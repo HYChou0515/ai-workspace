@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections import deque
 from collections.abc import (
@@ -82,6 +83,11 @@ def _est_tokens(m: Any) -> int:
 #: `history_items` only folds user/assistant/tool/error — so telling the user
 #: costs the model nothing.
 CONTEXT_NOTICE_ROLE = "notice"
+# plan-graceful-shutdown P4: what `aclose` allows past its budget — once for
+# the handover's store write, once for the cancelled turns' teardown — so an
+# engine with turns past the deadline adds up to 2 × this to the lifespan's
+# drain; `docs/deployment.md` states the bound.
+_DRAIN_GRACE_S = 2.0
 
 
 def context_notice_text(note: str) -> str:
@@ -553,7 +559,7 @@ class PendingTurn:
 _QueueItem = tuple[
     str,
     AgentToolContext,
-    Callable[[list[TurnMessage]], None],
+    Callable[[list[TurnMessage]], bool | None],
     "OnTurnEnd | None",
     "asyncio.Future[None]",
     "PendingTurn | None",  # the caller's preparation token; see `enqueue`
@@ -843,7 +849,7 @@ class ChatTurnEngine:
         content: str,
         ctx: AgentToolContext,
         *,
-        on_complete: Callable[[list[TurnMessage]], None],
+        on_complete: Callable[[list[TurnMessage]], bool | None],
         on_turn_end: OnTurnEnd | None = None,
         pending: PendingTurn | None = None,
     ) -> asyncio.Future[None]:
@@ -1027,7 +1033,7 @@ class ChatTurnEngine:
         self,
         content: str,
         ctx: AgentToolContext,
-        on_complete: Callable[[list[TurnMessage]], None],
+        on_complete: Callable[[list[TurnMessage]], bool | None],
         on_turn_end: OnTurnEnd | None,
         publish: Callable[[AgentEvent], None],
     ) -> None:
@@ -1036,6 +1042,7 @@ class ChatTurnEngine:
         subscribers. Cancellation / failure is recorded as a terminal message
         (and broadcast) and the (partial) result is always persisted."""
         reducer = _TurnReducer()
+        cancelled: RunCancelled | None = None
         try:
             # Warm the sandbox as the turn begins (best-effort), so the cold
             # start is already paid for by the time the agent calls exec.
@@ -1063,9 +1070,14 @@ class ChatTurnEngine:
                 publish(ev)
         except asyncio.CancelledError:
             logger.info("turns: turn cancelled for %s", ctx.investigation_id)
+            # Reduced now, broadcast below — AFTER `on_complete` has said
+            # whether this turn was still this pod's to end. A copy a peer took
+            # over (plan-graceful-shutdown P3: the epoch cancelled it, or its
+            # own drain released it) persists nothing, and must not broadcast
+            # a cancel either: on the bus it reaches the live pod's viewers as
+            # a "cancelled" banner seconds before the peer's answer starts.
             cancelled = RunCancelled()
             reducer.add(cancelled)
-            publish(cancelled)
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error message
             logger.exception("turns: turn errored for %s", ctx.investigation_id)
@@ -1082,11 +1094,14 @@ class ChatTurnEngine:
             # could not be saved otherwise vanishes on the next reload with no
             # explanation at all.
             try:
-                on_complete(reducer.produced)
+                still_mine = on_complete(reducer.produced) is not False
             except Exception as exc:  # noqa: BLE001 — persistence is best-effort here
+                still_mine = True
                 logger.exception("turns: failed to persist turn for %s", ctx.investigation_id)
                 with contextlib.suppress(Exception):
                     publish(_terminal_error(exc))
+            if cancelled is not None and still_mine:
+                publish(cancelled)
             # #492: flush the item's live sandbox to durable at turn-end — the
             # turn-end reconcile of guarantee (2). Runs on completion and on error
             # (the partial work is real). Guarded so best-effort durability never
@@ -1114,9 +1129,20 @@ class ChatTurnEngine:
         pending = PendingTurn(author=author)
         session = self._ws_session(key)
         session.pending_turns.add(pending)
+        # plan-graceful-shutdown P3: the turn's claim is opened before this
+        # window and judged by the key's heartbeat, which the turn itself only
+        # starts once it RUNS. A preparation longer than `TURN_STALE_AFTER_MS`
+        # — a cold sandbox wake, compaction on a slow model — would read as a
+        # dead owner: a peer would take the claim, cancel this copy through the
+        # epoch and re-run it, twice the cost for one answer. So the
+        # preparation beats too, the same beat, stopped the same way.
+        stop = asyncio.Event()
+        if self._turn_activity is not None:
+            self._spawn_detached(self._beat(key, stop))
         try:
             yield pending
         finally:
+            stop.set()
             session.pending_turns.discard(pending)
 
     async def run_interruptible[T](self, key: str, coro: Coroutine[Any, Any, T]) -> T:
@@ -1321,7 +1347,7 @@ class ChatTurnEngine:
         content: str,
         ctx: AgentToolContext,
         *,
-        on_complete: Callable[[list[TurnMessage]], None],
+        on_complete: Callable[[list[TurnMessage]], bool | None],
     ) -> StreamingResponse:
         """Start a turn for `key` (cancelling any in-flight one first) and return
         its SSE response. `on_complete` is invoked once with the produced
@@ -1378,7 +1404,7 @@ class ChatTurnEngine:
         self,
         timeout: float = 10.0,
         *,
-        handover: Callable[[str], Awaitable[None]] | None = None,
+        handover: Callable[[list[str]], Awaitable[None]] | None = None,
     ) -> None:
         """Give in-flight turns a bounded chance to finish and persist.
 
@@ -1395,13 +1421,81 @@ class ChatTurnEngine:
         result — and given a short moment to do so.
 
         plan-graceful-shutdown P4: with `handover`, what did not finish is let
-        go of FIRST — `handover(key)` for every session still running or
-        holding queued turns (the lifespan wires it to release the turn
-        claims) — and only then cancelled. A released claim is no longer this
-        pod's (`chat_send` checks before persisting), so the cancel writes no
-        partial reply and no "interrupted" marker: a peer re-runs the recipe
-        and the thread reads question, answer. Stop's marker is Stop's."""
-        live = [
+        go of FIRST — one `handover(keys)` for every conversation still running
+        a turn or holding queued ones (the lifespan wires it to release the
+        turn claims) — and only then cancelled. A released claim is no longer
+        this pod's (`chat_send` checks before persisting), so the cancel writes
+        no partial reply and no "interrupted" marker: a peer re-runs the recipe
+        and the thread reads question, answer. Stop's marker is Stop's.
+
+        The wait is against a DEADLINE on whatever is live at each pass, not
+        on a snapshot taken once: a queued turn starts when the running one
+        ends, inside the budget, and did not exist when the drain began — it
+        is waited for while time remains and handed over like any other when
+        it runs out. A snapshot missed it on both counts, and the worker's
+        cancel then ended it through Stop's path with its claim finished as
+        this pod's (round 1)."""
+        deadline = time.monotonic() + timeout
+        announced = False
+        while True:
+            live = self._live_turns()
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            if not live:
+                # A queued turn between its predecessor's end and its own
+                # start is not a task yet; give the worker a moment to make it
+                # one rather than handing it over with budget to spare.
+                if any(not s.queue.empty() for s in self._ws_sessions.values()):
+                    await asyncio.sleep(min(0.05, left))
+                    continue
+                break
+            if not announced:
+                logger.info("turns: draining %d in-flight turn(s) (<=%.1fs)", len(live), timeout)
+                announced = True
+            # `asyncio.wait`, NOT `wait_for(gather(...))`: a timed-out `wait_for`
+            # cancels the gather, and a cancelled gather cancels its children —
+            # so the turns were being cancelled by the deadline itself, through
+            # Stop's persist path, before the code below ever saw a straggler.
+            # `wait` leaves the pending ones running for this method to decide.
+            await asyncio.wait(live, timeout=left)
+        # Past the deadline. Whatever is live NOW is cancelled — after being
+        # handed over, so its teardown persists nothing (see the docstring);
+        # without a handover that teardown persists the partial, as Stop's does.
+        unfinished = [
+            key
+            for key, session in (*self._ws_sessions.items(), *self._sessions.items())
+            if (session.current_turn is not None and not session.current_turn.done())
+            or (isinstance(session, _WorkspaceSession) and not session.queue.empty())
+        ]
+        if handover is not None and unfinished:
+            try:
+                await asyncio.wait_for(handover(unfinished), _DRAIN_GRACE_S)
+            except Exception:  # noqa: BLE001 — a failed release leaves the old behaviour
+                logger.exception(
+                    "turns: could not hand over %s; they persist as cancelled", unfinished
+                )
+            else:
+                logger.info(
+                    "turns: handed over %d conversation(s): %s", len(unfinished), unfinished
+                )
+        stragglers = self._live_turns()
+        for task in stragglers:
+            task.cancel()
+        if stragglers:
+            logger.warning("turns: %d turn(s) did not drain — cancelled", len(stragglers))
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*stragglers, return_exceptions=True), _DRAIN_GRACE_S
+                )
+        for session in self._ws_sessions.values():
+            if session.worker is not None:
+                session.worker.cancel()
+
+    def _live_turns(self) -> list[asyncio.Task[Any]]:
+        """Every task a turn is made of, right now: the sessions' current turns
+        and the detached ones (heartbeats, fire-and-forget persists)."""
+        return [
             t
             for t in (
                 *(s.current_turn for s in self._ws_sessions.values()),
@@ -1410,45 +1504,6 @@ class ChatTurnEngine:
             )
             if t is not None and not t.done()
         ]
-        stragglers: list[asyncio.Task[Any]] = []
-        if live:
-            logger.info("turns: draining %d in-flight turn(s) (<=%.1fs)", len(live), timeout)
-            # `asyncio.wait`, NOT `wait_for(gather(...))`: a timed-out `wait_for`
-            # cancels the gather, and a cancelled gather cancels its children —
-            # so the turns were being cancelled by the deadline itself, through
-            # Stop's persist path, before the code below ever saw a straggler.
-            # `wait` leaves the pending ones running for this method to decide.
-            _done, pending = await asyncio.wait(live, timeout=timeout)
-            stragglers = list(pending)
-        # Past the deadline: cancel, then let each turn's teardown persist what it
-        # has (that path is the same one Stop uses) — unless it is being handed
-        # over, in which case the release below makes that teardown persist
-        # nothing (see the docstring).
-        if handover is not None and stragglers:
-            unfinished = [
-                key
-                for key, session in (*self._ws_sessions.items(), *self._sessions.items())
-                if (session.current_turn is not None and not session.current_turn.done())
-                or (isinstance(session, _WorkspaceSession) and not session.queue.empty())
-            ]
-            for key in unfinished:
-                try:
-                    await handover(key)
-                except Exception:  # noqa: BLE001 — a failed release leaves the old behaviour
-                    logger.exception("turns: could not hand over %s; it persists as cancelled", key)
-            if unfinished:
-                logger.info(
-                    "turns: handed over %d conversation(s): %s", len(unfinished), unfinished
-                )
-        for task in stragglers:
-            task.cancel()
-        if stragglers:
-            logger.warning("turns: %d turn(s) did not drain — cancelled", len(stragglers))
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(asyncio.gather(*stragglers, return_exceptions=True), 2.0)
-        for session in self._ws_sessions.values():
-            if session.worker is not None:
-                session.worker.cancel()
 
     def _spawn_detached(self, coro: Coroutine[Any, Any, None]) -> None:
         """Run a fire-and-forget coroutine, holding a STRONG reference until it

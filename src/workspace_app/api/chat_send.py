@@ -42,7 +42,7 @@ from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
-from .events import GoalUpdated, UserMessage
+from .events import GoalUpdated, RunError, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
@@ -140,6 +140,22 @@ def _last_user_was_the_driver(conv: Conversation) -> bool:
         if message.role == "user":
             return message.driven_by == GOAL_DRIVER
     return False
+
+
+def _history_before(messages: list[Message], created_at: int, content: str) -> list[Message]:
+    """The thread up to, not including, the user message a turn answers.
+
+    Found by its timestamp and text rather than taken to be the last message:
+    on a first send it is, and on a re-run it need not be — a queued follow-up
+    or the #624 notice may already sit after it, and `[:-1]` then hands the
+    model the question twice (once as history, once as the turn). The
+    fallback, for a thread compaction rewrote under a claim, is everything
+    older than the message."""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.role == "user" and m.created_at == created_at and m.content == content:
+            return messages[:i]
+    return [m for m in messages if m.created_at is not None and m.created_at < created_at]
 
 
 class ChatSendService:
@@ -838,7 +854,7 @@ class ChatSendService:
         # goes away — opened here, before the preparation that can take seconds
         # and is exactly where a rollout catches a turn.
         claim = self._open_claim(
-            engine_key, created, investigation_id, rid, author, lane, driven_by, body, caller_env
+            engine_key, created, investigation_id, rid, author, lane, driven_by, body
         )
         await self._start_turn(
             investigation_id,
@@ -865,10 +881,10 @@ class ChatSendService:
         lane: CallLane,
         driven_by: str | None,
         body: _MessageBody,
-        caller_env: dict[str, str] | None,
     ) -> str | None:
         """Best-effort: a store that cannot be written is not a reason to refuse
-        the turn — it makes this turn as pod-bound as every turn used to be."""
+        the turn — it makes this turn as pod-bound as every turn used to be.
+        The request env is deliberately NOT on the claim (see `TurnClaim`)."""
         if self._turn_claims is None:
             return None
         try:
@@ -882,7 +898,6 @@ class ChatSendService:
                     lane=lane,
                     driven_by=driven_by,
                     body=body.model_dump(mode="json"),
-                    caller_env=dict(caller_env or {}),
                 )
             )
         except Exception:  # noqa: BLE001 — logged; the turn runs regardless
@@ -913,24 +928,85 @@ class ChatSendService:
         handover (plan-graceful-shutdown P3). The question is already in the
         thread; nothing is appended and no `UserMessage` is announced (the
         viewers re-hydrate from the store on reconnect). The claim row is the
-        one `open` wrote, so the reply persisting finishes it as usual."""
+        one `open` wrote, so the reply persisting finishes it as usual.
+
+        Returns once the turn is QUEUED, not answered: the reclaim tick runs
+        every claim it took in turn, and a tick that waited on each reply (a
+        real turn outlives `send_await_timeout`) would start the Nth orphan N
+        detach-timeouts late. The request env is what a turn with no request
+        behind it gets (`env_without_request`), as for a goal-driven round —
+        the caller's own cookie was composed for one turn and is not stored.
+        A failure before the turn exists ends the thread the way a failed
+        preparation does; the claim is finished, not re-taken every tick."""
         claim = row.claim
-        conv = self._conv_rm.get(claim.rid).data
-        assert isinstance(conv, Conversation)
+        try:
+            conv = self._conv_rm.get(claim.rid).data
+            assert isinstance(conv, Conversation)
+            body = _MessageBody.model_validate(claim.body)
+            caller_env: dict[str, str] | None = None
+            if self._request_env is not None:
+                caller_env = await self._request_env.env_without_request(
+                    user_id=claim.author, item_id=claim.investigation_id
+                )
+        except Exception as exc:  # noqa: BLE001 — reported on the thread, like a failed preparation
+            logger.exception("chat_send: re-run of %s could not be prepared", row.id)
+            self._end_with_failure(claim.rid, claim.key, row.id, _terminal_error(exc))
+            return
         await self._start_turn(
             claim.investigation_id,
             claim.rid,
             conv,
             claim.key,
-            _MessageBody.model_validate(claim.body),
+            body,
             claim.author,
             lane=cast(CallLane, claim.lane),
             driven_by=claim.driven_by,
-            caller_env=claim.caller_env or None,
+            caller_env=caller_env,
             created=claim.created_at,
             claim=row.id,
             announce=False,
+            await_reply=False,
         )
+
+    async def abandon(self, row: ClaimRow) -> None:
+        """Give up on a claim taken over `RECLAIM_MAX_RERUNS` times: finish it
+        and end the thread with an error that says so, so the person stops
+        waiting (#559 reads the last message) and can send again."""
+        attempts = row.claim.reruns + 1  # the first run plus each takeover
+        self._end_with_failure(
+            row.claim.rid,
+            row.claim.key,
+            row.id,
+            RunError(
+                message=(
+                    f"The assistant could not finish this reply after {attempts} attempts. "
+                    "Please send your message again."
+                )
+            ),
+        )
+
+    def _end_with_failure(
+        self, rid: str, engine_key: str, claim: str | None, failure: RunError
+    ) -> None:
+        """The thread's ending for a turn that will not run: the error
+        message persisted (the FE reads "a reply is on its way" off a thread
+        that ends on the question, and waits), the claim finished (a peer
+        re-running this would answer a question the person has already been
+        told failed), and the viewers told on the stream."""
+        with contextlib.suppress(Exception):
+            fresh = self._conv_rm.get(rid).data
+            if isinstance(fresh, Conversation):
+                fresh.messages.append(
+                    Message(
+                        role="error",
+                        content=failure.message,
+                        error_kind="error",
+                        created_at=now_ms(),
+                    )
+                )
+                self._conv_rm.update(rid, fresh)
+        self._finish_claim(claim)
+        self._turn_engine.publish(engine_key, failure)
 
     async def _start_turn(
         self,
@@ -947,13 +1023,16 @@ class ChatSendService:
         created: int,
         claim: str | None,
         announce: bool,
+        await_reply: bool = True,
     ) -> None:
         """Build the turn ctx from the conversation's history and enqueue the
         turn. `created` is the persisted user message's timestamp; `claim` the
         row `_open_claim` wrote (finished when the reply persists, or when the
         preparation fails and the thread gets its error ending instead);
         `announce` publishes the `UserMessage` live — a first send does, a
-        re-run does not."""
+        re-run does not; `await_reply` holds the caller up to
+        `send_await_timeout` for the reply — the POST wants that, the reclaim
+        tick does not."""
         # Own the preparation window from here — before any of it runs.
         #
         # Everything from this point to `enqueue` takes real time: compaction
@@ -1115,8 +1194,10 @@ class ChatSendService:
                     investigation_id,
                     agent_config=agent_config,
                     run_subagent=_run_subagent_with_depth,
-                    # Cross-turn memory: prior dialogue (excludes the user msg just added).
-                    history_messages=conv.messages[:-1],
+                    # Cross-turn memory: the dialogue BEFORE the message this turn
+                    # answers — found, not assumed to be last: a re-run's thread
+                    # may have grown past it (a queued follow-up, the #624 notice).
+                    history_messages=_history_before(conv.messages, created, body.content),
                     reasoning_effort=body.reasoning_effort,
                     kb_enhancements=caller_enh,
                     collection_ids=hub_collection_ids,
@@ -1155,19 +1236,22 @@ class ChatSendService:
                         self._files, investigation_id, body.image_paths
                     )
 
-                def persist(produced: list[TurnMessage]) -> None:
+                def persist(produced: list[TurnMessage]) -> bool:
                     # plan-graceful-shutdown P3: a claim a peer took over (its
                     # epoch bump is what cancelled this copy) or this pod let go
                     # of (a handover) is no longer this pod's to answer — the
                     # partial reply and the cancel marker this copy would write
                     # land AFTER the peer's answer and read as an interruption
-                    # of it. Nothing of this copy is persisted.
+                    # of it. Nothing of this copy is persisted, and the verdict
+                    # goes back to the engine so it does not broadcast the
+                    # cancel either (a "cancelled" banner on every viewer's
+                    # screen, seconds before the peer's answer starts).
                     if not self._claim_is_mine(claim):
                         logger.info(
                             "chat_send: turn on %s was taken over; not persisting this copy",
                             engine_key,
                         )
-                        return
+                        return False
                     # Persist the agent's reply + tool outputs so re-entering the
                     # workspace shows them, not just the user's own messages.
                     if produced:
@@ -1222,6 +1306,7 @@ class ChatSendService:
                     # worker is awaiting it), so awaiting a follow-up turn here would
                     # deadlock — the queue only advances once this task ends.
                     self._maybe_continue_goal(produced, investigation_id, rid, engine_key, author)
+                    return True
 
                 # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
                 # collections.json) as a labelled, authoritative block — re-derived fresh from
@@ -1294,8 +1379,11 @@ class ChatSendService:
                 # `fut` well within the deadline → the POST returns after the reply is
                 # persisted, exactly as before; slow turns run on in the background and the
                 # client follows the live SSE stream.
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(asyncio.shield(fut), timeout=self._send_await_timeout)
+                if await_reply:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(
+                            asyncio.shield(fut), timeout=self._send_await_timeout
+                        )
         except Exception as exc:  # noqa: BLE001 — reported on the thread, not to the caller
             # The message is already in the thread — it is persisted above, before
             # any of this — and no turn is going to answer it now. `agentLog`
@@ -1322,23 +1410,7 @@ class ChatSendService:
             # differently depending on where it was caught, and `str(exc)` alone
             # drops the type — `str(KeyError("slug"))` reaches the thread as
             # literally `'slug'`.
-            failure = _terminal_error(exc)
-            with contextlib.suppress(Exception):
-                fresh = self._conv_rm.get(rid).data
-                if isinstance(fresh, Conversation):
-                    fresh.messages.append(
-                        Message(
-                            role="error",
-                            content=failure.message,
-                            error_kind="error",
-                            created_at=now_ms(),
-                        )
-                    )
-                    self._conv_rm.update(rid, fresh)
-            # The thread has its ending; a peer re-running this would answer a
-            # question the person has already been told failed.
-            self._finish_claim(claim)
-            self._turn_engine.publish(engine_key, failure)
+            self._end_with_failure(rid, engine_key, claim, _terminal_error(exc))
             if driven_by:
                 # …but a driver is not an HTTP caller and has no status to read.
                 # `OffHoursGoalSweeper.tick` releases its per-STRETCH claim on

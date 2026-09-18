@@ -23,10 +23,20 @@ safety net for anything that did not, so no connection can hold the lifespan
 shutdown again. The lifespan then drains in-flight turns for the same budget
 and tears down as written.
 
-Two budgets, ONE number: uvicorn's connection wait and the lifespan's turn
-drain both get ``shutdown_budget``, so the worst case is ``2 × budget`` plus
-teardown — the k8s ``terminationGracePeriodSeconds`` must exceed that
+Two budgets, ONE number: uvicorn's connection wait and the lifespan's drain
+(one deadline for every engine and, all-in-one, the coordinators) both get
+``shutdown_budget``; each engine with turns past its deadline adds 4 s (the
+handover write, the cancelled turns' teardown). So the worst case is
+``2 × budget + 8 s`` plus teardown — the k8s ``terminationGracePeriodSeconds``
+must exceed that, and its ``preStop`` sleep counts inside it
 (``kubernetes/base/deployment.yaml`` says by how much).
+
+On a pod deletion the readiness 503 is NOT what stops traffic: k8s removes a
+Terminating pod from the EndpointSlice on its own, in parallel with preStop →
+SIGTERM, and preStop's sleep is what lets that removal propagate before the
+listener closes. The 503 covers the SIGTERMs that are not deletions — a
+liveness restart of the container, a manual kill — where the pod stays in
+the endpoints.
 """
 
 from __future__ import annotations

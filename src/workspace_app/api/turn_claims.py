@@ -10,8 +10,8 @@ received — `apply_skills`, attached images and the retrieval knobs are NOT on
 the persisted `Message`, and a re-run without them answers a different
 question), plus who owns it and whether the owner let go on purpose.
 
-One row per turn, keyed by the engine key and the message's `created_at`;
-opened when the message is persisted, hard-deleted when the turn persists its
+One row per turn (id: engine key, the message's `created_at`, a unique
+suffix); opened when the message is persisted, hard-deleted when the turn persists its
 reply (`finish`), swept by the reclaimer when it lingers. NOT fields on the
 `_TurnActivity` heartbeat row: that row's explicit "turn ended" write went
 through three timing defects (see its module docstring) and was removed; a
@@ -27,6 +27,8 @@ from __future__ import annotations
 import abc
 import contextlib
 import logging
+import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,7 +36,6 @@ from msgspec import Struct
 from msgspec.structs import replace
 from specstar import SpecStar
 from specstar.types import (
-    DuplicateResourceError,
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
     RevisionStatus,
@@ -45,8 +46,12 @@ logger = logging.getLogger(__name__)
 
 class TurnClaim(Struct):
     """The send recipe plus ownership. `body` is the `_MessageBody` as a plain
-    dict (pydantic's `model_dump`), `caller_env` the request-composed env the
-    turn ran with (a re-run cannot ask a request that is gone)."""
+    dict (pydantic's `model_dump`).
+
+    NOT on it: the request-composed env (#714). That is the caller's own
+    cookie, a header their gateway stamped on — composed for one turn and, by
+    `request_env.py`'s contract, never written back anywhere. A re-run is a
+    turn nobody pressed send for, and asks the seam what such a turn gets."""
 
     key: str  # the engine key (item id for the default chat, else the chat id)
     created_at: int  # the persisted user message's `created_at` (ms)
@@ -55,14 +60,19 @@ class TurnClaim(Struct):
     author: str
     lane: str = "background"
     body: dict[str, Any] = {}
-    caller_env: dict[str, str] = {}
     driven_by: str | None = None
     owner: str = ""  # pod id of whoever is running (or last ran) this turn
     released: bool = False  # the owner let go on purpose (a SIGTERM handover)
+    reruns: int = 0  # times a peer has taken it over (the reclaimer's bound)
 
 
 def claim_id(key: str, created_at: int) -> str:
-    return f"{key}:{created_at}"
+    """Readable prefix for the log, unique by the suffix: two sends on one
+    key inside one millisecond are two questions, each owed an answer, and a
+    row keyed by (key, created_at) alone merged them — the first turn's
+    persist finished the shared row and the second's answer was never
+    persisted."""
+    return f"{key}:{created_at}:{uuid.uuid4().hex[:8]}"
 
 
 @dataclass(frozen=True)
@@ -84,8 +94,10 @@ class ITurnClaimStore(abc.ABC):
         """The turn persisted its reply: the claim is done. Idempotent."""
 
     @abc.abstractmethod
-    def release(self, key: str) -> None:
-        """Let go of every open claim on `key` — a handover, not an end."""
+    def release(self, keys: Collection[str]) -> None:
+        """Let go of every open claim THIS pod holds on `keys` — a handover,
+        not an end. One round trip for the whole list: a drain calls it once.
+        A claim a peer already took on one of those keys is the peer's."""
 
     @abc.abstractmethod
     def list_open(self) -> list[ClaimRow]:
@@ -126,25 +138,22 @@ class SpecstarTurnClaimStore(ITurnClaimStore):
     def open(self, claim: TurnClaim) -> str:
         cid = claim_id(claim.key, claim.created_at)
         rec = replace(claim, owner=self._pod_id, released=False)
-        rm = self._rm()
-        try:
-            rm.create(rec, resource_id=cid, status=RevisionStatus.draft)
-        except DuplicateResourceError:
-            # The same message re-sent into the store (a retry): ours again.
-            rm.modify(cid, rec, status=RevisionStatus.draft)
+        self._rm().create(rec, resource_id=cid, status=RevisionStatus.draft)
         return cid
 
     def finish(self, cid: str) -> None:
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             self._rm().permanently_delete(cid)
 
-    def release(self, key: str) -> None:
+    def release(self, keys: Collection[str]) -> None:
+        wanted = set(keys)
         for row in self.list_open():
-            if row.claim.key != key or row.claim.released:
+            claim = row.claim
+            if claim.key not in wanted or claim.released or claim.owner != self._pod_id:
                 continue
             with contextlib.suppress(Exception):
                 self._rm().modify(
-                    row.id, replace(row.claim, released=True), status=RevisionStatus.draft
+                    row.id, replace(claim, released=True), status=RevisionStatus.draft
                 )
 
     def list_open(self) -> list[ClaimRow]:
@@ -165,7 +174,7 @@ class SpecstarTurnClaimStore(ITurnClaimStore):
 
     def take(self, row: ClaimRow) -> ClaimRow:
         rm = self._rm()
-        taken = replace(row.claim, owner=self._pod_id, released=False)
+        taken = replace(row.claim, owner=self._pod_id, released=False, reruns=row.claim.reruns + 1)
         info = rm.modify(
             row.id,
             taken,

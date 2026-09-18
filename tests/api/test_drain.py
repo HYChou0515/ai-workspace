@@ -157,9 +157,12 @@ async def test_the_server_seam_schedules_the_drain_on_the_loop_and_still_exits()
     await asyncio.wait_for(began.wait(), 1.0)
 
 
-def test_the_lifespan_drains_turns_for_the_shutdown_budget() -> None:
-    """One number: the budget the lifespan gives in-flight turns is the
-    `shutdown_budget` handed to `create_app`, not a constant of its own."""
+def test_the_lifespan_drains_turns_against_one_deadline() -> None:
+    """One number, one WINDOW: the budget the lifespan gives in-flight turns
+    is the `shutdown_budget` handed to `create_app`, and every engine drains
+    against the same deadline — the second engine gets what the first left,
+    not a fresh budget of its own (round 1: two engines, each with the whole
+    budget, then the coordinators with a third)."""
     app, _ = _app(shutdown_budget=timedelta(seconds=7))
     seen: list[float] = []
     with TestClient(app):
@@ -168,10 +171,13 @@ def test_the_lifespan_drains_turns_for_the_shutdown_budget() -> None:
 
             async def spy(timeout: float = 10.0, *, _real=real, **kw) -> None:  # noqa: ANN003
                 seen.append(timeout)
+                await asyncio.sleep(0.2)  # this engine spends some of the window
                 await _real(timeout=timeout, **kw)
 
             engine.aclose = spy  # type: ignore[method-assign]
-    assert seen and all(t == 7.0 for t in seen)
+    assert len(seen) == 2
+    assert 6.5 < seen[0] <= 7.0
+    assert seen[1] <= seen[0] - 0.2  # what the first one left, not 7 again
 
 
 def test_the_coordinator_drain_is_bounded_by_the_same_budget() -> None:

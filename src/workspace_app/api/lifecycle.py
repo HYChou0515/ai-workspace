@@ -651,14 +651,23 @@ def build_lifespan(
             # sweeper (or this pod, restarted) re-runs it; see `aclose`.
             claims = getattr(app.state, "turn_claims", None)
 
-            async def _handover(key: str) -> None:
+            async def _handover(keys: list[str]) -> None:
                 if claims is not None:
-                    await asyncio.to_thread(claims.release, key)
+                    await asyncio.to_thread(claims.release, keys)
 
+            # ONE deadline for the whole drain — the engines in turn, then (all-
+            # in-one only) the coordinators — so the pod is out inside
+            # `shutdown_budget` + `aclose`'s two grace periods, whatever is in
+            # flight. A budget PER step made the bound a multiple nobody had
+            # added up (round 1: the second engine got a fresh 20 s, the
+            # coordinators a third).
+            deadline = time.monotonic() + shutdown_budget.total_seconds()
             for engine in getattr(app.state, "turn_engines", ()):
                 logger.debug("lifespan: draining in-flight turns")
                 with contextlib.suppress(BaseException):
-                    await engine.aclose(timeout=shutdown_budget.total_seconds(), handover=_handover)
+                    await engine.aclose(
+                        timeout=max(0.0, deadline - time.monotonic()), handover=_handover
+                    )
             logger.debug("lifespan: draining coordinators + kernels")
             t_coord = time.monotonic()
             # Drain in-flight jobs before exit (bounded) — ONLY on a pod that
@@ -670,12 +679,11 @@ def build_lifespan(
             # pod past its grace period. A pure producer has nothing in flight;
             # pending jobs are durable and the workers pick them up.
             if run_consumers:
-                # The whole drain shares the ONE shutdown budget: a queue that
-                # cannot empty in time (an index job on a big PDF; the boot's
-                # own Help-doc jobs took 16 s on a fresh local boot) is left to
+                # The same deadline as the turns above: a queue that cannot
+                # empty in time (an index job on a big PDF; the boot's own
+                # Help-doc jobs took 16 s on a fresh local boot) is left to
                 # specstar's stale-job recovery — that is what a durable queue
                 # is for — instead of holding the pod past its grace period.
-                deadline = time.monotonic() + shutdown_budget.total_seconds()
                 for name in (
                     "wiki_coordinator",
                     "index_coordinator",
@@ -707,7 +715,9 @@ def build_lifespan(
             t0 = time.monotonic()
             await kernels.shutdown_all()
             t1 = time.monotonic()
-            await registry.close_all()
+            # `kill_idle`'s rule (globally idle ⇒ kill, else write back and
+            # drop): the sandboxes are the fleet's, not this pod's.
+            await registry.close_all(idle_after=idle_timeout)
             t2 = time.monotonic()
             logger.info(
                 "lifespan: shutdown complete (kernels %.1fs, sandboxes %.1fs)", t1 - t0, t2 - t1

@@ -15,6 +15,8 @@ config-refactor grill — the only env override mechanism).
 from __future__ import annotations
 
 import argparse
+import contextlib
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -443,19 +445,43 @@ def main() -> None:
         print("  llm log: off (set WORKSPACE_LLM_LOG=1 or observability.llm_log.enabled: true)")
     app = build_app(settings, config_dir=config_dir)
     with boot_step("start HTTP server (uvicorn)"):
-        # plan-graceful-shutdown P2: `DrainingServer` begins the pod's drain in
-        # the SIGTERM handler (readiness off, streams ended) so uvicorn's wait
-        # for open connections actually ends and the lifespan shutdown — the
-        # turn drain, the sandbox teardown — gets to run. `timeout_graceful_
-        # shutdown` is the safety net for a connection that did not end; it is
-        # the same number the lifespan drains turns against.
-        config = uvicorn.Config(
+        serve(
             app,
             host=settings.server.host,
             port=settings.server.port,
-            timeout_graceful_shutdown=int(settings.server.shutdown_budget_sec),
+            shutdown_budget_sec=settings.server.shutdown_budget_sec,
         )
-        DrainingServer(config, drain=app.state.drain).run()
+
+
+# uvicorn's own `STARTUP_FAILURE`, spelled here so a caller can name it.
+STARTUP_FAILURE = 3
+
+
+def serve(app: FastAPI, *, host: str, port: int, shutdown_budget_sec: float) -> None:
+    """Run the app under uvicorn until it is told to stop.
+
+    plan-graceful-shutdown P2: `DrainingServer` begins the pod's drain in the
+    SIGTERM handler (readiness off, streams ended) so uvicorn's wait for open
+    connections actually ends and the lifespan shutdown — the turn drain, the
+    sandbox teardown — gets to run. `timeout_graceful_shutdown` is the safety
+    net for a connection that did not end; it is the same number the lifespan
+    drains turns against (whole seconds: uvicorn takes an int).
+
+    This replaced `uvicorn.run`, and keeps what that did around `Server.run`:
+    a server that never STARTED (the lifespan's startup raised — a bad config,
+    a store that refused) exits `STARTUP_FAILURE`, and a Ctrl-C before the
+    signal handlers are installed is a clean stop, not a traceback."""
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=int(shutdown_budget_sec),
+    )
+    server = DrainingServer(config, drain=app.state.drain)
+    with contextlib.suppress(KeyboardInterrupt):
+        server.run()
+    if not server.started:
+        sys.exit(STARTUP_FAILURE)
 
 
 if __name__ == "__main__":

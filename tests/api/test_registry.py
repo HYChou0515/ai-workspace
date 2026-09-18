@@ -482,6 +482,29 @@ async def test_close_all_kills_every_alive_handle():
     assert new is not s1
 
 
+async def test_close_all_keeps_a_sandbox_the_fleet_is_still_using():
+    """Shutdown applies `kill_idle`'s rule, not a rule of its own: a pod's
+    session is pod-local, the sandbox behind it is not (#345 shared dir,
+    #366 shared address). A pod being rolled kills only what no pod has
+    touched past the idle threshold; the rest is written back and dropped
+    from THIS pod, and the next pod warms it. Round 1 of #815 found the
+    unconditional kill — unreachable until P2 let the lifespan run — tearing
+    down the sandbox a peer had just taken the pod's turn over into."""
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
+    s1 = await registry.session("ws-1")
+    await registry.ensure_handle(s1)  # bumps the global heartbeat: active now
+    s2 = await registry.session("ws-2")
+    await registry.ensure_handle(s2)
+    activity.ms["ws-2"] = 0  # untouched by anyone since the epoch: idle
+
+    await registry.close_all(idle_after=timedelta(hours=8))
+    assert sandbox.kill_calls == 1  # ws-2 only
+    assert "ws-1" in activity.ms  # the heartbeat is the other pods' to read
+    assert await registry.session("ws-1") is not s1  # dropped locally all the same
+
+
 # ---- sync hooks ----
 
 

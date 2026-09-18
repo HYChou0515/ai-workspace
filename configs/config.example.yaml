@@ -77,12 +77,14 @@
 #                              # pod shuts down against — uvicorn's wait for open
 #                              # connections (normally ~1 s: the drain ends every
 #                              # SSE stream at the signal) and the lifespan's
-#                              # in-flight turn drain each get at most this. Worst
-#                              # case 2 × this + teardown; the k8s
+#                              # in-flight turn drain each get at most this; an
+#                              # app-chat turn past it is handed to a peer (no
+#                              # partial), a KB-chat turn persists its partial.
+#                              # Bound: 2 × this + 8 s + teardown; the k8s
 #                              # terminationGracePeriodSeconds must exceed it
-#                              # (kubernetes/base/deployment.yaml: 60).
+#                              # (kubernetes/base/deployment.yaml: 90).
 #   turn_reclaim_interval_sec: 5  # plan-graceful-shutdown: how often a pod looks
-#                              # for chat turns whose pod is gone (a rollout, a
+#                              # for app-chat turns whose pod is gone (a rollout, a
 #                              # scale-down, a crash) and re-runs them itself, so
 #                              # the reply arrives instead of the thread ending on
 #                              # the question. One pod per window fleet-wide. 0 =

@@ -9,10 +9,15 @@
 # existed this printed `Waiting for connections to close.` and the process
 # never left — the SIGKILL every rollout ended in.
 #
-# Usage: WORKSPACE_APP_CONFIG=... [WORKSPACE_TOOLS_DIR=...] scripts/check_sigterm_drain.sh [port] [wait_s]
+# Usage: WORKSPACE_APP_CONFIG=... [WORKSPACE_TOOLS_DIR=...] scripts/check_sigterm_drain.sh [wait_s]
+#
+# The port is the config's `server.port` — the app has no override, so an
+# argument here could only disagree with it (round 1 of #815: the first
+# version took one, probed 8342 while the app listened on 8247, and the
+# "up after 90s" line reported connection refused as if it were a slow boot).
 set -u
-PORT="${1:-8000}"
-WAIT="${2:-30}"
+WAIT="${1:-30}"
+PORT=$(uv run python -c 'from workspace_app.config.loader import load_with_provenance; print(load_with_provenance()[0].server.port)')
 TMP="${TMPDIR:-/tmp}/sigterm-drain.$$"
 mkdir -p "$TMP"
 LOG="$TMP/app.log"
@@ -24,11 +29,17 @@ uv run python -c 'import logging; logging.basicConfig(level=logging.INFO, format
 APP=$!
 i=0
 while [ "$i" -lt 90 ]; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/openapi.json" 2>/dev/null)
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/readyz" 2>/dev/null)
   [ "$code" = "200" ] && break
   i=$((i + 1)); sleep 1
 done
-echo "app pid $APP up after ${i}s (openapi=$code)"
+if [ "$code" != "200" ]; then
+  echo "FAIL: app never answered /api/readyz on port $PORT (last=$code); log tail:"
+  tail -20 "$LOG" | cut -c1-140
+  kill -9 "$APP" 2>/dev/null
+  exit 1
+fi
+echo "app pid $APP up after ${i}s on port $PORT"
 curl -s -N -w '\nCURL_HTTP=%{http_code}\n' "http://127.0.0.1:$PORT/api/monitor/stream" > "$TMP/sse.out" 2>&1 &
 CURL=$!
 sleep 2

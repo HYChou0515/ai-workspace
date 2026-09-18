@@ -117,3 +117,52 @@ def test_discarding_a_question_marks_it_discarded():
     assert r.json()["status"] == "discarded"
     # a discarded question drops out of the open inbox
     assert _client(spec).get("/kb/doc-questions").json() == []
+
+
+async def test_answering_a_term_question_keeps_the_loop_free():
+    """`land_term_answer` calls the answer-card formatter, an LLM when
+    `card_drafter_llm` is wired — synchronously, from an `async def` route.
+    The P1 sweep of plan-graceful-shutdown missed this member (round 1); a
+    slow formatter held the event loop for the whole call, the same class as
+    the `read_image` stall that failed the liveness probe."""
+    import asyncio
+    import time
+
+    import httpx
+
+    class _SlowFormatter(VerbatimAnswerFormatter):
+        def format(self, *, term: str, answer: str) -> tuple[str, str]:
+            time.sleep(0.3)  # a model call, from the loop's point of view
+            return super().format(term=term, answer=answer)
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d1", question_text="?"
+    )
+    app = FastAPI()
+    register_doc_question_routes(
+        app, spec, formatter=_SlowFormatter(), wiki_store=WikiFileStore(spec)
+    )
+    worst = 0.0
+    stop = False
+
+    async def watch() -> None:
+        nonlocal worst
+        while not stop:
+            t0 = time.monotonic()
+            await asyncio.sleep(0.02)
+            worst = max(worst, time.monotonic() - t0 - 0.02)
+
+    watcher = asyncio.create_task(watch())
+    await asyncio.sleep(0.02)  # the watcher is asleep before the request starts
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://t"
+        ) as client:
+            r = await client.post(f"/kb/doc-questions/{qid}/answer", json={"answer": "metal 4"})
+    finally:
+        stop = True
+        await watcher
+    assert r.status_code == 200
+    assert worst < 0.1, f"the loop was blocked for {worst * 1000:.0f} ms"

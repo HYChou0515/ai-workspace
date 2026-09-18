@@ -4,23 +4,34 @@ A turn is an `asyncio.Task` in one pod; its question is in the store. When the
 pod goes, the thread ends on the question and nobody knows a reply is owed —
 the FE reads "last message is the user's" (#559) and waits. `ReclaimTick` is
 the other pod's side of the handover: it lists the open claims
-(`turn_claims`), decides for each whether its owner is gone, takes it (a CAS,
-so one taker per claim fleet-wide), advances the shared cancel epoch so a pod
-that merely STALLED — loop wedged, heartbeat stale, not dead — cancels its own
-copy when it comes back (#349's watcher), and re-runs the recipe on this pod's
-engine (`ChatSendService.rerun`). The reply then persists and finishes the
-claim exactly as a first run would.
+(`turn_claims`), decides per KEY whether their owner is gone, takes them (a
+CAS each, so one taker per claim fleet-wide), and re-runs each recipe on this
+pod's engine (`ChatSendService.rerun`). The reply then persists and finishes
+the claim exactly as a first run would.
 
-The decision, per claim:
+The decision, per key (one conversation's queue):
 
-- `released` — the owner let go on purpose (its drain, P4): take it now.
-- the key's heartbeat is fresh (`_TurnActivity`, 30 s): someone is driving;
-  leave it.
-- stale, and the thread still ends on that user message: the owner died
-  mid-turn; take it.
-- stale, and the thread has moved on (a reply, an error ending): the turn
-  ended and only `finish` was lost — the pod died between the two writes.
-  Delete the claim; re-running would answer twice.
+- some claim on the key is `released` — its owner let go on purpose (its
+  drain, P4) and has already cancelled its copy: take those, now.
+- else the key's heartbeat is fresh (`_TurnActivity`, 30 s): someone is
+  driving this conversation; leave every claim on it.
+- else the owner died, or merely STALLED — loop wedged, heartbeat stale, not
+  dead: take every claim on the key, advance the shared cancel epoch ONCE and
+  BEFORE any re-run, so a stalled owner's copy cancels itself when it comes
+  back (#349's watcher) and this pod's own re-runs, which stamp the epoch as
+  they start, are not cancelled by it. Then re-run in the order asked.
+
+The claim is the ledger and the ONLY evidence: it is finished when the reply
+persists and not before. Nothing about the thread's shape says whether a
+given question was answered — a queued follow-up (Q1, Q2, A1, A2 is the
+documented order), the #624 notice, a peer's answer to a LATER question all
+sit after a question that is still unanswered, and a rule that read the
+thread dropped the claim in every one of those shapes. The one thing such a
+rule protected against — a pod dying between the reply's write and the
+claim's delete, a millisecond apart — costs a duplicate answer; the rule cost
+the answer. What bounds the re-runs instead is `RECLAIM_MAX_RERUNS`: a turn
+that cannot finish anywhere is not re-run for ever, and the person is not
+left waiting for ever either — the thread gets an error ending that says so.
 
 One producer per window across the fleet (`ScanLease`, like every other
 sweep), ticking every few seconds so a handover costs seconds, not the 30 s a
@@ -31,14 +42,15 @@ whatever a crash left behind — bounded by concurrent turns, not by content.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from specstar.types import PreconditionFailedError
-
-from ..resources import Conversation
+from specstar.types import (
+    PreconditionFailedError,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+)
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -52,6 +64,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 RECLAIM_TICK_S = 5.0
+# Times a claim may be taken over before it is given up on. Two: one takeover
+# is the ordinary handover, a second covers the taker itself being rolled; a
+# third orphaning of the same question is a turn that fails wherever it runs.
+RECLAIM_MAX_RERUNS = 2
 
 
 @dataclass
@@ -75,50 +91,65 @@ class ReclaimTick:
         )
 
     async def run(self) -> list[str]:
-        """One pass over the open claims. Returns the keys taken (for tests and
-        the log). Per-claim resilient: one bad row must not cost the rest."""
+        """One pass over the open claims, a key at a time. Returns the keys
+        taken (for tests and the log). Per-key resilient: one bad conversation
+        must not cost the rest."""
         taken: list[str] = []
         rows = await asyncio.to_thread(self.claims.list_open)
-        for row in rows:
+        by_key: dict[str, list[ClaimRow]] = {}
+        for row in sorted(rows, key=lambda r: r.claim.created_at):
+            by_key.setdefault(row.claim.key, []).append(row)
+        for key, group in by_key.items():
             try:
-                if await self._take_if_orphaned(row):
-                    taken.append(row.claim.key)
-            except Exception:  # noqa: BLE001 — logged, next claim
-                logger.exception("turn-reclaim: claim %s could not be judged", row.id)
+                if await self._take_key(key, group):
+                    taken.append(key)
+            except Exception:  # noqa: BLE001 — logged, next key
+                logger.exception("turn-reclaim: claims on %s could not be judged", key)
         return taken
 
-    async def _take_if_orphaned(self, row: ClaimRow) -> bool:
-        claim = row.claim
-        if not claim.released:
-            if await self.activity.alive(claim.key):
+    async def _take_key(self, key: str, group: list[ClaimRow]) -> bool:
+        released = [row for row in group if row.claim.released]
+        if released:
+            candidates, stalled = released, False
+        else:
+            if await self.activity.alive(key):
                 return False
-            if not await asyncio.to_thread(self._still_owed, claim.rid, claim.created_at):
-                logger.info(
-                    "turn-reclaim: %s ended without finishing its claim; dropping it", row.id
-                )
-                await asyncio.to_thread(self.claims.finish, row.id)
-                return False
-        try:
-            mine = await asyncio.to_thread(self.claims.take, row)
-        except PreconditionFailedError:
-            return False  # a peer took it on the same tick
-        # A stalled-not-dead owner still holds a copy: the epoch is what makes
-        # it let go, so the thread gets ONE answer.
-        await self.control.advance(claim.key)
-        logger.info(
-            "turn-reclaim: taking over %s (released=%s, was %s)",
-            row.id,
-            claim.released,
-            claim.owner,
-        )
-        await self.chat_send.rerun(mine)
+            candidates, stalled = group, True
+        mine: list[ClaimRow] = []
+        for row in candidates:
+            if row.claim.reruns >= RECLAIM_MAX_RERUNS:
+                await self._give_up(row)
+                continue
+            try:
+                mine.append(await asyncio.to_thread(self.claims.take, row))
+            except PreconditionFailedError:
+                continue  # a peer took it on the same tick
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                continue  # finished between the listing and now: the turn ended
+        if not mine:
+            return False
+        if stalled:
+            # Once per key, before any re-run: a stalled-not-dead owner still
+            # holds a copy and the epoch is what makes it let go. Each re-run
+            # below stamps the epoch as it starts, so an advance AFTER one
+            # would cancel it too — the second claim's take used to do that
+            # to the first claim's re-run.
+            await self.control.advance(key)
+        for row in mine:
+            logger.info(
+                "turn-reclaim: taking over %s (released=%s, was %s, rerun %d)",
+                row.id,
+                row.claim.released,
+                row.claim.owner,
+                row.claim.reruns,
+            )
+            await self.chat_send.rerun(row)
         return True
 
-    def _still_owed(self, rid: str, created_at: int) -> bool:
-        """Does the thread still end on the user message this claim is for?"""
-        with contextlib.suppress(Exception):
-            conv = self.spec.get_resource_manager(Conversation).get(rid).data
-            if isinstance(conv, Conversation) and conv.messages:
-                last = conv.messages[-1]
-                return last.role == "user" and last.created_at == created_at
-        return False
+    async def _give_up(self, row: ClaimRow) -> None:
+        logger.warning(
+            "turn-reclaim: %s was taken over %d times without finishing; giving up",
+            row.id,
+            row.claim.reruns,
+        )
+        await self.chat_send.abandon(row)
