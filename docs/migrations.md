@@ -115,8 +115,8 @@ uv run python scripts/run_migrate.py --dry-run \
 **資料**（rollout 後）
 
 1. `uv run python scripts/run_migrate.py workspace-file`。
-   為什麼：v2 把 `content.size` 進索引，用量加總（`workspace_usage`）用它。
-   漏跑的症狀：升級前的檔案不計入用量，額度低估。
+   為什麼：v2 把 `content.size` 進索引，耐久儲存那邊的用量加總用它（#538 之後用量先問活著的 sandbox，
+   sandbox 冷的時候才退回這個加總）。漏跑的症狀：sandbox 冷的時候，升級前的檔案不計入用量，額度低估。
    ⚠️ 今天跑會直接帶到 v3，而 v3 有「必須打新 pod」的規矩——照 [#668](#pr-668) 的做法跑。
 
 ### 2026-06-27 · cfa12349 · #293 source-doc v4：`token_count` {#pr-293}
@@ -170,7 +170,7 @@ uv run python scripts/run_migrate.py --dry-run \
 1. `uv run python scripts/run_migrate.py source-doc`。
    為什麼：文件列表改成只查索引、不撈整列（`status` / `status_detail` / `content.content_type` /
    `content.file_id`），狀態摘要用 `status` 分組計數。
-   漏跑的症狀：升級前的文件在 `documents/status` 的摘要裡沒有狀態、被少算；wiki 重建按鈕顯示的
+   漏跑的症狀：升級前的文件在 `documents/status` 的摘要裡沒有狀態、被少算；wiki 重建回報的
    「涵蓋幾份」也少算。
 
 ### 2026-07-04 · bee5c29f · #420 source-doc v7：權限鏡像 {#pr-420}
