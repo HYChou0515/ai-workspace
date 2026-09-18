@@ -187,18 +187,25 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
       ) : (
         <>
           <div className="page-tools">
-            {/* One chip per App present, the App's own name (`AppTag`'s
-                rule: the slug until the manifests arrive), 全部 first. */}
-            <div className="chips" role="group" aria-label={t("wui.filter.app")}>
-              <Chip on={appFilter === ""} onClick={() => setAppFilter("")}>
-                {t("wui.filter.all")}
-              </Chip>
-              {slugs.map((slug) => (
-                <Chip key={slug} on={appFilter === slug} onClick={() => setAppFilter(slug)}>
-                  {apps.find((a) => a.slug === slug)?.title || slug}
-                </Chip>
-              ))}
-            </div>
+            {/* One option per App present, the App's own name (`AppTag`'s
+                rule: the slug until the manifests arrive), 全部 first. A
+                select, not chips: twelve Apps as chips is two or three rows
+                (the author: 「如果我們有 12 個 app 上面 filter 不就會擠爆」). */}
+            <label>
+              {t("wui.filter.app")}
+              <select
+                value={appFilter}
+                onChange={(e) => setAppFilter(e.target.value)}
+                aria-label={t("wui.filter.app")}
+              >
+                <option value="">{t("wui.filter.all")}</option>
+                {slugs.map((slug) => (
+                  <option key={slug} value={slug}>
+                    {apps.find((a) => a.slug === slug)?.title || slug}
+                  </option>
+                ))}
+              </select>
+            </label>
             {/* Held until the identity has settled: the placeholder id must
                 not claim anyone's items. */}
             <Chip on={mineOnly} onClick={() => setMineOnly((v) => !v)} disabled={!me.ready}>

@@ -1182,7 +1182,7 @@ export const messages = {
   "wui.view.tip": { "zh-TW": "切換卡片 / 表格", en: "Switch between cards and the table" },
   // The tools (amendment 2): filter by App, search, sort — within the App
   // sections, which stay.
-  "wui.filter.app": { "zh-TW": "依 App 篩選", en: "Filter by App" },
+  "wui.filter.app": { "zh-TW": "App", en: "App" },
   "wui.filter.all": { "zh-TW": "全部", en: "All" },
   "wui.search": { "zh-TW": "搜尋頁面或 item", en: "Search pages or items" },
   "wui.sort": { "zh-TW": "排序", en: "Sort" },

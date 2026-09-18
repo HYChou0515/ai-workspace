@@ -513,7 +513,7 @@ describe("WuiOverviewPage", () => {
       await screen.findByText(word("wui.empty"));
       expect(screen.queryByRole("switch")).toBeNull();
       expect(screen.queryByRole("searchbox")).toBeNull();
-      expect(screen.queryByRole("combobox")).toBeNull();
+      expect(screen.queryAllByRole("combobox")).toHaveLength(0);
     });
 
     it("makes the whole card the page's link, with the star and Remove OUTSIDE it", async () => {
@@ -656,7 +656,7 @@ describe("WuiOverviewPage", () => {
       expect(screen.queryByRole("region", { name: word("wui.favourites") })).toBeNull();
 
       // Stacks with the App filter.
-      fireEvent.click(within(screen.getByRole("group", { name: word("wui.filter.app") })).getByRole("button", { name: "根因分析" }));
+      fireEvent.change(screen.getByRole("combobox", { name: word("wui.filter.app") }), { target: { value: "rca" } });
       expect(screen.getByText("沒有符合的頁面")).toBeInTheDocument();
 
       fireEvent.click(mine);
@@ -678,27 +678,28 @@ describe("WuiOverviewPage", () => {
         .getAllByRole("listitem")
         .map((li) => within(li).getAllByRole("link")[0].textContent);
 
-    it("filters by App: one chip per App present, 全部 first; a chip keeps only that App's section", async () => {
+    it("filters by App with a select — one option per App present, 全部 first — so twelve Apps do not flood the row", async () => {
+      // The author: 「如果我們有 12 個 app 上面 filter 不就會擠爆」. A select
+      // holds any number of Apps in one control; the option's words are the
+      // App's own name (the slug until the manifests arrive), 全部 literal.
       render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
 
-      const chips = screen.getByRole("group", { name: word("wui.filter.app") });
-      // The App's own name on each chip, in the listing's order; 全部 literal.
-      expect(within(chips).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      const pick = screen.getByRole("combobox", { name: word("wui.filter.app") });
+      expect(within(pick).getAllByRole("option").map((o) => o.textContent)).toEqual([
         "全部",
         "根因分析",
         "專案管理",
       ]);
-      expect(within(chips).getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
+      expect(pick).toHaveValue("");
 
-      fireEvent.click(within(chips).getByRole("button", { name: "專案管理" }));
+      fireEvent.change(pick, { target: { value: "pm" } });
 
       expect(screen.queryByRole("region", { name: "根因分析" })).toBeNull();
       expect(rowTitles(screen.getByRole("region", { name: "專案管理" }))).toEqual(["Burn-down"]);
-      expect(within(chips).getByRole("button", { name: "專案管理" })).toHaveAttribute("aria-pressed", "true");
-      expect(within(chips).getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "false");
+      expect(pick).toHaveValue("pm");
 
-      fireEvent.click(within(chips).getByRole("button", { name: "全部" }));
+      fireEvent.change(pick, { target: { value: "" } });
       expect(screen.getByRole("region", { name: "根因分析" })).toBeInTheDocument();
     });
 
@@ -748,7 +749,7 @@ describe("WuiOverviewPage", () => {
       fireEvent.change(screen.getByRole("combobox", { name: word("wui.sort") }), { target: { value: "title" } });
       expect(rowTitles(fav())).toEqual(["Burn-down", "Scrap trend", "Shipping board"]);
 
-      fireEvent.click(within(screen.getByRole("group", { name: word("wui.filter.app") })).getByRole("button", { name: "專案管理" }));
+      fireEvent.change(screen.getByRole("combobox", { name: word("wui.filter.app") }), { target: { value: "pm" } });
       expect(rowTitles(fav())).toEqual(["Burn-down"]);
 
       fireEvent.change(screen.getByRole("searchbox", { name: word("wui.search") }), { target: { value: "zzz" } });
