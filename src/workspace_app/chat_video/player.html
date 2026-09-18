@@ -14,7 +14,8 @@
     overflow:hidden; }
   /* `zoom` enlarges the LAYOUT (every px in this sheet), so the column, the
      text and the composer all grow with the frame; `transform` on top of it
-     is the camera. Chromium is the only renderer this page ever meets. */
+     is the camera. The recorder is Chromium, where the two compose as the
+     script assumes; a `--html` preview in another browser may differ. */
   #stage { position:absolute; inset:0; zoom:var(--ui-scale); width:calc(var(--frame-w) / var(--ui-scale));
     height:calc(var(--frame-h) / var(--ui-scale)); transform-origin:0 0; transform:translate(0,0) scale(1); }
   #stage.moving { transition: transform var(--zoom-ms, 900ms) cubic-bezier(.4,0,.2,1); }
@@ -33,6 +34,7 @@
   .reasoning { color:var(--dim); font-size:14px; white-space:pre-wrap; border-left:2px solid var(--line);
     padding-left:10px; margin-bottom:8px; }
   .reasoning .label { font-size:12px; color:var(--dim); margin-bottom:2px; }
+  .stopped { font-size:12px; color:var(--err); margin-top:6px; }
   .answer.raw { white-space:pre-wrap; }
   .answer :is(h1,h2,h3) { margin:.4em 0 .2em; font-size:1.05em; }
   .answer p { margin:.3em 0; }
@@ -159,6 +161,7 @@ async function stepStream(s) {
   const a = el('div', 'answer raw'); bubble.appendChild(a);
   await typeInto(a, s.text, OPTIONS.stream_ms);
   a.classList.remove('raw'); a.innerHTML = s.html;   // rendered here in Python, HTML disabled
+  if (s.stopped) bubble.appendChild(el('div', 'stopped', '已中止:' + s.stopped));
   await sleep(t(PACING.after_answer_ms));
 }
 
@@ -188,7 +191,7 @@ async function stepTool(s) {
     const card = el('div', 'tool');
     const head = el('div', 'head'); const spin = el('div', 'spin'); head.appendChild(spin); head.appendChild(el('span', '', s.name));
     card.appendChild(head);
-    if (Object.keys(s.args).length) card.appendChild(el('div', 'args', JSON.stringify(s.args, null, 2)));
+    if (s.args_text) card.appendChild(el('div', 'args', s.args_text));
     thread.appendChild(card);
     await sleep(t(OPTIONS.tool_pause_ms));
     spin.remove(); head.insertAdjacentText('afterbegin', '✓ ');

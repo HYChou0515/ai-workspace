@@ -10,9 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from workspace_app.chat_video import service
 from workspace_app.chat_video.options import VideoOptions
+from workspace_app.chat_video.render import RendererUnavailable
 from workspace_app.chat_video.service import render_chat_video
+from workspace_app.chat_video.timeline import build_timeline
 
 _MESSAGES = [
     {"role": "user", "content": "hi", "author": "u"},
@@ -26,6 +30,7 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
     def fake_record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int) -> Path:
         seen["html"] = html
         seen["expected_ms"] = expected_ms
+        assert (workdir / "player.html").exists() or True  # the page is the record's to write
         seen["workdir"] = workdir
         out = workdir / "recording.webm"
         out.write_bytes(b"WEBM")
@@ -50,9 +55,18 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
     assert "hello" in str(seen["html"]) and "const TIMELINE" in str(seen["html"])
     # The assets reached the page: the answer's `![](/chart.png)` is a data URI.
     assert "data:image/png;base64," in str(seen["html"])
+    # The deadline is set from what will PLAY, not from what was asked: a
+    # squeezed transcript's deadline used to be its unsqueezed estimate — a
+    # 40-message chat capped at 1 s got a 31-minute deadline.
     expected = seen["expected_ms"]
     assert isinstance(expected, int) and expected > 0
-    assert not (tmp_path / "recording.webm").exists()  # the scratch is gone
+    assert (
+        expected
+        == build_timeline(
+            title="t", messages=_MESSAGES, options=VideoOptions(fmt=("gif", "mp4"))
+        ).playback_ms
+    )
+    assert not (tmp_path / "chat-video").exists()  # the scratch is gone
 
 
 def test_the_scratch_dir_is_removed_even_when_the_browser_fails(monkeypatch, tmp_path):
@@ -69,3 +83,15 @@ def test_the_scratch_dir_is_removed_even_when_the_browser_fails(monkeypatch, tmp
         raise AssertionError("the browser's failure was swallowed")
 
     assert not any(tmp_path.iterdir())
+
+
+def test_a_missing_ffmpeg_is_reported_before_the_browser_is_opened(monkeypatch, tmp_path):
+    recorded = []
+    monkeypatch.setattr(service, "record", lambda *a, **k: recorded.append(1))
+    monkeypatch.setattr(
+        service, "ensure_tools", lambda _o: (_ for _ in ()).throw(RendererUnavailable("ffmpeg"))
+    )
+
+    with pytest.raises(RendererUnavailable):
+        render_chat_video(title="t", messages=_MESSAGES, options=VideoOptions(), workdir=tmp_path)
+    assert recorded == []

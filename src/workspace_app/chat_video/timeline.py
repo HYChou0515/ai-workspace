@@ -30,12 +30,16 @@ class TypeStep(msgspec.Struct, tag="typing"):
 
 class StreamStep(msgspec.Struct, tag="stream"):
     """The assistant's turn, streamed character by character. ``reasoning``
-    marks the thinking block, shown dimmed and before the answer."""
+    marks the thinking block, shown dimmed and before the answer. ``stopped``
+    is the message's ``stopped_reason`` (#113: cut off mid-stream), shown as
+    a small label — a video that showed a clean stop would misreport the
+    run."""
 
     author: str
     text: str
     reasoning: bool
     ms: int
+    stopped: str = ""
 
 
 class ShownFile(msgspec.Struct):
@@ -101,9 +105,13 @@ PACING: dict[str, int] = {
 
 # What a headless browser spends per character on top of the asked delay —
 # firing the timer, inserting the node, painting the frame. Measured, not
-# chosen: a 600-character transcript ran 3 s over an estimate that ignored
-# it. The player does not read this; the browser adds it by itself — which is
-# also why neither `speed` nor the squeeze can shrink it.
+# chosen: the shipped sample (485 characters the player inserts) ran 3 s over
+# an estimate that ignored it, at `speed=1.5`. It is an approximation: the
+# measured cost is ~6.5 ms/char at speed 1 and falls as the asked delays
+# shrink (~4 ms at speed 2, ~2 ms under a hard squeeze — timers coalesce),
+# so a squeezed recording lands a few percent UNDER its `playback_ms`, never
+# over. Kept as one unscaled constant on purpose: over-estimating is the safe
+# direction for the recorder's deadline. The player does not read this.
 CHAR_OVERHEAD_MS = 5
 
 _PUNCT = set(",.;:!?，。；：！？")
@@ -195,9 +203,9 @@ class Timeline(msgspec.Struct):
         return seen
 
     estimated_ms: int
-    """How long the recording should run: the asked delays (``speed``
-    applied) plus ``overhead_ms`` — the number the ceiling is checked
-    against."""
+    """What the transcript ASKS for: the delays (``speed`` applied) plus
+    ``overhead_ms`` — the number the ceiling is checked against, BEFORE any
+    squeeze. For how long the recording will run, read ``playback_ms``."""
     overhead_ms: int
     """The browser's own per-character cost, which no option shrinks."""
     time_scale: float
@@ -206,6 +214,16 @@ class Timeline(msgspec.Struct):
     it fit — computed on the asked delays alone, since the overhead does not
     squeeze. Uniform on purpose: dropping messages or truncating the tail
     would make a video that lies about the conversation."""
+
+    @property
+    def playback_ms(self) -> int:
+        """How long the recording will run: the asked delays after the
+        squeeze, plus the overhead. The number a person is told and the one
+        the recorder's deadline is set from. Equals ``estimated_ms`` when
+        nothing was squeezed, ``max_seconds`` (in ms) when it landed on the
+        ceiling, and more than that only when the overhead alone is over it."""
+        asked = self.estimated_ms - self.overhead_ms
+        return round(asked * self.time_scale) + self.overhead_ms
 
 
 def build_timeline(
@@ -221,7 +239,8 @@ def build_timeline(
     else:
         # Squeeze only what can be squeezed. If the overhead alone is over the
         # ceiling the floor keeps the player moving at all; the recording will
-        # simply run long, and the recorder's own timeout is the last resort.
+        # simply run long — `playback_ms` says by how much, and the recorder's
+        # deadline is set from that number, not from the ceiling.
         scale = max(0.05, (ceiling - overhead) / asked)
     return Timeline(
         title=title,
@@ -265,6 +284,7 @@ def _steps(messages: list[dict[str, Any]], options: VideoOptions) -> list[Step]:
                         text=text,
                         reasoning=False,
                         ms=_typed_ms(text, options.stream_ms) + PACING["after_answer_ms"],
+                        stopped=str(m.get("stopped_reason") or ""),
                     )
                 )
         elif role == "tool":

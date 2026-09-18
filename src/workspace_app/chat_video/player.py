@@ -36,7 +36,7 @@ from markdown_it.token import Token
 from markdown_it.utils import EnvType, OptionsDict
 
 from .options import VideoOptions
-from .timeline import PACING, ShownFile, StreamStep, Timeline, _abs, _is_url
+from .timeline import PACING, ShownFile, StreamStep, Timeline, ToolStep, _abs, _cut, _is_url
 
 Assets = Mapping[str, bytes]
 
@@ -132,8 +132,13 @@ def _steps_for_js(
             d["html"] = render_markdown(
                 step.text, assets=assets, max_asset_bytes=options.max_asset_bytes
             )
-        if "files" in d:
-            d["files"] = [_file_for_js(f, assets, options.max_asset_bytes) for f in step.files]  # ty: ignore[unresolved-attribute]
+        if isinstance(step, ToolStep):
+            d["files"] = [_file_for_js(f, assets, options.max_asset_bytes) for f in step.files]
+            # The call's arguments, cut like its output: `write_file`'s
+            # `content` is the whole file, and uncut it made a 4,000 px card.
+            args = json.dumps(step.args, ensure_ascii=False, indent=2) if step.args else ""
+            d["args_text"] = _cut(args, options.tool_output_chars)
+            del d["args"]
         out.append(d)
     return out
 

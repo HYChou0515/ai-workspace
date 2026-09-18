@@ -69,6 +69,37 @@ def test_a_reply_that_only_thought_has_no_empty_answer_step():
     assert [_streamed(s) for s in steps] == [("去讀檔", True)]
 
 
+def test_a_stopped_reply_carries_why_it_stopped():
+    """#113: an answer cut off mid-stream (`stopped_reason`) shows a small
+    label saying so — the thread does, and a video that showed a clean stop
+    would misreport the run."""
+    steps = build_timeline(
+        title="t",
+        messages=[
+            {"role": "assistant", "content": "loop loop", "stopped_reason": "repetition"},
+            {"role": "assistant", "content": "fine"},
+        ],
+        options=VideoOptions(),
+    ).steps
+
+    assert [s.stopped for s in steps if isinstance(s, StreamStep)] == ["repetition", ""]
+
+
+def test_the_playback_estimate_is_the_squeezed_one():
+    """Two numbers, both honest: `estimated_ms` is what the transcript asks
+    for, `playback_ms` is what the recording will run once the ceiling has
+    squeezed it — the one a person is told, and the one the recorder's
+    deadline is set from."""
+    tl = build_timeline(title="t", messages=_long_chat(40), options=VideoOptions(max_seconds=60))
+
+    assert (
+        tl.playback_ms == round((tl.estimated_ms - tl.overhead_ms) * tl.time_scale) + tl.overhead_ms
+    )
+    assert tl.playback_ms == 60_000
+    short = build_timeline(title="t", messages=_long_chat(2), options=VideoOptions())
+    assert short.playback_ms == short.estimated_ms  # nothing to squeeze
+
+
 def test_a_tool_message_is_a_card_that_spins_then_shows_a_bounded_output():
     """The card shows the call (name + args), spins for the pause, then opens
     the output. A tool that dumped a whole file is cut with an ellipsis: the
@@ -184,8 +215,9 @@ def test_speed_divides_and_max_seconds_compresses_the_rest():
 
 def test_a_transcript_whose_browser_cost_alone_exceeds_the_ceiling_still_plays():
     """Nothing can squeeze the per-character cost. The scale bottoms out
-    rather than going to zero or negative — the video runs long, and the
-    recorder's timeout is the honest last word, not a frozen player."""
+    rather than going to zero or negative — the video runs long (its
+    `playback_ms` says how long), the recorder's deadline is set from that,
+    and a page that still hangs fails by name rather than freezing."""
     long = build_timeline(title="t", messages=_long_chat(400), options=VideoOptions(max_seconds=1))
 
     assert long.overhead_ms > 1_000
@@ -275,3 +307,53 @@ def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
     )
 
     assert tl.referenced_paths() == ["/plots/a.png", "/plots/b.png"]
+
+
+def test_a_declaration_that_is_not_valid_json_or_not_the_shape_declares_nothing():
+    """A hand-edited marker line that does not parse, or parses to the wrong
+    shape, is treated as no declaration — the body is still shown, nothing
+    crashes, no card is invented."""
+    for tail in (
+        "[shown-files]{not json",
+        "[shown-files][1,2]",
+        '[shown-files]{"shown_files": "x"}',
+    ):
+        steps = build_timeline(
+            title="t",
+            messages=[{"role": "tool", "tool_name": "x", "content": "body\n" + tail}],
+            options=VideoOptions(),
+        ).steps
+        assert isinstance(steps[0], ToolStep) and steps[0].files == []
+    # entries that are not objects are skipped, the good one kept
+    steps = build_timeline(
+        title="t",
+        messages=[
+            {
+                "role": "tool",
+                "tool_name": "x",
+                "content": declare_shown_files(
+                    "",
+                    ["nope", {"path": "/a.png", "mime": "image/png", "size": 1}],  # ty: ignore[invalid-argument-type]
+                ),
+            }
+        ],
+        options=VideoOptions(),
+    ).steps
+    assert isinstance(steps[0], ToolStep) and [f.path for f in steps[0].files] == ["/a.png"]
+
+
+def test_a_path_shown_twice_is_wanted_once():
+    """The same chart declared by the plot tool, then by `show_file`, then
+    embedded in the answer: one read, not three."""
+    shown = declare_shown_files("", [{"path": "/p.png", "mime": "image/png", "size": 1}])
+    tl = build_timeline(
+        title="t",
+        messages=[
+            {"role": "tool", "tool_name": "sci_plot", "content": shown},
+            {"role": "tool", "tool_name": "show_file", "content": shown},
+            {"role": "assistant", "author": "AI", "content": "![](p.png)"},
+        ],
+        options=VideoOptions(),
+    )
+
+    assert tl.referenced_paths() == ["/p.png"]

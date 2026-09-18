@@ -9,11 +9,12 @@ AI 的思考與回答逐字串流、工具呼叫變成卡片。**不打 LLM、�
 
 ```bash
 uv sync --extra chat-video          # Playwright(Python 套件)
-uv run playwright install chromium  # headless Chromium,約 150 MB,放在 ~/.cache/ms-playwright
+uv run playwright install chromium  # Chromium + headless shell,約 860 MB,放在 ~/.cache/ms-playwright
 which ffmpeg                        # 沒有就 apt install ffmpeg
 ```
 
-沒裝的話指令會用一句話告訴你少了什麼,不會噴 traceback。
+三樣少了任何一樣(Python 套件、Chromium、ffmpeg),指令都用一句話告訴你少了什麼、exit 3,不會噴 traceback;
+ffmpeg 在**錄影之前**就檢查,不會錄完才說。
 
 !!! note "Debian 11"
     Playwright 釘在 `1.49.x`:更新的版本在 Debian 11 上 `playwright install` 會拒絕
@@ -40,8 +41,8 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `--stream-speed` | 22 | 串流:每個字幾毫秒 |
 | `--tool-pause` | 1200 | 工具卡片轉圈多久 |
 | `--speed` | 1.0 | 整體倍速;`2` = 快一倍 |
-| `--max-seconds` | 90 | 影片上限。超過的話**所有延遲等比壓縮**,不丟訊息、不截尾 |
-| `--tool-output-chars` | 600 | 工具輸出超過就截斷加 `…` |
+| `--max-seconds` | 90 | 影片上限。超過的話**所有延遲等比壓縮**,不丟訊息、不截尾。軟上限:瀏覽器每個字的固定開銷壓不掉,幾萬字的對話還是會超過(指令會印出實際會播多久) |
+| `--tool-output-chars` | 600 | 工具輸出**和參數**超過就截斷加 `…`(`write_file` 的整個檔案內容不會撐爆卡片) |
 | `--max-asset-bytes` | 4000000 | 內嵌的圖超過這個大小就改成檔案卡 |
 
 常用組合:
@@ -60,7 +61,12 @@ uv run python -m workspace_app.chat_video my.chat.json --html preview.html && xd
 uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o demo.mp4
 ```
 
-指令會印出預估秒數;實錄通常在 3% 內(估算含瀏覽器每個字的固定開銷)。
+指令會印出「會播多久」(`will play 39.1s`;有壓縮時連原本要多久一起印)。實錄比它長約 3–6%(範例:預設速度
+39.1 s 估 → 41.2 s 實錄、`--speed 1.5` 19.7 → 20.2);很短的片子比例更高(4.5 → 5.1 s);被壓縮的片子反而略短
+(`--max-seconds 10`:10.0 估 → 8.8 s 實錄)。每個字的瀏覽器開銷是一個常數近似(`CHAR_OVERHEAD_MS`),故意往多估。
+
+錯的輸入(壞 JSON、少 `title`、第 N 則不是物件、`content` 不是字串)是一句話 + exit 2——和 KB 上傳同一個驗證器;
+錯的旗標值(`--speed 0`、`--zoom 0.5`)也是一句話 + exit 2。錄影途中失敗(頁面沒在期限內播完、ffmpeg 失敗)exit 4。
 
 ## JSON 怎麼改
 
@@ -70,7 +76,7 @@ uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o
 | `role` | 用到的欄位 | 畫面 |
 |---|---|---|
 | `user` | `content`、`author` | 鏡頭推進輸入框,逐字打,送出 |
-| `assistant` | `content`(markdown)、`reasoning`、`author` | 有 `reasoning` 先串流灰色「思考」區塊,再串流正文;`content` 空就只有思考 |
+| `assistant` | `content`(markdown)、`reasoning`、`author`、`stopped_reason` | 有 `reasoning` 先串流灰色「思考」區塊,再串流正文;`content` 空就只有思考;`stopped_reason` 有值就在正文下加一行紅色小標 |
 | `tool` | `tool_name`、`tool_args`、`content`(= 輸出) | 工具卡片:名稱 + 參數 → 轉圈 → 輸出;結果尾端有 `[shown-files]` 宣告的,卡片下面接檔案(見下) |
 | `tool` = `show_file` | 同上 | **沒有卡片**,檔案本身就是畫面(和聊天視窗一樣) |
 | `error` | `content`、`error_kind` | 紅色氣泡 |
@@ -111,7 +117,7 @@ uv run python -m workspace_app.chat_video docs/examples/chat-video-sample/chat.j
            ─► ffmpeg 轉 gif / mp4 / webm
 ```
 
-zoom 是 CSS `transform`(推進 + 平移到輸入框),不是後製;UI 放大是 CSS `zoom`。全部在
+zoom 是 CSS `transform`(推進 + 平移到輸入框),不是後製;UI 放大是 CSS `zoom`(Chromium 的組合方式;`--html` 用別的瀏覽器預覽可能不同)。全部在
 `src/workspace_app/chat_video/`;重依賴(Playwright、ffmpeg)只在 `render.py`,其他部分不裝 extra
 也能 import——這是為了之後 worker pod 版:API pod 不需要帶瀏覽器。
 

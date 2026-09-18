@@ -16,7 +16,7 @@ from typing import Any
 
 from .options import Format, VideoOptions
 from .player import render_player_html
-from .render import encode, record
+from .render import encode, ensure_tools, record
 from .timeline import build_timeline
 
 
@@ -39,12 +39,13 @@ def render_chat_video(
     caller reads them — the CLI from ``--files``, a job from the item's
     files, for the paths ``Timeline.referenced_paths`` names — because this
     function runs in a thread with no store of its own."""
+    ensure_tools(options)  # before a recording that would be thrown away
     timeline = build_timeline(title=title, messages=messages, options=options)
     html = render_player_html(timeline, options, assets=assets or {})
     scratch = workdir / "chat-video"
     scratch.mkdir(parents=True, exist_ok=True)
     try:
-        recording = record(html, options, scratch, expected_ms=timeline.estimated_ms)
+        recording = record(html, options, scratch, expected_ms=timeline.playback_ms)
         out: dict[Format, bytes] = {}
         for fmt in options.fmt:
             path = encode(recording, fmt, scratch / f"out.{fmt}")

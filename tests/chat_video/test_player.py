@@ -94,6 +94,12 @@ def test_an_answer_is_markdown_with_html_off_and_links_as_text():
     html = _embedded(page)["steps"][0]["html"]
     assert "<strong>bold</strong>" in html
     assert "<code>code</code>" in html
+    assert (
+        "<table>"
+        in _embedded(_page([{"role": "assistant", "content": "|a|b|\n|-|-|\n|1|2|"}]))["steps"][0][
+            "html"
+        ]
+    )
     assert "<b>raw</b>" not in html and "&lt;b&gt;raw&lt;/b&gt;" in html
     assert "href=" not in html and "src=" not in html
     assert "https://e.com/x" in html  # the URL survives as text
@@ -109,10 +115,17 @@ def test_the_player_reads_the_same_pacing_table_the_estimate_used():
 
     m = re.search(r"^const PACING = (\{.*?\});", page, re.MULTILINE)
     assert m and json.loads(m.group(1)) == PACING
-    # …and the script uses the table, not its own literals, for every pause.
+    # …and the script uses the table, not its own literals, for every pause:
+    # every `sleep(` goes through `t(`, and nothing inside `t(` is a number.
+    # (A count of `PACING.` references let two hard-coded pauses through.)
     script = page[page.index("<script>") :]
     assert "s.ms" not in script
-    assert script.count("PACING.") >= len(PACING)
+    sleeps = re.findall(r"sleep\(([^)]*)", script)
+    assert sleeps and all(arg.startswith("t(") for arg in sleeps), sleeps
+    assert not re.search(r"\bt\(\s*\d", script)
+    assert "setTimeout" not in script.replace(
+        "const sleep = ms => new Promise(r => setTimeout(r, ms));", ""
+    )
 
 
 def test_the_page_fetches_nothing():
@@ -179,3 +192,43 @@ def test_an_image_in_an_answer_resolves_the_same_way_and_a_url_never_loads():
     assert 'src="data:image/png;base64,' in html
     assert "https://x/y.png" not in html and "ext" in html  # the URL image is its alt text
     assert "/z.png" not in html and "gone" in html
+
+
+def test_tool_args_are_cut_like_the_output_so_a_write_file_is_not_a_wall():
+    """`write_file`'s `content` argument is the whole file. Uncut, one such
+    call made a 4,000 px card whose header sat 3,500 px above the frame."""
+    page = _page(
+        [
+            {
+                "role": "tool",
+                "tool_name": "write_file",
+                "tool_args": {"path": "/a.py", "content": "x" * 5000},
+            }
+        ],
+        tool_output_chars=80,
+    )
+
+    step = _embedded(page)["steps"][0]
+    assert step["args_text"].endswith("…") and len(step["args_text"]) <= 81
+    script = page[page.index("<script>") :]
+    assert "JSON.stringify(s.args" not in script  # the page draws the cut text, not the dict
+
+
+def test_a_stopped_reply_shows_its_label():
+    page = _page([{"role": "assistant", "content": "x", "stopped_reason": "repetition"}])
+
+    assert _embedded(page)["steps"][0]["stopped"] == "repetition"
+    assert "s.stopped" in page[page.index("<script>") :]
+
+
+def test_an_answer_image_whose_bytes_are_not_a_picture_draws_nothing():
+    """`![]()` declares no mime, so the bytes are sniffed; an SVG (text that
+    can carry script) or a stray file is not one of the types drawn."""
+    md = "![s](/a.svg) ![t](/b.txt)"
+    page = _page(
+        [{"role": "assistant", "author": "AI", "content": md}],
+        assets={"/a.svg": b"<svg onload=alert(1)></svg>", "/b.txt": b"hello"},
+    )
+
+    html = _embedded(page)["steps"][0]["html"]
+    assert "<img" not in html and "onload" not in html

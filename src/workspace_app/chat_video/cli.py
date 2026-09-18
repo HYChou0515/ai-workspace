@@ -1,8 +1,13 @@
 """``python -m workspace_app.chat_video export.chat.json -o demo.gif``
 
-Every flag is a field of ``VideoOptions`` and nothing else: the CLI is one
-of three readers of that struct (the job payload and the front-end form are
-the other two), and adding a knob means adding a field, not a flag.
+Every field of ``VideoOptions`` has a flag here, and the flags that are not
+fields (``-o``, ``--fmt``, ``--html``, ``--files``) only say where things
+come from and go. The CLI is one of three readers of that struct (the job
+payload and the front-end form are the other two), so a new knob is a new
+field, not a new flag.
+
+Exit codes: 2 the input or an option is wrong (one sentence naming what);
+3 a tool is missing (what to install); 4 the render failed (why).
 
 ``--html`` writes the player page instead of recording — open it in a
 browser, watch, edit the JSON, repeat — which is also the way to see what a
@@ -12,18 +17,16 @@ worker will render without owning a Chromium.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import tempfile
 from pathlib import Path
 
-from .options import VideoOptions
+from ..kb.chat_export import parse_chat_export
+from .options import FORMATS, VideoOptions
 from .player import render_player_html
 from .render import RendererUnavailable
 from .service import render_chat_video
 from .timeline import build_timeline
-
-_FORMATS = ("gif", "mp4", "webm")
 
 
 class Args(argparse.Namespace):
@@ -67,7 +70,7 @@ def parse_args(argv: list[str]) -> Args:
     p.add_argument(
         "--fmt",
         action="append",
-        choices=_FORMATS,
+        choices=FORMATS,
         default=[],
         help="an extra format to write beside --out",
     )
@@ -113,10 +116,18 @@ def parse_args(argv: list[str]) -> Args:
     ns = p.parse_args(argv, namespace=Args())
     ns.out = ns.out or ns.source.with_suffix(".gif")
     primary = ns.out.suffix.lstrip(".").lower()
-    if primary not in _FORMATS:
-        p.error(f"--out must end in one of {', '.join(_FORMATS)} (got {ns.out.name!r})")
+    if primary not in FORMATS:
+        p.error(f"--out must end in one of {', '.join(FORMATS)} (got {ns.out.name!r})")
     fmt = (primary, *[x for x in ns.fmt if x != primary])
-    ns.options = VideoOptions(
+    try:
+        ns.options = _options(ns, fmt)
+    except ValueError as exc:
+        p.error(str(exc))
+    return ns
+
+
+def _options(ns: Args, fmt: tuple[str, ...]) -> VideoOptions:
+    return VideoOptions(
         width=ns.width, height=ns.height, chat_width=ns.chat_width, scale=ns.scale,
         zoom=ns.zoom, zoom_ms=ns.zoom_ms,
         type_ms=ns.type_speed, stream_ms=ns.stream_speed, tool_pause_ms=ns.tool_pause,
@@ -124,21 +135,21 @@ def parse_args(argv: list[str]) -> Args:
         max_asset_bytes=ns.max_asset_bytes,
         fmt=fmt,
     )  # fmt: skip
-    return ns
 
 
 def main(argv: list[str] | None = None) -> int:
     ns = parse_args(sys.argv[1:] if argv is None else argv)
-    data = json.loads(ns.source.read_text(encoding="utf-8"))
-    title = str(data.get("title") or ns.source.stem)
-    messages = data.get("messages")
-    if not isinstance(messages, list):
-        print(
-            f"{ns.source}: expected a 'messages' list (the .chat.json export shape)",
-            file=sys.stderr,
-        )
+    # The validator the KB upload runs on these same files: one sentence
+    # naming the part of a hand-edited file to fix, never a traceback.
+    try:
+        title, messages = parse_chat_export(ns.source.read_bytes())
+    except ValueError as exc:
+        print(f"{ns.source}: {exc}", file=sys.stderr)
         return 2
     timeline = build_timeline(title=title, messages=messages, options=ns.options)
+    plays = f"will play {timeline.playback_ms / 1000:.1f}s"
+    if timeline.time_scale < 1:
+        plays += f" (squeezed from {timeline.estimated_ms / 1000:.1f}s to fit --max-seconds)"
     wanted = timeline.referenced_paths()
     assets = load_assets(ns.files, wanted) if ns.files is not None else {}
     for missing in (p for p in wanted if p not in assets):
@@ -148,8 +159,9 @@ def main(argv: list[str] | None = None) -> int:
         ns.html.write_text(
             render_player_html(timeline, ns.options, assets=assets), encoding="utf-8"
         )
-        print(f"wrote {ns.html} (estimated {timeline.estimated_ms / 1000:.1f}s)")
+        print(f"wrote {ns.html} ({plays})")
         return 0
+    print(plays)
     try:
         with tempfile.TemporaryDirectory(prefix="chat-video-") as tmp:
             videos = render_chat_video(
@@ -162,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
     except RendererUnavailable as exc:
         print(str(exc), file=sys.stderr)
         return 3
+    except RuntimeError as exc:  # RecordingTimedOut, a failed ffmpeg
+        print(f"render failed: {exc}", file=sys.stderr)
+        return 4
     for fmt, blob in videos.items():
         target = ns.out if fmt == ns.options.fmt[0] else ns.out.with_suffix(f".{fmt}")
         target.write_bytes(blob)

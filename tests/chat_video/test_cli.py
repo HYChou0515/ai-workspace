@@ -1,20 +1,24 @@
-"""`python -m workspace_app.chat_video` (P4): flags are `VideoOptions`, one for one.
+"""`python -m workspace_app.chat_video` (P4): every `VideoOptions` field has a flag.
 
-The parser is the only thing under test here; what it feeds is the same
-`render_chat_video` the service tests cover. A CLI that quietly ignored a
-flag would be found here, not in someone's presentation.
+The parser, and `main` with the renderer stood in for; what the renderer does
+is the service tests' business. A CLI that quietly ignored a flag would be
+found here, not in someone's presentation.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from workspace_app.agent.shown_files import declare_shown_files
 from workspace_app.chat_video.cli import load_assets, main, parse_args
 from workspace_app.chat_video.options import VideoOptions
+from workspace_app.chat_video.render import RecordingTimedOut, RendererUnavailable
 
 
-def test_every_option_has_a_flag_and_the_output_name_picks_the_format():
+def test_every_field_has_a_flag_and_the_output_name_picks_the_format():
     ns = parse_args(
         [
             "chat.json", "-o", "demo.mp4",
@@ -112,3 +116,113 @@ def test_html_mode_inlines_a_shown_image_from_files_dir(tmp_path):
     assert main([str(src), "--html", str(out), "--files", str(ws)]) == 0
 
     assert "data:image/png;base64,iVBORw0KGgo" in out.read_text()
+
+
+def _source(tmp_path, body: object) -> Path:
+    src = tmp_path / "c.chat.json"
+    src.write_text(body if isinstance(body, str) else json.dumps(body))
+    return src
+
+
+@pytest.mark.parametrize(
+    ("body", "word"),
+    [
+        ('{"title": "t", "messages": [}', "invalid JSON"),
+        ([1, 2], "object at the top level"),
+        ({"messages": [{"role": "user", "content": "x"}]}, '"title"'),
+        ({"title": "t", "messages": [{"role": "user", "content": "x"}, "oops"]}, "message 2"),
+        ({"title": "t", "messages": [{"role": "user", "content": ["a", "b"]}]}, "message 1"),
+    ],
+)
+def test_a_hand_edited_file_that_is_wrong_gets_one_sentence_naming_what(
+    tmp_path, capsys, body, word
+):
+    """The same validator the KB upload path runs on these files
+    (`kb.chat_export.parse_chat_export`), so the sentence is the one an
+    operator already knows — and never a traceback."""
+    code = main([str(_source(tmp_path, body)), "--html", str(tmp_path / "p.html")])
+
+    assert code == 2
+    assert word in capsys.readouterr().err
+
+
+def test_an_invalid_option_is_one_sentence_too(tmp_path, capsys):
+    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "x"}]})
+
+    with pytest.raises(SystemExit) as stop:  # argparse's own refusal: a line + exit 2
+        main([str(src), "--html", str(tmp_path / "p.html"), "--speed", "0"])
+
+    assert stop.value.code == 2 and "speed must be positive" in capsys.readouterr().err
+
+
+def test_recording_writes_every_format_and_says_how_long_it_will_play(
+    tmp_path, capsys, monkeypatch
+):
+    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "hi"}]})
+    monkeypatch.setattr(
+        "workspace_app.chat_video.cli.render_chat_video",
+        lambda **k: {fmt: f"{fmt}-bytes".encode() for fmt in k["options"].fmt},
+    )
+
+    code = main([str(src), "-o", str(tmp_path / "demo.mp4"), "--fmt", "gif"])
+
+    assert code == 0
+    assert (tmp_path / "demo.mp4").read_bytes() == b"mp4-bytes"
+    assert (tmp_path / "demo.gif").read_bytes() == b"gif-bytes"
+    out = capsys.readouterr().out
+    assert "will play" in out and "s" in out and "wrote" in out
+
+
+@pytest.mark.parametrize(
+    ("exc", "code", "word"),
+    [
+        (RendererUnavailable("install the chat-video extra"), 3, "chat-video"),
+        (RecordingTimedOut("the page did not finish within 45s"), 4, "did not finish"),
+        (RuntimeError("ffmpeg failed encoding gif: boom"), 4, "ffmpeg"),
+    ],
+)
+def test_a_renderer_failure_is_its_sentence_and_an_exit_code(
+    tmp_path, capsys, monkeypatch, exc, code, word
+):
+    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "hi"}]})
+
+    def fail(**_k):
+        raise exc
+
+    monkeypatch.setattr("workspace_app.chat_video.cli.render_chat_video", fail)
+
+    assert main([str(src), "-o", str(tmp_path / "demo.gif")]) == code
+    assert word in capsys.readouterr().err
+
+
+def test_an_output_name_without_a_known_extension_is_refused_by_name(tmp_path, capsys):
+    with pytest.raises(SystemExit) as stop:
+        parse_args(["chat.json", "-o", "demo"])
+
+    assert stop.value.code == 2 and "--out must end in one of" in capsys.readouterr().err
+
+
+def test_a_squeezed_transcript_is_told_so_and_a_missing_file_is_noted(
+    tmp_path, capsys, monkeypatch
+):
+    """Two things the person needs to know before the recording starts: the
+    video will be shorter than the transcript asked for, and a file the
+    transcript shows will be a card because nobody handed over its bytes."""
+    src = _source(
+        tmp_path,
+        {
+            "title": "t",
+            "messages": [
+                {"role": "user", "content": "x" * 400},
+                {"role": "assistant", "content": "y" * 400 + " ![c](/gone.png)"},
+            ],
+        },
+    )
+    monkeypatch.setattr("workspace_app.chat_video.cli.render_chat_video", lambda **k: {"gif": b"g"})
+
+    code = main([str(src), "-o", str(tmp_path / "d.gif"), "--max-seconds", "5"])
+
+    out, err = capsys.readouterr()
+    assert code == 0
+    assert "squeezed from" in out and "will play 5" in out
+    assert "/gone.png shown as a card (pass --files DIR)" in err

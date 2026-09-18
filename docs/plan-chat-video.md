@@ -120,6 +120,29 @@ src/workspace_app/chat_video/
 - **模板不能塞在 Python 字串裡**(E501 整片紅),改成 package data `player.html` 用 `importlib.resources` 讀。
 - **reasoning 後 `content` 為空的訊息會多一個空的 answer step**;改成只有思考時不吐 answer。
 - 沒做「`--zoom 1` 時 JS 不推進」的測試(那要真瀏覽器);JS 的 `if (!(k > 1)) return` 是那條規則,親眼看過 `--zoom 1` 的錄影。
+- **第一輪 review(符合度 / 回歸 / 真實性三把鏡頭)抓到的,P7 修掉:**
+  - `tool_args` **沒截斷**(plan 第 46 行寫了「截斷」):一個 `write_file` 就把卡片撐成 4,000 px、標頭在畫面外 3,500 px。
+    現在參數 JSON 也吃 `tool_output_chars`。
+  - `record()` **整個函式沒有任何測試執行到**、`chat_video/__main__.py` 沒進 coverage omit——full-suite 100% gate 會紅。
+    補了假 `playwright.sync_api` 的單元測試(Chromium 沒裝的句子、逾時、成功路徑)+ 一條真 Chromium 錄 400×300 並
+    ffprobe 回 400,300 的 integration 測試;套件 statements + branches 100%。
+  - 錄影 deadline 用的是**未壓縮**估算(40 則 × 500 字、`max_seconds=1` ⇒ 31 分鐘的 deadline);plan 寫的是
+    `max_seconds × 1.5 + 30`。改成 `playback_ms`(壓縮後 + 開銷)× 1.5 + 30 s。CLI 印的也改成 `playback_ms`。
+  - 上限是**軟的**:每字瀏覽器開銷壓不掉(20k 字無論 `max_seconds` 都 ~110 s);文件與 options docstring 明講。
+  - 「每個延遲都走 `t()`」的守衛只是 `count("PACING.") >= 8`,而 script 有 10 處——兩個字面量都放得過。改成
+    「每個 `sleep(` 都是 `sleep(t(`、`t(` 後面不能是數字」;突變體 `sleep(t(600))` 現在紅。
+  - Chromium 沒裝(`playwright install` 沒跑)是整段 traceback、頁面逾時是 traceback 且沒有檔案、ffmpeg 逾時是
+    traceback、ffmpeg 缺少要等**錄完**才發現:四條都改成一句話,ffmpeg 在錄之前就查。
+  - 手改 JSON 的常見錯誤全是 traceback,而 repo 已經有 `kb.chat_export.parse_chat_export`(KB 上傳用):CLI 改用它。
+  - `VideoOptions` 零驗證(`--speed 0` ZeroDivisionError、`fmt=["exe"]` 錄完才被 ffmpeg 拒絕):加 `__post_init__`,
+    三個讀者(旗標 / job payload 的 msgspec decode / 表單)同一套。
+  - `stopped_reason` 小標沒做(plan 第 45 行);補上。
+  - 句子:「指令會印出預估秒數」錄影路徑其實沒印;「3% 內」量出來預設速度是 +4.5%、短片 +14%、壓縮片 −68%(印的是
+    未壓縮數);Chromium「約 150 MB」實際 ~860 MB;`CHAR_OVERHEAD_MS` 註解的「600 字」實際 485、「speed 與壓縮都縮不了」
+    量出來會縮(6.5 → 4.0 → 2.1 ms/字);`+30_000` 不是 floor 是 slack;「Chromium is the only renderer」被 `--html` 自己
+    否定;`test_service` 的 scratch 斷言查錯路徑(永遠綠);plan 的 `-> bytes`(實際 `dict[fmt, bytes]`)、
+    `estimated_seconds()`(實際 `estimated_ms`)、`docs/demo-chat-video.md`(實際 `chat-video.md`)、「可摺」(沒做)、
+    「照 `ms` 播」(script 不讀 `ms`)。全部改掉或記在這裡。
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
   加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進

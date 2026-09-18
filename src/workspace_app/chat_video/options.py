@@ -11,6 +11,7 @@ from __future__ import annotations
 import msgspec
 
 Format = str  # "gif" | "mp4" | "webm"
+FORMATS: tuple[Format, ...] = ("gif", "mp4", "webm")
 
 
 class VideoOptions(msgspec.Struct, frozen=True):
@@ -44,9 +45,12 @@ class VideoOptions(msgspec.Struct, frozen=True):
     speed: float = 1.0
     """Uniform multiplier on every delay; ``2`` plays twice as fast."""
     max_seconds: int = 90
-    """Ceiling on the whole animation. A transcript that would run longer is
-    compressed uniformly to fit — a 200-message chat must not become a
-    twenty-minute job on a worker."""
+    """Ceiling on the animation as ASKED FOR: a transcript that would run
+    longer has every delay compressed uniformly to fit — a 200-message chat
+    must not become a twenty-minute job on a worker. Soft by one term: the
+    browser's own per-character cost is not a delay and does not compress,
+    so a very long transcript still runs over (``Timeline.overhead_ms`` is
+    that term; ``playback_ms`` the honest total)."""
 
     # ── what is shown ──────────────────────────────────────────────────
     tool_output_chars: int = 600
@@ -56,3 +60,30 @@ class VideoOptions(msgspec.Struct, frozen=True):
     bigger ones become a file card. The page carries its pictures (it fetches
     nothing), and a 40 MB page is a slow, memory-hungry recording."""
     fmt: tuple[Format, ...] = ("gif",)
+
+    def __post_init__(self) -> None:
+        """Refuse nonsense here, once, for every reader — a flag, a decoded job
+        payload (msgspec runs this on decode too) or a form — with the field
+        named. Before this, ``speed=0`` was a ZeroDivisionError in the
+        timeline and ``fmt=("exe",)`` was found by ffmpeg after the whole
+        recording had run."""
+        checks = (
+            (16 <= self.width <= 7680, "width must be 16..7680"),
+            (16 <= self.height <= 4320, "height must be 16..4320"),
+            (self.chat_width >= 200, "chat_width must be at least 200"),
+            (self.scale >= 0, "scale must be 0 (automatic) or positive"),
+            (self.zoom >= 1, "zoom must be at least 1 (1 = no push-in)"),
+            (self.zoom_ms >= 0, "zoom_ms must not be negative"),
+            (self.type_ms >= 0, "type_ms must not be negative"),
+            (self.stream_ms >= 0, "stream_ms must not be negative"),
+            (self.tool_pause_ms >= 0, "tool_pause_ms must not be negative"),
+            (self.speed > 0, "speed must be positive"),
+            (self.max_seconds >= 1, "max_seconds must be at least 1"),
+            (self.tool_output_chars >= 1, "tool_output_chars must be at least 1"),
+            (self.max_asset_bytes >= 0, "max_asset_bytes must not be negative"),
+            (bool(self.fmt), "fmt must name at least one format"),
+            (all(f in FORMATS for f in self.fmt), f"fmt must be among {', '.join(FORMATS)}"),
+        )
+        for ok, why in checks:
+            if not ok:
+                raise ValueError(why)
