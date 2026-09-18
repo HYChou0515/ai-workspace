@@ -67,9 +67,13 @@ markup. No other change.
 
 ### `ChatListRail.tsx`
 
-Both `.map`s render `<NavGlyph …>` before the text. `.chat-rail__menu-item`
-becomes `display: flex; align-items: center; gap: var(--space-8)` so the glyph
-and the label sit on one line at every width.
+Both `.map`s render `<NavGlyph …>` before the text. The ☰ menu's items become
+a flex row — `.chat-rail__menu > .chat-rail__menu-item { display: flex;
+align-items: center; gap: var(--space-8) }` — so the glyph and the label sit on
+one line at every width. **Scoped to the ☰ menu on purpose** (P3): the ⋯ row
+menu's Rename / Share / Delete buttons share `.chat-rail__menu-item`, sit in a
+flex column and are centred by the UA button default; `display: flex` on the
+bare class would have left-aligned them.
 
 ### `usePlatformDestinations.ts`
 
@@ -93,6 +97,8 @@ a false sentence, and the file is the one both menus are told to read.
   change" pin.
 - **P2** The rail renders `NavGlyph` in both sections + the flex CSS + the stale
   comment removed. Red first (see test plan).
+- **P3** The flex row scoped to `.chat-rail__menu > …` — found by the regression
+  lens on my own diff before the push (below).
 
 ## Test plan (red first, targeted only)
 
@@ -143,3 +149,41 @@ section.
 - Existing tests: `GlobalNav.test.tsx` (mocks apps with `icon: "flame"` /
   `"bug"`), `ChatListRail.test.tsx:86-100` (opens the menu via
   `button /platform menu/i`, asserts destination hrefs), `AppIcon.test.tsx`.
+
+## Live check (2026-09-19, worktree build on 127.0.0.1:8256, real Chromium)
+
+Merged `origin/master` (`06131733`, Skill hub) first so the menu matches the
+report's screenshot. A fresh Playground item, the rail's ☰ opened by
+`button[name="Platform menu"]`; at 390 the rail was tucked and `Show scratches`
+expanded it first. Per entry: the `[role=menuitem]`, its glyph
+(`[data-icon]` / `img`), whether the glyph's vertical centre is within 4px of
+the row's, and the row height.
+
+| width | entries | with glyph | glyph on the label's line | row height |
+|---|---|---|---|---|
+| 1280 | 11 | 11 | 11 | 30px |
+| 390 | 11 | 11 | 11 | 30px |
+
+Glyphs, in order: sparkle, kanban, flame, flame · layers, check, sparkle,
+layers, external, sparkle, quote — the same names the global switcher draws
+for the entries it shares (probed on `/kb`: Playground sparkle, PM kanban, RCA
+flame, Topic Hub flame, Knowledge base layers, WUI external). Screenshots
+`rail-menu-1280.png`, `rail-390.png`, `switcher-1280.png` (job tmp; not
+committed).
+
+## Self-review before the push (conformance / veracity / regression on my own diff)
+
+- Conformance: P1 (`NavGlyph`, both forms; `GlobalNav` uses it; its test file
+  unchanged — the diff stat for it is empty) and P2 (both rail sections, flex
+  CSS, the "text-only" sentence gone) match the Design section; the test plan's
+  three `NavGlyph` cases and the per-item rail case exist; mutation pins (1)
+  and (2) run — each reddens only the new test, naming that section's first
+  entry (`RCA` / `Knowledge base`), the other 24 stay green.
+- Veracity: every `file:line` in Verified ground truth was re-checked against
+  the worktree (one corrected: `MenuLink` starts at :31). Commit claims about
+  which test reddens on which mutation were produced by running them.
+- Regression — **one finding, fixed as P3**: `.chat-rail__menu-item` is also
+  the ⋯ row menu's button class. Probe on the built bundle: ☰ items compute
+  `display: flex` (11/11); ⋯ buttons compute `block / center` — as on master.
+  Before the scoping they would have computed `flex` and read left-aligned.
+
