@@ -13,6 +13,7 @@
 5. 「簡單一點,在檔案寫進度就好了。」「取消 = 把進度檔刪掉,想法很好。」心跳「十秒一次就可以了」。
 6. 「我相信放在 job 裡面會比較適合,因為 memory 很高,而且又是 chromium 又是 ffmpeg,不會是 sandbox 標配。」
 7. 「你要寫好 coordinator,跟著 run consumer 啟動與否;他比較另類需要自己的 docker。」
+8. 「這個 job input 歷史對話的部分應該是 json(可能只有部分,但是一個完整 json)以及其他設定與 output 位置,這樣我才能在我需要的時候打後端 api 生成固定字句的 video。」
 
 ## 量到的事實(2026-09-19,這台 Debian 11,12 則的範例 `docs/examples/chat-video-sample/`)
 
@@ -37,13 +38,14 @@
 | 1 | **在 job queue 的 worker pod 跑,不進 sandbox**:依賴 ~1 GB、記憶體 GB 級,不是 sandbox 標配 | 需求 6 |
 | 2 | **影片寫進 workspace** `/exports/chat-video/<標題>-<yyyymmdd-hhmm>.<fmt>`:檔案樹看得到、既有 `GET /files/{path}` 下載、可 `show_file`、能讀 item 的人都拿得到、算 workspace 額度;不做 run 模型的 Binary | user 選 A |
 | 3 | worker 照 **blob-gc 先例**從 `build_app` 組(`API_REGISTRY_JOBTYPES` 加 `chat-video`),所以有 API 同一個 `WorkspaceFiles`;**不開 sandbox** | 事實 |
-| 4 | 觸發要 **`read_chat` + `read_content` + `add_content`** 三個動詞;route 查一次、worker 寫檔前用 `job.info.created_by` **再查一次**(同 import 的 `_may_write`);前端照動詞決定按鈕**顯示與否** | 第 2 題 |
+| 4 | 影片 route 要 **`read_content` + `add_content`**(transcript 是呼叫者供的;活對話那條路的 `read_chat` 由前端先走的 `export-chat` 把關);route 查一次、worker 寫檔前用 `job.info.created_by` **再查一次**(同 import 的 `_may_write`);前端照三個動詞決定按鈕**顯示與否** | 第 2 題 |
 | 5 | **Markdown 匯出在伺服端**:`GET …/export-chat?format=json\|md`(預設 json 不變),`md` 回 `text/markdown` + `<標題>.chat.md`;純函式 `build_chat_markdown` 與 JSON 同一份 messages | 第 3 題 |
-| 6 | **範圍 = 訊息位置**,API 用絕對位置、0 起算、半開 `[start, end)`,不給 = 全部,不合法 422 一句話;json / md / 影片三者共用;有範圍時檔名加 ` (N–M)` | 第 4 題 |
+| 6 | **範圍 = 訊息位置**,`export-chat` 用絕對位置、0 起算、半開 `[start, end)`,不給 = 全部,不合法 422 一句話;json / md 直接用,影片是前端先拿切好的 JSON 再送 job;有範圍時檔名加 ` (N–M)` | 第 4 題 |
+| 6b | **job 的輸入是一份完整的 `.chat.json` + 設定 + 輸出位置,不綁 chat_id**:`POST …/items/{item_id}/chat-video {transcript, options, output_path?}`;API 先把 transcript 寫成 workspace 裡的 **source 檔** `<output>.chat.json`(留著,改了再 POST 就重生),job row 只帶路徑(#723 的 job row 沒圍籬,對話內容不能放上去);worker 用 `parse_chat_export` 讀 source,和 CLI 同一條 | 需求 8 |
 | 7 | **前端從新往舊數**:全部 / 最近 N 則 / 自訂(從–到兩個選單,最新在最上),用**開窗當下的快照**換算成絕對位置 | 需求 2 |
 | 8 | **尺寸:三種輸入法、一個結果**——比例+解析度滑桿 / 比例+文字大小 / 直接寬×高;永遠顯示「寬 × 高 ・ 文字倍率 ・ 約 N MB」;送出的是 `width` / `height` / `scale`(0 = 自動) | 需求 4 |
 | 9 | 露出六個影片選項:尺寸、格式(mp4 / gif / webm 單選)、速度、打字、推進輸入框、最長秒數;其餘 `VideoOptions` 預設 | 第 5 題 |
-| 10 | **上限在伺服端**(`config.yaml` `chat_video:` 段、有預設、`config.example.yaml` 附範例、`docs/migrations.md` 記一筆):總像素 ≤ 1920×1080、`max_seconds` ≤ 180、輸出檔 ≤ 100 MB(超過 → 失敗一句話、不寫檔)、既有 workspace 額度、每 chat + 每 user 各一支 in-flight(409) | 需求 3 |
+| 10 | **上限在伺服端**(`config.yaml` `chat_video:` 段、有預設、`config.example.yaml` 附範例、`docs/migrations.md` 記一筆):總像素 ≤ 1920×1080、`max_seconds` ≤ 180、輸出檔 ≤ 100 MB(超過 → 失敗一句話、不寫檔)、既有 workspace 額度、每 item + 每 user 各一支 in-flight(409) | 需求 3 |
 | 11 | **進度就是 workspace 裡的一個檔** `<輸出檔>.progress.json`,不做 run 模型、不做狀態 route;完成刪掉、失敗留著 | 需求 5 |
 | 12 | **取消 = 刪掉進度檔**;worker **每 10 秒心跳**:讀進度檔(不在 → 取消:錄影關瀏覽器、編碼 kill ffmpeg、都 10 秒內)、在就寫回 `stage / elapsed_seconds / heartbeat_at`;`heartbeat_at` 超過 60 秒沒動 = worker 死了,殘檔可覆蓋 | 需求 5 |
 | 13 | **自己的 image** `rca-app-chat-video`(Dockerfile 加 stage,不塞進 `rca-app`);k8s 一顆 `rca-worker-chat-video` 照 blob-gc 抄;all-in-one 時 API 進程自己吃 job,沒裝工具 → 進度檔寫那句安裝提示、不炸 API | 第 7 題 |
@@ -54,22 +56,25 @@
 
 ```
 前端 Export ▾ ── 文字 JSON/MD ──► GET  …/chats/{id}/export-chat?format=&start=&end=   (read_chat) ──► 直接下載
-           └── 影片 ────────────► POST …/chats/{id}/video  {options, start, end}
-                                   (read_chat + read_content + add_content)
-                                   ① 驗 options 對 config 上限        ② 同 chat / 同 user 有活的進度檔 → 409
-                                   ③ build_timeline → expected_seconds ④ files.write(progress.json, stage=queued)
-                                   ⑤ enqueue ChatVideoJob(payload, partition_key=chat_id)
-                                   ⑥ 202 {output_path, progress_path, expected_seconds}
+           └── 影片 ── ① GET export-chat?start=&end=(切好的 JSON) ──────────────────────────────┐
+                       ② POST …/items/{item_id}/chat-video {transcript, options, output_path?}  ◄──┘
+                          (read_content + add_content;你自己打 API 也是這一條:transcript 可以是手寫的)
+                          a. parse_chat_export(transcript)、check_limits(options)、output_path 在 workspace 內且不存在
+                          b. 同 item 同 user 有活的進度檔 → 409
+                          c. build_timeline → expected_seconds
+                          d. files.write(<output>.chat.json = source)、files.write(<output>.progress.json, stage=queued)
+                          e. enqueue ChatVideoJob(payload = 路徑們 + options, partition_key=item_id)
+                          f. 202 {output_path, source_path, progress_path, expected_seconds}
                     ┌───────────────────────────────────────────────────────────────────┐
                     │ worker `chat-video`(從 build_app 組;或 all-in-one 的 API 進程)        │
-                    │ _handle: 讀 Conversation → 切 [start,end) → 再授權(created_by)        │
+                    │ _handle: 再授權(created_by)→ files.read(source) → parse_chat_export  │
                     │   → 對 referenced_paths() 逐一 files.read(item, path)(有大小上限)   │
                     │   → 心跳 task(每 10 s):讀進度檔;不在 → 取消旗標;在 → 寫 stage/elapsed │
                     │   → to_thread(render_chat_video(…, should_stop=旗標))                 │
                     │       record():每 2 s 切片等 done,切片之間看旗標 → 關瀏覽器            │
                     │       encode():Popen + 每秒 poll,看旗標 → kill                        │
                     │   → 輸出 > max_output_bytes → 失敗一句話                               │
-                    │   → ensure_room_for(len) → files.write(output) → 刪進度檔              │
+                    │   → ensure_room_for(len) → files.write(output) → 刪進度檔(source 留著)  │
                     │   失敗:進度檔 stage=failed + error 一句話,留著                         │
                     └───────────────────────────────────────────────────────────────────┘
 前端:輪詢 GET /files/<progress_path>(1 s → 8 s 退避)→ header 狀態列「🎬 製作中 · 預計 41 s」+ 進度條(elapsed/expected)
@@ -93,10 +98,10 @@ src/workspace_app/chat_video/
   options.py    VideoOptions(既有)+ ChatVideoLimits(config 段的 struct)+ check_limits(options, limits) -> None | 422 句
   render.py     record(html, options, workdir, *, expected_ms, should_stop)  切片等待;encode(src, fmt, out, *, should_stop)  Popen 輪詢
   service.py    render_chat_video(…, should_stop=None)(既有簽名加一個 callback)
-  jobs.py       ChatVideoPayload / ChatVideoJob / ChatVideoCoordinator(enqueue / _handle / 心跳 / 進度檔 / 授權)
+  jobs.py       ChatVideoPayload(item_id, source_path, output_path, progress_path, options)/ ChatVideoJob / ChatVideoCoordinator(enqueue / _handle / 心跳 / 進度檔 / 授權)
   progress.py   Progress struct + read/write/delete(全部走 WorkspaceFiles)
 src/workspace_app/kb/chat_export.py   build_chat_markdown(title, messages);slice_messages(messages, start, end)
-src/workspace_app/api/chat_routes.py  export-chat 加 format/start/end;新 POST …/chats/{chat_id}/video
+src/workspace_app/api/chat_routes.py  export-chat 加 format/start/end;新 POST …/items/{item_id}/chat-video(item 層級,不綁 chat)
 src/workspace_app/coordinators.py     bundle 加 chat_video(受 run_consumers 控制,同其他)
 src/workspace_app/worker/__init__.py  _JOBTYPE_ATTR 加 "chat-video";API_REGISTRY_JOBTYPES 加 "chat-video"
 config/schema.py                       chat_video: {max_pixels, max_seconds, max_output_bytes, heartbeat_seconds=10, stale_after_seconds=60}
@@ -146,8 +151,8 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 
 - **影片是聊天視窗畫的,不是比它好看的**(#817 第八輪的結論):圖片型別由檔名決定、和檔案路由共用同一函式;這裡不變。
 - 進度不是真百分比(錄影是一段阻塞呼叫),是 `elapsed / expected`,每 10 秒真的前進;文案用「預計」。
-- 進度檔在檔案樹裡看得到(在 `/exports/chat-video/` 底下),失敗的會留著——這是刻意的:人看得到、也刪得掉。
-- 同一 chat 第二次匯出會排在第一次後面(partition_key)但 route 先 409——簡單優先。
+- 進度檔在檔案樹裡看得到(在 `/exports/chat-video/` 底下),失敗的會留著——這是刻意的:人看得到、也刪得掉。source 檔 `<output>.chat.json` 也留著:它就是「固定字句」,改了再 POST 一次就重生;不想要就刪。
+- 同一 item 第二次匯出會排在第一次後面(partition_key = item_id)但 route 先 409——簡單優先。
 - 匯出對話框沒有 `useDirtyClose`:它裝的是**選項**不是未存的工作,Escape / ✕ 丟掉的只是幾個下拉的選擇;`closeOnBackdrop` 照 `ModalShell` 預設 false。
 - 不做:自訂路徑、多格式一次出、在對話串裡點選範圍、進度 SSE。
 
@@ -173,17 +178,17 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 測試:假 playwright 在第 N 片翻旗標 → 瀏覽器被關、丟 `Cancelled`;假 ffmpeg(sleep 的 subprocess)被 kill;心跳寫入序列。
 
 ### P5 — coordinator + worker
-- `chat_video/jobs.py`:`ChatVideoPayload(item_id, chat_id, start, end, options, output_path, progress_path)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoCoordinator(spec, *, files, locator/conversations, limits, message_queue_factory, superusers)`:
-  `enqueue()`(409 規則、進度檔 queued、job);`_handle()`(讀 Conversation、切片、再授權、讀 assets、心跳 task、`to_thread(render)`、大小上限、`ensure_room_for`、寫檔、刪進度檔;任何失敗 → 進度檔 failed 一句話)。
+- `chat_video/jobs.py`:`ChatVideoPayload(item_id, source_path, output_path, progress_path, options)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoCoordinator(spec, *, files, limits, message_queue_factory, superusers, permission_of)`:
+  `enqueue(item_id, transcript, options, output_path, user)`(驗 transcript、409 規則、寫 source 檔、進度檔 queued、job);`_handle()`(再授權、`files.read(source)` → `parse_chat_export`、讀 assets、心跳 task、`to_thread(render)`、大小上限、`ensure_room_for`、寫檔、刪進度檔;任何失敗 → 進度檔 failed 一句話)。
 - `coordinators.py` bundle 加 `chat_video`,**受 `run_consumers` 控制同其他**;`worker/__init__.py` 兩張表各加 `chat-video`;`worker.build_coordinator` 對它走 `build_app`。
 - 測試:enqueue 的 409 / 過期殘檔可覆蓋;`_handle` 全路徑(假 render);再授權失敗 → failed、不寫;取消 → 不寫、進度檔不重建;`ensure_room_for` 不足 → failed 一句話;all-in-one 沒工具 → failed 一句話。
 
 ### P6 — route
-- `POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(三動詞、`check_limits`、`build_timeline` 算 `expected_seconds`、呼叫 `enqueue`、202)。
-- 測試:三動詞各缺一個 → 403;上限 → 422;in-flight → 409;202 的 body。
+- `POST /a/{slug}/items/{item_id}/chat-video`(`read_content` + `add_content`、body `{transcript, options, output_path?}`、`parse_chat_export` 驗 transcript → 422 一句話、`check_limits`、`output_path` 在 workspace 內且不存在、`build_timeline` 算 `expected_seconds`、呼叫 `enqueue`、202)。
+- 測試:兩動詞各缺一個 → 403;壞 transcript / 上限 / 路徑逃逸或已存在 → 422;in-flight → 409;202 的 body 四個路徑;手寫的三則 transcript 也能排。
 
 ### P7 — 前端
-- `ExportMenu`(Export ▾:文字 JSON / 文字 Markdown / 影片…)→ `ExportDialog`(格式、範圍三選一 + 從/到選單最新在上、尺寸三模式 + 結果列、六個影片選項);`api/workflows.ts` 的 `fetchChatExport` 加 format / range;新 `startChatVideo`。
+- `ExportMenu`(Export ▾:文字 JSON / 文字 Markdown / 影片…)→ `ExportDialog`(格式、範圍三選一 + 從/到選單最新在上、尺寸三模式 + 結果列、六個影片選項);`api/workflows.ts` 的 `fetchChatExport` 加 format / range;新 `startChatVideo(slug, itemId, transcript, options)`——影片是 **先 fetch 切好的 JSON、再 POST**,前端用的就是對外那條 API。
 - `VideoProgress`(header 狀態列,`useQuery` 輪詢 `GET /files/<progress_path>`,退避 `pollAfter`;done / failed / 取消 = DELETE 進度檔);按鈕依三動詞顯示。
 - i18n 兩種語系;測試:範圍換算(快照、倒數 → 絕對)、尺寸三模式的換算表、進度輪詢的三種結局、按鈕顯示條件。
 
@@ -195,5 +200,6 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 
 - 前端 Export 選單三種都能出檔;md 貼進報告可讀;範圍「最近 5 則」出的內容就是最新 5 則。
 - 影片從 UI 排隊到出現在 `/exports/chat-video/`,進度條每 10 秒前進,刪進度檔 10 秒內停;上限違反時是一句話不是 traceback。
+- 用 curl 對 `POST …/chat-video` 送一份手寫三則的 transcript,也出得了影片(source / progress / mp4 三個檔都在樹裡)。
 - `run_consumers: false` + `worker chat-video` 的 pod-split 走通(本機兩個進程);`rca-app` image 大小不變。
 - ffmpeg 峰值 RSS 量到的數字 ≤ workers.yaml 的 limit;`ruff` / `ty` / targeted 測試綠;`mkdocs --strict` 綠。
