@@ -11,7 +11,7 @@ can hold a ``Binary``, ``list(self.storage.dump_meta(None))`` materialises
 EVERY ``ResourceMeta`` of the model at once — ``indexed_data`` included, which
 on ``DocChunk`` / ``ClusterMember`` is every row's embedding vectors: the
 Postgres meta store's ``values()`` decodes the ``data`` BYTEA, the full
-``ResourceMeta``, and the 0.12.1 vector strip (``docs/migrations.md`` §6)
+``ResourceMeta``, and the 0.12.1 vector strip (``docs/migrations.md#pr-524``)
 touches only the JSONB column, so ``migrate/execute`` does not shrink this
 figure — then streams each resource's revisions one at a time (the
 bulk pre-fetch, ``dump_resources_bulk``, exists only for the S3 store; disk and

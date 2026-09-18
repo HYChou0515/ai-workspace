@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from ..files import WorkspaceFiles, rel_path
 from ..files.facade import WorkspaceFull
+from ..files.media_type import media_type_for
 from ..files.zip_download import (
     DownloadPrepared,
     prepare_zip,
@@ -756,20 +757,13 @@ def register_file_routes(
     @app.get("/a/{slug}/items/{item_id}/files/{path:path}")
     async def read_file(slug: str, item_id: str, path: str) -> Response:
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        import mimetypes
-
         norm = _workspace_path(path)
         try:
             data = await files.read(investigation_id, norm)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        # Issue #40: extension → MIME first so workspace markdown reports
-        # rendering `![foo](./foo.png)` get `Content-Type: image/png`
-        # (the browser inlines) instead of `application/octet-stream`
-        # (the browser offers a download). Unknown extension → fall back
-        # to the previous UTF-8 sniff so text-with-unknown-extension
-        # still renders in the file viewer.
-        #
+        # The rule lives in `files/media_type.py` because the chat-video
+        # player must serve a picture under the SAME type this route would.
         # Guess from the NORMALISED path, not the raw one. `GET /files/logo.png/`
         # finds the file (the read is normalised) but `splitext` sees no extension
         # on a string ending in `/`, so the raw form fell through to the sniff and
@@ -777,16 +771,7 @@ def register_file_routes(
         # expected an inlined image, with a 200 hiding it. That contradicted this
         # module's own rule that a trailing slash must not change what a path
         # means, one line after enforcing it.
-        guessed, _ = mimetypes.guess_type(norm)
-        if guessed:
-            media_type = guessed
-        else:
-            try:
-                data.decode("utf-8")
-                media_type = "text/plain; charset=utf-8"
-            except UnicodeDecodeError:
-                media_type = "application/octet-stream"
-        return Response(content=data, media_type=media_type)
+        return Response(content=data, media_type=media_type_for(norm, data))
 
     # ---- Notebook cell execution (plan-backend §7.3) ----
 

@@ -42,6 +42,26 @@ kubectl apply -k kubernetes/overlays/production
 (`kubectl apply -k` uses the built-in kustomize. Create the namespace first if it
 doesn't exist: `kubectl create ns rca-prod`.)
 
+## Upgrade
+
+Rolling a new image is the same `kubectl apply -k` — but **before** it, read the
+upgrade runbook, [`docs/migrations.md`](../docs/migrations.md): one entry per
+merged PR that needs an operator's hand (a data backfill, a removed or moved
+config key, a default that changed, a worker or manifest to add), in master
+order, oldest first. The entries you owe are the PRs between what you run and
+what you are about to roll:
+
+```bash
+git log --first-parent --oneline <your-running-commit>..origin/master | grep -o '#[0-9]*'
+```
+
+Each entry says what to run, WHEN (before the rollout / after / while the new
+pods are held unready), and what skipping it looks like. One of them **blocks
+the rollout**: a `workspace-file` backfill ([#668](../docs/migrations.md#pr-668))
+keeps every new pod at `/api/readyz` 503 until it is done, and it must be run by
+port-forwarding a NEW pod, not through the Service — a rollout that "hangs with
+the new pods never ready" is that entry, not a broken image.
+
 ## Sub-path (`company.com/my-svc/rca`)
 
 Three pieces must agree on the prefix:

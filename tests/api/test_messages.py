@@ -1052,6 +1052,22 @@ async def test_read_file_falls_back_to_utf8_when_extension_unknown(harness: Harn
     assert resp.headers["content-type"].startswith("text/plain")
 
 
+async def test_read_file_serves_the_shared_media_type_rule(harness: Harness, monkeypatch):
+    """`files/media_type.py:media_type_for` is the one rule for a file's
+    Content-Type — the chat-video player sends a picture under the same
+    type, so the two cannot drift. This pins that the route CALLS it (a
+    copy kept alike by hand would pass every other test here)."""
+    monkeypatch.setattr(
+        "workspace_app.api.file_routes.media_type_for", lambda path, data: "x/pinned"
+    )
+    await harness.filestore.write(harness.iid, "/a.txt", b"hello")
+
+    resp = harness.client.get(harness.wpath("/files/a.txt"))
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("x/pinned")
+
+
 def test_read_file_missing_returns_404(harness: Harness):
     resp = harness.client.get(harness.wpath("/files/nope"))
     assert resp.status_code == 404

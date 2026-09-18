@@ -16,6 +16,9 @@ dependencies = [
     "litellm>=1.85.1",
     "llama-index-core>=0.10,<0.11",
     "llama-index-readers-file>=0.1.33",
+    # Renders an assistant answer for the chat-video player. Already here by
+    # way of rich (litellm); declared now because we import it.
+    "markdown-it-py>=3",
     "openai-agents>=0.17.3",
     "openpyxl>=3.1.5",
     "pypdfium2>=5.9.0",
@@ -41,6 +44,19 @@ process-sandbox = [
 # the broker; the in-memory default needs nothing.
 rabbitmq = [
     "aio-pika>=9.4.0",
+]
+# Rendering a chat transcript to video (`workspace_app.chat_video`,
+# docs/plan-chat-video.md): a headless Chromium records the player page. Only
+# the pod that renders needs it — the timeline and the page import without it.
+# After `uv sync --extra chat-video`, run `playwright install chromium` once;
+# ffmpeg comes from the OS. Pinned to 1.49 because of the BROWSER download,
+# not the wheel: with 1.63 installed, `playwright install` refuses Debian 11
+# ("does not support … on debian11-x64"), which is what the dev boxes run —
+# raise it when the image base moves. The pin also holds greenlet at 3.1.x
+# for the whole lock (playwright's own hard pin); nothing at runtime uses
+# greenlet today.
+chat-video = [
+    "playwright>=1.49,<1.50",
 ]
 
 [build-system]
@@ -92,6 +108,7 @@ omit = [
     "src/workspace_app/worker/__main__.py",  # #312: settings-driven composition + CLI glue
     "src/workspace_app/changelog/__main__.py",  # #441: git-log walk + file IO glue
     "src/workspace_app/skill_eval/__main__.py",  # CLI glue + litellm IO; the library is unit-tested
+    "src/workspace_app/chat_video/__main__.py",  # two lines of `raise SystemExit(main())`; cli.py is tested
 ]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.
