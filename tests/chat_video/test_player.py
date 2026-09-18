@@ -57,6 +57,17 @@ def test_the_frame_size_reaches_the_page_as_variables():
     assert "--chat-w: 900px" in page
 
 
+def test_the_ui_scales_with_the_frame_unless_told_otherwise():
+    """A 1080p frame is not a 720p page with more black around it: the whole
+    UI grows with the frame (1.5× at 1080p, 3× at 4K), never below 1, and
+    `scale` overrides the rule when someone wants a denser or larger look."""
+    assert "--ui-scale: 1;" in _page([], width=1280, height=720)
+    assert "--ui-scale: 1.5;" in _page([], width=1920, height=1080)
+    assert "--ui-scale: 3;" in _page([], width=3840, height=2160)
+    assert "--ui-scale: 1;" in _page([], width=1080, height=1080)  # square: never shrinks
+    assert "--ui-scale: 2;" in _page([], width=1280, height=720, scale=2.0)
+
+
 def test_an_answer_is_markdown_with_html_off_and_links_as_text():
     """Bold and code render; a raw tag in the answer is text; a markdown link
     or image stays the characters it was — no `href`, no `src`."""

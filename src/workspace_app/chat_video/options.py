@@ -20,7 +20,12 @@ class VideoOptions(msgspec.Struct, frozen=True):
     the viewport, so no scaling happens afterwards."""
     height: int = 720
     chat_width: int = 760
-    """The chat column's width in CSS px, centred in the frame."""
+    """The chat column's width in CSS px (before ``scale``), centred in the
+    frame."""
+    scale: float = 0.0
+    """How much the whole UI is enlarged. ``0`` = automatic: the frame's size
+    relative to 1280×720, never below 1 — so 1080p renders at 1.5× and 4K at
+    3× rather than as a small page with black around it."""
 
     # ── the camera ─────────────────────────────────────────────────────
     zoom: float = 1.8

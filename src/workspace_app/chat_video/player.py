@@ -66,6 +66,18 @@ def _template() -> str:
     return resources.files(__package__).joinpath("player.html").read_text(encoding="utf-8")
 
 
+def ui_scale(options: VideoOptions) -> float:
+    """``options.scale``, or the automatic rule: the frame relative to
+    1280×720, floored at 1 (a small or square frame keeps the base size)."""
+    if options.scale > 0:
+        return options.scale
+    return max(1.0, min(options.width / 1280, options.height / 720))
+
+
+def _css_number(value: float) -> str:
+    return str(int(value)) if value == int(value) else f"{value:g}"
+
+
 def render_player_html(timeline: Timeline, options: VideoOptions) -> str:
     payload = {
         "title": timeline.title,
@@ -77,6 +89,7 @@ def render_player_html(timeline: Timeline, options: VideoOptions) -> str:
         .replace("/*FRAME_W*/", str(options.width))
         .replace("/*FRAME_H*/", str(options.height))
         .replace("/*CHAT_W*/", str(options.chat_width))
+        .replace("/*UI_SCALE*/", _css_number(ui_scale(options)))
         .replace("/*TIMELINE*/", _embed_json(payload))
         .replace("/*OPTIONS*/", _embed_json(msgspec.to_builtins(options)))
         .replace("/*PACING*/", _embed_json(PACING))
