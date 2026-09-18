@@ -119,6 +119,9 @@ class IRequestEnv(abc.ABC):
 - **沒有 request ≠ 可以拿 service account**(第一輪 review 補的)。`send(request=None)` 只有在
   `driven_by` 有值(平台自己起的 turn)時才問 `env_without_request`;忘了傳 request 的下一個呼叫者
   掉到安全那邊——item 的 copy 而已,和 `call_lane` 的預設同一個方向。
+  另一個明說「沒有 request」的呼叫者是 **peer 重跑的 chat turn**(plan-graceful-shutdown P3,
+  `ChatSendService.rerun`):原 pod 收到的 request env 只活一輪、沒存下來,重跑直接問
+  `env_without_request`,`user_id` 是提問的人。
 - **不做 TTL / refresh / 快取。** 每輪問一次,快取與否是 impl 的事——平台快取等於平台決定
   過期政策,而它不知道對面的 token 活多久。
 

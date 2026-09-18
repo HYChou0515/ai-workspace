@@ -142,6 +142,12 @@ def _last_user_was_the_driver(conv: Conversation) -> bool:
     return False
 
 
+# The ending a claim gets when it was taken over too often; the prefix is what
+# `abandon` recognises as its own so a repeat writes nothing.
+_GIVE_UP_PREFIX = "The assistant could not finish this reply"
+_GIVE_UP_MESSAGE = _GIVE_UP_PREFIX + " after {attempts} attempts. Please send your message again."
+
+
 def _history_before(messages: list[Message], created_at: int, content: str) -> list[Message]:
     """The thread up to, not including, the user message a turn answers.
 
@@ -402,7 +408,11 @@ class ChatSendService:
         this hands out is the more privileged of the two answers, so a caller
         that merely omitted the request (the next route, a test helper) must
         fall to the item's copy alone — the same side ``call_lane`` defaults
-        to for the quota, and for the same reason.
+        to for the quota, and for the same reason. The one caller that asks
+        ``env_without_request`` WITHOUT coming through here is ``rerun``
+        (plan-graceful-shutdown P3): a peer re-running a turn whose pod went
+        away has no request by construction and says so explicitly — it is
+        not a caller that forgot to pass one.
 
         A failing impl FAILS THE SEND, before the user's message is persisted —
         the same placement as the quota gate above, and for the same reason: a
@@ -943,15 +953,23 @@ class ChatSendService:
             conv = self._conv_rm.get(claim.rid).data
             assert isinstance(conv, Conversation)
             body = _MessageBody.model_validate(claim.body)
-            caller_env: dict[str, str] | None = None
-            if self._request_env is not None:
-                caller_env = await self._request_env.env_without_request(
-                    user_id=claim.author, item_id=claim.investigation_id
-                )
         except Exception as exc:  # noqa: BLE001 — reported on the thread, like a failed preparation
             logger.exception("chat_send: re-run of %s could not be prepared", row.id)
             self._end_with_failure(claim.rid, claim.key, row.id, _terminal_error(exc))
             return
+        seam = self._request_env
+
+        async def headless_env() -> dict[str, str] | None:
+            # Resolved INSIDE the preparation window (`_start_turn`), under its
+            # heartbeat: the claim is this pod's from `take` on, and a policy
+            # that takes its time with no beat behind it read as a dead owner
+            # to the next tick, which took the claim again (round 2).
+            if seam is None:
+                return None
+            return await seam.env_without_request(
+                user_id=claim.author, item_id=claim.investigation_id
+            )
+
         await self._start_turn(
             claim.investigation_id,
             claim.rid,
@@ -961,11 +979,12 @@ class ChatSendService:
             claim.author,
             lane=cast(CallLane, claim.lane),
             driven_by=claim.driven_by,
-            caller_env=caller_env,
+            caller_env=None,
             created=claim.created_at,
             claim=row.id,
             announce=False,
             await_reply=False,
+            resolve_env=headless_env,
         )
 
     async def abandon(self, row: ClaimRow) -> None:
@@ -973,17 +992,18 @@ class ChatSendService:
         and end the thread with an error that says so, so the person stops
         waiting (#559 reads the last message) and can send again."""
         attempts = row.claim.reruns + 1  # the first run plus each takeover
-        self._end_with_failure(
-            row.claim.rid,
-            row.claim.key,
-            row.id,
-            RunError(
-                message=(
-                    f"The assistant could not finish this reply after {attempts} attempts. "
-                    "Please send your message again."
-                )
-            ),
-        )
+        failure = RunError(message=_GIVE_UP_MESSAGE.format(attempts=attempts))
+        # A `finish` the store refused leaves the row for the next tick, which
+        # gives up on it again (one more attempt on the count): the ending is
+        # written once, not once per tick.
+        with contextlib.suppress(Exception):
+            conv = self._conv_rm.get(row.claim.rid).data
+            if isinstance(conv, Conversation) and conv.messages:
+                last = conv.messages[-1]
+                if last.role == "error" and last.content.startswith(_GIVE_UP_PREFIX):
+                    self._finish_claim(row.id)
+                    return
+        self._end_with_failure(row.claim.rid, row.claim.key, row.id, failure)
 
     def _end_with_failure(
         self, rid: str, engine_key: str, claim: str | None, failure: RunError
@@ -1024,6 +1044,7 @@ class ChatSendService:
         claim: str | None,
         announce: bool,
         await_reply: bool = True,
+        resolve_env: Callable[[], Awaitable[dict[str, str] | None]] | None = None,
     ) -> None:
         """Build the turn ctx from the conversation's history and enqueue the
         turn. `created` is the persisted user message's timestamp; `claim` the
@@ -1032,7 +1053,9 @@ class ChatSendService:
         `announce` publishes the `UserMessage` live — a first send does, a
         re-run does not; `await_reply` holds the caller up to
         `send_await_timeout` for the reply — the POST wants that, the reclaim
-        tick does not."""
+        tick does not. `resolve_env`, when given, supplies the env instead of
+        `caller_env` — awaited inside the preparation window, so the wait is
+        under the turn's heartbeat."""
         # Own the preparation window from here — before any of it runs.
         #
         # Everything from this point to `enqueue` takes real time: compaction
@@ -1057,6 +1080,7 @@ class ChatSendService:
                 # what happened before Stop learned who pressed it.
                 author="" if driven_by else author,
             ) as pending:
+                env = await resolve_env() if resolve_env is not None else caller_env
                 # #739: compact BEFORE the turn is built — the thread is final for this
                 # turn (the user's message is in) and the model has not been called yet.
                 #
@@ -1214,7 +1238,7 @@ class ChatSendService:
                     # back when the request was still open — or, for a goal-driven
                     # turn with no request, what the seam gives such a turn. The
                     # item's env_vars are merged on top of these.
-                    caller_env=caller_env,
+                    caller_env=env,
                     # #613: this thread's Conversation id — the update_todos tool's row key.
                     conversation_id=rid,
                 )

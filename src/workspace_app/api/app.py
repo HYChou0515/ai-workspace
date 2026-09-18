@@ -2275,7 +2275,8 @@ def create_app(
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
         # a turn's tools see the item's env_vars alone, exactly as before.
         request_env=request_env,
-        # plan-graceful-shutdown P3: every send opens a durable claim a peer
+        # plan-graceful-shutdown P3: every app-chat send (not the KB chat's, which
+        # builds its turn in its route) opens a durable claim a peer
         # can re-run the turn from.
         turn_claims=turn_claims,
     )

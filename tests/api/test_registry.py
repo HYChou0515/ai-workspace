@@ -482,13 +482,38 @@ async def test_close_all_kills_every_alive_handle():
     assert new is not s1
 
 
+async def test_close_all_writes_back_what_it_keeps_and_forgets_what_it_kills():
+    """`kill_idle`'s rule, both halves: a kept sandbox is still written back
+    (the durable snapshot is what the next pod restores from if the live one
+    goes), and a killed one has its heartbeat row forgotten, as the reaper
+    does. Round 2 found the first half true but unpinned and the second
+    missing."""
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync, activity=activity)
+    s1 = await registry.session("ws-1")
+    await registry.ensure_handle(s1)  # active now: kept
+    s2 = await registry.session("ws-2")
+    await registry.ensure_handle(s2)
+    activity.ms["ws-2"] = 0  # idle since the epoch: killed
+    sync.calls.clear()
+
+    await registry.close_all(idle_after=timedelta(hours=8))
+    assert ("mirror", "ws-1") in sync.calls  # kept, but written back
+    assert ("mirror", "ws-2") in sync.calls
+    assert sandbox.kill_calls == 1
+    assert "ws-1" in activity.ms and "ws-2" not in activity.ms
+
+
 async def test_close_all_keeps_a_sandbox_the_fleet_is_still_using():
     """Shutdown applies `kill_idle`'s rule, not a rule of its own: a pod's
     session is pod-local, the sandbox behind it is not (#345 shared dir,
     #366 shared address). A pod being rolled kills only what no pod has
     touched past the idle threshold; the rest is written back and dropped
     from THIS pod, and the next pod warms it. Round 1 of #815 found the
-    unconditional kill — unreachable until P2 let the lifespan run — tearing
+    unconditional kill — not reached in a rollout with a stream open until
+    P2 let the lifespan run — tearing
     down the sandbox a peer had just taken the pod's turn over into."""
     sandbox = _CountingSandbox()
     activity = _FakeActivity()

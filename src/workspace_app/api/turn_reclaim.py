@@ -11,15 +11,27 @@ the claim exactly as a first run would.
 
 The decision, per key (one conversation's queue):
 
-- some claim on the key is `released` — its owner let go on purpose (its
-  drain, P4) and has already cancelled its copy: take those, now.
-- else the key's heartbeat is fresh (`_TurnActivity`, 30 s): someone is
-  driving this conversation; leave every claim on it.
-- else the owner died, or merely STALLED — loop wedged, heartbeat stale, not
-  dead: take every claim on the key, advance the shared cancel epoch ONCE and
-  BEFORE any re-run, so a stalled owner's copy cancels itself when it comes
-  back (#349's watcher) and this pod's own re-runs, which stamp the epoch as
-  they start, are not cancelled by it. Then re-run in the order asked.
+- a claim on the key that is `released` — its owner let go on purpose (its
+  drain, P4) and has already cancelled its copy: take it, now.
+- the other claims on the key, while its heartbeat is fresh (`_TurnActivity`,
+  30 s): someone is driving this conversation; leave them.
+- the other claims once the heartbeat is stale — the owner died, or merely
+  STALLED (loop wedged, not dead): take them too, advance the shared cancel
+  epoch ONCE and BEFORE any re-run, so a stalled owner's copy cancels itself
+  when it comes back (#349's watcher) and this pod's own re-runs, which stamp
+  the epoch as they start, are not cancelled by it. Then re-run everything
+  taken, in the order asked. (Released and stale on one key are taken on the
+  same tick: taking only the released one had the other wait for that
+  re-run's beat to go stale — answered second, half a minute late.)
+
+A key is taken WHOLE or left whole. Two ticks can list the same key (the
+lease serialises windows, and a window's end overlaps the next one's start);
+each takes in the same order, so the first `take` to lose its CAS says a
+peer is on this key, and this tick leaves the rest of it to that peer. Split
+between two takers, both advanced the epoch and whichever landed second
+cancelled the other's legitimate re-run through Stop's path — partial,
+"interrupted", claim finished, question lost. A claim past its re-run bound
+is likewise given up on by whoever TAKES it, so the thread gets one ending.
 
 The claim is the ledger and the ONLY evidence: it is finished when the reply
 persists and not before. Nothing about the thread's shape says whether a
@@ -97,7 +109,9 @@ class ReclaimTick:
         taken: list[str] = []
         rows = await asyncio.to_thread(self.claims.list_open)
         by_key: dict[str, list[ClaimRow]] = {}
-        for row in sorted(rows, key=lambda r: r.claim.created_at):
+        # The same order on every pod, so two ticks on one key collide on its
+        # FIRST claim and the loser leaves the whole key alone.
+        for row in sorted(rows, key=lambda r: (r.claim.created_at, r.id)):
             by_key.setdefault(row.claim.key, []).append(row)
         for key, group in by_key.items():
             try:
@@ -108,43 +122,47 @@ class ReclaimTick:
         return taken
 
     async def _take_key(self, key: str, group: list[ClaimRow]) -> bool:
-        released = [row for row in group if row.claim.released]
-        if released:
-            candidates, stalled = released, False
-        else:
-            if await self.activity.alive(key):
-                return False
-            candidates, stalled = group, True
+        others = [row for row in group if not row.claim.released]
+        stale = bool(others) and not await self.activity.alive(key)
+        candidates = [row for row in group if row.claim.released or stale]
+        if not candidates:
+            return False
         mine: list[ClaimRow] = []
+        stalled = False  # an unreleased claim was taken: its owner may still hold a copy
         for row in candidates:
-            if row.claim.reruns >= RECLAIM_MAX_RERUNS:
-                await self._give_up(row)
-                continue
             try:
-                mine.append(await asyncio.to_thread(self.claims.take, row))
+                taken = await asyncio.to_thread(self.claims.take, row)
             except PreconditionFailedError:
-                continue  # a peer took it on the same tick
+                break  # a peer is taking this key: the rest of it is theirs
             except (ResourceIDNotFoundError, ResourceIsDeletedError):
                 continue  # finished between the listing and now: the turn ended
-        if not mine:
-            return False
-        if stalled:
-            # Once per key, before any re-run: a stalled-not-dead owner still
-            # holds a copy and the epoch is what makes it let go. Each re-run
-            # below stamps the epoch as it starts, so an advance AFTER one
-            # would cancel it too — the second claim's take used to do that
-            # to the first claim's re-run.
-            await self.control.advance(key)
-        for row in mine:
+            except Exception:  # noqa: BLE001 — this claim's problem, not the key's
+                logger.exception("turn-reclaim: %s could not be taken; next tick", row.id)
+                continue
+            stalled = stalled or not row.claim.released
+            if row.claim.reruns >= RECLAIM_MAX_RERUNS:
+                await self._give_up(row)  # ours now, so ours to end — once
+                continue
             logger.info(
                 "turn-reclaim: taking over %s (released=%s, was %s, rerun %d)",
                 row.id,
                 row.claim.released,
                 row.claim.owner,
-                row.claim.reruns,
+                taken.claim.reruns,
             )
+            mine.append(taken)
+        if stalled:
+            # Once per key, before any re-run: a stalled-not-dead owner still
+            # holds a copy and the epoch is what makes it let go — also when
+            # the claim was given up on rather than re-run, or that copy runs
+            # to its end and only then finds its claim gone. Each re-run below
+            # stamps the epoch as it starts, so an advance AFTER one would
+            # cancel it too — the second claim's take used to do that to the
+            # first claim's re-run.
+            await self.control.advance(key)
+        for row in mine:
             await self.chat_send.rerun(row)
-        return True
+        return bool(mine)
 
     async def _give_up(self, row: ClaimRow) -> None:
         logger.warning(

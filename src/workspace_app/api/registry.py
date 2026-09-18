@@ -815,12 +815,14 @@ class InvestigationRegistry:
         and merely dropped from this pod, and the next pod warms it. Nothing
         is lost either way: the write-back is what makes the durable snapshot
         current, and an unkilled sandbox is the host's idle TTL's to reap.
-        Before plan-graceful-shutdown P2 this method had never run in a
-        rollout (uvicorn's wait for the SSE streams outlived the grace period),
-        and its unconditional kill would have torn down the very sandbox a
-        peer had just taken this pod's turn over into. No ``idle_after``: only
-        a sandbox no pod has ever touched is killed — a single-process deploy
-        has no heartbeat store and kills everything, as before.
+        Before plan-graceful-shutdown P2 this method did not run in a rollout
+        that had a stream open (uvicorn's wait outlived the grace period), and
+        its unconditional kill would have torn down the very sandbox a peer
+        had just taken this pod's turn over into. No ``idle_after`` (a direct
+        caller): only a sandbox no pod has ever touched is killed. With no
+        heartbeat store at all (a bare registry, as in tests) everything is
+        killed, as before — `create_app` always wires one, so under the app
+        this kills only what `kill_idle` would have.
 
         Per item, like `kill_idle` and `mirror_warm`: one sandbox the host had
         already reaped (its own idle TTL, a restart) raises `SandboxNotFound`
@@ -857,6 +859,8 @@ class InvestigationRegistry:
                     continue
                 with contextlib.suppress(SandboxNotFound):
                     await self.sandbox.kill(s.handle)
+                if self.activity is not None:
+                    await self.activity.forget(inv_id)  # as `kill_idle` does
             except Exception:  # noqa: BLE001 — one bad item must not strand the rest
                 logger.warning(
                     "registry: close_all left item %s behind (teardown failed)",

@@ -228,8 +228,9 @@ async def test_shutdown_lets_go_of_alive_sessions_without_killing_them():
     (#345 shared dir, #366 shared address), a peer may be mid-turn in it
     (the turn this pod just handed over, for one), and `kill_idle`'s rule
     applies — only a sandbox no pod has touched past the idle threshold is
-    torn down. Before plan-graceful-shutdown P2 this path never ran in a
-    rollout; its unconditional kill was found the first time it could."""
+    torn down. Before plan-graceful-shutdown P2 this path did not run in a
+    rollout with a stream open; its unconditional kill was found the first
+    time it could."""
     app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=60),

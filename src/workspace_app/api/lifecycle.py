@@ -236,10 +236,12 @@ def build_lifespan(
     async def turn_reclaim_sweeper(app: FastAPI) -> None:
         """plan-graceful-shutdown P3: take over the turns of a pod that is gone.
 
-        A lease-taking producer in the #804 sense: each window ONE pod lists
-        the open turn claims (bounded by turns in flight, not by content) and
-        re-runs the orphaned ones on its own engine — the work it produces is a
-        turn, which only an API pod can run, so it stays here. Per-claim
+        Lease-taking like a #804 producer — each window ONE pod lists the open
+        turn claims (bounded by turns in flight, not by content) — but the
+        work it produces is a turn, run on its own engine: not a pure
+        producer, the third stated exception in CLAUDE.md beside the goal and
+        notification sweepers, because a turn can only run on an API pod.
+        Per-claim
         resilient inside the tick; the whole tick guarded so it never wedges
         the loop. Tick-first, so a pod that boots after a rollout picks up
         what the old pods let go of without waiting a window."""
@@ -651,13 +653,14 @@ def build_lifespan(
             # sweeper (or this pod, restarted) re-runs it; see `aclose`.
             claims = getattr(app.state, "turn_claims", None)
 
-            async def _handover(keys: list[str]) -> None:
+            async def _handover(keys: list[str], not_after: float) -> None:
                 if claims is not None:
-                    await asyncio.to_thread(claims.release, keys)
+                    await asyncio.to_thread(claims.release, keys, not_after=not_after)
 
             # ONE deadline for the whole drain — the engines in turn, then (all-
             # in-one only) the coordinators — so the pod is out inside
-            # `shutdown_budget` + `aclose`'s two grace periods, whatever is in
+            # `shutdown_budget` + up to two grace periods PER engine with turns
+            # past it (`_DRAIN_GRACE_S`; two engines ⇒ + 8 s), whatever is in
             # flight. A budget PER step made the bound a multiple nobody had
             # added up (round 1: the second engine got a fresh 20 s, the
             # coordinators a third).

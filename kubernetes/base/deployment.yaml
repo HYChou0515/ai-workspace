@@ -45,9 +45,9 @@ spec:
           # preStop → SIGTERM in PARALLEL, so for a few seconds new requests
           # would still land on a pod that stopped listening. This sleep runs
           # BEFORE the signal and lets that removal propagate first. (The
-          # app's readiness 503 begins WITH the drain, i.e. after this sleep;
-          # it covers the SIGTERMs that are not deletions — a liveness
-          # restart, a manual kill — where the pod stays in the endpoints.)
+          # app's readiness 503 begins WITH the drain, i.e. after this sleep,
+          # and uvicorn closes the listener within 0.1 s of the signal, so the
+          # 503 is the truthful answer rather than what stops traffic.)
           lifecycle:
             preStop:
               exec:

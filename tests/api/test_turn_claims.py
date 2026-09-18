@@ -91,6 +91,42 @@ def test_release_leaves_another_pods_claim_on_the_key_alone():
     assert row.claim.owner == "pod-b" and not row.claim.released
 
 
+def test_release_does_not_overwrite_a_claim_a_peer_took_meanwhile():
+    """`release` writes from a listing; a peer's `take` can land between the
+    listing and the write. The write is a CAS on the listed etag, so it
+    fails instead of putting `owner=<this pod>, released=True` over the
+    taker's row — which would have had the taker drop its finished answer
+    as "not mine" and a later tick re-run it once more (round 2)."""
+    spec = make_spec(default_user="u")
+    a = _store(spec)
+    b = SpecstarTurnClaimStore(spec, pod_id="pod-b")
+    a.open(_claim())
+    stale = a.list_open()  # what a's drain read
+    (row,) = b.list_open()
+    b.take(row)  # the peer got there first
+    a.list_open = lambda: stale  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    a.release(["item-1"])
+    (row,) = b.list_open()
+    assert row.claim.owner == "pod-b" and not row.claim.released
+
+
+def test_a_release_past_its_deadline_writes_nothing():
+    """A drain bounds its handover; a store that answers late must not land
+    the release AFTER the cancelled copy persisted its partial as this
+    pod's — a peer would then re-run a question that already has an ending
+    (round 2). `not_after` is checked before every write."""
+    import time
+
+    spec = make_spec(default_user="u")
+    store = _store(spec)
+    store.open(_claim())
+    listed = store.list_open()
+    store.list_open = lambda: (time.sleep(0.2), listed)[1]  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    store.release(["item-1"], not_after=time.monotonic() + 0.05)
+    (row,) = SpecstarTurnClaimStore(spec, pod_id="pod-a").list_open()
+    assert not row.claim.released
+
+
 def test_two_opens_in_the_same_millisecond_are_two_claims():
     """Two sends on one key inside one millisecond are two questions, each
     owed an answer. A row keyed by (key, created_at) alone merged them: the

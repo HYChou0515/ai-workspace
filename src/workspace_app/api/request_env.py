@@ -83,12 +83,16 @@ class IRequestEnv(abc.ABC):
         Asked for every turn nobody pressed send for: each agent node of a
         workflow run (an item schedule's, an event trigger's, and a run a person
         started by hand — every node of one run reads this one source for one
-        user, so no step carries a credential the next step lacks), and a
-        goal-driver continuation of a chat. ``user_id`` is the user that turn was captured
+        user, so no step carries a credential the next step lacks), a
+        goal-driver continuation of a chat, and a chat turn a peer RE-RUNS
+        after the pod driving it went away (plan-graceful-shutdown P3: the
+        person's own request env was composed for one turn and never stored,
+        so the re-run asks here). ``user_id`` is the user that turn was captured
         as: the item's OWNER for an item schedule and for a run a WUI page
         button starts (both run the schedule engine), the goal's setter for a
         goal turn, the profile's declared ``acting_user`` for an event trigger,
-        the person who pressed run for ``POST …/run``. Whether that maps to a
+        the person who pressed run for ``POST …/run``, the person who asked
+        for a re-run chat turn. Whether that maps to a
         per-user credential, one shared service account, or nothing at all is
         this impl's policy; the platform stores none of it and merges the
         answer under the item's ``env_vars`` exactly as ``env_for``'s. Note

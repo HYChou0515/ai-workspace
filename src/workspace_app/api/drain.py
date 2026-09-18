@@ -13,14 +13,14 @@ So the shutdown starts where the signal lands. :class:`DrainingServer`
 overrides uvicorn's ``handle_exit`` — the documented seam, run in the signal
 handler on the loop thread but outside any task — and hands :meth:`Drain.begin`
 to the loop before letting uvicorn set ``should_exit`` as it always did.
-``begin`` flips readiness off (``/api/readyz`` answers 503, so k8s stops
-routing here; the Deployment's ``preStop`` sleep gives the endpoints time to
-notice) and ends every live stream: the chat engines close their subscribers
-(the FE treats a closed stream as "reconnect now" and lands on a live pod), the
-monitor feed closes its. With the connections gone uvicorn's wait ends within
-a second; ``timeout_graceful_shutdown`` (``server.shutdown_budget_sec``) is the
-safety net for anything that did not, so no connection can hold the lifespan
-shutdown again. The lifespan then drains in-flight turns for the same budget
+``begin`` flips readiness off (``/api/readyz`` answers 503 — see below for
+what that does and does not cover) and ends every live stream: the chat
+engines close their subscribers (the FE treats a closed stream as "reconnect
+now" and lands on a live pod), the monitor feed closes its. With the
+connections gone uvicorn's wait ends within a second;
+``timeout_graceful_shutdown`` (``server.shutdown_budget_sec``) is the safety
+net for anything that did not, so no connection can hold the lifespan shutdown
+again. The lifespan then drains in-flight turns for the same budget
 and tears down as written.
 
 Two budgets, ONE number: uvicorn's connection wait and the lifespan's drain
@@ -31,12 +31,14 @@ handover write, the cancelled turns' teardown). So the worst case is
 must exceed that, and its ``preStop`` sleep counts inside it
 (``kubernetes/base/deployment.yaml`` says by how much).
 
-On a pod deletion the readiness 503 is NOT what stops traffic: k8s removes a
-Terminating pod from the EndpointSlice on its own, in parallel with preStop →
-SIGTERM, and preStop's sleep is what lets that removal propagate before the
-listener closes. The 503 covers the SIGTERMs that are not deletions — a
-liveness restart of the container, a manual kill — where the pod stays in
-the endpoints.
+The readiness 503 is the truthful answer, not what stops traffic: on a pod
+deletion k8s removes the Terminating pod from the EndpointSlice on its own, in
+parallel with preStop → SIGTERM, and preStop's sleep is what lets that removal
+propagate before the listener closes; on ANY SIGTERM uvicorn closes the
+listener within 0.1 s of ``handle_exit``, so a readiness probe after that is
+refused outright and the 503 adds nothing a closed listener does not already
+cause. It is kept for the moment between the two, and for any drain that does
+not close the listener.
 """
 
 from __future__ import annotations

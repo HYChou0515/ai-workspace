@@ -921,8 +921,9 @@ class ChatTurnEngine:
             # publishes the same terminal event live.
             if pending is not None and pending.cancelled:
                 logger.info("turns: worker %s declined a turn stopped during prep", key)
+                still_mine = True
                 try:
-                    on_complete([_error_message(RunCancelled())])
+                    still_mine = on_complete([_error_message(RunCancelled())]) is not False
                 except Exception as exc:  # noqa: BLE001 — reported, never raised at the worker
                     # Loud, like `_run_turn`'s own persist failure. Swallowed, a
                     # failed write here lands the person back in the state this
@@ -930,7 +931,11 @@ class ChatTurnEngine:
                     # says nothing about why.
                     logger.exception("turns: worker %s could not record a declined turn", key)
                     session.publish(_terminal_error(exc))
-                session.publish(RunCancelled())
+                # Not broadcast for a copy that is no longer this pod's (a drain
+                # marked the token after handing the claim over) — the same
+                # rule as `_run_turn`'s cancel.
+                if still_mine:
+                    session.publish(RunCancelled())
                 if not fut.done():
                     fut.set_result(None)
                 session.queue.task_done()
@@ -1404,7 +1409,7 @@ class ChatTurnEngine:
         self,
         timeout: float = 10.0,
         *,
-        handover: Callable[[list[str]], Awaitable[None]] | None = None,
+        handover: Callable[[list[str], float], Awaitable[None]] | None = None,
     ) -> None:
         """Give in-flight turns a bounded chance to finish and persist.
 
@@ -1421,9 +1426,12 @@ class ChatTurnEngine:
         result — and given a short moment to do so.
 
         plan-graceful-shutdown P4: with `handover`, what did not finish is let
-        go of FIRST — one `handover(keys)` for every conversation still running
-        a turn or holding queued ones (the lifespan wires it to release the
-        turn claims) — and only then cancelled. A released claim is no longer
+        go of FIRST — one `handover(keys, not_after)` for every conversation
+        still running a turn, holding queued ones or preparing one (the
+        lifespan wires it to release the turn claims; `not_after` is the
+        `time.monotonic()` moment this method stops waiting for it and
+        cancels, past which the release must write nothing) — and only then
+        cancelled. A released claim is no longer
         this pod's (`chat_send` checks before persisting), so the cancel writes
         no partial reply and no "interrupted" marker: a peer re-runs the recipe
         and the thread reads question, answer. Stop's marker is Stop's.
@@ -1462,15 +1470,23 @@ class ChatTurnEngine:
         # Past the deadline. Whatever is live NOW is cancelled — after being
         # handed over, so its teardown persists nothing (see the docstring);
         # without a handover that teardown persists the partial, as Stop's does.
+        # Three shapes: a turn running, turns queued, and a send still
+        # PREPARING its turn (its claim is open, its turn does not exist yet —
+        # `pending_turns`; only the workspace session has those, the KB
+        # engine's `_TurnSession` has neither queue nor preparation).
         unfinished = [
             key
             for key, session in (*self._ws_sessions.items(), *self._sessions.items())
             if (session.current_turn is not None and not session.current_turn.done())
-            or (isinstance(session, _WorkspaceSession) and not session.queue.empty())
+            or (
+                isinstance(session, _WorkspaceSession)
+                and (not session.queue.empty() or session.pending_turns)
+            )
         ]
         if handover is not None and unfinished:
             try:
-                await asyncio.wait_for(handover(unfinished), _DRAIN_GRACE_S)
+                not_after = time.monotonic() + _DRAIN_GRACE_S
+                await asyncio.wait_for(handover(unfinished, not_after), _DRAIN_GRACE_S)
             except Exception:  # noqa: BLE001 — a failed release leaves the old behaviour
                 logger.exception(
                     "turns: could not hand over %s; they persist as cancelled", unfinished
@@ -1479,6 +1495,14 @@ class ChatTurnEngine:
                 logger.info(
                     "turns: handed over %d conversation(s): %s", len(unfinished), unfinished
                 )
+        # A send still preparing finishes AFTER this returns and enqueues on
+        # this engine; its token is marked as a Stop during preparation would
+        # mark it, so the worker declines the turn — and, the claim being
+        # released, the declined copy persists nothing. Round 2 found the
+        # turn running to completion on the drained engine otherwise.
+        for session in self._ws_sessions.values():
+            for waiting in session.pending_turns:
+                waiting.cancelled = True
         stragglers = self._live_turns()
         for task in stragglers:
             task.cancel()

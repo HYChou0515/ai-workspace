@@ -3,8 +3,8 @@
 # an SSE stream is open?
 #
 # Boots the app, holds one `/api/monitor/stream` open with curl, sends
-# SIGTERM, and reports: whether the process exited on its own inside the
-# budget, whether `lifespan: shutdown complete` was logged, and whether the
+# SIGTERM, and reports: whether the process exited on its own inside
+# `wait_s` (default 30; the config's budget is 20), whether `lifespan: shutdown complete` was logged, and whether the
 # SSE client got a clean EOF (HTTP 200) rather than a reset. Before the drain
 # existed this printed `Waiting for connections to close.` and the process
 # never left — the SIGKILL every rollout ended in.

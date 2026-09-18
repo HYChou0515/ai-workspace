@@ -27,6 +27,7 @@ from __future__ import annotations
 import abc
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -94,10 +95,14 @@ class ITurnClaimStore(abc.ABC):
         """The turn persisted its reply: the claim is done. Idempotent."""
 
     @abc.abstractmethod
-    def release(self, keys: Collection[str]) -> None:
+    def release(self, keys: Collection[str], *, not_after: float | None = None) -> None:
         """Let go of every open claim THIS pod holds on `keys` — a handover,
         not an end. One round trip for the whole list: a drain calls it once.
-        A claim a peer already took on one of those keys is the peer's."""
+        A claim a peer already took on one of those keys is the peer's.
+        `not_after` (a `time.monotonic()` deadline): write nothing past it —
+        the drain that asked has moved on to cancelling, and a release that
+        lands after the cancelled copy persisted its partial as this pod's
+        would have a peer re-run a question that already has an ending."""
 
     @abc.abstractmethod
     def list_open(self) -> list[ClaimRow]:
@@ -145,15 +150,24 @@ class SpecstarTurnClaimStore(ITurnClaimStore):
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             self._rm().permanently_delete(cid)
 
-    def release(self, keys: Collection[str]) -> None:
+    def release(self, keys: Collection[str], *, not_after: float | None = None) -> None:
         wanted = set(keys)
         for row in self.list_open():
             claim = row.claim
             if claim.key not in wanted or claim.released or claim.owner != self._pod_id:
                 continue
+            if not_after is not None and time.monotonic() > not_after:
+                logger.warning("turn-claims: release of %s missed the drain's deadline", row.id)
+                return
+            # A CAS on the etag the listing read: a peer's `take` that landed
+            # in between must not be written over with this pod as owner
+            # (the taker would then drop its answer as "not mine").
             with contextlib.suppress(Exception):
                 self._rm().modify(
-                    row.id, replace(claim, released=True), status=RevisionStatus.draft
+                    row.id,
+                    replace(claim, released=True),
+                    status=RevisionStatus.draft,
+                    expected_etag=row.etag,
                 )
 
     def list_open(self) -> list[ClaimRow]:

@@ -97,13 +97,15 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
   `server.shutdown_budget_sec` (default 20), passed to uvicorn as
   `timeout_graceful_shutdown` (whole seconds); there is no 10 s setting. The
   process exits 143 (uvicorn re-raises the captured SIGTERM after a clean
-  shutdown), not 0. On a pod DELETION the readiness 503 is not what stops
-  traffic — k8s removes a Terminating pod from the EndpointSlice on its own,
-  in parallel with `preStop` → SIGTERM, and `preStop`'s sleep is what lets
-  that removal propagate before the listener closes; the 503 covers the
-  SIGTERMs that are not deletions (a liveness restart of the container, a
-  manual kill), where the pod stays in the endpoints.
-- **P3 — a turn survives its pod.** The turn's durable claim: `_TurnActivity`
+  shutdown), not 0. The readiness 503 is the truthful answer, not what stops
+  traffic: on a pod DELETION k8s removes the Terminating pod from the
+  EndpointSlice on its own, in parallel with `preStop` → SIGTERM, and
+  `preStop`'s sleep is what lets that removal propagate before the listener
+  closes; on any SIGTERM uvicorn closes the listener within 0.1 s, after
+  which a readiness probe is refused outright — the 503 adds nothing to that
+  (round 2 measured it; the first correction still credited it with the
+  non-deletion case).
+- **P3 — a turn survives its pod (the app chat's; see the non-goal).** The turn's durable claim: `_TurnActivity`
   gains `owner` (pod id) and `message_id` (the accepted message being
   answered); the driving pod writes it when the turn starts and heartbeats as
   today. A reclaim sweeper on every API pod (a lease-taking producer in the
@@ -136,8 +138,9 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
   PR.
 
 - **P3 as built (deviations from the paragraph above, decided while reading
-  the code).** (1) The claim is its own row, one per turn — `_TurnClaim`,
-  keyed by engine key + the user message's `created_at` — not fields on
+  the code).** (1) The claim is its own row, one per turn — `TurnClaim`,
+  id = engine key + the user message's `created_at` + a unique suffix
+  (round 1: two sends in one ms are two rows) — not fields on
   `_TurnActivity`: that heartbeat row's explicit "turn ended" write went
   through three timing defects (its module docstring) and was removed; a
   per-turn row is hard-deleted when its turn persists and swept by the
@@ -172,7 +175,7 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
 
 ## 判準 (each one a probe through the real door)
 
-- P1: with a describer that blocks 3 × 150 ms, the loop-lag witness records
+- P1: with a describer that blocks for two or three 150 ms calls, the loop-lag witness records
   < 100 ms lag during `read_image` / `read_page` / the plot review; on the
   unfixed code it records ≥ 300 ms (each test reddens there). The same
   witness for `answer_doc_question` with a 300 ms formatter.
@@ -208,9 +211,11 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
   defaults: 20 + 28 + 5 = 53 s before the teardown; the base's 90 leaves it
   37 s (60 left 7 s, and the first version said "2 × budget" as if the grace
   periods and the second engine did not exist).
-- The reclaim sweeper is a pure producer per the #804 convention; the work it
-  re-enqueues is a turn, which only an API pod can run — so it stays on the API
-  and lists a table bounded by in-flight turns.
+- The reclaim sweeper is NOT a pure producer in the #804 sense (it runs the
+  turn on its own engine, like `goal_offhours_sweeper`); it is the third
+  stated exception in CLAUDE.md: the work it produces is a turn, which only
+  an API pod can run — so it stays on the API, one pod per window, and lists
+  a table bounded by in-flight turns.
 
 ## 執行結果
 
@@ -221,18 +226,19 @@ Branch `graceful-shutdown` off master `2ccfff9f`: P1–P4 as four commits, then 
 |---|---|
 | `read_image` / `read_page` / the plot review no longer hold the loop | three loop-lag witnesses (`tests/agent/test_read_image_tool.py`, `tests/kb/test_read_tools.py`, `tests/agent/test_plot_review.py`): 451 / 309 / 301 ms of lag on the unfixed code, < 100 ms fixed |
 | the tool-log sink wakes an idle loop from a worker thread | `tests/api/test_litellm_runner.py::test_tool_log_emitter_wakes_an_idle_loop_from_a_worker_thread` — latency-based; **mutation** (bare `put_nowait`): the chunk lands after 2.01 s (the test's own timeout timer), fixed: 0.1 s |
-| SIGTERM begins the drain: readiness 503, every chat + monitor stream ended, uvicorn's wait ends, the lifespan runs | `tests/api/test_drain.py` (7) + `scripts/check_sigterm_drain.sh` on the real app: `drain: begun` → `shutdown complete` in 16.9 s (the 16 s is the all-in-one index queue; production is a pure producer) → exit 143, the SSE client gets HTTP 200 + EOF. **Mutation**: dropping `drain.on_begin(turn_engine.close_all_streams)` reddens the chat-stream test cleanly (the test has a structural exit so a hang becomes a failure) |
+| SIGTERM begins the drain: readiness 503, every chat + monitor stream ended, uvicorn's wait ends, the lifespan runs | `tests/api/test_drain.py` (7) + `scripts/check_sigterm_drain.sh` on the real app: `drain: begun` → `shutdown complete` in 16–20 s across four runs (16.9 / 16.2 / 16.7 / 19.7 — the all-in-one index queue, drained to the budget; production is a pure producer) → exit 143, the SSE client gets HTTP 200 + EOF. **Mutation**: dropping `drain.on_begin(turn_engine.close_all_streams)` reddens the chat-stream test cleanly (the test has a structural exit so a hang becomes a failure) |
 | the coordinator drain shares the budget | `test_the_coordinator_drain_is_bounded_by_the_same_budget`: a coordinator that never drains, budget 0.5 s, shutdown < 3 s (was 30 s) |
 | a send opens a claim, the reply finishes it | `tests/api/test_turn_reclaim.py::test_a_send_opens_a_claim_and_the_reply_finishes_it` (the runner reads the store from inside the turn) |
 | a peer re-runs the stored question without appending it | `…::test_rerun_answers_the_stored_question_without_appending_it` |
-| the reclaim decision, per key: released → now (epoch untouched); fresh heartbeat → leave; stale → take every claim on the key, epoch once before any re-run, re-run in order; a claim owed whatever follows it in the thread; `RECLAIM_MAX_RERUNS` → error ending; a row finished between listing and taking is the turn ending | `tests/api/test_turn_reclaim.py`, the `# ── the reclaim decision` block: 9 tests, each through `ReclaimTick.of(app)` |
+| the reclaim decision, per key: released → now (epoch untouched); fresh heartbeat → leave; stale → take every claim on the key (released ones too), epoch once before any re-run — also on a give-up — re-run in order; a key is taken whole or left whole (a lost CAS ends the tick's work on it; a transient take error skips one claim); a claim owed whatever follows it in the thread; `RECLAIM_MAX_RERUNS` → one error ending, by whoever takes the spent claim, idempotent across ticks; a row finished between listing and taking is the turn ending | `tests/api/test_turn_reclaim.py`, the `# ── the reclaim decision` block: 15 tests through `ReclaimTick.of(app)` (the two-pod one is listed below) |
 | two pods, one store: A stalls, B takes and answers, A's epoch-cancelled copy writes NOTHING and broadcasts no cancel | `…::test_two_pods_on_one_store_a_stalled_owner_is_taken_over_and_writes_nothing` — the first version reddened with `('error', 'The previous response was interrupted.')` AFTER B's answer (`is_mine` before persist is the fix); round 1's mutation (publish the cancel before persist decides) reddens it on `RunCancelled` |
 | the lifespan sweeper does it on its own, behind the lease | `…::test_the_lifespan_sweeper_takes_over_a_released_turn_without_being_asked` (B's interval 0.1 s) + `…::test_no_sweeper_when_the_interval_is_none` |
 | a draining pod hands over what it could not finish, without a partial or a marker | `…::test_a_pods_shutdown_hands_over_the_turn_it_could_not_finish` — A's shutdown through its own portal (budget 0.3 s), A's thread untouched, claim `released`, B's answer alone |
 | the drain waits for a queued turn that starts DURING it while budget remains, and hands it over when it runs out | `…::test_a_pods_shutdown_waits_for_a_turn_that_started_during_the_drain` / `…::test_a_pods_shutdown_hands_over_the_queued_turn_that_started_during_the_drain` — the POSTs detach at once (`send_await_timeout=0.05`): with them still waiting, their preparation heartbeat sat in the first snapshot and waited the queued turn out by accident, so the snapshot-only mutation stayed green until that was fixed |
-| the claim beats during preparation; a re-run's history stops at the claimed message; a re-run gets the headless env, not a stored cookie | `…::test_a_claim_beats_while_its_turn_is_still_being_prepared`, `…::test_a_rerun_takes_its_history_from_before_the_claimed_question`, `…::test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie` (`"caller_env" not in TurnClaim.__struct_fields__`) |
-| `release` is one round trip for the whole drain and skips a peer's claim; two opens in one ms are two claims; `take` counts the re-runs | `tests/api/test_turn_claims.py` (9) |
-| shutdown keeps a sandbox the fleet is using (`kill_idle`'s rule) | `tests/api/test_registry.py::test_close_all_keeps_a_sandbox_the_fleet_is_still_using` |
+| the claim beats during preparation and while a re-run resolves its env; a re-run returns once queued; a re-run's history stops at the claimed message; a re-run gets the headless env, not a stored cookie | `…::test_a_claim_beats_while_its_turn_is_still_being_prepared`, `…::test_a_rerun_beats_while_resolving_the_headless_env`, `…::test_rerun_returns_once_the_turn_is_queued_not_answered`, `…::test_a_rerun_takes_its_history_from_before_the_claimed_question`, `…::test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie` (`"caller_env" not in TurnClaim.__struct_fields__`) |
+| `release` is one round trip for the whole drain, skips a peer's claim, is a CAS on what it listed and writes nothing past its deadline; two opens in one ms are two claims; `take` counts the re-runs | `tests/api/test_turn_claims.py` (11) |
+| shutdown keeps a sandbox the fleet is using (`kill_idle`'s rule), writes back what it keeps, forgets what it kills | `tests/api/test_registry.py::test_close_all_keeps_a_sandbox_the_fleet_is_still_using`, `…::test_close_all_writes_back_what_it_keeps_and_forgets_what_it_kills` |
+| a send still preparing at the deadline is handed over, declined, persists nothing, broadcasts nothing | `…::test_a_send_still_preparing_at_the_deadline_is_handed_over_and_declined` |
 | `answer_doc_question` keeps the loop free; `serve` exits 3 on a boot that never started; every engine drains against ONE deadline | `tests/api/test_doc_question_routes.py::test_answering_a_term_question_keeps_the_loop_free` (304 ms of lag on the unfixed code), `tests/test_main_serve.py`, `tests/api/test_drain.py::test_the_lifespan_drains_turns_against_one_deadline` |
 
 Found on the way and fixed: `ChatTurnEngine.aclose` waited with
@@ -263,8 +269,9 @@ there):
   through Stop's path with its claim finished. Now: a deadline loop over
   whatever is live, one handover for every conversation still running or
   queued, bounded by `_DRAIN_GRACE_S`.
-- `registry.close_all` killed every session's sandbox unconditionally — never
-  reached before P2, and under `kind: http` the sandbox is the fleet's one
+- `registry.close_all` killed every session's sandbox unconditionally — not
+  reached in a rollout with a stream open before P2, and under `kind: http`
+  the sandbox is the fleet's one
   address-converged sandbox, the very one a peer takes the turn over into.
   Now `kill_idle`'s rule: write back, kill only when globally idle.
 - The reclaim rule read the thread ("stale but moved on ⇒ drop the claim") and
@@ -295,9 +302,88 @@ stops traffic on a deletion; the FE behaviour above; the bound arithmetic
 (`terminationGracePeriodSeconds` 60 → 90); the KB chat is not covered; P2 as
 built; the 判準 as probed.
 
-Mutation probes (file copy, restore; `r1_mutations.py`): 15 mutations, each
-reddening exactly the test that pins it — the drain-snapshot one only after
-the P4 tests were made to detach their POSTs (see the table).
+Mutation probes (file copy, restore; a throwaway script outside the tree):
+15 mutations, each reddening exactly the test that pins it — the
+drain-snapshot one only after the P4 tests were made to detach their POSTs
+(see the table). Not among the 15, and claimed as pinned anyway: `rerun`
+returning once queued — round 2 caught the sentence and the pin is
+`test_rerun_returns_once_the_turn_is_queued_not_answered` now.
+
+Recorded here because round 2 asked where they were: `scripts/check_sigterm_
+drain.sh` now reads the port from the config (the app has no override, so an
+argument could only disagree with it) and fails loudly when readyz never
+answers; `close_all(idle_after=None)` — a direct caller — kills only what no
+pod has ever touched; a `rerun` whose preparation fails (the conversation is
+gone, the recipe no longer validates) finishes the claim with an error ending
+rather than being re-taken every tick.
+
+## Round 2 (four lenses on `ce4476ce`) — what changed
+
+Round 1's replacements, read as new code:
+
+- A send still PREPARING at the deadline (compaction, a cold sandbox wake —
+  its claim open, its turn not yet a task) was neither handed over nor
+  stopped: the preparation finished after the drain, enqueued, and the turn
+  ran on the drained engine — at process exit persisting a partial with its
+  claim finished as this pod's. Now `pending_turns` count as unfinished, the
+  claim is released with the rest, and the tokens are marked as a Stop during
+  preparation marks them, so the worker declines the turn and the declined
+  copy persists nothing and broadcasts nothing.
+- Two ticks that overlap at a lease-window boundary could split one key's
+  claims (B takes Q1, C takes Q2): both advanced the epoch and the later
+  advance cancelled the other's legitimate re-run through Stop's path — Q1
+  lost. A key is taken whole or left whole: the first `take` to lose its CAS
+  ends this tick's work on that key. A transient error on one `take` skips
+  that claim, not the key. A stale key's released and unreleased claims are
+  taken on the same tick (taking only the released one had the other wait for
+  that re-run's beat to go stale). The epoch is advanced when an unreleased
+  claim was taken OR given up on (a stalled owner's copy must stop either
+  way). Giving up is done by whoever TAKES the spent claim (one ending, not
+  one per tick) and the ending is idempotent across ticks when `finish` is
+  refused.
+- `rerun` awaited `env_without_request` with the claim taken and no beat
+  behind it — a slow policy read as a dead owner to the next tick, which took
+  the claim again. The resolver now runs inside the preparation window,
+  under its beat (`_start_turn(resolve_env=…)`).
+- The bounded handover could time out while its thread's release was still
+  in flight: the cancel then persisted the partial as this pod's, and the
+  late release had a peer re-run the question (Q, partial, "interrupted", A).
+  `release(keys, not_after=…)` writes nothing past the drain's deadline.
+- `release` is a CAS on the etag it listed (a peer's `take` in between is
+  not overwritten); `close_all` forgets the heartbeat of what it kills, as
+  `kill_idle` does; the declined-turn path publishes its cancel only if the
+  copy was still this pod's.
+
+Prose: the ledger row back to the table's four cells; the ms-window duplicate
+answer and the `kind: local` dir retention stated as trade-offs; the 503 —
+round 1 had credited it with the non-deletion SIGTERMs, and uvicorn closes
+the listener within 0.1 s of any SIGTERM, so it is the truthful answer and
+not what stops traffic (`drain.py`, `deployment.md`, `deployment.yaml`, P2
+as built); "a VLM thread delays the exit" was false — uvicorn re-raises the
+captured SIGTERM under the default handler and the process dies at once, the
+thread with it; the KB exclusion on the three sentences that still said
+"every send" / "a turn survives its pod"; the `registry.close_all`
+docstring's false "single-process deploy has no heartbeat store"
+(`create_app` always wires one); the re-run named as an asker in
+`IRequestEnv.env_without_request`, `_resolve_request_env` and
+`docs/plan-headless-env.md` (the contract text had said only `driven_by`
+callers may ask); "pure producer" for the reclaim sweeper corrected to the
+third stated exception (plan, `lifecycle.py`; CLAUDE.md now names all three
+in one sentence); `_open_orphan` really opens as pod A (`open` stamps the
+opener — the stale-path tests had been taking over their own pod's claims);
+`release` is one listing plus a write per claim, not "one round trip"; the
+lifecycle's bound comment says per engine; 判準 P1's "3 × 150 ms" is two or
+three calls; the live-check figure is four runs, not one number; the
+gates sentence names the exact file list its count comes from.
+
+Known limitations, stated rather than built around (Low, both): a Stop
+pressed while a message was still being prepared, followed by a drain before
+its turn ran, is lost — the peer re-runs the stopped question (the Stop lives
+on an in-memory token); and the reply persist is get→append→update with no
+CAS, so two pods persisting into one conversation at once (the peer's re-run
+and a follow-up on the pod the user reconnected to) can overwrite each other
+— before #815 that needed two users or failed sticky routing, now one user
+and one rollout can produce it.
 
 Gates: `ruff check` / `ruff format --check` / `ty check` clean; `mkdocs build
 --strict` exit 0; targeted set (the 23 test files touching the changed seams —

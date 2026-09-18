@@ -1,4 +1,5 @@
-"""A turn survives its pod (plan-graceful-shutdown P3).
+"""An app-chat turn survives its pod (plan-graceful-shutdown P3; the KB
+chat opens no claim and is not covered).
 
 `send` opens a durable claim beside the persisted question; the reply
 persisting finishes it. A claim whose owner is gone — heartbeat stale, or let
@@ -21,7 +22,7 @@ from workspace_app.api.events import AgentEvent, MessageDelta, RunDone
 from workspace_app.api.request_env import IRequestEnv
 from workspace_app.api.schemas import _MessageBody
 from workspace_app.api.turn_activity import SpecstarTurnActivityStore
-from workspace_app.api.turn_claims import TurnClaim
+from workspace_app.api.turn_claims import SpecstarTurnClaimStore, TurnClaim
 from workspace_app.api.turn_reclaim import RECLAIM_MAX_RERUNS, ReclaimTick
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.memory import MemoryFileStore
@@ -157,7 +158,9 @@ async def test_rerun_answers_the_stored_question_without_appending_it():
 
 
 def _open_orphan(client: TestClient, spec: SpecStar, *, released: bool = False, reruns: int = 0):
-    """A claim as pod A would have left it: owned by A, question in the thread."""
+    """A claim as pod A would have left it: opened by pod A's store (`open`
+    stamps the opener, so the owner really is "pod-a", not this client's pod),
+    the question in the thread."""
     item_id, rid = _item_with_chat(spec)
     from workspace_app.resources import Message
 
@@ -166,8 +169,8 @@ def _open_orphan(client: TestClient, spec: SpecStar, *, released: bool = False, 
     assert isinstance(conv, Conversation)
     conv.messages.append(Message(role="user", content="hi", author="alice", created_at=1_000))
     conv_rm.update(rid, conv)
-    store = _claims(client)
-    store.open(
+    pod_a = SpecstarTurnClaimStore(spec, pod_id="pod-a")
+    pod_a.open(
         TurnClaim(
             key=item_id,
             created_at=1_000,
@@ -175,12 +178,11 @@ def _open_orphan(client: TestClient, spec: SpecStar, *, released: bool = False, 
             rid=rid,
             author="alice",
             body={"content": "hi"},
-            owner="pod-a",
             reruns=reruns,
         )
     )
     if released:
-        store.release([item_id])
+        pod_a.release([item_id])
     return item_id, rid
 
 
@@ -505,6 +507,409 @@ async def test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie():
         await _service(client).rerun(row)
         await _settle(store)
     assert envs == [{"HEADLESS_FOR": "alice"}]
+
+
+async def test_a_key_a_peer_is_taking_is_left_whole():
+    """Two ticks that overlap at a lease-window boundary list the same stale
+    key; the first `take` that loses its CAS means a peer is on this key, and
+    the whole key is left to it. Splitting it — B takes Q1, C takes Q2 — had
+    both advance the epoch, and whichever landed second cancelled the other's
+    legitimate re-run through Stop's path: partial, "interrupted", claim
+    finished, Q1 never answered (round 2)."""
+    import dataclasses
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec)
+        _append(spec, rid, "user", "the second question", 2_000)
+        _claims(client).open(
+            TurnClaim(
+                key=item_id,
+                created_at=2_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "the second question"},
+                owner="pod-a",
+            )
+        )
+        await activity.bump(item_id)
+        peer = SpecstarTurnClaimStore(spec, pod_id="peer")
+        control = cast(FastAPI, client.app).state.turn_control
+        before = await control.current(item_id)
+
+        class _PeerTakesFirst:
+            async def alive(self, key: str) -> bool:
+                first = min(peer.list_open(), key=lambda r: r.claim.created_at)
+                peer.take(first)  # the peer's tick got there between our list and our take
+                return False
+
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, client.app)),
+            activity=_PeerTakesFirst(),  # type: ignore[arg-type]
+        )
+        taken = await tick.run()
+        after = await control.current(item_id)
+    assert taken == [] and runner.runs == 0
+    assert after == before  # the peer's advance is the only one this key gets
+    # Q2 untouched (still as `open` left it, this store's own id, no rerun):
+    # the peer's to take on its pass.
+    rows = {r.claim.created_at: r.claim for r in _claims(client).list_open()}
+    assert rows[1_000].owner == "peer"
+    assert rows[2_000].owner == _claims(client).pod_id and rows[2_000].reruns == 0  # opened here
+
+
+async def test_a_take_that_raises_skips_that_claim_and_still_runs_the_rest(caplog):
+    """A transient store error on one claim's `take` is that claim's problem:
+    the rest of the key is still taken, advanced ONCE and re-run. Aborting
+    the key after the first take had that claim owned by this pod with no
+    beat and nothing running — re-taken 30 s later as stale, and after two
+    such hiccups given up on (round 2)."""
+    import dataclasses
+    import logging
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec)
+        _append(spec, rid, "user", "the second question", 2_000)
+        store = _claims(client)
+        store.open(
+            TurnClaim(
+                key=item_id,
+                created_at=2_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "the second question"},
+                owner="pod-a",
+            )
+        )
+        await activity.bump(item_id)
+        control = cast(FastAPI, client.app).state.turn_control
+        before = await control.current(item_id)
+
+        class _FlakyOnTheSecond:
+            def __getattr__(self, name):  # noqa: ANN001, ANN204 — the real store, but for `take`
+                return getattr(store, name)
+
+            def take(self, row):  # noqa: ANN001, ANN202
+                if row.claim.created_at == 2_000:
+                    raise RuntimeError("store hiccup")
+                return store.take(row)
+
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, client.app)),
+            claims=_FlakyOnTheSecond(),  # type: ignore[arg-type]
+        )
+        with caplog.at_level(logging.ERROR):
+            taken = await tick.run()
+        await _settle(store)
+        after = await control.current(item_id)
+    assert taken == [item_id] and runner.runs == 1
+    assert after == before + 1
+    assert "hi" in runner.prompts[0]
+    (left,) = store.list_open()
+    assert left.claim.created_at == 2_000 and left.claim.reruns == 0  # next tick's
+
+
+async def test_only_the_tick_that_takes_a_spent_claim_writes_its_ending():
+    """Two overlapping ticks both see a claim past `RECLAIM_MAX_RERUNS`. The
+    ending is written by whoever TAKES it (a CAS), so the thread gets one
+    error message, not one per tick (round 2)."""
+    import dataclasses
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec, reruns=RECLAIM_MAX_RERUNS)
+        await activity.bump(item_id)
+        peer = SpecstarTurnClaimStore(spec, pod_id="peer")
+
+        class _PeerTakesFirst:
+            async def alive(self, key: str) -> bool:
+                (row,) = peer.list_open()
+                peer.take(row)
+                return False
+
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, client.app)),
+            activity=_PeerTakesFirst(),  # type: ignore[arg-type]
+        )
+        taken = await tick.run()
+    assert taken == [] and runner.runs == 0
+    assert _thread(spec, rid) == [("user", "hi")]  # the peer's ending, not ours as well
+    (row,) = _claims(client).list_open()
+    assert row.claim.owner == "peer"
+
+
+async def test_a_send_still_preparing_at_the_deadline_is_handed_over_and_declined():
+    """The drain's third shape, after running and queued: a send whose claim
+    is open but whose turn does not exist yet (compaction, a cold sandbox
+    wake). It is handed over like the others, and its token is marked so
+    the turn never starts here — the preparation that finishes after the
+    drain enqueues, the worker declines, and the declined copy persists
+    nothing (the claim is no longer this pod's). Round 2 found it neither
+    handed over nor stopped: the turn ran on the drained engine and, at
+    exit, persisted a partial with its claim finished (round 2)."""
+    spec = make_spec(default_user="u")
+    client, runner = _pod(spec)
+    item_id, rid = _item_with_chat(spec)
+    conv = spec.get_resource_manager(Conversation).get(rid).data
+    assert isinstance(conv, Conversation)
+    with client:
+        svc = _service(client)
+        store = _claims(client)
+        engine = cast(FastAPI, client.app).state.turn_engines[0]
+        gate = asyncio.Event()
+        real_compact = svc.compact
+
+        async def slow_compact(*a, **kw):  # noqa: ANN002, ANN003, ANN202
+            await gate.wait()
+            return await real_compact(*a, **kw)
+
+        svc.compact = slow_compact
+        seen: list[str] = []
+
+        async def collect() -> None:
+            async for ev in engine.subscribe(item_id):
+                seen.append(type(ev).__name__)
+
+        collector = asyncio.create_task(collect())
+        send = asyncio.create_task(
+            svc.send(item_id, rid, conv, item_id, _MessageBody(content="hi"), author="alice")
+        )
+        for _ in range(100):
+            if store.list_open():
+                break
+            await asyncio.sleep(0.02)
+
+        async def handover(keys: list[str], not_after: float) -> None:
+            await asyncio.to_thread(store.release, keys, not_after=not_after)
+
+        await engine.aclose(timeout=0.3, handover=handover)
+        (row,) = store.list_open()
+        assert row.claim.released, "the preparing send was not handed over"
+        gate.set()  # the preparation finishes on the drained engine
+        await asyncio.wait_for(send, 5)
+        await asyncio.sleep(0.05)
+        collector.cancel()
+    assert runner.runs == 0  # declined, never run here
+    assert _thread(spec, rid) == [("user", "hi")]  # no partial, no marker
+    (row,) = _claims(client).list_open()
+    assert row.claim.released  # still the peer's to answer
+    assert "RunCancelled" not in seen, seen  # and the viewers were not told "cancelled"
+
+
+async def test_a_rerun_beats_while_resolving_the_headless_env():
+    """`env_without_request` is a deploy-owned policy that may take its time
+    (minting a credential); the claim is the taker's from `take` on, and
+    without a beat behind it the next tick would read a stale key and take
+    it AGAIN — a second copy (round 2). So the resolution runs inside the
+    preparation window, under its beat."""
+
+    class _SlowSeam(IRequestEnv):
+        def __init__(self) -> None:
+            self.gate = asyncio.Event()
+
+        async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:  # noqa: ANN001
+            return {}
+
+        async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+            await self.gate.wait()
+            return {}
+
+    seam = _SlowSeam()
+    spec = make_spec(default_user="u")
+    item_id, rid = _item_with_chat(spec)
+    _append(spec, rid, "user", "hi", 1_000)
+    client = TestClient(
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=_Runner(),
+            run_consumers=False,
+            turn_reclaim_interval=None,
+            request_env=seam,
+        )
+    )
+    with client:
+        store = _claims(client)
+        store.open(
+            TurnClaim(
+                key=item_id,
+                created_at=1_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "hi"},
+            )
+        )
+        (row,) = store.list_open()
+        rerun = asyncio.create_task(_service(client).rerun(row))
+        await asyncio.sleep(0.1)  # inside the seam's await; the first beat has landed
+        alive = await cast(FastAPI, client.app).state.turn_activity.alive(item_id)
+        seam.gate.set()
+        await asyncio.wait_for(rerun, 5)
+        await _settle(store)
+    assert alive, "no heartbeat behind the claim while the re-run resolved its env"
+
+
+async def test_rerun_returns_once_the_turn_is_queued_not_answered():
+    """The tick runs every claim it took in turn; a `rerun` that waited on the
+    reply (up to `send_await_timeout`, as the POST does) would start the
+    Nth orphan N detach-timeouts late. Round 1 made it return at once and
+    said it was pinned; nothing reddened when that was mutated (round 2)."""
+    spec = make_spec(default_user="u")
+    item_id, rid = _item_with_chat(spec)
+    _append(spec, rid, "user", "hi", 1_000)
+    runner = _Runner()
+    gate = asyncio.Event()
+    original = runner.run
+
+    async def held(prompt, ctx):  # noqa: ANN001, ANN202
+        await gate.wait()
+        async for ev in original(prompt, ctx):
+            yield ev
+
+    runner.run = held  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    client = TestClient(
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner,
+            run_consumers=False,
+            turn_reclaim_interval=None,
+            send_await_timeout=3.0,  # what a rerun that waited would wait
+        )
+    )
+    with client:
+        store = _claims(client)
+        store.open(
+            TurnClaim(
+                key=item_id,
+                created_at=1_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "hi"},
+            )
+        )
+        (row,) = store.list_open()
+        returned_with_the_gate_shut = False
+        try:
+            await asyncio.wait_for(_service(client).rerun(row), 1.0)
+            returned_with_the_gate_shut = runner.runs == 0
+        except TimeoutError:
+            pass  # the verdict is below; a hang here would be a hang of the drain
+        finally:
+            # A structural exit: the turn's tasks live on THIS loop and the
+            # lifespan drain on the client's, so leaving the `with` while the
+            # turn is live would wait on a foreign loop for ever.
+            gate.set()
+            await _settle(store)
+    assert returned_with_the_gate_shut, "rerun waited on the reply"
+    assert _thread(spec, rid) == [("user", "hi"), ("assistant", "the answer")]
+
+
+async def test_an_abandon_whose_finish_fails_writes_one_ending_not_one_per_tick():
+    """Giving up appends the error ending and finishes the claim; a `finish`
+    the store refuses leaves the row for the next tick, which must not append
+    the same ending again (round 2: three ticks, three "could not finish"
+    messages). The ending is idempotent: written only if the thread does not
+    already end on it."""
+    import dataclasses
+
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec, reruns=RECLAIM_MAX_RERUNS)
+        await activity.bump(item_id)
+        store = _claims(client)
+
+        class _FinishRefused:
+            def __getattr__(self, name):  # noqa: ANN001, ANN204
+                return getattr(store, name)
+
+            def finish(self, cid: str) -> None:
+                raise RuntimeError("store refused")
+
+        tick = dataclasses.replace(
+            ReclaimTick.of(cast(FastAPI, client.app)),
+            claims=_FinishRefused(),  # type: ignore[arg-type]
+        )
+        # The tick's own ChatSendService still finishes through the real store;
+        # point it at the refusing one too, so the ending is written but the
+        # row stays.
+        tick.chat_send._turn_claims = _FinishRefused()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+        await tick.run()
+        await tick.run()
+        await tick.run()
+        tick.chat_send._turn_claims = store  # type: ignore[assignment]
+    assert runner.runs == 0
+    endings = [m for m in _thread(spec, rid) if m[0] == "error"]
+    assert len(endings) == 1, endings
+
+
+async def test_giving_up_still_advances_the_epoch_on_a_stalled_owner():
+    """A claim past its bound on a STALLED (not dead) owner: the give-up ends
+    the thread, and the epoch is advanced all the same so the owner's copy —
+    still running, still burning the model — cancels itself instead of
+    finishing into a claim that is gone (round 2)."""
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, _ = _pod(spec)
+    with client:
+        item_id, _ = _open_orphan(client, spec, reruns=RECLAIM_MAX_RERUNS)
+        await activity.bump(item_id)
+        control = cast(FastAPI, client.app).state.turn_control
+        before = await control.current(item_id)
+        await ReclaimTick.of(cast(FastAPI, client.app)).run()
+        after = await control.current(item_id)
+    assert after == before + 1
+
+
+async def test_a_stale_key_takes_its_released_and_unreleased_claims_together():
+    """One key, Q1's claim owned by a pod that died (stale, not released) and
+    Q2's released by a pod that drained. Taking only the released one left
+    Q1 waiting until Q2's re-run ended AND its beat went stale — answered
+    after Q2, half a minute late (round 2). A stale key is taken whole."""
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec, reply="answer")
+    with client:
+        item_id, rid = _open_orphan(client, spec)  # Q1: pod-a, dead
+        _append(spec, rid, "user", "the second question", 2_000)
+        drained = SpecstarTurnClaimStore(spec, pod_id="pod-b")
+        drained.open(
+            TurnClaim(
+                key=item_id,
+                created_at=2_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "the second question"},
+            )
+        )
+        drained.release([item_id])  # Q2: pod-b let go
+        await activity.bump(item_id)
+        taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
+        await _settle(_claims(client))
+    assert taken == [item_id] and runner.runs == 2
+    assert "hi" in runner.prompts[0] and "the second question" in runner.prompts[1]
+    assert _thread(spec, rid) == [
+        ("user", "hi"),
+        ("user", "the second question"),
+        ("assistant", "answer"),
+        ("assistant", "answer"),
+    ]
 
 
 async def test_taking_a_claim_advances_the_epoch_so_a_stalled_owner_stops():
