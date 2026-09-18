@@ -1179,6 +1179,18 @@ export const messages = {
   "wui.view.label": { "zh-TW": "顯示方式", en: "View" },
   "wui.view.cards": { "zh-TW": "卡片", en: "Cards" },
   "wui.view.table": { "zh-TW": "表格", en: "Table" },
+  "wui.view.tip": { "zh-TW": "切換卡片 / 表格", en: "Switch between cards and the table" },
+  // The tools (amendment 2): filter by App, search, sort — within the App
+  // sections, which stay.
+  "wui.filter.app": { "zh-TW": "依 App 篩選", en: "Filter by App" },
+  "wui.filter.all": { "zh-TW": "全部", en: "All" },
+  "wui.search": { "zh-TW": "搜尋頁面或 item", en: "Search pages or items" },
+  "wui.sort": { "zh-TW": "排序", en: "Sort" },
+  "wui.sort.newest": { "zh-TW": "最新 Deploy", en: "Newest Deploy" },
+  "wui.sort.title": { "zh-TW": "名稱", en: "Name" },
+  "wui.nomatch": { "zh-TW": "沒有符合的頁面", en: "No page matches" },
+  // The viewer's own items' pages — owner, not deployer.
+  "wui.mine": { "zh-TW": "我的", en: "Mine" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",

@@ -29,6 +29,8 @@ export type DeployedWui = {
   slug: string;
   item_id: string;
   item_title: string;
+  /** The item's OWNER — not who pressed Deploy (`deployed_by`). */
+  item_owner: string;
   path: string;
   title: string;
   deployed_by: string;

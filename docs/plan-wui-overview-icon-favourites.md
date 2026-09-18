@@ -379,3 +379,21 @@ remembered in the browser.
   `:402` `.wui-list`, `:442` `.page-mark`, `:503` the narrow block.
 - `lib/wuiAutoBuild.ts` the localStorage shape to copy.
 
+### Amendment 2 (2026-09-18, after seeing the P20 cards): what the author asked for, one line each
+
+> 應該要一樣高 · 他是哪個 app 來的 · 排序 filter 都要有 · 搜尋也要有 · 卡片 表格 選取應該是
+> switch · Owner 也要在上面 · 卡片裡面不用有標籤 我的最愛的可以有 · 還要有「我的」wui · 這樣可以
+
+Built as P21, with the App SECTIONS kept (the author's 「這樣可以」 on the P20
+screenshot; a grouping question was asked and declined — see
+`feedback_denied_question_is_not_consent`):
+
+| Ask | Done |
+|---|---|
+| Equal heights | The grid's default `stretch` back (P19's `start` undone); the card a flex column, body `flex: 1`, footer at the bottom. The shell's `.page ul > li` (a centred flex row) reached into the card once it became `display: flex` — `align-items: stretch; gap: 0` said out loud, and guarded. |
+| Cards / table as a switch | ONE `role="switch"` (the `.switch` markup of `components/Switch.tsx`), 卡片 on the left, 表格 on the right, the live word in ink; off = cards. |
+| Filter · search · sort | A toolbar under the heading: App chips (全部 + one per App present, `aria-pressed`), a search box (title or item title, case-insensitive), a sort select (最新 Deploy = the server's order, the default; 名稱 = `localeCompare` zh-TW). Filter hides sections; search drops sections with no match and says 沒有符合的頁面 when none; sort is within a section. Not persisted. All three apply to every section. |
+| Owner on the card | `GET /wui` and the Deploy response carry `item_owner` (the locator's new `title_owner_of`: one lookup for both facts, so the per-item cost did not double). The card footer names the owner with `UserChip` (avatar + directory name); the table's detail line names them after the item. |
+| The App on the card — only where the section does not say it | The App's tag on cards (and, in the table, at the start of the detail) in the 我的最愛 and 我的 sections; not in an App section. |
+| 「我的」 | A section between 我的最愛 and the Apps: the pages of items the viewer OWNS (`item_owner === me`, not who pressed Deploy), nothing until the identity has settled; the page stays in its App section too. |
+

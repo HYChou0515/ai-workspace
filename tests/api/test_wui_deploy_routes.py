@@ -205,6 +205,12 @@ def test_the_row_names_the_person_who_pressed_deploy_not_the_owner():
     assert r.status_code == 200, r.text
     assert r.json()["deployed_by"] == "alice"
     assert r.json()["can_remove"] is True
+    # …and the item's OWNER is a different person, named on the row too
+    # (the author: 「Owner 也要在上面」) — in the Deploy response and the listing.
+    assert r.json()["item_owner"] == "bob"
+    assert [(p["deployed_by"], p["item_owner"]) for p in client.get("/wui").json()["pages"]] == [
+        ("alice", "bob")
+    ]
 
 
 def test_a_view_file_nested_past_the_parsers_depth_is_a_400_not_a_500():

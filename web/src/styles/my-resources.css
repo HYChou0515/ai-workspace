@@ -50,6 +50,65 @@
   margin: 0 0 var(--space-32);
 }
 
+/* The cards / table switch: both words on it, the live one in ink. */
+.page .view-switch .switch-label {
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+}
+
+.page .view-switch .switch-label[data-on="true"] {
+  color: var(--text-paper);
+  font-weight: 600;
+}
+
+/* The tools under the heading (amendment 2): App chips · search · sort.
+   One wrapping row; the search box takes what is left. */
+.page > .page-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8) var(--space-16);
+  margin: calc(-1 * var(--space-12)) 0 var(--space-24);
+}
+
+.page > .page-tools > .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.page > .page-tools > input[type="search"] {
+  flex: 1 1 200px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font: inherit;
+  font-size: var(--text-small);
+}
+
+.page > .page-tools > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.page > .page-tools select {
+  height: 32px;
+  padding: 0 var(--space-8);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font: inherit;
+  font-size: var(--text-small);
+}
+
 .page > section + section {
   margin-top: var(--space-32);
 }
@@ -470,17 +529,25 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--space-16);
-  /* Each card its own height: the default `stretch` made every card in a
-     row as tall as its tallest sibling (measured: a two-word title in a
-     328px card beside a seven-line one), and a card's height is nobody
-     else's business. */
-  align-items: start;
+  /* The default `stretch`: every card in a row the same height (the author:
+     「應該要一樣高 比較整齊」). P19 had `start` because a stretched card
+     beside a seven-line title was 328px of nothing; P20's clamp bounds a
+     card at two title lines + one detail line, so stretching is tidy now. */
 }
 
 .page .wui-card {
   /* `relative` is what the stretched link and the actions position against. */
   position: relative;
-  display: block;
+  /* A column whose body grows, so the footer sits at the bottom of a card
+     that was stretched to its row's height. `align-items: stretch` and
+     `gap: 0` are said out loud: the shell's `.page ul > li` is a CENTRED
+     flex row with a gap, and once this became `display: flex` that rule
+     reached in — the stripe (no content) went 0px wide, the body (wider
+   than the card at its min-content) was centred and clipped on both sides. */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
   padding: 0;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -500,6 +567,10 @@
 }
 
 .page .wui-card > .wui-card-body {
+  flex: 1;
+  /* A flex item's minimum is its min-content — the title's longest word —
+     so without this a card narrower than that word grows past its edges. */
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-12);
@@ -571,19 +642,33 @@
   z-index: 1;
 }
 
-/* 下架: a footer row, right-aligned, ABOVE the stretched link — a press on
-   it must not open the page, and it must not be inside the anchor (a button
-   in a link is not HTML). A footer rather than beside the star: two buttons
-   in the corner reserved 96px of the body for the card's whole height, and
-   at three columns that left the title 153px — two lines for "Shipping
-   board" (measured, P19). */
-.page .wui-card > .actions {
+/* The footer: the App's tag on the left, 下架 on the right — ABOVE the
+   stretched link, so a press on 下架 does not open the page, and never
+   inside the anchor (a button in a link is not HTML). A footer rather than
+   beside the star: two buttons in the corner reserved 96px of the body for
+   the card's whole height, and at three columns that left the title 153px —
+   two lines for "Shipping board" (measured, P19). */
+.page .wui-card > .wui-card-foot {
   position: relative;
   z-index: 1;
   display: flex;
-  justify-content: flex-end;
-  gap: var(--space-4);
-  padding: 0 var(--space-8) var(--space-8);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: 0 var(--space-8) var(--space-8) var(--space-16);
+}
+
+.page .wui-card > .wui-card-foot > .wui-card-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.page .wui-card > .wui-card-foot .app-tag {
+  font-size: var(--text-small);
 }
 
 .page .wui-card > .error {

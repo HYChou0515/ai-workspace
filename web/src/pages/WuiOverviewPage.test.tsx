@@ -18,6 +18,11 @@ vi.mock("../api", () => ({
       { slug: "rca", title: "根因分析", description: "", icon: "flame", color: "#F0502E" },
       { slug: "pm", title: "專案管理", description: "", icon: "kanban", color: "#3B82F6" },
     ]),
+    // The directory `UserChip` names an owner from; one entry, so the chip
+    // shows a NAME for carol and falls back to the id for everyone else.
+    getUsers: vi.fn(async () => [
+      { id: "carol", name: "Carol Lin", section: "", email: "", photo_url: null },
+    ]),
   },
 }));
 
@@ -49,6 +54,7 @@ const row = (over: Partial<DeployedWui>): DeployedWui => ({
   deployed_by: "bob",
   deployed_at: 1_700_000_000_000,
   icon: "",
+  item_owner: "carol",
   can_remove: true,
   ...over,
 });
@@ -57,7 +63,8 @@ const row = (over: Partial<DeployedWui>): DeployedWui => ({
  * Deploy first). */
 const THREE: DeployedWui[] = [
   row({ title: "Shipping board", item_id: "i-1", deployed_at: 3 }),
-  row({ slug: "pm", item_id: "p-1", item_title: "Q4 roadmap", title: "Burn-down", deployed_at: 2 }),
+  // alice's own item — the signed-in viewer's, so it is 「我的」.
+  row({ slug: "pm", item_id: "p-1", item_title: "Q4 roadmap", title: "Burn-down", deployed_at: 2, item_owner: "alice" }),
   row({ title: "Scrap trend", item_id: "i-2", item_title: "Line 4", deployed_at: 1, can_remove: false }),
 ];
 
@@ -113,8 +120,11 @@ describe("WuiOverviewPage", () => {
     expect(within(pm).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
       expect.stringContaining("Burn-down"),
     ]);
-    // A row says which item it came from and who put it up.
+    // A row says which item it came from, whose it is, and who put it up.
     expect(within(rca).getAllByRole("listitem")[0]).toHaveTextContent("Line 3 stoppage");
+    // By NAME once the directory has answered (the id until then). Two rows
+    // in this section are carol's, so two names.
+    await within(rca).findAllByText("Carol Lin");
     expect(within(rca).getAllByRole("listitem")[0]).toHaveTextContent("bob");
   });
 
@@ -349,7 +359,7 @@ describe("WuiOverviewPage", () => {
       render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
 
-      fireEvent.click(screen.getByRole("button", { name: STAR("Burn-down") }));
+      fireEvent.click(screen.getAllByRole("button", { name: STAR("Burn-down") })[0]);
 
       const fav = favGroup();
       expect(fav).not.toBeNull();
@@ -365,9 +375,10 @@ describe("WuiOverviewPage", () => {
       // …and still under 專案管理, where the complete listing keeps it.
       const pm = screen.getByRole("region", { name: "專案管理" });
       expect(within(pm).getAllByRole("listitem")).toHaveLength(1);
-      // Both copies of the row show the same state: two stars, both pressed,
-      // both now offering to unstar.
-      expect(screen.getAllByRole("button", { name: UNSTAR("Burn-down") })).toHaveLength(2);
+      // Every copy of the row shows the same state — the favourites section,
+      // 我的 (Burn-down is alice's) and its App section: three stars, all
+      // pressed, all now offering to unstar.
+      expect(screen.getAllByRole("button", { name: UNSTAR("Burn-down") })).toHaveLength(3);
       for (const b of screen.getAllByRole("button", { name: UNSTAR("Burn-down") })) {
         expect(b).toHaveAttribute("aria-pressed", "true");
         expect(b).toHaveAttribute("aria-label", "把「Burn-down」從我的最愛移除");
@@ -383,7 +394,7 @@ describe("WuiOverviewPage", () => {
       // Starred in the OPPOSITE order to the listing: the group follows the
       // listing (newest Deploy first), not the order of starring.
       fireEvent.click(screen.getByRole("button", { name: STAR("Scrap trend") }));
-      fireEvent.click(screen.getByRole("button", { name: STAR("Burn-down") }));
+      fireEvent.click(screen.getAllByRole("button", { name: STAR("Burn-down") })[0]);
 
       expect(within(favGroup()!).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
         expect.stringContaining("Burn-down"),
@@ -394,7 +405,9 @@ describe("WuiOverviewPage", () => {
       // copy both flip; the group survives while one star remains.
       fireEvent.click(within(favGroup()!).getAllByRole("button", { name: UNSTAR("Burn-down") })[0]);
       expect(within(favGroup()!).getAllByRole("listitem")).toHaveLength(1);
-      expect(screen.getByRole("button", { name: STAR("Burn-down") })).toHaveAttribute("aria-pressed", "false");
+      for (const b of screen.getAllByRole("button", { name: STAR("Burn-down") })) {
+        expect(b).toHaveAttribute("aria-pressed", "false");
+      }
 
       fireEvent.click(within(favGroup()!).getByRole("button", { name: UNSTAR("Scrap trend") }));
       expect(favGroup()).toBeNull();
@@ -452,8 +465,6 @@ describe("WuiOverviewPage", () => {
   });
 
   describe("cards (the cards amendment)", () => {
-    const CARDS = () => translate("zh-TW", "wui.view.cards");
-    const TABLE = () => translate("zh-TW", "wui.view.table");
     beforeEach(() => localStorage.clear());
 
     it("draws cards by default, in a wide shell, and no table", async () => {
@@ -464,11 +475,13 @@ describe("WuiOverviewPage", () => {
       expect(container.querySelector(".wui-list")).toBeNull();
       // Three cards fit only at the Launcher's width: the shell widens.
       expect(container.querySelector(".page")).toHaveClass("page--wide");
-      // The toggle says which is on, LITERALLY (round 4's lesson).
-      const cards = screen.getByRole("button", { name: "卡片" });
-      const table = screen.getByRole("button", { name: "表格" });
-      expect(cards).toHaveAttribute("aria-pressed", "true");
-      expect(table).toHaveAttribute("aria-pressed", "false");
+      // ONE control, a switch (the author: 「選取應該是 switch 或是類似的 ui」),
+      // off = cards, on = table; both words on it, LITERALLY.
+      const sw = screen.getByRole("switch", { name: word("wui.view.label") });
+      expect(sw).not.toBeChecked();
+      const label = sw.closest("label")!;
+      expect(label).toHaveTextContent("卡片");
+      expect(label).toHaveTextContent("表格");
       expect(readWuiView()).toBe("cards");
     });
 
@@ -476,29 +489,31 @@ describe("WuiOverviewPage", () => {
       const { container, unmount } = render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
 
-      fireEvent.click(screen.getByRole("button", { name: TABLE() }));
+      fireEvent.click(screen.getByRole("switch", { name: word("wui.view.label") }));
 
       expect(container.querySelector(".wui-list")).not.toBeNull();
       expect(container.querySelector(".wui-cards")).toBeNull();
       expect(container.querySelector(".page")).not.toHaveClass("page--wide");
-      expect(screen.getByRole("button", { name: TABLE() })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("switch", { name: word("wui.view.label") })).toBeChecked();
       expect(readWuiView()).toBe("table");
       unmount();
 
       const again = render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
       expect(again.container.querySelector(".wui-list")).not.toBeNull();
+      expect(screen.getByRole("switch", { name: word("wui.view.label") })).toBeChecked();
 
-      fireEvent.click(screen.getByRole("button", { name: CARDS() }));
+      fireEvent.click(screen.getByRole("switch", { name: word("wui.view.label") }));
       expect(again.container.querySelector(".wui-cards")).not.toBeNull();
       expect(readWuiView()).toBe("cards");
     });
 
-    it("has no toggle when there is nothing to list", async () => {
+    it("has no switch and no tools when there is nothing to list", async () => {
       render(<WuiOverviewPage client={client([])} />, { wrapper: Wrap });
       await screen.findByText(word("wui.empty"));
-      expect(screen.queryByRole("button", { name: CARDS() })).toBeNull();
-      expect(screen.queryByRole("button", { name: TABLE() })).toBeNull();
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(screen.queryByRole("searchbox")).toBeNull();
+      expect(screen.queryByRole("combobox")).toBeNull();
     });
 
     it("makes the whole card the page's link, with the star and Remove OUTSIDE it", async () => {
@@ -538,7 +553,14 @@ describe("WuiOverviewPage", () => {
       // The star is the card's top-right corner (the author: 「我的最愛通常會
       // 在右上角」) — its own element, not in the footer with 下架.
       expect(star.closest(".wui-card > .star")).not.toBeNull();
-      expect(remove.closest(".wui-card > .actions")).not.toBeNull();
+      expect(remove.closest(".wui-card > .wui-card-foot")).not.toBeNull();
+      // The item's OWNER, on every card, by NAME where the directory has one
+      // (the author: 「Owner 也要在上面」). Not who pressed Deploy — that is
+      // the detail line's.
+      await within(card.querySelector(".wui-card-foot") as HTMLElement).findByText("Carol Lin");
+      // No App tag in an App section — its heading already says the App (the
+      // author: 「卡片裡面不用有標籤 我的最愛的可以有」).
+      expect(card.querySelector(".app-tag")).toBeNull();
       // A long title and a long detail are CUT, not shown whole (the author:
       // 「不要硬要顯示全部」): the whole text lives in the tooltip.
       expect(link).toHaveAttribute("title", "出貨看板");
@@ -555,14 +577,17 @@ describe("WuiOverviewPage", () => {
       render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
       await screen.findByRole("region", { name: "根因分析" });
 
-      fireEvent.click(screen.getByRole("button", { name: translate("zh-TW", "wui.star", { title: "Burn-down" }) }));
+      fireEvent.click(screen.getAllByRole("button", { name: translate("zh-TW", "wui.star", { title: "Burn-down" }) })[0]);
 
       const fav = screen.getByRole("region", { name: word("wui.favourites") });
       expect(fav.querySelector("ul.wui-cards")).not.toBeNull();
+      // Here the card DOES say its App: the section's heading cannot.
+      expect(fav.querySelector(".wui-card .app-tag")).toHaveTextContent("專案管理");
       const unstars = screen.getAllByRole("button", {
         name: translate("zh-TW", "wui.unstar", { title: "Burn-down" }),
       });
-      expect(unstars).toHaveLength(2);
+      // Favourites, 我的 (Burn-down is alice's) and its App section.
+      expect(unstars).toHaveLength(3);
       for (const b of unstars) expect(b).toHaveAttribute("aria-pressed", "true");
     });
 
@@ -581,6 +606,120 @@ describe("WuiOverviewPage", () => {
       );
       expect(c.remove).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(screen.queryByRole("link", { name: "Shipping board" })).toBeNull());
+    });
+  });
+
+  describe("「我的」— the viewer's own items' pages (amendment 2)", () => {
+    it("lists the pages of items the viewer OWNS, between the favourites and the Apps, with the App on each", async () => {
+      toggleFavourite("alice", favouriteKey(THREE[0]));
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      const mine = screen.getByRole("region", { name: word("wui.mine") });
+      expect(within(mine).getByRole("heading")).toHaveTextContent("我的");
+      const rows = within(mine).getAllByRole("listitem");
+      expect(rows.map((li) => within(li).getAllByRole("link")[0].textContent)).toEqual(["Burn-down"]);
+      // Owner, not deployer: Shipping board was Deployed by bob into carol's
+      // item — not alice's, so not here.
+      expect(rows[0].querySelector(".app-tag")).toHaveTextContent("專案管理");
+      // Order on the page: favourites, then 我的, then the Apps.
+      const names = screen.getAllByRole("region").map((r) => within(r).getByRole("heading").textContent);
+      expect(names.slice(0, 2)).toEqual(["我的最愛", "我的"]);
+      // …and the page stays in its App section too — 我的 is a shortcut.
+      expect(within(screen.getByRole("region", { name: "專案管理" })).getAllByRole("listitem")).toHaveLength(1);
+    });
+
+    it("has no 「我的」 section when the viewer owns none of the listed items", async () => {
+      render(
+        <WuiOverviewPage client={client([THREE[0], THREE[2]])} />,
+        { wrapper: Wrap },
+      );
+      await screen.findByRole("region", { name: "根因分析" });
+      expect(screen.queryByRole("region", { name: word("wui.mine") })).toBeNull();
+    });
+  });
+
+  describe("search, sort and filter (amendment 2)", () => {
+    const rowTitles = (region: HTMLElement) =>
+      within(region)
+        .getAllByRole("listitem")
+        .map((li) => within(li).getAllByRole("link")[0].textContent);
+
+    it("filters by App: one chip per App present, 全部 first; a chip keeps only that App's section", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      const chips = screen.getByRole("group", { name: word("wui.filter.app") });
+      // The App's own name on each chip, in the listing's order; 全部 literal.
+      expect(within(chips).getAllByRole("button").map((b) => b.textContent)).toEqual([
+        "全部",
+        "根因分析",
+        "專案管理",
+      ]);
+      expect(within(chips).getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(within(chips).getByRole("button", { name: "專案管理" }));
+
+      expect(screen.queryByRole("region", { name: "根因分析" })).toBeNull();
+      expect(rowTitles(screen.getByRole("region", { name: "專案管理" }))).toEqual(["Burn-down"]);
+      expect(within(chips).getByRole("button", { name: "專案管理" })).toHaveAttribute("aria-pressed", "true");
+      expect(within(chips).getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(within(chips).getByRole("button", { name: "全部" }));
+      expect(screen.getByRole("region", { name: "根因分析" })).toBeInTheDocument();
+    });
+
+    it("searches the page title and the item title, case-insensitively; a section with no match goes; no match at all says so", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      const box = screen.getByRole("searchbox", { name: word("wui.search") });
+      fireEvent.change(box, { target: { value: "SCRAP" } });
+      expect(rowTitles(screen.getByRole("region", { name: "根因分析" }))).toEqual(["Scrap trend"]);
+      expect(screen.queryByRole("region", { name: "專案管理" })).toBeNull();
+
+      fireEvent.change(box, { target: { value: "q4" } }); // the ITEM's title
+      expect(rowTitles(screen.getByRole("region", { name: "專案管理" }))).toEqual(["Burn-down"]);
+      expect(screen.queryByRole("region", { name: "根因分析" })).toBeNull();
+
+      fireEvent.change(box, { target: { value: "zzz" } });
+      expect(screen.getByText("沒有符合的頁面")).toBeInTheDocument();
+      expect(screen.queryAllByRole("region")).toHaveLength(0);
+      // Not the "nothing Deployed" empty state: the switch and the tools stay.
+      expect(screen.getByRole("switch")).toBeInTheDocument();
+    });
+
+    it("sorts within each section: newest Deploy (the default, the server's order) or by name", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      const sort = screen.getByRole("combobox", { name: word("wui.sort") });
+      expect(sort).toHaveValue("newest");
+      expect(rowTitles(screen.getByRole("region", { name: "根因分析" }))).toEqual(["Shipping board", "Scrap trend"]);
+
+      fireEvent.change(sort, { target: { value: "title" } });
+      expect(rowTitles(screen.getByRole("region", { name: "根因分析" }))).toEqual(["Scrap trend", "Shipping board"]);
+
+      fireEvent.change(sort, { target: { value: "newest" } });
+      expect(rowTitles(screen.getByRole("region", { name: "根因分析" }))).toEqual(["Shipping board", "Scrap trend"]);
+    });
+
+    it("applies the same search, sort and filter to the favourites section", async () => {
+      toggleFavourite("alice", favouriteKey(THREE[0]));
+      toggleFavourite("alice", favouriteKey(THREE[1]));
+      toggleFavourite("alice", favouriteKey(THREE[2]));
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+      const fav = () => screen.getByRole("region", { name: word("wui.favourites") });
+
+      fireEvent.change(screen.getByRole("combobox", { name: word("wui.sort") }), { target: { value: "title" } });
+      expect(rowTitles(fav())).toEqual(["Burn-down", "Scrap trend", "Shipping board"]);
+
+      fireEvent.click(within(screen.getByRole("group", { name: word("wui.filter.app") })).getByRole("button", { name: "專案管理" }));
+      expect(rowTitles(fav())).toEqual(["Burn-down"]);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: word("wui.search") }), { target: { value: "zzz" } });
+      expect(screen.queryByRole("region", { name: word("wui.favourites") })).toBeNull();
     });
   });
 

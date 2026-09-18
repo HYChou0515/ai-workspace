@@ -185,7 +185,7 @@ describe("my-resources: the live panel's layout", () => {
     expect(wideRule(".page .wui-card .wui-card-text > a::after")).toMatch(/position:\s*absolute/);
     // The actions sit ABOVE the overlay, or a press on the star opens the
     // page instead of starring it. Same for the item link in the detail.
-    expect(wideRule(".page .wui-card > .actions")).toMatch(/z-index:\s*[1-9]/);
+    expect(wideRule(".page .wui-card > .wui-card-foot")).toMatch(/z-index:\s*[1-9]/);
     expect(wideRule(".page .wui-card .wui-card-text > .detail > a")).toMatch(/z-index:\s*[1-9]/);
     // Cards mode widens the shell (three cards at the Launcher's width).
     expect(wideRule(".page.page--wide")).toMatch(/max-width:\s*1080px/);
@@ -195,6 +195,28 @@ describe("my-resources: the live panel's layout", () => {
     expect(wideRule(".page .wui-card > .star")).toMatch(/z-index:\s*[1-9]/);
     // The body leaves the corner free, or the title runs under the star.
     expect(wideRule(".page .wui-card > .wui-card-body")).toMatch(/padding-right:\s*\d+px|padding:[^;]*\b(4[4-9]|[5-9]\d)px/);
+  });
+
+  it("makes every card in a row the same height, with the footer at the bottom", () => {
+    // The author, on the P20 cards: 「應該要一樣高 比較整齊」. P19 had set
+    // `align-items: start` because a stretched card beside a seven-line
+    // title was 328px of nothing; P20's clamp bounds a card at two title
+    // lines + one detail line, so stretching is safe again. The card is a
+    // flex column with its body growing, or the footer floats mid-card.
+    const grid = wideRule(".page .wui-cards");
+    expect(grid).not.toMatch(/align-items:\s*start/);
+    const card = wideRule(".page .wui-card");
+    expect(card).toMatch(/display:\s*flex/);
+    expect(card).toMatch(/flex-direction:\s*column/);
+    // Said out loud, because the shell's `.page ul > li` is a CENTRED flex
+    // row: the first cut of this column inherited `align-items: center` and
+    // the stripe went 0px wide while the body was clipped on both sides
+    // (measured on the real page). Both are the shell's to override.
+    expect(card).toMatch(/align-items:\s*stretch/);
+    expect(card).toMatch(/gap:\s*0/);
+    const body = wideRule(".page .wui-card > .wui-card-body");
+    expect(body).toMatch(/flex:\s*1/);
+    expect(body).toMatch(/min-width:\s*0/);
   });
 
   it("fills a pressed star in EVERY view, not only the table", () => {

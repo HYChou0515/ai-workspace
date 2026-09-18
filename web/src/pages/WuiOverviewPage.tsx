@@ -17,6 +17,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
@@ -26,8 +27,10 @@ import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { PageMark } from "../components/PageMark";
+import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
+import { useUser } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
 import { useApps } from "../hooks/useResources";
 import { appTagPalette } from "../lib/appColor";
@@ -53,6 +56,14 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   // Cards or the table (the cards amendment): the viewer's choice, per
   // browser, cards by default.
   const [view, setView] = useWuiView();
+  // The tools (amendment 2) — about this visit, so plain state: which App
+  // (a slug, or "" for all), what the search box holds, and the order
+  // within a section. The App sections themselves stay (the author's
+  // 「這樣可以」 on them).
+  const [appFilter, setAppFilter] = useState("");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"newest" | "title">("newest");
+  const apps = useApps();
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.wuiOverview,
     queryFn: () => client.list(),
@@ -85,60 +96,88 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   }
   if (isPending || !data) return <p>{t("wui.loading")}</p>;
 
+  // The Apps present, in the listing's order (first seen) — the chips, and
+  // the sections' order.
+  const slugs = [...new Set(data.map((page) => page.slug))];
+  // Search: the page title or the item title, case-insensitive substring.
+  const needle = query.trim().toLocaleLowerCase();
+  const matches = (page: DeployedWui) =>
+    (!appFilter || page.slug === appFilter) &&
+    (!needle ||
+      page.title.toLocaleLowerCase().includes(needle) ||
+      (page.item_title || page.item_id).toLocaleLowerCase().includes(needle));
+  // Sort within a section: the server's order (newest Deploy first) stands
+  // unless the viewer asked for names — `localeCompare`, so 出貨 sorts among
+  // CJK the way the shell's language does, not by code point.
+  const ordered = (pages: DeployedWui[]) =>
+    sort === "title" ? [...pages].sort((a, b) => a.title.localeCompare(b.title, "zh-TW")) : pages;
+  const shown = data.filter(matches);
   // Group by app, in first-seen order — the rows arrive newest first, so an
-  // app whose latest Deploy is the most recent heads the page. Within a group
-  // the server's order stands; nothing here re-sorts.
+  // app whose latest Deploy is the most recent heads the page. A section
+  // with nothing left after the filter is not drawn.
   const groups = new Map<string, DeployedWui[]>();
-  for (const page of data) {
+  for (const page of shown) {
     const rows = groups.get(page.slug);
     if (rows) rows.push(page);
     else groups.set(page.slug, [page]);
   }
   // The favourites group: the listed rows the viewer starred, in the
   // listing's order — a shortcut above the complete listing, never instead of
-  // it. A starred key the listing no longer returns draws nothing (and stays
-  // in storage: Deploying the page again brings it back starred).
-  const starred = data.filter((page) => favourites.has(favouriteKey(page)));
+  // it, and under the same search, sort and filter. A starred key the
+  // listing no longer returns draws nothing (and stays in storage: Deploying
+  // the page again brings it back starred).
+  const starred = shown.filter((page) => favourites.has(favouriteKey(page)));
+  // 「我的」: the pages of items the viewer OWNS — the owner, not who pressed
+  // Deploy — under the same search, sort and filter. Nothing until the
+  // identity has settled: the placeholder id must not claim anyone's items.
+  const mine = me.ready ? shown.filter((page) => page.item_owner === me.id) : [];
 
-  const rowProps = (page: DeployedWui, starred: boolean) => ({
+  const rowProps = (page: DeployedWui, starred: boolean, showApp: boolean) => ({
     key: `${page.item_id}${page.path}`,
     page,
     client,
     starred,
     starReady: me.ready,
     onStar: () => favourites.toggle(favouriteKey(page)),
+    // The App's tag on the element only where no section heading says the
+    // App — the favourites and 我的 sections (the author: 「卡片裡面不用有標籤
+    // 我的最愛的可以有」).
+    showApp,
   });
   // One list element per section, in whichever view is on. The two views
   // share `PageActions` (the star, Remove, the confirm, the mutation) and
   // `PageDetail` (the item link, who and when) — the parity between a card
   // and a row is structural, not two copies kept alike by hand.
-  const listOf = (pages: DeployedWui[], starredAll: boolean) =>
+  const listOf = (pages: DeployedWui[], starredAll: boolean, showApp: boolean) =>
     view === "cards" ? (
       <ul className="wui-cards">
-        {pages.map((page) => (
-          <PageCard {...rowProps(page, starredAll || favourites.has(favouriteKey(page)))} />
+        {ordered(pages).map((page) => (
+          <PageCard {...rowProps(page, starredAll || favourites.has(favouriteKey(page)), showApp)} />
         ))}
       </ul>
     ) : (
       /* `wui-list`, not the bare `.page ul`: the narrow-viewport reflow in
          my-resources.css is written per list class. */
       <ul className="wui-list">
-        {pages.map((page) => (
-          <PageRow {...rowProps(page, starredAll || favourites.has(favouriteKey(page)))} />
+        {ordered(pages).map((page) => (
+          <PageRow {...rowProps(page, starredAll || favourites.has(favouriteKey(page)), showApp)} />
         ))}
       </ul>
     );
+  // Nothing Deployed at all: the empty state, no switch, no tools. Nothing
+  // matching the tools: the tools stay (they are what to change) and one
+  // line says so.
+  const nothingDeployed = data.length === 0;
 
   return (
     // Cards need the Launcher's width for three to fit; the table keeps the
     // shell's 760. The modifier follows the view, not the other way round.
-    <div className={view === "cards" && groups.size > 0 ? "page page--wide" : "page"}>
+    <div className={view === "cards" && !nothingDeployed ? "page page--wide" : "page"}>
       <div className="page-head">
         <h1>WUI</h1>
-        {/* No toggle on the empty state: there is nothing to draw either way. */}
-        {groups.size > 0 ? <ViewToggle view={view} onChange={setView} /> : null}
+        {nothingDeployed ? null : <ViewSwitch view={view} onChange={setView} />}
       </div>
-      {groups.size === 0 ? (
+      {nothingDeployed ? (
         <>
           <p className="empty">{t("wui.empty")}</p>
           <p className="hint">
@@ -147,10 +186,49 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
         </>
       ) : (
         <>
+          <div className="page-tools">
+            {/* One chip per App present, the App's own name (`AppTag`'s
+                rule: the slug until the manifests arrive), 全部 first. */}
+            <div className="chips" role="group" aria-label={t("wui.filter.app")}>
+              <Chip on={appFilter === ""} onClick={() => setAppFilter("")}>
+                {t("wui.filter.all")}
+              </Chip>
+              {slugs.map((slug) => (
+                <Chip key={slug} on={appFilter === slug} onClick={() => setAppFilter(slug)}>
+                  {apps.find((a) => a.slug === slug)?.title || slug}
+                </Chip>
+              ))}
+            </div>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("wui.search")}
+              aria-label={t("wui.search")}
+            />
+            <label>
+              {t("wui.sort")}
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value === "title" ? "title" : "newest")}
+                aria-label={t("wui.sort")}
+              >
+                <option value="newest">{t("wui.sort.newest")}</option>
+                <option value="title">{t("wui.sort.title")}</option>
+              </select>
+            </label>
+          </div>
+          {shown.length === 0 ? <p className="empty">{t("wui.nomatch")}</p> : null}
           {starred.length > 0 ? (
             <section aria-labelledby="wui-favourites">
               <h2 id="wui-favourites">{t("wui.favourites")}</h2>
-              {listOf(starred, true)}
+              {listOf(starred, true, true)}
+            </section>
+          ) : null}
+          {mine.length > 0 ? (
+            <section aria-labelledby="wui-mine">
+              <h2 id="wui-mine">{t("wui.mine")}</h2>
+              {listOf(mine, false, true)}
             </section>
           ) : null}
           {[...groups].map(([slug, rows]) => {
@@ -164,7 +242,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
                 <h2 id={`wui-app-${slug}`}>
                   <AppTag slug={slug} />
                 </h2>
-                {listOf(rows, false)}
+                {listOf(rows, false, false)}
               </section>
             );
           })}
@@ -174,39 +252,55 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   );
 }
 
-/** Cards or the table — `LanguageToggle`'s two-button shape: `aria-pressed`
- * is the state, the words are the product's. */
-function ViewToggle({ view, onChange }: { view: WuiView; onChange: (v: WuiView) => void }) {
+/** Cards or the table — ONE switch (the author: 「選取應該是 switch 或是類似的
+ * ui」), off = cards, on = table, both words on it so either end names its
+ * state. The `.switch` markup and classes are `components/Switch.tsx`'s
+ * (base.css draws the track and the thumb); it is not that component only
+ * because that one takes a single trailing word. */
+function ViewSwitch({ view, onChange }: { view: WuiView; onChange: (v: WuiView) => void }) {
   const t = useT();
-  const options: { id: WuiView; label: string }[] = [
-    { id: "cards", label: t("wui.view.cards") },
-    { id: "table", label: t("wui.view.table") },
-  ];
+  const table = view === "table";
   return (
-    <div role="group" aria-label={t("wui.view.label")} style={{ display: "flex", gap: 6 }}>
-      {options.map((o) => {
-        const on = o.id === view;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            aria-pressed={on}
-            onClick={() => onChange(o.id)}
-            style={{
-              padding: "6px 12px",
-              border: "1px solid var(--paper-3)",
-              borderRadius: "var(--radius-btn)",
-              fontSize: pxToRem(12),
-              background: on ? "var(--accent-soft)" : "var(--white)",
-              color: on ? "var(--accent-h)" : "var(--text-paper)",
-              cursor: "pointer",
-            }}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
+    <label className="switch view-switch" title={t("wui.view.tip")}>
+      <span className="switch-label" data-on={!table}>
+        {t("wui.view.cards")}
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={table}
+        aria-label={t("wui.view.label")}
+        onChange={(e) => onChange(e.target.checked ? "table" : "cards")}
+      />
+      <span className="switch-track" aria-hidden="true">
+        <span className="switch-thumb" />
+      </span>
+      <span className="switch-label" data-on={table}>
+        {t("wui.view.table")}
+      </span>
+    </label>
+  );
+}
+
+/** A filter chip — `LanguageToggle`'s button, `aria-pressed` the state. */
+function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      style={{
+        padding: "6px 12px",
+        border: "1px solid var(--paper-3)",
+        borderRadius: "var(--radius-btn)",
+        fontSize: pxToRem(12),
+        background: on ? "var(--accent-soft)" : "var(--white)",
+        color: on ? "var(--accent-h)" : "var(--text-paper)",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -220,6 +314,9 @@ type PageProps = {
    * press cannot be filed under the placeholder id. */
   starReady: boolean;
   onStar: () => void;
+  /** Draw the App's tag on the element — only where no section heading says
+   * the App (favourites, 我的). */
+  showApp: boolean;
 };
 
 /** The Remove mutation and its confirm — PER ELEMENT (the pattern
@@ -313,20 +410,44 @@ function UnlistButton({
   );
 }
 
-/** Which item the page came from, who put it up and when — one line, cut
- * with an ellipsis when it does not fit (the author: 「不要硬要顯示全部」),
- * the whole sentence in the tooltip. */
-function PageDetail({ page }: { page: DeployedWui }) {
+/** Which item the page came from (and, in the table, whose it is), who put
+ * it up and when — one line, cut with an ellipsis when it does not fit (the
+ * author: 「不要硬要顯示全部」), the whole sentence in the tooltip. The card
+ * names the owner in its footer instead, so it asks for the line without. */
+function PageDetail({
+  page,
+  withOwner,
+  withApp = false,
+}: {
+  page: DeployedWui;
+  withOwner: boolean;
+  /** The App's tag at the start of the line — the table's way of saying the
+   * App where its section heading does not. */
+  withApp?: boolean;
+}) {
   const t = useT();
+  const owner = useUser(page.item_owner);
   const item = page.item_title || page.item_id;
   const by = t("wui.row.by", {
     who: page.deployed_by,
     when: relativeTime(new Date(page.deployed_at).toISOString()),
   });
+  const sentence = withOwner ? `${item} · ${owner.name} · ${by}` : `${item} · ${by}`;
   return (
-    <span className="detail" title={`${item} · ${by}`}>
+    <span className="detail" title={sentence}>
+      {withApp ? (
+        <>
+          <AppTag slug={page.slug} />{" "}
+        </>
+      ) : null}
       {/* The workspace has no deep link to a file, so this opens the item. */}
       <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
+      {withOwner ? (
+        <>
+          {" · "}
+          <UserChip userId={page.item_owner} nameOnly />
+        </>
+      ) : null}
       {" · "}
       {/* Relative, like the rest of the shell, with the exact stamp in the
           title — `relativeTime` / `exactTime` are the shell's own pair
@@ -337,8 +458,9 @@ function PageDetail({ page }: { page: DeployedWui }) {
   );
 }
 
-/** One Deployed page as a TABLE row: mark · title · detail · star · Remove. */
-function PageRow({ page, client, starred, starReady, onStar }: PageProps) {
+/** One Deployed page as a TABLE row: mark · title · (App) · detail · star ·
+ * 下架. */
+function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProps) {
   const t = useT();
   const { remove, ask } = useRemove(page, client);
   return (
@@ -352,7 +474,7 @@ function PageRow({ page, client, starred, starReady, onStar }: PageProps) {
       <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
         {page.title}
       </a>
-      <PageDetail page={page} />
+      <PageDetail page={page} withOwner withApp={showApp} />
       <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} />
       <UnlistButton page={page} remove={remove} onRemove={ask} />
       {remove.isError ? (
@@ -371,7 +493,7 @@ function PageRow({ page, client, starred, starReady, onStar }: PageProps) {
  * where a favourite usually is), 下架 (the footer) and the item link sit
  * above it (`z-index`), so they press without opening the page and are
  * never inside the link. */
-function PageCard({ page, client, starred, starReady, onStar }: PageProps) {
+function PageCard({ page, client, starred, starReady, onStar, showApp }: PageProps) {
   const t = useT();
   const { remove, ask } = useRemove(page, client);
   // The App's own colour for the stripe, and its tint for the hover — the
@@ -403,15 +525,20 @@ function PageCard({ page, client, starred, starReady, onStar }: PageProps) {
           <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
             {page.title}
           </a>
-          <PageDetail page={page} />
+          <PageDetail page={page} withOwner={false} />
         </div>
       </div>
       <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} className="btn star" />
-      {page.can_remove ? (
-        <div className="actions">
-          <UnlistButton page={page} remove={remove} onRemove={ask} />
-        </div>
-      ) : null}
+      {/* The footer: on the left the item's OWNER (the author: 「Owner 也要在
+          上面」) and — only where the section heading does not say it — the
+          App's tag; on the right 下架 for someone who may. */}
+      <div className="wui-card-foot">
+        <span className="wui-card-who">
+          {showApp ? <AppTag slug={page.slug} /> : null}
+          <UserChip userId={page.item_owner} size={18} />
+        </span>
+        <UnlistButton page={page} remove={remove} onRemove={ask} />
+      </div>
       {remove.isError ? (
         <span className="error" role="alert">
           {t("wui.remove.failed")}

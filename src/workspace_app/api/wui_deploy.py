@@ -155,6 +155,9 @@ class DeployedPage(BaseModel):
     slug: str
     item_id: str
     item_title: str
+    # The item's OWNER — not who pressed Deploy (`deployed_by`); the overview
+    # names both, and a 「我的」 section is the owner's.
+    item_owner: str
     path: str
     title: str
     deployed_by: str
@@ -231,9 +234,11 @@ def register_wui_deploy_routes(
             deployed_at=(now or now_ms)(),
         )
         pages.record(row)
+        title, owner = locator.title_owner_of(workspace_id) or ("", "")
         return DeployedPage(
             **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
-            item_title=locator.title_of(workspace_id) or "",
+            item_title=title,
+            item_owner=owner,
             can_remove=True,
         )
 
@@ -265,27 +270,32 @@ def register_wui_deploy_routes(
         `require_access` holds the facts for its window, and an item with
         several pages asks once.
         """
-        decided: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+        decided: dict[tuple[str, str], tuple[bool, bool, str, str]] = {}
         out: list[DeployedPage] = []
         for row in pages.newest_first():
             key = (row.slug, row.item_id)
             if key not in decided:
                 readable = _may(row.slug, row.item_id, "read_content")
+                # The title and the owner are ONE store read of their own, so
+                # they are memoised with the decision — and only for an item
+                # that will be shown, so a hidden item costs nothing but its
+                # refusal.
+                facts = locator.title_owner_of(row.item_id) if readable else None
+                title, owner = facts or ("", "")
                 decided[key] = (
                     readable,
                     readable and _may(row.slug, row.item_id, "edit_content"),
-                    # The title is a store read of its own, so it is memoised
-                    # with the decision — and only for an item that will be
-                    # shown, so a hidden item costs nothing but its refusal.
-                    (locator.title_of(row.item_id) or "") if readable else "",
+                    title,
+                    owner,
                 )
-            readable, removable, item_title = decided[key]
+            readable, removable, item_title, item_owner = decided[key]
             if not readable:
                 continue
             out.append(
                 DeployedPage(
                     **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
                     item_title=item_title,
+                    item_owner=item_owner,
                     can_remove=removable,
                 )
             )
