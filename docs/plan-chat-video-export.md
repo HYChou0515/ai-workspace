@@ -194,11 +194,13 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 
 ### P8 — image + k8s + 文件 + 親眼驗收
 - `docker/Dockerfile` 加 stage `chat-video`;`kubernetes/base/workers.yaml` 加 `rca-worker-chat-video`(limit 以 P1 量到的為準);`docs/deployment.md` §11 worker 清單加一顆、`docs/chat-video.md` 加「從前端匯出」一節、`docs/migrations.md`。
-- 本機 all-in-one(`run_consumers: true`,裝好 extra + Chromium + ffmpeg)從 UI 按到底:選範圍 → 排 job → 進度前進 → 影片出現在檔案樹 → 開啟;錄一段 GIF 給 user;再試取消(刪進度檔)與失敗(上限)兩條。
+- 本機 all-in-one(`run_consumers: true`,裝好 extra + Chromium + ffmpeg)從 UI 按到底:選範圍 → 排 job → 進度前進 → 影片出現在檔案樹 → 開啟;再試取消(刪進度檔)與失敗(上限)兩條。
+- **Web demo 給 user 看**(`/web-demo`,真瀏覽器錄 GIF):① Export ▾ → 文字 Markdown → 下載、打開看格式;② Export ▾ → 影片 → 選「最近 5 則」、比例 + 解析度滑桿拉到 1080p、格式 mp4 → 送出 → header 進度列每 10 秒前進 → 完成 →「已存到 …」→ 點開影片播;③ 再排一支、在檔案樹刪掉進度檔 → 10 秒內停;④ 用 curl 對 `POST …/chat-video` 送手寫三則的 transcript → 三個檔出現在樹裡。GIF 附在 PR 裡、也傳給 user。**做完 = user 看得到、按得動;GIF 沒錄到的功能不算做完。**
 
 ## 驗收
 
 - 前端 Export 選單三種都能出檔;md 貼進報告可讀;範圍「最近 5 則」出的內容就是最新 5 則。
+- **user 看過 web demo 的 GIF**(P8 的四段),而且是在 PR 合併之前。
 - 影片從 UI 排隊到出現在 `/exports/chat-video/`,進度條每 10 秒前進,刪進度檔 10 秒內停;上限違反時是一句話不是 traceback。
 - 用 curl 對 `POST …/chat-video` 送一份手寫三則的 transcript,也出得了影片(source / progress / mp4 三個檔都在樹裡)。
 - `run_consumers: false` + `worker chat-video` 的 pod-split 走通(本機兩個進程);`rca-app` image 大小不變。
