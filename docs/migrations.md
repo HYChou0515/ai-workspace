@@ -84,6 +84,16 @@ uv run python scripts/run_migrate.py --dry-run \
 - `filestore.max_file_size`（新；預設 2 GiB；`0` = 不限）。不動設定：超過 2 GiB 的單檔上傳被拒。
   ⚠️ ingress 自己的 body 上限是另一回事（預設 1 MB），見 [#563](#pr-563)。
 
+### 2026-06-26 · 7b82131f #238 + d3beaefb #260 · hosted sandbox：獨立的 `sandbox-host` 服務（opt-in） {#pr-260}
+
+**k8s · CI 側**（只在 `sandbox.kind: http` 時——production 用的就是這種）
+
+- 多一個要自己部署的服務：`sandbox-host`（獨立的 uv 專案 `sandbox-host/`，自己的 Dockerfile 與映像），
+  範例在 `deploy/sandbox-host.example.yaml`（Deployment + Service，`SANDBOX_HOST_*` 環境變數，
+  `/readyz` / `/healthz` 探針）。app 這邊設 `sandbox.kind: http` + `sandbox.http.base_url` 指向它。
+  之後每個動到 `sandbox-host/` 的 PR，兩邊都要一起升（CI 永遠重建兩個映像）；不為版本歪斜設計相容模式。
+  不用 hosted sandbox 的部署：什麼都不用做。
+
 ### 2026-06-26 · 26406008 · #266 `kb.embedder.num_retries` 拿掉了 {#pr-266}
 
 **設定**（⚠️ 拒絕開機）
