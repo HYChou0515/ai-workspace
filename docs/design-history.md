@@ -55,6 +55,7 @@
 | [plan-turn-replay-buffer.md](plan-turn-replay-buffer.md) | 同台重連無損：#43 broadcast 加 in-pod seq + ring buffer，`?since=` replay 斷線期間漏掉的事件 |
 | [plan-event-bus-cross-pod-streaming.md](plan-event-bus-cross-pod-streaming.md) | 跨 pod live 串流：RabbitMQ fanout 事件匯流排（IEventBus，memory 預設 + rabbitmq），不再依賴 sticky |
 | [plan-skills-and-tools.md](plan-skills-and-tools.md) | Skills 與 tools 套件設計 |
+| [plan-chat-video.md](plan-chat-video.md) | 把一段對話紀錄做成影片：吃 `.chat.json`、一條指令、不打 LLM；純 HTML/CSS 的 zoom 推進輸入框、指定長寬；核心是純函式 + msgspec options，為之後的前端按鈕 + 獨立 job / worker pod 鋪路 |
 | [plan-headless-env.md](plan-headless-env.md) | 沒有人按送出的 turn（item 排程、goal driver、event trigger、整條 workflow）也拿得到環境變數：`IRequestEnv` 多一個 `env_without_request(user_id, item_id)`，預設 `{}`，部署的 impl 決定回 service account 還是什麼都不給；平台仍不認得 service account 這個詞；改變 #714「workflow 整條不接」的定案並寫明為何原顧慮不再成立 |
 | [plan-tool-env-declaration.md](plan-tool-env-declaration.md) | #750 tool 宣告自己要哪些環境變數 + 第二方帳密換 env：手寫選填宣告跟著 package 走、沒宣告≠不需要、便民工具不是閘門；附「為何 tool 不指名方法」 |
 | [plan-profile-python-env.md](plan-profile-python-env.md) | profile 自帶 python 環境:起始 `pyproject.toml`+`uv.lock` 決定 sandbox 套件,**每輪對話**跑一次 `uv sync --frozen --inexact`(`--inexact` 才不會刪掉使用者自己裝的);附「為何 venv 不放 workspace」「共用 cache 為何必須唯讀(hardlink 別名)」與十條被實作/review 推翻的原始宣稱 |

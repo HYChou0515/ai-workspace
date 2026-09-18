@@ -1,0 +1,107 @@
+# Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
+
+> **狀態:計畫。P1–P5(script 版)本 PR 做;P6–P8(前端按鈕 + job + worker pod)列出形狀、本 PR 不做。**
+
+## 需求（user 原話的整理）
+
+1. 「輸入指令就生成動畫」——吃 Export 出來的 `.chat.json`(手改過也行),**不打 LLM、不起 API server**。
+2. user 的那一輪,鏡頭要 **zoom 到輸入框**,逐字打、送出、拉遠。
+3. 要能指定輸出的**長寬**。
+4. 之後要變成**前端一顆按鈕**,由**獨立 job、專門的 worker pod** 產生影片——現在的切法要讓那一步只是「接上」,不是重寫。
+
+## 已驗證的事實(proof,`tmp/zoomspike/`)
+
+- 純 HTML/CSS 就能做 zoom:整頁容器 `translate(...) scale(k)` 一段 900 ms transition = 鏡頭推進;倍率要**封頂**讓整個輸入框進得了畫面(1280 寬時 1.8 → 1.55),而且要**推進 + 平移**把輸入框帶到畫面下三分之一——只設 `transform-origin` 會讓貼底的輸入框推進後仍然貼底、左邊被切、上面一片空。
+- 錄影就是 viewport:Playwright `record_video_size = viewport` ⇒ `--width/--height` 直接是輸出像素,不縮放。
+- 這台 Debian 11 只能跑 Playwright **1.49.x**(1.63 不支援 `debian11-x64`);Chromium 1148 已在 `~/.cache/ms-playwright`。
+- 訊息要**貼底排**(最新的緊貼輸入框上方),推進時才看得到上一輪對話。
+
+## 決定的做法
+
+**一個 package 模組,三層乾淨切開;CLI 和未來的 job handler 都只是呼叫同一個純函式。**
+
+```
+src/workspace_app/chat_video/
+  options.py    VideoOptions (msgspec.Struct)   ← CLI 旗標 = 未來 job payload 的欄位 = 未來前端表單的欄位
+  timeline.py   build_timeline(title, messages, options) -> Timeline   純函式,零重依賴,可算「預估秒數」
+  player.py     render_player_html(timeline, options) -> str           自帶 CSS/JS 的單頁,無 CDN(worker pod 可能離線)
+  render.py     record(html, options, workdir) -> webm; encode(webm, fmt) -> bytes   Playwright + ffmpeg,lazy import
+  service.py    render_chat_video(title, messages, options, *, workdir) -> bytes    ← 未來 job handler 呼叫的就是它
+  __main__.py   python -m workspace_app.chat_video export.chat.json -o demo.gif [--width …]
+```
+
+- **輸入是 `build_chat_export` 的形狀**(`{title, messages[]}`,`messages` 是 `Message` 的 `to_builtins`)。手改的 JSON 和「按鈕對著一段活的 chat」走**同一個**入口:未來的 route 只是把 `conv.messages` `to_builtins` 後丟給同一個函式,不另定格式。
+- **重依賴走 extra**:`playwright` + ffmpeg 只在 `render.py` 裡 lazy import,放 `[project.optional-dependencies] chat-video`;API pod 的 image 不裝也能 import 這個 package(`timeline` / `player` 純 Python,CI 測得到);worker pod 的 image 才裝 extra + Chromium + CJK 字型。
+- **同步函式**:`render_chat_video` 是 blocking(Playwright sync API + subprocess ffmpeg),未來 job handler 用 `asyncio.to_thread` 包——和 `Ingestor.index` 同一個慣例。
+- **有上界**:`options.max_seconds`(預設 90)——timeline 先算預估秒數,超過就把所有延遲等比壓縮;一段 200 則的對話不會變成 20 分鐘的影片,worker 也不會被一個 job 卡死。Playwright 有 `timeout`,ffmpeg 有 `timeout`。
+- **markdown**:`markdown-it-py`(rich 已帶進來,明列成直接依賴,同 `cryptography` 的前例);只開 commonmark 子集(標題 / 粗體 / 清單 / 行內碼 / 程式碼區塊),HTML 關掉(`html=False`),內容全部 escape——JSON 是手改的,不能讓它注入 script 進錄影頁。
+- **輸出**:`fmt` ∈ `gif` / `mp4` / `webm`,可多選;GIF 走調色盤 + fps 上限;MP4 是 h264 yuv420p(投影片吃得下)。
+
+## 每個 role 怎麼演
+
+| `role` | 動畫 |
+|---|---|
+| `user` | 鏡頭推進輸入框 → focus 光圈 + 游標 → 逐字打(標點停頓稍長)→ Enter → 氣泡進對話串 → 拉遠 |
+| `assistant` | 有 `reasoning` 先展開「思考」區塊逐字串流(灰、可摺),再逐字串流正文(markdown);`stopped_reason` 有值就加一個小標 |
+| `tool` | 工具卡片:`tool_name` + `tool_args`(JSON 縮排,截斷)→ 轉圈「執行中」停 `tool_pause_ms` → 展開 `content`(截到 `tool_output_chars`) |
+| `error` | 紅色錯誤氣泡,`error_kind` 當小標 |
+| `system` / `mention` / 其他 | 一行灰色置中提示 |
+
+`author` 顯示在氣泡上方;「打字」動畫一律演成同一個人。
+
+## 已鎖定的決策
+
+| # | 決定 | 來源 |
+|---|---|---|
+| 1 | 不起 API server、不打 LLM;一條指令 | 「我要的是輸入指令 就生成動畫喔 不用放在api server」 |
+| 2 | 仿真頁,不是真 app 畫面(像但非像素級) | plan 第一版,user 未反對;proof 已看過 |
+| 3 | zoom 用 CSS transform 做,不後製 | proof |
+| 4 | `--width/--height` = 輸出像素 | 「我還需要長寬大小的輸入 指定生成size」 |
+| 5 | 核心是純函式 + msgspec options,為 job 版鋪路;script 版先行 | 「後面他會獨立成一個job由專門的worker pod處理 … 你可以先做script版」 |
+
+## 知情取捨
+
+- **不是真 UI。** 要像素級真的得起 app 錄(`/web-demo` 那條),那條不可能是「一條指令」也不可能在 worker pod 上跑(要 SPA + API)。
+- **Playwright 釘 `1.49.x`** 是為了這台 Debian 11;image base 換掉後可以放寬,寫在 pyproject 註解。
+- **worker image 要有 CJK 字型**(`fonts-noto-cjk`)不然中文是豆腐;這是 k8s 側的事(`reference_sandbox_host_ships_with_api`:prod 自維護 image),plan 點名、本 PR 不動 Dockerfile。
+- **多個 `author` 只顯示名字**,不做多人打字。
+- **不做**:主題切換(先深色)、頭像、附件圖片、citation 渲染。
+
+## Phases(本 PR:P1–P5)
+
+### Phase 1 — `VideoOptions` + `build_timeline`(純函式,TDD)
+- `options.py`:`VideoOptions(width=1280, height=720, zoom=1.8, zoom_ms=900, type_ms=55, stream_ms=22, tool_pause_ms=1200, speed=1.0, max_seconds=90, chat_width=760, tool_output_chars=600, fmt=("gif",))`。
+- `timeline.py`:messages → `list[Step]`(`TypeStep` / `StreamStep` / `ToolStep` / `ErrorStep` / `NoteStep`),每步帶自己的 `ms` 預估;`estimated_seconds()`;超過 `max_seconds` 時算出 `time_scale`。
+- 測試(每條先紅):五種 role 各對到的步驟;`reasoning` 先於正文;tool 輸出截斷;預估秒數是加總;超上界時 `time_scale < 1` 且壓縮後 ≤ 上界;未知 role 變 `NoteStep` 不炸。
+
+### Phase 2 — `render_player_html`(純函式,TDD)
+- 單頁 HTML:CSS(深色、貼底排、zoom 容器、focus 光圈、工具卡片、思考區塊)+ JS 播放器(讀嵌入的 timeline JSON,照 `ms` 播;結束時 `document.body.dataset.done = "1"`)。
+- markdown-it 渲染 assistant 正文;**所有** user / tool / error 文字 escape;timeline JSON 嵌入用 `</script` 安全序列化。
+- 測試:`<script>` 出現在訊息裡不會變成標籤;CJK 與 emoji 原樣;`--width/--height` 進到 CSS 變數;`--zoom 1` 時 JS 不推進;產出的 HTML 不含 `http://` / `https://`(無 CDN)。
+
+### Phase 3 — `record` / `encode` / `render_chat_video`
+- `render.py`:Playwright sync,viewport = 尺寸,`record_video_size` = 尺寸,等 `done` 或逾時(`max_seconds × 1.5 + 30`);ffmpeg 轉 gif / mp4 / webm(subprocess,有 timeout,失敗把 stderr 尾巴丟進例外)。
+- `service.py`:串三層,回 `dict[fmt, bytes]`;`workdir` 用完清掉。
+- 測試:Playwright / ffmpeg 不在時的錯誤訊息是一句人話(不是 ImportError traceback);`encode` 用一支 1 秒的合成 webm 走 gif + mp4(標 `integration`,CI 不跑)。
+
+### Phase 4 — CLI `python -m workspace_app.chat_video`
+- 旗標對 `VideoOptions` 一對一;`--html` 只吐播放器;`-o` 副檔名決定 fmt(或 `--fmt` 多選);`--speed 2` 整體加速。
+- `pyproject.toml`:`chat-video` extra(`playwright==1.49.*`)、`markdown-it-py` 明列。
+- 測試:argparse → `VideoOptions` 的對應(含 `-o x.mp4` ⇒ fmt mp4)。
+
+### Phase 5 — 文件 + 親眼驗收
+- `docs/demo-chat-video.md`:安裝(`uv sync --extra chat-video` + `playwright install chromium`)、指令、旗標、JSON 手改的注意事項(`role` / `tool_name` / `tool_args`)、Debian 11 的版本釘。
+- 用一份**真的** export(含 reasoning + tool + error)錄 1280×720 與 1080×1080 各一段,抽 frame 看,GIF 傳給 user。
+
+## 之後的形狀(P6–P8,本 PR 不做,寫下來讓接的人不用重想)
+
+- **P6 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `await asyncio.to_thread(render_chat_video, …)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
+- **P7 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
+- **P8 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。
+- **部署**:worker image 加 `chat-video` extra + `playwright install --with-deps chromium` + `fonts-noto-cjk`;`kubernetes/base/workers.yaml` 加 `chat-video` 一顆(prod 自維護,PR 要點名)。
+
+## 驗收(P1–P5)
+
+- `uv run python -m workspace_app.chat_video sample.chat.json -o out.gif --width 1920 --height 1080` 一條指令出檔;`ffprobe` 讀到的尺寸 = 指定尺寸。
+- user 那一輪的 frame:輸入框整個在畫面內、光圈、游標、字正在打;拉遠後氣泡在對話串裡。
+- 沒裝 extra 時 `import workspace_app.chat_video.timeline` 不炸;`ruff` / `ty` / targeted 測試綠;`mkdocs --strict` 綠。
