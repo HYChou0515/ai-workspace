@@ -38,6 +38,7 @@ const row = (over: Partial<DeployedWui>): DeployedWui => ({
   title: "Shipping board",
   deployed_by: "bob",
   deployed_at: 1_700_000_000_000,
+  icon: "",
   can_remove: true,
   ...over,
 });
@@ -267,6 +268,30 @@ describe("WuiOverviewPage", () => {
     expect(await screen.findByText(word("wui.empty"))).toBeInTheDocument();
     expect(screen.getByRole("link", { name: word("wui.empty.help") })).toHaveAttribute("href", "/help");
     expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("leads every row with the page's mark — its icon when it has one, its letters when not", async () => {
+    render(
+      <WuiOverviewPage
+        client={client([
+          row({ title: "Shipping board", icon: "📦" }),
+          row({ item_id: "i-2", title: "Scrap trend", icon: "" }),
+        ])}
+      />,
+      { wrapper: Wrap },
+    );
+
+    const items = within(await screen.findByRole("region", { name: "根因分析" })).getAllByRole(
+      "listitem",
+    );
+    const marks = items.map((li) => within(li).getByTestId("page-mark"));
+    expect(marks[0]).toHaveTextContent("📦");
+    expect(marks[1]).toHaveTextContent("ST");
+    // First in the row, so the grid's leading track is the mark's on every
+    // row — the sheet maps `> li > .page-mark` to column 1.
+    expect(items[0].firstElementChild).toBe(marks[0]);
+    // The mark does not become part of the row's name.
+    expect(within(items[0]).getByRole("link", { name: "Shipping board" })).toBeInTheDocument();
   });
 
   it("publishes its own breadcrumb trail, so the bar stops naming the item the viewer just left", async () => {

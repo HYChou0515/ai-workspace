@@ -133,8 +133,23 @@ describe("my-resources: the live panel's layout", () => {
     // happy-dom lays nothing out.
     const tracks = wideRule(".page .wui-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
-    const second = tracks!.trim().split(/\s+(?![^(]*\))/)[1];
-    expect(second).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);
+    const cols = tracks!.trim().split(/\s+(?![^(]*\))/);
+    // mark · title · item + who/when · Remove (P13 put the mark first). The
+    // free-text track is the THIRD; a test that read "the second" after the
+    // mark arrived would have pinned the title's `1fr` and called it a cap.
+    expect(cols).toHaveLength(4);
+    expect(cols[2]).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);
+    // The mark's track is `auto` and that is safe ONLY because the mark is a
+    // fixed-size box — `PageMark` sets width and height inline, and its test
+    // pins them. Nothing free-text may ever sit in an `auto` track here.
+    expect(cols[0]).toBe("auto");
+    // The circle clips what it holds (a file icon is `cover`ed, not stretched)
+    // and never shrinks to make room — it is the one thing on the row with a
+    // size of its own.
+    const markRule = wideRule(".page .page-mark");
+    expect(markRule).toMatch(/border-radius:\s*50%/);
+    expect(markRule).toMatch(/overflow:\s*hidden/);
+    expect(markRule).toMatch(/flex-shrink:\s*0/);
     // The cap alone bounds nothing: a grid track's automatic MINIMUM is the
     // cell's min-content, and for nowrap text that is the whole item title —
     // so the cell has to be allowed to shrink (`min-width: 0`) and to wrap.
@@ -182,6 +197,11 @@ describe("my-resources: the live panel's layout", () => {
     expect(block).toMatch(/\.page \.wui-list[^{}]*\{[^}]*display:\s*flex/);
     expect(block).toMatch(/\.page \.wui-list > li \{[^}]*grid-template-columns:/);
     expect(block).toMatch(/\.page \.wui-list \.detail \{[^}]*grid-row:\s*2/);
+    // …and under the TITLE, not under the mark: the mark keeps column 1, so a
+    // detail that spanned from column 1 would start under the circle and read
+    // as a third thing on the row rather than the title's second line.
+    expect(block).toMatch(/\.page \.wui-list \.detail \{[^}]*grid-column:\s*2 \/ -1/);
+    expect(block).toMatch(/\.page \.wui-list > li > \.page-mark \{[^}]*grid-column:\s*1/);
     // …and the title must stop sharing a line with the App tag, which is what
     // gives it the width back.
     expect(block).toMatch(/\.page \.live-list \.app-tag \{[^}]*grid-row:\s*2/);

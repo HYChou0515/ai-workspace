@@ -24,6 +24,7 @@ import { exactTime, relativeTime } from "../api/types";
 import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
+import { PageMark } from "../components/PageMark";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useT } from "../lib/i18n";
 
@@ -129,6 +130,16 @@ function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
   });
   return (
     <li>
+      {/* The page's own icon, or the title's letters: one circle per row
+          (`plan-wui-overview-icon-favourites`). Decoration — the link is the
+          row's name. */}
+      <PageMark
+        slug={page.slug}
+        itemId={page.item_id}
+        path={page.path}
+        icon={page.icon}
+        title={page.title}
+      />
       {/* A new tab: the reader page renders outside the shell, with no way
           back to here, so it opens beside the overview rather than over it. */}
       <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener">

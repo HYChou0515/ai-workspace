@@ -33,6 +33,10 @@ export type DeployedWui = {
   title: string;
   deployed_by: string;
   deployed_at: number;
+  /** The view file's `icon:` as the server stored it at Deploy — a file name
+   * in the page's folder, an emoji, or a named-icon key — or `""` for none.
+   * Resolved by `PageMark`; a form that does not resolve draws the default. */
+  icon: string;
   /** Whether THIS viewer may Remove it — the server's `edit_content` answer,
    * so the button is drawn only where a press would be accepted. */
   can_remove: boolean;
