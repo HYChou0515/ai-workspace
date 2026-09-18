@@ -92,7 +92,10 @@ def test_the_page_draws_exactly_the_set_the_timeline_named(case: str):
     text, _ = EXPECTED[case]
     options = VideoOptions()
     tl = _timeline(text, options)
-    named = _named(tl)
+    # What a job (or the CLI) would hand over: the prefetch list, which
+    # drops a path that climbs above the root — the page refuses that path
+    # too, so nothing is drawn for it.
+    named = tl.referenced_paths()
 
     page = render_player_html(tl, options, assets={p: _PNG for p in named})
     drawn = re.findall(r'<img class="shown" data-asset="([^"]*)"', _step_html(page))

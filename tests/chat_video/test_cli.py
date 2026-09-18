@@ -115,7 +115,7 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489")
     (ws / "plots" / "a.png").write_bytes(png)
     (ws / "plots" / "b.png").write_bytes(png)
-    (ws / "plots" / "chart.svg").write_bytes(b"<svg/>")
+    (ws / "plots" / "chart.svg").write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"/>')
     (ws / "plots" / "t.csv").write_bytes(b"a,b\n")
     (ws / "plots" / "empty.png").write_bytes(b"")
     src = _source(
@@ -165,7 +165,9 @@ def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
     assert code == 0
     assert "/plots/a.png" not in err  # drawn
     assert "/plots/b.png will not be drawn (over the page's image budget)" in err
-    assert "/plots/chart.svg will not be drawn (not an image the page draws)" in err
+    # SVG is sniffed by its text and is a picture; here it comes after b.png
+    # and the budget (one PNG) is spent, so it is the budget that refuses it.
+    assert "/plots/chart.svg will not be drawn (over the page's image budget)" in err
     assert f"/plots/missing.png will not be drawn (not under {ws}, or too big)" in err
     assert "t.csv" not in err
     assert "/plots/empty.png will not be drawn (not an image the page draws)" in err

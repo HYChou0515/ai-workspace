@@ -103,8 +103,8 @@ uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o
 (不在 DIR 底下或太大 / 不是圖 / 超出總預算);不會炸。`plots/a.png`、`./plots/a.png`、`plots//a.png` 是同一個檔。
 `DIR` 之外的路徑(`/../…`、指到外面的 symlink)一律不讀——`../secret.png` 不會被折成 `DIR/secret.png`(聊天視窗對它也是
 破圖)。宣告的 mime 不是 `image/*` 的檔(CSV、PDF)照聊天視窗的規則就是檔案卡:不讀、不列在 note 裡;同一個路徑被回答的
-`![]()` 和某次宣告都提到,bytes 認得出(PNG / JPEG / GIF / WebP)就照 bytes,認不出(SVG 是文字)才用宣告的 `image/*`;0 byte 的檔
-不畫。外部 URL 的 `![](https://…)`
+`![]()` 和某次宣告都提到,畫什麼**只看 bytes**:PNG / JPEG / GIF / WebP / BMP / ICO / AVIF 以簽名認、SVG 以文字認;認不出的(TIFF、
+0 byte、文字檔)不畫——宣告的 mime 只決定那次宣告是縮圖還是檔案卡。外部 URL 的 `![](https://…)`
 **不會被抓**——頁面不碰網路——
 只剩 alt 文字(聊天視窗會抓,這是影片自己的規則)。中文檔名、含空白的路徑(寫成 `<plots/my chart.png>`)、
 `![x][ref]` 參照式都認得——timeline 要讀哪些檔和頁面畫哪些圖是同一次 markdown 解析。(這說的是影片;聊天視窗本身目前對中文 /

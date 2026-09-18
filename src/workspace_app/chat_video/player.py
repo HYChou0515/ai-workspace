@@ -95,36 +95,34 @@ def decide_assets(
     the CLI's note relays (deciding from "what was read" alone left an SVG
     chart read, undrawn and unmentioned).
 
-    The verdict is a property of the PATH, from all of its references, so
-    the first reference's verdict does not stick to it (round 4). The
-    BYTES decide the mime whenever they can be sniffed (png / jpeg / gif /
-    webp); a tool's ``image/*`` declaration is consulted only where
-    sniffing cannot tell (SVG is text) — whether that declaration comes
-    before or after an answer's ``![]()`` of the same path. Round 5: the
-    other way round sent PNG bytes out as ``data:image/svg+xml``, which
-    Chromium decodes by mime alone — a broken picture, and no note. A path
-    is a picture when its bytes were handed over and are not empty, the
-    mime is ``image/*`` without a ``,`` (a comma ends a ``data:`` URL's
-    header), and they fit ``max_asset_bytes`` and what is left of the
-    page's total budget (``max_assets_total_bytes``, raw bytes; base64 makes
-    the page a third larger). First-fit: a file that does not fit the
-    remainder is refused, and a later, smaller one that fits is still a
-    picture."""
-    declared: dict[str, str] = {}
-    for path, mime in paths:
-        if mime.startswith("image/"):
-            declared.setdefault(path, mime)
+    The verdict is a property of the PATH, not of whichever reference came
+    first (round 4), and the mime in the ``data:`` URI comes from the BYTES
+    alone (``_sniff_image``: every raster Chromium decodes, by signature,
+    and SVG by its text). A declared mime never reaches a URL — rounds 5
+    and 6 were both the declaration leaking into it (PNG bytes shipped as
+    ``image/svg+xml``, which Chromium decodes by mime alone; then seventeen
+    hand-edited spellings that break a ``data:`` URL) — so a declaration
+    only decides whether THAT reference draws a picture or a card
+    (``wanted_files`` / ``player.html``), and bytes nobody can identify are
+    a card wherever they came from. A path is a picture when its bytes were
+    handed over, they sniff as an image, and they fit ``max_asset_bytes``
+    and what is left of the page's total budget (``max_assets_total_bytes``,
+    raw bytes; base64 makes the page a third larger). First-fit: a file
+    that does not fit the remainder is refused, and a later, smaller one
+    that fits is still a picture. A path that climbs above the root is
+    refused whatever was handed over — the job's prefetch list drops it,
+    and this is the second lock."""
     out: dict[str, Verdict] = {}
     budget = options.max_assets_total_bytes
     for path, _mime in paths:
         if path in out:
             continue
-        data = assets.get(path)
+        data = None if md.escapes_root(path) else assets.get(path)
         if data is None:
             out[path] = Verdict(why=NOT_HANDED)
             continue
-        mime = _sniff_image(data) or declared.get(path, "")
-        if not data or not mime.startswith("image/") or "," in mime:
+        mime = _sniff_image(data)
+        if not mime:
             out[path] = Verdict(why=NOT_AN_IMAGE)
             continue
         if len(data) > options.max_asset_bytes or len(data) > budget:
@@ -159,20 +157,31 @@ _SIGNATURES = (
     (b"\xff\xd8\xff", "image/jpeg"),
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+    (b"\x00\x00\x01\x00", "image/x-icon"),
 )
+_SVG_STARTS = (b"<svg", b"<?xml", b"<!DOCTYPE svg", b"<!--")
 
 
 def _sniff_image(data: bytes) -> str:
-    """The handful of image types a browser draws, by signature, for an
-    answer's ``![]()`` which declares no mime. `RIFF` alone is also WAV and
-    AVI; WebP is `RIFF….WEBP`. Sniffing never yields SVG — an SVG is text —
-    but a DECLARED ``image/svg+xml`` is inlined like the FE does, and inside
-    an ``<img>`` an SVG runs no script and fetches nothing."""
+    """The mime of ``data`` when it is a picture Chromium draws, else ``""``
+    — the ONLY source of the mime in a ``data:`` URI. Every raster Chromium
+    decodes, by signature: PNG, JPEG, GIF, WebP (`RIFF….WEBP`; `RIFF` alone
+    is also WAV and AVI), BMP, ICO, AVIF (`….ftypavif`); TIFF is not one
+    (no decoder), so it is not here. SVG by its text: after an optional BOM
+    and whitespace, an XML prolog, doctype, comment or the `<svg` root, with
+    `<svg` in the first kilobyte — inside an ``<img>`` an SVG runs no script
+    and fetches nothing, which is why the chat draws it too."""
     for magic, mime in _SIGNATURES:
         if data.startswith(magic):
             return mime
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    if data[4:12] == b"ftypavif":
+        return "image/avif"
+    head = data.removeprefix(b"\xef\xbb\xbf").lstrip()
+    if head.startswith(_SVG_STARTS) and b"<svg" in head[:1024]:
+        return "image/svg+xml"
     return ""
 
 

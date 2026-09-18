@@ -21,6 +21,7 @@ from workspace_app.chat_video.player import (
     NOT_HANDED,
     Verdict,
     decide_assets,
+    inline_assets,
     render_player_html,
 )
 from workspace_app.chat_video.timeline import PACING, build_timeline
@@ -250,17 +251,24 @@ def test_a_riff_that_is_not_webp_is_not_an_image():
     assert list(_assets(page)) == ["/b.webp"]
 
 
-def test_an_answer_image_whose_bytes_are_not_a_picture_draws_nothing():
-    """`![]()` declares no mime, so the bytes are sniffed; an SVG (text that
-    can carry script) or a stray file is not one of the types drawn."""
+def test_an_answer_image_is_drawn_by_its_bytes_and_a_stray_file_is_not():
+    """`![]()` declares no mime, so the bytes are sniffed. An SVG is drawn
+    as the chat draws it — inside an `<img>` its script never runs and it
+    fetches nothing — and its text rides in the base64 table, never as
+    markup; a stray text file is alt text."""
     md = "![s](/a.svg) ![t](/b.txt)"
     page = _page(
         [{"role": "assistant", "author": "AI", "content": md}],
-        assets={"/a.svg": b"<svg onload=alert(1)></svg>", "/b.txt": b"hello"},
+        assets={
+            "/a.svg": b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+            "/b.txt": b"hello",
+        },
     )
 
     html = _embedded(page)["steps"][0]["html"]
-    assert "<img" not in html and "onload" not in html
+    assert html.count('<img class="shown" data-asset="/a.svg"') == 1
+    assert html.count("<img") == 1  # the .txt is alt text, not a picture
+    assert "onload" not in page.replace(_assets(page)["/a.svg"], "")  # only inside the base64
 
 
 def test_a_file_shown_many_times_is_inlined_once():
@@ -337,7 +345,7 @@ _SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
             ],
             "image/svg+xml",
         ),
-        # Two image declarations: the first image mime is the table's.
+        # Two image declarations, neither of which names the bytes' type.
         (
             [_shown("/plots/chart.svg", "image/svg+xml"), _shown("/plots/chart.svg", "image/png")],
             "image/svg+xml",
@@ -345,57 +353,142 @@ _SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
     ],
     ids=["answer first", "declaration first", "placeholder then picture", "two image mimes"],
 )
-def test_one_path_many_references_a_declared_image_mime_wins_whatever_the_order(messages, mime):
-    """The table is per PATH; its mime comes from every reference of that
-    path, not from whichever came first."""
+def test_one_path_many_references_the_bytes_name_the_mime_whatever_was_declared(messages, mime):
+    """The table is per PATH and its mime is the bytes' own; a declaration
+    only decides whether THAT reference draws a picture or a card."""
     page = _page(messages, assets={"/plots/chart.svg": _SVG})
 
     assert _assets(page)["/plots/chart.svg"].startswith(f"data:{mime};base64,")
 
 
-# What a path's bytes are × what a tool declared it as → the table's verdict.
-# The bytes decide whenever they can be sniffed (png / jpeg / gif / webp);
-# the declaration is consulted only where sniffing cannot tell (SVG is text).
-# Round 5: "declared wins" sent PNG bytes out as data:image/svg+xml, which
-# Chromium decodes by mime alone → a broken picture, no note. The chat draws
-# it (the file route serves by extension and Chromium sniffs rasters).
-_BYTES_X_DECLARED = {
-    "png bytes, nothing declared": (_PNG, "", Verdict(mime="image/png")),
-    "png bytes, declared png": (_PNG, "image/png", Verdict(mime="image/png")),
-    "png bytes, declared svg (the round-5 row)": (_PNG, "image/svg+xml", Verdict(mime="image/png")),
-    "png bytes, declared jpeg": (_PNG, "image/jpeg", Verdict(mime="image/png")),
-    "svg bytes, declared svg": (_SVG, "image/svg+xml", Verdict(mime="image/svg+xml")),
-    "svg bytes, nothing declared": (_SVG, "", Verdict(why=NOT_AN_IMAGE)),
-    "text bytes, nothing declared": (b"a,b\n", "", Verdict(why=NOT_AN_IMAGE)),
-    # A declared image whose bytes cannot be sniffed is trusted, as the chat
-    # trusts the extension: text served as image/png is broken in both.
-    "text bytes, declared png": (b"hello", "image/png", Verdict(mime="image/png")),
-    # A 0-byte file is not a picture anywhere; "never a broken <img>".
-    "empty bytes, declared png": (b"", "image/png", Verdict(why=NOT_AN_IMAGE)),
-    "empty bytes, nothing declared": (b"", "", Verdict(why=NOT_AN_IMAGE)),
-    # A comma ends a data: URL's header; a declared mime carrying one would
-    # break the picture silently. Parameters after `;` are fine.
-    "svg bytes, declared mime with a comma": (_SVG, "image/svg+xml,x", Verdict(why=NOT_AN_IMAGE)),
-    "svg bytes, declared mime with parameters": (
-        _SVG,
-        "image/svg+xml; charset=utf-8",
-        Verdict(mime="image/svg+xml; charset=utf-8"),
+# What a path's bytes are → the table's verdict. The mime in a `data:` URI
+# comes from the BYTES alone: every raster Chromium decodes, by signature
+# (png / jpeg / gif / webp / bmp / ico / avif), and SVG by its text. Bytes
+# nobody can identify are not a picture, whatever a tool declared them as —
+# a declared mime never reaches a URL, so there is no malformed-mime class
+# to enumerate (round 6 found 17 members of it) and no "which declaration
+# wins" order (round 6 found the first-wins pin order-dependent). Rounds 5
+# and 6 were both the declaration leaking into the URI.
+_SVG_XML = b'<?xml version="1.0"?>\n' + _SVG
+_BYTES = {
+    "png": (_PNG, Verdict(mime="image/png")),
+    "gif": (b"GIF89a" + bytes(10), Verdict(mime="image/gif")),
+    "jpeg": (b"\xff\xd8\xff\xe0" + bytes(10), Verdict(mime="image/jpeg")),
+    "webp": (b"RIFF" + bytes(4) + b"WEBP" + bytes(8), Verdict(mime="image/webp")),
+    "bmp": (b"BM" + bytes(12), Verdict(mime="image/bmp")),
+    "ico": (b"\x00\x00\x01\x00" + bytes(12), Verdict(mime="image/x-icon")),
+    "avif": (bytes(4) + b"ftypavif" + bytes(8), Verdict(mime="image/avif")),
+    "svg": (_SVG, Verdict(mime="image/svg+xml")),
+    "svg with an xml prolog": (_SVG_XML, Verdict(mime="image/svg+xml")),
+    "svg with a BOM and a comment": (
+        b"\xef\xbb\xbf<!-- chart -->" + _SVG,
+        Verdict(mime="image/svg+xml"),
     ),
-    "no bytes, declared png": (None, "image/png", Verdict(why=NOT_HANDED)),
+    # Chromium has no TIFF decoder: a card (the chat's <img> is broken).
+    "tiff": (b"II*\x00" + bytes(12), Verdict(why=NOT_AN_IMAGE)),
+    "html that is not svg": (b"<html><body>x</body></html>", Verdict(why=NOT_AN_IMAGE)),
+    "text": (b"a,b\n", Verdict(why=NOT_AN_IMAGE)),
+    "empty": (b"", Verdict(why=NOT_AN_IMAGE)),
+    "missing": (None, Verdict(why=NOT_HANDED)),
 }
+# The declaration axis — including the hand-edited shapes round 6 found
+# shipping broken pictures — must not move a single verdict.
+_DECLARED = [
+    "",
+    "image/png",
+    "image/svg+xml",
+    "image/jpeg",
+    "image/svg+xml; charset=utf-8",
+    "image/svg+xml,x",
+    "image/svg\n+xml",
+    'image/svg+xml"',
+    "image/svg+xml#x",
+    "image/",
+    "image/*",
+    "text/plain",
+]
 
 
-@pytest.mark.parametrize("case", _BYTES_X_DECLARED)
-def test_the_bytes_decide_and_the_declaration_only_where_they_cannot(case):
-    data, declared, expected = _BYTES_X_DECLARED[case]
-    # Both orders of reference: an answer's ![]() (mime "") and, when there
-    # is one, the declaration — the verdict is the path's, not the first
-    # reference's.
-    refs = [("/x", "")] + ([("/x", declared)] if declared else [])
+@pytest.mark.parametrize("declared", _DECLARED)
+@pytest.mark.parametrize("kind", _BYTES)
+def test_the_bytes_alone_name_the_picture(kind, declared):
+    data, expected = _BYTES[kind]
     assets = {"/x": data} if data is not None else {}
+    refs = [("/x", "")] + ([("/x", declared)] if declared else [])
 
     assert decide_assets(refs, assets, VideoOptions()) == {"/x": expected}
     assert decide_assets(refs[::-1], assets, VideoOptions()) == {"/x": expected}
+
+
+def test_two_declarations_of_one_path_agree_whatever_their_order():
+    """A file regenerated between two `show_file`s carries two mimes; the
+    bytes at render time are one state, and the table says that state."""
+    a, b = (
+        [("/x", "image/png"), ("/x", "image/svg+xml")],
+        [("/x", "image/svg+xml"), ("/x", "image/png")],
+    )
+
+    assert decide_assets(a, {"/x": _SVG}, VideoOptions()) == {"/x": Verdict(mime="image/svg+xml")}
+    assert decide_assets(b, {"/x": _SVG}, VideoOptions()) == {"/x": Verdict(mime="image/svg+xml")}
+    assert decide_assets(a, {"/x": _PNG}, VideoOptions()) == {"/x": Verdict(mime="image/png")}
+    assert decide_assets(b, {"/x": _PNG}, VideoOptions()) == {"/x": Verdict(mime="image/png")}
+
+
+def test_a_path_that_climbs_above_the_root_is_never_a_picture_even_when_handed_bytes():
+    """Defence in depth for the job version: the prefetch list drops such a
+    path, and the page refuses it too, so a caller that hands bytes for
+    `/../secret.png` anyway still draws nothing."""
+    assert decide_assets([("/../s.png", "")], {"/../s.png": _PNG}, VideoOptions()) == {
+        "/../s.png": Verdict(why=NOT_HANDED)
+    }
+
+
+@pytest.mark.integration
+def test_a_real_chromium_draws_every_kind_the_sniffer_names(tmp_path):
+    """The sniff table IS the list of what Chromium decodes: each kind, made
+    by Pillow, goes through `inline_assets` and comes out with a natural
+    width in a real browser; TIFF and text never reach the page."""
+    import io as _io
+
+    from playwright.sync_api import sync_playwright
+
+    Image = pytest.importorskip("PIL.Image")
+    im = Image.new("RGB", (2, 2), (255, 0, 0))
+    files: dict[str, bytes] = {}
+    for fmt, ext in [
+        ("PNG", "png"),
+        ("JPEG", "jpeg"),
+        ("GIF", "gif"),
+        ("WEBP", "webp"),
+        ("BMP", "bmp"),
+        ("ICO", "ico"),
+        ("AVIF", "avif"),
+        ("TIFF", "tiff"),
+    ]:
+        buf = _io.BytesIO()
+        im.save(buf, fmt, **({"sizes": [(2, 2)]} if fmt == "ICO" else {}))
+        files[f"/x.{ext}"] = buf.getvalue()
+    files["/x.svg"] = _SVG
+    files["/x.txt"] = b"hello"
+    inlined = inline_assets([(p, "") for p in files], files, VideoOptions())
+
+    assert set(inlined) == {
+        f"/x.{e}" for e in ("png", "jpeg", "gif", "webp", "bmp", "ico", "avif", "svg")
+    }
+    tags = "".join(
+        f'<img id="{p[1:].replace(".", "_")}" src="{uri}">' for p, uri in inlined.items()
+    )
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(f"<html><body>{tags}</body></html>")
+            page.wait_for_function("[...document.images].every(i => i.complete)", timeout=30_000)
+            widths = page.evaluate("[...document.images].map(i => [i.id, i.naturalWidth])")
+        finally:
+            browser.close()
+
+    assert widths and all(w > 0 for _id, w in widths), widths
 
 
 def test_a_declared_non_image_is_a_card_even_when_the_path_is_in_the_table():
