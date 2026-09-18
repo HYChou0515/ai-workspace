@@ -99,13 +99,19 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   }
   if (isPending || !data) return <p>{t("wui.loading")}</p>;
 
-  // The Apps present, in the listing's order (first seen) — the chips, and
-  // the sections' order.
+  // The Apps present, in the listing's order (first seen) — the select's
+  // options, and the sections' order.
   const slugs = [...new Set(data.map((page) => page.slug))];
+  // The filter FOLLOWS the options: an App whose last page was unlisted (by
+  // this viewer, or by anyone before a refetch) is no longer an option, and
+  // a controlled select with a value it cannot show draws 全部 while the
+  // state still filters — an empty page under a toolbar that reads as
+  // "everything" (the review of P19–P24). Derived, so it needs no reset.
+  const appPick = slugs.includes(appFilter) ? appFilter : "";
   // Search: the page title or the item title, case-insensitive substring.
   const needle = query.trim().toLocaleLowerCase();
   const matches = (page: DeployedWui) =>
-    (!appFilter || page.slug === appFilter) &&
+    (!appPick || page.slug === appPick) &&
     (!mineOnly || (me.ready && page.item_owner === me.id)) &&
     (!needle ||
       page.title.toLocaleLowerCase().includes(needle) ||
@@ -132,8 +138,10 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   // the page again brings it back starred).
   const starred = shown.filter((page) => favourites.has(favouriteKey(page)));
 
+  // `key` is NOT in here: React refuses a key that arrives through a spread
+  // (a console error on every render — the review of P19–P24); it is passed
+  // directly at each use.
   const rowProps = (page: DeployedWui, starred: boolean, showApp: boolean) => ({
-    key: `${page.item_id}${page.path}`,
     page,
     client,
     starred,
@@ -152,7 +160,10 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
     view === "cards" ? (
       <ul className="wui-cards">
         {ordered(pages).map((page) => (
-          <PageCard {...rowProps(page, starredAll || favourites.has(favouriteKey(page)), showApp)} />
+          <PageCard
+            key={`${page.item_id}${page.path}`}
+            {...rowProps(page, starredAll || favourites.has(favouriteKey(page)), showApp)}
+          />
         ))}
       </ul>
     ) : (
@@ -160,7 +171,10 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
          my-resources.css is written per list class. */
       <ul className="wui-list">
         {ordered(pages).map((page) => (
-          <PageRow {...rowProps(page, starredAll || favourites.has(favouriteKey(page)), showApp)} />
+          <PageRow
+            key={`${page.item_id}${page.path}`}
+            {...rowProps(page, starredAll || favourites.has(favouriteKey(page)), showApp)}
+          />
         ))}
       </ul>
     );
@@ -194,7 +208,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
             <label>
               {t("wui.filter.app")}
               <select
-                value={appFilter}
+                value={appPick}
                 onChange={(e) => setAppFilter(e.target.value)}
                 aria-label={t("wui.filter.app")}
               >
@@ -444,9 +458,12 @@ function PageDetail({
 }) {
   const t = useT();
   const owner = useUser(page.item_owner);
+  // The deployer through the directory too — the raw id beside a resolved
+  // owner read "Carol Kao · u_1a2b Deploy" once ids stop being names.
+  const deployer = useUser(page.deployed_by);
   const item = page.item_title || page.item_id;
   const by = t("wui.row.by", {
-    who: page.deployed_by,
+    who: deployer.name,
     when: relativeTime(new Date(page.deployed_at).toISOString()),
   });
   const sentence = withOwner ? `${item} · ${owner.name} · ${by}` : `${item} · ${by}`;

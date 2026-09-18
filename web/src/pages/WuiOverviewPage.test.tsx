@@ -108,6 +108,21 @@ const word = (key: Parameters<typeof translate>[1]) => translate("zh-TW", key);
 const REMOVE = () => new RegExp(`^${word("wui.remove")}`);
 
 describe("WuiOverviewPage", () => {
+  // FIRST in the file on purpose: React logs the key-in-spread error once per
+  // component for the life of the module, so a test further down would see
+  // nothing whatever the code does (it passed unfixed in that position).
+  it("renders without React's key-in-spread error", async () => {
+    // `rowProps()` returned `key` inside the object that was then spread —
+    // React 19 logs "A props object containing a \"key\" prop is being
+    // spread into JSX" on every render (four times per test run here).
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+    await screen.findByRole("region", { name: "根因分析" });
+    const keyErrors = errors.mock.calls.filter((c) => String(c[0]).includes('"key" prop'));
+    errors.mockRestore();
+    expect(keyErrors).toHaveLength(0);
+  });
+
   it("groups the pages under their app, newest Deploy first within a group", async () => {
     render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
 
@@ -754,6 +769,42 @@ describe("WuiOverviewPage", () => {
 
       fireEvent.change(screen.getByRole("searchbox", { name: word("wui.search") }), { target: { value: "zzz" } });
       expect(screen.queryByRole("region", { name: word("wui.favourites") })).toBeNull();
+    });
+  });
+
+  describe("review of P18–P24 (three low findings, each pinned)", () => {
+    it("drops an App filter whose App has no page left, instead of filtering on a slug the select cannot show", async () => {
+      // Filter to pm, then pm's last page is unlisted (here: by this viewer;
+      // a refetch after someone else's 下架 is the same). The select's
+      // options come from the listing, so "pm" is gone from them — the
+      // browser shows 全部 while the filter still says pm: an empty page
+      // under a toolbar that reads as "everything". The filter follows the
+      // options.
+      const c = client();
+      render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+      fireEvent.change(screen.getByRole("combobox", { name: word("wui.filter.app") }), { target: { value: "pm" } });
+      expect(screen.queryByRole("region", { name: "根因分析" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: REMOVE() }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: word("wui.remove") }));
+
+      await waitFor(() => expect(screen.queryByRole("region", { name: "專案管理" })).toBeNull());
+      // Everything left is shown, and the select agrees.
+      expect(screen.getByRole("region", { name: "根因分析" })).toBeInTheDocument();
+      expect(screen.queryByText("沒有符合的頁面")).toBeNull();
+      expect(screen.getByRole("combobox", { name: word("wui.filter.app") })).toHaveValue("");
+    });
+
+    it("names who pressed Deploy from the directory, the way it names the owner", async () => {
+      // `deployed_by` went into the sentence as the raw id while the owner
+      // beside it was resolved through the directory: after SSO that reads
+      // "Carol Kao · u_1a2b Deploy". Same lookup for both.
+      render(<WuiOverviewPage client={client([row({ deployed_by: "carol" })])} />, { wrapper: Wrap });
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+      await within(rca).findByText(/Carol Lin Deploy/);
+      expect(within(rca).getByRole("listitem")).not.toHaveTextContent(/\bcarol Deploy/);
     });
   });
 
