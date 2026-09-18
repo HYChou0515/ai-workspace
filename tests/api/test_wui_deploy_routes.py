@@ -114,6 +114,73 @@ def test_a_page_at_the_workspace_root_has_no_folder_so_it_takes_the_files_name(p
     assert r.json()["title"] == title
 
 
+@pytest.mark.parametrize(
+    ("line", "icon"),
+    [
+        # The three forms App icons take (`plan-wui-overview-icon-favourites`):
+        # a file in the page's folder, one emoji, a named-icon key. The server
+        # stores the string; which form it is, and whether it resolves, is the
+        # overview's call at render — a decoration must not block a Deploy.
+        ("icon: logo.png\n", "logo.png"),
+        ('icon: "📦"\n', "📦"),
+        ("icon: kanban\n", "kanban"),
+        # Stripped, like `title:`.
+        ('icon: "  📦 "\n', "📦"),
+    ],
+)
+def test_deploy_carries_the_icon_the_view_file_declares(line: str, icon: str):
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _page(client, iid, body=WUI + line.encode())
+
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["icon"] == icon
+    assert [p["icon"] for p in client.get("/wui").json()["pages"]] == [icon]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"",
+        # Not a string, or an empty one: "none". Deploy still passes — the
+        # overview draws the default circle, which is how the author sees the
+        # icon did not take.
+        b"icon: 3\n",
+        b"icon: [a]\n",
+        b'icon: ""\n',
+        b'icon: "   "\n',
+    ],
+)
+def test_a_missing_or_malformed_icon_is_none_and_deploy_still_passes(line: bytes):
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _page(client, iid, body=WUI + line)
+
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["icon"] == ""
+
+
+def test_a_row_written_before_the_icon_field_lists_with_none():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    # The P1 shape of the row — no `icon` — recorded straight into the store,
+    # as every row Deployed before this field existed was.
+    DeployedPages(spec).record(
+        DeployedWui(slug="rca", item_id=iid, path=PAGE, title="t", deployed_by="bob", deployed_at=1)
+    )
+
+    rows = client.get("/wui").json()["pages"]
+
+    assert [(p["title"], p["icon"]) for p in rows] == [("t", "")]
+
+
 def test_the_row_names_the_person_who_pressed_deploy_not_the_owner():
     # Every other Deploy in this file is the owner's, so `deployed_by` could be
     # a constant and nothing would notice; an editor who is not the owner tells

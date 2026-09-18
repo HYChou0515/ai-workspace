@@ -1,7 +1,7 @@
 # Plan — WUI overview: a page's own icon, and a viewer's favourites
 
 Amends [`plan-wui-overview.md`](plan-wui-overview.md) (PR #811). Same PR, same
-branch, phases continue at **P11** — the author's call (2026-09-18), taken
+branch, phases continue at **P11** (this plan) — the author's call (2026-09-18), taken
 knowing it reopens a PR that four review rounds had closed.
 
 ## The ask (the author's words, 2026-09-18)
@@ -57,7 +57,7 @@ icon: logo.png        # a file in this folder — or an emoji ("📦"), or a key
 ```
 
 **Server (`api/wui_deploy.py`).** `DeployedWui` gains `icon: str = ""` (a
-default, so rows written before P11 decode). `page_icon(doc)` beside
+default, so rows written before P12 decode). `page_icon(doc)` beside
 `page_title`: the value of `icon:` when it is a non-empty string, stripped;
 anything else `""`. No file read, no key check — the decisions above. The
 Deploy route sets it on the row; `DeployedPage` (the response model) carries it
@@ -173,21 +173,23 @@ block's `grid-column: 2 / -1` for `.detail`.
 
 ## Phases (one commit each)
 
-11. **Icon — server.** `DeployedWui.icon`, `page_icon`, the Deploy route sets
+11. **This plan.** (Renumbered 2026-09-18: the plan took P11, so the work
+    starts at P12; the test plan below uses the new numbers.)
+12. **Icon — server.** `DeployedWui.icon`, `page_icon`, the Deploy route sets
     it; `DeployedPage.icon`. `docs/migrations.md`: no backfill (rows before
-    P11 read `""` = the default circle).
-12. **Icon — overview.** `DeployedWui.icon` on the client; `PageMark` in
+    P12 read `""` = the default circle).
+13. **Icon — overview.** `DeployedWui.icon` on the client; `PageMark` in
     `PageRow`; the first `auto` track and the narrow mapping; the CSS guard;
     the widths measured.
-13. **Favourites.** `lib/wuiFavourites.ts` + hook; the `star` icon; the star
+14. **Favourites.** `lib/wuiFavourites.ts` + hook; the `star` icon; the star
     button; the top group; the last `auto` track; i18n.
-14. **Docs + demo.** `wui.md`, `SKILL.md`, `reference.md`; the `/web-demo`
+15. **Docs + demo.** `wui.md`, `SKILL.md`, `reference.md`; the `/web-demo`
     re-recorded with a page that declares an emoji icon, one that declares
     none, and a star pressed.
 
 ## Test plan (red first, targeted only)
 
-P11 (`tests/api/test_wui_deploy_routes.py`):
+P12 (`tests/api/test_wui_deploy_routes.py`):
 - `icon: "📦"` → the response and the listing carry `icon == "📦"`.
 - `icon: logo.png` → `"logo.png"` (no file need exist).
 - No `icon:` → `""`; `icon: 3` / `icon: [a]` / `icon: ""` / `icon: "  "` → `""`.
@@ -196,7 +198,7 @@ P11 (`tests/api/test_wui_deploy_routes.py`):
 - Mutation: `page_icon` returning the raw value un-stripped reddens the
   `"  📦 "` case.
 
-P12 (`WuiOverviewPage.test.tsx`, `PageMark.test.tsx`):
+P13 (`WuiOverviewPage.test.tsx`, `PageMark.test.tsx`):
 - No icon: the mark shows the title's first grapheme — `"出貨看板"` → `出`,
   `"Shipping board"` → `SB`, `"lot-tracker"` → `LT`; the circle carries the
   App's tint (compare against `appTagPalette` of the mocked App colour, hex —
@@ -207,7 +209,7 @@ P12 (`WuiOverviewPage.test.tsx`, `PageMark.test.tsx`):
   space; firing `error` on it swaps in the initials.
 - `aria-hidden` on the mark; the row's accessible name is still the title.
 
-P13 (`wuiFavourites.test.ts`, `WuiOverviewPage.test.tsx`):
+P14 (`wuiFavourites.test.ts`, `WuiOverviewPage.test.tsx`):
 - `read` of nothing / garbage / a non-object → empty; `toggle` twice is a
   no-op on storage; two users' sets do not mix; a user id containing `:`
   and one containing `%` stay distinct.
@@ -225,7 +227,7 @@ P13 (`wuiFavourites.test.ts`, `WuiOverviewPage.test.tsx`):
 - CSS: five tracks declared once in the wide rule; `.detail` spans `2 / -1`
   in the narrow block; deleting either reddens.
 
-P14: `mkdocs build --strict` green; the demo's frames checked for the circle,
+P15: `mkdocs build --strict` green; the demo's frames checked for the circle,
 an emoji mark, and a filled star.
 
 ## Verified ground truth (file pointers, branch `worktree-wui-overview` @ `46f7c692`)
@@ -281,7 +283,7 @@ an emoji mark, and a filled star.
 
 - **Two `auto` tracks on a subgrid list** — bounded content, so the round-2
   collapse should not recur; but "should not" is what round 2 also believed.
-  Measure at the four widths before P12 is called done; the numbers go in the
+  Measure at the four widths before P13 is called done; the numbers go in the
   commit message with the harness path.
 - **`Intl.Segmenter`** is absent in happy-dom / older Node: the fallback
   `[...title][0]` is what the tests exercise; a browser with the segmenter

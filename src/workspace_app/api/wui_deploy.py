@@ -61,6 +61,11 @@ class DeployedWui(Struct):
     title: str
     deployed_by: str
     deployed_at: int
+    # The view file's `icon:` as written — a file name in the page's folder, an
+    # emoji, or a named-icon key — or "" for none (`page_icon`). Which form it
+    # is, and whether it resolves, is the overview's call at render; a row
+    # written before this field existed decodes to "" and draws the default.
+    icon: str = ""
 
 
 #: `filestore/specstar_impl._fid`'s spelling: specstar ids can't hold an ASCII
@@ -131,6 +136,17 @@ def page_title(doc: Mapping[str, Any], path: str) -> str:
     return parts[-1].removesuffix(VIEW_SUFFIX) or parts[-1]
 
 
+def page_icon(doc: Mapping[str, Any]) -> str:
+    """The view file's ``icon:``, stripped, when it is a non-empty string;
+    anything else is "none". Not resolved here: a file that is not there or a
+    key nobody knows draws the default circle on the overview, and a Deploy is
+    not refused over a decoration (`plan-wui-overview-icon-favourites`)."""
+    icon = doc.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        return icon.strip()
+    return ""
+
+
 class DeployBody(BaseModel):
     path: str
 
@@ -143,6 +159,7 @@ class DeployedPage(BaseModel):
     title: str
     deployed_by: str
     deployed_at: int
+    icon: str
     can_remove: bool
 
 
@@ -208,6 +225,7 @@ def register_wui_deploy_routes(
             item_id=workspace_id,
             path=path,
             title=page_title(doc, path),
+            icon=page_icon(doc),
             deployed_by=get_user_id(),
             # Resolved at call time so a test can hold the clock still.
             deployed_at=(now or now_ms)(),
