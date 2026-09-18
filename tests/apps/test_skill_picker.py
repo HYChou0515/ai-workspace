@@ -8,6 +8,8 @@ exercised end to end against production loaders — no synthetic package.
 
 from __future__ import annotations
 
+import pytest
+
 from workspace_app.apps.skills import (
     SkillMeta,
     build_applied_skills_block,
@@ -269,3 +271,26 @@ async def test_a_manifest_gone_between_the_listing_and_the_read_is_simply_not_a_
         ("alpha", False, ""),
         ("beta", False, ""),
     ]
+
+
+async def test_a_skill_md_gone_between_the_listing_and_the_read_still_raises(monkeypatch):
+    """The other half of the one-batch read, pinned (round 4 found the strict
+    `raise` a hand-written line no test held): a manifest that vanished makes
+    its folder not a copy, but a SKILL.md that vanished is what it always was
+    — a `FileNotFound` out of the index, the tolerance the per-file loop
+    never had and this batch was told not to invent."""
+    from workspace_app.apps.skills import workspace_skill_metas
+    from workspace_app.filestore.protocol import FileNotFound
+
+    files = await _files_with(alpha=b"a", beta=b"b")
+    real_ls = files.ls
+
+    async def ls_then_delete(workspace_id: str, prefix: str = "") -> list[str]:
+        paths = await real_ls(workspace_id, prefix)
+        await files.delete(workspace_id, "/.skill/alpha/SKILL.md")
+        return paths
+
+    monkeypatch.setattr(files, "ls", ls_then_delete)
+
+    with pytest.raises(FileNotFound):
+        await workspace_skill_metas(files, "inv")

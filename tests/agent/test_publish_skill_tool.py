@@ -609,6 +609,41 @@ async def test_a_copy_exactly_at_the_cap_publishes_because_its_manifest_is_not_t
     assert out.startswith("published skill"), out
 
 
+async def test_the_room_ask_before_the_review_charges_nobody_only_the_write_does():
+    """Round 4 found `record=False` unpinned. The per-person gate is not a pure
+    predicate: on the allowed path it writes the post-write size to the
+    ledger, so a pre-check that asked with `record=True` charged the owner
+    once before the review and once at the write (two entries for one
+    manifest — and one of them for a publish the reviewer might still
+    refuse). The ask says it is only asking; the write records."""
+    asked: list[bool] = []
+
+    async def gate(_ws: str, _new_size: int, _growth: int, *, record: bool = True) -> None:
+        asked.append(record)
+
+    hub = _hub()
+    files = WorkspaceFiles(MemoryFileStore(), quota=10_000, person_gate=gate)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            app_slug="rca",
+            template_profile="default",
+            acting_user="alice",
+            skill_hub=hub,
+            review_skill_via=_Reviewer(),
+            on_exec_output=lambda _b: None,
+        )
+    )
+    await _put(ctx, "s", {"SKILL.md": _md("s")})
+    asked.clear()  # the SKILL.md write above legitimately charged
+
+    out = await publish_skill_impl(ctx, "s")
+
+    assert out.startswith("published skill"), out
+    assert asked == [False, True], asked
+
+
 async def test_a_folder_over_the_cap_is_refused_from_its_sizes_without_reading_it():
     """Review round 2: the 20 MiB cap was checked after the whole folder was
     already in memory. The sizes are cheap metadata (`stat_all`); the bytes

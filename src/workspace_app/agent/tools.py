@@ -2551,8 +2551,9 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     # manifest is rewritten to the version just published, so the Skills panel
     # does not offer an "update" to the very copy the update came from, and a
     # published fork tracks the fork rather than the root it was installed
-    # from. From here on the folder is a copy of its own entry — a re-publish
-    # from another item shows up as an update, and Refresh brings it.
+    # from. Under `tracks_entry` only: from here on such a folder is a copy of
+    # its own entry — a re-publish from another item shows up as an update,
+    # and Refresh brings it. A package copy keeps tracking the package.
     manifest_unwritten = False
     if tracks_entry:
         manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
