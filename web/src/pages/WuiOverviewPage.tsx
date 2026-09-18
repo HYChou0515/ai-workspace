@@ -27,7 +27,7 @@ import { useDialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { PageMark } from "../components/PageMark";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
-import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useT } from "../lib/i18n";
 import { favouriteKey, useWuiFavourites } from "../lib/wuiFavourites";
 
@@ -39,9 +39,13 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: "WUI" }]);
   // The viewer's stars — ONE set for the page, so the two copies of a starred
   // row (its App group and the favourites group) read and flip together. Per
-  // signed-in user: the id is a placeholder until the user query settles, and
-  // the hook re-reads when it changes.
-  const favourites = useWuiFavourites(useCurrentUser());
+  // signed-in user: the id is the "default-user" placeholder until the user
+  // query settles, and the hook re-reads when it changes — so until `ready`
+  // the star is held (disabled). A cold deep-link races the listing against
+  // that query, and a press in the window was filed under the placeholder and
+  // silently unfilled when the real id arrived (code review of P14).
+  const me = useCurrentUserState();
+  const favourites = useWuiFavourites(me.id);
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.wuiOverview,
     queryFn: () => client.list(),
@@ -111,6 +115,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
                     page={page}
                     client={client}
                     starred
+                    starReady={me.ready}
                     onStar={() => favourites.toggle(favouriteKey(page))}
                   />
                 ))}
@@ -136,6 +141,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
                     page={page}
                     client={client}
                     starred={favourites.has(favouriteKey(page))}
+                    starReady={me.ready}
                     onStar={() => favourites.toggle(favouriteKey(page))}
                   />
                 ))}
@@ -157,6 +163,7 @@ function PageRow({
   page,
   client,
   starred,
+  starReady,
   onStar,
 }: {
   page: DeployedWui;
@@ -164,6 +171,9 @@ function PageRow({
   /** Whether THIS viewer starred it — the page's one set, so a row drawn twice
    * (its App group and the favourites group) shows one answer. */
   starred: boolean;
+  /** False until the viewer's identity has settled; the star is held so a
+   * press cannot be filed under the placeholder id. */
+  starReady: boolean;
   onStar: () => void;
 }) {
   const t = useT();
@@ -222,6 +232,7 @@ function PageRow({
         data-size="sm"
         aria-pressed={starred}
         aria-label={starred ? t("wui.unstar", { title: page.title }) : t("wui.star", { title: page.title })}
+        disabled={!starReady}
         onClick={onStar}
       >
         <Icon name="star" size={16} />

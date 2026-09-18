@@ -21,7 +21,13 @@ vi.mock("../api", () => ({
   },
 }));
 
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "alice" }));
+// The signed-in user, and whether the user query has SETTLED: until it has,
+// the id is the "default-user" placeholder — an identity, not the identity.
+let me = { id: "alice", ready: true };
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => me.id,
+  useCurrentUserState: () => me,
+}));
 
 import { makeQueryClient } from "../api/queryClient";
 import { exactTime, relativeTime } from "../api/types";
@@ -75,7 +81,10 @@ function Wrap({ children }: { children: React.ReactNode }) {
 }
 
 afterEach(cleanup);
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  me = { id: "alice", ready: true };
+});
 
 /** The product's own words. No `LocaleProvider` is mounted here, so `useT`
  * resolves the context DEFAULT (zh-TW) whatever the runner's `navigator`
@@ -390,6 +399,21 @@ describe("WuiOverviewPage", () => {
 
       expect(within(favGroup()!).getAllByRole("listitem")).toHaveLength(1);
       expect(readFavourites("alice")).toEqual(["gone/pages/old/page.ai.yaml", favouriteKey(THREE[0])]);
+    });
+
+    it("holds the star until the user query has settled, so a press is never filed under the placeholder", async () => {
+      // Code review of P14: a cold deep-link to /wui races the listing against
+      // the current-user query; a star pressed in that window was written under
+      // "default-user" and silently unfilled when the real id arrived.
+      me = { id: "default-user", ready: false };
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      const star = screen.getByRole("button", { name: STAR("Shipping board") });
+      expect(star).toBeDisabled();
+      fireEvent.click(star);
+      expect(localStorage.getItem("rca.wuiFavourites")).toBeNull();
+      expect(favGroup()).toBeNull();
     });
 
     it("stars are the viewer's own: another user's stars do not show", async () => {
