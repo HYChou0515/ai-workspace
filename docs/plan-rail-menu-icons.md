@@ -44,7 +44,11 @@ lands on master; #818 inherits it on merge.)
 - **The rail's look otherwise stays**: same paddings, same font size, same
   hover, same order, Help still listed there (the rail has no "?" button).
 - **`GlobalNav` does not change visually.** It switches to the shared glyph so
-  there is one source; its existing tests are the pin that nothing moved.
+  there is one source. ~~Its existing tests are the pin that nothing moved.~~
+  Round 1 showed they are not — they pin links and labels and stayed green
+  with the switcher's glyphs deleted outright. What pins it now: `NavGlyph`'s
+  own tests (every box property, sizes, colours) plus one per-row glyph case
+  added to `GlobalNav.test.tsx` (P4); the existing cases are untouched.
 
 ## Design
 
@@ -55,10 +59,15 @@ lands on master; #818 inherits it on merge.)
 export function NavGlyph(props: { app: AppSummary } | { icon: IconName }) …
 ```
 
-- `app` form → `<AppIcon icon={app.icon} slug={app.slug} color={app.color} size={22} />`
-  (what `Switcher` does today).
-- `icon` form → the 22px `inline-flex` box with `<Icon name size={16}
-  color="var(--text-paper-d)" />` (what `FixedLink` does today, moved).
+- Both forms render inside ONE 22px `inline-flex` box (`line-height: 1`,
+  `flex-shrink: 0`) — P4; the first cut boxed only the `icon` form.
+- `app` form → `<AppIcon icon slug color={app.color || undefined} size={22} />`
+  (what `Switcher` did, plus the box and the colour fallback: the manifest
+  defaults `icon`/`color` to `""`; an emoji's line box is 34px tall, an empty
+  icon has no width, an empty stroke paints nothing — each put that row out of
+  column, in the switcher already and in the rail once it drew glyphs).
+- `icon` form → `<Icon name size={16} color="var(--text-paper-d)" />` in the
+  box (what `FixedLink` did, moved).
 
 ### `GlobalNav.tsx`
 
@@ -99,6 +108,9 @@ a false sentence, and the file is the one both menus are told to read.
   comment removed. Red first (see test plan).
 - **P3** The flex row scoped to `.chat-rail__menu > …` — found by the regression
   lens on my own diff before the push (below).
+- **P4** Review round 1: both `NavGlyph` forms in one box + `color || undefined`;
+  every box property and stroke colour pinned in `NavGlyph.test.tsx`; a
+  per-row glyph case in `GlobalNav.test.tsx`.
 
 ## Test plan (red first, targeted only)
 
@@ -139,7 +151,8 @@ section.
   `AppSummary { slug, title, icon, color, … }` (`web/src/api/types.ts:188-189`).
 - Global switcher: `web/src/components/GlobalNav.tsx` — `MenuLink` (:31-60,
   `display:flex; gap:10`), `FixedLink` (:62-80, the 22px box + `Icon` 16),
-  `Switcher` (:120-124 `AppIcon size={22}`; :133-140 `FixedLink`, Help filtered).
+  `Switcher` (:120-124 `AppIcon size={22}`; :133-140 `FixedLink`, Help filtered);
+  `FixedLink` is :62-79 (the plan first said 80).
 - Rail menu: `web/src/components/ChatListRail.tsx:172-199` — `role="menu"`,
   `Link role="menuitem" className="chat-rail__menu-item"`, text only in both
   sections. CSS `web/src/styles/chat-rail.css:124-130` — no `display`.
@@ -154,7 +167,7 @@ section.
 
 Merged `origin/master` (`06131733`, Skill hub) first so the menu matches the
 report's screenshot. A fresh Playground item, the rail's ☰ opened by
-`button[name="Platform menu"]`; at 390 the rail was tucked and `Show scratches`
+`button[name="Platform menu"]`; at 390 the rail was tucked and `Show Scratches`
 expanded it first. Per entry: the `[role=menuitem]`, its glyph
 (`[data-icon]` / `img`), whether the glyph's vertical centre is within 4px of
 the row's, and the row height.
@@ -186,4 +199,37 @@ committed).
   the ⋯ row menu's button class. Probe on the built bundle: ☰ items compute
   `display: flex` (11/11); ⋯ buttons compute `block / center` — as on master.
   Before the scoping they would have computed `flex` and read left-aligned.
+
+## Review round 1 (2026-09-19 — defect / conformance / veracity / regression, in parallel, isolated snapshots)
+
+Worst finding: **MEDIUM** (a claimed pin that pinned nothing). Nothing HIGH.
+
+- **Conformance**: every deliverable present; "not doing" respected; P1–P3
+  cover every hunk. One gap: the plan called `GlobalNav.test.tsx` the "no
+  visual change" pin, and with both `<NavGlyph>` lines deleted from
+  `GlobalNav.tsx` it stays 12/12 green.
+- **Veracity**: rail mutation pins TRUE (as stated, 1 failed / 24 passed each,
+  naming `RCA` / `Knowledge base`); `NavGlyph.test` size pins TRUE; every
+  code-comment sentence and ground-truth line TRUE (two cosmetic: `FixedLink`
+  :62-79, `Show Scratches`). FALSE: the same pin claim — and `NavGlyph`'s
+  `inline-flex` / centring / `flexShrink` / colour each survived deletion
+  40/40. Live-check numbers judged derived (row 30 = 22 + 2×4; glyph order =
+  manifests + hook order).
+- **Regression**: none. Switcher HTML byte-identical to master for named /
+  file / emoji / unknown icons and destinations; `.chat-rail__menu-item`'s only
+  other consumer (⋯ buttons) is out of the child combinator's reach; existing
+  suites 67/67 → 68/68; menuitem accessible names unchanged for all icon forms.
+- **Defect**: nothing reaching a user for a shipped App. LOW: the `app` form
+  was unboxed, so an emoji / empty icon / empty colour App sat out of column
+  (measured 42px row, label at 67.6 / 16 vs 38, invisible stroke).
+
+**P4** (`e5feda7b`) answers all three: one box for both forms (+ `color ||
+undefined`), every box property pinned, a per-row glyph case for the switcher.
+Mutation pins re-run after P4 — each of the six that passed before now
+reddens: drop `flexShrink` 5, drop `inline-flex`+centring 5, drop the muted
+colour 1, delete the switcher's App glyph 1, delete `FixedLink`'s glyph 1,
+unbox the `app` form 6. Real Chromium: six glyph forms on the rail's CSS all
+30px / box 22×22 / label x=38; the built switcher's ten rows all 36px, glyph
+centre offset 0.0, label x=44 — the added box changes nothing visible for a
+shipped App. Rail live check re-run unchanged (11/11 at 1280 and 390, 30px).
 
