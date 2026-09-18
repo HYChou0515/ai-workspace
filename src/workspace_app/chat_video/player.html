@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>chat video</title>
+<style>
+  :root {
+    --frame-w: /*FRAME_W*/px; --frame-h: /*FRAME_H*/px; --chat-w: /*CHAT_W*/px; --ui-scale: /*UI_SCALE*/;
+    --bg:#0f1115; --panel:#171a21; --panel-user:#1f2a44; --line:#2a2f3a; --line-user:#2f3f66;
+    --fg:#e6e8ee; --dim:#8b93a7; --acc:#6ea8fe; --err:#ff6b6b; --err-bg:#2a1518;
+  }
+  html, body { margin:0; width:var(--frame-w); height:var(--frame-h); background:var(--bg); color:var(--fg);
+    font: 16px/1.55 ui-sans-serif, system-ui, "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", sans-serif;
+    overflow:hidden; }
+  /* `zoom` enlarges the LAYOUT (every px in this sheet), so the column, the
+     text and the composer all grow with the frame; `transform` on top of it
+     is the camera. The recorder is Chromium, where the two compose as the
+     script assumes; a `--html` preview in another browser may differ. */
+  #stage { position:absolute; inset:0; zoom:var(--ui-scale); width:calc(var(--frame-w) / var(--ui-scale));
+    height:calc(var(--frame-h) / var(--ui-scale)); transform-origin:0 0; transform:translate(0,0) scale(1); }
+  #stage.moving { transition: transform var(--zoom-ms, 900ms) cubic-bezier(.4,0,.2,1); }
+  #title { position:absolute; left:0; right:0; top:0; height:44px; display:flex; align-items:center;
+    justify-content:center; color:var(--dim); font-size:13px; letter-spacing:.02em;
+    border-bottom:1px solid var(--line); background:var(--bg); z-index:2; }
+  #thread { position:absolute; left:50%; transform:translateX(-50%); width:min(var(--chat-w), calc(var(--frame-w) / var(--ui-scale) - 32px));
+    top:56px; bottom:112px; overflow:hidden; display:flex; flex-direction:column; justify-content:flex-end; gap:14px; }
+  .msg { max-width:86%; padding:10px 14px; border-radius:14px; background:var(--panel); border:1px solid var(--line);
+    animation: rise 260ms ease-out; overflow-wrap:anywhere; }
+  .msg.user { align-self:flex-end; background:var(--panel-user); border-color:var(--line-user); white-space:pre-wrap; }
+  .msg.error { border-color:var(--err); background:var(--err-bg); }
+  .msg .who { font-size:12px; color:var(--dim); margin-bottom:4px; }
+  .msg .who .kind { margin-left:8px; color:var(--err); }
+  .note { align-self:center; color:var(--dim); font-size:13px; animation: rise 260ms ease-out; }
+  .reasoning { color:var(--dim); font-size:14px; white-space:pre-wrap; border-left:2px solid var(--line);
+    padding-left:10px; margin-bottom:8px; }
+  .reasoning .label { font-size:12px; color:var(--dim); margin-bottom:2px; }
+  .stopped { font-size:12px; color:var(--err); margin-top:6px; }
+  .answer.raw { white-space:pre-wrap; }
+  .answer :is(h1,h2,h3) { margin:.4em 0 .2em; font-size:1.05em; }
+  .answer p { margin:.3em 0; }
+  .answer pre { background:#0b0d12; border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+    overflow:hidden; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .answer code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.92em; }
+  .answer :not(pre) > code { background:#0b0d12; padding:1px 5px; border-radius:5px; }
+  .answer table { border-collapse:collapse; margin:.4em 0; } .answer td, .answer th { border:1px solid var(--line); padding:2px 8px; }
+  .tool { align-self:flex-start; width:86%; background:#12151b; border:1px solid var(--line); border-radius:12px;
+    padding:8px 12px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; animation: rise 260ms ease-out; }
+  .tool .head { display:flex; align-items:center; gap:8px; color:var(--acc); }
+  .tool .spin { width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--acc); border-radius:50%;
+    animation: spin 800ms linear infinite; }
+  .tool .args { color:var(--dim); white-space:pre-wrap; margin-top:4px; }
+  .tool .out { color:var(--fg); white-space:pre-wrap; margin-top:6px; border-top:1px solid var(--line); padding-top:6px; }
+  /* Files a tool showed: an image as a 260px thumbnail (the FE's THUMB), any
+     other file as a card with its name and size. Outside the tool card, as in
+     the chat — a chart hidden behind the result is the same failure as a path
+     in prose. */
+  .shown-files { align-self:flex-start; display:flex; flex-direction:column; gap:8px; animation: rise 260ms ease-out; }
+  .shown-files img, .answer img.shown { display:block; max-width:260px; max-height:260px; border-radius:8px; border:1px solid var(--line); }
+  .shown-files .caption { font-size:12px; color:var(--dim); }
+  .file-card { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:8px 12px; font-size:13px; }
+  .file-card .icon { width:28px; height:28px; border-radius:6px; background:#0b0d12; border:1px solid var(--line);
+    display:grid; place-items:center; color:var(--acc); font-size:12px; }
+  .file-card .name { color:var(--fg); } .file-card .size { color:var(--dim); font-size:12px; }
+  #composer { position:absolute; left:50%; bottom:32px; transform:translateX(-50%);
+    width:min(var(--chat-w), calc(var(--frame-w) / var(--ui-scale) - 32px)); box-sizing:border-box;
+    background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px 16px;
+    display:flex; align-items:center; gap:10px; transition: box-shadow 400ms, border-color 400ms; }
+  #composer.focused { border-color:var(--acc); box-shadow:0 0 0 4px rgba(110,168,254,.25), 0 0 40px rgba(110,168,254,.25); }
+  #input { flex:1; min-height:24px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  #input:empty::before { content:"傳訊息給 AI…"; color:var(--dim); }
+  .caret { display:inline-block; width:2px; height:1.1em; background:var(--fg); vertical-align:-2px;
+    animation: blink 1s steps(1) infinite; }
+  .send { width:34px; height:34px; border-radius:10px; background:var(--acc); display:grid; place-items:center;
+    color:#08101f; font-weight:700; flex:none; }
+  @keyframes blink { 50% { opacity:0; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes rise { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="title"></div>
+  <div id="thread"></div>
+  <div id="composer"><div id="input"></div><div class="send">↑</div></div>
+</div>
+<script>
+const TIMELINE = /*TIMELINE*/;
+const OPTIONS = /*OPTIONS*/;
+const PACING = /*PACING*/;   // the same table the estimate was built from
+const ASSETS = /*ASSETS*/;   // path → data: URI, each inlined picture ONCE
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Every delay goes through here: `speed` from the options, then the squeeze
+// that keeps the whole thing under `max_seconds`.
+const t = ms => Math.max(0, Math.round(ms / OPTIONS.speed * TIMELINE.time_scale));
+const stage = document.getElementById('stage');
+const thread = document.getElementById('thread');
+const composer = document.getElementById('composer');
+const input = document.getElementById('input');
+document.getElementById('title').textContent = TIMELINE.title;
+document.documentElement.style.setProperty('--zoom-ms', t(OPTIONS.zoom_ms) + 'ms');
+
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+const punct = ch => /[,.;:!?，。；：！？]/.test(ch);
+
+// The camera: push in AND pan so the element's centre lands at (50%, 62%) of
+// the frame, with the zoom capped so the whole element still fits across it.
+// Rects and innerWidth are in real frame pixels; the stage's own `translate`
+// is in its zoomed coordinate space, hence the division by UI.
+const UI = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale')) || 1;
+function zoomTo(target, k) {
+  if (!(k > 1)) return;
+  const r = target.getBoundingClientRect();
+  k = Math.min(k, (innerWidth * 0.92) / r.width);
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const tx = (innerWidth / 2 - cx * k) / UI, ty = (innerHeight * 0.62 - cy * k) / UI;
+  stage.classList.add('moving');
+  stage.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+}
+function zoomOut() { stage.style.transform = 'translate(0px, 0px) scale(1)'; }
+
+async function typeInto(node, text, perChar) {
+  const caret = el('span', 'caret');
+  node.appendChild(caret);
+  for (const ch of text) {
+    caret.insertAdjacentText('beforebegin', ch);
+    await sleep(t(perChar + (punct(ch) ? perChar * PACING.punct_factor : 0)));
+  }
+  caret.remove();
+}
+
+let lastBubble = null;  // an assistant bubble a reasoning block may be followed into
+
+async function stepTyping(s) {
+  lastBubble = null;
+  composer.classList.add('focused');
+  zoomTo(composer, OPTIONS.zoom);
+  await sleep(t(OPTIONS.zoom_ms + PACING.zoom_settle_ms));
+  await typeInto(input, s.text, OPTIONS.type_ms);
+  await sleep(t(PACING.after_type_ms));
+  input.textContent = '';
+  composer.classList.remove('focused');
+  const m = el('div', 'msg user'); m.appendChild(el('div', 'who', s.author)); m.appendChild(el('span', '', s.text));
+  thread.appendChild(m);
+  zoomOut();
+  await sleep(t(OPTIONS.zoom_ms + PACING.zoom_settle_ms));
+}
+
+async function stepStream(s) {
+  let bubble = lastBubble;
+  if (!bubble || bubble.dataset.author !== s.author || !s.reasoning && bubble.querySelector('.answer')) {
+    bubble = el('div', 'msg'); bubble.dataset.author = s.author; bubble.appendChild(el('div', 'who', s.author));
+    thread.appendChild(bubble);
+  }
+  lastBubble = bubble;
+  if (s.reasoning) {
+    const r = el('div', 'reasoning'); r.appendChild(el('div', 'label', '思考'));
+    const body = el('div'); r.appendChild(body); bubble.appendChild(r);
+    await typeInto(body, s.text, OPTIONS.stream_ms);
+    return;
+  }
+  const a = el('div', 'answer raw'); bubble.appendChild(a);
+  await typeInto(a, s.text, OPTIONS.stream_ms);
+  a.classList.remove('raw'); a.innerHTML = s.html;   // rendered here in Python, HTML disabled
+  for (const img of a.querySelectorAll('img[data-asset]')) img.src = ASSETS[img.dataset.asset] || '';
+  if (s.stopped) bubble.appendChild(el('div', 'stopped', '已中止:' + s.stopped));
+  await sleep(t(PACING.after_answer_ms));
+}
+
+const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+// The files a tool declared, drawn as the chat draws them: a declaration
+// whose OWN mime is image/* (isInlineImage) and whose bytes are in the
+// table as a thumbnail, anything else (declared non-image, no bytes, over
+// the cap) as a card naming the file. The thumbnail's bytes travel under
+// the media type the chat's file route serves them with, so the browser
+// makes of them exactly what it makes in the chat — a broken <img> only
+// where the chat's is broken too.
+function shownFiles(files) {
+  const box = el('div', 'shown-files');
+  for (const f of files) {
+    const src = f.mime.startsWith('image/') && ASSETS[f.path];
+    if (src) {
+      const img = el('img'); img.src = src; img.alt = f.caption || f.path; box.appendChild(img);
+    } else {
+      const card = el('div', 'file-card'); card.appendChild(el('div', 'icon', '▤'));
+      const meta = el('div'); meta.appendChild(el('div', 'name', f.path.split('/').pop()));
+      meta.appendChild(el('div', 'size', fmtBytes(f.size))); card.appendChild(meta); box.appendChild(card);
+    }
+    if (f.caption) box.appendChild(el('div', 'caption', f.caption));
+  }
+  return box;
+}
+
+async function stepTool(s) {
+  lastBubble = null;
+  if (s.card) {
+    const card = el('div', 'tool');
+    const head = el('div', 'head'); const spin = el('div', 'spin'); head.appendChild(spin); head.appendChild(el('span', '', s.name));
+    card.appendChild(head);
+    if (s.args_text) card.appendChild(el('div', 'args', s.args_text));
+    thread.appendChild(card);
+    await sleep(t(OPTIONS.tool_pause_ms));
+    spin.remove(); head.insertAdjacentText('afterbegin', '✓ ');
+    if (s.output) card.appendChild(el('div', 'out', s.output));
+  } else {
+    // `show_file`: no card — the file IS the rendering. The spin still
+    // happens, off screen, so the tempo of the thread is the same.
+    await sleep(t(OPTIONS.tool_pause_ms));
+  }
+  if (s.files.length) thread.appendChild(shownFiles(s.files));
+  await sleep(t(PACING.after_tool_ms));
+}
+
+async function stepError(s) {
+  lastBubble = null;
+  const m = el('div', 'msg error'); const who = el('div', 'who', '錯誤');
+  if (s.kind) who.appendChild(el('span', 'kind', s.kind));
+  m.appendChild(who); m.appendChild(el('span', '', s.text)); thread.appendChild(m);
+  await sleep(t(PACING.appear_ms));
+}
+
+async function stepNote(s) {
+  lastBubble = null;
+  thread.appendChild(el('div', 'note', s.text));
+  await sleep(t(PACING.appear_ms));
+}
+
+const handlers = { typing: stepTyping, stream: stepStream, tool: stepTool, error: stepError, note: stepNote };
+
+(async () => {
+  await sleep(t(PACING.lead_ms));
+  for (const s of TIMELINE.steps) await handlers[s.type](s);
+  await sleep(t(PACING.tail_ms));
+  document.body.dataset.done = '1';
+})();
+</script>
+</body>
+</html>

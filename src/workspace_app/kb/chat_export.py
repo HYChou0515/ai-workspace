@@ -80,6 +80,8 @@ def parse_chat_export(raw: bytes) -> tuple[str, list[dict[str, Any]]]:
         data = json.loads(raw.decode("utf-8", errors="replace"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON: {exc}") from exc
+    except RecursionError as exc:  # nested past the decoder: 100k `[`
+        raise ValueError("invalid JSON: nested too deep") from exc
     if not isinstance(data, dict):
         raise ValueError(f"expected an object at the top level, got {type(data).__name__}")
     title = data.get("title")
