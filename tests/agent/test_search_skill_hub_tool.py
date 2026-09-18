@@ -143,3 +143,25 @@ async def test_a_long_list_is_cut_and_says_how_many_more():
 async def test_without_the_hub_the_tool_says_where_it_works():
     out = await search_skill_hub_impl(_ctx(None), "x")
     assert out.startswith("error:") and "App workspace turn" in out
+
+
+async def test_a_forks_lineage_never_names_a_root_the_viewer_may_not_read():
+    """Review round 1: the lineage annotation read the root with `hub.get`,
+    which has no viewer — so after alice took her root private, bob's fork
+    still printed "(fork of alice/secret)" to carol. Q10: what carol may not
+    read is gone, so a fork of it reads "(fork)", exactly like a fork of a
+    deleted root."""
+    spec, hub = _hub()
+    root = await _entry(hub, "alice", "secret-sauce", "d")
+    fork = await _entry(hub, "bob", "secret-sauce", "d", forked_from=root)
+    rm = spec.get_resource_manager(SkillHubEntry)
+    rm.update(
+        root,
+        msgspec.structs.replace(rm.get(root).data, permission=Permission(visibility="private")),
+    )
+
+    out = await search_skill_hub_impl(_ctx(hub, user="carol"), "secret")
+
+    assert fork in out and root not in out
+    assert "alice" not in out
+    assert "(fork)" in out

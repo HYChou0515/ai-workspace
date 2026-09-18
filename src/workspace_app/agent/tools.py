@@ -2454,11 +2454,13 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     # Lineage from `.origin` (plan: fork / revision / root). A copy of someone
     # else's entry is a fork of it; a copy of the publisher's own is a new
     # revision of theirs (`publish` resolves that by name); a copy whose
-    # upstream cannot be found is a root — Q10: what cannot be found is gone.
+    # upstream cannot be READ by the publisher — deleted, or taken private
+    # since they installed it — is a root: Q10, what cannot be read is gone
+    # (and its owner is never named).
     forked_from, forked_owner = "", ""
     origin = await workspace_skill_origin(files, inv, name)
     if origin is not None and origin.source == "hub" and origin.entry:
-        upstream = hub.get(origin.entry)
+        _state, upstream = hub.state_for(origin.entry, c.acting_user)
         if upstream is not None and upstream.owner != c.acting_user:
             forked_from, forked_owner = origin.entry, upstream.owner
 
@@ -2515,7 +2517,20 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         lines.append(
             f"It mentions these tools: {', '.join(tools)} — an App without them cannot follow it."
         )
-    lines.append("It is public by default.")
+    # Read back, not assumed: a re-publish keeps the entry's permission, so
+    # one the owner had unpublished stays private — saying "public" there
+    # would be false in the one direction that matters.
+    published = hub.get(entry_id)
+    visibility = published.permission.visibility if published is not None else "public"
+    if visibility == "private":
+        lines.append(
+            "It is UNPUBLISHED (private): only the owner can see it, because it was taken "
+            "down earlier — the owner can republish it on the skill hub page."
+        )
+    elif visibility == "restricted":
+        lines.append("It is visible to the people on its access list (restricted).")
+    else:
+        lines.append("It is public: everyone on the platform can find and install it.")
     return "\n".join(lines)
 
 
@@ -2589,19 +2604,13 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     which of the tools it mentions this App does not have — tell the user
     before installing such a skill; parts of it may not be followable here.
     """
-    from ..apps.skill_hub import missing_tools_for, nest_forks
+    from ..apps.skill_hub import matches_query, missing_tools_for, nest_forks
 
     c = ctx.context
     hub = c.skill_hub
     if hub is None or c.app_slug is None:
         return "error: search_skill_hub is only available in an App workspace turn"
-    needle = query.strip().lower()
-    visible = hub.visible(c.acting_user)
-    hits = [
-        (i, e)
-        for i, e in visible
-        if not needle or needle in e.name.lower() or needle in e.description.lower()
-    ]
+    hits = [(i, e) for i, e in hub.visible(c.acting_user) if matches_query(e, query)]
     if not hits:
         return (
             f"no skill hub entry matches {query!r}. The user can publish one of this "
@@ -2618,7 +2627,9 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     for i, e, is_fork in ordered[:SEARCH_SKILL_HUB_LIMIT]:
         lineage = ""
         if e.forked_from:
-            root = by_id.get(e.forked_from) or hub.get(e.forked_from)
+            # As the SPEAKER may know the root: a root taken private reads
+            # "(fork)" exactly like a deleted one (Q10), never its owner's name.
+            _state, root = hub.state_for(e.forked_from, c.acting_user)
             lineage = f" (fork of {root.owner}/{root.name})" if root is not None else " (fork)"
         indent = "  ↳ " if is_fork else "- "
         lines.append(

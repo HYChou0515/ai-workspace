@@ -171,7 +171,10 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
             f"the folder is {total / 2**20:.1f} MiB, over the {SKILL_HUB_MAX_BYTES // 2**20} MiB "
             "cap for one skill hub entry — drop or shrink the large files"
         )
-    for mention in sorted(set(_REFERENCE_MENTION.findall(body))):
+    # A mention at the end of a sentence carries its full stop into the match
+    # (the class excludes the other punctuation but a dot is a path character);
+    # a file name never ends in one, so trailing dots are the sentence's.
+    for mention in sorted({m.rstrip(".") for m in _REFERENCE_MENTION.findall(body)}):
         if mention not in payload:
             problems.append(
                 f"the body names `{mention}` but the folder does not ship it — an agent "
@@ -215,19 +218,36 @@ def nest_forks(hits: Mapping[str, SkillHubEntry]) -> list[tuple[str, list[str]]]
     return out
 
 
+#: Tools `build_tools` grants a turn WITHOUT the App declaring them, so no
+#: `agent.tools` list names them and a skill that mentions one must not be
+#: told the App lacks it. Kept beside the one such grant in `agent/tools.py`
+#: (`_grant_read_skill`) by the test that pins this constant against it.
+IMPLICITLY_GRANTED_TOOLS = frozenset({"read_skill"})
+
+
 def missing_tools_for(referenced: Collection[str], app_slug: str) -> list[str]:
     """The tools a skill mentions that `app_slug`'s ceiling does not grant —
     the install告知 (plan Q1/Q2): shown, never enforced. Against the App's
     declared ceiling, not a turn's effective set: the question is whether the
     App CAN follow the skill, which a per-item toggle does not change. An
-    unknown App has no ceiling to compare against → nothing missing."""
+    unknown App (a slug the catalog does not know) has no ceiling to compare
+    against → nothing missing."""
+    from .catalog import discover_app_slugs
     from .manifest import load_app_manifest
 
-    try:
-        ceiling = set(load_app_manifest(app_slug).agent.tools)
-    except KeyError:
+    if app_slug not in discover_app_slugs():
         return []
+    ceiling = set(load_app_manifest(app_slug).agent.tools) | IMPLICITLY_GRANTED_TOOLS
     return [t for t in referenced if t not in ceiling]
+
+
+def matches_query(entry: SkillHubEntry, query: str) -> bool:
+    """The one search rule: the query, trimmed, is a case-insensitive
+    substring of the name or the description; an empty query matches all.
+    The page's list and the agent's `search_skill_hub` both call this — a copy
+    kept alike by hand in each was how they were first written."""
+    needle = query.strip().lower()
+    return not needle or needle in entry.name.lower() or needle in entry.description.lower()
 
 
 def skill_description(skill_md: str) -> str:

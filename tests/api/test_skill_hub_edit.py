@@ -219,3 +219,39 @@ async def test_republishing_from_the_new_item_moves_the_source(harness: Harness)
 
     assert again == entry
     assert _edit(harness, entry).json()["item_id"] == harness.iid
+
+
+async def test_a_superuser_owner_edits_through_a_source_item_the_gate_would_let_them_into():
+    """Review round 1: the resolver re-implemented the item gate by hand and
+    forgot `superusers`, so it diverged from `GET …/skills` on the same item
+    (200 there, `no_access` here). It now asks the one gate."""
+    from workspace_app.api.app import create_app
+    from workspace_app.api.events import RunDone
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import TestClient as ApiTestClient
+
+    spec = make_spec(default_user="root", superusers=frozenset({"root"}))
+    filestore = SpecstarFileStore(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=filestore,
+        runner=ScriptedAgentRunner([RunDone()]),
+        superusers=frozenset({"root"}),
+    )
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        bobs_private = rm.create(
+            RcaInvestigation(title="t", owner="bob", permission=Permission(visibility="private"))
+        ).resource_id
+    await filestore.write(bobs_private, "/.skill/triage/SKILL.md", _md())
+    hub: SkillHubStore = app.state.skill_hub
+    entry = await _published_from(hub, bobs_private, owner="root")
+    client = ApiTestClient(app)
+
+    assert client.get(f"/a/rca/items/{bobs_private}/skills").status_code == 200
+    assert client.post(f"/skill-hub/entries/{entry}/edit").json()["action"] == "open"

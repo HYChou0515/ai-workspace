@@ -163,6 +163,10 @@ def _child_context(
         ),
         history=[],
         run_agent=None,
+        # The skill hub reviewer is a second delegation seam; nulled for the
+        # same reason as `run_agent`, and `publish_skill` — its only caller —
+        # is stripped from the child's tools above (both halves, as always).
+        review_skill_via=None,
         subagent_defs=(),
         # Conversation-scoped. `conversation_id` is what actually refuses:
         # `update_todos` is a whole-list replace on the parent's pinned checklist

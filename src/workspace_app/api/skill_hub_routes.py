@@ -28,14 +28,14 @@ from ..apps.skill_hub import (
     SkillHubEntry,
     SkillHubStore,
     UpstreamState,
+    matches_query,
     missing_tools_for,
     nest_forks,
 )
 from ..apps.skills import install_hub_skill, skill_folder_in_the_way, workspace_skill_payload
 from ..files import WorkspaceFiles
-from ..perm import Actor, authorize
 from ..resources.groups import groups_of
-from .item_authz import load_access_facts
+from .item_authz import check_access, load_access_facts
 from .locator import ItemLocator
 from .permission_body import PermissionBody, PermissionOut, build_permission
 
@@ -152,6 +152,7 @@ def register_skill_hub_routes(
     locator: ItemLocator,
     get_user_id: Callable[[], str],
     spec: SpecStar,
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     """Mount the skill hub routes (reads, owner management, the edit resolver)
     + the item install route onto ``app``."""
@@ -195,12 +196,10 @@ def register_skill_hub_routes(
         row's `missing_tools` against that App's ceiling — the Skills panel's
         picker asks for the item's App, so the告知 is on the row it picks from."""
         viewer = get_user_id()
-        needle = q.strip().lower()
         hits = {
             i: e
             for i, e in hub.visible(viewer)
-            if (not mine or e.owner == viewer)
-            and (not needle or needle in e.name.lower() or needle in e.description.lower())
+            if (not mine or e.owner == viewer) and matches_query(e, q)
         }
         roots: list[SkillHubCard] = []
         for root, forks in nest_forks(hits):
@@ -344,13 +343,20 @@ def register_skill_hub_routes(
         facts = load_access_facts(spec, entry.source_item, include_deleted=True)
         if facts is None or facts.is_deleted:
             return target.model_copy(update={"reason": "deleted"})
-        actor = Actor.human(viewer, groups=groups_of(spec, viewer))
-        perm = facts.item.permission
-        # Editing a skill writes to the item: read access alone is not enough.
-        if not (
-            authorize(actor, "read_meta", perm, created_by=facts.created_by)
-            and authorize(actor, "edit_content", perm, created_by=facts.created_by)
-        ):
+        # The ONE item gate, not a copy of its body: editing a skill writes to
+        # the item, so the verb is `edit_content`, and a superuser passes here
+        # exactly as they pass `GET …/skills` on the same item.
+        try:
+            check_access(
+                facts,
+                facts.slug,
+                entry.source_item,
+                "edit_content",
+                user=viewer,
+                groups=groups_of(spec, viewer),
+                superusers=superusers,
+            )
+        except HTTPException:
             return target.model_copy(update={"reason": "no_access"})
         lifecycle = load_app_manifest(facts.slug).lifecycle
         if lifecycle is not None:

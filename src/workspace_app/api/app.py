@@ -2471,7 +2471,13 @@ def create_app(
     # Skill hub (docs/plan-skill-hub.md): the page's read routes + the panel's
     # install door. Same store the tools use.
     register_skill_hub_routes(
-        api, hub=skill_hub, files=files, locator=locator, get_user_id=get_user_id, spec=spec
+        api,
+        hub=skill_hub,
+        files=files,
+        locator=locator,
+        get_user_id=get_user_id,
+        spec=spec,
+        superusers=superusers,
     )
 
     # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema

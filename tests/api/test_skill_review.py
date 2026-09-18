@@ -194,6 +194,35 @@ async def test_non_string_junk_in_notes_is_dropped_not_stringified():
     assert review.notes == ["real note"]
 
 
+async def test_a_reply_that_says_notes_but_carries_none_as_strings_keeps_its_words():
+    """Review round 1: four shapes of "there are notes" all came back `ok`
+    with nothing — the exact format slip the parser exists to keep. When the
+    object says `notes` and no string notes were found, the whole reply is
+    the note, as it already was when no object was found at all."""
+    from workspace_app.api.skill_review import parse_review
+
+    shapes = [
+        '{"verdict":"notes","notes":[{"file":"SKILL.md","note":"hardcoded path"}]}',
+        '{"verdict":"notes","notes":"SKILL.md: hardcoded path"}',
+        '{"verdict":"notes"} — the description never says when to use it.',
+    ]
+    for reply in shapes:
+        review = parse_review(reply, model="m")
+        assert review.verdict == "notes", reply
+        assert (
+            review.notes and "hardcoded path" in review.notes[0] or "never says" in review.notes[0]
+        )
+
+
+async def test_when_a_reply_holds_a_draft_and_a_final_object_the_final_wins():
+    """A reasoning model that writes `Draft: {…ok…} Final: {…notes…}` in the
+    answer channel: the LAST review-shaped object is the answer."""
+    from workspace_app.api.skill_review import parse_review
+
+    reply = 'Draft: {"verdict":"ok","notes":[]}\nFinal: {"verdict":"notes","notes":["n1"]}'
+    assert parse_review(reply, model="m").notes == ["n1"]
+
+
 # ── no review, no publish ────────────────────────────────────────────────────
 
 

@@ -300,3 +300,40 @@ async def test_a_model_override_swaps_the_whole_endpoint_bundle_not_just_the_add
     assert (cfg.reports_usage, cfg.vision) == (False, False)  # the preset's, not the parent's
     assert cfg.frequency_penalty == 0.5
     assert (cfg.presence_penalty, cfg.repetition_penalty) == (None, None)
+
+
+async def test_a_sub_agent_cannot_publish_to_the_skill_hub_and_does_not_inherit_the_reviewer():
+    """Review round 1: `publish_skill` reaches OUTSIDE the item — it puts a
+    skill in front of everyone under the acting user's name — and the
+    meta-skill requires the user to have said which skill; a sub-agent cannot
+    ask. Both halves, as for `run_agent`: the name is stripped from the child
+    so the tool is never built, and the review seam is nulled so it could not
+    work even if it were."""
+    from workspace_app.apps.subagents import SUBAGENT_FORBIDDEN_TOOLS
+
+    async def reviewer(*_a, **_k):  # pragma: no cover — must never be called
+        raise AssertionError("a sub-agent reached the reviewer")
+
+    parent = dataclasses.replace(
+        _parent(),
+        agent_config=AgentConfig(
+            name="main", allowed_tools=["publish_skill", "install_skill", "search_skill_hub"]
+        ),
+        review_skill_via=reviewer,
+    )
+    runner = _Recorder([MessageDelta(text="ok"), RunDone()])
+    defn = SubagentDef(
+        name="pub",
+        description="d",
+        tools=["publish_skill", "install_skill", "search_skill_hub"],
+        body="b",
+    )
+
+    await run_agent_task(runner, parent, defn, "go")
+
+    child = runner.ctx
+    assert child is not None and child.agent_config is not None
+    assert "publish_skill" in SUBAGENT_FORBIDDEN_TOOLS
+    assert child.agent_config.allowed_tools == ["install_skill", "search_skill_hub"]
+    assert child.review_skill_via is None
+    assert child.skill_hub is parent.skill_hub

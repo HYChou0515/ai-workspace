@@ -23,6 +23,7 @@ from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
 from workspace_app.apps.skills import WORKSPACE_SKILL_DIR, install_hub_skill
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 
 OK = SkillHubReview(verdict="ok", notes=[], model="gpt-4o")
@@ -370,6 +371,53 @@ async def test_a_published_fork_tracks_the_fork_not_the_root():
         type=SkillOrigin,
     )
     assert origin.entry == bobs
+
+
+async def test_a_copy_of_an_entry_the_publisher_may_no_longer_read_publishes_as_a_root():
+    """Review round 1: the fork decision read the upstream with `hub.get`, so
+    a copy of an entry its owner had taken PRIVATE still published as a fork —
+    and the reply named that owner. Q10 again: unreadable is gone, and gone
+    publishes as a root."""
+    hub = _hub()
+    bobs = await hub.publish(
+        owner="bob",
+        name="triage-reflow",
+        description="d",
+        source_item="inv-bob",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md()},
+        referenced_tools=[],
+        review=OK,
+    )
+    hub.set_permission(bobs, Permission(visibility="private"))
+    ctx = _ctx(hub, _Reviewer())
+    await _put(ctx, "triage-reflow", {"SKILL.md": _md(), ORIGIN_FILE: _origin(bobs)})
+
+    out = await publish_skill_impl(ctx, "triage-reflow")
+
+    entry = hub.get(hub.find("alice", "triage-reflow") or "")
+    assert entry is not None and entry.forked_from == ""
+    assert "bob" not in out and "fork" not in out
+
+
+async def test_the_reply_says_the_visibility_the_entry_actually_has():
+    """Review round 1: "It is public by default." was unconditional, so a
+    re-publish of an entry its owner had UNPUBLISHED told the agent — and the
+    user — it was public. The sentence is read back from the row."""
+    hub = _hub()
+    ctx = _ctx(hub, _Reviewer())
+    await _put(ctx, "s", {"SKILL.md": _md("s")})
+    first = await publish_skill_impl(ctx, "s")
+    assert "public" in first
+    mine = hub.find("alice", "s")
+    assert mine is not None
+    hub.set_permission(mine, Permission(visibility="private"))
+
+    again = await publish_skill_impl(ctx, "s")
+
+    assert "public by default" not in again
+    assert "unpublished" in again or "private" in again
 
 
 # ── refusals that name what to do ────────────────────────────────────────────

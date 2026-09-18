@@ -213,6 +213,21 @@ async def test_the_detail_computes_the_tool_diff_for_the_app_asked_about(harness
     assert plain["missing_tools"] == []
 
 
+async def test_an_unknown_app_in_the_diff_query_is_nothing_missing_not_a_500(harness: Harness):
+    """Review round 1: `missing_tools_for` caught `KeyError`, but an unknown
+    slug raises `FileNotFoundError` from the manifest loader — a 500 any
+    signed-in user could trigger from a query string."""
+    hub = _hub(harness)
+    entry = await _entry(hub, "alice", "triage", tools=["exec"])
+
+    for app in ("no-such-app", "../pm", ""):
+        listed = harness.client.get("/skill-hub/entries", params={"app": app})
+        detail = harness.client.get(f"/skill-hub/entries/{entry}", params={"app": app})
+        assert listed.status_code == 200 and detail.status_code == 200, app
+        assert listed.json()["entries"][0]["missing_tools"] == []
+        assert detail.json()["missing_tools"] == []
+
+
 async def test_an_entry_the_viewer_cannot_read_is_404_like_one_that_never_existed(harness: Harness):
     hub = _hub(harness)
     hidden = await _entry(hub, "alice", "hidden")

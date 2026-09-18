@@ -406,3 +406,29 @@ async def test_delete_purges_the_version_the_row_points_at(
     await store.delete(entry)
 
     assert await store._blobs.ls(row.blobs) == []  # noqa: SLF001
+
+
+# ── the one search-match rule ────────────────────────────────────────────────
+
+
+def test_matches_query_is_the_rule_both_the_page_and_the_tool_use() -> None:
+    """Review round 1: the page's list and the search tool each carried a
+    copy of the match. One function, and the two callers import it — a test
+    that they agree is then a test that both call it (see the tool test that
+    searches `Reflow` and the route test that searches `REFLOW`)."""
+    from workspace_app.apps.skill_hub import matches_query
+
+    e = SkillHubEntry(
+        owner="a",
+        name="reflow-triage",
+        description="Find Solder defects.",
+        source_item="i",
+        source_app="rca",
+        source_profile="p",
+        origin=SkillOrigin(source="hub", files={}),
+        review=OK,
+    )
+    assert matches_query(e, "") is True
+    assert matches_query(e, "  REFLOW ") is True
+    assert matches_query(e, "solder") is True
+    assert matches_query(e, "deck") is False

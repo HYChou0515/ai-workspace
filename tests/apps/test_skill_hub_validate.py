@@ -85,6 +85,19 @@ def test_a_reference_the_body_names_must_ship() -> None:
     assert "references/glossary.md" not in problems[0], "the one that ships is not a problem"
 
 
+def test_a_reference_at_the_end_of_a_sentence_is_the_file_not_the_file_plus_a_dot() -> None:
+    """Review round 1: `First read references/glossary.md. Then …` was refused
+    for not shipping `references/glossary.md.` — the full stop rode along."""
+    raw = _md(body="First read references/glossary.md. Then continue.\n")
+    assert (
+        validate_skill_payload("triage-reflow", {"SKILL.md": raw, "references/glossary.md": b"ok"})
+        == []
+    )
+    # …and the missing-file report names the file, not the file plus a dot.
+    problems = validate_skill_payload("triage-reflow", {"SKILL.md": raw})
+    assert len(problems) == 1 and "`references/glossary.md`" in problems[0]
+
+
 def test_a_script_that_does_not_parse_is_a_problem() -> None:
     """`scripts/*.py` run through `exec` in the workspace. One that cannot even
     parse fails on first use — cheap to catch here, expensive to find later."""
@@ -224,3 +237,32 @@ async def test_the_validator_is_stricter_than_the_loader_about_description_on_pu
     assert validate_skill_payload("triage-reflow", payload) != [], (
         "the validator no longer refuses it"
     )
+
+
+# ── the install告知 against an App's ceiling ─────────────────────────────────
+
+
+def test_a_tool_the_platform_grants_every_app_implicitly_is_never_missing() -> None:
+    """Review round 1: `read_skill` is in the registry (so the scanner finds
+    it) but in no App's `agent.tools` — `build_tools` grants it on its own —
+    so every skill that said "load it with read_skill" was flagged as needing
+    a tool the App lacked. The ceiling is the manifest PLUS what the platform
+    adds without being asked."""
+    from workspace_app.apps.skill_hub import missing_tools_for
+
+    assert missing_tools_for(["exec", "read_skill", "query_entity"], "rca") == ["query_entity"]
+
+
+def test_the_implicit_grant_list_matches_what_build_tools_adds_on_its_own() -> None:
+    """The constant beside `missing_tools_for` names the tools `build_tools`
+    grants without an App declaring them. Pinned against the builder itself:
+    build the tools for a turn whose `allowed_tools` is EMPTY, and whatever
+    comes back is the implicit set — a new implicit grant that is not in the
+    constant would be reported as "this App lacks it" on every skill hub row."""
+    from workspace_app.agent.tools import build_tools
+    from workspace_app.apps.skill_hub import IMPLICITLY_GRANTED_TOOLS
+
+    implicit = {
+        t.name for t in build_tools([], app_slug="rca", profile="default", skills_reachable=True)
+    }
+    assert implicit == IMPLICITLY_GRANTED_TOOLS

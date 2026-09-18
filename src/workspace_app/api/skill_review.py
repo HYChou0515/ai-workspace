@@ -137,14 +137,14 @@ def parse_review(answer: str, *, model: str) -> SkillHubReview:
     as one note rather than dropped — the reviewer did review, it just did not
     answer in the shape it was asked for, and publishing that as `ok` would
     turn a format slip into a clean bill."""
-    obj = next(
-        (
-            o
-            for o in map(try_object, balanced_objects(answer))
-            if o is not None and ("notes" in o or "verdict" in o)
-        ),
-        None,
-    )
+    shaped = [
+        o
+        for o in map(try_object, balanced_objects(answer))
+        if o is not None and ("notes" in o or "verdict" in o)
+    ]
+    # The LAST review-shaped object: a model that drafts and then finalises
+    # ("Draft: {…} Final: {…}") means the final one.
+    obj = shaped[-1] if shaped else None
     if obj is None:
         return SkillHubReview(verdict="notes", notes=[answer.strip()], model=model)
     raw = obj.get("notes")
@@ -153,6 +153,13 @@ def parse_review(answer: str, *, model: str) -> SkillHubReview:
         if isinstance(raw, list)
         else []
     )
+    # The object says there ARE notes but none came through as strings — a
+    # list of dicts, one bare string, or prose beside `{"verdict":"notes"}`.
+    # A format slip must not read as a clean bill: the whole reply is the
+    # note, as it is when no object was found at all. An explicit EMPTY list
+    # is not a slip — it is "notes: none", and the notes decide.
+    if not notes and obj.get("verdict") == "notes" and raw != []:
+        notes = [answer.strip()]
     return SkillHubReview(verdict="notes" if notes else "ok", notes=notes, model=model)
 
 
