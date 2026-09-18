@@ -62,6 +62,12 @@ class ServerSettings:
     # plus teardown — the k8s `terminationGracePeriodSeconds` must exceed it
     # (`kubernetes/base/deployment.yaml` sets 60 against the default 20).
     shutdown_budget_sec: float = 20.0
+    # plan-graceful-shutdown P3: how often a pod looks for chat turns whose pod
+    # is gone (a rollout, a scale-down, a crash) and re-runs them itself, so the
+    # reply arrives instead of the thread ending on the question. One pod per
+    # window fleet-wide; the table it reads is bounded by turns in flight.
+    # 0 ⇒ off (a single-pod deploy has no peer, though its restarted self is one).
+    turn_reclaim_interval_sec: float = 5.0
     # #43 reconnect replay: how many recent broadcast events each per-item session
     # keeps in an in-pod ring so a same-pod reconnect can replay the gap (`?since=`).
     # 0 disables replay (a reconnect degrades to store re-hydrate). ~200KB/session

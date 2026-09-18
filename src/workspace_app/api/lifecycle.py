@@ -37,6 +37,7 @@ from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
+from .turn_reclaim import RECLAIM_TICK_S
 
 if TYPE_CHECKING:
     from ..monitor import IMonitor
@@ -100,6 +101,9 @@ def build_lifespan(
     notification_delivery_interval: timedelta = _NOTIFY_DELIVERY_INTERVAL,
     offhours: OffHoursSettings | None = None,
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
+    # plan-graceful-shutdown P3: how often a pod looks for turns whose pod is
+    # gone. None ⇒ no sweeper (a single-pod deploy has no peer to take over).
+    turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
     warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -226,6 +230,39 @@ def build_lifespan(
                 except Exception:
                     logger.exception("goal offhours sweep failed; continuing")
                 await asyncio.sleep(offhours.poll_seconds)
+        except asyncio.CancelledError:
+            return
+
+    async def turn_reclaim_sweeper(app: FastAPI) -> None:
+        """plan-graceful-shutdown P3: take over the turns of a pod that is gone.
+
+        A lease-taking producer in the #804 sense: each window ONE pod lists
+        the open turn claims (bounded by turns in flight, not by content) and
+        re-runs the orphaned ones on its own engine — the work it produces is a
+        turn, which only an API pod can run, so it stays here. Per-claim
+        resilient inside the tick; the whole tick guarded so it never wedges
+        the loop. Tick-first, so a pod that boots after a rollout picks up
+        what the old pods let go of without waiting a window."""
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+        from .turn_reclaim import ReclaimTick
+
+        assert turn_reclaim_interval is not None
+        interval_s = turn_reclaim_interval.total_seconds()
+        lease = ScanLease(SpecstarTriggerStore(spec), "turn-reclaim", interval_s=interval_s)
+        tick = ReclaimTick.of(app)
+
+        async def once() -> None:
+            if not await asyncio.to_thread(lease.claim):
+                return  # another pod looked this window
+            taken = await tick.run()
+            if taken:
+                logger.info("turn-reclaim: took over %d turn(s): %s", len(taken), taken)
+
+        try:
+            while True:
+                with contextlib.suppress(Exception):
+                    await once()
+                await asyncio.sleep(interval_s)
         except asyncio.CancelledError:
             return
 
@@ -556,6 +593,9 @@ def build_lifespan(
             bg.append(perf_trace.start_loop_watchdog())
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
+        if turn_reclaim_interval is not None:
+            bg.append(asyncio.create_task(turn_reclaim_sweeper(app)))  # plan-graceful-shutdown P3
+            logger.debug("lifespan: turn-reclaim sweeper enabled")
         # NOTE: the full capability round is deliberately NOT scheduled here
         # — boot stays connectivity-only (see the health step above); operators
         # trigger the heavy round on demand via the FE / POST /health/checks/run.

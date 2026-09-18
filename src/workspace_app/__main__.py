@@ -262,6 +262,11 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             # plan-graceful-shutdown P2: the turn-drain budget — the same number
             # uvicorn gets below as `timeout_graceful_shutdown`.
             shutdown_budget=timedelta(seconds=settings.server.shutdown_budget_sec),
+            turn_reclaim_interval=(
+                timedelta(seconds=settings.server.turn_reclaim_interval_sec)
+                if settings.server.turn_reclaim_interval_sec > 0
+                else None
+            ),
             runner=get_runner(settings),
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
             # plan-subagent-model-choice: the curated engines a run_agent call

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
@@ -131,8 +132,10 @@ from .turn_activity import (
     SpecstarTurnActivityStore,
     register_turn_activity,
 )
+from .turn_claims import SpecstarTurnClaimStore, register_turn_claims
 from .turn_context import TurnContextBuilder, resolve_item_tools
 from .turn_gate import TurnRefused, quota_body
+from .turn_reclaim import RECLAIM_TICK_S
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
@@ -512,6 +515,9 @@ def create_app(
     # number to `timeout_graceful_shutdown`). ONE number: the worst case is
     # 2 × this plus teardown, and the k8s grace period must exceed that.
     shutdown_budget: timedelta = timedelta(seconds=20),
+    # plan-graceful-shutdown P3: how often this pod looks for turns whose pod
+    # is gone and re-runs them. None ⇒ off.
+    turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
     gc_interval: timedelta | None = timedelta(hours=1),
     gc_t1: str = "1h",
     gc_t2: str = "24h",
@@ -1318,6 +1324,7 @@ def create_app(
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
         shutdown_budget=shutdown_budget,
+        turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
         # #WUI P15: fires the schedules pages declared. Built here so it shares
         # the one `spec`, the one index and the item-owner lookup the rest of the
@@ -1676,6 +1683,7 @@ def create_app(
     register_schedule_index(spec)  # #WUI P14 (page-declared schedules)
     register_trigger_store(spec)  # #429 P7 / #804 (the shared window ledger)
     register_stretch_claims(spec)  # #615 (off-hours stretch claims)
+    register_turn_claims(spec)  # plan-graceful-shutdown P3 (a turn's durable claim)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -1801,12 +1809,24 @@ def create_app(
     # engines share one store: the question ("is anyone working on this chat?")
     # is the same on either surface, and two stores would be two answers.
     turn_activity: ITurnActivityStore = SpecstarTurnActivityStore(spec)
+    # plan-graceful-shutdown P3: THIS pod's identity, shared by the engines'
+    # event-bus tagging and the turn claims' `owner`, so "who is running this
+    # turn" and "whose events are these" name the same pod.
+    pod_id = uuid.uuid4().hex
+    turn_claims = SpecstarTurnClaimStore(spec, pod_id=pod_id)
+    # For the reclaim tick (`turn_reclaim.ReclaimTick.of`): what it judges by
+    # and re-runs through, off `app.state` like every other lifespan sweeper.
+    app.state.spec = spec
+    app.state.turn_claims = turn_claims
+    app.state.turn_activity = turn_activity
+    app.state.turn_control = turn_control
     turn_engine = ChatTurnEngine(
         runner,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
         replay_buffer_events=turn_replay_buffer_events,
         event_bus=event_bus,
+        pod_id=pod_id,
         turn_activity=turn_activity,
     )
     # The sweeper feeds the durable per-person ledger with what the mirror just
@@ -2255,6 +2275,9 @@ def create_app(
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
         # a turn's tools see the item's env_vars alone, exactly as before.
         request_env=request_env,
+        # plan-graceful-shutdown P3: every send opens a durable claim a peer
+        # can re-run the turn from.
+        turn_claims=turn_claims,
     )
 
     # #615: the sweeper task (built in the lifespan, before this point) reaches

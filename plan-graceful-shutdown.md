@@ -110,6 +110,29 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
   engine path (it does — `ChatTurnEngine` is one class; verify the claim row is
   keyed the same way).
 
+- **P3 as built (deviations from the paragraph above, decided while reading
+  the code).** (1) The claim is its own row, one per turn — `_TurnClaim`,
+  keyed by engine key + the user message's `created_at` — not fields on
+  `_TurnActivity`: that heartbeat row's explicit "turn ended" write went
+  through three timing defects (its module docstring) and was removed; a
+  per-turn row is hard-deleted when its turn persists and swept by the
+  reclaimer when it lingers, and the heartbeat stays where it is. (2) The
+  claim carries the whole send recipe — investigation, conversation, author,
+  lane, the `_MessageBody` as JSON — because the persisted `Message` keeps only
+  content/author/answers; `apply_skills`, attached images and the retrieval
+  knobs would otherwise be lost and the re-run would answer a different
+  question. (3) Reclaim rule: `released` (a SIGTERM handover) ⇒ now; else the
+  key's heartbeat is stale AND the thread still ends with that user message ⇒
+  now; stale but answered ⇒ delete the claim. The taker CAS-claims `owner`,
+  advances the epoch, and re-runs through `ChatSendService.rerun` — `_send`
+  minus the append and minus the live `UserMessage` publish. (4) A handover
+  does NOT persist the partial reply and the cancel marker (that is Stop's
+  meaning); the peer's answer follows the question cleanly, and a
+  single-replica deploy's restarted pod takes back its own released claims.
+  So the phases are: **P3** claims + rerun + reclaim sweeper (the OOM path,
+  via staleness); **P4** SIGTERM handover (release + cancel without persist,
+  inside the drain budget); **P5** k8s / docs / ledger.
+
 ## 判準 (each one a probe through the real door)
 
 - P1: with a 0.5 s blocking describer, the loop-lag witness records < 50 ms lag
