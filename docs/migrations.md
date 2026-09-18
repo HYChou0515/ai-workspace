@@ -552,7 +552,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   （2026-09-09 的 48f09a55 起）；現在不會。另外四個協調 model 改在 `create_app` 無條件註冊——Postgres 上多兩個
   永遠空的 model（各三張表），無害。
 
-### 2026-09-18 · #811 WUI 總覽：`/wui` 列出 Deploy 過的頁面（`deployed-wui`） {#pr-811}
+### 2026-09-18 · d94f6b77 · #811 WUI 總覽：`/wui` 列出 Deploy 過的頁面（`deployed-wui`） {#pr-811}
 
 **設定** — 不動。沒有新旋鈕。
 

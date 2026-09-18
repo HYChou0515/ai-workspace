@@ -1142,7 +1142,7 @@ def test_the_mock_sandbox_says_the_uv_ceiling_is_dead(caplog):
     that cannot honour the number, and three documents then said every such
     entry point warns — `factories.py` ("called from every entry point that
     cannot honour the number"), `configs/config.example.yaml` ("logs a warning
-    at startup rather than pretending") and `docs/migrations.md` §5.5. `mock`
+    at startup rather than pretending") and `docs/migrations.md#pr-776`. `mock`
     kept no cache and said nothing.
 
     That is the same defect its own fix was for, one backend over — which is
