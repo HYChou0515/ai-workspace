@@ -19,9 +19,11 @@ const manifest = {
 vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items, isPending: false }),
   useAppManifest: () => manifest,
+  // The real AppSummary always carries icon + color (the manifest's); a double
+  // without them would let the rail crash on a field GlobalNav's tests supply.
   useApps: () => [
-    { slug: "rca", title: "RCA" },
-    { slug: "pm", title: "Product" },
+    { slug: "rca", title: "RCA", description: "", icon: "flame", color: "#F0502E" },
+    { slug: "pm", title: "Product", description: "", icon: "bug", color: "#2D6CC9" },
   ],
 }));
 const newChat = vi.fn();
@@ -99,6 +101,28 @@ describe("ChatListRail", () => {
     expect(hrefs).toEqual(
       expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/wui", "/help"]),
     );
+  });
+
+  it("draws every menu entry's icon, in both sections, as the global switcher does", () => {
+    // The data was shared; the look had drifted the same way — the switcher drew
+    // an icon per entry and the rail drew text only. Assert on EACH item, not a
+    // count: a count is satisfied by one section carrying the other's share.
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /platform menu/i }));
+
+    const menu = screen.getByRole("menu");
+    const entries = within(menu).getAllByRole("menuitem");
+    const apps = entries.filter((el) => el.getAttribute("href")?.startsWith("/a/"));
+    const destinations = entries.filter((el) => !el.getAttribute("href")?.startsWith("/a/"));
+    expect(apps.length).toBeGreaterThan(0);
+    expect(destinations.length).toBeGreaterThan(0);
+    for (const el of [...apps, ...destinations]) {
+      // A named icon is an <svg data-icon>; a shipped file icon is an <img>.
+      expect(el.querySelector("[data-icon], img"), el.textContent ?? "").not.toBeNull();
+    }
+    // The App's glyph is its own manifest icon, not a generic one.
+    expect(apps[0]).toHaveTextContent("RCA");
+    expect(apps[0]!.querySelector('[data-icon="flame"]')).not.toBeNull();
   });
 
   it("calls an item what the App calls it, not a chat (#pm)", () => {

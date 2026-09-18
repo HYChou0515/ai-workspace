@@ -122,6 +122,10 @@
   color: var(--text-paper-d);
 }
 .chat-rail__menu-item {
+  /* Glyph + label on one line — the same row the global switcher draws. */
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
   padding: var(--space-4) var(--space-8);
   border-radius: var(--radius-card);
   color: var(--text-paper);
