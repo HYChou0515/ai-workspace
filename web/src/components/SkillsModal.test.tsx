@@ -404,6 +404,44 @@ describe("SkillsModal — the skill hub", () => {
     expect(await screen.findByTestId("pick-e-fork")).toBeInTheDocument();
     expect(screen.queryByTestId("pick-missing-e-fork")).toBeNull();
   });
+  it("Publish is a deliberate exit, so it asks about unsaved picks first (#779)", async () => {
+    // Review round 1: Publish called the bare `onClose`, throwing away every
+    // tri-state pick in silence while Escape politely asked.
+    const props = renderModal();
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skill-author-skill-off"));
+    const offered: string[] = [];
+    const unsubscribe = subscribeAgentDraft("i1", (text) => offered.push(text));
+
+    fireEvent.click(screen.getByTestId("skill-publish-my-skill"));
+
+    // The sentence is in the box either way; the panel asks before it goes.
+    expect(offered).toHaveLength(1);
+    expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("dialog-action-discard"));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    unsubscribe();
+  });
+
+  it("offers Update and Reset only while the copy's upstream is live", async () => {
+    // Review round 1: Reset on a copy whose original was unpublished or
+    // deleted did nothing and then said "Updated to the shipped version".
+    const skills: ItemSkillState[] = [
+      { ...SKILLS[2], name: "gone", is_copy: true, upstream: "deleted", update_available: true },
+      { ...SKILLS[2], name: "hidden", is_copy: true, upstream: "unpublished" },
+      { ...SKILLS[2], name: "fine", is_copy: true, upstream: "live", update_available: true },
+    ];
+    renderModal({ client: fakeClient(skills) });
+
+    await screen.findByTestId("skill-row-fine");
+    expect(screen.getByTestId("skill-reset-fine")).toBeInTheDocument();
+    expect(screen.getByTestId("skill-refresh-fine")).toBeInTheDocument();
+    expect(screen.queryByTestId("skill-reset-gone")).toBeNull();
+    expect(screen.queryByTestId("skill-refresh-gone")).toBeNull();
+    expect(screen.queryByTestId("skill-reset-hidden")).toBeNull();
+  });
+
   it("says on the row when a copy's skill hub original was unpublished or deleted", async () => {
     const skills: ItemSkillState[] = [
       { ...SKILLS[2], name: "gone", is_copy: true, upstream: "deleted" },

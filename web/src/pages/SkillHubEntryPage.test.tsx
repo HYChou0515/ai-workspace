@@ -186,10 +186,11 @@ describe("SkillHubEntryPage", () => {
 
     const dialog = await screen.findByTestId("skill-hub-new-item");
     expect(dialog).toHaveTextContent(word("skillHub.edit.reason.closed"));
-    expect(within(dialog).getByRole("link", { name: word("skillHub.edit.newItem.go") })).toHaveAttribute(
-      "href",
-      "/a/rca/new",
-    );
+    // Review round 1: the profile the skill was written for rode along
+    // nowhere; the new item opened on the App's default profile.
+    expect(
+      within(dialog).getByRole("link", { name: word("skillHub.edit.newItem.go") }),
+    ).toHaveAttribute("href", "/a/rca/new?profile=default");
   });
 
   it("transfers to the person picked", async () => {
@@ -204,6 +205,10 @@ describe("SkillHubEntryPage", () => {
     expect(go).toBeEnabled();
     fireEvent.click(go);
     await waitFor(() => expect(c.transfer).toHaveBeenCalledWith("e-1", "bob"));
+    // Review round 1: after giving it away the page refetched an entry the
+    // old owner may no longer read, and landed on the error line with a
+    // Retry that could never succeed. It leaves for the list instead.
+    expect(await screen.findByText("LIST PAGE")).toBeInTheDocument();
   });
 
   it("says what a fork was forked from, including an original that went away", async () => {

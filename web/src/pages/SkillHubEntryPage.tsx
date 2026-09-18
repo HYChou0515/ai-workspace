@@ -244,6 +244,10 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
     onSuccess: () => {
       setTransferring(false);
       void refresh();
+      // Given away: the page would refetch an entry its old owner may no
+      // longer read (a private one) and land on the error line with a Retry
+      // that cannot succeed. The list is where they are now.
+      navigate("/skill-hub", { replace: true });
     },
     onError: failed,
   });
@@ -407,7 +411,13 @@ function NewItemDialog({ target, onClose }: { target: SkillEditTarget; onClose: 
         <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
           {t("skillHub.cancel")}
         </button>
-        <Link className="btn" data-variant="primary" to={`/a/${encodeURIComponent(target.app)}/new`}>
+        {/* The profile the skill was written for rides along (`?profile=`):
+            the new item opens on it rather than the App's default. */}
+        <Link
+          className="btn"
+          data-variant="primary"
+          to={`/a/${encodeURIComponent(target.app)}/new?profile=${encodeURIComponent(target.profile)}`}
+        >
           {t("skillHub.edit.newItem.go")}
         </Link>
       </ModalActions>

@@ -125,10 +125,13 @@ export function SkillsModal({
   // agent's `publish_skill` checks the folder, has it reviewed and reports in
   // the chat (the author: 「上傳必須在item內上傳 這樣才有辦法讓ai審核 而且有問題
   // 馬上可以在對話窗看到」). Offered, not sent, the WUI's idiom: what to say
-  // next is still theirs. The panel closes so the box is in front of them.
+  // next is still theirs. The panel closes so the box is in front of them —
+  // through the SAME exit as ✕ and Escape (#779): a deliberate close that
+  // holds unsaved picks asks first (the first version called `onClose`
+  // bare and threw them away in silence).
   const publish = (name: string) => {
     publishAgentDraft(itemId, t("skills.publishSentence", { name }));
-    onClose();
+    attemptClose();
   };
 
   const installed = async (name: string) => {
@@ -236,11 +239,22 @@ export function SkillsModal({
                 onDownload={
                   s.source === "workspace" || s.is_copy ? () => void download(s.name) : undefined
                 }
-                // Update only when there is something to bring; reset is always
-                // available — it is the way back from an edit gone wrong, and
-                // that need has nothing to do with upstream having moved.
-                onRefresh={s.update_available ? () => void refresh(s.name, false) : undefined}
-                onReset={s.is_copy ? () => void refresh(s.name, true) : undefined}
+                // Update only when there is something to bring; reset whenever
+                // there is an upstream to bring it FROM — it is the way back
+                // from an edit gone wrong, and that need has nothing to do
+                // with upstream having moved. Neither on a copy whose upstream
+                // is KNOWN to be gone (`unpublished` / `deleted`): the row says
+                // so instead, and a press there did nothing and then said
+                // "Updated". An absent `upstream` (an older API pod mid-
+                // rollout) keeps today's behaviour.
+                onRefresh={
+                  s.update_available && !upstreamGone(s)
+                    ? () => void refresh(s.name, false)
+                    : undefined
+                }
+                onReset={
+                  s.is_copy && !upstreamGone(s) ? () => void refresh(s.name, true) : undefined
+                }
                 // Only a skill whose files are HERE can be published: a
                 // hand-written one, or a copy installed from the skill hub
                 // (both read `source: workspace`). A package skill's files are
@@ -509,6 +523,12 @@ function SkillRow({
       </div>
     </div>
   );
+}
+
+/** Whether the copy's skill hub original is known to be gone (plan P5's two
+ * dead states). `undefined` — a server that does not say — is not gone. */
+function upstreamGone(s: ItemSkillState): boolean {
+  return s.upstream === "unpublished" || s.upstream === "deleted";
 }
 
 function overrideFromSkills(skills: ItemSkillState[]): Record<string, boolean> {

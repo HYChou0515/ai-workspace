@@ -15,7 +15,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type CSSProperties } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
@@ -53,6 +53,14 @@ function CapsLabel({ children }: { children: React.ReactNode }) {
 export function AppNewItem() {
   const { slug = "" } = useParams();
   const manifest = useAppManifest(slug);
+  // `?profile=<name>`: a caller that knows which profile the item should
+  // start on (the skill hub's "edit in a new item", plan-skill-hub P8)
+  // says so in the address. Honoured only when the App ships it; anything
+  // else falls back to the App's default, as before.
+  const [params] = useSearchParams();
+  const asked = params.get("profile");
+  const askedProfile =
+    asked && manifest?.profiles.some((p) => p.name === asked) ? asked : undefined;
   const navigate = useNavigate();
   const qc = useQueryClient();
   const me = useCurrentUser();
@@ -111,7 +119,7 @@ export function AppNewItem() {
             <ItemForm
               manifest={manifest}
               profiles={manifest.profiles}
-              defaultProfile={manifest.default_profile}
+              defaultProfile={askedProfile ?? manifest.default_profile}
               ownerId={me}
               formId={FORM_ID}
               hideFooter
