@@ -273,3 +273,70 @@ def test_a_chromium_that_fails_for_another_reason_is_not_dressed_up(monkeypatch,
     with pytest.raises(Exception, match="has been closed") as caught:
         record("<html></html>", VideoOptions(), tmp_path)
     assert not isinstance(caught.value, RendererUnavailable)
+
+
+def _peak_rss_of_ffmpeg_under(run) -> float:
+    """Run ``run()`` while sampling every ffmpeg process below this test
+    (``ps``, 0.2 s); the peak RSS in MB across them."""
+    import os
+    import threading
+    import time
+
+    me = os.getpid()
+    peak = 0.0
+    stop = False
+
+    def sample() -> None:
+        nonlocal peak
+        while not stop:
+            table = subprocess.run(
+                ["ps", "-eo", "pid=,ppid=,rss=,args="], capture_output=True, text=True
+            ).stdout
+            kids: dict[int, list[tuple[int, float, str]]] = {}
+            for ln in table.splitlines():
+                parts = ln.split(None, 3)
+                if len(parts) == 4:
+                    kids.setdefault(int(parts[1]), []).append(
+                        (int(parts[0]), int(parts[2]) / 1024, parts[3])
+                    )
+            todo = [me]
+            while todo:
+                for pid, rss, args in kids.get(todo.pop(), []):
+                    if "ffmpeg" in args:
+                        peak = max(peak, rss)
+                    todo.append(pid)
+            time.sleep(0.2)
+
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    try:
+        run()
+    finally:
+        stop = True
+        th.join()
+    return peak
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("fmt", "cap_mb"), [("gif", 1024), ("mp4", 512)])
+def test_encoding_a_1080p_clip_stays_within_the_measured_bound(tmp_path, fmt, cap_mb):
+    """Measured on the 41-second sample at 1080p: the single-pass gif
+    (`split → palettegen → paletteuse`) held every frame until the palette
+    was known — 4,546 MB — and libx264 at its default preset and thread
+    count took 1,329 MB. Now: mp4 273–320 MB (five runs); gif's second
+    pass 230–640 MB — bimodal, some runs fill a ~50-frame queue in the
+    first seconds and then hold, and a 120-second clip peaks no higher than
+    a 20-second one, so it is bounded, not growing. A worker pod's memory
+    limit is set from these, so they are pinned on a 20-second synthetic
+    1080p clip (the cost is per frame, not per picture)."""
+    src = tmp_path / "in.webm"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+         "-i", "testsrc=size=1920x1080:rate=25:duration=20",
+         "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", src],
+        check=True,
+    )  # fmt: skip
+
+    peak = _peak_rss_of_ffmpeg_under(lambda: encode(src, fmt, tmp_path / f"out.{fmt}"))
+
+    assert 0 < peak <= cap_mb, f"{fmt}: ffmpeg peaked at {peak:.0f} MB"

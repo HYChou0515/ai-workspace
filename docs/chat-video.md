@@ -136,3 +136,12 @@ zoom 是 CSS `transform`(推進 + 平移到輸入框),不是後製;UI 放大是 
 - 仿真的聊天視窗,像但不是像素級的真 app 畫面。
 - 不畫檔案樹、側欄、citation;`ask_user` 的選項畫成一般卡片(和 replay 模式一樣)。
 - 跑在沒有 CJK 字型的機器(某些 container)中文會是方塊——裝 `fonts-noto-cjk`。
+
+## 要多少資源(量的,41 秒的範例,1080p)
+
+- **時間**:錄影 = 影片時長(頁面即時播放、即時錄),mp4 轉檔 4–5 秒、gif 兩段共 14 秒。
+- **記憶體**(峰值 RSS):Chromium 約 170 MB、Playwright 的錄影 ffmpeg 約 150 MB;轉檔 **mp4 273–320 MB**、**gif 230–640 MB**
+  (gif 的第二段有時會在前幾秒填滿一個約 50 張 frame 的佇列然後持平;120 秒的片峰值不比 20 秒的高,所以是有界的、不隨片長長大)。
+  錄影和轉檔不同時發生,所以整個流程的峰值就是轉檔那一段。修之前:單段式 gif 4,546 MB、預設參數的 libx264 1,329 MB——
+  跑在 worker pod 上的話 memory limit 要照上面的數字給(`kubernetes/base/workers.yaml`)。
+- **輸出大小**:720p 41 秒 mp4 1.8 MB、gif 18 MB;1080p mp4 2.5 MB、gif 36 MB。

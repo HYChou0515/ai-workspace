@@ -19,9 +19,12 @@
 
 - 720p mp4+gif:總共 **48 s**,其中**錄影 = 影片時長 41 s**(頁面即時播放、即時錄),mp4 轉檔 2–3 s、gif 5 s;1080p mp4:57 s。
   ⇒ 最久的一段是錄影,長度 = 影片時長,上限就是 `max_seconds`。
-- 峰值記憶體:Chromium(headless_shell)**154 MB**、node 92 MB、python 107 MB;**ffmpeg 720p gif 1,924 MB、1080p mp4 4,290 MB**——
-  h264 轉檔不該吃這麼多,`render.encode` 的指令有問題(候選:Playwright 的 webm 是變動 frame rate,ffmpeg 預設補幀把整段撐在記憶體;
-  gif 的 `split → palettegen` 也會把全部 frame 留住)。**P1 先修、再量,pod 的 memory limit 以量到的為準。**
+- 峰值記憶體:Chromium(headless_shell)**154–172 MB**、Playwright 錄影用的 ffmpeg 147 MB、node 92 MB、python 107 MB;轉檔的 ffmpeg
+  才是大戶——**1080p 單段式 gif 4,546 MB、預設參數 libx264 mp4 1,329 MB**(第一次量寫成「1080p mp4 4,290 MB」是錯的:那次量測腳本
+  同時出了 gif 和 mp4,4 GB 的是 gif)。原因:`split → palettegen → paletteuse` 要留住全部 frame 到調色盤算出來;x264 預設 preset +
+  執行緒數 = 核心數。**P1 修完再量**:mp4(`veryfast`、解碼與編碼各 2 執行緒)273–320 MB;gif 兩段式 230–640 MB,雙峰——有時前幾秒
+  填滿約 50 張 frame 的佇列後持平,120 秒合成片峰值(273)不比 20 秒(185)高 ⇒ 有界、不隨片長長大;執行緒旋鈕和單一輸入(`movie=`)
+  都壓不掉雙峰,time-box 到此,規格照量到的邊界寫:integration 測試釘 gif ≤ 1024 MB、mp4 ≤ 512 MB(舊碼 2,119 / 1,260 紅)。
 - 檔案大小:720p 41 s mp4 **1.8 MB**、gif **18.2 MB**。
 - 依賴大小:Chromium 380–550 MB、`fonts-noto-cjk` 87 MB、ffmpeg + libav 約 20 MB(apt 完整閉包更多)、`playwright` wheel 幾十 MB
   ⇒ image 約 **+0.7–1 GB**。
@@ -158,10 +161,11 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 
 ## Phases(每個 = 一個 commit,TDD;每個修法先有會紅的測試)
 
-### P1 — ffmpeg 記憶體
-- 量:`encode` 對 41 s 720p 的 webm,mp4 / gif 各自的峰值 RSS(現在 4.3 GB / 1.9 GB)。
-- 修:mp4 加 `-vsync cfr -r <fps>`(或 `-fps_mode cfr`)、`-preset veryfast`、`-threads 2`;gif 改**兩段式**(先 `palettegen` 出 png 調色盤,再 `paletteuse`),不用 `split`。目標:1080p mp4 ≤ 500 MB。
-- 釘:integration 測試量 ffmpeg 子行程峰值 RSS(`ps` 取樣)≤ 上限;數字寫進 `docs/chat-video.md`。
+### P1 — ffmpeg 記憶體 ✅
+- 量:`encode` 對 41 s 1080p 的 webm,gif 4,546 / mp4 1,329 MB(見〈量到的事實〉;`-vsync cfr` 沒用,時間軸本來就規則)。
+- 修:gif **兩段式**(`palettegen` 出 png,再 `movie=` 載入 `paletteuse`);mp4 `-preset veryfast`;解碼與編碼各 `-threads 2`。
+- 釘:`test_encoding_a_1080p_clip_stays_within_the_measured_bound`(integration,`ps` 取樣 ffmpeg 子行程)gif ≤ 1024、mp4 ≤ 512 MB;
+  數字寫進 `docs/chat-video.md`〈要多少資源〉。
 
 ### P2 — 文字匯出:Markdown + 範圍
 - `kb/chat_export.py`:`slice_messages(messages, start, end)`(驗證 → `ValueError` 一句話)、`build_chat_markdown(title, messages)`;`chat_export_filename` 加 `suffix` 與範圍後綴。

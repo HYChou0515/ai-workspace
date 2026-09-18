@@ -111,7 +111,19 @@ def record(html: str, options: VideoOptions, workdir: Path, *, expected_ms: int 
 def encode(src: Path, fmt: Format, out: Path) -> Path:
     """Re-encode the recording. ``gif`` builds a palette first (the difference
     between a GIF with banding and one without); ``mp4`` is H.264 yuv420p so
-    slide decks accept it; ``webm`` is a straight copy."""
+    slide decks accept it; ``webm`` is a straight copy.
+
+    Memory is bounded per frame, not per clip — a worker pod's limit is set
+    from it (measured on the 41-second sample at 1080p). The gif is TWO
+    passes (a palette PNG, then the frames through it): the single-pass
+    ``split → palettegen → paletteuse`` graph holds every frame until the
+    palette is known — 4,546 MB; two passes peak at 230–640 MB (bimodal:
+    some runs fill a ~50-frame queue early and hold there; a 120-second
+    clip peaks no higher), same bytes out. The mp4 asks libx264 for
+    ``veryfast`` on two threads: the default preset and thread count took
+    1,329 MB, this 273–320 MB and a second longer. The decoder is held to
+    two threads as well (``-threads 2`` before ``-i``): VP8 frame-threading
+    otherwise keeps as many 8 MB frames in flight as there are cores."""
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise RendererUnavailable("encoding needs ffmpeg on PATH (apt install ffmpeg)")
@@ -119,19 +131,26 @@ def encode(src: Path, fmt: Format, out: Path) -> Path:
         shutil.copyfile(src, out)
         return out
     if fmt == "gif":
-        filters = (
-            "fps=12,split[s0][s1];[s0]palettegen=max_colors=200[p];[s1][p]paletteuse=dither=bayer"
-        )
-        args = [ffmpeg, "-v", "error", "-y", "-i", str(src), "-vf", filters, str(out)]
+        palette = out.with_name(out.name + ".palette.png")
+        passes = [
+            [ffmpeg, "-v", "error", "-y", "-i", str(src),
+             "-vf", "fps=12,palettegen=max_colors=200", str(palette)],
+            [ffmpeg, "-v", "error", "-y", "-threads", "2", "-i", str(src),
+             "-vf", f"movie={palette}[p];[in]fps=12[x];[x][p]paletteuse=dither=bayer", str(out)],
+        ]  # fmt: skip
     elif fmt == "mp4":
-        args = [
-            ffmpeg, "-v", "error", "-y", "-i", str(src),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out),
+        passes = [
+            [ffmpeg, "-v", "error", "-y", "-threads", "2", "-i", str(src),
+             "-c:v", "libx264", "-preset", "veryfast", "-threads", "2",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)],
         ]  # fmt: skip
     else:
         raise ValueError(f"unknown format {fmt!r} (gif, mp4 or webm)")
     try:
-        subprocess.run(args, check=True, capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S)
+        for args in passes:
+            subprocess.run(
+                args, check=True, capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S
+            )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "").strip().splitlines()[-3:]
         raise RuntimeError(f"ffmpeg failed encoding {fmt}: " + " | ".join(tail)) from exc
@@ -139,4 +158,7 @@ def encode(src: Path, fmt: Format, out: Path) -> Path:
         raise RuntimeError(
             f"ffmpeg did not finish encoding {fmt} within {_ENCODE_TIMEOUT_S}s"
         ) from exc
+    finally:
+        if fmt == "gif":
+            out.with_name(out.name + ".palette.png").unlink(missing_ok=True)
     return out
