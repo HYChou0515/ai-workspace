@@ -16,11 +16,11 @@ import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
 import { useApps } from "../hooks/useResources";
-import { AppIcon } from "./AppIcon";
 import { GlobalSettings } from "./GlobalSettings";
 import { HealthDot } from "./HealthDot";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
+import { NavGlyph } from "./NavGlyph";
 import { Popover } from "./Popover";
 
 /** A destination is "current" when the path is it or nested under it. */
@@ -62,18 +62,7 @@ function MenuLink({
 function FixedLink({ to, icon, label, pathname }: { to: string; icon: IconName; label: string; pathname: string }) {
   return (
     <MenuLink to={to} active={isActive(pathname, to)}>
-      <span
-        style={{
-          width: 22,
-          height: 22,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-        }}
-      >
-        <Icon name={icon} size={16} color="var(--text-paper-d)" />
-      </span>
+      <NavGlyph icon={icon} />
       {label}
     </MenuLink>
   );
@@ -119,7 +108,7 @@ function Switcher() {
         <div onClick={close} style={{ padding: "6px 0" }}>
           {apps.map((app) => (
             <MenuLink key={app.slug} to={`/a/${app.slug}`} active={isActive(pathname, `/a/${app.slug}`)}>
-              <AppIcon icon={app.icon} slug={app.slug} color={app.color} size={22} />
+              <NavGlyph app={app} />
               {app.title}
             </MenuLink>
           ))}
