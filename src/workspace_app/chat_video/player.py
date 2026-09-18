@@ -73,30 +73,54 @@ def render_markdown(text: str, *, inlined: Mapping[str, str] = _NO_INLINED) -> s
     return md.render(text, {"inlined": inlined})
 
 
+NOT_HANDED, NOT_AN_IMAGE, OVER_BUDGET = (
+    "no bytes were handed over",
+    "not an image the page draws",
+    "over the page's image budget",
+)
+
+
 def inline_assets(
     paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
 ) -> dict[str, str]:
     """The page's ASSETS table: path → ``data:`` URI, for the images we will
-    inline, each ONCE however many times it is shown. Twenty `show_file`s of
-    one chart used to carry twenty copies (a 107 MB page).
+    inline, each path ONCE however many times it is shown. Twenty
+    `show_file`s of one chart used to carry twenty copies (a 107 MB page).
 
     A file is inlined when the caller handed over its bytes, they are a
     picture (declared mime when there is one, else sniffed), it fits
-    ``max_asset_bytes``, and the page's total budget
-    (``max_assets_total_bytes``) is not yet spent — in reading order, so the
-    pictures a viewer sees first are the ones kept."""
-    out: dict[str, str] = {}
+    ``max_asset_bytes``, and it fits what is left of the page's total budget
+    (``max_assets_total_bytes``, counted in raw bytes; base64 makes the page
+    a third larger). First-fit in reading order: a file that does not fit
+    the remainder is a card, and a later, smaller one that does fit is
+    still a picture."""
+    return {path: uri for path, (uri, _why) in decide_assets(paths, assets, options).items() if uri}
+
+
+def decide_assets(
+    paths: list[tuple[str, str]], assets: Assets, options: VideoOptions
+) -> dict[str, tuple[str, str]]:
+    """Per distinct path: ``(data URI, "")`` when it will be drawn, else
+    ``("", why)`` — the page's own decision, which is what the CLI's note
+    reports. Reporting from "what was read" alone missed an SVG chart that
+    was read, not drawn, and not mentioned."""
+    out: dict[str, tuple[str, str]] = {}
     budget = options.max_assets_total_bytes
     for path, mime in paths:
         if path in out:
             continue
         data = assets.get(path)
-        if data is None or len(data) > options.max_asset_bytes or len(data) > budget:
+        if data is None:
+            out[path] = ("", NOT_HANDED)
             continue
         mime = mime or _sniff_image(data)
         if not mime.startswith("image/"):
+            out[path] = ("", NOT_AN_IMAGE)
             continue
-        out[path] = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+        if len(data) > options.max_asset_bytes or len(data) > budget:
+            out[path] = ("", OVER_BUDGET)
+            continue
+        out[path] = (f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}", "")
         budget -= len(data)
     return out
 
@@ -172,7 +196,7 @@ def _css_number(value: float) -> str:
 def render_player_html(
     timeline: Timeline, options: VideoOptions, *, assets: Assets = _NO_ASSETS
 ) -> str:
-    inlined = inline_assets(_wanted(timeline), assets, options)
+    inlined = inline_assets(timeline.wanted_files(), assets, options)
     payload = {
         "title": timeline.title,
         "steps": _steps_for_js(timeline, options, inlined),
@@ -189,15 +213,3 @@ def render_player_html(
         .replace("/*PACING*/", _embed_json(PACING))
         .replace("/*ASSETS*/", _embed_json(inlined))
     )
-
-
-def _wanted(timeline: Timeline) -> list[tuple[str, str]]:
-    """Every path the page may draw, in reading order, with the declared mime
-    where there is one — the same walk as ``Timeline.referenced_paths``."""
-    out: list[tuple[str, str]] = []
-    for step in timeline.steps:
-        if isinstance(step, ToolStep):
-            out.extend((f.path, f.mime) for f in step.files)
-        elif isinstance(step, StreamStep) and not step.reasoning:
-            out.extend((p, "") for p in md.image_paths(step.text))
-    return out

@@ -277,3 +277,49 @@ def test_the_total_of_inlined_bytes_is_capped_in_reading_order():
     page = _page(steps, assets=assets, max_assets_total_bytes=len(_PNG + bytes(100)) * 2)
 
     assert list(_assets(page)) == ["/0.png", "/1.png"]
+
+
+def test_the_budget_is_first_fit_a_big_file_is_skipped_and_a_later_small_one_kept():
+    """ "Past the budget, cards" is first-fit: a file that does not fit what is
+    left is a card, and a later, smaller one that does fit is still a
+    picture. Said so, so nobody reads it as a prefix."""
+    small, big = _PNG, _PNG + bytes(1000)
+    page = _page(
+        [
+            _shown("/a.png", "image/png"),
+            _shown("/big.png", "image/png"),
+            _shown("/c.png", "image/png"),
+        ],
+        assets={"/a.png": small, "/big.png": big, "/c.png": small},
+        max_assets_total_bytes=len(small) * 2 + 10,
+    )
+
+    assert list(_assets(page)) == ["/a.png", "/c.png"]
+
+
+def test_the_same_file_under_three_spellings_is_one_entry():
+    """`show_file` declares `/plots/a.png`; the answer writes `./plots/a.png`
+    and `plots//a.png`. One file, one table entry, one copy of the bytes —
+    with the bytes keyed the way the CLI (and a job) keys them: by the
+    timeline's own list. Keyed by hand, un-normalised spellings would be alt
+    text and the copy count would look fine."""
+    options = VideoOptions()
+    tl = build_timeline(
+        title="t",
+        messages=[
+            _shown("/plots/a.png", "image/png"),
+            {
+                "role": "assistant",
+                "author": "AI",
+                "content": "![x](./plots/a.png) ![y](plots//a.png)",
+            },
+        ],
+        options=options,
+    )
+
+    page = render_player_html(tl, options, assets={p: _PNG for p in tl.referenced_paths()})
+
+    assert list(_assets(page)) == ["/plots/a.png"]
+    assert page.count("iVBORw0KGgo") == 1
+    answer = _embedded(page)["steps"][1]["html"]
+    assert answer.count('<img class="shown" data-asset="/plots/a.png"') == 2

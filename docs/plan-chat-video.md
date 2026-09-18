@@ -160,6 +160,26 @@ src/workspace_app/chat_video/
     RIFF 一律當 webp(WAV 也是 RIFF);ms 類 option 沒上限(2³¹ 溢位變立即逾時);假 playwright 的 `video.path()` 在
     `context.close()` 前就存在(真的不會);`test_service` 又多一個 `or True` 空斷言;`del d["args"]` 沒有守衛。全部修。
   - 沒修、記下:三樣工具都缺時要三次來回才問完(每次一句話,沒有白錄);`chat_width > width` 由 CSS `min()` 兜住。
+- **第三輪 review(只看 P8 的 diff)抓到的,P9 修掉——沒有 HIGH,全是小修,沒換機制:**
+  - 一個真缺陷:`![![y](q.png)](p.png)`(圖的 alt 裡再放一張圖)——markdown-it 會把 alt 也解析成 token,timeline 的
+    walk 走進去把 `q.png` 列進要讀的清單,但頁面把 alt 壓平成文字、永遠不畫它。就是第二輪那一類(讀了不畫)剩下的一個
+    形狀。修法:走到 image token 就 `continue`,不進 alt。parity case 加 4 個(18 個),砍掉 `continue` 恰好紅那兩條。
+  - parity 測試的 docstring 說「以頁面為 oracle」,但頁面只能被餵 timeline 列出的路徑,所以它只抓得到「列太多」,抓不到
+    「列太少」——那半邊靠的是手寫的 `EXPECTED` 規格。docstring 改成說實話:兩個守衛各守一個方向。
+  - CLI 的「哪個路徑沒畫」只算「`--files` 沒讀到」一種;讀到了但不是圖(SVG 圖表)、讀到了但超出總預算,都靜默。
+    改成從頁面自己的判斷(`decide_assets`,三個理由)來報——判準裝在值被算出的地方,CLI 只轉述。
+  - `_wanted()`(player)是 `Timeline.referenced_paths()` 的手抄雙胞胎。收成 `Timeline.wanted_files()` 一次 walk,
+    `referenced_paths` 是它的去重視圖、頁面的 ASSETS 表也從它來。
+  - 路徑沒正規化:`plots/a.png`、`./plots/a.png`、`plots//a.png` 是三個 key ⇒ 讀三次、嵌三份。`abs_path` 改 `posixpath.normpath`。
+  - 「超出預算變卡片」的實際行為是 first-fit 不是前綴(塞不下的跳過、後面小的照嵌);而且預算算原始 bytes,base64 後頁面
+    約大三分之一。文件與 docstring 照實寫,加一條釘住 first-fit 的測試。
+  - 3.12 的 `Path.resolve()` 撞到 symlink loop 丟 `RuntimeError`,不是 `OSError` → traceback。接住。
+  - `[shown-files]` 後面 10 萬層 `[` → `RecursionError` traceback;前端是 `SyntaxError` = 沒有宣告。接住,同一句意思。
+  - `type_ms` / `stream_ms` 的上限沒被測試釘住;`speed` 只有 `> 0`,`0.001` 會讓每個延遲放大千倍、壓縮救不回來。
+    釘住;`speed` 改 0.1–100。timer 溢位那句「立即觸發」只對一半(也可能是幾週後),改寫。
+  - 測試 95 → 125 條(含 2 條 integration;`pytest --collect-only` 數的):parity 14 → 36(18 個 case × 兩個方向)、
+    options +4、player +2、CLI +2、timeline 同數(一條改名加深)。每個修法一個突變體,十個都恰好紅在對應的測試;
+    對照組(砍掉 tool files 的 walk)紅 5。
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。
   加了 `assets: Mapping[path, bytes]` 接縫(CLI `--files DIR` 讀;未來 job 用 `Timeline.referenced_paths()` 先撈再進

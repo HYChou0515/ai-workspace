@@ -136,7 +136,7 @@ def shown_files_in(result: str) -> tuple[str, list[ShownFile]]:
         return result, []
     try:
         parsed = json.loads(declaration[len(SHOWN_FILES_MARKER) :])
-    except ValueError:
+    except (ValueError, RecursionError):  # not JSON; or nested past the parser
         return body, []
     raw = parsed.get(SHOWN_FILES_KEY) if isinstance(parsed, dict) else None
     files: list[ShownFile] = []
@@ -171,25 +171,30 @@ class Timeline(msgspec.Struct):
     title: str
     steps: list[Step]
 
-    def referenced_paths(self) -> list[str]:
-        """Every workspace path the page will want bytes for, absolute, in
-        order, once: files tools declared, and ``![](path)`` images in
-        answers — the latter through the same markdown parse the page draws
-        with (``markdown.image_paths``), so this list and the pictures drawn
-        cannot disagree. Not a URL (the page fetches nothing), not a link.
-        This is the list a job prefetches before the render goes to a
-        thread."""
-        seen: list[str] = []
+    def wanted_files(self) -> list[tuple[str, str]]:
+        """Every workspace file the page may draw, in reading order, with the
+        declared mime where a tool declared one (``""`` for an answer's
+        ``![]()``, whose bytes are sniffed). Files tools declared, and images
+        in answers through the same markdown parse the page draws with
+        (``markdown.image_paths``). Not a URL (the page fetches nothing), not
+        a link. The ONE walk: ``referenced_paths`` and the page's asset table
+        are both views of it."""
+        out: list[tuple[str, str]] = []
         for step in self.steps:
             if isinstance(step, ToolStep):
-                paths = [f.path for f in step.files]
+                out.extend((f.path, f.mime) for f in step.files)
             elif isinstance(step, StreamStep) and not step.reasoning:
-                paths = md.image_paths(step.text)
-            else:
-                continue
-            for p in paths:
-                if p not in seen:
-                    seen.append(p)
+                out.extend((p, "") for p in md.image_paths(step.text))
+        return out
+
+    def referenced_paths(self) -> list[str]:
+        """The paths of ``wanted_files``, once each — the list a job
+        prefetches before the render goes to a thread, and the CLI reads
+        from ``--files``."""
+        seen: list[str] = []
+        for path, _mime in self.wanted_files():
+            if path not in seen:
+                seen.append(path)
         return seen
 
     estimated_ms: int

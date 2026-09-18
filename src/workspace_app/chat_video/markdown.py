@@ -14,6 +14,7 @@ handed over — see ``player._image``.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from typing import Any
 from urllib.parse import unquote
@@ -40,7 +41,10 @@ def is_url(ref: str) -> bool:
 
 
 def abs_path(path: str) -> str:
-    return path if path.startswith("/") else "/" + path
+    """The one spelling of a workspace path: absolute and normalised, so
+    `plots/a.png`, `./plots/a.png` and `plots//a.png` are one key — one
+    read, one table entry, one copy of the bytes."""
+    return posixpath.normpath("/" + path.lstrip("/"))
 
 
 def image_path(token: Token) -> str | None:
@@ -56,8 +60,10 @@ def image_path(token: Token) -> str | None:
 
 def image_paths(text: str) -> list[str]:
     """Every workspace image ``text`` refers to, in reading order, once each
-    — through the same parse the page renders with, so this list and the
-    pictures the page draws cannot drift apart."""
+    — through the same parse the page renders with, and skipping what the
+    page flattens (an image inside an image's alt), so this list and the
+    pictures the page draws come from one reading. The parity tests hold
+    the two together; a new markdown construct is a new case there."""
     out: list[str] = []
 
     def walk(tokens: list[Token]) -> None:
@@ -66,6 +72,10 @@ def image_paths(text: str) -> list[str]:
                 path = image_path(t)
                 if path is not None and path not in out:
                     out.append(path)
+                # An image's children are its ALT, which the page flattens to
+                # text — an image nested there is never drawn, so it is not
+                # wanted either.
+                continue
             if t.children:
                 walk(t.children)
 

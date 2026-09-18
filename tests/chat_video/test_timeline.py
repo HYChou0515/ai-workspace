@@ -309,11 +309,20 @@ def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
     assert tl.referenced_paths() == ["/plots/a.png", "/plots/b.png"]
 
 
-def test_a_declaration_is_parsed_exactly_as_the_fe_parses_it():
+def test_a_declaration_is_parsed_as_the_fe_parses_it():
     """`shownFiles.ts` `JSON.parse`s everything after the marker; junk before
     the brace fails the whole declaration there, so it must here. A size that
     is not a finite number (`NaN`/`Infinity`, which Python's json accepts and
-    the browser's does not) skips the entry rather than crashing."""
+    the browser's does not) skips the entry rather than crashing. One
+    declaration nested absurdly deep is a `RecursionError` in Python's parser
+    and a `SyntaxError` in V8: both mean "no declaration", not a traceback."""
+    deep = "body\n[shown-files]" + "[" * 100_000
+    steps = build_timeline(
+        title="t",
+        messages=[{"role": "tool", "tool_name": "x", "content": deep}],
+        options=VideoOptions(),
+    ).steps
+    assert isinstance(steps[0], ToolStep) and steps[0].files == []
     junk = (
         "body\n[shown-files]junk"
         + '{"shown_files":[{"path":"/a.png","mime":"image/png","size":1}]}'

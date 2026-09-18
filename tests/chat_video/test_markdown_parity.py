@@ -3,14 +3,21 @@ draws are ONE reading of the markdown, not two kept alike by hand.
 
 Round 2 found the two apart on 9 of 16 inputs — a hand-written regex on the
 timeline side, markdown-it's normalised href on the page side — so a CJK
-filename was read from --files and never drawn, with nothing said. The
-oracle here is the page: for every input, hand the page bytes for exactly
-the paths the timeline named, and every one of them must come out as a
-picture; nothing else may.
+filename was read from --files and never drawn, with nothing said.
+
+Two guards, each for one direction. `EXPECTED` is a hand-written spec of
+what each input refers to: it catches the timeline naming too little (a
+regex that misses `<…>` or reference-style images). The page-vs-timeline
+check catches it naming too much: hand the page bytes for exactly what the
+timeline named, and the set drawn must equal the set named — a path read
+from --files and never drawn is the round-2 defect. The page can only ever
+be handed what the timeline named, so the second check alone would let an
+under-reading pass; that is why the spec list is not redundant.
 """
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -24,7 +31,7 @@ _PNG = bytes.fromhex(
     "0000000d49444154789c6360000002000154a24f5f0000000049454e44ae426082"
 )
 
-CASES = {
+EXPECTED = {
     "plain": ("![a](plots/a.png)", ["/plots/a.png"]),
     "absolute": ("![a](/plots/a.png)", ["/plots/a.png"]),
     "cjk": ("![a](plots/圖.png)", ["/plots/圖.png"]),
@@ -39,39 +46,44 @@ CASES = {
     "url": ("![a](https://x/y.png)", []),
     "two, one twice": ("![a](p.png) ![b](q.png) ![c](p.png)", ["/p.png", "/q.png"]),
     "inside a link": ("[![a](p.png)](https://x)", ["/p.png"]),
+    # markdown-it parses an image inside an image's ALT; the page flattens
+    # the alt to text, so the inner one is never drawn and must not be read.
+    "image inside an image's alt": ("![![y](q.png)](p.png)", ["/p.png"]),
+    "dot-slash and double slash": ("![a](./p.png) ![b](plots//q.png)", ["/p.png", "/plots/q.png"]),
+    "in a table cell": ("|a|\n|-|\n|![x](p.png)|", ["/p.png"]),
+    "in a blockquote": ("> ![x](p.png)", ["/p.png"]),
 }
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_the_page_draws_exactly_the_images_the_timeline_asked_bytes_for(case: str):
-    text, wanted = CASES[case]
-    options = VideoOptions()
-    tl = build_timeline(
+def _timeline(text: str, options: VideoOptions):
+    return build_timeline(
         title="t",
         messages=[{"role": "assistant", "author": "AI", "content": text}],
         options=options,
     )
 
-    assert tl.referenced_paths() == wanted
 
-    page = render_player_html(tl, options, assets={p: _PNG for p in wanted})
-    html = _step_html(page)
-    drawn = re.findall(r'<img class="shown" data-asset="([^"]*)"', html)
-    assert drawn == [p for p in _order(text, wanted)], (case, html)
+@pytest.mark.parametrize("case", EXPECTED)
+def test_the_timeline_names_what_the_input_refers_to(case: str):
+    text, wanted = EXPECTED[case]
+
+    assert _timeline(text, VideoOptions()).referenced_paths() == wanted
+
+
+@pytest.mark.parametrize("case", EXPECTED)
+def test_the_page_draws_exactly_the_set_the_timeline_named(case: str):
+    text, _ = EXPECTED[case]
+    options = VideoOptions()
+    tl = _timeline(text, options)
+    named = tl.referenced_paths()
+
+    page = render_player_html(tl, options, assets={p: _PNG for p in named})
+    drawn = re.findall(r'<img class="shown" data-asset="([^"]*)"', _step_html(page))
+
+    assert set(drawn) == set(named), (case, drawn, named)
 
 
 def _step_html(page: str) -> str:
-    import json
-
     m = re.search(r"^const TIMELINE = (.*);$", page, re.MULTILINE)
     assert m
     return json.loads(m.group(1))["steps"][0]["html"]
-
-
-def _order(text: str, wanted: list[str]) -> list[str]:
-    """Every occurrence in reading order (a path used twice is drawn twice)."""
-    if not wanted:
-        return []
-    if text.startswith("![a](p.png) ![b](q.png)"):
-        return ["/p.png", "/q.png", "/p.png"]
-    return wanted

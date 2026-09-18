@@ -23,7 +23,7 @@ from pathlib import Path
 
 from ..kb.chat_export import parse_chat_export
 from .options import FORMATS, VideoOptions
-from .player import render_player_html
+from .player import NOT_HANDED, decide_assets, render_player_html
 from .render import RendererUnavailable
 from .service import render_chat_video
 from .timeline import build_timeline
@@ -58,7 +58,7 @@ def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[st
             if candidate.stat().st_size > max_bytes:
                 continue
             out[path] = candidate.read_bytes()
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop, on 3.12
             continue
     return out
 
@@ -171,11 +171,17 @@ def main(argv: list[str] | None = None) -> int:
         if ns.files is not None
         else {}
     )
-    for missing in (p for p in wanted if p not in assets):
-        where = f"not under {ns.files}, or too big" if ns.files is not None else "pass --files DIR"
-        # A declared file becomes a card; an answer's `![]()` becomes its alt
-        # text. Either way the picture is not there, which is what matters.
-        print(f"note: {missing} will not be drawn ({where})", file=sys.stderr)
+    # The page's own verdict per path, not "what was read": a file can be
+    # read and still not drawn (not an image, over the budget). A declared
+    # file then becomes a card; an answer's `![]()` becomes its alt text.
+    for path, (_uri, why) in decide_assets(timeline.wanted_files(), assets, ns.options).items():
+        if not why:
+            continue
+        if why == NOT_HANDED:
+            why = (
+                f"not under {ns.files}, or too big" if ns.files is not None else "pass --files DIR"
+            )
+        print(f"note: {path} will not be drawn ({why})", file=sys.stderr)
     if ns.html is not None:
         ns.html.write_text(
             render_player_html(timeline, ns.options, assets=assets), encoding="utf-8"

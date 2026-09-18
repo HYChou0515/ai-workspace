@@ -61,11 +61,13 @@ class VideoOptions(msgspec.Struct, frozen=True):
     """An image a tool showed is inlined into the page up to this size;
     bigger ones become a file card."""
     max_assets_total_bytes: int = 24_000_000
-    """The page's whole budget for inlined images, spent in reading order;
-    past it, files are cards. Each file is inlined once however often it is
-    shown, so this bounds the page (it carries its pictures — it fetches
-    nothing) rather than the transcript: a 100 MB page is a slow,
-    memory-hungry recording."""
+    """The page's whole budget for inlined images, raw bytes, spent first-fit
+    in reading order: a file that does not fit what is left is a card (or,
+    for an answer's ``![]()``, its alt text), a later one that fits is still
+    a picture. Each path is inlined once however often it is shown, so this
+    bounds the page (it carries its pictures — it fetches nothing) rather
+    than the transcript: a 100 MB page is a slow, memory-hungry recording.
+    base64 makes the page about a third larger than the budget."""
     fmt: tuple[Format, ...] = ("gif",)
 
     def __post_init__(self) -> None:
@@ -80,13 +82,18 @@ class VideoOptions(msgspec.Struct, frozen=True):
             (self.chat_width >= 200, "chat_width must be at least 200"),
             (self.scale >= 0, "scale must be 0 (automatic) or positive"),
             (self.zoom >= 1, "zoom must be at least 1 (1 = no push-in)"),
-            # Upper bounds on every millisecond knob: a timer over 2^31-1 ms
-            # overflows in the browser and fires at once.
+            # Upper bounds on every millisecond knob: a browser timer wraps
+            # at 2^31-1 ms (fires at once, or in weeks) and a page that never
+            # finishes is a worker that never finishes.
             (0 <= self.zoom_ms <= 60_000, "zoom_ms must be 0..60000"),
             (0 <= self.type_ms <= 10_000, "type_ms must be 0..10000"),
             (0 <= self.stream_ms <= 10_000, "stream_ms must be 0..10000"),
             (0 <= self.tool_pause_ms <= 60_000, "tool_pause_ms must be 0..60000"),
-            (self.speed > 0, "speed must be positive"),
+            # Every delay is divided by speed, so it needs a floor: at 0.001
+            # a 40 s transcript asks for 11 hours, and the ceiling's 5% floor
+            # still leaves 33 minutes. Ten times slower is as slow as anyone
+            # means; a hundred times faster is a slideshow.
+            (0.1 <= self.speed <= 100, "speed must be 0.1..100"),
             (1 <= self.max_seconds <= 3600, "max_seconds must be 1..3600"),
             (self.tool_output_chars >= 1, "tool_output_chars must be at least 1"),
             (self.max_asset_bytes >= 0, "max_asset_bytes must not be negative"),

@@ -40,11 +40,11 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `--type-speed` | 55 | 打字:每個字幾毫秒(標點停 3 倍) |
 | `--stream-speed` | 22 | 串流:每個字幾毫秒 |
 | `--tool-pause` | 1200 | 工具卡片轉圈多久 |
-| `--speed` | 1.0 | 整體倍速;`2` = 快一倍 |
+| `--speed` | 1.0 | 整體倍速;`2` = 快一倍;範圍 0.1–100 |
 | `--max-seconds` | 90 | 影片上限。超過的話**所有延遲等比壓縮**,不丟訊息、不截尾。軟上限:瀏覽器每個字的固定開銷壓不掉、壓縮也只壓到 5%,幾萬字的對話還是會超過(指令會印出實際會播多久) |
 | `--tool-output-chars` | 600 | 工具輸出**和參數**超過就截斷加 `…`(`write_file` 的整個檔案內容不會撐爆卡片) |
-| `--max-asset-bytes` | 4000000 | 一張圖超過這個大小就改成檔案卡(而且根本不讀進來) |
-| `--max-assets-total-bytes` | 24000000 | 整頁內嵌圖片的總預算;同一張圖不論秀幾次只嵌一次;超出預算的(依出現順序)變檔案卡 |
+| `--max-asset-bytes` | 4000000 | 一張圖超過這個大小就不畫(宣告的變檔案卡、`![]()` 剩 alt 文字;而且根本不讀進來) |
+| `--max-assets-total-bytes` | 24000000 | 整頁內嵌圖片的總預算(原始 bytes;base64 後頁面約大三分之一);同一張圖不論秀幾次只嵌一次;依出現順序 first-fit——塞不下剩餘預算的那張不畫,後面塞得下的小圖照畫 |
 
 常用組合:
 
@@ -99,7 +99,8 @@ uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o
 
 `image/*` 內嵌成 260px 縮圖(隨 `--scale` 放大),其他 mime 是檔案卡(檔名 + 大小)。**bytes 不在 JSON 裡**——
 要用 `--files DIR` 指到 workspace 資料夾(路徑 `/plots/a.png` ⇒ `DIR/plots/a.png`)。沒給、或檔案不在:
-工具宣告的那種變成檔案卡、回答裡 `![](…)` 的那種只剩 alt 文字;指令會在 stderr 說哪一個路徑沒畫;不會炸。
+工具宣告的那種變成檔案卡、回答裡 `![](…)` 的那種只剩 alt 文字;指令會在 stderr 逐一說哪個路徑沒畫、為什麼
+(不在 DIR 底下或太大 / 不是圖 / 超出總預算);不會炸。`plots/a.png`、`./plots/a.png`、`plots//a.png` 是同一個檔。
 `DIR` 之外的路徑(`/../…`、指到外面的 symlink)一律不讀。外部 URL 的 `![](https://…)` **不會被抓**——頁面不碰網路——
 只剩 alt 文字(聊天視窗會抓,這是影片自己的規則)。中文檔名、含空白的路徑(寫成 `<plots/my chart.png>`)、
 `![x][ref]` 參照式都認得——timeline 要讀哪些檔和頁面畫哪些圖是同一次 markdown 解析。

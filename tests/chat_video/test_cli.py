@@ -92,6 +92,68 @@ def test_files_dir_supplies_exactly_the_referenced_paths_and_never_outside_it(tm
     assert assets == {"/plots/a.png": b"PNG-A"}
 
 
+def test_a_symlink_loop_under_files_dir_is_skipped_not_a_traceback(tmp_path):
+    """Python 3.12's `Path.resolve()` raises `RuntimeError` on a symlink
+    loop — not an `OSError`. A hand-edited path into one is left out like any
+    other path the OS rejects."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "loop").symlink_to(ws / "loop")
+
+    assert load_assets(ws, ["/loop/a.png"], max_bytes=10) == {}
+
+
+def test_the_note_names_every_path_the_page_will_not_draw_whatever_the_reason(
+    tmp_path, capsys, monkeypatch
+):
+    """Three ways a wanted path is not drawn: nobody handed over bytes, the
+    bytes are not a picture, the page's budget ran out. The note used to
+    come from the first alone — an SVG chart in an answer was read, not
+    drawn, and not mentioned."""
+    ws = tmp_path / "ws"
+    (ws / "plots").mkdir(parents=True)
+    png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489")
+    (ws / "plots" / "a.png").write_bytes(png)
+    (ws / "plots" / "b.png").write_bytes(png)
+    (ws / "plots" / "chart.svg").write_bytes(b"<svg/>")
+    src = _source(
+        tmp_path,
+        {
+            "title": "t",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "author": "AI",
+                    "content": (
+                        "![a](plots/a.png) ![b](plots/b.png) "
+                        "![s](plots/chart.svg) ![m](plots/missing.png)"
+                    ),
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr("workspace_app.chat_video.cli.render_chat_video", lambda **k: {"gif": b"g"})
+
+    code = main(
+        [
+            str(src),
+            "-o",
+            str(tmp_path / "d.gif"),
+            "--files",
+            str(ws),
+            "--max-assets-total-bytes",
+            str(len(png)),
+        ]
+    )
+
+    err = capsys.readouterr().err
+    assert code == 0
+    assert "/plots/a.png" not in err  # drawn
+    assert "/plots/b.png will not be drawn (over the page's image budget)" in err
+    assert "/plots/chart.svg will not be drawn (not an image the page draws)" in err
+    assert f"/plots/missing.png will not be drawn (not under {ws}, or too big)" in err
+
+
 def test_files_dir_does_not_read_what_the_page_would_not_inline(tmp_path):
     """The size check happens BEFORE the read: a 300 MB file named in a
     declaration used to be read whole and then become a card."""
@@ -167,7 +229,7 @@ def test_an_invalid_option_is_one_sentence_too(tmp_path, capsys):
     with pytest.raises(SystemExit) as stop:  # argparse's own refusal: a line + exit 2
         main([str(src), "--html", str(tmp_path / "p.html"), "--speed", "0"])
 
-    assert stop.value.code == 2 and "speed must be positive" in capsys.readouterr().err
+    assert stop.value.code == 2 and "speed must be 0.1..100" in capsys.readouterr().err
 
 
 def test_recording_writes_every_format_and_says_how_long_it_will_play(
