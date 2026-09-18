@@ -122,6 +122,7 @@ from .schedule_index import (
     register_schedule_index,
 )
 from .schedule_reconcile import reconcile_item_schedules
+from .skill_hub_routes import register_skill_hub_routes
 from .skill_review import review_skill
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
@@ -2452,6 +2453,12 @@ def create_app(
         max_file_size=max_file_size,
         admission=admission,
         skill_hub=skill_hub,
+    )
+
+    # Skill hub (docs/plan-skill-hub.md): the page's read routes + the panel's
+    # install door. Same store the tools use.
+    register_skill_hub_routes(
+        api, hub=skill_hub, files=files, locator=locator, get_user_id=get_user_id
     )
 
     # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema

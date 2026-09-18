@@ -34,6 +34,7 @@ from .shown_files import (
 from .tool_authz import LEGACY_TOOL_RENAMES, TOOL_VERBS, authorize_tool
 
 if TYPE_CHECKING:
+    from ..apps.skill_hub import SkillHubEntry
     from ..apps.subagents import SubagentDef
     from ..factories import SubagentModel
     from ..resources.conversation import Citation
@@ -2520,12 +2521,8 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
     for verb in TOOL_VERBS["install_skill"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
-    from ..apps.manifest import load_app_manifest
-    from ..apps.skills import (
-        install_hub_skill,
-        workspace_skill_origin,
-        workspace_skill_payload,
-    )
+    from ..apps.skill_hub import missing_tools_for
+    from ..apps.skills import install_hub_skill, skill_folder_in_the_way
 
     c = ctx.context
     files, inv = c.files, c.investigation_id
@@ -2537,32 +2534,19 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
     # Q10: an entry this person may not read IS one that does not exist, and
     # the two are worded identically so a refusal never says "exists, not for
     # you".
-    state, entry = hub.state_for(entry_id, c.acting_user)
+    _state, entry = hub.state_for(entry_id, c.acting_user)
     if entry is None:
         return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
     name = entry.name
-    if await workspace_skill_payload(files, inv, name):
-        # Never overwrite: the folder may be the user's own skill, or an earlier
-        # install they have since edited. Say WHOSE copy it is when it is one,
-        # so "already have it" and "name clash" read differently.
-        origin = await workspace_skill_origin(files, inv, name)
-        whose = ""
-        if origin is not None and origin.source == "hub" and origin.entry:
-            _st, theirs = hub.state_for(origin.entry, c.acting_user)
-            if theirs is not None:
-                whose = f"{theirs.owner}'s "
-        return (
-            f"error: this workspace already has {whose}'.skill/{name}/' — remove or rename "
-            "that folder first, then install again."
-        )
+    if taken := await skill_folder_in_the_way(files, inv, hub, name, c.acting_user):
+        return f"error: {taken}."
     await install_hub_skill(files, inv, hub, entry_id)
     lines = [
         f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "
         f"into .skill/{name}/. It is in the skill index from the next turn on; load it any "
         f"time with read_skill('{name}')."
     ]
-    ceiling = set(load_app_manifest(c.app_slug).agent.tools)
-    if missing := [t for t in entry.referenced_tools if t not in ceiling]:
+    if missing := missing_tools_for(entry.referenced_tools, c.app_slug):
         lines.append(
             f"Note: it mentions {', '.join(missing)}, which this App does not have — parts of "
             "it may not be followable here. Tell the user."
@@ -2570,6 +2554,66 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
     if entry.review.notes:
         lines.append("The publish-time review noted:")
         lines += [f"- {n}" for n in entry.review.notes]
+    return "\n".join(lines)
+
+
+#: How many skill hub entries one search shows before it asks for a narrower
+#: query. A skill's whole listing is a few lines; 25 keeps a bare `search("")`
+#: on a busy hub inside a screen rather than a tool-output cap.
+SEARCH_SKILL_HUB_LIMIT = 25
+
+
+async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
+    """Find skills other users have published to the skill hub. Use it when the
+    user asks whether a skill for some task exists, or wants to install one.
+
+    `query` matches the skill's name and description (case-insensitive); an
+    empty query lists everything. Each hit shows `owner/name`, the description,
+    which App it was written in, and the ENTRY ID that `install_skill` takes.
+    Forks are listed under the skill they were forked from. A hit also says
+    which of the tools it mentions this App does not have — tell the user
+    before installing such a skill; parts of it may not be followable here.
+    """
+    from ..apps.skill_hub import missing_tools_for, nest_forks
+
+    c = ctx.context
+    hub = c.skill_hub
+    if hub is None or c.app_slug is None:
+        return "error: search_skill_hub is only available in an App workspace turn"
+    needle = query.strip().lower()
+    visible = hub.visible(c.acting_user)
+    hits = [
+        (i, e)
+        for i, e in visible
+        if not needle or needle in e.name.lower() or needle in e.description.lower()
+    ]
+    if not hits:
+        return (
+            f"no skill hub entry matches {query!r}. The user can publish one of this "
+            "workspace's skills with publish_skill."
+        )
+    # Roots first, each followed by its forks — a fork whose root is not in the
+    # hits (filtered out, or unreadable to this viewer) stands on its own.
+    by_id = {i: e for i, e in hits}
+    ordered: list[tuple[str, SkillHubEntry, bool]] = []
+    for root, forks in nest_forks(by_id):
+        ordered.append((root, by_id[root], False))
+        ordered += [(j, by_id[j], True) for j in forks]
+    lines = [f"{len(hits)} skill hub entr{'y' if len(hits) == 1 else 'ies'} match {query!r}:"]
+    for i, e, is_fork in ordered[:SEARCH_SKILL_HUB_LIMIT]:
+        lineage = ""
+        if e.forked_from:
+            root = by_id.get(e.forked_from) or hub.get(e.forked_from)
+            lineage = f" (fork of {root.owner}/{root.name})" if root is not None else " (fork)"
+        indent = "  ↳ " if is_fork else "- "
+        lines.append(
+            f"{indent}{e.owner}/{e.name}{lineage} — {e.description} "
+            f"[written in {e.source_app}; id {i}]"
+        )
+        if missing := missing_tools_for(e.referenced_tools, c.app_slug):
+            lines.append(f"    mentions {', '.join(missing)}, which this App lacks")
+    if len(ordered) > SEARCH_SKILL_HUB_LIMIT:
+        lines.append(f"… and {len(ordered) - SEARCH_SKILL_HUB_LIMIT} more — narrow the query.")
     return "\n".join(lines)
 
 
@@ -3532,6 +3576,9 @@ _IMPLS = {
     # `install_skill` — the skill hub's read door into a workspace: a copy with
     # an `.origin`, same shape `read_skill` materializes. Opt-in per App.
     "install_skill": install_skill_impl,
+    # `search_skill_hub` — reads the hub, never the item, so it has no row in
+    # `TOOL_VERBS` (see that module's docstring). Opt-in per App.
+    "search_skill_hub": search_skill_hub_impl,
     # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
     # AGENT.md write, so a sub-agent the agent authors is always one it can call.
     "save_subagent": save_subagent_impl,

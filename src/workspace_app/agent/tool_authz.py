@@ -29,6 +29,10 @@ how five separate tools hid behind an argument that fitted two of them:
 * ``update_todos`` — not here because it does not touch the workspace at all:
   it writes a specstar ``ConversationTodos`` row keyed by conversation. It was
   listed for rounds under a reason that was simply untrue.
+* ``search_skill_hub`` — the same shape: it reads skill hub entries, scoped to
+  what the SPEAKER may read (``SkillHubStore.visible``), and touches nothing on
+  the item. Its two siblings that do touch the item (``publish_skill`` reads
+  ``.skill/`` out, ``install_skill`` writes it in) are in the table.
 
 This enumeration has been short FIVE times — ``list_files``/``exists``, then
 ``infer_modules``, then ``make_deck``, then the entity tools, then

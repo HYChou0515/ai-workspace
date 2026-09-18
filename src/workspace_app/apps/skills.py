@@ -577,6 +577,29 @@ async def skill_upstream(
     return SkillUpstream(state="live", update_available=origin.files != shipped_now)
 
 
+async def skill_folder_in_the_way(
+    files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, name: str, viewer: str
+) -> str | None:
+    """The refusal an install gets when ``.skill/<name>/`` already exists —
+    one sentence, shared by the tool and the route so the two doors refuse
+    alike — or ``None`` when the name is free. Never overwrite: the folder may
+    be the user's own skill, or an earlier install they have since edited. It
+    says WHOSE copy it is when it is one, so "already have it" and "name
+    clash" read differently (plan install step 4)."""
+    if not await workspace_skill_payload(files, workspace_id, name):
+        return None
+    origin = await workspace_skill_origin(files, workspace_id, name)
+    whose = ""
+    if origin is not None and origin.source == "hub" and origin.entry:
+        _state, theirs = hub.state_for(origin.entry, viewer)
+        if theirs is not None:
+            whose = f"{theirs.owner}'s "
+    return (
+        f"this workspace already has {whose}'.skill/{name}/' — remove or rename that folder "
+        "first, then install again"
+    )
+
+
 async def install_hub_skill(
     files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, entry_id: str
 ) -> str:

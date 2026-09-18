@@ -210,3 +210,125 @@ async def test_a_publish_that_dies_writing_files_leaves_no_row(spec: SpecStar) -
     assert store.find("alice", "triage-reflow") is None, (
         "the row was created before its files were, and now points at nothing"
     )
+
+
+# ── listing for a viewer (plan P6) ───────────────────────────────────────────
+
+
+async def _named(store: SkillHubStore, owner: str, name: str, *, description: str = "d") -> str:
+    md = f"---\nname: {name}\ndescription: {description}\n---\n\nbody".encode()
+    return await store.publish(
+        owner=owner,
+        name=name,
+        description=description,
+        source_item="i",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": md},
+        referenced_tools=[],
+        review=OK,
+    )
+
+
+def _private(spec: SpecStar, entry_id: str) -> None:
+    from workspace_app.perm import Permission
+
+    rm = spec.get_resource_manager(SkillHubEntry)
+    rm.update(
+        entry_id,
+        msgspec.structs.replace(rm.get(entry_id).data, permission=Permission(visibility="private")),
+    )
+
+
+async def test_visible_lists_what_the_viewer_may_read_and_nothing_else(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    """Public entries for everyone; a private one for its owner only; a deleted
+    one for nobody. The listing is what the skill hub page and the search tool
+    both read, so the rule lives here once."""
+    a = await _named(store, "alice", "a-skill")
+    b = await _named(store, "bob", "b-skill")
+    hidden = await _named(store, "alice", "hidden")
+    _private(spec, hidden)
+    gone = await _named(store, "carol", "gone")
+    spec.get_resource_manager(SkillHubEntry).delete(gone)
+
+    assert [i for i, _ in store.visible("bob")] == [a, b]
+    assert [i for i, _ in store.visible("alice")] == [a, b, hidden]
+    assert all(isinstance(e, SkillHubEntry) for _, e in store.visible("bob"))
+
+
+async def test_visible_is_sorted_by_name_then_owner(store: SkillHubStore) -> None:
+    await _named(store, "bob", "zeta")
+    await _named(store, "carol", "alpha")
+    await _named(store, "alice", "alpha")
+
+    assert [(e.name, e.owner) for _, e in store.visible("x")] == [
+        ("alpha", "alice"),
+        ("alpha", "carol"),
+        ("zeta", "bob"),
+    ]
+
+
+async def test_forks_of_is_an_indexed_lookup_by_forked_from(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    root = await _publish(store, "alice")
+    fork1 = await _publish(store, "bob", forked_from=root)
+    fork2 = await _publish(store, "carol", forked_from=root)
+    await _publish(store, "dave")  # another root, no relation
+
+    assert sorted(store.forks_of(root)) == sorted([fork1, fork2])
+    assert store.forks_of(fork1) == []
+
+    spec.get_resource_manager(SkillHubEntry).delete(fork2)
+    assert store.forks_of(root) == [fork1], "a tombstone is not a fork"
+
+
+async def test_republishing_after_a_delete_is_a_new_entry_and_the_old_id_stays_dead(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    """Soft delete is final for the copies that point at the old id (Q10);
+    the owner publishing the same name again starts over, it does not revive."""
+    old = await _publish(store)
+    spec.get_resource_manager(SkillHubEntry).delete(old)
+
+    new = await _publish(store)
+
+    assert new != old
+    assert store.get(old) is None and store.get(new) is not None
+    assert [i for i, _ in store.visible("alice")] == [new]
+
+
+# ── the nesting rule ─────────────────────────────────────────────────────────
+
+
+async def test_nest_forks_keeps_every_hit_and_nests_one_level(store: SkillHubStore) -> None:
+    """A fork of a fork was dropped by the first version — skipped as "not a
+    root", attached to nothing. Every id in goes out exactly once."""
+    from workspace_app.apps.skill_hub import nest_forks
+
+    root = await _publish(store, "alice")
+    fork = await _publish(store, "bob", forked_from=root)
+    fork_of_fork = await _publish(store, "carol", forked_from=fork)
+    orphan = await _publish(store, "dave", forked_from="gone-root")
+    hits = {i: e for i, e in store.visible("x")}
+
+    nested = nest_forks(hits)
+
+    assert nested == [(root, [fork]), (fork_of_fork, []), (orphan, [])]
+    shown = [i for r, fs in nested for i in (r, *fs)]
+    assert sorted(shown) == sorted(hits), "nothing dropped, nothing doubled"
+
+
+async def test_nest_forks_keeps_the_hits_order_so_visible_decides_it(store: SkillHubStore) -> None:
+    """No sort of its own: `visible` already orders by name then owner, and a
+    second sort here would be a rule nothing could observe."""
+    from workspace_app.apps.skill_hub import nest_forks
+
+    root = await _publish(store, "zed")
+    b = await _publish(store, "bob", forked_from=root)
+    a = await _publish(store, "alice", forked_from=root)
+    hits = {i: e for i, e in store.visible("x")}
+
+    assert nest_forks(hits) == [(root, [a, b])]

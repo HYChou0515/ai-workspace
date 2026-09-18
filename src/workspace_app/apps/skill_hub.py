@@ -167,6 +167,48 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
     return problems
 
 
+def nest_forks(hits: Mapping[str, SkillHubEntry]) -> list[tuple[str, list[str]]]:
+    """``[(root_id, [fork_id, …]), …]`` over one listing's hits — the one
+    nesting rule the page's list and the search tool share (plan Q4: 根在上、
+    fork 收在原作底下).
+
+    A hit nests under its parent only when the parent is itself shown as a
+    root; everything else is a root of its own — a fork whose parent is out of
+    view (filtered, unreadable, deleted) and a fork of a fork alike. One level,
+    and nothing in ``hits`` is ever dropped: the first version skipped every
+    fork-of-a-fork as "not a root" and then attached it to nothing.
+    Roots and forks both keep ``hits``' order (``visible`` sorts by name then
+    owner, so a listing built from it reads that way at both levels)."""
+
+    def shown_as_root(entry_id: str) -> bool:
+        entry = hits[entry_id]
+        return entry.forked_from not in hits or not shown_as_root(entry.forked_from)
+
+    # `shown_as_root` recurses up the parent chain; a chain is finite because
+    # `forked_from` points at an entry published earlier, never at itself.
+    roots = [i for i in hits if shown_as_root(i)]
+    out: list[tuple[str, list[str]]] = []
+    for root in roots:
+        forks = [i for i, e in hits.items() if e.forked_from == root and not shown_as_root(i)]
+        out.append((root, forks))
+    return out
+
+
+def missing_tools_for(referenced: Collection[str], app_slug: str) -> list[str]:
+    """The tools a skill mentions that `app_slug`'s ceiling does not grant —
+    the install告知 (plan Q1/Q2): shown, never enforced. Against the App's
+    declared ceiling, not a turn's effective set: the question is whether the
+    App CAN follow the skill, which a per-item toggle does not change. An
+    unknown App has no ceiling to compare against → nothing missing."""
+    from .manifest import load_app_manifest
+
+    try:
+        ceiling = set(load_app_manifest(app_slug).agent.tools)
+    except KeyError:
+        return []
+    return [t for t in referenced if t not in ceiling]
+
+
 def skill_description(skill_md: str) -> str:
     """The frontmatter ``description`` of a SKILL.md — the line the entry lists
     under. For a SKILL.md that passed :func:`validate_skill_payload` this is
@@ -248,10 +290,44 @@ class SkillHubStore:
             return "unpublished", None
         return "live", entry
 
+    def visible(self, viewer: str) -> list[tuple[str, SkillHubEntry]]:
+        """Every entry `viewer` may read, as ``(id, entry)`` sorted by name then
+        owner — what the page's list and the search tool both read, so the
+        visibility rule is applied in exactly one place.
+
+        A full read of the table, filtered in memory: the permission is not an
+        indexed field (a scope on it would silently match nothing — the trap
+        `register_skill_hub` names), and the hub holds one row per published
+        skill, hundreds at most, read on a page open rather than in a turn.
+        The viewer's groups are looked up ONCE for the whole list."""
+        actor = Actor.human(viewer, groups=groups_of(self._spec, viewer))
+        out: list[tuple[str, SkillHubEntry]] = []
+        live = (QB.is_deleted() == False).build()  # noqa: E712 — specstar's meta predicate
+        for res in self._rm().list_resources(live, returns=["info", "data"]):
+            entry = res.data
+            assert isinstance(entry, SkillHubEntry)
+            if authorize(actor, "read_content", entry.permission, created_by=entry.owner):
+                out.append((res.info.resource_id, entry))
+        out.sort(key=lambda pair: (pair[1].name, pair[1].owner))
+        return out
+
+    def forks_of(self, entry_id: str) -> list[str]:
+        """Ids of the entries forked from `entry_id` — an indexed `forked_from`
+        lookup, not a scan, tombstones excluded. Visibility is the caller's
+        to apply."""
+        query = ((QB["forked_from"] == entry_id) & (QB.is_deleted() == False)).build()  # noqa: E712
+        return [res.info.resource_id for res in self._rm().list_resources(query, returns=["info"])]
+
     def find(self, owner: str, name: str) -> str | None:
         """The entry id for an identity, or ``None``. Scoped by both indexed
         fields, so this is a point lookup rather than a scan."""
-        query = ((QB["owner"] == owner) & (QB["name"] == name)).build()
+        # Tombstones excluded: `list_resources` returns soft-deleted rows, and
+        # a deleted entry's id must NOT be the one a re-publish lands on — the
+        # copies pointing at it read "deleted" for good (Q10), and the
+        # re-publish is a new entry.
+        query = (
+            (QB["owner"] == owner) & (QB["name"] == name) & (QB.is_deleted() == False)  # noqa: E712
+        ).build()
         for res in self._rm().list_resources(query, returns=["info"]):
             return res.info.resource_id
         return None
