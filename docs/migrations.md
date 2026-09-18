@@ -686,3 +686,35 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 **legacy 切段器的中文修正（#806 P1）不需要重讀。** production 走 LlamaIndex 管線
 （`kb_pipeline=get_doc_pipeline(...)`），中文本來就切得正常（實測 12,358 字 → 80 塊）；受影響的只有沒接
 `kb_pipeline` 的 `create_app` 呼叫（測試、離線模式）。
+
+### 2026-09-18 · (PR #818) · skill hub：使用者之間分享 skill，不經過 dev 的 git {#pr-818}
+
+**新 model**（不用 migrate）
+
+- `SkillHubEntry`（`skill-hub-entry`）：一份發布出去的 skill 的 metadata；檔案是 FileStore 裡
+  `skill-hub:<entry id>` 命名空間下的 blob。`owner` / `name` / `forked_from` 有索引，**新表沒有舊列**，
+  所以沒有 backfill；**沒有 auto-CRUD route**（在 `spec.apply` 之後才註冊，像 `_SandboxActivity`），
+  寫入只走會先審查的 `publish_skill`。
+- `SkillOrigin`（副本的 `.origin` manifest）多了 `entry` 欄位，預設 `""`；既有的 package skill 副本
+  照舊解碼，不用動。
+
+**app.json**（⚠️ 自家 app 要自己補，不然按鈕在、agent 卻說沒有這個工具）
+
+- 出貨的四個 app（`rca` / `pm` / `playground` / `topic-hub`）已在 `agent.tools` 加上
+  `publish_skill` / `install_skill` / `search_skill_hub`，並在 `agent.skills` 加 `skill-hub`。
+  部署方自己的 app 若有 `save_skill`，比照加；沒加的 app 一樣看得到 Skills 面板的兩顆按鈕
+  （「從 skill hub 裝」走 route，不需要 tool；「發布」放進對話框的那句話會讓 agent 回答它沒有
+  `publish_skill`）。
+- `TOOL_VERBS`：`publish_skill` / `install_skill` 吃 `edit_content`（和 `save_skill` 同）；
+  自訂 preset 的 `allowed_tools` 若要用它們，ceiling 會照推。
+
+**行為**（不動設定就變）
+
+- Skills 面板的 `GET …/skills` 多了 `upstream` 欄位（`live` / `unpublished` / `deleted` / `null`）；
+  既有 package 副本讀 `live`（或上游從 package 移除時 `deleted`，`update_available` 照舊 `false`）。
+- AI 審查走發布那個 turn 的 runner，429 照 turn 的規則等：preset 有 `fallbacks` 時是 failover 鏈的
+  `failover.rate_limit_budget_s`（preset 可覆寫，預設 7200 秒）；單一 endpoint 時是 runner 自己迴圈的
+  120 秒（`LitellmAgentRunner` 的 `rate_limit_budget_s`，`get_runner` 目前**沒有**從設定帶入）。
+  **等不到就不上架**（tool 回錯誤、對話窗看到「審查服務無法連線」），沒有「未審」狀態。
+  發布不是熱路徑，這是刻意的。
+- 前端多了 `/skill-hub` 與 `/skill-hub/:id` 兩頁、導覽多一個入口「Skill hub」。

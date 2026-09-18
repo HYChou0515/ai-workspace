@@ -26,7 +26,7 @@ Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部�
 | 擴充面 | dev 自建 | user 自建（執行期 + AI 共創） |
 |---|---|---|
 | **Tool** | ✅ Python tool-package——**vendor 進 repo**（`sample-tools/`）**或外部作者自己的 repo + CI**（#674） | ❌ **無**——安全考量,見下 |
-| **Skill** | ✅ `sample-skills/` + `SHARED_SKILLS` 註冊 | ✅ `author-skill` + `save_skill` → `.skill/`（#298） |
+| **Skill** | ✅ `sample-skills/` + `SHARED_SKILLS` 註冊 | ✅ `author-skill` + `save_skill` → `.skill/`（#298）；**發布到 skill hub 給全站用**（`publish_skill`，見下） |
 | **Workflow** | ✅ Python `run.py`（圖靈完備） | ✅ `workflow.json` **降階 DSL**（#323）——**最難的一塊** |
 | **View Kind** | ✅ React 元件 + `web/src/ext/` 一行註冊（#698）——**dev 可以是維運方** | ❌ **無**——會執行任意前端程式碼 |
 | **WUI** | ✅ 就是一個 workspace 資料夾——沒有 dev 專屬路徑 | ✅ **和 AI 共創**——`view: wui` + `index.html`（見 [`wui.md`](wui.md)） |
@@ -558,6 +558,40 @@ body 硬上限 `SKILL_BODY_CAP = 50_000` 字元(兩端都套)。核心載入邏�
 **workspace(user) → shared(app.json) → profile**,前者 shadow 後者。package／profile skill 是在
 system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill 則**每輪 live 注入**;
 兩者同名時 workspace skill 蓋過 package skill。
+
+### user 之間：skill hub（不經過 dev 的 git）
+
+上面三個來源都要經過 dev 的 git 才能讓別人用到;**skill hub** 是第四個來源,使用者自己填
+（設計與十個決策:[`plan-skill-hub.md`](plan-skill-hub.md)）。一個 workspace skill 在 item 裡
+發布（Skills 面板的「發布到 skill hub」把一句話放進對話框,agent 呼叫 `publish_skill(name)`）,
+之後任何人在自己 item 的 Skills 面板「從 skill hub 裝」（或 agent 呼叫 `install_skill`）,
+它就以**副本**（`.skill/<name>/` + `.origin` 記 entry id）落地——和 package skill 的副本同一套
+機制,所以 index、`read_skill`、Refresh、「有新版」全部照舊;多出來的是上游可以**下架**
+（owner 改成 private）或**刪除**（soft），副本那一列會顯示狀態而不是壞掉。
+
+- **發布前的檢查**（`apps/skill_hub.py`）:結構性的**擋**——frontmatter `name` ≠ 資料夾、沒
+  `description`（loader 其實容忍,hub 刻意比它嚴:沒 description 的 skill 被列出卻永遠不觸發）、
+  body 超過 `SKILL_BODY_CAP`、body 提到的 `references/…` 沒隨附、`scripts/*.py` parse 不過——
+  每一條都是「裝了等於沒裝、而且不報錯」的坑。過了才掃 body 裡**已註冊的 tool 名**
+  （`agent/tools.py` 的 `_IMPLS`,整字或 code span）,記在條目上;裝的時候對目標 App 的 ceiling
+  算差集,**告知不擋**。
+- **AI 審**只掛意見、從不擋（D4）:審查者是發布那個 turn 的 sub-agent（`api/skill_review.py`）,
+  走 turn 自己的 runner 與 `AgentConfig`,所以模型／endpoint／failover／429 等待都是 turn 的,
+  沒有第二套接線。**審不到就不上架**——模型連不上是系統壞了,不是開缺口的理由;沒有「未審」狀態。
+- **身分是 `owner/name`**,底層是穩定的 resource id,副本與 fork 都指 id,所以 `owner` 可以轉移。
+  非 owner 只能 **fork**:裝別人的、改、從自己 item 發布,`.origin` 指向別人的條目就自動記
+  `forked_from`。列表根在上、fork 收在原作底下。
+- **owner 的管理都在 skill hub 詳情頁**（`/skill-hub/:id`,owner 之外的人**沒有任何按鈕**）:
+  修改（回到當時發布的 item;item 已刪／已完成／進不去 → 開新 item）、下架／上架、可見範圍
+  （既有的權限對話框）、轉移、刪除。
+- **三個 tool 都是薄殼**:`publish_skill` / `install_skill` 在 `TOOL_VERBS` 裡吃 `edit_content`
+  （和 `save_skill` 同）;`search_skill_hub` 只讀 hub、不碰 item,所以不在表裡。`skill-hub` 這個
+  shared skill 教 agent 什麼時候該找、該裝、該發布,以及每種回覆要對使用者說什麼;情境在
+  `sample-scenarios/skill-hub/`。
+- **路由**:`GET /skill-hub/entries`（`q` / `mine` / `app` 給差集）、`GET /skill-hub/entries/{id}`、
+  `POST /a/{slug}/items/{id}/skills/install`（面板的門,和 tool 共用同一個核心與拒絕句）,
+  以及 owner 限定的 `unpublish` / `republish` / `permission` / `transfer` / `edit` / `DELETE`。
+  hub 條目本身沒有 auto-CRUD route——寫入只能走會先審查的 tool。
 
 ### 調校 skill 的 guidance（第二方）
 
