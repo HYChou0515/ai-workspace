@@ -1,6 +1,6 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
-> **狀態:script 版已實作(PR #817,P1–P16:P1–P5 主體、P6 顯示工具、P7–P16 九輪 review 的修正),使用說明在 [chat-video.md](chat-video.md);P16–P18(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
+> **狀態:script 版已實作(PR #817,P1–P17:P1–P5 主體、P6 顯示工具、P7–P17 九輪 review 的修正 + CI 第一次跑完 `rest` 的修正),使用說明在 [chat-video.md](chat-video.md);P16–P18(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）
 
@@ -304,6 +304,12 @@ src/workspace_app/chat_video/
     送路由真正建出的 header。
   - 記下(不在這個 PR):影片用 Playwright 附的 Chromium 錄,聊天視窗在 user 自己的瀏覽器——AVIF / HEIC / 多位元編碼的 SVG 隨版本與
     引擎不同;prod nginx 對 `%25…` 的路徑會不會先解碼一次,我看不到設定。
+
+- **CI 的 `rest` 分片在這條分支上從沒跑完過**(每輪 review 有發現就砍 CI,`rest` 是最慢的、每次都還在跑)。第一次跑完就紅在
+  `test_service.py` 的串接測試:它替換了 `record` / `encode` 但沒替換 `ensure_tools`,而 `ensure_tools` 查 PATH 上有沒有 ffmpeg——本機有、
+  CI runner 沒有,從 P3 寫下來就沒被 CI 驗過。用一個把 `shutil.which("ffmpeg")` 變 None 的 pytest plugin 在本機重現(恰好只紅這一條),
+  替身補上(P17)。教訓:砍 CI 重跑的規則讓最慢的分片永遠跑不到終點;review 收斂後至少要讓一輪**完整**跑完。另:api-5 在託管 runner 上
+  卡了 71 分鐘(平常 18),本機用 CI 同樣的切法(收集 → 位置 ≡ 4 mod 5 → `-n auto`)356 條 78 秒全過,是 runner 的 flake,重跑即可。
 
 - **plan 漏了「顯示工具」**(user 問「show file 能夠顯示嗎」才補)。前端把檔案放到人面前有三條路——`show_file`
   (沒有卡片,檔案即畫面)、任何工具結果尾端的 `[shown-files]` 宣告、回答裡的 `![](路徑)`——bytes 都不在 export 裡。

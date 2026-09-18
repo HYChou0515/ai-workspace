@@ -41,6 +41,10 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
 
     monkeypatch.setattr(service, "record", fake_record)
     monkeypatch.setattr(service, "encode", fake_encode)
+    # The tool check is its own test below; this one is the orchestration,
+    # and must not depend on the machine having ffmpeg (CI's runners do not —
+    # the `rest` shard was red on exactly this line).
+    monkeypatch.setattr(service, "ensure_tools", lambda _o: None)
 
     result = render_chat_video(
         title="t",
