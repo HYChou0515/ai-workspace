@@ -2,7 +2,9 @@
 
 `GET /skill-hub/entries` is the page's list (roots with forks beneath, `q`
 search, `mine`); `GET /skill-hub/entries/{id}` the detail (with `?app=` for
-the tool diff the install告知 shows); the two download routes are the zip;
+the tool diff the install告知 shows; the owner also gets the full
+`permission` for the share dialog). There is no hub-side download: D2/Q8 put
+every download in the item, where the installed copy's zip already exists.
 `POST /a/{slug}/items/{id}/skills/install` is what the Skills panel's install
 button calls — the same core the `install_skill` tool uses, so the two doors
 cannot drift. Visibility is the viewer's on every one of them (Q10: an entry
@@ -10,9 +12,6 @@ you may not read is 404, the same 404 as one that never existed).
 """
 
 from __future__ import annotations
-
-import io
-import zipfile
 
 import msgspec
 
@@ -158,6 +157,14 @@ async def test_the_owner_sees_the_source_item_and_is_owner(harness: Harness):
     d = harness.client.get(f"/skill-hub/entries/{mine}").json()
 
     assert d["is_owner"] is True and d["source_item"] == "inv-src"
+    assert d["permission"]["visibility"] == "public" and d["permission"]["read_content"] == []
+
+
+async def test_a_non_owner_does_not_get_the_permission_object(harness: Harness):
+    hub = _hub(harness)
+    theirs = await _entry(hub, "alice", "triage")
+
+    assert harness.client.get(f"/skill-hub/entries/{theirs}").json()["permission"] is None
 
 
 async def test_the_lineage_reports_a_root_that_went_private_or_was_deleted(harness: Harness):
@@ -208,33 +215,6 @@ async def test_an_entry_the_viewer_cannot_read_is_404_like_one_that_never_existe
 
     assert codes == {404}
     assert len(bodies) == 1, "one wording, so a 404 never says 'exists, not for you'"
-
-
-# ── download ─────────────────────────────────────────────────────────────────
-
-
-async def test_download_is_a_zip_rooted_at_the_skill_folder(harness: Harness):
-    hub = _hub(harness)
-    entry = await _entry(hub, "alice", "triage")
-
-    prepared = harness.client.post(f"/skill-hub/entries/{entry}/download/prepare")
-    assert prepared.status_code == 200, prepared.text
-    body = prepared.json()
-    assert body["filename"] == "triage.zip"
-    res = harness.client.get(f"/skill-hub/entries/{entry}/download/{body['download_id']}")
-
-    assert res.status_code == 200
-    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
-        assert sorted(zf.namelist()) == ["triage/SKILL.md", "triage/references/g.md"]
-        assert zf.read("triage/references/g.md") == b"g"
-
-
-async def test_download_of_an_unreadable_entry_is_404(harness: Harness):
-    hub = _hub(harness)
-    hidden = await _entry(hub, "alice", "hidden")
-    _private(harness, hidden)
-
-    assert harness.client.post(f"/skill-hub/entries/{hidden}/download/prepare").status_code == 404
 
 
 # ── install (the panel's door) ───────────────────────────────────────────────

@@ -1819,6 +1819,93 @@ export const messages = {
     "zh-TW": "模型服務正在限制我們的請求頻率，這次回答沒有完成。這不是模型忙 —— 要等限制解除，或把額度調高。",
     en: "The model endpoint is rate-limiting us, so this response wasn't completed. This is not a busy model: the limit has to clear, or be raised.",
   },
+
+  // The skill hub (docs/plan-skill-hub.md). "Skill hub" is the proper noun
+  // (the author: 「不要縮寫 就是skill hub」), so it is not translated.
+  "skillHub.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "skillHub.error": { "zh-TW": "讀不到 skill hub。", en: "The skill hub could not be read." },
+  "skillHub.retry": { "zh-TW": "再試一次", en: "Try again" },
+  "skillHub.search": { "zh-TW": "搜尋名稱或說明", en: "Search names or descriptions" },
+  "skillHub.all": { "zh-TW": "全部", en: "All" },
+  "skillHub.mine": { "zh-TW": "我的", en: "Mine" },
+  "skillHub.empty": {
+    "zh-TW": "還沒有人發布任何 skill。",
+    en: "Nobody has published a skill yet.",
+  },
+  "skillHub.empty.what": {
+    "zh-TW": "在 item 的 Skills 面板裡，把你做好的 skill 發布到 skill hub，其他人就能從自己的 item 裝進去。",
+    en: "In an item's Skills panel, publish a skill you made to the skill hub; others install it from their own items.",
+  },
+  "skillHub.noMatch": { "zh-TW": "沒有符合的 skill。", en: "No skill matches." },
+  "skillHub.forks": { "zh-TW": "{count} 個 fork", en: "{count} forks" },
+  "skillHub.fork.one": { "zh-TW": "1 個 fork", en: "1 fork" },
+  "skillHub.forkOf": { "zh-TW": "fork 自 {origin}", en: "fork of {origin}" },
+  "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
+  "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },
+  "skillHub.writtenIn": { "zh-TW": "在 {app} 寫的", en: "written in {app}" },
+  "skillHub.tools": { "zh-TW": "用到的工具", en: "Tools it mentions" },
+  "skillHub.tools.none": { "zh-TW": "沒有提到任何工具", en: "mentions no tools" },
+  "skillHub.review": { "zh-TW": "AI 審查意見", en: "AI review" },
+  "skillHub.review.ok": { "zh-TW": "審查沒有意見", en: "Nothing flagged" },
+  "skillHub.review.notes": { "zh-TW": "審查有 {count} 則意見", en: "{count} review notes" },
+  "skillHub.review.by": { "zh-TW": "由 {model} 審查", en: "reviewed by {model}" },
+  "skillHub.badge.notes": { "zh-TW": "有審查意見", en: "Review notes" },
+  "skillHub.files": { "zh-TW": "檔案", en: "Files" },
+  "skillHub.forksOf": { "zh-TW": "Fork", en: "Forks" },
+  "skillHub.forksOf.none": { "zh-TW": "還沒有人 fork 這個 skill。", en: "Nobody has forked this skill yet." },
+  "skillHub.howToInstall": {
+    "zh-TW": "要用這個 skill，到你 item 的 Skills 面板按「從 skill hub 裝」。",
+    en: "To use this skill, open your item's Skills panel and press “Install from the skill hub”.",
+  },
+  "skillHub.visibility.public": { "zh-TW": "公開", en: "Public" },
+  "skillHub.visibility.restricted": { "zh-TW": "限定名單", en: "Restricted" },
+  "skillHub.visibility.private": { "zh-TW": "已下架（只有你看得到）", en: "Unpublished (only you can see it)" },
+  // Owner-only actions (plan Q7). Nobody else sees a single button.
+  "skillHub.edit": { "zh-TW": "修改", en: "Edit" },
+  "skillHub.unpublish": { "zh-TW": "下架", en: "Unpublish" },
+  "skillHub.republish": { "zh-TW": "重新上架", en: "Republish" },
+  "skillHub.share": { "zh-TW": "可見範圍", en: "Visibility" },
+  "skillHub.share.caption": {
+    "zh-TW": "誰能在 skill hub 看到並裝這個 skill。",
+    en: "Who can see and install this skill on the skill hub.",
+  },
+  "skillHub.transfer": { "zh-TW": "轉移 owner", en: "Transfer" },
+  "skillHub.transfer.title": { "zh-TW": "把「{name}」轉給誰？", en: "Transfer “{name}” to whom?" },
+  "skillHub.transfer.body": {
+    "zh-TW": "轉移後只有新 owner 能修改、下架或刪除；已裝的副本和 fork 都不受影響。",
+    en: "After the transfer only the new owner can edit, unpublish or delete it; installed copies and forks are unaffected.",
+  },
+  "skillHub.transfer.confirm": { "zh-TW": "轉移", en: "Transfer" },
+  "skillHub.delete": { "zh-TW": "刪除", en: "Delete" },
+  "skillHub.delete.title": { "zh-TW": "刪除「{name}」？", en: "Delete “{name}”?" },
+  "skillHub.delete.body": {
+    "zh-TW": "刪除後不能復原。已裝的副本留在各自的 item 裡，但會顯示「原作已刪除」；同名重新發布會是新的 skill。",
+    en: "This cannot be undone. Installed copies stay in their items but will read “the original was deleted”; publishing the name again starts a new skill.",
+  },
+  "skillHub.delete.confirm": { "zh-TW": "刪除", en: "Delete" },
+  "skillHub.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "skillHub.deleted": { "zh-TW": "已刪除「{name}」。", en: "Deleted “{name}”." },
+  // The edit resolver's "new item" branch (plan P8): the source item cannot
+  // take the edit, and the reason says why.
+  "skillHub.edit.newItem.title": { "zh-TW": "要開一個新的 item 來修改", en: "Edit in a new item" },
+  "skillHub.edit.reason.closed": {
+    "zh-TW": "發布這個 skill 的 item 已經完成。",
+    en: "The item this skill was published from is closed.",
+  },
+  "skillHub.edit.reason.deleted": {
+    "zh-TW": "發布這個 skill 的 item 已經刪除。",
+    en: "The item this skill was published from was deleted.",
+  },
+  "skillHub.edit.reason.no_access": {
+    "zh-TW": "你已經進不去發布這個 skill 的 item。",
+    en: "You can no longer edit the item this skill was published from.",
+  },
+  "skillHub.edit.newItem.how": {
+    "zh-TW": "開一個新的 {app} item，在 Skills 面板把這個 skill 裝進去修改，再從那裡重新發布——之後「修改」就會開那個新 item。",
+    en: "Create a new {app} item, install this skill from its Skills panel, edit, and publish from there — Edit will open that item from then on.",
+  },
+  "skillHub.edit.newItem.go": { "zh-TW": "開新 item", en: "Create the item" },
+  "skillHub.failed": { "zh-TW": "沒有成功：{reason}", en: "That didn't work: {reason}" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

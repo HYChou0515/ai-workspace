@@ -1,7 +1,7 @@
 """The skill hub's read routes, and the item-side install door (plan P6).
 
-Three surfaces read the same store: the skill hub page (list + detail + zip),
-the Skills panel's "install from the skill hub" (the install route here), and
+Three surfaces read the same store: the skill hub page (list + detail), the
+Skills panel's "install from the skill hub" (the install route here), and
 the agent's three tools (`agent/tools.py`). Visibility is applied once, in
 `SkillHubStore.visible` / `state_for`, and every route here goes through one
 of those — an entry the viewer may not read is a 404 worded exactly like one
@@ -16,13 +16,11 @@ who can read the entry gets 403 on every one of them.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from typing import Literal
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -35,21 +33,11 @@ from ..apps.skill_hub import (
 )
 from ..apps.skills import install_hub_skill, skill_folder_in_the_way, workspace_skill_payload
 from ..files import WorkspaceFiles
-from ..files.zip_download import (
-    DownloadPrepared,
-    prepare_zip,
-    prepared_path,
-    safe_zip_filename,
-    stream_prepared_zip,
-    write_zip_members,
-)
 from ..perm import Actor, authorize
 from ..resources.groups import groups_of
 from .item_authz import load_access_facts
 from .locator import ItemLocator
 from .permission_body import PermissionBody, PermissionOut, build_permission
-
-logger = logging.getLogger(__name__)
 
 #: One wording for every "not for you" — a private entry, a deleted one and an
 #: id that never existed all answer this, so a 404 never says "exists, not for you".
@@ -111,6 +99,9 @@ class SkillHubDetail(BaseModel):
     skill_md: str
     is_owner: bool
     visibility: Literal["public", "restricted", "private"]
+    #: The full access state, for the owner's share dialog — the same shape
+    #: `PUT …/permission` takes, so it round-trips. `None` for everyone else.
+    permission: PermissionBody | None
     #: `referenced_tools` minus the ceiling of the App asked about (`?app=`);
     #: empty when no App was asked about.
     missing_tools: list[str]
@@ -248,39 +239,11 @@ def register_skill_hub_routes(
             skill_md=payload.get("SKILL.md", b"").decode("utf-8", errors="replace"),
             is_owner=is_owner,
             visibility=entry.permission.visibility,
+            permission=PermissionBody(**msgspec.to_builtins(entry.permission))
+            if is_owner
+            else None,
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
         )
-
-    @app.post("/skill-hub/entries/{entry_id}/download/prepare")
-    async def prepare_skill_hub_download(entry_id: str) -> DownloadPrepared:
-        """A zip of the entry's files, rooted at `<name>/` so it unpacks as the
-        folder another tool (opencode, a `.skill/` dir) expects. Same two-step
-        shape as the workspace download."""
-        viewer = get_user_id()
-        entry = _readable(entry_id, viewer)
-        payload = await hub.payload_of(entry_id)
-        members = [(f"{entry.name}/{rel}", data) for rel, data in sorted(payload.items())]
-        download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
-        logger.info(
-            "skill_hub_routes: prepared download %s of entry %s (%d bytes)",
-            download_id,
-            entry_id,
-            size,
-        )
-        return DownloadPrepared(
-            download_id=download_id,
-            filename=safe_zip_filename(entry.name, fallback="skill"),
-            size=size,
-        )
-
-    @app.get("/skill-hub/entries/{entry_id}/download/{download_id}")
-    async def stream_skill_hub_download(entry_id: str, download_id: str) -> FileResponse:
-        viewer = get_user_id()
-        entry = _readable(entry_id, viewer)
-        path = prepared_path(download_id)
-        if path is None:
-            raise HTTPException(status_code=404, detail="download not found")
-        return stream_prepared_zip(path, safe_zip_filename(entry.name, fallback="skill"))
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────
 
