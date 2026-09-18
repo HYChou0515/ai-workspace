@@ -200,8 +200,9 @@ After #813 the API pods stop OOMing. Three things showed up in their place:
 
 - `rca-app`: `terminationGracePeriodSeconds`, `preStop` — both new.
 - `server.shutdown_budget_sec` (uvicorn's `timeout_graceful_shutdown` is the
-  same number) and `server.turn_reclaim_interval_sec` — new knobs, ledger row
-  in `docs/migrations.md` §5.5. The pod's exit takes at most: uvicorn's wait
+  same number) and `server.turn_reclaim_interval_sec` — new knobs, an entry
+  in `docs/migrations.md` (the upgrade runbook, `#pr-815`; master turned the
+  ledger table into that runbook while this PR was open). The pod's exit takes at most: uvicorn's wait
   (≤ budget) + the lifespan drain (one deadline for every engine and, all-in-
   one only, the coordinators: ≤ budget, plus 4 s for each engine that still
   has turns past it — 2 s for the handover write, 2 s for the cancelled
@@ -354,7 +355,8 @@ Round 1's replacements, read as new code:
   `kill_idle` does; the declined-turn path publishes its cancel only if the
   copy was still this pod's.
 
-Prose: the ledger row back to the table's four cells; the ms-window duplicate
+Prose: the ledger row back to the table's four cells (then, on merging master,
+rewritten as a `#pr-815` runbook entry — #816 replaced the table); the ms-window duplicate
 answer and the `kind: local` dir retention stated as trade-offs; the 503 —
 round 1 had credited it with the non-deletion SIGTERMs, and uvicorn closes
 the listener within 0.1 s of any SIGTERM, so it is the truthful answer and

@@ -125,7 +125,7 @@ flowchart LR
     `SpecstarFileStore.prefix_index_ready()` 在全部回填完成前為 False、`/api/readyz` 回 503，
     而 k8s 的 readinessProbe 就指著它：**新 pod 不會 ready，rollout 會停住**，直到操作員跑
     `workspace-file` 的回填。做法（含「回填不能打 Service」這個陷阱）見
-    [部署指南](../deployment.md) §11 與[資料遷移](../migrations.md) §8。
+    [部署指南](../deployment.md) §11 與[升級手冊](../migrations.md#pr-668)。
 
 ## 設計決策與出處
 
