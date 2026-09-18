@@ -1,5 +1,9 @@
 # Plan — WUI overview: one page that lists every deployed WUI
 
+> Amended by [`plan-wui-overview-icon-favourites.md`](plan-wui-overview-icon-favourites.md)
+> (2026-09-18, P11 onward, same PR): a page's own icon on the row, and a
+> viewer's favourites group.
+
 ## Problem
 
 A WUI lives in the item that made it, and nothing outside that item knows it
