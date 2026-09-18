@@ -24,9 +24,12 @@ import { exactTime, relativeTime } from "../api/types";
 import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
+import { Icon } from "../components/Icon";
 import { PageMark } from "../components/PageMark";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useT } from "../lib/i18n";
+import { favouriteKey, useWuiFavourites } from "../lib/wuiFavourites";
 
 export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   const t = useT();
@@ -34,6 +37,11 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
   // item's workspace left the bar naming that item over this page. Same shape
   // as Help / Diagnostics / Review; "WUI" is the proper noun the menu uses.
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: "WUI" }]);
+  // The viewer's stars — ONE set for the page, so the two copies of a starred
+  // row (its App group and the favourites group) read and flip together. Per
+  // signed-in user: the id is a placeholder until the user query settles, and
+  // the hook re-reads when it changes.
+  const favourites = useWuiFavourites(useCurrentUser());
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.wuiOverview,
     queryFn: () => client.list(),
@@ -75,6 +83,11 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
     if (rows) rows.push(page);
     else groups.set(page.slug, [page]);
   }
+  // The favourites group: the listed rows the viewer starred, in the
+  // listing's order — a shortcut above the complete listing, never instead of
+  // it. A starred key the listing no longer returns draws nothing (and stays
+  // in storage: Deploying the page again brings it back starred).
+  const starred = data.filter((page) => favourites.has(favouriteKey(page)));
 
   return (
     <div className="page">
@@ -87,7 +100,24 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
           </p>
         </>
       ) : (
-        [...groups].map(([slug, rows]) => {
+        <>
+          {starred.length > 0 ? (
+            <section aria-labelledby="wui-favourites">
+              <h2 id="wui-favourites">{t("wui.favourites")}</h2>
+              <ul className="wui-list">
+                {starred.map((page) => (
+                  <PageRow
+                    key={`${page.item_id}${page.path}`}
+                    page={page}
+                    client={client}
+                    starred
+                    onStar={() => favourites.toggle(favouriteKey(page))}
+                  />
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {[...groups].map(([slug, rows]) => {
           // The heading IS the pill: its label is the App's own name, the slug
           // until the manifests arrive (or for an App no longer registered),
           // and the icon inside is `aria-hidden` — so the region is named by
@@ -101,12 +131,19 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
                   in my-resources.css is written per list class. */}
               <ul className="wui-list">
                 {rows.map((page) => (
-                  <PageRow key={`${page.item_id}${page.path}`} page={page} client={client} />
+                  <PageRow
+                    key={`${page.item_id}${page.path}`}
+                    page={page}
+                    client={client}
+                    starred={favourites.has(favouriteKey(page))}
+                    onStar={() => favourites.toggle(favouriteKey(page))}
+                  />
                 ))}
               </ul>
             </section>
           );
-        })
+          })}
+        </>
       )}
     </div>
   );
@@ -116,7 +153,19 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
  * and — for someone who may — Remove. Its own component so the mutation is the
  * ROW'S (the pattern `LiveEnvironmentRow` set): one row's pending press must
  * not disable every other row's button. */
-function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
+function PageRow({
+  page,
+  client,
+  starred,
+  onStar,
+}: {
+  page: DeployedWui;
+  client: WuiApi;
+  /** Whether THIS viewer starred it — the page's one set, so a row drawn twice
+   * (its App group and the favourites group) shows one answer. */
+  starred: boolean;
+  onStar: () => void;
+}) {
   const t = useT();
   const qc = useQueryClient();
   const { confirm } = useDialog();
@@ -160,6 +209,23 @@ function PageRow({ page, client }: { page: DeployedWui; client: WuiApi }) {
           })}
         </span>
       </span>
+      {/* The star: the viewer's own, so every row has one — a reader who may
+          not Remove may still keep a favourite. `aria-pressed` is the state
+          and what the sheet fills the glyph from; the label is the action,
+          naming the page, so "pressed" is never the only clue. `ghost`, not
+          `secondary`: it sits beside Remove and must not read as a second
+          Remove. */}
+      <button
+        type="button"
+        className="btn"
+        data-variant="ghost"
+        data-size="sm"
+        aria-pressed={starred}
+        aria-label={starred ? t("wui.unstar", { title: page.title }) : t("wui.star", { title: page.title })}
+        onClick={onStar}
+      >
+        <Icon name="star" size={16} />
+      </button>
       {page.can_remove ? (
         <button
           type="button"

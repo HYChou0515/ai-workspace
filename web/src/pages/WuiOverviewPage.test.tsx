@@ -7,7 +7,7 @@ import "@testing-library/jest-dom/vitest";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeployedWui, WuiApi } from "../api/wui";
 
@@ -21,11 +21,14 @@ vi.mock("../api", () => ({
   },
 }));
 
+vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "alice" }));
+
 import { makeQueryClient } from "../api/queryClient";
 import { exactTime, relativeTime } from "../api/types";
 import { DialogProvider } from "../components/Dialog";
 import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { translate } from "../lib/i18n";
+import { favouriteKey, readFavourites, toggleFavourite } from "../lib/wuiFavourites";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { QueryWrap } from "../test/queryWrapper";
 import { WuiOverviewPage } from "./WuiOverviewPage";
@@ -72,6 +75,7 @@ function Wrap({ children }: { children: React.ReactNode }) {
 }
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 /** The product's own words. No `LocaleProvider` is mounted here, so `useT`
  * resolves the context DEFAULT (zh-TW) whatever the runner's `navigator`
@@ -292,6 +296,119 @@ describe("WuiOverviewPage", () => {
     expect(items[0].firstElementChild).toBe(marks[0]);
     // The mark does not become part of the row's name.
     expect(within(items[0]).getByRole("link", { name: "Shipping board" })).toBeInTheDocument();
+  });
+
+  describe("favourites (docs/plan-wui-overview-icon-favourites.md)", () => {
+    const FAV = () => word("wui.favourites");
+    const STAR = (title: string) => translate("zh-TW", "wui.star", { title });
+    const UNSTAR = (title: string) => translate("zh-TW", "wui.unstar", { title });
+    const favGroup = () => screen.queryByRole("region", { name: FAV() });
+
+    it("draws no favourites group until something is starred, and a star on every row", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      expect(favGroup()).toBeNull();
+      const star = screen.getByRole("button", { name: STAR("Shipping board") });
+      // The state is `aria-pressed`; the label is the ACTION — it names the
+      // page and says which way the press goes.
+      expect(star).toHaveAttribute("aria-pressed", "false");
+      // `.btn` + a variant, or base.css leaves it bare text (review round 2 /
+      // 4 of this PR) — and a read-only viewer gets a star too: starring is
+      // theirs, Remove is not.
+      expect(star).toHaveClass("btn");
+      expect(star).toHaveAttribute("data-variant", "ghost");
+      expect(screen.getByRole("button", { name: STAR("Scrap trend") })).toBeInTheDocument();
+    });
+
+    it("puts a starred page in a favourites group at the top — and leaves it under its App", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      fireEvent.click(screen.getByRole("button", { name: STAR("Burn-down") }));
+
+      const fav = favGroup();
+      expect(fav).not.toBeNull();
+      // Literally, in the product's words: the heading is what a reader lands
+      // on, and a heading derived from the key under test pins nothing.
+      expect(within(fav!).getByRole("heading")).toHaveTextContent("我的最愛");
+      // First on the page: the shortcut sits above the complete listing.
+      const regions = screen.getAllByRole("region");
+      expect(regions[0]).toBe(fav);
+      expect(within(fav!).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+        expect.stringContaining("Burn-down"),
+      ]);
+      // …and still under 專案管理, where the complete listing keeps it.
+      const pm = screen.getByRole("region", { name: "專案管理" });
+      expect(within(pm).getAllByRole("listitem")).toHaveLength(1);
+      // Both copies of the row show the same state: two stars, both pressed,
+      // both now offering to unstar.
+      expect(screen.getAllByRole("button", { name: UNSTAR("Burn-down") })).toHaveLength(2);
+      for (const b of screen.getAllByRole("button", { name: UNSTAR("Burn-down") })) {
+        expect(b).toHaveAttribute("aria-pressed", "true");
+      }
+      // Written through, under this user.
+      expect(readFavourites("alice")).toEqual([favouriteKey(THREE[1])]);
+    });
+
+    it("lists two favourites from two Apps in the listing's order, and drops the group when the last star goes", async () => {
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      // Starred in the OPPOSITE order to the listing: the group follows the
+      // listing (newest Deploy first), not the order of starring.
+      fireEvent.click(screen.getByRole("button", { name: STAR("Scrap trend") }));
+      fireEvent.click(screen.getByRole("button", { name: STAR("Burn-down") }));
+
+      expect(within(favGroup()!).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+        expect.stringContaining("Burn-down"),
+        expect.stringContaining("Scrap trend"),
+      ]);
+
+      // Unstar from inside the favourites group: its copy and the App group's
+      // copy both flip; the group survives while one star remains.
+      fireEvent.click(within(favGroup()!).getAllByRole("button", { name: UNSTAR("Burn-down") })[0]);
+      expect(within(favGroup()!).getAllByRole("listitem")).toHaveLength(1);
+      expect(screen.getByRole("button", { name: STAR("Burn-down") })).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(within(favGroup()!).getByRole("button", { name: UNSTAR("Scrap trend") }));
+      expect(favGroup()).toBeNull();
+      expect(readFavourites("alice")).toEqual([]);
+    });
+
+    it("draws nothing for a starred page the listing no longer returns, and keeps its key", async () => {
+      // Starred earlier; since Removed, or its item closed to this viewer.
+      toggleFavourite("alice", "gone/pages/old/page.ai.yaml");
+      toggleFavourite("alice", favouriteKey(THREE[0]));
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+
+      expect(within(favGroup()!).getAllByRole("listitem")).toHaveLength(1);
+      expect(readFavourites("alice")).toEqual(["gone/pages/old/page.ai.yaml", favouriteKey(THREE[0])]);
+    });
+
+    it("stars are the viewer's own: another user's stars do not show", async () => {
+      toggleFavourite("bob", favouriteKey(THREE[0]));
+      render(<WuiOverviewPage client={client()} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+      expect(favGroup()).toBeNull();
+    });
+
+    it("Remove pressed in the favourites group takes the row out of both groups with one DELETE", async () => {
+      toggleFavourite("alice", favouriteKey(THREE[0]));
+      const c = client();
+      render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+      await screen.findByRole("region", { name: "根因分析" });
+      expect(screen.getAllByRole("link", { name: "Shipping board" })).toHaveLength(2);
+
+      fireEvent.click(within(favGroup()!).getByRole("button", { name: REMOVE() }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: word("wui.remove") }));
+
+      await waitFor(() => expect(screen.queryByRole("link", { name: "Shipping board" })).toBeNull());
+      expect(c.remove).toHaveBeenCalledTimes(1);
+      expect(favGroup()).toBeNull();
+    });
   });
 
   it("publishes its own breadcrumb trail, so the bar stops naming the item the viewer just left", async () => {

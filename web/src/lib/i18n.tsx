@@ -1162,6 +1162,12 @@ export const messages = {
   },
   "wui.remove.cancel": { "zh-TW": "取消", en: "Cancel" },
   "wui.remove.failed": { "zh-TW": "移除失敗，再試一次。", en: "Could not remove it — try again." },
+  // The viewer's favourites (plan-wui-overview-icon-favourites): a group at the
+  // top of the overview, and a star on every row. The star's label is the
+  // ACTION, naming the page — `aria-pressed` carries the state.
+  "wui.favourites": { "zh-TW": "我的最愛", en: "Favourites" },
+  "wui.star": { "zh-TW": "把「{title}」加入我的最愛", en: "Add “{title}” to favourites" },
+  "wui.unstar": { "zh-TW": "把「{title}」從我的最愛移除", en: "Remove “{title}” from favourites" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",

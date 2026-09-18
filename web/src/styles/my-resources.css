@@ -413,8 +413,17 @@
   /* The leading `auto` is the mark — a circle of one FIXED size (inline
      width/height on `.page-mark`), so unlike the item title it cannot grow
      with content and the subgrid lesson above does not reach it. */
-  grid-template-columns: auto minmax(0, 1fr) fit-content(45%) auto;
+  /* The trailing pair are the star and Remove — buttons, bounded. */
+  grid-template-columns: auto minmax(0, 1fr) fit-content(45%) auto auto;
   column-gap: var(--space-12);
+}
+
+/* A row without Remove (a reader) still has the star; it keeps its own
+   column so the stars line up down the list, and the empty Remove cell is
+   just empty. The star's PRESSED state fills the glyph: the fill follows the
+   one attribute that is the state, so it cannot drift from the label. */
+.page .wui-list [aria-pressed="true"] [data-icon="star"] path {
+  fill: currentColor;
 }
 
 .page .wui-list > li {
@@ -574,10 +583,10 @@
   }
 
   .page .wui-list > li {
-    /* mark · title · Remove on the first line; the detail drops under the
-       TITLE (column 2 onward), not under the mark, so it reads as the
+    /* mark · title · star · Remove on the first line; the detail drops under
+       the TITLE (column 2 onward), not under the mark, so it reads as the
        title's second line. */
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     row-gap: var(--space-4);
   }
 
@@ -592,9 +601,16 @@
   }
 
   .page .wui-list > li > button {
-    grid-column: 3;
     grid-row: 1;
     justify-self: end;
+  }
+
+  .page .wui-list > li > button[aria-pressed] {
+    grid-column: 3;
+  }
+
+  .page .wui-list > li > button:not([aria-pressed]) {
+    grid-column: 4;
   }
 
   .page .wui-list .detail {

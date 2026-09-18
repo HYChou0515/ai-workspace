@@ -134,10 +134,12 @@ describe("my-resources: the live panel's layout", () => {
     const tracks = wideRule(".page .wui-list").match(/grid-template-columns:([^;]*);/)?.[1];
     expect(tracks).toBeTruthy();
     const cols = tracks!.trim().split(/\s+(?![^(]*\))/);
-    // mark · title · item + who/when · Remove (P13 put the mark first). The
-    // free-text track is the THIRD; a test that read "the second" after the
-    // mark arrived would have pinned the title's `1fr` and called it a cap.
-    expect(cols).toHaveLength(4);
+    // mark · title · item + who/when · star · Remove (P13 put the mark first,
+    // P14 the star before Remove). The free-text track is the THIRD; a test
+    // that read "the second" after the mark arrived would have pinned the
+    // title's `1fr` and called it a cap.
+    expect(cols).toHaveLength(5);
+    expect(cols.slice(3)).toEqual(["auto", "auto"]);
     expect(cols[2]).toMatch(/^fit-content\(\d+(\.\d+)?(%|rem|px|ch|em)\)$/);
     // The mark's track is `auto` and that is safe ONLY because the mark is a
     // fixed-size box — `PageMark` sets width and height inline, and its test
@@ -202,6 +204,11 @@ describe("my-resources: the live panel's layout", () => {
     // as a third thing on the row rather than the title's second line.
     expect(block).toMatch(/\.page \.wui-list \.detail \{[^}]*grid-column:\s*2 \/ -1/);
     expect(block).toMatch(/\.page \.wui-list > li > \.page-mark \{[^}]*grid-column:\s*1/);
+    // The star keeps column 3 and Remove column 4 by the one attribute that
+    // tells them apart, so a reader's row (no Remove) still puts its star
+    // where every other row's is.
+    expect(block).toMatch(/\.page \.wui-list > li > button\[aria-pressed\] \{[^}]*grid-column:\s*3/);
+    expect(block).toMatch(/\.page \.wui-list > li > button:not\(\[aria-pressed\]\) \{[^}]*grid-column:\s*4/);
     // …and the title must stop sharing a line with the App tag, which is what
     // gives it the width back.
     expect(block).toMatch(/\.page \.live-list \.app-tag \{[^}]*grid-row:\s*2/);
