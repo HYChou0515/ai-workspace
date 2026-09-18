@@ -497,6 +497,23 @@
 #     qwen3-32b-local: { model: ollama_chat/qwen3:32b, llm: { base_url: http://gpu-2:11434 } }
 #     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30, num_retries: 1 }  # hosted ⇒ relax ttft
 #
+# ─── chat_video (Export ▾ → 影片) ─────────────────────────────────────────
+# The ceilings on what a video job may ask for (docs/plan-chat-video-export.md,
+# decision 10). The form only offers values inside them; the server refuses
+# whatever it is sent past them (422 naming the ceiling) and refuses to write an
+# output larger than max_output_bytes (the job fails with one sentence). The
+# worker pod's memory limit in kubernetes/base/workers.yaml was set from these —
+# raising max_pixels means re-measuring (docs/chat-video.md, 要多少資源).
+# chat_video:
+#   max_pixels: 2073600         # width × height ≤ 1920×1080 (a portrait 1080×1920 fits)
+#   max_seconds: 180            # VideoOptions.max_seconds ≤ this; the recording is as
+#                               #   long as the video, so this is the job's wall time
+#   max_output_bytes: 100000000 # a 1080p GIF is the case (36 MB for 41 s); mp4 is ~4 MB a minute
+#   heartbeat_seconds: 10       # the worker re-reads + rewrites <output>.progress.json
+#                               #   this often; deleting the file is the cancel
+#   stale_after_seconds: 60     # no heartbeat for this long ⇒ the worker died and the
+#                               #   progress file may be replaced by a new request
+
 # `vision: true` — the preset's model NATIVELY sees images. A workspace turn then
 # feeds attached images straight into the main model's message, and `read_image`
 # hands it the raw image, instead of routing every image through the separate

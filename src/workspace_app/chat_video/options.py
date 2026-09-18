@@ -105,3 +105,28 @@ class VideoOptions(msgspec.Struct, frozen=True):
         for ok, why in checks:
             if not ok:
                 raise ValueError(why)
+
+
+def check_limits(options: VideoOptions, *, max_pixels: int, max_seconds: int) -> None:
+    """The server's ceilings on top of the struct's own sanity (which is what
+    ANY caller may ask; these are what THIS deployment allows —
+    ``config.yaml`` ``chat_video:``). The form never offers a value past
+    them; a caller of the API can send anything, so the refusal names the
+    ceiling and what it is, one sentence, for a 422."""
+    pixels = options.width * options.height
+    if pixels > max_pixels:
+        side = _side_of(max_pixels)
+        raise ValueError(
+            f"{options.width}×{options.height} is {pixels:,} pixels; at most {max_pixels:,}{side}"
+        )
+    if options.max_seconds > max_seconds:
+        raise ValueError(f"max_seconds {options.max_seconds}; at most {max_seconds}")
+
+
+def _side_of(max_pixels: int) -> str:
+    """`(1920×1080)` after a pixel count a person would not recognise; the
+    16:9 frame with that many pixels, when it is a whole one."""
+    width = round((max_pixels * 16 / 9) ** 0.5)
+    return (
+        f" ({width}×{max_pixels // width})" if width * (max_pixels // width) == max_pixels else ""
+    )

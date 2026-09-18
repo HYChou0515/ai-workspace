@@ -1334,3 +1334,33 @@ def test_subagent_models_left_null_loads_as_empty(tmp_path: Path):
     )
     s = load(config_path=cfg, env={})
     assert s.agents.subagent_models == ()
+
+
+def test_chat_video_section_loads_and_defaults_are_the_measured_ceilings(tmp_path: Path):
+    """`chat_video:` is the server-side ceiling on what a video job may ask
+    for (plan-chat-video-export decision 10): total pixels, seconds, output
+    bytes, and the progress heartbeat. Whitelisted AND built — a key that
+    parses but never reaches `Settings` is the dead-knob class. The defaults
+    are what the worker pod's limits were set from."""
+    defaults = load(config_path=tmp_path / "missing.yaml", env={}).chat_video
+    assert defaults.max_pixels == 1920 * 1080
+    assert defaults.max_seconds == 180
+    assert defaults.max_output_bytes == 100_000_000
+    assert defaults.heartbeat_seconds == 10
+    assert defaults.stale_after_seconds == 60
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            chat_video:
+              max_pixels: 921600
+              max_seconds: 60
+              max_output_bytes: 20000000
+              heartbeat_seconds: 5
+              stale_after_seconds: 30
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={}).chat_video
+    assert (s.max_pixels, s.max_seconds, s.max_output_bytes) == (921600, 60, 20_000_000)
+    assert (s.heartbeat_seconds, s.stale_after_seconds) == (5, 30)

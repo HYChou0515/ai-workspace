@@ -172,9 +172,12 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - route `export-chat?format=&start=&end=`;422 一句話;`Content-Disposition` 兩種副檔名。
 - 測試:格式表(每種 role 一列、reasoning、tool 截斷、shown-files 清單、stopped、error)、範圍邊界(0 / 全部 / 越界 / start≥end)、route 兩種 format。
 
-### P3 — 上限 config
-- `config/schema.py` 加 `chat_video`(預設如決策 10);`config.example.yaml` 附範例段;`docs/migrations.md` 記一筆(default-on、不填照預設)。
-- `options.py`:`ChatVideoLimits` + `check_limits`;測試每條上限的邊界(等於過、超過一句話)。
+### P3 — 上限 config ✅
+- `config/schema.py` `ChatVideoSettings` + `Settings.chat_video`;loader whitelist + `_build`(測試:預設值 = 量到的上限、寫了會被建出來);
+  `configs/config.example.yaml` 附註解段(去掉 `#` 餵 loader 驗過);`docs/configuration.md` 表加一列;`docs/migrations.md` 加 #823 的條目
+  (四格;裡面提到後面 phase 才有的行為——P8 收尾時逐句回驗)。
+- `options.py` `check_limits(options, *, max_pixels, max_seconds)`(不依賴 config 模組,收整數):等於過、超過 `ValueError` 一句話點名上限與數字
+  (`1921×1080 is 2,074,680 pixels; at most 2,073,600 (1920×1080)`);`max_output_bytes` 在 worker 寫檔前才能查,P5。
 
 ### P4 — 進度檔 + 取消旗標
 - `chat_video/progress.py`:`Progress` struct、`write(files, item, path, progress)` / `read` / `delete`;`is_alive(progress, now, stale_after)`。

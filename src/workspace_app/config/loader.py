@@ -27,6 +27,7 @@ from .interpolate import expand_env, has_env_reference
 from .merge import merge_layered
 from .schema import (
     AgentsSettings,
+    ChatVideoSettings,
     ChunkerSettings,
     ClusterSettings,
     CodeEmbedderSettings,
@@ -607,6 +608,10 @@ _TOP_SCHEMA: dict[str, Any] = {
     },
     # #196 busy-aware failover global defaults.
     "failover": _dataclass_keys(FailoverSettings),
+    # Export-a-chat-as-video ceilings (plan-chat-video-export decision 10):
+    # whitelisted AND built below, or the route would enforce the bundled
+    # defaults whatever the operator wrote.
+    "chat_video": _dataclass_keys(ChatVideoSettings),
 }
 
 
@@ -976,6 +981,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
         ),
         failover=_build_failover(d["failover"]),
+        chat_video=_build(ChatVideoSettings, d["chat_video"]),
     )
 
 
