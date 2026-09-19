@@ -1893,6 +1893,12 @@ export const messages = {
   // D12: it used to be English only, inside a zh-TW page. The English is
   // word for word what it said before (pinned by its parity tests).
   "perm.title": { "zh-TW": "分享「{name}」", en: "Share “{name}”" },
+  // The per-document caption (KbDocIde): the one sentence of that dialog
+  // that was still English once the dialog itself spoke zh-TW (#826 round 1).
+  "kb.doc.share.caption": {
+    "zh-TW": "選擇誰能讀這份文件。它只能比 collection 更嚴，不能更寬。",
+    en: "Choose who can read this document. It can only restrict access further than the collection — never widen it.",
+  },
   "perm.caption.collection": {
     "zh-TW": "選擇誰能存取這個 collection。",
     en: "Choose who can access this collection.",

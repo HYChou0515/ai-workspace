@@ -450,7 +450,9 @@ function SkillRow({
           )}
           {skill.update_available && !upstreamGone(skill) && (
             // In words (plan-skill-hub-ui-polish D4): a fourth unlabelled
-            // icon was the only sign that upstream had moved.
+            // icon was the only sign that upstream had moved. Not shown when
+            // upstream is KNOWN gone (that row has its own badge); an absent
+            // `upstream` (an older API) still shows it.
             <span
               data-testid={`skill-update-${skill.name}`}
               style={{

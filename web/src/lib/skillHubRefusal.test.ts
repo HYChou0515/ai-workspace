@@ -64,6 +64,11 @@ describe("describeRefusal (plan-skill-hub-ui-polish D16)", () => {
     expect(describeRefusal(coded(418, { error: "teapot" }), t)).toBe(
       "fallback (418)",
     );
+    // A code that happens to be an Object.prototype name is unknown too, not
+    // a function handed to `t` (review round 1 of #826).
+    expect(describeRefusal(coded(500, { error: "constructor" }), t)).toBe(
+      "fallback (500)",
+    );
     expect(
       describeRefusal(new HttpError(409, "the server's own sentence"), t),
     ).toBe("the server's own sentence");

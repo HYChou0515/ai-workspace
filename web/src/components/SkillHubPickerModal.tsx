@@ -7,15 +7,16 @@
  * this App does not have. Shown, never enforced — the person decides. The
  * install goes through the panel's own door (`POST …/skills/install`), which
  * shares its core and its refusals with the agent's `install_skill` tool: a
- * folder of that name already here is a 409 whose sentence names whose copy
- * it is, and that sentence is what the person sees.
+ * folder of that name already here is a 409 carrying the fact (whose copy,
+ * which path), which `describeRefusal` words for the person.
  *
  * That refusal is also known BEFORE the press (plan-skill-hub-ui-polish D8):
  * the panel hands over the names whose files are here (`taken`, the same
  * predicate as its Download), and a row of such a name is marked 「已有同名
  * skill」 with its Install disabled — the decision's information at the
- * decision point, and the same condition the route refuses on, not a second
- * rule that could drift.
+ * decision point. It is a second reading of the fact the route refuses on
+ * (the folder exists), pinned to the route's by a parity test
+ * (`tests/api/test_skill_hub_panel.py`) rather than kept alike by hand.
  */
 
 import { useMutation, useQuery } from "@tanstack/react-query";

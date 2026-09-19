@@ -22,7 +22,7 @@ export function describeRefusal(
   e: unknown,
   t: (key: MsgKey, vars?: Vars) => string,
 ): string {
-  if (e instanceof HttpError && e.code && e.code in KEY) {
+  if (e instanceof HttpError && e.code && Object.hasOwn(KEY, e.code)) {
     const d = e.detail ?? {};
     const owner = str(d.owner);
     if (e.code === "folder_in_the_way") {

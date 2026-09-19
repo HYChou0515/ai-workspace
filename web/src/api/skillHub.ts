@@ -86,8 +86,8 @@ export type SkillHubApi = {
   /** `app` (a slug) adds `missing_tools` against that App's ceiling. */
   get(entryId: string, app?: string): Promise<SkillHubDetail>;
   /** The Skills panel's install door: 409 when a folder of that name is
-   * already in the item (the sentence names whose copy it is), 404 when the
-   * entry cannot be read. */
+   * already in the item (a coded refusal naming whose copy it is), 404 when
+   * the entry cannot be read. */
   install(slug: string, itemId: string, entryId: string): Promise<SkillInstalled>;
   unpublish(entryId: string): Promise<void>;
   republish(entryId: string): Promise<void>;
