@@ -1,9 +1,16 @@
 {
   "name": "one-off-stays-one-off",
-  "note": "The opposite failure: guidance about clocks must not make the model schedule things nobody asked to repeat. A one-time request gets a workflow at most — no schedule.",
+  "note": "The opposite failure: guidance about clocks must not make the model schedule things nobody asked to repeat. A one-time request gets a workflow at most — no schedule. An ask-first run (the guide's step 1) ends at the question and is compliant as long as nothing was scheduled.",
   "prompt": "Make a workflow that reads notes.md and writes a one-paragraph summary to summary.md. I'll run it myself when I need it.",
   "expect": {
-    "must_call": ["save_workflow"],
-    "must_not_call": ["save_schedules"]
+    "must_call": [
+      [
+        "save_workflow",
+        "ask_user"
+      ]
+    ],
+    "must_not_call": [
+      "save_schedules"
+    ]
   }
 }
