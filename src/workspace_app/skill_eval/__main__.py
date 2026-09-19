@@ -220,8 +220,11 @@ def _resolve_skill(spec: str) -> tuple[str, str, Path]:
         if not name:
             raise SystemExit(f"{path}: SKILL.md frontmatter has no `name`")
     src = SHARED_SKILLS.get(name)
-    if src is None and text is not None and path.parent.name == name:
-        src = path.parent
+    # `.resolve()`: `--skill SKILL.md` from inside the folder has parent `.`,
+    # whose own name is "" — the rule is about the folder, not the spelling.
+    own = path.resolve().parent
+    if src is None and text is not None and own.name == name:
+        src = own
     if src is None:
         where = f"{path} is not in a folder named {name!r} and" if text is not None else "it is"
         raise SystemExit(
@@ -244,6 +247,9 @@ def main() -> None:
         raise SystemExit("need --skill and --scenarios (or --dump-skill)")
 
     name, skill_md, skill_dir = _resolve_skill(args.skill)
+    # Named once, because it is not always the folder beside `--skill`: an
+    # edited copy of a registered skill runs with the REGISTRY's files.
+    print(f"skill {name!r}: references/ and scripts/ from {skill_dir}")
     scenarios = load_scenarios(args.scenarios)
     if not scenarios:
         raise SystemExit(f"no *.json scenarios in {args.scenarios}")

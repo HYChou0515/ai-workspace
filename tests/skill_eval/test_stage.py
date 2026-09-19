@@ -198,15 +198,28 @@ def test_the_control_arm_gets_no_skill_files(tmp_path: Path):
     assert sorted(p.name for p in work.iterdir()) == ["data.csv"]
 
 
-def test_an_unregistered_skill_in_its_own_folder_supplies_its_own_files(tmp_path: Path):
+@pytest.mark.parametrize("spelling", ["absolute", "relative-from-parent", "bare-from-inside"])
+def test_an_unregistered_skill_in_its_own_folder_supplies_its_own_files(
+    tmp_path: Path, monkeypatch, spelling: str
+):
     """A profile skill (`apps/<slug>/profiles/<p>/.skill/<name>/SKILL.md`) or a
     skill still being written is not in `SHARED_SKILLS`, and refusing it would
     make the harness useless for exactly the guidance a deployer writes. Its
     folder IS the skill folder — the platform's loader accepts a folder only
-    when it is named by the frontmatter `name` — so that folder is the source."""
+    when it is named by the frontmatter `name` — so that folder is the source,
+    however the path was spelled: `cd <folder> && --skill SKILL.md` names a
+    parent of `.`, whose own name is empty."""
     src = _skill(tmp_path / ".skill", "report-format", files={"references/r.md": "rules"})
+    if spelling == "absolute":
+        spec = str(src / "SKILL.md")
+    elif spelling == "relative-from-parent":
+        monkeypatch.chdir(src.parent)
+        spec = "report-format/SKILL.md"
+    else:
+        monkeypatch.chdir(src)
+        spec = "SKILL.md"
 
-    name, text, folder = _resolve_skill(str(src / "SKILL.md"))
+    name, text, folder = _resolve_skill(spec)
 
     assert (name, folder) == ("report-format", src)
     work = tmp_path / "work"

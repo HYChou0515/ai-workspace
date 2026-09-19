@@ -8,6 +8,11 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
     --scenarios sample-scenarios/author-skill --control -o ./tune/run-1
 ```
 
+The dump writes `SKILL.md` alone, and an edited copy runs with the registered
+skill's `references/` (the run prints which folder supplied them). Half of
+this skill's guidance is `references/writing-for-agents.md`, so to tune that
+half edit it in place under `sample-skills/author-skill/references/`.
+
 What these measure is whether the model follows the guide's SHAPE, not whether
 `save_skill` works (its own tests do that): that it opens a file before it
 drafts, and that it does not save a skill the user has not seen. Scoring is on
