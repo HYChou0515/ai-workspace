@@ -120,7 +120,7 @@ def test_a_third_party_tool_carries_its_release_and_author_on_its_own_row(
 
     assert asked == [iid]
     by_key = {r["key"]: r for r in rows}
-    row = by_key["wafer-history"]
+    row = by_key["wafer-history:trend"]  # part 2: the row is the command, provenance rides on it
     assert row["version"] == "1.4.2"
     assert row["author"] == "Wafer Team <wafer@example.com>"
     assert row["stale"] is False
@@ -129,7 +129,9 @@ def test_a_third_party_tool_carries_its_release_and_author_on_its_own_row(
     assert row["pref"] == "follow"
     # And now a description, because resolving told us what it bundles. The
     # bare `tools[]` entry alone could only produce an empty one.
-    assert "Trend" in row["description"]
+    # Part 2: the row is the command itself, under its package.
+    assert row["label"] == "Trend" and row["package"] == "Wafer History"
+    assert row["description"] == "Yield trend for a lot."
 
 
 def test_a_tools_row_carries_what_it_wants_from_the_environment(harness: Harness, monkeypatch):
@@ -165,7 +167,7 @@ def test_a_tools_row_carries_what_it_wants_from_the_environment(harness: Harness
 
     rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
 
-    (row,) = [r for r in rows if r["key"] == "wafer-history"]
+    (row,) = [r for r in rows if r["key"] == "wafer-history:trend"]
     assert row["env_needs"] == [
         {"name": "WAFER_API", "description": "Yield service base URL", "required": True},
         {"name": "WAFER_CACHE", "description": "", "required": None},
@@ -216,7 +218,7 @@ def test_a_junk_declaration_costs_its_own_field_not_the_whole_endpoint(
     resp = harness.client.get(f"/a/rca/items/{iid}/tools")
 
     assert resp.status_code == 200, "one junk value must not take the endpoint down"
-    (row,) = [r for r in resp.json()["tools"] if r["key"] == "wafer-history"]
+    (row,) = [r for r in resp.json()["tools"] if r["key"] == "wafer-history:trend"]
     assert row["env_needs"] == [
         {"name": "GOOD", "description": "a real description", "required": True},
         {"name": "NULL_DESC", "description": "", "required": None},
@@ -254,7 +256,7 @@ def test_a_package_that_never_declared_reaches_the_wire_as_null(harness: Harness
     rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
 
     by_key = {r["key"]: r for r in rows}
-    assert by_key["wafer-history"]["env_needs"] is None, "silence is not a claim"
+    assert by_key["wafer-history:trend"]["env_needs"] is None, "silence is not a claim"
     assert by_key["exec"]["env_needs"] == [], "and it is distinguishable from one"
 
 
@@ -283,7 +285,7 @@ def test_a_third_party_row_says_it_came_from_the_cached_copy(harness: Harness, m
 
     rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
 
-    assert {r["key"]: r for r in rows}["wafer-history"]["stale"] is True
+    assert {r["key"]: r for r in rows}["wafer-history:trend"]["stale"] is True
 
 
 def test_a_third_party_row_that_could_not_be_resolved_says_why(harness: Harness, monkeypatch):
@@ -388,3 +390,126 @@ def test_every_row_names_the_fold_the_picker_groups_it_under(harness: Harness):
     # positive control on the premise: the two are otherwise indistinguishable
     assert by_key["exec"]["package"] is None and by_key["rca-tools"]["package"] is None
     assert by_key["exec"]["external"] is False and by_key["rca-tools"]["external"] is False
+
+
+# ---------------------------------------------------------------------------
+# plan-tools-picker-groups part 2: a whole-package grant is one row PER COMMAND
+# in the picker, and a command can be pinned on its own. These build their own
+# app with the first-party package inventory injected (the shared harness has
+# none, which is exactly the "nothing resolves it ⇒ one row" case above).
+
+
+def _picker_with_packages(*packages):
+    from fastapi.testclient import TestClient
+
+    from workspace_app.api.app import create_app
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import ApiTestClient
+
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        packages=list(packages),
+    )
+    return spec, ApiTestClient(app), TestClient(app)
+
+
+def _rca_tools_pkg():
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    return PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=tuple(CommandInfo(c, f"{c}.", {}) for c in ("spc", "pareto", "wafer-history")),
+    )
+
+
+def _carrier_pkg():
+    from workspace_app.tooling.registry import PackageInfo
+
+    return PackageInfo(name="python-stack", install_dir="../.tools/python-stack", commands=())
+
+
+def test_a_whole_package_grant_is_one_row_per_command_when_the_package_is_known():
+    """The rca app grants `rca-tools` whole. With the package built, the picker
+    shows its three commands, each foldable under the package and each with
+    its own switch — `python-stack`, which exports no command, stays one row."""
+    spec, client, _ = _picker_with_packages(_rca_tools_pkg(), _carrier_pkg())
+    iid = register_rca_item(spec)
+
+    rows = client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+    by_key = {r["key"]: r for r in rows}
+
+    assert "rca-tools" not in by_key  # the whole-package row is gone…
+    for cmd in ("spc", "pareto", "wafer-history"):
+        row = by_key[f"rca-tools:{cmd}"]  # …replaced by one row per command
+        assert row["group"] == "rca-tools" and row["package"] == "Rca Tools"
+        assert row["pref"] == "follow" and row["effective"] is True and row["default_on"] is True
+    assert by_key["python-stack"]["group"] == "python-stack"
+
+
+def test_a_command_pin_shows_and_takes_effect_on_its_own_row():
+    spec, client, _ = _picker_with_packages(_rca_tools_pkg())
+    iid = register_rca_item(spec, attached_tool_prefs={"rca-tools:pareto": False})
+
+    rows = client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+    by_key = {r["key"]: r for r in rows}
+
+    assert by_key["rca-tools:pareto"]["pref"] == "off"
+    assert by_key["rca-tools:pareto"]["effective"] is False
+    assert by_key["rca-tools:spc"]["pref"] == "follow"
+    assert by_key["rca-tools:spc"]["effective"] is True
+
+
+def test_a_legacy_whole_package_pin_reads_as_pinned_on_every_command_row():
+    """An item pinned `rca-tools: false` before commands were pickable: every
+    command row shows Off and resolves off, and a command key on top wins."""
+    spec, client, _ = _picker_with_packages(_rca_tools_pkg())
+    iid = register_rca_item(spec, attached_tool_prefs={"rca-tools": False, "rca-tools:spc": True})
+
+    rows = client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+    by_key = {r["key"]: r for r in rows}
+
+    assert by_key["rca-tools:pareto"]["pref"] == "off"
+    assert by_key["rca-tools:pareto"]["effective"] is False
+    assert by_key["rca-tools:spc"]["pref"] == "on"
+    assert by_key["rca-tools:spc"]["effective"] is True
+
+
+def test_the_picker_and_the_runner_agree_on_every_command(monkeypatch):
+    """Parity: `effective` on the picker row and the commands the runner
+    registers come from the same `command_grants`; drive both for one set of
+    pins and compare the sets — the anti-drift promise the route was built on,
+    restated at command granularity."""
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.apps.resolve import resolve_item_agent_config
+
+    pkg = _rca_tools_pkg()
+    spec, client, _ = _picker_with_packages(pkg)
+    prefs = {"rca-tools:pareto": False, "exec": False}
+    iid = register_rca_item(spec, attached_tool_prefs=prefs)
+
+    rows = client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+    picker_on = {r["key"] for r in rows if r["effective"]}
+
+    from workspace_app.config.schema import Settings
+    from workspace_app.factories import get_app_catalog
+
+    cfg = resolve_item_agent_config(spec, get_app_catalog(Settings()), iid)
+    assert cfg is not None
+    agent = _agent_for(cfg, packages=[pkg])
+    runner_cmds = {t.name for t in agent.tools}
+
+    assert {"spc", "wafer-history"} <= runner_cmds and "pareto" not in runner_cmds
+    assert {"rca-tools:spc", "rca-tools:wafer-history"} <= picker_on
+    assert "rca-tools:pareto" not in picker_on
+    # every package command the picker says is on, the runner registered — and vice versa
+    picker_pkg_cmds = {k.partition(":")[2] for k in picker_on if k.startswith("rca-tools:")}
+    assert picker_pkg_cmds == runner_cmds & {c.name for c in pkg.commands}

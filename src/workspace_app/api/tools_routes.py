@@ -39,7 +39,14 @@ from ..apps.manifest import load_app_manifest
 from ..apps.profiles import load_profile
 from ..apps.resolve import find_work_item
 from ..sandbox.protocol import Sandbox
-from ..tooling.catalog import BUILTIN_GROUP, flat_catalog, picker_units
+from ..tooling.catalog import (
+    BUILTIN_GROUP,
+    command_grants,
+    expand_entries,
+    flat_catalog,
+    picker_units,
+    unit_pref,
+)
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
@@ -214,29 +221,35 @@ def register_tools_routes(
         manifest = load_app_manifest(slug)
         ceiling = manifest.agent.tools
         prof = load_profile(slug, item.profile)
-        default_set = set(prof.tools if prof.tools else ceiling)
-        # Effective set from the very same resolve a turn uses (anti-drift).
-        cfg = locator.resolve_agent_config(item_id)
-        effective = set(cfg.allowed_tools or []) if cfg is not None else set()
+        default_entries = prof.tools if prof.tools else ceiling
         declared = manifest.agent.external_tools
         external = await _resolve_external(item_id, declared)
         # Resolved third-party packages join the first-party ones so their rows
         # get a real label and a description of what they bundle. Without them
         # a declared tool falls through `picker_units`' unknown-entry branch and
         # renders as a bare humanized key with nothing to say for itself.
-        units = picker_units(ceiling, [*pkgs, *external.packages])
+        packages = [*pkgs, *external.packages]
+        # The effective set comes from the same `command_grants` the runner's
+        # `_agent_for` applies (plan-tools-picker-groups part 2) — the anti-drift
+        # this route was built on, restated at COMMAND granularity: a
+        # whole-package grant is one row per command the package has, each with
+        # its own switch, and a row's `effective` is by construction what the
+        # turn registers. `default_on` is the template's answer, before pins.
+        grants = command_grants(ceiling, default_entries, prefs, packages)
+        effective = set(grants.enabled)
+        units = picker_units(expand_entries(ceiling, packages), packages)
         rows = [
             _row(
                 unit,
-                default_on=unit.name in default_set,
-                pref=_pref_state(prefs.get(unit.name)),
+                default_on=unit.name in grants.default_on,
+                pref=_pref_state(unit_pref(unit.name, prefs)),
                 effective=unit.name in effective,
                 declared=declared,
                 external=external,
                 # The same package list `picker_units` described the rows from,
                 # so a row's needs and its label can never come from different
                 # resolutions of the same tool.
-                packages=[*pkgs, *external.packages],
+                packages=packages,
             )
             for unit in units
         ]
