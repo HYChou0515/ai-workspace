@@ -13,18 +13,26 @@
  * owner's actions and nobody else's.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
-import { type SkillHubApi, type SkillHubCard, skillHubApi } from "../api/skillHub";
+import {
+  type SkillHubApi,
+  type SkillHubCard,
+  skillHubApi,
+} from "../api/skillHub";
 import { AppTag } from "../components/AppTag";
 import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useT } from "../lib/i18n";
 
-export function SkillHubPage({ client = skillHubApi }: { client?: SkillHubApi }) {
+export function SkillHubPage({
+  client = skillHubApi,
+}: {
+  client?: SkillHubApi;
+}) {
   const t = useT();
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: "Skill hub" }]);
   const [query, setQuery] = useState("");
@@ -40,6 +48,13 @@ export function SkillHubPage({ client = skillHubApi }: { client?: SkillHubApi })
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.skillHub(q, mine),
     queryFn: () => client.list(q, mine),
+    // A new (q, mine) is a new query key, and without this every keystroke's
+    // debounce made the page `isPending` — the whole tree, search box
+    // included, was swapped for 載入中…, the box remounted, and the caret
+    // and focus went with it (plan-skill-hub-ui-polish D2). The previous
+    // list stays on screen until the next one lands; only the FIRST load
+    // has nothing to show.
+    placeholderData: keepPreviousData,
   });
   // "Nothing published at all" and "nothing matches the tools" are different
   // states: the first gets the empty state (no tools, they would filter
@@ -70,7 +85,17 @@ export function SkillHubPage({ client = skillHubApi }: { client?: SkillHubApi })
   }
   if (isPending || !data) return <p>{t("skillHub.loading")}</p>;
 
-  const nothingPublished = everything !== undefined && everything.length === 0 && !q && !mine;
+  const nothingPublished =
+    everything !== undefined && everything.length === 0 && !q && !mine;
+  // Where a fork's root is — by id, from the one listing that always holds
+  // every entry this viewer may read (`everything`): a fork shown on its own
+  // (「我的」, or a search that matched the fork and not the root) can still
+  // say whose it is. A root that is in neither is one the viewer cannot read.
+  const lineage = new Map<string, SkillHubCard>();
+  for (const e of everything ?? data) {
+    lineage.set(e.id, e);
+    for (const f of e.forks) lineage.set(f.id, f);
+  }
 
   return (
     <div className="page">
@@ -90,7 +115,11 @@ export function SkillHubPage({ client = skillHubApi }: { client?: SkillHubApi })
               placeholder={t("skillHub.search")}
               aria-label={t("skillHub.search")}
             />
-            <div className="skill-hub-scope" role="group" aria-label={t("skillHub.mine")}>
+            <div
+              className="skill-hub-scope"
+              role="group"
+              aria-label={t("skillHub.mine")}
+            >
               <button
                 type="button"
                 className="btn"
@@ -118,7 +147,7 @@ export function SkillHubPage({ client = skillHubApi }: { client?: SkillHubApi })
           ) : (
             <ul className="skill-hub-list">
               {data.map((entry) => (
-                <SkillRow key={entry.id} entry={entry} />
+                <SkillRow key={entry.id} entry={entry} lineage={lineage} />
               ))}
             </ul>
           )}
@@ -130,36 +159,60 @@ export function SkillHubPage({ client = skillHubApi }: { client?: SkillHubApi })
 
 /** A root with its forks beneath (one level), or a fork standing on its own
  * when its root is out of view. */
-function SkillRow({ entry, fork = false }: { entry: SkillHubCard; fork?: boolean }) {
+function SkillRow({
+  entry,
+  fork = false,
+  lineage,
+}: {
+  entry: SkillHubCard;
+  fork?: boolean;
+  lineage: Map<string, SkillHubCard>;
+}) {
   const t = useT();
   const forks = entry.forks.length;
+  // Every fork says where it came from, whether it sits under its root or
+  // stands alone (plan-skill-hub-ui-polish D9). The review badge is gone
+  // (D7): every entry was reviewed, so "has notes" separated nothing worth a
+  // badge — the notes themselves are on the entry's page.
+  const root = entry.forked_from ? lineage.get(entry.forked_from) : undefined;
   return (
-    <li className="skill-hub-row" data-fork={fork || undefined} data-testid={`entry-${entry.id}`}>
+    <li
+      className="skill-hub-row"
+      data-fork={fork || undefined}
+      data-testid={`entry-${entry.id}`}
+    >
       <div className="skill-hub-row-head">
-        <Link to={`/skill-hub/${encodeURIComponent(entry.id)}`} className="skill-hub-row-title">
+        <Link
+          to={`/skill-hub/${encodeURIComponent(entry.id)}`}
+          className="skill-hub-row-title"
+        >
           <span className="skill-hub-owner">{entry.owner}/</span>
           {entry.name}
         </Link>
         <AppTag slug={entry.source_app} />
-        {entry.review_verdict === "notes" ? (
-          <span className="skill-hub-badge" data-kind="notes">
-            {t("skillHub.badge.notes")}
-          </span>
-        ) : null}
         {forks > 0 ? (
           <span className="skill-hub-badge" data-kind="forks">
-            {forks === 1 ? t("skillHub.fork.one") : t("skillHub.forks", { count: forks })}
+            {forks === 1
+              ? t("skillHub.fork.one")
+              : t("skillHub.forks", { count: forks })}
           </span>
         ) : null}
       </div>
       <p className="skill-hub-row-desc">{entry.description}</p>
+      {entry.forked_from ? (
+        <p className="skill-hub-row-origin">
+          {root
+            ? t("skillHub.forkOf", { origin: `${root.owner}/${root.name}` })
+            : t("skillHub.forkOf.gone")}
+        </p>
+      ) : null}
       <div className="skill-hub-row-meta">
         <UserChip userId={entry.owner} size={18} nameOnly />
       </div>
       {forks > 0 ? (
         <ul className="skill-hub-forks">
           {entry.forks.map((f) => (
-            <SkillRow key={f.id} entry={f} fork />
+            <SkillRow key={f.id} entry={f} fork lineage={lineage} />
           ))}
         </ul>
       ) : null}
