@@ -11,7 +11,7 @@ import json
 import logging
 import posixpath
 import re
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from ..apps.subagents import SubagentDef
     from ..factories import SubagentModel
     from ..resources.conversation import Citation
+    from ..tooling.registry import PackageInfo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -2777,8 +2778,14 @@ async def save_subagent_impl(
     # Tools outside the ceiling are REFUSED, not quietly trimmed. A sub-agent that
     # starts out believing it holds `exec` and then finds it missing fails in a way
     # its caller cannot read; being told now is what lets the agent pick another way.
-    if (allowed := _subagent_tool_ceiling(ctx.context)) is not None and (
-        outside := sorted(t for t in tools if t not in allowed)
+    # "Outside" is judged by the same rule the loader clamps with (`narrow_entries`),
+    # at either granularity: a turn holds package tools as `pkg:cmd` units, and a
+    # definition may still say `pkg` — meaning what the turn holds of it.
+    from ..tooling.catalog import narrow_entries
+
+    allowed = _subagent_tool_ceiling(ctx.context)
+    if allowed is not None and (
+        outside := sorted(t for t in tools if not narrow_entries([t], allowed))
     ):
         # Two rules wearing one sentence. "it can only use tools you hold
         # yourself" was said for the four a sub-agent may NEVER hold — which the
@@ -2817,8 +2824,16 @@ async def save_subagent_impl(
     # `checked.parsed` is the definition the round-trip check already parsed —
     # re-parsing here produced a branch that could never be false, which the
     # 100% gate would have failed on.
+    # Spliced with the SAME clamp the loader applies to a file it reads: the
+    # index is what `run_agent` delegates from for the rest of this turn, and a
+    # bare package name that the refusal above accepted (it means "what this
+    # turn holds of it") must reach the index already narrowed to that.
+    from ..apps.subagents import clamp_tools
+
     others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
-    ctx.context.subagent_defs = tuple(sorted((*others, checked.parsed), key=lambda d: d.name))
+    ctx.context.subagent_defs = tuple(
+        sorted((*others, clamp_tools(checked.parsed, allowed)), key=lambda d: d.name)
+    )
     saved = f"saved sub-agent '{slug}' to {rel_path(path)}."
     # Through the SAME predicate `build_tools` and the delegation index use. This
     # was a third reader that simply assumed, so a per-item toggle switching
@@ -2893,17 +2908,29 @@ def held_tool_names(
     return _profile_tool_ceiling(app_slug, profile)
 
 
-def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
+def _profile_tool_ceiling(
+    app_slug: str | None, profile: str | None, packages: Sequence[PackageInfo] = ()
+) -> set[str] | None:
     """The tools an agent in this App profile may hold — the App's ``agent.tools`` ceiling,
     narrowed by the profile's ``tools`` override (#323, Q4: a workflow's agent steps can't
     exceed what its author could use by hand). ``None`` (skip the clamp) for a synthetic /
-    unreadable slug."""
+    unreadable slug.
+
+    Brought to COMMAND granularity when the caller has the package list
+    (``expand_entries``): a whole-package grant becomes its ``pkg:cmd`` units,
+    so a validator judging by ``narrow_entries`` accepts ``rca-tools:spc`` and
+    refuses ``rca-tools:typo`` — with bare names only, the two are
+    indistinguishable and the typo saved a workflow whose node silently held
+    nothing. Callers without packages (the sub-agent clamp's fallback, the
+    author-workflow guide) keep the bare names, which read as "the whole
+    package" everywhere they are used."""
     if app_slug is None or profile is None:
         return None
     from msgspec import UNSET
 
     from ..apps.manifest import load_app_manifest
     from ..apps.profiles import load_profile
+    from ..tooling.catalog import expand_entries
 
     try:
         app_tools = set(load_app_manifest(app_slug).agent.tools)
@@ -2915,7 +2942,8 @@ def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str]
     # and a validator (`save_workflow_impl`) as well as the two refusal
     # messages. No shipped manifest names a legacy tool, so normalising here
     # changed four consumers on a case none of them can be handed.
-    return (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+    ceiling = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+    return set(expand_entries(sorted(ceiling), packages))
 
 
 async def save_workflow_impl(
@@ -2959,7 +2987,9 @@ async def save_workflow_impl(
             f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
             "pick another id. To put a workflow on a clock, call save_schedules."
         )
-    ceiling = _profile_tool_ceiling(ctx.context.app_slug, ctx.context.template_profile)
+    ceiling = _profile_tool_ceiling(
+        ctx.context.app_slug, ctx.context.template_profile, ctx.context.packages
+    )
     workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
     if workflow is None or errs:
         return "error: the workflow has problems — fix these and save again:\n- " + "\n- ".join(
@@ -3736,6 +3766,15 @@ _WORKSPACE_TOOLS = [
 # schema lives in the workspace, not the tool signature), so this is correct, not
 # a workaround.
 _NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
+
+
+def builtin_tool_names() -> frozenset[str]:
+    """Every built-in tool's registered name, and nothing else — for a caller
+    that only has to tell a built-in from a package entry. A set lookup:
+    `builtin_tool_descriptions` builds every tool's schema to read its
+    description (~40 ms), which is the wrong price for a membership test that
+    runs on every turn."""
+    return frozenset(_IMPLS)
 
 
 def builtin_tool_descriptions() -> dict[str, str]:

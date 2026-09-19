@@ -2271,6 +2271,7 @@ def create_app(
         # Whether the sweep will read the item's own schedules file at all — the
         # same index the sweep iterates, asked the same way.
         schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
+        packages=packages or [],
     )
 
     chat_send_svc = ChatSendService(

@@ -915,3 +915,94 @@ def test_a_run_that_will_not_start_is_a_sentence_not_a_stream():
 
     assert resp.status_code == 502
     assert "judge" in resp.json()["detail"]
+
+
+# ─── plan-tools-picker-groups part 2 (P14 revision): this door finalizes the
+# grant the same way a turn does, so a per-command pin binds a page too ───────
+
+
+class _ResolvedLocator(_Locator):
+    """What the real locator returns: `resolve`'s config, which carries the
+    App ceiling and the item's pins for the door to finalize against the
+    package list."""
+
+    def __init__(self, allowed: list[str], ceiling: list[str], prefs: dict[str, bool]):
+        super().__init__(allowed)
+        self.ceiling = ceiling
+        self.prefs = prefs
+
+    def resolve_agent_config(self, item_id: str) -> AgentConfig:
+        return AgentConfig(
+            name="cfg", allowed_tools=self.allowed, tool_ceiling=self.ceiling, tool_prefs=self.prefs
+        )
+
+
+def test_a_command_the_item_pinned_off_is_refused_at_the_wui_door():
+    # The app grants `mes` whole; the item's picker turned `lot-status` off.
+    # The agent no longer holds it, so a page must not reach it either.
+    loc = _ResolvedLocator(allowed=["mes"], ceiling=["mes"], prefs={"mes:lot-status": False})
+    client, sandbox, _, _ = build(locator=loc)
+
+    resp = client.post(URL, json={})
+    assert resp.status_code == 403
+    assert sandbox.calls == []
+    # The reason names the switch that would change the answer: the app DOES
+    # offer it; this item's picker turned it off. "This app does not offer"
+    # would send the person to app.json for a switch that lives in the picker.
+    assert "tool picker" in resp.json()["detail"]
+    assert "does not offer" not in resp.json()["detail"]
+
+
+def test_the_wui_door_provisions_from_the_finalized_grant(monkeypatch):
+    """The same finalized config the door admitted from is what the ctx
+    carries: provisioning (`ensure_sandbox`) reads `allowed_tools` off the
+    ctx to pick the bundles to install. Item pinned the package off (a legacy
+    whole-package key) and ONE command back on — the door admits it, so the
+    bundle must be provisioned, as a chat turn on this item would."""
+    from pathlib import Path
+
+    import workspace_app.agent.provision as prov
+
+    provisioned: list[list[str]] = []
+
+    async def _fake_provision(sandbox, handle, packages, *, prebuilt_dir):
+        provisioned.append([p.name for p in packages])
+
+    monkeypatch.setattr(prov, "provision_tools", _fake_provision)
+    app = FastAPI()
+    sb = _Sandbox()
+    loc = _ResolvedLocator(
+        allowed=[], ceiling=["mes"], prefs={"mes": False, "mes:lot-status": True}
+    )
+
+    async def _external(item_id: str) -> ExternalTools:
+        return ExternalTools()
+
+    register_wui_routes(
+        app,
+        locator=cast("ItemLocator", loc),
+        sandbox=cast("Sandbox", sb),
+        registry=_Registry(),
+        packages=[PKG],
+        prebuilt_dir=Path("/prebuilt"),
+        resolve_external=_external,
+        request_env=None,
+        get_user_id=lambda: "u",
+        orchestrator=None,
+        turn_engine=None,
+        workflows_for=_offers([]),
+    )
+    resp = TestClient(app).post(URL, json={})
+    assert resp.status_code == 200, resp.text
+    assert sb.calls  # the command ran…
+    assert provisioned == [["mes"]]  # …in a sandbox that had its bundle
+
+
+def test_a_command_the_item_pinned_on_is_admitted_even_when_the_profile_left_it_out():
+    # The profile granted nothing of `mes`; the item's picker turned this one
+    # command on. The agent holds it, so the page may call it.
+    loc = _ResolvedLocator(allowed=[], ceiling=["mes"], prefs={"mes:lot-status": True})
+    client, sandbox, _, _ = build(locator=loc)
+
+    assert client.post(URL, json={}).status_code == 200
+    assert sandbox.calls

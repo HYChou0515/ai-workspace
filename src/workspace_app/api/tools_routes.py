@@ -5,11 +5,16 @@ description) the chat **tool cards** label off, so an unmapped tool never leaks
 its raw ``snake_case`` name into the UI.
 
 ``GET /a/{slug}/items/{item_id}/tools`` is the per-item **picker** state: one row
-per ``app.json`` ``tools[]`` entry with its human label, the profile default
-(``default_on``), the item's tri-state override (``pref``), and the resolved
-``effective`` state. The effective state comes from the SAME
-``AppCatalog.resolve`` a real turn uses, so the picker can never drift from the
-toolset the agent actually runs.
+per unit of the App's ``tools[]`` ceiling brought to COMMAND granularity — a
+whole-package entry is one row per command the package has, a zero-command
+package or an entry nothing resolves stays one row — with its human label, the
+profile default (``default_on``), the item's tri-state override (``pref``), and
+the resolved ``effective`` state. The effective state is read off the SAME
+finalized config a real turn runs with: ``AppCatalog.resolve`` for the item,
+then ``finalize_tool_grants`` against the same package list a turn resolves
+(plan-tools-picker-groups part 2), so the picker can never drift from the
+toolset the agent actually runs. ``default_on`` is ``profile_default_tools`` —
+the function ``resolve`` itself starts from — expanded the same way.
 
 A third-party tool (#674/#724) is a row here like any other: its
 ``external_tools`` key IS an ``app.json`` ``tools[]`` entry, so it already has a
@@ -34,12 +39,17 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 from specstar import SpecStar
 
-from ..apps.catalog import AppCatalog
+from ..apps.catalog import AppCatalog, finalize_tool_grants, profile_default_tools
 from ..apps.manifest import load_app_manifest
-from ..apps.profiles import load_profile
 from ..apps.resolve import find_work_item
 from ..sandbox.protocol import Sandbox
-from ..tooling.catalog import flat_catalog, picker_units
+from ..tooling.catalog import (
+    BUILTIN_GROUP,
+    expand_entries,
+    flat_catalog,
+    picker_units,
+    unit_pref,
+)
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
@@ -91,6 +101,14 @@ class ItemToolState(BaseModel):
     Without it two rows can read as peers while one of them is a part of the
     other, and a command seen in a chat card cannot be traced to the switch
     that governs it."""
+    group: str = BUILTIN_GROUP
+    """Which fold of the picker this row lives under: ``"builtin"`` for every
+    built-in, otherwise the raw package id — a ``pkg:cmd`` command and its
+    whole-package row share it, and an entry nothing resolves is its own fold.
+
+    Said by the server because the client cannot tell: a whole-package row of
+    a first-party package and a built-in both carry no ``package`` and
+    ``external`` false. See ``docs/plan-tools-picker-groups.md``."""
     external: bool = False
     """This tool's bytes come from a third-party artifact rather than the
     platform's own image (#674). Carried explicitly because "who wrote this"
@@ -205,34 +223,44 @@ def register_tools_routes(
         prefs = item.attached_tool_prefs
         manifest = load_app_manifest(slug)
         ceiling = manifest.agent.tools
-        prof = load_profile(slug, item.profile)
-        default_set = set(prof.tools if prof.tools else ceiling)
-        # Effective set from the very same resolve a turn uses (anti-drift).
-        cfg = locator.resolve_agent_config(item_id)
-        effective = set(cfg.allowed_tools or []) if cfg is not None else set()
         declared = manifest.agent.external_tools
         external = await _resolve_external(item_id, declared)
         # Resolved third-party packages join the first-party ones so their rows
         # get a real label and a description of what they bundle. Without them
         # a declared tool falls through `picker_units`' unknown-entry branch and
         # renders as a bare humanized key with nothing to say for itself.
-        units = picker_units(ceiling, [*pkgs, *external.packages])
+        packages = [*pkgs, *external.packages]
+        # `effective` is read off the config a turn would run with: the item's
+        # resolve, finalized against this package list by the same
+        # `finalize_tool_grants` every turn passes through (plan-tools-picker-
+        # groups part 2) — one function, not a second derivation kept alike by
+        # hand. The previous copy re-derived the profile default here with a
+        # falsy test that read `tools: []` as "inherit the ceiling" and lit
+        # every row while the turn held nothing.
+        cfg = locator.resolve_agent_config(item_id)
+        effective = set(finalize_tool_grants(cfg, packages).allowed_tools or []) if cfg else set()
+        # `default_on` is the template's answer BEFORE pins — the same function
+        # `resolve` starts from, expanded the same way the ceiling is.
+        default_on = set(expand_entries(profile_default_tools(slug, item.profile), packages))
+        units = picker_units(expand_entries(ceiling, packages), packages)
         rows = [
             _row(
                 unit,
-                default_on=unit.name in default_set,
-                pref=_pref_state(prefs.get(unit.name)),
+                default_on=unit.name in default_on,
+                pref=_pref_state(unit_pref(unit.name, prefs)),
                 effective=unit.name in effective,
                 declared=declared,
                 external=external,
                 # The same package list `picker_units` described the rows from,
                 # so a row's needs and its label can never come from different
                 # resolutions of the same tool.
-                packages=[*pkgs, *external.packages],
+                packages=packages,
             )
             for unit in units
         ]
-        _warn_undeclared(item_id, declared, {u.name for u in units})
+        # Rows are per command; the declaration is per package, so compare by
+        # the unit's package — `wafer-history:trend` IS `wafer-history` offered.
+        _warn_undeclared(item_id, declared, {u.name.partition(":")[0] for u in units})
         return ItemTools(tools=rows)
 
     async def _resolve_external(item_id: str, declared: dict[str, str]) -> ExternalTools:
@@ -256,12 +284,13 @@ def register_tools_routes(
             logger.warning("item %s: third-party tools could not be resolved: %s", item_id, exc)
             return ExternalTools(refused=dict.fromkeys(declared, str(exc)))
 
-    def _warn_undeclared(item_id: str, declared: dict[str, str], units: set[str]) -> None:
+    def _warn_undeclared(item_id: str, declared: dict[str, str], offered: set[str]) -> None:
         """An `external_tools` key that is not in `tools[]` reaches no row —
         and no turn either, because `tools[]` is the ceiling every grant is
         drawn from. Silently absent in both places is the worst of both, so it
-        is said once, here, where the mismatch is visible."""
-        for name in sorted(set(declared) - units):
+        is said once, here, where the mismatch is visible. ``offered`` is the
+        set of PACKAGE names the rows cover (a row is one command)."""
+        for name in sorted(set(declared) - offered):
             logger.warning(
                 "item %s: %r is declared in external_tools but not in tools[] — "
                 "it is neither offered nor granted",
@@ -295,6 +324,7 @@ def _row(
         pref=pref,
         effective=effective,
         package=unit.package,
+        group=unit.group,
         external=provider in declared,
         version=prov.version if prov else None,
         author=prov.author if prov else None,

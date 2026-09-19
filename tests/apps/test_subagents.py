@@ -254,3 +254,13 @@ async def test_a_definition_that_vanishes_mid_listing_still_raises():
 
     with pytest.raises(FileNotFound):
         await workspace_subagent_defs(files, "inv-1")
+
+
+def test_clamp_narrows_a_bare_package_to_the_commands_the_ceiling_holds():
+    """plan-tools-picker-groups part 2: the ceiling is a finalized turn's
+    `allowed_tools` — `pkg:cmd` units — and a definition may still say `pkg`."""
+    from workspace_app.apps.subagents import SubagentDef, clamp_tools
+
+    defn = SubagentDef(name="r", description="d", body="b", tools=["rca-tools", "exec", "sci-plot"])
+    out = clamp_tools(defn, {"read_file", "rca-tools:wafer-history", "rca-tools:spc"})
+    assert out.tools == ["rca-tools:spc", "rca-tools:wafer-history"]

@@ -91,6 +91,15 @@ def test_picker_unit_for_unknown_bare_entry_degrades_cleanly():
     assert units[0].description == ""
 
 
+def test_flat_catalog_commands_carry_their_package_group_too():
+    """`ToolMeta.group` promises "the raw package id" for anything that is not
+    a built-in — on BOTH constructors. `flat_catalog` builds a package command's
+    meta through the built-in helper, which used to leave the default."""
+    cat = flat_catalog(packages=[_pkg("rca-tools", _cmd("spc", "Chart it."))])
+    assert cat["spc"].group == "rca-tools"
+    assert cat["exec"].group == "builtin"
+
+
 def test_summarize_description_handles_empty_text():
     from workspace_app.tooling.catalog import summarize_description
 
@@ -140,3 +149,22 @@ def test_a_bundle_that_describes_itself_gets_its_own_words_in_the_picker() -> No
 
     (unit,) = units
     assert unit.description == "SMT 產線的量測資料擷取與初步分析。"
+
+
+def test_every_picker_unit_names_the_group_the_picker_folds_it_under():
+    """The picker folds rows by package, with every built-in under one group
+    called ``builtin``. The FE cannot derive this itself: a whole-package row
+    of a first-party package carries no ``package`` and no ``external`` flag,
+    exactly like a built-in does. So the server names the group — the raw
+    package id, never the humanized label, so it is stable across locales."""
+    units = picker_units(
+        ["exec", "rca-tools:spc", "rca-tools", "data-fetch:grab", "mystery"],
+        packages=[_pkg("rca-tools", _cmd("spc", "Chart it."))],
+    )
+    assert [u.group for u in units] == [
+        "builtin",  # a built-in
+        "rca-tools",  # one command of a built package
+        "rca-tools",  # the whole package — same group as its commands
+        "data-fetch",  # a command of a package this deploy did not build
+        "mystery",  # an unknown bare entry is its own group
+    ]

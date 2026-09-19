@@ -1276,8 +1276,18 @@ def _validate_step(
     if step.retries < 0:
         errs.append(f"{where}: retries cannot be negative")
     if tool_ceiling is not None:
+        # Judged by the rule the run narrows with (`narrow_entries`): a command
+        # of a package the profile grants whole is inside the ceiling, since the
+        # picker now shows and the run now honours that granularity. The
+        # ceiling is what the caller could bring to command granularity: with
+        # the package list (`_profile_tool_ceiling(…, packages)`) a misspelt
+        # command names nothing and is refused; a package the caller could not
+        # resolve, or one with no commands, stays a bare name and any `pkg:cmd`
+        # of it passes here — the run then drops it, and says so in its log.
+        from ..tooling.catalog import narrow_entries
+
         for t in step.tools:
-            if t not in tool_ceiling:
+            if not narrow_entries([t], tool_ceiling):
                 errs.append(f"{where}: tool {t!r} is outside the profile's allowed tools")
     _check_interp([step.prompt, step.out, step.tools], scope, where, errs, steps_seen)
     if step.check is not None:

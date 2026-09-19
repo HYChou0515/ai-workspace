@@ -114,3 +114,54 @@ async def test_confirmation_names_a_path_the_agent_can_actually_use():
     assert ".workflows/my-flow.json" in out
     assert "/.workflows/my-flow.json" not in out
     assert await exists_impl(ctx, ".workflows/my-flow.json") is True
+
+
+def _steps_with_tools(tools: list[str]) -> str:
+    return json.dumps(
+        {
+            "id": "x",
+            "phases": [{"id": "note"}],
+            "steps": [
+                {
+                    "type": "agent",
+                    "cache": True,
+                    "prompt": "p",
+                    "phase": "note",
+                    "out": "o",
+                    "tools": tools,
+                }
+            ],
+        }
+    )
+
+
+def _rca_pkg():
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    return PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=tuple(CommandInfo(c, f"{c}.", {}) for c in ("spc", "pareto")),
+    )
+
+
+async def test_a_command_of_a_package_the_profile_grants_whole_is_accepted_by_name():
+    """plan-tools-picker-groups part 2: the run honours `rca-tools:spc` on an
+    item whose App grants `rca-tools` whole, so the validator accepts it —
+    judged against the ceiling brought to COMMAND granularity with the turn's
+    own package list, which is what makes the next test possible."""
+    ctx = _ctx(app_slug="rca", template_profile="default", packages=[_rca_pkg()])
+    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["rca-tools:spc", "read_file"]))
+    assert "saved workflow" in out, out
+
+
+async def test_a_command_the_package_does_not_have_is_refused_not_saved():
+    """`rca-tools:spcc` is a typo. Accepting it saves a workflow whose node
+    silently holds nothing of the package at run time; the validator's whole
+    job is to say so now. The packages are in hand at this door, so the
+    ceiling is expanded and the typo names nothing in it."""
+    ctx = _ctx(app_slug="rca", template_profile="default", packages=[_rca_pkg()])
+    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["rca-tools:spcc"]))
+    assert "error" in out and "outside the profile's allowed tools" in out, out
+    out = await save_workflow_impl(ctx, "flow2", _steps_with_tools(["exec:foo"]))
+    assert "error" in out and "outside the profile's allowed tools" in out, out

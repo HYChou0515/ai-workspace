@@ -504,6 +504,14 @@ def _agent_for(
     # Same tri-state for package tools (the colon-syntax expansion):
     # symmetric with build_tools above so bundled RCA presets
     # (allowed_tools=None) still expose every package command.
+    #
+    # `allowed_tools` is read AS WRITTEN. A per-item pin on one command of a
+    # whole-package grant is already in it (`pkg:cmd` units) by the time a
+    # config reaches here: the turn builder finalized the grant at the door
+    # where the package list became known (`apps.catalog.finalize_tool_grants`).
+    # Re-deriving it here from a ceiling + pins was tried and re-widened every
+    # config that had been narrowed after resolve (a sub-agent's own list, a
+    # workflow node's `tools:`).
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # Last stop before the model sees them, and the only place every source is in

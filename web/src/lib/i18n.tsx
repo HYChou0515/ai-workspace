@@ -1640,6 +1640,16 @@ export const messages = {
   "tools.on": { "zh-TW": "開啟", en: "On" },
   "tools.off": { "zh-TW": "關閉", en: "Off" },
   "tools.state.aria": { "zh-TW": "{tool} 的設定", en: "Setting for {tool}" },
+  // plan-tools-picker-groups: the list folds by package. The fold of the
+  // agent's own functions is named for what it is — the core — not "built-in":
+  // every row already carries a Built-in / by-author origin chip (#724), and a
+  // first-party PACKAGE row says Built-in too, so a fold called "builtin" sat
+  // above a column of the same word meaning something else. The server's
+  // fold id stays `builtin`; only what is shown changes.
+  "tools.group.builtin": { "zh-TW": "核心工具", en: "Core tools" },
+  "tools.group.count": { "zh-TW": "{n} 項", en: "{n} tools" },
+  "tools.group.mixed": { "zh-TW": "混合", en: "Mixed" },
+  "tools.group.aria": { "zh-TW": "{group} 整組的設定", en: "Setting for all of {group}" },
   "tools.defaultOn": { "zh-TW": "預設開啟", en: "On by default" },
   "tools.defaultOff": { "zh-TW": "預設關閉", en: "Off by default" },
   "tools.noMatch": { "zh-TW": "沒有符合「{q}」的工具。", en: "No tools match “{q}”." },

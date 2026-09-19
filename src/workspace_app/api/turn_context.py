@@ -29,7 +29,10 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import msgspec
+
 from ..agent.context import AgentToolContext, ReviewSkill
+from ..apps.catalog import finalize_tool_grants
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
@@ -45,6 +48,7 @@ from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
+from ..tooling.catalog import narrow_entries
 from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
 from ..workflow.user_schedules import SchedulePolicy
 from .locator import TurnFacts
@@ -849,6 +853,7 @@ class TurnContextBuilder:
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
         external = await self._external_tools(item_id, session)
+        agent_config = self._finalized(agent_config, external)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -911,11 +916,19 @@ class TurnContextBuilder:
         agent_config: AgentConfig | None,
         run_subagent: RunSubagent,
         history_messages: list[Message],
+        tool_subset: list[str] | None = None,
         entity_write_origin: EntityOrigin | None = None,
         caller_env: dict[str, str] | None = None,
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
         core only — every interactive extra stays at its ``AgentToolContext`` default.
+
+        ``tool_subset`` is the node's own ``tools:`` (manual §5.1): a bound, never
+        a widening. It is applied AFTER the item's pins are finalized, as an
+        intersection at command granularity (`narrow_entries`) — so a node that
+        says ``rca-tools`` gets the commands the item holds of it, and a pin that
+        turned a command ON for the item's chat adds nothing to a node that did
+        not name it. ``None`` ⇒ the node holds what the item holds.
 
         ``caller_env`` is what the deploy's seam answers for a turn with no
         request behind it (``docs/plan-headless-env.md``), resolved by the
@@ -943,6 +956,7 @@ class TurnContextBuilder:
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
         external = await self._external_tools(item_id, session)
+        agent_config = self._finalized(agent_config, external, tool_subset)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -958,3 +972,41 @@ class TurnContextBuilder:
             ),
             entity_write_origin=entity_write_origin,
         )
+
+    def _finalized(
+        self,
+        agent_config: AgentConfig | None,
+        external: ExternalTools,
+        tool_subset: list[str] | None = None,
+    ) -> AgentConfig | None:
+        """The turn's config with its tool grant DECIDED (plan-tools-picker-groups
+        part 2, P14 revision): this is the door where a resolved config first
+        meets the complete package list — first-party from the startup scan,
+        third-party from this turn's resolve — so it is where a whole-package
+        grant becomes the ``pkg:cmd`` units the item's pins leave on
+        (`finalize_tool_grants`). Everything that reads ``allowed_tools`` after
+        this and can tell a package command from a package — the sub-agent
+        clamp, the runner, provisioning, `_wui_callable` — reads the finished
+        answer, which is why it runs before `_subagent_defs` and `_common`, not
+        inside the runner. (Sizing and authz read the list too, but only its
+        built-in names; they cannot see the difference.)
+
+        A node's ``tool_subset`` is intersected afterwards, so the pins can
+        neither be re-applied on the narrowed list nor widen past it. Only
+        ``allowed_tools`` is narrowed: ``disabled_tools`` (#480's "off by
+        preference") keeps naming what the ITEM turned off, not what the node
+        left out — the node's list is not the picker, and the model must not be
+        told to ask a user to switch on a tool no switch controls."""
+        if agent_config is None:
+            return None
+        cfg = finalize_tool_grants(agent_config, [*(self._packages or []), *external.packages])
+        if tool_subset is not None:
+            held = cfg.allowed_tools or []
+            # Said, not swallowed: a node whose `tools:` names something this
+            # item does not hold (pinned off, or a command the package does
+            # not have — the validator can only refuse what it can see) runs
+            # without it, and the run's log is the only place that says so.
+            if dropped := [t for t in tool_subset if not narrow_entries([t], held)]:
+                logger.warning("workflow node: tools not held by this item, dropped: %s", dropped)
+            cfg = msgspec.structs.replace(cfg, allowed_tools=narrow_entries(tool_subset, held))
+        return cfg
