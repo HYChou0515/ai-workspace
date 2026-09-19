@@ -237,7 +237,16 @@ entry 粒度的舊答案**，其他每個讀它的人都拿到舊答案；而 re
   picker 30/68 差全是整包列換成指令列、共有列零變）另抓到兩個未宣告：sub-agent 定義也接受 `pkg:cmd`、拒絕訊息的「Available」列的是指令名
   （22→32）；env 面板對**部分授權**的組從指令名改成套件名（決定 13 的後果）→ 寫進 runbook／本紀錄。
   五條先紅（child_context、splice、schema 計數、DSL、WUI 文案）；四條是釘子、寫在修法之後或釘既有行為（WUI provisioning、第三方兩門、
-  決定 14），各由突變證明守得住；連同順序釘子共十個突變，各紅自己那一條。
+  決定 14），各由突變證明守得住；連同順序釘子共十個突變，九個只紅自己那一條，決定 14 那個（MJ）紅三條——它守的那行本來就有兩條在守，
+  它是第三根、點名用的。
+- **P21**：review 第三輪（只審 P20，缺陷＋回歸）。同一個發現：DSL 驗證器改用 `narrow_entries` 之後，對**裸名**天花板的前綴規則把
+  `rca-tools:typo`、`rca-tools:`、`exec:foo` 全放行——存檔說 saved、那個 step 跑起來什麼都沒有（跑的那半 master 也靜默，驗證器是新放寬的）。
+  修法：`narrow_entries` 的前綴規則不把內建名當套件（`exec:foo` 哪裡都不算持有）；`_profile_tool_ceiling(app, profile, packages)` 有 packages
+  就先 `expand_entries` 到指令粒度——`save_workflow_impl` 給 `ctx.packages`（完整）、兩條模板 route 由 `create_app` 給第一方——展開後沒有裸
+  `rca-tools`，typo 自然名不到東西；解不出的套件或零指令套件仍是裸名、`pkg:x` 過得了驗證器，所以 `_finalized` 對收窄到空的條目留一行
+  WARNING（typo、釘掉的都會列）。兩條先紅（內建前綴、typo 拒絕），log 那條是寫在修法之後的釘子；三個突變各紅對的測試。回歸鏡頭其餘：68 個真 turn 對第二輪 0 差；
+  sub-agent 端到端只有「同回合 save 的定義」變了（就是 P20 要的）；finalize 63 ms→0.03 ms、picker 275→90 ms；寬測試 2620 綠。
+  用詞：測試 docstring「44 個 schema」是一次 finalize 兩次呼叫 = 88；「22→32」是有 pin 的案例、無 pin 是 23→33；「~40 ms」量到 32–40。
 - **順序**（P16 起、寫進紀錄）：定案後 `allowed_tools` 一律天花板順序；master 的 `_apply_tool_prefs` 在**沒有 pref** 時回 profile 順序。
   出貨的 profile 順序都和天花板一致，所以模型看到的工具清單不變；一個把 `tools` 寫成不同順序的 profile 會看到清單重排（集合不變）。
 

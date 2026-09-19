@@ -202,3 +202,14 @@ def test_a_bare_package_key_governs_a_command_the_app_granted_on_its_own():
     )
     assert g.enabled == ("exec",)
     assert g.disabled == ("rca-tools:spc",)
+
+
+def test_narrow_never_treats_a_builtin_as_a_package_prefix():
+    """`exec:foo` is not "a command of the held package `exec`": no built-in
+    has commands. Without this, a validator or a refusal judging by prefix
+    accepted `exec:foo` / `read_file:x` and the child, node or definition
+    then held nothing, silently."""
+    from workspace_app.tooling.catalog import narrow_entries
+
+    assert narrow_entries(["exec:foo", "read_file:x"], ["exec", "read_file", "rca-tools"]) == []
+    assert narrow_entries(["rca-tools:spc"], ["exec", "rca-tools"]) == ["rca-tools:spc"]

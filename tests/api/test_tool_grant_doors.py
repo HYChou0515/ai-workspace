@@ -393,3 +393,23 @@ async def test_the_turn_door_finalizes_a_third_party_package_it_resolved(monkeyp
     assert "wafer-history:trend" in ctx.agent_config.disabled_tools
     agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools)
     assert "trend" not in {t.name for t in agent.tools}
+
+
+async def test_a_node_naming_a_command_the_item_does_not_hold_says_so_in_the_log(
+    monkeypatch, caplog
+):
+    """The validator refuses what it can see; a `pkg:cmd` it could not judge
+    (an unresolved package, a zero-command one) or a command the item pinned
+    off reaches the run, is dropped, and the run's log is where that is said."""
+    import logging
+
+    _, _, executor, runner, iid = _build(monkeypatch, {"rca-tools:pareto": False})
+    with caplog.at_level(logging.WARNING, logger="workspace_app.api.turn_context"):
+        await executor.drive_turn(
+            iid, "no-such-chat", "u", "hello", ["rca-tools:typo", "rca-tools:pareto", "read_file"]
+        )
+    cmds, _ = _model_view(runner.ctxs[-1])
+    assert cmds == set()
+    [rec] = [r for r in caplog.records if "not held by this item" in r.getMessage()]
+    assert "rca-tools:typo" in rec.getMessage() and "rca-tools:pareto" in rec.getMessage()
+    assert "read_file" not in rec.getMessage()

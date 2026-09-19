@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import msgspec
@@ -23,6 +23,7 @@ from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
 
 from ..files import WorkspaceFiles, rel_path
+from ..tooling.registry import PackageInfo
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
 from ..workflow.handle import WorkflowHandle
@@ -138,11 +139,18 @@ def register_workflow_routes(
     event_dispatcher: EventTriggerDispatcher,
     schedule_policy: SchedulePolicy,
     schedule_indexed: Callable[[str], bool],
+    packages: Sequence[PackageInfo] = (),
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
 
     ``schedule_indexed(item_id)`` answers whether the sweep's index names this
-    item's own schedules file — a blocking read, called off the loop."""
+    item's own schedules file — a blocking read, called off the loop.
+
+    ``packages`` are the deploy's first-party tool packages, so the template
+    validators judge a step's ``tools:`` at command granularity (a typo in a
+    command name is refused, not saved) — the same ceiling `save_workflow`
+    validates against, minus this item's third-party bundles, which no route
+    here resolves."""
 
     async def _item_entities_of(investigation_id: str):
         """A ``type_name -> current parsed records`` resolver over the item's entity store —
@@ -306,7 +314,7 @@ def register_workflow_routes(
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
-        ceiling = _profile_tool_ceiling(slug, profile)
+        ceiling = _profile_tool_ceiling(slug, profile, packages)
         out: list[dict] = []
         for name in sorted(SHARED_WORKFLOWS):
             d = load_shared_workflow(name)
@@ -351,7 +359,7 @@ def register_workflow_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         profile = locator.profile_of(investigation_id)
-        problems = validate_def(d, tool_ceiling=_profile_tool_ceiling(slug, profile))
+        problems = validate_def(d, tool_ceiling=_profile_tool_ceiling(slug, profile, packages))
         if problems:
             raise HTTPException(
                 status_code=422,

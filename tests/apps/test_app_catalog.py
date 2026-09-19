@@ -524,8 +524,9 @@ def test_finalize_without_packages_keeps_the_entry_level_answer():
 
 def test_finalize_learns_the_builtin_names_without_building_their_schemas(monkeypatch):
     """`expand_entries` must not expand an entry that names a built-in; knowing
-    the names is a set lookup, not 44 `function_tool()` schema builds (~40 ms)
-    on every turn and four times per picker GET."""
+    the names is a set lookup, not 44 `function_tool()` schema builds (30–40 ms)
+    per call — twice per finalize (ceiling and defaults), so on every turn,
+    and four times per picker GET."""
     from workspace_app.agent import tools as tools_mod
     from workspace_app.apps.catalog import finalize_tool_grants
 

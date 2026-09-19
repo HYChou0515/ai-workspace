@@ -1001,7 +1001,12 @@ class TurnContextBuilder:
             return None
         cfg = finalize_tool_grants(agent_config, [*(self._packages or []), *external.packages])
         if tool_subset is not None:
-            cfg = msgspec.structs.replace(
-                cfg, allowed_tools=narrow_entries(tool_subset, cfg.allowed_tools or [])
-            )
+            held = cfg.allowed_tools or []
+            # Said, not swallowed: a node whose `tools:` names something this
+            # item does not hold (pinned off, or a command the package does
+            # not have — the validator can only refuse what it can see) runs
+            # without it, and the run's log is the only place that says so.
+            if dropped := [t for t in tool_subset if not narrow_entries([t], held)]:
+                logger.warning("workflow node: tools not held by this item, dropped: %s", dropped)
+            cfg = msgspec.structs.replace(cfg, allowed_tools=narrow_entries(tool_subset, held))
         return cfg

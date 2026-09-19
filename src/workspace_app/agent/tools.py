@@ -11,7 +11,7 @@ import json
 import logging
 import posixpath
 import re
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from ..apps.subagents import SubagentDef
     from ..factories import SubagentModel
     from ..resources.conversation import Citation
+    from ..tooling.registry import PackageInfo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -2907,17 +2908,29 @@ def held_tool_names(
     return _profile_tool_ceiling(app_slug, profile)
 
 
-def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
+def _profile_tool_ceiling(
+    app_slug: str | None, profile: str | None, packages: Sequence[PackageInfo] = ()
+) -> set[str] | None:
     """The tools an agent in this App profile may hold — the App's ``agent.tools`` ceiling,
     narrowed by the profile's ``tools`` override (#323, Q4: a workflow's agent steps can't
     exceed what its author could use by hand). ``None`` (skip the clamp) for a synthetic /
-    unreadable slug."""
+    unreadable slug.
+
+    Brought to COMMAND granularity when the caller has the package list
+    (``expand_entries``): a whole-package grant becomes its ``pkg:cmd`` units,
+    so a validator judging by ``narrow_entries`` accepts ``rca-tools:spc`` and
+    refuses ``rca-tools:typo`` — with bare names only, the two are
+    indistinguishable and the typo saved a workflow whose node silently held
+    nothing. Callers without packages (the sub-agent clamp's fallback, the
+    author-workflow guide) keep the bare names, which read as "the whole
+    package" everywhere they are used."""
     if app_slug is None or profile is None:
         return None
     from msgspec import UNSET
 
     from ..apps.manifest import load_app_manifest
     from ..apps.profiles import load_profile
+    from ..tooling.catalog import expand_entries
 
     try:
         app_tools = set(load_app_manifest(app_slug).agent.tools)
@@ -2929,7 +2942,8 @@ def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str]
     # and a validator (`save_workflow_impl`) as well as the two refusal
     # messages. No shipped manifest names a legacy tool, so normalising here
     # changed four consumers on a case none of them can be handed.
-    return (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+    ceiling = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+    return set(expand_entries(sorted(ceiling), packages))
 
 
 async def save_workflow_impl(
@@ -2973,7 +2987,9 @@ async def save_workflow_impl(
             f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
             "pick another id. To put a workflow on a clock, call save_schedules."
         )
-    ceiling = _profile_tool_ceiling(ctx.context.app_slug, ctx.context.template_profile)
+    ceiling = _profile_tool_ceiling(
+        ctx.context.app_slug, ctx.context.template_profile, ctx.context.packages
+    )
     workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
     if workflow is None or errs:
         return "error: the workflow has problems — fix these and save again:\n- " + "\n- ".join(

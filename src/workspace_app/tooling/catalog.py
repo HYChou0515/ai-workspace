@@ -205,18 +205,27 @@ def narrow_entries(entries: Iterable[str], held: Iterable[str]) -> list[str]:
     of it that are held (``pkg:cmd`` units, by name), so an item's pins bind
     the delegate too — a step that says ``rca-tools`` on an item that pinned
     ``pareto`` off does not get ``pareto``. A ``pkg:cmd`` entry stays when the
-    bare ``pkg`` is held (a config that never met its package list). Anything
-    else is dropped. Deduped, in ``entries`` order. String-level on purpose:
-    it needs no package list, so it can run wherever the held list is."""
+    bare ``pkg`` is held (a config that never met its package list) — unless
+    ``pkg`` names a built-in, which has no commands: ``exec:foo`` is nothing,
+    not "a command of exec". Anything else is dropped. Deduped, in
+    ``entries`` order. String-level on purpose: it needs no package list, so
+    it can run wherever the held list is — which also means it cannot tell
+    ``rca-tools:typo`` from ``rca-tools:spc`` when ``held`` still says bare
+    ``rca-tools``; a caller that has the packages passes the held list
+    EXPANDED (``expand_entries``), and then only real commands survive."""
+    from ..agent.tools import builtin_tool_names
+
+    builtins = builtin_tool_names()
     held_set = set(held)
     out: list[str] = []
     seen: set[str] = set()
     for entry in entries:
+        pkg, sep, _ = entry.partition(":")
         if entry in held_set:
             units = [entry]
-        elif ":" not in entry:
+        elif not sep:
             units = sorted(h for h in held_set if ":" in h and h.partition(":")[0] == entry)
-        elif entry.partition(":")[0] in held_set:
+        elif pkg in held_set and pkg not in builtins:
             units = [entry]
         else:
             units = []

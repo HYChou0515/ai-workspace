@@ -752,7 +752,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   （指令鍵優先）。使用者在 modal 第一次（有改動的）儲存時，那把整包鍵會被拆成逐指令鍵寫回——資料在 item 列上，沒有 migrate 要跑。
   漏知道的症狀：無。沒有指令的套件（`python-stack`，它是 sandbox 的 Python 載體）仍是一列。
 - 隨之而來、沒有開關的幾個語意（都是「picker 關掉的指令就是關掉」）：workflow step 的 `tools:` 寫 `rca-tools` 時拿到的是
-  **這個 item 持有的那幾個指令**（被釘掉的不在），寫 `rca-tools:spc` 這種指令名也可以（驗證器與執行都認）；sub-agent 定義的 `tools`
+  **這個 item 持有的那幾個指令**（被釘掉的不在），寫 `rca-tools:spc` 這種指令名也可以（驗證器認得部署有的套件指令：拼錯的指令名會被拒；解不出的套件或沒有指令的套件寫 `pkg:x` 驗證器擋不了，執行時丟掉並在 log 留一行 `workflow node: tools not held by this item, dropped`）；sub-agent 定義的 `tools`
   可以寫整包名或指令名（`save_subagent` 接受、載入與委派時縮成持有的指令；它拒絕時的「Available」清單從此列的是指令名）；
   WUI 頁面叫一個被釘掉的指令會 403（訊息指向 tool picker）。一個整包鍵現在也管到 app 只授部分指令的套件（以前那種鍵是 no-op）。
 
