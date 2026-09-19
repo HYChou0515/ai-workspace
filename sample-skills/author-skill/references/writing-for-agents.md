@@ -3,8 +3,9 @@
 > Copied from Matt Pocock's [`writing-for-agents`](https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents)
 > (`mattpocock/skills`, MIT licence — notice at the end of this file, commit
 > `321658273cb1`, 2026-08-19) — `SKILL.md` and `SKILL-MECHANICS.md` folded into
-> one file. The text is his; the "On this platform" section maps his terms
-> onto this platform's skill loader.
+> one file: the text is his, with the cross-references between the two files
+> reworded to point within this one. The "On this platform" section is ours
+> and maps his terms onto this platform's skill loader.
 
 Reference for writing any document an agent consumes: a skill, an `AGENTS.md` / `CLAUDE.md`, a doc reached by a pointer. The packaging differs; the writing does not: the same levers make each one predictable, since the agent takes the same _process_ every run rather than producing the same output.
 
@@ -115,10 +116,13 @@ apply to a skill saved here, with these mappings:
   body)` writes it into the frontmatter, and the skills index the agent sees
   before every turn lists exactly that line. Write it as the pointer rules say:
   leading word first, one trigger per branch, no restating what the body says.
-- **Model-invoked is the only mode here.** There is no `disable-model-invocation`
-  — every saved skill is reachable by the agent through its description, so the
-  description is always paying context load. That is one more reason to keep
-  it to the trigger.
+- **Model-invoked is the default, and the switch is per item, not per skill.**
+  There is no `disable-model-invocation` in the frontmatter; a saved skill is
+  on, listed in the index by its description, and reachable by the agent from
+  there. The skills picker of an item can turn it off, which drops it from the
+  index (no context load) while Apply still loads it into a turn — that is the
+  user-invoked mode. Write the description for the default: it is paying
+  context load in every turn of every item that has not switched it off.
 - **Disclosed reference is a file under the skill's folder**: write it with
   `write_file` to `.skill/<name>/references/<file>.md` and point at it from the
   body by that same full path ("read `.skill/<name>/references/<file>.md`

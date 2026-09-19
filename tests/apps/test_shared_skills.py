@@ -129,12 +129,32 @@ def test_author_skill_points_at_its_files_by_the_path_a_workspace_holds_them():
     pointer written `references/x.md` is a file the agent cannot open, and a
     guide that writes it that way teaches every skill it authors the same dead
     form. Every file path in the guide and its reference is the full
-    `.skill/<name>/…` one; the bare folder name may still be spoken of as a
-    folder."""
+    `.skill/<name>/…` one, backticked or not; the bare folder name may still
+    be spoken of as a folder."""
     folder = shared.SHARED_SKILLS["author-skill"]
     for doc in (folder / "SKILL.md", folder / "references" / "writing-for-agents.md"):
-        bare = re.findall(r"`(?:references|scripts)/[^`]*\.\w+`", doc.read_text())
+        bare = BARE_SKILL_FILE_POINTER.findall(doc.read_text())
         assert bare == [], (doc.name, bare)
+
+
+#: A `references/<file>` or `scripts/<file>` path not preceded by the
+#: `.skill/<name>/` prefix — the form `read_file` cannot open.
+BARE_SKILL_FILE_POINTER = re.compile(r"(?<![\w/.])(?:references|scripts)/[\w./-]*\.\w+")
+
+
+@pytest.mark.parametrize(
+    ("text", "hits"),
+    [
+        ("read `.skill/x/references/glossary.md` when …", []),
+        ("read `references/glossary.md` when …", ["references/glossary.md"]),
+        ("read references/glossary.md when unsure.", ["references/glossary.md"]),
+        ('exec(["python", ".skill/x/scripts/summarise.py"])', []),
+        ("run scripts/summarise.py first", ["scripts/summarise.py"]),
+        ("a file under the skill's `references/` folder", []),
+    ],
+)
+def test_the_bare_pointer_guard_reads_paths_not_backticks(text: str, hits: list[str]):
+    assert BARE_SKILL_FILE_POINTER.findall(text) == hits
 
 
 def test_merged_profile_skills_includes_declared_shared(tmp_registry):

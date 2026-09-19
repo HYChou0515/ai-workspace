@@ -692,7 +692,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   「更新為出貨版本」（`rollout 後`，不用一次做完；只在你希望某個既有 item 拿到新版 guide 時逐 item 按）。
   漏做的症狀：部署了新版 guide，某些 item 的 agent 還照舊步驟走——不是沒部署到，是那個 item 有自己的副本。
   新 item、以及部署前從沒在該 item 用過 `author-skill` 的 item，第一次讀到的就是新版，不用動。
-- `author-skill` 本身的步驟從五步變七步：草擬前先讀那份規則、審閱後多一步「整理」（只改措辭不改內容、告訴使用者
+- `author-skill` 本身的步驟從六步變七步：草擬前先讀那份規則、審閱後多一步「整理」（只改措辭不改內容、告訴使用者
   收緊了什麼）、skill 的 `name` 改成在第一步就以 kebab-case 定下（因為內文指向 `.skill/<name>/references/…` 要在
   存檔前就寫得出來）。agent 幫使用者做 skill 時會多一輪對話與一次 `read_file`；沒有旋鈕可關。
 

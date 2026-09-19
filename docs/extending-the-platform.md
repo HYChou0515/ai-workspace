@@ -660,7 +660,7 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 |---|---|
 | `name` | 報告與輸出資料夾用的識別字(必填) |
 | `prompt` | 送給模型的那句話(必填) |
-| `data` | 開跑前複製進 workspace 的檔案,相對於情境資料夾。**被測 skill 自己的檔案**(`references/`、`scripts/`)不用列在這裡:harness 會照真 turn 的樣子把它們放進 workspace 的 `.skill/<name>/`(`SKILL.md` 除外,它走 prompt),所以 body 裡「先讀 `.skill/<name>/references/x.md`」這種步驟量得到。這些檔**一律**來自 frontmatter `name:` 指到的那個內建 skill——`--dump-skill` 只寫出 `SKILL.md`,編輯過的副本旁邊有什麼(上一輪的輸出資料夾之類)都不是 skill 的內容;frontmatter 沒有 `name` 或名字沒註冊就直接拒跑,而不是少了檔案照跑。`--control` 那一臂**不放**這些檔:真 turn 裡檔案是跟著 `read_skill` 進來的,沒載入 skill 的 workspace 本來就沒有 |
+| `data` | 開跑前複製進 workspace 的檔案,相對於情境資料夾。**被測 skill 自己的檔案**(`references/`、`scripts/`)不用列在這裡:harness 會照真 turn 的樣子把它們放進 workspace 的 `.skill/<name>/`(`SKILL.md` 除外,它走 prompt),所以 body 裡「先讀 `.skill/<name>/references/x.md`」這種步驟量得到。這些檔照 frontmatter `name:` 找:**先**找同名的內建 skill(`--dump-skill` 只寫出 `SKILL.md`,編輯過的副本旁邊有什麼——上一輪的輸出資料夾之類——都不是 skill 的內容);沒註冊時,SKILL.md 所在的資料夾**名字就是 `<name>`** 才算 skill 資料夾(平台載入 profile / workspace skill 時的同一條規則),就拿那個資料夾——profile skill、還沒註冊的新 skill 走這條;兩條都對不上就直接拒跑,而不是少了檔案照跑。`--control` 那一臂**不放**這些檔:真 turn 裡檔案是跟著 `read_skill` 進來的,沒載入 skill 的 workspace 本來就沒有 |
 | `note` | 給讀報告的人看的說明 |
 | `expect.must_call` | 這些工具**每個都**要被呼叫過 |
 | `expect.must_not_call` | 這些工具**一個都不准**被呼叫 |

@@ -114,7 +114,7 @@ Once approved, call `save_skill(name, description, body)`:
 
 - `name` — the kebab-case name from step 1.
 - `description` — the one-line trigger from step 1.
-- `body` — the markdown from step 3.
+- `body` — the markdown as it stands after step 5.
 
 `save_skill` owns the file format, so you only pass those three fields. For any
 reference or script files, write them with `write_file` into the same

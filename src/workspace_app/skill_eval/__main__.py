@@ -49,8 +49,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--skill",
         default=None,
-        help="a registered shared skill by NAME, or a path to a SKILL.md you edited (its "
-        "frontmatter `name` says which registered skill's references/ and scripts/ it runs with)",
+        help="a registered shared skill by NAME, or a path to a SKILL.md (its frontmatter "
+        "`name` says whose references/ and scripts/ it runs with: the registered skill of "
+        "that name, else the file's own folder when that folder is named after the skill)",
     )
     p.add_argument(
         "--dump-skill",
@@ -194,14 +195,18 @@ def _stage(
 
 
 def _resolve_skill(spec: str) -> tuple[str, str, Path]:
-    """``(name, SKILL.md text, folder)`` from a registered name or a path to an
-    edited body. The name is the frontmatter's — never the folder's, because
+    """``(name, SKILL.md text, folder)`` from a registered name or a path to a
+    body. The name is the frontmatter's — never the folder's, because
     `--dump-skill … -o ./tune` puts the body in a folder called `tune`. The
-    folder is the REGISTERED skill's: it is where `references/` and `scripts/`
-    come from, and the only place they can come from, since the dump writes
-    `SKILL.md` alone and whatever else sits beside the edited copy (a run's
-    output, say) is not skill content. A body the harness cannot place this
-    way is refused rather than run without its files."""
+    folder is where `references/` and `scripts/` come from, and it is found by
+    that name: the registered skill first (the dump writes `SKILL.md` alone,
+    so an edited copy never holds better files than the registry does — and
+    whatever else sits beside it, a run's output say, is not skill content);
+    else the file's own folder when it IS a skill folder, i.e. named `<name>`
+    — the invariant the platform's loader holds every profile and workspace
+    skill folder to — which is what lets a profile skill or a skill still
+    being written run with its own files. A body neither rule can place is
+    refused rather than run without its files."""
     path = Path(spec)
     text: str | None = None
     name = spec
@@ -215,8 +220,14 @@ def _resolve_skill(spec: str) -> tuple[str, str, Path]:
         if not name:
             raise SystemExit(f"{path}: SKILL.md frontmatter has no `name`")
     src = SHARED_SKILLS.get(name)
+    if src is None and text is not None and path.parent.name == name:
+        src = path.parent
     if src is None:
-        raise SystemExit(f"unknown skill {name!r}. registered: {', '.join(sorted(SHARED_SKILLS))}")
+        where = f"{path} is not in a folder named {name!r} and" if text is not None else "it is"
+        raise SystemExit(
+            f"unknown skill {name!r}: {where} not registered "
+            f"(registered: {', '.join(sorted(SHARED_SKILLS))})"
+        )
     return name, text if text is not None else (src / "SKILL.md").read_text(), src
 
 
