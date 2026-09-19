@@ -762,6 +762,21 @@ export const messages = {
     "zh-TW": "已更新到出貨版本。",
     en: "Updated to the shipped version.",
   },
+  // plan-skill-hub-ui-polish D4: a copy installed from the skill hub has no
+  // "shipped version" — it updates to what is on the hub now.
+  "skills.reset.hub": {
+    "zh-TW": "還原成 hub 上的版本",
+    en: "Reset to the version on the hub",
+  },
+  "skills.refresh.hub": {
+    "zh-TW": "更新為 hub 上的新版",
+    en: "Update to the version on the hub",
+  },
+  "skills.refreshDone.hub": {
+    "zh-TW": "已更新到 hub 上的新版。",
+    en: "Updated to the version on the hub.",
+  },
+  "skills.updateAvailable": { "zh-TW": "有新版", en: "Update available" },
   "skills.refreshKept": {
     "zh-TW": "這些檔案你改過，所以保持原樣",
     en: "Edited here, so left as they are",

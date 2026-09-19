@@ -327,6 +327,68 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     expect(screen.getByTestId("skill-reset-triage")).toBeInTheDocument();
   });
 
+  it("says 「有新版」 on the row, in words, when upstream has moved (plan-skill-hub-ui-polish D4)", async () => {
+    renderModal({
+      client: fakeClient([
+        ...COPIED,
+        ...NO_UPDATE.map((s) => ({ ...s, name: "settled" })),
+      ]) as never,
+    });
+    await screen.findByTestId("skill-row-triage");
+    // A fourth unlabelled icon was the only sign; a status is a badge.
+    expect(screen.getByTestId("skill-update-triage")).toHaveTextContent(
+      word("skills.updateAvailable"),
+    );
+    expect(screen.queryByTestId("skill-update-settled")).toBeNull();
+  });
+
+  it("words Update / Reset and the note by where the copy came from — the package or the hub (D4)", async () => {
+    // A hub copy lists as `source: workspace` + `is_copy` (its files never
+    // came from the package); a package copy keeps the package's source.
+    const skills: ItemSkillState[] = [
+      COPIED[0],
+      {
+        ...COPIED[0],
+        name: "from-hub",
+        source: "workspace",
+        upstream: "live",
+      },
+    ];
+    const refreshItemSkill = vi.fn(async () => ({
+      updated: ["SKILL.md"],
+      skipped: [],
+      removed: [],
+    }));
+    renderModal({
+      client: { ...fakeClient(skills), refreshItemSkill } as never,
+    });
+    await screen.findByTestId("skill-row-from-hub");
+
+    expect(screen.getByTestId("skill-refresh-triage")).toHaveAccessibleName(
+      `${word("skills.refresh")} triage`,
+    );
+    expect(screen.getByTestId("skill-reset-triage")).toHaveAccessibleName(
+      `${word("skills.reset")} triage`,
+    );
+    expect(screen.getByTestId("skill-refresh-from-hub")).toHaveAccessibleName(
+      `${word("skills.refresh.hub")} from-hub`,
+    );
+    expect(screen.getByTestId("skill-reset-from-hub")).toHaveAccessibleName(
+      `${word("skills.reset.hub")} from-hub`,
+    );
+
+    fireEvent.click(screen.getByTestId("skill-refresh-from-hub"));
+    expect(await screen.findByTestId("skills-refresh-note")).toHaveTextContent(
+      word("skills.refreshDone.hub"),
+    );
+    fireEvent.click(screen.getByTestId("skill-refresh-triage"));
+    await waitFor(() =>
+      expect(screen.getByTestId("skills-refresh-note")).toHaveTextContent(
+        word("skills.refreshDone"),
+      ),
+    );
+  });
+
   it("offers no refresh for a skill that was written here", async () => {
     renderModal();
     await screen.findByTestId("skill-row-my-skill");
@@ -410,6 +472,48 @@ function fakeHub(rows: SkillHubCard[] = [hubCard({})]) {
     })),
   };
 }
+
+describe("SkillsModal — the footer at phone width (plan-skill-hub-ui-polish D13)", () => {
+  it("keeps the import hint while the footer is unmeasured or wide, and hides it in a measured-narrow footer — the text stays on the Import button", async () => {
+    renderModal();
+    await screen.findByTestId("skill-row-my-skill");
+    // happy-dom lays nothing out: every width is 0 = unmeasured, and an
+    // unmeasured footer must not hide anything.
+    expect(screen.getByTestId("skills-import-hint")).toHaveTextContent(
+      word("skills.importHint"),
+    );
+    expect(screen.getByTestId("skills-import")).toHaveAttribute(
+      "title",
+      word("skills.importHint"),
+    );
+    cleanup();
+
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        width: 320,
+        height: 24,
+        top: 0,
+        left: 0,
+        right: 320,
+        bottom: 24,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+    try {
+      renderModal();
+      await screen.findByTestId("skill-row-my-skill");
+      expect(screen.queryByTestId("skills-import-hint")).toBeNull();
+      expect(screen.getByTestId("skills-import")).toHaveAttribute(
+        "title",
+        word("skills.importHint"),
+      );
+    } finally {
+      rect.mockRestore();
+    }
+  });
+});
 
 describe("SkillsModal — the skill hub", () => {
   it("offers Publish on a workspace skill only, and puts the sentence in the chat box", async () => {

@@ -7,12 +7,57 @@
 /** The registered icon keys, as a runtime tuple so callers holding an arbitrary
  * string (e.g. an App manifest's `icon`) can test membership before rendering. */
 export const ICON_NAMES = [
-  "search", "plus", "minus", "x", "chev_d", "chev_r", "chev_l", "folder", "file", "chat",
-  "play", "term", "user", "users", "settings", "bell", "branch", "sparkle", "arrow_r", "arrow_u",
-  "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
-  "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
-  "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow", "wiki",
-  "insert_line", "remove_line", "star",
+  "search",
+  "plus",
+  "minus",
+  "x",
+  "chev_d",
+  "chev_r",
+  "chev_l",
+  "folder",
+  "file",
+  "chat",
+  "play",
+  "term",
+  "user",
+  "users",
+  "settings",
+  "bell",
+  "branch",
+  "sparkle",
+  "arrow_r",
+  "arrow_u",
+  "arrow_d",
+  "git",
+  "dots_h",
+  "dots_v",
+  "eye",
+  "pin",
+  "clock",
+  "check",
+  "split",
+  "panel_left",
+  "layers",
+  "download",
+  "upload",
+  "filter",
+  "tag",
+  "bug",
+  "flame",
+  "refresh",
+  "undo",
+  "quote",
+  "external",
+  "paperclip",
+  "pencil",
+  "home",
+  "kanban",
+  "trash",
+  "workflow",
+  "wiki",
+  "insert_line",
+  "remove_line",
+  "star",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -89,7 +134,10 @@ export function Icon({
     ),
     file: (
       <>
-        <path d="M6 3 H14 L18 7 V20 A1 1 0 0 1 17 21 H7 A1 1 0 0 1 6 20 Z" {...sp} />
+        <path
+          d="M6 3 H14 L18 7 V20 A1 1 0 0 1 17 21 H7 A1 1 0 0 1 6 20 Z"
+          {...sp}
+        />
         <path d="M14 3 V7 H18" {...sp} />
       </>
     ),
@@ -111,7 +159,10 @@ export function Icon({
       <>
         <circle cx="9" cy="9" r="3" {...sp} />
         <circle cx="17" cy="10" r="2.5" {...sp} />
-        <path d="M3 19 Q3 14 9 14 Q15 14 15 19 M15 19 Q21 19 21 15 Q21 12 17 12" {...sp} />
+        <path
+          d="M3 19 Q3 14 9 14 Q15 14 15 19 M15 19 Q21 19 21 15 Q21 12 17 12"
+          {...sp}
+        />
       </>
     ),
     settings: (
@@ -139,7 +190,10 @@ export function Icon({
     ),
     sparkle: (
       <>
-        <path d="M12 3 L13 9 L19 10 L13 11 L12 17 L11 11 L5 10 L11 9 Z" {...sp} />
+        <path
+          d="M12 3 L13 9 L19 10 L13 11 L12 17 L11 11 L5 10 L11 9 Z"
+          {...sp}
+        />
         <path d="M19 4 L20 6 L22 7 L20 8 L19 10 L18 8 L16 7 L18 6 Z" {...sp} />
       </>
     ),
@@ -170,7 +224,10 @@ export function Icon({
     ),
     eye: (
       <>
-        <path d="M2 12 Q7 5 12 5 Q17 5 22 12 Q17 19 12 19 Q7 19 2 12 Z" {...sp} />
+        <path
+          d="M2 12 Q7 5 12 5 Q17 5 22 12 Q17 19 12 19 Q7 19 2 12 Z"
+          {...sp}
+        />
         <circle cx="12" cy="12" r="3" {...sp} />
       </>
     ),
@@ -225,7 +282,12 @@ export function Icon({
         <rect x="16.6" y="7" width="2.8" height="1.8" rx="0.6" {...sp} />
       </>
     ),
-    layers: <path d="M12 3 L21 8 L12 13 L3 8 Z M3 13 L12 18 L21 13 M3 17 L12 22 L21 17" {...sp} />,
+    layers: (
+      <path
+        d="M12 3 L21 8 L12 13 L3 8 Z M3 13 L12 18 L21 13 M3 17 L12 22 L21 17"
+        {...sp}
+      />
+    ),
     // workflow — connected task nodes (a small flow/pipeline), distinct from the
     // stacked `layers` = collections identity (#466 ②).
     workflow: (
@@ -239,7 +301,10 @@ export function Icon({
     // `layers` = collections identity (#466 ②).
     wiki: (
       <>
-        <path d="M12 6 Q8 4 4 5 V18 Q8 17 12 19 Q16 17 20 18 V5 Q16 4 12 6 Z" {...sp} />
+        <path
+          d="M12 6 Q8 4 4 5 V18 Q8 17 12 19 Q16 17 20 18 V5 Q16 4 12 6 Z"
+          {...sp}
+        />
         <path d="M12 6 V19" {...sp} />
       </>
     ),
@@ -255,11 +320,17 @@ export function Icon({
     bug: (
       <>
         <circle cx="12" cy="13" r="5" {...sp} />
-        <path d="M9 10 L7 7 M15 10 L17 7 M7 13 H3 M21 13 H17 M8 17 L5 20 M16 17 L19 20 M12 8 V18" {...sp} />
+        <path
+          d="M9 10 L7 7 M15 10 L17 7 M7 13 H3 M21 13 H17 M8 17 L5 20 M16 17 L19 20 M12 8 V18"
+          {...sp}
+        />
       </>
     ),
     flame: (
-      <path d="M12 3 Q15 7 14 11 Q17 10 17 14 Q17 19 12 21 Q7 19 7 14 Q7 11 9 9 Q11 11 12 9 Q11 6 12 3 Z" {...sp} />
+      <path
+        d="M12 3 Q15 7 14 11 Q17 10 17 14 Q17 19 12 21 Q7 19 7 14 Q7 11 9 9 Q11 11 12 9 Q11 6 12 3 Z"
+        {...sp}
+      />
     ),
     refresh: (
       <>
@@ -267,10 +338,14 @@ export function Icon({
         <path d="M20 4 V8 H16" {...sp} />
       </>
     ),
+    // ↺ — `refresh` mirrored: the same arc with its arrowhead at the top
+    // left, so the pair reads "bring the new one" / "go back". The first
+    // version drew an arrowhead six units away from the end of its own arc
+    // and read as nothing (plan-skill-hub-ui-polish D5).
     undo: (
       <>
-        <path d="M9 7 L4 12 L9 17" {...sp} />
-        <path d="M4 12 H14 A6 6 0 0 1 14 24" {...sp} transform="translate(0,-6)" />
+        <path d="M4 8 A8 8 0 1 1 5 16" {...sp} />
+        <path d="M4 4 V8 H8" {...sp} />
       </>
     ),
     paperclip: (
@@ -297,20 +372,23 @@ export function Icon({
       <>
         <path d="M4 7 H20" {...sp} />
         <path d="M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7" {...sp} />
-        <path d="M6 7 L7 20 A1 1 0 0 0 8 21 H16 A1 1 0 0 0 17 20 L18 7" {...sp} />
+        <path
+          d="M6 7 L7 20 A1 1 0 0 0 8 21 H16 A1 1 0 0 0 17 20 L18 7"
+          {...sp}
+        />
         <path d="M10 11 V17 M14 11 V17" {...sp} />
       </>
     ),
     quote: (
-      <path
-        d="M7 7 H10 V12 Q10 15 7 16 M14 7 H17 V12 Q17 15 14 16"
-        {...sp}
-      />
+      <path d="M7 7 H10 V12 Q10 15 7 16 M14 7 H17 V12 Q17 15 14 16" {...sp} />
     ),
     // "open in new tab / full view" — a box with a diagonal arrow leaving it.
     external: (
       <>
-        <path d="M18 13 V18 A1 1 0 0 1 17 19 H6 A1 1 0 0 1 5 18 V7 A1 1 0 0 1 6 6 H11" {...sp} />
+        <path
+          d="M18 13 V18 A1 1 0 0 1 17 19 H6 A1 1 0 0 1 5 18 V7 A1 1 0 0 1 6 6 H11"
+          {...sp}
+        />
         <path d="M14 5 H19 V10 M19 5 L11 13" {...sp} />
       </>
     ),
@@ -321,13 +399,20 @@ export function Icon({
       viewBox="0 0 24 24"
       width={size}
       height={size}
-      style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...style }}
+      style={{
+        display: "inline-block",
+        verticalAlign: "middle",
+        flexShrink: 0,
+        ...style,
+      }}
       data-icon={name}
       aria-hidden
     >
       {/* An unregistered key (e.g. a manifest icon the set doesn't have) must not
           render a hollow <svg> — fall back to a neutral tile glyph (#456). */}
-      {paths[name] ?? <rect x="4" y="4" width="16" height="16" rx="3" {...sp} />}
+      {paths[name] ?? (
+        <rect x="4" y="4" width="16" height="16" rx="3" {...sp} />
+      )}
     </svg>
   );
 }

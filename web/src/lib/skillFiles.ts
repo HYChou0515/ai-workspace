@@ -16,3 +16,17 @@ import type { ItemSkillState } from "../api/types";
 export function filesHere(skill: ItemSkillState): boolean {
   return skill.source === "workspace" || skill.is_copy === true;
 }
+
+/**
+ * Whether a copy came from the skill hub rather than the package. The
+ * listing's own construction (`effective_item_skills`): a copy of a package
+ * skill keeps the package's `source` (`shared` / `profile`), and a copy
+ * installed from the hub is a workspace skill like any other (`workspace`)
+ * because its files never came from the package. So `is_copy` under
+ * `workspace` can only be a hub copy. The panel words Update / Reset by it
+ * (plan-skill-hub-ui-polish D4): "the shipped version" is the package's
+ * phrase, and a hub copy updates to the version on the hub.
+ */
+export function hubCopy(skill: ItemSkillState): boolean {
+  return skill.is_copy === true && skill.source === "workspace";
+}

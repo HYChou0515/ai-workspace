@@ -11,7 +11,8 @@ import { sameShape } from "../lib/sameShape";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
-import { filesHere } from "../lib/skillFiles";
+import { filesHere, hubCopy } from "../lib/skillFiles";
+import { useContainerWidth } from "../hooks/useContainerWidth";
 import { publishAgentDraft } from "../lib/agentDraftBus";
 import { ModalShell } from "./ModalShell";
 import { SkillHubPickerModal } from "./SkillHubPickerModal";
@@ -66,6 +67,13 @@ export function SkillsModal({
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [initial, setInitial] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
+  // The footer's own width (plan-skill-hub-ui-polish D13): three buttons and
+  // a hint share one line, and at phone width the hint folded into three
+  // lines beside them. Below FOOTER_HINT_MIN_WIDTH the hint is not drawn — its
+  // text lives on as the Import button's title. 0 is "not measured yet"
+  // (or a test DOM), never "narrow": an unmeasured footer hides nothing.
+  const [footerRef, footerW] = useContainerWidth<HTMLDivElement>();
+  const showImportHint = footerW === 0 || footerW >= FOOTER_HINT_MIN_WIDTH;
 
   // Seed the editable sparse override once the resolved state loads (present
   // on/off entries only — an absent key follows the profile/App default).
@@ -117,10 +125,15 @@ export function SkillsModal({
 
   const refresh = async (name: string, force: boolean) => {
     const res = await client.refreshItemSkill(slug, itemId, name, { force });
+    const skill = list.find((s) => s.name === name);
     setRefreshNote(
       res.skipped.length > 0
         ? `${t("skills.refreshKept")}: ${res.skipped.join(", ")}`
-        : t("skills.refreshDone"),
+        : t(
+            skill && hubCopy(skill)
+              ? "skills.refreshDone.hub"
+              : "skills.refreshDone",
+          ),
     );
     await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
   };
@@ -298,12 +311,14 @@ export function SkillsModal({
       </div>
 
       <div
+        ref={footerRef}
         style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}
       >
         <button
           type="button"
           data-testid="skills-import"
           disabled={busy}
+          title={t("skills.importHint")}
           onClick={() => importRef.current?.click()}
           style={pillBtn}
         >
@@ -318,15 +333,20 @@ export function SkillsModal({
         >
           <Icon name="sparkle" size={12} /> {t("skills.fromHub")}
         </button>
-        <span
-          style={{
-            fontSize: pxToRem(11),
-            color: "var(--text-paper-d)",
-            flex: 1,
-          }}
-        >
-          {t("skills.importHint")}
-        </span>
+        {showImportHint ? (
+          <span
+            data-testid="skills-import-hint"
+            style={{
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+              flex: 1,
+            }}
+          >
+            {t("skills.importHint")}
+          </span>
+        ) : (
+          <span style={{ flex: 1 }} />
+        )}
         <button
           type="button"
           data-testid="skills-save"
@@ -399,6 +419,9 @@ function SkillRow({
   onPublish?: () => void;
 }) {
   const t = useT();
+  // "The shipped version" is the package's phrase; a hub copy updates to,
+  // and resets to, the version on the hub (D4).
+  const fromHub = hubCopy(skill);
   return (
     <div
       data-testid={`skill-row-${skill.name}`}
@@ -451,6 +474,23 @@ function SkillRow({
               }}
             >
               {t("skills.copy")}
+            </span>
+          )}
+          {skill.update_available && !upstreamGone(skill) && (
+            // In words (plan-skill-hub-ui-polish D4): a fourth unlabelled
+            // icon was the only sign that upstream had moved.
+            <span
+              data-testid={`skill-update-${skill.name}`}
+              style={{
+                fontSize: pxToRem(10),
+                color: "var(--info)",
+                border: "1px solid var(--info)",
+                borderRadius: 999,
+                padding: "0 6px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t("skills.updateAvailable")}
             </span>
           )}
           {(skill.upstream === "unpublished" ||
@@ -549,7 +589,8 @@ function SkillRow({
           <button
             type="button"
             data-testid={`skill-reset-${skill.name}`}
-            aria-label={`${t("skills.reset")} ${skill.name}`}
+            aria-label={`${t(fromHub ? "skills.reset.hub" : "skills.reset")} ${skill.name}`}
+            title={t(fromHub ? "skills.reset.hub" : "skills.reset")}
             onClick={onReset}
             style={{ ...pillBtn, height: 24 }}
           >
@@ -560,7 +601,8 @@ function SkillRow({
           <button
             type="button"
             data-testid={`skill-refresh-${skill.name}`}
-            aria-label={`${t("skills.refresh")} ${skill.name}`}
+            aria-label={`${t(fromHub ? "skills.refresh.hub" : "skills.refresh")} ${skill.name}`}
+            title={t(fromHub ? "skills.refresh.hub" : "skills.refresh")}
             onClick={onRefresh}
             style={{ ...pillBtn, height: 24 }}
           >
@@ -600,6 +642,11 @@ function SkillRow({
     </div>
   );
 }
+
+/** Below this footer width the import hint is not drawn (D13). At the
+ * panel's 640 the footer is ~600; at a 390 phone it is ~320, where the three
+ * buttons leave the hint a column a few characters wide. */
+const FOOTER_HINT_MIN_WIDTH = 480;
 
 /** Whether the copy's skill hub original is known to be gone (plan P5's two
  * dead states). `undefined` — a server that does not say — is not gone. */
