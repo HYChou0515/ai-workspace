@@ -244,23 +244,22 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     // beside the trail — so the current page gets the trail's whole width.
     expect(within(nav).queryAllByRole("link")).toEqual([]);
 
-    fireEvent.click(within(nav).getByRole("button", { name: "顯示完整路徑" }));
+    const more = within(nav).getByRole("button", { name: "顯示完整路徑" });
+    fireEvent.click(more);
 
-    expect(within(nav).getByRole("link", { name: "Home" })).toHaveAttribute(
-      "href",
-      "/",
-    );
-    expect(within(nav).getByRole("link", { name: "RCA" })).toHaveAttribute(
-      "href",
-      "/a/rca",
-    );
-    expect(within(nav).getByRole("link", { name: "Docs" })).toHaveAttribute(
-      "href",
-      "/a/rca/docs",
-    );
-    expect(
-      within(nav).queryByRole("button", { name: "顯示完整路徑" }),
-    ).toBeNull();
+    // The folded crumbs open in a popover, NOT back into the trail: at 390
+    // the bar has no room for them, so re-expanding inline re-clipped every
+    // crumb (`H… › Sk… › log…`) and unmounted the focused button (review
+    // round 1 of #826). The trail itself is unchanged and the button stays.
+    const menu = screen.getByRole("dialog");
+    expect(within(menu).getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+    expect(within(menu).getByRole("link", { name: "RCA" })).toHaveAttribute("href", "/a/rca");
+    expect(within(menu).getByRole("link", { name: "Docs" })).toHaveAttribute("href", "/a/rca/docs");
+    // (the popover renders inside the nav; every link in there is the menu's)
+    expect(within(nav).getAllByRole("link").every((a) => menu.contains(a))).toBe(true);
+    expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
+    expect(more).toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "true");
   });
 
   it("leaves a two-crumb trail alone on narrow — there is nothing between first and last to fold", () => {

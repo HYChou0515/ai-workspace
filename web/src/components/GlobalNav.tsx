@@ -144,18 +144,18 @@ function Switcher() {
 function Breadcrumbs() {
   const trail = useBreadcrumbTrail();
   const t = useT();
-  // On narrow, everything before the last crumb folds into one "…" button
-  // that expands it (MUI Breadcrumbs' `maxItems`, plan D14 — with nothing
-  // kept before the fold: the first crumb is 回首頁, and the Brand's home icon
-  // already sits beside it). Every crumb used to shrink alike, so at 390 the
-  // trail read 「回…」「Skill h…」 — the current page unreadable; now only the
-  // last crumb competes for the room (measured at 390: an entry page's leaf
-  // went from `defaul…` to whole). Expanded state resets with the trail: a
-  // new page starts folded again.
+  // On narrow, everything before the last crumb folds into one "…" (the
+  // fold of MUI Breadcrumbs' `maxItems`, plan D14 — with nothing kept before
+  // it: the first crumb is 回首頁, and the Brand's home icon already sits
+  // beside the trail). Every crumb used to shrink alike, so at 390 the trail
+  // read 「回…」「Skill h…」 — the current page unreadable; now only the last
+  // crumb competes for the room (measured at 390: an entry page's leaf went
+  // from `defaul…` to whole). The "…" opens the folded crumbs in a popover
+  // rather than back into the trail: the bar has no room for them, and an
+  // inline expansion re-clipped every crumb and unmounted the button that
+  // had focus (review round 1 of #826).
   const isNarrow = useIsNarrow();
-  const [expandedFor, setExpandedFor] = useState<string | null>(null);
-  const trailKey = JSON.stringify(trail);
-  const folded = isNarrow && trail.length > 2 && expandedFor !== trailKey;
+  const folded = isNarrow && trail.length > 2;
   if (trail.length === 0) return null;
   const shown: (Crumb | "…")[] = folded
     ? ["…", trail[trail.length - 1]]
@@ -179,26 +179,49 @@ function Breadcrumbs() {
       {shown.map((crumb, i) => {
         const last = i === shown.length - 1;
         if (crumb === "…") {
+          const hidden = trail.slice(0, -1);
           return (
-            <Fragment key="…">
-              <button
-                type="button"
-                aria-label={t("nav.crumbs.expand")}
-                title={t("nav.crumbs.expand")}
-                onClick={() => setExpandedFor(trailKey)}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  padding: "0 2px",
-                  color: "var(--text-paper-d)",
-                  font: "inherit",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                }}
-              >
-                …
-              </button>
-            </Fragment>
+            <Popover
+              key="…"
+              align="start"
+              width={220}
+              trigger={({ onClick, open }) => (
+                <button
+                  type="button"
+                  aria-label={t("nav.crumbs.expand")}
+                  title={t("nav.crumbs.expand")}
+                  aria-expanded={open}
+                  onClick={onClick}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    padding: "0 2px",
+                    color: "var(--text-paper-d)",
+                    font: "inherit",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  …
+                </button>
+              )}
+            >
+              {(close) => (
+                <div onClick={close} style={{ padding: "6px 0" }}>
+                  {hidden.map((c, j) =>
+                    c.to ? (
+                      <MenuLink key={`${c.label}-${j}`} to={c.to} active={false}>
+                        {c.label}
+                      </MenuLink>
+                    ) : (
+                      <div key={`${c.label}-${j}`} style={{ padding: "7px 12px", fontSize: "var(--text-body-sm)" }}>
+                        {c.label}
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+            </Popover>
           );
         }
         return (
