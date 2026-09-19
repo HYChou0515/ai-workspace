@@ -61,20 +61,50 @@ export type EnvNeedsView = {
   missingRequired: string[];
 };
 
+/** One thing that declares needs: a package (however many of its commands the
+ * picker draws) or a built-in. */
+type Provider = Pick<ItemToolState, "key" | "label" | "author" | "version" | "env_needs">;
+
+function providerOf(t: ItemToolState): Provider {
+  if (t.package) {
+    // A command of a package. `group` is the package id (server-named); a row
+    // from before it existed falls back to the id in its own key.
+    const id = t.group ?? t.key.slice(0, Math.max(0, t.key.indexOf(":")));
+    return { key: id, label: t.package, author: t.author, version: t.version, env_needs: t.env_needs };
+  }
+  return { key: t.key, label: t.label, author: t.author, version: t.version, env_needs: t.env_needs };
+}
+
 export function deriveEnvNeeds(
   tools: ItemToolState[],
   values: Record<string, string>,
 ): EnvNeedsView {
   // Only what this item actually runs. A tool switched off has no bearing on
   // what is missing, and listing it would ask for variables nothing will read.
-  const live = tools.filter((t) => t.effective);
+  //
+  // The unit here is the PROVIDER, not the picker row: a whole-package grant
+  // is one row per command (plan-tools-picker-groups part 2), and every one
+  // of those rows carries the same declaration, because a bundle declares
+  // its needs once. A `pkg:cmd` row folds to its package (the row's `group`,
+  // labelled by its `package`); a whole-package row or a built-in is its own
+  // provider. First row seen speaks for the package — they all say the same
+  // thing — and a package counts as live when ANY of its commands is on.
+  const seen = new Set<string>();
+  const live: Provider[] = [];
+  for (const t of tools) {
+    if (!t.effective) continue;
+    const p = providerOf(t);
+    if (seen.has(p.key)) continue;
+    seen.add(p.key);
+    live.push(p);
+  }
 
   // A declaration is written by hand, by a third party, and a name this text
   // format cannot carry would give someone a field that quietly writes a
   // DIFFERENT variable (`A=B=v` reads back as A="B=v"). Offering that is worse
   // than offering nothing, so it is left out — which gates no tool, only an
   // input that could never have worked.
-  const usable = (t: ItemToolState) => {
+  const usable = (t: Provider) => {
     const seen = new Set<string>();
     return (t.env_needs ?? []).filter((n) => {
       if (unstorable({ [n.name]: "x" }).length > 0) return false;

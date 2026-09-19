@@ -236,4 +236,52 @@ describe("deriveEnvNeeds", () => {
     expect(view.missingRequired).toEqual(["SAP_HOST"]);
     expect(view.groups[0].fields[0].filled).toBe(false);
   });
+  // plan-tools-picker-groups part 2: a whole-package grant is one picker row
+  // per COMMAND, and every one of those rows carries its package's needs.
+  // The declaration belongs to the package, so the panel folds by package.
+  describe("over one row per command", () => {
+    const NEEDS = [{ name: "SAP_HOST", description: "server address", required: true }];
+    const rows = ["spc", "pareto", "wafer-history"].map((c) =>
+      tool({
+        key: `sap-tools:${c}`,
+        label: c,
+        package: "Sap Tools",
+        group: "sap-tools",
+        env_needs: NEEDS,
+        version: "1.2.3",
+        author: "SAP Team",
+      }),
+    );
+
+    it("shows one group per package, not one per command", () => {
+      const view = deriveEnvNeeds(rows, {});
+      expect(view.groups.map((g) => [g.key, g.label, g.author, g.version])).toEqual([
+        ["sap-tools", "Sap Tools", "SAP Team", "1.2.3"],
+      ]);
+    });
+
+    it("names the package once beside the variable", () => {
+      const view = deriveEnvNeeds(rows, {});
+      expect(view.groups[0]!.fields[0]!.wantedBy).toEqual(["Sap Tools"]);
+    });
+
+    it("names an undeclared package once", () => {
+      const silent = ["spc", "pareto"].map((c) =>
+        tool({ key: `rca-tools:${c}`, label: c, package: "Rca Tools", group: "rca-tools" }),
+      );
+      expect(deriveEnvNeeds(silent, {}).undeclared).toEqual(["Rca Tools"]);
+    });
+
+    it("a package whose every command is off has no say", () => {
+      const off = rows.map((r) => ({ ...r, effective: false }));
+      const view = deriveEnvNeeds(off, {});
+      expect(view.groups).toEqual([]);
+      expect(view.missingRequired).toEqual([]);
+    });
+
+    it("one command on is enough for the package to count", () => {
+      const one = rows.map((r, i) => ({ ...r, effective: i === 1 }));
+      expect(deriveEnvNeeds(one, {}).missingRequired).toEqual(["SAP_HOST"]);
+    });
+  });
 });
