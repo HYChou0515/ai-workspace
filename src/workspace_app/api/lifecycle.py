@@ -557,6 +557,11 @@ def build_lifespan(
             # #245: blob-GC consumer — the all-in-one pod runs its own reconcile.
             with boot_step("start blob-GC consumer"):
                 app.state.blob_gc_coordinator.start_consuming()
+            # plan-chat-video-export: the all-in-one pod renders its own videos
+            # (it needs Chromium + ffmpeg on this image for that; without them
+            # every job fails with the sentence `ensure_tools` writes).
+            with boot_step("start chat-video consumer"):
+                app.state.chat_video_coordinator.start_consuming()
         # #230: seed the platform Help collection from packaged content (repo =
         # source of truth; identical bytes are a no-op). The STORE runs here (off
         # the loop, best-effort — a dead backend leaves the collection
@@ -696,6 +701,7 @@ def build_lifespan(
                     "graph_coordinator",
                     "card_gen_coordinator",
                     "blob_gc_coordinator",
+                    "chat_video_coordinator",
                 ):
                     coordinator = getattr(app.state, name, None)
                     if coordinator is None:

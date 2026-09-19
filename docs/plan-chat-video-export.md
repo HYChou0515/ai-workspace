@@ -92,13 +92,13 @@
  "output_path": "/exports/chat-video/OOM-調查-20260919-0310.mp4",
  "requested_by": "hychou", "error": ""}
 ```
-`stage ∈ queued | rendering | encoding | writing | failed`(`done` 不會被看到——完成即刪)。
+`stage ∈ queued | rendering | encoding | failed`(`done` 不會被看到——完成即刪;寫檔是一次 facade 呼叫,心跳在算圖結束就停,所以沒有 `writing` 這一格)。
 
 ### 模組
 
 ```
 src/workspace_app/chat_video/
-  options.py    VideoOptions(既有)+ ChatVideoLimits(config 段的 struct)+ check_limits(options, limits) -> None | 422 句
+  options.py    VideoOptions(既有)+ check_limits(options, max_pixels=, max_seconds=) -> None | 422 句
   render.py     record(html, options, workdir, *, expected_ms, should_stop)  切片等待;encode(src, fmt, out, *, should_stop)  Popen 輪詢
   service.py    render_chat_video(…, should_stop=None)(既有簽名加一個 callback)
   jobs.py       ChatVideoPayload(item_id, source_path, output_path, progress_path, options)/ ChatVideoJob / ChatVideoCoordinator(enqueue / _handle / 心跳 / 進度檔 / 授權)
@@ -189,11 +189,14 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 測試:假 playwright 記每次 `timeout`(釘住切片長度)與 close 次數;假 `Popen` 一開始就寫半成品(釘住清理);8 個突變體各紅自己的測試
   (兩個第一版沒抓到:「不切片」和「留半寫檔」——替身看不到那個性質,補上才紅)。套件 100%。
 
-### P5 — coordinator + worker
-- `chat_video/jobs.py`:`ChatVideoPayload(item_id, source_path, output_path, progress_path, options)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoCoordinator(spec, *, files, limits, message_queue_factory, superusers, permission_of)`:
-  `enqueue(item_id, transcript, options, output_path, user)`(驗 transcript、409 規則、寫 source 檔、進度檔 queued、job);`_handle()`(再授權、`files.read(source)` → `parse_chat_export`、讀 assets、心跳 task、`to_thread(render)`、大小上限、`ensure_room_for`、寫檔、刪進度檔;任何失敗 → 進度檔 failed 一句話)。
-- `coordinators.py` bundle 加 `chat_video`,**受 `run_consumers` 控制同其他**;`worker/__init__.py` 兩張表各加 `chat-video`;`worker.build_coordinator` 對它走 `build_app`。
-- 測試:enqueue 的 409 / 過期殘檔可覆蓋;`_handle` 全路徑(假 render);再授權失敗 → failed、不寫;取消 → 不寫、進度檔不重建;`ensure_room_for` 不足 → failed 一句話;all-in-one 沒工具 → failed 一句話。
+### P5 — coordinator + worker ✅
+- `chat_video/jobs.py`:`ChatVideoPayload(item_id, source_path, output_path, progress_path, options)`、`ChatVideoJob(Job[ChatVideoPayload])`(`partition_key = item_id`)、`ChatVideoCoordinator(spec, *, limits: ChatVideoSettings, message_queue_factory, superusers, render, now)` + `set_files(files)`(post-build 注入,同 eval 的 `set_retriever`;`limits` 直接吃 config 的 dataclass,不再抄一份 `ChatVideoLimits`):
+  `enqueue(item_id, title, messages, options, output_path, expected_seconds, user)`(409 兩條規則都問 `progress.is_alive`:同輸出有活的進度檔 / 同人在此 item 有活的 job——後者從 queue 的 active rows 找、以進度檔為準;過期或不是我們寫的檔可覆蓋;寫 source 檔 + queued 進度檔 + job row 只帶路徑);
+  `_handle()` 把 `_run()` 丟到**一個** loop 上跑(API 下是 lifespan 捕到的 loop;worker 沒 running loop 就自己開一條 thread 的 loop,整個消費期共用一條——production sandbox 是 `kind: http`,facade 透過同一個 `httpx.AsyncClient` 打它,連線池屬於開它的 loop,一 job 一 loop 的第二支 job 會用到已關 loop 上的連線);
+  `_run()`:再授權(`_may` = `load_access_facts` + `authorize` 兩個 verb,少一個都拒)、`parse_chat_export` 讀 source(壞掉/不見 → failed 一句話)、assets 先問 `file_size` 再讀(CLI `load_assets` 的規則:超過 `max_asset_bytes` 不進記憶體)、心跳 task 每 `heartbeat_seconds` 重寫 stage/elapsed、檔不見 → `stop.set()`、`to_thread(render, should_stop=stop.is_set, on_stage=…)`、`Cancelled` → 什麼都不寫、其他例外 → failed 一句話(all-in-one 沒 Chromium/ffmpeg 就是 `ensure_tools` 那句)、算完再看一次進度檔(在最後一次心跳與算完之間被刪也要丟掉)、`max_output_bytes` → failed 一句話、`files.write(output)`(額度是 facade 自己的規則,一次寫就是那個閘,沒有再前置一個 `ensure_room_for`)被拒 → failed `could not write …`、成功刪進度檔。`fail()` 在進度檔已被刪時不重建。
+- `coordinators.py` bundle 加 `chat_video`(永遠建,`chat_video_settings` 從 `settings.chat_video`)、`create_app` 注入 facade + `app.state.chat_video_coordinator`、lifecycle 在 `run_consumers` 下啟動 + 進 drain 清單;`worker/__init__.py` 兩張表各加 `chat-video`(`API_REGISTRY_JOBTYPES`:它要的是 API 組出來的那個 facade,只有 `create_app` 會組);`kubernetes/base/workers.yaml` 加 `rca-worker-chat-video`(manifest 守衛要求每個 JobType 都有 Deployment,所以放在這一步;image `rca-app-chat-video:latest`,memory request 1Gi / limit 2Gi 由 P1 量到的數字推:錄影 Chromium 154–172 MB + 錄影 ffmpeg 147 MB,編碼 mp4 273–320 MB / gif 230–640 MB,兩段不重疊)。
+- 測試(`tests/chat_video/test_jobs.py` 16 個函式 19 個案例、`test_consumer_gate` +2、`test_worker` +1 走 `build_coordinator` 真門):27 個突變體(含對照組)各紅自己那條;jobs.py / coordinators.py / worker 100%。
+- 第一版兩個洞在寫測試時發現:`stage[0]="writing"` 在心跳已停之後才設、沒人看得到(拿掉 `writing` 這一格);取消測試分不出「被旗標停下」和「等到放棄」(假 render 記 `stopped`)。
 
 ### P6 — route
 - `POST /a/{slug}/items/{item_id}/chat-video`(`read_content` + `add_content`、body `{transcript, options, output_path?}`、`parse_chat_export` 驗 transcript → 422 一句話、`check_limits`、`output_path` 在 workspace 內且不存在、`build_timeline` 算 `expected_seconds`、呼叫 `enqueue`、202)。

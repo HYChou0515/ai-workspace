@@ -10,7 +10,7 @@ job can store them as a ``Binary`` without a shared filesystem.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,7 @@ def render_chat_video(
     workdir: Path,
     assets: Mapping[str, bytes] | None = None,
     should_stop: StopCheck | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> dict[Format, bytes]:
     """Render ``messages`` (the ``build_chat_export`` shape) to every format
     in ``options.fmt``. ``workdir`` is scratch: whatever is left there — the
@@ -42,16 +43,22 @@ def render_chat_video(
     function runs in a thread with no store of its own. ``should_stop`` is
     asked throughout the recording (between slices) and the encodes (each
     second); True abandons the render with :class:`render.Cancelled` — the
-    worker answers it from the progress file, whose deletion is the cancel."""
+    worker answers it from the progress file, whose deletion is the cancel.
+    ``on_stage`` is told ``"rendering"`` before the recording and
+    ``"encoding"`` before the encodes, for the progress file."""
     ensure_tools(options)  # before a recording that would be thrown away
     timeline = build_timeline(title=title, messages=messages, options=options)
     html = render_player_html(timeline, options, assets=assets or {})
     scratch = workdir / "chat-video"
     scratch.mkdir(parents=True, exist_ok=True)
     try:
+        if on_stage is not None:
+            on_stage("rendering")
         recording = record(
             html, options, scratch, expected_ms=timeline.playback_ms, should_stop=should_stop
         )
+        if on_stage is not None:
+            on_stage("encoding")
         out: dict[Format, bytes] = {}
         for fmt in options.fmt:
             path = encode(recording, fmt, scratch / f"out.{fmt}", should_stop=should_stop)

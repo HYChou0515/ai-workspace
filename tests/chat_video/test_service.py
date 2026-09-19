@@ -24,7 +24,11 @@ _MESSAGES = [
 ]
 
 
-def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, tmp_path):
+@pytest.mark.parametrize("with_stages", [True, False], ids=["job", "cli"])
+def test_it_records_the_rendered_page_once_and_encodes_each_format(
+    monkeypatch, tmp_path, with_stages
+):
+    """`on_stage` is the job's; the CLI passes none and runs the same way."""
     seen: dict[str, object] = {}
     encode_stops: list[object] = []
 
@@ -47,6 +51,8 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
     def stop() -> bool:
         return False
 
+    stages: list[str] = []
+
     monkeypatch.setattr(service, "record", fake_record)
     monkeypatch.setattr(service, "encode", fake_encode)
     # The tool check is its own test below; this one is the orchestration,
@@ -61,9 +67,13 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(monkeypatch, 
         workdir=tmp_path,
         assets={"/chart.png": b"\x89PNG\r\n\x1a\n" + b"\0" * 8},
         should_stop=stop,
+        on_stage=stages.append if with_stages else None,
     )
 
     assert result == {"gif": b"gif:WEBM", "mp4": b"mp4:WEBM"}
+    # The worker's heartbeat names the stage from this: once before the
+    # recording, once before the encodes (one for all formats).
+    assert stages == (["rendering", "encoding"] if with_stages else [])
     # The cancel reaches both long phases: the same callable, unchanged.
     assert seen["record_stop"] is stop and encode_stops == [stop, stop]
     assert "hello" in str(seen["html"]) and "const TIMELINE" in str(seen["html"])
@@ -89,6 +99,9 @@ def test_the_scratch_dir_is_removed_even_when_the_browser_fails(monkeypatch, tmp
         raise RuntimeError("browser died")
 
     monkeypatch.setattr(service, "record", failing_record)
+    # Without this, a runner with no ffmpeg raises `RendererUnavailable` — a
+    # RuntimeError too — before `record`, and the test is green over nothing.
+    monkeypatch.setattr(service, "ensure_tools", lambda _o: None)
 
     try:
         render_chat_video(title="t", messages=_MESSAGES, options=VideoOptions(), workdir=tmp_path)

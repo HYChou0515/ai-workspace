@@ -97,6 +97,9 @@ def build_bundle(
         # is composed from `build_app`) cannot disagree with settings.
         gc_t1=settings.filestore.gc_t1,
         gc_t2=settings.filestore.gc_t2,
+        # plan-chat-video-export: likewise never consumed from a slim worker
+        # (chat-video is composed from `build_app`, for the API's facade).
+        chat_video_settings=settings.chat_video,
     )
     # #506 worker parity: build_coordinators wires the OPEN-loop one-shot drafter;
     # swap in the AGENTIC (closed-loop) one exactly like create_app, so a split-
@@ -175,10 +178,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | None) -> object:
     """The coordinator this worker consumes, from the composition its JobType
-    needs. Most JobTypes come from the FastAPI-free ``build_bundle``; one in
-    ``API_REGISTRY_JOBTYPES`` (blob-gc) must hold the API's WHOLE model
-    registry, so it comes from the API's own composition — ``build_app``,
-    built and never served — and the registries are equal by construction."""
+    needs. Most JobTypes come from the FastAPI-free ``build_bundle``; those in
+    ``API_REGISTRY_JOBTYPES`` come from the API's own composition —
+    ``build_app``, built and never served: blob-gc must hold the API's WHOLE
+    model registry (equal by construction), chat-video must write through the
+    API's own ``WorkspaceFiles`` (only ``create_app`` composes it)."""
     if jobtype in API_REGISTRY_JOBTYPES:
         from ..__main__ import build_app
 

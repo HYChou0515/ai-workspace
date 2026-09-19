@@ -450,3 +450,75 @@ spec:
         - name: scratch
           persistentVolumeClaim:
             claimName: rca-scratch
+---
+# ── chat-video render (plan-chat-video-export) — fixed 1 replica, no HPA ──────
+# One job = one headless Chromium recording the transcript replay in real time
+# (a 41-second video takes 41 seconds to record) and one ffmpeg encode. The
+# image is NOT `rca-app`: Chromium + ffmpeg add ~0.7–1 GB the API pod has no
+# use for, so `docker/Dockerfile`'s `chat-video` stage builds
+# `rca-app-chat-video` — the same app, plus the two tools.
+#
+# Like blob-gc, this worker boots the API's OWN composition (`build_app`, never
+# served): the job reads its transcript and writes its video through the API's
+# `WorkspaceFiles` — the quota, the jail and the mirror — and only `create_app`
+# composes that facade. So it needs what the API pod needs AT BOOT: the same
+# configmap, `/data` for the durable store, `/scratch` for the sandbox root the
+# construction step mkdirs (the video is written through the facade into the
+# item's shared dir on THIS volume when the item is warm on some pod, else into
+# the durable snapshot). Mirror whatever the overlay adds to `rca-app` for those.
+#
+# Memory, measured on the 41-second 1080p sample (`docs/chat-video.md`): the
+# recording holds Chromium (154–172 MB) + Playwright's recorder ffmpeg (147 MB);
+# the encode that follows it peaks at 273–320 MB for mp4 and 230–640 MB for gif
+# (two-pass, a frame queue that sometimes fills) — the two never overlap. The
+# limit leaves room for the process itself; an OOM here fails one job's
+# progress file, not a request. `chat_video.max_pixels` / `max_seconds` in the
+# configmap are what bound this, so raise them together with the limit.
+# Scratch disk holds the recording (4.6 MB for the sample, 12 MB for 120 s) and
+# the outputs (≤ `chat_video.max_output_bytes`, 100 MB by default) per job.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-chat-video
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-chat-video
+  template:
+    metadata:
+      labels:
+        app: rca-worker-chat-video
+    spec:
+      # A render in flight is stoppable at any second (the heartbeat asks), but
+      # a SIGTERM lets the job drain (`consume_until_stopped`) up to the video's
+      # own length: `chat_video.max_seconds` (180 s) + the encode.
+      terminationGracePeriodSeconds: 240
+      containers:
+        - name: worker
+          image: rca-app-chat-video:latest
+          command: ["python", "-m", "workspace_app.worker", "chat-video"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: scratch
+              mountPath: /scratch
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+              ephemeral-storage: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+              ephemeral-storage: "1Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+        - name: scratch
+          persistentVolumeClaim:
+            claimName: rca-scratch

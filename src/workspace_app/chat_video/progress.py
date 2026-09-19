@@ -22,8 +22,8 @@ from typing import Literal
 
 import msgspec
 
-Stage = Literal["queued", "rendering", "encoding", "writing", "failed"]
-RUNNING: frozenset[str] = frozenset({"queued", "rendering", "encoding", "writing"})
+Stage = Literal["queued", "rendering", "encoding", "failed"]
+RUNNING: frozenset[str] = frozenset({"queued", "rendering", "encoding"})
 
 SOURCE_SUFFIX = ".chat.json"
 PROGRESS_SUFFIX = ".progress.json"

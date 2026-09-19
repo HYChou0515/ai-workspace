@@ -23,6 +23,7 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SubagentDef
 from ..config.schema import (
+    ChatVideoSettings,
     EnhancementSettings,
     OffHoursSettings,
     PerUserResources,
@@ -522,6 +523,11 @@ def create_app(
     gc_interval: timedelta | None = timedelta(hours=1),
     gc_t1: str = "1h",
     gc_t2: str = "24h",
+    # plan-chat-video-export: the `chat_video:` config section — the size /
+    # length ceilings a request is checked against (`check_limits`) and the
+    # output ceiling + heartbeat the worker applies. None ⇒ its defaults.
+    # `__main__` threads settings.chat_video.
+    chat_video: ChatVideoSettings | None = None,
     # Step budgets for the wiki agents (#50) — far higher than a chat reply's
     # ~10 turns; a maintenance pass writes several pages, the reader navigates.
     wiki_maintainer_max_turns: int = 40,
@@ -1627,6 +1633,7 @@ def create_app(
         gc_t2=gc_t2,
         monitor=monitor,
         filestore=filestore,
+        chat_video_settings=chat_video,
     )
 
     # #208: the first real backend hit — specstar materialises every model's
@@ -1710,6 +1717,12 @@ def create_app(
     app.state.import_coordinator = coordinators.kb_import
     # #245: the blob-GC reconcile consumer; the sweeper's ask goes through it.
     app.state.blob_gc_coordinator = coordinators.blob_gc
+    # plan-chat-video-export: the video job reads its transcript and writes its
+    # output through the SAME `WorkspaceFiles` the routes use — quota, jail and
+    # mirror included — so the facade is injected post-build (`eval` takes its
+    # retriever the same way). On app.state for the lifespan's consumer gate.
+    coordinators.chat_video.set_files(files)
+    app.state.chat_video_coordinator = coordinators.chat_video
     # The whole bundle, for a worker that consumes from THIS composition
     # (`worker.build_coordinator` → `select_coordinator`, the same jobtype map).
     app.state.coordinators = coordinators
