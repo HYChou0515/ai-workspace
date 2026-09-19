@@ -128,13 +128,30 @@ def _resolve_agent(app_slug: str, profile: str, preset: str | None, config_path:
     from ..factories import get_app_catalog
 
     settings = load(config_path=config_path)
+    known = ", ".join(sorted(settings.agents.presets))
+    if preset is not None and preset not in settings.agents.presets:
+        raise SystemExit(f"unknown preset {preset!r}. config knows: {known}")
     try:
-        return get_app_catalog(settings).resolve(
+        cfg = get_app_catalog(settings).resolve(
             app_slug=app_slug, profile=profile, attached_preset=preset
         )
     except KeyError as e:
-        known = ", ".join(sorted(settings.agents.presets))
-        raise SystemExit(f"unknown preset {preset!r} ({e}). config knows: {known}") from e
+        raise SystemExit(f"cannot resolve a turn for {app_slug}/{profile} ({e})") from e
+    if preset is not None:
+        # `resolve` honours an attached preset only when the App's picker (or
+        # the profile's subset) lists it, and falls back to the default without
+        # a word — right for a live turn, wrong here: a run that measured some
+        # other model would report a number about nothing. The preset's model
+        # and endpoint are what it contributes; if the turn does not carry
+        # them, it is not that preset's turn.
+        want = settings.agents.presets[preset]
+        if (cfg.model, cfg.llm_base_url) != (want.model, want.llm.base_url):
+            raise SystemExit(
+                f"preset {preset!r} is not in app {app_slug!r} / profile {profile!r}'s picker, "
+                f"so the turn resolved to {cfg.name!r} ({cfg.model}) instead. Name a picker "
+                f"preset, or override one of them in the config you pass with --config."
+            )
+    return cfg
 
 
 def _litellm_chat(cfg, num_ctx: int, timeout: int) -> Chat:
