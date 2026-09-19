@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileService } from "../api/fileService";
 import type { ItemSkillState } from "../api/types";
 import { HttpError } from "../api/http";
+import { makeQueryClient } from "../api/queryClient";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import type { SkillHubCard } from "../api/skillHub";
 import { subscribeAgentDraft } from "../lib/agentDraftBus";
 import { translate } from "../lib/i18n";
@@ -471,6 +473,45 @@ describe("SkillsModal — the skill hub", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("alice's '.skill/triage-reflow/'");
     expect(screen.getByTestId("skill-hub-picker")).toBeInTheDocument();
+  });
+
+  it("reports a refused install ONCE — in the picker, not also as the global write-failure toast (plan-skill-hub-ui-polish D3)", async () => {
+    // Mounted on the REAL query client: its MutationCache reports every
+    // failed mutation as 「儲存失敗，內容未套用」 unless the mutation says it
+    // handles its own error (`meta.silentError`). The picker does — the
+    // demo showed both at once, the toast with a title that was not even
+    // true (nothing was being saved).
+    resetWriteFailures();
+    const hub = fakeHub();
+    hub.install.mockRejectedValueOnce(
+      new HttpError(
+        409,
+        "this workspace already has alice's '.skill/triage-reflow/' — remove or rename that folder first, then install again",
+      ),
+    );
+    const props: ComponentProps<typeof SkillsModal> = {
+      slug: "rca",
+      itemId: "i1",
+      fileService: fakeService().svc,
+      onClose: vi.fn(),
+      onSaveSkillPrefs: vi.fn(),
+      appliedSkills: [],
+      onToggleApply: vi.fn(),
+      client: fakeClient(),
+      hubClient: hub,
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillsModal {...props} />
+      </MemoryRouter>,
+      makeQueryClient(),
+    );
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    fireEvent.click(await screen.findByTestId("pick-install-e-1"));
+
+    await screen.findByRole("alert");
+    expect(currentWriteFailure()).toBeNull();
   });
 
   it("lists a fork under its root as one more thing to install", async () => {

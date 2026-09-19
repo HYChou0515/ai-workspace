@@ -255,6 +255,29 @@ describe("SkillHubPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the notice a navigation handed it, as a status the person can dismiss (D10)", async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/skill-hub",
+            state: { notice: { kind: "success", text: "已刪除「x」。" } },
+          },
+        ]}
+      >
+        <QueryWrap>
+          <SkillHubPage client={client()} />
+        </QueryWrap>
+      </MemoryRouter>,
+    );
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("已刪除「x」。");
+    fireEvent.click(
+      within(status).getByRole("button", { name: word("notice.dismiss") }),
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("says so when nothing matches, and keeps the tools", async () => {
     render(<SkillHubPage client={client()} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-root");

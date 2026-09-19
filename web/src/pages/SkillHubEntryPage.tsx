@@ -32,10 +32,15 @@ import { UserPicker } from "../components/UserPicker";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useApps } from "../hooks/useResources";
+import { useUsers } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
 import { DOC_ROLES } from "../lib/permission";
 
-export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubApi }) {
+export function SkillHubEntryPage({
+  client = skillHubApi,
+}: {
+  client?: SkillHubApi;
+}) {
   const { entryId = "" } = useParams();
   const t = useT();
   const { data, isPending, isError, refetch } = useQuery({
@@ -72,10 +77,17 @@ export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubA
   return <EntryView entry={data} client={client} />;
 }
 
-function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
+function EntryView({
+  entry,
+  client,
+}: {
+  entry: SkillHubDetail;
+  client: SkillHubApi;
+}) {
   const t = useT();
   const apps = useApps();
-  const appTitle = (slug: string) => apps.find((a) => a.slug === slug)?.title || slug;
+  const appTitle = (slug: string) =>
+    apps.find((a) => a.slug === slug)?.title || slug;
   return (
     <div className="page skill-hub-entry">
       <div className="page-head">
@@ -89,7 +101,9 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
       <div className="skill-hub-entry-meta">
         <UserChip userId={entry.owner} size={20} />
         <AppTag slug={entry.source_app} />
-        <span className="muted">{t("skillHub.writtenIn", { app: appTitle(entry.source_app) })}</span>
+        <span className="muted">
+          {t("skillHub.writtenIn", { app: appTitle(entry.source_app) })}
+        </span>
         {entry.is_owner ? (
           <span className="skill-hub-badge" data-kind={entry.visibility}>
             {entry.visibility === "private"
@@ -101,7 +115,9 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
         ) : null}
       </div>
       {entry.forked_from ? <Lineage lineage={entry.forked_from} /> : null}
-      {entry.is_owner ? null : <p className="hint">{t("skillHub.howToInstall")}</p>}
+      {entry.is_owner ? null : (
+        <p className="hint">{t("skillHub.howToInstall")}</p>
+      )}
 
       <section>
         <h2>{t("skillHub.tools")}</h2>
@@ -130,7 +146,9 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
           </ul>
         )}
         {entry.review.model ? (
-          <p className="muted small">{t("skillHub.review.by", { model: entry.review.model })}</p>
+          <p className="muted small">
+            {t("skillHub.review.by", { model: entry.review.model })}
+          </p>
         ) : null}
       </section>
 
@@ -161,7 +179,10 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
             {entry.forks.map((f) => (
               <li key={f.id} className="skill-hub-row" data-fork>
                 <div className="skill-hub-row-head">
-                  <Link to={`/skill-hub/${encodeURIComponent(f.id)}`} className="skill-hub-row-title">
+                  <Link
+                    to={`/skill-hub/${encodeURIComponent(f.id)}`}
+                    className="skill-hub-row-title"
+                  >
                     <span className="skill-hub-owner">{f.owner}/</span>
                     {f.name}
                   </Link>
@@ -189,7 +210,11 @@ export function skillBody(md: string): string {
 /** What this entry was forked from, as the viewer may know it. A root that
  * went private or was deleted is SAID — the plan's 「原作已下架 / 已刪除」 —
  * never a broken link. */
-function Lineage({ lineage }: { lineage: NonNullable<SkillHubDetail["forked_from"]> }) {
+function Lineage({
+  lineage,
+}: {
+  lineage: NonNullable<SkillHubDetail["forked_from"]>;
+}) {
   const t = useT();
   if (lineage.state === "live") {
     return (
@@ -212,7 +237,13 @@ function Lineage({ lineage }: { lineage: NonNullable<SkillHubDetail["forked_from
 /** The owner's five actions. Rendered for the owner ONLY — the caller gates
  * on `entry.is_owner`, the server's answer, and every one of these routes
  * refuses a non-owner anyway. */
-function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
+function OwnerActions({
+  entry,
+  client,
+}: {
+  entry: SkillHubDetail;
+  client: SkillHubApi;
+}) {
   const t = useT();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -222,13 +253,34 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
   const [transferring, setTransferring] = useState(false);
   const [newItem, setNewItem] = useState<SkillEditTarget | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const users = useUsers();
+  // The notice names the new owner the way the picker did (display name),
+  // falling back to the id for someone the directory does not list.
+  const personName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const refresh = () => qc.invalidateQueries({ queryKey: ["skillHub"] });
-  const failed = (e: unknown) => setFailure(e instanceof Error ? e.message : String(e));
+  const failed = (e: unknown) =>
+    setFailure(e instanceof Error ? e.message : String(e));
+  // Every action here shows its own failure line (`failed`), so the query
+  // client's global write-failure toast must not fire for it too — the demo
+  // showed both at once, the toast under a title that was not even true
+  // (plan-skill-hub-ui-polish D3). `silentError` is that opt-out.
+  const own = { meta: { silentError: true } } as const;
+  // The list is where a transfer or a delete leaves the person; it says what
+  // just happened (D10) — a success is a notice there, not a silent bounce.
+  const leaveWith = (text: string) =>
+    navigate("/skill-hub", {
+      replace: true,
+      state: { notice: { kind: "success", text } },
+    });
 
   const unpublish = useMutation({
-    mutationFn: () => (entry.visibility === "private" ? client.republish(entry.id) : client.unpublish(entry.id)),
+    mutationFn: () =>
+      entry.visibility === "private"
+        ? client.republish(entry.id)
+        : client.unpublish(entry.id),
     onSuccess: refresh,
     onError: failed,
+    ...own,
   });
   const permission = useMutation({
     mutationFn: (perm: Parameters<SkillHubApi["setPermission"]>[1]) =>
@@ -238,37 +290,54 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       void refresh();
     },
     onError: failed,
+    ...own,
   });
   const transfer = useMutation({
     mutationFn: (owner: string) => client.transfer(entry.id, owner),
-    onSuccess: () => {
+    onSuccess: (_res, owner) => {
       setTransferring(false);
       void refresh();
       // Given away: the page would refetch an entry its old owner may no
       // longer read (a private one) and land on the error line with a Retry
-      // that cannot succeed. The list is where they are now.
-      navigate("/skill-hub", { replace: true });
+      // that cannot succeed. The list is where they are now — told who has
+      // it, and that a private one is out of their sight from here on.
+      leaveWith(
+        t(
+          entry.visibility === "private"
+            ? "skillHub.transferred.private"
+            : "skillHub.transferred",
+          {
+            name: entry.name,
+            owner: personName(owner),
+          },
+        ),
+      );
     },
     onError: failed,
+    ...own,
   });
   const remove = useMutation({
     mutationFn: () => client.remove(entry.id),
     onSuccess: () => {
       void refresh();
-      navigate("/skill-hub", { replace: true });
+      leaveWith(t("skillHub.deleted", { name: entry.name }));
     },
     onError: failed,
+    ...own,
   });
   const edit = useMutation({
     mutationFn: () => client.edit(entry.id),
     onSuccess: (target) => {
       if (target.action === "open") {
-        navigate(`/a/${encodeURIComponent(target.app)}/${encodeURIComponent(target.item_id)}`);
+        navigate(
+          `/a/${encodeURIComponent(target.app)}/${encodeURIComponent(target.item_id)}`,
+        );
       } else {
         setNewItem(target);
       }
     },
     onError: failed,
+    ...own,
   });
 
   const askDelete = async () => {
@@ -277,29 +346,77 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       body: t("skillHub.delete.body"),
       actions: [
         { id: "cancel", label: t("skillHub.cancel") },
-        { id: "delete", label: t("skillHub.delete.confirm"), variant: "danger" },
+        {
+          id: "delete",
+          label: t("skillHub.delete.confirm"),
+          variant: "danger",
+        },
       ],
     });
     if (choice === "delete") remove.mutate();
   };
   const busy =
-    unpublish.isPending || remove.isPending || edit.isPending || transfer.isPending;
+    unpublish.isPending ||
+    remove.isPending ||
+    edit.isPending ||
+    transfer.isPending;
 
   return (
-    <div className="skill-hub-actions" role="group" aria-label={t("skillHub.edit")}>
-      <button type="button" className="btn" data-size="sm" data-variant="primary" disabled={busy} onClick={() => edit.mutate()}>
+    <div
+      className="skill-hub-actions"
+      role="group"
+      aria-label={t("skillHub.edit")}
+    >
+      <button
+        type="button"
+        className="btn"
+        data-size="sm"
+        data-variant="primary"
+        disabled={busy}
+        onClick={() => edit.mutate()}
+      >
         {t("skillHub.edit")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => unpublish.mutate()}>
-        {entry.visibility === "private" ? t("skillHub.republish") : t("skillHub.unpublish")}
+      <button
+        type="button"
+        className="btn"
+        data-size="sm"
+        data-variant="secondary"
+        disabled={busy}
+        onClick={() => unpublish.mutate()}
+      >
+        {entry.visibility === "private"
+          ? t("skillHub.republish")
+          : t("skillHub.unpublish")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setSharing(true)}>
+      <button
+        type="button"
+        className="btn"
+        data-size="sm"
+        data-variant="secondary"
+        disabled={busy}
+        onClick={() => setSharing(true)}
+      >
         {t("skillHub.share")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setTransferring(true)}>
+      <button
+        type="button"
+        className="btn"
+        data-size="sm"
+        data-variant="secondary"
+        disabled={busy}
+        onClick={() => setTransferring(true)}
+      >
         {t("skillHub.transfer")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="danger" disabled={busy} onClick={() => void askDelete()}>
+      <button
+        type="button"
+        className="btn"
+        data-size="sm"
+        data-variant="danger"
+        disabled={busy}
+        onClick={() => void askDelete()}
+      >
         {t("skillHub.delete")}
       </button>
       {failure ? (
@@ -358,7 +475,12 @@ function TransferDialog({
   const titleId = useId();
   const [picked, setPicked] = useState<string | null>(null);
   return (
-    <ModalShell onClose={onClose} labelledBy={titleId} width={480} data-testid="skill-hub-transfer">
+    <ModalShell
+      onClose={onClose}
+      labelledBy={titleId}
+      width={480}
+      data-testid="skill-hub-transfer"
+    >
       <h2 id={titleId} className="modal-title">
         {t("skillHub.transfer.title", { name })}
       </h2>
@@ -369,7 +491,12 @@ function TransferDialog({
         exclude={[owner]}
       />
       <ModalActions>
-        <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          onClick={onClose}
+        >
           {t("skillHub.cancel")}
         </button>
         <button
@@ -388,7 +515,13 @@ function TransferDialog({
 
 /** The edit resolver's `new_item` branch: say why the source item cannot
  * take the edit, and what to do instead. */
-function NewItemDialog({ target, onClose }: { target: SkillEditTarget; onClose: () => void }) {
+function NewItemDialog({
+  target,
+  onClose,
+}: {
+  target: SkillEditTarget;
+  onClose: () => void;
+}) {
   const t = useT();
   const apps = useApps();
   const appTitle = apps.find((a) => a.slug === target.app)?.title || target.app;
@@ -401,14 +534,27 @@ function NewItemDialog({ target, onClose }: { target: SkillEditTarget; onClose: 
   const titleId = useId();
   return (
     // A read-only explanation: nothing to lose, so a stray click closes it (#779).
-    <ModalShell onClose={onClose} labelledBy={titleId} width={480} closeOnBackdrop data-testid="skill-hub-new-item">
+    <ModalShell
+      onClose={onClose}
+      labelledBy={titleId}
+      width={480}
+      closeOnBackdrop
+      data-testid="skill-hub-new-item"
+    >
       <h2 id={titleId} className="modal-title">
         {t("skillHub.edit.newItem.title")}
       </h2>
       <p>{t(reasonKey)}</p>
-      <p className="hint">{t("skillHub.edit.newItem.how", { app: appTitle })}</p>
+      <p className="hint">
+        {t("skillHub.edit.newItem.how", { app: appTitle })}
+      </p>
       <ModalActions>
-        <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          onClick={onClose}
+        >
           {t("skillHub.cancel")}
         </button>
         {/* The profile the skill was written for rides along (`?profile=`):

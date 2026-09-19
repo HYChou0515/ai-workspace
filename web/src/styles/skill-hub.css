@@ -227,3 +227,27 @@
   font-size: var(--text-body-lg);
   margin: 0 0 var(--space-12);
 }
+
+/* A page-level notice for the outcome of the action that brought the person
+   here (plan-skill-hub-ui-polish D10): one line, dismissable, in the success
+   tone; never an error (those stay where the action was). */
+.page-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin: var(--space-12) 0 var(--space-16);
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-left: 4px solid var(--ok);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
+}
+.page-notice[data-kind="info"] {
+  border-left-color: var(--info);
+}
+.page-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}

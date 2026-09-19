@@ -15,7 +15,7 @@
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import {
@@ -24,6 +24,7 @@ import {
   skillHubApi,
 } from "../api/skillHub";
 import { AppTag } from "../components/AppTag";
+import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
 import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useT } from "../lib/i18n";
@@ -35,6 +36,12 @@ export function SkillHubPage({
 }) {
   const t = useT();
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: "Skill hub" }]);
+  // What the page that sent us here wants said — the entry page after a
+  // transfer or a delete (plan-skill-hub-ui-polish D10). Router state, so a
+  // reload or a fresh visit carries no stale notice.
+  const notice =
+    (useLocation().state as { notice?: PageNoticeContent } | null)?.notice ??
+    null;
   const [query, setQuery] = useState("");
   const [mine, setMine] = useState(false);
   // The search is the server's (it matches what the agent's search tool
@@ -100,6 +107,7 @@ export function SkillHubPage({
   return (
     <div className="page">
       <h1>Skill hub</h1>
+      <PageNotice notice={notice} />
       {nothingPublished ? (
         <>
           <p className="empty">{t("skillHub.empty")}</p>

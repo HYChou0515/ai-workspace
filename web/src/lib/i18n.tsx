@@ -2352,6 +2352,19 @@ export const messages = {
     "zh-TW": "已刪除「{name}」。",
     en: "Deleted “{name}”.",
   },
+  // What the list says after an entry was given away (plan-skill-hub-ui-polish
+  // D10): who has it now — and, when it was unpublished, that it is out of
+  // the old owner's sight from here on, which is why they landed here.
+  "skillHub.transferred": {
+    "zh-TW": "已把「{name}」轉給 {owner}。",
+    en: "“{name}” is {owner}'s now.",
+  },
+  "skillHub.transferred.private": {
+    "zh-TW":
+      "已把「{name}」轉給 {owner}。它是已下架的條目，從現在起只有 {owner} 看得到。",
+    en: "“{name}” is {owner}'s now. It is unpublished, so from here on only {owner} can see it.",
+  },
+  "notice.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
   // The edit resolver's "new item" branch (plan P8): the source item cannot
   // take the edit, and the reason says why.
   "skillHub.edit.newItem.title": {

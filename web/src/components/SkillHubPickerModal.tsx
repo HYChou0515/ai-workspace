@@ -16,7 +16,11 @@ import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
-import { type SkillHubApi, type SkillHubCard, skillHubApi } from "../api/skillHub";
+import {
+  type SkillHubApi,
+  type SkillHubCard,
+  skillHubApi,
+} from "../api/skillHub";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { AppTag } from "./AppTag";
@@ -54,6 +58,11 @@ export function SkillHubPickerModal({
     mutationFn: (entryId: string) => client.install(slug, itemId, entryId),
     onSuccess: (res) => onInstalled(res.name),
     onError: (e) => setFailure(e instanceof Error ? e.message : String(e)),
+    // The refusal is shown right here (`failure`), so the query client's
+    // global write-failure toast must not report it a second time — under a
+    // title that is not even true, nothing was being saved
+    // (plan-skill-hub-ui-polish D3).
+    meta: { silentError: true },
   });
   // Roots and forks flattened for the picker: a fork is one more thing to
   // install, and the list route already put each under its root.
@@ -70,13 +79,26 @@ export function SkillHubPickerModal({
       closeOnBackdrop
       zIndex="var(--z-dialog)"
       data-testid="skill-hub-picker"
-      panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}
+      panelStyle={{
+        padding: 18,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
+      }}
     >
       <h2 id={titleId} className="modal-title">
         {t("skills.fromHub")}
       </h2>
-      <p style={{ margin: 0, fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}>
-        {t("skills.fromHub.intro")} <Link to="/skill-hub">{t("skills.fromHub.browse")}</Link>
+      <p
+        style={{
+          margin: 0,
+          fontSize: "var(--text-body-sm)",
+          color: "var(--text-paper-d)",
+        }}
+      >
+        {t("skills.fromHub.intro")}{" "}
+        <Link to="/skill-hub">{t("skills.fromHub.browse")}</Link>
       </p>
       <input
         type="search"
@@ -94,23 +116,44 @@ export function SkillHubPickerModal({
         }}
       />
       {failure ? (
-        <p className="error" role="alert" style={{ margin: 0, fontSize: "var(--text-body-sm)" }}>
+        <p
+          className="error"
+          role="alert"
+          style={{ margin: 0, fontSize: "var(--text-body-sm)" }}
+        >
           {t("skillHub.failed", { reason: failure })}
         </p>
       ) : null}
-      <div className="scrollable" style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+      <div
+        className="scrollable"
+        style={{ overflowY: "auto", flex: 1, minHeight: 0 }}
+      >
         {listQ.isError ? (
           <p className="error" role="alert">
             {t("skillHub.error")}
           </p>
         ) : listQ.isPending ? (
-          <p style={{ color: "var(--text-paper-d)" }}>{t("skillHub.loading")}</p>
+          <p style={{ color: "var(--text-paper-d)" }}>
+            {t("skillHub.loading")}
+          </p>
         ) : rows.length === 0 ? (
-          <p data-testid="skill-hub-picker-empty" style={{ color: "var(--text-paper-d)" }}>
+          <p
+            data-testid="skill-hub-picker-empty"
+            style={{ color: "var(--text-paper-d)" }}
+          >
             {q ? t("skillHub.noMatch") : t("skills.fromHub.none")}
           </p>
         ) : (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+          <ul
+            style={{
+              listStyle: "none",
+              margin: 0,
+              padding: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
             {rows.map((row) => (
               <PickRow
                 key={row.id}
@@ -126,7 +169,12 @@ export function SkillHubPickerModal({
         )}
       </div>
       <ModalActions>
-        <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          onClick={onClose}
+        >
           {t("skillHub.cancel")}
         </button>
       </ModalActions>
@@ -134,7 +182,15 @@ export function SkillHubPickerModal({
   );
 }
 
-function PickRow({ row, busy, onInstall }: { row: SkillHubCard; busy: boolean; onInstall: () => void }) {
+function PickRow({
+  row,
+  busy,
+  onInstall,
+}: {
+  row: SkillHubCard;
+  busy: boolean;
+  onInstall: () => void;
+}) {
   const t = useT();
   return (
     <li
@@ -150,26 +206,49 @@ function PickRow({ row, busy, onInstall }: { row: SkillHubCard; busy: boolean; o
       }}
     >
       <div style={{ flex: 1, minWidth: 0, fontSize: pxToRem(13) }}>
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 6,
+          }}
+        >
           <span>
             <span style={{ color: "var(--text-paper-d)" }}>{row.owner}/</span>
             <strong>{row.name}</strong>
           </span>
           <AppTag slug={row.source_app} />
           {row.forked_from ? (
-            <span style={{ fontSize: pxToRem(10), color: "var(--text-paper-d)" }}>fork</span>
+            <span
+              style={{ fontSize: pxToRem(10), color: "var(--text-paper-d)" }}
+            >
+              fork
+            </span>
           ) : null}
         </div>
-        <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>
+        <div
+          style={{
+            fontSize: pxToRem(11),
+            color: "var(--text-paper-d)",
+            overflowWrap: "anywhere",
+          }}
+        >
           {row.description}
         </div>
         {row.missing_tools.length > 0 ? (
           // The告知 (plan Q1): named, on the row, never a block.
           <div
             data-testid={`pick-missing-${row.id}`}
-            style={{ fontSize: pxToRem(11), color: "var(--warn)", marginTop: 2 }}
+            style={{
+              fontSize: pxToRem(11),
+              color: "var(--warn)",
+              marginTop: 2,
+            }}
           >
-            {t("skills.fromHub.missing", { tools: row.missing_tools.join(", ") })}
+            {t("skills.fromHub.missing", {
+              tools: row.missing_tools.join(", "),
+            })}
           </div>
         ) : null}
       </div>
