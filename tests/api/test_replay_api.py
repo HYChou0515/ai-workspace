@@ -228,3 +228,52 @@ def test_replay_error_codes():
     body = {"source": "rca", "thread_id": "x", "message_index": 0}
     assert bare.post("/health/replay/turn", json=body).status_code == 503
     assert bare.post("/health/replay/doc", json={"document_id": "x"}).status_code == 503
+
+
+def test_replay_offers_the_tools_the_turn_held_not_the_entry_level_grant():
+    """plan-tools-picker-groups part 2 (P14 revision): the replay loader is a
+    door — the resolved config meets the deploy's package list here — so a
+    command the item pinned off is not on the replayed menu either, and the
+    probe's `tools` match what the live turn was offered."""
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    rca = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=tuple(CommandInfo(c, f"{c}.", {}) for c in ("spc", "pareto")),
+    )
+    completion = _FakeCompletion([_chunk("ok")])
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        replay_service=ReplayService(completion=completion),
+        packages=[rca],
+    )
+    client = TestClient(app)
+    rid = (
+        spec.get_resource_manager(RcaInvestigation)
+        .create(
+            RcaInvestigation(
+                title="t", owner="alice", attached_tool_prefs={"rca-tools:pareto": False}
+            )
+        )
+        .resource_id
+    )
+    spec.get_resource_manager(Conversation).create(
+        Conversation(
+            item_id=rid,
+            messages=[Message(role="user", content="hi"), Message(role="assistant", content="ok")],
+        )
+    )
+
+    resp = client.post(
+        "/health/replay/turn", json={"source": "rca", "thread_id": rid, "message_index": 1}
+    )
+
+    assert resp.status_code == 200
+    offered = {t["function"]["name"] for t in completion.kwargs["tools"]}
+    assert "spc" in offered
+    assert "pareto" not in offered

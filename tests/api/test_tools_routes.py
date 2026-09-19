@@ -7,6 +7,8 @@ recomputes the default set and drifts from a real turn).
 already had a row with a switch — describing it anywhere else listed the same
 tool twice."""
 
+import pytest
+
 from workspace_app.tooling.external import ExternalTools, ToolProvenance
 
 from .conftest import Harness, register_rca_item
@@ -483,33 +485,85 @@ def test_a_legacy_whole_package_pin_reads_as_pinned_on_every_command_row():
     assert by_key["rca-tools:spc"]["effective"] is True
 
 
-def test_the_picker_and_the_runner_agree_on_every_command(monkeypatch):
-    """Parity: `effective` on the picker row and the commands the runner
-    registers come from the same `command_grants`; drive both for one set of
-    pins and compare the sets — the anti-drift promise the route was built on,
-    restated at command granularity."""
-    from workspace_app.api.litellm_runner import _agent_for
+# ─── P14 revision: the picker reads the FINALIZED config, the profile default
+# through the function resolve uses, and warns on package names ──────────────
+
+_PIN_TABLE = [
+    {},
+    {"rca-tools:pareto": False},
+    {"rca-tools": False},
+    {"rca-tools": False, "rca-tools:spc": True},
+    {"exec": False, "rca-tools:wafer-history": False},
+]
+
+
+@pytest.mark.parametrize("prefs", _PIN_TABLE, ids=[str(p) for p in _PIN_TABLE])
+def test_the_picker_and_the_door_agree_on_every_command(prefs):
+    """Parity, with the door as the oracle: a row's `effective` is the
+    membership of the FINALIZED config's `allowed_tools` — the same
+    `finalize_tool_grants` every turn passes through — for each row of a
+    table of pin shapes, not one hand-picked set."""
+    from workspace_app.apps.catalog import finalize_tool_grants
     from workspace_app.apps.resolve import resolve_item_agent_config
+    from workspace_app.config.schema import Settings
+    from workspace_app.factories import get_app_catalog
 
     pkg = _rca_tools_pkg()
     spec, client, _ = _picker_with_packages(pkg)
-    prefs = {"rca-tools:pareto": False, "exec": False}
     iid = register_rca_item(spec, attached_tool_prefs=prefs)
 
     rows = client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
     picker_on = {r["key"] for r in rows if r["effective"]}
 
+    cfg = resolve_item_agent_config(spec, get_app_catalog(Settings()), iid)
+    assert cfg is not None
+    door = set(finalize_tool_grants(cfg, [pkg]).allowed_tools or [])
+    assert picker_on == door
+
+
+def test_the_picker_and_the_door_agree_when_the_profile_grants_no_tools(monkeypatch):
+    """`tools: []` in a profile is explicit zero, the tri-state's own meaning.
+    The route once read it as "inherit the ceiling" (a falsy test) and lit
+    every row while the turn held nothing."""
+    import msgspec
+
+    from workspace_app.apps import catalog as app_catalog
+    from workspace_app.apps.catalog import finalize_tool_grants
+    from workspace_app.apps.resolve import resolve_item_agent_config
     from workspace_app.config.schema import Settings
     from workspace_app.factories import get_app_catalog
 
+    real = app_catalog.load_profile
+    monkeypatch.setattr(
+        app_catalog, "load_profile", lambda s, p: msgspec.structs.replace(real(s, p), tools=[])
+    )
+    pkg = _rca_tools_pkg()
+    spec, client, _ = _picker_with_packages(pkg)
+    iid = register_rca_item(spec)
+
+    rows = client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+    assert rows  # the ceiling still draws every row…
+    assert not [r for r in rows if r["effective"]]  # …none of them on
+    assert not [r for r in rows if r["default_on"]]
     cfg = resolve_item_agent_config(spec, get_app_catalog(Settings()), iid)
     assert cfg is not None
-    agent = _agent_for(cfg, packages=[pkg])
-    runner_cmds = {t.name for t in agent.tools}
+    assert finalize_tool_grants(cfg, [pkg]).allowed_tools == []
 
-    assert {"spc", "wafer-history"} <= runner_cmds and "pareto" not in runner_cmds
-    assert {"rca-tools:spc", "rca-tools:wafer-history"} <= picker_on
-    assert "rca-tools:pareto" not in picker_on
-    # every package command the picker says is on, the runner registered — and vice versa
-    picker_pkg_cmds = {k.partition(":")[2] for k in picker_on if k.startswith("rca-tools:")}
-    assert picker_pkg_cmds == runner_cmds & {c.name for c in pkg.commands}
+
+def test_a_declared_and_granted_third_party_tool_is_not_warned_about(
+    harness: Harness, monkeypatch, caplog
+):
+    """The undeclared-warning compares `external_tools` keys with what the
+    picker drew; the rows are per command now, so the comparison is by the
+    unit's PACKAGE — a declared, granted, resolved bundle logs nothing."""
+    import logging
+
+    iid = register_rca_item(harness.spec)
+    _declaring(monkeypatch, "wafer-history")
+    _resolving(monkeypatch, _resolved())
+
+    with caplog.at_level(logging.WARNING, logger="workspace_app.api.tools_routes"):
+        rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+
+    assert "wafer-history:trend" in {r["key"] for r in rows}  # it IS offered
+    assert not [r for r in caplog.records if "not in tools[]" in r.getMessage()]

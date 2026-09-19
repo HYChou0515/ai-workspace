@@ -36,6 +36,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..agent.context import AgentToolContext
+from ..apps.catalog import finalize_tool_grants
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
@@ -473,11 +474,14 @@ def register_wui_routes(
         # the same authority they would need to make the change by hand.
         investigation_id = locator.require_access(slug, item_id, "edit_content")
 
-        config = locator.resolve_agent_config(investigation_id)
-        allowed = config.allowed_tools if config is not None else []
-
         external = await _external(investigation_id)
         available = [*bundled, *external.packages]
+        # A door (plan-tools-picker-groups part 2): the resolved config meets
+        # the package list here, so the grant is finalized the same way a turn
+        # finalizes it — a command the item's picker turned off is not held by
+        # the agent, and not reachable from a page either.
+        config = locator.resolve_agent_config(investigation_id)
+        allowed = finalize_tool_grants(config, available).allowed_tools if config else []
 
         try:
             found = find_allowed_command(available, allowed, name)

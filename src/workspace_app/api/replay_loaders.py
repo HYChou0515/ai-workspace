@@ -14,6 +14,7 @@ from typing import Any
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..apps.catalog import finalize_tool_grants
 from ..resources import AgentConfig, Conversation
 from ..resources.kb import KbChat, SourceDoc
 from ..tooling.registry import PackageInfo
@@ -51,7 +52,14 @@ class ReplayLoaders:
                     return None
                 return (
                     list(data.messages),
-                    config,
+                    # A door (plan-tools-picker-groups part 2): the replay
+                    # assembles the agent from this config + these packages
+                    # directly, so the grant is finalized here as a turn's
+                    # would be — or the replayed menu would offer a command
+                    # the item's picker had turned off. First-party packages
+                    # only, as the replay always was: a turn's third-party
+                    # bundles resolve per turn and are not re-fetched here.
+                    finalize_tool_grants(config, self._packages or []),
                     self._packages,
                     self._locator.profile_of(thread_id),
                 )
