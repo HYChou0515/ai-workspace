@@ -1,0 +1,19 @@
+{
+  "name": "reads-the-rules-before-drafting",
+  "note": "The guide says: read references/writing-for-agents.md before drafting. The harness pre-loads the skill under test (there is no read_skill to call), so the observable is the read_file that opens the reference — a model that drafts from memory skips the rules the skill is meant to be tidied against. It saves nothing yet, because the user has not seen a draft.",
+  "prompt": "Make me a skill for triaging SMT reflow defects. The flow is: pull the AOI log, group defects by station, rank by count, and write a one-paragraph summary naming the top station. Draft it and show me.",
+  "expect": {
+    "must_call": [
+      "read_file"
+    ],
+    "must_not_call": [
+      "save_skill"
+    ],
+    "must_mention": [
+      [
+        "description",
+        "Description"
+      ]
+    ]
+  }
+}
