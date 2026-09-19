@@ -118,6 +118,8 @@ def test_skills_endpoint_returns_picker_state_across_sources():
         # A skill written here, not a copy of a baked-in one (#589) — so there is
         # no upstream it could be behind.
         "is_copy": False,
+        # …nor anything it is a copy OF (#826 P14).
+        "copy_of": "",
         "update_available": False,
         # …and no upstream STATE either (plan-skill-hub P5): only a copy has one.
         "upstream": None,

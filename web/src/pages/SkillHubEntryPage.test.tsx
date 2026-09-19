@@ -326,6 +326,9 @@ describe("SkillHubEntryPage", () => {
             "permission-save",
           ),
         );
+        // The dialog stays open, so the failure must be IN it — an alert on
+        // the page behind the backdrop is one the person cannot see (round 2).
+        return screen.getByTestId("permission-dialog");
       },
     ],
     [
@@ -344,6 +347,7 @@ describe("SkillHubEntryPage", () => {
             name: word("skillHub.transfer.confirm"),
           }),
         );
+        return dialog;
       },
     ],
     [
@@ -378,9 +382,10 @@ describe("SkillHubEntryPage", () => {
         new HttpError(403, "only the owner may manage this entry"),
       );
       mount(c, makeQueryClient());
-      await act();
+      const where = (await act()) ?? document.body;
 
-      await screen.findByRole("alert");
+      const alert = await within(where as HTMLElement).findByRole("alert");
+      expect(alert).toHaveTextContent("only the owner may manage this entry");
       expect(currentWriteFailure()).toBeNull();
     },
   );

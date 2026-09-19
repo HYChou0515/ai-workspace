@@ -42,6 +42,7 @@ export function PermissionDialog({
   roles = COLLECTION_ROLES,
   caption: captionText,
   audience = "workspace",
+  error = null,
   pickableGroups = [],
   onSubmit,
   onClose,
@@ -61,6 +62,10 @@ export function PermissionDialog({
    * item is public to this workspace; a skill hub entry to everyone on the
    * platform. The hint under the Public option says which. */
   audience?: "workspace" | "platform";
+  /** The last save's refusal, worded — drawn INSIDE the dialog above Save,
+   * because the dialog stays open on failure and a line on the page behind
+   * the backdrop is one the person cannot see (#826 round 2). */
+  error?: string | null;
   /** #608 — every group the caller may grant to (name + count). Empty ⇒ the group
    * section is hidden (the caller didn't load them / the feature is off). */
   pickableGroups?: PickableGroup[];
@@ -353,6 +358,12 @@ export function PermissionDialog({
             ).join("\n")}
           </pre>
         )}
+
+        {error ? (
+          <p className="error" role="alert" style={{ margin: 0, fontSize: pxToRem(12) }}>
+            {error}
+          </p>
+        ) : null}
 
         <ModalActions>
           <button

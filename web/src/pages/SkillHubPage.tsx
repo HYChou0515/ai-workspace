@@ -48,7 +48,10 @@ export function SkillHubPage({
   );
   useEffect(() => {
     if ((location.state as { notice?: PageNoticeContent } | null)?.notice) {
-      navigate(location.pathname + location.search, { replace: true, state: null });
+      navigate(location.pathname + location.search + location.hash, {
+        replace: true,
+        state: null,
+      });
     }
     // Once, on arrival: the notice is what THIS mount was handed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -83,15 +86,19 @@ export function SkillHubPage({
     queryFn: () => client.list("", false),
   });
 
-  // Only the FIRST load has nothing to show. From then on the tools stay
-  // mounted whatever the list does — a failed search draws its error and
-  // Retry in the results area, not in place of the search box that caused
-  // it (review round 1 of #826: the error branch still swapped the tree).
-  if (isPending && !isError) return <p>{t("skillHub.loading")}</p>;
+  // Only the UNTOUCHED page's first load has nothing to show. Once the tools
+  // were used they stay mounted whatever the list does — loading and failure
+  // are states of the results area, not of the tree (review rounds 1 and 2
+  // of #826: the error branch swapped the tree; so did a search after a
+  // failed first load, which has no previous data to keep).
+  const untouched = !q && !mine;
+  if (isPending && !isError && untouched) return <p>{t("skillHub.loading")}</p>;
   const rows = data ?? [];
 
+  // Not while an error is shown: the two share a key, and a failed refetch of
+  // an empty hub kept `[]` as data — the empty state hid the error and Retry.
   const nothingPublished =
-    everything !== undefined && everything.length === 0 && !q && !mine;
+    everything !== undefined && everything.length === 0 && untouched && !isError;
   // Where a fork's root is — by id, from the one listing that always holds
   // every entry this viewer may read (`everything`): a fork shown on its own
   // (「我的」, or a search that matched the fork and not the root) can still
@@ -169,6 +176,8 @@ export function SkillHubPage({
                   {t("skillHub.retry")}
                 </button>
               </p>
+            ) : isPending ? (
+              <p className="loading">{t("skillHub.loading")}</p>
             ) : rows.length === 0 ? (
               <p className="empty">{t("skillHub.noMatch")}</p>
             ) : (

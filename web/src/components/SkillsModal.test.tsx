@@ -320,6 +320,8 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
         upstream: "live",
         copy_of: "shared",
       },
+      // an older API pod mid-rollout sends no `copy_of`: the package's words
+      { ...COPIED[0], name: "older-api", source: "workspace", upstream: "live" },
     ];
     const refreshItemSkill = vi.fn(async () => ({
       updated: ["SKILL.md"],
@@ -345,6 +347,9 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     );
     expect(screen.getByTestId("skill-reset-undeclared")).toHaveAccessibleName(
       `${word("skills.reset")} undeclared`,
+    );
+    expect(screen.getByTestId("skill-reset-older-api")).toHaveAccessibleName(
+      `${word("skills.reset")} older-api`,
     );
 
     fireEvent.click(screen.getByTestId("skill-refresh-from-hub"));

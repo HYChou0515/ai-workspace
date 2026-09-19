@@ -22,6 +22,7 @@ vi.mock("../api", () => ({
 }));
 
 import { translate } from "../lib/i18n";
+import { makeQueryClient } from "../api/queryClient";
 import { QueryWrap } from "../test/queryWrapper";
 import { SkillHubPage } from "./SkillHubPage";
 
@@ -178,6 +179,54 @@ describe("SkillHubPage", () => {
       "aria-busy",
       "false",
     );
+  });
+
+  it("keeps the tools when the first load failed and a search follows — the loading text sits in the results area (D2, review round 2)", async () => {
+    // After a failed first load no query ever had data, so the next key has
+    // no previous data to keep and is `isPending` — and the page swapped the
+    // whole tree for 載入中… again, search box included. The whole-tree line is
+    // for the untouched page only; once the tools were used, loading is a
+    // state of the results area.
+    const c = client();
+    let first = true;
+    c.list.mockImplementation(
+      () =>
+        new Promise<SkillHubCard[]>((_resolve, reject) => {
+          if (first) {
+            first = false;
+            reject(new Error("boom"));
+          } // the second one hangs — mid-fetch is the state under test
+        }),
+    );
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+    await screen.findByRole("alert");
+    const box = screen.getByRole("searchbox");
+    fireEvent.change(box, { target: { value: "x" } });
+
+    await waitFor(() => expect(c.list).toHaveBeenCalledWith("x", false));
+    expect(screen.getByRole("searchbox")).toBe(box);
+    expect(screen.getByTestId("skill-hub-results")).toHaveTextContent(word("skillHub.loading"));
+  });
+
+  it("shows the error, not the empty state, when an empty hub's refetch fails (review round 2)", async () => {
+    // `everything` and the list share a key; TanStack keeps `[]` as data on a
+    // failed refetch, so `nothingPublished` was true while `isError` was too
+    // and the "nothing published" state hid the error and its Retry.
+    const c = client([]);
+    const qc = makeQueryClient();
+    render(
+      <MemoryRouter>
+        <QueryWrap client={qc}>
+          <SkillHubPage client={c} />
+        </QueryWrap>
+      </MemoryRouter>,
+    );
+    await screen.findByText(word("skillHub.empty"));
+    c.list.mockRejectedValue(new Error("boom"));
+    await qc.invalidateQueries({ queryKey: ["skillHub"] });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(word("skillHub.error"));
+    expect(screen.queryByText(word("skillHub.empty"))).toBeNull();
   });
 
   it("keeps the search box and the tools when a search fails — the error and Retry sit in the results area (D2, review round 1)", async () => {

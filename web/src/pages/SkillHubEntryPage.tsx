@@ -330,16 +330,18 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => unpublish.mutate()}>
         {entry.visibility === "private" ? t("skillHub.republish") : t("skillHub.unpublish")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setSharing(true)}>
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => { setFailure(null); setSharing(true); }}>
         {t("skillHub.share")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setTransferring(true)}>
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => { setFailure(null); setTransferring(true); }}>
         {t("skillHub.transfer")}
       </button>
       <button type="button" className="btn" data-size="sm" data-variant="danger" disabled={busy} onClick={() => void askDelete()}>
         {t("skillHub.delete")}
       </button>
-      {failure ? (
+      {/* While a dialog is open the failure is drawn in it (round 2 of
+          #826: a line behind the backdrop was invisible); here otherwise. */}
+      {failure && !sharing && !transferring ? (
         <p className="error" role="alert">
           {t("skillHub.failed", { reason: failure })}
         </p>
@@ -357,6 +359,7 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
           audience="platform"
           pickableGroups={pickableGroups}
           busy={permission.isPending}
+          error={failure ? t("skillHub.failed", { reason: failure }) : null}
           onSubmit={(perm) => permission.mutate(perm)}
           onClose={() => setSharing(false)}
         />
@@ -367,6 +370,7 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
           name={entry.name}
           owner={entry.owner}
           busy={transfer.isPending}
+          error={failure ? t("skillHub.failed", { reason: failure }) : null}
           onSubmit={(owner) => transfer.mutate(owner)}
           onClose={() => setTransferring(false)}
         />
@@ -389,12 +393,15 @@ function TransferDialog({
   name,
   owner,
   busy,
+  error,
   onSubmit,
   onClose,
 }: {
   name: string;
   owner: string;
   busy: boolean;
+  /** The last attempt's refusal, worded — shown here, where the person is. */
+  error: string | null;
   onSubmit: (owner: string) => void;
   onClose: () => void;
 }) {
@@ -412,6 +419,11 @@ function TransferDialog({
         onToggle={(id) => setPicked((cur) => (cur === id ? null : id))}
         exclude={[owner]}
       />
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
       <ModalActions>
         <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
           {t("skillHub.cancel")}
@@ -432,11 +444,15 @@ function TransferDialog({
 
 /** The edit resolver's `new_item` branch: say why the source item cannot
  * take the edit, and what to do instead. */
-function NewItemDialog({ target, 
+function NewItemDialog({
+  target,
   entryId,
-onClose }: { target: SkillEditTarget; 
+  onClose,
+}: {
+  target: SkillEditTarget;
   entryId: string;
-onClose: () => void }) {
+  onClose: () => void;
+}) {
   const t = useT();
   const apps = useApps();
   const appTitle = apps.find((a) => a.slug === target.app)?.title || target.app;
