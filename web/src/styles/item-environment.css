@@ -1,14 +1,16 @@
 /* The item's Sandbox modal body — `components/ItemEnvironmentPanel.tsx`.
  *
  * Every part is a shape the app already draws somewhere: the status row is
- * `/my-resources`'s live row (dot · name · figures · a bordered button), the
- * totals are its stat tiles (`styles/gauge.css`), the fields wear the house
- * `.input` (base.css) under a label, and the frame is the Tools modal's. This
- * sheet only lays those parts out; it declares no chrome of its own.
+ * `/my-resources`' live row (`.live-card` + `.live-dot`, gauge.css), the totals
+ * are its stat tiles (gauge.css), the fields wear the house `.input` (base.css)
+ * under a label, and the frame is the Tools modal's. This sheet lays those
+ * parts out and dresses only what has no home elsewhere: the helper lines,
+ * the "Back to default" link, the disabled look.
  *
- * The earlier sheet gave the two inputs `width: 6rem` and nothing else, so they
- * drew with the browser's inset grey — the "cheap" look — beside a bare-text
- * "Close sandbox" button and a total that named nothing. */
+ * The earlier sheet gave the CPU input `width: 6rem` and tabular figures and
+ * the memory input nothing, so both drew with the browser's inset grey — the
+ * "cheap" look — beside a bare-text "Close sandbox" button and a total that
+ * named nothing. */
 
 .item-environment {
   display: flex;
@@ -16,7 +18,8 @@
   gap: var(--space-8);
 }
 
-/* dot · label · figures · [Close sandbox] — the live row from /my-resources. */
+/* dot · label · figures · [Close sandbox] — /my-resources' live row: the card
+   chrome is the shared `.live-card` (gauge.css); only the flex layout is ours. */
 .item-environment .env-status {
   display: flex;
   /* If the row cannot hold dot · label · figures · button, the BUTTON drops to
@@ -24,11 +27,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-8);
-  min-height: 32px;
-  padding: var(--space-8) var(--space-12);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
-  background: var(--paper-2);
 }
 
 .item-environment .env-status__label {
@@ -107,6 +105,16 @@
   font-size: var(--text-small);
   line-height: var(--leading-body-sm, 1.5);
   color: var(--text-paper-d);
+}
+
+/* A field holding what the server would refuse: the note under it says the
+   grammar, in the error colour, and `aria-invalid` says it to AT. */
+.item-environment .input[aria-invalid="true"] {
+  border-color: var(--err);
+}
+
+.item-environment .env-field__note--invalid {
+  color: var(--err);
 }
 
 /* "Back to default" reads as a link inside the helper line, not a button

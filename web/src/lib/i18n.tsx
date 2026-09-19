@@ -1107,6 +1107,11 @@ export const messages = {
     en: "This deployment can't confirm a memory ceiling is applied, so there's nothing to set here.",
   },
   "itemenv.field.cpu": { "zh-TW": "CPU（核心數）", en: "CPU (cores)" },
+  "itemenv.field.cpu.hint": { "zh-TW": "要大於 0，例如 1 或 0.5。", en: "More than 0 — e.g. 1 or 0.5." },
+  "itemenv.field.memory.hint": {
+    "zh-TW": "整數加 K/M/G/T，例如 512M 或 2G。",
+    en: "An integer with K/M/G/T — e.g. 512M or 2G.",
+  },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
     en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",

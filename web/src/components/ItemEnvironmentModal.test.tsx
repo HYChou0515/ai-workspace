@@ -59,12 +59,33 @@ function route(
         ? new Response(JSON.stringify({ detail: "sandbox_quota_exceeded" }), { status: 507 })
         : json({});
     }
-    if (init?.method === "POST" && url.includes("/close")) return json({});
+    if (init?.method === "DELETE" && url.includes("/me/resources/live/")) return json({});
     if (url.includes("/environment")) {
       if (hangLoad) return new Promise<Response>(() => {});
       return json(environment);
     }
     if (url.includes("/me/resources")) return json(resources);
+    return json({});
+  });
+}
+
+/** Like `route`, but the environment is read from a mutable holder and a PUT
+ *  can be held open — for the sequences the review found untested. */
+function liveRoute(holder: { env: unknown; resources?: unknown; hangPut?: boolean; failReload?: boolean }) {
+  let puts = 0;
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "PUT") {
+      puts += 1;
+      if (holder.hangPut) return new Promise<Response>(() => {});
+      return json({});
+    }
+    if (init?.method === "DELETE" && url.includes("/me/resources/live/")) return json({});
+    if (url.includes("/environment")) {
+      if (holder.failReload && puts > 0) return new Response("nope", { status: 500 });
+      return json(holder.env);
+    }
+    if (url.includes("/me/resources")) return json(holder.resources ?? CAPPED);
     return json({});
   });
 }
@@ -276,3 +297,116 @@ describe("ItemEnvironmentModal — Save", () => {
     expect(screen.getByTestId("cpu-input")).toHaveValue(3);
   });
 });
+
+describe("ItemEnvironmentModal — what the review found unguarded", () => {
+  it("after a successful Save the draft is gone: Save goes grey and a Cancel closes without a prompt", async () => {
+    const holder = { env: STATED };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    const onClose = open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    holder.env = { ...STATED, stated_cpu_cores: 2 }; // what the server now says
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(screen.getByTestId("itemenv-save")).toBeDisabled());
+    expect(screen.getByTestId("cpu-input")).toHaveValue(2);
+    fireEvent.click(screen.getByTestId("itemenv-cancel"));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("dialog-action-discard")).toBeNull();
+  });
+
+  it("Save sends the OTHER dimension as the server holds it NOW, not as it was at the first keystroke", async () => {
+    // Two change_permission holders: this one types a cpu value, the other
+    // one saves a memory size meanwhile (the record refetches). Save must
+    // carry the other's memory, not a copy taken when typing began.
+    const holder = { env: STATED };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    const onClose = open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    holder.env = { ...STATED, stated_memory_bytes: 1024 ** 3 };
+    await onClose.client.invalidateQueries({ queryKey: ["item-environment", "rca", "i-1"] });
+    await waitFor(() => expect(screen.getByTestId("memory-input")).toHaveValue("1G"));
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(puts(f)).toHaveLength(1));
+    expect(puts(f)[0]).toEqual({ cpu_cores: 2, memory: "1G" });
+  });
+
+  it("one Save is one PUT, however fast the second click comes", async () => {
+    const holder = { env: STATED, hangPut: true };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    const save = screen.getByTestId("itemenv-save");
+    fireEvent.click(save);
+    fireEvent.click(save);
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(puts(f)).toHaveLength(1);
+  });
+
+  it("says so when the record cannot be re-read after a Save, instead of showing the old numbers as if they were new", async () => {
+    const holder = { env: STATED, failReload: true };
+    vi.stubGlobal("fetch", liveRoute(holder));
+    open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    const note = await screen.findByTestId("reload-failed");
+    expect(note).toHaveAttribute("role", "alert");
+  });
+
+  it("'Close sandbox' sends the close and re-reads both the item and the person's totals", async () => {
+    const f = route(CAPPED, RUNNING);
+    vi.stubGlobal("fetch", f);
+    open();
+    const before = f.mock.calls.length;
+    fireEvent.click(await screen.findByTestId("close-environment"));
+    await waitFor(() =>
+      expect(
+        f.mock.calls.some(
+          (c) => (c[1] as RequestInit | undefined)?.method === "DELETE" && String(c[0]).includes("/me/resources/live/i-1"),
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => {
+      const after = f.mock.calls.slice(before).map((c) => String(c[0]));
+      expect(after.some((u) => u.includes("/environment"))).toBe(true);
+      expect(after.some((u) => u.includes("/me/resources"))).toBe(true);
+    });
+  });
+
+  it("refuses, client-side, what the server would refuse: a memory spelling it cannot parse, or a cpu of 0", async () => {
+    // The placeholder teaches the server's grammar (512M); "512.0 MB" is not
+    // it, and a 422 that only says "not saved" would leave the person guessing.
+    open();
+    const memory = await screen.findByTestId("memory-input");
+    expect(memory).toHaveAttribute("placeholder", "512M");
+    fireEvent.change(memory, { target: { value: "512.0 MB" } });
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
+    expect(memory).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("memory-hint")).toBeTruthy();
+    fireEvent.change(memory, { target: { value: "512m" } });
+    expect(screen.getByTestId("itemenv-save")).toBeEnabled();
+    expect(memory).not.toHaveAttribute("aria-invalid", "true");
+
+    const cpu = screen.getByTestId("cpu-input");
+    fireEvent.change(cpu, { target: { value: "0" } });
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
+    expect(cpu).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(cpu, { target: { value: "0.5" } });
+    expect(screen.getByTestId("itemenv-save")).toBeEnabled();
+  });
+
+  it("hides 'Back to default' while the size is locked — running, or a viewer who may not spend", async () => {
+    vi.stubGlobal("fetch", route(CAPPED, { ...STATED, running: true }));
+    open();
+    await screen.findByTestId("cpu-input");
+    expect(screen.queryByTestId("reset-cpu")).toBeNull();
+    expect(screen.queryByTestId("reset-memory")).toBeNull();
+    cleanup();
+    vi.stubGlobal("fetch", route(CAPPED, STATED));
+    open({ canEdit: false });
+    await screen.findByTestId("cpu-input");
+    expect(screen.queryByTestId("reset-cpu")).toBeNull();
+  });
+});
+

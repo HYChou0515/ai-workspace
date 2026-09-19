@@ -19,15 +19,27 @@
  * a Save button the modal is like every other one (#779): a draft is dirty
  * when it differs from what the modal opened with, every deliberate exit —
  * Escape, Cancel — goes through `useDirtyClose`, and nothing is written by a
- * keystroke that only moved focus. One PUT carries BOTH dimensions: the route
- * replaces both, and sending only the edited one used to clear the other.
+ * keystroke that only moved focus. One PUT carries BOTH dimensions, because
+ * the route replaces both — and the dimension the person did not touch is
+ * read from the record AS IT IS AT SAVE TIME, not copied when typing began:
+ * two `change_permission` holders can resize the same item, and a draft that
+ * carried a stale copy of the other's memory would have written it back over
+ * theirs. So the draft holds only the fields that were typed in.
+ *
+ * What the server would refuse is refused here first: a cpu of 0 or less, or
+ * a memory spelling `parse_size` cannot read (it wants an integer with an
+ * optional K/M/G/T — the placeholder shows that spelling). A 422 only says
+ * "not saved", which leaves the person guessing at the grammar.
  *
  * Because saves are dispatched while this is on screen, a refusal has
  * somewhere to be read (`saveFailed`) and the draft stays for a second try.
+ * And a save that SUCCEEDED but whose re-read failed says so too: TanStack
+ * keeps the previous record on a failed refetch, so without the notice the
+ * fields would show the old numbers as if they were the new ones.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { itemEnvironmentApi } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
@@ -35,7 +47,7 @@ import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
-import { toSizeString } from "./ItemEnvironmentSize";
+import { isValidCpu, isValidMemory, toSizeString } from "./ItemEnvironmentSize";
 import { ModalShell } from "./ModalShell";
 import { budgetFrom } from "./useItemEnvironment";
 
@@ -69,19 +81,27 @@ export function ItemEnvironmentModal({
   });
   const budget = budgetFrom(resources.data);
 
-  // What the modal OPENED with — the baseline `dirty` is measured against. A
-  // draft of `null` means "nothing typed yet": the fields show the stated
-  // values, and are clean by definition.
+  // The record's own values — the baseline `dirty` is measured against, and
+  // what fills any field the person has not typed in. Recomputed from the
+  // latest record on purpose (see the header: the untouched dimension must be
+  // the server's current one at save time).
   const stated: SizeDraft | null = env.data
     ? {
         cpu: env.data.statedCpuCores === null ? "" : String(env.data.statedCpuCores),
         memory: toSizeString(env.data.statedMemoryBytes) ?? "",
       }
     : null;
-  const [draft, setDraft] = useState<SizeDraft | null>(null);
-  const current = draft ?? stated;
+  // Only the fields that were typed in. `{}` = nothing typed = clean.
+  const [draft, setDraft] = useState<Partial<SizeDraft>>({});
+  const current: SizeDraft | null = stated
+    ? { cpu: draft.cpu ?? stated.cpu, memory: draft.memory ?? stated.memory }
+    : null;
   const dirty =
     current !== null && stated !== null && (current.cpu !== stated.cpu || current.memory !== stated.memory);
+  const invalid = {
+    cpu: current !== null && !isValidCpu(current.cpu),
+    memory: current !== null && !isValidMemory(current.memory),
+  };
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["item-environment", slug, itemId] });
@@ -97,10 +117,18 @@ export function ItemEnvironmentModal({
     onSuccess: () => {
       // The stated values are about to become what was typed; drop the draft
       // so the fields follow the refetched record instead of a stale copy.
-      setDraft(null);
+      setDraft({});
       refresh();
     },
   });
+  // `save.isPending` is a render-time value; a second click that lands before
+  // the re-render sees it false and sends a second PUT. The ref is current.
+  const inflight = useRef(false);
+  const submit = () => {
+    if (!current || inflight.current) return;
+    inflight.current = true;
+    save.mutate(current, { onSettled: () => (inflight.current = false) });
+  };
   const close = useMutation({
     mutationFn: () => myResourcesApi.closeEnvironment(itemId),
     // Both queries: closing frees the person's budget as well as this item's
@@ -111,7 +139,8 @@ export function ItemEnvironmentModal({
 
   const attemptClose = useDirtyClose(dirty, onClose);
   const editable = env.data !== undefined && budget !== null && canEdit;
-  const canSave = editable && dirty && !env.data!.running && !save.isPending;
+  const canSave =
+    editable && dirty && !invalid.cpu && !invalid.memory && !env.data!.running && !save.isPending;
 
   return (
     <ModalShell
@@ -138,7 +167,8 @@ export function ItemEnvironmentModal({
           budget={budget}
           canEdit={canEdit}
           draft={current}
-          onDraft={setDraft}
+          invalid={invalid}
+          onDraft={(patch) => setDraft((d) => ({ ...d, ...patch }))}
           onCloseSandbox={() => {
             // Otherwise the "not saved" line from an earlier refusal is still
             // sitting there after the sandbox has been shut down and the panel
@@ -162,6 +192,13 @@ export function ItemEnvironmentModal({
           {t("itemenv.saveFailed")}
         </p>
       ) : null}
+      {env.isError && env.data ? (
+        // A refetch that failed after a write: the numbers on screen are the
+        // OLD record, and nothing else would say so.
+        <p data-testid="reload-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
+          {t("itemenv.loadFailed")}
+        </p>
+      ) : null}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
         {editable ? (
@@ -182,7 +219,7 @@ export function ItemEnvironmentModal({
               data-variant="primary"
               data-size="sm"
               data-testid="itemenv-save"
-              onClick={() => current && save.mutate(current)}
+              onClick={submit}
               disabled={!canSave}
             >
               {t("tools.save")}

@@ -197,7 +197,7 @@ function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyR
     meta: { silentError: true },
   });
   return (
-    <li>
+    <li className="live-card">
       {/* Decoration, and deliberately out of the a11y tree: the fact it states
           — this one is running right now — is already carried by the section's
           heading and lede. Its job is visual, and it is the thing that stops

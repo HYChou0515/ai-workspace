@@ -52,9 +52,12 @@ be vetoed by looking at the result.
    `itemenv.close.hint` as a `.detail` line under the row. No confirm dialog —
    `/my-resources` has none either.
 4. **Size = two labelled fields side by side.** A 2-column grid (1 column under
-   480px): `CPU (cores)` (`resources.gauge.cpu` + unit) and `Memory`
-   (`resources.memory`); each field: `<label>` → `<input class="input">`
-   (number step 0.5 / text placeholder `512M`) → helper line: effective value +
+   480px): `CPU (cores)` (a new key, `itemenv.field.cpu`; the tile keeps
+   `resources.gauge.cpu`) and `Memory` (`resources.memory`); each field:
+   `<label>` → `<input class="input">` (number step 0.5, min 0.5 / text
+   placeholder in the SERVER's spelling, `toSizeString(effective)` = `512M`
+   — round 1 caught the display spelling `512.0 MB` there, which `parse_size`
+   refuses) → helper line: effective value +
    origin (`itemenv.size.default` / `itemenv.size.stated` + "Back to default"
    link-button) → clamp note (`…clamped.quota/app`) → `itemenv.unenforced`
    where the backend applies no ceiling (then no input, as today). Read-only:
@@ -88,7 +91,8 @@ be vetoed by looking at the result.
   box uses it. Guard test. No visual change intended for KB (same values).
 - **P2** `components/Gauge.tsx` (`Meter`, `Gauge`) + `styles/gauge.css`;
   `MyResourcesPage` and the panel use them; the two private copies go.
-  `MyResourcesPage.test.tsx` unchanged and green.
+  `MyResourcesPage.test.tsx` keeps every case (one import line moves, since
+  `formatAgainstLimit` left the page).
 - **P3** The modal: Tools frame, drafts + dirty + Save/Cancel + `useDirtyClose`,
   read-only footer, saveFailed placement. Panel becomes presentational (draft
   in, `onDraft` out), status row, two labelled fields, two tiles.
@@ -113,16 +117,25 @@ be vetoed by looking at the result.
   3. Cancel / Escape on a dirty modal asks once (DialogProvider), confirming
      discards and closes, declining keeps it open, and NOTHING is sent;
   4. "Back to default" makes the modal dirty; Save then sends `null`;
-  5. running → inputs disabled, Save disabled, "Close sandbox" present; after
-     a successful close the queries are invalidated (kept from today);
+  5. running → inputs disabled, Save disabled, "Close sandbox" present;
+     clicking it sends the DELETE and re-reads both queries (new in P5 — no
+     such test existed before this PR either);
   6. read-only viewer → no Save, no Cancel, a Close-panel button, inputs
      disabled, `itemenv.readonly` shown;
   7. refused save → `itemenv.saveFailed` with `role="alert"`, modal stays open;
   8. the two existing "is a real modal" / "asks the item's route … and the
      person's" cases stay.
-  Mutations: (a) Save sends only the edited dimension → test 1 red; (b) drop
-  `useDirtyClose` from Cancel → test 3 red; (c) enable Save while running →
-  test 5 red.
+  Mutations: (a) Save sends only the edited dimension → test 1 (and 4) red;
+  (b) drop `useDirtyClose` from Cancel → test 3 red; (c) enable Save while
+  running → NOT test 5 (a modal opened running is clean, so `dirty` already
+  disables Save) but the extra case "disables Save when the sandbox starts
+  under a draft" — the only path to a dirty draft while running.
+  P5 (round 1) adds: the draft is dropped after Save; Save carries the other
+  dimension as the server holds it at save time; one Save is one PUT; a
+  failed re-read after Save says so; client-side refusal of `0` / an
+  unparseable memory spelling; reset links hidden while locked; a CSS shape
+  guard for the status row and the fields (`styles/item-environment.test.ts`);
+  `.live-card` guarded in `gauge.test.ts`.
 - P3 panel (`ItemEnvironmentPanel.test.tsx`, adjusted): keeps its 13 cases'
   intent (default vs stated, clamped notes, unenforced, read-only, running
   lock) re-aimed at the labelled fields; adds: both tiles present with the
@@ -195,4 +208,45 @@ with `/my-resources`: same `Gauge` component, same `gauge.css`.
 Screenshots `sm-idle-1280.png`, `sm-dirty-1280.png`, `sm-escape-1280.png`,
 `sm-saved-1280.png`, `sm-running-1280.png`, `sm-running-390.png`,
 `sm-tools-1280.png` (job tmp; not committed).
+
+## Review round 1 (2026-09-19 — defect / conformance / veracity / regression, in parallel, isolated snapshots)
+
+Worst finding: **HIGH** — the memory placeholder. Regression: none.
+
+- **Defect**: HIGH — the memory field's placeholder was `formatBytes(effective)`
+  = `"512.0 MB"`, a spelling `parse_size` refuses (integer + K/M/G/T only), so
+  typing what the hint showed gave a 422 that only said "not saved". LOW ×4:
+  the untouched dimension was copied into the draft at the first keystroke (a
+  concurrent resize by the other `change_permission` holder would be written
+  back over); a Save whose re-read failed showed the old numbers with nothing
+  saying so; `min={0}` let `0` through to a 422; `<label for>` pointed at an
+  input that is not drawn when the dimension is unenforced. Escape/confirm
+  stacking, refetch-under-draft, CSS scope and tokens all held.
+- **Conformance**: D1–D7, "not doing" and P1–P4 all map; the same placeholder
+  gap; plan text wrong in three places (P2 "unchanged", mutation (c)'s test,
+  test 5's "kept from today" — no such test ever existed); `memory-unenforced`
+  / `reset-memory` shipped without tests; `sizeToSave` left as a second, dead
+  rule for building the PUT.
+- **Veracity**: every mutation the plan names bites ((c) via a different test);
+  unguarded: `setDraft({})` after Save, reset hidden while locked,
+  `!isPending`, the whole Close-sandbox path, the P4 CSS fix. Two false
+  sentences in `item-environment.css`'s header ("nothing else"; "declares no
+  chrome of its own" — `.env-status` re-declared a look-alike of
+  `/my-resources`' row with different padding and surface). `.kb-input` and
+  113 counts confirmed; after the PR it is 112.
+- **Regression**: none — 15 `.kb-input` fields map 1:1 onto `.input` with
+  byte-equal declarations and no cascade flip; `/my-resources` HTML
+  byte-identical after the gauge move; the five old blur-save cases fail on
+  the new modal exactly as planned; 243 → 260 tests green.
+
+**P5** answers all of it: placeholder in the server's spelling + client-side
+validity (`isValidCpu` / `isValidMemory`, the server's rules asked first) with
+`aria-invalid` and a grammar note; the draft holds only typed fields and Save
+reads the other from the live record; an in-flight ref makes one Save one PUT;
+a `reload-failed` alert when the re-read after Save fails; `min={0.5}`;
+`htmlFor` only where the input exists; `.live-card` in gauge.css shared by
+the page's rows and the modal's status row (padding restated on the page rule
+because the generic `.page ul > li` outranks a one-class card);
+`ItemEnvironmentSize` trimmed to `toSizeString` + the two validity rules, its
+test rewritten; seven new modal cases, four panel cases, five CSS guards.
 

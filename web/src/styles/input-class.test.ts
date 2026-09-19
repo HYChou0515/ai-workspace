@@ -6,7 +6,7 @@
  * inline copy in 57 other files. A field can only ship bare when there is
  * nothing shared to reach for, so this pins two things: the old name is gone,
  * and the files this change touched draw their inputs with the class, not an
- * inline copy. (The 113 inline copies elsewhere are a separate sweep.)
+ * inline copy. (The ~112 inline copies still elsewhere are a separate sweep.)
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";

@@ -266,7 +266,56 @@ describe("the shapes it borrows", () => {
       <ItemEnvironmentPanel draft={DRAFT} onDraft={(d) => seen.push(d)} env={IDLE} budget={BUDGET} canEdit />,
     );
     fireEvent.change(screen.getByTestId("cpu-input"), { target: { value: "3" } });
-    expect(seen).toEqual([{ cpu: "3", memory: "" }]);
+    // Only the field that changed: the modal binds the other to the live record.
+    expect(seen).toEqual([{ cpu: "3" }]);
+  });
+
+  it("offers 'Back to default' for a stated memory too, and it clears only memory", () => {
+    const seen: unknown[] = [];
+    render(
+      <ItemEnvironmentPanel
+        draft={{ cpu: "", memory: "256M" }}
+        onDraft={(d) => seen.push(d)}
+        env={{ ...IDLE, statedMemoryBytes: 256 * 1024 ** 2 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    fireEvent.click(screen.getByTestId("reset-memory"));
+    expect(seen).toEqual([{ memory: "" }]);
+  });
+
+  it("says memory cannot be set where the backend applies no memory ceiling, and points no label at a missing input", () => {
+    const { container } = render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, enforcedMemoryBytes: null, enforcedCpuCores: null }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    expect(screen.queryByTestId("memory-input")).toBeNull();
+    expect(screen.getByTestId("memory-unenforced").textContent).toMatch(/無法確認|can't confirm/);
+    // A dangling `for` is a lint hit and names nothing for AT.
+    expect(container.querySelectorAll("label[for]")).toHaveLength(0);
+  });
+
+  it("marks a field the modal calls invalid, and shows the grammar under it", () => {
+    render(
+      <ItemEnvironmentPanel
+        draft={{ cpu: "0", memory: "512.0 MB" }}
+        invalid={{ cpu: true, memory: true }}
+        onDraft={noop}
+        env={IDLE}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    expect(screen.getByTestId("cpu-input").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByTestId("memory-input").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByTestId("memory-hint").textContent).toMatch(/512M/);
+    expect(screen.getByTestId("memory-input").getAttribute("placeholder")).toBe("2G");
   });
 });
 

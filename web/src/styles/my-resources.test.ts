@@ -66,7 +66,8 @@ describe("my-resources: the live panel's layout", () => {
     // shared hairline-separated row.
     const live = rule(".page .live-list > li");
     expect(live).toMatch(/display:\s*grid/);
-    expect(live).toMatch(/border-radius:/);
+    // The card chrome (border-radius, surface) is `.live-card` in gauge.css —
+    // guarded there — so this rule need only make the row a grid.
     expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
   });
 

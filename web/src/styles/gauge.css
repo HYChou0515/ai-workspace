@@ -99,6 +99,17 @@
   margin: var(--space-8) 0 0;
 }
 
+/* One card per live thing — `/my-resources`' running-sandbox rows and the
+   Sandbox modal's status row. ONE rule, so the modal's row IS the page's row
+   rather than a look-alike with its own padding and surface. Layout (grid on
+   the page, flex in the modal) stays each consumer's own. */
+.live-card {
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper);
+}
+
 /* Running, right now. Solid rather than haloed so it needs no colour outside
    the token set, and it breathes only where motion is welcome. */
 .live-dot {

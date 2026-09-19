@@ -37,6 +37,7 @@ import type { ItemEnvironment } from "../api/itemEnvironment";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { Gauge } from "./Gauge";
+import { toSizeString } from "./ItemEnvironmentSize";
 
 export type EnvBudget = {
   cpu: number;
@@ -53,7 +54,12 @@ export type ItemEnvironmentPanelProps = {
   budget: EnvBudget | null;
   canEdit: boolean;
   draft: SizeDraft;
-  onDraft: (draft: SizeDraft) => void;
+  /** Which fields hold something the server would refuse (the modal decides;
+   *  this only marks the field and shows its grammar). */
+  invalid?: { cpu: boolean; memory: boolean };
+  /** Only the field that changed — the modal keeps the untouched one bound
+   *  to the live record. */
+  onDraft: (patch: Partial<SizeDraft>) => void;
   /** Close the RUNNING sandbox (not the panel). */
   onCloseSandbox?: () => void;
 };
@@ -63,6 +69,7 @@ export function ItemEnvironmentPanel({
   budget,
   canEdit,
   draft,
+  invalid = { cpu: false, memory: false },
   onDraft,
   onCloseSandbox,
 }: ItemEnvironmentPanelProps) {
@@ -85,7 +92,7 @@ export function ItemEnvironmentPanel({
   return (
     <div className="item-environment">
       {/* ── status row: always drawn ── */}
-      <div className="env-status" data-testid="environment-status" data-running={env.running}>
+      <div className="env-status live-card" data-testid="environment-status" data-running={env.running}>
         <span className={`live-dot${env.running ? "" : " live-dot--idle"}`} aria-hidden="true" />
         <span className="env-status__label">
           {env.running ? t("itemenv.status.running") : t("itemenv.status.idle")}
@@ -118,20 +125,23 @@ export function ItemEnvironmentPanel({
           <h4 className="env-heading">{t("itemenv.size.heading")}</h4>
           <div className="env-fields">
             <div className="env-field">
-              <label htmlFor="itemenv-cpu">{t("itemenv.field.cpu")}</label>
+              {/* `htmlFor` only where there is an input to point at. */}
+              <label htmlFor={cpuEnforced ? "itemenv-cpu" : undefined}>{t("itemenv.field.cpu")}</label>
               {cpuEnforced ? (
                 <input
                   className="input"
                   id="itemenv-cpu"
                   data-testid="cpu-input"
                   type="number"
-                  min={0}
+                  min={0.5}
                   step={0.5}
                   inputMode="decimal"
                   value={draft.cpu}
                   placeholder={cpuEffective === null ? "" : String(cpuEffective)}
                   disabled={locked}
-                  onChange={(e) => onDraft({ ...draft, cpu: e.target.value })}
+                  aria-invalid={invalid.cpu || undefined}
+                  aria-describedby={invalid.cpu ? "itemenv-cpu-hint" : undefined}
+                  onChange={(e) => onDraft({ cpu: e.target.value })}
                 />
               ) : (
                 <p data-testid="cpu-unenforced" className="detail">
@@ -155,13 +165,18 @@ export function ItemEnvironmentPanel({
                       type="button"
                       className="env-reset"
                       data-testid="reset-cpu"
-                      onClick={() => onDraft({ ...draft, cpu: "" })}
+                      onClick={() => onDraft({ cpu: "" })}
                     >
                       {t("itemenv.size.reset")}
                     </button>
                   </>
                 )}
               </p>
+              {invalid.cpu ? (
+                <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
+                  {t("itemenv.field.cpu.hint")}
+                </p>
+              ) : null}
               {cpuClamped ? (
                 <p data-testid="cpu-clamped" className="detail env-field__note">
                   {t(env.cpuBoundBy === "quota" ? "itemenv.size.clamped.quota" : "itemenv.size.clamped.app", {
@@ -173,16 +188,20 @@ export function ItemEnvironmentPanel({
             </div>
 
             <div className="env-field">
-              <label htmlFor="itemenv-memory">{t("resources.memory")}</label>
+              <label htmlFor={memEnforced ? "itemenv-memory" : undefined}>{t("resources.memory")}</label>
               {memEnforced ? (
                 <input
                   className="input"
                   id="itemenv-memory"
                   data-testid="memory-input"
                   value={draft.memory}
-                  placeholder={memEffective ? formatBytes(memEffective) : "512M"}
+                  // The SERVER's spelling ("512M"), never the display one
+                  // ("512.0 MB"): the placeholder is what people type back.
+                  placeholder={toSizeString(memEffective) ?? "512M"}
                   disabled={locked}
-                  onChange={(e) => onDraft({ ...draft, memory: e.target.value })}
+                  aria-invalid={invalid.memory || undefined}
+                  aria-describedby={invalid.memory ? "itemenv-memory-hint" : undefined}
+                  onChange={(e) => onDraft({ memory: e.target.value })}
                 />
               ) : (
                 <p data-testid="memory-unenforced" className="detail">
@@ -204,13 +223,18 @@ export function ItemEnvironmentPanel({
                       type="button"
                       className="env-reset"
                       data-testid="reset-memory"
-                      onClick={() => onDraft({ ...draft, memory: "" })}
+                      onClick={() => onDraft({ memory: "" })}
                     >
                       {t("itemenv.size.reset")}
                     </button>
                   </>
                 )}
               </p>
+              {invalid.memory ? (
+                <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
+                  {t("itemenv.field.memory.hint")}
+                </p>
+              ) : null}
               {memClamped && memStated !== null && memEffective !== null ? (
                 <p data-testid="memory-clamped" className="detail env-field__note">
                   {t(

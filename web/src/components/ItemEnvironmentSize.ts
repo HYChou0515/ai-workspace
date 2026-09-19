@@ -1,35 +1,18 @@
 /**
- * What a save sends, given what is stored and what the person just changed.
+ * The size fields' wire grammar, on the client.
  *
- * `PUT .../resources` replaces the whole value — both dimensions, every time.
- * The modal used to hard-code `memory: null` on every save, so editing CPU (or
- * clicking "back to default") silently destroyed a stored memory setting, with
- * no way to restore it because there was no memory control at all.
+ * `toSizeString` writes bytes the way the server's `parse_size` reads them —
+ * an integer with the largest unit that divides it exactly (`"512M"`, `"2G"`,
+ * or the bare byte count) — so a stated size round-trips: what the record
+ * holds is what the field shows and what Save sends back.
  *
- * The api client's own comment claimed the opposite — "omitting one would read
- * as 'leave that dimension alone'" — describing an intention the server never
- * had. A replace endpoint means the client owns the whole state, and this is
- * the one function that assembles it.
+ * `isValidCpu` / `isValidMemory` are the server's refusals
+ * (`api/item_routes.py:_validated_resources`, `quota/limits.py:parse_size`)
+ * asked BEFORE the PUT: a 422 only says "not saved", and the person would be
+ * left guessing at the grammar. `""` is valid in both — it means "use the
+ * default" and is sent as `null`.
  */
 
-import type { ItemSize } from "../api/itemEnvironment";
-
-/** The two dimensions as the environment route reports them. */
-export type StatedSize = {
-  statedCpuCores: number | null;
-  statedMemoryBytes: number | null;
-};
-
-/** What the person just changed. An absent key means "they did not touch this
- *  one" — which is NOT the same as `null`, the value that clears it. */
-export type SizeEdit = {
-  cpuCores?: number | null;
-  memory?: string | null;
-};
-
-/** Bytes in the spelling the server parses, so the panel and `config.yaml`
- *  describe the same thing in the same words. Exact powers of two only —
- *  anything else stays a byte count rather than being rounded into a lie. */
 export function toSizeString(bytes: number | null): string | null {
   if (bytes === null) return null;
   for (const [unit, size] of [
@@ -42,10 +25,18 @@ export function toSizeString(bytes: number | null): string | null {
   return String(bytes);
 }
 
-export function sizeToSave(stated: StatedSize, edit: SizeEdit): ItemSize {
-  return {
-    cpuCores: "cpuCores" in edit ? (edit.cpuCores ?? null) : stated.statedCpuCores,
-    memory:
-      "memory" in edit ? (edit.memory ?? null) : toSizeString(stated.statedMemoryBytes),
-  };
+/** More than 0 and finite; the server refuses 0 rather than reading it as "unlimited". */
+export function isValidCpu(text: string): boolean {
+  if (text === "") return true;
+  const n = Number(text);
+  return Number.isFinite(n) && n > 0;
+}
+
+/** `parse_size`'s grammar: digits with an optional K/M/G/T, either case, and
+ *  not zero (which this route refuses, unlike the operator's config). */
+export function isValidMemory(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "") return true;
+  const m = /^(\d+)([kmgt])?$/i.exec(trimmed);
+  return m !== null && Number(m[1]) > 0;
 }
