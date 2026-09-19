@@ -4,15 +4,8 @@
  * search + 「我的」 as SERVER parameters, and the two empty states.
  */
 import "@testing-library/jest-dom/vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SkillHubApi, SkillHubCard } from "../api/skillHub";
@@ -20,22 +13,10 @@ import type { SkillHubApi, SkillHubCard } from "../api/skillHub";
 vi.mock("../api", () => ({
   api: {
     listApps: vi.fn(async () => [
-      {
-        slug: "rca",
-        title: "根因分析",
-        description: "",
-        icon: "flame",
-        color: "#F0502E",
-      },
+      { slug: "rca", title: "根因分析", description: "", icon: "flame", color: "#F0502E" },
     ]),
     getUsers: vi.fn(async () => [
-      {
-        id: "alice",
-        name: "Alice Wu",
-        section: "",
-        email: "",
-        photo_url: null,
-      },
+      { id: "alice", name: "Alice Wu", section: "", email: "", photo_url: null },
     ]),
   },
 }));
@@ -65,21 +46,9 @@ const card = (over: Partial<SkillHubCard>): SkillHubCard => ({
 });
 
 const ROOT_WITH_FORK = card({
-  forks: [
-    card({
-      id: "e-fork",
-      owner: "bob",
-      forked_from: "e-root",
-      review_verdict: "notes",
-    }),
-  ],
+  forks: [card({ id: "e-fork", owner: "bob", forked_from: "e-root", review_verdict: "notes" })],
 });
-const OTHER = card({
-  id: "e-other",
-  owner: "carol",
-  name: "deck-maker",
-  description: "Slides.",
-});
+const OTHER = card({ id: "e-other", owner: "carol", name: "deck-maker", description: "Slides." });
 
 function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER]) {
   // The server's shape (`nest_forks`): a hit nests under its root only when
@@ -130,21 +99,19 @@ describe("SkillHubPage", () => {
     const root = await screen.findByTestId("entry-e-root");
     const fork = within(root).getByTestId("entry-e-fork");
     expect(fork).toHaveAttribute("data-fork", "true");
-    expect(
-      within(root).getByRole("link", { name: /alice\/\s*triage-reflow/ }),
-    ).toHaveAttribute("href", "/skill-hub/e-root");
-    expect(
-      within(fork).getByRole("link", { name: /bob\/\s*triage-reflow/ }),
-    ).toHaveAttribute("href", "/skill-hub/e-fork");
+    expect(within(root).getByRole("link", { name: /alice\/\s*triage-reflow/ })).toHaveAttribute(
+      "href",
+      "/skill-hub/e-root",
+    );
+    expect(within(fork).getByRole("link", { name: /bob\/\s*triage-reflow/ })).toHaveAttribute(
+      "href",
+      "/skill-hub/e-fork",
+    );
     // The root says how many forks it has; the fork says whose it is.
-    expect(
-      within(root).getByText(word("skillHub.fork.one")),
-    ).toBeInTheDocument();
-    expect(
-      within(fork).getByText(
+    expect(within(root).getByText(word("skillHub.fork.one"))).toBeInTheDocument();
+    expect(within(fork).getByText(
         word("skillHub.forkOf", { origin: "alice/triage-reflow" }),
-      ),
-    ).toBeInTheDocument();
+      ),).toBeInTheDocument();
     // The other root is NOT under the first.
     expect(within(root).queryByTestId("entry-e-other")).toBeNull();
     expect(screen.getByTestId("entry-e-other")).toBeInTheDocument();
@@ -155,18 +122,12 @@ describe("SkillHubPage", () => {
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-root");
 
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: "deck" },
-    });
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "deck" } });
     await waitFor(() => expect(c.list).toHaveBeenCalledWith("deck", false));
-    await waitFor(() =>
-      expect(screen.queryByTestId("entry-e-root")).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId("entry-e-root")).toBeNull());
     expect(screen.getByTestId("entry-e-other")).toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: word("skillHub.mine") }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.mine") }));
     await waitFor(() => expect(c.list).toHaveBeenCalledWith("deck", true));
   });
 
@@ -197,10 +158,15 @@ describe("SkillHubPage", () => {
     fireEvent.change(box, { target: { value: "deck" } });
     await waitFor(() => expect(c.list).toHaveBeenCalledWith("deck", false));
 
-    // mid-fetch: same node, still focused, previous rows still there
+    // mid-fetch: same node, still focused, previous rows still there — and
+    // the results area SAYS it is loading (review round 1: nothing did).
     expect(screen.getByRole("searchbox")).toBe(box);
     expect(document.activeElement).toBe(box);
     expect(screen.getByTestId("entry-e-root")).toBeInTheDocument();
+    expect(screen.getByTestId("skill-hub-results")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
 
     release?.();
     await waitFor(() =>
@@ -208,6 +174,33 @@ describe("SkillHubPage", () => {
     );
     expect(screen.getByRole("searchbox")).toBe(box);
     expect(document.activeElement).toBe(box);
+    expect(screen.getByTestId("skill-hub-results")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+  });
+
+  it("keeps the search box and the tools when a search fails — the error and Retry sit in the results area (D2, review round 1)", async () => {
+    const c = client();
+    c.list.mockImplementation(async (q = "") => {
+      if (q) throw new Error("boom");
+      return [ROOT_WITH_FORK, OTHER];
+    });
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-root");
+    const box = screen.getByRole("searchbox");
+    fireEvent.change(box, { target: { value: "deck" } });
+
+    const alert = await screen.findByRole("alert");
+    expect(screen.getByRole("searchbox")).toBe(box);
+    expect(screen.getByTestId("skill-hub-results")).toContainElement(alert);
+    const calls = c.list.mock.calls.length;
+    fireEvent.click(
+      within(alert).getByRole("button", { name: word("skillHub.retry") }),
+    );
+    await waitFor(() =>
+      expect(c.list.mock.calls.length).toBeGreaterThan(calls),
+    );
   });
 
   it("does not badge an entry for having review notes — every entry was reviewed (D7)", async () => {
@@ -278,17 +271,56 @@ describe("SkillHubPage", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("says the notice once — Back to the list does not announce it again (D10, review round 1)", async () => {
+    // The notice rode in the history entry's state, so opening an entry and
+    // pressing Back re-mounted the list with the same state: 「已刪除「x」。」
+    // again, for a delete that happened a while ago. The page consumes it on
+    // arrival (the entry's state is replaced with none).
+    function Away() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate(-1)}>
+          back
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: "/skill-hub", state: { notice: { kind: "success", text: "已刪除「x」。" } } },
+        ]}
+      >
+        <QueryWrap>
+          <Routes>
+            <Route
+              path="/skill-hub"
+              element={
+                <>
+                  <SkillHubPage client={client()} />
+                  <Link to="/skill-hub/x">open one</Link>
+                </>
+              }
+            />
+            <Route path="/skill-hub/x" element={<Away />} />
+          </Routes>
+        </QueryWrap>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("已刪除「x」。");
+    fireEvent.click(screen.getByRole("link", { name: "open one" }));
+    fireEvent.click(await screen.findByRole("button", { name: "back" }));
+
+    await screen.findByRole("searchbox");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("says so when nothing matches, and keeps the tools", async () => {
     render(<SkillHubPage client={client()} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-root");
 
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: "zzz" },
-    });
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "zzz" } });
 
-    expect(
-      await screen.findByText(word("skillHub.noMatch")),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(word("skillHub.noMatch"))).toBeInTheDocument();
     expect(screen.getByRole("searchbox")).toBeInTheDocument();
   });
 
@@ -306,9 +338,7 @@ describe("SkillHubPage", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(word("skillHub.error"));
-    fireEvent.click(
-      within(alert).getByRole("button", { name: word("skillHub.retry") }),
-    );
+    fireEvent.click(within(alert).getByRole("button", { name: word("skillHub.retry") }));
     expect(await screen.findByTestId("entry-e-root")).toBeInTheDocument();
   });
 });

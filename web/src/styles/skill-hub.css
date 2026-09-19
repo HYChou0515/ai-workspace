@@ -251,3 +251,9 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* The list while the next query is on its way (D2): still there, dimmed. */
+.skill-hub-results[aria-busy="true"] .skill-hub-list {
+  opacity: 0.6;
+  transition: opacity 150ms ease-out;
+}

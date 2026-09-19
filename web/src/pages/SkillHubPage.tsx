@@ -15,7 +15,7 @@
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import {
@@ -38,10 +38,21 @@ export function SkillHubPage({
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: "Skill hub" }]);
   // What the page that sent us here wants said — the entry page after a
   // transfer or a delete (plan-skill-hub-ui-polish D10). Router state, so a
-  // reload or a fresh visit carries no stale notice.
-  const notice =
-    (useLocation().state as { notice?: PageNoticeContent } | null)?.notice ??
-    null;
+  // reload or a fresh visit carries no stale notice — and consumed on
+  // arrival: kept for this mount, cleared from the history entry, so Back to
+  // the list does not announce it again (review round 1 of #826).
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [notice] = useState<PageNoticeContent | null>(
+    () => (location.state as { notice?: PageNoticeContent } | null)?.notice ?? null,
+  );
+  useEffect(() => {
+    if ((location.state as { notice?: PageNoticeContent } | null)?.notice) {
+      navigate(location.pathname + location.search, { replace: true, state: null });
+    }
+    // Once, on arrival: the notice is what THIS mount was handed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [query, setQuery] = useState("");
   const [mine, setMine] = useState(false);
   // The search is the server's (it matches what the agent's search tool
@@ -52,17 +63,18 @@ export function SkillHubPage({
     const id = setTimeout(() => setQ(query.trim()), 250);
     return () => clearTimeout(id);
   }, [query]);
-  const { data, isPending, isError, refetch } = useQuery({
-    queryKey: qk.skillHub(q, mine),
-    queryFn: () => client.list(q, mine),
-    // A new (q, mine) is a new query key, and without this every keystroke's
-    // debounce made the page `isPending` — the whole tree, search box
-    // included, was swapped for 載入中…, the box remounted, and the caret
-    // and focus went with it (plan-skill-hub-ui-polish D2). The previous
-    // list stays on screen until the next one lands; only the FIRST load
-    // has nothing to show.
-    placeholderData: keepPreviousData,
-  });
+  const { data, isPending, isError, isFetching, isPlaceholderData, refetch } =
+    useQuery({
+      queryKey: qk.skillHub(q, mine),
+      queryFn: () => client.list(q, mine),
+      // A new (q, mine) is a new query key, and without this every keystroke's
+      // debounce made the page `isPending` — the whole tree, search box
+      // included, was swapped for 載入中…, the box remounted, and the caret
+      // and focus went with it (plan-skill-hub-ui-polish D2). The previous
+      // list stays on screen until the next one lands; only the FIRST load
+      // has nothing to show.
+      placeholderData: keepPreviousData,
+    });
   // "Nothing published at all" and "nothing matches the tools" are different
   // states: the first gets the empty state (no tools, they would filter
   // nothing); the second keeps the tools, because they are what to change.
@@ -71,26 +83,12 @@ export function SkillHubPage({
     queryFn: () => client.list("", false),
   });
 
-  if (isError) {
-    return (
-      <div className="page">
-        <h1>Skill hub</h1>
-        <p className="error" role="alert">
-          {t("skillHub.error")}{" "}
-          <button
-            type="button"
-            className="btn"
-            data-variant="secondary"
-            data-size="sm"
-            onClick={() => void refetch()}
-          >
-            {t("skillHub.retry")}
-          </button>
-        </p>
-      </div>
-    );
-  }
-  if (isPending || !data) return <p>{t("skillHub.loading")}</p>;
+  // Only the FIRST load has nothing to show. From then on the tools stay
+  // mounted whatever the list does — a failed search draws its error and
+  // Retry in the results area, not in place of the search box that caused
+  // it (review round 1 of #826: the error branch still swapped the tree).
+  if (isPending && !isError) return <p>{t("skillHub.loading")}</p>;
+  const rows = data ?? [];
 
   const nothingPublished =
     everything !== undefined && everything.length === 0 && !q && !mine;
@@ -99,7 +97,7 @@ export function SkillHubPage({
   // (「我的」, or a search that matched the fork and not the root) can still
   // say whose it is. A root that is in neither is one the viewer cannot read.
   const lineage = new Map<string, SkillHubCard>();
-  for (const e of everything ?? data) {
+  for (const e of everything ?? rows) {
     lineage.set(e.id, e);
     for (const f of e.forks) lineage.set(f.id, f);
   }
@@ -150,15 +148,37 @@ export function SkillHubPage({
               </button>
             </div>
           </div>
-          {data.length === 0 ? (
-            <p className="empty">{t("skillHub.noMatch")}</p>
-          ) : (
-            <ul className="skill-hub-list">
-              {data.map((entry) => (
-                <SkillRow key={entry.id} entry={entry} lineage={lineage} />
-              ))}
-            </ul>
-          )}
+          {/* The results area: busy while the next list is on its way (the
+              previous one stays visible, dimmed), the error with Retry when
+              a search failed, else the rows. */}
+          <div
+            className="skill-hub-results"
+            data-testid="skill-hub-results"
+            aria-busy={isFetching && isPlaceholderData ? "true" : "false"}
+          >
+            {isError ? (
+              <p className="error" role="alert">
+                {t("skillHub.error")}{" "}
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="secondary"
+                  data-size="sm"
+                  onClick={() => void refetch()}
+                >
+                  {t("skillHub.retry")}
+                </button>
+              </p>
+            ) : rows.length === 0 ? (
+              <p className="empty">{t("skillHub.noMatch")}</p>
+            ) : (
+              <ul className="skill-hub-list">
+                {rows.map((entry) => (
+                  <SkillRow key={entry.id} entry={entry} lineage={lineage} />
+                ))}
+              </ul>
+            )}
+          </div>
         </>
       )}
     </div>
