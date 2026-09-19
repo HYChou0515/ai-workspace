@@ -104,26 +104,35 @@ def test_options_past_a_ceiling_are_refused_with_the_ceiling_named(width, height
 
 
 @pytest.mark.parametrize(
-    ("per_file", "total", "why"),
+    ("per_file", "total", "fitted"),
     [
-        (4_000_000, 10**12, "max_assets_total_bytes 1,000,000,000,000; at most 100,000,000"),
-        (60_000_000, 50_000_000, "max_asset_bytes 60,000,000; at most max_assets_total_bytes"),
+        (4_000_000, 10**12, (4_000_000, 100_000_000)),  # a script's 10**12: the ceiling
+        (60_000_000, 50_000_000, (50_000_000, 50_000_000)),  # per-file under the total
+        (4_000_000, 24_000_000, (4_000_000, 20_000_000)),  # the DEFAULTS under a 20 MB ceiling
+        (1_000_000, 2_000_000, (1_000_000, 2_000_000)),  # already inside: the same object
     ],
+    ids=["script-total", "per-file-over-total", "defaults-under-small-ceiling", "inside"],
 )
-def test_the_asset_budgets_are_bounded_by_the_output_ceiling(per_file, total, why):
-    """The struct accepts any non-negative budget; the deployment does not.
-    A script used to be able to send 10**12 and make the worker read a
-    whole workspace file into a 2 GiB pod. The bound is `max_output_bytes`
-    — the number the deployment already states for one video's weight."""
-    from workspace_app.chat_video.options import check_limits
+def test_the_asset_budgets_are_fitted_under_the_output_ceiling(per_file, total, fitted):
+    """The struct accepts any non-negative budget; the deployment bounds
+    it by `max_output_bytes` — the number it already states for one video's
+    weight (a script used to send 10**12 and have the worker read a whole
+    workspace file into a 2 GiB pod). Fitted, not refused: the budgets have
+    defaults the dialog never sends, and the first version's 422 under a
+    20 MB ceiling named a knob the person had no field for — every video
+    export from the UI refused, on a value the example config invites."""
+    from workspace_app.chat_video.options import fit_asset_budgets
 
-    with pytest.raises(ValueError, match=re.escape(why)):
-        check_limits(
-            VideoOptions(max_asset_bytes=per_file, max_assets_total_bytes=total),
-            max_pixels=1920 * 1080,
-            max_seconds=180,
-            max_output_bytes=100_000_000,
-        )
+    before = VideoOptions(max_asset_bytes=per_file, max_assets_total_bytes=total)
+    ceiling = (
+        20_000_000 if total == 24_000_000 else (50_000_000 if total == 50_000_000 else 100_000_000)
+    )
+
+    after = fit_asset_budgets(before, max_output_bytes=ceiling)
+
+    assert (after.max_asset_bytes, after.max_assets_total_bytes) == fitted
+    if fitted == (per_file, total):
+        assert after is before
 
 
 def test_a_pixel_ceiling_that_is_no_whole_16_9_frame_is_named_by_the_number_alone():

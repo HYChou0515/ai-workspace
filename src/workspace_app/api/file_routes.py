@@ -770,7 +770,13 @@ def register_file_routes(
         # serve by range, plays a chat video. The whole file is read either
         # way — the facade has no partial read — so this is the slice of it;
         # a video is at most `chat_video.max_output_bytes`.
-        wanted = byte_range(request.headers.get("range"), len(data))
+        # RFC 9110 §13.1.5: with `If-Range` the range applies only when the
+        # validator matches, and this route emits none, so it never does.
+        wanted = (
+            None
+            if request.headers.get("if-range") is not None
+            else byte_range(request.headers.get("range"), len(data))
+        )
         if wanted == UNSATISFIABLE:
             return Response(
                 status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,

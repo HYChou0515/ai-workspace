@@ -243,15 +243,25 @@ class ChatVideoCoordinator:
             out.append((data.payload, row.info.created_by))  # ty: ignore[unresolved-attribute]
         return out
 
-    async def _alive_progress(self, item_id: str, path: str) -> prog.Progress | None:
+    async def _alive_progress(
+        self,
+        item_id: str,
+        path: str,
+        *,
+        rows: list[tuple[ChatVideoPayload, str]] | None = None,
+    ) -> prog.Progress | None:
         """The file at ``path`` if a job still holds it (`progress.is_alive`):
-        a ``queued`` file while a row names it, a running one by heartbeat."""
+        a ``queued`` file while the row that carries ITS token is active, a
+        running one by heartbeat. The token, not the path: a cancelled
+        job's row stays PENDING until the worker reaches it, and a successor
+        at the same path must not read as that row's — the worker's own
+        ``mine()`` rule, applied on the producer side."""
         p = await self._read_progress(item_id, path)
         if p is None:
             return None
-        queued_alive = any(
-            pl.progress_path == path and pl.item_id == item_id for pl, _ in self._active_rows()
-        )
+        if rows is None:
+            rows = self._active_rows()
+        queued_alive = any(pl.token == p.token for pl, _ in rows)
         alive = prog.is_alive(
             p,
             now=self._now(),
@@ -261,12 +271,15 @@ class ChatVideoCoordinator:
         return p if alive else None
 
     async def _alive_jobs(self) -> list[_LiveJob]:
-        """Every job that is alive right now — its row active AND the progress
-        file it points at still its own (the file is the truth about a
-        worker that died mid-render). What decision 10's two rules read."""
+        """Every job that is alive right now — its row active AND the file at
+        its path alive AND that file its own (a cancelled requester's row
+        must not borrow a successor's file). What decision 10's two rules
+        read; the rows are listed once for the whole walk."""
+        rows = self._active_rows()
         out: list[_LiveJob] = []
-        for payload, requester in self._active_rows():
-            if await self._alive_progress(payload.item_id, payload.progress_path) is not None:
+        for payload, requester in rows:
+            p = await self._alive_progress(payload.item_id, payload.progress_path, rows=rows)
+            if p is not None and p.token == payload.token:
                 out.append(_LiveJob(payload.item_id, requester, payload.output_path))
         return out
 

@@ -45,11 +45,12 @@ import { absoluteRange, newestNumber, type RangeChoice } from "../lib/chatExport
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import {
+  allowedSteps,
+  allowedTextSizes,
   type Aspect,
   ASPECTS,
   estimateMegabytes,
-  frameFor,
-  RESOLUTION_STEPS,
+  fitChoice,
   resolveSize,
   type SizeChoice,
   TEXT_SIZES,
@@ -196,8 +197,11 @@ export function ExportDialog({
         : form.range;
   const abs = absoluteRange(total, range);
 
-  const size = useMemo(() => resolveSize(form.size), [form.size]);
   const ceiling = limits.data;
+  // What the person chose, as this deployment can honour it — the stop
+  // or text size the ceiling allows nearest to it (`fitChoice`).
+  const choice = useMemo(() => fitChoice(form.size, ceiling?.max_pixels), [form.size, ceiling]);
+  const size = useMemo(() => resolveSize(choice), [choice]);
   const tooBig = ceiling !== undefined && size.width * size.height > ceiling.max_pixels;
   /** The knobs as they will be sent: each within the struct's bounds, the
    * length also within the deployment's. */
@@ -248,17 +252,8 @@ export function ExportDialog({
     }
   };
 
-  /** The frames this deployment allows for `aspect`, by short side. */
-  const allowedSteps = (aspect: Aspect) =>
-    RESOLUTION_STEPS.filter((p) => {
-      const f = frameFor(aspect, p);
-      return ceiling === undefined || f.width * f.height <= ceiling.max_pixels;
-    });
-  const allowedTextSizes = (aspect: Aspect) =>
-    TEXT_SIZES.filter((s) => {
-      const f = frameFor(aspect, 720 * s);
-      return ceiling === undefined || f.width * f.height <= ceiling.max_pixels;
-    });
+  const steps = (aspect: Aspect) => allowedSteps(aspect, ceiling?.max_pixels);
+  const textSizes = (aspect: Aspect) => allowedTextSizes(aspect, ceiling?.max_pixels);
 
   const textSizeLabel = (s: number) => `${t(`export.video.textSize.${TEXT_SIZE_NAME[s]}`)}（${s}×）`;
 
@@ -395,8 +390,12 @@ export function ExportDialog({
       </Field>
 
       {form.kind === "video" &&
-        (ceiling === undefined ? (
-          <p className="detail">{t("export.loading")}</p>
+        (limits.isError ? (
+          <p className="detail export-dialog__error" role="alert" data-testid="export-limits-error">
+            {t("export.limitsFailed")}
+          </p>
+        ) : ceiling === undefined ? (
+          <p className="detail">{t("export.limitsLoading")}</p>
         ) : (
           <>
             <Field label={t("export.video.size")}>
@@ -415,7 +414,7 @@ export function ExportDialog({
                       onChange={() => {
                         const aspect = "aspect" in form.size ? form.size.aspect : "16:9";
                         if (mode === "resolution")
-                          setSize({ mode, aspect, p: allowedSteps(aspect)[0] ?? 480 });
+                          setSize({ mode, aspect, p: steps(aspect)[0] ?? 480 });
                         else if (mode === "text") setSize({ mode, aspect, textScale: 1 });
                         else setSize({ mode, width: size.width, height: size.height });
                       }}
@@ -450,20 +449,9 @@ export function ExportDialog({
                       className="input"
                       value={form.size.aspect}
                       onChange={(e) => {
+                        // The stop / text size follows through `fitChoice`.
                         const aspect = e.target.value as Aspect;
-                        if (form.size.mode === "resolution") {
-                          const steps = allowedSteps(aspect);
-                          const p = steps.includes(form.size.p)
-                            ? form.size.p
-                            : (steps[steps.length - 1] ?? 480);
-                          setSize({ mode: "resolution", aspect, p });
-                        } else if (form.size.mode === "text") {
-                          const sizes = allowedTextSizes(aspect);
-                          const textScale = sizes.includes(form.size.textScale)
-                            ? form.size.textScale
-                            : (sizes[sizes.length - 1] ?? 1);
-                          setSize({ mode: "text", aspect, textScale });
-                        }
+                        if (form.size.mode !== "custom") setSize({ ...form.size, aspect });
                       }}
                     >
                       {ASPECTS.map((a) => (
@@ -474,7 +462,7 @@ export function ExportDialog({
                     </select>
                   </div>
                 )}
-                {form.size.mode === "resolution" && (
+                {choice.mode === "resolution" && (
                   <div className="export-dialog__field">
                     <label htmlFor="export-resolution">{t("export.video.resolution")}</label>
                     {/* A slider over the named stops this deployment allows
@@ -485,35 +473,35 @@ export function ExportDialog({
                         id="export-resolution"
                         type="range"
                         data-testid="export-resolution"
-                        data-steps={allowedSteps(form.size.aspect).join(",")}
+                        data-steps={steps(choice.aspect).join(",")}
                         min={0}
-                        max={Math.max(0, allowedSteps(form.size.aspect).length - 1)}
+                        max={Math.max(0, steps(choice.aspect).length - 1)}
                         step={1}
-                        value={Math.max(0, allowedSteps(form.size.aspect).indexOf(form.size.p))}
+                        value={Math.max(0, steps(choice.aspect).indexOf(choice.p))}
                         onChange={(e) => {
-                          if (form.size.mode !== "resolution") return;
-                          const p = allowedSteps(form.size.aspect)[Number(e.target.value)];
-                          if (p !== undefined) setSize({ ...form.size, p });
+                          if (choice.mode !== "resolution") return;
+                          const p = steps(choice.aspect)[Number(e.target.value)];
+                          if (p !== undefined) setSize({ ...choice, p });
                         }}
                       />
-                      <span data-testid="export-resolution-label">{form.size.p}p</span>
+                      <span data-testid="export-resolution-label">{choice.p}p</span>
                     </div>
                   </div>
                 )}
-                {form.size.mode === "text" && (
+                {choice.mode === "text" && (
                   <div className="export-dialog__field">
                     <label htmlFor="export-text-size">{t("export.video.textSize")}</label>
                     <select
                       id="export-text-size"
                       data-testid="export-text-size"
                       className="input"
-                      value={form.size.textScale}
+                      value={choice.textScale}
                       onChange={(e) =>
-                        form.size.mode === "text" &&
-                        setSize({ ...form.size, textScale: Number(e.target.value) })
+                        choice.mode === "text" &&
+                        setSize({ ...choice, textScale: Number(e.target.value) })
                       }
                     >
-                      {allowedTextSizes(form.size.aspect).map((s) => (
+                      {textSizes(choice.aspect).map((s) => (
                         <option key={s} value={s}>
                           {textSizeLabel(s)}
                         </option>

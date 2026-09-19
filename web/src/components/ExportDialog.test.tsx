@@ -277,6 +277,69 @@ describe("ExportDialog — video", () => {
     expect(body.options.width * body.options.height).toBeLessThanOrEqual(1280 * 720);
   });
 
+  it("a ceiling below the opening 720p moves the slider to the largest stop allowed, not to a stop it cannot draw", async () => {
+    // Before: the state stayed at 720p, the slider was `min=0 max=0
+    // value=0` beside a "720p" label and the error, and submit was locked
+    // until the person happened to touch the aspect select.
+    const c = client({
+      fetchChatVideoLimits: vi.fn(async () => ({
+        max_pixels: 500_000,
+        max_seconds: 60,
+        max_output_bytes: 1,
+      })),
+    });
+    open(c);
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+    await screen.findByTestId("export-size-result");
+
+    expect(screen.getByTestId("export-resolution-label").textContent).toBe("480p");
+    expect(screen.getByTestId("export-size-result").textContent).toContain("852×480");
+    expect(screen.queryByTestId("export-size-error")).toBeNull();
+    expect(screen.getByTestId("export-submit")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("export-submit"));
+    await waitFor(() => expect(c.startChatVideo).toHaveBeenCalledTimes(1));
+    const body = (c.startChatVideo as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    expect(body.options).toMatchObject({ width: 852, height: 480 });
+  });
+
+  it("a text size the ceiling forbids is shown as the one it allows — the select and the result line agree", async () => {
+    // 600,000 px in 16:9 allows only 小 (1024×576). Before, the select's
+    // only option READ 小 while the state and the result line stayed at
+    // 1×/1280×720 with the error up — choosing 小 fired no change.
+    const c = client({
+      fetchChatVideoLimits: vi.fn(async () => ({
+        max_pixels: 600_000,
+        max_seconds: 60,
+        max_output_bytes: 1,
+      })),
+    });
+    open(c);
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+    await screen.findByTestId("export-size-result");
+    fireEvent.click(screen.getByTestId("export-size-mode-text"));
+
+    expect((screen.getByTestId("export-text-size") as HTMLSelectElement).value).toBe("0.8");
+    expect(screen.getByTestId("export-size-result").textContent).toContain("1024×576・文字 0.8×");
+    expect(screen.queryByTestId("export-size-error")).toBeNull();
+  });
+
+  it("says so when the deployment's limits cannot be read, instead of loading forever", async () => {
+    const c = client({
+      fetchChatVideoLimits: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    open(c);
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+
+    await screen.findByTestId("export-limits-error");
+    expect(screen.queryByText("讀取對話中…")).toBeNull();
+    expect(screen.getByTestId("export-submit")).toBeDisabled();
+  });
+
   it("is offered but locked without the two verbs the route asks", async () => {
     const c = client();
     open(c, { canExportVideo: false });

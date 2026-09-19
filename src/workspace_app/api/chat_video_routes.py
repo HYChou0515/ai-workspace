@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 from ..chat_video import progress as prog
 from ..chat_video.jobs import ChatVideoCoordinator, InFlight
-from ..chat_video.options import FORMATS, VideoOptions, check_limits
+from ..chat_video.options import FORMATS, VideoOptions, check_limits, fit_asset_budgets
 from ..chat_video.timeline import build_timeline
 from ..config.schema import ChatVideoSettings
 from ..files import WorkspaceFiles, rel_path
@@ -45,6 +45,7 @@ DEFAULT_OUTPUT_DIR = "/exports/chat-video"
 # The default file name keeps this much of the title's stem: a 300-character
 # title made a 900-byte name the store refused (a 500 for a renamed chat).
 DEFAULT_STEM_CHARS = 64
+DEFAULT_STEM_BYTES = 128
 
 
 class ChatVideoRequest(BaseModel):
@@ -59,6 +60,17 @@ class ChatVideoRequest(BaseModel):
     """Where the video goes, a workspace path ending in ``.gif`` / ``.mp4`` /
     ``.webm`` (the extension picks the format, as the CLI's ``-o`` does).
     Default: ``/exports/chat-video/<title>-<timestamp>.<fmt>``."""
+
+
+def default_stem(title: str) -> str:
+    """The title as a file-name stem, capped twice: by characters, so a name
+    stays readable, and by UTF-8 bytes, because the store's limit is
+    NAME_MAX in bytes and ``safe_stem`` keeps every letter — 64 letters
+    from CJK Extension B are 256 bytes, and with the stamp and
+    ``.progress.json`` the first `files.write` was a 500."""
+    stem = safe_stem(title)[:DEFAULT_STEM_CHARS]
+    stem = stem.encode("utf-8")[:DEFAULT_STEM_BYTES].decode("utf-8", errors="ignore")
+    return stem.rstrip("-") or "chat"
 
 
 class ChatVideoQueued(BaseModel):
@@ -122,8 +134,10 @@ def register_chat_video_routes(
         requester's own Cancel was a swallowed 403 and the render went on.
         The path must be a progress file of ours (422 otherwise), present
         (404 once it is gone), and the caller must be its requester or an
-        editor (403)."""
-        investigation_id = locator.require_access(slug, item_id, "read_meta")
+        editor (403). The gate is `read_content` — what the POST asked, so
+        the requester always has it — because 404 / 422 / 403 tell whether a
+        file exists, and the file routes keep that behind `read_content`."""
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         progress_path = _workspace_path(path)
         if not progress_path.endswith(prog.PROGRESS_SUFFIX):
             raise HTTPException(status_code=422, detail="path must be a chat-video progress file")
@@ -177,8 +191,7 @@ def register_chat_video_routes(
             options = msgspec.structs.replace(options, fmt=(fmt,))
         else:
             stamp = now().strftime("%Y%m%d-%H%M%S")
-            stem = safe_stem(title)[:DEFAULT_STEM_CHARS].rstrip("-") or "chat"
-            output_path = f"{DEFAULT_OUTPUT_DIR}/{stem}-{stamp}.{options.fmt[0]}"
+            output_path = f"{DEFAULT_OUTPUT_DIR}/{default_stem(title)}-{stamp}.{options.fmt[0]}"
         try:
             check_limits(
                 options,
@@ -188,6 +201,7 @@ def register_chat_video_routes(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        options = fit_asset_budgets(options, max_output_bytes=limits.max_output_bytes)
         if await files.exists(investigation_id, output_path):
             raise HTTPException(status_code=409, detail=f"file exists at {rel_path(output_path)}")
         timeline = build_timeline(title=title, messages=messages, options=options)

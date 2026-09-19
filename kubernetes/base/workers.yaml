@@ -454,8 +454,9 @@ spec:
 # ── chat-video render (plan-chat-video-export) — fixed 1 replica, no HPA ──────
 # One job = one headless Chromium recording the transcript replay in real time
 # (a 41-second video takes 41 seconds to record) and one ffmpeg encode. The
-# image is NOT `rca-app`: Chromium + ffmpeg add ~0.7–1 GB the API pod has no
-# use for, so `docker/Dockerfile`'s `chat-video` stage builds
+# image is NOT `rca-app`: Chromium + ffmpeg add an estimated 0.5–1 GB (not
+# measured yet — the local build stalled on LibreOffice's apt) the API pod has
+# no use for, so `docker/Dockerfile`'s `chat-video` stage builds
 # `rca-app-chat-video` — the same app, plus the two tools.
 #
 # Like blob-gc, this worker boots the API's OWN composition (`build_app`, never
@@ -495,8 +496,13 @@ spec:
       # the recording gives up at `expected × 1.5 + 30 s` (`render.record`),
       # 300 s for the default `chat_video.max_seconds` of 180; each ffmpeg
       # pass at `_ENCODE_TIMEOUT_S` = 300 s, and gif is two passes — 300 +
-      # 600 = 900. Shorter and a rollout SIGKILLs a half-made video: the row
-      # stays PROCESSING, the heartbeat stops, the pill says "worker 沒有回應".
+      # 600 = 900. That is one job's floor: the drain also waits for the
+      # BACKLOG (`aclose` waits for no PENDING/PROCESSING rows, consuming
+      # meanwhile), so with several queued the pod is SIGKILLed mid-render
+      # anyway. Then: RabbitMQ redelivers the job (specstar ACKs after the
+      # handler), the next worker re-renders it from the start (same token,
+      # `mine()` agrees), and the pill says "worker 沒有回應" for at most
+      # `stale_after_seconds` + one beat before going back to 錄影中.
       terminationGracePeriodSeconds: 900
       containers:
         - name: worker

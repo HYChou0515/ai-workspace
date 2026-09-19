@@ -68,6 +68,46 @@ export function frameFor(aspect: Aspect, p: number): { width: number; height: nu
   return { width: short, height: even((short * h) / w) };
 }
 
+/** The stops this deployment allows for `aspect`, by short side (every
+ * stop whose frame is within `maxPixels`; all of them when the ceiling is
+ * not known yet). */
+export function allowedSteps(aspect: Aspect, maxPixels: number | undefined): number[] {
+  return RESOLUTION_STEPS.filter((p) => {
+    const f = frameFor(aspect, p);
+    return maxPixels === undefined || f.width * f.height <= maxPixels;
+  });
+}
+
+/** The text sizes whose 720p layout, scaled, is within `maxPixels`. */
+export function allowedTextSizes(aspect: Aspect, maxPixels: number | undefined): number[] {
+  return TEXT_SIZES.filter((s) => {
+    const f = frameFor(aspect, 720 * s);
+    return maxPixels === undefined || f.width * f.height <= maxPixels;
+  });
+}
+
+/** The choice as the dialog can honour it: a stop or a text size the
+ * ceiling does not allow becomes the largest it does (the dialog opens on
+ * 720p before the ceiling has arrived, and a deployment capped below
+ * 720p used to show an immovable slider labelled "720p" beside the
+ * error). One derivation, applied at render, so every reader — the
+ * slider, the select, the result line, the request — sees the same
+ * choice; nothing is left for an aspect change to re-seed. A custom size
+ * is the person's own and is not moved (the error line says why). */
+export function fitChoice(choice: SizeChoice, maxPixels: number | undefined): SizeChoice {
+  if (choice.mode === "resolution") {
+    const steps = allowedSteps(choice.aspect, maxPixels);
+    if (steps.length === 0 || steps.includes(choice.p)) return choice;
+    return { ...choice, p: steps[steps.length - 1] };
+  }
+  if (choice.mode === "text") {
+    const sizes = allowedTextSizes(choice.aspect, maxPixels);
+    if (sizes.length === 0 || sizes.includes(choice.textScale)) return choice;
+    return { ...choice, textScale: sizes[sizes.length - 1] };
+  }
+  return choice;
+}
+
 export function resolveSize(choice: SizeChoice): ResolvedSize {
   if (choice.mode === "resolution") {
     const f = frameFor(choice.aspect, choice.p);

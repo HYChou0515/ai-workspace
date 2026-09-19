@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatVideoProgress, ChatVideoQueued } from "../api/chatVideo";
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
 import { OpenFileProvider } from "../hooks/openFile";
+import { DialogProvider } from "./Dialog";
 import { renderWithQuery } from "../test/queryWrapper";
 import { pollDelay, VideoProgress, type VideoProgressClient } from "./VideoProgress";
 
@@ -58,15 +60,10 @@ function fileThat(
 
 const looks = (c: VideoProgressClient) => (c.readFile as ReturnType<typeof vi.fn>).mock.calls.length;
 
-function mount(
-  client: VideoProgressClient,
-  openFile?: (path: string) => void,
-  job: ChatVideoQueued = JOB,
-) {
-  const onDismiss = vi.fn();
-  const ui = (
-    // `poll`: the real backoff starts at a second; the tests need the next
-    // answer now, and `pollDelay` has its own test below.
+function pill(client: VideoProgressClient, job: ChatVideoQueued, onDismiss: () => void) {
+  // `poll`: the real backoff starts at a second; the tests need the next
+  // answer now, and `pollDelay` has its own test below.
+  return (
     <VideoProgress
       slug="rca"
       itemId="rca:1"
@@ -76,6 +73,15 @@ function mount(
       poll={() => 20}
     />
   );
+}
+
+function mount(
+  client: VideoProgressClient,
+  openFile?: (path: string) => void,
+  job: ChatVideoQueued = JOB,
+) {
+  const onDismiss = vi.fn();
+  const ui = pill(client, job, onDismiss);
   const rendered = renderWithQuery(
     openFile ? <OpenFileProvider value={openFile}>{ui}</OpenFileProvider> : ui,
   );
@@ -195,6 +201,36 @@ describe("VideoProgress — three endings for one file", () => {
 
     await screen.findByText(/forbidden: edit_content/);
     expect(screen.getByTestId("video-progress-cancel")).not.toBeDisabled();
+  });
+});
+
+describe("VideoProgress — one pill per job", () => {
+  it("a second job handed to the same pill starts fresh: its Cancel works and its done refetches the tree", async () => {
+    // The mount site keeps the pill up through the first job's ending and
+    // the Export action stays available, so job B arrives as a new `job`
+    // prop. The instance used to be reused: `cancelling` from A's cancel
+    // left B's Cancel disabled, and `refetched` from A's done left B's
+    // done without the tree refetch. The body is keyed on the token.
+    const a = fileThat([progress({}), "gone"], { outputExists: false });
+    const { rerender, onDismiss, client } = mount(a);
+    await screen.findByText("錄影中");
+    fireEvent.click(screen.getByTestId("video-progress-cancel"));
+    await screen.findByText("影片已取消");
+
+    const jobB = { ...JOB, output_path: "/exports/b.mp4", progress_path: "/exports/b.mp4.progress.json", token: "job-2" };
+    const b = fileThat([progress({ token: "job-2" }), progress({ token: "job-2" }), "gone"], { outputExists: true });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    // `rerender` replaces the whole tree, providers included.
+    rerender(
+      <QueryClientProvider client={client}>
+        <DialogProvider>{pill(b, jobB, onDismiss)}</DialogProvider>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("錄影中");
+    expect(screen.getByTestId("video-progress-cancel")).not.toBeDisabled();
+    await screen.findByText(/影片已存到/);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.files("rca:1") });
   });
 });
 

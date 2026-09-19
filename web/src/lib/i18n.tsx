@@ -2009,6 +2009,11 @@ export const messages = {
   "export.cancel": { "zh-TW": "取消", en: "Cancel" },
   "export.loading": { "zh-TW": "讀取對話中…", en: "Loading the conversation…" },
   "export.loadFailed": { "zh-TW": "讀不到這段對話。", en: "Could not load this conversation." },
+  "export.limitsLoading": { "zh-TW": "讀取影片上限中…", en: "Loading the video limits…" },
+  "export.limitsFailed": {
+    "zh-TW": "讀不到這個部署的影片上限，暫時做不了影片。",
+    en: "Could not load this deployment's video limits; no video for now.",
+  },
   "export.failed": { "zh-TW": "匯出失敗：{reason}", en: "Export failed: {reason}" },
   "video.progress.queued": { "zh-TW": "影片排隊中", en: "Video queued" },
   "video.progress.rendering": { "zh-TW": "錄影中", en: "Recording" },

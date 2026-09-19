@@ -88,6 +88,22 @@ def test_a_range_past_the_end_is_416_naming_the_size():
     assert r.headers["content-range"] == "bytes */100"
 
 
+def test_a_range_under_an_if_range_is_ignored_because_no_validator_can_match():
+    """RFC 9110 §13.1.5: `If-Range` makes the range conditional on a
+    validator — an ETag or a Last-Modified — and this route emits neither,
+    so the condition can never hold and the whole file is served (200)."""
+    client, iid = _client_and_item()
+    client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 100)
+
+    r = client.get(
+        f"/a/rca/items/{iid}/files/a.bin",
+        headers={"Range": "bytes=0-9", "If-Range": '"some-etag"'},
+    )
+
+    assert (r.status_code, len(r.content)) == (200, 100)
+    assert "content-range" not in r.headers
+
+
 def test_without_a_range_the_whole_file_comes_back_as_before_and_ranges_are_advertised():
     client, iid = _client_and_item()
     client.put(f"/a/rca/items/{iid}/files/report.md", content=b"# hi")

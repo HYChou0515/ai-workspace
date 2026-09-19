@@ -85,21 +85,33 @@ function ours(text: string, token: string): ChatVideoProgress | null {
   return null;
 }
 
-export function VideoProgress({
-  slug,
-  itemId,
-  job,
-  onDismiss,
-  client = realClient,
-  poll = pollDelay,
-}: {
+type Props = {
   slug: string;
   itemId: string;
   job: ChatVideoQueued;
   onDismiss: () => void;
   client?: VideoProgressClient;
   poll?: (polls: number) => number;
-}) {
+};
+
+/** One pill per JOB: the body is keyed on the job's token, so a second
+ * video queued while the pill still shows the first's ending starts with
+ * fresh state. Without the key the instance was reused — `cancelling`
+ * stayed true (B's Cancel disabled after A's cancel), `refetched` stayed
+ * true (B's done never refetched the tree), and the poll count carried
+ * over (B's first re-poll waited the 8-second cap). */
+export function VideoProgress(props: Props) {
+  return <VideoProgressBody key={props.job.token} {...props} />;
+}
+
+function VideoProgressBody({
+  slug,
+  itemId,
+  job,
+  onDismiss,
+  client = realClient,
+  poll = pollDelay,
+}: Props) {
   const t = useT();
   const queryClient = useQueryClient();
   const openFile = useOpenFile();

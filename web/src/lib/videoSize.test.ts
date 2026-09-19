@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allowedSteps,
+  allowedTextSizes,
   autoUiScale,
+  fitChoice,
   estimateMegabytes,
   frameFor,
   RESOLUTION_STEPS,
@@ -69,6 +72,33 @@ describe("resolveSize — three ways to say one W×H + text scale", () => {
       scale: 0.8,
       scaleIsAuto: false,
     });
+  });
+
+  it("fits a choice to the ceiling: a stop or text size past it becomes the largest allowed; custom stays", () => {
+    // A deployment capped at 500,000 px allows only 480p in 16:9 (852×480
+    // = 408,960; 720p is 921,600). The dialog opens on 720p before the
+    // ceiling arrives, so the choice must be fitted at render, not seeded.
+    expect(fitChoice({ mode: "resolution", aspect: "16:9", p: 720 }, 500_000)).toEqual({
+      mode: "resolution",
+      aspect: "16:9",
+      p: 480,
+    });
+    expect(allowedSteps("16:9", 500_000)).toEqual([480]);
+    // 600,000 px in 16:9 allows only 小 (0.8 × 720p = 1024×576 = 589,824).
+    expect(fitChoice({ mode: "text", aspect: "16:9", textScale: 1 }, 600_000)).toEqual({
+      mode: "text",
+      aspect: "16:9",
+      textScale: 0.8,
+    });
+    expect(allowedTextSizes("16:9", 600_000)).toEqual([0.8]);
+    // Inside the ceiling, or the ceiling unknown, or nothing allowed at all:
+    // the choice is returned as it is (the same object).
+    const ok = { mode: "resolution" as const, aspect: "16:9" as const, p: 720 };
+    expect(fitChoice(ok, 1920 * 1080)).toBe(ok);
+    expect(fitChoice(ok, undefined)).toBe(ok);
+    expect(fitChoice(ok, 1000)).toBe(ok);
+    const custom = { mode: "custom" as const, width: 4000, height: 3000 };
+    expect(fitChoice(custom, 500_000)).toBe(custom);
   });
 
   it("custom: width × height as typed, rounded to even, text scale automatic — or pinned when asked", () => {

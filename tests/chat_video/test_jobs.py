@@ -130,13 +130,14 @@ async def _progress(files: WorkspaceFiles, item: str) -> Progress | None:
         return None
 
 
-def _job(spec: SpecStar):
-    """The job row queued last."""
+def _job(spec: SpecStar, *, user: str | None = None):
+    """The job row queued last — by `user`, when given."""
     rm = spec.get_resource_manager(ChatVideoJob)
     infos = []
     for row in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
         assert isinstance(row.info, RevisionInfo)
-        infos.append(row.info)
+        if user is None or row.info.created_by == user:
+            infos.append(row.info)
     assert infos
     return rm.get(max(infos, key=lambda i: i.created_time).resource_id)
 
@@ -207,6 +208,46 @@ async def test_one_video_in_flight_per_item_and_one_per_person():
     with pytest.raises(InFlight, match="you already have a video being made"):
         await ask(other, "/x.mp4")  # per person: alice, on another item
     await ask(other, "/bob.mp4", user="bob")  # bob on the other item: neither rule
+
+
+async def test_a_cancelled_requesters_row_does_not_borrow_a_successors_file():
+    """Alice queues at a path, cancels (the file is gone; her row stays
+    PENDING until the worker reaches it), and Bob queues the same path —
+    accepted, the path is free. The first version then told Alice, on ANY
+    item, "you already have a video being made at that path": her row was
+    judged alive because a live file sat at its PATH — Bob's. A row holds a
+    file only when the file carries the row's token, the worker's own
+    `mine()` rule; the producer side now applies it too."""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item, other = _item(spec), _item(spec)
+    coord = _coordinator(spec, files, _Render(), clock=clock, stale_after_seconds=60)
+
+    async def ask(item_id: str, output_path: str, *, user: str) -> None:
+        await coord.enqueue(
+            item_id=item_id, title="t", messages=MESSAGES, options=VideoOptions(fmt=("mp4",)),
+            output_path=output_path, expected_seconds=1, user=user,
+        )  # fmt: skip
+
+    await ask(item, OUT, user="alice")
+    await files.delete(item, OUT + ".progress.json")  # the cancel; alice's row stays PENDING
+    await ask(item, OUT, user="bob")  # the path is free: bob's file, bob's token
+
+    await ask(other, "/alice-again.mp4", user="alice")  # not a 409: her old row holds nothing
+
+    rows = spec.get_resource_manager(ChatVideoJob).list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+    assert len(list(rows)) == 3
+    with pytest.raises(InFlight, match="already being made on this item"):
+        await ask(item, "/carol.mp4", user="carol")  # bob's job IS alive on that item
+
+    # The other face of the same rule: bob's row gone (the queue dropped it),
+    # alice's stale row still naming the path. The file is nobody's — a row
+    # must carry the FILE's token to hold it, and none does — so a new
+    # request replaces it rather than meeting "already being made at".
+    rm = spec.get_resource_manager(ChatVideoJob)
+    rm.delete(_job(spec, user="bob").info.resource_id)
+    await ask(item, OUT, user="dave")
+    p = await _progress(files, item)
+    assert p is not None and p.requested_by == "dave"
 
 
 async def test_a_queued_file_is_alive_while_its_job_row_is_and_no_longer_when_it_is_not():

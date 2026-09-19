@@ -118,13 +118,10 @@ def check_limits(
     ANY caller may ask; these are what THIS deployment allows —
     ``config.yaml`` ``chat_video:``). The form never offers a value past
     them; a caller of the API can send anything, so the refusal names the
-    ceiling and what it is, one sentence, for a 422.
-
-    The two asset budgets are bounded by ``max_output_bytes`` — the one
-    number the deployment already states for "how many bytes one video may
-    weigh": the page carries its pictures inline, and the worker holds what
-    the page will inline, so a request may not ask it to pull more than that
-    into memory (it used to accept ``10**12`` and read the whole file)."""
+    ceiling and what it is, one sentence, for a 422. The asset budgets are
+    not refused but FITTED (:func:`fit_asset_budgets`): they have defaults
+    the dialog never sends, and a refusal on a default named a knob the
+    person had no field for."""
     pixels = options.width * options.height
     if pixels > max_pixels:
         side = _side_of(max_pixels)
@@ -133,16 +130,25 @@ def check_limits(
         )
     if options.max_seconds > max_seconds:
         raise ValueError(f"max_seconds {options.max_seconds}; at most {max_seconds}")
-    if options.max_assets_total_bytes > max_output_bytes:
-        raise ValueError(
-            f"max_assets_total_bytes {options.max_assets_total_bytes:,}; "
-            f"at most {max_output_bytes:,} (the output ceiling)"
-        )
-    if options.max_asset_bytes > options.max_assets_total_bytes:
-        raise ValueError(
-            f"max_asset_bytes {options.max_asset_bytes:,}; "
-            f"at most max_assets_total_bytes ({options.max_assets_total_bytes:,})"
-        )
+
+
+def fit_asset_budgets(options: VideoOptions, *, max_output_bytes: int) -> VideoOptions:
+    """The two asset budgets brought under the deployment's ceiling: the
+    total under ``max_output_bytes`` — the one number the deployment already
+    states for "how many bytes one video may weigh"; the page carries its
+    pictures inline and the worker holds what the page will inline, so a
+    request may not make it pull more than that into memory (a script used
+    to send ``10**12`` and have a whole workspace file read) — and the
+    per-file budget under the total. Fitted rather than refused: both have
+    defaults (24 MB, 4 MB) that the dialog never sends, and refusing the
+    default under a 20 MB ceiling was a 422 naming a knob the person had no
+    field for. What is queued carries the fitted values, so the row says what
+    the worker will do."""
+    total = min(options.max_assets_total_bytes, max_output_bytes)
+    per_file = min(options.max_asset_bytes, total)
+    if (total, per_file) == (options.max_assets_total_bytes, options.max_asset_bytes):
+        return options
+    return msgspec.structs.replace(options, max_assets_total_bytes=total, max_asset_bytes=per_file)
 
 
 def _side_of(max_pixels: int) -> str:

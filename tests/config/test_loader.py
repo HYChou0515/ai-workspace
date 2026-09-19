@@ -20,6 +20,7 @@ when they write a small `config.yaml`?
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from textwrap import dedent
 
@@ -1364,3 +1365,33 @@ def test_chat_video_section_loads_and_defaults_are_the_measured_ceilings(tmp_pat
     s = load(config_path=cfg, env={}).chat_video
     assert (s.max_pixels, s.max_seconds, s.max_output_bytes) == (921600, 60, 20_000_000)
     assert (s.heartbeat_seconds, s.stale_after_seconds) == (5, 30)
+
+
+@pytest.mark.parametrize(
+    ("section", "sentence"),
+    [
+        ("heartbeat_seconds: 0", "chat_video.heartbeat_seconds must be a positive integer, got 0"),
+        ("max_seconds: -5", "chat_video.max_seconds must be a positive integer, got -5"),
+        ("max_pixels: true", "chat_video.max_pixels must be a positive integer, got True"),
+        (
+            "heartbeat_seconds: 10\n  stale_after_seconds: 5",
+            "chat_video.stale_after_seconds (5) must be at least chat_video.heartbeat_seconds (10)",
+        ),
+        (
+            "stale_after_seconds: 5",  # the default heartbeat is 10
+            "chat_video.stale_after_seconds (5) must be at least chat_video.heartbeat_seconds (10)",
+        ),
+    ],
+    ids=["heartbeat-0", "negative", "bool", "stale-under-beat", "stale-under-default-beat"],
+)
+def test_a_chat_video_ceiling_that_cannot_work_refuses_to_boot(tmp_path: Path, section, sentence):
+    """`heartbeat_seconds: 0` is a hot loop (16,689 progress-file writes in
+    a 0.3 s render, each a store write in production); a stale rule shorter
+    than the beat reads every running job as dead between two beats, so a
+    second request replaces a live job's file mid-render. Refused at boot
+    with the key named, like the other knobs a typo would silently break."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"chat_video:\n  {section}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=re.escape(sentence)):
+        load(config_path=cfg, env={})

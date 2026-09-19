@@ -279,6 +279,48 @@ def test_the_requester_can_cancel_their_own_video_without_edit_content():
     assert client.delete(cancel, params={"path": queued["source_path"]}).status_code == 422
 
 
+def test_only_a_progress_path_is_a_cancel_handle_even_when_the_document_is_genuine():
+    """The route deletes the file it is pointed at, so the path must be a
+    `.progress.json` — a genuine progress document copied to another name
+    is not a cancel handle, and the route must not become a way to delete
+    arbitrary files the caller may only read."""
+    holder = {"id": "alice"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="alice")
+    queued = _post(client, iid, output_path="/videos/mine.mp4").json()
+    doc = client.get(f"/a/rca/items/{iid}/files{queued['progress_path']}").content
+    assert client.put(f"/a/rca/items/{iid}/files/videos/copy.json", content=doc).status_code == 204
+
+    r = client.delete(f"/a/rca/items/{iid}/chat-video", params={"path": "/videos/copy.json"})
+
+    assert r.status_code == 422
+    assert client.get(f"/a/rca/items/{iid}/files/videos/copy.json").status_code == 200
+
+
+def test_the_cancel_route_asks_read_content_so_it_tells_a_meta_reader_nothing_about_files():
+    """404 / 422 / 403 say whether a file exists at the path, and the file
+    routes keep that behind `read_content`; a person with `read_meta` alone
+    gets the one answer that says nothing. The requester always has
+    `read_content` — the POST needed it."""
+    holder = {"id": "alice"}
+    client, spec = _client_and_spec(holder)
+    perm = Permission(
+        visibility="restricted",
+        read_meta=["user:alice", "user:erin"],
+        read_content=["user:alice"],
+        add_content=["user:alice"],
+    )
+    iid = _item(spec, by="bob", permission=perm)
+    progress = _post(client, iid, output_path="/videos/mine.mp4").json()["progress_path"]
+
+    holder["id"] = "erin"  # read_meta only
+    cancel = f"/a/rca/items/{iid}/chat-video"
+    present = client.delete(cancel, params={"path": progress})
+    absent = client.delete(cancel, params={"path": "/videos/nothing.mp4.progress.json"})
+
+    assert (present.status_code, absent.status_code) == (403, 403)
+
+
 def test_an_editor_can_cancel_anyones_video_on_the_item():
     holder = {"id": "alice"}
     client, spec = _client_and_spec(holder)
@@ -300,7 +342,8 @@ def test_an_editor_can_cancel_anyones_video_on_the_item():
 def test_a_very_long_title_still_names_a_file_the_store_can_take():
     """A 300-character title made a 900-byte file name the store refused —
     a 500 from the video export of a chat someone had renamed at length. The
-    default name keeps the first 64 characters of the stem."""
+    default name keeps the first 64 characters of the stem, and no more than
+    128 bytes of them: for a three-byte script that is 42 characters."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     iid = _item(spec, by="bob")
@@ -310,7 +353,52 @@ def test_a_very_long_title_still_names_a_file_the_store_can_take():
 
     assert r.status_code == 202, r.text
     name = r.json()["output_path"].rsplit("/", 1)[-1]
-    assert len(name.encode()) < 255 and name.startswith("事故" * 32)
+    assert len(name.encode()) < 255 and name.startswith("事故" * 21 + "-")
+
+
+def test_a_title_of_four_byte_letters_is_capped_by_bytes_not_characters():
+    """`safe_stem` keeps every letter, and CJK Extension B letters are four
+    bytes each: 64 of them are 256 bytes, over the store's NAME_MAX before
+    the stamp and `.progress.json` are added — the first `files.write` was
+    the same 500 the character cap was meant to end. The stem is capped in
+    UTF-8 bytes as well (128), so the longest name this route makes fits."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    wide = {**TRANSCRIPT, "title": "\U00020000" * 70}
+
+    r = client.post(f"/a/rca/items/{iid}/chat-video", json={"transcript": wide})
+
+    assert r.status_code == 202, r.text
+    progress = r.json()["progress_path"].rsplit("/", 1)[-1]
+    assert len(progress.encode()) <= 128 + len("-20260919-123456.mp4.progress.json")
+    assert progress.startswith("\U00020000" * 32)  # 32 × 4 bytes = the 128
+
+
+def test_the_dialogs_own_request_is_accepted_under_a_small_output_ceiling():
+    """The asset budgets have defaults (24 MB total, 4 MB a file) that the
+    dialog never sends — its body is size, format and the four tempo knobs.
+    The first version compared those DEFAULTS with `max_output_bytes` and
+    refused: on a deployment that set the ceiling to 20 MB (the value the
+    example config invites), every video export from the UI was a 422
+    naming a knob the person had no field for. The budgets are fitted to
+    the ceiling instead, and the queued row carries the fitted values."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(
+        holder, chat_video=ChatVideoSettings(max_output_bytes=20_000_000)
+    )
+    iid = _item(spec, by="bob")
+    dialog_body = {
+        "width": 1280, "height": 720, "scale": 0, "fmt": ["mp4"],
+        "type_ms": 55, "zoom": 1.8, "speed": 1, "max_seconds": 90,
+    }  # fmt: skip
+
+    r = _post(client, iid, options=dialog_body)
+
+    assert r.status_code == 202, r.text
+    (job,) = [r.data for r in spec.get_resource_manager(ChatVideoJob).list_resources()]
+    assert job.payload.options.max_assets_total_bytes == 20_000_000
+    assert job.payload.options.max_asset_bytes == 4_000_000  # the default, already under it
 
 
 def test_the_deployments_ceilings_are_readable_so_the_form_never_offers_past_them():

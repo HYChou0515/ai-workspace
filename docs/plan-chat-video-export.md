@@ -67,7 +67,7 @@
                           c. build_timeline → expected_seconds
                           d. files.write(<output>.chat.json = source)、files.write(<output>.progress.json, stage=queued)
                           e. enqueue ChatVideoJob(payload = 路徑們 + options, partition_key=item_id)
-                          f. 202 {output_path, source_path, progress_path, expected_seconds}
+                          f. 202 {output_path, source_path, progress_path, expected_seconds, stale_after_seconds, token}
                     ┌───────────────────────────────────────────────────────────────────┐
                     │ worker `chat-video`(從 build_app 組;或 all-in-one 的 API 進程)        │
                     │ _handle: 再授權(created_by)→ files.read(source) → parse_chat_export  │
@@ -164,6 +164,8 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 進度膠囊是掛在這次 mount 上的:重新整理、切到別的對話再回來,膠囊不會回來(進度檔在樹裡看得到,也刪得掉)。
 - 心跳是「讀檔、再寫檔」,取消的 DELETE 落在這兩步之間會被寫回去、取消丟失;視窗是每 10 秒一次 read+write 的幾毫秒。不修:workspace 寫沒有 CAS,修要換機制。
 - 輸出路徑落在既有檔案底下(`videos/x.mp4/a.mp4`)是 500 不是 4xx——檔案路由本來就這樣(既有的一類),這裡沒加判斷。
+- worker 收到 SIGTERM 時在做的那支做完才退(grace 900 秒 = 錄影 300 + ffmpeg 兩段各 300);後面有排隊時 drain 會等到被 SIGKILL,那支由 RabbitMQ 重送、下一顆 worker 從頭做(同一個 token,`mine()` 認得),膠囊最多 70 秒說「worker 沒有回應」再回到錄影中。all-in-one 沒有重送,只剩人刪進度檔重送。
+- `enqueue` 是「先讀再寫」沒有 CAS:同一秒兩個 POST 都能過三條 409。同一路徑的話後寫的檔蓋掉先寫的,先到的 job 在第一次 `mine()` 就停、什麼都不寫——退化成沒事;不同路徑的話兩支都做(同 item 的 `partition_key` 讓它們排隊)。簡單優先。
 - 不做:自訂路徑、多格式一次出、在對話串裡點選範圍、進度 SSE。
 
 ## Phases(每個 = 一個 commit,TDD;每個修法先有會紅的測試)
@@ -250,6 +252,15 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 素材預讀先看大小、總量 `max_assets_total_bytes` first-fit(D8);`check_limits` 讓兩個素材上限不超過輸出上限。ffmpeg 兩段 gif 都 `-threads 2`、stderr 落地檔不用 PIPE(D9)。`start` 沒帶 `end` 的檔名寫成 `(3–None)`(V6)→ 半開範圍在 route 補齊;空對話匯出 200;標題砍到 64 字。
 - `workers.yaml` grace 240 → 900(錄影 300 + ffmpeg 兩段各 300,推的,寫在註解);runbook 條目搬回 `## 條目` #818 之後、補「資料」格、症狀改成前端真的會說的那句;`docs/chat-video.md` 逐句改;`FileChanged` 的兩次 publish 與「failed 不再輪詢」各補一條會紅的測試(V9)。
 - 這輪沒修、寫進知情取捨的:時鐘偏差、膠囊掛在 mount 上、心跳 read-then-write 與 DELETE 的毫秒視窗、輸出落在檔案底下是 500。
+
+### P11 — review 第二輪(修法驗證 / 回歸 / 缺陷,平行)✅
+回歸鏡頭乾淨(master 的 88 條檔案路由與權限測試、113 條匯出測試跑在這支的 src 上全綠;真瀏覽器 `<video>` 拖得動、1001×601 出 1000×600)。另外兩把各有貨,沒有一項換機制:
+- **素材預算對上輸出上限**(兩把都抓到,最嚴重):P10 讓 `check_limits` 拒絕 `max_assets_total_bytes > max_output_bytes`,但那是請求的**預設值**(24 MB),對話框根本沒這個欄位——上限設 20 MB(example config 邀請的值)的部署,UI 每一次匯出影片都 422、句子點名一個人沒有的旋鈕。改成 `fit_asset_budgets`:夾到上限(總量 ≤ 輸出上限、單檔 ≤ 總量),排進去的列帶夾過的值;測試用對話框那份 body 打 route。
+- **生產端也用 token 認 job**:`_alive_progress` / `_alive_jobs` 原本用路徑認——alice 取消後她的列還 PENDING,bob 排同一路徑,alice 在任何 item 都被 409「你已經有一支在做」;反過來 bob 的列被丟掉、alice 的舊列還指著那條路徑時,那個檔沒人做卻永遠「在做」。改成列要帶**檔案的** token 才算持有(worker 的 `mine()` 同一條規則),兩個突變各紅一格;列只列一次。
+- **膠囊一支 job 一顆**:mount 點沒 `key`,A 取消後 B 的取消鈕是灰的、A 完成後 B 完成不重抓樹、B 第一次輪詢等 8 秒。`VideoProgress` 的本體 `key={job.token}`。
+- **上限低於 720p 的部署**:對話框開在 720p、上限到了也不重算,滑桿 `min=max=0` 動不了、標籤寫 720p;文字模式的選單顯示 小 而狀態還是 1×。改成 render 時 `fitChoice`(允許的最大停點 / 文字大小),比例切換不再各自重算。
+- 讀不到上限 → 寫「讀不到影片上限」不是「讀取對話中…」;檔名的 stem 除了 64 字也 cap 128 bytes(擴充 B 區的字 4 bytes,64 個就超過 NAME_MAX);loader 拒絕 `heartbeat_seconds: 0`(量到 0.3 秒 16,689 次寫檔)與 `stale < heartbeat`;`If-Range` 出現就不給 Range(這條路由沒有 validator,永遠對不上);取消路由改問 `read_content`(404/422/403 洩露檔案在不在);後綴守衛補一條「真 progress 文件放在別的檔名也是 422」。
+- 寫進知情取捨:SIGKILL 後 RabbitMQ 重送、`enqueue` 的先讀再寫。
 
 ## 驗收
 
