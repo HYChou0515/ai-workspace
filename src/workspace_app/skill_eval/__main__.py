@@ -32,7 +32,9 @@ from pathlib import Path
 
 import msgspec
 
+from ..apps.frontmatter import FrontmatterError, parse_frontmatter
 from ..apps.shared_skills import SHARED_SKILLS
+from ..apps.skill_payload import skill_payload
 from .report import Report, render, row_for
 from .runner import Chat, ToolCall, Transcript, Turn, run_scenario
 from .scenario import Scenario, load_scenarios
@@ -47,7 +49,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--skill",
         default=None,
-        help="a registered shared skill by NAME, or a path to a SKILL.md you edited",
+        help="a registered shared skill by NAME, or a path to a SKILL.md you edited (its "
+        "frontmatter `name` says which registered skill's references/ and scripts/ it runs with)",
     )
     p.add_argument(
         "--dump-skill",
@@ -160,43 +163,51 @@ def _litellm_chat(cfg, num_ctx: int, timeout: int) -> Chat:
     return chat
 
 
-def _stage(scenario: Scenario, scenarios_dir: Path, work: Path, *, skill_dir: Path | None) -> None:
+def _stage(scenario: Scenario, scenarios_dir: Path, work: Path, *, skill_dir: Path) -> None:
     """The scenario's data at the workspace root, and the skill's OWN files
     (`references/`, `scripts/`, …) under `.skill/<name>/` — the path a real
-    turn holds them at (`apps.skills.materialize_skill`). Without the second
-    half a body that says "read `references/x.md` first" scores the model on a
-    step the workspace made impossible: every such `read_file` answered "no
-    such file". `SKILL.md` itself is not staged; the body reaches the model
-    through the prompt."""
+    turn holds them at (`apps.skills.materialize_skill`), copied through the
+    same `skill_payload` so build noise is left behind here too. Without the
+    second half a body that says "read `.skill/<name>/references/x.md` first"
+    scores the model on a step the workspace made impossible: every such
+    `read_file` answered "no such file". `SKILL.md` itself is not staged; the
+    body reaches the model through the prompt."""
     work.mkdir(parents=True, exist_ok=True)
     for name in scenario.data:
         shutil.copy(scenarios_dir / name, work / name)
-    if skill_dir is None:
-        return
-    for src in sorted(skill_dir.rglob("*")):
-        if not src.is_file() or src.name == "SKILL.md":
+    for rel, data in skill_payload(skill_dir).items():
+        if rel == "SKILL.md":
             continue
-        target = work / ".skill" / skill_dir.name / src.relative_to(skill_dir)
+        target = work / ".skill" / skill_dir.name / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, target)
+        target.write_bytes(data)
 
 
-def _resolve_skill(spec: str) -> tuple[str, str, Path | None]:
-    """``(name, SKILL.md text, folder)`` from a registered name or a path. The
-    folder is where the skill's `references/` and `scripts/` come from: for a
-    path, the edited file's own folder when it holds any — `--dump-skill`
-    writes `SKILL.md` alone, so an edited copy usually does not — else the
-    registered folder of the same name, else nothing to stage."""
+def _resolve_skill(spec: str) -> tuple[str, str, Path]:
+    """``(name, SKILL.md text, folder)`` from a registered name or a path to an
+    edited body. The name is the frontmatter's — never the folder's, because
+    `--dump-skill … -o ./tune` puts the body in a folder called `tune`. The
+    folder is the REGISTERED skill's: it is where `references/` and `scripts/`
+    come from, and the only place they can come from, since the dump writes
+    `SKILL.md` alone and whatever else sits beside the edited copy (a run's
+    output, say) is not skill content. A body the harness cannot place this
+    way is refused rather than run without its files."""
     path = Path(spec)
+    text: str | None = None
+    name = spec
     if path.is_file():
-        name = path.parent.name
-        own = any(p.is_file() and p.name != "SKILL.md" for p in path.parent.rglob("*"))
-        folder = path.parent if own else SHARED_SKILLS.get(name)
-        return name, path.read_text(), folder
-    src = SHARED_SKILLS.get(spec)
+        text = path.read_text()
+        try:
+            front, _body = parse_frontmatter(text.encode())
+        except FrontmatterError as e:
+            raise SystemExit(f"{path}: {e}") from e
+        name = str(front.get("name", "")).strip()
+        if not name:
+            raise SystemExit(f"{path}: SKILL.md frontmatter has no `name`")
+    src = SHARED_SKILLS.get(name)
     if src is None:
-        raise SystemExit(f"unknown skill {spec!r}. registered: {', '.join(sorted(SHARED_SKILLS))}")
-    return spec, (src / "SKILL.md").read_text(), src
+        raise SystemExit(f"unknown skill {name!r}. registered: {', '.join(sorted(SHARED_SKILLS))}")
+    return name, text if text is not None else (src / "SKILL.md").read_text(), src
 
 
 def main() -> None:

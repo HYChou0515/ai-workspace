@@ -168,6 +168,9 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
         return f"wrote {args['path']} ({len(content)} bytes)"
     if name == "read_file":
         target = work / args["path"]
+        # Scoring is on tool names; the transcript shows WHICH file was asked
+        # for, so a scenario about "it opened the reference" can be read back.
+        events.append(Event("read_file", args["path"]))
         if not target.is_file():
             return f"no such file: {args['path']}"
         return truncate_middle(target.read_text(), EXEC_CAP)

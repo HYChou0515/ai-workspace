@@ -120,8 +120,9 @@ apply to a skill saved here, with these mappings:
   it to the trigger.
 - **Disclosed reference is a file under the skill's folder**: write it with
   `write_file` to `.skill/<name>/references/<file>.md` and point at it from the
-  body ("read `references/<file>.md` when …"). The future agent opens it with
-  `read_file` only when the pointer fires. `scripts/` is the same for
+  body by that same full path ("read `.skill/<name>/references/<file>.md`
+  when …"). The future agent opens it with `read_file`, which resolves from
+  the workspace root, only when the pointer fires. `scripts/` is the same for
   repeatable computation.
 - **Completion criteria** are what `read_skill`'s future run is graded by: end
   each step on a checkable "done" ("every station in the file has a row", not

@@ -231,3 +231,14 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
         double = schema["function"]["parameters"]
         assert set(double["properties"]) <= set(real_params), (name, double["properties"])
         assert sorted(double["required"]) == sorted(real_required), (name, double["required"])
+
+
+def test_read_file_records_which_path_was_asked_for(tmp_path):
+    """Scoring is on tool NAMES, so `must_call: ["read_file"]` is satisfied by
+    any read. The transcript has to show WHICH file, or a scenario built around
+    "it opened the reference" cannot be checked by the person reading it."""
+    (tmp_path / "r.md").write_text("rules")
+    events: list[Event] = []
+    assert run("read_file", {"path": "r.md"}, tmp_path, events) == "rules"
+    assert run("read_file", {"path": "gone.md"}, tmp_path, events) == "no such file: gone.md"
+    assert events == [Event("read_file", "r.md"), Event("read_file", "gone.md")]

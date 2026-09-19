@@ -2,12 +2,20 @@
 to open. `materialize_skill` gives a real turn the skill's `references/` and
 `scripts/` under `.skill/<name>/`; a harness that staged only the scenario's
 data files answered every such `read_file` with "no such file", so a body that
-says "read `references/x.md` first" could never be measured — the model would
-be scored on a step the workspace made impossible."""
+says "read `.skill/x/references/r.md` first" could never be measured — the
+model would be scored on a step the workspace made impossible.
+
+Where those files come from is ONE rule: the registered skill named by the
+body's frontmatter. `--dump-skill` writes `SKILL.md` alone, so the folder an
+edited copy sits in says nothing about the skill — its name is whatever `-o`
+was, and anything beside it (a previous run's output, say) is not skill
+content."""
 
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from workspace_app.skill_eval.__main__ import _resolve_skill, _stage
 from workspace_app.skill_eval.scenario import Scenario
@@ -16,7 +24,9 @@ from workspace_app.skill_eval.scenario import Scenario
 def _skill(root: Path, name: str, *, files: dict[str, str]) -> Path:
     d = root / name
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nread references/r.md")
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: d\n---\n\nread .skill/{name}/references/r.md"
+    )
     for rel, text in files.items():
         (d / rel).parent.mkdir(parents=True, exist_ok=True)
         (d / rel).write_text(text)
@@ -54,24 +64,95 @@ def test_a_skill_with_no_files_of_its_own_stages_nothing_extra(tmp_path: Path):
     assert not (work / ".skill").exists()
 
 
-def test_resolving_a_registered_skill_or_an_edited_copy_names_its_folder(
-    tmp_path: Path, monkeypatch
-):
-    """`--dump-skill` writes SKILL.md alone; an edited copy passed back by path
-    still has to find its `references/` — the harness looks beside the edited
-    file first, and falls back to the registered folder of the same name."""
+def test_staging_drops_the_same_build_noise_a_real_turn_never_receives(tmp_path: Path):
+    """`materialize_skill` copies through `skill_payload`, which leaves
+    `__pycache__/`, `*.pyc` and a copy's `.origin` manifest behind. The harness
+    stages through the same function, so what the model can `list_files` here
+    is what it can list in a real workspace — not a superset."""
+    src = _skill(
+        tmp_path / "src",
+        "tidy",
+        files={
+            "scripts/x.py": "print(1)",
+            "scripts/__pycache__/x.cpython-312.pyc": "junk",
+            "scripts/x.pyc": "junk",
+            ".origin": "{}",
+        },
+    )
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    work = tmp_path / "work"
+
+    _stage(Scenario(name="s", prompt="p"), scenarios, work, skill_dir=src)
+
+    staged = sorted(p.relative_to(work).as_posix() for p in work.rglob("*") if p.is_file())
+    assert staged == [".skill/tidy/scripts/x.py"]
+
+
+def test_a_registered_name_resolves_to_its_folder(tmp_path: Path, monkeypatch):
     from workspace_app.apps import shared_skills
 
     src = _skill(tmp_path / "src", "tidy", files={"references/r.md": "rules"})
     monkeypatch.setitem(shared_skills.SHARED_SKILLS, "tidy", src)
 
     name, text, folder = _resolve_skill("tidy")
-    assert (name, folder) == ("tidy", src) and "read references" in text
 
-    # An edited copy in a folder of the same name, WITHOUT the references beside
-    # it: the registered folder supplies them.
-    edited = tmp_path / "tune" / "tidy" / "SKILL.md"
-    edited.parent.mkdir(parents=True)
-    edited.write_text(text + "\n(edited)")
-    name, text2, folder2 = _resolve_skill(str(edited))
-    assert name == "tidy" and text2.endswith("(edited)") and folder2 == src
+    assert (name, folder) == ("tidy", src) and "read .skill/tidy/references" in text
+
+
+def test_an_edited_copy_is_named_by_its_frontmatter_and_files_come_from_the_registry(
+    tmp_path: Path, monkeypatch
+):
+    """The documented loop is `--dump-skill tidy -o ./tune` then
+    `--skill ./tune/SKILL.md`: the folder is called `tune`, holds only the
+    edited body, and gains a `run-1/` the moment the loop runs once. None of
+    that is the skill. The name is the frontmatter's; the files are the
+    registered skill's."""
+    from workspace_app.apps import shared_skills
+
+    src = _skill(tmp_path / "src", "tidy", files={"references/r.md": "rules"})
+    monkeypatch.setitem(shared_skills.SHARED_SKILLS, "tidy", src)
+    tune = tmp_path / "tune"
+    tune.mkdir()
+    edited = tune / "SKILL.md"
+    edited.write_text((src / "SKILL.md").read_text() + "\n(edited)")
+    (tune / "run-1").mkdir()
+    (tune / "run-1" / "report.txt").write_text("a previous run")
+
+    name, text, folder = _resolve_skill(str(edited))
+
+    assert name == "tidy"
+    assert text.endswith("(edited)")
+    assert folder == src
+
+    work = tmp_path / "work"
+    _stage(Scenario(name="s", prompt="p"), tmp_path, work, skill_dir=folder)
+    staged = sorted(p.relative_to(work).as_posix() for p in work.rglob("*") if p.is_file())
+    assert staged == [".skill/tidy/references/r.md"]
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("---\ndescription: d\n---\n\nbody", "no `name`"),
+        ("---\nname: nobody-registered-this\ndescription: d\n---\n\nbody", "unknown skill"),
+        ("no frontmatter at all", "frontmatter"),
+    ],
+)
+def test_a_body_the_harness_cannot_place_is_refused_loudly(tmp_path: Path, text: str, reason: str):
+    """A body whose files cannot be found would run — and score the model on
+    steps the workspace made impossible, the exact failure staging exists to
+    prevent. So it does not run."""
+    edited = tmp_path / "SKILL.md"
+    edited.write_text(text)
+
+    with pytest.raises(SystemExit) as e:
+        _resolve_skill(str(edited))
+
+    assert reason in str(e.value)
+
+
+def test_an_unregistered_name_is_refused_loudly():
+    with pytest.raises(SystemExit) as e:
+        _resolve_skill("nobody-registered-this")
+    assert "unknown skill" in str(e.value)

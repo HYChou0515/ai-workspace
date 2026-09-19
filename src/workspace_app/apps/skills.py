@@ -475,9 +475,10 @@ async def materialize_skill(
     name: str,
 ) -> None:
     """#589: copy a baked-in skill's files into the workspace so the body's own
-    instructions resolve — ``see references/glossary.md`` and
+    instructions resolve — ``read .skill/<name>/references/glossary.md`` and
     ``exec(["python", ".skill/<name>/scripts/x.py"])`` only work if the files are
-    actually there.
+    actually there. (The body has to name that full path: `read_file` resolves
+    from the workspace root and `read_skill` returns the body alone.)
 
     Copy-if-absent: a workspace copy already present is left completely alone.
     That is the whole point — the AI is meant to tweak these scripts, and an

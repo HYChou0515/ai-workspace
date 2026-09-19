@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -104,9 +105,8 @@ def test_author_skill_ships_the_writing_rules_and_points_at_them():
     # The pointer sits in the drafting step, worded as a step (read it, apply
     # it), so it is on the path every drafting run takes.
     draft, _, _ = body.partition("## 4.")
-    assert "references/writing-for-agents.md" in draft
-    # …and the tidy-before-save pass is its own step: the checks the reviewer
-    # will run at publish time, applied by the author first.
+    assert "`.skill/author-skill/references/writing-for-agents.md`" in draft
+    # …and the tidy-before-save pass is its own step.
     assert "no-op" in body.lower()
     assert "single source of truth" in body.lower()
     # The reference carries the levers the body names, so the pointer resolves
@@ -116,6 +116,20 @@ def test_author_skill_ships_the_writing_rules_and_points_at_them():
         assert lever in text, lever
     # Provenance: copied text says where it came from.
     assert "mattpocock/skills" in text and "MIT" in text
+
+
+def test_author_skill_points_at_its_files_by_the_path_a_workspace_holds_them():
+    """`read_file` resolves from the workspace root and `read_skill` returns the
+    body alone — nothing tells the agent where the skill's files landed. So a
+    pointer written `references/x.md` is a file the agent cannot open, and a
+    guide that writes it that way teaches every skill it authors the same dead
+    form. Every file path in the guide and its reference is the full
+    `.skill/<name>/…` one; the bare folder name may still be spoken of as a
+    folder."""
+    folder = shared.SHARED_SKILLS["author-skill"]
+    for doc in (folder / "SKILL.md", folder / "references" / "writing-for-agents.md"):
+        bare = re.findall(r"`(?:references|scripts)/[^`]*\.\w+`", doc.read_text())
+        assert bare == [], (doc.name, bare)
 
 
 def test_merged_profile_skills_includes_declared_shared(tmp_registry):
