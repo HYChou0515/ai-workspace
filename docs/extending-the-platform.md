@@ -685,7 +685,8 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 ### user 自建（#298）
 
 在任何 workspace app 裡跟助理說「幫我做一個 skill」,agent 會載入內建的 `author-skill`
-meta-skill,走**界定→抽取→草擬→審閱→儲存→收尾**六步,最後呼叫 `save_skill(name, description,
+meta-skill,走**界定→抽取→草擬→審閱→整理→儲存→收尾**七步(草擬與整理都對著它自帶的
+`references/writing-for-agents.md`——寫給 agent 的文件規則,見 `skills-authoring.md`),最後呼叫 `save_skill(name, description,
 body)` 把檔寫進 workspace FileStore 的 `.skill/<name>/SKILL.md`(你永遠不必手動編輯)。它:
 
 - **每個 turn live 重讀**(不 cache),存進去下一個 turn 就 `read_skill('<name>')` 可用;

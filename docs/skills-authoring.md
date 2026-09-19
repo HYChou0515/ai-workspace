@@ -14,17 +14,24 @@ disclosure),只是現在改成在執行期由**使用者 + AI 共同創作、可
 
 在任何 workspace app(RCA、Topic Hub、Playground)裡,只要告訴助理你想做一個 skill——
 例如 *「幫我做一個用來分流 reflow 缺陷的 skill」*。agent 會載入內建的 **`author-skill`**
-meta-skill,走一個六步流程:
+meta-skill,走一個七步流程:
 
 1. **界定範圍 + 觸發條件(Scope + trigger)** — 這是給哪一個任務用的,以及什麼時候該觸發
    (這個 skill 的一行 description)。
 2. **抽取(Extract)** — 你的流程(有序步驟)、術語、與輸出風格。它也會讀 workspace 裡
    已經存在的東西(檔案、先前的訊息),從中挖出一個實際的範例,而不是只靠提問。
-3. **草擬(Draft)** — 一份標準格式的 `SKILL.md` 內文。
+3. **草擬(Draft)** — 一份標準格式的 `SKILL.md` 內文。動筆前它先讀
+   `references/writing-for-agents.md`——寫給 agent 讀的文件該長什麼樣的規則(description
+   是觸發條件不是簡介、每一步結尾要有可檢查的「做完」、一個意思只寫一處、砍掉 agent
+   本來就會做的句子、只有部分情況用到的東西推到 `references/`)。這份規則抄自 Matt Pocock
+   的 [`writing-for-agents`](https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents)(MIT)。
 4. **審閱(Review)** — 它把草稿給你看,反覆迭代到你核可為止。
-5. **儲存(Save)** — 它呼叫 `save_skill`,寫出帶有正確 frontmatter 的
+5. **整理(Tidy)** — 內容定案後,它再用同一份規則過一遍草稿:只改措辭不改你核可的內容,
+   並告訴你收緊了什麼。這和發布到 skill hub 時 AI 審稿人看的是同一把尺,先自己過就不會
+   在那裡才被挑出來。
+6. **儲存(Save)** — 它呼叫 `save_skill`,寫出帶有正確 frontmatter 的
    `.skill/<name>/SKILL.md`(這個檔你永遠不必手動編輯)。
-6. **收尾(Close out)** — 這個 skill 現在用 `read_skill('<name>')` 就會載入;它會告訴你
+7. **收尾(Close out)** — 這個 skill 現在用 `read_skill('<name>')` 就會載入;它會告訴你
    怎麼下載/重用/升級它。
 
 ## skill 存在哪裡

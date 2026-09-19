@@ -89,6 +89,35 @@ def test_author_skill_is_registered():
     assert "author-skill" in shared.SHARED_SKILLS
 
 
+def test_author_skill_ships_the_writing_rules_and_points_at_them():
+    """The author asked that a skill be TIDIED before it is saved — and chose to
+    do it the way Matt Pocock's own repo does: the rules live in the guide the
+    drafting agent reads, not in a mechanism behind `save_skill`. So the rules
+    (his `writing-for-agents`, MIT) ship as a reference file of `author-skill`,
+    and the body reaches it at the step where the draft is written — a rule the
+    body never points at is one the agent never reads, and `materialize_skill`
+    only copies what the folder actually holds."""
+    folder = shared.SHARED_SKILLS["author-skill"]
+    rules = folder / "references" / "writing-for-agents.md"
+    assert rules.is_file()
+    body = (folder / "SKILL.md").read_text()
+    # The pointer sits in the drafting step, worded as a step (read it, apply
+    # it), so it is on the path every drafting run takes.
+    draft, _, _ = body.partition("## 4.")
+    assert "references/writing-for-agents.md" in draft
+    # …and the tidy-before-save pass is its own step: the checks the reviewer
+    # will run at publish time, applied by the author first.
+    assert "no-op" in body.lower()
+    assert "single source of truth" in body.lower()
+    # The reference carries the levers the body names, so the pointer resolves
+    # to the thing it promises.
+    text = rules.read_text()
+    for lever in ("Leading word", "Negation", "Pruning", "completion criterion"):
+        assert lever in text, lever
+    # Provenance: copied text says where it came from.
+    assert "mattpocock/skills" in text and "MIT" in text
+
+
 def test_merged_profile_skills_includes_declared_shared(tmp_registry):
     """resolve()'s index source merges declared shared skills with the profile's
     own package skills (#298 Q7)."""
