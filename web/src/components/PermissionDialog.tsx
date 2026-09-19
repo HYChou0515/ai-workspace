@@ -69,9 +69,7 @@ export function PermissionDialog({
 }) {
   const t = useT();
   const [visibility, setVisibility] = useState<Visibility>(value.visibility);
-  const [grants, setGrants] = useState<Grant[]>(() =>
-    grantsFromPermission(value, owner),
-  );
+  const [grants, setGrants] = useState<Grant[]>(() => grantsFromPermission(value, owner));
   const [groupGrants, setGroupGrants] = useState<GroupGrant[]>(() =>
     groupGrantsFromPermission(value),
   );
@@ -89,8 +87,7 @@ export function PermissionDialog({
   const showPeople = !hasGroups || tab === "people";
   const showGroups = hasGroups && tab === "groups";
 
-  const next = () =>
-    permissionFromGrants(visibility, grants, value, groupGrants);
+  const next = () => permissionFromGrants(visibility, grants, value, groupGrants);
 
   // #779: against the opening seed rather than `next()`, which normalises — see
   // ItemShareDialog for the same reasoning. Same quiet failure too: the dialog
@@ -104,10 +101,7 @@ export function PermissionDialog({
   // and re-added (a false "dirty"), and ItemGrant.verbs is a Set, which
   // stringifies to {} however full it is — so a whole custom-verb edit read as
   // unchanged and closed without asking.
-  const dirty = !sameShape(
-    { visibility, grants, groupGrants },
-    initialRef.current,
-  );
+  const dirty = !sameShape({ visibility, grants, groupGrants }, initialRef.current);
   const attemptClose = useDirtyClose(dirty, onClose);
   // A grant whose group we can't resolve (deleted, or not visible to us) reads as
   // "Unknown group" — the owner can still remove it — rather than a raw id (#608).
@@ -127,18 +121,14 @@ export function PermissionDialog({
     setGrants((g) => g.map((x) => (x.userId === id ? { ...x, role } : x)));
   const addGroup = (id: string) =>
     setGroupGrants((g) =>
-      id && !g.some((x) => x.groupId === id)
-        ? [...g, { groupId: id, role: "viewer" }]
-        : g,
+      id && !g.some((x) => x.groupId === id) ? [...g, { groupId: id, role: "viewer" }] : g,
     );
   const setGroupRole = (id: string, role: RoleId) =>
-    setGroupGrants((g) =>
-      g.map((x) => (x.groupId === id ? { ...x, role } : x)),
-    );
-  const removeGroup = (id: string) =>
-    setGroupGrants((g) => g.filter((x) => x.groupId !== id));
+    setGroupGrants((g) => g.map((x) => (x.groupId === id ? { ...x, role } : x)));
+  const removeGroup = (id: string) => setGroupGrants((g) => g.filter((x) => x.groupId !== id));
 
   const preview = next();
+
   // The three visibilities, in the viewer's language; the Public hint names
   // the audience the caller declared.
   const visibilities: { id: Visibility; label: string; hint: string }[] = [
@@ -158,7 +148,6 @@ export function PermissionDialog({
       ),
     },
   ];
-
   return (
     <ModalShell
       onClose={attemptClose}
@@ -173,45 +162,34 @@ export function PermissionDialog({
       </strong>
       <p style={caption}>{captionText ?? t("perm.caption.collection")}</p>
 
-      <fieldset
-        style={{
-          border: "none",
-          margin: 0,
-          padding: 0,
-          display: "grid",
-          gap: 6,
-        }}
-      >
+        <fieldset style={{ border: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
         {visibilities.map((v) => (
-          <label key={v.id} style={radioRow}>
-            <input
-              type="radio"
-              name="visibility"
-              data-testid={`visibility-${v.id}`}
-              checked={visibility === v.id}
-              onChange={() => setVisibility(v.id)}
-            />
-            <span>
-              <span style={{ fontSize: pxToRem(13) }}>{v.label}</span>
-              <span style={{ ...caption, marginLeft: 6 }}>{v.hint}</span>
-            </span>
-          </label>
-        ))}
-      </fieldset>
+            <label key={v.id} style={radioRow}>
+              <input
+                type="radio"
+                name="visibility"
+                data-testid={`visibility-${v.id}`}
+                checked={visibility === v.id}
+                onChange={() => setVisibility(v.id)}
+              />
+              <span>
+                <span style={{ fontSize: pxToRem(13) }}>{v.label}</span>
+                <span style={{ ...caption, marginLeft: 6 }}>{v.hint}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
 
-      {visibility === "restricted" && (
-        // flexShrink 0, NOT minHeight 0 — see ItemShareDialog for the whole
-        // story: a shrinkable child lets the flex column compress the picker
-        // instead of letting ModalShell's panel scroll.
-        <div
-          data-testid="permission-grants"
-          style={{ display: "grid", gap: 8, flexShrink: 0 }}
-        >
-          {hasGroups && (
-            <ShareTabs
-              value={tab}
-              onChange={(id) => setTab(id as "people" | "groups")}
-              tabs={[
+        {visibility === "restricted" && (
+          // flexShrink 0, NOT minHeight 0 — see ItemShareDialog for the whole
+          // story: a shrinkable child lets the flex column compress the picker
+          // instead of letting ModalShell's panel scroll.
+          <div data-testid="permission-grants" style={{ display: "grid", gap: 8, flexShrink: 0 }}>
+            {hasGroups && (
+              <ShareTabs
+                value={tab}
+                onChange={(id) => setTab(id as "people" | "groups")}
+                tabs={[
                 {
                   id: "people",
                   label: t("perm.tab.people"),
@@ -222,11 +200,11 @@ export function PermissionDialog({
                   label: t("perm.tab.groups"),
                   count: groupGrants.length,
                 },
-              ]}
-            />
-          )}
+                ]}
+              />
+            )}
 
-          {showPeople && (
+            {showPeople && (
             <div
               data-testid="permission-people"
               role={hasGroups ? "tabpanel" : undefined}
@@ -234,197 +212,175 @@ export function PermissionDialog({
               aria-labelledby={hasGroups ? "share-tab-people" : undefined}
               style={{ display: "grid", gap: 8 }}
             >
-              {/* No scroll box here: UserPicker caps and scrolls its own result
+            {/* No scroll box here: UserPicker caps and scrolls its own result
                 list, and a second layer just scrolls the search input away. */}
-              <div data-testid="permission-people-picker">
-                <UserPicker
-                  selected={grants.map((g) => g.userId)}
-                  exclude={[owner]}
-                  onToggle={toggleUser}
+            <div data-testid="permission-people-picker">
+              <UserPicker
+                selected={grants.map((g) => g.userId)}
+                exclude={[owner]}
+                onToggle={toggleUser}
                   placeholder={t("perm.addPeople")}
-                />
-              </div>
-              {grants.length > 0 && (
-                // Capped + scrollable: the list grows inside its own box, so the
-                // picker, the group section and the buttons stay put.
-                <ul
-                  className="scrollable"
-                  data-testid="grant-list"
-                  style={grantList}
-                >
-                  {grants.map((g) => (
-                    <li key={g.userId} style={{ display: "grid", gap: 2 }}>
-                      <div style={grantRow}>
-                        <UserChip userId={g.userId} />
-                        <select
-                          aria-label={t("perm.roleFor", { name: g.userId })}
-                          data-testid={`role-${g.userId}`}
-                          value={g.role}
-                          onChange={(e) =>
-                            setRole(g.userId, e.target.value as RoleId)
-                          }
-                          className="inline-edit"
-                          style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
-                        >
-                          {roles.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          aria-label={t("perm.remove", { name: g.userId })}
-                          onClick={() => toggleUser(g.userId)}
-                          className="btn"
-                          data-variant="danger"
-                          data-size="sm"
-                        >
-                          {t("perm.remove.button")}
-                        </button>
-                      </div>
-                      <span style={roleHint}>{roleDef(g.role).hint}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              />
             </div>
-          )}
+            {grants.length > 0 && (
+              // Capped + scrollable: the list grows inside its own box, so the
+              // picker, the group section and the buttons stay put.
+              <ul className="scrollable" data-testid="grant-list" style={grantList}>
+                {grants.map((g) => (
+                  <li key={g.userId} style={{ display: "grid", gap: 2 }}>
+                    <div style={grantRow}>
+                      <UserChip userId={g.userId} />
+                      <select
+                          aria-label={t("perm.roleFor", { name: g.userId })}
+                        data-testid={`role-${g.userId}`}
+                        value={g.role}
+                        onChange={(e) => setRole(g.userId, e.target.value as RoleId)}
+                        className="inline-edit"
+                        style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                      >
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                          aria-label={t("perm.remove", { name: g.userId })}
+                        onClick={() => toggleUser(g.userId)}
+                        className="btn"
+                        data-variant="danger"
+                        data-size="sm"
+                      >
+                          {t("perm.remove.button")}
+                      </button>
+                    </div>
+                    <span style={roleHint}>{roleDef(g.role).hint}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
 
-          {showGroups && (
-            <div
-              data-testid="permission-groups"
-              role="tabpanel"
-              id="share-panel-groups"
-              aria-labelledby="share-tab-groups"
-              style={{ display: "grid", gap: 6 }}
-            >
-              {/* No heading: the tab above already says Groups. */}
-              <div data-testid="group-grant-select">
-                <GroupPicker
-                  groups={pickableGroups}
-                  exclude={groupGrants.map((x) => x.groupId)}
-                  onPick={addGroup}
+            </div>
+            )}
+
+            {showGroups && (
+              <div
+                data-testid="permission-groups"
+                role="tabpanel"
+                id="share-panel-groups"
+                aria-labelledby="share-tab-groups"
+                style={{ display: "grid", gap: 6 }}
+              >
+                {/* No heading: the tab above already says Groups. */}
+                <div data-testid="group-grant-select">
+                  <GroupPicker
+                    groups={pickableGroups}
+                    exclude={groupGrants.map((x) => x.groupId)}
+                    onPick={addGroup}
                   placeholder={t("perm.addGroup")}
-                />
-              </div>
-              {groupGrants.length > 0 && (
-                <ul
-                  className="scrollable"
-                  data-testid="group-grant-list"
-                  style={grantList}
-                >
-                  {groupGrants.map((g) => (
-                    <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
-                      <div style={grantRow}>
-                        <span style={groupPill}>
-                          <Icon
-                            name="users"
-                            size={13}
-                            color="var(--text-paper-d)"
-                          />
-                          <span style={{ fontSize: pxToRem(13) }}>
-                            {groupName(g.groupId)}
+                  />
+                </div>
+                {groupGrants.length > 0 && (
+                  <ul className="scrollable" data-testid="group-grant-list" style={grantList}>
+                    {groupGrants.map((g) => (
+                      <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
+                        <div style={grantRow}>
+                          <span style={groupPill}>
+                            <Icon name="users" size={13} color="var(--text-paper-d)" />
+                            <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                            {groupCount(g.groupId) != null && (
+                              <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
+                                · {groupCount(g.groupId)}
+                              </span>
+                            )}
                           </span>
-                          {groupCount(g.groupId) != null && (
-                            <span
-                              style={{
-                                color: "var(--text-paper-d2)",
-                                fontSize: pxToRem(11),
-                              }}
-                            >
-                              · {groupCount(g.groupId)}
-                            </span>
-                          )}
-                        </span>
-                        <select
+                          <select
                           aria-label={t("perm.roleFor", {
                             name: groupName(g.groupId),
                           })}
-                          data-testid={`group-role-${g.groupId}`}
-                          value={g.role}
-                          onChange={(e) =>
-                            setGroupRole(g.groupId, e.target.value as RoleId)
-                          }
-                          className="inline-edit"
-                          style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
-                        >
-                          {roles.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          data-testid={`group-remove-${g.groupId}`}
+                            data-testid={`group-role-${g.groupId}`}
+                            value={g.role}
+                            onChange={(e) => setGroupRole(g.groupId, e.target.value as RoleId)}
+                            className="inline-edit"
+                            style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                          >
+                            {roles.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            data-testid={`group-remove-${g.groupId}`}
                           aria-label={t("perm.remove", {
                             name: groupName(g.groupId),
                           })}
-                          onClick={() => removeGroup(g.groupId)}
-                          className="btn"
-                          data-variant="danger"
-                          data-size="sm"
-                        >
+                            onClick={() => removeGroup(g.groupId)}
+                            className="btn"
+                            data-variant="danger"
+                            data-size="sm"
+                          >
                           {t("perm.remove.button")}
-                        </button>
-                      </div>
-                      <span style={roleHint}>{roleDef(g.role).hint}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+                          </button>
+                        </div>
+                        <span style={roleHint}>{roleDef(g.role).hint}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
-      <button
-        type="button"
-        data-testid="toggle-advanced"
-        onClick={() => setAdvanced((a) => !a)}
-        className="btn"
-        data-variant="secondary"
-        data-size="sm"
-        style={{ alignSelf: "flex-start" }}
-      >
-        {t(advanced ? "perm.advanced.hide" : "perm.advanced.show")}
-      </button>
-      {advanced && (
-        <pre data-testid="advanced-verbs" style={verbsBox}>
-          {ALL_VERBS.map(
-            (verb) =>
-              `${verb}: ${previewSubjects(visibility, preview, verb).join(", ") || "—"}`,
-          ).join("\n")}
-        </pre>
-      )}
-
-      <ModalActions>
         <button
           type="button"
-          data-testid="permission-cancel"
-          onClick={attemptClose}
+          data-testid="toggle-advanced"
+          onClick={() => setAdvanced((a) => !a)}
           className="btn"
           data-variant="secondary"
           data-size="sm"
+          style={{ alignSelf: "flex-start" }}
         >
+        {t(advanced ? "perm.advanced.hide" : "perm.advanced.show")}
+        </button>
+        {advanced && (
+          <pre data-testid="advanced-verbs" style={verbsBox}>
+            {ALL_VERBS.map(
+              (verb) => `${verb}: ${previewSubjects(visibility, preview, verb).join(", ") || "—"}`,
+            ).join("\n")}
+          </pre>
+        )}
+
+        <ModalActions>
+          <button
+            type="button"
+            data-testid="permission-cancel"
+            onClick={attemptClose}
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+          >
           {t("perm.cancel")}
-        </button>
-        <button
-          type="button"
-          data-testid="permission-save"
-          disabled={busy}
-          onClick={() => onSubmit(next())}
-          className="btn"
-          data-variant="primary"
-          data-size="sm"
-        >
+          </button>
+          <button
+            type="button"
+            data-testid="permission-save"
+            disabled={busy}
+            onClick={() => onSubmit(next())}
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
+          >
           {t("perm.save")}
-        </button>
-      </ModalActions>
+          </button>
+        </ModalActions>
     </ModalShell>
   );
 }
+
 
 const panel: React.CSSProperties = {
   padding: 18,
@@ -441,17 +397,9 @@ const caption: React.CSSProperties = {
   lineHeight: 1.5,
 };
 
-const radioRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-};
+const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 
-const grantRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-};
+const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const grantList: React.CSSProperties = {
   listStyle: "none",
   margin: 0,

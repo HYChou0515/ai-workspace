@@ -83,8 +83,7 @@ export function QuickCreate({
           // your back.
           const today = new Date().toISOString().slice(0, 10);
           const seeded: Record<string, string> = {};
-          for (const f of form)
-            if (f.widget === "datetimerange") seeded[f.name] = `${today}/`;
+          for (const f of form) if (f.widget === "datetimerange") seeded[f.name] = `${today}/`;
           setDraft(seeded);
           setSeed(seeded);
           setOpen(true);
@@ -94,6 +93,7 @@ export function QuickCreate({
       </button>
     );
   }
+
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,13 +111,9 @@ export function QuickCreate({
   // in a modal — the header keeps just the "+ New" button.
   return (
     // Lays out its own interior (the padding lives in its CSS), so the shell's default padding is switched off.
-    <ModalShell
-      onClose={attemptClose}
-      ariaLabel={`New ${entityLabel ?? "record"}`}
-      width={560}
+    <ModalShell onClose={attemptClose} ariaLabel={`New ${entityLabel ?? "record"}`} width={560} 
       panelStyle={{ padding: 0 }}
-      align="top"
-    >
+    align="top">
       <form onSubmit={submit} className="ev-quickcreate">
         <h3 className="ev-quickcreate__title">New {entityLabel ?? "record"}</h3>
         <div className="ev-quickcreate__grid">
@@ -125,11 +121,7 @@ export function QuickCreate({
             <label key={f.name} className="ev-quickcreate__field">
               <span className="ev-quickcreate__label">
                 {f.name}
-                {f.required ? (
-                  <span className="ev-quickcreate__req"> *</span>
-                ) : (
-                  ""
-                )}
+                {f.required ? <span className="ev-quickcreate__req"> *</span> : ""}
               </span>
               <RoleCreateInput
                 widget={f.widget as WidgetKind}
@@ -145,22 +137,10 @@ export function QuickCreate({
           ))}
         </div>
         <div className="ev-quickcreate__actions">
-          <button
-            type="button"
-            className="btn"
-            data-variant="ghost"
-            data-size="sm"
-            onClick={attemptClose}
-          >
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={attemptClose}>
             Cancel
           </button>
-          <button
-            type="submit"
-            className="btn"
-            data-variant="primary"
-            data-size="sm"
-            disabled={busy}
-          >
+          <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
             Create
           </button>
         </div>
@@ -177,25 +157,14 @@ export function QuickCreate({
 
 /** A schema/view-level Diagnostic list (warning = yellow, still usable; error =
  * red, dropped from the projection) — the "warning-not-death" surface (§D). */
-function DiagnosticBanner({
-  diagnostics,
-}: {
-  diagnostics: EntityDiagnostic[];
-}) {
+function DiagnosticBanner({ diagnostics }: { diagnostics: EntityDiagnostic[] }) {
   const hasError = diagnostics.some((d) => d.level === "error");
   return (
-    <div
-      role="status"
-      className={`ev-banner${hasError ? " ev-banner--err" : ""}`}
-    >
+    <div role="status" className={`ev-banner${hasError ? " ev-banner--err" : ""}`}>
       <ul className="ev-diags">
         {diagnostics.map((d, i) => (
           <li key={i} className="ev-diags__item">
-            <span
-              className={`ev-level ev-level--${d.level === "error" ? "error" : "warning"}`}
-            >
-              {d.level}
-            </span>
+            <span className={`ev-level ev-level--${d.level === "error" ? "error" : "warning"}`}>{d.level}</span>
             <span>
               {d.message}
               {d.field ? ` (${d.field})` : ""}
@@ -223,20 +192,8 @@ export type EntityViewBodyProps = EntityViewProps & {
 };
 
 export function EntityViewBody(props: EntityViewBodyProps) {
-  const {
-    spec,
-    type,
-    entities,
-    invalid,
-    users,
-    onCreate,
-    busy,
-    conflicts,
-    onDismissConflict,
-    catalogDiagnostics,
-    schemaMissing,
-    viewConfig,
-  } = props;
+  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing, viewConfig } =
+    props;
   const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
@@ -252,16 +209,13 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   // schema-missing warning for exactly that view, and claimed in the docs that
   // its entity props were empty when they were not.
   const hasEntity = !!spec.entity;
-  const showEmpty =
-    hasEntity && entities.length === 0 && !renderer.ownsEmptyState;
+  const showEmpty = hasEntity && entities.length === 0 && !renderer.ownsEmptyState;
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
         <h3 className="ev-panel__title">
           {spec.title || spec.entity || spec.view}
-          {entities.length > 0 && (
-            <span className="ev-panel__count">{entities.length}</span>
-          )}
+          {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
           {viewConfig && <ViewSettingsPanel config={viewConfig} />}
@@ -272,19 +226,13 @@ export function EntityViewBody(props: EntityViewBodyProps) {
               onCreate={onCreate}
               busy={busy}
               entityLabel={type.name}
-              refOptionsFor={(name) =>
-                refOptionsForField(type, props.refIndex, name)
-              }
+              refOptionsFor={(name) => refOptionsForField(type, props.refIndex, name)}
             />
           )}
         </div>
       </div>
-      {conflicts && conflicts.length > 0 && (
-        <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />
-      )}
-      {catalogDiagnostics && catalogDiagnostics.length > 0 && (
-        <DiagnosticBanner diagnostics={catalogDiagnostics} />
-      )}
+      {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
+      {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
       {/* Only a view that NAMES an entity can be missing that entity's schema.
           A kind drawing a workspace file names none, so this used to render as
           "No schema for  — showing raw fields", with an empty name, above a
@@ -294,9 +242,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           <span className="ev-banner__icon" aria-hidden>
             ⚠
           </span>
-          <div className="ev-banner__body">
-            No schema for {spec.entity} — showing raw fields (read-only).
-          </div>
+          <div className="ev-banner__body">No schema for {spec.entity} — showing raw fields (read-only).</div>
         </div>
       )}
       {invalid && invalid.length > 0 && (
@@ -305,9 +251,8 @@ export function EntityViewBody(props: EntityViewBodyProps) {
             ⚠
           </span>
           <div className="ev-banner__body">
-            {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be
-            parsed and {invalid.length > 1 ? "are" : "is"} excluded from the
-            projection.
+            {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and{" "}
+            {invalid.length > 1 ? "are" : "is"} excluded from the projection.
           </div>
         </div>
       )}
@@ -317,8 +262,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
             ⚠
           </span>
           <div className="ev-banner__body">
-            The <code>{spec.view}</code> view needs an <code>entity:</code>{" "}
-            naming which records to draw.
+            The <code>{spec.view}</code> view needs an <code>entity:</code> naming which records to draw.
           </div>
         </div>
       ) : showEmpty ? (

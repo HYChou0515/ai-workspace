@@ -120,8 +120,7 @@ export function ModalShell({
     const panel = panelRef.current;
     if (!panel) return;
     const restoreTo = document.activeElement as HTMLElement | null;
-    const focusables = () =>
-      Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+    const focusables = () => Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
 
     // Only claim focus if the content hasn't already placed it (#779 P5).
     // React's `autoFocus` leaves no attribute behind — it calls .focus() while
@@ -194,9 +193,7 @@ export function ModalShell({
         // is the scrolling body of every modal in the app (`maxHeight: 85vh` +
         // `overflowY: auto` below), so the themed thin bar belongs here rather
         // than being remembered at each of the callers.
-        className={
-          panelClassName ? `scrollable ${panelClassName}` : "scrollable"
-        }
+        className={panelClassName ? `scrollable ${panelClassName}` : "scrollable"}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         style={{

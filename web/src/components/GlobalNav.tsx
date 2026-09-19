@@ -59,17 +59,7 @@ function MenuLink({
   );
 }
 
-function FixedLink({
-  to,
-  icon,
-  label,
-  pathname,
-}: {
-  to: string;
-  icon: IconName;
-  label: string;
-  pathname: string;
-}) {
+function FixedLink({ to, icon, label, pathname }: { to: string; icon: IconName; label: string; pathname: string }) {
   return (
     <MenuLink to={to} active={isActive(pathname, to)}>
       <NavGlyph icon={icon} />
@@ -125,18 +115,12 @@ function Switcher() {
       {(close) => (
         <div onClick={close} style={{ padding: "6px 0" }}>
           {apps.map((app) => (
-            <MenuLink
-              key={app.slug}
-              to={`/a/${app.slug}`}
-              active={isActive(pathname, `/a/${app.slug}`)}
-            >
+            <MenuLink key={app.slug} to={`/a/${app.slug}`} active={isActive(pathname, `/a/${app.slug}`)}>
               <NavGlyph app={app} />
               {app.title}
             </MenuLink>
           ))}
-          <div
-            style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }}
-          />
+          <div style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }} />
           {/* One list, shared with the chat rail's menu (they had drifted). Help
               is dropped here only because this bar already carries a persistent
               "?" button (#230); listing it twice would be a duplicate. */}
@@ -219,9 +203,7 @@ function Breadcrumbs() {
         }
         return (
           <Fragment key={`${crumb.label}-${i}`}>
-            {i > 0 && (
-              <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
-            )}
+            {i > 0 && <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />}
             {crumb.to && !last ? (
               <Link
                 to={crumb.to}
@@ -311,9 +293,7 @@ function ReviewLink() {
   return (
     <Link
       to="/review"
-      title={
-        count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")
-      }
+      title={count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")}
       style={{
         position: "relative",
         display: "inline-flex",

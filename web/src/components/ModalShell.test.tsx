@@ -73,12 +73,7 @@ describe("ModalShell", () => {
   it("closes on backdrop click when closeOnBackdrop is asked for", () => {
     const onClose = vi.fn();
     render(
-      <ModalShell
-        onClose={onClose}
-        ariaLabel="m"
-        data-testid="shell"
-        closeOnBackdrop
-      >
+      <ModalShell onClose={onClose} ariaLabel="m" data-testid="shell" closeOnBackdrop>
         <button type="button">inside</button>
       </ModalShell>,
     );

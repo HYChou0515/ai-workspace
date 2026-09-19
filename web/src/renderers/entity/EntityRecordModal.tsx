@@ -130,12 +130,7 @@ export function EntityRecordModal({
         </button>
       </div>
 
-      {inConflict && (
-        <ConflictBanner
-          conflicts={[record.number]}
-          onDismiss={onDismissConflict}
-        />
-      )}
+      {inConflict && <ConflictBanner conflicts={[record.number]} onDismiss={onDismissConflict} />}
 
       <EntityRecordPane
         path={path}

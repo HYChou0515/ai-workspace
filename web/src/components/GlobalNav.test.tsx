@@ -1,12 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -38,20 +32,8 @@ const okHealth: HealthApi = {
 
 vi.mock("../hooks/useResources", () => ({
   useApps: () => [
-    {
-      slug: "rca",
-      title: "Root Cause Analysis",
-      description: "x",
-      icon: "flame",
-      color: "#F0502E",
-    },
-    {
-      slug: "yield",
-      title: "Yield Tracking",
-      description: "y",
-      icon: "bug",
-      color: "#2D6CC9",
-    },
+    { slug: "rca", title: "Root Cause Analysis", description: "x", icon: "flame", color: "#F0502E" },
+    { slug: "yield", title: "Yield Tracking", description: "y", icon: "bug", color: "#2D6CC9" },
   ],
 }));
 
@@ -60,11 +42,7 @@ function Pub({ crumbs }: { crumbs: Crumb[] }) {
   return null;
 }
 
-function renderNav(
-  path: string,
-  crumbs: Crumb[] = [],
-  healthClient?: HealthApi,
-) {
+function renderNav(path: string, crumbs: Crumb[] = [], healthClient?: HealthApi) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <QueryWrap>
@@ -80,18 +58,12 @@ function renderNav(
 describe("GlobalNav", () => {
   it("brand links home (/)", () => {
     renderNav("/a/rca");
-    expect(screen.getByRole("link", { name: /Workspace/ })).toHaveAttribute(
-      "href",
-      "/",
-    );
+    expect(screen.getByRole("link", { name: /Workspace/ })).toHaveAttribute("href", "/");
   });
 
   it("has a persistent Help link to /help (#230)", () => {
     renderNav("/a/rca");
-    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute(
-      "href",
-      "/help",
-    );
+    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
   });
 
   it("brand cues it returns home — a tooltip — while still linking / (#172)", () => {
@@ -114,14 +86,9 @@ describe("GlobalNav", () => {
       { label: "Bearing noise #1432" },
     ]);
     const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
-    expect(within(nav).getByRole("link", { name: "RCA" })).toHaveAttribute(
-      "href",
-      "/a/rca",
-    );
+    expect(within(nav).getByRole("link", { name: "RCA" })).toHaveAttribute("href", "/a/rca");
     // The current page is not a link — it's the leaf, shown as text.
-    expect(
-      within(nav).queryByRole("link", { name: "Bearing noise #1432" }),
-    ).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Bearing noise #1432" })).toBeNull();
     expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
   });
 
@@ -129,18 +96,22 @@ describe("GlobalNav", () => {
     renderNav("/a/rca");
     fireEvent.click(screen.getByRole("button", { name: /切換/ }));
     const menu = screen.getByRole("dialog");
-    expect(
-      within(menu).getByRole("link", { name: /Root Cause Analysis/ }),
-    ).toHaveAttribute("href", "/a/rca");
-    expect(
-      within(menu).getByRole("link", { name: /Yield Tracking/ }),
-    ).toHaveAttribute("href", "/a/yield");
-    expect(
-      within(menu).getByRole("link", { name: /Knowledge base/i }),
-    ).toHaveAttribute("href", "/kb");
-    expect(
-      within(menu).getByRole("link", { name: /Diagnostics/i }),
-    ).toHaveAttribute("href", "/diagnostics");
+    expect(within(menu).getByRole("link", { name: /Root Cause Analysis/ })).toHaveAttribute(
+      "href",
+      "/a/rca",
+    );
+    expect(within(menu).getByRole("link", { name: /Yield Tracking/ })).toHaveAttribute(
+      "href",
+      "/a/yield",
+    );
+    expect(within(menu).getByRole("link", { name: /Knowledge base/i })).toHaveAttribute(
+      "href",
+      "/kb",
+    );
+    expect(within(menu).getByRole("link", { name: /Diagnostics/i })).toHaveAttribute(
+      "href",
+      "/diagnostics",
+    );
   });
 
   it("switcher draws every row's glyph — Apps and destinations alike", () => {
@@ -173,19 +144,18 @@ describe("GlobalNav", () => {
     renderNav("/a/yield/42");
     fireEvent.click(screen.getByRole("button", { name: /切換/ }));
     const menu = screen.getByRole("dialog");
-    expect(
-      within(menu).getByRole("link", { name: /Yield Tracking/ }),
-    ).toHaveAttribute("aria-current", "page");
-    expect(
-      within(menu).getByRole("link", { name: /Root Cause Analysis/ }),
-    ).not.toHaveAttribute("aria-current");
+    expect(within(menu).getByRole("link", { name: /Yield Tracking/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(within(menu).getByRole("link", { name: /Root Cause Analysis/ })).not.toHaveAttribute(
+      "aria-current",
+    );
   });
 
   it("shows the AI-health dot linking to /diagnostics", async () => {
     renderNav("/a/rca", [], okHealth);
-    const dot = await screen.findByRole("link", {
-      name: /AI features are working/i,
-    });
+    const dot = await screen.findByRole("link", { name: /AI features are working/i });
     expect(dot).toHaveAttribute("href", "/diagnostics");
   });
 
@@ -231,18 +201,9 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
     expect(screen.queryByText("審核")).not.toBeInTheDocument();
     // …but the links, and their accessible names, are not.
-    expect(screen.getByRole("link", { name: "回首頁" })).toHaveAttribute(
-      "href",
-      "/",
-    );
-    expect(screen.getByRole("link", { name: "審核" })).toHaveAttribute(
-      "href",
-      "/review",
-    );
-    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute(
-      "href",
-      "/help",
-    );
+    expect(screen.getByRole("link", { name: "回首頁" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "審核" })).toHaveAttribute("href", "/review");
+    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
   });
 
   it("does not use aria-label on Review — that would hide the pending count", () => {
@@ -253,9 +214,7 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     // have been added for.
     stubViewport(true);
     renderNav("/a/rca");
-    expect(screen.getByRole("link", { name: "審核" })).not.toHaveAttribute(
-      "aria-label",
-    );
+    expect(screen.getByRole("link", { name: "審核" })).not.toHaveAttribute("aria-label");
   });
 
   it("drops the switcher's word on narrow too — icon + chevron, name kept (plan-skill-hub-ui-polish D14)", () => {

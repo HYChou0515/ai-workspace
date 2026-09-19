@@ -67,6 +67,7 @@ export function SkillsModal({
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [initial, setInitial] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
+
   // The footer's own width (plan-skill-hub-ui-polish D13): three buttons and
   // a hint share one line, and at phone width the hint folded into three
   // lines beside them. Below FOOTER_HINT_MIN_WIDTH the hint is not drawn — its
@@ -74,7 +75,6 @@ export function SkillsModal({
   // (or a test DOM), never "narrow": an unmeasured footer hides nothing.
   const [footerRef, footerW] = useContainerWidth<HTMLDivElement>();
   const showImportHint = footerW === 0 || footerW >= FOOTER_HINT_MIN_WIDTH;
-
   // Seed the editable sparse override once the resolved state loads (present
   // on/off entries only — an absent key follows the profile/App default).
   // `initial` keeps that seed so #779 can tell an edited list from an untouched
@@ -91,10 +91,7 @@ export function SkillsModal({
   // sameShape, not JSON.stringify: setState deletes a key for "follow" and
   // re-adds it for on/off, so toggling a skill away and back reorders the object
   // and the modal would claim unsaved work over an identical set.
-  const attemptClose = useDirtyClose(
-    initial !== null && !sameShape(prefs, initial),
-    onClose,
-  );
+  const attemptClose = useDirtyClose(initial !== null && !sameShape(prefs, initial), onClose);
 
   const list = skillsQ.data ?? [];
   const applied = new Set(appliedSkills);
@@ -204,135 +201,110 @@ export function SkillsModal({
         minHeight: 0,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Icon name="sparkle" size={15} />
-        <strong style={{ flex: 1 }}>{t("skills.title")}</strong>
-        <button
-          type="button"
-          aria-label={t("skills.close")}
-          onClick={attemptClose}
-          style={{
-            border: "none",
-            background: "transparent",
-            cursor: "pointer",
-          }}
-        >
-          <Icon name="x" size={14} />
-        </button>
-      </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="sparkle" size={15} />
+          <strong style={{ flex: 1 }}>{t("skills.title")}</strong>
+          <button
+            type="button"
+            aria-label={t("skills.close")}
+            onClick={attemptClose}
+            style={{ border: "none", background: "transparent", cursor: "pointer" }}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </div>
 
-      <p
-        style={{
-          margin: 0,
-          fontSize: "var(--text-body-sm)",
-          color: "var(--text-paper-d)",
-        }}
-      >
-        {t("skills.intro")}
-      </p>
-
-      {refreshNote && (
-        <p
-          data-testid="skills-refresh-note"
-          style={{
-            margin: 0,
-            fontSize: pxToRem(11),
-            color: "var(--accent-h)",
-            background: "var(--accent-soft)",
-            borderRadius: "var(--radius-btn)",
-            padding: "4px 8px",
-          }}
-        >
-          {refreshNote}
+        <p style={{ margin: 0, fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}>
+          {t("skills.intro")}
         </p>
-      )}
-      <div
-        className="scrollable"
-        style={{
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-          flex: 1,
-        }}
-      >
-        {list.length === 0 ? (
+
+        {refreshNote && (
           <p
-            data-testid="skills-empty"
+            data-testid="skills-refresh-note"
             style={{
-              fontSize: "var(--text-body-sm)",
-              color: "var(--text-paper-d)",
+              margin: 0,
+              fontSize: pxToRem(11),
+              color: "var(--accent-h)",
+              background: "var(--accent-soft)",
+              borderRadius: "var(--radius-btn)",
+              padding: "4px 8px",
             }}
           >
-            {t("skills.empty")}
+            {refreshNote}
           </p>
-        ) : (
-          list.map((s) => (
-            <SkillRow
-              key={s.name}
-              skill={s}
-              state={stateOf(s.name)}
-              onSetState={(next) => setState(s.name, next)}
-              applied={applied.has(s.name)}
-              onToggleApply={() => onToggleApply?.(s.name)}
-              // #589: a copy's files are in the workspace even though the row reports
-              // the package source it came from, so both cases are downloadable.
-              onDownload={
-                filesHere(s) ? () => void download(s.name) : undefined
-              }
-              // Update only when there is something to bring; reset whenever
-              // there is an upstream to bring it FROM — it is the way back
-              // from an edit gone wrong, and that need has nothing to do
-              // with upstream having moved. Neither on a copy whose upstream
-              // is KNOWN to be gone (`unpublished` / `deleted`): the row says
-              // so instead, and a press there did nothing and then said
-              // "Updated". An absent `upstream` (an older API pod mid-
-              // rollout) keeps today's behaviour.
-              onRefresh={
-                s.update_available && !upstreamGone(s)
-                  ? () => void refresh(s.name, false)
-                  : undefined
-              }
-              onReset={
-                s.is_copy && !upstreamGone(s)
-                  ? () => void refresh(s.name, true)
-                  : undefined
-              }
-              // Only a skill whose files are HERE can be published: a
-              // hand-written one, or a copy installed from the skill hub
-              // (both read `source: workspace`). A package skill's files are
-              // the deploy's.
-              onPublish={
-                s.source === "workspace" ? () => publish(s.name) : undefined
-              }
-            />
-          ))
         )}
-      </div>
+        <div className="scrollable"
+          style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}
+        >
+          {list.length === 0 ? (
+            <p
+              data-testid="skills-empty"
+              style={{ fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}
+            >
+              {t("skills.empty")}
+            </p>
+          ) : (
+            list.map((s) => (
+              <SkillRow
+                key={s.name}
+                skill={s}
+                state={stateOf(s.name)}
+                onSetState={(next) => setState(s.name, next)}
+                applied={applied.has(s.name)}
+                onToggleApply={() => onToggleApply?.(s.name)}
+                // #589: a copy's files are in the workspace even though the row reports
+                // the package source it came from, so both cases are downloadable.
+                onDownload={
+                filesHere(s) ? () => void download(s.name) : undefined
+                }
+                // Update only when there is something to bring; reset whenever
+                // there is an upstream to bring it FROM — it is the way back
+                // from an edit gone wrong, and that need has nothing to do
+                // with upstream having moved. Neither on a copy whose upstream
+                // is KNOWN to be gone (`unpublished` / `deleted`): the row says
+                // so instead, and a press there did nothing and then said
+                // "Updated". An absent `upstream` (an older API pod mid-
+                // rollout) keeps today's behaviour.
+                onRefresh={
+                  s.update_available && !upstreamGone(s)
+                    ? () => void refresh(s.name, false)
+                    : undefined
+                }
+                onReset={
+                  s.is_copy && !upstreamGone(s) ? () => void refresh(s.name, true) : undefined
+                }
+                // Only a skill whose files are HERE can be published: a
+                // hand-written one, or a copy installed from the skill hub
+                // (both read `source: workspace`). A package skill's files are
+                // the deploy's.
+                onPublish={s.source === "workspace" ? () => publish(s.name) : undefined}
+              />
+            ))
+          )}
+        </div>
 
-      <div
+        <div 
         ref={footerRef}
-        style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}
-      >
-        <button
-          type="button"
-          data-testid="skills-import"
-          disabled={busy}
+        style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+          <button
+            type="button"
+            data-testid="skills-import"
+            disabled={busy}
           title={t("skills.importHint")}
-          onClick={() => importRef.current?.click()}
-          style={pillBtn}
-        >
-          <Icon name="upload" size={12} /> {t("skills.import")}
-        </button>
-        <button
-          type="button"
-          data-testid="skills-from-hub"
-          disabled={busy}
-          onClick={() => setPicking(true)}
-          style={pillBtn}
-        >
-          <Icon name="sparkle" size={12} /> {t("skills.fromHub")}
-        </button>
+            onClick={() => importRef.current?.click()}
+            style={pillBtn}
+          >
+            <Icon name="upload" size={12} /> {t("skills.import")}
+          </button>
+          <button
+            type="button"
+            data-testid="skills-from-hub"
+            disabled={busy}
+            onClick={() => setPicking(true)}
+            style={pillBtn}
+          >
+            <Icon name="sparkle" size={12} /> {t("skills.fromHub")}
+          </button>
         {showImportHint ? (
           <span
             data-testid="skills-import-hint"
@@ -347,47 +319,47 @@ export function SkillsModal({
         ) : (
           <span style={{ flex: 1 }} />
         )}
-        <button
-          type="button"
-          data-testid="skills-save"
-          disabled={saving || prefs === null}
-          onClick={() => void save()}
-          style={{
-            ...pillBtn,
-            background: "var(--accent)",
-            color: "var(--white)",
-            borderColor: "var(--accent)",
-          }}
-        >
-          {t("skills.save")}
-        </button>
-        <input
-          ref={(el) => {
-            importRef.current = el;
-            // `webkitdirectory` isn't in the HTMLInputElement type — set it raw so
-            // the picker selects a whole skill folder (SKILL.md + references/scripts).
-            if (el) el.setAttribute("webkitdirectory", "");
-          }}
-          type="file"
-          data-testid="skills-import-input"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const files = e.target.files;
-            if (files && files.length) void importFolder(files);
-            e.target.value = "";
-          }}
-        />
-      </div>
-      {picking && (
-        <SkillHubPickerModal
-          slug={slug}
-          itemId={itemId}
+          <button
+            type="button"
+            data-testid="skills-save"
+            disabled={saving || prefs === null}
+            onClick={() => void save()}
+            style={{
+              ...pillBtn,
+              background: "var(--accent)",
+              color: "var(--white)",
+              borderColor: "var(--accent)",
+            }}
+          >
+            {t("skills.save")}
+          </button>
+          <input
+            ref={(el) => {
+              importRef.current = el;
+              // `webkitdirectory` isn't in the HTMLInputElement type — set it raw so
+              // the picker selects a whole skill folder (SKILL.md + references/scripts).
+              if (el) el.setAttribute("webkitdirectory", "");
+            }}
+            type="file"
+            data-testid="skills-import-input"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const files = e.target.files;
+              if (files && files.length) void importFolder(files);
+              e.target.value = "";
+            }}
+          />
+        </div>
+        {picking && (
+          <SkillHubPickerModal
+            slug={slug}
+            itemId={itemId}
           taken={new Set(list.filter(filesHere).map((s) => s.name))}
-          onInstalled={(name) => void installed(name)}
-          onClose={() => setPicking(false)}
-          client={hubClient}
-        />
-      )}
+            onInstalled={(name) => void installed(name)}
+            onClose={() => setPicking(false)}
+            client={hubClient}
+          />
+        )}
     </ModalShell>
   );
 }
@@ -493,8 +465,7 @@ function SkillRow({
               {t("skills.updateAvailable")}
             </span>
           )}
-          {(skill.upstream === "unpublished" ||
-            skill.upstream === "deleted") && (
+          {(skill.upstream === "unpublished" || skill.upstream === "deleted") && (
             // A copy whose skill hub original went away (plan P5): a state on
             // the row, so the missing Update control is explained rather than
             // read as broken. The copy itself keeps working.
@@ -648,11 +619,11 @@ function SkillRow({
   );
 }
 
+
 /** Below this footer width the import hint is not drawn (D13). Measured:
  * at the panel's 640 the footer is 602 px; at a 390 phone it is 304, where
  * the three buttons leave the hint a column a few characters wide. */
 const FOOTER_HINT_MIN_WIDTH = 480;
-
 /** Whether the copy's skill hub original is known to be gone (plan P5's two
  * dead states). `undefined` — a server that does not say — is not gone. */
 function upstreamGone(s: ItemSkillState): boolean {

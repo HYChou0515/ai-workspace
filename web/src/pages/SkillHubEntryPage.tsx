@@ -37,11 +37,7 @@ import { useT } from "../lib/i18n";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { DOC_ROLES } from "../lib/permission";
 
-export function SkillHubEntryPage({
-  client = skillHubApi,
-}: {
-  client?: SkillHubApi;
-}) {
+export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubApi }) {
   const { entryId = "" } = useParams();
   const t = useT();
   const { data, isPending, isError, refetch } = useQuery({
@@ -81,17 +77,10 @@ export function SkillHubEntryPage({
   return <EntryView entry={data} client={client} />;
 }
 
-function EntryView({
-  entry,
-  client,
-}: {
-  entry: SkillHubDetail;
-  client: SkillHubApi;
-}) {
+function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
   const t = useT();
   const apps = useApps();
-  const appTitle = (slug: string) =>
-    apps.find((a) => a.slug === slug)?.title || slug;
+  const appTitle = (slug: string) => apps.find((a) => a.slug === slug)?.title || slug;
   return (
     <div className="page skill-hub-entry">
       <div className="page-head">
@@ -105,9 +94,7 @@ function EntryView({
       <div className="skill-hub-entry-meta">
         <UserChip userId={entry.owner} size={20} />
         <AppTag slug={entry.source_app} />
-        <span className="muted">
-          {t("skillHub.writtenIn", { app: appTitle(entry.source_app) })}
-        </span>
+        <span className="muted">{t("skillHub.writtenIn", { app: appTitle(entry.source_app) })}</span>
         {entry.is_owner ? (
           <span className="skill-hub-badge" data-kind={entry.visibility}>
             {entry.visibility === "private"
@@ -119,9 +106,7 @@ function EntryView({
         ) : null}
       </div>
       {entry.forked_from ? <Lineage lineage={entry.forked_from} /> : null}
-      {entry.is_owner ? null : (
-        <p className="hint">{t("skillHub.howToInstall")}</p>
-      )}
+      {entry.is_owner ? null : <p className="hint">{t("skillHub.howToInstall")}</p>}
 
       <section>
         <h2>{t("skillHub.tools")}</h2>
@@ -150,9 +135,7 @@ function EntryView({
           </ul>
         )}
         {entry.review.model ? (
-          <p className="muted small">
-            {t("skillHub.review.by", { model: entry.review.model })}
-          </p>
+          <p className="muted small">{t("skillHub.review.by", { model: entry.review.model })}</p>
         ) : null}
       </section>
 
@@ -183,10 +166,7 @@ function EntryView({
             {entry.forks.map((f) => (
               <li key={f.id} className="skill-hub-row" data-fork>
                 <div className="skill-hub-row-head">
-                  <Link
-                    to={`/skill-hub/${encodeURIComponent(f.id)}`}
-                    className="skill-hub-row-title"
-                  >
+                  <Link to={`/skill-hub/${encodeURIComponent(f.id)}`} className="skill-hub-row-title">
                     <span className="skill-hub-owner">{f.owner}/</span>
                     {f.name}
                   </Link>
@@ -214,11 +194,7 @@ export function skillBody(md: string): string {
 /** What this entry was forked from, as the viewer may know it. A root that
  * went private or was deleted is SAID — the plan's 「原作已下架 / 已刪除」 —
  * never a broken link. */
-function Lineage({
-  lineage,
-}: {
-  lineage: NonNullable<SkillHubDetail["forked_from"]>;
-}) {
+function Lineage({ lineage }: { lineage: NonNullable<SkillHubDetail["forked_from"]> }) {
   const t = useT();
   if (lineage.state === "live") {
     return (
@@ -241,13 +217,7 @@ function Lineage({
 /** The owner's five actions. Rendered for the owner ONLY — the caller gates
  * on `entry.is_owner`, the server's answer, and every one of these routes
  * refuses a non-owner anyway. */
-function OwnerActions({
-  entry,
-  client,
-}: {
-  entry: SkillHubDetail;
-  client: SkillHubApi;
-}) {
+function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
   const t = useT();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -277,10 +247,7 @@ function OwnerActions({
     });
 
   const unpublish = useMutation({
-    mutationFn: () =>
-      entry.visibility === "private"
-        ? client.republish(entry.id)
-        : client.unpublish(entry.id),
+    mutationFn: () => (entry.visibility === "private" ? client.republish(entry.id) : client.unpublish(entry.id)),
     onSuccess: refresh,
     onError: failed,
     ...own,
@@ -332,9 +299,7 @@ function OwnerActions({
     mutationFn: () => client.edit(entry.id),
     onSuccess: (target) => {
       if (target.action === "open") {
-        navigate(
-          `/a/${encodeURIComponent(target.app)}/${encodeURIComponent(target.item_id)}`,
-        );
+        navigate(`/a/${encodeURIComponent(target.app)}/${encodeURIComponent(target.item_id)}`);
       } else {
         setNewItem(target);
       }
@@ -349,77 +314,29 @@ function OwnerActions({
       body: t("skillHub.delete.body"),
       actions: [
         { id: "cancel", label: t("skillHub.cancel") },
-        {
-          id: "delete",
-          label: t("skillHub.delete.confirm"),
-          variant: "danger",
-        },
+        { id: "delete", label: t("skillHub.delete.confirm"), variant: "danger" },
       ],
     });
     if (choice === "delete") remove.mutate();
   };
   const busy =
-    unpublish.isPending ||
-    remove.isPending ||
-    edit.isPending ||
-    transfer.isPending;
+    unpublish.isPending || remove.isPending || edit.isPending || transfer.isPending;
 
   return (
-    <div
-      className="skill-hub-actions"
-      role="group"
-      aria-label={t("skillHub.edit")}
-    >
-      <button
-        type="button"
-        className="btn"
-        data-size="sm"
-        data-variant="primary"
-        disabled={busy}
-        onClick={() => edit.mutate()}
-      >
+    <div className="skill-hub-actions" role="group" aria-label={t("skillHub.edit")}>
+      <button type="button" className="btn" data-size="sm" data-variant="primary" disabled={busy} onClick={() => edit.mutate()}>
         {t("skillHub.edit")}
       </button>
-      <button
-        type="button"
-        className="btn"
-        data-size="sm"
-        data-variant="secondary"
-        disabled={busy}
-        onClick={() => unpublish.mutate()}
-      >
-        {entry.visibility === "private"
-          ? t("skillHub.republish")
-          : t("skillHub.unpublish")}
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => unpublish.mutate()}>
+        {entry.visibility === "private" ? t("skillHub.republish") : t("skillHub.unpublish")}
       </button>
-      <button
-        type="button"
-        className="btn"
-        data-size="sm"
-        data-variant="secondary"
-        disabled={busy}
-        onClick={() => setSharing(true)}
-      >
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setSharing(true)}>
         {t("skillHub.share")}
       </button>
-      <button
-        type="button"
-        className="btn"
-        data-size="sm"
-        data-variant="secondary"
-        disabled={busy}
-        onClick={() => setTransferring(true)}
-      >
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setTransferring(true)}>
         {t("skillHub.transfer")}
       </button>
-      <button
-        type="button"
-        className="btn"
-        data-size="sm"
-        data-variant="danger"
-        disabled={busy}
-        onClick={() => void askDelete()}
-      >
+      <button type="button" className="btn" data-size="sm" data-variant="danger" disabled={busy} onClick={() => void askDelete()}>
         {t("skillHub.delete")}
       </button>
       {failure ? (
@@ -485,12 +402,7 @@ function TransferDialog({
   const titleId = useId();
   const [picked, setPicked] = useState<string | null>(null);
   return (
-    <ModalShell
-      onClose={onClose}
-      labelledBy={titleId}
-      width={480}
-      data-testid="skill-hub-transfer"
-    >
+    <ModalShell onClose={onClose} labelledBy={titleId} width={480} data-testid="skill-hub-transfer">
       <h2 id={titleId} className="modal-title">
         {t("skillHub.transfer.title", { name })}
       </h2>
@@ -501,12 +413,7 @@ function TransferDialog({
         exclude={[owner]}
       />
       <ModalActions>
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          onClick={onClose}
-        >
+        <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
           {t("skillHub.cancel")}
         </button>
         <button
@@ -525,15 +432,11 @@ function TransferDialog({
 
 /** The edit resolver's `new_item` branch: say why the source item cannot
  * take the edit, and what to do instead. */
-function NewItemDialog({
-  target,
+function NewItemDialog({ target, 
   entryId,
-  onClose,
-}: {
-  target: SkillEditTarget;
+onClose }: { target: SkillEditTarget; 
   entryId: string;
-  onClose: () => void;
-}) {
+onClose: () => void }) {
   const t = useT();
   const apps = useApps();
   const appTitle = apps.find((a) => a.slug === target.app)?.title || target.app;
@@ -546,27 +449,14 @@ function NewItemDialog({
   const titleId = useId();
   return (
     // A read-only explanation: nothing to lose, so a stray click closes it (#779).
-    <ModalShell
-      onClose={onClose}
-      labelledBy={titleId}
-      width={480}
-      closeOnBackdrop
-      data-testid="skill-hub-new-item"
-    >
+    <ModalShell onClose={onClose} labelledBy={titleId} width={480} closeOnBackdrop data-testid="skill-hub-new-item">
       <h2 id={titleId} className="modal-title">
         {t("skillHub.edit.newItem.title")}
       </h2>
       <p>{t(reasonKey)}</p>
-      <p className="hint">
-        {t("skillHub.edit.newItem.how", { app: appTitle })}
-      </p>
+      <p className="hint">{t("skillHub.edit.newItem.how", { app: appTitle })}</p>
       <ModalActions>
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          onClick={onClose}
-        >
+        <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
           {t("skillHub.cancel")}
         </button>
         {/* The profile the skill was written for rides along (`?profile=`):

@@ -10,47 +10,26 @@ import { AppNewItem } from "./AppNewItem";
 
 afterEach(cleanup);
 
-const createAppItem = vi
-  .fn()
-  .mockResolvedValue({ resource_id: "rca-investigation/1" });
+const createAppItem = vi.fn().mockResolvedValue({ resource_id: "rca-investigation/1" });
 const navigate = vi.fn();
 
-vi.mock("../api", () => ({
-  api: { createAppItem: (...a: unknown[]) => createAppItem(...a) },
-}));
+vi.mock("../api", () => ({ api: { createAppItem: (...a: unknown[]) => createAppItem(...a) } }));
 vi.mock("../hooks/useCurrentUser", () => ({
   useCurrentUser: () => "default-user",
   useCurrentUserState: () => ({ id: "default-user", ready: true }),
 }));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
-  useUser: (id: string) => ({
-    id,
-    name: id,
-    section: "",
-    email: "",
-    photo_url: null,
-  }),
+  useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),
 }));
 vi.mock("../hooks/useResources", () => ({
   useAppManifest: () => ({
     item: { noun: "Investigation", create_label: "Start Investigation" },
-    layout: {
-      breadcrumb: [],
-      statusbar: [],
-      list: [],
-      form: ["severity", "product"],
-      default_tabs: [],
-    },
+    layout: { breadcrumb: [], statusbar: [], list: [], form: ["severity", "product"], default_tabs: [] },
     fields: [
       { name: "title", label: "Title", kind: "text" },
       { name: "description", label: "Description", kind: "text" },
-      {
-        name: "severity",
-        label: "Severity",
-        kind: "select",
-        options: ["P0", "P2"],
-      },
+      { name: "severity", label: "Severity", kind: "select", options: ["P0", "P2"] },
       { name: "product", label: "Product", kind: "text" },
     ],
     labels: {},
@@ -94,9 +73,7 @@ describe("AppNewItem", () => {
       }),
     );
     // #4: goes straight into the new item's workspace (id percent-encoded).
-    await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith("/a/rca/rca-investigation%2F1"),
-    );
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/a/rca/rca-investigation%2F1"));
   });
 
   it("surfaces a create failure instead of silently doing nothing", async () => {
@@ -116,11 +93,7 @@ describe("AppNewItem", () => {
     await userEvent.type(screen.getByLabelText(/title/i), "Oven drift");
     await userEvent.click(screen.getByRole("button", { name: /create/i }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        /boom: create rejected/i,
-      ),
-    );
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/boom: create rejected/i));
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -219,9 +192,7 @@ describe("AppNewItem", () => {
     expect(screen.getByLabelText(/title/i)).toHaveValue("Oven drift");
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(
-      await screen.findByTestId("dialog-action-discard"),
-    ).toBeInTheDocument();
+    expect(await screen.findByTestId("dialog-action-discard")).toBeInTheDocument();
     expect(navigate).not.toHaveBeenCalled();
   });
 });

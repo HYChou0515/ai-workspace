@@ -12,17 +12,11 @@ import type { AppItem } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useSetItemPermission } from "../hooks/useResources";
-import {
-  type ItemPermission,
-  parseItemPermission,
-} from "../lib/itemPermission";
+import { type ItemPermission, parseItemPermission } from "../lib/itemPermission";
 import { ModalShell } from "./ModalShell";
 import { UserPicker } from "./UserPicker";
 
-function subjectsFrom(
-  perm: ItemPermission | undefined,
-  prefix: "user:" | "group:",
-): string[] {
+function subjectsFrom(perm: ItemPermission | undefined, prefix: "user:" | "group:"): string[] {
   return (perm?.read_meta ?? [])
     .filter((s) => s.startsWith(prefix))
     .map((s) => s.slice(prefix.length));
@@ -37,20 +31,11 @@ export function ShareChatDialog({
   item: AppItem;
   onClose: () => void;
 }) {
-  const current = parseItemPermission(
-    (item as Record<string, unknown>).permission,
-  );
+  const current = parseItemPermission((item as Record<string, unknown>).permission);
   const groups = usePickableGroups();
-  const { setPermissionAsync, isPending, error } = useSetItemPermission(
-    slug,
-    item.resource_id,
-  );
-  const [users, setUsers] = useState<string[]>(() =>
-    subjectsFrom(current, "user:"),
-  );
-  const [groupIds, setGroupIds] = useState<string[]>(() =>
-    subjectsFrom(current, "group:"),
-  );
+  const { setPermissionAsync, isPending, error } = useSetItemPermission(slug, item.resource_id);
+  const [users, setUsers] = useState<string[]>(() => subjectsFrom(current, "user:"));
+  const [groupIds, setGroupIds] = useState<string[]>(() => subjectsFrom(current, "group:"));
 
   const toggle = (set: (fn: (s: string[]) => string[]) => void, id: string) =>
     set((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -58,10 +43,7 @@ export function ShareChatDialog({
   // #779: the picks are not sent until Share, so closing means the people you
   // chose were simply never granted anything — and nothing says so.
   const initialRef = useRef(
-    JSON.stringify({
-      users: subjectsFrom(current, "user:"),
-      groupIds: subjectsFrom(current, "group:"),
-    }),
+    JSON.stringify({ users: subjectsFrom(current, "user:"), groupIds: subjectsFrom(current, "group:") }),
   );
   const attemptClose = useDirtyClose(
     JSON.stringify({ users, groupIds }) !== initialRef.current,
@@ -69,10 +51,7 @@ export function ShareChatDialog({
   );
 
   const save = async () => {
-    const subjects = [
-      ...users.map((u) => `user:${u}`),
-      ...groupIds.map((g) => `group:${g}`),
-    ];
+    const subjects = [...users.map((u) => `user:${u}`), ...groupIds.map((g) => `group:${g}`)];
     // Grant read + converse to the chosen subjects; back to private if none.
     // Other verbs / change_permission are preserved verbatim from the current
     // permission so a share never loosens anything the owner set elsewhere.
@@ -98,8 +77,7 @@ export function ShareChatDialog({
       <div className="chat-share">
         <div className="chat-share__title">Share this chat</div>
         <div className="chat-share__hint">
-          Pick people or groups — they’ll see it in their chats and can read +
-          reply.
+          Pick people or groups — they’ll see it in their chats and can read + reply.
         </div>
 
         <div className="chat-share__section">People</div>
@@ -130,12 +108,7 @@ export function ShareChatDialog({
 
         {error && <div className="chat-share__error">{error}</div>}
         <div className="chat-share__actions">
-          <button
-            type="button"
-            className="btn"
-            data-size="sm"
-            onClick={attemptClose}
-          >
+          <button type="button" className="btn" data-size="sm" onClick={attemptClose}>
             Cancel
           </button>
           <button

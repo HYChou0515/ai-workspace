@@ -88,11 +88,7 @@ export type SkillHubApi = {
   /** The Skills panel's install door: 409 when a folder of that name is
    * already in the item (the sentence names whose copy it is), 404 when the
    * entry cannot be read. */
-  install(
-    slug: string,
-    itemId: string,
-    entryId: string,
-  ): Promise<SkillInstalled>;
+  install(slug: string, itemId: string, entryId: string): Promise<SkillInstalled>;
   unpublish(entryId: string): Promise<void>;
   republish(entryId: string): Promise<void>;
   setPermission(entryId: string, perm: CollectionPermission): Promise<void>;
@@ -101,8 +97,7 @@ export type SkillHubApi = {
   edit(entryId: string): Promise<SkillEditTarget>;
 };
 
-const entryBase = (entryId: string) =>
-  `/skill-hub/entries/${encodeURIComponent(entryId)}`;
+const entryBase = (entryId: string) => `/skill-hub/entries/${encodeURIComponent(entryId)}`;
 
 /**
  * A refusal, as the page will word it. The hub's routes refuse with a CODE
@@ -130,19 +125,12 @@ async function refused(resp: Response, failed: string): Promise<HttpError> {
   return new HttpError(resp.status, sentence ?? fallback);
 }
 
-async function post(
-  path: string,
-  body?: unknown,
-  failed = "request failed",
-): Promise<Response> {
+async function post(path: string, body?: unknown, failed = "request failed"): Promise<Response> {
   const resp = await apiFetch(path, {
     method: "POST",
     ...(body === undefined
       ? {}
-      : {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }),
+      : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
   });
   if (!resp.ok) throw await refused(resp, failed);
   return resp;
@@ -162,8 +150,7 @@ export const skillHubApi: SkillHubApi = {
   async get(entryId, app) {
     const suffix = app ? `?app=${encodeURIComponent(app)}` : "";
     const resp = await apiFetch(`${entryBase(entryId)}${suffix}`);
-    if (!resp.ok)
-      throw await refused(resp, "the skill hub entry could not be read");
+    if (!resp.ok) throw await refused(resp, "the skill hub entry could not be read");
     return (await resp.json()) as SkillHubDetail;
   },
   async install(slug, itemId, entryId) {
@@ -175,18 +162,10 @@ export const skillHubApi: SkillHubApi = {
     return (await resp.json()) as SkillInstalled;
   },
   async unpublish(entryId) {
-    await post(
-      `${entryBase(entryId)}/unpublish`,
-      undefined,
-      "unpublish failed",
-    );
+    await post(`${entryBase(entryId)}/unpublish`, undefined, "unpublish failed");
   },
   async republish(entryId) {
-    await post(
-      `${entryBase(entryId)}/republish`,
-      undefined,
-      "republish failed",
-    );
+    await post(`${entryBase(entryId)}/republish`, undefined, "republish failed");
   },
   async setPermission(entryId, perm) {
     const resp = await apiFetch(`${entryBase(entryId)}/permission`, {
@@ -194,8 +173,7 @@ export const skillHubApi: SkillHubApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(perm),
     });
-    if (!resp.ok)
-      throw await refused(resp, "the visibility could not be saved");
+    if (!resp.ok) throw await refused(resp, "the visibility could not be saved");
   },
   async remove(entryId) {
     const resp = await apiFetch(entryBase(entryId), { method: "DELETE" });
@@ -205,11 +183,7 @@ export const skillHubApi: SkillHubApi = {
     await post(`${entryBase(entryId)}/transfer`, { owner }, "transfer failed");
   },
   async edit(entryId) {
-    const resp = await post(
-      `${entryBase(entryId)}/edit`,
-      undefined,
-      "edit failed",
-    );
+    const resp = await post(`${entryBase(entryId)}/edit`, undefined, "edit failed");
     return (await resp.json()) as SkillEditTarget;
   },
 };
