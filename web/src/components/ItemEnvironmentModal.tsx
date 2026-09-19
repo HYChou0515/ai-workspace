@@ -117,7 +117,9 @@ export function ItemEnvironmentModal({
       data-testid="item-environment-modal"
       width={420}
       maxWidth="92vw"
-      panelStyle={{ display: "flex", flexDirection: "column", minHeight: 0 }}
+      // The header and `.item-environment` pad themselves (var(--space-12),
+      // measured below), so the shell's default padding is switched off.
+      panelStyle={{ padding: 0, display: "flex", flexDirection: "column", minHeight: 0 }}
     >
       <div
         style={{

@@ -67,8 +67,9 @@ export function AppNewItem() {
   // skill this item is for, and the form says what comes next — install it
   // from the Skills panel (plan-skill-hub-ui-polish D11). Said, not done:
   // creating is this form's, installing is the panel's, and both stay
-  // visible. The entry is read for its name; until it lands (or if it never
-  // does) the hint still says "this skill".
+  // visible. The entry is read for its name (the entry page's key factory,
+  // keyed with this App so it is a cache entry of its own); until it lands
+  // (or if it never does) the hint still says "this skill".
   const t = useT();
   const skillId = params.get("skill") ?? "";
   const skillQ = useQuery({
@@ -111,6 +112,9 @@ export function AppNewItem() {
       width={620}
       maxWidth="100%"
       panelStyle={{
+        // Lays out its own header / body / footer (each padded, ruled
+        // edge to edge), so the shell's default padding is switched off.
+        padding: 0,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,

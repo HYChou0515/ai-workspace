@@ -9,10 +9,12 @@ afterEach(cleanup);
 
 describe("ModalShell", () => {
   it("gives the panel its padding by default, so a caller that passes none is not flush to the edge (plan-skill-hub-ui-polish D1)", () => {
-    // 28 callers, each remembering its own `panelStyle.padding` — and the
-    // ones that forgot (the hub's transfer and new-item dialogs) drew text
-    // against the border. Material's dialog has 24dp of content padding
-    // built in; the shell owns the default now.
+    // 30 call sites; 21 remembered their own `panelStyle.padding` (0 / 14 /
+    // 18 / 20 / 24 / "18px 20px 22px"), 9 passed none — and the two that
+    // wanted one (the hub's transfer and new-item dialogs) drew text against
+    // the border. Material's dialog has 24dp of content padding built in;
+    // the shell owns the default now, and the seven that lay out their own
+    // interior say 0 (or, ManageChats, its own 16).
     render(
       <ModalShell onClose={() => {}} ariaLabel="plain">
         <p>body</p>

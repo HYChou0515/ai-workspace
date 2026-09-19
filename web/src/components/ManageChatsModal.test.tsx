@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemChatSummary } from "../api/itemChats";
@@ -29,7 +34,12 @@ const chat = (over: Partial<ItemChatSummary>): ItemChatSummary => ({
 
 const chats = [
   chat({ chat_id: "c1", name_hint: "Compare Q3 and Q4" }),
-  chat({ chat_id: "c2", title: "Memory digest", run_id: "r1", status: "running" }),
+  chat({
+    chat_id: "c2",
+    title: "Memory digest",
+    run_id: "r1",
+    status: "running",
+  }),
 ];
 
 const props = () => ({
@@ -44,13 +54,19 @@ const props = () => ({
 describe("ManageChatsModal", () => {
   it("lists a row per chat with its workflow status", () => {
     render(<ManageChatsModal {...props()} />);
-    expect(screen.getByTestId("manage-chat-row-c1")).toHaveTextContent("Compare Q3 and Q4");
-    expect(screen.getByTestId("manage-chat-row-c2")).toHaveTextContent("running");
+    expect(screen.getByTestId("manage-chat-row-c1")).toHaveTextContent(
+      "Compare Q3 and Q4",
+    );
+    expect(screen.getByTestId("manage-chat-row-c2")).toHaveTextContent(
+      "running",
+    );
   });
 
   it("filters rows by the search box", () => {
     render(<ManageChatsModal {...props()} />);
-    fireEvent.change(screen.getByTestId("manage-chats-search"), { target: { value: "memory" } });
+    fireEvent.change(screen.getByTestId("manage-chats-search"), {
+      target: { value: "memory" },
+    });
     expect(screen.queryByTestId("manage-chat-row-c1")).not.toBeInTheDocument();
     expect(screen.getByTestId("manage-chat-row-c2")).toBeInTheDocument();
   });
@@ -80,6 +96,14 @@ describe("ManageChatsModal", () => {
     expect(p.onDelete).not.toHaveBeenCalled(); // first click only arms the confirm
     fireEvent.click(screen.getByTestId("manage-delete-confirm-c2"));
     expect(p.onDelete).toHaveBeenCalledWith("c2");
+  });
+
+  it("keeps the 16 px panel padding it always had (review round 1 of #826, D1)", () => {
+    // The padding used to live on `.manage-chats__dialog`, a class ON the
+    // panel element — and P1's inline `padding: 0` opt-out beat it (16 → 0).
+    // The class does not compete any more; the panel says 16 itself.
+    render(<ManageChatsModal {...props()} />);
+    expect(screen.getByTestId("manage-chats-modal").style.padding).toBe("16px");
   });
 
   it("closes from the close button", () => {

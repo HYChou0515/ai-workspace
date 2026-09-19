@@ -27,9 +27,7 @@ function ChatTypeCell({ chat }: { chat: ItemChatSummary }) {
       <Icon name="settings" size={12} color="var(--text-paper-d)" />
       Workflow
       {badge && (
-        <span
-          className={`manage-chats__badge manage-chats__badge--${badge.tone}`}
-        >
+        <span className={`manage-chats__badge manage-chats__badge--${badge.tone}`}>
           {badge.symbol} {badge.label}
         </span>
       )}
@@ -78,10 +76,7 @@ function ChatRow({
 
   const id = chat.chat_id;
   return (
-    <tr
-      data-testid={`manage-chat-row-${id}`}
-      className={active ? "manage-chats__row--active" : ""}
-    >
+    <tr data-testid={`manage-chat-row-${id}`} className={active ? "manage-chats__row--active" : ""}>
       <td className="manage-chats__name">
         {editing ? (
           <input
@@ -105,9 +100,7 @@ function ChatRow({
       <td>
         <ChatTypeCell chat={chat} />
       </td>
-      <td className="manage-chats__activity">
-        {activity(chat.last_activity_ms)}
-      </td>
+      <td className="manage-chats__activity">{activity(chat.last_activity_ms)}</td>
       <td className="manage-chats__count">{chat.message_count}</td>
       <td className="manage-chats__actions">
         {editing ? (
@@ -124,9 +117,7 @@ function ChatRow({
         ) : confirming ? (
           <>
             <span className="manage-chats__confirm-note">
-              {chat.run_id
-                ? "Delete? Its workflow will be stopped."
-                : "Delete this chat?"}
+              {chat.run_id ? "Delete? Its workflow will be stopped." : "Delete this chat?"}
             </span>
             <button
               type="button"
@@ -204,17 +195,17 @@ export function ManageChatsModal({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const attemptClose = useDirtyClose(renamingId !== null, onClose);
   const q = query.trim().toLowerCase();
-  const shown = q
-    ? chats.filter((c) => chatLabel(c).toLowerCase().includes(q))
-    : chats;
+  const shown = q ? chats.filter((c) => chatLabel(c).toLowerCase().includes(q)) : chats;
 
   return (
-    // Lays out its own interior (the padding lives in its CSS), so the shell's default padding is switched off.
+    // Its 16 px is said HERE, not in `.manage-chats__dialog`: that class sits
+    // on the panel element itself, and the shell's inline padding (any value)
+    // beats a class — P1's `padding: 0` opt-out had zeroed it (#826 round 1).
     <ModalShell
       onClose={attemptClose}
       ariaLabel="Manage chats"
       data-testid="manage-chats-modal"
-      panelStyle={{ padding: 0 }}
+      panelStyle={{ padding: 16 }}
       width={720}
       maxWidth="100%"
       panelClassName="manage-chats__dialog"
@@ -274,9 +265,7 @@ export function ManageChatsModal({
             ))}
           </tbody>
         </table>
-        {shown.length === 0 && (
-          <p className="manage-chats__empty">No chats match.</p>
-        )}
+        {shown.length === 0 && <p className="manage-chats__empty">No chats match.</p>}
       </div>
     </ModalShell>
   );
