@@ -500,9 +500,11 @@ async def materialize_skill(
     # A skill that is nothing but its SKILL.md has nothing to materialize, and
     # copying it anyway would be pure cost: the copy shadows the package version,
     # so the body stops tracking upstream and the skill starts reporting as a
-    # workspace one. Every skill shipped today is exactly that shape, so the
-    # common case must stay untouched — only a skill that actually brings files
-    # becomes a local copy.
+    # workspace one. Most shipped skills are exactly that shape, so the common
+    # case must stay untouched — only a skill that actually brings files becomes
+    # a local copy. `author-skill` is one (it ships `references/`), so from its
+    # first read a workspace holds its own copy and a later edit to the shipped
+    # guide reaches that workspace only through the skills panel's Refresh.
     if set(payload) <= {"SKILL.md"}:
         return
     for rel, data in payload.items():

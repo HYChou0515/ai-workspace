@@ -136,7 +136,7 @@ def test_an_edited_copy_is_named_by_its_frontmatter_and_files_come_from_the_regi
     [
         ("---\ndescription: d\n---\n\nbody", "no `name`"),
         ("---\nname: nobody-registered-this\ndescription: d\n---\n\nbody", "unknown skill"),
-        ("no frontmatter at all", "frontmatter"),
+        ("---\nname: [unbalanced\n---\n\nbody", "malformed"),
     ],
 )
 def test_a_body_the_harness_cannot_place_is_refused_loudly(tmp_path: Path, text: str, reason: str):

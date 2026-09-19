@@ -1,9 +1,10 @@
 # Writing for agents — the rules a skill is tidied against
 
 > Copied from Matt Pocock's [`writing-for-agents`](https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents)
-> (`mattpocock/skills`, MIT licence, commit `321658273cb1`, 2026-08-19) — `SKILL.md`
-> and `SKILL-MECHANICS.md` folded into one file. The text is his; the section
-> at the very end maps his terms onto this platform's skill loader.
+> (`mattpocock/skills`, MIT licence — notice at the end of this file, commit
+> `321658273cb1`, 2026-08-19) — `SKILL.md` and `SKILL-MECHANICS.md` folded into
+> one file. The text is his; the "On this platform" section maps his terms
+> onto this platform's skill loader.
 
 Reference for writing any document an agent consumes: a skill, an `AGENTS.md` / `CLAUDE.md`, a doc reached by a pointer. The packaging differs; the writing does not: the same levers make each one predictable, since the agent takes the same _process_ every run rather than producing the same output.
 
@@ -130,3 +131,30 @@ apply to a skill saved here, with these mappings:
 - **The body cap** is 50 000 characters; a body near it is sprawl by
   definition — split by sequence or push reference down before the cap
   forces it.
+
+## Licence
+
+The text above is a substantial copy of the MIT-licensed `mattpocock/skills`,
+and this notice travels with every copy of it:
+
+MIT License
+
+Copyright (c) 2026 Matt Pocock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

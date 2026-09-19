@@ -23,6 +23,11 @@ Ask (or confirm if it's already obvious from the conversation):
 - **When should it fire?** This becomes the one-line `description` — a concrete
   "use this when…" so the agent (later) knows to reach for it. Prefer the user's
   own trigger words.
+- **What is it called?** Settle the `name` now, in kebab-case
+  (`smt-reflow-triage`): it is the folder `.skill/<name>/` every file pointer
+  in the body will use, and `save_skill` lower-cases the name and turns each
+  run of other characters into `-`, so only a name already in that form is
+  the folder you can point at before saving.
 
 State the scope back in one sentence and get a yes before drafting.
 
@@ -107,7 +112,7 @@ Done when every line below holds:
 
 Once approved, call `save_skill(name, description, body)`:
 
-- `name` — a short title; it's slugified to kebab-case automatically.
+- `name` — the kebab-case name from step 1.
 - `description` — the one-line trigger from step 1.
 - `body` — the markdown from step 3.
 

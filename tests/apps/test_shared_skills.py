@@ -114,8 +114,13 @@ def test_author_skill_ships_the_writing_rules_and_points_at_them():
     text = rules.read_text()
     for lever in ("Leading word", "Negation", "Pruning", "completion criterion"):
         assert lever in text, lever
-    # Provenance: copied text says where it came from.
-    assert "mattpocock/skills" in text and "MIT" in text
+    # Provenance: copied text says where it came from — and MIT requires the
+    # copyright line and the permission notice to travel with every substantial
+    # copy, which this file is (and it is copied into every workspace that
+    # reads the skill, and publishable to the hub from there).
+    assert "mattpocock/skills" in text
+    assert "Copyright (c) 2026 Matt Pocock" in text
+    assert "Permission is hereby granted, free of charge" in text
 
 
 def test_author_skill_points_at_its_files_by_the_path_a_workspace_holds_them():

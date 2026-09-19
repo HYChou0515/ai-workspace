@@ -176,6 +176,26 @@ def test_every_tool_a_shipped_scenario_scores_on_is_one_the_harness_offers():
     assert missing == {}, f"scenarios score on tools the harness never offers: {missing}"
 
 
+def test_every_shipped_scenario_names_only_data_files_that_ship_beside_it():
+    """A scenario's `data` is copied from its own folder; a name with no file
+    behind it fails at staging, on the first run, for whoever picked the
+    scenario up — and a scenario that must be fixed before it can run is one
+    that measures nothing."""
+    from pathlib import Path
+
+    from workspace_app.skill_eval.scenario import load_scenarios
+
+    root = Path(__file__).resolve().parents[2] / "sample-scenarios"
+    absent = {
+        f"{folder.name}/{sc.name}": name
+        for folder in sorted(p for p in root.iterdir() if p.is_dir())
+        for sc in load_scenarios(folder)
+        for name in sc.data
+        if not (folder / name).is_file()
+    }
+    assert absent == {}
+
+
 def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path):
     from workspace_app.skill_eval.tools import run
 
