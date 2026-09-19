@@ -50,11 +50,59 @@ user：「工具那個 modal 可以 by tool 折疊，並且也提供 預設／�
 | P6 | review 第一輪的修：開合改成兩個時刻決定、換搜尋詞釋放手動、搜尋中組 = 命中列、標題鈕拿掉 `aria-label`（可及名稱 = 可見文字）+ 混合寫進三態群組名、缺 `group` 的列退回平列表、`--paper-1`→`--paper-2`；後端 `flat_catalog` 的套件指令 `group` 填套件名、`ItemToolState` 用常數 | 紅：混合組內按回一致仍開、手動收合後換詞重開、搜尋中項數／狀態／組三態只算命中列、a11y 名稱含項數與混合、缺 `group` 平列表、`flat_catalog` 的 `group`；釘子：builtin 排第二的輸入仍最前、折疊內單列可調、收合且一致的組 reset、modal 兩個內建走 fold → Save；token 守衛綠 |
 | P7 | 第二輪的修：換詞只釋放親手收的、`autoOpen` 換詞時重取、trim 後相同不算換詞；決定 6 補「單命中保留標題」；先列開合狀態表再改 | 紅：親手開的組經打字再刪掉仍開；搜尋中改到混合、清掉搜尋仍開；只差空白的詞不釋放；釘子：reset 在搜尋中只清命中列。三根新釘子各自在突變下獨紅 |
 | P8 | 第三輪（單一問題）：72 格狀態表全對、零碼缺陷；補兩根釘子縫——「搜尋中改到一致、清掉搜尋就收」（重取混合集合是 `=` 不是 `∪`；決定：照表收）、空白守衛的「第二個空白」與「只換大小寫」；註解改「正規化後的詞沒變」 | 兩根釘子各自在突變（union／比未正規化的字串）下獨紅；一行碼＋釘子不再開一輪 |
-| P9 | 推、draft PR、對最終 sha 跑 CI | — |
+| — | 推、draft PR#828、對最終 sha `04bffba0` 跑 CI（11/11 綠）；接著 user 要求第二部分在同一條 PR 做 | — |
 
 `docs/migrations.md`：**不加條目**——API 多一個回應欄位、前端消費，運營方不用做事。
 
 **不做**：組層級的儲存（決定 1）；記住收合狀態；組的效果摘要文字；Skills modal；拿套件完整指令清單來算（決定 3）。
+
+
+## 第二部分：整包授權也逐指令控制（同一條 PR，2026-09-19）
+
+### 問題
+
+user：「我們能針對 tool command 做控制嗎？現在只有 partial tool 才有辦法。」
+
+對著程式碼：
+
+- `app.json` 的 `tools[]` 條目有兩種粒度：整包（`rca-tools`）或單一指令（`rca-tools:spc`，#724）。執行期
+  `tooling/registry.py:_select_commands` 兩種都吃——整包展開成該套件全部指令、冒號形只取那一個。
+- 但 item 的三態 pref（`attached_tool_prefs`）只在 `apps/catalog.py:_apply_tool_prefs` 被算，而它**只走
+  `app.json` 的條目**：app 授整包 `rca-tools` 時，`rca-tools:spc: false` 這種 key 根本沒被看（「Keys outside the
+  ceiling no-op」）。picker（`picker_units`）也因此只能給整包一列。**只有 app 一開始就寫 `pkg:cmd` 的條目才能逐指令控制。**
+- 「套件有哪些指令」在 `resolve` 那一層拿不到：第一方套件是開機掃的（`self._packages`），第三方套件是每個 turn
+  開頭 `resolve_item_tools` 問 host 解出來的（`api/turn_context.py:100`）；`AppCatalog.resolve` 在那之前跑，只看
+  manifest 與 profile。真正知道指令清單的點只有兩個：runner（`litellm_runner.py:507 build_function_tools(packages,
+  allowed=config.allowed_tools)`）與 picker route（`tools_routes.py picker_units(ceiling, [*pkgs, *external.packages])`）。
+- 目前 picker 的 `effective` 是拿「turn 用的同一條 `AppCatalog.resolve`」算的（anti-drift，route docstring 明講）。
+  逐指令之後這個承諾要換個地方守：兩邊共用同一個「展開 + 套 pref」的函式。
+
+### 決定（grill，2026-09-19）
+
+| # | 問題 | 決定 | 為什麼 |
+|---|---|---|---|
+| 1 | 需求範圍 | **app 授整包時，picker 仍然一個指令一列可各自開關；`app.json` 不動**。整包條目的意思不變：「這個套件現在有的全部指令」，套件下一版多一個指令，沒有 pref 就跟預設 | user：「對」。app 要寫部分指令本來就可以 |
+| 2 | 判準放哪 | **一個純函式** `tooling/catalog.py:command_grants(entries, default_entries, prefs, packages)`：把天花板條目展開成指令粒度（整包 → 該套件在 `packages` 裡有的每個 `pkg:cmd`；認不得的套件保持原樣、不展開；內建與冒號條目不變），再逐指令套 pref，回傳 `(enabled, disabled)` 兩個 `pkg:cmd`／內建名的有序清單。**runner 與 picker route 都叫它**，`AppCatalog.resolve` 不動 | 判準裝在值被算出的地方——知道指令清單的只有這兩個消費者；兩邊各寫一次就是「效果由誰答」會漂的那種 |
+| 3 | pref 優先序 | `prefs["pkg:cmd"]` > `prefs["pkg"]`（舊資料的整包鍵）> 預設（profile／app 的預設集含 `pkg` 或 `pkg:cmd` 就是 on）。整包鍵**繼續有效**，不遷移 | 既有 item 的 `rca-tools: false` 不能一升版就失效；`attached_tool_prefs` 存在 item 列裡，沒有 migrate route 可跑 |
+| 4 | picker 寫回 | picker 只寫**逐指令鍵**；`overrideFromTools` 從列重建 override，讀到的整包鍵在第一次 Save 時自然被拆成逐指令鍵（read-modify-PUT 整張覆蓋） | 不發明「整包鍵 + 指令鍵並存」的第二套規則；決定 3 只管讀 |
+| 5 | picker 的列 | 整包授權的套件：**一個指令一列**，`group` = 套件 id、`package` = 套件人話標籤（和 #724 的 `pkg:cmd` 列同形）；折疊標題的整組三態就是「整包開關」。認不得的套件（沒 build、host 解不出）：仍是整包一列（展不開）；`unavailable` 照舊 | 沿用剛做的折疊；user 那句「partial tool 永遠打開」的顧慮在這裡反過來成立：整包授權 = 全部指令都在天花板內 |
+| 6 | 給模型看的「關掉的工具」（#480） | 逐指令：`disabled` 裡的 `pkg:cmd` 各一條（`picker_units` 已會描述冒號條目）；整包全關就是它全部指令各一條 | 「可請使用者開啟」的單位要和 picker 的開關一致 |
+| 7 | `AgentConfig.allowed_tools` | runner 拿到的仍是條目清單；展開在 `build_function_tools` 前一步做（`_agent_for` 已同時握有 `config` 與 `packages`）。`AgentConfig` 多帶 `tool_prefs`（resolve 原樣塞入）與 `tool_ceiling`（manifest 的 `tools[]`），讓 runner 端算得出來 | `resolve` 沒有 packages；把 prefs 帶到有 packages 的地方，而不是把 packages 帶回 resolve（第三方套件在 resolve 之後才存在） |
+| 8 | profile 的 `tools` 子集 | 照舊是條目粒度（可寫整包或 `pkg:cmd`）；預設集展開規則同天花板 | 不改 manifest／profile 的語言 |
+| 9 | 不做 | `app.json`／profile 語法不加東西；不做整包鍵的資料遷移；Skills 不動；`external_tools` 的 host 契約不動 | — |
+
+### Phases
+
+| phase | 內容 | 驗收（先紅後綠） |
+|---|---|---|
+| P9 | 這一節 | — |
+| P10 | `tooling/catalog.py:command_grants`（純函式）+ 測試 | 紅：整包 → 每個指令；認不得的套件不展開；`pkg:cmd` pref 蓋過整包鍵、整包鍵蓋過預設；profile 預設集寫整包時各指令預設 on；天花板順序保留；內建與冒號條目原樣通過；`disabled` 逐指令且與 `enabled` 不相交 |
+| P11 | runner：`AgentConfig` 帶 `tool_prefs`／`tool_ceiling`（`resolve` 原樣塞入）；`_agent_for` 用 `command_grants` 算 `allowed` 給 `build_function_tools`、算 `disabled` 給 #480 段落 | 紅（`tests/api/test_turn_external_tools.py`／`test_tool_prompt.py` 那一層，走真入口 `_agent_for`）：整包授權 + `pkg:cmd: false` → 模型的工具清單少那一個、#480 段落列出它；整包鍵 `pkg: false` → 全部指令都不在、全部列在 #480；沒有 pref → 和現在逐位元相同（parity：對五個 app.json × 有／無套件，`build_function_tools` 的輸出與 master 相同） |
+| P12 | picker route：整包授權展開成指令列（`group`／`package` 同 #724 形），`pref`／`effective` 由同一個 `command_grants` 算；FE 不用改（折疊 UI 已在）；`overrideFromTools` 不變 | 紅：rca item 的 `rca-tools` 從一列變 N 列、每列 `group=rca-tools`；`pref` 對整包鍵的 item 讀成每列 pinned；Save 後寫回逐指令鍵（modal 測試）；parity：route 的 `effective` 與 runner 的 `allowed` 對同一組 prefs 一致（同一函式，測試從一張表導出） |
+| P13 | 文件：`docs/contract.md` 那列、`docs/subsystems/frontend.md`、`docs/plan-third-party-tools.md`／#724 提到「整包一列」的句子；`docs/migrations.md` **加一條**（行為變：既有整包鍵仍有效，但 picker 第一次 Save 會拆成逐指令鍵——運營方不用做事，但要知道） | `mkdocs --strict` 綠 |
+| P14 | review（換了效果的計算點：一輪，四把鏡頭）、乾淨後推、對最終 sha 跑 CI、更新 PR body | — |
+
+user：「同一個 PR 改好」——不另開分支，接在 P8 之後。
 
 ## 施工紀錄
 
