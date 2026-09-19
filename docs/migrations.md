@@ -676,6 +676,40 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 另一個 item 的 Skills 面板「從 skill hub 裝」看得到它、裝進去後那一列有「可在此編輯」、下一輪 `read_skill` 讀得到。
 - 部署方自己的 app：`agent.tools` 有那三個、`agent.skills` 有 `skill-hub`，否則 agent 會說沒有 `publish_skill`。
 
+### 2026-09-19 · #827 onboarding 的文字改成 markdown、App 可以放圖（`GET /apps/{slug}/assets/{name}`） {#pr-827}
+
+**設定** — 不動。沒有新旋鈕。
+
+**資料** — 不動。沒有新 model、沒有索引、沒有 Schema 版本變動；`app.json` 的 `onboarding` 多一個選填 `footer`
+（預設 `""`），舊的 `app.json` 一字不改照常載入。
+
+**行為**（⚠️ 不動設定行為就變）
+
+- 歡迎卡（`OnboardingModal`：Launcher 的平台層 + 每個 App 的 dashboard）的 `intro`、每個 point 的 `body`
+  與新的 `footer` 現在當 **markdown**（GFM）渲染，不再是純文字；point 的 `title` 仍是純文字。內建五個 App 的
+  文字掃過：只有 `pm` 一處反引號（`` `issues/N.md` ``）會變成行內程式碼，正是作者原意；沒有別的變化。
+  **部署方自己的 App**（fork 裡的 `app.json`）若 onboarding 文字含 `*` `_` `#` `[` `` ` `` `$`，畫面會變排版
+  （`rollout 前` 掃一次：`grep -n '"body"\|"intro"\|"footer"' apps/<slug>/app.json`；為什麼：純文字是合法
+  markdown，但這幾個字元在 markdown 裡有意思——`$` 是因為這條管線含數學（`$5 and $10` 之間會被畫成公式）；
+  `<` 不在清單裡：沒有 raw HTML，`<b>` 就照字面顯示（唯一例外是 GFM 的 `<https://…>` 自動連結，正是作者要的）；漏做的症狀：歡迎卡裡出現粗體／標題／連結／公式不是作者要的）。
+- `rca` 的 onboarding **版本號 1 → 2**（第一個 point 多了建立表單的截圖）：每個使用者會**再看到一次** RCA 的
+  歡迎卡，按「永遠不顯示」後就不再出現——這是 #161 定義的語意（教學內容變了就重新顯示），不是 bug。
+- 新的唯讀路由 `GET /apps/{slug}/assets/{name}`：吐 App 目錄下 `assets/<name>` 的圖（副檔名白名單同 icon：
+  png / svg / jpg / jpeg / webp / gif；純檔名；其他一律 404），**沒有額外授權**——跟 `/apps/{slug}` 同級，
+  圖是 App 的公開說明。fork 裡的 App 要放圖就放 `apps/<slug>/assets/`，markdown 寫 `![](assets/<name>)`；
+  寫法見 `docs/adding-an-app.md` 的 `onboarding` 欄位。
+
+**k8s · CI 側** — 不動。`sandbox-host/`、`kubernetes/` 沒改；映像照常把 `assets/` 一起包（hatch 包整個
+`src/workspace_app`，跟 profile 的 `*.tpl` 一樣）。
+
+**確認做完**
+
+- `GET /api/apps/rca/assets/create-investigation.png` 回 `200` + `image/png`；`GET /api/apps/rca` 的
+  `onboarding.version` 是 `"2"`、`onboarding.footer` 存在（`""`）。
+- 開 RCA 的 dashboard：歡迎卡第一個 point 底下有「Start an investigation」表單的截圖；390px 寬也是滿版一張、
+  三個 point 都在（卡片會捲）。
+- 部署方自己的 App：歡迎卡的字沒有多出粗體／標題／連結。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

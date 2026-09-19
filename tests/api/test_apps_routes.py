@@ -304,3 +304,142 @@ def test_get_app_icon_refuses_to_leave_the_app_directory(tmp_path, monkeypatch):
 
 def test_get_app_icon_unknown_slug_404():
     assert _client().get("/apps/nope/icon").status_code == 404
+
+
+# ── `GET /apps/{slug}/assets/{name}` — the images an App's onboarding embeds ──
+
+
+def _ships_assets(tmp_path, monkeypatch, files: dict[str, bytes]) -> str:
+    """Re-point the App loaders at a temp tree in which the real ``rca`` App
+    ships ``files`` under ``assets/`` (the folder onboarding markdown refers to
+    as ``assets/<name>``). Same shape as ``_ships_icon``: a REAL slug so the
+    route's unknown-app guard still runs against the package."""
+    slug = "rca"
+    (tmp_path / slug / "assets").mkdir(parents=True)
+    for name, blob in files.items():
+        (tmp_path / slug / "assets" / name).write_bytes(blob)
+    monkeypatch.setattr("workspace_app.apps.manifest.apps_root", lambda: tmp_path)
+    return slug
+
+
+def test_get_app_asset_serves_a_shipped_image(tmp_path, monkeypatch):
+    """`![](assets/hero.png)` in an App's onboarding resolves to this route; the
+    browser gets the real bytes with the right media type."""
+    client = _client()
+    slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
+
+    r = client.get(f"/apps/{slug}/assets/hero.png")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.content == _PNG_1X1
+
+
+def test_get_app_asset_404s_when_the_file_is_missing(tmp_path, monkeypatch):
+    client = _client()
+    slug = _ships_assets(tmp_path, monkeypatch, {})
+
+    assert client.get(f"/apps/{slug}/assets/hero.png").status_code == 404
+
+
+def test_get_app_asset_serves_only_image_types(tmp_path, monkeypatch):
+    """Same allowlist as the icon: the folder may hold anything, the route hands
+    out images only — it is not a reader for arbitrary files an App ships."""
+    client = _client()
+    slug = _ships_assets(tmp_path, monkeypatch, {"notes.txt": b"secret"})
+
+    assert client.get(f"/apps/{slug}/assets/notes.txt").status_code == 404
+
+
+def test_get_app_asset_route_never_sees_a_path_shaped_name(tmp_path, monkeypatch):
+    """What the ROUTER does with a traversal-shaped URL: an encoded `/` in the
+    name segment matches no route, so the handler is never called — the spy on
+    the loader records nothing — and the answer is the router's 404. A literal
+    `../` is not exercised here because the HTTP client normalises it away
+    before the request leaves (`/apps/rca/assets/../icon.png` is sent as
+    `/apps/rca/icon.png`) — such a case would pass against any handler. This
+    is not the loader's guard — that is pinned by
+    ``test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename`` below,
+    at the seam a name can actually arrive through."""
+    from workspace_app.apps import manifest
+
+    client = _client()
+    slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
+    (tmp_path / slug / "icon.png").write_bytes(_PNG_1X1)  # beside app.json
+    (tmp_path / "secret.png").write_bytes(_PNG_1X1)  # beside the App
+    seen: list[str] = []
+    real = manifest.load_app_asset
+
+    def spy(slug: str, subdir: str, name: str):
+        seen.append(name)
+        return real(slug, subdir, name)
+
+    monkeypatch.setattr(manifest, "load_app_asset", spy)
+
+    assert client.get(f"/apps/{slug}/assets/hero.png").status_code == 200  # the control
+    assert seen == ["hero.png"]  # the spy sees a name the router does deliver
+    assert client.get(f"/apps/{slug}/assets/..%2Ficon.png").status_code == 404
+    assert client.get(f"/apps/{slug}/assets/..%2F..%2Fsecret.png").status_code == 404
+    assert seen == ["hero.png"]  # and nothing for the two that never reached the handler
+
+
+def test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename(tmp_path, monkeypatch):
+    """The loader's own rule, at the seam a name arrives through (a manifest
+    field for the icon, a decoded path segment for an asset): anything with a
+    separator is refused BEFORE a path is built. Every target below really
+    exists — the control proves it — so a ``None`` is a refusal, not a miss."""
+    from workspace_app.apps.manifest import load_app_asset
+
+    slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
+    (tmp_path / slug / "icon.png").write_bytes(_PNG_1X1)  # beside app.json
+    (tmp_path / "secret.png").write_bytes(_PNG_1X1)  # beside the App
+
+    assert load_app_asset(slug, "assets", "hero.png") is not None  # the control
+    assert load_app_asset(slug, "assets", "../icon.png") is None
+    assert load_app_asset(slug, "assets", "../../secret.png") is None
+    assert load_app_asset(slug, "assets", "..\\icon.png") is None
+    assert load_app_asset(slug, "assets", "..") is None  # suffix "." — the allowlist refuses it
+    assert load_app_asset(slug, "assets", ".") is None
+    assert load_app_asset(slug, "", "../secret.png") is None  # the icon seam, same rule
+    assert load_app_asset(slug, "", "icon.png") is not None
+
+
+def test_load_app_asset_treats_a_name_the_filesystem_refuses_as_no_asset(tmp_path, monkeypatch):
+    """A name the filesystem itself cannot hold (longer than NAME_MAX, so the
+    probe raises ENAMETOOLONG instead of answering "not there") is no asset —
+    ``None``, and 404 on the route — not a 500 with a traceback. The assets
+    route is the first place a URL segment reaches this loader, so the case
+    is reachable by anyone."""
+    from workspace_app.apps.manifest import load_app_asset
+
+    client = _client()  # built before the loaders are re-pointed
+    slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
+    too_long = "a" * 300 + ".png"
+
+    assert load_app_asset(slug, "assets", "hero.png") is not None  # the control
+    assert load_app_asset(slug, "assets", too_long) is None
+    assert client.get(f"/apps/{slug}/assets/{too_long}").status_code == 404
+
+
+def test_get_app_asset_unknown_slug_404():
+    assert _client().get("/apps/nope/assets/hero.png").status_code == 404
+
+
+def test_get_app_asset_serves_only_folders_that_are_apps():
+    """The route's own guard: a folder under the apps root that is NOT a
+    discovered App (``_template`` — the scaffold, which really ships
+    ``assets/example.png``) answers 404 even though the file exists. Without
+    the guard the loader would serve it, so this is the input that tells the
+    guard apart from a plain file miss (``nope`` above is 404 either way)."""
+    from workspace_app.apps.manifest import apps_root
+
+    assert (apps_root() / "_template" / "assets" / "example.png").is_file()  # the control
+    assert _client().get("/apps/_template/assets/example.png").status_code == 404
+
+
+def test_get_app_manifest_onboarding_footer_defaults_empty():
+    """`footer` (markdown under the points, above the buttons) is optional: an
+    app.json that predates it still loads, and the FE sees `""`."""
+    ob = _client().get("/apps/playground").json()["onboarding"]
+    assert ob is not None
+    assert ob["footer"] == ""

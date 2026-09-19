@@ -10,7 +10,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
-import { useFileService } from "../api/fileService";
+import { useFileService, useOptionalFileService } from "../api/fileService";
 import { MonacoEditor } from "../components/MonacoEditor";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
@@ -64,11 +64,40 @@ export function MarkdownRenderer({ path }: { path: string }) {
  * file they were written in. Split out of the file renderer so anything holding
  * markdown in memory — an entity record's body, say — reads exactly like the
  * same prose would in a `.md` file, instead of growing a second, poorer
- * markdown pipeline beside this one. `path` is the resolution base. */
-export function MarkdownBody({ text, path }: { text: string; path: string }) {
-  const svc = useFileService();
+ * markdown pipeline beside this one. `path` is the resolution base.
+ *
+ * One caller holds markdown that is NOT in a workspace: the onboarding modal,
+ * on the Launcher and the AppDashboard, outside any `FileServiceProvider`.
+ * Such a caller passes `resolveUrl` — how ITS refs become browser URLs — and
+ * the same pipeline runs without a file service; when both are present the
+ * caller's resolver wins, because it said so. A caller that passes neither
+ * still needs the provider; the throw is deliberate (a silent identity
+ * resolver would render broken images and say nothing). `compact` is the
+ * chat-sized variant (`.md-compact`). `className` goes on the article beside
+ * `md-body`, which is how a context overrides what `.md-body` sets — colour,
+ * size — with a compound selector on the same element (`.x.md-body`), one
+ * class more specific than `.md-body` alone. */
+export function MarkdownBody({
+  text,
+  path,
+  resolveUrl,
+  compact = false,
+  className,
+}: {
+  text: string;
+  path?: string;
+  resolveUrl?: (src: string) => string;
+  compact?: boolean;
+  className?: string;
+}) {
+  const svc = useOptionalFileService();
+  if (!resolveUrl && !svc) {
+    throw new Error("MarkdownBody needs a resolveUrl or a <FileServiceProvider>");
+  }
+  const resolve = resolveUrl ?? ((src: string) => svc!.fileUrl(src, path));
+  const classes = [className, "md-body", compact && "md-compact"].filter(Boolean).join(" ");
   return (
-    <article className="md-body">
+    <article className={classes}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
@@ -78,7 +107,7 @@ export function MarkdownBody({ text, path }: { text: string; path: string }) {
           // outside the F11 report viewer) lands on the file API.
           img: ({ src, alt }) => {
             if (!src) return null;
-            const url = svc.fileUrl(src, path);
+            const url = resolve(src);
             return (
               <img src={url} alt={alt ?? ""} style={{ maxWidth: "100%", height: "auto" }} />
             );
@@ -87,7 +116,7 @@ export function MarkdownBody({ text, path }: { text: string; path: string }) {
           // the file API (opens the file) so the user can see its content;
           // external URLs / #fragments pass through.
           a: ({ href, children, ...rest }) => {
-            const resolved = typeof href === "string" ? svc.fileUrl(href, path) : href;
+            const resolved = typeof href === "string" ? resolve(href) : href;
             const isFile = typeof href === "string" && resolved !== href;
             return (
               <a href={resolved} {...rest} {...(isFile ? { target: "_blank", rel: "noreferrer" } : {})}>
