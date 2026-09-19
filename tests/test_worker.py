@@ -81,6 +81,7 @@ def test_select_coordinator_maps_each_jobtype_to_its_coordinator():
         "graph": bundle.graph,
         "kb-import": bundle.kb_import,
         "blob-gc": bundle.blob_gc,
+        "chat-video": bundle.chat_video,
     }
     assert set(expected) == set(_JOBTYPE_ATTR), (
         "a jobtype was added or renamed without a case here — a worker pod can be "
@@ -167,6 +168,51 @@ def test_build_bundle_forwards_the_context_knobs_to_the_eval_retriever(tmp_path)
 def test_the_blob_gc_worker_is_built_from_the_apis_composition():
     assert set(_JOBTYPE_ATTR) >= API_REGISTRY_JOBTYPES
     assert "blob-gc" in API_REGISTRY_JOBTYPES
+
+
+def test_the_chat_video_worker_is_built_from_the_apis_composition(tmp_path, monkeypatch):
+    """plan-chat-video-export P5: the video job writes through the API's
+    `WorkspaceFiles` (quota, jail, mirror), which only `create_app` composes —
+    so this worker, like blob-gc, boots `build_app` and takes the coordinator
+    the API wired, files and all. Through the worker's real door
+    (`build_coordinator`, what `main` calls): the coordinator it hands back
+    already holds a facade — routed through `build_bundle` it would hold none
+    and every job would fail at `files`."""
+    from textwrap import dedent
+
+    from workspace_app.chat_video.jobs import ChatVideoCoordinator
+    from workspace_app.config.loader import load
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.worker.__main__ import build_coordinator
+
+    assert "chat-video" in API_REGISTRY_JOBTYPES
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent(f"""
+            server:
+              run_consumers: false
+              superusers: [root]
+            filestore:
+              kind: specstar
+            sandbox:
+              root: {tmp_path / "sandbox"}
+            chat_video:
+              max_output_bytes: 12345
+            kb:
+              embedder:
+                model: ""
+        """),
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg, env={})
+    monkeypatch.setattr("workspace_app.__main__.PACKAGES", {})
+
+    coordinator = build_coordinator(settings, "chat-video", config_dir=None)
+
+    assert isinstance(coordinator, ChatVideoCoordinator)
+    assert isinstance(coordinator.files, WorkspaceFiles)
+    assert coordinator._limits.max_output_bytes == 12345  # the configmap reaches the worker
+    assert coordinator._superusers == frozenset({"root"})  # and so does the superuser set
 
 
 def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monkeypatch):

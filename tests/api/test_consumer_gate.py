@@ -39,6 +39,18 @@ async def test_consumers_run_in_process_by_default():
         # coordinator that is wired everywhere EXCEPT this line accepts uploads and
         # silently never writes them — which is exactly how it shipped first.
         assert app.state.import_coordinator.consuming
+        # plan-chat-video-export P5: the all-in-one pod renders its own videos.
+        assert app.state.chat_video_coordinator.consuming
+    # …and the lifespan's drain list names it too, or a SIGTERM would leave its
+    # consumer thread running past the loop it captured.
+    assert not app.state.chat_video_coordinator.consuming
+
+
+async def test_the_chat_video_coordinator_writes_through_the_apis_own_facade():
+    """The job's every file is a workspace file, so the coordinator gets the SAME
+    `WorkspaceFiles` the routes use (quota, jail, mirror) — not a second one."""
+    app, _ = _app()
+    assert app.state.chat_video_coordinator.files is app.state.workspace_files
 
 
 async def test_run_consumers_false_disables_consumers_but_keeps_the_producer():
@@ -57,6 +69,7 @@ async def test_run_consumers_false_disables_consumers_but_keeps_the_producer():
         assert not app.state.wiki_coordinator.consuming
         assert not app.state.card_gen_coordinator.consuming
         assert not app.state.import_coordinator.consuming
+        assert not app.state.chat_video_coordinator.consuming
         # …but enqueue still works: a job is created and left for a worker pod.
         assert app.state.index_coordinator.enqueue(doc_id, cid) is True
         assert not app.state.index_coordinator.consuming  # enqueue never starts a consumer

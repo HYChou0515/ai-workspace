@@ -386,6 +386,63 @@ def test_export_chat_downloads_the_round_trip_format():
     assert messages[0]["content"] == "AOI flagged voids on lot 25-W14"
 
 
+def test_export_chat_as_markdown_and_by_range():
+    """`?format=md` is the same messages rendered for a person, named
+    `.chat.md`; `?start=&end=` is an absolute, half-open range shared by
+    both formats and reflected in the file name the way the person read it
+    (1-based, inclusive). A range that names nothing is a 422 with the
+    rule, never a traceback."""
+    client, spec, _ = _build_harness('{"insights": []}')
+    inv_id = _create_investigation(spec)
+    chat_id = client.get(f"/a/rca/items/{inv_id}/chats").json()[0]["chat_id"]
+    base = f"/a/rca/items/{inv_id}/chats/{chat_id}/export-chat"
+
+    md = client.get(base, params={"format": "md"})
+    assert md.status_code == 200
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert md.headers["content-disposition"].startswith('attachment; filename="MX-7-voids.chat.md"')
+    assert md.text.startswith("# MX-7 voids\n\n### 👤 ")
+    assert "AOI flagged voids on lot 25-W14" in md.text
+
+    last = client.get(base, params={"start": 1, "end": 2})
+    assert last.status_code == 200
+    assert last.headers["content-disposition"].startswith(
+        'attachment; filename="MX-7-voids (2-2).chat.json"'
+    )
+    assert [m["role"] for m in last.json()["messages"]] == ["assistant"]
+
+    # One end alone: the other is the thread's edge, and the name says the
+    # resolved range — it used to say `(2–None)`.
+    tail = client.get(base, params={"start": 1})
+    assert tail.status_code == 200
+    assert tail.headers["content-disposition"].startswith(
+        'attachment; filename="MX-7-voids (2-2).chat.json"'
+    )
+    assert len(tail.json()["messages"]) == 1
+
+    bad = client.get(base, params={"start": 2, "end": 1})
+    assert bad.status_code == 422
+    assert bad.json()["detail"] == "start must be before end"
+    assert client.get(base, params={"format": "pdf"}).status_code == 422
+
+
+def test_export_of_an_empty_chat_is_an_empty_export_not_a_refusal():
+    """A fresh chat (the UI's "new chat") has no messages. With no range
+    asked for, its export is the whole thread — empty — as on master; the
+    branch had turned it into 422 "start must be before end", and the
+    dialog then said "Could not load this conversation"."""
+    client, spec, _ = _build_harness('{"insights": []}')
+    inv_id = _create_investigation(spec)
+    empty = client.post(f"/a/rca/items/{inv_id}/chats", json={"title": "empty"}).json()["chat_id"]
+
+    r = client.get(f"/a/rca/items/{inv_id}/chats/{empty}/export-chat")
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"title": "empty", "messages": []}
+    md = client.get(f"/a/rca/items/{inv_id}/chats/{empty}/export-chat", params={"format": "md"})
+    assert md.status_code == 200
+
+
 def test_export_chat_404s_on_unknown_investigation():
     client, _, _ = _build_harness('{"insights": []}')
     assert client.get("/a/rca/items/nope/chats/whatever/export-chat").status_code == 404

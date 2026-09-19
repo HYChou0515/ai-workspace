@@ -136,3 +136,60 @@ zoom 是 CSS `transform`(推進 + 平移到輸入框),不是後製;UI 放大是 
 - 仿真的聊天視窗,像但不是像素級的真 app 畫面。
 - 不畫檔案樹、側欄、citation;`ask_user` 的選項畫成一般卡片(和 replay 模式一樣)。
 - 跑在沒有 CJK 字型的機器(某些 container)中文會是方塊——裝 `fonts-noto-cjk`。
+
+## 要多少資源(量的,41 秒的範例,1080p)
+
+- **時間**:錄影 = 影片時長(頁面即時播放、即時錄),mp4 轉檔 4–5 秒、gif 兩段共 14 秒。
+- **記憶體**(峰值 RSS):Chromium 約 170 MB、Playwright 的錄影 ffmpeg 約 150 MB;轉檔 **mp4 273–320 MB**、**gif 230–640 MB**
+  (gif 的第二段有時會在前幾秒填滿一個約 50 張 frame 的佇列然後持平;120 秒的片峰值不比 20 秒的高,所以是有界的、不隨片長長大)。
+  錄影和轉檔不同時發生,所以整個流程的峰值就是轉檔那一段。修之前:單段式 gif 4,546 MB、預設參數的 libx264 1,329 MB——
+  跑在 worker pod 上的話 memory limit 要照上面的數字給(`kubernetes/base/workers.yaml`)。
+- **輸出大小**:720p 41 秒 mp4 1.8 MB、gif 18 MB;1080p mp4 2.5 MB、gif 36 MB。
+
+## 從聊天視窗匯出(#823)
+
+chat header 的 **匯出** 開一個對話框,三種格式一組 radio:**文字 JSON**(`.chat.json`,照舊)、**文字 Markdown**
+(`.chat.md`,貼進報告用)、**影片**。三種都可以選範圍,**從最新往回數**:全部 / 最近 N 則 / 自訂從第 k 則到第 m 則
+(#1 是最新的一則;選單上每則寫 `#k · 👤/🤖 前幾個字`)。文字直接下載;影片的部分:
+
+- **尺寸**三種輸入法,結果列永遠顯示 `W×H・文字 s×・約 N MB`(估的,不是上限——量過一支比估的多六成):比例(16:9 / 1:1 / 9:16)
+  + 解析度滑桿(停點 480p…2160p,只列這個部署允許的)、比例 + 文字大小(小 / 中 / 大 / 特大 = 0.8×…1.6×,畫面跟著放大)、
+  直接打寬高(+ 可選文字大小;奇數邊錄影器會取成偶數,表單先取好,所以顯示的就是做出來的)。
+- **節奏**:整體速度、打字(毫秒/字)、輸入框推近倍率、最長秒數——其餘旗標用指令列的預設;打超過範圍的值送出時夾到範圍內。
+- 送出後 header 的綠點右邊多一顆進度膠囊(排隊中 / 錄影中 / 編碼中,`已用秒數 / 約 預估秒數`),完成後顯示影片路徑、可開啟或下載;
+  影片寫進這個 item 的 workspace `/exports/chat-video/<標題>-<時間>.<格式>`(算 workspace 額度),旁邊留著
+  `<影片>.chat.json`——那份就是輸入,改一改可以用 API 再送。**取消 = 刪掉 `<影片>.progress.json`**(進度列上的取消鈕,
+  或在檔案樹裡直接刪),worker 最慢十來秒停下(心跳 10 秒 + 錄影切片 2 秒)、什麼都不寫;還在排隊的連錄影都不開始。
+  失敗的話進度檔留著,裡面一句話寫原因。排隊超過 60 秒沒人接手,膠囊會說「還沒有 worker 接手」;錄到一半心跳停 60 秒,說「worker 沒有回應」。
+- 需要這個 item 的「讀取檔案」(影片要拿它秀過的圖)與「新增檔案」兩個權限(有「編輯檔案」的人也算——編輯包含新增);
+  沒有的話影片那個選項會鎖住並寫原因。
+
+### 從 API 出固定字句的影片
+
+前端用的就是這條 API,所以要「隨時打後端 API 生成固定字句的影片」不用經過任何對話:
+
+```bash
+curl -sS -X POST "$BASE/api/a/rca/items/$ITEM/chat-video" \
+  -H 'content-type: application/json' \
+  -d '{
+    "transcript": {"title": "OOM 事故",
+                   "messages": [{"role": "user", "content": "為什麼 API pod 會 OOM？"},
+                                {"role": "assistant", "content": "cluster_sweeper 在每顆 pod 讀全表。"}]},
+    "options": {"width": 1280, "height": 720, "type_ms": 55},
+    "output_path": "videos/oom.mp4"
+  }'
+# 202 {"output_path": "/videos/oom.mp4", "source_path": "/videos/oom.mp4.chat.json",
+#      "progress_path": "/videos/oom.mp4.progress.json", "expected_seconds": 7,
+#      "stale_after_seconds": 60, "token": "5b1c…"}
+```
+
+`transcript` 是完整的 `.chat.json` 文件(`title` + `messages`,每則至少 `role` 與 `content`;可以只是整段對話的一部分,
+但要是一份完整的 JSON);`options` 是 `VideoOptions` 的任意子集;`output_path` 可省(伺服端命名),給了的話**副檔名決定格式**
+(`.gif` / `.mp4` / `.webm`,同指令列的 `-o`)。`GET` 同一路徑回這個部署的上限(`max_pixels` / `max_seconds` / `max_output_bytes`,
+`config.yaml` 的 `chat_video:`);超過是 422、路徑已有檔是 409,同一支還在做、這個 item 有一支在做、你在別的 item 有一支在做也都是 409
+(一句話寫在做的是哪一支)。之後用 `GET …/files/<progress_path>` 看進度(`token` 對得上才是這一支的;不是的話對你來說它已經不在了)、
+`DELETE …/chat-video?path=<progress_path>` 取消(排的人自己可以刪;檔案路由的 `DELETE` 要「編輯檔案」)、
+`GET …/files/<output_path>` 拿影片(支援 `Range`,所以 `<video>` 拖得動、Safari 也肯播)。
+
+算圖在 `chat-video` worker(pod-split 部署要有 `rca-worker-chat-video`;all-in-one 要 API 自己跑 `rca-app-chat-video` image),
+見 [deployment.md §11](deployment.md#11-生產環境注意事項)。

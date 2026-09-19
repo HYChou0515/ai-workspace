@@ -79,6 +79,10 @@ class VideoOptions(msgspec.Struct, frozen=True):
         checks = (
             (16 <= self.width <= 7680, "width must be 16..7680"),
             (16 <= self.height <= 4320, "height must be 16..4320"),
+            # No even-side rule: an odd frame is rounded down by the recorder
+            # (1001×601 records as 1000×600), so x264 never sees one — a rule
+            # here refused inputs that worked. The form offers even sizes so
+            # the number it shows is the number that comes out.
             (self.chat_width >= 200, "chat_width must be at least 200"),
             (self.scale >= 0, "scale must be 0 (automatic) or positive"),
             (self.zoom >= 1, "zoom must be at least 1 (1 = no push-in)"),
@@ -105,3 +109,51 @@ class VideoOptions(msgspec.Struct, frozen=True):
         for ok, why in checks:
             if not ok:
                 raise ValueError(why)
+
+
+def check_limits(options: VideoOptions, *, max_pixels: int, max_seconds: int) -> None:
+    """The server's ceilings on top of the struct's own sanity (which is what
+    ANY caller may ask; these are what THIS deployment allows —
+    ``config.yaml`` ``chat_video:``). The form never offers a value past
+    them; a caller of the API can send anything, so the refusal names the
+    ceiling and what it is, one sentence, for a 422. The output ceiling is
+    the worker's to apply (it knows the size only once the file exists), and
+    the asset budgets are not refused but FITTED (:func:`fit_asset_budgets`):
+    they have defaults the dialog never sends, and a refusal on a default
+    named a knob the person had no field for."""
+    pixels = options.width * options.height
+    if pixels > max_pixels:
+        side = _side_of(max_pixels)
+        raise ValueError(
+            f"{options.width}×{options.height} is {pixels:,} pixels; at most {max_pixels:,}{side}"
+        )
+    if options.max_seconds > max_seconds:
+        raise ValueError(f"max_seconds {options.max_seconds}; at most {max_seconds}")
+
+
+def fit_asset_budgets(options: VideoOptions, *, max_output_bytes: int) -> VideoOptions:
+    """The two asset budgets brought under the deployment's ceiling: the
+    total under ``max_output_bytes`` — the one number the deployment already
+    states for "how many bytes one video may weigh"; the page carries its
+    pictures inline and the worker holds what the page will inline, so a
+    request may not make it pull more than that into memory (a script used
+    to send ``10**12`` and have a whole workspace file read) — and the
+    per-file budget under the total. Fitted rather than refused: both have
+    defaults (24 MB, 4 MB) that the dialog never sends, and refusing the
+    default under a 20 MB ceiling was a 422 naming a knob the person had no
+    field for. What is queued carries the fitted values, so the row says what
+    the worker will do."""
+    total = min(options.max_assets_total_bytes, max_output_bytes)
+    per_file = min(options.max_asset_bytes, total)
+    if (total, per_file) == (options.max_assets_total_bytes, options.max_asset_bytes):
+        return options
+    return msgspec.structs.replace(options, max_assets_total_bytes=total, max_asset_bytes=per_file)
+
+
+def _side_of(max_pixels: int) -> str:
+    """`(1920×1080)` after a pixel count a person would not recognise; the
+    16:9 frame with that many pixels, when it is a whole one."""
+    width = round((max_pixels * 16 / 9) ** 0.5)
+    return (
+        f" ({width}×{max_pixels // width})" if width * (max_pixels // width) == max_pixels else ""
+    )

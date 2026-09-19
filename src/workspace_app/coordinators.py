@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from .chat_video.jobs import ChatVideoCoordinator
 from .filestore.blob_gc import BlobGcCoordinator
 from .kb.card_drafter import LlmCardDrafter, NullCardDrafter
 from .kb.card_gen_coordinator import CardGenCoordinator
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 
     from .agent.config_catalog import AgentConfigCatalog
     from .api.runner import AgentRunner
+    from .config.schema import ChatVideoSettings
     from .filestore.protocol import FileStore
     from .kb.embedder import Embedder
     from .kb.llm import ILlm
@@ -74,6 +76,11 @@ class CoordinatorBundle:
     # #245: the blob-GC reconcile. Always built — no LLM; the API's sweeper asks
     # for it once per window and whoever consumes `blob-gc` runs it.
     blob_gc: BlobGcCoordinator
+    # plan-chat-video-export: the chat-video render. Always built — no LLM; a
+    # browser + ffmpeg the API image does not carry, so a pod-split deploy gives
+    # it its own worker image. Its `WorkspaceFiles` is injected post-build
+    # (`set_files`), the way `eval` takes its retriever.
+    chat_video: ChatVideoCoordinator
 
 
 def build_ingestor(
@@ -179,6 +186,9 @@ def build_coordinators(
     gc_t2: str = "24h",
     monitor: IMonitor | None = None,
     filestore: FileStore | None = None,
+    # plan-chat-video-export: the `chat_video:` config section — the output
+    # ceiling and the heartbeat the worker applies. None ⇒ its defaults.
+    chat_video_settings: ChatVideoSettings | None = None,
 ) -> CoordinatorBundle:
     """Construct the background job coordinators and wire the index→wiki→quality
     chain. The returned coordinators are *not* yet consuming — the caller (API
@@ -329,13 +339,22 @@ def build_coordinators(
         filestore=filestore,
         message_queue_factory=message_queue_factory,
     )
-    logger.info("coordinators: built wiki/index/card_gen/kb_import/blob_gc coordinators")
+    # plan-chat-video-export: one render per job; the route's own answer to
+    # "who may" is asked again by the worker, with the same superuser set.
+    chat_video = ChatVideoCoordinator(
+        spec,
+        limits=chat_video_settings,
+        message_queue_factory=message_queue_factory,
+        superusers=superusers,
+    )
+    logger.info("coordinators: built wiki/index/card_gen/kb_import/blob_gc/chat_video coordinators")
     return CoordinatorBundle(
         wiki=wiki,
         index=index,
         card_gen=card_gen,
         kb_import=kb_import,
         blob_gc=blob_gc,
+        chat_video=chat_video,
         quality=quality,
         sanity=sanity,
         eval=eval_coordinator,

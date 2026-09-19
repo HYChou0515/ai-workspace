@@ -20,6 +20,7 @@ when they write a small `config.yaml`?
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from textwrap import dedent
 
@@ -1334,3 +1335,104 @@ def test_subagent_models_left_null_loads_as_empty(tmp_path: Path):
     )
     s = load(config_path=cfg, env={})
     assert s.agents.subagent_models == ()
+
+
+def test_chat_video_section_loads_and_defaults_are_the_measured_ceilings(tmp_path: Path):
+    """`chat_video:` is the server-side ceiling on what a video job may ask
+    for (plan-chat-video-export decision 10): total pixels, seconds, output
+    bytes, and the progress heartbeat. Whitelisted AND built — a key that
+    parses but never reaches `Settings` is the dead-knob class. The defaults
+    are what the worker pod's limits were set from."""
+    defaults = load(config_path=tmp_path / "missing.yaml", env={}).chat_video
+    assert defaults.max_pixels == 1920 * 1080
+    assert defaults.max_seconds == 180
+    assert defaults.max_output_bytes == 100_000_000
+    assert defaults.heartbeat_seconds == 10
+    assert defaults.stale_after_seconds == 60
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            chat_video:
+              max_pixels: 921600
+              max_seconds: 60
+              max_output_bytes: 20000000
+              heartbeat_seconds: 5
+              stale_after_seconds: 30
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={}).chat_video
+    assert (s.max_pixels, s.max_seconds, s.max_output_bytes) == (921600, 60, 20_000_000)
+    assert (s.heartbeat_seconds, s.stale_after_seconds) == (5, 30)
+
+
+@pytest.mark.parametrize(
+    ("section", "sentence"),
+    [
+        ("heartbeat_seconds: 0", "chat_video.heartbeat_seconds must be a positive integer, got 0"),
+        ("max_seconds: -5", "chat_video.max_seconds must be a positive integer, got -5"),
+        ("max_pixels: true", "chat_video.max_pixels must be a positive integer, got True"),
+        (
+            "heartbeat_seconds: 10\n  stale_after_seconds: 5",
+            "chat_video.stale_after_seconds (5) must be longer than "
+            "chat_video.heartbeat_seconds (10)",
+        ),
+        (
+            "stale_after_seconds: 5",  # the default heartbeat is 10
+            "chat_video.stale_after_seconds (5) must be longer than "
+            "chat_video.heartbeat_seconds (10)",
+        ),
+        (
+            "heartbeat_seconds: 60",  # equal to the default stale rule: dead each write latency
+            "chat_video.stale_after_seconds (60) must be longer than "
+            "chat_video.heartbeat_seconds (60)",
+        ),
+        # A blank value is a YAML null, and the layered merge lets it REPLACE
+        # the bundled default rather than fall back to it — the first version
+        # read `None` as "absent" and booted a worker whose heartbeat never
+        # woke (`wait_for(halt.wait(), timeout=None)`), so no cancel was seen
+        # until the render ended on its own.
+        ("heartbeat_seconds:", "chat_video.heartbeat_seconds must be a positive integer, got None"),
+        ("max_pixels: null", "chat_video.max_pixels must be a positive integer, got None"),
+        (
+            "stale_after_seconds: ~",
+            "chat_video.stale_after_seconds must be a positive integer, got None",
+        ),
+    ],
+    ids=[
+        "heartbeat-0",
+        "negative",
+        "bool",
+        "stale-under-beat",
+        "stale-under-default-beat",
+        "stale-equal-beat",
+        "blank-is-null",
+        "null",
+        "tilde-is-null",
+    ],
+)
+def test_a_chat_video_ceiling_that_cannot_work_refuses_to_boot(tmp_path: Path, section, sentence):
+    """`heartbeat_seconds: 0` is a hot loop (16,689 progress-file writes in
+    a 0.3 s render, each a store write in production); a stale rule no
+    longer than the beat reads a running job as dead between two beats, so a
+    second request replaces a live job's file mid-render. Refused at boot
+    with the key named, like the other knobs a typo would silently break."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"chat_video:\n  {section}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=re.escape(sentence)):
+        load(config_path=cfg, env={})
+
+
+def test_a_chat_video_header_with_every_key_commented_out_is_refused_as_a_null_section(
+    tmp_path: Path,
+):
+    """Uncommenting only the `chat_video:` header of the example config
+    leaves a null section; the loader says what that is instead of an
+    AttributeError one step in."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("chat_video:\n  # max_pixels: 921600\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=re.escape("chat_video must be a mapping")):
+        load(config_path=cfg, env={})

@@ -46,6 +46,14 @@ export const qk = {
   chatContext: (slug: string, itemId: string, chatId: string) =>
     ["chatContext", slug, itemId, chatId] as const,
   file: (id: string, path: string) => ["file", id, path] as const,
+  // plan-chat-video-export: the export dialog's transcript (what the range
+  // picker counts) and the deployment's video ceilings (what the form offers).
+  chatTranscript: (id: string, chatId: string) => ["chatTranscript", id, chatId] as const,
+  chatVideoLimits: (id: string) => ["chatVideoLimits", id] as const,
+  // The progress file the header line polls; keyed by path so two videos of
+  // one item are two queries.
+  chatVideoProgress: (id: string, path: string, token: string) =>
+    ["chatVideoProgress", id, path, token] as const,
   // A WUI's assembled document. `generation` is the Refresh counter, not a
   // cache-buster: a WUI is deliberately never reloaded on its own, so a NEW key
   // is the only thing that rebuilds one — and it also drops the old frame,

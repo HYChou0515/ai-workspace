@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canChangeItemPermission,
   canWriteItem,
+  canAddItemContent,
   canWriteItemMeta,
   itemVisibility,
   parseItemPermission,
@@ -31,6 +32,37 @@ describe("canWriteItem (mirrors backend perm/authorize for a write verb)", () =>
   });
   it("restricted + not granted → read-only", () => {
     expect(canWriteItem({ visibility: "restricted", edit_content: ["user:someone"] }, ME, OWNER, false)).toBe(false);
+  });
+});
+
+describe("canAddItemContent (the video export's second verb, by the server's rule)", () => {
+  // `POST …/chat-video` asks read_content AND add_content. The server folds
+  // edit_content into add_content (`_effective_grants`, pinned by
+  // tests/perm/test_authorize.py::test_edit_content_grant_implies_add_content);
+  // the first version read the verb ALONE and told an editor with only
+  // edit_content the video needed a grant the route would not ask for.
+  it("an editor with edit_content only IS an adder — edit_content ⊇ add_content", () => {
+    const perm = { visibility: "restricted" as const, edit_content: ["user:me1"] };
+    expect(canAddItemContent(perm, ME, OWNER, false)).toBe(true);
+  });
+  it("write_meta alone is NOT — the union (`canWriteItem`) says yes and the route 403s", () => {
+    const perm = { visibility: "restricted" as const, write_meta: ["user:me1"] };
+    expect(canWriteItem(perm, ME, OWNER, false)).toBe(true);
+    expect(canAddItemContent(perm, ME, OWNER, false)).toBe(false);
+  });
+  it("a Collaborator (add_content granted) can; a Reader cannot", () => {
+    expect(
+      canAddItemContent({ visibility: "restricted", add_content: ["user:me1"] }, ME, OWNER, false),
+    ).toBe(true);
+    expect(
+      canAddItemContent({ visibility: "restricted", read_content: ["user:me1"] }, ME, OWNER, false),
+    ).toBe(false);
+  });
+  it("public allows it; the owner always may; a superuser bypasses", () => {
+    expect(canAddItemContent({ visibility: "public" }, ME, OWNER, false)).toBe(true);
+    expect(canAddItemContent({ visibility: "private" }, OWNER, OWNER, false)).toBe(true);
+    expect(canAddItemContent({ visibility: "private" }, ME, OWNER, true)).toBe(true);
+    expect(canAddItemContent({ visibility: "private" }, ME, OWNER, false)).toBe(false);
   });
 });
 

@@ -261,6 +261,8 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             ),
             gc_t1=settings.filestore.gc_t1,
             gc_t2=settings.filestore.gc_t2,
+            # plan-chat-video-export: the video ceilings + the worker's heartbeat.
+            chat_video=settings.chat_video,
             # plan-graceful-shutdown P2: the turn-drain budget — the same number
             # uvicorn gets below as `timeout_graceful_shutdown`.
             shutdown_budget=timedelta(seconds=settings.server.shutdown_budget_sec),

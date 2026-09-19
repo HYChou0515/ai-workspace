@@ -13,6 +13,7 @@ import builtins
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,8 @@ import pytest
 from workspace_app.chat_video import render
 from workspace_app.chat_video.options import VideoOptions
 from workspace_app.chat_video.render import (
+    RECORD_SLICE_MS,
+    Cancelled,
     RecordingTimedOut,
     RendererUnavailable,
     encode,
@@ -49,32 +52,134 @@ def test_encoding_without_ffmpeg_says_so(monkeypatch, tmp_path):
         encode(tmp_path / "in.webm", "gif", tmp_path / "out.gif")
 
 
+class _FakeFfmpeg:
+    """A `subprocess.Popen` stand-in: exits with `returncode` after `ticks`
+    one-second waits (each a `TimeoutExpired`, as the real `wait(timeout=1)`),
+    with `stderr` as its last words; `killed` records a kill."""
+
+    def __init__(self, *, returncode: int = 0, ticks: int = 0, stderr: str = ""):
+        self.returncode_after = returncode
+        self.ticks_left = ticks
+        self.stderr_text = stderr
+        self.killed = False
+        self.returncode: int | None = None
+        self.args: list[str] = []
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args, **kw):  # the Popen call itself
+        self.args = list(args)
+        self.calls.append(list(args))
+        Path(args[-1]).write_bytes(b"partial")  # ffmpeg opens its output at once
+        # ffmpeg's stderr goes to a FILE (see `_run_ffmpeg`); the fake writes
+        # its last words there, as the real one would.
+        err = kw.get("stderr")
+        if hasattr(err, "write"):
+            err.write(self.stderr_text)
+            err.flush()
+        return self
+
+    def wait(self, timeout: float | None = None):
+        if self.ticks_left > 0:
+            self.ticks_left -= 1
+            raise subprocess.TimeoutExpired(self.args, timeout or 0)
+        self.returncode = self.returncode_after
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+    def communicate(self, timeout: float | None = None):
+        return "", ""
+
+
 def test_an_ffmpeg_failure_carries_its_own_last_words(monkeypatch, tmp_path):
     """ffmpeg's stderr is the only diagnosis there is; the tail of it rides on
     the exception instead of being lost to a log nobody reads."""
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
-
-    def boom(*_a, **_k):
-        raise subprocess.CalledProcessError(
-            1, ["ffmpeg"], stderr="…\nInvalid data found when processing input\n"
-        )
-
-    monkeypatch.setattr(render.subprocess, "run", boom)
+    monkeypatch.setattr(
+        render.subprocess,
+        "Popen",
+        _FakeFfmpeg(returncode=1, stderr="…\nInvalid data found when processing input\n"),
+    )
 
     with pytest.raises(RuntimeError, match="Invalid data found"):
         encode(tmp_path / "in.webm", "mp4", tmp_path / "out.mp4")
 
 
+def test_the_gif_passes_are_both_thread_capped_and_the_palette_is_an_input(monkeypatch, tmp_path):
+    """Two things the code did not do while its docstring said so: the
+    palette pass had no `-threads 2` before `-i` (the decoder ran on every
+    core; measured 164 MB vs 123 MB capped), and the second pass named the
+    palette INSIDE a filter graph (`movie=<path>`), where a `:` or `,` in the
+    scratch path breaks the parse. The palette is a second input now."""
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    proc = _FakeFfmpeg()
+    monkeypatch.setattr(render.subprocess, "Popen", proc)
+
+    encode(tmp_path / "in.webm", "gif", tmp_path / "out.gif")
+
+    first, second = proc.calls
+    for args in (first, second):
+        assert args.index("-threads") < args.index("-i") and args[args.index("-threads") + 1] == "2"
+    assert second.count("-i") == 2 and not any("movie=" in a for a in second)
+
+
+def test_an_ffmpeg_that_talks_a_lot_still_finishes_with_its_last_words(monkeypatch, tmp_path):
+    """stderr used to be a pipe nobody read until exit: a pass writing more
+    than the pipe holds (64 KB — per-frame decode errors on a damaged
+    recording) blocked on it and was only killed at the 300-second cap,
+    reported as a hang. It writes to a file now; the tail is still the
+    sentence."""
+    talker = tmp_path / "ffmpeg"
+    talker.write_text(
+        "#!/bin/sh\n"
+        'python3 -c "import sys; '
+        "sys.stderr.write('noise\\n' * 40000 + 'the real reason\\n'); sys.exit(1)\"\n"
+    )
+    talker.chmod(0o755)
+    monkeypatch.setattr(shutil, "which", lambda _name: str(talker))
+    monkeypatch.setattr(render, "_ENCODE_TIMEOUT_S", 5)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="the real reason"):
+        encode(tmp_path / "in.webm", "mp4", tmp_path / "out.mp4")
+    assert time.monotonic() - started < 4  # not the timeout
+
+
 def test_an_ffmpeg_that_hangs_is_a_sentence_not_a_traceback(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    proc = _FakeFfmpeg(ticks=10_000)
+    monkeypatch.setattr(render.subprocess, "Popen", proc)
+    monkeypatch.setattr(render, "_ENCODE_TIMEOUT_S", 3)
 
-    def hang(*_a, **_k):
-        raise subprocess.TimeoutExpired(["ffmpeg"], 300)
-
-    monkeypatch.setattr(render.subprocess, "run", hang)
-
-    with pytest.raises(RuntimeError, match="300"):
+    with pytest.raises(RuntimeError, match="within 3s"):
         encode(tmp_path / "in.webm", "gif", tmp_path / "out.gif")
+
+    assert proc.killed  # not left running behind the sentence
+    assert not list(tmp_path.iterdir())  # and nothing half-written left behind
+
+
+@pytest.mark.parametrize("fmt", ["mp4", "gif"])
+def test_a_stop_during_an_encode_kills_ffmpeg_and_is_cancelled(monkeypatch, tmp_path, fmt):
+    """The encode is polled every second with `should_stop` asked each time:
+    a True kills ffmpeg then and there, raises `Cancelled`, and leaves no
+    output — not the half-written file ffmpeg had opened, not the gif's
+    palette."""
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    proc = _FakeFfmpeg(ticks=10_000)
+    monkeypatch.setattr(render.subprocess, "Popen", proc)
+    asked: list[int] = []
+
+    def should_stop() -> bool:
+        asked.append(1)
+        return len(asked) >= 2
+
+    with pytest.raises(Cancelled):
+        encode(tmp_path / "in.webm", fmt, tmp_path / f"out.{fmt}", should_stop=should_stop)
+
+    assert proc.killed and len(asked) == 2
+    assert not list(tmp_path.iterdir())  # no output, no palette
 
 
 def test_ensure_tools_names_a_missing_ffmpeg_before_anything_is_recorded(monkeypatch):
@@ -86,10 +191,17 @@ def test_ensure_tools_names_a_missing_ffmpeg_before_anything_is_recorded(monkeyp
     ensure_tools(VideoOptions(fmt=("webm",)))  # a straight copy needs no ffmpeg
 
 
-def _fake_playwright(monkeypatch, launch_error_text: str | None = None):
+def _fake_playwright(
+    monkeypatch, launch_error_text: str | None = None, *, done_after_waits: int = 1
+):
     """A `playwright.sync_api` whose Chromium either cannot launch or plays
-    the page instantly — enough to reach the code around the browser."""
+    the page — `done` on the `done_after_waits`-th wait, a TimeoutError on
+    each wait before that, as the real one when a slice runs out — enough to
+    reach the code around the browser. `mod.closed` counts browser closes."""
     import types
+
+    state: dict[str, int] = {"waits": 0, "closed": 0}
+    timeouts: list[int] = []
 
     class Error(Exception):
         pass
@@ -112,7 +224,9 @@ def _fake_playwright(monkeypatch, launch_error_text: str | None = None):
             pass
 
         def wait_for_function(self, _expr, timeout):
-            if timeout < 1:
+            state["waits"] += 1
+            timeouts.append(timeout)
+            if timeout < 1 or state["waits"] < done_after_waits:
                 raise TimeoutError(f"Timeout {timeout}ms exceeded")
 
         def wait_for_timeout(self, _ms):
@@ -139,7 +253,7 @@ def _fake_playwright(monkeypatch, launch_error_text: str | None = None):
             return _Context(Path(record_video_dir))
 
         def close(self):
-            pass
+            state["closed"] += 1
 
     class _Chromium:
         def launch(self):
@@ -161,6 +275,8 @@ def _fake_playwright(monkeypatch, launch_error_text: str | None = None):
     mod.Error = Error  # ty: ignore[unresolved-attribute]
     mod.TimeoutError = TimeoutError  # ty: ignore[unresolved-attribute]
     mod.ViewportSize = dict  # ty: ignore[unresolved-attribute]
+    mod.state = state  # ty: ignore[unresolved-attribute]
+    mod.timeouts = timeouts  # ty: ignore[unresolved-attribute]
     monkeypatch.setitem(sys.modules, "playwright.sync_api", mod)
     return mod
 
@@ -183,6 +299,43 @@ def test_a_page_that_never_finishes_fails_the_recording_by_name(monkeypatch, tmp
 
     with pytest.raises(RecordingTimedOut, match="did not finish"):
         record("<html></html>", VideoOptions(), tmp_path, expected_ms=-40_000)
+
+
+def test_a_recording_waits_in_slices_and_a_stop_between_them_closes_the_browser(
+    monkeypatch, tmp_path
+):
+    """The recording is the long phase — as long as the video — so the cancel
+    has to reach it: `record` waits for `done` in short slices and asks
+    `should_stop` between them. A stop closes the browser at once (the
+    partial video is discarded) and raises `Cancelled`; nothing is moved to
+    `recording.webm`."""
+    mod = _fake_playwright(monkeypatch, done_after_waits=1000)
+    asked: list[int] = []
+
+    def should_stop() -> bool:
+        asked.append(1)
+        return len(asked) >= 3
+
+    with pytest.raises(Cancelled):
+        record(
+            "<html></html>", VideoOptions(), tmp_path, expected_ms=60_000, should_stop=should_stop
+        )
+
+    assert len(asked) == 3  # one ask per slice, until the third said stop
+    assert mod.state["waits"] == 3 and mod.state["closed"] == 1
+    # Each wait is at most one slice — that is what puts a cancel within
+    # reach of a three-minute recording, rather than one wait to the deadline.
+    assert mod.timeouts == [RECORD_SLICE_MS] * 3
+    assert not (tmp_path / "recording.webm").exists()
+
+
+def test_a_recording_that_finishes_in_a_later_slice_is_the_webm(monkeypatch, tmp_path):
+    """Slices are not a deadline: a page that needs several is still recorded."""
+    mod = _fake_playwright(monkeypatch, done_after_waits=4)
+
+    out = record("<html></html>", VideoOptions(), tmp_path, expected_ms=60_000)
+
+    assert out.read_bytes() == b"WEBM" and mod.state["waits"] == 4
 
 
 def test_a_recorded_page_comes_back_as_the_workdirs_webm(monkeypatch, tmp_path):
@@ -273,3 +426,70 @@ def test_a_chromium_that_fails_for_another_reason_is_not_dressed_up(monkeypatch,
     with pytest.raises(Exception, match="has been closed") as caught:
         record("<html></html>", VideoOptions(), tmp_path)
     assert not isinstance(caught.value, RendererUnavailable)
+
+
+def _peak_rss_of_ffmpeg_under(run) -> float:
+    """Run ``run()`` while sampling every ffmpeg process below this test
+    (``ps``, 0.2 s); the peak RSS in MB across them."""
+    import os
+    import threading
+    import time
+
+    me = os.getpid()
+    peak = 0.0
+    stop = False
+
+    def sample() -> None:
+        nonlocal peak
+        while not stop:
+            table = subprocess.run(
+                ["ps", "-eo", "pid=,ppid=,rss=,args="], capture_output=True, text=True
+            ).stdout
+            kids: dict[int, list[tuple[int, float, str]]] = {}
+            for ln in table.splitlines():
+                parts = ln.split(None, 3)
+                if len(parts) == 4:
+                    kids.setdefault(int(parts[1]), []).append(
+                        (int(parts[0]), int(parts[2]) / 1024, parts[3])
+                    )
+            todo = [me]
+            while todo:
+                for pid, rss, args in kids.get(todo.pop(), []):
+                    if "ffmpeg" in args:
+                        peak = max(peak, rss)
+                    todo.append(pid)
+            time.sleep(0.2)
+
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    try:
+        run()
+    finally:
+        stop = True
+        th.join()
+    return peak
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("fmt", "cap_mb"), [("gif", 1024), ("mp4", 512)])
+def test_encoding_a_1080p_clip_stays_within_the_measured_bound(tmp_path, fmt, cap_mb):
+    """Measured on the 41-second sample at 1080p: the single-pass gif
+    (`split → palettegen → paletteuse`) held every frame until the palette
+    was known — 4,546 MB — and libx264 at its default preset and thread
+    count took 1,329 MB. Now: mp4 273–320 MB (five runs); gif's second
+    pass 230–640 MB — bimodal, some runs fill a ~50-frame queue in the
+    first seconds and then hold, and a 120-second clip peaks no higher than
+    a 20-second one, so it is bounded, not growing. A worker pod's memory
+    limit is set from these, so they are pinned on a 20-second synthetic
+    1080p clip (the cost is per frame, not per picture)."""
+    src = tmp_path / "in.webm"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+         "-i", "testsrc=size=1920x1080:rate=25:duration=20",
+         "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", src],
+        check=True,
+    )  # fmt: skip
+
+    peak = _peak_rss_of_ffmpeg_under(lambda: encode(src, fmt, tmp_path / f"out.{fmt}"))
+
+    assert 0 < peak <= cap_mb, f"{fmt}: ffmpeg peaked at {peak:.0f} MB"

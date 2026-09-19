@@ -119,7 +119,7 @@ CHAR_OVERHEAD_MS = 5
 _PUNCT = set(",.;:!?，。；：！？")
 
 
-def _cut(text: str, limit: int) -> str:
+def cut_text(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
@@ -301,7 +301,7 @@ def _steps(messages: list[dict[str, Any]], options: VideoOptions) -> list[Step]:
                 ToolStep(
                     name=name,
                     args=dict(args) if isinstance(args, dict) else {},
-                    output=_cut(body, options.tool_output_chars),
+                    output=cut_text(body, options.tool_output_chars),
                     files=files,
                     card=not (name == "show_file" and files),
                     ms=options.tool_pause_ms + PACING["after_tool_ms"],

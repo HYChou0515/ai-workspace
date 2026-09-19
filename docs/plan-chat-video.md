@@ -98,6 +98,8 @@ src/workspace_app/chat_video/
 
 ## 之後的形狀(P16–P18,本 PR 不做,寫下來讓接的人不用重想;原本編成 P6–P8,和後來的 commit 編號撞了,照 flat 規則改)
 
+> **接手的 plan 在 [plan-chat-video-export.md](plan-chat-video-export.md)**(2026-09-19 討論定案):影片寫進 workspace 而非 run 的 Binary、進度是 workspace 裡的一個檔、取消 = 刪檔、worker 照 blob-gc 從 `build_app` 組、自己的 image。下面這段是討論前的草稿,以那一份為準。
+
 - **P16 job**:`ChatVideoPayload(item_id, chat_id, options: VideoOptions, user)`、`ChatVideoJob(Job[ChatVideoPayload])`、`ChatVideoRun`(status / progress / `video: Binary` / `error`)。`ChatVideoCoordinator`(同 `ImportCoordinator` 的形狀):`enqueue()` 由 route 呼叫;`_handle()` 讀 conversation → `to_builtins` → `build_timeline` → 對 `referenced_paths()` 逐一 `await files.read(item_id, path)` 組成 `assets`(`referenced_paths` 已不列爬出根的 `..` 路徑;façade 的 `abs_path` 不 jail `..`,所以 handler 讀之前仍要像 `cli.load_assets` 那樣拒絕解析到 workspace 外的路徑——第五輪點名;P12 起 `decide_assets` 自己也拒絕這種路徑,第二道鎖)→ `await asyncio.to_thread(render_chat_video, …, assets=assets)` → 存 Binary。`worker/__init__.py` 的 `_JOBTYPE_ATTR` 加 `"chat-video"`;`build_coordinators` 加進 bundle。
 - **P17 route + 權限**:`POST /a/{slug}/items/{item_id}/chats/{chat_id}/video`(gate `read_chat`,同 export)回 run id;`GET …/video/{run_id}` 回狀態 / 下載。配額:一個 chat 同時只跑一個(partition_key = chat_id)。
 - **P18 前端**:chat header 一顆「產生影片」按鈕 → 尺寸 / 格式的小表單(欄位 = `VideoOptions`)→ 進度 → 下載。

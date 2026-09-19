@@ -27,6 +27,7 @@ from .interpolate import expand_env, has_env_reference
 from .merge import merge_layered
 from .schema import (
     AgentsSettings,
+    ChatVideoSettings,
     ChunkerSettings,
     ClusterSettings,
     CodeEmbedderSettings,
@@ -324,6 +325,45 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_context_chars(merged, source=source)
     _check_host_managed_durable(merged, source=source)
     _check_window_ratio(merged, source=source)
+    _check_chat_video(merged, source=source)
+
+
+def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
+    """`chat_video:` (plan-chat-video-export decision 10): every ceiling a
+    positive integer, and `stale_after_seconds` longer than
+    `heartbeat_seconds`. A `heartbeat_seconds: 0` is a hot loop rewriting
+    the progress file tens of thousands of times a second (measured:
+    16,689 writes in a 0.3 s render), and a stale rule no longer than the
+    beat reads a running job as dead between beats — a second request then
+    replaces a live job's file mid-render. `merged` is the bundled defaults
+    with the file laid over them, so every key is present here, and a YAML
+    null (`heartbeat_seconds:` left blank) REPLACES the default verbatim
+    rather than falling back to it — `None` is refused like any other
+    non-integer, because a worker with `heartbeat_seconds=None` never
+    beats and never sees a cancel."""
+    if "chat_video" not in merged:
+        return  # a partial dict (a caller's own `_validate`): nothing written, nothing to check
+    node = merged["chat_video"]
+    if not isinstance(node, dict):
+        raise ValueError(
+            f"config {source}: chat_video must be a mapping of the five ceilings, got {node!r}"
+            " — a header with every key commented out is a null section; drop the header too"
+        )
+    for field in dataclasses.fields(ChatVideoSettings):
+        value = node.get(field.name, field.default)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(
+                f"config {source}: chat_video.{field.name} must be a positive integer, "
+                f"got {value!r}"
+            )
+    heartbeat = node.get("heartbeat_seconds", ChatVideoSettings.heartbeat_seconds)
+    stale = node.get("stale_after_seconds", ChatVideoSettings.stale_after_seconds)
+    if stale <= heartbeat:
+        raise ValueError(
+            f"config {source}: chat_video.stale_after_seconds ({stale}) must be longer than "
+            f"chat_video.heartbeat_seconds ({heartbeat}) — a rule no longer than the beat reads "
+            "a running job as dead between two beats"
+        )
 
 
 def _check_window_ratio(merged: dict[str, Any], *, source: str) -> None:
@@ -607,6 +647,10 @@ _TOP_SCHEMA: dict[str, Any] = {
     },
     # #196 busy-aware failover global defaults.
     "failover": _dataclass_keys(FailoverSettings),
+    # Export-a-chat-as-video ceilings (plan-chat-video-export decision 10):
+    # whitelisted AND built below, or the route would enforce the bundled
+    # defaults whatever the operator wrote.
+    "chat_video": _dataclass_keys(ChatVideoSettings),
 }
 
 
@@ -976,6 +1020,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
         ),
         failover=_build_failover(d["failover"]),
+        chat_video=_build(ChatVideoSettings, d["chat_video"]),
     )
 
 

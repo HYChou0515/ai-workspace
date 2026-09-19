@@ -11,8 +11,10 @@ import { api } from "../../api";
 import { investigationFileService } from "../../api/fileService";
 import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { downloadChatExport } from "../../api/workflows";
+import type { ChatVideoQueued } from "../../api/chatVideo";
 import { EntryView } from "../../components/AgentEntryView";
+import { ExportDialog } from "../../components/ExportDialog";
+import { VideoProgress } from "../../components/VideoProgress";
 import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
@@ -146,6 +148,7 @@ export function AgentPanel({
   envVars,
   onSaveEnvVars,
   environment,
+  canExportVideo = false,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -213,6 +216,11 @@ export function AgentPanel({
    *  button is not drawn: a control that can never do anything is worse than
    *  a missing one, because it looks like a promise. */
   environment?: { canResize: boolean };
+  /** plan-chat-video-export: whether this viewer may make a VIDEO of the chat
+   *  — `read_content` + `add_content`, the two verbs the route asks. Text
+   *  export needs only the chat, so the dialog always opens; without this the
+   *  video choice is drawn locked, with the reason. */
+  canExportVideo?: boolean;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -701,6 +709,7 @@ export function AgentPanel({
         envVars={envVars}
         onSaveEnvVars={onSaveEnvVars}
         environment={environment}
+        canExportVideo={canExportVideo}
         appliedSkills={appliedSkills}
         onToggleApplySkill={toggleApplySkill}
       />
@@ -1431,6 +1440,7 @@ export function AgentHeader({
   envVars,
   onSaveEnvVars,
   environment,
+  canExportVideo = false,
   appliedSkills = [],
   onToggleApplySkill,
   tier: tierProp,
@@ -1472,6 +1482,9 @@ export function AgentHeader({
    *  button is not drawn: a control that can never do anything is worse than
    *  a missing one, because it looks like a promise. */
   environment?: { canResize: boolean };
+  /** plan-chat-video-export: may this viewer make a video (read_content +
+   *  add_content)? The dialog opens either way; this only unlocks its video choice. */
+  canExportVideo?: boolean;
   /** #380: skills queued (composer-owned) to apply this turn — lit in the panel. */
   appliedSkills?: string[];
   /** Which shape the action buttons take. Injected in tests; otherwise measured
@@ -1481,7 +1494,11 @@ export function AgentHeader({
   onToggleApplySkill?: (name: string) => void;
 }) {
   const t = useT();
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [showExport, setShowExport] = useState(false);
+  // The video job this header is following, from the dialog's 202 until the
+  // person dismisses the line. One at a time: the route refuses a second
+  // for the same person on the same item while the first is alive.
+  const [videoJob, setVideoJob] = useState<ChatVideoQueued | null>(null);
   const [showSkills, setShowSkills] = useState(false);
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showTools, setShowTools] = useState(false);
@@ -1493,7 +1510,7 @@ export function AgentHeader({
   );
   // What can change the header's content width at a fixed column width: the
   // labels (they change with the locale), which actions are present, and the
-  // export error line. The hook forgets its width record when this changes.
+  // video progress line. The hook forgets its width record when this changes.
   const contentKey = [
     onNewChat ? "new" : "",
     onSaveToolPrefs ? t("tools.button") : "",
@@ -1502,7 +1519,7 @@ export function AgentHeader({
     t("skills.button"),
     t("workflows.button"),
     chatId ? "export" : "",
-    exportError ? "err" : "",
+    videoJob ? "video" : "",
   ].join("|");
   const { tier, headerRef, identityRef } = useHeaderTier(tierProp, contentKey);
   return (
@@ -1522,6 +1539,16 @@ export function AgentHeader({
         flexWrap: "wrap",
       }}
     >
+      {showExport && chatId && (
+        <ExportDialog
+          slug={slug}
+          itemId={investigationId}
+          chatId={chatId}
+          canExportVideo={canExportVideo}
+          onClose={() => setShowExport(false)}
+          onVideoQueued={setVideoJob}
+        />
+      )}
       {showSkills && (
         <SkillsModal
           slug={slug}
@@ -1687,31 +1714,33 @@ export function AgentHeader({
           // Only where there is a chat to name. Without one the button could
           // only ask the server to pick, and it used to pick the item's first —
           // so the absent case is drawn as absent, the way #739's gauge is.
-          // Downloads the `.chat.json` round-trip format (#39) through the
-          // app-scoped route (#95), validating the response so a misroute
+          // Opens the export dialog (plan-chat-video-export): the `.chat.json`
+          // round-trip format (#39), Markdown, or a video, over a range —
+          // through the app-scoped route (#95), validated so a misroute
           // surfaces an error instead of saving the SPA shell (#100).
           !!chatId && {
             id: "export",
             testid: "export-button",
             aria: "Export conversation",
             icon: "download",
-            label: "Export",
-            tip: "Export this conversation",
-            onClick: () => {
-              setExportError(null);
-              downloadChatExport(slug, investigationId, chatId).catch((e) =>
-                setExportError(e instanceof Error ? e.message : "匯出失敗"),
-              );
-            },
+            label: t("export.button"),
+            tip: t("export.tip"),
+            onClick: () => setShowExport(true),
           },
         ]}
       />
-      {exportError && (
-        <span role="alert" style={{ fontSize: pxToRem(11), color: "var(--err)" }}>
-          {exportError}
-        </span>
-      )}
       <HealthDot />
+      {/* To the RIGHT of the health dot, on the same row — a compact pill,
+          not a row of its own between the header and the thread (the user's
+          call: "burger 左邊或綠點右邊,不要擺中間"). */}
+      {videoJob && (
+        <VideoProgress
+          slug={slug}
+          itemId={investigationId}
+          job={videoJob}
+          onDismiss={() => setVideoJob(null)}
+        />
+      )}
       {/* #159: the running/idle mono badge was the most engineering-flavoured
           chrome in the header and duplicated the status line above. Removed —
           the action cue + the composer's turn indicator carry the state. */}

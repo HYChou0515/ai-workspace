@@ -30,6 +30,7 @@
 
 import type { AppItem } from "../api/types";
 import {
+  canAddItemContent,
   canChangeItemPermission,
   canConverse,
   canReadChat,
@@ -51,6 +52,11 @@ export type ItemAccess = {
   canConverse: boolean;
   /** Write entity records / edit files (`edit_content` family). */
   canWrite: boolean;
+  /** Add a file to the workspace (`add_content`, which an `edit_content` grant
+   * includes — the server's rule) — with {@link canSeeFiles}, the video
+   * export's gate. Narrower than {@link canWrite} on purpose: the route asks
+   * this verb, and a `write_meta` holder who passes the union is refused. */
+  canAddContent: boolean;
   /** Store a field ON the item — env vars, tool/skill prefs, the details form
    * (`write_meta`). Narrower than {@link canWrite} on purpose: the item PATCH
    * accepts write_meta alone, so an editor who passes canWrite is still refused. */
@@ -76,6 +82,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
       canSeeFiles: true,
       canConverse: true,
       canWrite: true,
+      canAddContent: true,
       canWriteMeta: true,
       isDiscoverableOnly: false,
       // Optimistic like its siblings during the identity load — see the module
@@ -92,6 +99,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
     canSeeFiles: canReadItemContent(perm, me, owner, isSuperuser, groups),
     canConverse: canConverse(perm, me, owner, isSuperuser, groups),
     canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
+    canAddContent: canAddItemContent(perm, me, owner, isSuperuser, groups),
     canWriteMeta: canWriteItemMeta(perm, me, owner, isSuperuser, groups),
     isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser, groups),
     canManageAccess: canChangeItemPermission(perm, me, owner, isSuperuser, groups),

@@ -1342,6 +1342,29 @@ class ObservabilitySettings:
     llm_log: LlmLogSettings = field(default_factory=LlmLogSettings)
 
 
+# ─── chat_video (export a chat as a video: the server-side ceilings) ────
+@dataclass(frozen=True)
+class ChatVideoSettings:
+    """What a video job may ask for, checked when it is asked (route) and
+    again before its output is written (worker) — the form only offers
+    values inside these, the server refuses whatever it is sent.
+    ``max_pixels`` bounds width × height (1080p; a portrait 1080×1920 fits,
+    4K does not) because Chromium's memory grows with the frame;
+    ``max_seconds`` bounds ``VideoOptions.max_seconds`` (the recording is as
+    long as the video, so this is the job's wall time); ``max_output_bytes``
+    refuses an output that would not fit (a 1080p GIF is the case) rather
+    than write it; ``heartbeat_seconds`` is how often the worker re-reads and
+    rewrites the progress file (its absence is the cancel);
+    ``stale_after_seconds`` without a heartbeat means the worker died and the
+    file may be replaced. See docs/plan-chat-video-export.md, decisions 10–12."""
+
+    max_pixels: int = 1920 * 1080
+    max_seconds: int = 180
+    max_output_bytes: int = 100_000_000
+    heartbeat_seconds: int = 10
+    stale_after_seconds: int = 60
+
+
 @dataclass(frozen=True)
 class FailoverSettings:
     """Global defaults for busy-aware LLM failover (#196 + #131).
@@ -1473,3 +1496,4 @@ class Settings:
     event_bus: EventBusSettings = field(default_factory=EventBusSettings)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     failover: FailoverSettings = field(default_factory=FailoverSettings)
+    chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)

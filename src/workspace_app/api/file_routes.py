@@ -37,6 +37,7 @@ from ..kernels import KernelService
 from ..quota.admission import AdmissionGate
 from ..sandbox.protocol import Sandbox
 from .activity import ActivityLog
+from .byte_range import UNSATISFIABLE, byte_range
 from .events import CellEvent, FileChanged, to_sse
 from .locator import ItemLocator
 from .registry import InvestigationRegistry
@@ -117,6 +118,8 @@ def _workspace_path(raw: str) -> str:
       ``_workspace_prefix``, which keeps ``""`` meaning "whole workspace"
     * ``deploy_wui`` / ``undeploy_wui`` (``api/wui_deploy.py``) — the body
       path and the ``path`` query parameter
+    * ``queue_chat_video`` (``api/chat_video_routes.py``) — the body's
+      ``output_path`` (the two files beside it take its name)
 
     Known NOT to pass through here, deliberately or otherwise:
     ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store
@@ -755,13 +758,41 @@ def register_file_routes(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/a/{slug}/items/{item_id}/files/{path:path}")
-    async def read_file(slug: str, item_id: str, path: str) -> Response:
+    async def read_file(request: Request, slug: str, item_id: str, path: str) -> Response:
         investigation_id = locator.require_access(slug, item_id, "read_content")
         norm = _workspace_path(path)
         try:
             data = await files.read(investigation_id, norm)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # A single byte `Range` is honoured (206) so a `<video>` over this
+        # route can seek and Safari, which refuses media a server will not
+        # serve by range, plays a chat video. The whole file is read either
+        # way — the facade has no partial read — so this is the slice of it;
+        # a video is at most `chat_video.max_output_bytes`.
+        # RFC 9110 §13.1.5: with `If-Range` the range applies only when the
+        # validator matches, and this route emits none, so it never does.
+        wanted = (
+            None
+            if request.headers.get("if-range") is not None
+            else byte_range(request.headers.get("range"), len(data))
+        )
+        if wanted == UNSATISFIABLE:
+            return Response(
+                status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                headers={"Content-Range": f"bytes */{len(data)}", "Accept-Ranges": "bytes"},
+            )
+        if isinstance(wanted, tuple):
+            first, last = wanted
+            return Response(
+                content=data[first : last + 1],
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=media_type_for(norm, data),
+                headers={
+                    "Content-Range": f"bytes {first}-{last}/{len(data)}",
+                    "Accept-Ranges": "bytes",
+                },
+            )
         # The rule lives in `files/media_type.py` because the chat-video
         # player must serve a picture under the SAME type this route would.
         # Guess from the NORMALISED path, not the raw one. `GET /files/logo.png/`
@@ -771,7 +802,11 @@ def register_file_routes(
         # expected an inlined image, with a 200 hiding it. That contradicted this
         # module's own rule that a trailing slash must not change what a path
         # means, one line after enforcing it.
-        return Response(content=data, media_type=media_type_for(norm, data))
+        return Response(
+            content=data,
+            media_type=media_type_for(norm, data),
+            headers={"Accept-Ranges": "bytes"},
+        )
 
     # ---- Notebook cell execution (plan-backend §7.3) ----
 

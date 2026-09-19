@@ -293,6 +293,7 @@ function ShellBody({
     canSeeFiles: _canSeeFiles,
     canConverse: _canConverse,
     canWriteMeta: _canWriteMeta,
+    canAddContent: _canAddContent,
     canManageAccess: _canManageAccess,
   } = useItemAccess(item);
 
@@ -906,6 +907,11 @@ function ShellBody({
                   ? { canResize: _canManageAccess }
                   : undefined
               }
+              // plan-chat-video-export: the two verbs `POST …/chat-video`
+              // asks — the video reads the item's files (the pictures the
+              // transcript shows) and adds one (the video). Text export needs
+              // neither: it is the chat's own, gated on read_chat above.
+              canExportVideo={_canSeeFiles && _canAddContent}
             />
             )}
           </div>

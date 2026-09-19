@@ -41,6 +41,9 @@ _JOBTYPE_ATTR = {
     # ResourceMeta of every blob-capable model and streams every revision,
     # which OOMed the API pod that ran it.
     "blob-gc": "blob_gc",
+    # plan-chat-video-export: the chat-video render — Chromium + ffmpeg, a
+    # workload with its own image (`rca-app-chat-video`) and its own memory.
+    "chat-video": "chat_video",
 }
 
 # JobTypes whose consumer must hold the API's WHOLE model registry, so the
@@ -50,7 +53,12 @@ _JOBTYPE_ATTR = {
 # partial registry would quarantine, then delete, every blob the missing models
 # reference (#804 P4). `BlobGcCoordinator._check_registry` refuses such a pass
 # at run time; this is what makes the check pass by construction.
-API_REGISTRY_JOBTYPES = frozenset({"blob-gc"})
+#
+# `chat-video` is here for a different reason: its every file goes through the
+# API's `WorkspaceFiles` (quota, jail, mirror), and only `create_app` composes
+# that facade — so the worker takes the coordinator the API wired, files and
+# all, instead of assembling a second facade that would drift from the first.
+API_REGISTRY_JOBTYPES = frozenset({"blob-gc", "chat-video"})
 
 
 def select_coordinator(bundle: CoordinatorBundle, jobtype: str) -> object:

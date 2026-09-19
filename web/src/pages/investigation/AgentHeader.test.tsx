@@ -7,8 +7,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { AgentHeader } from "./AgentPanel";
 
-const downloadChatExport = vi.hoisted(() => vi.fn());
-vi.mock("../../api/workflows", () => ({ downloadChatExport }));
+// The dialog itself is tested in `ExportDialog.test.tsx`; here it is a stub
+// that shows what the header handed it — the App, the chat, the video gate.
+vi.mock("../../components/ExportDialog", () => ({
+  ExportDialog: (p: { slug: string; chatId: string; canExportVideo: boolean }) => (
+    <div
+      role="dialog"
+      aria-modal="true"
+      data-testid="export-dialog"
+      data-slug={p.slug}
+      data-chat={p.chatId}
+      data-video={String(p.canExportVideo)}
+    />
+  ),
+}));
 
 vi.mock("../../api", async (orig) => {
   const actual = await orig<typeof import("../../api")>();
@@ -23,30 +35,14 @@ vi.mock("../../api", async (orig) => {
 });
 
 describe("AgentHeader export", () => {
-  afterEach(() => {
-    cleanup();
-    downloadChatExport.mockReset();
-  });
+  afterEach(cleanup);
 
-  it("Export downloads via the current App's route, not the removed /investigations one", () => {
-    // The header is shared by every App (#89/#95). Export must carry the App's
-    // slug so it targets the app-scoped route; the old hardcoded
-    // `/investigations/...` is gone and 404s into the SPA shell (#100).
-    downloadChatExport.mockResolvedValue(undefined);
-    renderWithQuery(
-      <MemoryRouter>
-        <AgentHeader streaming={false} investigationId="topic-hub:1" chatId="chat-1" slug="topic-hub" />
-      </MemoryRouter>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /export/i }));
-    expect(downloadChatExport).toHaveBeenCalledWith("topic-hub", "topic-hub:1", "chat-1");
-  });
-
-  it("exports the chat the panel is showing, not whichever one is the item's first", () => {
-    // The defect this replaces: the button knew only the item, so the backend
-    // resolved the item's DEFAULT chat and handed back the earliest conversation
-    // whatever was on screen. An item id alone can no longer express the request.
-    downloadChatExport.mockResolvedValue(undefined);
+  it("Export opens the dialog for the current App and the chat the panel is showing", () => {
+    // The header is shared by every App (#89/#95), so the dialog gets the
+    // App's slug (the app-scoped route; the old `/investigations/...` 404s
+    // into the SPA shell, #100) — and THIS chat's id: the button used to know
+    // only the item, and the server then handed back the item's earliest
+    // conversation whatever was on screen.
     renderWithQuery(
       <MemoryRouter>
         <AgentHeader
@@ -58,11 +54,28 @@ describe("AgentHeader export", () => {
       </MemoryRouter>,
     );
     fireEvent.click(screen.getByRole("button", { name: /export/i }));
-    expect(downloadChatExport).toHaveBeenCalledWith(
-      "topic-hub",
-      "topic-hub:1",
-      "conversation:the-one-on-screen",
+    const dialog = screen.getByTestId("export-dialog");
+    expect(dialog).toHaveAttribute("data-slug", "topic-hub");
+    expect(dialog).toHaveAttribute("data-chat", "conversation:the-one-on-screen");
+    // Without the two verbs the video choice is locked — and this header
+    // was not told it may.
+    expect(dialog).toHaveAttribute("data-video", "false");
+  });
+
+  it("hands the video gate to the dialog when the viewer may read and add files", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader
+          streaming={false}
+          investigationId="topic-hub:1"
+          slug="topic-hub"
+          chatId="chat-1"
+          canExportVideo
+        />
+      </MemoryRouter>,
     );
+    fireEvent.click(screen.getByRole("button", { name: /export/i }));
+    expect(screen.getByTestId("export-dialog")).toHaveAttribute("data-video", "true");
   });
 
   it("draws no Export at all on a surface that has no chat of its own", () => {
@@ -75,17 +88,6 @@ describe("AgentHeader export", () => {
       </MemoryRouter>,
     );
     expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
-  });
-
-  it("surfaces an error instead of silently downloading the SPA shell", async () => {
-    downloadChatExport.mockRejectedValue(new Error("匯出失敗：伺服器沒有回傳對話檔。"));
-    renderWithQuery(
-      <MemoryRouter>
-        <AgentHeader streaming={false} investigationId="inv-1" chatId="chat-1" slug="rca" />
-      </MemoryRouter>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /export/i }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/匯出失敗/);
   });
 });
 
@@ -385,6 +387,6 @@ describe("the ⋯ menu keeps a keyboard user's place", () => {
     }
     open();
     fireEvent.click(screen.getByTestId("header-more-export"));
-    expect(downloadChatExport).toHaveBeenCalledWith("topic-hub", "topic-hub:1", "chat-1");
+    expect(screen.getByTestId("export-dialog")).toHaveAttribute("data-chat", "chat-1");
   });
 });
