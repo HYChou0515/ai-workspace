@@ -81,3 +81,25 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,os; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"APP_PORT\",\"8000\")}/openapi.json').read()" || exit 1
 
 CMD ["python", "-m", "workspace_app"]
+
+# ---- stage 3: the chat-video worker (plan-chat-video-export) ----
+# The same app, plus a headless Chromium and ffmpeg — the two tools a chat
+# video needs and nothing else in the platform does. Its own image so the
+# API pod (and every other worker) does not carry the ~0.7–1 GB they add;
+# `kubernetes/base/workers.yaml` runs it as `rca-worker-chat-video`.
+#
+#   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
+#
+# `--with-deps` installs Chromium's shared libraries through apt; the
+# browser itself lands under PLAYWRIGHT_BROWSERS_PATH, outside the venv, so
+# a later `uv sync` cannot remove it. The worker boots the API's own
+# composition (`build_app`, never served — see workers.yaml), so it needs
+# what the API needs at boot: the same configmap and mounts.
+FROM app AS chat-video
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN uv sync --frozen --no-dev --extra chat-video \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+CMD ["python", "-m", "workspace_app.worker", "chat-video"]

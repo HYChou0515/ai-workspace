@@ -43,6 +43,9 @@ export type ChatVideoQueued = {
   source_path: string;
   progress_path: string;
   expected_seconds: number;
+  /** The server's rule for a worker that stopped breathing: a heartbeat
+   * older than this means nobody is on the job. */
+  stale_after_seconds: number;
 };
 
 export type ChatVideoLimits = {

@@ -28,6 +28,7 @@ import { qk } from "../api/queryKeys";
 import type { FileContent } from "../api/types";
 import { useOpenFile } from "../hooks/openFile";
 import { useT } from "../lib/i18n";
+import { relPath } from "../lib/relPath";
 
 export type VideoProgressClient = {
   readFile: (slug: string, itemId: string, path: string) => Promise<FileContent>;
@@ -120,14 +121,19 @@ export function VideoProgress({
   if (done) {
     return (
       <div className="video-progress" role="status" data-testid="video-progress" data-state="done">
-        <span>
-          {t("video.progress.done", { path: "" })}
-          <span className="video-progress__path">{job.output_path}</span>
+        <span className="video-progress__saved">
+          <span>{t("video.progress.done", { path: "" })}</span>
+          {/* `relPath`: with `direction: rtl` (the left-ellipsis trick) a
+              leading "/" is a neutral the bidi algorithm moves to the end. */}
+          <span className="video-progress__path" title={job.output_path}>
+            {relPath(job.output_path)}
+          </span>
         </span>
         {openFile && (
           <button
             type="button"
             className="btn"
+            data-variant="primary"
             data-size="sm"
             data-testid="video-progress-open"
             onClick={() => openFile(job.output_path)}
@@ -138,6 +144,7 @@ export function VideoProgress({
         <button
           type="button"
           className="btn"
+          data-variant="secondary"
           data-size="sm"
           data-testid="video-progress-dismiss"
           onClick={onDismiss}
@@ -155,6 +162,7 @@ export function VideoProgress({
         <button
           type="button"
           className="btn"
+          data-variant="secondary"
           data-size="sm"
           data-testid="video-progress-dismiss"
           onClick={onDismiss}
@@ -172,6 +180,7 @@ export function VideoProgress({
         <button
           type="button"
           className="btn"
+          data-variant="secondary"
           data-size="sm"
           data-testid="video-progress-dismiss"
           onClick={() => {
@@ -189,18 +198,34 @@ export function VideoProgress({
   const expected = progress?.expected_seconds ?? job.expected_seconds;
   const elapsed = progress?.elapsed_seconds ?? 0;
   const fraction = expected > 0 ? Math.min(1, elapsed / expected) : 0;
+  // The server's own liveness rule (`progress.is_alive`): a heartbeat older
+  // than `stale_after_seconds` means no worker holds this file — the runbook's
+  // symptom for a deployment that forgot the chat-video worker.
+  const silentFor = progress
+    ? Math.round((Date.now() - Date.parse(progress.heartbeat_at)) / 1000)
+    : 0;
+  const stale = progress !== null && silentFor > job.stale_after_seconds;
   return (
-    <div className="video-progress" role="status" data-testid="video-progress" data-state="running">
+    <div
+      className="video-progress"
+      role="status"
+      data-testid="video-progress"
+      data-state={stale ? "stale" : "running"}
+    >
       <span className="video-progress__stage">{t(`video.progress.${stage}`)}</span>
       <span className="video-progress__elapsed">
         {t("video.progress.elapsed", { e: elapsed, x: expected })}
       </span>
+      {stale && (
+        <span className="video-progress__stale">{t("video.progress.stale", { n: silentFor })}</span>
+      )}
       <span className="video-progress__bar" aria-hidden="true">
         <span className="video-progress__fill" style={{ width: `${Math.round(fraction * 100)}%` }} />
       </span>
       <button
         type="button"
         className="btn"
+        data-variant="secondary"
         data-size="sm"
         data-testid="video-progress-cancel"
         disabled={cancelled}

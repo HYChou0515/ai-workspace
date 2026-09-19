@@ -65,6 +65,7 @@ describe("startChatVideo — POST …/items/{id}/chat-video", () => {
       source_path: "/exports/chat-video/OOM-1.mp4.chat.json",
       progress_path: "/exports/chat-video/OOM-1.mp4.progress.json",
       expected_seconds: 41,
+      stale_after_seconds: 60,
     };
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(answer, 202));
     vi.stubGlobal("fetch", fetchMock);

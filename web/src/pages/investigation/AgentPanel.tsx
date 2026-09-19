@@ -1729,6 +1729,10 @@ export function AgentHeader({
           },
         ]}
       />
+      <HealthDot />
+      {/* To the RIGHT of the health dot, on the same row — a compact pill,
+          not a row of its own between the header and the thread (the user's
+          call: "burger 左邊或綠點右邊,不要擺中間"). */}
       {videoJob && (
         <VideoProgress
           slug={slug}
@@ -1737,7 +1741,6 @@ export function AgentHeader({
           onDismiss={() => setVideoJob(null)}
         />
       )}
-      <HealthDot />
       {/* #159: the running/idle mono badge was the most engineering-flavoured
           chrome in the header and duplicated the status line above. Removed —
           the action cue + the composer's turn indicator carry the state. */}

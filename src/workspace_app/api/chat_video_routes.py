@@ -61,6 +61,11 @@ class ChatVideoQueued(BaseModel):
     source_path: str
     progress_path: str
     expected_seconds: int
+    """How long the video will play — the timeline's own figure."""
+    stale_after_seconds: int
+    """After this long without a heartbeat in the progress file the worker
+    is gone (`chat_video.stale_after_seconds`) — the watcher's rule is the
+    server's, so it says "no worker" when the server would."""
 
 
 class ChatVideoLimitsOut(BaseModel):
@@ -166,4 +171,5 @@ def register_chat_video_routes(
             source_path=source_path,
             progress_path=progress_path,
             expected_seconds=expected_seconds,
+            stale_after_seconds=limits.stale_after_seconds,
         )

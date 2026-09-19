@@ -3,44 +3,23 @@
  *
  * Its own sheet, its own class names: `chat-rail.css` scopes the share
  * dialog's `.chat-share__*` and reusing those names here would give this
- * panel no styles at all while every test stayed green. */
+ * panel no styles at all while every test stayed green. Only LAYOUT lives
+ * here: the frame is the Tools modal's (inline, as there), the fields wear
+ * the house `.input` (base.css), the buttons `.btn`, the helpers `.detail` —
+ * the rule #825 set for the Sandbox modal, so the two dialogs are one look. */
 
-.export-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-  padding: var(--space-12);
-  min-width: 0;
-}
-
-.export-dialog__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
-}
-
-.export-dialog__title {
-  flex: 1;
-  min-width: 0;
+.export-dialog__lede {
   margin: 0;
-  font-size: var(--text-body);
-  font-weight: 600;
-}
-
-.export-dialog__x {
-  border: none;
-  background: transparent;
-  cursor: pointer;
+  font-size: var(--text-small);
+  line-height: var(--leading-body-sm, 1.5);
   color: var(--text-paper-d);
 }
 
-/* Label above field, not beside it: the video rows hold three or four
-   controls and a result line, and a side label would squeeze them into a
-   column too narrow for a 16:9 select at 390px. */
-.export-dialog__row {
+.export-dialog__section {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  min-width: 0;
 }
 
 .export-dialog__label {
@@ -50,26 +29,13 @@
   color: var(--text-paper-d);
 }
 
-.export-dialog__field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-width: 0;
-}
-
-/* Radios and their labels on one wrapping line; a radio's inline number
-   input (the "latest N") sits inside its label. */
-.export-dialog__choices,
-.export-dialog__size,
-.export-dialog__custom {
+/* Radios and their labels on one wrapping line; the "latest N" number sits
+   inside its radio's label. */
+.export-dialog__choices {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-4) var(--space-12);
   align-items: center;
-}
-
-.export-dialog__custom {
-  padding-top: var(--space-4);
 }
 
 .export-dialog__choice {
@@ -84,79 +50,116 @@
   color: var(--text-paper-d);
 }
 
+/* The inline number beside "latest": the house chrome at a fixed width. */
 .export-dialog__num {
+  flex: none;
   width: 5.5em;
-  padding: 2px var(--space-4);
-  font: inherit;
+  min-height: 28px;
+  padding: 0 6px;
   font-variant-numeric: tabular-nums;
 }
 
-.export-dialog select {
-  font: inherit;
-  max-width: 100%;
-}
-
-/* Six tempo knobs in two columns; one column when the panel is narrow. */
-.export-dialog__tempo {
+/* Labelled fields two abreast — from / to, format / aspect / resolution, the
+   six tempo knobs; one column where two would leave a label nowhere to go. */
+.export-dialog__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4) var(--space-12);
-}
-
-.export-dialog__tempo-item {
-  justify-content: space-between;
+  gap: var(--space-8) var(--space-12);
 }
 
 @media (max-width: 480px) {
-  .export-dialog__tempo {
-    grid-template-columns: minmax(0, 1fr);
+  .export-dialog__grid {
+    grid-template-columns: 1fr;
   }
+}
+
+.export-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.export-dialog__field > label {
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* The class sets `flex: 1` for row layouts; in a column it must fill. */
+.export-dialog__field > .input {
+  width: 100%;
+  flex: none;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The always-shown answer to "what will I get": W×H · text scale · ~MB. */
 .export-dialog__result {
+  margin: 0;
   font-size: var(--text-body-sm);
   font-variant-numeric: tabular-nums;
   color: var(--text-paper);
-  padding: var(--space-4) var(--space-8);
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
   background: var(--paper-2);
-  border-radius: 6px;
-}
-
-.export-dialog__note {
-  font-size: var(--text-body-sm);
-  color: var(--text-paper-d);
 }
 
 .export-dialog__error {
-  font-size: var(--text-body-sm);
   color: var(--err);
   overflow-wrap: anywhere;
 }
 
-.export-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-8);
-  padding-top: var(--space-4);
+/* `.detail` is the Sandbox modal's helper line (#825); the same look here,
+   scoped to this panel (`panelClassName`) so the name leaks nowhere. */
+.export-dialog .detail {
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: var(--leading-body-sm, 1.5);
+  color: var(--text-paper-d);
 }
 
 /* ── the progress line under the chat header ─────────────────────────── */
 
+/* A compact pill at the RIGHT END of the header row, beside the health dot
+   — never a block of its own between the header and the thread ("burger 左
+   邊或綠點右邊,不要擺中間"). The chat column is ~380px with the workspace
+   open, so the row usually cannot hold identity + actions + dot + pill: the
+   header wraps it, and `margin-left: auto` keeps it under the dot and the ⋯
+   rather than drifting left. Everything but the path refuses to shrink; the
+   path takes what is left and ellipses from its start, so the file NAME stays
+   readable. */
 .video-progress {
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: var(--space-4) var(--space-8);
-  padding: var(--space-4) var(--space-8);
-  font-size: var(--text-body-sm);
+  min-height: 28px;
+  padding: 2px var(--space-4) 2px var(--space-8);
+  font-size: var(--text-small);
   color: var(--text-paper);
+  border: 1px solid var(--paper-3);
+  border-radius: 14px;
   background: var(--paper-2);
-  border-radius: 6px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-.video-progress[data-state="failed"] {
+.video-progress > * {
+  flex: none;
+}
+
+/* The pill's buttons are a notch smaller than `.btn[data-size="sm"]` (28px),
+   so they sit inside it rather than on its edge. */
+.video-progress .btn {
+  height: 22px;
+  padding: 0 8px;
+}
+
+.video-progress[data-state="failed"],
+.video-progress__stale {
   color: var(--err);
 }
 
@@ -170,21 +173,35 @@
 }
 
 .video-progress__bar {
-  flex: 1 1 80px;
+  width: 48px;
   height: 4px;
-  min-width: 40px;
   border-radius: 2px;
   background: var(--paper-3, var(--paper-2));
   overflow: hidden;
 }
 
 .video-progress__fill {
+  display: block;
   height: 100%;
   background: var(--accent);
   transition: width 0.4s linear;
 }
 
+/* "影片已存到 <path>": the sentence and the path share one shrinkable span. */
+.video-progress__saved {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: var(--space-4);
+  align-items: baseline;
+}
+
 .video-progress__path {
+  flex: 0 1 auto;
+  min-width: 3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
   font-family: var(--font-mono);
   font-size: var(--text-mono-caps);
 }

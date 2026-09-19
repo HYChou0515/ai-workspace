@@ -15,6 +15,7 @@ const JOB: ChatVideoQueued = {
   source_path: "/exports/chat-video/OOM-1.mp4.chat.json",
   progress_path: "/exports/chat-video/OOM-1.mp4.progress.json",
   expected_seconds: 41,
+  stale_after_seconds: 60,
 };
 
 function progress(over: Partial<ChatVideoProgress>): ChatVideoProgress {
@@ -82,7 +83,12 @@ describe("VideoProgress — three endings for one file", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await screen.findByText(/影片已存到/);
-    expect(screen.getByText(JOB.output_path)).toBeTruthy();
+    // Shown without the leading slash (the left-ellipsis needs rtl, which
+    // would move a leading "/" to the end); the full path is the title.
+    expect(screen.getByText("exports/chat-video/OOM-1.mp4")).toHaveAttribute(
+      "title",
+      JOB.output_path,
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.files("rca:1") });
     // …and the file is not asked about again: a finished job is not polled.
     const looks = (client_.readFile as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -116,6 +122,29 @@ describe("VideoProgress — three endings for one file", () => {
     await waitFor(() => expect(c.deleteFile).toHaveBeenCalledWith("rca", "rca:1", JOB.progress_path));
     await screen.findByText("影片已取消");
     expect(screen.queryByText(/影片已存到/)).toBeNull();
+  });
+});
+
+describe("VideoProgress — no worker", () => {
+  it("a heartbeat older than the server's rule reads as no worker, by the server's number", async () => {
+    // The runbook's symptom for a missing `rca-worker-chat-video`: the file
+    // stays `queued` and nobody rewrites it. Without this line the person
+    // watches "queued 0 / 41 s" for ever.
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    mount(fileThat([progress({ stage: "queued", elapsed_seconds: 0, heartbeat_at: old })]));
+
+    await screen.findByText(/worker 沒有回應/);
+    expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "stale");
+    // Cancel is still there: deleting the file is how this one is cleared.
+    expect(screen.getByTestId("video-progress-cancel")).toBeTruthy();
+  });
+
+  it("a heartbeat within the rule is an ordinary wait", async () => {
+    const fresh = new Date(Date.now() - 20_000).toISOString();
+    mount(fileThat([progress({ stage: "queued", elapsed_seconds: 0, heartbeat_at: fresh })]));
+
+    await screen.findByText("影片排隊中");
+    expect(screen.queryByText(/worker 沒有回應/)).toBeNull();
   });
 });
 

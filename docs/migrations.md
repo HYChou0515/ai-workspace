@@ -785,7 +785,7 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 
 **行為**（不動設定也會多出來的東西）
 
-- chat header 的 Export 變成選單：文字 JSON（照舊）、文字 Markdown（`?format=md`）、影片；三者都可以選訊息範圍
+- chat header 的 Export 開一個對話框：文字 JSON（照舊）、文字 Markdown（`?format=md`）、影片；三者都可以選訊息範圍
   （`?start=&end=`，絕對位置、半開）。影片排一個 `ChatVideoJob`，**寫進 item 的 workspace** `/exports/chat-video/…`
   （算 workspace 額度），旁邊的 `<輸出檔>.progress.json` 是進度也是取消把手（刪掉 = 取消），`<輸出檔>.chat.json`
   是那次的輸入（留著，改了再送就重生）。也能直接打 `POST /a/{slug}/items/{item_id}/chat-video`
@@ -803,13 +803,16 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 
 - **rollout 前**：多一種 JobType `chat-video` → `rca-worker-chat-video` Deployment（`python -m workspace_app.worker chat-video`），
   **用自己的映像 `rca-app-chat-video`**（`docker/Dockerfile` 的 `chat-video` stage：app + `chat-video` extra + Chromium + ffmpeg +
-  `fonts-noto-cjk`，約 +1 GB；不塞進 `rca-app`，每顆 API pod 沒理由多 1 GB）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
+  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，估 +0.5–1 GB——**沒量**，本機的 image build 卡在
+  LibreOffice 的 apt 下載；CI 第一次 build 完把數字記回這裡。不塞進 `rca-app`，每顆 API pod 沒理由多這些）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
   （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
   sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
   `workers.yaml` 的註解有數字）。CI 要多 build / push 這個映像。
-  漏加的症狀：前端按了「產生影片」後進度停在 `queued`，60 秒後前端顯示「worker 沒有回應」；job 永遠 pending。
+  漏加的症狀：前端按了「開始做影片」後進度列停在「影片排隊中 0 / 約 N 秒」，`stale_after_seconds`（60 秒）後那一列改寫
+  「worker 沒有回應（N 秒沒心跳）」；job 永遠 pending；檔案樹裡的 `.progress.json` 的 `heartbeat_at` 不再更新。
 
 **確認做完**
 
-- `kubectl get deploy rca-worker-chat-video` 有 1 顆 ready；從任一 item 的 chat header Export ▾ → 影片 → 送出，
-  進度列每 10 秒前進、幾十秒後 `/exports/chat-video/` 出現 `.mp4`。用 curl 送一份三則的手寫 transcript 也應出檔。
+- `kubectl get deploy rca-worker-chat-video` 有 1 顆 ready；從任一 item 的 chat header 匯出 → 影片 → 開始做影片，
+  進度列每 10 秒前進、幾十秒後 `/exports/chat-video/` 出現 `.mp4`。用 curl 送一份三則的手寫 transcript 也應出檔
+  （[chat-video.md 從 API 出固定字句的影片](chat-video.md#從-api-出固定字句的影片)）。

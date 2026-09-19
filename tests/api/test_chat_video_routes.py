@@ -79,6 +79,9 @@ def test_a_hand_written_transcript_is_queued_and_the_three_paths_come_back():
     assert body["source_path"] == out + ".chat.json"
     assert body["progress_path"] == out + ".progress.json"
     assert body["expected_seconds"] > 0
+    # The watcher's rule for "the worker stopped breathing" is the server's
+    # (`chat_video.stale_after_seconds`), handed over rather than guessed.
+    assert body["stale_after_seconds"] == 60
     # The two files are in the tree before the answer: the transcript, kept
     # (edit and resubmit), and the progress file the person will watch —
     # whose absence is the cancel, so it must exist to be deleted.

@@ -18,6 +18,7 @@ import { AiYamlRenderer } from "./entity/AiYamlRenderer";
 import { RecordFileRenderer } from "./entity/RecordFileRenderer";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { ImageRenderer } from "./ImageRenderer";
+import { VideoRenderer } from "./VideoRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
 import { PdfRenderer } from "./PdfRenderer";
@@ -94,6 +95,11 @@ export const RENDERERS: RendererDef[] = [
     Component: ImageRenderer,
     editToggle: true,
   },
+  // plan-chat-video-export: a chat video (mp4 / webm) plays in the browser's
+  // own player, streamed from the file route — it used to fall through to the
+  // text editor as mojibake. gif stays with the image renderer (an <img>
+  // animates it).
+  { key: "video", match: ext("mp4", "webm"), Component: VideoRenderer, editToggle: true },
   // #361: structured-text types get a collapsible tree / per-record view with a
   // preview⇄edit toggle (Edit flips to the byte editor). `.ndjson` shares the
   // jsonl renderer; `.yml`/`.yaml` parse to the same tree as JSON.

@@ -476,6 +476,7 @@ RCA 的 system prompt 是純 markdown，存在
     python -m workspace_app.worker graph       # knowledge graph 抽取
     python -m workspace_app.worker kb-import   # 知識庫封存包匯入(#715)
     python -m workspace_app.worker blob-gc     # 孤兒 blob 回收(#245);每 gc_interval 一趟,API 只負責「請人做」
+    python -m workspace_app.worker chat-video  # 對話做成影片(#823);要 Chromium + ffmpeg,用自己的 image
     ```
 
     這份清單是 `workspace_app.worker._JOBTYPE_ATTR` 的完整內容,而
@@ -501,6 +502,19 @@ RCA 的 system prompt 是純 markdown，存在
     doc-chunk / cluster-member **每一列**都帶向量——Postgres meta store 解的是整個 meta 的 BYTEA,
     §6 的 migrate 只瘦 JSONB 欄,對這個數字沒幫助)」來給,revision 是逐筆串流
     (這正是它以前在 API pod 上 OOM 的原因,`workers.yaml` 的註解有寫)。
+
+    **`chat-video` worker 也組 API 那整套**,理由不同:它的每一個檔案都走 API 的
+    `WorkspaceFiles`(額度、路徑 jail、鏡像),而那個 facade 只有 `create_app` 會組,所以
+    worker 直接拿 API 組好的 coordinator(`worker.API_REGISTRY_JOBTYPES` 兩個成員各有各的理由)。
+    它跑的是**另一個 image** `rca-app-chat-video`(`docker/Dockerfile` 的 `chat-video` stage:
+    同一個 app + headless Chromium + ffmpeg,多 0.7–1 GB,API pod 用不到所以不放進 `rca-app`):
+    `docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .`。
+    記憶體照 `workers.yaml` 上量到的數字給(錄影時 Chromium 154–172 MB + 錄影 ffmpeg 147 MB,編碼
+    mp4 273–320 MB / gif 230–640 MB,兩段不重疊);OOM 只壞一支影片的進度檔,不影響 request。
+    all-in-one(`run_consumers: true`)的 API 也會消費這種 job——但 `rca-app` image 沒有
+    Chromium 和 ffmpeg,每支影片都會失敗、進度檔寫上缺哪個工具的那句話(`encoding needs ffmpeg on PATH …` /
+    `recording needs Playwright …`);要在單 pod 出影片,
+    API 本身就要跑 `rca-app-chat-video`(它是 `rca-app` 的超集,serve 一樣)。
 
     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
     worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。

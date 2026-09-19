@@ -218,10 +218,14 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 拿掉一個守不到東西的守衛:`sawFailed`(failed 之後輪詢就停、關閉會卸載元件,所以「failed 之後不見」到不了)。
 - 已知未做:重新整理頁面後 header 的進度列不會回來(進度檔還在樹裡、可以手動刪);做影片的期間沒有第二顆進度列(route 對同人同 item 409)。
 
-### P9 — image + k8s + 文件 + 親眼驗收
-- `docker/Dockerfile` 加 stage `chat-video`;`kubernetes/base/workers.yaml` 加 `rca-worker-chat-video`(limit 以 P1 量到的為準);`docs/deployment.md` §11 worker 清單加一顆、`docs/chat-video.md` 加「從前端匯出」一節、`docs/migrations.md`。
-- 本機 all-in-one(`run_consumers: true`,裝好 extra + Chromium + ffmpeg)從 UI 按到底:選範圍 → 排 job → 進度前進 → 影片出現在檔案樹 → 開啟;再試取消(刪進度檔)與失敗(上限)兩條。
-- **Web demo 給 user 看**(`/web-demo`,真瀏覽器錄 GIF):① Export ▾ → 文字 Markdown → 下載、打開看格式;② Export ▾ → 影片 → 選「最近 5 則」、比例 + 解析度滑桿拉到 1080p、格式 mp4 → 送出 → header 進度列每 10 秒前進 → 完成 →「已存到 …」→ 點開影片播;③ 再排一支、在檔案樹刪掉進度檔 → 10 秒內停;④ 用 curl 對 `POST …/chat-video` 送手寫三則的 transcript → 三個檔出現在樹裡。GIF 附在 PR 裡、也傳給 user。**做完 = user 看得到、按得動;GIF 沒錄到的功能不算做完。**
+### P9 — image + 文件 + 親眼驗收 + web demo ✅
+- `docker/Dockerfile` 加 stage `chat-video`(`FROM app`:`uv sync --extra chat-video` + apt ffmpeg + `playwright install --with-deps chromium`,`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`,CMD 是 worker;`docker build --target chat-video -t rca-app-chat-video:latest`)。本機 build 卡在 app stage 的 LibreOffice apt 下載(75 分鐘沒過),**image 大小沒量到**,runbook 照實寫。
+- `docs/deployment.md` §11 worker 清單加 `chat-video` + 一段「也組 API 那套、自己的 image、all-in-one 要跑 `rca-app-chat-video`」;`docs/chat-video.md` 加「從聊天視窗匯出」+「從 API 出固定字句的影片」(curl 例子的 `expected_seconds` 是跑 `build_timeline` 算的 7);`docs/migrations.md` 的 #823 條目逐句回驗(「變成選單」→「開一個對話框」;漏 worker 的症狀改成前端真的會顯示的那句;確認做完改成 UI 真的字)。
+- 202 多回 `stale_after_seconds`;前端進度改用伺服端這個數判「worker 沒有回應(N 秒沒心跳)」——runbook 寫的症狀,前端本來根本不會顯示。
+- **親眼驗收 / web demo**(真 app all-in-one 在 :8321、假 OpenAI 端點只換模型吐的字、其餘全真;`tmp/demo/tour.py` 四段一鏡到底):① 匯出 → Markdown → 最近 4 則 → 下載(檔案是第 3–6 則,可讀);② 匯出 → 影片 → 最近 5、1080p、mp4 → 排隊中 → 錄影中 → 編碼中 → 已存到 → 開啟(2.4 MB、h264 1920×1080、22.3 s,ffprobe 過);③ 再排 gif、按取消 → 已取消(沒有 gif、沒有進度檔);④ curl 手寫三句 → `videos/handwritten.mp4` 出現、Ctrl+P 打開。GIF(1.6× 速)+ webm 給了 user。
+- demo 抓到的東西(review 沒看到的):**「開啟」把 mp4 丟進文字編輯器**(2.4 MB 亂碼 + invisible-unicode 警告)→ 加 `renderers/VideoRenderer.tsx`(`<video controls>` 串檔案路由,不經 editor buffer;registry `video: mp4 / webm`,gif 留給 image);錄影用的 open-source Chromium 解不了 h264 所以 GIF 裡播放器是黑的,一般瀏覽器會播。
+- user 看了 demo 的兩個回饋都做了:**對話框照 PR #825 的樣子**(Tools modal 的框:480px、`<strong>` 標題 + 12px 說明、`.btn` 取消/主要 footer、沒 ✕ 沒 icon;欄位 label 在上 + house `.input`、helper `.detail`、兩欄 grid;`.input` 這條 base.css 規則和 #825 加的一字不差,先合的留、後合的解一個顯而易見的衝突);**進度不擺中間**——改成綠點右邊的膠囊,chat 欄放不下時 header 把它整顆換行、`margin-left: auto` 靠右貼在 ⋯ 與綠點下面;路徑從左省略(`direction: rtl`,所以顯示 `relPath`,不然開頭的 `/` 會被 bidi 搬到尾巴)。
+- 探針踩到的坑:`/tmp` 100%(別的 session 留的 pytest basetemp 與孤兒 blob 目錄)讓 pytest 的輸出 ENOSPC;只清自己 user 的、一天以上的。
 
 ## 驗收
 

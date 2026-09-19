@@ -1933,6 +1933,10 @@ export const messages = {
   "export.button": { "zh-TW": "匯出", en: "Export" },
   "export.tip": { "zh-TW": "匯出這段對話：文字或影片", en: "Export this conversation as text or video" },
   "export.title": { "zh-TW": "匯出對話", en: "Export conversation" },
+  "export.desc": {
+    "zh-TW": "把這段對話存成文字，或做成一支影片。範圍從最新的一則往回數。",
+    en: "Save this conversation as text, or make a video of it. The range counts back from the newest message.",
+  },
   "export.kind": { "zh-TW": "格式", en: "Format" },
   "export.kind.json": { "zh-TW": "文字 JSON", en: "Text (JSON)" },
   "export.kind.md": { "zh-TW": "文字 Markdown", en: "Text (Markdown)" },
@@ -1998,6 +2002,10 @@ export const messages = {
   "video.progress.failed": { "zh-TW": "影片沒做成：{error}", en: "The video failed: {error}" },
   "video.progress.cancel": { "zh-TW": "取消", en: "Cancel" },
   "video.progress.cancelled": { "zh-TW": "影片已取消", en: "Video cancelled" },
+  "video.progress.stale": {
+    "zh-TW": "worker 沒有回應（{n} 秒沒心跳）：可能沒有 chat-video worker 在跑。取消可以清掉這一支。",
+    en: "No worker is answering ({n} s without a heartbeat): there may be no chat-video worker running. Cancel clears this one.",
+  },
   "video.progress.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
 } satisfies Record<string, Entry>;
 
