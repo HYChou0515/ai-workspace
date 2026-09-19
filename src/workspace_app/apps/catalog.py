@@ -17,11 +17,11 @@ via ``factories.get_app_catalog`` and ``validate_all_apps`` runs at startup
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from importlib import resources
 from typing import TYPE_CHECKING
 
-from msgspec import UNSET
+from msgspec import UNSET, structs
 
 from ..resources import AgentConfig
 from .manifest import AppManifest, load_app_manifest
@@ -30,6 +30,7 @@ from .skills import SkillMeta, effective_item_skills
 
 if TYPE_CHECKING:
     from ..config.schema import Preset
+    from ..tooling.registry import PackageInfo
 
 _APPS_PKG = "workspace_app.apps"
 
@@ -80,6 +81,64 @@ def _apply_tool_prefs(
         if include:
             out.append(name)
     return out
+
+
+def profile_default_tools(app_slug: str, profile: str) -> list[str]:
+    """The tool set a profile starts from, before any per-item pin: its own
+    ``tools`` when it names one (``[]`` included — explicit zero, the same
+    tri-state ``allowed_tools`` carries), else the App's whole ceiling.
+
+    One function because two readers need it — ``resolve`` and the tool
+    picker route, which shows it as the "Default" a row follows — and the
+    route's own copy read ``[]`` as "inherit the ceiling" (a falsy test) while
+    this read it as zero, so a profile granting nothing had every row lit and
+    a turn holding none of them."""
+    manifest = load_app_manifest(app_slug)
+    prof = load_profile(app_slug, profile)
+    if prof.tools is not UNSET:
+        _subset_or_raise(
+            prof.tools, manifest.agent.tools, kind="tools", app=app_slug, profile=profile
+        )
+        return list(prof.tools)
+    return list(manifest.agent.tools)
+
+
+def finalize_tool_grants(config: AgentConfig, packages: Sequence[PackageInfo]) -> AgentConfig:
+    """The config's tool grant at COMMAND granularity, decided where the
+    packages are (plan-tools-picker-groups part 2, P14 revision).
+
+    ``resolve`` runs before a turn has its package list (third-party bundles
+    resolve per turn), so it can only pin entries. This applies the one rule
+    (`tooling.catalog.command_grants`) once the list is in hand and writes
+    the answer INTO ``allowed_tools`` / ``disabled_tools`` — a whole-package
+    entry becomes the ``pkg:cmd`` units the item's pins leave on — and SPENDS
+    ``tool_ceiling`` / ``tool_prefs`` (cleared), so the pins cannot be applied
+    a second time: a narrowing done after this (compaction's "no tools",
+    a sub-agent definition's own list) sticks. A config with no ceiling —
+    one that did not come from ``resolve``, or one already finalized — is
+    returned as is, so the call is idempotent and the doors need not know
+    which they were handed.
+
+    Called at every door where a resolved config meets a package list:
+    `api.turn_context._common` (every turn), the WUI `callTool` route, the
+    picker route and the replay loader. Every reader of ``allowed_tools``
+    downstream of a door — the runner, provisioning, authz, the sub-agent
+    clamp, `_wui_callable` — therefore sees the same answer without
+    re-deriving it; that is the point of finalizing rather than recomputing."""
+    if not config.tool_ceiling:
+        return config
+    from ..tooling.catalog import command_grants
+
+    grants = command_grants(
+        config.tool_ceiling, config.allowed_tools or [], config.tool_prefs, packages
+    )
+    return structs.replace(
+        config,
+        allowed_tools=list(grants.enabled),
+        disabled_tools=list(grants.disabled),
+        tool_ceiling=[],
+        tool_prefs={},
+    )
 
 
 def validate_function_coherence(manifest: AppManifest) -> None:
@@ -225,13 +284,7 @@ class AppCatalog:
         prof = load_profile(app_slug, profile)
 
         # tools — profile subset of the App ceiling, else the whole ceiling.
-        if prof.tools is not UNSET:
-            _subset_or_raise(
-                prof.tools, manifest.agent.tools, kind="tools", app=app_slug, profile=profile
-            )
-            default_tools = list(prof.tools)
-        else:
-            default_tools = list(manifest.agent.tools)
+        default_tools = profile_default_tools(app_slug, profile)
         # #322: a per-item tri-state override sits on top of that default. Each
         # entry pins one App-ceiling tool ON (True) or OFF (False); absent keys
         # follow the default (so future profile-default changes still flow). The

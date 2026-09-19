@@ -160,16 +160,62 @@ def expand_entries(entries: Iterable[str], packages: Sequence[PackageInfo]) -> l
     exports no command (a runtime carrier such as ``python-stack``) stays one
     unit, or its switch would have nothing to hang on. Built-ins, entries
     already at command granularity, and entries nothing resolves pass through
-    as written. Pure; both the runner and the picker route feed it the same
-    package list, so the two never disagree on what a grant expands to."""
+    as written; an entry that names a built-in is a built-in even when a
+    package shares the name (the runner's ``dedupe_tools`` lets the built-in
+    outrank a package's copy, so the picker draws the same winner). Deduped,
+    first position wins: ``["rca-tools", "rca-tools:spc"]`` grants ``spc``
+    once, not a duplicate row and a FunctionTool built twice. Pure; every
+    door that holds the package list (`apps.catalog.finalize_tool_grants`
+    and the picker route) feeds it the same list, so nothing disagrees on
+    what a grant expands to."""
+    from ..agent.tools import builtin_tool_descriptions
+
+    builtins = builtin_tool_descriptions()
     by_name = {p.name: p for p in packages}
     out: list[str] = []
+    seen: set[str] = set()
     for entry in entries:
         pkg = by_name.get(entry)
-        if pkg is not None and ":" not in entry and pkg.commands:
-            out.extend(f"{entry}:{c.name}" for c in pkg.commands)
+        if pkg is not None and ":" not in entry and entry not in builtins and pkg.commands:
+            units = [f"{entry}:{c.name}" for c in pkg.commands]
         else:
-            out.append(entry)
+            units = [entry]
+        for unit in units:
+            if unit not in seen:
+                seen.add(unit)
+                out.append(unit)
+    return out
+
+
+def narrow_entries(entries: Iterable[str], held: Iterable[str]) -> list[str]:
+    """``entries`` ∩ ``held``, at whichever granularity each side is written —
+    the one rule behind every "a declared list, bounded by what this turn
+    holds": a workflow step's ``tools:``, a sub-agent definition's ``tools``
+    (at load and at ``save_subagent``).
+
+    An entry that is held verbatim stays. A bare ``pkg`` becomes the commands
+    of it that are held (``pkg:cmd`` units, by name), so an item's pins bind
+    the delegate too — a step that says ``rca-tools`` on an item that pinned
+    ``pareto`` off does not get ``pareto``. A ``pkg:cmd`` entry stays when the
+    bare ``pkg`` is held (a config that never met its package list). Anything
+    else is dropped. Deduped, in ``entries`` order. String-level on purpose:
+    it needs no package list, so it can run wherever the held list is."""
+    held_set = set(held)
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry in held_set:
+            units = [entry]
+        elif ":" not in entry:
+            units = sorted(h for h in held_set if ":" in h and h.partition(":")[0] == entry)
+        elif entry.partition(":")[0] in held_set:
+            units = [entry]
+        else:
+            units = []
+        for unit in units:
+            if unit not in seen:
+                seen.add(unit)
+                out.append(unit)
     return out
 
 
@@ -213,9 +259,11 @@ def command_grants(
     (``unit_pref``) or, unpinned, whether the default set has it.
 
     ``AppCatalog.resolve`` cannot do this — it runs before the turn has
-    resolved its third-party packages — so the two places that DO hold the
-    package list call this instead, and the picker's ``effective`` is by
-    construction what the agent runs with."""
+    resolved its third-party packages — so it is applied where the packages
+    are: `apps.catalog.finalize_tool_grants` writes the answer INTO the
+    config's ``allowed_tools`` / ``disabled_tools`` at every door that holds
+    the package list, and the picker route reads the same finalized config,
+    so its ``effective`` is by construction what the agent runs with."""
     units = expand_entries(ceiling, packages)
     default_units = set(expand_entries(default_entries, packages))
     pins = prefs or {}

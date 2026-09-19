@@ -112,3 +112,79 @@ def test_without_packages_nothing_expands_and_the_old_entry_rule_holds():
     g = command_grants(["exec", "rca-tools"], ["exec"], {"rca-tools": True}, [])
     assert g.enabled == ("exec", "rca-tools")
     assert g.disabled == ()
+
+
+# ─── P14 revision: expansion edge rules ────────────────────────────
+
+
+def test_a_ceiling_naming_a_package_and_one_of_its_commands_draws_each_command_once():
+    """`["rca-tools", "rca-tools:spc"]` is a redundant grant, not two grants:
+    spc is one unit, at its first position. Twice would be a duplicate picker
+    row and a FunctionTool built twice on every turn."""
+    assert expand_entries(["rca-tools", "rca-tools:spc"], [RCA]) == [
+        "rca-tools:spc",
+        "rca-tools:pareto",
+        "rca-tools:wafer-history",
+    ]
+    assert expand_entries(["rca-tools:spc", "rca-tools"], [RCA]) == [
+        "rca-tools:spc",
+        "rca-tools:pareto",
+        "rca-tools:wafer-history",
+    ]
+
+
+def test_an_entry_naming_a_builtin_is_never_expanded_as_a_package():
+    """A package that happens to be called like a built-in does not take the
+    built-in's row: the runner's `dedupe_tools` lets the built-in outrank a
+    package's copy, and the picker has to draw the same winner."""
+    impostor = _pkg("exec", "a")
+    assert expand_entries(["exec"], [impostor]) == ["exec"]
+
+
+# ─── P14 revision: narrowing is an intersection, at either granularity ─
+
+
+def test_narrow_keeps_what_is_held_verbatim():
+    from workspace_app.tooling.catalog import narrow_entries
+
+    held = ["read_file", "rca-tools:spc", "rca-tools:pareto"]
+    assert narrow_entries(["read_file", "rca-tools:pareto"], held) == [
+        "read_file",
+        "rca-tools:pareto",
+    ]
+
+
+def test_narrow_expands_a_bare_package_to_the_commands_held_of_it():
+    """A step or a sub-agent definition says `rca-tools`; the turn holds two of
+    its three commands (the third was pinned off). It gets those two — the
+    item's pins bind the delegate too — sorted by name."""
+    from workspace_app.tooling.catalog import narrow_entries
+
+    held = ["read_file", "rca-tools:wafer-history", "rca-tools:spc"]
+    assert narrow_entries(["rca-tools"], held) == ["rca-tools:spc", "rca-tools:wafer-history"]
+
+
+def test_narrow_keeps_a_command_when_its_whole_package_is_held():
+    """The reverse granularity: `held` still names the bare package (a config
+    that never met its package list), and the entry names one command of it."""
+    from workspace_app.tooling.catalog import narrow_entries
+
+    assert narrow_entries(["rca-tools:spc"], ["rca-tools", "exec"]) == ["rca-tools:spc"]
+
+
+def test_narrow_drops_what_is_not_held():
+    from workspace_app.tooling.catalog import narrow_entries
+
+    held = ["read_file", "rca-tools:spc"]
+    assert narrow_entries(["exec", "rca-tools:pareto", "sci-plot", "mystery"], held) == []
+
+
+def test_narrow_dedupes_and_keeps_the_entries_order():
+    from workspace_app.tooling.catalog import narrow_entries
+
+    held = ["exec", "read_file", "rca-tools:spc", "rca-tools:pareto"]
+    assert narrow_entries(["rca-tools", "exec", "rca-tools:spc", "exec"], held) == [
+        "rca-tools:pareto",
+        "rca-tools:spc",
+        "exec",
+    ]
