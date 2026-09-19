@@ -174,10 +174,11 @@ describe("OnboardingModal — markdown and images", () => {
   });
 
   it("renders every shipped App's teaching word for word", async () => {
-    // Parity with the plain-text rendering this replaces: the five app.json
-    // blocks that exist today must read the same. The oracle is the raw
-    // string itself (plain text is valid markdown); pm's one pair of backticks
-    // becomes <code>, so those are the only characters allowed to vanish.
+    // Parity with the plain-text rendering this replaces: every shipped
+    // app.json string that IS plain text (no markdown construct in it) must
+    // read exactly as it did. The oracle is the raw string itself — plain text
+    // is valid markdown. Strings that use markdown on purpose (rca's screenshot,
+    // pm's backticks, the template's example) are covered by the tests above.
     const fs = await import("node:fs");
     const path = await import("node:path");
     const appsDir = path.resolve(__dirname, "../../../src/workspace_app/apps");
@@ -191,9 +192,10 @@ describe("OnboardingModal — markdown and images", () => {
         <OnboardingModal content={ob} scope={{ kind: "app", slug }} onGotIt={vi.fn()} onDontShowAgain={vi.fn()} />,
       );
       const text = container.textContent ?? "";
-      for (const raw of [ob.intro, ...ob.points.flatMap((p) => [p.title, p.body])]) {
-        if (raw) expect(text).toContain(raw.replace(/`/g, ""));
-      }
+      const plain = (raw: string) => raw !== "" && !/[`*_#\[\]\n]/.test(raw);
+      const strings = [ob.intro, ...ob.points.flatMap((p) => [p.title, p.body]), ob.footer ?? ""];
+      expect(strings.filter(plain).length).toBeGreaterThan(0); // the oracle is not vacuous
+      for (const raw of strings.filter(plain)) expect(text).toContain(raw);
       unmount();
     }
   });

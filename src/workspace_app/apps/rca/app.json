@@ -5,11 +5,14 @@
   "icon": "flame",
   "color": "#F0502E",
   "onboarding": {
-    "version": "1",
+    "version": "2",
     "title": "Welcome to Root Cause Analysis",
     "intro": "Investigate failures end to end — from raw evidence to a report you can share.",
     "points": [
-      { "title": "Add your evidence", "body": "Upload logs, datasets, and images, then ask the agent to dig into them." },
+      {
+        "title": "Add your evidence",
+        "body": "Upload logs, datasets, and images, then ask the agent to dig into them.\n\n![The Start an investigation form: title, severity, status, topics, product, owner, template](assets/create-investigation.png)"
+      },
       { "title": "Ask the agent", "body": "Pull histories, rank suspect factors, and run SPC or Pareto from plain questions." },
       { "title": "Draft the report", "body": "Turn findings into a structured report you can export and hand off." }
     ]
