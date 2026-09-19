@@ -109,6 +109,7 @@ be vetoed by looking at the result.
   都可以 同理"); `normaliseMemory` sends the server's.
 - **P7** Review round 2 (see the record below).
 - **P8** Review round 3 (see the record below).
+- **P9** Review round 4 (see the record below).
 
 ## Test plan (red first, targeted only)
 
@@ -360,4 +361,44 @@ bare `:not()` → the row-shape guard; Close sandbox not locked → the
 interrupted-save case; sent values not cached → "saved, but could not
 re-read"; stale flag never raised → the three re-read cases; full-width
 digits not folded → the two IME cases.
+
+## Review round 4 (2026-09-19 — verify P8: regression in Chromium / veracity)
+
+Worst finding: **MEDIUM** ×2 in code, both one-liners; nothing HIGH.
+
+- **Regression (P8, Chromium, 228 computed properties over `/my-resources`,
+  `/skill-hub`, `/wui` at 1280 and 390)**: 224 identical to master; the four
+  that differ are all the live row's `gap` — at ≤640px the row is its own
+  grid and its 12px column gap had come from the generic rule P7 excluded it
+  from: dot → title 12px → 0 (MEDIUM). The modal's status row measures the
+  same as the page's live row and as a bare `.live-card`. The banner path
+  matches master (a 507 landing after Discard mid-flight reaches
+  `currentWriteFailure`). MEDIUM: `setQueryData` after a failed re-read marks
+  the record fresh, so under the prod client's 30 s `staleTime` the reopen the
+  notice prescribes issued 0 GETs.
+- **Veracity (P8)**: all five mutations reproduce. Unpinned: the memory half
+  of the cache write (`parseSize`'s multiplier could go — MEDIUM, test-level);
+  the dropped `silentError` (no test saw the banner); the `loadFailed`
+  fallback branch (reachable through a failed non-save refetch, LOW, a
+  string); and `staleAfterSave` persisted past a later SUCCESSFUL read
+  (positive control: invalidate with the server answering → the notice
+  stayed) — LOW, a false "close and reopen". Two wording nits: P8's commit
+  title ("no mutation can be detached mid-flight" — Cancel → Discard still
+  can, harmlessly, by design); the CSS comment credited `:where` with what
+  `:not` does.
+
+**P9**: `column-gap: var(--space-12)` restated on the narrow live rule
+(measured 12px at 390 on the built bundle; guarded); `invalidateQueries
+({refetchType: "none"})` after the cache write, so a reopen under the real
+client reads the server (test counts the GET); the notice pinned to the
+query's `dataUpdatedAt` — any later read retires it; `parseSize` tested
+directly and the memory half asserted through the modal; the banner pinned
+under `makeQueryClient`; the CSS comment corrected. Mutations, each
+reddening only its own case: notice not retired; no invalidation; narrow gap
+dropped; `parseSize` multiplier dropped; `silentError` back.
+
+Stop: round 4's code findings were both one-line fixes, each pinned by a
+test that reddens on the unfixed line; no mechanism was replaced. The
+`loadFailed` fallback stays untested (a string on a path no double reaches);
+P8's commit title stands as written — history is not rewritten for a nit.
 
