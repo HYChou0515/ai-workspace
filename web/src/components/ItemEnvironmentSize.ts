@@ -1,38 +1,24 @@
 /**
- * What a save sends, given what is stored and what the person just changed.
+ * The size fields' wire grammar, on the client.
  *
- * `PUT .../resources` replaces the whole value — both dimensions, every time.
- * The modal used to hard-code `memory: null` on every save, so editing CPU (or
- * clicking "back to default") silently destroyed a stored memory setting, with
- * no way to restore it because there was no memory control at all.
+ * `toSizeString` writes bytes the way the server's `parse_size` reads them —
+ * an integer with the largest unit that divides it exactly (`"512M"`, `"2G"`,
+ * or the bare byte count) — so a stated size round-trips: what the record
+ * holds is what the field shows and what Save sends back.
  *
- * The api client's own comment claimed the opposite — "omitting one would read
- * as 'leave that dimension alone'" — describing an intention the server never
- * had. A replace endpoint means the client owns the whole state, and this is
- * the one function that assembles it.
+ * `isValidCpu` / `isValidMemory` are the server's refusals
+ * (`api/item_routes.py:_validated_resources`, `quota/limits.py:parse_size`)
+ * asked BEFORE the PUT: a 422 only says "not saved", and the person would be
+ * left guessing at the grammar. `""` is valid in both — it means "use the
+ * default" and is sent as `null`. `normaliseMemory` is what lets the memory
+ * field take the spellings people actually use — "MB" as well as "M", a
+ * space, a fraction — and still send the one the server parses.
  */
 
-import type { ItemSize } from "../api/itemEnvironment";
-
-/** The two dimensions as the environment route reports them. */
-export type StatedSize = {
-  statedCpuCores: number | null;
-  statedMemoryBytes: number | null;
-};
-
-/** What the person just changed. An absent key means "they did not touch this
- *  one" — which is NOT the same as `null`, the value that clears it. */
-export type SizeEdit = {
-  cpuCores?: number | null;
-  memory?: string | null;
-};
-
-/** Bytes in the spelling the server parses, so the panel and `config.yaml`
- *  describe the same thing in the same words. Exact powers of two only —
- *  anything else stays a byte count rather than being rounded into a lie. */
-function toSizeString(bytes: number | null): string | null {
+export function toSizeString(bytes: number | null): string | null {
   if (bytes === null) return null;
   for (const [unit, size] of [
+    ["T", 1024 ** 4],
     ["G", 1024 ** 3],
     ["M", 1024 ** 2],
     ["K", 1024],
@@ -42,10 +28,52 @@ function toSizeString(bytes: number | null): string | null {
   return String(bytes);
 }
 
-export function sizeToSave(stated: StatedSize, edit: SizeEdit): ItemSize {
-  return {
-    cpuCores: "cpuCores" in edit ? (edit.cpuCores ?? null) : stated.statedCpuCores,
-    memory:
-      "memory" in edit ? (edit.memory ?? null) : toSizeString(stated.statedMemoryBytes),
-  };
+/** More than 0 and finite; the server refuses 0 rather than reading it as "unlimited". */
+export function isValidCpu(text: string): boolean {
+  if (text === "") return true;
+  const n = Number(text);
+  return Number.isFinite(n) && n > 0;
+}
+
+const UNITS: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
+
+/**
+ * What a person writes → what `parse_size` reads, or `null` when it is not a
+ * size at all. People write "512MB", "512 mb", "1.5G" and the display format
+ * "512.0 MB" as readily as "512M"; the server reads only `<integer>[K|M|G|T]`.
+ * So: any case, an optional space, an optional trailing B, full-width digits,
+ * a fraction WITH a unit folded into the exact smaller unit ("1.5G" →
+ * "1536M"; below a whole byte it rounds), a fraction WITHOUT one refused (a
+ * fraction of a byte is not a size). `""` is "the default", not a size — the
+ * caller sends `null` for it.
+ */
+export function normaliseMemory(text: string): string | null {
+  // Full-width digits (a zh-TW IME slip) are digits; the server's
+  // `str.isdigit` reads them too.
+  const ascii = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(?:([kmgt])b?)?\s*$/i.exec(ascii);
+  if (!m) return null;
+  // A fraction is fine WITH a unit (1.5G is 1536M); without one it would be
+  // a fraction of a byte, which is not a size.
+  if (!m[2] && m[1].includes(".")) return null;
+  const unit = m[2] ? UNITS[m[2].toUpperCase()]! : 1;
+  const bytes = Math.round(Number(m[1]) * unit);
+  if (!(bytes > 0)) return null;
+  return toSizeString(bytes) ?? null;
+}
+
+/** Empty = the default; otherwise something `normaliseMemory` can read. The
+ *  server refuses zero on this route, unlike the operator's config. */
+export function isValidMemory(text: string): boolean {
+  return text.trim() === "" || normaliseMemory(text) !== null;
+}
+
+/** The server's spelling back to bytes — for writing a just-sent size into
+ *  the cached record when its re-read failed. Only ever fed what
+ *  `normaliseMemory` produced. */
+export function parseSize(text: string | null): number | null {
+  if (text === null) return null;
+  const m = /^(\d+)([KMGT])?$/.exec(text);
+  if (!m) return null;
+  return Number(m[1]) * (m[2] ? UNITS[m[2]]! : 1);
 }

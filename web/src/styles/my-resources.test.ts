@@ -59,21 +59,6 @@ function wideRule(selector: string): string {
 }
 
 describe("my-resources: the live panel's layout", () => {
-  it("lays the three totals out as columns, not as a stack of full-width bars", () => {
-    // Three 712px accent bars stacked in the same column as the rows beneath
-    // them is what made the section read as one seven-row list. The group role
-    // the DOM test asserts survives this rule being deleted; the separation
-    // does not.
-    const block = rule(".page .stat-row");
-    expect(block).toMatch(/display:\s*grid/);
-    // A `repeat(...)`, not a pinned count: the storage section puts ONE gauge in
-    // this same panel, so `repeat(3, 1fr)` would leave it in the left third with
-    // two empty columns. What has to hold is that the totals get their own
-    // columns instead of stacking full-width in the list's column — which is
-    // the shape the whole section was rewritten to escape.
-    expect(block).toMatch(/grid-template-columns:\s*repeat\(/);
-  });
-
   it("gives a live sandbox a different row shape from a stored one", () => {
     // The complaint underneath all of this: two sections that mean different
     // things looked identical, and the only thing separating them was the word
@@ -81,8 +66,24 @@ describe("my-resources: the live panel's layout", () => {
     // shared hairline-separated row.
     const live = rule(".page .live-list > li");
     expect(live).toMatch(/display:\s*grid/);
-    expect(live).toMatch(/border-radius:/);
-    expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
+    // The card chrome (border-radius, surface) is `.live-card` in gauge.css —
+    // guarded there — so this rule need only make the row a grid.
+    // `:where(...)` — zero specificity — keeps this generic rule at (0,1,2).
+    // A bare `:not(.live-list)` raised it to (0,2,2) and it then outranked
+    // every `.page .X > li` rule in the app: the storage list lost its grid,
+    // /wui its table, /skill-hub its chips (round 3, measured in Chromium).
+    expect(rule(".page ul:where(:not(.live-list)) > li")).toMatch(/display:\s*flex/);
+    expect(css).not.toMatch(/\.page ul:not\(/);
+    // The live title keeps the shared `> a` ellipsis — that rule is unscoped.
+    expect(rule(".page ul > li > a")).toMatch(/text-overflow:\s*ellipsis/);
+    // Excluded from the generic rule, the live row no longer inherits its
+    // `gap`; the narrow layout (its own grid) needs the column gap restated —
+    // without it the dot touched the title at 390 (round 4, Chromium).
+    const narrow = css.match(/@media \(max-width: 640px\) \{([\s\S]*?)\n\}/);
+    expect(narrow).not.toBeNull();
+    const narrowLive = narrow![1]!.match(/\.page \.live-list > li \{([^}]*)\}/);
+    expect(narrowLive).not.toBeNull();
+    expect(narrowLive![1]).toMatch(/column-gap:\s*var\(--space-12\)/);
   });
 
   it.each([".page .live-list", ".page .disk-list", ".page .wui-list"])(

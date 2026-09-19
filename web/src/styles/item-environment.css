@@ -1,78 +1,141 @@
-/* The item page's environment panel.
+/* The item's Sandbox modal body — `components/ItemEnvironmentPanel.tsx`.
  *
- * Its own sheet rather than a `.page` selector, because `my-resources.css`
- * scopes `.gauge` / `.summary` / `.detail` under `.page` and this panel lives in
- * a sidebar, not on that page. Reusing the class NAMES without the styles is
- * exactly how the previous round shipped a resource page whose meters were two
- * zero-height divs and whose whole row read as one run-on word — semantic
- * markup, no stylesheet, and it passed every "clickable" check.
+ * Every part is a shape the app already draws somewhere: the status row is
+ * `/my-resources`' live row (`.live-card` + `.live-dot`, gauge.css), the totals
+ * are its stat tiles (gauge.css), the fields wear the house `.input` (base.css)
+ * under a label, and the frame is the Tools modal's. This sheet lays those
+ * parts out and dresses only what has no home elsewhere: the helper lines,
+ * the "Back to default" link, the disabled look.
  *
- * `.meter` / `.meter-fill` are already global and are deliberately NOT
- * redeclared here: one bar, one definition, so the two cannot drift.
- */
+ * The earlier sheet gave the CPU input `width: 6rem` and tabular figures and
+ * the memory input nothing, so both drew with the browser's inset grey — the
+ * "cheap" look — beside a bare-text "Close sandbox" button and a total that
+ * named nothing. */
 
 .item-environment {
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
-  padding: var(--space-12);
 }
 
-/* The panel's own <h3> moved into the modal's header row, which is inline
-   styled, so the h3 half of this pair stopped matching anything. The two rules
-   are merged rather than one deleted: the second only ever overrode the first,
-   and what it computed to is written out here. */
-.item-environment > h4 {
-  margin: var(--space-8) 0 0;
-  font-size: var(--text-body-sm);
-  color: var(--text-paper-d);
-}
-
-/* Label grows, value sits at the end — the gap is what keeps a title and a
-   figure from reading as one word. */
-.item-environment .summary {
+/* dot · label · figures · [Close sandbox] — /my-resources' live row: the card
+   chrome is the shared `.live-card` (gauge.css); only the flex layout is ours. */
+.item-environment .env-status {
   display: flex;
-  align-items: baseline;
+  /* If the row cannot hold dot · label · figures · button, the BUTTON drops to
+     its own line; the figures never break in the middle ("512.0" / "MB"). */
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-8);
+}
+
+.item-environment .env-status__label {
+  font-weight: 500;
+}
+
+.item-environment .env-status__detail {
+  /* Grows to push the button right; never shrinks below its own figures —
+     with `min-width: 0` the text ran under the button instead of wrapping. */
+  flex: 1 0 auto;
   margin: 0;
-  font-size: var(--text-body);
-  color: var(--text-paper);
-}
-
-.item-environment .gauge-label {
-  flex: 1;
-  min-width: 0;
-}
-
-.item-environment .gauge-value {
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-/* Everything that explains rather than states: which limit bound, why the field
-   is locked, why it is read-only. Quieter than the figure it qualifies, but it
-   has to stay legible — these lines are the whole reason a clamped setting is
-   not a contradiction. */
-.item-environment .detail {
+/* Idle: the same dot, unlit and still. */
+.item-environment .live-dot--idle {
+  background: var(--text-paper-d2);
+  animation: none;
+}
+
+.item-environment .env-hint {
   margin: 0;
+}
+
+.item-environment .env-heading {
+  margin: var(--space-8) 0 0;
   font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text-paper);
+}
+
+/* Two fields side by side, the same width; one column where two would leave
+   "512.0 MB · Default (from your current quota)" nowhere to go. */
+.item-environment .env-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-12);
+}
+
+@media (max-width: 480px) {
+  .item-environment .env-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.item-environment .env-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.item-environment .env-field > label {
+  font-size: var(--text-small);
   color: var(--text-paper-d);
 }
 
-.item-environment .gauge {
-  margin-top: var(--space-4);
-}
-
-.item-environment input[type="number"] {
-  width: 6rem;
+/* The class sets `flex: 1` for row layouts; in a column it must fill. */
+.item-environment .env-field > .input {
+  width: 100%;
+  flex: none;
   font-variant-numeric: tabular-nums;
 }
 
 /* A disabled field here means "not now" (something is running) or "not you"
    (you may look, not spend) — never "broken". It stays readable, and the
    sentence beside it says which of the two it is. */
-.item-environment input:disabled {
+.item-environment .input:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.item-environment .detail {
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: var(--leading-body-sm, 1.5);
+  color: var(--text-paper-d);
+}
+
+/* A field holding what the server would refuse: the note under it says the
+   grammar, in the error colour, and `aria-invalid` says it to AT. The red
+   border outranks `.input:focus`'s accent one, so focus is shown as a ring —
+   `.input` has no outline of its own. */
+.item-environment .input[aria-invalid="true"] {
+  border-color: var(--err);
+}
+
+.item-environment .input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.item-environment .env-field__note--invalid {
+  color: var(--err);
+}
+
+/* "Back to default" reads as a link inside the helper line, not a button
+   beside it — it is a correction to the sentence it sits in. */
+.item-environment .env-reset {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The tiles need no outer margin inside a modal — the frame's gap spaces them. */
+.item-environment .stat-row {
+  margin-bottom: 0;
 }
 
 /* The closable list inside a refusal. Same row shape as `/my-resources`'s

@@ -1119,6 +1119,20 @@ export const messages = {
     "zh-TW": "這個部署無法確認會套用 CPU 上限，所以這裡不提供調整。",
     en: "This deployment can't confirm a CPU ceiling is applied, so there's nothing to set here.",
   },
+  "itemenv.unenforced.memory": {
+    "zh-TW": "這個部署無法確認會套用記憶體上限，所以這裡不提供調整。",
+    en: "This deployment can't confirm a memory ceiling is applied, so there's nothing to set here.",
+  },
+  "itemenv.field.cpu": { "zh-TW": "CPU（核心數）", en: "CPU (cores)" },
+  "itemenv.savedButStale": {
+    "zh-TW": "已存檔，但讀不回最新狀態。關掉再開一次。",
+    en: "Saved — but the latest status couldn't be read back. Close it and open it again.",
+  },
+  "itemenv.field.cpu.hint": { "zh-TW": "要大於 0，例如 1 或 0.5。", en: "More than 0 — e.g. 1 or 0.5." },
+  "itemenv.field.memory.hint": {
+    "zh-TW": "數字加單位，例如 512M、512MB 或 1.5G。",
+    en: "A number with a unit — e.g. 512M, 512MB or 1.5G.",
+  },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
     en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",

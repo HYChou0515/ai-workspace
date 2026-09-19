@@ -47,7 +47,7 @@ export function GroupPicker({
     <div style={{ minWidth: 240 }}>
       <input
         type="search"
-        className="kb-input"
+        className="input"
         aria-labelledby={labelledBy}
         aria-label={labelledBy ? undefined : placeholder}
         placeholder={placeholder}

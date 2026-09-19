@@ -1,6 +1,6 @@
 /**
- * The sandbox panel's frame: it fetches, it decides what the two halves are
- * allowed to say, and it is the modal the panel is shown in.
+ * The Sandbox modal's frame: it fetches, it owns the two size drafts and the
+ * one Save that commits them, and it is the modal the panel is shown in.
  *
  * TWO queries, and they are deliberately different routes. `/environment` is
  * scoped to this item and is what a collaborator may see; `/me/resources` is
@@ -12,52 +12,62 @@
  * budget half, which is the same state a deploy that caps nobody is in. The
  * status half — is it running, close it — stands on its own.
  *
- * It was called a modal long before it was one. What it rendered was a bare
- * `<div className="modal">`, and `.modal` is declared in no stylesheet — so it
- * was an unstyled block in the normal document flow: nothing dimmed behind it,
- * no Escape, focus left on the page underneath, and one unlabelled `×` sitting
- * below the panel. `ModalShell` owns all of that (#445/#779), so this asks for
- * it rather than re-deriving it.
+ * SAVE, not blur. The fields used to commit the moment focus left them, and
+ * there was no Save: Escape wrote nothing, Tab wrote, whether a ✕ click wrote
+ * depended on the browser, and a "you have unsaved changes" prompt could not
+ * be added because the prompt's own focus move was a blur and so a save. With
+ * a Save button the modal is like every other one (#779): a draft is dirty
+ * when it differs from what the modal opened with, every deliberate exit —
+ * Escape, Cancel — goes through `useDirtyClose`, and nothing is written by a
+ * keystroke that only moved focus. One PUT carries BOTH dimensions, because
+ * the route replaces both — and the dimension the person did not touch is
+ * read from the record as the modal last fetched it, not copied when typing
+ * began: two `change_permission` holders can resize the same item, and a
+ * draft that carried a stale copy of the other's memory would have written it
+ * back over theirs whenever the record had since been refetched. (The record
+ * refetches only on this modal's own saves and closes — a truly concurrent
+ * write can still be lost; that needs the server to compare-and-swap.) So
+ * the draft holds only the fields that were typed in.
  *
- * The fields commit on BLUR and there is no Save button, so what "leaving"
- * ought to mean is a question about the panel's save model rather than about
- * this modal.
+ * A save is one gesture from click to re-read: the fields, Save AND "Close
+ * sandbox" are locked while the PUT is out and while the record is being
+ * re-read, and the draft is dropped only once the re-read has landed.
+ * Dropping it at the PUT's success flashed the pre-save number for one round
+ * trip (the GET probes the sandbox), and ate a keystroke typed meanwhile.
+ * Close sandbox is locked for a different reason: it `reset()`s the mutation,
+ * which detaches an in-flight one from this component — its per-mutate
+ * callbacks then never fire and its options callbacks fire on a modal that has
+ * moved on. Not offering it while a save is out means no such mutation exists.
  *
- * The rule is about FOCUS, not about closing: moving focus off a field commits
- * it. Tab to the ✕, or click it in a browser that focuses buttons on mousedown,
- * and the field you left is saved — you moved the focus, and that is this
- * panel's only save gesture. Escape moves no focus and so sends nothing.
+ * What the server would refuse is refused here first: a cpu of 0 or less, or
+ * a memory that is not a size. The server reads only `<integer>[K|M|G|T]`;
+ * people write "512MB", "1.5 GB" and the display format "512.0 MB" just as
+ * readily, so the field takes those and `normaliseMemory` sends the server's
+ * spelling. A 422 only says "not saved", which leaves the person guessing.
  *
- * That is inherited, and it is uneven: whether a ✕ CLICK saves depends on the
- * browser (Chrome focuses on mousedown, Firefox and Safari do not). Both were
- * tried here and both were worse than saying so. A `useDirtyClose` prompt
- * cannot work at all — `DialogProvider` focuses the confirm so it can be
- * answered, focus leaving the field blurs it, and blurring is what saves, so
- * the question commits the value it asks about. Committing on the way out made
- * Escape the only keystroke in the app that WRITES, spending the item owner's
- * quota. And withdrawing the ✕'s focus move with `preventDefault` — the third
- * attempt — evened the exits out by turning the commonest one into silent data
- * loss, which is a regression against what the ✕ does today.
- *
- * So the frame leaves the save model alone and this comment states it rather
- * than claiming it away. What would actually fix it is a Save button, which is
- * a decision about the panel, not about the modal around it.
- *
- * Because saves are dispatched while this is on screen, a refusal has somewhere
- * to be read (`saveFailed`) — the one part of that gap this frame can close.
+ * Because saves are dispatched while this is on screen, a refusal has
+ * somewhere to be read (`saveFailed`, beside the app-wide banner — which is
+ * also what reports a refusal that lands after the modal has been closed on
+ * it) and the draft stays for a second try. A save that SUCCEEDED but whose
+ * re-read failed says so — and writes what it sent into the cached record:
+ * TanStack keeps the previous record on a failed refetch, so the fields would
+ * otherwise show the old numbers as if they were the new ones, and a draft
+ * kept instead would make leaving ask about "unsaved changes" the notice has
+ * just called saved.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId } from "react";
+import { useId, useRef, useState } from "react";
 
-import { itemEnvironmentApi } from "../api/itemEnvironment";
+import { itemEnvironmentApi, type ItemEnvironment } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
-import { Icon } from "./Icon";
-import { ItemEnvironmentPanel } from "./ItemEnvironmentPanel";
+import { pxToRem } from "../lib/pxToRem";
+import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
+import { isValidCpu, isValidMemory, normaliseMemory, parseSize, toSizeString } from "./ItemEnvironmentSize";
 import { ModalShell } from "./ModalShell";
 import { budgetFrom } from "./useItemEnvironment";
-import { type SizeEdit, sizeToSave } from "./ItemEnvironmentSize";
 
 export type ItemEnvironmentModalProps = {
   slug: string;
@@ -77,7 +87,6 @@ export function ItemEnvironmentModal({
   const t = useT();
   const qc = useQueryClient();
   const titleId = useId();
-
   const env = useQuery({
     queryKey: ["item-environment", slug, itemId],
     queryFn: () => itemEnvironmentApi.get(slug, itemId),
@@ -88,20 +97,92 @@ export function ItemEnvironmentModal({
     // A person without a budget is the normal case, not an error state.
     retry: false,
   });
+  const budget = budgetFrom(resources.data);
 
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ["item-environment", slug, itemId] });
-    void qc.invalidateQueries({ queryKey: ["my-resources"] });
+  // The record's own values — the baseline `dirty` is measured against, and
+  // what fills any field the person has not typed in. Recomputed from the
+  // latest record on purpose (see the header: the untouched dimension must be
+  // the server's current one at save time).
+  const stated: SizeDraft | null = env.data
+    ? {
+        cpu: env.data.statedCpuCores === null ? "" : String(env.data.statedCpuCores),
+        memory: toSizeString(env.data.statedMemoryBytes) ?? "",
+      }
+    : null;
+  // Only the fields that were typed in. `{}` = nothing typed = clean.
+  const [draft, setDraft] = useState<Partial<SizeDraft>>({});
+  // A save went through but its re-read did not: the cached record carries
+  // the sent values (below), and the notice shows while the record is still
+  // THAT one — pinned to the query's own data timestamp, so any later read
+  // (a refetch on reconnect, a Close sandbox) retires it; a flag only the
+  // next Save cleared kept saying "close and reopen" over a current record.
+  const [staleAt, setStaleAt] = useState<number | null>(null);
+  const staleAfterSave = staleAt !== null && env.dataUpdatedAt === staleAt;
+  const current: SizeDraft | null = stated
+    ? { cpu: draft.cpu ?? stated.cpu, memory: draft.memory ?? stated.memory }
+    : null;
+  const dirty =
+    current !== null && stated !== null && (current.cpu !== stated.cpu || current.memory !== stated.memory);
+  const invalid = {
+    cpu: current !== null && !isValidCpu(current.cpu),
+    memory: current !== null && !isValidMemory(current.memory),
   };
 
+  const envKey = ["item-environment", slug, itemId];
+  const refresh = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: envKey }),
+      qc.invalidateQueries({ queryKey: ["my-resources"] }),
+    ]);
+
   const save = useMutation({
-    // The route REPLACES both dimensions, so the client owns the whole value.
-    // Hard-coding `memory: null` here meant every cpu edit — and every "back to
-    // default" click — silently destroyed a stored memory setting.
-    mutationFn: (edit: SizeEdit) =>
-      itemEnvironmentApi.setSize(slug, itemId, sizeToSave(env.data!, edit)),
-    onSuccess: refresh,
+    mutationFn: (d: SizeDraft) =>
+      itemEnvironmentApi.setSize(slug, itemId, {
+        cpuCores: d.cpu === "" ? null : Number(d.cpu),
+        // The person's spelling ("1.5 GB") → the server's ("1536M").
+        memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
+      }),
+    // Awaited, so the mutation stays PENDING until the re-read has landed:
+    // `save.isPending` is the one flag for "a save is out", PUT and re-read.
+    onSuccess: async (_, d) => {
+      await refresh();
+      const failed = qc.getQueryState(envKey)?.status === "error";
+      if (failed) {
+        // The write went through; the re-read did not. The stated values are
+        // known — they are what was sent — so the cached record takes them
+        // (its effective/clamp figures stay the old ones until a real read).
+        qc.setQueryData(envKey, (old: ItemEnvironment | undefined) =>
+          old && {
+            ...old,
+            statedCpuCores: d.cpu === "" ? null : Number(d.cpu),
+            statedMemoryBytes: d.memory.trim() === "" ? null : parseSize(normaliseMemory(d.memory)),
+          },
+        );
+        // setQueryData marks the record FRESH, so the reopen the notice
+        // prescribes would read the cache for `staleTime` and fetch nothing.
+        // Invalidated (without refetching now — that just failed), the next
+        // mount reads the server.
+        void qc.invalidateQueries({ queryKey: envKey, refetchType: "none" });
+      }
+      // Stamped AFTER setQueryData, which is itself a data update.
+      setStaleAt(failed ? (qc.getQueryState(envKey)?.dataUpdatedAt ?? null) : null);
+      setDraft({});
+    },
+    // In the OPTIONS, not per-mutate: `save.reset()` (Close sandbox) detaches
+    // the in-flight mutation's observer and a per-mutate callback never fires,
+    // which left the ref stuck and every later Save silently dropped.
+    onSettled: () => {
+      inflight.current = false;
+    },
   });
+  // `save.isPending` is a render-time value; a second click that lands before
+  // the re-render sees it false and sends a second PUT. The ref is current.
+  const inflight = useRef(false);
+  const submit = () => {
+    if (!current || inflight.current) return;
+    inflight.current = true;
+    save.mutate(current);
+  };
   const close = useMutation({
     mutationFn: () => myResourcesApi.closeEnvironment(itemId),
     // Both queries: closing frees the person's budget as well as this item's
@@ -110,82 +191,117 @@ export function ItemEnvironmentModal({
     onSuccess: refresh,
   });
 
+  const attemptClose = useDirtyClose(dirty, onClose);
+  const editable = env.data !== undefined && budget !== null && canEdit;
+  const busy = save.isPending;
+  const canSave = editable && dirty && !invalid.cpu && !invalid.memory && !env.data!.running && !busy;
+
   return (
     <ModalShell
-      onClose={onClose}
+      onClose={attemptClose}
       labelledBy={titleId}
       data-testid="item-environment-modal"
-      width={420}
+      width={480}
       maxWidth="92vw"
-      // The header and `.item-environment` pad themselves (var(--space-12),
-      // measured below), so the shell's default padding is switched off.
-      panelStyle={{ padding: 0, display: "flex", flexDirection: "column", minHeight: 0 }}
+      panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-8)",
-          // Same padding as `.item-environment` below it, so the header BOX
-          // shares the panel's margins. The title text itself sits one icon
-          // further in, exactly as it does in every other modal's header —
-          // measured at 1280: title 466px, first reading 443px.
-          padding: "var(--space-12) var(--space-12) 0",
-        }}
-      >
-        <Icon name="settings" size={15} />
-        {/* A heading ELEMENT: `labelledBy` names the dialog either way, but a
-            <strong> leaves the dialog with nothing for heading navigation to
-            land on. */}
-        <h2
-          id={titleId}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            margin: 0,
-            fontSize: "var(--text-body)",
-            fontWeight: 600,
-          }}
-        >
-          {t("itemenv.heading")}
-        </h2>
-        <button
-          type="button"
-          data-testid="dismiss-item-environment"
-          // NOT `itemenv.close` — that button ends what is running. This one
-          // only puts the panel away.
-          aria-label={t("itemenv.dismiss")}
-          onClick={onClose}
-          style={{ border: "none", background: "transparent", cursor: "pointer" }}
-        >
-          <Icon name="x" size={14} />
-        </button>
-      </div>
+      {/* A heading ELEMENT: `labelledBy` names the dialog either way, but a
+          <strong> leaves the dialog with nothing for heading navigation to
+          land on. Sized like the Tools modal's title beside it. */}
+      <h2 id={titleId} style={{ margin: 0, fontSize: pxToRem(14), fontWeight: 600 }}>
+        {t("itemenv.heading")}
+      </h2>
+      <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+        {t("itemenv.tip")}
+      </p>
 
-      {env.data ? (
+      {env.data && current ? (
         <ItemEnvironmentPanel
           env={env.data}
-          budget={budgetFrom(resources.data)}
+          budget={budget}
           canEdit={canEdit}
-          onClose={() => {
+          draft={current}
+          invalid={invalid}
+          busy={busy}
+          onDraft={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+          onCloseSandbox={() => {
+            if (save.isPending) return; // the button is disabled; belt and braces
             // Otherwise the "not saved" line from an earlier refusal is still
             // sitting there after the sandbox has been shut down and the panel
             // has re-rendered around it, describing a request nobody can see.
             save.reset();
             close.mutate();
           }}
-          onSave={(edit) => save.mutate(edit)}
-          saveFailed={save.isError}
         />
       ) : (
         <p
           data-testid="item-environment-pending"
           className="detail"
-          style={{ margin: 0, padding: "var(--space-12)", color: "var(--text-paper-d)" }}
+          style={{ margin: 0, color: "var(--text-paper-d)" }}
         >
           {t(env.isError ? "itemenv.loadFailed" : "itemenv.loading")}
         </p>
       )}
+
+      {save.isError ? (
+        <p data-testid="save-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
+          {t("itemenv.saveFailed")}
+        </p>
+      ) : null}
+      {staleAfterSave ? (
+        // A re-read that failed after a write: the save went through and the
+        // fields show what was sent, but the effective/clamp figures are the
+        // old record's. Said as such — "couldn't read" alone reads as "not
+        // saved".
+        <p data-testid="reload-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
+          {t("itemenv.savedButStale")}
+        </p>
+      ) : env.isError && env.data ? (
+        <p data-testid="reload-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
+          {t("itemenv.loadFailed")}
+        </p>
+      ) : null}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+        {editable ? (
+          <>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="itemenv-cancel"
+              onClick={attemptClose}
+            >
+              {t("tools.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-variant="primary"
+              data-size="sm"
+              data-testid="itemenv-save"
+              onClick={submit}
+              disabled={!canSave}
+            >
+              {t("tools.save")}
+            </button>
+          </>
+        ) : (
+          // Nothing to save — no budget on this deploy, or a viewer who may
+          // look but not spend — so the one way out is named as such.
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid="itemenv-close-panel"
+            onClick={attemptClose}
+          >
+            {t("itemenv.dismiss")}
+          </button>
+        )}
+      </div>
     </ModalShell>
   );
 }

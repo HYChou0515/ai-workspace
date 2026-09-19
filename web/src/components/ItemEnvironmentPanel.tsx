@@ -1,29 +1,44 @@
 /**
- * The item page's environment panel — two halves with different preconditions.
+ * The body of an item's Sandbox modal — presentational. It draws three
+ * things and decides none of them:
  *
- * "Is my environment running, and close it" is about a MACHINE. It is worth
- * having on a deploy that caps nobody, so it is always drawn.
+ *  1. the status row — running or not, the size it is running at, and the one
+ *     action that changes that (Close sandbox), in the shape `/my-resources`
+ *     draws its live rows;
+ *  2. the size fields — CPU and memory, side by side, each with its label, its
+ *     input, and a helper line saying what is in effect and where the number
+ *     came from (a default resolved from the owner's quota, or something a
+ *     person set — and if set, why less is in effect: the App's ceiling or the
+ *     owner's quota held it down);
+ *  3. the owner's totals — CPU and memory as the same tiles `/my-resources`
+ *     draws, so a number here looks like the same number there.
  *
- * "How much of my budget is this spending, and how big may it be" is about a
- * BUDGET, and only means anything where one exists. On a deploy with no
- * per-person limits — which is the shipped default, and therefore the state
- * every deployment is in until someone configures it — drawing `0 / 0` would be
- * noise and offering a dial with an unlimited ceiling would be worse. So that
- * half is simply absent, and the useful half still shows up.
+ * The DRAFTS belong to the modal, which also owns Save. This panel only
+ * reports edits (`onDraft`); nothing here writes. The earlier panel saved on
+ * blur, and the modal around it spent thirty lines explaining why that made
+ * Escape and ✕ behave differently across browsers. A field that only edits a
+ * draft has no such question to answer.
  *
- * The item leads and the person's total sits beside it: you are on this item's
- * page, so it is the subject, and the total is the context that makes a refusal
- * explicable.
+ * Fields are LOCKED while the sandbox runs: there is no resize, the size is
+ * applied when the sandbox is created, and a field that accepted a change now
+ * would promise something the protocol cannot do. The hint under the status
+ * row says so. `canEdit` is the viewer's `change_permission` — the verb that
+ * decides who may spend the OWNER's quota; everyone else sees the numbers,
+ * greyed, and a sentence saying why.
+ *
+ * Which ceiling held a stated size down is answered by the SERVER
+ * (`cpuBoundBy`), not by comparing figures here: the effective number is
+ * clamped against the owner's quota, and for a delegate the viewer's quota is
+ * somebody else's — the comparison was normally false, so the panel blamed
+ * the App and sent people to change a setting that was not holding them.
  */
-
-import { useState } from "react";
 
 import type { ItemEnvironment } from "../api/itemEnvironment";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
+import { Gauge } from "./Gauge";
+import { toSizeString } from "./ItemEnvironmentSize";
 
-/** The owner's own ceiling and what they currently hold. `null` when this
- *  deploy caps nobody — which is a different thing from "zero used". */
 export type EnvBudget = {
   cpu: number;
   memoryBytes: number;
@@ -31,222 +46,229 @@ export type EnvBudget = {
   memoryInUse: number;
 };
 
+/** The two fields as the person is typing them. `""` = "use the default". */
+export type SizeDraft = { cpu: string; memory: string };
+
 export type ItemEnvironmentPanelProps = {
   env: ItemEnvironment;
   budget: EnvBudget | null;
-  /** Whether this viewer may spend the owner's quota — `change_permission`.
-   *  Read-only for everyone else, deliberately: a collaborator who gets refused
-   *  needs to SEE the number that refused them. */
   canEdit: boolean;
-  onClose?: () => void;
-  /** One dimension at a time. An absent key means "not touched", which the
-   *  caller turns into "keep what is stored" — the distinction that stops a cpu
-   *  edit from clearing memory.
-   *
-   *  Called when a field LOSES FOCUS to something else in the panel. Closing the
-   *  modal is deliberately not that: its exits neither save nor ask, and the
-   *  comment in `ItemEnvironmentModal` says why both were tried and withdrawn. */
-  onSave?: (edit: { cpuCores?: number | null; memory?: string | null }) => void;
-  /** Whether the last save was REFUSED. Every save is dispatched while this
-   *  panel is on screen — the modal's exits do not commit — so a refusal has
-   *  somewhere to be read, which is what makes fire-and-forget saving honest. */
-  saveFailed?: boolean;
+  draft: SizeDraft;
+  /** Which fields hold something the server would refuse (the modal decides;
+   *  this only marks the field and shows its grammar). */
+  invalid?: { cpu: boolean; memory: boolean };
+  /** A save is out (PUT or its re-read): the fields hold still so a
+   *  keystroke cannot land between the write and the record catching up. */
+  busy?: boolean;
+  /** Only the field that changed — the modal keeps the untouched one bound
+   *  to the live record. */
+  onDraft: (patch: Partial<SizeDraft>) => void;
+  /** Close the RUNNING sandbox (not the panel). */
+  onCloseSandbox?: () => void;
 };
-
-function Meter({ used, limit }: { used: number; limit: number }) {
-  if (!limit) return null;
-  const pct = Math.min(100, Math.round((used / limit) * 100));
-  return (
-    <div
-      className="meter"
-      role="progressbar"
-      aria-valuenow={pct}
-      aria-valuemin={0}
-      aria-valuemax={100}
-    >
-      <div className="meter-fill" style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
 
 export function ItemEnvironmentPanel({
   env,
   budget,
   canEdit,
-  onClose,
-  onSave,
-  saveFailed,
+  draft,
+  invalid = { cpu: false, memory: false },
+  busy = false,
+  onDraft,
+  onCloseSandbox,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
-  const [draft, setDraft] = useState<string>(
-    env.statedCpuCores === null ? "" : String(env.statedCpuCores),
-  );
-  const [memoryDraft, setMemoryDraft] = useState<string>(
-    env.statedMemoryBytes === null ? "" : String(env.statedMemoryBytes),
-  );
+  const locked = !canEdit || env.running;
+  const still = locked || busy;
 
-  const stated = env.statedCpuCores;
-  const effective = env.effectiveCpuCores;
-  // A dial this deploy will not honour is a promise, not a control — #712's
-  // lesson one layer up, and worse here because a PERSON set the number.
-  // `null` covers "caps nothing" and "could not ask" alike, because the backend
-  // reports an unreachable host identically to one that caps nothing.
-  const enforced = env.enforcedCpuCores !== null;
-  // Held down when somebody asked for more than they may have. Both numbers are
-  // shown, and which limit bound is named: showing the smaller one alone makes
-  // the panel disagree with what the person typed, with nothing to explain it.
-  const clamped = stated !== null && effective !== null && effective < stated;
-  // Which limit bound comes from the SERVER. Deriving it here meant comparing
-  // the effective figure — clamped against the OWNER's quota — with the
-  // viewer's own, and for a `change_permission` delegate those are different
-  // people: the comparison was normally false, so the panel blamed the App and
-  // sent them to change a setting that was not holding them.
-  const boundByQuota = env.cpuBoundBy === "quota";
+  const cpuStated = env.statedCpuCores;
+  const cpuEffective = env.effectiveCpuCores;
+  const cpuEnforced = env.enforcedCpuCores !== null;
+  const cpuClamped = cpuStated !== null && cpuEffective !== null && cpuEffective < cpuStated;
+
+  const memStated = env.statedMemoryBytes;
+  const memEffective = env.effectiveMemoryBytes;
+  const memEnforced = env.enforcedMemoryBytes !== null;
+  const memClamped = memStated !== null && memEffective !== null && memEffective < memStated;
+
+  const cores = (n: number) =>
+    t(n === 1 ? "resources.live.cores_one" : "resources.live.cores", { n });
 
   return (
-    // The title lives on the modal's own header row — drawing it again here
-    // gave the panel two of them, one of which no `labelledBy` pointed at.
-    <section className="item-environment">
-      {/* ── the machine half: always drawn ── */}
-      <p data-testid="environment-status" className="summary">
-        <span className="gauge-label">
+    <div className="item-environment">
+      {/* ── status row: always drawn ── */}
+      <div className="env-status live-card" data-testid="environment-status" data-running={env.running}>
+        <span className={`live-dot${env.running ? "" : " live-dot--idle"}`} aria-hidden="true" />
+        <span className="env-status__label">
           {env.running ? t("itemenv.status.running") : t("itemenv.status.idle")}
         </span>
         {env.running ? (
-          <span data-testid="this-item-usage" className="gauge-value">
-            {effective === null ? "—" : effective}
-            {env.effectiveMemoryBytes ? ` · ${formatBytes(env.effectiveMemoryBytes)}` : ""}
+          <span data-testid="this-item-usage" className="env-status__detail detail">
+            {cpuEffective === null ? "" : cores(cpuEffective)}
+            {cpuEffective !== null && memEffective ? " · " : ""}
+            {memEffective ? formatBytes(memEffective) : ""}
           </span>
         ) : null}
-      </p>
-      {env.running && canEdit ? (
-        <>
-          <button type="button" data-testid="close-environment" onClick={onClose}>
+        {env.running && canEdit ? (
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid="close-environment"
+            disabled={busy}
+            onClick={onCloseSandbox}
+          >
             {t("itemenv.close")}
           </button>
-          <p className="detail">{t("itemenv.close.hint")}</p>
-        </>
-      ) : null}
+        ) : null}
+      </div>
+      {env.running && canEdit ? <p className="detail env-hint">{t("itemenv.close.hint")}</p> : null}
 
-      {/* ── the budget half: only where a budget exists ── */}
+      {/* ── size + totals: only where a budget exists ── */}
       {budget === null ? null : (
         <>
-          <h4>{t("itemenv.size.heading")}</h4>
-          <p className="summary">
-            {/* Never a bare number: an unset value shows what it resolves to AND
-                that it is a default, or it reads as something the person chose. */}
-            <span data-testid="cpu-value" className="gauge-value">
-              {effective === null ? "—" : String(effective)}
-            </span>
-            <span data-testid="cpu-origin" className="detail">
-              {stated === null ? t("itemenv.size.default") : t("itemenv.size.stated")}
-            </span>
-            {stated === null ? null : (
-              <button
-                type="button"
-                data-testid="reset-cpu"
-                disabled={!canEdit || env.running}
-                onClick={() => {
-                  setDraft("");
-                  onSave?.({ cpuCores: null });
-                }}
-              >
-                {t("itemenv.size.reset")}
-              </button>
-            )}
-          </p>
-
-          {clamped ? (
-            <p data-testid="cpu-clamped" className="detail">
-              {t(boundByQuota ? "itemenv.size.clamped.quota" : "itemenv.size.clamped.app", {
-                stated: String(stated),
-                effective: String(effective),
-              })}
-            </p>
-          ) : null}
-
-          {enforced ? null : (
-            <p data-testid="cpu-unenforced" className="detail">
-              {t("itemenv.unenforced")}
-            </p>
-          )}
-          {!enforced ? null : (
-          <input
-            data-testid="cpu-input"
-            type="number"
-            min={0}
-            step={0.5}
-            value={draft}
-            // Locked while it runs, because there is no resize: the size is
-            // applied when the sandbox is created. A field that accepted a
-            // change now would be promising something the protocol cannot do.
-            disabled={!canEdit || env.running}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => onSave?.({ cpuCores: draft === "" ? null : Number(draft) })}
-          />
-          )}
-          {canEdit ? null : <p className="detail">{t("itemenv.readonly")}</p>}
-
-          {/* Memory had no control at all — the field existed on the item, the
-              route accepted it, and nothing could set it. P9's SIGKILL note
-              even tells people to come here and look at it. */}
-          <p className="summary">
-            <span data-testid="memory-value" className="gauge-value">
-              {env.effectiveMemoryBytes === null ? "—" : formatBytes(env.effectiveMemoryBytes)}
-            </span>
-            <span data-testid="memory-origin" className="detail">
-              {env.statedMemoryBytes === null ? t("itemenv.size.default") : t("itemenv.size.stated")}
-            </span>
-          </p>
-          {env.memoryBoundBy === null ||
-          env.statedMemoryBytes === null ||
-          env.effectiveMemoryBytes === null ? null : (
-            <p data-testid="memory-clamped" className="detail">
-              {t(
-                env.memoryBoundBy === "quota"
-                  ? "itemenv.memory.clamped.quota"
-                  : "itemenv.memory.clamped.app",
-                {
-                  stated: formatBytes(env.statedMemoryBytes),
-                  effective: formatBytes(env.effectiveMemoryBytes),
-                },
+          <h4 className="env-heading">{t("itemenv.size.heading")}</h4>
+          <div className="env-fields">
+            <div className="env-field">
+              {/* `htmlFor` only where there is an input to point at. */}
+              <label htmlFor={cpuEnforced ? "itemenv-cpu" : undefined}>{t("itemenv.field.cpu")}</label>
+              {cpuEnforced ? (
+                <input
+                  className="input"
+                  id="itemenv-cpu"
+                  data-testid="cpu-input"
+                  type="number"
+                  min={0.5}
+                  step={0.5}
+                  inputMode="decimal"
+                  value={draft.cpu}
+                  placeholder={cpuEffective === null ? "" : String(cpuEffective)}
+                  disabled={still}
+                  aria-invalid={invalid.cpu || undefined}
+                  aria-describedby={invalid.cpu ? "itemenv-cpu-hint" : undefined}
+                  onChange={(e) => onDraft({ cpu: e.target.value })}
+                />
+              ) : (
+                <p data-testid="cpu-unenforced" className="detail">
+                  {t("itemenv.unenforced")}
+                </p>
               )}
-            </p>
-          )}
-          {env.enforcedMemoryBytes === null ? null : (
-            <input
-              data-testid="memory-input"
-              value={memoryDraft}
-              placeholder="512M"
-              aria-label={t("resources.memory")}
-              disabled={!canEdit || env.running}
-              onChange={(e) => setMemoryDraft(e.target.value)}
-              onBlur={() =>
-                onSave?.({ memory: memoryDraft === "" ? null : memoryDraft })
-              }
+              <p className="detail env-field__origin">
+                {/* Never a bare number: an unset value shows what it resolves
+                    to AND that it is a default, or it reads as chosen. */}
+                <span data-testid="cpu-value">
+                  {cpuEffective === null ? "—" : cores(cpuEffective)}
+                </span>
+                {" · "}
+                <span data-testid="cpu-origin">
+                  {cpuStated === null ? t("itemenv.size.default") : t("itemenv.size.stated")}
+                </span>
+                {cpuStated === null || locked ? null : (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="env-reset"
+                      data-testid="reset-cpu"
+                      onClick={() => onDraft({ cpu: "" })}
+                    >
+                      {t("itemenv.size.reset")}
+                    </button>
+                  </>
+                )}
+              </p>
+              {invalid.cpu ? (
+                <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
+                  {t("itemenv.field.cpu.hint")}
+                </p>
+              ) : null}
+              {cpuClamped ? (
+                <p data-testid="cpu-clamped" className="detail env-field__note">
+                  {t(env.cpuBoundBy === "quota" ? "itemenv.size.clamped.quota" : "itemenv.size.clamped.app", {
+                    stated: String(cpuStated),
+                    effective: String(cpuEffective),
+                  })}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="env-field">
+              <label htmlFor={memEnforced ? "itemenv-memory" : undefined}>{t("resources.memory")}</label>
+              {memEnforced ? (
+                <input
+                  className="input"
+                  id="itemenv-memory"
+                  data-testid="memory-input"
+                  value={draft.memory}
+                  // The SERVER's spelling ("512M"), never the display one
+                  // ("512.0 MB"): the placeholder is what people type back.
+                  // Nothing in effect yet → no placeholder: a number here
+                  // would be one nobody vouched for.
+                  placeholder={toSizeString(memEffective) ?? ""}
+                  disabled={still}
+                  aria-invalid={invalid.memory || undefined}
+                  aria-describedby={invalid.memory ? "itemenv-memory-hint" : undefined}
+                  onChange={(e) => onDraft({ memory: e.target.value })}
+                />
+              ) : (
+                <p data-testid="memory-unenforced" className="detail">
+                  {t("itemenv.unenforced.memory")}
+                </p>
+              )}
+              <p className="detail env-field__origin">
+                <span data-testid="memory-value">
+                  {memEffective === null ? "—" : formatBytes(memEffective)}
+                </span>
+                {" · "}
+                <span data-testid="memory-origin">
+                  {memStated === null ? t("itemenv.size.default") : t("itemenv.size.stated")}
+                </span>
+                {memStated === null || locked ? null : (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="env-reset"
+                      data-testid="reset-memory"
+                      onClick={() => onDraft({ memory: "" })}
+                    >
+                      {t("itemenv.size.reset")}
+                    </button>
+                  </>
+                )}
+              </p>
+              {invalid.memory ? (
+                <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
+                  {t("itemenv.field.memory.hint")}
+                </p>
+              ) : null}
+              {memClamped && memStated !== null && memEffective !== null ? (
+                <p data-testid="memory-clamped" className="detail env-field__note">
+                  {t(
+                    env.memoryBoundBy === "quota"
+                      ? "itemenv.memory.clamped.quota"
+                      : "itemenv.memory.clamped.app",
+                    { stated: formatBytes(memStated), effective: formatBytes(memEffective) },
+                  )}
+                </p>
+              ) : null}
+            </div>
+          </div>
+          {canEdit ? null : <p className="detail env-hint">{t("itemenv.readonly")}</p>}
+
+          <h4 className="env-heading">{t("itemenv.usage.total")}</h4>
+          <div data-testid="budget-gauge" className="stat-row" role="group" aria-label={t("itemenv.usage.total")}>
+            <Gauge label={t("resources.gauge.cpu")} used={budget.cpuInUse} limit={budget.cpu} format={String} />
+            <Gauge
+              label={t("resources.memory")}
+              used={budget.memoryInUse}
+              limit={budget.memoryBytes}
+              format={formatBytes}
             />
-          )}
-
-          {/* After BOTH inputs, not between them: one `save` mutation serves cpu,
-              memory and reset alike, so an alert sitting under the cpu field
-              points a refused MEMORY save at the wrong control. */}
-          {saveFailed ? (
-            <p data-testid="save-failed" className="detail" role="alert">
-              {t("itemenv.saveFailed")}
-            </p>
-          ) : null}
-
-          <div data-testid="budget-gauge" className="gauge">
-            <p className="summary">
-              <span className="gauge-label">{t("itemenv.usage.total")}</span>
-              <span className="gauge-value">
-                {budget.cpuInUse} / {budget.cpu}
-              </span>
-            </p>
-            <Meter used={budget.cpuInUse} limit={budget.cpu} />
           </div>
         </>
       )}
-    </section>
+    </div>
   );
 }
