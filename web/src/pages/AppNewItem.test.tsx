@@ -40,6 +40,14 @@ vi.mock("../hooks/useResources", () => ({
     ],
   }),
 }));
+const hubGet = vi.fn(async (_id: string) => ({
+  id: "e-1",
+  owner: "alice",
+  name: "csv-peek",
+}));
+vi.mock("../api/skillHub", () => ({
+  skillHubApi: { get: (...a: [string]) => hubGet(...a) },
+}));
 vi.mock("react-router-dom", async (orig) => ({
   ...(await orig<typeof import("react-router-dom")>()),
   useNavigate: () => navigate,
@@ -132,6 +140,34 @@ describe("AppNewItem", () => {
         profile: "tool-demo",
       }),
     );
+  });
+
+  it("says which skill to install once the item exists, when the address names one (plan-skill-hub-ui-polish D11)", async () => {
+    // The skill hub's "edit in a new item" links here with the entry; the
+    // form says what comes next — install, not auto-install: creating is
+    // the form's, installing is the panel's, and both stay visible.
+    render(
+      <QueryWrap>
+        <MemoryRouter initialEntries={["/a/rca/new?profile=default&skill=e-1"]}>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    const hint = await screen.findByTestId("new-item-skill-hint");
+    await waitFor(() => expect(hint).toHaveTextContent("alice/csv-peek"));
+    expect(hubGet).toHaveBeenCalledWith("e-1", "rca");
+  });
+
+  it("says nothing about a skill when the address names none", async () => {
+    render(
+      <QueryWrap>
+        <MemoryRouter initialEntries={["/a/rca/new"]}>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    await screen.findByLabelText(/title/i);
+    expect(screen.queryByTestId("new-item-skill-hint")).toBeNull();
   });
 
   // #779: a create form is all unsaved work by definition — there is nothing to

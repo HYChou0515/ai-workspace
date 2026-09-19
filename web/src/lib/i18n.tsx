@@ -542,6 +542,8 @@ export const messages = {
     "zh-TW": "切換 App、知識庫或診斷",
     en: "Switch app, knowledge base, or diagnostics",
   },
+  // The folded breadcrumb's "…" (plan-skill-hub-ui-polish D14).
+  "nav.crumbs.expand": { "zh-TW": "顯示完整路徑", en: "Show the full path" },
   "nav.home": { "zh-TW": "回首頁", en: "Home" },
 
   // Topic Hub collection-set picker entry (CollectionsButton) — frame it as the
@@ -586,6 +588,21 @@ export const messages = {
   "skills.reset": { "zh-TW": "還原成出貨版本", en: "Reset to the shipped version" },
   "skills.refresh": { "zh-TW": "更新為出貨版本", en: "Update to the shipped version" },
   "skills.refreshDone": { "zh-TW": "已更新到出貨版本。", en: "Updated to the shipped version." },
+  // plan-skill-hub-ui-polish D4: a copy installed from the skill hub has no
+  // "shipped version" — it updates to what is on the hub now.
+  "skills.reset.hub": {
+    "zh-TW": "還原成 hub 上的版本",
+    en: "Reset to the version on the hub",
+  },
+  "skills.refresh.hub": {
+    "zh-TW": "更新為 hub 上的新版",
+    en: "Update to the version on the hub",
+  },
+  "skills.refreshDone.hub": {
+    "zh-TW": "已更新到 hub 上的新版。",
+    en: "Updated to the version on the hub.",
+  },
+  "skills.updateAvailable": { "zh-TW": "有新版", en: "Update available" },
   "skills.refreshKept": {
     "zh-TW": "這些檔案你改過，所以保持原樣",
     en: "Edited here, so left as they are",
@@ -1863,7 +1880,14 @@ export const messages = {
   "skillHub.review.ok": { "zh-TW": "審查沒有意見", en: "Nothing flagged" },
   "skillHub.review.notes": { "zh-TW": "審查有 {count} 則意見", en: "{count} review notes" },
   "skillHub.review.by": { "zh-TW": "由 {model} 審查", en: "reviewed by {model}" },
-  "skillHub.badge.notes": { "zh-TW": "有審查意見", en: "Review notes" },
+  // A fork's card names its root (plan-skill-hub-ui-polish D9, reusing
+  // `skillHub.forkOf`); when the root is one the viewer cannot read —
+  // unpublished, deleted — it says that much. The "has review notes" badge
+  // is gone (D7): every entry was reviewed.
+  "skillHub.forkOf.gone": {
+    "zh-TW": "fork 自一個已下架或刪除的條目",
+    en: "Fork of an entry that was unpublished or deleted",
+  },
   "skillHub.files": { "zh-TW": "檔案", en: "Files" },
   "skillHub.forksOf": { "zh-TW": "Fork", en: "Forks" },
   "skillHub.forksOf.none": { "zh-TW": "還沒有人 fork 這個 skill。", en: "Nobody has forked this skill yet." },
@@ -1879,6 +1903,48 @@ export const messages = {
   "skillHub.unpublish": { "zh-TW": "下架", en: "Unpublish" },
   "skillHub.republish": { "zh-TW": "重新上架", en: "Republish" },
   "skillHub.share": { "zh-TW": "可見範圍", en: "Visibility" },
+  // The generic sharing dialog (`PermissionDialog`), plan-skill-hub-ui-polish
+  // D12: it used to be English only, inside a zh-TW page. The English is
+  // word for word what it said before (pinned by its parity tests).
+  "perm.title": { "zh-TW": "分享「{name}」", en: "Share “{name}”" },
+  // The per-document caption (KbDocIde): the one sentence of that dialog
+  // that was still English once the dialog itself spoke zh-TW (#826 round 1).
+  "kb.doc.share.caption": {
+    "zh-TW": "選擇誰能讀這份文件。它只能比 collection 更嚴，不能更寬。",
+    en: "Choose who can read this document. It can only restrict access further than the collection — never widen it.",
+  },
+  "perm.caption.collection": {
+    "zh-TW": "選擇誰能存取這個 collection。",
+    en: "Choose who can access this collection.",
+  },
+  "perm.private": { "zh-TW": "私人", en: "Private" },
+  "perm.private.hint": { "zh-TW": "只有你", en: "Only you" },
+  "perm.restricted": { "zh-TW": "限定", en: "Restricted" },
+  "perm.restricted.hint": {
+    "zh-TW": "你和指定的人",
+    en: "You + specific people",
+  },
+  "perm.public": { "zh-TW": "公開", en: "Public" },
+  "perm.public.hint.workspace": {
+    "zh-TW": "這個 workspace 的所有人",
+    en: "Everyone in the workspace",
+  },
+  "perm.public.hint.platform": {
+    "zh-TW": "平台上所有人",
+    en: "Everyone on the platform",
+  },
+  "perm.tab.people": { "zh-TW": "人", en: "People" },
+  "perm.tab.groups": { "zh-TW": "群組", en: "Groups" },
+  "perm.addPeople": { "zh-TW": "加人…", en: "Add people…" },
+  "perm.addGroup": { "zh-TW": "加群組…", en: "Add a group…" },
+  "perm.roleFor": { "zh-TW": "{name} 的角色", en: "Role for {name}" },
+  "perm.remove": { "zh-TW": "移除 {name}", en: "Remove {name}" },
+  "perm.remove.button": { "zh-TW": "移除", en: "Remove" },
+  "perm.group.unknown": { "zh-TW": "未知的群組", en: "Unknown group" },
+  "perm.advanced.show": { "zh-TW": "顯示進階", en: "Show advanced" },
+  "perm.advanced.hide": { "zh-TW": "隱藏進階", en: "Hide advanced" },
+  "perm.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "perm.save": { "zh-TW": "儲存", en: "Save" },
   "skillHub.share.caption": {
     "zh-TW": "誰能在 skill hub 看到並裝這個 skill。",
     en: "Who can see and install this skill on the skill hub.",
@@ -1899,6 +1965,19 @@ export const messages = {
   "skillHub.delete.confirm": { "zh-TW": "刪除", en: "Delete" },
   "skillHub.cancel": { "zh-TW": "取消", en: "Cancel" },
   "skillHub.deleted": { "zh-TW": "已刪除「{name}」。", en: "Deleted “{name}”." },
+  // What the list says after an entry was given away (plan-skill-hub-ui-polish
+  // D10): who has it now — and, when it was unpublished, that it is out of
+  // the old owner's sight from here on, which is why they landed here.
+  "skillHub.transferred": {
+    "zh-TW": "已把「{name}」轉給 {owner}。",
+    en: "“{name}” is {owner}'s now.",
+  },
+  "skillHub.transferred.private": {
+    "zh-TW":
+      "已把「{name}」轉給 {owner}。它是已下架的條目，從現在起只有 {owner} 看得到。",
+    en: "“{name}” is {owner}'s now. It is unpublished, so from here on only {owner} can see it.",
+  },
+  "notice.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
   // The edit resolver's "new item" branch (plan P8): the source item cannot
   // take the edit, and the reason says why.
   "skillHub.edit.newItem.title": { "zh-TW": "要開一個新的 item 來修改", en: "Edit in a new item" },
@@ -1919,19 +1998,62 @@ export const messages = {
     en: "Create a new {app} item, install this skill from its Skills panel, edit, and publish from there — Edit will open that item from then on.",
   },
   "skillHub.edit.newItem.go": { "zh-TW": "開新 item", en: "Create the item" },
+  // plan-skill-hub-ui-polish D11: the new-item form, opened from a hub entry.
+  "newItem.skillHint": {
+    "zh-TW": "建好後，到「技能」面板把 {skill} 裝進來再修改。",
+    en: "Once it exists, install {skill} from its Skills panel and edit it there.",
+  },
+  "newItem.skillHint.this": { "zh-TW": "這個 skill", en: "this skill" },
+  // The routes' coded refusals (plan-skill-hub-ui-polish D16), worded by
+  // `lib/skillHubRefusal.ts`.
+  "skillHub.refused.not_found": {
+    "zh-TW": "找不到這個 skill hub 條目。",
+    en: "No such skill hub entry.",
+  },
+  "skillHub.refused.owner_only": {
+    "zh-TW": "只有 owner 能管理這個條目。",
+    en: "Only the owner may manage this entry.",
+  },
+  "skillHub.refused.transfer_owner_required": {
+    "zh-TW": "轉移要指定另一個人。",
+    en: "Transfer needs a different, non-empty owner.",
+  },
+  "skillHub.refused.transfer_name_taken": {
+    "zh-TW": "{owner} 已經發布了一個叫「{name}」的 skill。",
+    en: "{owner} already publishes a skill named “{name}”.",
+  },
+  "skillHub.refused.folder_in_the_way": {
+    "zh-TW":
+      "這個 workspace 已經有 {path}，先把那個資料夾刪掉或改名，再裝一次。",
+    en: "This workspace already has {path} — remove or rename that folder first, then install again.",
+  },
+  "skillHub.refused.folder_in_the_way.theirs": {
+    "zh-TW":
+      "這個 workspace 已經有 {owner} 的 {path}，先把那個資料夾刪掉或改名，再裝一次。",
+    en: "This workspace already has {owner}'s {path} — remove or rename that folder first, then install again.",
+  },
   "skillHub.failed": { "zh-TW": "沒有成功：{reason}", en: "That didn't work: {reason}" },
   // The Skills panel's two skill hub buttons (plan D2: the actions live in the item).
   "skills.fromHub": { "zh-TW": "從 skill hub 裝", en: "Install from the skill hub" },
+  // plan-skill-hub-ui-polish D6: one sentence, then the link on a line of
+  // its own; the button is a verb; the warning names what is missing first.
   "skills.fromHub.intro": {
-    "zh-TW": "別人發布的 skill，裝進這個 item 就能用。提到這個 App 沒有的工具的，會先說。",
-    en: "Skills other people published; installed into this item, ready to use. One that mentions a tool this App lacks says so first.",
+    "zh-TW": "裝別人發布的 skill 進這個 item；缺這個 App 沒有的 tool 時會先告訴你。",
+    en: "Install a skill someone published into this item; when it needs a tool this App does not have, the row says so first.",
   },
-  "skills.fromHub.browse": { "zh-TW": "到 skill hub 看全部", en: "Browse the skill hub" },
+  "skills.fromHub.browse": { "zh-TW": "到 skill hub 看全部 →",
+    en: "Browse the skill hub →", },
   "skills.fromHub.none": { "zh-TW": "skill hub 上還沒有任何 skill。", en: "Nothing has been published to the skill hub yet." },
-  "skills.fromHub.install": { "zh-TW": "裝進這個 item", en: "Install here" },
+  "skills.fromHub.install": { "zh-TW": "安裝", en: "Install" },
   "skills.fromHub.missing": {
-    "zh-TW": "提到 {tools}，這個 App 沒有——裝了也可能有步驟做不到。",
-    en: "Mentions {tools}, which this App does not have — some steps may not be followable here.",
+    "zh-TW": "缺少 tool：{tools}，可能有步驟無法執行",
+    en: "Missing tool: {tools} — some steps may not run here",
+  },
+  // D8: the name is already a skill folder in this item — the install route
+  // would refuse it, so the row says so and the button is off.
+  "skills.fromHub.taken": {
+    "zh-TW": "已有同名 skill",
+    en: "A skill of this name is already here",
   },
   "skills.fromHub.installed": { "zh-TW": "已裝入「{name}」，下一輪就能用。", en: "Installed “{name}” — usable from the next turn." },
   "skills.publish": { "zh-TW": "發布到 skill hub", en: "Publish to the skill hub" },

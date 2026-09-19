@@ -322,7 +322,8 @@
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
-  padding: 16px;
+  /* padding: the panel says it inline (ManageChatsModal.tsx) — an inline
+     value always beats this rule, so a value here could only disagree. */
 }
 .manage-chats__header {
   display: flex;

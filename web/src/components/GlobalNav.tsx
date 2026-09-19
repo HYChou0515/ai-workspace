@@ -11,7 +11,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import type { HealthApi } from "../api/health";
 import { useT } from "../lib/i18n";
-import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { type Crumb, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
@@ -72,6 +72,10 @@ function Switcher() {
   const apps = useApps();
   const { pathname } = useLocation();
   const t = useT();
+  // Narrow drops the word (see Brand): at 390 「切換」 wrapped onto two lines
+  // (plan-skill-hub-ui-polish D14). The icon and the tooltip still say what
+  // this is; the accessible name is the aria-label either way.
+  const isNarrow = useIsNarrow();
   // Which destinations this viewer may open — including the #608 Groups gating
   // — is resolved by the shared hook, so the rail's menu cannot disagree.
   const destinations = usePlatformDestinations();
@@ -99,7 +103,11 @@ function Switcher() {
             cursor: "pointer",
           }}
         >
-          <span>{t("nav.switch")}</span>
+          {isNarrow ? (
+            <Icon name="layers" size={14} />
+          ) : (
+            <span>{t("nav.switch")}</span>
+          )}
           <Icon name="chev_d" size={14} />
         </button>
       )}
@@ -135,7 +143,24 @@ function Switcher() {
 
 function Breadcrumbs() {
   const trail = useBreadcrumbTrail();
+  const t = useT();
+  // On narrow, everything before the last crumb folds into one "…" (the
+  // fold of MUI Breadcrumbs' `maxItems`, plan D14 — with nothing kept before
+  // it: the first crumb is 回首頁, and the Brand's home icon already sits
+  // beside the trail). Every crumb used to shrink alike, so at 390 the trail
+  // read 「回…」「Skill h…」 — the current page unreadable; now only the last
+  // crumb competes for the room (measured at 390: an entry page's leaf went
+  // from `defaul…` to whole). The "…" opens the folded crumbs in a popover
+  // rather than back into the trail: the bar has no room for them, and an
+  // inline expansion re-clipped every crumb and unmounted the button that
+  // had focus (review round 1 of #826).
+  const isNarrow = useIsNarrow();
+  const folded = isNarrow && trail.length > 2;
   if (trail.length === 0) return null;
+  const shown: (Crumb | "…")[] = folded
+    ? ["…", trail[trail.length - 1]]
+    : trail;
+  const hidden = trail.slice(0, -1);
   return (
     <nav
       aria-label="Breadcrumb"
@@ -144,16 +169,73 @@ function Breadcrumbs() {
         alignItems: "center",
         gap: 6,
         minWidth: 0,
-        // #464: shrink + clip so a long crumb (e.g. the App title on a narrow
-        // viewport) can't push the whole global bar past the viewport edge.
         flexShrink: 1,
-        overflow: "hidden",
         fontSize: "var(--text-body-sm)",
         color: "var(--text-paper-d)",
       }}
     >
-      {trail.map((crumb, i) => {
-        const last = i === trail.length - 1;
+      {/* The "…" and its popover sit OUTSIDE the clipped box below: the
+          Popover is absolutely positioned inside its trigger's wrapper, and
+          an `overflow: hidden` ancestor clips it to nothing (round 2 of #826
+          measured exactly that — "open", and no link hittable). */}
+      {folded && (
+            <Popover
+              key="…"
+              align="start"
+              width={220}
+              trigger={({ onClick, open }) => (
+                <button
+                  type="button"
+                  aria-label={t("nav.crumbs.expand")}
+                  title={t("nav.crumbs.expand")}
+                  aria-expanded={open}
+                  onClick={onClick}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    padding: "0 2px",
+                    color: "var(--text-paper-d)",
+                    font: "inherit",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  …
+                </button>
+              )}
+            >
+              {(close) => (
+                <div onClick={close} style={{ padding: "6px 0" }}>
+                  {hidden.map((c, j) =>
+                    c.to ? (
+                      <MenuLink key={`${c.label}-${j}`} to={c.to} active={false}>
+                        {c.label}
+                      </MenuLink>
+                    ) : (
+                      <div key={`${c.label}-${j}`} style={{ padding: "7px 12px", fontSize: "var(--text-body-sm)" }}>
+                        {c.label}
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+            </Popover>
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minWidth: 0,
+          // #464: shrink + clip so a long crumb (e.g. the App title on a narrow
+          // viewport) can't push the whole global bar past the viewport edge.
+          flexShrink: 1,
+          overflow: "hidden",
+        }}
+      >
+      {shown.map((crumb, i) => {
+        const last = i === shown.length - 1;
+        if (crumb === "…") return null;
         return (
           <Fragment key={`${crumb.label}-${i}`}>
             {i > 0 && <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />}
@@ -192,6 +274,7 @@ function Breadcrumbs() {
           </Fragment>
         );
       })}
+      </div>
     </nav>
   );
 }

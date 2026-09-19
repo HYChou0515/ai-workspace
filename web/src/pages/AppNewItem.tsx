@@ -13,18 +13,20 @@
  * then goes straight into the new item.
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
+import { skillHubApi } from "../api/skillHub";
 import { Icon } from "../components/Icon";
 import { ItemForm, pruneEmpty } from "../components/ItemForm";
 import { ModalShell } from "../components/ModalShell";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useAppManifest } from "../hooks/useResources";
+import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 const FORM_ID = "new-item-form";
@@ -61,6 +63,23 @@ export function AppNewItem() {
   const asked = params.get("profile");
   const askedProfile =
     asked && manifest?.profiles.some((p) => p.name === asked) ? asked : undefined;
+  // `?skill=<entry id>`: the skill hub's "edit in a new item" says which
+  // skill this item is for, and the form says what comes next — install it
+  // from the Skills panel (plan-skill-hub-ui-polish D11). Said, not done:
+  // creating is this form's, installing is the panel's, and both stay
+  // visible. The entry is read for its name (the entry page's key factory,
+  // keyed with this App so it is a cache entry of its own); until it lands
+  // (or if it never does) the hint still says "this skill".
+  const t = useT();
+  const skillId = params.get("skill") ?? "";
+  const skillQ = useQuery({
+    queryKey: qk.skillHubEntry(skillId, slug),
+    queryFn: () => skillHubApi.get(skillId, slug),
+    enabled: skillId !== "",
+  });
+  const skillLabel = skillQ.data
+    ? `${skillQ.data.owner}/${skillQ.data.name}`
+    : t("newItem.skillHint.this");
   const navigate = useNavigate();
   const qc = useQueryClient();
   const me = useCurrentUser();
@@ -93,6 +112,9 @@ export function AppNewItem() {
       width={620}
       maxWidth="100%"
       panelStyle={{
+        // Lays out its own header / body / footer (each padded, ruled
+        // edge to edge), so the shell's default padding is switched off.
+        padding: 0,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
@@ -116,6 +138,15 @@ export function AppNewItem() {
 
           {/* Body (scrolls) */}
           <div className="scrollable" style={{ padding: "20px 22px", overflow: "auto" }}>
+            {skillId !== "" && (
+              <p
+                data-testid="new-item-skill-hint"
+                className="hint"
+                style={{ margin: "0 0 14px", fontSize: pxToRem(12) }}
+              >
+                {t("newItem.skillHint", { skill: skillLabel })}
+              </p>
+            )}
             <ItemForm
               manifest={manifest}
               profiles={manifest.profiles}

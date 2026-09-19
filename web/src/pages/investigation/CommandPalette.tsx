@@ -84,6 +84,9 @@ export function CommandPalette({
       // happens to be last in the DOM; that is luck, not a reason.
       zIndex="var(--z-modal)"
       panelStyle={{
+        // The search row and the result rows run edge to edge (their own
+        // padding, a rule between), so the shell's default padding is off.
+        padding: 0,
         maxHeight: "60vh",
         background: "var(--white)",
         border: "1px solid var(--paper-3)",

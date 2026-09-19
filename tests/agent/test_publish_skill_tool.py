@@ -202,6 +202,31 @@ async def test_review_notes_are_in_the_reply_and_the_skill_still_publishes():
     assert entry is not None and entry.review.notes == notes
 
 
+async def test_the_reply_keeps_its_sentences_out_of_the_reviewers_list():
+    """plan-skill-hub-ui-polish D15: the sentences after the notes ("It
+    mentions these tools…", "It is public…") were joined to the list with a
+    single newline, so markdown folded them into the last note. Each is its
+    own paragraph; the notes are one list with exactly the notes in it."""
+    notes = ["say when to use it", "scripts/x.py: hardcoded path"]
+    hub = _hub()
+    ctx = _ctx(hub, _Reviewer(SkillHubReview(verdict="notes", notes=notes, model="gpt-4o")))
+    await _put(ctx, "s", {"SKILL.md": _md("s", body="Run `exec` then `read_file`.\n")})
+
+    out = await publish_skill_impl(ctx, "s")
+
+    blocks = _blocks(out)
+    assert [kind for kind, _ in blocks] == [
+        "paragraph",
+        "paragraph",
+        "list",
+        "paragraph",
+        "paragraph",
+    ], out
+    assert blocks[2][1] == notes
+    assert blocks[3][1][0].startswith("It mentions these tools:")
+    assert blocks[4][1][0].startswith("It is public:")
+
+
 async def test_an_unreachable_reviewer_fails_the_publish_and_writes_nothing():
     """Q9: no review, no entry. The reply says the review service is what
     failed, so the person retries later rather than editing a skill that was
@@ -857,3 +882,39 @@ async def test_create_app_wires_the_hub_and_a_reviewer_that_runs_on_the_apps_run
     assert ctx.review_skill_via is not None
     review = await ctx.review_skill_via(ctx, "s", {"SKILL.md": _md("s")}, None)
     assert review == SkillHubReview(verdict="notes", notes=["one note"], model="gpt-4o")
+
+
+# ── the reply as markdown (plan-skill-hub-ui-polish D15) ────────────────────
+
+
+def _blocks(text: str) -> list[tuple[str, list[str]]]:
+    """The reply's top-level blocks as a CommonMark parser sees them — the
+    chat renders tool replies (relayed or quoted) through react-markdown, and
+    markdown-it-py follows the same spec. A `paragraph` carries its one
+    inline text; a `list` carries one text per item. A sentence that follows
+    a bullet list after a single newline is a lazy continuation of the LAST
+    ITEM, not a paragraph — which is what the demo showed."""
+    from markdown_it import MarkdownIt
+
+    out: list[tuple[str, list[str]]] = []
+    tokens = MarkdownIt("commonmark").parse(text)
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.level == 0 and tok.type == "paragraph_open":
+            out.append(("paragraph", [tokens[i + 1].content]))
+        elif tok.level == 0 and tok.type == "bullet_list_open":
+            close = next(
+                j
+                for j in range(i, len(tokens))
+                if tokens[j].type == "bullet_list_close" and tokens[j].level == 0
+            )
+            items = [t.content for t in tokens[i:close] if t.type == "inline"]
+            # A tight list: every item paragraph is `hidden`. Items separated by
+            # blank lines are still ONE list, but a loose one, drawn with a
+            # paragraph gap per item.
+            tight = all(t.hidden for t in tokens[i:close] if t.type == "paragraph_open")
+            out.append(("list" if tight else "loose-list", items))
+            i = close
+        i += 1
+    return out

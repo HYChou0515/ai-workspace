@@ -68,6 +68,13 @@
   overflow-wrap: anywhere;
 }
 
+/* The fork's origin line (plan-skill-hub-ui-polish D9): a fact, in the meta tone. */
+.skill-hub-row-origin {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-paper-d);
+}
+
 .page .skill-hub-row-meta {
   margin-top: var(--space-8);
   display: flex;
@@ -219,4 +226,34 @@
 .modal-title {
   font-size: var(--text-body-lg);
   margin: 0 0 var(--space-12);
+}
+
+/* A page-level notice for the outcome of the action that brought the person
+   here (plan-skill-hub-ui-polish D10): one line, dismissable, in the success
+   tone; never an error (those stay where the action was). */
+.page-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin: var(--space-12) 0 var(--space-16);
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-left: 4px solid var(--ok);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
+}
+.page-notice[data-kind="info"] {
+  border-left-color: var(--info);
+}
+.page-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The list while the next query is on its way (D2): still there, dimmed. */
+.skill-hub-results[aria-busy="true"] .skill-hub-list {
+  opacity: 0.6;
+  transition: opacity 150ms ease-out;
 }

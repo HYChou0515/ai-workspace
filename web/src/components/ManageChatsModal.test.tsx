@@ -82,6 +82,14 @@ describe("ManageChatsModal", () => {
     expect(p.onDelete).toHaveBeenCalledWith("c2");
   });
 
+  it("keeps the 16 px panel padding it always had (review round 1 of #826, D1)", () => {
+    // The padding used to live on `.manage-chats__dialog`, a class ON the
+    // panel element — and P1's inline `padding: 0` opt-out beat it (16 → 0).
+    // The class does not compete any more; the panel says 16 itself.
+    render(<ManageChatsModal {...props()} />);
+    expect(screen.getByTestId("manage-chats-modal").style.padding).toBe("16px");
+  });
+
   it("closes from the close button", () => {
     const p = props();
     render(<ManageChatsModal {...p} />);

@@ -32,7 +32,9 @@ import { UserPicker } from "../components/UserPicker";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useApps } from "../hooks/useResources";
+import { useUsers } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
+import { describeRefusal } from "../lib/skillHubRefusal";
 import { DOC_ROLES } from "../lib/permission";
 
 export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubApi }) {
@@ -46,7 +48,10 @@ export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubA
   useBreadcrumbs([
     { label: t("nav.home"), to: "/" },
     { label: "Skill hub", to: "/skill-hub" },
-    { label: data ? `${data.owner}/${data.name}` : "…" },
+    // The name alone: the h1 right below says `owner/name`, and at a phone
+    // width `owner/name` was cut to `defaul…` even with the trail folded
+    // (plan-skill-hub-ui-polish D14; measured at 390).
+    { label: data ? data.name : "…" },
   ]);
 
   if (isError) {
@@ -221,14 +226,38 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
   const [sharing, setSharing] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [newItem, setNewItem] = useState<SkillEditTarget | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  // The last failure and WHICH action it came from: it clears when any
+  // action starts (`onMutate`), and each dialog draws only a failure of its
+  // own — round 3 of #826: clearing on dialog OPEN threw a page-level failure
+  // away, and a share failure outlived the retry that succeeded.
+  const [failure, setFailure] = useState<{ action: string; text: string } | null>(null);
+  const users = useUsers();
+  // The notice names the new owner the way the picker did (display name),
+  // falling back to the id for someone the directory does not list.
+  const personName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const refresh = () => qc.invalidateQueries({ queryKey: ["skillHub"] });
-  const failed = (e: unknown) => setFailure(e instanceof Error ? e.message : String(e));
+  const failed = (action: string) => (e: unknown) =>
+    setFailure({ action, text: describeRefusal(e, t) });
+  const starting = { onMutate: () => setFailure(null) };
+  // Every action here shows its own failure line (`failed`), so the query
+  // client's global write-failure toast must not fire for it too — the demo
+  // showed both at once, the toast under a title that was not even true
+  // (plan-skill-hub-ui-polish D3). `silentError` is that opt-out.
+  const own = { meta: { silentError: true } } as const;
+  // The list is where a transfer or a delete leaves the person; it says what
+  // just happened (D10) — a success is a notice there, not a silent bounce.
+  const leaveWith = (text: string) =>
+    navigate("/skill-hub", {
+      replace: true,
+      state: { notice: { kind: "success", text } },
+    });
 
   const unpublish = useMutation({
     mutationFn: () => (entry.visibility === "private" ? client.republish(entry.id) : client.unpublish(entry.id)),
     onSuccess: refresh,
-    onError: failed,
+    onError: failed("unpublish"),
+    ...starting,
+    ...own,
   });
   const permission = useMutation({
     mutationFn: (perm: Parameters<SkillHubApi["setPermission"]>[1]) =>
@@ -237,27 +266,44 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       setSharing(false);
       void refresh();
     },
-    onError: failed,
+    onError: failed("permission"),
+    ...starting,
+    ...own,
   });
   const transfer = useMutation({
     mutationFn: (owner: string) => client.transfer(entry.id, owner),
-    onSuccess: () => {
+    onSuccess: (_res, owner) => {
       setTransferring(false);
       void refresh();
       // Given away: the page would refetch an entry its old owner may no
       // longer read (a private one) and land on the error line with a Retry
-      // that cannot succeed. The list is where they are now.
-      navigate("/skill-hub", { replace: true });
+      // that cannot succeed. The list is where they are now — told who has
+      // it, and that a private one is out of their sight from here on.
+      leaveWith(
+        t(
+          entry.visibility === "private"
+            ? "skillHub.transferred.private"
+            : "skillHub.transferred",
+          {
+            name: entry.name,
+            owner: personName(owner),
+          },
+        ),
+      );
     },
-    onError: failed,
+    onError: failed("transfer"),
+    ...starting,
+    ...own,
   });
   const remove = useMutation({
     mutationFn: () => client.remove(entry.id),
     onSuccess: () => {
       void refresh();
-      navigate("/skill-hub", { replace: true });
+      leaveWith(t("skillHub.deleted", { name: entry.name }));
     },
-    onError: failed,
+    onError: failed("remove"),
+    ...starting,
+    ...own,
   });
   const edit = useMutation({
     mutationFn: () => client.edit(entry.id),
@@ -268,7 +314,9 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
         setNewItem(target);
       }
     },
-    onError: failed,
+    onError: failed("edit"),
+    ...starting,
+    ...own,
   });
 
   const askDelete = async () => {
@@ -302,9 +350,12 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       <button type="button" className="btn" data-size="sm" data-variant="danger" disabled={busy} onClick={() => void askDelete()}>
         {t("skillHub.delete")}
       </button>
-      {failure ? (
+      {/* A dialog draws its own failure (round 2 of #826: a line behind the
+          backdrop was invisible); the page draws the rest, and only while no
+          dialog covers it. */}
+      {failure && !sharing && !transferring ? (
         <p className="error" role="alert">
-          {t("skillHub.failed", { reason: failure })}
+          {t("skillHub.failed", { reason: failure.text })}
         </p>
       ) : null}
 
@@ -315,8 +366,12 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
           value={entry.permission}
           roles={DOC_ROLES}
           caption={t("skillHub.share.caption")}
+          // A hub entry is public to everyone on the platform, not to "this
+          // workspace" (D12).
+          audience="platform"
           pickableGroups={pickableGroups}
           busy={permission.isPending}
+          error={failure?.action === "permission" ? t("skillHub.failed", { reason: failure.text }) : null}
           onSubmit={(perm) => permission.mutate(perm)}
           onClose={() => setSharing(false)}
         />
@@ -327,13 +382,18 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
           name={entry.name}
           owner={entry.owner}
           busy={transfer.isPending}
+          error={failure?.action === "transfer" ? t("skillHub.failed", { reason: failure.text }) : null}
           onSubmit={(owner) => transfer.mutate(owner)}
           onClose={() => setTransferring(false)}
         />
       ) : null}
 
       {newItem ? (
-        <NewItemDialog target={newItem} onClose={() => setNewItem(null)} />
+        <NewItemDialog
+          target={newItem}
+          entryId={entry.id}
+          onClose={() => setNewItem(null)}
+        />
       ) : null}
     </div>
   );
@@ -345,12 +405,15 @@ function TransferDialog({
   name,
   owner,
   busy,
+  error,
   onSubmit,
   onClose,
 }: {
   name: string;
   owner: string;
   busy: boolean;
+  /** The last attempt's refusal, worded — shown here, where the person is. */
+  error: string | null;
   onSubmit: (owner: string) => void;
   onClose: () => void;
 }) {
@@ -368,6 +431,11 @@ function TransferDialog({
         onToggle={(id) => setPicked((cur) => (cur === id ? null : id))}
         exclude={[owner]}
       />
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
       <ModalActions>
         <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
           {t("skillHub.cancel")}
@@ -388,7 +456,15 @@ function TransferDialog({
 
 /** The edit resolver's `new_item` branch: say why the source item cannot
  * take the edit, and what to do instead. */
-function NewItemDialog({ target, onClose }: { target: SkillEditTarget; onClose: () => void }) {
+function NewItemDialog({
+  target,
+  entryId,
+  onClose,
+}: {
+  target: SkillEditTarget;
+  entryId: string;
+  onClose: () => void;
+}) {
   const t = useT();
   const apps = useApps();
   const appTitle = apps.find((a) => a.slug === target.app)?.title || target.app;
@@ -412,11 +488,13 @@ function NewItemDialog({ target, onClose }: { target: SkillEditTarget; onClose: 
           {t("skillHub.cancel")}
         </button>
         {/* The profile the skill was written for rides along (`?profile=`):
-            the new item opens on it rather than the App's default. */}
+            the new item opens on it rather than the App's default. So does
+            the entry (`?skill=`), for the form to say what comes next
+            (plan-skill-hub-ui-polish D11). */}
         <Link
           className="btn"
           data-variant="primary"
-          to={`/a/${encodeURIComponent(target.app)}/new?profile=${encodeURIComponent(target.profile)}`}
+          to={`/a/${encodeURIComponent(target.app)}/new?profile=${encodeURIComponent(target.profile)}&skill=${encodeURIComponent(entryId)}`}
         >
           {t("skillHub.edit.newItem.go")}
         </Link>

@@ -590,7 +590,7 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
   shared skill 教 agent 什麼時候該找、該裝、該發布,以及每種回覆要對使用者說什麼;情境在
   `sample-scenarios/skill-hub/`。
 - **路由**:`GET /skill-hub/entries`（`q` / `mine` / `app` 給差集）、`GET /skill-hub/entries/{id}`、
-  `POST /a/{slug}/items/{id}/skills/install`（面板的門,和 tool 共用同一個核心與拒絕句）,
+  `POST /a/{slug}/items/{id}/skills/install`（面板的門,和 tool 共用同一個核心與同一個拒絕事實——tool 給模型英文句,路由給前端 code,前端翻成使用者的語言）,
   以及 owner 限定的 `unpublish` / `republish` / `permission` / `transfer` / `edit` / `DELETE`。
   hub 條目本身沒有 auto-CRUD route——寫入只能走會先審查的 tool。
 

@@ -217,10 +217,99 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     expect(screen.getByRole("link", { name: "審核" })).not.toHaveAttribute("aria-label");
   });
 
+  it("drops the switcher's word on narrow too — icon + chevron, name kept (plan-skill-hub-ui-polish D14)", () => {
+    // Seen in the demo at 390: 「切換」 wrapped onto two lines. Same rule as
+    // Brand and Review: narrow drops the word, not the control.
+    stubViewport(true);
+    renderNav("/a/rca");
+    const btn = screen.getByRole("button", { name: "切換 App、知識庫或診斷" });
+    expect(btn).not.toHaveTextContent("切換");
+    expect(btn.querySelector("[data-icon]")).not.toBeNull();
+  });
+
+  it("collapses the crumbs before the last into one … on narrow, and expands them on request (D14)", () => {
+    // MUI Breadcrumbs' `maxItems`: first › … › last, the ellipsis a button
+    // that reveals the middle. Every crumb shrank alike before, so at 390
+    // the trail read 「回…」「Skill h…」 — the current page unreadable.
+    stubViewport(true);
+    renderNav("/a/rca/123", [
+      { label: "Home", to: "/" },
+      { label: "RCA", to: "/a/rca" },
+      { label: "Docs", to: "/a/rca/docs" },
+      { label: "Bearing noise #1432" },
+    ]);
+    const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
+    // Nothing kept before the fold — 回首頁 is the Brand's home icon, right
+    // beside the trail — so the current page gets the trail's whole width.
+    expect(within(nav).queryAllByRole("link")).toEqual([]);
+
+    const more = within(nav).getByRole("button", { name: "顯示完整路徑" });
+    fireEvent.click(more);
+
+    // The folded crumbs open in a popover, NOT back into the trail: at 390
+    // the bar has no room for them, so re-expanding inline re-clipped every
+    // crumb (`H… › Sk… › log…`) and unmounted the focused button (review
+    // round 1 of #826). The trail itself is unchanged and the button stays.
+    const menu = screen.getByRole("dialog");
+    expect(within(menu).getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+    expect(within(menu).getByRole("link", { name: "RCA" })).toHaveAttribute("href", "/a/rca");
+    expect(within(menu).getByRole("link", { name: "Docs" })).toHaveAttribute("href", "/a/rca/docs");
+    // (the popover renders inside the nav; every link in there is the menu's)
+    expect(within(nav).getAllByRole("link").every((a) => menu.contains(a))).toBe(true);
+    // …and OUTSIDE the box that clips the crumbs: an absolutely positioned
+    // panel inside an `overflow: hidden` ancestor is clipped to nothing —
+    // round 2 measured the "open" popover at 390 with every link unhittable.
+    // The clip (#464) stays, on an inner box around the crumbs only.
+    // (a crumb clips its own text too, so the box is looked for ABOVE it)
+    const clipper = within(nav)
+      .getByText("Bearing noise #1432")
+      .parentElement!.closest('[style*="overflow: hidden"]');
+    expect(clipper).not.toBeNull();
+    expect(nav.contains(clipper)).toBe(true);
+    for (let el = menu.parentElement; el; el = el.parentElement) {
+      expect(el.style.overflow, el.outerHTML.slice(0, 80)).not.toBe("hidden");
+      if (el === nav) break;
+    }
+    expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
+    expect(more).toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("leaves a two-crumb trail alone on narrow — there is nothing between first and last to fold", () => {
+    stubViewport(true);
+    renderNav("/skill-hub", [
+      { label: "Home", to: "/" },
+      { label: "Skill hub" },
+    ]);
+    const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(within(nav).getByRole("link", { name: "Home" })).toBeInTheDocument();
+    expect(within(nav).getByText("Skill hub")).toBeInTheDocument();
+    expect(
+      within(nav).queryByRole("button", { name: "顯示完整路徑" }),
+    ).toBeNull();
+  });
+
   it("keeps the words on a wide viewport", () => {
     stubViewport(false);
-    renderNav("/a/rca");
+    renderNav("/a/rca", [
+      { label: "Home", to: "/" },
+      { label: "RCA", to: "/a/rca" },
+      { label: "Docs", to: "/a/rca/docs" },
+      { label: "Bearing noise #1432" },
+    ]);
     expect(screen.getByText("Workspace")).toBeInTheDocument();
     expect(screen.getByText("審核")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /切換/ })).toHaveTextContent(
+      "切換",
+    );
+    // …and the whole trail, nothing folded.
+    const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(
+      within(nav)
+        .getAllByRole("link")
+        .map((a) => a.textContent),
+    ).toEqual(["Home", "RCA", "Docs"]);
+    expect(within(nav).queryByRole("button")).toBeNull();
   });
 });

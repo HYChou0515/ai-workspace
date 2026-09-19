@@ -73,6 +73,28 @@ describe("skillHubApi refusals", () => {
     expect((err as HttpError).message).toBe("only the owner may manage this entry");
   });
 
+  it("a coded refusal keeps the code and its parameters for the page to word (plan-skill-hub-ui-polish D16)", async () => {
+    answering(409, {
+      detail: {
+        error: "folder_in_the_way",
+        owner: "alice",
+        path: ".skill/triage/",
+      },
+    });
+    const err = await skillHubApi
+      .install("rca", "i1", "e1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).code).toBe("folder_in_the_way");
+    expect((err as HttpError).detail).toEqual({
+      error: "folder_in_the_way",
+      owner: "alice",
+      path: ".skill/triage/",
+    });
+    // No sentence came; the message is the fallback, never "[object Object]".
+    expect((err as HttpError).message).toMatch(/install.*409/);
+  });
+
   it("a refusal with no sentence still says what failed and the status", async () => {
     answering(500, {});
     const err = await skillHubApi.install("rca", "i1", "e1").catch((e: unknown) => e);

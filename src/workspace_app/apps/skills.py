@@ -328,6 +328,12 @@ class SkillState(msgspec.Struct, frozen=True):
     #: on for good just by using it), yet its files really are here — downloadable,
     #: editable, and refreshable from upstream.
     is_copy: bool = False
+    #: What the copy is OF — ``shared`` / ``profile`` / ``hub`` (``""`` when not
+    #: a copy). ``source`` cannot say it: a copy of a package skill this App
+    #: does not declare has no row to shadow and lists as ``workspace`` just
+    #: like a hub copy, and the panel words Reset / Update by the origin
+    #: (#826 review round 1).
+    copy_of: SkillSource | Literal[""] = ""
 
 
 def effective_item_skills(
@@ -390,6 +396,7 @@ def effective_item_skills(
                 default_on=default_on,
                 effective=effective,
                 is_copy=meta.is_copy,
+                copy_of=meta.copy_of,
             )
         )
     return out
@@ -628,27 +635,50 @@ async def skill_upstream(
     return SkillUpstream(state="live", update_available=up.origin.files != up.files)
 
 
+class FolderInTheWay(msgspec.Struct, frozen=True):
+    """The fact behind an install refusal: ``.skill/<name>/`` is occupied, and
+    whose hub copy it is when it is one (``""`` for a hand-written folder, a
+    package copy, or a copy of an entry the viewer may not read). Two doors
+    render it (plan-skill-hub-ui-polish D16): the tool tells the model the
+    English ``sentence``; the route sends the person a code with ``owner`` and
+    ``path`` for the front end to word in their language."""
+
+    name: str
+    owner: str = ""
+
+    @property
+    def path(self) -> str:
+        return f"{WORKSPACE_SKILL_DIR}/{self.name}/"
+
+    def sentence(self) -> str:
+        whose = f"{self.owner}'s " if self.owner else ""
+        return (
+            f"this workspace already has {whose}'{self.path}' — remove or rename that folder "
+            "first, then install again"
+        )
+
+    def code(self) -> dict[str, str]:
+        return {"error": "folder_in_the_way", "owner": self.owner, "path": self.path}
+
+
 async def skill_folder_in_the_way(
     files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, name: str, viewer: str
-) -> str | None:
+) -> FolderInTheWay | None:
     """The refusal an install gets when ``.skill/<name>/`` already exists —
-    one sentence, shared by the tool and the route so the two doors refuse
-    alike — or ``None`` when the name is free. Never overwrite: the folder may
-    be the user's own skill, or an earlier install they have since edited. It
+    one fact, shared by the tool and the route so the two doors refuse alike
+    — or ``None`` when the name is free. Never overwrite: the folder may be
+    the user's own skill, or an earlier install they have since edited. It
     says WHOSE copy it is when it is one, so "already have it" and "name
     clash" read differently (plan install step 4)."""
     if not await workspace_skill_payload(files, workspace_id, name):
         return None
     origin = await workspace_skill_origin(files, workspace_id, name)
-    whose = ""
+    owner = ""
     if origin is not None and origin.source == "hub" and origin.entry:
         _state, theirs = hub.state_for(origin.entry, viewer)
         if theirs is not None:
-            whose = f"{theirs.owner}'s "
-    return (
-        f"this workspace already has {whose}'.skill/{name}/' — remove or rename that folder "
-        "first, then install again"
-    )
+            owner = theirs.owner
+    return FolderInTheWay(name=name, owner=owner)
 
 
 async def install_hub_skill(

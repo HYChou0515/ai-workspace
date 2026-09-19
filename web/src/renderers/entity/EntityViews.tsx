@@ -110,7 +110,14 @@ export function QuickCreate({
   // it floated as a lopsided card next to a vertically-centred title. It now opens
   // in a modal — the header keeps just the "+ New" button.
   return (
-    <ModalShell onClose={attemptClose} ariaLabel={`New ${entityLabel ?? "record"}`} width={560} align="top">
+    // Lays out its own interior (the padding lives in its CSS), so the shell's default padding is switched off.
+    <ModalShell
+      onClose={attemptClose}
+      ariaLabel={`New ${entityLabel ?? "record"}`}
+      width={560}
+      panelStyle={{ padding: 0 }}
+      align="top"
+    >
       <form onSubmit={submit} className="ev-quickcreate">
         <h3 className="ev-quickcreate__title">New {entityLabel ?? "record"}</h3>
         <div className="ev-quickcreate__grid">

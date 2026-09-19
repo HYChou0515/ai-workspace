@@ -8,6 +8,34 @@ import { ModalShell } from "./ModalShell";
 afterEach(cleanup);
 
 describe("ModalShell", () => {
+  it("gives the panel its padding by default, so a caller that passes none is not flush to the edge (plan-skill-hub-ui-polish D1)", () => {
+    // 30 call sites; 21 remembered their own `panelStyle.padding` (0 / 14 /
+    // 18 / 20 / 24 / "18px 20px 22px"), 9 passed none — and the two that
+    // wanted one (the hub's transfer and new-item dialogs) drew text against
+    // the border. Material's dialog has 24dp of content padding built in;
+    // the shell owns the default now, and the seven that lay out their own
+    // interior say 0 (or, ManageChats, its own 16).
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="plain">
+        <p>body</p>
+      </ModalShell>,
+    );
+    expect(screen.getByRole("dialog").style.padding).toBe("20px");
+  });
+
+  it("keeps a caller's own padding, including a deliberate zero", () => {
+    render(
+      <ModalShell
+        onClose={() => {}}
+        ariaLabel="flush"
+        panelStyle={{ padding: 0 }}
+      >
+        <p>body</p>
+      </ModalShell>,
+    );
+    expect(screen.getByRole("dialog").style.padding).toBe("0px");
+  });
+
   it("renders children inside a labelled modal dialog", () => {
     render(
       <ModalShell onClose={() => {}} ariaLabel="My modal">

@@ -56,6 +56,7 @@
 | [plan-event-bus-cross-pod-streaming.md](plan-event-bus-cross-pod-streaming.md) | 跨 pod live 串流：RabbitMQ fanout 事件匯流排（IEventBus，memory 預設 + rabbitmq），不再依賴 sticky |
 | [plan-skills-and-tools.md](plan-skills-and-tools.md) | Skills 與 tools 套件設計 |
 | [plan-skill-hub.md](plan-skill-hub.md) | skill hub：使用者之間分享 skill，不經過 dev 的版本庫——在 item 裡發布（結構擋、AI 審掛意見）、在 item 裡裝（副本 + `.origin`，告知目標 App 缺的 tool）、非 owner 只能 fork、owner 在詳情頁管理；十個 grill 決策的原文 |
+| [plan-skill-hub-ui-polish.md](plan-skill-hub-ui-polish.md) | skill hub 的 UI 打磨（#826）：九段 demo 錄影抓到的 22 個問題，每一項對照教科書做法（Material 3 / Apple HIG / NN/g / Polaris / GOV.UK / MUI）決定 D1–D17——對話框預設留白、搜尋框不失焦、錯誤只報一次、成功提示、安裝前先標「已有同名 skill」、圖示各自專用＋tooltip、可見範圍對話框走 i18n、伺服器拒絕句改 code、工具回話分段、窄寬的頂欄與麵包屑；版面一律真 Chromium 量 1280／390 |
 | [plan-chat-video.md](plan-chat-video.md) | **PR #817(script 版 P1–P5 已做)**。把一段對話紀錄做成影片：吃 `.chat.json`、一條指令、不打 LLM；純 HTML/CSS 的 zoom 推進輸入框、指定長寬；核心是純函式 + msgspec options，為之後的前端按鈕 + 獨立 job / worker pod 鋪路 |
 | [plan-headless-env.md](plan-headless-env.md) | 沒有人按送出的 turn（item 排程、goal driver、event trigger、整條 workflow）也拿得到環境變數：`IRequestEnv` 多一個 `env_without_request(user_id, item_id)`，預設 `{}`，部署的 impl 決定回 service account 還是什麼都不給；平台仍不認得 service account 這個詞；改變 #714「workflow 整條不接」的定案並寫明為何原顧慮不再成立 |
 | [plan-tool-env-declaration.md](plan-tool-env-declaration.md) | #750 tool 宣告自己要哪些環境變數 + 第二方帳密換 env：手寫選填宣告跟著 package 走、沒宣告≠不需要、便民工具不是閘門；附「為何 tool 不指名方法」 |

@@ -84,8 +84,10 @@ export function EntityRecordModal({
   const attemptClose = useDirtyClose(editing, onClose);
 
   return (
+    // Lays out its own interior (the padding lives in its CSS), so the shell's default padding is switched off.
     <ModalShell
       onClose={attemptClose}
+      panelStyle={{ padding: 0 }}
       // Several records get opened in one session, so the accessible name has to
       // say which one — "Record" alone tells a screen-reader user nothing.
       ariaLabel={`#${record.number} ${title}`}

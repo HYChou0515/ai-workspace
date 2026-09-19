@@ -340,6 +340,7 @@ def register_file_routes(
                     source=s.source,
                     default_on=s.default_on,
                     is_copy=s.is_copy,
+                    copy_of=s.copy_of,
                     update_available=(up := upstreams.get(s.name)) is not None
                     and up.update_available,
                     upstream=up.state if up is not None else None,

@@ -205,6 +205,14 @@ export function ModalShell({
           maxHeight: "85vh",
           overflowY: "auto",
           width,
+          // The panel owns its content padding (plan-skill-hub-ui-polish D1).
+          // It used to be every caller's to remember, and the ones that forgot
+          // drew their title against the border. 20 is the dialog value the
+          // callers use (18 is the dense-panel one: 9 callers to 6); a caller
+          // that wants otherwise — including a deliberate 0 for a body it lays
+          // out itself — says so in `panelStyle`, and `modalPadding.test.ts`
+          // makes every site decide.
+          padding: 20,
           ...panelStyle,
         }}
       >

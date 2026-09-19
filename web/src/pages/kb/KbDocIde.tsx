@@ -441,7 +441,7 @@ export function KbDocIde({
                   value={permQuery.data}
                   pickableGroups={pickableGroups}
                   roles={DOC_ROLES}
-                  caption="Choose who can read this document. It can only restrict access further than the collection — never widen it."
+                  caption={t("kb.doc.share.caption")}
                   busy={setPermMut.isPending || clearPermMut.isPending}
                   onSubmit={(perm) => {
                     // "Public" ⇒ no restriction ⇒ remove the override (revert to

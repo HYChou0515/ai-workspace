@@ -80,6 +80,33 @@ async def test_every_management_route_is_403_for_a_non_owner_and_changes_nothing
     assert hub.get(theirs) is not None
 
 
+async def test_every_management_refusal_is_a_code_the_front_end_translates(harness: Harness):
+    """plan-skill-hub-ui-polish D16: the routes' person-facing refusals used
+    to be English sentences shown as-is inside a zh-TW page. They are codes
+    now — the site's existing shape (`turn_gate` quota codes, this hub's own
+    edit `reason`s) — with the parameters a sentence needs, and the front
+    end words them. One test per code."""
+    hub = _hub(harness)
+    theirs = await _entry(hub, "alice")
+    mine = await _entry(hub, VIEWER)
+    bobs = await _entry(hub, "bob")
+
+    owner_only = harness.client.post(f"/skill-hub/entries/{theirs}/unpublish")
+    assert (owner_only.status_code, owner_only.json()["detail"]) == (403, {"error": "owner_only"})
+
+    empty = harness.client.post(f"/skill-hub/entries/{mine}/transfer", json={"owner": ""})
+    assert (empty.status_code, empty.json()["detail"]) == (
+        400,
+        {"error": "transfer_owner_required"},
+    )
+
+    taken = harness.client.post(f"/skill-hub/entries/{mine}/transfer", json={"owner": "bob"})
+    assert (taken.status_code, taken.json()["detail"]) == (
+        409,
+        {"error": "transfer_name_taken", "owner": "bob", "name": _entry_row(harness, bobs).name},
+    )
+
+
 async def test_an_entry_the_viewer_cannot_read_is_404_on_management_too(harness: Harness):
     hub = _hub(harness)
     hidden = await _entry(hub, "alice")

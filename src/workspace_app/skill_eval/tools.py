@@ -231,9 +231,10 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
         )
     if name == "publish_skill":
         return (
+            # Paragraphs, like the real reply (agent/tools.py, D15).
             f"published skill '{args['name']}' to the skill hub (new; entry "
-            "0123456789abcdef0123456789abcdef).\n"
-            "The reviewer (eval) had nothing to flag.\n"
+            "0123456789abcdef0123456789abcdef).\n\n"
+            "The reviewer (eval) had nothing to flag.\n\n"
             "It is public: everyone on the platform can find and install it."
         )
     return f"unknown tool {name!r}"

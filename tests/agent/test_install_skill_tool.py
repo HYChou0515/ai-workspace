@@ -105,6 +105,32 @@ async def test_tools_this_app_lacks_are_named_not_hidden():
     assert "pm" in out, "and which App it was written in"
 
 
+async def test_the_reply_is_paragraphs_and_the_notes_are_one_list():
+    """plan-skill-hub-ui-polish D15, the install twin: the "installed…" and
+    "Note: it mentions…" sentences were one paragraph with a soft break; each
+    is its own, and the review notes are one list holding exactly them."""
+    _spec, hub = _hub()
+    entry = await hub.publish(
+        owner="alice",
+        name="triage-reflow",
+        description="Triage reflow defects.",
+        source_item="inv-alice",
+        source_app="pm",
+        source_profile="default",
+        payload=PAYLOAD,
+        referenced_tools=["query_entity"],
+        review=SkillHubReview(verdict="notes", notes=["say when", "name the log"]),
+    )
+
+    out = await install_skill_impl(_ctx(hub), entry)
+
+    blocks = _blocks(out)
+    assert [kind for kind, _ in blocks] == ["paragraph", "paragraph", "paragraph", "list"], out
+    assert blocks[0][1][0].startswith("installed skill 'triage-reflow'")
+    assert blocks[1][1][0].startswith("Note: it mentions query_entity")
+    assert blocks[3][1] == ["say when", "name the log"]
+
+
 async def test_a_folder_with_that_name_is_never_overwritten():
     _spec, hub = _hub()
     entry = await _alices(hub)
@@ -116,7 +142,10 @@ async def test_a_folder_with_that_name_is_never_overwritten():
 
     out = await install_skill_impl(ctx, entry)
 
-    assert out.startswith("error:") and "triage-reflow" in out
+    assert out == (
+        "error: this workspace already has '.skill/triage-reflow/' — remove or rename that "
+        "folder first, then install again."
+    )
     assert await files.read(inv, f"/{WORKSPACE_SKILL_DIR}/triage-reflow/SKILL.md") == mine
     assert not await files.exists(inv, f"/{WORKSPACE_SKILL_DIR}/triage-reflow/{ORIGIN_FILE}")
 
@@ -142,7 +171,13 @@ async def test_the_refusal_names_whose_copy_is_in_the_way():
 
     out = await install_skill_impl(ctx, carols)
 
-    assert out.startswith("error:") and "alice" in out
+    # Word for word what the tool said before the route's refusal became a
+    # code (plan-skill-hub-ui-polish D16): the model's sentence and the
+    # person's code are two renderings of one fact, `FolderInTheWay`.
+    assert out == (
+        "error: this workspace already has alice's '.skill/triage-reflow/' — remove or rename "
+        "that folder first, then install again."
+    )
 
 
 async def test_an_entry_the_installer_cannot_see_is_gone_the_same_as_one_that_never_was():
@@ -202,3 +237,39 @@ async def test_the_owner_can_install_her_own_private_entry():
 async def test_without_the_hub_the_tool_says_where_it_works():
     out = await install_skill_impl(_ctx(None), "any")
     assert out.startswith("error:") and "App workspace turn" in out
+
+
+# ── the reply as markdown (plan-skill-hub-ui-polish D15) ────────────────────
+
+
+def _blocks(text: str) -> list[tuple[str, list[str]]]:
+    """The reply's top-level blocks as a CommonMark parser sees them — the
+    chat renders tool replies (relayed or quoted) through react-markdown, and
+    markdown-it-py follows the same spec. A `paragraph` carries its one
+    inline text; a `list` carries one text per item. A sentence that follows
+    a bullet list after a single newline is a lazy continuation of the LAST
+    ITEM, not a paragraph — which is what the demo showed."""
+    from markdown_it import MarkdownIt
+
+    out: list[tuple[str, list[str]]] = []
+    tokens = MarkdownIt("commonmark").parse(text)
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.level == 0 and tok.type == "paragraph_open":
+            out.append(("paragraph", [tokens[i + 1].content]))
+        elif tok.level == 0 and tok.type == "bullet_list_open":
+            close = next(
+                j
+                for j in range(i, len(tokens))
+                if tokens[j].type == "bullet_list_close" and tokens[j].level == 0
+            )
+            items = [t.content for t in tokens[i:close] if t.type == "inline"]
+            # A tight list: every item paragraph is `hidden`. Items separated by
+            # blank lines are still ONE list, but a loose one, drawn with a
+            # paragraph gap per item.
+            tight = all(t.hidden for t in tokens[i:close] if t.type == "paragraph_open")
+            out.append(("list" if tight else "loose-list", items))
+            i = close
+        i += 1
+    return out

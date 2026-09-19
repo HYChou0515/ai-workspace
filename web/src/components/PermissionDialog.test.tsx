@@ -15,12 +15,104 @@ vi.mock("./UserChip", () => ({
 }));
 vi.mock("./Icon", () => ({ Icon: () => <span /> }));
 
+import { LocaleProvider, setStoredLocale, translate } from "../lib/i18n";
 import { DOC_ROLES, type CollectionPermission } from "../lib/permission";
 import { renderWithQuery } from "../test/queryWrapper";
 import { PermissionDialog } from "./PermissionDialog";
 
 afterEach(cleanup);
 
+
+describe("PermissionDialog — the viewer's language (plan-skill-hub-ui-polish D12)", () => {
+  // No LocaleProvider here: `useT` renders zh-TW, the primary audience.
+  it("speaks zh-TW, and says who 'Public' reaches as the caller names it", () => {
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="alice/csv-peek"
+        owner="alice"
+        value={perm()}
+        audience="platform"
+        onSubmit={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("分享「alice/csv-peek」")).toBeInTheDocument();
+    expect(screen.getByText("私人")).toBeInTheDocument();
+    expect(screen.getByText("限定")).toBeInTheDocument();
+    expect(screen.getByText("公開")).toBeInTheDocument();
+    expect(screen.getByText("平台上所有人")).toBeInTheDocument();
+    expect(screen.getByTestId("permission-cancel")).toHaveTextContent("取消");
+    expect(screen.getByTestId("permission-save")).toHaveTextContent("儲存");
+  });
+
+  it("defaults the audience to the workspace — the item and collection callers' meaning", () => {
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm()}
+        onSubmit={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("這個 workspace 的所有人")).toBeInTheDocument();
+    expect(screen.queryByText("平台上所有人")).toBeNull();
+  });
+
+  // Parity with the dialog as it was: in English, every caller that passed
+  // no `audience` reads exactly the words it read before this change —
+  // rendered through the same props each existing caller passes.
+  it.each([
+    [
+      "KbCollectionPage",
+      { resourceName: "Docs", roles: undefined, caption: undefined },
+    ],
+    [
+      "KbDocIde",
+      {
+        resourceName: "notes/a.md",
+        roles: DOC_ROLES,
+        caption:
+          "Choose who can read this document. It can only restrict access further than the collection — never widen it.",
+      },
+    ],
+  ])("reads in English exactly as before for %s", (_caller, props) => {
+    setStoredLocale("en");
+    renderWithQuery(
+      <LocaleProvider>
+        <PermissionDialog
+          owner="bob"
+          value={perm()}
+          onSubmit={() => {}}
+          onClose={() => {}}
+          {...props}
+        />
+      </LocaleProvider>,
+    );
+    expect(
+      screen.getByText(`Share “${props.resourceName}”`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        props.caption ?? "Choose who can access this collection.",
+      ),
+    ).toBeInTheDocument();
+    for (const [label, hint] of [
+      ["Private", "Only you"],
+      ["Restricted", "You + specific people"],
+      ["Public", "Everyone in the workspace"],
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getByText(hint)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId("toggle-advanced")).toHaveTextContent(
+      "Show advanced",
+    );
+    expect(screen.getByTestId("permission-cancel")).toHaveTextContent("Cancel");
+    expect(screen.getByTestId("permission-save")).toHaveTextContent("Save");
+    localStorage.removeItem("ws.locale");
+  });
+});
 const perm = (over: Partial<CollectionPermission> = {}): CollectionPermission => ({
   visibility: "restricted",
   read_meta: [],
@@ -88,7 +180,11 @@ describe("PermissionDialog", () => {
         onClose={() => {}}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Remove alice" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: translate("zh-TW", "perm.remove", { name: "alice" }),
+      }),
+    );
     fireEvent.click(screen.getByTestId("permission-save"));
     expect((onSubmit.mock.calls[0][0] as CollectionPermission).read_content).toEqual([]);
   });
@@ -264,7 +360,9 @@ describe("PermissionDialog — unresolvable group grant (#608)", () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.getByText("Unknown group")).toBeInTheDocument();
+    expect(
+      screen.getByText(translate("zh-TW", "perm.group.unknown")),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("group-remove-ghost")).toBeInTheDocument();
   });
 });

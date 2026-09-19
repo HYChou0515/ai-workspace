@@ -239,13 +239,14 @@ async def test_an_entry_the_viewer_cannot_read_is_404_like_one_that_never_existe
     codes = {
         harness.client.get(f"/skill-hub/entries/{e}").status_code for e in (hidden, gone, "nope")
     }
-    bodies = {
+    bodies = [
         harness.client.get(f"/skill-hub/entries/{e}").json()["detail"]
         for e in (hidden, gone, "nope")
-    }
+    ]
 
     assert codes == {404}
-    assert len(bodies) == 1, "one wording, so a 404 never says 'exists, not for you'"
+    # One code (D16), so a 404 never says 'exists, not for you'.
+    assert bodies == [{"error": "not_found"}] * 3
 
 
 # ── install (the panel's door) ───────────────────────────────────────────────
@@ -280,8 +281,30 @@ async def test_install_refuses_to_overwrite_and_says_whose_copy_is_there(harness
     res = harness.client.post(harness.wpath("/skills/install"), json={"entry_id": carols})
 
     assert res.status_code == 409, res.text
-    assert "alice" in res.json()["detail"]
+    # D16: the fact (whose copy, which path), for the front end to word.
+    assert res.json()["detail"] == {
+        "error": "folder_in_the_way",
+        "owner": "alice",
+        "path": ".skill/triage/",
+    }
     assert await harness.filestore.read(harness.iid, "/.skill/triage/SKILL.md") == _md("triage")
+
+
+async def test_install_refuses_a_hand_written_folder_with_no_owner_to_name(harness: Harness):
+    hub = _hub(harness)
+    carols = await _entry(hub, "carol", "triage")
+    await harness.filestore.write(
+        harness.iid, "/.skill/triage/SKILL.md", b"---\nname: triage\n---\nmine\n"
+    )
+
+    res = harness.client.post(harness.wpath("/skills/install"), json={"entry_id": carols})
+
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"] == {
+        "error": "folder_in_the_way",
+        "owner": "",
+        "path": ".skill/triage/",
+    }
 
 
 async def test_install_of_an_unreadable_entry_is_404_and_writes_nothing(harness: Harness):

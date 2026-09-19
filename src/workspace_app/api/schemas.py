@@ -108,6 +108,10 @@ class _ItemSkillState(BaseModel):
     #: its files are here, so the download control applies and (later) so does a
     #: refresh from upstream.
     is_copy: bool = False
+    #: What the copy is of — ``shared`` / ``profile`` / ``hub``; ``""`` when not
+    #: a copy. The panel words Reset / Update by it: "the shipped version" is
+    #: the package's phrase, a hub copy updates to what is on the hub.
+    copy_of: Literal["shared", "profile", "hub", ""] = ""
     #: #589 — the package ships something this copy does not have. The refresh
     #: control appears on this, not merely on being a copy: a button whose only
     #: honest outcome is "nothing changed" reads as broken.

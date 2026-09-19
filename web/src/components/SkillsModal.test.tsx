@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileService } from "../api/fileService";
 import type { ItemSkillState } from "../api/types";
 import { HttpError } from "../api/http";
+import { makeQueryClient } from "../api/queryClient";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import type { SkillHubCard } from "../api/skillHub";
 import { subscribeAgentDraft } from "../lib/agentDraftBus";
 import { translate } from "../lib/i18n";
@@ -95,6 +103,21 @@ describe("SkillsModal (#380)", () => {
     expect(screen.getByTestId("skill-designed-pptx-off")).toBeInTheDocument();
     expect(screen.getByTestId("skill-my-skill-follow")).toBeInTheDocument();
     expect(screen.getByTestId("skill-source-my-skill")).toHaveTextContent("workspace");
+  });
+
+  it("keeps a row's controls in ONE cluster, so a narrow panel wraps them under the text as a unit", async () => {
+    // Measured in Chromium, not here (happy-dom lays nothing out): at 390 px
+    // the controls used to fight the text for one line — pills over buttons,
+    // toggles two lines high, the name clipped. The row wraps its cluster
+    // now, and the cluster wraps within itself; what a DOM test can hold is
+    // the structure that makes that possible: every control of a workspace
+    // skill's row is inside the one cluster element, none beside it.
+    renderModal();
+    const row = await screen.findByTestId("skill-row-my-skill");
+    const cluster = within(row).getByTestId("skill-actions-my-skill");
+    const controls = within(row).getAllByRole("button");
+    expect(controls.length).toBeGreaterThanOrEqual(5); // apply, download, three toggles
+    for (const c of controls) expect(cluster.contains(c)).toBe(true);
   });
 
   it("exposes each skill's full description via title= so a clipped line is readable on hover (#456)", async () => {
@@ -261,6 +284,134 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     expect(screen.getByTestId("skill-reset-triage")).toBeInTheDocument();
   });
 
+  it("says 「有新版」 on the row, in words, when upstream has moved (plan-skill-hub-ui-polish D4)", async () => {
+    renderModal({
+      client: fakeClient([
+        ...COPIED,
+        ...NO_UPDATE.map((s) => ({ ...s, name: "settled" })),
+      ]) as never,
+    });
+    await screen.findByTestId("skill-row-triage");
+    // A fourth unlabelled icon was the only sign; a status is a badge.
+    expect(screen.getByTestId("skill-update-triage")).toHaveTextContent(
+      word("skills.updateAvailable"),
+    );
+    expect(screen.queryByTestId("skill-update-settled")).toBeNull();
+  });
+
+  it("words Update / Reset and the note by where the copy came from — the package or the hub (D4)", async () => {
+    // The listing says what a copy is OF (`copy_of`). `source` alone cannot:
+    // a copy of a package skill this App does not declare lists as
+    // `workspace` + `is_copy` exactly like a hub copy (review round 1 of
+    // #826), and its Reset must still say the package's words.
+    const skills: ItemSkillState[] = [
+      { ...COPIED[0], copy_of: "profile" },
+      {
+        ...COPIED[0],
+        name: "from-hub",
+        source: "workspace",
+        upstream: "live",
+        copy_of: "hub",
+      },
+      {
+        ...COPIED[0],
+        name: "undeclared",
+        source: "workspace",
+        upstream: "live",
+        copy_of: "shared",
+      },
+      // an older API pod mid-rollout sends no `copy_of`: the package's words
+      { ...COPIED[0], name: "older-api", source: "workspace", upstream: "live" },
+    ];
+    const refreshItemSkill = vi.fn(async () => ({
+      updated: ["SKILL.md"],
+      skipped: [],
+      removed: [],
+    }));
+    renderModal({
+      client: { ...fakeClient(skills), refreshItemSkill } as never,
+    });
+    await screen.findByTestId("skill-row-from-hub");
+
+    expect(screen.getByTestId("skill-refresh-triage")).toHaveAccessibleName(
+      `${word("skills.refresh")} triage`,
+    );
+    expect(screen.getByTestId("skill-reset-triage")).toHaveAccessibleName(
+      `${word("skills.reset")} triage`,
+    );
+    expect(screen.getByTestId("skill-refresh-from-hub")).toHaveAccessibleName(
+      `${word("skills.refresh.hub")} from-hub`,
+    );
+    expect(screen.getByTestId("skill-reset-from-hub")).toHaveAccessibleName(
+      `${word("skills.reset.hub")} from-hub`,
+    );
+    expect(screen.getByTestId("skill-reset-undeclared")).toHaveAccessibleName(
+      `${word("skills.reset")} undeclared`,
+    );
+    expect(screen.getByTestId("skill-reset-older-api")).toHaveAccessibleName(
+      `${word("skills.reset")} older-api`,
+    );
+
+    fireEvent.click(screen.getByTestId("skill-refresh-from-hub"));
+    expect(await screen.findByTestId("skills-refresh-note")).toHaveTextContent(
+      word("skills.refreshDone.hub"),
+    );
+    fireEvent.click(screen.getByTestId("skill-refresh-triage"));
+    await waitFor(() =>
+      expect(screen.getByTestId("skills-refresh-note")).toHaveTextContent(
+        word("skills.refreshDone"),
+      ),
+    );
+  });
+
+  it("draws a copy's four icon buttons with four different glyphs, none of them Import's, each with a tooltip (plan-skill-hub-ui-polish D17)", async () => {
+    // 「看不懂 2–4 是什麼意思」「更新和還原 icon 看不出差別」「發布看起來是
+    // 上傳」: Reset and Update were mirror images, Publish shared Import's
+    // glyph, and Download had no tooltip. Each glyph is its own (Material /
+    // Lucide names: download, cloud-upload, history, refresh), and every
+    // icon-only button says what it does on hover (`title`) and to
+    // assistive tech (`aria-label`) — the words stay off the crowded row.
+    const skills: ItemSkillState[] = [
+      { ...COPIED[0], name: "from-hub", source: "workspace", upstream: "live", copy_of: "hub" },
+    ];
+    renderModal({ client: fakeClient(skills) as never });
+    await screen.findByTestId("skill-row-from-hub");
+
+    const glyph = (testId: string) =>
+      screen
+        .getByTestId(testId)
+        .querySelector("[data-icon]")
+        ?.getAttribute("data-icon");
+    const glyphs = {
+      download: glyph("skill-download-from-hub"),
+      publish: glyph("skill-publish-from-hub"),
+      reset: glyph("skill-reset-from-hub"),
+      refresh: glyph("skill-refresh-from-hub"),
+    };
+    expect(glyphs).toEqual({
+      download: "download",
+      publish: "publish",
+      reset: "restore",
+      refresh: "refresh",
+    });
+    expect(new Set(Object.values(glyphs)).size).toBe(4);
+    expect(glyph("skills-import")).not.toBe(glyphs.publish);
+    // …and the name never breaks at its hyphen to make room for them — the
+    // re-recorded demo showed `log-` / `digest` again once the badge and the
+    // 14 px glyphs joined the row (#822 had pinned only the pills).
+    expect(within(screen.getByTestId("skill-row-from-hub")).getByText("from-hub")).toHaveStyle({ whiteSpace: "nowrap" });
+
+    for (const [id, label] of [
+      ["skill-download-from-hub", word("skills.download")],
+      ["skill-publish-from-hub", word("skills.publish")],
+      ["skill-reset-from-hub", word("skills.reset.hub")],
+      ["skill-refresh-from-hub", word("skills.refresh.hub")],
+    ]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("title", label);
+      expect(screen.getByTestId(id)).toHaveAccessibleName(`${label} from-hub`);
+    }
+  });
+
   it("offers no refresh for a skill that was written here", async () => {
     renderModal();
     await screen.findByTestId("skill-row-my-skill");
@@ -341,6 +492,48 @@ function fakeHub(rows: SkillHubCard[] = [hubCard({})]) {
   };
 }
 
+describe("SkillsModal — the footer at phone width (plan-skill-hub-ui-polish D13)", () => {
+  it("keeps the import hint while the footer is unmeasured or wide, and hides it in a measured-narrow footer — the text stays on the Import button", async () => {
+    renderModal();
+    await screen.findByTestId("skill-row-my-skill");
+    // happy-dom lays nothing out: every width is 0 = unmeasured, and an
+    // unmeasured footer must not hide anything.
+    expect(screen.getByTestId("skills-import-hint")).toHaveTextContent(
+      word("skills.importHint"),
+    );
+    expect(screen.getByTestId("skills-import")).toHaveAttribute(
+      "title",
+      word("skills.importHint"),
+    );
+    cleanup();
+
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        width: 320,
+        height: 24,
+        top: 0,
+        left: 0,
+        right: 320,
+        bottom: 24,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+    try {
+      renderModal();
+      await screen.findByTestId("skill-row-my-skill");
+      expect(screen.queryByTestId("skills-import-hint")).toBeNull();
+      expect(screen.getByTestId("skills-import")).toHaveAttribute(
+        "title",
+        word("skills.importHint"),
+      );
+    } finally {
+      rect.mockRestore();
+    }
+  });
+});
+
 describe("SkillsModal — the skill hub", () => {
   it("offers Publish on a workspace skill only, and puts the sentence in the chat box", async () => {
     const props = renderModal();
@@ -397,6 +590,167 @@ describe("SkillsModal — the skill hub", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("alice's '.skill/triage-reflow/'");
     expect(screen.getByTestId("skill-hub-picker")).toBeInTheDocument();
+  });
+
+  it("words a coded refusal in the viewer's language (D16)", async () => {
+    const hub = fakeHub();
+    hub.install.mockRejectedValueOnce(
+      new HttpError(
+        409,
+        "install failed (409)",
+        "folder_in_the_way",
+        undefined,
+        {
+          error: "folder_in_the_way",
+          owner: "alice",
+          path: ".skill/triage-reflow/",
+        },
+      ),
+    );
+    renderWithHub(hub);
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    fireEvent.click(await screen.findByTestId("pick-install-e-1"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      word("skillHub.refused.folder_in_the_way.theirs", {
+        owner: "alice",
+        path: ".skill/triage-reflow/",
+      }),
+    );
+  });
+
+  it("reports a refused install ONCE — in the picker, not also as the global write-failure toast (plan-skill-hub-ui-polish D3)", async () => {
+    // Mounted on the REAL query client: its MutationCache reports every
+    // failed mutation as 「儲存失敗，內容未套用」 unless the mutation says it
+    // handles its own error (`meta.silentError`). The picker does — the
+    // demo showed both at once, the toast with a title that was not even
+    // true (nothing was being saved).
+    resetWriteFailures();
+    const hub = fakeHub();
+    hub.install.mockRejectedValueOnce(
+      new HttpError(
+        409,
+        "this workspace already has alice's '.skill/triage-reflow/' — remove or rename that folder first, then install again",
+      ),
+    );
+    const props: ComponentProps<typeof SkillsModal> = {
+      slug: "rca",
+      itemId: "i1",
+      fileService: fakeService().svc,
+      onClose: vi.fn(),
+      onSaveSkillPrefs: vi.fn(),
+      appliedSkills: [],
+      onToggleApply: vi.fn(),
+      client: fakeClient(),
+      hubClient: hub,
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillsModal {...props} />
+      </MemoryRouter>,
+      makeQueryClient(),
+    );
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    fireEvent.click(await screen.findByTestId("pick-install-e-1"));
+
+    await screen.findByRole("alert");
+    expect(currentWriteFailure()).toBeNull();
+  });
+
+  it("says 「安裝」, names the missing tool before the consequence, and keeps the browse link on its own line (plan-skill-hub-ui-polish D6)", async () => {
+    renderWithHub(fakeHub());
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+
+    expect(await screen.findByTestId("pick-install-e-1")).toHaveTextContent(
+      /^安裝$/,
+    );
+    expect(screen.getByTestId("pick-missing-e-1")).toHaveTextContent(
+      /^缺少 tool：query_entity，/,
+    );
+    const intro = screen.getByText(word("skills.fromHub.intro"));
+    const browse = screen.getByRole("link", {
+      name: word("skills.fromHub.browse"),
+    });
+    // Two lines, not one paragraph with a link glued to its last sentence.
+    expect(intro).not.toContainElement(browse);
+  });
+
+  it("marks an entry whose name a skill WITH FILES HERE already holds, and disables its Install (D8)", async () => {
+    // The install route refuses exactly when `.skill/<name>/` is occupied —
+    // a hand-written skill, a hub copy, a copy of a package skill — and
+    // accepts a name only a package skill holds (no folder here). The
+    // picker marks the same set, from the same listing the panel shows.
+    // The same four kinds the backend parity test walks
+    // (`tests/api/test_skill_hub_panel.py`): a hand-written skill, a copy of
+    // a package skill, a hub copy, a package skill with no folder here.
+    const skills: ItemSkillState[] = [
+      ...SKILLS,
+      {
+        name: "designed-pptx-copy",
+        description: "a package skill, copied here",
+        source: "shared",
+        default_on: false,
+        is_copy: true,
+        pref: "follow",
+        effective: false,
+      },
+      {
+        name: "from-hub",
+        description: "installed from the hub",
+        source: "workspace",
+        default_on: true,
+        is_copy: true,
+        upstream: "live",
+        pref: "follow",
+        effective: true,
+      },
+    ];
+    const hub = fakeHub([
+      hubCard({ id: "e-1", name: "triage-reflow" }),
+      hubCard({ id: "e-2", name: "my-skill", missing_tools: [] }),
+      hubCard({ id: "e-3", name: "designed-pptx-copy", missing_tools: [] }),
+      hubCard({ id: "e-4", name: "author-skill", missing_tools: [] }),
+      hubCard({ id: "e-5", name: "from-hub", missing_tools: [] }),
+    ]);
+    const props: ComponentProps<typeof SkillsModal> = {
+      slug: "rca",
+      itemId: "i1",
+      fileService: fakeService().svc,
+      onClose: vi.fn(),
+      onSaveSkillPrefs: vi.fn(),
+      appliedSkills: [],
+      onToggleApply: vi.fn(),
+      client: fakeClient(skills),
+      hubClient: hub,
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillsModal {...props} />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    await screen.findByTestId("pick-install-e-1");
+
+    for (const id of ["e-2", "e-3", "e-5"]) {
+      expect(screen.getByTestId(`pick-taken-${id}`)).toHaveTextContent(
+        word("skills.fromHub.taken"),
+      );
+      expect(screen.getByTestId(`pick-install-${id}`)).toBeDisabled();
+    }
+    for (const id of ["e-1", "e-4"]) {
+      expect(screen.queryByTestId(`pick-taken-${id}`)).toBeNull();
+      expect(screen.getByTestId(`pick-install-${id}`)).toBeEnabled();
+    }
+    // The mark and the button are one cluster that wraps under the text
+    // (D13, the panel row's shape) — pinned by structure, happy-dom lays
+    // nothing out.
+    const cluster = screen.getByTestId("pick-actions-e-2");
+    expect(cluster).toContainElement(screen.getByTestId("pick-taken-e-2"));
+    expect(cluster).toContainElement(screen.getByTestId("pick-install-e-2"));
   });
 
   it("lists a fork under its root as one more thing to install", async () => {

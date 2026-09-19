@@ -198,10 +198,14 @@ export function ManageChatsModal({
   const shown = q ? chats.filter((c) => chatLabel(c).toLowerCase().includes(q)) : chats;
 
   return (
+    // Its 16 px is said HERE, not in `.manage-chats__dialog`: that class sits
+    // on the panel element itself, and the shell's inline padding (any value)
+    // beats a class — P1's `padding: 0` opt-out had zeroed it (#826 round 1).
     <ModalShell
       onClose={attemptClose}
       ariaLabel="Manage chats"
       data-testid="manage-chats-modal"
+      panelStyle={{ padding: 16 }}
       width={720}
       maxWidth="100%"
       panelClassName="manage-chats__dialog"

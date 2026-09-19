@@ -68,7 +68,12 @@ export function ShareChatDialog({
   };
 
   return (
-    <ModalShell onClose={attemptClose} ariaLabel="Share chat">
+    // Lays out its own interior (the padding lives in its CSS), so the shell's default padding is switched off.
+    <ModalShell
+      onClose={attemptClose}
+      ariaLabel="Share chat"
+      panelStyle={{ padding: 0 }}
+    >
       <div className="chat-share">
         <div className="chat-share__title">Share this chat</div>
         <div className="chat-share__hint">

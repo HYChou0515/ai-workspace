@@ -17,6 +17,7 @@ import {
   roleDef,
 } from "../lib/permission";
 import { useDirtyClose } from "../hooks/useDirtyClose";
+import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
 import { Icon } from "./Icon";
@@ -39,7 +40,9 @@ export function PermissionDialog({
   value,
   busy = false,
   roles = COLLECTION_ROLES,
-  caption: captionText = "Choose who can access this collection.",
+  caption: captionText,
+  audience = "workspace",
+  error = null,
   pickableGroups = [],
   onSubmit,
   onClose,
@@ -52,14 +55,24 @@ export function PermissionDialog({
   /** The roles offered in the grant picker. Defaults to the three collection
    * roles; a per-doc override (#308) passes `DOC_ROLES` (Viewer only). */
   roles?: RoleDef[];
-  /** Sub-heading under the title — resource-specific copy. */
+  /** Sub-heading under the title — resource-specific copy. Defaults to the
+   * collection's sentence. */
   caption?: string;
+  /** Who "Public" reaches (plan-skill-hub-ui-polish D12): a collection or an
+   * item is public to this workspace; a skill hub entry to everyone on the
+   * platform. The hint under the Public option says which. */
+  audience?: "workspace" | "platform";
+  /** The last save's refusal, worded — drawn INSIDE the dialog above Save,
+   * because the dialog stays open on failure and a line on the page behind
+   * the backdrop is one the person cannot see (#826 round 2). */
+  error?: string | null;
   /** #608 — every group the caller may grant to (name + count). Empty ⇒ the group
    * section is hidden (the caller didn't load them / the feature is off). */
   pickableGroups?: PickableGroup[];
   onSubmit: (perm: CollectionPermission) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [visibility, setVisibility] = useState<Visibility>(value.visibility);
   const [grants, setGrants] = useState<Grant[]>(() => grantsFromPermission(value, owner));
   const [groupGrants, setGroupGrants] = useState<GroupGrant[]>(() =>
@@ -98,7 +111,8 @@ export function PermissionDialog({
   // A grant whose group we can't resolve (deleted, or not visible to us) reads as
   // "Unknown group" — the owner can still remove it — rather than a raw id (#608).
   const groupName = (id: string) =>
-    pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
+    pickableGroups.find((g) => g.resource_id === id)?.name ??
+    t("perm.group.unknown");
   const groupCount = (id: string): number | null =>
     pickableGroups.find((g) => g.resource_id === id)?.member_count ?? null;
 
@@ -120,20 +134,41 @@ export function PermissionDialog({
 
   const preview = next();
 
+  // The three visibilities, in the viewer's language; the Public hint names
+  // the audience the caller declared.
+  const visibilities: { id: Visibility; label: string; hint: string }[] = [
+    { id: "private", label: t("perm.private"), hint: t("perm.private.hint") },
+    {
+      id: "restricted",
+      label: t("perm.restricted"),
+      hint: t("perm.restricted.hint"),
+    },
+    {
+      id: "public",
+      label: t("perm.public"),
+      hint: t(
+        audience === "platform"
+          ? "perm.public.hint.platform"
+          : "perm.public.hint.workspace",
+      ),
+    },
+  ];
   return (
     <ModalShell
       onClose={attemptClose}
-      ariaLabel={`Share ${resourceName}`}
+      ariaLabel={t("perm.title", { name: resourceName })}
       data-testid="permission-dialog"
       width={480}
       maxWidth="92vw"
       panelStyle={panel}
     >
-        <strong style={{ fontSize: pxToRem(14) }}>Share “{resourceName}”</strong>
-        <p style={caption}>{captionText}</p>
+      <strong style={{ fontSize: pxToRem(14) }}>
+        {t("perm.title", { name: resourceName })}
+      </strong>
+      <p style={caption}>{captionText ?? t("perm.caption.collection")}</p>
 
         <fieldset style={{ border: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
-          {VISIBILITIES.map((v) => (
+        {visibilities.map((v) => (
             <label key={v.id} style={radioRow}>
               <input
                 type="radio"
@@ -160,8 +195,16 @@ export function PermissionDialog({
                 value={tab}
                 onChange={(id) => setTab(id as "people" | "groups")}
                 tabs={[
-                  { id: "people", label: "People", count: grants.length },
-                  { id: "groups", label: "Groups", count: groupGrants.length },
+                {
+                  id: "people",
+                  label: t("perm.tab.people"),
+                  count: grants.length,
+                },
+                {
+                  id: "groups",
+                  label: t("perm.tab.groups"),
+                  count: groupGrants.length,
+                },
                 ]}
               />
             )}
@@ -181,7 +224,7 @@ export function PermissionDialog({
                 selected={grants.map((g) => g.userId)}
                 exclude={[owner]}
                 onToggle={toggleUser}
-                placeholder="Add people…"
+                  placeholder={t("perm.addPeople")}
               />
             </div>
             {grants.length > 0 && (
@@ -193,7 +236,7 @@ export function PermissionDialog({
                     <div style={grantRow}>
                       <UserChip userId={g.userId} />
                       <select
-                        aria-label={`Role for ${g.userId}`}
+                          aria-label={t("perm.roleFor", { name: g.userId })}
                         data-testid={`role-${g.userId}`}
                         value={g.role}
                         onChange={(e) => setRole(g.userId, e.target.value as RoleId)}
@@ -208,13 +251,13 @@ export function PermissionDialog({
                       </select>
                       <button
                         type="button"
-                        aria-label={`Remove ${g.userId}`}
+                          aria-label={t("perm.remove", { name: g.userId })}
                         onClick={() => toggleUser(g.userId)}
                         className="btn"
                         data-variant="danger"
                         data-size="sm"
                       >
-                        Remove
+                          {t("perm.remove.button")}
                       </button>
                     </div>
                     <span style={roleHint}>{roleDef(g.role).hint}</span>
@@ -240,7 +283,7 @@ export function PermissionDialog({
                     groups={pickableGroups}
                     exclude={groupGrants.map((x) => x.groupId)}
                     onPick={addGroup}
-                    placeholder="Add a group…"
+                  placeholder={t("perm.addGroup")}
                   />
                 </div>
                 {groupGrants.length > 0 && (
@@ -258,7 +301,9 @@ export function PermissionDialog({
                             )}
                           </span>
                           <select
-                            aria-label={`Role for ${groupName(g.groupId)}`}
+                          aria-label={t("perm.roleFor", {
+                            name: groupName(g.groupId),
+                          })}
                             data-testid={`group-role-${g.groupId}`}
                             value={g.role}
                             onChange={(e) => setGroupRole(g.groupId, e.target.value as RoleId)}
@@ -274,13 +319,15 @@ export function PermissionDialog({
                           <button
                             type="button"
                             data-testid={`group-remove-${g.groupId}`}
-                            aria-label={`Remove ${groupName(g.groupId)}`}
+                          aria-label={t("perm.remove", {
+                            name: groupName(g.groupId),
+                          })}
                             onClick={() => removeGroup(g.groupId)}
                             className="btn"
                             data-variant="danger"
                             data-size="sm"
                           >
-                            Remove
+                          {t("perm.remove.button")}
                           </button>
                         </div>
                         <span style={roleHint}>{roleDef(g.role).hint}</span>
@@ -302,7 +349,7 @@ export function PermissionDialog({
           data-size="sm"
           style={{ alignSelf: "flex-start" }}
         >
-          {advanced ? "Hide advanced" : "Show advanced"}
+        {t(advanced ? "perm.advanced.hide" : "perm.advanced.show")}
         </button>
         {advanced && (
           <pre data-testid="advanced-verbs" style={verbsBox}>
@@ -311,6 +358,12 @@ export function PermissionDialog({
             ).join("\n")}
           </pre>
         )}
+
+        {error ? (
+          <p className="error" role="alert" style={{ margin: 0, fontSize: pxToRem(12) }}>
+            {error}
+          </p>
+        ) : null}
 
         <ModalActions>
           <button
@@ -321,7 +374,7 @@ export function PermissionDialog({
             data-variant="secondary"
             data-size="sm"
           >
-            Cancel
+          {t("perm.cancel")}
           </button>
           <button
             type="button"
@@ -332,18 +385,13 @@ export function PermissionDialog({
             data-variant="primary"
             data-size="sm"
           >
-            Save
+          {t("perm.save")}
           </button>
         </ModalActions>
     </ModalShell>
   );
 }
 
-const VISIBILITIES: { id: Visibility; label: string; hint: string }[] = [
-  { id: "private", label: "Private", hint: "Only you" },
-  { id: "restricted", label: "Restricted", hint: "You + specific people" },
-  { id: "public", label: "Public", hint: "Everyone in the workspace" },
-];
 
 const panel: React.CSSProperties = {
   padding: 18,

@@ -391,6 +391,10 @@ export type ItemSkillState = {
    * default-off one can't be turned on for good just by using it), yet its files
    * really are here — downloadable, and refreshable from upstream. */
   is_copy?: boolean;
+  /** What the copy is of — `shared` / `profile` / `hub`; `""` when not a copy.
+   * Reset / Update are worded by it (an older API pod mid-rollout sends none,
+   * which reads as the package's words — what every copy read before). */
+  copy_of?: "shared" | "profile" | "hub" | "";
   /** #589 — the package ships something this copy does not have. The update
    * control appears on THIS, not merely on being a copy: a button whose only
    * honest outcome is "nothing changed" reads as broken. */

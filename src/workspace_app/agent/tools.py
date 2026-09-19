@@ -2573,13 +2573,18 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         if forked_from
         else "new"
     )
+    # Paragraphs, joined by a blank line (plan-skill-hub-ui-polish D15): the
+    # reply is markdown to whoever reads it — the model relays it, the chat
+    # renders it — and a sentence one newline after a bullet list is a lazy
+    # continuation of the LAST NOTE, not a sentence. The notes are one
+    # paragraph of their own: a list.
     lines = [f"published skill '{name}' to the skill hub ({how}; entry {entry_id})."]
     if review.notes:
         lines.append(
             f"The reviewer ({review.model or 'AI'}) left {len(review.notes)} note(s) — "
             "relay them to the user as suggestions:"
         )
-        lines += [f"- {n}" for n in review.notes]
+        lines.append("\n".join(f"- {n}" for n in review.notes))
     else:
         lines.append(f"The reviewer ({review.model or 'AI'}) had nothing to flag.")
     if tools:
@@ -2607,7 +2612,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         lines.append("It is visible to the people on its access list (restricted).")
     else:
         lines.append("It is public: everyone on the platform can find and install it.")
-    return "\n".join(lines)
+    return "\n\n".join(lines)
 
 
 async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:
@@ -2645,7 +2650,7 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
         return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
     name = entry.name
     if taken := await skill_folder_in_the_way(files, inv, hub, name, c.acting_user):
-        return f"error: {taken}."
+        return f"error: {taken.sentence()}."
     await install_hub_skill(files, inv, hub, entry_id)
     lines = [
         f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "
@@ -2659,8 +2664,9 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
         )
     if entry.review.notes:
         lines.append("The publish-time review noted:")
-        lines += [f"- {n}" for n in entry.review.notes]
-    return "\n".join(lines)
+        lines.append("\n".join(f"- {n}" for n in entry.review.notes))
+    # Paragraphs (D15) — see publish_skill_impl.
+    return "\n\n".join(lines)
 
 
 #: How many skill hub entries one search shows before it asks for a narrower

@@ -10,7 +10,7 @@
  */
 
 import type { CollectionPermission } from "../lib/permission";
-import { apiFetch, detailSentence, HttpError } from "./http";
+import { apiFetch, detailSentence, errorInfo, HttpError } from "./http";
 
 export type SkillHubReviewVerdict = "ok" | "notes";
 export type SkillUpstreamState = "live" | "unpublished" | "deleted";
@@ -86,8 +86,8 @@ export type SkillHubApi = {
   /** `app` (a slug) adds `missing_tools` against that App's ceiling. */
   get(entryId: string, app?: string): Promise<SkillHubDetail>;
   /** The Skills panel's install door: 409 when a folder of that name is
-   * already in the item (the sentence names whose copy it is), 404 when the
-   * entry cannot be read. */
+   * already in the item (a coded refusal naming whose copy it is), 404 when
+   * the entry cannot be read. */
   install(slug: string, itemId: string, entryId: string): Promise<SkillInstalled>;
   unpublish(entryId: string): Promise<void>;
   republish(entryId: string): Promise<void>;
@@ -100,16 +100,29 @@ export type SkillHubApi = {
 const entryBase = (entryId: string) => `/skill-hub/entries/${encodeURIComponent(entryId)}`;
 
 /**
- * A refusal, as the person should read it: the server's own sentence when it
- * sent one (`{"detail": "already has alice's '.skill/…'"}`), else what failed
- * and the status. `httpErrorFrom` is the wrong helper here — it keeps only an
- * OBJECT `detail` (the quota codes) and drops a string, so every refusal read
- * as "install failed: 409" (review round 1). `api/wui.ts` reads the sentence
- * the same way.
+ * A refusal, as the page will word it. The hub's routes refuse with a CODE
+ * and its parameters (`{"detail": {"error": "folder_in_the_way", "owner":
+ * "alice", "path": ".skill/…"}}`, plan-skill-hub-ui-polish D16), kept on the
+ * error for `describeRefusal` to word in the viewer's language; the message
+ * is the fallback (what failed and the status) for a code nobody knows. A
+ * server that still sends a sentence (`{"detail": "…"}`) gets it as the
+ * message, as before — `httpErrorFrom` alone was the wrong helper here, it
+ * drops a string `detail`, so every refusal read as "install failed: 409"
+ * (review round 1).
  */
 async function refused(resp: Response, failed: string): Promise<HttpError> {
+  const fallback = `${failed} (${resp.status})`;
+  const info = await errorInfo(resp);
+  if (info.code)
+    return new HttpError(
+      resp.status,
+      fallback,
+      info.code,
+      info.also,
+      info.detail,
+    );
   const sentence = await detailSentence(resp);
-  return new HttpError(resp.status, sentence ?? `${failed} (${resp.status})`);
+  return new HttpError(resp.status, sentence ?? fallback);
 }
 
 async function post(path: string, body?: unknown, failed = "request failed"): Promise<Response> {
