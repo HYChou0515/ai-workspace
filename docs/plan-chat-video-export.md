@@ -268,6 +268,7 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - **對話框的兩個判斷讀不同東西**:警語看 `limits.isError`、送出鈕看 `limits.data`;TanStack 在 refetch 失敗時留著上一次的 data,所以「上次開過、這次後端閃一下」會同時出現警語、控制項消失、送出鈕可按。改成沒有任何上限時才警語,有快取就照快取畫。
 - **呼叫者自己給的 `output_path` 檔名太長**:預設名 cap 了、外面給的沒有,254 bytes 的名字 + `.progress.json` 讓 store 丟 ENAMETOOLONG → 500(每條檔案路由都一樣,既有的一類);route 先算「名字 + 後綴 ≤ 255」不然 422 點名數字。
 - 修法驗證鏡頭補的洞:**生產端「在錄影中、心跳新鮮」那格沒有測試**——`_alive_jobs` 丟掉所有 running 的突變 48 條全綠(一條新測試三個 409 全釘);同路徑一秒內第二支 job 會先畫到第一支的快取讀數(query key 加 token);模式切回「比例＋解析度」改回 720p 讓 fit 決定;64 字元的 cap 補一條 ASCII 標題(中文標題先被 128 bytes 切到);`check_limits` 的 `max_output_bytes` 參數已經沒人讀 → 拿掉。
+- **P13(CI 抓到的)**:`_check_chat_video` 把「沒有 `chat_video` 這個 key」當成 null 段落拒絕——production 的 merged 一定有這段(預設值疊上去),但 `_validate` 也被既有測試拿部分 dict 直接呼叫(`test_cov_fill_config`),`rest` 分片紅;改成 key 不在就不查、在但是 null 才拒。教訓:改 loader 要跑整個 `tests/config`,不是只跑 `test_loader.py`。
 - 文件三句改掉:「最多 70 秒回到錄影中」是公式不是接手順序(broker 要等 stale sweep 把自己那列標掉;最多重送 3 次);「all-in-one 沒有重送」是假的(`start_consume` 先 `recover_stale_jobs`);「後面有排隊就被 SIGKILL」只在排隊比 grace 長時成立。P11 的 commit message 寫「十二個突變」,`r2_mutants.py` 數起來是 8 + 3 = 11。
 
 ## 驗收

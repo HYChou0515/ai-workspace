@@ -341,7 +341,9 @@ def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
     rather than falling back to it — `None` is refused like any other
     non-integer, because a worker with `heartbeat_seconds=None` never
     beats and never sees a cancel."""
-    node = merged.get("chat_video")
+    if "chat_video" not in merged:
+        return  # a partial dict (a caller's own `_validate`): nothing written, nothing to check
+    node = merged["chat_video"]
     if not isinstance(node, dict):
         raise ValueError(
             f"config {source}: chat_video must be a mapping of the five ceilings, got {node!r}"
