@@ -8,6 +8,8 @@
 // written, and so does any other relative ref: a ref nobody can serve is left
 // to break visibly rather than guessed at.
 
+import { API_PREFIX } from "../api/http";
+
 export type OnboardingScope = { kind: "platform" } | { kind: "app"; slug: string };
 
 const ASSETS = /^(?:\.\/)?assets\/([^/]+)$/;
@@ -16,5 +18,7 @@ export function onboardingAssetUrl(scope: OnboardingScope, src: string): string 
   if (scope.kind !== "app") return src;
   const m = ASSETS.exec(src);
   if (!m) return src;
-  return `/api/apps/${encodeURIComponent(scope.slug)}/assets/${encodeURIComponent(m[1])}`;
+  // On `API_PREFIX`, like every backend URL (#177): a sub-path deploy puts
+  // its base in front, and a literal `/api/…` would point outside it.
+  return `${API_PREFIX}/apps/${encodeURIComponent(scope.slug)}/assets/${encodeURIComponent(m[1])}`;
 }

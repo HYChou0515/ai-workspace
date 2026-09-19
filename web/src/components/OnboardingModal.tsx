@@ -34,8 +34,11 @@ export function OnboardingModal({
   // The intro, each point's body and the footer are markdown through the one
   // shared pipeline (`MarkdownBody`, compact) — never a second renderer. The
   // modal sits outside any FileServiceProvider, so refs resolve through the
-  // onboarding rule instead of a workspace's file service.
+  // onboarding rule instead of a workspace's file service. `.md-body` sets
+  // its own colour and size; `onboarding-prose` (base.css) hands them back
+  // to the wrappers below, which carry the modal's 14/13px dimmed look.
   const resolveUrl = (src: string) => onboardingAssetUrl(scope, src);
+  const prose = { resolveUrl, compact: true, className: "onboarding-prose" } as const;
   return (
     <ModalShell
       onClose={onGotIt}
@@ -54,7 +57,7 @@ export function OnboardingModal({
           </h2>
           {content.intro && (
             <div style={{ fontSize: pxToRem(14), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-              <MarkdownBody text={content.intro} resolveUrl={resolveUrl} compact />
+              <MarkdownBody text={content.intro} {...prose} />
             </div>
           )}
         </div>
@@ -84,7 +87,7 @@ export function OnboardingModal({
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: pxToRem(14), fontWeight: 600 }}>{p.title}</div>
                   <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-                    <MarkdownBody text={p.body} resolveUrl={resolveUrl} compact />
+                    <MarkdownBody text={p.body} {...prose} />
                   </div>
                 </div>
               </li>
@@ -97,7 +100,7 @@ export function OnboardingModal({
             data-testid="onboarding-footer"
             style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)", lineHeight: 1.5 }}
           >
-            <MarkdownBody text={content.footer} resolveUrl={resolveUrl} compact />
+            <MarkdownBody text={content.footer} {...prose} />
           </div>
         )}
 

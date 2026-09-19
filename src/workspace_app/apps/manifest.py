@@ -234,22 +234,29 @@ def load_app_asset(slug: str, subdir: str, name: str) -> tuple[bytes, str] | Non
     (``subdir=""`` ⇒ beside ``app.json``), or ``None`` when there is nothing to serve.
 
     ``None`` covers every way it is not a servable image — an extension outside
-    :data:`ICON_MEDIA_TYPES`, and a name for a file that isn't there. The callers
-    turn all of them into one 404.
+    :data:`ICON_MEDIA_TYPES`, a name for a file that isn't there, and a name the
+    filesystem itself refuses to look up (longer than NAME_MAX: the probe raises
+    ``ENAMETOOLONG`` rather than answering "not there", and the assets route
+    hands this loader a URL segment anyone can shape). The callers turn all of
+    them into one 404.
 
-    ``name`` is a plain filename: anything with a separator — ``/``, ``\\``, or
-    the ``..`` a URL-decoded path might carry — is refused outright rather than
-    resolved, so neither a manifest nor a URL can reach out of the folder this
-    route serves. The check is on the NAME, before any path is built; there is
-    no "resolve, then see where we landed" step to get wrong.
+    ``name`` is a plain filename: anything with a separator — ``/`` or ``\\`` —
+    is refused outright rather than resolved, so neither a manifest nor a URL
+    can reach out of the folder this route serves. The check is on the NAME,
+    before any path is built; there is no "resolve, then see where we landed"
+    step to get wrong. ``.`` and ``..`` need no clause of their own: their
+    suffix is ``.``, which the allowlist already refuses.
     """
     suffix = name[name.rfind(".") :].lower() if "." in name else ""
     media_type = ICON_MEDIA_TYPES.get(suffix)
-    if media_type is None or "/" in name or "\\" in name or name in {".", ".."}:
+    if media_type is None or "/" in name or "\\" in name:
         return None
     folder = apps_root() / slug
     path = (folder / subdir / name) if subdir else (folder / name)
-    if not path.is_file():
+    try:
+        if not path.is_file():
+            return None
+    except OSError:  # ENAMETOOLONG and kin — a name the filesystem cannot hold
         return None
     return path.read_bytes(), media_type
 

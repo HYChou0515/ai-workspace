@@ -352,18 +352,21 @@ def test_get_app_asset_serves_only_image_types(tmp_path, monkeypatch):
 
 
 def test_get_app_asset_route_never_sees_a_path_shaped_name(tmp_path, monkeypatch):
-    """What the ROUTER does with a traversal-shaped URL: `..` segments and an
-    encoded `/` never reach the handler (probed: the loader is not called), so
-    these are 404 at the routing layer. This is not the loader's guard — that
-    is pinned by ``test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename``
-    below, at the seam a name can actually arrive through."""
+    """What the ROUTER does with a traversal-shaped URL: an encoded `/` in the
+    name segment matches no route, so the handler is never called (probed with
+    a spy on the loader) and the answer is the router's 404. A literal `../`
+    is not exercised here because the HTTP client normalises it away before
+    the request leaves (`/apps/rca/assets/../icon.png` is sent as
+    `/apps/rca/icon.png`) — such a case would pass against any handler. This
+    is not the loader's guard — that is pinned by
+    ``test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename`` below,
+    at the seam a name can actually arrive through."""
     client = _client()
     slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
     (tmp_path / slug / "icon.png").write_bytes(_PNG_1X1)  # beside app.json
     (tmp_path / "secret.png").write_bytes(_PNG_1X1)  # beside the App
 
     assert client.get(f"/apps/{slug}/assets/hero.png").status_code == 200  # the control
-    assert client.get(f"/apps/{slug}/assets/../icon.png").status_code == 404
     assert client.get(f"/apps/{slug}/assets/..%2Ficon.png").status_code == 404
     assert client.get(f"/apps/{slug}/assets/..%2F..%2Fsecret.png").status_code == 404
 
@@ -383,13 +386,43 @@ def test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename(tmp_path, mo
     assert load_app_asset(slug, "assets", "../icon.png") is None
     assert load_app_asset(slug, "assets", "../../secret.png") is None
     assert load_app_asset(slug, "assets", "..\\icon.png") is None
-    assert load_app_asset(slug, "assets", "..") is None
+    assert load_app_asset(slug, "assets", "..") is None  # suffix "." — the allowlist refuses it
+    assert load_app_asset(slug, "assets", ".") is None
     assert load_app_asset(slug, "", "../secret.png") is None  # the icon seam, same rule
     assert load_app_asset(slug, "", "icon.png") is not None
 
 
+def test_load_app_asset_treats_a_name_the_filesystem_refuses_as_no_asset(tmp_path, monkeypatch):
+    """A name the filesystem itself cannot hold (longer than NAME_MAX, so the
+    probe raises ENAMETOOLONG instead of answering "not there") is no asset —
+    ``None``, and 404 on the route — not a 500 with a traceback. The assets
+    route is the first place a URL segment reaches this loader, so the case
+    is reachable by anyone."""
+    from workspace_app.apps.manifest import load_app_asset
+
+    client = _client()  # built before the loaders are re-pointed
+    slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
+    too_long = "a" * 300 + ".png"
+
+    assert load_app_asset(slug, "assets", "hero.png") is not None  # the control
+    assert load_app_asset(slug, "assets", too_long) is None
+    assert client.get(f"/apps/{slug}/assets/{too_long}").status_code == 404
+
+
 def test_get_app_asset_unknown_slug_404():
     assert _client().get("/apps/nope/assets/hero.png").status_code == 404
+
+
+def test_get_app_asset_serves_only_folders_that_are_apps():
+    """The route's own guard: a folder under the apps root that is NOT a
+    discovered App (``_template`` — the scaffold, which really ships
+    ``assets/example.png``) answers 404 even though the file exists. Without
+    the guard the loader would serve it, so this is the input that tells the
+    guard apart from a plain file miss (``nope`` above is 404 either way)."""
+    from workspace_app.apps.manifest import apps_root
+
+    assert (apps_root() / "_template" / "assets" / "example.png").is_file()  # the control
+    assert _client().get("/apps/_template/assets/example.png").status_code == 404
 
 
 def test_get_app_manifest_onboarding_footer_defaults_empty():

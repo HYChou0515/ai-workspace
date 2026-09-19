@@ -161,6 +161,45 @@ describe("OnboardingModal — markdown and images", () => {
     expect(screen.queryByTestId("onboarding-footer")).toBeNull();
   });
 
+  it("marks every prose block as the modal's own, in the compact variant", () => {
+    // `.md-body` carries its own colour and size, which would beat the dimmed
+    // paper colour and the 14/13px the modal sets on its wrappers. The
+    // modal's class is what `base.css` keys the context override on (see
+    // onboardingProse.test.ts for the rule itself), so every block must carry
+    // it — intro, each body, and the footer.
+    const { container } = render(
+      <OnboardingModal
+        content={{ ...CONTENT, footer: "More in the guide." }}
+        scope={{ kind: "app", slug: "rca" }}
+        onGotIt={vi.fn()}
+        onDontShowAgain={vi.fn()}
+      />,
+    );
+    const articles = [...container.querySelectorAll("article")];
+    expect(articles).toHaveLength(1 + CONTENT.points.length + 1);
+    for (const a of articles) expect(a).toHaveClass("onboarding-prose", "md-body", "md-compact");
+  });
+
+  it("renders pm's backticked sentence with the backticks as code (the one shipped string that changes)", async () => {
+    // The one pre-existing shipped string with a markdown construct in it:
+    // it must read as it did minus the backticks, with the path as `<code>`.
+    // Read from disk so the test follows the manifest.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../src/workspace_app/apps/pm/app.json"), "utf8"),
+    );
+    const ob = manifest.onboarding as Onboarding;
+    const raw = ob.points.map((p) => p.body).find((b) => b.includes("`"));
+    expect(raw).toBeDefined();
+    const { container } = render(
+      <OnboardingModal content={ob} scope={{ kind: "app", slug: "pm" }} onGotIt={vi.fn()} onDontShowAgain={vi.fn()} />,
+    );
+    expect(container.textContent).toContain(raw!.replaceAll("`", ""));
+    const code = [...container.querySelectorAll("code")].map((c) => c.textContent);
+    expect(code).toEqual([raw!.split("`")[1]]);
+  });
+
   it("keeps a platform-level absolute image path as written", () => {
     const { container } = render(
       <OnboardingModal

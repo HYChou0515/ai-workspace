@@ -123,4 +123,18 @@ describe("MarkdownBody — resolving refs without a file service", () => {
     const plain = render(<MarkdownBody text="hi" resolveUrl={(s) => s} />);
     expect(plain.container.querySelector("article")).not.toHaveClass("md-compact");
   });
+
+  it("carries a caller's class beside its own, so a context can override .md-body", () => {
+    const { container } = render(<MarkdownBody text="hi" resolveUrl={(s) => s} compact className="onboarding-prose" />);
+    expect(container.querySelector("article")).toHaveClass("onboarding-prose", "md-body", "md-compact");
+  });
+
+  it("uses resolveUrl even when a provider is also present — the caller said how ITS refs resolve", () => {
+    const { container } = render(
+      <FileServiceProvider value={investigationFileService("pm", "item1")}>
+        <MarkdownBody text="![shot](assets/a.png)" path="/notes/x.md" resolveUrl={(src) => `/resolved/${src}`} />
+      </FileServiceProvider>,
+    );
+    expect(container.querySelector("img")).toHaveAttribute("src", "/resolved/assets/a.png");
+  });
 });

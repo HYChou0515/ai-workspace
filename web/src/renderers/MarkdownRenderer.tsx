@@ -66,31 +66,37 @@ export function MarkdownRenderer({ path }: { path: string }) {
  * same prose would in a `.md` file, instead of growing a second, poorer
  * markdown pipeline beside this one. `path` is the resolution base.
  *
- * Two callers hold markdown that is NOT in a workspace: the onboarding modal
- * sits on the Launcher / AppDashboard, outside any `FileServiceProvider`. Such
- * a caller passes `resolveUrl` — how ITS refs become browser URLs — and the
- * same pipeline runs without a file service. A caller that passes neither
+ * One caller holds markdown that is NOT in a workspace: the onboarding modal,
+ * on the Launcher and the AppDashboard, outside any `FileServiceProvider`.
+ * Such a caller passes `resolveUrl` — how ITS refs become browser URLs — and
+ * the same pipeline runs without a file service; when both are present the
+ * caller's resolver wins, because it said so. A caller that passes neither
  * still needs the provider; the throw is deliberate (a silent identity
  * resolver would render broken images and say nothing). `compact` is the
- * chat-sized variant (`.md-compact`). */
+ * chat-sized variant (`.md-compact`). `className` goes on the article beside
+ * `md-body`, which is how a context overrides what `.md-body` sets — colour,
+ * size — the way `.kb-msg__text.md-body` does. */
 export function MarkdownBody({
   text,
   path,
   resolveUrl,
   compact = false,
+  className,
 }: {
   text: string;
   path?: string;
   resolveUrl?: (src: string) => string;
   compact?: boolean;
+  className?: string;
 }) {
   const svc = useOptionalFileService();
   if (!resolveUrl && !svc) {
     throw new Error("MarkdownBody needs a resolveUrl or a <FileServiceProvider>");
   }
   const resolve = resolveUrl ?? ((src: string) => svc!.fileUrl(src, path));
+  const classes = [className, "md-body", compact && "md-compact"].filter(Boolean).join(" ");
   return (
-    <article className={compact ? "md-body md-compact" : "md-body"}>
+    <article className={classes}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

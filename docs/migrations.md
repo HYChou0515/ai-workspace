@@ -688,9 +688,10 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 歡迎卡（`OnboardingModal`：Launcher 的平台層 + 每個 App 的 dashboard）的 `intro`、每個 point 的 `body`
   與新的 `footer` 現在當 **markdown**（GFM）渲染，不再是純文字；point 的 `title` 仍是純文字。內建五個 App 的
   文字掃過：只有 `pm` 一處反引號（`` `issues/N.md` ``）會變成行內程式碼，正是作者原意；沒有別的變化。
-  **部署方自己的 App**（fork 裡的 `app.json`）若 onboarding 文字含 `*` `_` `#` `[` `` ` `` `<`，畫面會變排版
-  （`rollout 前` 掃一次：`grep -n '"body"\|"intro"' apps/<slug>/app.json`；為什麼：純文字是合法 markdown，
-  但這幾個字元在 markdown 裡有意思；漏做的症狀：歡迎卡裡出現粗體／標題／連結不是作者要的）。
+  **部署方自己的 App**（fork 裡的 `app.json`）若 onboarding 文字含 `*` `_` `#` `[` `` ` `` `$`，畫面會變排版
+  （`rollout 前` 掃一次：`grep -n '"body"\|"intro"\|"footer"' apps/<slug>/app.json`；為什麼：純文字是合法
+  markdown，但這幾個字元在 markdown 裡有意思——`$` 是因為這條管線含數學（`$5 and $10` 之間會被畫成公式）；
+  `<` 不在清單裡：沒有 raw HTML，`<b>` 就照字面顯示；漏做的症狀：歡迎卡裡出現粗體／標題／連結／公式不是作者要的）。
 - `rca` 的 onboarding **版本號 1 → 2**（第一個 point 多了建立表單的截圖）：每個使用者會**再看到一次** RCA 的
   歡迎卡，按「永遠不顯示」後就不再出現——這是 #161 定義的語意（教學內容變了就重新顯示），不是 bug。
 - 新的唯讀路由 `GET /apps/{slug}/assets/{name}`：吐 App 目錄下 `assets/<name>` 的圖（副檔名白名單同 icon：

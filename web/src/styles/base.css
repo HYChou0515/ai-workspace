@@ -261,6 +261,20 @@ select {
 .md-body.md-compact p, .md-body.md-compact ul, .md-body.md-compact ol { margin: 0 0 6px; }
 .md-body.md-compact pre { font-size: 0.6875rem; padding: 8px; }
 
+/* The onboarding modal's prose (OnboardingModal → MarkdownBody). The modal
+   sets colour and size on the wrapper around each block — intro 14px, bodies
+   13px, the dimmed paper colour — and `.md-body` above would beat those with
+   its own. In this context the article takes its wrapper's. Same specificity
+   as `.md-body.md-compact`, so this MUST stay below it (later wins a tie). */
+.onboarding-prose.md-body {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+.onboarding-prose.md-body > :last-child {
+  margin-bottom: 0;
+}
+
 /* Health indicator (#51): the header dot pulses while a probe round runs. */
 @keyframes health-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

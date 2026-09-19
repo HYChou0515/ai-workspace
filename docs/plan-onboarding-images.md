@@ -15,8 +15,12 @@ grill（2026-09-19）逐題定案如下；每一條都有對應的程式碼事�
   的相對路徑解析）；它的 docstring 明講「不要在旁邊長第二條較差的 markdown 管線」。它內部呼叫
   `useFileService()`，**沒有 provider 會 throw**；而 modal 掛在 Launcher / AppDashboard，兩處都在
   `FileServiceProvider` 之外。
-- `.md-body` 樣式是**全域**的（`web/src/styles/base.css:233`），已有 `md-compact` 變體（13px 級距，跟 modal
-  現在的字級一致）——不是被 scope 住的 class，沿用不會零樣式。
+- `.md-body` 樣式是**全域**的（`web/src/styles/base.css:233`），已有 `md-compact` 變體——不是被 scope 住的
+  class，沿用不會零樣式。**但它自帶 `color: var(--text-paper)` 與 `font-size`**（compact 是 13px）：modal 的
+  intro 是 14px、內文是 13px、顏色是 `--text-paper-d`（暗一階），寫在外層 wrapper 的 inline style 上；元素自己的
+  class 規則會蓋掉從父層繼承的值，所以 wrapper 那三個屬性會**死掉**（round 1 四把鏡頭各自量到：article
+  `13px / #1A1B1F`，wrapper `14px / #5C5F66`）。修法照 `kb.css:151` 的 `.kb-msg__text.md-body`：一個情境
+  class 讓 article `inherit` 回 wrapper 的值（見下方 as-built）。
 - **App 自帶檔案給瀏覽器的先例**：`GET /apps/{slug}/icon`（`api/meta_routes.py:154`）→
   `apps/manifest.py:load_app_icon`：純檔名、任何分隔符一律拒絕（不可能跳出 App 目錄）、副檔名白名單
   `ICON_MEDIA_TYPES`（png / svg / jpg / jpeg / webp / gif）、任何不成立都是 404。`/apps/{slug}` 與 `/icon`
@@ -119,6 +123,28 @@ grill（2026-09-19）逐題定案如下；每一條都有對應的程式碼事�
 
 推（秒級 gate 過就推）→ **砍掉 push 觸發的 CI** → 四把鏡頭（符合度 / 真實性 / 缺陷 / 回歸）平行、各自
 worktree → 乾淨後對最終 sha `gh run rerun` → 綠了報。三輪預算。
+
+## As-built — review round 1（2026-09-19，四把鏡頭對 `e5f8bd5c`）
+
+四份報告合併後先列表、再一次修（一格一條會紅的測試；每條守衛拿掉時**剛好**它那條紅，其餘綠）：
+
+| # | 缺陷 | 幾把鏡頭 | 修法 | 釘子（突變 → 紅的那條） |
+|---|---|---|---|---|
+| A | `.md-body` 的 `color`/`font-size` 蓋掉 modal wrapper 的 inline 樣式（灰→黑、intro 14→13px）；`.md-compact p` 讓每個區塊尾端多 6px | 4 | `MarkdownBody` 加 `className`；modal 每個區塊傳 `onboarding-prose`；`base.css` 在 `.md-body.md-compact` **之後**加 `.onboarding-prose.md-body { color/font-size/line-height: inherit }` 與 `> :last-child { margin-bottom: 0 }`（同權重靠來源順序） | `onboardingProse.test.ts`（CSS 原文：三個 `inherit`、順序在 compact 之後、尾段 margin）；modal 的 DOM 測試（四個 article 都帶 `onboarding-prose md-body md-compact`，順便釘住 `compact`）。搬到 compact 之前 → 順序那條紅；modal 不傳 class → DOM 那條紅；拿掉 `color: inherit` / 尾段規則 → 各自那條紅 |
+| B | `onboardingAssetUrl` 硬寫 `/api/`——`web/src` 唯一沒走 `API_PREFIX` 的後端 URL；`BASE_PATH=/my-svc/rca/` 的生產 overlay 下圖會打到 ingress 外 | 1（HIGH） | `${API_PREFIX}/apps/…`（同 `AppIcon.tsx`） | `onboardingAssets.deployBase.test.ts`（`vi.mock` `API_PREFIX=/my-svc/rca/api`）；改回 `/api` → 紅 |
+| C | 超過 NAME_MAX 的檔名讓 `is_file()` 冒 `ENAMETOOLONG` → **500**（assets 路由是第一個把 URL 片段餵進 loader 的地方，任何人可構造） | 2 | `is_file()` 的 `OSError` 一律 `None`（Python 3.13 的 `is_file` 本來就這樣；255 是檔案系統常數，zip Traversable 沒有，不放在名字守衛） | `test_load_app_asset_treats_a_name_the_filesystem_refuses_as_no_asset`（loader `None` + route 404）；拿掉 `except` → 只有它紅 |
+| D | `name in {".", ".."}` 是死守衛：兩者副檔名是 `.`，白名單先擋 | 1 | 拆掉，docstring 說明由白名單擋 | loader 測試多一個 `"."`；`..`/`.` 仍 `None` |
+| E | 決策 4「有 `resolveUrl` 就用它」只釘一半：provider 與 `resolveUrl` 同時在時誰贏沒測 | 1 | 只加測試 | `MarkdownRenderer.test.tsx`：provider 內帶 `resolveUrl` → 用 `resolveUrl`；改成 provider 優先 → 紅 |
+| F | assets 路由的未知 slug 守衛沒有敏感測試（`nope` 沒守衛也 404） | 1 | 只加測試 | `test_get_app_asset_serves_only_folders_that_are_apps`：`_template/assets/example.png` 磁碟上有、不是 App → 404；拿掉守衛 → 只有它紅 |
+| G | parity 測試把 pm 的反引號句跳過了（plan 點名要「去反引號後在」） | 1 | 只加測試 | modal 測試從 `pm/app.json` 讀那句：去反引號後在 `textContent`，`<code>` 剛好一個 = `issues/N.md` |
+| H | `_template/assets/example.png` 的文字有 tofu 方塊（字型缺箭頭 glyph） | 2 | 純 ASCII 重生（640×240，8.7 KB） | 目視 |
+| I | `test_get_app_asset_route_never_sees_a_path_shaped_name` 的 `../icon.png` 那格是 httpx 客戶端先正規化（送出的是 `/apps/rca/icon.png`），對任何 handler 都會過 | 1 | 刪那格、docstring 說明；留 `..%2F` 兩格（spy 證明 handler 沒被叫） | — |
+| J | 文件：runbook 的「會變排版的字元」漏 `$`（pipeline 有 remark-math，`$5 and $10` 會畫成 KaTeX）、多列 `<`（沒 rehype-raw，`<b>` 是純文字）；`adding-an-app.md` 漏 `jpeg`；`MarkdownRenderer.tsx` docstring「Two callers」 | 2 | 改字 | — |
+
+修後真瀏覽器重量（`/a/rca`，Chromium，light 1280×900 / 390×844、dark 1280×900）：四個 article（intro + 三個
+body）的 computed `font-size` = wrapper（14 / 13 / 13 / 13 px）、`color` = 「Don't show again」按鈕的
+`--text-paper-d`（light `rgb(92,95,102)`、dark `rgb(169,173,181)`）≠ 標題色（`rgb(26,27,31)` / `rgb(236,234,227)`），
+每個 article 的最後一個子元素 `margin-bottom: 0`。
 
 ## 驗證（DoD）
 
