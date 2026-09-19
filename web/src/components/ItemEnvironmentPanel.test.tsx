@@ -16,7 +16,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 // Unmount between tests. Leaked DOM makes a later query match twice and report
 // "found multiple elements" — which reads as a product bug and is not one.
@@ -40,12 +40,17 @@ const IDLE = {
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
 
+// The panel is presentational: the modal owns the draft. An empty draft is
+// "use the default", which is what every case here opens with.
+const DRAFT = { cpu: "", memory: "" };
+const noop = () => {};
+
 describe("what is visible", () => {
   it("shows an unset size as the resolved number AND says it is the default", () => {
     // The condition the user made the price of never storing a default: an
     // empty field must not render as `0`, and must not render as a blank box
     // either — one reads as "unlimited", the other as "broken".
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
 
     const shown = screen.getByTestId("cpu-value").textContent ?? "";
     expect(shown).toContain("2");
@@ -56,6 +61,8 @@ describe("what is visible", () => {
   it("tells a stated size apart from an inherited one at a glance", () => {
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{ ...IDLE, statedCpuCores: 1 }}
         budget={BUDGET}
         canEdit
@@ -70,6 +77,8 @@ describe("what is visible", () => {
   it("shows BOTH numbers when a setting is held down, and names what held it", () => {
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{ ...IDLE, statedCpuCores: 8, effectiveCpuCores: 4, cpuBoundBy: "quota" }}
         budget={BUDGET}
         canEdit
@@ -83,7 +92,7 @@ describe("what is visible", () => {
   });
 
   it("draws no budget half at all when this deploy caps nobody", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={null} canEdit />);
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={null} canEdit />);
 
     expect(screen.queryByTestId("budget-gauge")).toBeNull();
     expect(screen.queryByTestId("cpu-input")).toBeNull();
@@ -94,6 +103,8 @@ describe("what is visible", () => {
   it("leads with THIS item, with the person's total beside it", () => {
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{ ...IDLE, running: true }}
         budget={BUDGET}
         canEdit
@@ -109,6 +120,8 @@ describe("what is clickable", () => {
   it("offers close while it runs, and locks the size behind it", () => {
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{ ...IDLE, running: true }}
         budget={BUDGET}
         canEdit
@@ -120,7 +133,7 @@ describe("what is clickable", () => {
   });
 
   it("opens the size for editing once nothing is running", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
 
     expect(screen.getByTestId("cpu-input").hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("close-environment")).toBeNull();
@@ -128,7 +141,7 @@ describe("what is clickable", () => {
 
   it("is read-only for someone who may see it but not spend the owner's budget", () => {
     render(
-      <ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit={false} />,
+      <ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit={false} />,
     );
 
     expect(screen.getByTestId("cpu-input").hasAttribute("disabled")).toBe(true);
@@ -149,6 +162,8 @@ describe("a deploy that will not honour the dial", () => {
     // claim would be inventing a distinction the backend cannot make.
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{ ...IDLE, enforcedCpuCores: null }}
         budget={BUDGET}
         canEdit
@@ -161,7 +176,7 @@ describe("a deploy that will not honour the dial", () => {
   });
 
   it("still draws the dial where the backend does apply a ceiling", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
 
     expect(screen.getByTestId("cpu-input")).toBeTruthy();
     expect(screen.queryByTestId("cpu-unenforced")).toBeNull();
@@ -180,6 +195,8 @@ describe("the memory half explains itself too", () => {
     // shipped and the screen was left behind.
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{
           ...IDLE,
           statedMemoryBytes: 8 * 1024 ** 3,
@@ -198,7 +215,7 @@ describe("the memory half explains itself too", () => {
   });
 
   it("says nothing when memory was not held down", () => {
-    render(<ItemEnvironmentPanel env={IDLE} budget={BUDGET} canEdit />);
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
 
     expect(screen.queryByTestId("memory-clamped")).toBeNull();
   });
@@ -208,6 +225,8 @@ describe("the memory half explains itself too", () => {
     // ceiling while memory is held by the other.
     render(
       <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
         env={{
           ...IDLE,
           statedMemoryBytes: 8 * 1024 ** 3,
@@ -222,3 +241,32 @@ describe("the memory half explains itself too", () => {
     expect(screen.getByTestId("memory-clamped").textContent ?? "").toMatch(/App/);
   });
 });
+
+describe("the shapes it borrows", () => {
+  it("draws the owner's totals as TWO named tiles — CPU and memory — with the right figures", () => {
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
+    const tiles = screen.getByTestId("budget-gauge");
+    expect(tiles.querySelectorAll('[role="progressbar"]')).toHaveLength(2);
+    expect(tiles.textContent).toContain("2 / 4");
+    expect(tiles.textContent).toContain("2.0 GB / 8.0 GB");
+  });
+
+  it("names what the running sandbox holds — cores AND memory — on the status row", () => {
+    render(
+      <ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={{ ...IDLE, running: true }} budget={BUDGET} canEdit />,
+    );
+    const detail = screen.getByTestId("this-item-usage").textContent ?? "";
+    expect(detail).toMatch(/2 核|2 cores/);
+    expect(detail).toContain("2.0 GB");
+  });
+
+  it("reports an edit as a draft and writes nothing itself", () => {
+    const seen: unknown[] = [];
+    render(
+      <ItemEnvironmentPanel draft={DRAFT} onDraft={(d) => seen.push(d)} env={IDLE} budget={BUDGET} canEdit />,
+    );
+    fireEvent.change(screen.getByTestId("cpu-input"), { target: { value: "3" } });
+    expect(seen).toEqual([{ cpu: "3", memory: "" }]);
+  });
+});
+

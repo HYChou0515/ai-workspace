@@ -30,7 +30,7 @@ export type SizeEdit = {
 /** Bytes in the spelling the server parses, so the panel and `config.yaml`
  *  describe the same thing in the same words. Exact powers of two only —
  *  anything else stays a byte count rather than being rounded into a lie. */
-function toSizeString(bytes: number | null): string | null {
+export function toSizeString(bytes: number | null): string | null {
   if (bytes === null) return null;
   for (const [unit, size] of [
     ["G", 1024 ** 3],
