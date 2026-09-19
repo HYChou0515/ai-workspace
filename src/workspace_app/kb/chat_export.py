@@ -38,18 +38,24 @@ def is_chat_export(filename: str) -> bool:
     return filename.lower().endswith(CHAT_EXPORT_SUFFIX)
 
 
+def safe_stem(title: str) -> str:
+    """A chat's title as a file stem — the separators a filesystem dislikes
+    folded to ``-``. Letters are KEPT whatever their script: these chats are
+    named in Chinese, and a name reduced to hyphens names nothing. A title
+    that folds away entirely (punctuation only, or an unnamed chat) is
+    ``chat`` rather than an empty stem. The one rule for every file named
+    after a chat: the export's download name and the video's default path."""
+    return re.sub(r"[^\w.-]+", "-", title, flags=re.UNICODE).strip("-") or "chat"
+
+
 def chat_export_filename(
     title: str, *, fmt: str = "json", start: int | None = None, end: int | None = None
 ) -> str:
-    """The download name for a chat's export — its title with the separators a
-    filesystem dislikes folded away, plus the suffix the upload side dispatches
-    on (``.chat.json``; the markdown twin is ``.chat.md``). Letters are KEPT
-    whatever their script: these chats are named in Chinese, and a name
-    reduced to hyphens names nothing. A title that folds away entirely
-    (punctuation only, or an unnamed chat) falls back to ``chat`` rather than
-    producing a bare ``.chat.json``. A range is named the way the person read
-    it in the dialog — 1-based and inclusive, ``(2–3)`` for ``[1, 3)``."""
-    safe = re.sub(r"[^\w.-]+", "-", title, flags=re.UNICODE).strip("-") or "chat"
+    """The download name for a chat's export — ``safe_stem`` of its title plus
+    the suffix the upload side dispatches on (``.chat.json``; the markdown
+    twin is ``.chat.md``). A range is named the way the person read it in the
+    dialog — 1-based and inclusive, ``(2–3)`` for ``[1, 3)``."""
+    safe = safe_stem(title)
     if start is not None or end is not None:
         safe += f" ({(start or 0) + 1}–{end})"
     return f"{safe}{_SUFFIX[fmt]}"

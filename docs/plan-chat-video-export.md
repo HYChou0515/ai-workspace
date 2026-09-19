@@ -198,9 +198,10 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 測試(`tests/chat_video/test_jobs.py` 16 個函式 19 個案例、`test_consumer_gate` +2、`test_worker` +1 走 `build_coordinator` 真門):27 個突變體(含對照組)各紅自己那條;jobs.py / coordinators.py / worker 100%。
 - 第一版兩個洞在寫測試時發現:`stage[0]="writing"` 在心跳已停之後才設、沒人看得到(拿掉 `writing` 這一格);取消測試分不出「被旗標停下」和「等到放棄」(假 render 記 `stopped`)。
 
-### P6 — route
-- `POST /a/{slug}/items/{item_id}/chat-video`(`read_content` + `add_content`、body `{transcript, options, output_path?}`、`parse_chat_export` 驗 transcript → 422 一句話、`check_limits`、`output_path` 在 workspace 內且不存在、`build_timeline` 算 `expected_seconds`、呼叫 `enqueue`、202)。
-- 測試:兩動詞各缺一個 → 403;壞 transcript / 上限 / 路徑逃逸或已存在 → 422;in-flight → 409;202 的 body 四個路徑;手寫的三則 transcript 也能排。
+### P6 — route ✅
+- `api/chat_video_routes.py`:`POST /a/{slug}/items/{item_id}/chat-video`(`read_content` + `add_content` 各問一次 `locator.require_access`、body `{transcript, options?, output_path?}`):transcript 走同一個 `parse_chat_export` → 422 一句話;options 用 `msgspec.convert` 進 `VideoOptions`(struct 自己的 `__post_init__` 句子)→ 422;`output_path` 走 file routes 共用的 `_workspace_path`(`..` → **400**,同 mkdir/move,不是 422——同一個守衛同一個答案)、**副檔名決定格式**(同 CLI 的 `-o demo.gif`;不在 gif/mp4/webm → 422)、不給就 `/exports/chat-video/<safe_stem(title)>-<YYYYMMDD-HHMMSS>.<fmt>`(`safe_stem` 從 `chat_export_filename` 抽出來共用,一條規則);`check_limits` 對 `settings.chat_video` → 422;路徑已有檔 → **409** `file exists at …`(file routes 對「目標已存在」的答案);`build_timeline` 算 `expected_seconds`;`enqueue`;`InFlight` → 409;寫完兩個檔各 publish 一個 `FileChanged` 讓檔案樹重抓;202 `{output_path, source_path, progress_path, expected_seconds}`。
+- 測試(`tests/api/test_chat_video_routes.py` 9 個函式 12 個案例,app 開 `run_consumers=False` 因為本機有 Chromium 會真的開始錄):手寫三則中文 transcript 排進去、三個路徑與檔案樹裡的兩個檔;副檔名決定格式;兩動詞各缺一個 → 403;壞 transcript / 壞 option / 超上限 → 422 各自的句子;`..` → 400、壞副檔名 → 422;已存在 → 409;in-flight → 409。13 個突變體(含對照組)各紅自己那條;route 與 `chat_export.py` 100%。
+- 探針踩到一個坑:同秒同大小的突變體(`202`→`200`)還原後 Python 仍信任舊 pyc,三條測試紅得像程式壞了;探針 restore 後刪該模組的 pyc。
 
 ### P7 — 前端
 - `ExportMenu`(Export ▾:文字 JSON / 文字 Markdown / 影片…)→ `ExportDialog`(格式、範圍三選一 + 從/到選單最新在上、尺寸三模式 + 結果列、六個影片選項);`api/workflows.ts` 的 `fetchChatExport` 加 format / range;新 `startChatVideo(slug, itemId, transcript, options)`——影片是 **先 fetch 切好的 JSON、再 POST**,前端用的就是對外那條 API。

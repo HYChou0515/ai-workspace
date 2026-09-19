@@ -2484,6 +2484,20 @@ def create_app(
         get_user_id=get_user_id,
     )
 
+    # plan-chat-video-export: queue a video of a transcript; the consumer is
+    # the coordinator wired above, the ceilings are `chat_video:`.
+    from .chat_video_routes import register_chat_video_routes
+
+    register_chat_video_routes(
+        api,
+        locator=locator,
+        files=files,
+        coordinator=coordinators.chat_video,
+        limits=chat_video if chat_video is not None else ChatVideoSettings(),
+        get_user_id=get_user_id,
+        turn_engine=turn_engine,
+    )
+
     register_file_routes(
         api,
         files=files,

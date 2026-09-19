@@ -114,6 +114,8 @@ def _workspace_path(raw: str) -> str:
       ``_workspace_prefix``, which keeps ``""`` meaning "whole workspace"
     * ``deploy_wui`` / ``undeploy_wui`` (``api/wui_deploy.py``) — the body
       path and the ``path`` query parameter
+    * ``queue_chat_video`` (``api/chat_video_routes.py``) — the body's
+      ``output_path`` (the two files beside it take its name)
 
     Known NOT to pass through here, deliberately or otherwise:
     ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store
