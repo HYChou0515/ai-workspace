@@ -11,7 +11,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import type { HealthApi } from "../api/health";
 import { useT } from "../lib/i18n";
-import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { type Crumb, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
@@ -59,7 +59,17 @@ function MenuLink({
   );
 }
 
-function FixedLink({ to, icon, label, pathname }: { to: string; icon: IconName; label: string; pathname: string }) {
+function FixedLink({
+  to,
+  icon,
+  label,
+  pathname,
+}: {
+  to: string;
+  icon: IconName;
+  label: string;
+  pathname: string;
+}) {
   return (
     <MenuLink to={to} active={isActive(pathname, to)}>
       <NavGlyph icon={icon} />
@@ -72,6 +82,10 @@ function Switcher() {
   const apps = useApps();
   const { pathname } = useLocation();
   const t = useT();
+  // Narrow drops the word (see Brand): at 390 「切換」 wrapped onto two lines
+  // (plan-skill-hub-ui-polish D14). The icon and the tooltip still say what
+  // this is; the accessible name is the aria-label either way.
+  const isNarrow = useIsNarrow();
   // Which destinations this viewer may open — including the #608 Groups gating
   // — is resolved by the shared hook, so the rail's menu cannot disagree.
   const destinations = usePlatformDestinations();
@@ -99,7 +113,11 @@ function Switcher() {
             cursor: "pointer",
           }}
         >
-          <span>{t("nav.switch")}</span>
+          {isNarrow ? (
+            <Icon name="layers" size={14} />
+          ) : (
+            <span>{t("nav.switch")}</span>
+          )}
           <Icon name="chev_d" size={14} />
         </button>
       )}
@@ -107,12 +125,18 @@ function Switcher() {
       {(close) => (
         <div onClick={close} style={{ padding: "6px 0" }}>
           {apps.map((app) => (
-            <MenuLink key={app.slug} to={`/a/${app.slug}`} active={isActive(pathname, `/a/${app.slug}`)}>
+            <MenuLink
+              key={app.slug}
+              to={`/a/${app.slug}`}
+              active={isActive(pathname, `/a/${app.slug}`)}
+            >
               <NavGlyph app={app} />
               {app.title}
             </MenuLink>
           ))}
-          <div style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }} />
+          <div
+            style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }}
+          />
           {/* One list, shared with the chat rail's menu (they had drifted). Help
               is dropped here only because this bar already carries a persistent
               "?" button (#230); listing it twice would be a duplicate. */}
@@ -135,7 +159,23 @@ function Switcher() {
 
 function Breadcrumbs() {
   const trail = useBreadcrumbTrail();
+  const t = useT();
+  // On narrow, everything before the last crumb folds into one "…" button
+  // that expands it (MUI Breadcrumbs' `maxItems`, plan D14 — with nothing
+  // kept before the fold: the first crumb is 回首頁, and the Brand's home icon
+  // already sits beside it). Every crumb used to shrink alike, so at 390 the
+  // trail read 「回…」「Skill h…」 — the current page unreadable; now only the
+  // last crumb competes for the room (measured at 390: an entry page's leaf
+  // went from `defaul…` to whole). Expanded state resets with the trail: a
+  // new page starts folded again.
+  const isNarrow = useIsNarrow();
+  const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  const trailKey = JSON.stringify(trail);
+  const folded = isNarrow && trail.length > 2 && expandedFor !== trailKey;
   if (trail.length === 0) return null;
+  const shown: (Crumb | "…")[] = folded
+    ? ["…", trail[trail.length - 1]]
+    : trail;
   return (
     <nav
       aria-label="Breadcrumb"
@@ -152,11 +192,36 @@ function Breadcrumbs() {
         color: "var(--text-paper-d)",
       }}
     >
-      {trail.map((crumb, i) => {
-        const last = i === trail.length - 1;
+      {shown.map((crumb, i) => {
+        const last = i === shown.length - 1;
+        if (crumb === "…") {
+          return (
+            <Fragment key="…">
+              <button
+                type="button"
+                aria-label={t("nav.crumbs.expand")}
+                title={t("nav.crumbs.expand")}
+                onClick={() => setExpandedFor(trailKey)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  padding: "0 2px",
+                  color: "var(--text-paper-d)",
+                  font: "inherit",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                …
+              </button>
+            </Fragment>
+          );
+        }
         return (
           <Fragment key={`${crumb.label}-${i}`}>
-            {i > 0 && <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />}
+            {i > 0 && (
+              <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
+            )}
             {crumb.to && !last ? (
               <Link
                 to={crumb.to}
@@ -246,7 +311,9 @@ function ReviewLink() {
   return (
     <Link
       to="/review"
-      title={count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")}
+      title={
+        count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")
+      }
       style={{
         position: "relative",
         display: "inline-flex",

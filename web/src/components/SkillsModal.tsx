@@ -648,9 +648,9 @@ function SkillRow({
   );
 }
 
-/** Below this footer width the import hint is not drawn (D13). At the
- * panel's 640 the footer is ~600; at a 390 phone it is ~320, where the three
- * buttons leave the hint a column a few characters wide. */
+/** Below this footer width the import hint is not drawn (D13). Measured:
+ * at the panel's 640 the footer is 602 px; at a 390 phone it is 304, where
+ * the three buttons leave the hint a column a few characters wide. */
 const FOOTER_HINT_MIN_WIDTH = 480;
 
 /** Whether the copy's skill hub original is known to be gone (plan P5's two

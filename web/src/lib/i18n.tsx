@@ -706,6 +706,8 @@ export const messages = {
     "zh-TW": "切換 App、知識庫或診斷",
     en: "Switch app, knowledge base, or diagnostics",
   },
+  // The folded breadcrumb's "…" (plan-skill-hub-ui-polish D14).
+  "nav.crumbs.expand": { "zh-TW": "顯示完整路徑", en: "Show the full path" },
   "nav.home": { "zh-TW": "回首頁", en: "Home" },
 
   // Topic Hub collection-set picker entry (CollectionsButton) — frame it as the

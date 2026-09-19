@@ -52,7 +52,10 @@ export function SkillHubEntryPage({
   useBreadcrumbs([
     { label: t("nav.home"), to: "/" },
     { label: "Skill hub", to: "/skill-hub" },
-    { label: data ? `${data.owner}/${data.name}` : "…" },
+    // The name alone: the h1 right below says `owner/name`, and at a phone
+    // width `owner/name` was cut to `defaul…` even with the trail folded
+    // (plan-skill-hub-ui-polish D14; measured at 390).
+    { label: data ? data.name : "…" },
   ]);
 
   if (isError) {

@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -32,8 +38,20 @@ const okHealth: HealthApi = {
 
 vi.mock("../hooks/useResources", () => ({
   useApps: () => [
-    { slug: "rca", title: "Root Cause Analysis", description: "x", icon: "flame", color: "#F0502E" },
-    { slug: "yield", title: "Yield Tracking", description: "y", icon: "bug", color: "#2D6CC9" },
+    {
+      slug: "rca",
+      title: "Root Cause Analysis",
+      description: "x",
+      icon: "flame",
+      color: "#F0502E",
+    },
+    {
+      slug: "yield",
+      title: "Yield Tracking",
+      description: "y",
+      icon: "bug",
+      color: "#2D6CC9",
+    },
   ],
 }));
 
@@ -42,7 +60,11 @@ function Pub({ crumbs }: { crumbs: Crumb[] }) {
   return null;
 }
 
-function renderNav(path: string, crumbs: Crumb[] = [], healthClient?: HealthApi) {
+function renderNav(
+  path: string,
+  crumbs: Crumb[] = [],
+  healthClient?: HealthApi,
+) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <QueryWrap>
@@ -58,12 +80,18 @@ function renderNav(path: string, crumbs: Crumb[] = [], healthClient?: HealthApi)
 describe("GlobalNav", () => {
   it("brand links home (/)", () => {
     renderNav("/a/rca");
-    expect(screen.getByRole("link", { name: /Workspace/ })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: /Workspace/ })).toHaveAttribute(
+      "href",
+      "/",
+    );
   });
 
   it("has a persistent Help link to /help (#230)", () => {
     renderNav("/a/rca");
-    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
+    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute(
+      "href",
+      "/help",
+    );
   });
 
   it("brand cues it returns home — a tooltip — while still linking / (#172)", () => {
@@ -86,9 +114,14 @@ describe("GlobalNav", () => {
       { label: "Bearing noise #1432" },
     ]);
     const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
-    expect(within(nav).getByRole("link", { name: "RCA" })).toHaveAttribute("href", "/a/rca");
+    expect(within(nav).getByRole("link", { name: "RCA" })).toHaveAttribute(
+      "href",
+      "/a/rca",
+    );
     // The current page is not a link — it's the leaf, shown as text.
-    expect(within(nav).queryByRole("link", { name: "Bearing noise #1432" })).toBeNull();
+    expect(
+      within(nav).queryByRole("link", { name: "Bearing noise #1432" }),
+    ).toBeNull();
     expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
   });
 
@@ -96,22 +129,18 @@ describe("GlobalNav", () => {
     renderNav("/a/rca");
     fireEvent.click(screen.getByRole("button", { name: /切換/ }));
     const menu = screen.getByRole("dialog");
-    expect(within(menu).getByRole("link", { name: /Root Cause Analysis/ })).toHaveAttribute(
-      "href",
-      "/a/rca",
-    );
-    expect(within(menu).getByRole("link", { name: /Yield Tracking/ })).toHaveAttribute(
-      "href",
-      "/a/yield",
-    );
-    expect(within(menu).getByRole("link", { name: /Knowledge base/i })).toHaveAttribute(
-      "href",
-      "/kb",
-    );
-    expect(within(menu).getByRole("link", { name: /Diagnostics/i })).toHaveAttribute(
-      "href",
-      "/diagnostics",
-    );
+    expect(
+      within(menu).getByRole("link", { name: /Root Cause Analysis/ }),
+    ).toHaveAttribute("href", "/a/rca");
+    expect(
+      within(menu).getByRole("link", { name: /Yield Tracking/ }),
+    ).toHaveAttribute("href", "/a/yield");
+    expect(
+      within(menu).getByRole("link", { name: /Knowledge base/i }),
+    ).toHaveAttribute("href", "/kb");
+    expect(
+      within(menu).getByRole("link", { name: /Diagnostics/i }),
+    ).toHaveAttribute("href", "/diagnostics");
   });
 
   it("switcher draws every row's glyph — Apps and destinations alike", () => {
@@ -144,18 +173,19 @@ describe("GlobalNav", () => {
     renderNav("/a/yield/42");
     fireEvent.click(screen.getByRole("button", { name: /切換/ }));
     const menu = screen.getByRole("dialog");
-    expect(within(menu).getByRole("link", { name: /Yield Tracking/ })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    expect(within(menu).getByRole("link", { name: /Root Cause Analysis/ })).not.toHaveAttribute(
-      "aria-current",
-    );
+    expect(
+      within(menu).getByRole("link", { name: /Yield Tracking/ }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      within(menu).getByRole("link", { name: /Root Cause Analysis/ }),
+    ).not.toHaveAttribute("aria-current");
   });
 
   it("shows the AI-health dot linking to /diagnostics", async () => {
     renderNav("/a/rca", [], okHealth);
-    const dot = await screen.findByRole("link", { name: /AI features are working/i });
+    const dot = await screen.findByRole("link", {
+      name: /AI features are working/i,
+    });
     expect(dot).toHaveAttribute("href", "/diagnostics");
   });
 
@@ -201,9 +231,18 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
     expect(screen.queryByText("審核")).not.toBeInTheDocument();
     // …but the links, and their accessible names, are not.
-    expect(screen.getByRole("link", { name: "回首頁" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "審核" })).toHaveAttribute("href", "/review");
-    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
+    expect(screen.getByRole("link", { name: "回首頁" })).toHaveAttribute(
+      "href",
+      "/",
+    );
+    expect(screen.getByRole("link", { name: "審核" })).toHaveAttribute(
+      "href",
+      "/review",
+    );
+    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute(
+      "href",
+      "/help",
+    );
   });
 
   it("does not use aria-label on Review — that would hide the pending count", () => {
@@ -214,13 +253,91 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     // have been added for.
     stubViewport(true);
     renderNav("/a/rca");
-    expect(screen.getByRole("link", { name: "審核" })).not.toHaveAttribute("aria-label");
+    expect(screen.getByRole("link", { name: "審核" })).not.toHaveAttribute(
+      "aria-label",
+    );
+  });
+
+  it("drops the switcher's word on narrow too — icon + chevron, name kept (plan-skill-hub-ui-polish D14)", () => {
+    // Seen in the demo at 390: 「切換」 wrapped onto two lines. Same rule as
+    // Brand and Review: narrow drops the word, not the control.
+    stubViewport(true);
+    renderNav("/a/rca");
+    const btn = screen.getByRole("button", { name: "切換 App、知識庫或診斷" });
+    expect(btn).not.toHaveTextContent("切換");
+    expect(btn.querySelector("[data-icon]")).not.toBeNull();
+  });
+
+  it("collapses the crumbs before the last into one … on narrow, and expands them on request (D14)", () => {
+    // MUI Breadcrumbs' `maxItems`: first › … › last, the ellipsis a button
+    // that reveals the middle. Every crumb shrank alike before, so at 390
+    // the trail read 「回…」「Skill h…」 — the current page unreadable.
+    stubViewport(true);
+    renderNav("/a/rca/123", [
+      { label: "Home", to: "/" },
+      { label: "RCA", to: "/a/rca" },
+      { label: "Docs", to: "/a/rca/docs" },
+      { label: "Bearing noise #1432" },
+    ]);
+    const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
+    // Nothing kept before the fold — 回首頁 is the Brand's home icon, right
+    // beside the trail — so the current page gets the trail's whole width.
+    expect(within(nav).queryAllByRole("link")).toEqual([]);
+
+    fireEvent.click(within(nav).getByRole("button", { name: "顯示完整路徑" }));
+
+    expect(within(nav).getByRole("link", { name: "Home" })).toHaveAttribute(
+      "href",
+      "/",
+    );
+    expect(within(nav).getByRole("link", { name: "RCA" })).toHaveAttribute(
+      "href",
+      "/a/rca",
+    );
+    expect(within(nav).getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "/a/rca/docs",
+    );
+    expect(
+      within(nav).queryByRole("button", { name: "顯示完整路徑" }),
+    ).toBeNull();
+  });
+
+  it("leaves a two-crumb trail alone on narrow — there is nothing between first and last to fold", () => {
+    stubViewport(true);
+    renderNav("/skill-hub", [
+      { label: "Home", to: "/" },
+      { label: "Skill hub" },
+    ]);
+    const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(within(nav).getByRole("link", { name: "Home" })).toBeInTheDocument();
+    expect(within(nav).getByText("Skill hub")).toBeInTheDocument();
+    expect(
+      within(nav).queryByRole("button", { name: "顯示完整路徑" }),
+    ).toBeNull();
   });
 
   it("keeps the words on a wide viewport", () => {
     stubViewport(false);
-    renderNav("/a/rca");
+    renderNav("/a/rca", [
+      { label: "Home", to: "/" },
+      { label: "RCA", to: "/a/rca" },
+      { label: "Docs", to: "/a/rca/docs" },
+      { label: "Bearing noise #1432" },
+    ]);
     expect(screen.getByText("Workspace")).toBeInTheDocument();
     expect(screen.getByText("審核")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /切換/ })).toHaveTextContent(
+      "切換",
+    );
+    // …and the whole trail, nothing folded.
+    const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(
+      within(nav)
+        .getAllByRole("link")
+        .map((a) => a.textContent),
+    ).toEqual(["Home", "RCA", "Docs"]);
+    expect(within(nav).queryByRole("button")).toBeNull();
   });
 });
