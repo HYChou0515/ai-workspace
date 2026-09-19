@@ -61,6 +61,21 @@ class AgentConfig(Struct):
     derived value set by ``AppCatalog.resolve``; empty for stored/fallback
     configs that never went through the ceiling resolve."""
 
+    tool_ceiling: list[str] = field(default_factory=list)
+    """plan-tools-picker-groups part 2: the App's ``tools[]`` as written, so the
+    runner can bring it to COMMAND granularity once it holds the package list
+    (``tooling.catalog.command_grants``) — ``AppCatalog.resolve`` runs before
+    the turn has resolved its third-party packages and cannot. Empty for every
+    config that did not come from ``resolve`` (wiki, card drafter, the catalog
+    build, bare tests): then ``allowed_tools`` is the answer as before."""
+
+    tool_prefs: dict[str, bool] = field(default_factory=dict)
+    """The item's tri-state override, verbatim, carried for the same reason: a
+    ``pkg:cmd`` key can only be applied where the package's commands are
+    known. Entry-level keys were already folded into ``allowed_tools`` /
+    ``disabled_tools`` by ``resolve``; ``command_grants`` re-reads them only as
+    the fallback for a command of a whole-package grant."""
+
     env: dict[str, str] = field(default_factory=dict)
     sandbox_image: str = "workspace-app/sandbox:py312-ds"
     """Default sandbox image built from `docker/Dockerfile.workspace`

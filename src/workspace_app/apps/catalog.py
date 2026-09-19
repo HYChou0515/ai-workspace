@@ -312,6 +312,8 @@ class AppCatalog:
             suggestions=suggestions,
             allowed_tools=tools,
             disabled_tools=disabled_tools,
+            tool_ceiling=list(manifest.agent.tools),
+            tool_prefs=dict(tool_prefs or {}),
             env=dict(preset.env),
             sandbox_image=preset.sandbox_image,
             idle_timeout_seconds=preset.idle_timeout_seconds,

@@ -1543,3 +1543,65 @@ def test_tool_output_text_stringifies_a_part_it_does_not_know():
     # foreign part beside it is stringified rather than dropped.
     img = ToolOutputImage(image_url="data:image/png;base64,QUJD")
     assert _tool_output_text([ToolOutputText(text="a"), 42, img]).split("\n")[:2] == ["a", "42"]
+
+
+def _rca_pkg():
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    return PackageInfo(
+        name="rca-tools",
+        commands=tuple(
+            CommandInfo(name=c, description=f"{c}.", params_json_schema={})
+            for c in ("spc", "pareto", "wafer-history")
+        ),
+        install_dir="/.tools/rca-tools",
+    )
+
+
+def test_a_command_pin_narrows_a_whole_package_grant_at_the_real_entry_point():
+    """plan-tools-picker-groups part 2: the app granted the whole package, the
+    item pinned one command Off. The agent gets the other two, and the one it
+    lost is advertised as available on request (#480) — by command, not by
+    package. `_agent_for` is where the runner has the package list, so this is
+    where the rule bites."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(
+        name="ws",
+        allowed_tools=["rca-tools"],
+        tool_ceiling=["rca-tools"],
+        tool_prefs={"rca-tools:pareto": False},
+    )
+    agent = _agent_for(cfg, packages=[_rca_pkg()])
+    names = {t.name for t in agent.tools}
+    assert {"spc", "wafer-history"} <= names
+    assert "pareto" not in names
+    assert isinstance(agent.instructions, str)
+    assert "pareto" in agent.instructions  # advertised as off, so the model can ask for it
+
+
+def test_a_legacy_whole_package_pin_still_governs_every_command_at_the_runner():
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(
+        name="ws",
+        allowed_tools=[],  # entry-level resolution already dropped the package
+        disabled_tools=["rca-tools"],
+        tool_ceiling=["rca-tools"],
+        tool_prefs={"rca-tools": False, "rca-tools:spc": True},
+    )
+    agent = _agent_for(cfg, packages=[_rca_pkg()])
+    names = {t.name for t in agent.tools}
+    assert "spc" in names and "pareto" not in names and "wafer-history" not in names
+
+
+def test_a_config_without_a_ceiling_keeps_the_old_entry_rule():
+    """The five other AgentConfig constructors (wiki, card drafter, catalog
+    build…) set no ceiling: their allowed_tools ARE the answer, byte for byte."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(
+        name="ws", allowed_tools=["rca-tools:spc"], tool_prefs={"rca-tools:spc": False}
+    )
+    agent = _agent_for(cfg, packages=[_rca_pkg()])
+    assert "spc" in {t.name for t in agent.tools}  # the pin is ignored: no ceiling, no expansion
