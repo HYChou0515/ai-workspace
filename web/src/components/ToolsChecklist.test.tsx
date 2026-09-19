@@ -187,14 +187,14 @@ const GROUPED: ItemToolState[] = [
 ];
 
 describe("ToolsChecklist folds rows by group", () => {
-  it("draws one fold per multi-row group, builtin first and literally named builtin", () => {
+  it("draws one fold per multi-row group, the core fold first, named for what it is", () => {
     render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
     const headers = screen.getAllByTestId(/^tool-group-header-/);
     expect(headers.map((h) => h.getAttribute("data-testid"))).toEqual([
       "tool-group-header-builtin",
       "tool-group-header-rca-tools",
     ]);
-    expect(screen.getByTestId("tool-group-header-builtin")).toHaveTextContent("builtin");
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveTextContent("核心工具");
     expect(screen.getByTestId("tool-group-header-rca-tools")).toHaveTextContent("Rca Tools");
   });
 
@@ -252,7 +252,7 @@ describe("ToolsChecklist folds rows by group", () => {
     expect(screen.queryByTestId("tool-row-rca-tools:pareto")).not.toBeInTheDocument();
 
     // the fold's own name matches too, and then every row of it shows
-    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "builtin" } });
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "核心" } });
     expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument();
     expect(screen.getByTestId("tool-row-write_file")).toBeInTheDocument();
     expect(screen.queryByTestId("tool-group-header-rca-tools")).not.toBeInTheDocument();

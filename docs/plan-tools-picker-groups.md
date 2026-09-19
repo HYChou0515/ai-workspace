@@ -28,7 +28,7 @@ user：「工具那個 modal 可以 by tool 折疊，並且也提供 預設／�
 | 2 | 預設展開／收合 | 打開時**全部收合**；「狀態混合的組」與「搜尋有命中的組」自動展開。收合狀態每次打開重來，不記 | user：「可以」。收合時標題列已有三態和項數，看得出整組狀態；混合才需要看進去 |
 | 3 | 組的宇宙 | **只看天花板內的列**（伺服端回來的那幾列）。app 只授一個套件 3 個指令，組裡就 3 列、`3 項`，3 列都開就是開啟；組的三態也只套到這 3 列。**不**去拿套件完整指令清單來比 | user 擔心「partial tool 永遠打開／永遠混合」；picker 的粒度本來就是 `tools[]` 條目，天花板外的指令不會出現在這裡 |
 | 4 | 分組依據 | 伺服端每列加 **`group: str`**（`ToolMeta.group` → `ItemToolState.group`）：內建 → `"builtin"`；`pkg:cmd` → 套件 id；整套件一列 → 條目自己；認不得的條目 → 條目自己。用**原始 id**不用人話標籤，fold key 不隨語系變 | 前端分不出第一方整套件列和內建（見上）；沒有第二種做法 |
-| 5 | 組的名稱 | `builtin` 組**就叫 `builtin`**（照 user 的字，不翻譯）；套件組用該套件的人話標籤（指令列的 `package`，或整套件列自己的 `label`），tooltip 帶原始 id | user 指定；其餘沿用列已在用的標籤 |
+| 5 | 組的名稱 | 內建那組顯示 **「核心工具」／`Core tools`**（fold id 仍是 `builtin`，不顯示）；套件組用該套件的人話標籤（指令列的 `package`，或整套件列自己的 `label`），tooltip 帶原始 id | 第一版照 user 的字叫 `builtin`；P3 真瀏覽器截圖給 user 看後他改口——組名 `builtin` 底下每列還各掛一個 #724 的來源標籤「內建／Built-in」（第一方套件列也是），同一個字疊兩層意思，「看起來很怪」。改成講這組是什麼（agent 本體的函式，非 sandbox 裡的套件）的字，和來源標籤不撞 |
 | 6 | 單列的組 | **不折疊**：標題列就是那一列（沒有 chevron），三態就是那列的 | 否則同一個三態顯示兩次 |
 | 7 | 順序 | `builtin` 組最前，其餘套件照 `tools[]` 第一次出現的順序；組內列照 `tools[]` 順序 | 內建最多、通常最前；其餘不重排 |
 | 8 | 標題列內容 | 展開鈕（名稱 + `N 項`，`aria-expanded`）+ 三態（`role=group`，混合時三個 `aria-pressed=false` + 「混合」chip）。收合時**不**再列出效果摘要 | 三態已經是摘要；多一段字是第二個真相 |
@@ -45,7 +45,8 @@ user：「工具那個 modal 可以 by tool 折疊，並且也提供 預設／�
 | P2 | 後端 `group`：`ToolMeta.group`（預設 `BUILTIN_GROUP="builtin"`）、`picker_units` 四種條目各自填、`ItemToolState.group`、route 帶出；`web/src/api/types.ts` 加 `group: string`；`docs/contract.md` 那列的形狀補 `group` | 紅：`test_catalog` 一條斷言五種條目的 `group`（`exec`→builtin、`rca-tools:spc`→`rca-tools`、`rca-tools`→`rca-tools`、`data-fetch:grab`→`data-fetch`、`mystery`→`mystery`）；`test_tools_routes` 一條斷言 rca 的 `exec` 與 `rca-tools` 在線路上 `package`/`external` 相同（前提的對照組）而 `group` 不同 |
 | P3 | 前端 `ToolsChecklist`：`groupsOf(tools)`（純函式：分組、順序、導出狀態）；折疊標題列 + 組三態 + 混合 chip；預設收合／混合與搜尋命中展開；單列組不折疊；搜尋比對組名；i18n 鍵（`tools.group.builtin`＝`builtin`、`tools.group.count`、`tools.group.mixed`、`tools.group.aria`、`tools.group.toggle`） | 紅（vitest，每條先對現在的平列表紅）：(a) 三個 group 畫三個標題、`builtin` 在最前、標題文字就是 `builtin`；(b) 預設收合：組內列不在 DOM，按標題才出現；(c) 混合的組自動展開、三個鈕都 `aria-pressed=false`、有「混合」；(d) 按組的「開啟」→ `onChange` 收到組內每個 key 都 `true`，按「預設」→ 那些 key 都不在；(e) 單列組沒有展開鈕、就是那列；(f) 搜尋只命中某組的一列 → 其他組不畫、該組展開只畫那列；(g) **部分天花板**：某套件只有 2 列、兩列都 `on` → 標題顯示開啟（決定 3 的釘子）；(h) `ToolsPickerModal.test` 既有的存檔流程全綠（列在折疊裡照樣能點到——測試先展開） |
 | P4 | 文件：`docs/subsystems/frontend.md` 那列（Tools 按鈕 → … 每列三態）補「按套件折疊、builtin 一組、組三態導出」；`docs/contract.md` `ItemToolState` 形狀補 `group` | 每句對著碼；`mkdocs build --strict` 綠 |
-| P5 | 推、draft PR、三把鏡頭 review（換了列表的機制：一輪；有發現就再一輪）、review 乾淨後對最終 sha 跑 CI | — |
+| P5 | 組名改「核心工具」／`Core tools`（決定 5 的修訂；只動 i18n 值、兩條測試、文件） | 既有 (a) 改斷言標題文字、(f) 改用「核心」搜尋；其餘全綠 |
+| P6 | 推、draft PR、三把鏡頭 review（換了列表的機制：一輪；有發現就再一輪）、review 乾淨後對最終 sha 跑 CI | — |
 
 `docs/migrations.md`：**不加條目**——API 多一個回應欄位、前端消費，運營方不用做事。
 
@@ -60,12 +61,14 @@ user：「工具那個 modal 可以 by tool 折疊，並且也提供 預設／�
 - **P3**（`6e74831f`）：`web/src/lib/toolGroups.ts`（純函式：`groupsOf` 分組與順序、`groupState` 導出、
   `withGroupState` 整組改寫、`prefOf`）；`ToolsChecklist` 拆成 fold 標題列 + `ToolRow` + `TriState`；
   `manual` 只記使用者親手開關過的組，其餘走「混合或搜尋命中就開」；單列組直接畫列。i18n 五個鍵
-  （`tools.group.builtin` 兩語系都是 `builtin`）。八條先紅：六條對平列表紅、兩條（單列組、全部回到預設）是釘子。
+  （`tools.group.builtin` 第一版兩語系都是 `builtin`，P5 改掉）。八條先紅：六條對平列表紅、兩條（單列組、全部回到預設）是釘子。
   真瀏覽器（起真後端 8241、rca item：`builtin` 23 列 + 五個單列套件）1280 與 390 各按過一輪：收合／展開／組
   「On」23 列全變／`Exec` 單獨 Off 後標題「混合」三個不亮，`scrollWidth ≤ clientWidth`；390 第一版把
   組名截成「bui…」——次要的項數與混合標記沒讓位，改成和列的 provenance chip 同一個「先縮」寫法後組名完整。
 - **P4**：`docs/subsystems/frontend.md` 那列、本紀錄。`docs/migrations.md` 不加（運營方不用做事）。
+- **P5**：user 看了 P3 的截圖：「builtin 改成其他字好了，下面也都是 builtin 看起來很怪」——組名和 #724 的來源標籤撞字。
+  改成「核心工具」／`Core tools`（i18n 值、兩條測試、`frontend.md`、決定 5）。fold id、伺服端、`data-testid` 都不動。
 
 **順手看到、沒動的**：第一方整套件列（`data-fetch`、`rca-tools`…）右邊的來源標籤是「內建／Built-in」
-（#724 的「不是第三方就是平台自己的」），和上面那組叫 `builtin` 的內建函式並排時字面上撞名；
-要分就得改 #724 的來源語彙（例如「平台套件」），不在這次範圍。
+（#724 的「不是第三方就是平台自己的」）——P5 把組名改掉之後不再和組名撞，但「核心工具」組裡每一列也各掛一個
+「內建」標籤，資訊重複；要清掉得改 #724 的來源語彙或對核心列省略那個標籤，不在這次範圍。
