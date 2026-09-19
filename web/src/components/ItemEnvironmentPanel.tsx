@@ -172,6 +172,7 @@ export function ItemEnvironmentPanel({
           )}
           {!enforced ? null : (
           <input
+            className="input"
             data-testid="cpu-input"
             type="number"
             min={0}
@@ -215,6 +216,7 @@ export function ItemEnvironmentPanel({
           )}
           {env.enforcedMemoryBytes === null ? null : (
             <input
+              className="input"
               data-testid="memory-input"
               value={memoryDraft}
               placeholder="512M"

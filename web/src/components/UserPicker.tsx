@@ -49,7 +49,7 @@ export function UserPicker({
     <div style={{ minWidth: 240 }}>
       <input
         type="search"
-        className="kb-input"
+        className="input"
         aria-labelledby={labelledBy}
         placeholder={placeholder}
         value={q}
