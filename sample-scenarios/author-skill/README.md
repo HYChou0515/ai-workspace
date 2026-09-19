@@ -14,11 +14,12 @@ this skill's guidance is `references/writing-for-agents.md`, so to tune that
 half edit it in place under `sample-skills/author-skill/references/`.
 
 What these measure is whether the model follows the guide's SHAPE, not whether
-`save_skill` works (its own tests do that): that it opens a file before it
-drafts, and that it does not save a skill the user has not seen. Scoring is on
-tool names alone, so each run's `_transcript.json` records which path every
-`read_file` asked for: in `reads-the-rules-before-drafting` the writing rules
-are the only file staged; `no-save-without-review` also stages `yield.csv`,
-the worked example step 2 tells the agent to mine.
+`save_skill` works (its own tests do that): that it does not save a skill the
+user has not seen, and that before drafting it either asks (a run ends at
+`ask_user`, as a real turn does) or opens a file. Scoring is on tool names
+alone, so each run's `_transcript.json` records which path every `read_file`
+asked for: in `reads-the-rules-before-drafting` the writing rules are the only
+file staged; `no-save-without-review` also stages `yield.csv`, the worked
+example step 2 tells the agent to mine.
 `--control` reruns each scenario with no skill loaded, so a scenario the bare
 model also passes is reported as measuring nothing.

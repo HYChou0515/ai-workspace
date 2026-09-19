@@ -170,8 +170,9 @@ def test_every_tool_a_shipped_scenario_scores_on_is_one_the_harness_offers():
     named: dict[str, set[str]] = {}
     for folder in sorted(p for p in root.iterdir() if p.is_dir()):
         for sc in load_scenarios(folder):
-            for tool in [*sc.expect.must_call, *sc.expect.must_not_call]:
-                named.setdefault(tool, set()).add(f"{folder.name}/{sc.name}")
+            for entry in [*sc.expect.must_call, *sc.expect.must_not_call]:
+                for tool in [entry] if isinstance(entry, str) else entry:
+                    named.setdefault(tool, set()).add(f"{folder.name}/{sc.name}")
     missing = {tool: sorted(where) for tool, where in named.items() if tool not in offered}
     assert missing == {}, f"scenarios score on tools the harness never offers: {missing}"
 

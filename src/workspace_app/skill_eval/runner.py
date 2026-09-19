@@ -17,6 +17,7 @@ from pathlib import Path
 
 import msgspec
 
+from ..api.litellm_runner import ASK_USER_TOOL
 from ..apps import skills as skills_mod
 from .scenario import Scenario
 from .tools import Event, schemas
@@ -57,7 +58,7 @@ class Transcript(msgspec.Struct, frozen=True):
     events: list[Event]
     answer: str
     steps: int
-    #: "answered" | "step-limit"
+    #: "answered" | "asked-user" | "step-limit"
     ended: str
 
 
@@ -119,6 +120,15 @@ def run_scenario(
             # The model must see its own mistakes; swallowing them would score
             # the harness instead of the guidance.
             output = f"tool raised: {type(e).__name__}: {e}"
+        if head.name == ASK_USER_TOOL:
+            # The production runner stops here STRUCTURALLY
+            # (`api/litellm_runner.py::ask_user_stop_behaviour`): the answer
+            # arrives in the next turn, and a model let run on answers a
+            # question nobody answered. Letting it continue here scored a
+            # save a real turn could never have reached. The answer is what
+            # the user saw — the reply's text and the question itself.
+            asked = "\n".join([turn.content, *(e.detail for e in events if e.kind == "ask_user")])
+            return Transcript(calls, events, asked.strip(), step + 1, "asked-user")
         messages.append(
             {"role": "tool", "tool_call_id": head.id, "name": head.name, "content": output}
         )

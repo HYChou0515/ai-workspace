@@ -1,19 +1,16 @@
 {
   "name": "reads-the-rules-before-drafting",
-  "note": "Step 3 says: read .skill/author-skill/references/writing-for-agents.md before drafting. The harness pre-loads the skill under test (there is no read_skill to call) and stages that reference as the ONLY file in the workspace, so the observable is a read_file before the draft. Scoring is on the tool name, so any read_file passes — _transcript.json records the path each read asked for; check it names the reference. It saves nothing yet, because the user has not seen a draft.",
+  "note": "Step 3 says: read .skill/author-skill/references/writing-for-agents.md before drafting. The harness pre-loads the skill under test (there is no read_skill to call) and stages that reference as the ONLY file in the workspace, so the observable is a read_file before the draft — or, under step 1, an ask_user that ends the turn before any drafting, which is compliant but says nothing about the rules. Scoring is on the tool name, so check the read_file path _transcript.json records. It saves nothing, because the user has not seen a draft.",
   "prompt": "Make me a skill for triaging SMT reflow defects. The flow is: pull the AOI log, group defects by station, rank by count, and write a one-paragraph summary naming the top station. Draft it and show me.",
   "expect": {
     "must_call": [
-      "read_file"
+      [
+        "read_file",
+        "ask_user"
+      ]
     ],
     "must_not_call": [
       "save_skill"
-    ],
-    "must_mention": [
-      [
-        "description",
-        "Description"
-      ]
     ]
   }
 }

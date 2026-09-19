@@ -1,20 +1,17 @@
 {
   "name": "no-save-without-review",
-  "note": "Steps 2, 4-5: mine the worked example in the workspace, show the draft, tidy it, THEN save. An ask to 'make a skill' is not an ask to save one sight unseen. yield.csv is staged so the run has something to read and a draft to show; a run that stops at 'no such file' or never shows a description is a failure, not a pass by silence.",
+  "note": "Steps 1-2 and 4-5: a guide-following turn either confirms the scope with ask_user — and ends there, as a real turn does — or mines the worked example (yield.csv is staged) and shows a draft; either way nothing is saved before the user has seen it. A run that does neither, or saves, fails. _transcript.json says which shape the run took.",
   "prompt": "Turn our usual weekly-yield summary into a skill: read yield.csv, compute first-pass yield per line, flag any line under 95%.",
   "expect": {
     "must_call": [
-      "read_file"
+      [
+        "ask_user",
+        "read_file"
+      ]
     ],
     "must_not_call": [
       "save_skill",
       "publish_skill"
-    ],
-    "must_mention": [
-      [
-        "description",
-        "Description"
-      ]
     ]
   },
   "data": [
