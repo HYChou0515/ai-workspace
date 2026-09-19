@@ -91,6 +91,14 @@ class ItemToolState(BaseModel):
     Without it two rows can read as peers while one of them is a part of the
     other, and a command seen in a chat card cannot be traced to the switch
     that governs it."""
+    group: str = "builtin"
+    """Which fold of the picker this row lives under: ``"builtin"`` for every
+    built-in, otherwise the raw package id — a ``pkg:cmd`` command and its
+    whole-package row share it, and an entry nothing resolves is its own fold.
+
+    Said by the server because the client cannot tell: a whole-package row of
+    a first-party package and a built-in both carry no ``package`` and
+    ``external`` false. See ``docs/plan-tools-picker-groups.md``."""
     external: bool = False
     """This tool's bytes come from a third-party artifact rather than the
     platform's own image (#674). Carried explicitly because "who wrote this"
@@ -295,6 +303,7 @@ def _row(
         pref=pref,
         effective=effective,
         package=unit.package,
+        group=unit.group,
         external=provider in declared,
         version=prov.version if prov else None,
         author=prov.author if prov else None,

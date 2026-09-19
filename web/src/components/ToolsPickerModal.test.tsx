@@ -10,9 +10,10 @@ import { ToolsPickerModal } from "./ToolsPickerModal";
 afterEach(cleanup);
 
 const TOOLS: ItemToolState[] = [
-  { key: "exec", label: "Exec", description: "Run a shell command.", default_on: true, pref: "follow", effective: true },
+  { key: "exec", group: "builtin", label: "Exec", description: "Run a shell command.", default_on: true, pref: "follow", effective: true },
   {
     key: "rca-tools",
+    group: "rca-tools",
     label: "RCA Tools",
     description: "Bundled tools.",
     default_on: true,

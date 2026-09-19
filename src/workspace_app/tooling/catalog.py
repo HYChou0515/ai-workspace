@@ -29,6 +29,10 @@ from .registry import PackageInfo
 _WORD_SPLIT = re.compile(r"[_\-:]+")
 
 
+BUILTIN_GROUP = "builtin"
+"""The one picker fold every built-in tool shares (#322 grouping)."""
+
+
 @dataclass(frozen=True)
 class ToolMeta:
     """Display metadata for one callable tool (built-in or package command)."""
@@ -44,6 +48,15 @@ class ToolMeta:
     side by side can mean "this whole bundle" and "this one command of that
     bundle". Told only its command name, a reader cannot tell which — nor which
     row's switch governs the tool they saw in a chat card."""
+    group: str = BUILTIN_GROUP
+    """Which fold of the picker this unit lives under: ``"builtin"`` for every
+    built-in, otherwise the raw package id (a ``pkg:cmd`` command and its
+    whole-package row share it; an entry nothing resolves is its own group).
+
+    Named here, on the server, because the FE cannot tell a whole-package row
+    of a first-party package from a built-in — both carry no ``package`` and
+    no ``external`` flag. The raw id, not the humanized label, so the fold key
+    is stable whatever locale renders it."""
 
 
 def humanize_tool_label(name: str) -> str:
@@ -102,6 +115,7 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
                     humanize_tool_label(cmd_name),
                     summarize_description(cmd.description if cmd else ""),
                     package=humanize_tool_label(pkg_name),
+                    group=pkg_name,
                 )
             )
         elif entry in pkgs:
@@ -112,11 +126,11 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
             # away anyway.
             granted = ", ".join(humanize_tool_label(c.name) for c in pkg.commands)
             desc = pkg.description.strip() or (f"Bundled tools: {granted}." if granted else "")
-            units.append(ToolMeta(entry, humanize_tool_label(entry), desc))
+            units.append(ToolMeta(entry, humanize_tool_label(entry), desc, group=entry))
         else:
             # Unknown entry (deploy without that package built) — still show it so
             # the user can toggle it; no description available.
-            units.append(ToolMeta(entry, humanize_tool_label(entry), ""))
+            units.append(ToolMeta(entry, humanize_tool_label(entry), "", group=entry))
     return units
 
 

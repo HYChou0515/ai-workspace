@@ -373,3 +373,18 @@ def test_item_tools_says_gone_when_the_item_vanishes_after_the_gate(harness: Har
     gone = harness.client.get(harness.wpath("/tools"))
 
     assert gone.status_code == 410, gone.text
+
+
+def test_every_row_names_the_fold_the_picker_groups_it_under(harness: Harness):
+    """The picker folds rows by package, built-ins under one fold called
+    ``builtin``. The rca app grants ``exec`` (a built-in) and ``rca-tools`` (a
+    whole first-party package): on the wire they look alike — no ``package``,
+    ``external`` false — so the server has to say which fold each belongs to."""
+    rows = harness.client.get(harness.wpath("/tools")).json()["tools"]
+    by_key = {r["key"]: r for r in rows}
+
+    assert by_key["exec"]["group"] == "builtin"
+    assert by_key["rca-tools"]["group"] == "rca-tools"
+    # positive control on the premise: the two are otherwise indistinguishable
+    assert by_key["exec"]["package"] is None and by_key["rca-tools"]["package"] is None
+    assert by_key["exec"]["external"] is False and by_key["rca-tools"]["external"] is False

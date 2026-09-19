@@ -40,6 +40,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
   const SAP: ItemToolState[] = [
     {
       key: "sap-tools",
+      group: "sap-tools",
       label: "SAP Tools",
       description: "",
       default_on: true,
@@ -52,6 +53,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
     },
     {
       key: "legacy",
+      group: "legacy",
       label: "Legacy Tool",
       description: "",
       default_on: true,
@@ -107,6 +109,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
     const many: ItemToolState[] = [
       {
         key: "wafer-history",
+        group: "wafer-history",
         label: "Wafer History",
         description: "",
         default_on: true,
@@ -119,6 +122,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
       },
       {
         key: "sap-tools",
+        group: "sap-tools",
         label: "SAP Tools",
         description: "",
         default_on: true,
@@ -170,6 +174,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
     const tools: ItemToolState[] = [
       {
         key: "sap-tools",
+        group: "sap-tools",
         label: "SAP Tools",
         description: "",
         default_on: true,
@@ -179,6 +184,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
       },
       {
         key: "wafer",
+        group: "wafer",
         label: "Wafer History",
         description: "",
         default_on: true,

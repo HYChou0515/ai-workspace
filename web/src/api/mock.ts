@@ -622,6 +622,7 @@ export const mockApi: ApiClient = {
     return [
       {
         key: "exec",
+        group: "builtin",
         label: "Exec",
         description: "Run a shell command inside the workspace sandbox.",
         default_on: true,
@@ -630,6 +631,7 @@ export const mockApi: ApiClient = {
       },
       {
         key: "read_file",
+        group: "builtin",
         label: "Read File",
         description: "Read a file from the workspace.",
         default_on: true,
@@ -638,6 +640,7 @@ export const mockApi: ApiClient = {
       },
       {
         key: "rca-tools",
+        group: "rca-tools",
         label: "Rca Tools",
         description: "Bundled tools: Spc, Pareto.",
         default_on: true,
@@ -646,6 +649,7 @@ export const mockApi: ApiClient = {
       },
       {
         key: "rca-tools:spc",
+        group: "rca-tools",
         label: "Spc",
         package: "Rca Tools",
         description: "Control chart for one measurement.",
@@ -655,6 +659,7 @@ export const mockApi: ApiClient = {
       },
       {
         key: "wafer-history",
+        group: "wafer-history",
         label: "Wafer History",
         description: "Bundled tools: Trend.",
         default_on: true,

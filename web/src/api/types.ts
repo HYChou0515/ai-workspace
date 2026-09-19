@@ -315,6 +315,12 @@ export type ItemToolState = {
    * granularity it chose, so without this two rows read as peers while one is
    * part of the other. */
   package?: string | null;
+  /** The fold the picker groups this row under (plan-tools-picker-groups):
+   * `"builtin"` for every built-in, otherwise the raw package id — a `pkg:cmd`
+   * command and its whole-package row share it. Server-named, because a
+   * whole-package row of a first-party package looks exactly like a built-in
+   * on the wire (no `package`, `external` false). */
+  group: string;
   /** #674: this tool's bytes come from a third-party artifact, not our image.
    * Distinct from `author` being null — "whose code is this" and "did they fill
    * their name in" are different questions. */

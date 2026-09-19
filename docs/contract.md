@@ -418,7 +418,7 @@ FE/後端絕不解析它;`path`/`collection_id` 來自 record +
 
 | Method | Path | 用途 | 狀態 |
 |---|---|---|---|
-| `GET`    | `/a/{slug}/items/{item_id}/tools`     | per-item tool picker 狀態:`ItemTools{tools:[ItemToolState{key, label, description, default_on, pref:"follow"\|"on"\|"off", effective}]}`;`effective` 由 turn 用的同一條 resolve 在 server 端算出（anti-drift） | ✅ |
+| `GET`    | `/a/{slug}/items/{item_id}/tools`     | per-item tool picker 狀態:`ItemTools{tools:[ItemToolState{key, label, description, default_on, pref:"follow"\|"on"\|"off", effective, group, package?, external, …}]}`;`effective` 由 turn 用的同一條 resolve 在 server 端算出（anti-drift）;`group` 是 picker 折疊用的 fold（內建一律 `"builtin"`,否則套件原始 id） | ✅ |
 | `GET`    | `/a/{slug}/items/{item_id}/workflows` | 列出此 item `.workflows/` 內使用者自寫的 workflow manifest(id + title + phases) | ✅ |
 
 `pref` 對應 `WorkItemBase.attached_tool_prefs: dict[str, bool]`(#322,Tier-1
