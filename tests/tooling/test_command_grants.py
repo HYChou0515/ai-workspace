@@ -107,8 +107,9 @@ def test_enabled_and_disabled_partition_the_expanded_ceiling_in_ceiling_order():
 
 
 def test_without_packages_nothing_expands_and_the_old_entry_rule_holds():
-    """Parity with `_apply_tool_prefs`: no package inventory ⇒ entries are the
-    units, prefs apply per entry, defaults per entry."""
+    """No package inventory ⇒ entries are the units, prefs apply per entry,
+    defaults per entry — the same reading `_apply_tool_prefs` gives at entry
+    level (set-wise; this asserts the fixed answer, not that oracle)."""
     g = command_grants(["exec", "rca-tools"], ["exec"], {"rca-tools": True}, [])
     assert g.enabled == ("exec", "rca-tools")
     assert g.disabled == ()

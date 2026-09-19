@@ -92,12 +92,15 @@ def _meta(name: str, description: str, *, group: str = BUILTIN_GROUP) -> ToolMet
 
 
 def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> list[ToolMeta]:
-    """One display unit per ``app.json`` ``tools[]`` entry — the picker's
-    pickable granularity (#322). The unit ``name`` IS the entry string verbatim,
-    so a tri-state pref keyed by it lines up with what ``AppCatalog.resolve``
-    adds/removes. A built-in or ``pkg:cmd`` entry resolves to that tool's meta; a
-    bare package entry becomes one unit whose description lists the tools it
-    bundles (so the user knows what a single checkbox grants)."""
+    """One display unit per entry of ``app_tools`` — the picker's pickable
+    granularity (#322). The route hands it the ceiling already brought to
+    command granularity (``expand_entries``), so a whole-package grant arrives
+    as ``pkg:cmd`` entries and draws one row per command; a bare package entry
+    reaches here only when the package has no commands or is unknown. The unit
+    ``name`` IS the entry string verbatim, so a tri-state pref keyed by it is
+    what ``unit_pref`` reads. A built-in or ``pkg:cmd`` entry resolves to that
+    tool's meta; a bare package entry becomes one unit whose description lists
+    the tools it bundles (so the user knows what a single checkbox grants)."""
     from ..agent.tools import builtin_tool_descriptions
 
     builtins = builtin_tool_descriptions()
@@ -223,7 +226,13 @@ def unit_pref(unit: str, prefs: Mapping[str, bool]) -> bool | None:
     """The tri-state pin that governs one unit: its own key first, then — for a
     ``pkg:cmd`` unit — the package's key (an item pinned before commands were
     pickable holds ``{"rca-tools": false}``, and that goes on meaning the whole
-    package), else ``None`` (follow the default)."""
+    package), else ``None`` (follow the default).
+
+    The package key governs a ``pkg:cmd`` unit whatever granularity the App
+    granted at — including a package the App later narrowed to one command. A
+    stored "this package is off" outlives the App changing how much of the
+    package it grants; before part 2 such a key was a no-op there (it named no
+    ceiling entry), and that is the one reading that changed."""
     if unit in prefs:
         return prefs[unit]
     pkg, sep, _ = unit.partition(":")

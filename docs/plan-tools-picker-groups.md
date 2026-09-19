@@ -84,7 +84,7 @@ user：「我們能針對 tool command 做控制嗎？現在只有 partial tool 
 | 1 | 需求範圍 | **app 授整包時，picker 仍然一個指令一列可各自開關；`app.json` 不動**。整包條目的意思不變：「這個套件現在有的全部指令」，套件下一版多一個指令，沒有 pref 就跟預設 | user：「對」。app 要寫部分指令本來就可以 |
 | 2 | 判準放哪 | **一個純函式** `tooling/catalog.py:command_grants(entries, default_entries, prefs, packages)`：把天花板條目展開成指令粒度（整包 → 該套件在 `packages` 裡有的每個 `pkg:cmd`；認不得的套件保持原樣、不展開；內建與冒號條目不變），再逐指令套 pref，回傳 `(enabled, disabled)` 兩個 `pkg:cmd`／內建名的有序清單。**runner 與 picker route 都叫它**，`AppCatalog.resolve` 不動 | 判準裝在值被算出的地方——知道指令清單的只有這兩個消費者；兩邊各寫一次就是「效果由誰答」會漂的那種 |
 | 3 | pref 優先序 | `prefs["pkg:cmd"]` > `prefs["pkg"]`（舊資料的整包鍵）> 預設（profile／app 的預設集含 `pkg` 或 `pkg:cmd` 就是 on）。整包鍵**繼續有效**，不遷移 | 既有 item 的 `rca-tools: false` 不能一升版就失效；`attached_tool_prefs` 存在 item 列裡，沒有 migrate route 可跑 |
-| 4 | picker 寫回 | picker 只寫**逐指令鍵**；`overrideFromTools` 從列重建 override，讀到的整包鍵在第一次 Save 時自然被拆成逐指令鍵（read-modify-PUT 整張覆蓋） | 不發明「整包鍵 + 指令鍵並存」的第二套規則；決定 3 只管讀 |
+| 4 | picker 寫回 | picker 只寫**逐指令鍵**；`overrideFromTools` 從列重建 override，讀到的整包鍵在第一次（有改動的）Save 時自然被拆成逐指令鍵（`setField` 是 JSON-Patch `replace /attached_tool_prefs`——整個欄位換掉，不是 merge；**P19 修訂**：第一版寫 PUT，實際是 PATCH replace，效果相同） | 不發明「整包鍵 + 指令鍵並存」的第二套規則；決定 3 只管讀 |
 | 5 | picker 的列 | 整包授權的套件：**一個指令一列**，`group` = 套件 id、`package` = 套件人話標籤（和 #724 的 `pkg:cmd` 列同形）；折疊標題的整組三態就是「整包開關」。認不得的套件（沒 build、host 解不出）：仍是整包一列（展不開）；`unavailable` 照舊 | 沿用剛做的折疊；user 那句「partial tool 永遠打開」的顧慮在這裡反過來成立：整包授權 = 全部指令都在天花板內 |
 | 6 | 給模型看的「關掉的工具」（#480） | 逐指令：`disabled` 裡的 `pkg:cmd` 各一條（`picker_units` 已會描述冒號條目）；整包全關就是它全部指令各一條 | 「可請使用者開啟」的單位要和 picker 的開關一致 |
 | 7 | `AgentConfig.allowed_tools` | runner 拿到的仍是條目清單；展開在 `build_function_tools` 前一步做（`_agent_for` 已同時握有 `config` 與 `packages`）。`AgentConfig` 多帶 `tool_prefs`（resolve 原樣塞入）與 `tool_ceiling`（manifest 的 `tools[]`），讓 runner 端算得出來 | `resolve` 沒有 packages；把 prefs 帶到有 packages 的地方，而不是把 packages 帶回 resolve（第三方套件在 resolve 之後才存在） |
@@ -190,7 +190,7 @@ entry 粒度的舊答案**，其他每個讀它的人都拿到舊答案；而 re
 - **P9**（`6a082ff1`）：第二部分的 plan 併入本檔（user：「同一個 PR 改好」）。
 - **P10**（`3d1a36f0`）：`tooling/catalog.py` 的 `expand_entries`／`unit_pref`／`command_grants`（`CommandGrants`：enabled、
   disabled、default_on），九條測試先紅（import 失敗）後綠；含 user 那兩題：指令 pin 縮整包授權、舊整包鍵仍管每個指令。
-- **P11**（`8818df0e`）：`AgentConfig` 加 `tool_ceiling`／`tool_prefs`（只有 `resolve` 填；另外五個建構點預設空 = 不展開）；
+- **P11**（`8818df0e`）：`AgentConfig` 加 `tool_ceiling`／`tool_prefs`（只有 `resolve` 填；另外**六**個建構點預設空 = 不展開——第一版寫「五」，是回想的；grep 是 6）；
   `_agent_for` 有 packages 且有 ceiling 時用 `command_grants` 算給 `build_function_tools` 的 allowed 與 #480 段落。
   三條在真入口 `_agent_for` 先紅。
 - **P12**（`40b50927`）：route 用同一個 `command_grants`（`default_on` 取 profile 的預設集——pin 之前——不能拿
@@ -198,8 +198,31 @@ entry 粒度的舊答案**，其他每個讀它的人都拿到舊答案；而 re
   picker／runner 的 parity），五條第三方測試的 key 從整包改成指令列（第三方套件同樣展開）。真後端 rca item：38 列，
   `rca-tools` 10、`csv-column-summary` 2、`data-fetch`／`sci-plot` 各 1 指令、`python-stack` 整包；真瀏覽器展開
   Rca Tools 十列各有真描述、整組 Off 只翻那十列。
-- **P13**：`docs/migrations.md` 加 #828 條目（行為變、沒有設定、運營方不用做事但要知道整包鍵的讀法與第一次儲存會拆）；
+- **P13**（`5f81f0ab`）：`docs/migrations.md` 加 #828 條目（行為變、沒有設定、運營方不用做事但要知道整包鍵的讀法與第一次儲存會拆）；
   `contract.md`、`frontend.md`、本紀錄。
+- **merge**（`7f79327e`）：master `f5fe658a`（#825）併入；衝突只在 `ToolsChecklist.tsx` 搜尋框（master 把 inline 樣式折進 `.input`、
+  這邊把 `onChange` 換成 `changeSearch`），各取一半；43 條前端測試綠。
+- **P14**（`83251b8b`）：review 第一輪（四把鏡頭並行，快照 `7f79327e`）——見上方「P14 修訂」。四把鏡頭去重後 10 個洞，最重的
+  A／B 四把都抓到；根因是計算點放在 `_agent_for`。決策表先列完再動手。
+- **P15**（`7ccfa385`）：`finalize_tool_grants`（`apps/catalog.py`，用掉 ceiling／prefs 清空，冪等）、`narrow_entries`、
+  `expand_entries` 去重＋內建名守衛、`profile_default_tools` 從 `resolve` 抽出。11 條先紅（9 條 import、2 條行為：`spc` 畫兩次、
+  `exec:a` 遮掉 `exec`），resolve 當 oracle 的 parity 一條。
+- **P16**（`ada55cae`）：turn 那扇門——`TurnContextBuilder._finalized` 在 `_subagent_defs` 與 `_common` **之前**定案（clamp 也要讀定案後的）；
+  `build_workflow_turn(tool_subset=)` 在定案之後做交集，`workflow_exec` 不再自己 `replace`；`_agent_for` 回 master（`allowed_tools`
+  照讀）；`clamp_tools`／`save_subagent` 的「持有」用 `narrow_entries`。新檔 `tests/api/test_tool_grant_doors.py` 8 條走真入口
+  （chat 2、workflow step 3、compaction 1、sub-agent 2），6 條先紅（2 條在舊碼上碰巧綠、留作一致性釘子）；`save_subagent` 接受
+  整包名 1 條先紅；P11 的兩條 runner 測試（釘的是被拆掉的重算）換成「runner 絕不自己套 pin」的反向釘子；鄰近 17 個測試檔 411 綠、
+  1 紅 = 舊 parity 測試（P17 換掉）。
+- **P17**（`1b077752`）：另外三扇門——picker route 回去叫 `resolve_agent_config` 再 `finalize_tool_grants`（同一函式）、`default_on`
+  走 `profile_default_tools`、`_warn_undeclared` 比套件名；WUI `callTool` 定案後才 `find_allowed_command`；replay loader 定案
+  （只有第一方套件，既有限制）。5 條先紅（WUI 兩向、`tools: []`、假警告、replay）；parity 改成 5 格 pin 表 × 門當 oracle。
+- **P18**（`2c5b4ab2`）：`envNeeds.ts` 按 provider 折（`pkg:cmd` 列 → `group`，標籤 `package`；任一指令開就算 live）。3 條先紅、2 條補邊界。
+- **P19**：文件——`AgentConfig`／`picker_units`／`unit_pref`／`attached_tool_prefs` 的句子、`contract.md`、`apps-platform.md`、
+  `frontend.md`（PATCH）、`migrations.md`（補 step／sub-agent／WUI 三個語意與整包鍵管到部分授權）、本紀錄、決定 4、P11 的「六」；
+  P12 驗收欄的 modal 測試補上（`ToolsPickerModal.test.tsx`：整包鍵來的 off 列改一格後 Save 只出逐指令鍵、沒有整包鍵——
+  **釘住既有行為，不是先紅**：FE 本來就從列重建）。
+- **順序**（P16 起、寫進紀錄）：定案後 `allowed_tools` 一律天花板順序；master 的 `_apply_tool_prefs` 在**沒有 pref** 時回 profile 順序。
+  出貨的 profile 順序都和天花板一致，所以模型看到的工具清單不變；一個把 `tools` 寫成不同順序的 profile 會看到清單重排（集合不變）。
 
 **順手看到、沒動的**：第一方整套件列（`data-fetch`、`rca-tools`…）右邊的來源標籤是「內建／Built-in」
 （#724 的「不是第三方就是平台自己的」）——P5 把組名改掉之後不再和組名撞，但「核心工具」組裡每一列也各掛一個

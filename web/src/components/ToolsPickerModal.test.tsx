@@ -78,6 +78,42 @@ describe("ToolsPickerModal", () => {
     );
   });
 
+  // plan-tools-picker-groups part 2: an item pinned before commands were
+  // pickable holds `{"rca-tools": false}`; the server reads that as every
+  // command of the package pinned off and hands one `pkg:cmd` row per command,
+  // each `pref: "off"`. The override is rebuilt from the rows, so the first
+  // Save writes per-command keys and the bare key is gone — without the modal
+  // knowing there ever was one.
+  it("a legacy whole-package key comes back from Save as one key per command", async () => {
+    const onSave = vi.fn();
+    const cmd = (c: string): ItemToolState => ({
+      key: `rca-tools:${c}`,
+      group: "rca-tools",
+      package: "RCA Tools",
+      label: c,
+      description: `${c}.`,
+      default_on: true,
+      pref: "off",
+      effective: false,
+    });
+    const rows: ItemToolState[] = [TOOLS[0]!, cmd("spc"), cmd("pareto"), cmd("wafer-history")];
+    renderWithQuery(
+      <ToolsPickerModal slug="rca" itemId="i1" onSave={onSave} onClose={vi.fn()} client={fakeClient(rows)} />,
+    );
+    const header = await screen.findByTestId("tool-group-header-rca-tools");
+    fireEvent.click(header);
+    fireEvent.click(screen.getByTestId("tool-rca-tools:spc-on")); // turn one command back on
+    fireEvent.click(screen.getByTestId("tools-save"));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith({
+        "rca-tools:spc": true,
+        "rca-tools:pareto": false,
+        "rca-tools:wafer-history": false,
+      }),
+    );
+    expect(onSave.mock.calls[0]![0]).not.toHaveProperty("rca-tools");
+  });
+
   it("a clean cancel closes immediately (no discard prompt)", async () => {
     const onClose = vi.fn();
     renderWithQuery(
