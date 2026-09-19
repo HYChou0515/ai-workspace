@@ -628,41 +628,6 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   行，app 沒設 root logger 時只有 WARNING 以上會印——本機可用 `scripts/check_sigterm_drain.sh` 驗，它自己包了
   `basicConfig`）。另外 `terminationGracePeriodSeconds` 已生效：`kubectl get pod <api-pod> -o jsonpath='{.spec.terminationGracePeriodSeconds}'` 回 `90`。
 
-### 2026-09-19 · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
-
-**行為**（不動設定也會多出來的東西）
-
-- chat header 的 Export 變成選單：文字 JSON（照舊）、文字 Markdown（`?format=md`）、影片；三者都可以選訊息範圍
-  （`?start=&end=`，絕對位置、半開）。影片排一個 `ChatVideoJob`，**寫進 item 的 workspace** `/exports/chat-video/…`
-  （算 workspace 額度），旁邊的 `<輸出檔>.progress.json` 是進度也是取消把手（刪掉 = 取消），`<輸出檔>.chat.json`
-  是那次的輸入（留著，改了再送就重生）。也能直接打 `POST /a/{slug}/items/{item_id}/chat-video`
-  `{transcript, options, output_path?}` 用手寫的 transcript 生影片；gate 是 `read_content` + `add_content`。
-
-**設定**
-
-- 新段 `chat_video:`（`max_pixels` 1920×1080、`max_seconds` 180、`max_output_bytes` 100 MB、`heartbeat_seconds` 10、
-  `stale_after_seconds` 60）。都有預設，不設即生效；表單只給上限內的值、伺服端照這段擋（422 點名哪個上限）。
-  **改大 `max_pixels` 要重量 worker 的記憶體**（[chat-video.md 要多少資源](chat-video.md#要多少資源量的41-秒的範例1080p)）。
-- `server.run_consumers: true`（單機 all-in-one）時 API 進程自己吃 `chat-video` job：那台要裝 `uv sync --extra chat-video`
-  + `playwright install --with-deps chromium` + `ffmpeg` + `fonts-noto-cjk`；沒裝的話 job 失敗、進度檔寫那句安裝提示，API 不受影響。
-
-**k8s · CI 側**（`run_consumers: false` 的部署）
-
-- **rollout 前**：多一種 JobType `chat-video` → `rca-worker-chat-video` Deployment（`python -m workspace_app.worker chat-video`），
-  **用自己的映像 `rca-app-chat-video`**（`docker/Dockerfile` 的 `chat-video` stage：app + `chat-video` extra + Chromium + ffmpeg +
-  `fonts-noto-cjk`，約 +1 GB；不塞進 `rca-app`，每顆 API pod 沒理由多 1 GB）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
-  （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
-  sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
-  `workers.yaml` 的註解有數字）。CI 要多 build / push 這個映像。
-  漏加的症狀：前端按了「產生影片」後進度停在 `queued`，60 秒後前端顯示「worker 沒有回應」；job 永遠 pending。
-
-**確認做完**
-
-- `kubectl get deploy rca-worker-chat-video` 有 1 顆 ready；從任一 item 的 chat header Export ▾ → 影片 → 送出，
-  進度列每 10 秒前進、幾十秒後 `/exports/chat-video/` 出現 `.mp4`。用 curl 送一份三則的手寫 transcript 也應出檔。
-
----
-
 ### 2026-09-18 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
 
 **設定** — 不動。沒有新旋鈕。
@@ -813,3 +778,38 @@ REINDEX TABLE CONCURRENTLY cluster_member_meta;
 **legacy 切段器的中文修正（#806 P1）不需要重讀。** production 走 LlamaIndex 管線
 （`kb_pipeline=get_doc_pipeline(...)`），中文本來就切得正常（實測 12,358 字 → 80 塊）；受影響的只有沒接
 `kb_pipeline` 的 `create_app` 呼叫（測試、離線模式）。
+
+---
+
+### 2026-09-19 · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
+
+**行為**（不動設定也會多出來的東西）
+
+- chat header 的 Export 變成選單：文字 JSON（照舊）、文字 Markdown（`?format=md`）、影片；三者都可以選訊息範圍
+  （`?start=&end=`，絕對位置、半開）。影片排一個 `ChatVideoJob`，**寫進 item 的 workspace** `/exports/chat-video/…`
+  （算 workspace 額度），旁邊的 `<輸出檔>.progress.json` 是進度也是取消把手（刪掉 = 取消），`<輸出檔>.chat.json`
+  是那次的輸入（留著，改了再送就重生）。也能直接打 `POST /a/{slug}/items/{item_id}/chat-video`
+  `{transcript, options, output_path?}` 用手寫的 transcript 生影片；gate 是 `read_content` + `add_content`。
+
+**設定**
+
+- 新段 `chat_video:`（`max_pixels` 1920×1080、`max_seconds` 180、`max_output_bytes` 100 MB、`heartbeat_seconds` 10、
+  `stale_after_seconds` 60）。都有預設，不設即生效；表單只給上限內的值、伺服端照這段擋（422 點名哪個上限）。
+  **改大 `max_pixels` 要重量 worker 的記憶體**（[chat-video.md 要多少資源](chat-video.md#要多少資源量的41-秒的範例1080p)）。
+- `server.run_consumers: true`（單機 all-in-one）時 API 進程自己吃 `chat-video` job：那台要裝 `uv sync --extra chat-video`
+  + `playwright install --with-deps chromium` + `ffmpeg` + `fonts-noto-cjk`；沒裝的話 job 失敗、進度檔寫那句安裝提示，API 不受影響。
+
+**k8s · CI 側**（`run_consumers: false` 的部署）
+
+- **rollout 前**：多一種 JobType `chat-video` → `rca-worker-chat-video` Deployment（`python -m workspace_app.worker chat-video`），
+  **用自己的映像 `rca-app-chat-video`**（`docker/Dockerfile` 的 `chat-video` stage：app + `chat-video` extra + Chromium + ffmpeg +
+  `fonts-noto-cjk`，約 +1 GB；不塞進 `rca-app`，每顆 API pod 沒理由多 1 GB）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
+  （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
+  sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
+  `workers.yaml` 的註解有數字）。CI 要多 build / push 這個映像。
+  漏加的症狀：前端按了「產生影片」後進度停在 `queued`，60 秒後前端顯示「worker 沒有回應」；job 永遠 pending。
+
+**確認做完**
+
+- `kubectl get deploy rca-worker-chat-video` 有 1 顆 ready；從任一 item 的 chat header Export ▾ → 影片 → 送出，
+  進度列每 10 秒前進、幾十秒後 `/exports/chat-video/` 出現 `.mp4`。用 curl 送一份三則的手寫 transcript 也應出檔。
