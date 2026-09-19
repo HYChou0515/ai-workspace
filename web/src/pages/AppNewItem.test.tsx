@@ -10,26 +10,47 @@ import { AppNewItem } from "./AppNewItem";
 
 afterEach(cleanup);
 
-const createAppItem = vi.fn().mockResolvedValue({ resource_id: "rca-investigation/1" });
+const createAppItem = vi
+  .fn()
+  .mockResolvedValue({ resource_id: "rca-investigation/1" });
 const navigate = vi.fn();
 
-vi.mock("../api", () => ({ api: { createAppItem: (...a: unknown[]) => createAppItem(...a) } }));
+vi.mock("../api", () => ({
+  api: { createAppItem: (...a: unknown[]) => createAppItem(...a) },
+}));
 vi.mock("../hooks/useCurrentUser", () => ({
   useCurrentUser: () => "default-user",
   useCurrentUserState: () => ({ id: "default-user", ready: true }),
 }));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
-  useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),
+  useUser: (id: string) => ({
+    id,
+    name: id,
+    section: "",
+    email: "",
+    photo_url: null,
+  }),
 }));
 vi.mock("../hooks/useResources", () => ({
   useAppManifest: () => ({
     item: { noun: "Investigation", create_label: "Start Investigation" },
-    layout: { breadcrumb: [], statusbar: [], list: [], form: ["severity", "product"], default_tabs: [] },
+    layout: {
+      breadcrumb: [],
+      statusbar: [],
+      list: [],
+      form: ["severity", "product"],
+      default_tabs: [],
+    },
     fields: [
       { name: "title", label: "Title", kind: "text" },
       { name: "description", label: "Description", kind: "text" },
-      { name: "severity", label: "Severity", kind: "select", options: ["P0", "P2"] },
+      {
+        name: "severity",
+        label: "Severity",
+        kind: "select",
+        options: ["P0", "P2"],
+      },
       { name: "product", label: "Product", kind: "text" },
     ],
     labels: {},
@@ -39,6 +60,14 @@ vi.mock("../hooks/useResources", () => ({
       { name: "tool-demo", title: "Tool demo", description: "" },
     ],
   }),
+}));
+const hubGet = vi.fn(async (_id: string) => ({
+  id: "e-1",
+  owner: "alice",
+  name: "csv-peek",
+}));
+vi.mock("../api/skillHub", () => ({
+  skillHubApi: { get: (...a: [string]) => hubGet(...a) },
 }));
 vi.mock("react-router-dom", async (orig) => ({
   ...(await orig<typeof import("react-router-dom")>()),
@@ -65,7 +94,9 @@ describe("AppNewItem", () => {
       }),
     );
     // #4: goes straight into the new item's workspace (id percent-encoded).
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/a/rca/rca-investigation%2F1"));
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith("/a/rca/rca-investigation%2F1"),
+    );
   });
 
   it("surfaces a create failure instead of silently doing nothing", async () => {
@@ -85,7 +116,11 @@ describe("AppNewItem", () => {
     await userEvent.type(screen.getByLabelText(/title/i), "Oven drift");
     await userEvent.click(screen.getByRole("button", { name: /create/i }));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/boom: create rejected/i));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /boom: create rejected/i,
+      ),
+    );
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -134,6 +169,34 @@ describe("AppNewItem", () => {
     );
   });
 
+  it("says which skill to install once the item exists, when the address names one (plan-skill-hub-ui-polish D11)", async () => {
+    // The skill hub's "edit in a new item" links here with the entry; the
+    // form says what comes next — install, not auto-install: creating is
+    // the form's, installing is the panel's, and both stay visible.
+    render(
+      <QueryWrap>
+        <MemoryRouter initialEntries={["/a/rca/new?profile=default&skill=e-1"]}>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    const hint = await screen.findByTestId("new-item-skill-hint");
+    await waitFor(() => expect(hint).toHaveTextContent("alice/csv-peek"));
+    expect(hubGet).toHaveBeenCalledWith("e-1", "rca");
+  });
+
+  it("says nothing about a skill when the address names none", async () => {
+    render(
+      <QueryWrap>
+        <MemoryRouter initialEntries={["/a/rca/new"]}>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    await screen.findByLabelText(/title/i);
+    expect(screen.queryByTestId("new-item-skill-hint")).toBeNull();
+  });
+
   // #779: a create form is all unsaved work by definition — there is nothing to
   // come back to if it closes. Both deliberate exits ask first.
   it("asks before dropping a half-filled create form, on Escape and on the close button", async () => {
@@ -156,7 +219,9 @@ describe("AppNewItem", () => {
     expect(screen.getByLabelText(/title/i)).toHaveValue("Oven drift");
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(await screen.findByTestId("dialog-action-discard")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("dialog-action-discard"),
+    ).toBeInTheDocument();
     expect(navigate).not.toHaveBeenCalled();
   });
 });

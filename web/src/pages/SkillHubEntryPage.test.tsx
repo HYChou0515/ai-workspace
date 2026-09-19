@@ -283,7 +283,7 @@ describe("SkillHubEntryPage", () => {
       within(dialog).getByRole("link", {
         name: word("skillHub.edit.newItem.go"),
       }),
-    ).toHaveAttribute("href", "/a/rca/new?profile=default");
+    ).toHaveAttribute("href", "/a/rca/new?profile=default&skill=e-1");
   });
 
   it("transfers to the person picked", async () => {

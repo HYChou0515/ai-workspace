@@ -450,7 +450,11 @@ function OwnerActions({
       ) : null}
 
       {newItem ? (
-        <NewItemDialog target={newItem} onClose={() => setNewItem(null)} />
+        <NewItemDialog
+          target={newItem}
+          entryId={entry.id}
+          onClose={() => setNewItem(null)}
+        />
       ) : null}
     </div>
   );
@@ -517,9 +521,11 @@ function TransferDialog({
  * take the edit, and what to do instead. */
 function NewItemDialog({
   target,
+  entryId,
   onClose,
 }: {
   target: SkillEditTarget;
+  entryId: string;
   onClose: () => void;
 }) {
   const t = useT();
@@ -558,11 +564,13 @@ function NewItemDialog({
           {t("skillHub.cancel")}
         </button>
         {/* The profile the skill was written for rides along (`?profile=`):
-            the new item opens on it rather than the App's default. */}
+            the new item opens on it rather than the App's default. So does
+            the entry (`?skill=`), for the form to say what comes next
+            (plan-skill-hub-ui-polish D11). */}
         <Link
           className="btn"
           data-variant="primary"
-          to={`/a/${encodeURIComponent(target.app)}/new?profile=${encodeURIComponent(target.profile)}`}
+          to={`/a/${encodeURIComponent(target.app)}/new?profile=${encodeURIComponent(target.profile)}&skill=${encodeURIComponent(entryId)}`}
         >
           {t("skillHub.edit.newItem.go")}
         </Link>

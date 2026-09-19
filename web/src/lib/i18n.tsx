@@ -2404,6 +2404,12 @@ export const messages = {
     en: "Create a new {app} item, install this skill from its Skills panel, edit, and publish from there — Edit will open that item from then on.",
   },
   "skillHub.edit.newItem.go": { "zh-TW": "開新 item", en: "Create the item" },
+  // plan-skill-hub-ui-polish D11: the new-item form, opened from a hub entry.
+  "newItem.skillHint": {
+    "zh-TW": "建好後，到「技能」面板把 {skill} 裝進來再修改。",
+    en: "Once it exists, install {skill} from its Skills panel and edit it there.",
+  },
+  "newItem.skillHint.this": { "zh-TW": "這個 skill", en: "this skill" },
   "skillHub.failed": {
     "zh-TW": "沒有成功：{reason}",
     en: "That didn't work: {reason}",
