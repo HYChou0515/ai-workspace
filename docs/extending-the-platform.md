@@ -660,7 +660,7 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 |---|---|
 | `name` | 報告與輸出資料夾用的識別字(必填) |
 | `prompt` | 送給模型的那句話(必填) |
-| `data` | 開跑前複製進 workspace 的檔案,相對於情境資料夾 |
+| `data` | 開跑前複製進 workspace 的檔案,相對於情境資料夾。**被測 skill 自己的檔案**(`references/`、`scripts/`)不用列在這裡:harness 會照真 turn 的樣子把它們放進 workspace 的 `.skill/<name>/`(`SKILL.md` 除外,它走 prompt),所以 body 裡「先讀 `references/x.md`」這種步驟量得到;用 `--skill` 給編輯過的 SKILL.md 時,旁邊沒有這些檔就用同名內建 skill 的 |
 | `note` | 給讀報告的人看的說明 |
 | `expect.must_call` | 這些工具**每個都**要被呼叫過 |
 | `expect.must_not_call` | 這些工具**一個都不准**被呼叫 |

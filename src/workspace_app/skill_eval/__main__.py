@@ -160,27 +160,49 @@ def _litellm_chat(cfg, num_ctx: int, timeout: int) -> Chat:
     return chat
 
 
-def _stage(scenario: Scenario, scenarios_dir: Path, work: Path) -> None:
+def _stage(scenario: Scenario, scenarios_dir: Path, work: Path, *, skill_dir: Path | None) -> None:
+    """The scenario's data at the workspace root, and the skill's OWN files
+    (`references/`, `scripts/`, …) under `.skill/<name>/` — the path a real
+    turn holds them at (`apps.skills.materialize_skill`). Without the second
+    half a body that says "read `references/x.md` first" scores the model on a
+    step the workspace made impossible: every such `read_file` answered "no
+    such file". `SKILL.md` itself is not staged; the body reaches the model
+    through the prompt."""
     work.mkdir(parents=True, exist_ok=True)
     for name in scenario.data:
         shutil.copy(scenarios_dir / name, work / name)
+    if skill_dir is None:
+        return
+    for src in sorted(skill_dir.rglob("*")):
+        if not src.is_file() or src.name == "SKILL.md":
+            continue
+        target = work / ".skill" / skill_dir.name / src.relative_to(skill_dir)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, target)
 
 
-def _resolve_skill(spec: str) -> tuple[str, str]:
-    """``(name, SKILL.md text)`` from a registered name or a path."""
+def _resolve_skill(spec: str) -> tuple[str, str, Path | None]:
+    """``(name, SKILL.md text, folder)`` from a registered name or a path. The
+    folder is where the skill's `references/` and `scripts/` come from: for a
+    path, the edited file's own folder when it holds any — `--dump-skill`
+    writes `SKILL.md` alone, so an edited copy usually does not — else the
+    registered folder of the same name, else nothing to stage."""
     path = Path(spec)
     if path.is_file():
-        return path.parent.name, path.read_text()
+        name = path.parent.name
+        own = any(p.is_file() and p.name != "SKILL.md" for p in path.parent.rglob("*"))
+        folder = path.parent if own else SHARED_SKILLS.get(name)
+        return name, path.read_text(), folder
     src = SHARED_SKILLS.get(spec)
     if src is None:
         raise SystemExit(f"unknown skill {spec!r}. registered: {', '.join(sorted(SHARED_SKILLS))}")
-    return spec, (src / "SKILL.md").read_text()
+    return spec, (src / "SKILL.md").read_text(), src
 
 
 def main() -> None:
     args = _parse_args()
     if args.dump_skill:
-        _name, text = _resolve_skill(args.dump_skill)
+        _name, text, _folder = _resolve_skill(args.dump_skill)
         args.out_dir.mkdir(parents=True, exist_ok=True)
         target = args.out_dir / "SKILL.md"
         target.write_text(text)
@@ -189,7 +211,7 @@ def main() -> None:
     if not args.skill or not args.scenarios:
         raise SystemExit("need --skill and --scenarios (or --dump-skill)")
 
-    name, skill_md = _resolve_skill(args.skill)
+    name, skill_md, skill_dir = _resolve_skill(args.skill)
     scenarios = load_scenarios(args.scenarios)
     if not scenarios:
         raise SystemExit(f"no *.json scenarios in {args.scenarios}")
@@ -201,7 +223,7 @@ def main() -> None:
     for s in scenarios:
         for arm, body in (("skill", skill_md), *((("control", ""),) if args.control else ())):
             work = args.out_dir / f"{s.name}.{arm}"
-            _stage(s, args.scenarios, work)
+            _stage(s, args.scenarios, work, skill_dir=skill_dir)
             print(f"[{arm}] {s.name} …", flush=True)
             t: Transcript = run_scenario(
                 chat,
