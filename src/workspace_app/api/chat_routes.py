@@ -637,6 +637,12 @@ def register_chat_routes(
         # also how a `tool_name or ""` came to write a value the message did not
         # hold. `to_builtins` carries whatever the message carries, including
         # every field added after this line was written.
+        # One end given: the other is the thread's edge — resolved HERE so
+        # the file name carries the range that was actually exported (the
+        # name is built from both ends; a half range used to print `None`).
+        if start is not None or end is not None:
+            start = 0 if start is None else start
+            end = len(conv.messages) if end is None else end
         try:
             messages = slice_messages([to_builtins(m) for m in conv.messages], start, end)
         except ValueError as exc:

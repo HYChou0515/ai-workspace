@@ -18,12 +18,17 @@
  * Drawn from the parts the app already has (the rule #825 set for the
  * Sandbox modal): the frame is `ToolsPickerModal`'s — 480px, a `<strong>`
  * title over a 12px lede, a `.btn` Cancel / primary footer, no ✕ and no
- * icon (Escape and Cancel are the exits, both through `useDirtyClose`) —
- * and every field is a label over the house `.input`, helpers as `.detail`.
+ * icon (Escape and Cancel are the exits) — every field a label over the
+ * house `.input`, the slider `FontSizeSlider`'s, helpers as `.detail`.
+ *
+ * No `useDirtyClose` (the plan's 知情取捨): a few dropdowns are not unsaved
+ * work, and a "discard changes?" after one radio click is the guard #779
+ * warns against — it fires when nothing was lost and teaches people to
+ * click through it.
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useId, useMemo, useState } from "react";
 
 import {
   type ChatTranscript,
@@ -36,11 +41,9 @@ import {
 } from "../api/chatVideo";
 import { qk } from "../api/queryKeys";
 import { type ChatExportOptions, downloadChatExport } from "../api/workflows";
-import { useDirtyClose } from "../hooks/useDirtyClose";
 import { absoluteRange, newestNumber, type RangeChoice } from "../lib/chatExportRange";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
-import { sameShape } from "../lib/sameShape";
 import {
   type Aspect,
   ASPECTS,
@@ -76,23 +79,32 @@ type Kind = "json" | "md" | "video";
 type Fmt = "mp4" | "gif" | "webm";
 const FORMATS: Fmt[] = ["mp4", "gif", "webm"];
 
-/** The tempo knobs, the `VideoOptions` fields they are — the CLI's flags,
- * one for one. Defaults are the struct's own. */
+/** The tempo knobs of decision 9 — speed, typing, the composer push-in and
+ * the length; with the size and the format that is the six, and every other
+ * `VideoOptions` field is the struct's default. Defaults and bounds are the
+ * struct's own (`VideoOptions.__post_init__`); a value typed past a bound is
+ * clamped at submit rather than sent for a 422. */
 type Tempo = {
   type_ms: number;
-  stream_ms: number;
-  tool_pause_ms: number;
   zoom: number;
   speed: number;
   max_seconds: number;
 };
-const TEMPO_DEFAULTS: Tempo = {
-  type_ms: 55,
-  stream_ms: 22,
-  tool_pause_ms: 1200,
-  zoom: 1.8,
-  speed: 1,
-  max_seconds: 90,
+const TEMPO_DEFAULTS: Tempo = { type_ms: 55, zoom: 1.8, speed: 1, max_seconds: 90 };
+const TEMPO_BOUNDS: Record<keyof Tempo, { min: number; max: number; step: number }> = {
+  type_ms: { min: 0, max: 10000, step: 1 },
+  zoom: { min: 1, max: 5, step: 0.1 },
+  speed: { min: 0.1, max: 100, step: 0.1 },
+  max_seconds: { min: 1, max: 3600, step: 1 },
+};
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+
+/** The plan's names for the four text sizes. */
+const TEXT_SIZE_NAME: Record<number, "small" | "medium" | "large" | "xlarge"> = {
+  0.8: "small",
+  1: "medium",
+  1.3: "large",
+  1.6: "xlarge",
 };
 
 type Form = {
@@ -163,8 +175,6 @@ export function ExportDialog({
   const [latestN, setLatestN] = useState(5);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const initialRef = useRef(INITIAL);
-  const attemptClose = useDirtyClose(!sameShape(form, initialRef.current), onClose);
 
   const transcript = useQuery({
     queryKey: qk.chatTranscript(itemId, chatId),
@@ -189,8 +199,15 @@ export function ExportDialog({
   const size = useMemo(() => resolveSize(form.size), [form.size]);
   const ceiling = limits.data;
   const tooBig = ceiling !== undefined && size.width * size.height > ceiling.max_pixels;
-  const maxSeconds = Math.min(form.tempo.max_seconds, ceiling?.max_seconds ?? form.tempo.max_seconds);
-  const megabytes = estimateMegabytes(form.fmt, size.width * size.height, maxSeconds);
+  /** The knobs as they will be sent: each within the struct's bounds, the
+   * length also within the deployment's. */
+  const tempo: Tempo = {
+    type_ms: clamp(form.tempo.type_ms, TEMPO_BOUNDS.type_ms.min, TEMPO_BOUNDS.type_ms.max),
+    zoom: clamp(form.tempo.zoom, TEMPO_BOUNDS.zoom.min, TEMPO_BOUNDS.zoom.max),
+    speed: clamp(form.tempo.speed, TEMPO_BOUNDS.speed.min, TEMPO_BOUNDS.speed.max),
+    max_seconds: clamp(form.tempo.max_seconds, 1, ceiling?.max_seconds ?? TEMPO_BOUNDS.max_seconds.max),
+  };
+  const megabytes = estimateMegabytes(form.fmt, size.width * size.height, tempo.max_seconds);
 
   const patch = (p: Partial<Form>) => setForm((f) => ({ ...f, ...p }));
   const patchTempo = (p: Partial<Tempo>) => setForm((f) => ({ ...f, tempo: { ...f.tempo, ...p } }));
@@ -216,8 +233,7 @@ export function ExportDialog({
             // 0 = the player's automatic rule; a text-size choice pins it.
             scale: size.scaleIsAuto ? 0 : size.scale,
             fmt: [form.fmt],
-            ...form.tempo,
-            max_seconds: maxSeconds,
+            ...tempo,
           },
           output_path: null,
         });
@@ -244,9 +260,11 @@ export function ExportDialog({
       return ceiling === undefined || f.width * f.height <= ceiling.max_pixels;
     });
 
+  const textSizeLabel = (s: number) => `${t(`export.video.textSize.${TEXT_SIZE_NAME[s]}`)}（${s}×）`;
+
   return (
     <ModalShell
-      onClose={attemptClose}
+      onClose={onClose}
       labelledBy={titleId}
       data-testid="export-dialog"
       width={480}
@@ -459,22 +477,27 @@ export function ExportDialog({
                 {form.size.mode === "resolution" && (
                   <div className="export-dialog__field">
                     <label htmlFor="export-resolution">{t("export.video.resolution")}</label>
-                    <select
-                      id="export-resolution"
-                      data-testid="export-resolution"
-                      className="input"
-                      value={form.size.p}
-                      onChange={(e) =>
-                        form.size.mode === "resolution" &&
-                        setSize({ ...form.size, p: Number(e.target.value) })
-                      }
-                    >
-                      {allowedSteps(form.size.aspect).map((p) => (
-                        <option key={p} value={p}>
-                          {p}p
-                        </option>
-                      ))}
-                    </select>
+                    {/* A slider over the named stops this deployment allows
+                        (the plan's 解析度滑桿; "用拉的"): the value is the
+                        stop's index, the label beside it the stop's name. */}
+                    <div className="export-dialog__slider">
+                      <input
+                        id="export-resolution"
+                        type="range"
+                        data-testid="export-resolution"
+                        data-steps={allowedSteps(form.size.aspect).join(",")}
+                        min={0}
+                        max={Math.max(0, allowedSteps(form.size.aspect).length - 1)}
+                        step={1}
+                        value={Math.max(0, allowedSteps(form.size.aspect).indexOf(form.size.p))}
+                        onChange={(e) => {
+                          if (form.size.mode !== "resolution") return;
+                          const p = allowedSteps(form.size.aspect)[Number(e.target.value)];
+                          if (p !== undefined) setSize({ ...form.size, p });
+                        }}
+                      />
+                      <span data-testid="export-resolution-label">{form.size.p}p</span>
+                    </div>
                   </div>
                 )}
                 {form.size.mode === "text" && (
@@ -492,7 +515,7 @@ export function ExportDialog({
                     >
                       {allowedTextSizes(form.size.aspect).map((s) => (
                         <option key={s} value={s}>
-                          {s}×
+                          {textSizeLabel(s)}
                         </option>
                       ))}
                     </select>
@@ -534,6 +557,29 @@ export function ExportDialog({
                         }
                       />
                     </div>
+                    <div className="export-dialog__field">
+                      <label htmlFor="export-custom-text">{t("export.video.textSize")}</label>
+                      <select
+                        id="export-custom-text"
+                        data-testid="export-custom-text"
+                        className="input"
+                        value={form.size.textScale ?? ""}
+                        onChange={(e) => {
+                          if (form.size.mode !== "custom") return;
+                          const { textScale: _dropped, ...rest } = form.size;
+                          setSize(
+                            e.target.value ? { ...rest, textScale: Number(e.target.value) } : rest,
+                          );
+                        }}
+                      >
+                        <option value="">{t("export.video.textSize.auto")}</option>
+                        {TEXT_SIZES.map((s) => (
+                          <option key={s} value={s}>
+                            {textSizeLabel(s)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </>
                 )}
               </div>
@@ -556,13 +602,12 @@ export function ExportDialog({
               <div className="export-dialog__grid">
                 {(
                   [
-                    ["type_ms", "export.video.typeMs", 0, 10000, 1],
-                    ["stream_ms", "export.video.streamMs", 0, 10000, 1],
-                    ["tool_pause_ms", "export.video.toolPauseMs", 0, 60000, 100],
-                    ["zoom", "export.video.zoom", 1, 5, 0.1],
-                    ["speed", "export.video.speed", 0.1, 100, 0.1],
+                    ["speed", "export.video.speed"],
+                    ["type_ms", "export.video.typeMs"],
+                    ["zoom", "export.video.zoom"],
+                    ["max_seconds", "export.video.maxSeconds"],
                   ] as const
-                ).map(([key, label, min, max, step]) => (
+                ).map(([key, label]) => (
                   <div key={key} className="export-dialog__field">
                     <label htmlFor={`export-${key}`}>{t(label)}</label>
                     <input
@@ -570,34 +615,14 @@ export function ExportDialog({
                       type="number"
                       data-testid={`export-${key.replace(/_/g, "-")}`}
                       className="input"
-                      min={min}
-                      max={max}
-                      step={step}
+                      min={TEMPO_BOUNDS[key].min}
+                      max={key === "max_seconds" ? ceiling.max_seconds : TEMPO_BOUNDS[key].max}
+                      step={TEMPO_BOUNDS[key].step}
                       value={form.tempo[key]}
                       onChange={(e) => patchTempo({ [key]: Number(e.target.value) })}
                     />
                   </div>
                 ))}
-                <div className="export-dialog__field">
-                  <label htmlFor="export-max_seconds">{t("export.video.maxSeconds")}</label>
-                  <input
-                    id="export-max_seconds"
-                    type="number"
-                    data-testid="export-max-seconds"
-                    className="input"
-                    min={1}
-                    max={ceiling.max_seconds}
-                    value={form.tempo.max_seconds}
-                    onChange={(e) =>
-                      patchTempo({
-                        max_seconds: Math.max(
-                          1,
-                          Math.min(ceiling.max_seconds, Number(e.target.value) || 1),
-                        ),
-                      })
-                    }
-                  />
-                </div>
               </div>
               <p className="detail">{t("export.video.maxSeconds.note", { n: ceiling.max_seconds })}</p>
             </Field>
@@ -617,7 +642,7 @@ export function ExportDialog({
           data-variant="secondary"
           data-size="sm"
           data-testid="export-cancel"
-          onClick={attemptClose}
+          onClick={onClose}
         >
           {t("export.cancel")}
         </button>

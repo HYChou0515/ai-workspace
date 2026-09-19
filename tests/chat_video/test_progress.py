@@ -47,6 +47,7 @@ def test_a_progress_document_is_human_readable_json_and_round_trips():
         "output_path": "/exports/chat-video/x.mp4",
         "requested_by": "hychou",
         "error": "",
+        "token": "",
     }
     assert b"\n" in raw  # indented: a person opens this in the file tree
     assert Progress.loads(raw) == p
@@ -62,22 +63,28 @@ def test_a_progress_file_that_is_not_ours_is_refused_not_a_traceback():
 
 
 @pytest.mark.parametrize(
-    ("stage", "heartbeat_age", "alive"),
+    ("stage", "heartbeat_age", "queued_alive", "alive"),
     [
-        ("queued", 0, True),
-        ("rendering", 59, True),
-        ("rendering", 60, True),  # at the limit: still the worker's
-        ("rendering", 61, False),  # past it: the worker died, replace
-        ("encoding", 3600, False),
-        ("failed", 3600, False),  # a failed run holds no claim
-        ("failed", 0, False),
+        # queued: no heartbeat to judge — nobody rewrites the file while the
+        # job waits in line — so the queue's own answer decides, at any age.
+        ("queued", 0, True, True),
+        ("queued", 3600, True, True),
+        ("queued", 0, False, False),
+        ("rendering", 59, False, True),
+        ("rendering", 60, False, True),  # at the limit: still the worker's
+        ("rendering", 61, False, False),  # past it: the worker died, replace
+        ("encoding", 3600, True, False),  # a running stage never borrows the queue's answer
+        ("failed", 3600, True, False),  # a failed run holds no claim
+        ("failed", 0, True, False),
     ],
 )
-def test_alive_means_a_heartbeat_within_the_limit_and_not_finished(stage, heartbeat_age, alive):
+def test_alive_means_the_queue_still_holds_it_or_a_heartbeat_within_the_limit(
+    stage, heartbeat_age, queued_alive, alive
+):
     """The in-flight rule (409) and the stale rule (replace) are one
-    predicate: alive ⇔ the stage is still running AND the worker breathed
-    within `stale_after_seconds`. `queued` counts from when it was queued —
-    the API wrote that heartbeat itself."""
+    predicate. A `queued` file is alive while the queue holds its job (the
+    coordinator asks its rows); a running stage is alive while the worker
+    breathed within `stale_after_seconds`; a failed one never."""
     p = Progress(
         stage=stage,
         expected_seconds=41,
@@ -87,4 +94,12 @@ def test_alive_means_a_heartbeat_within_the_limit_and_not_finished(stage, heartb
         requested_by="u",
     )
 
-    assert is_alive(p, now=T0 + timedelta(seconds=heartbeat_age), stale_after_seconds=60) is alive
+    assert (
+        is_alive(
+            p,
+            now=T0 + timedelta(seconds=heartbeat_age),
+            stale_after_seconds=60,
+            queued_alive=queued_alive,
+        )
+        is alive
+    )

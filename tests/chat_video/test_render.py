@@ -13,6 +13,7 @@ import builtins
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -63,10 +64,18 @@ class _FakeFfmpeg:
         self.killed = False
         self.returncode: int | None = None
         self.args: list[str] = []
+        self.calls: list[list[str]] = []
 
-    def __call__(self, args, **_kw):  # the Popen call itself
+    def __call__(self, args, **kw):  # the Popen call itself
         self.args = list(args)
+        self.calls.append(list(args))
         Path(args[-1]).write_bytes(b"partial")  # ffmpeg opens its output at once
+        # ffmpeg's stderr goes to a FILE (see `_run_ffmpeg`); the fake writes
+        # its last words there, as the real one would.
+        err = kw.get("stderr")
+        if hasattr(err, "write"):
+            err.write(self.stderr_text)
+            err.flush()
         return self
 
     def wait(self, timeout: float | None = None):
@@ -81,7 +90,7 @@ class _FakeFfmpeg:
         self.returncode = -9
 
     def communicate(self, timeout: float | None = None):
-        return "", self.stderr_text
+        return "", ""
 
 
 def test_an_ffmpeg_failure_carries_its_own_last_words(monkeypatch, tmp_path):
@@ -96,6 +105,46 @@ def test_an_ffmpeg_failure_carries_its_own_last_words(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="Invalid data found"):
         encode(tmp_path / "in.webm", "mp4", tmp_path / "out.mp4")
+
+
+def test_the_gif_passes_are_both_thread_capped_and_the_palette_is_an_input(monkeypatch, tmp_path):
+    """Two things the code did not do while its docstring said so: the
+    palette pass had no `-threads 2` before `-i` (the decoder ran on every
+    core; measured 164 MB vs 123 MB capped), and the second pass named the
+    palette INSIDE a filter graph (`movie=<path>`), where a `:` or `,` in the
+    scratch path breaks the parse. The palette is a second input now."""
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    proc = _FakeFfmpeg()
+    monkeypatch.setattr(render.subprocess, "Popen", proc)
+
+    encode(tmp_path / "in.webm", "gif", tmp_path / "out.gif")
+
+    first, second = proc.calls
+    for args in (first, second):
+        assert args.index("-threads") < args.index("-i") and args[args.index("-threads") + 1] == "2"
+    assert second.count("-i") == 2 and not any("movie=" in a for a in second)
+
+
+def test_an_ffmpeg_that_talks_a_lot_still_finishes_with_its_last_words(monkeypatch, tmp_path):
+    """stderr used to be a pipe nobody read until exit: a pass writing more
+    than the pipe holds (64 KB — per-frame decode errors on a damaged
+    recording) blocked on it and was only killed at the 300-second cap,
+    reported as a hang. It writes to a file now; the tail is still the
+    sentence."""
+    talker = tmp_path / "ffmpeg"
+    talker.write_text(
+        "#!/bin/sh\n"
+        'python3 -c "import sys; '
+        "sys.stderr.write('noise\\n' * 40000 + 'the real reason\\n'); sys.exit(1)\"\n"
+    )
+    talker.chmod(0o755)
+    monkeypatch.setattr(shutil, "which", lambda _name: str(talker))
+    monkeypatch.setattr(render, "_ENCODE_TIMEOUT_S", 5)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="the real reason"):
+        encode(tmp_path / "in.webm", "mp4", tmp_path / "out.mp4")
+    assert time.monotonic() - started < 4  # not the timeout
 
 
 def test_an_ffmpeg_that_hangs_is_a_sentence_not_a_traceback(monkeypatch, tmp_path):

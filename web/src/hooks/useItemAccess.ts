@@ -52,9 +52,10 @@ export type ItemAccess = {
   canConverse: boolean;
   /** Write entity records / edit files (`edit_content` family). */
   canWrite: boolean;
-  /** Add a file to the workspace (`add_content` alone) — with {@link canSeeFiles},
-   * the video export's gate. Narrower than {@link canWrite} on purpose: the route
-   * asks this one verb, and an editor who passes the union is refused. */
+  /** Add a file to the workspace (`add_content`, which an `edit_content` grant
+   * includes — the server's rule) — with {@link canSeeFiles}, the video
+   * export's gate. Narrower than {@link canWrite} on purpose: the route asks
+   * this verb, and a `write_meta` holder who passes the union is refused. */
   canAddContent: boolean;
   /** Store a field ON the item — env vars, tool/skill prefs, the details form
    * (`write_meta`). Narrower than {@link canWrite} on purpose: the item PATCH

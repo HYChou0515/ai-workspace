@@ -160,15 +160,19 @@ export function canWriteItem(
 /** May the caller ADD to the item's content — the second verb the video
  * export asks (`POST …/chat-video`: `read_content` for the pictures the
  * transcript shows, `add_content` for the video it writes into the
- * workspace). One verb, not {@link canWriteItem}'s union: an editor holding
- * only `edit_content` passes the union and is refused 403 by the route. */
+ * workspace). The server's own rule (`perm/authorize._effective_grants`):
+ * `edit_content ⊇ add_content` — whoever may overwrite a file may add one
+ * — so an `edit_content` grant counts. Not {@link canWriteItem}'s union
+ * either way: a `write_meta` grant passes that and the route says 403. */
 export const canAddItemContent = (
   permission: ItemPermission | undefined,
   currentUserId: string,
   ownerId: string,
   isSuperuser: boolean,
   groups: string[] = [],
-): boolean => hasItemVerb(permission, currentUserId, ownerId, "add_content", isSuperuser, groups);
+): boolean =>
+  hasItemVerb(permission, currentUserId, ownerId, "add_content", isSuperuser, groups) ||
+  hasItemVerb(permission, currentUserId, ownerId, "edit_content", isSuperuser, groups);
 
 export const canWriteItemMeta = (
   permission: ItemPermission | undefined,

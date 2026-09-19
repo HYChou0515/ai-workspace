@@ -195,7 +195,9 @@ select {
    field cannot ship with the browser's inset grey because nobody remembered to
    copy the border/radius/surface inline (that is how the sandbox modal's two
    fields shipped bare, while the same look lived under a KB-only name and as 113
-   inline copies). Moved here from kb.css, values unchanged. A
+   inline copies). The rule PR #825 adds, copied byte for byte so whichever
+   merges second resolves one obvious conflict; #825 moves it here from
+   kb.css and retires `.kb-input` — this branch leaves kb.css alone. A
    container that wants a fixed width sets it on the element; the default is
    "fill the flex row". */
 .input {

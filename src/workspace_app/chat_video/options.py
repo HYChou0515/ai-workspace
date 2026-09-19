@@ -79,13 +79,10 @@ class VideoOptions(msgspec.Struct, frozen=True):
         checks = (
             (16 <= self.width <= 7680, "width must be 16..7680"),
             (16 <= self.height <= 4320, "height must be 16..4320"),
-            # libx264 with yuv420p refuses an odd side ("width not divisible
-            # by 2") — after the whole recording has run. The form only ever
-            # offers even sizes (`lib/videoSize.ts`); this is for everyone else.
-            (
-                self.width % 2 == 0 and self.height % 2 == 0,
-                "width and height must be even (the mp4 encoder's rule)",
-            ),
+            # No even-side rule: an odd frame is rounded down by the recorder
+            # (1001×601 records as 1000×600), so x264 never sees one — a rule
+            # here refused inputs that worked. The form offers even sizes so
+            # the number it shows is the number that comes out.
             (self.chat_width >= 200, "chat_width must be at least 200"),
             (self.scale >= 0, "scale must be 0 (automatic) or positive"),
             (self.zoom >= 1, "zoom must be at least 1 (1 = no push-in)"),
@@ -114,12 +111,20 @@ class VideoOptions(msgspec.Struct, frozen=True):
                 raise ValueError(why)
 
 
-def check_limits(options: VideoOptions, *, max_pixels: int, max_seconds: int) -> None:
+def check_limits(
+    options: VideoOptions, *, max_pixels: int, max_seconds: int, max_output_bytes: int
+) -> None:
     """The server's ceilings on top of the struct's own sanity (which is what
     ANY caller may ask; these are what THIS deployment allows —
     ``config.yaml`` ``chat_video:``). The form never offers a value past
     them; a caller of the API can send anything, so the refusal names the
-    ceiling and what it is, one sentence, for a 422."""
+    ceiling and what it is, one sentence, for a 422.
+
+    The two asset budgets are bounded by ``max_output_bytes`` — the one
+    number the deployment already states for "how many bytes one video may
+    weigh": the page carries its pictures inline, and the worker holds what
+    the page will inline, so a request may not ask it to pull more than that
+    into memory (it used to accept ``10**12`` and read the whole file)."""
     pixels = options.width * options.height
     if pixels > max_pixels:
         side = _side_of(max_pixels)
@@ -128,6 +133,16 @@ def check_limits(options: VideoOptions, *, max_pixels: int, max_seconds: int) ->
         )
     if options.max_seconds > max_seconds:
         raise ValueError(f"max_seconds {options.max_seconds}; at most {max_seconds}")
+    if options.max_assets_total_bytes > max_output_bytes:
+        raise ValueError(
+            f"max_assets_total_bytes {options.max_assets_total_bytes:,}; "
+            f"at most {max_output_bytes:,} (the output ceiling)"
+        )
+    if options.max_asset_bytes > options.max_assets_total_bytes:
+        raise ValueError(
+            f"max_asset_bytes {options.max_asset_bytes:,}; "
+            f"at most max_assets_total_bytes ({options.max_assets_total_bytes:,})"
+        )
 
 
 def _side_of(max_pixels: int) -> str:

@@ -23,6 +23,7 @@ const QUEUED: ChatVideoQueued = {
   progress_path: "/exports/chat-video/OOM-1.mp4.progress.json",
   expected_seconds: 41,
   stale_after_seconds: 60,
+  token: "job-1",
 };
 
 function client(over: Partial<ExportDialogClient> = {}): ExportDialogClient {
@@ -144,7 +145,13 @@ describe("ExportDialog — video", () => {
     await screen.findByTestId("export-size-result");
     fireEvent.click(screen.getByTestId("export-range-latest"));
     fireEvent.change(screen.getByTestId("export-latest-n"), { target: { value: "4" } });
-    fireEvent.change(screen.getByTestId("export-resolution"), { target: { value: "1080" } });
+    // The resolution is a SLIDER over the steps this deployment allows
+    // (the user's word: "用拉的"); index 2 of 480/720/1080/1440/2160 is 1080p.
+    const slider = screen.getByTestId("export-resolution") as HTMLInputElement;
+    expect(slider.type).toBe("range");
+    expect(slider.getAttribute("data-steps")).toBe("480,720,1080");
+    fireEvent.change(slider, { target: { value: "2" } });
+    expect(screen.getByTestId("export-resolution-label").textContent).toBe("1080p");
     fireEvent.change(screen.getByTestId("export-type-ms"), { target: { value: "40" } });
     // The result line is the same numbers the request will carry.
     expect(screen.getByTestId("export-size-result").textContent).toContain("1920×1080");
@@ -183,13 +190,56 @@ describe("ExportDialog — video", () => {
     await screen.findByTestId("export-size-result");
 
     fireEvent.click(screen.getByTestId("export-size-mode-text"));
-    fireEvent.change(screen.getByTestId("export-aspect"), { target: { value: "4:3" } });
-    fireEvent.change(screen.getByTestId("export-text-size"), { target: { value: "1.5" } });
+    fireEvent.change(screen.getByTestId("export-aspect"), { target: { value: "1:1" } });
+    fireEvent.change(screen.getByTestId("export-text-size"), { target: { value: "1.3" } });
     fireEvent.click(screen.getByTestId("export-submit"));
 
     await waitFor(() => expect(c.startChatVideo).toHaveBeenCalledTimes(1));
     const body = (c.startChatVideo as ReturnType<typeof vi.fn>).mock.calls[0][2];
-    expect(body.options).toMatchObject({ width: 1440, height: 1080, scale: 1.5 });
+    expect(body.options).toMatchObject({ width: 936, height: 936, scale: 1.3 });
+  });
+
+  it("custom width × height may pin a text size too (the plan's optional third input)", async () => {
+    const c = client();
+    open(c);
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+    await screen.findByTestId("export-size-result");
+
+    fireEvent.click(screen.getByTestId("export-size-mode-custom"));
+    fireEvent.change(screen.getByTestId("export-width"), { target: { value: "1000" } });
+    fireEvent.change(screen.getByTestId("export-height"), { target: { value: "600" } });
+    fireEvent.change(screen.getByTestId("export-custom-text"), { target: { value: "1.6" } });
+    fireEvent.click(screen.getByTestId("export-submit"));
+
+    await waitFor(() => expect(c.startChatVideo).toHaveBeenCalledTimes(1));
+    const body = (c.startChatVideo as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    expect(body.options).toMatchObject({ width: 1000, height: 600, scale: 1.6 });
+  });
+
+  it("offers the six knobs of decision 9 and no more; a knob typed out of range is clamped at submit", async () => {
+    const c = client();
+    open(c);
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+    await screen.findByTestId("export-size-result");
+
+    // size · format · speed · typing · zoom · max seconds — the reply and
+    // tool-pause knobs the first version added are the struct's defaults.
+    expect(screen.queryByTestId("export-stream-ms")).toBeNull();
+    expect(screen.queryByTestId("export-tool-pause-ms")).toBeNull();
+    fireEvent.change(screen.getByTestId("export-zoom"), { target: { value: "0" } });
+    fireEvent.change(screen.getByTestId("export-speed"), { target: { value: "0" } });
+    fireEvent.change(screen.getByTestId("export-type-ms"), { target: { value: "99999" } });
+    fireEvent.click(screen.getByTestId("export-submit"));
+
+    await waitFor(() => expect(c.startChatVideo).toHaveBeenCalledTimes(1));
+    const body = (c.startChatVideo as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    // The struct's own bounds (`VideoOptions.__post_init__`): a server 422
+    // for a cleared field was the first version's answer.
+    expect(body.options).toMatchObject({ zoom: 1, speed: 0.1, type_ms: 10000 });
+    expect(body.options).not.toHaveProperty("stream_ms");
+    expect(body.options).not.toHaveProperty("tool_pause_ms");
   });
 
   it("offers only the sizes this deployment allows, and refuses a typed size past them", async () => {
@@ -205,11 +255,8 @@ describe("ExportDialog — video", () => {
     fireEvent.click(screen.getByTestId("export-kind-video"));
     await screen.findByTestId("export-size-result");
 
-    // 1080p is 2,073,600 pixels: past a 720p ceiling, so not on the list.
-    const steps = Array.from(
-      (screen.getByTestId("export-resolution") as HTMLSelectElement).options,
-    ).map((o) => o.value);
-    expect(steps).toEqual(["480", "720"]);
+    // 1080p is 2,073,600 pixels: past a 720p ceiling, so not on the slider.
+    expect(screen.getByTestId("export-resolution").getAttribute("data-steps")).toBe("480,720");
     // The max-seconds field is capped where the deployment caps it.
     expect((screen.getByTestId("export-max-seconds") as HTMLInputElement).max).toBe("60");
 
@@ -258,8 +305,12 @@ describe("ExportDialog — video", () => {
   });
 });
 
-describe("ExportDialog — leaving (#779)", () => {
-  it("asks before dropping a changed form, and keeps it", async () => {
+describe("ExportDialog — leaving", () => {
+  it("Cancel and Escape close at once, even after a choice was made: options are not unsaved work", async () => {
+    // The plan's 知情取捨: this dialog holds a few dropdowns, not a draft.
+    // A "discard unsaved changes?" after one radio click is the guard #779
+    // warns about — one that fires when nothing was lost and teaches people
+    // to click through it. (The first version added it anyway.)
     const c = client();
     const { onClose } = open(c);
     await screen.findByText("全部（10 則）");
@@ -267,18 +318,9 @@ describe("ExportDialog — leaving (#779)", () => {
 
     fireEvent.click(screen.getByTestId("export-cancel"));
 
-    expect(onClose).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByTestId("dialog-action-keep"));
-    expect(screen.getByTestId("export-kind-md")).toBeChecked();
-  });
-
-  it("closes without asking when nothing was changed", async () => {
-    const c = client();
-    const { onClose } = open(c);
-    await screen.findByText("全部（10 則）");
-
-    fireEvent.click(screen.getByTestId("export-cancel"));
-
-    expect(onClose).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });

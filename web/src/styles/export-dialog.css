@@ -92,6 +92,30 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The resolution slider: `FontSizeSlider`'s shape — the track fills, the
+   stop's name sits beside it in tabular figures. */
+.export-dialog__slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: 28px;
+}
+
+.export-dialog__slider input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.export-dialog__slider span {
+  min-width: 3.5em;
+  text-align: right;
+  font-size: var(--text-body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-paper);
+}
+
 /* The always-shown answer to "what will I get": W×H · text scale · ~MB. */
 .export-dialog__result {
   margin: 0;
@@ -161,6 +185,15 @@
 .video-progress[data-state="failed"],
 .video-progress__stale {
   color: var(--err);
+}
+
+.video-progress__stale,
+.video-progress__waiting {
+  white-space: normal;
+}
+
+.video-progress__waiting {
+  color: var(--text-paper-d);
 }
 
 .video-progress__stage {

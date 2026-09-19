@@ -490,10 +490,14 @@ spec:
       labels:
         app: rca-worker-chat-video
     spec:
-      # A render in flight is stoppable at any second (the heartbeat asks), but
-      # a SIGTERM lets the job drain (`consume_until_stopped`) up to the video's
-      # own length: `chat_video.max_seconds` (180 s) + the encode.
-      terminationGracePeriodSeconds: 240
+      # A SIGTERM lets the job in flight finish (`consume_until_stopped`
+      # drains), and a job's worst case is the sum of its own deadlines:
+      # the recording gives up at `expected × 1.5 + 30 s` (`render.record`),
+      # 300 s for the default `chat_video.max_seconds` of 180; each ffmpeg
+      # pass at `_ENCODE_TIMEOUT_S` = 300 s, and gif is two passes — 300 +
+      # 600 = 900. Shorter and a rollout SIGKILLs a half-made video: the row
+      # stays PROCESSING, the heartbeat stops, the pill says "worker 沒有回應".
+      terminationGracePeriodSeconds: 900
       containers:
         - name: worker
           image: rca-app-chat-video:latest

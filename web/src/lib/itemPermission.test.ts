@@ -35,12 +35,18 @@ describe("canWriteItem (mirrors backend perm/authorize for a write verb)", () =>
   });
 });
 
-describe("canAddItemContent (the video export's second verb: add_content ALONE)", () => {
-  // `POST …/chat-video` asks read_content AND add_content. The union
-  // (`canWriteItem`) says yes to an editor who holds only edit_content — and
-  // the server then answers 403, so the union is the wrong question here.
-  it("an editor with edit_content only is NOT an adder — the union would have said yes", () => {
+describe("canAddItemContent (the video export's second verb, by the server's rule)", () => {
+  // `POST …/chat-video` asks read_content AND add_content. The server folds
+  // edit_content into add_content (`_effective_grants`, pinned by
+  // tests/perm/test_authorize.py::test_edit_content_grant_implies_add_content);
+  // the first version read the verb ALONE and told an editor with only
+  // edit_content the video needed a grant the route would not ask for.
+  it("an editor with edit_content only IS an adder — edit_content ⊇ add_content", () => {
     const perm = { visibility: "restricted" as const, edit_content: ["user:me1"] };
+    expect(canAddItemContent(perm, ME, OWNER, false)).toBe(true);
+  });
+  it("write_meta alone is NOT — the union (`canWriteItem`) says yes and the route 403s", () => {
+    const perm = { visibility: "restricted" as const, write_meta: ["user:me1"] };
     expect(canWriteItem(perm, ME, OWNER, false)).toBe(true);
     expect(canAddItemContent(perm, ME, OWNER, false)).toBe(false);
   });

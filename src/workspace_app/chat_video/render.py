@@ -165,12 +165,15 @@ def encode(src: Path, fmt: Format, out: Path, *, should_stop: StopCheck | None =
         shutil.copyfile(src, out)
         return out
     if fmt == "gif":
+        # The palette is the second pass's second INPUT, never text inside
+        # the filter graph (`movie=<path>`): a `:` or `,` in the scratch path
+        # would break that parse.
         palette = out.with_name(out.name + ".palette.png")
         passes = [
-            [ffmpeg, "-v", "error", "-y", "-i", str(src),
-             "-vf", "fps=12,palettegen=max_colors=200", str(palette)],
             [ffmpeg, "-v", "error", "-y", "-threads", "2", "-i", str(src),
-             "-vf", f"movie={palette}[p];[in]fps=12[x];[x][p]paletteuse=dither=bayer", str(out)],
+             "-vf", "fps=12,palettegen=max_colors=200", str(palette)],
+            [ffmpeg, "-v", "error", "-y", "-threads", "2", "-i", str(src), "-i", str(palette),
+             "-filter_complex", "[0:v]fps=12[x];[x][1:v]paletteuse=dither=bayer", str(out)],
         ]  # fmt: skip
     elif fmt == "mp4":
         passes = [
@@ -180,42 +183,47 @@ def encode(src: Path, fmt: Format, out: Path, *, should_stop: StopCheck | None =
         ]  # fmt: skip
     else:
         raise ValueError(f"unknown format {fmt!r} (gif, mp4 or webm)")
+    log = out.with_name(out.name + ".stderr.log")
     try:
         for args in passes:
-            _run_ffmpeg(args, fmt, should_stop)
+            _run_ffmpeg(args, fmt, should_stop, log=log)
     except BaseException:
         out.unlink(missing_ok=True)  # nothing half-written survives a refusal
         raise
     finally:
+        log.unlink(missing_ok=True)
         if fmt == "gif":
             out.with_name(out.name + ".palette.png").unlink(missing_ok=True)
     return out
 
 
-def _run_ffmpeg(args: list[str], fmt: Format, should_stop: StopCheck | None) -> None:
+def _run_ffmpeg(args: list[str], fmt: Format, should_stop: StopCheck | None, *, log: Path) -> None:
     """One ffmpeg pass, polled every second so a stop reaches it: ``should_stop``
     True kills it and raises :class:`Cancelled`; the pass overrunning
     ``_ENCODE_TIMEOUT_S`` kills it and is a sentence naming the limit; a
-    non-zero exit carries ffmpeg's last words."""
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    waited = 0
-    while True:
-        try:
-            code = proc.wait(timeout=1)
-            break
-        except subprocess.TimeoutExpired:
-            waited += 1
-            if should_stop is not None and should_stop():
-                proc.kill()
-                proc.communicate()
-                raise Cancelled("the encode was cancelled") from None
-            if waited >= _ENCODE_TIMEOUT_S:
-                proc.kill()
-                proc.communicate()
-                raise RuntimeError(
-                    f"ffmpeg did not finish encoding {fmt} within {_ENCODE_TIMEOUT_S}s"
-                ) from None
-    _, stderr = proc.communicate()
+    non-zero exit carries ffmpeg's last words. stderr goes to ``log``, a
+    file: a pipe nobody reads until exit holds 64 KB, and a pass with more
+    to say (per-frame decode errors on a damaged recording) blocked on it
+    and was only killed at the cap, reported as a hang."""
+    with log.open("w", encoding="utf-8") as err:
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=err, text=True)
+        waited = 0
+        while True:
+            try:
+                code = proc.wait(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                waited += 1
+                if should_stop is not None and should_stop():
+                    proc.kill()
+                    proc.communicate()
+                    raise Cancelled("the encode was cancelled") from None
+                if waited >= _ENCODE_TIMEOUT_S:
+                    proc.kill()
+                    proc.communicate()
+                    raise RuntimeError(
+                        f"ffmpeg did not finish encoding {fmt} within {_ENCODE_TIMEOUT_S}s"
+                    ) from None
     if code:
-        tail = (stderr or "").strip().splitlines()[-3:]
+        tail = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-3:]
         raise RuntimeError(f"ffmpeg failed encoding {fmt}: " + " | ".join(tail))

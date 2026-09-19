@@ -37,6 +37,7 @@ import logging
 import shutil
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,7 +45,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 from specstar import QB, Schema, SpecStar
-from specstar.types import Job, TaskStatus
+from specstar.types import Job, ResourceMeta, TaskStatus
 
 from ..api.item_authz import load_access_facts
 from ..config.schema import ChatVideoSettings
@@ -68,8 +69,10 @@ _DRAIN_INTERVAL = 0.02
 
 
 class InFlight(Exception):
-    """A live progress file already claims this output (or this user already
-    has one running on the item): the route answers 409."""
+    """Decision 10 — one video in flight per ITEM and one per PERSON: a live
+    progress file already claims this output, another job is alive on this
+    item, or this person already has one alive somewhere. The route answers
+    409 with the sentence."""
 
 
 class ChatVideoPayload(msgspec.Struct):
@@ -81,6 +84,8 @@ class ChatVideoPayload(msgspec.Struct):
     output_path: str
     progress_path: str
     options: VideoOptions
+    token: str = ""
+    """The job's own mark in its progress file (`Progress.token`)."""
 
 
 class ChatVideoJob(Job[ChatVideoPayload]):
@@ -90,6 +95,23 @@ class ChatVideoJob(Job[ChatVideoPayload]):
 
 
 Render = Callable[..., dict[str, bytes]]
+
+
+class Queued(msgspec.Struct, frozen=True):
+    """What :meth:`ChatVideoCoordinator.enqueue` hands back: the two files it
+    wrote and the mark on them. The token lets a watcher tell THIS job's
+    progress file from a successor's at the same path (the worker's own
+    ``mine()`` rule) — a file that is not this job's is, to it, gone."""
+
+    source_path: str
+    progress_path: str
+    token: str
+
+
+class _LiveJob(msgspec.Struct, frozen=True):
+    item_id: str
+    user: str
+    output_path: str
 
 
 class ChatVideoCoordinator:
@@ -148,16 +170,21 @@ class ChatVideoCoordinator:
         output_path: str,
         expected_seconds: int,
         user: str,
-    ) -> tuple[str, str]:
+    ) -> Queued:
         """Write the source and the ``queued`` progress file, queue the job;
-        ``(source_path, progress_path)``. :class:`InFlight` when a live
-        progress file already claims this output or this user already has one
-        running on the item; a stale one (its worker died) is replaced."""
+        the two paths and the job's token. :class:`InFlight` (decision 10) when
+        a live progress file already claims this output, when any job is
+        alive on this item, or when this person has one alive on any item;
+        a stale file (its worker died) or one that is nobody's is replaced."""
         source_path, progress_path = prog.paths_for(output_path)
         if await self._alive_progress(item_id, progress_path) is not None:
             raise InFlight(f"a video is already being made at {output_path}")
-        if (other := await self._running_for(item_id, user)) is not None:
-            raise InFlight(f"you already have a video being made at {other}")
+        for live in await self._alive_jobs():
+            if live.item_id == item_id:
+                raise InFlight(f"a video is already being made on this item at {live.output_path}")
+            if live.user == user:
+                raise InFlight(f"you already have a video being made at {live.output_path}")
+        token = uuid.uuid4().hex
         now = self._now()
         await self.files.write(
             item_id, source_path, build_chat_export(title=title, messages=messages)
@@ -172,6 +199,7 @@ class ChatVideoCoordinator:
                 heartbeat_at=now,
                 output_path=output_path,
                 requested_by=user,
+                token=token,
             ).dumps(),
         )
         with self._job_rm.using(user=user):
@@ -183,11 +211,12 @@ class ChatVideoCoordinator:
                         output_path=output_path,
                         progress_path=progress_path,
                         options=options,
+                        token=token,
                     ),
                     partition_key=item_id,
                 )
             )
-        return source_path, progress_path
+        return Queued(source_path=source_path, progress_path=progress_path, token=token)
 
     async def _read_progress(self, item_id: str, path: str) -> prog.Progress | None:
         """The file as ours, or None: absent, or not one of ours."""
@@ -200,28 +229,46 @@ class ChatVideoCoordinator:
         except ValueError:
             return None
 
-    async def _alive_progress(self, item_id: str, path: str) -> prog.Progress | None:
-        p = await self._read_progress(item_id, path)
-        if p is None or not prog.is_alive(
-            p, now=self._now(), stale_after_seconds=self._limits.stale_after_seconds
-        ):
-            return None
-        return p
-
-    async def _running_for(self, item_id: str, user: str) -> str | None:
-        """The output path of a job this user has alive on the item, if any —
-        from the queue's own rows (bounded by jobs in flight), then the
-        progress file they point at, which is the truth about liveness."""
-        rows = self._job_rm.list_resources(QB["status"].in_(_ACTIVE).build())
-        for row in rows:
-            data = row.data
+    def _active_rows(self) -> list[tuple[ChatVideoPayload, str]]:
+        """``(payload, requester)`` of every PENDING / PROCESSING row — the
+        queue's own view, bounded by jobs in flight."""
+        out: list[tuple[ChatVideoPayload, str]] = []
+        for row in self._job_rm.list_resources(QB["status"].in_(_ACTIVE).build()):
+            data, meta = row.data, row.meta
             assert isinstance(data, ChatVideoJob)
-            payload = data.payload
-            if payload.item_id != item_id or row.info.created_by != user:  # ty: ignore[unresolved-attribute]
+            # A soft-deleted row still answers the status query (the index
+            # is on the data, the deletion on the meta): no longer a claim.
+            if isinstance(meta, ResourceMeta) and meta.is_deleted:
                 continue
-            if await self._alive_progress(item_id, payload.progress_path) is not None:
-                return payload.output_path
-        return None
+            out.append((data.payload, row.info.created_by))  # ty: ignore[unresolved-attribute]
+        return out
+
+    async def _alive_progress(self, item_id: str, path: str) -> prog.Progress | None:
+        """The file at ``path`` if a job still holds it (`progress.is_alive`):
+        a ``queued`` file while a row names it, a running one by heartbeat."""
+        p = await self._read_progress(item_id, path)
+        if p is None:
+            return None
+        queued_alive = any(
+            pl.progress_path == path and pl.item_id == item_id for pl, _ in self._active_rows()
+        )
+        alive = prog.is_alive(
+            p,
+            now=self._now(),
+            stale_after_seconds=self._limits.stale_after_seconds,
+            queued_alive=queued_alive,
+        )
+        return p if alive else None
+
+    async def _alive_jobs(self) -> list[_LiveJob]:
+        """Every job that is alive right now — its row active AND the progress
+        file it points at still its own (the file is the truth about a
+        worker that died mid-render). What decision 10's two rules read."""
+        out: list[_LiveJob] = []
+        for payload, requester in self._active_rows():
+            if await self._alive_progress(payload.item_id, payload.progress_path) is not None:
+                out.append(_LiveJob(payload.item_id, requester, payload.output_path))
+        return out
 
     # ── consumer ─────────────────────────────────────────────────────
     def _handle(self, job) -> None:  # job: Resource[ChatVideoJob]
@@ -251,11 +298,21 @@ class ChatVideoCoordinator:
         item, files = payload.item_id, self.files
         started = self._now()
         stage: list[prog.Stage] = ["rendering"]
-        stop = threading.Event()
+        stop = threading.Event()  # the render's: set by the heartbeat on a cancel
+        halt = asyncio.Event()  # the heartbeat's: set by the job when the render is over
+
+        async def mine() -> prog.Progress | None:
+            """This job's progress file — None when it is gone (the cancel)
+            or is another job's (a cancel followed by a new request for the
+            same output): both mean "stop, write nothing, leave it alone"."""
+            current = await self._read_progress(item, payload.progress_path)
+            if current is None or current.token != payload.token:
+                return None
+            return current
 
         async def fail(sentence: str) -> None:
             logger.warning("chat-video: %s: %s", payload.output_path, sentence)
-            if await self._read_progress(item, payload.progress_path) is None:
+            if await mine() is None:
                 return  # cancelled meanwhile: the file is gone, leave it gone
             await files.write(
                 item,
@@ -268,9 +325,15 @@ class ChatVideoCoordinator:
                     output_path=payload.output_path,
                     requested_by=requester,
                     error=sentence,
+                    token=payload.token,
                 ).dumps(),
             )
 
+        if await mine() is None:
+            # Cancelled while it waited in line: nothing to start, nothing to
+            # write. Without this look the render began regardless — Chromium
+            # up and recording for a heartbeat before the flag was seen.
+            return
         if not self._may(item, requester):
             await fail("not authorized any more to read this item's files and add to them")
             return
@@ -280,46 +343,70 @@ class ChatVideoCoordinator:
             await fail(f"the transcript {payload.source_path} could not be read: {exc}")
             return
         timeline = build_timeline(title=title, messages=messages, options=payload.options)
-        # The CLI's `load_assets` rule: only the referenced files, and only
-        # those that fit `max_asset_bytes` — decided from the size BEFORE the
-        # read, so a 300 MB file the page would never inline is not pulled
-        # into this pod's memory first. Absent ones are simply not in the
-        # result (the page draws a card, or the alt text).
+        # The page's own rule for which pictures it inlines
+        # (`player.decide_assets`): each must fit `max_asset_bytes`, and they
+        # are taken first-fit in reading order until `max_assets_total_bytes`
+        # is spent. Applied here from the SIZES, before any read, so a file
+        # the page would not inline is not pulled into this pod's memory —
+        # the worker used to read every fitting file and hand the page 60 MB
+        # it then discarded. Absent ones are simply not in the result.
         fitting: list[str] = []
+        budget = payload.options.max_assets_total_bytes
         for path in timeline.referenced_paths():
             size = await files.file_size(item, path)
-            if size is not None and size <= payload.options.max_asset_bytes:
-                fitting.append(path)
+            if size is None or size > payload.options.max_asset_bytes or size > budget:
+                continue
+            fitting.append(path)
+            budget -= size
         assets = await files.read_many_existing(item, fitting)
         expected = round(timeline.playback_ms / 1000)
 
         async def heartbeat() -> None:
-            while True:
-                await asyncio.sleep(self._limits.heartbeat_seconds)
-                current = await self._read_progress(item, payload.progress_path)
-                if current is None:
-                    stop.set()  # deleted: the cancel
+            """Rewrite the progress file every `heartbeat_seconds` with the
+            stage and the elapsed time; its absence (or another job's file
+            in its place) is the cancel. A write that fails is logged and
+            the next beat tries again — this task ending with an exception
+            used to end the JOB after the render had finished, video
+            thrown away and no sentence written. It stops when asked
+            (`halt`), never by cancellation: cancelling a store write does
+            not stop the write — every real backend lands it from a thread
+            — and a beat cancelled mid-write used to land AFTER `fail()`
+            and put `rendering` back over the sentence."""
+            while not halt.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(halt.wait(), timeout=self._limits.heartbeat_seconds)
+                if halt.is_set():
                     return
-                now = self._now()
-                await files.write(
-                    item,
-                    payload.progress_path,
-                    prog.Progress(
-                        stage=stage[0],
-                        expected_seconds=expected,
-                        elapsed_seconds=int((now - started).total_seconds()),
-                        started_at=started,
-                        heartbeat_at=now,
-                        output_path=payload.output_path,
-                        requested_by=requester,
-                    ).dumps(),
-                )
+                try:
+                    if await mine() is None:
+                        stop.set()  # deleted, or someone else's now: the cancel
+                        return
+                    now = self._now()
+                    await files.write(
+                        item,
+                        payload.progress_path,
+                        prog.Progress(
+                            stage=stage[0],
+                            expected_seconds=expected,
+                            elapsed_seconds=int((now - started).total_seconds()),
+                            started_at=started,
+                            heartbeat_at=now,
+                            output_path=payload.output_path,
+                            requested_by=requester,
+                            token=payload.token,
+                        ).dumps(),
+                    )
+                except Exception:  # noqa: BLE001 — one beat, not the job
+                    logger.warning(
+                        "chat-video: heartbeat for %s failed", payload.output_path, exc_info=True
+                    )
 
         def on_stage(name: str) -> None:
             stage[0] = "encoding" if name == "encoding" else "rendering"
 
         beat = asyncio.create_task(heartbeat())
         scratch = tempfile.mkdtemp(prefix="chat-video-")
+        failure: str | None = None
         try:
             result = await asyncio.to_thread(
                 self._render,
@@ -334,14 +421,19 @@ class ChatVideoCoordinator:
         except Cancelled:
             return  # the file is gone; nothing to write, nothing to say
         except Exception as exc:  # noqa: BLE001 — the sentence is the job's whole report
-            await fail(str(exc) or type(exc).__name__)
-            return
+            failure = str(exc) or type(exc).__name__
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
-            beat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await beat
-        if await self._read_progress(item, payload.progress_path) is None:
+            # The heartbeat is stopped — asked, and waited for, so a write
+            # in flight has landed — BEFORE anything else is written: a beat
+            # in flight during `fail()` used to land after it and put
+            # `rendering` back over the sentence.
+            halt.set()
+            await beat
+        if failure is not None:
+            await fail(failure)
+            return
+        if await mine() is None:
             return  # cancelled between the render's end and now: discard
         fmt = payload.options.fmt[0]
         data = result[fmt]

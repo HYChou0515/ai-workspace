@@ -25,7 +25,6 @@ describe("frameFor — an aspect at a short side", () => {
   it("names the frames people know by their short side", () => {
     expect(frameFor("16:9", 720)).toEqual({ width: 1280, height: 720 });
     expect(frameFor("16:9", 1080)).toEqual({ width: 1920, height: 1080 });
-    expect(frameFor("4:3", 720)).toEqual({ width: 960, height: 720 });
     expect(frameFor("1:1", 720)).toEqual({ width: 720, height: 720 });
     // Portrait: the short side is the width.
     expect(frameFor("9:16", 720)).toEqual({ width: 720, height: 1280 });
@@ -33,7 +32,7 @@ describe("frameFor — an aspect at a short side", () => {
 
   it("is always even on both sides — the encoder's rule (yuv420p)", () => {
     for (const p of RESOLUTION_STEPS) {
-      for (const aspect of ["16:9", "4:3", "1:1", "9:16"] as const) {
+      for (const aspect of ["16:9", "1:1", "9:16"] as const) {
         const { width, height } = frameFor(aspect, p);
         expect(width % 2, `${aspect} ${p}`).toBe(0);
         expect(height % 2, `${aspect} ${p}`).toBe(0);
@@ -54,29 +53,36 @@ describe("resolveSize — three ways to say one W×H + text scale", () => {
   });
 
   it("text: aspect + a text size, the frame follows so the text is exactly that big", () => {
-    // 1.5× text on 16:9 = the 720p layout drawn at 1.5× = 1080p, scale pinned
-    // (not automatic: automatic would give 4:3 at 1440×1080 only 1.125×).
-    expect(resolveSize({ mode: "text", aspect: "16:9", textScale: 1.5 })).toEqual({
-      width: 1920,
-      height: 1080,
-      scale: 1.5,
+    // The plan's four sizes (小/中/大/特大 = 0.8 / 1 / 1.3 / 1.6): 大 on 16:9 is
+    // the 720p layout drawn at 1.3× — 1664×936 — with the scale PINNED, not
+    // automatic (automatic would give a square frame 1 whatever the size).
+    expect(TEXT_SIZES).toEqual([0.8, 1, 1.3, 1.6]);
+    expect(resolveSize({ mode: "text", aspect: "16:9", textScale: 1.3 })).toEqual({
+      width: 1664,
+      height: 936,
+      scale: 1.3,
       scaleIsAuto: false,
     });
-    expect(resolveSize({ mode: "text", aspect: "4:3", textScale: 1.5 })).toEqual({
-      width: 1440,
-      height: 1080,
-      scale: 1.5,
+    expect(resolveSize({ mode: "text", aspect: "1:1", textScale: 0.8 })).toEqual({
+      width: 576,
+      height: 576,
+      scale: 0.8,
       scaleIsAuto: false,
     });
-    expect(TEXT_SIZES).toContain(1.5);
   });
 
-  it("custom: width × height as typed, rounded to even, text scale automatic", () => {
+  it("custom: width × height as typed, rounded to even, text scale automatic — or pinned when asked", () => {
     expect(resolveSize({ mode: "custom", width: 1001, height: 601 })).toEqual({
       width: 1000,
       height: 600,
       scale: 1,
       scaleIsAuto: true,
+    });
+    expect(resolveSize({ mode: "custom", width: 1000, height: 600, textScale: 1.3 })).toEqual({
+      width: 1000,
+      height: 600,
+      scale: 1.3,
+      scaleIsAuto: false,
     });
   });
 });

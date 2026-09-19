@@ -16,6 +16,7 @@ const JOB: ChatVideoQueued = {
   progress_path: "/exports/chat-video/OOM-1.mp4.progress.json",
   expected_seconds: 41,
   stale_after_seconds: 60,
+  token: "job-1",
 };
 
 function progress(over: Partial<ChatVideoProgress>): ChatVideoProgress {
@@ -23,29 +24,45 @@ function progress(over: Partial<ChatVideoProgress>): ChatVideoProgress {
     stage: "rendering",
     expected_seconds: 41,
     elapsed_seconds: 12,
-    started_at: "2026-09-19T03:10:00Z",
-    heartbeat_at: "2026-09-19T03:10:12Z",
+    started_at: new Date(Date.now() - 12_000).toISOString(),
+    // From the clock, never a literal: a fixed timestamp made this fixture
+    // "stale" sixty seconds after it was written, and the suite red for good.
+    heartbeat_at: new Date().toISOString(),
     output_path: JOB.output_path,
     requested_by: "bob",
     error: "",
+    token: JOB.token,
     ...over,
   };
 }
 
-/** A progress file that answers a scripted sequence, then repeats the last. */
-function fileThat(answers: Array<ChatVideoProgress | "gone">): VideoProgressClient {
+/** A progress file that answers a scripted sequence, then repeats the last;
+ * `outputExists` is what the output path answers once the file is gone.
+ * `{ raw }` is the file's text as is — a hand-edited file. */
+function fileThat(
+  answers: Array<ChatVideoProgress | { raw: string } | "gone">,
+  { outputExists = true }: { outputExists?: boolean } = {},
+): VideoProgressClient {
   let i = 0;
   return {
     readFile: vi.fn(async (_slug: string, _itemId: string, _path: string) => {
       const a = answers[Math.min(i++, answers.length - 1)];
       if (a === "gone") throw new HttpError(404, "read failed: 404");
-      return { kind: "text" as const, path: JOB.progress_path, size: 1, text: JSON.stringify(a), encoding: "utf-8" as const };
+      const text = "raw" in a ? a.raw : JSON.stringify(a);
+      return { kind: "text" as const, path: JOB.progress_path, size: 1, text, encoding: "utf-8" as const };
     }),
-    deleteFile: vi.fn(async () => {}),
+    exists: vi.fn(async () => outputExists),
+    cancel: vi.fn(async () => {}),
   };
 }
 
-function mount(client: VideoProgressClient, openFile?: (path: string) => void) {
+const looks = (c: VideoProgressClient) => (c.readFile as ReturnType<typeof vi.fn>).mock.calls.length;
+
+function mount(
+  client: VideoProgressClient,
+  openFile?: (path: string) => void,
+  job: ChatVideoQueued = JOB,
+) {
   const onDismiss = vi.fn();
   const ui = (
     // `poll`: the real backoff starts at a second; the tests need the next
@@ -53,7 +70,7 @@ function mount(client: VideoProgressClient, openFile?: (path: string) => void) {
     <VideoProgress
       slug="rca"
       itemId="rca:1"
-      job={JOB}
+      job={job}
       onDismiss={onDismiss}
       client={client}
       poll={() => 20}
@@ -76,13 +93,18 @@ describe("VideoProgress — three endings for one file", () => {
     expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "running");
   });
 
-  it("the file going away is DONE: the path, an Open, and the file tree refetched", async () => {
+  it("the file going away WITH the output present is DONE: the path, Open, Download, the tree refetched", async () => {
     const openFile = vi.fn();
-    const client_ = fileThat([progress({}), "gone"]);
+    const client_ = fileThat([progress({}), "gone"], { outputExists: true });
     const { client, onDismiss } = mount(client_, openFile);
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await screen.findByText(/影片已存到/);
+    expect(client_.exists).toHaveBeenCalledWith("rca", "rca:1", JOB.output_path);
+    expect(screen.getByTestId("video-progress-download")).toHaveAttribute(
+      "href",
+      expect.stringContaining("/files/exports/chat-video/OOM-1.mp4"),
+    );
     // Shown without the leading slash (the left-ellipsis needs rtl, which
     // would move a leading "/" to the end); the full path is the title.
     expect(screen.getByText("exports/chat-video/OOM-1.mp4")).toHaveAttribute(
@@ -106,37 +128,114 @@ describe("VideoProgress — three endings for one file", () => {
 
     await screen.findByText(/the mp4 is 101 bytes; at most 100/);
     expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "failed");
+    // A failed file is final: the worker will not rewrite it, so it is not
+    // asked about again (the reason `sawFailed` could go: "gone after
+    // failed" is unreachable while this holds).
+    const n = looks(c);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(looks(c)).toBe(n);
     fireEvent.click(screen.getByTestId("video-progress-dismiss"));
 
-    await waitFor(() => expect(c.deleteFile).toHaveBeenCalledWith("rca", "rca:1", JOB.progress_path));
+    await waitFor(() => expect(c.cancel).toHaveBeenCalledWith("rca", "rca:1", JOB.progress_path));
     expect(onDismiss).toHaveBeenCalled();
   });
 
-  it("Cancel deletes the progress file, and its absence then reads as cancelled, not done", async () => {
-    const c = fileThat([progress({}), progress({}), "gone"]);
+  it("Cancel deletes the progress file through the route; absence with no output is cancelled", async () => {
+    const c = fileThat([progress({}), progress({}), "gone"], { outputExists: false });
     mount(c);
     await screen.findByText("錄影中");
 
     fireEvent.click(screen.getByTestId("video-progress-cancel"));
 
-    await waitFor(() => expect(c.deleteFile).toHaveBeenCalledWith("rca", "rca:1", JOB.progress_path));
+    await waitFor(() => expect(c.cancel).toHaveBeenCalledWith("rca", "rca:1", JOB.progress_path));
     await screen.findByText("影片已取消");
     expect(screen.queryByText(/影片已存到/)).toBeNull();
   });
+
+  it("the file deleted from the TREE (the documented cancel) is cancelled too — not \"saved\"", async () => {
+    // The plan's data flow: gone AND the output exists → saved. The first
+    // version read gone + "I did not press Cancel" as saved, so deleting the
+    // file in the tree showed "影片已存到 … [開啟]" over a video that was
+    // never made.
+    const c = fileThat([progress({}), "gone"], { outputExists: false });
+    mount(c);
+
+    await screen.findByText("影片已取消");
+    expect(screen.queryByText(/影片已存到/)).toBeNull();
+  });
+
+  it("a file that is not this job's — another token, or not our document — is gone to this watcher", async () => {
+    // The worker's own rule (`mine()`): a cancel, then a new request for
+    // the same output, puts ANOTHER job's file at the path. Following it
+    // would show that job's progress under this job's name. A hand-edited
+    // file is the same case: not ours. Both stop the polling.
+    const theirs = fileThat([progress({}), progress({ token: "job-2" })], { outputExists: false });
+    mount(theirs);
+    await screen.findByText("影片已取消");
+    const n = looks(theirs);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(looks(theirs)).toBe(n);
+    cleanup();
+
+    const edited = fileThat([{ raw: "not json at all" }], { outputExists: true });
+    mount(edited);
+    await screen.findByText(/影片已存到/);
+    const m = looks(edited);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(looks(edited)).toBe(m);
+  });
+
+  it("a cancel the server refuses is shown, not swallowed", async () => {
+    const c = fileThat([progress({})]);
+    (c.cancel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("forbidden: edit_content"));
+    mount(c);
+    await screen.findByText("錄影中");
+
+    fireEvent.click(screen.getByTestId("video-progress-cancel"));
+
+    await screen.findByText(/forbidden: edit_content/);
+    expect(screen.getByTestId("video-progress-cancel")).not.toBeDisabled();
+  });
 });
 
-describe("VideoProgress — no worker", () => {
-  it("a heartbeat older than the server's rule reads as no worker, by the server's number", async () => {
-    // The runbook's symptom for a missing `rca-worker-chat-video`: the file
-    // stays `queued` and nobody rewrites it. Without this line the person
-    // watches "queued 0 / 41 s" for ever.
+describe("VideoProgress — waiting and no worker", () => {
+  it("a queued file older than the rule is WAITING, not \"no worker\": nobody rewrites a queued file", async () => {
+    // One worker renders one job at a time and a render is a minute or
+    // more, so a job in line normally passes 60 s untouched. The sentence
+    // says what is known: nobody has taken it yet — the worker may be busy,
+    // or there may be none. Cancel stays.
     const old = new Date(Date.now() - 5 * 60_000).toISOString();
     mount(fileThat([progress({ stage: "queued", elapsed_seconds: 0, heartbeat_at: old })]));
 
+    await screen.findByText(/排隊 \d+ 秒，還沒有 worker 接手/);
+    expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "waiting");
+    expect(screen.queryByText(/worker 沒有回應/)).toBeNull();
+    expect(screen.getByTestId("video-progress-cancel")).toBeTruthy();
+  });
+
+  it("a RUNNING stage whose heartbeat stopped past the rule is no worker, by the server's number", async () => {
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    mount(fileThat([progress({ stage: "rendering", heartbeat_at: old })]));
+
     await screen.findByText(/worker 沒有回應/);
     expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "stale");
-    // Cancel is still there: deleting the file is how this one is cleared.
-    expect(screen.getByTestId("video-progress-cancel")).toBeTruthy();
+  });
+
+  it("a file nobody rewrites still crosses the rule: the age is taken at each look, not at the mount", async () => {
+    // The runbook's symptom for a missing worker is this sentence appearing
+    // after `stale_after_seconds`. The file is byte-identical on every poll
+    // — nobody is rewriting it — and the query's structural sharing then
+    // hands back the same object, so a component that judged the age at
+    // render time never re-rendered and never said it. Each reading now
+    // carries WHEN it was read.
+    const job = { ...JOB, stale_after_seconds: 1 };
+    const heartbeat = new Date(Date.now() - 500).toISOString();
+    mount(fileThat([progress({ stage: "rendering", heartbeat_at: heartbeat })]), undefined, job);
+    await screen.findByText("錄影中");
+    expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "running");
+
+    await screen.findByText(/worker 沒有回應/, {}, { timeout: 3000 });
+    expect(screen.getByTestId("video-progress")).toHaveAttribute("data-state", "stale");
   });
 
   it("a heartbeat within the rule is an ordinary wait", async () => {
@@ -144,7 +243,7 @@ describe("VideoProgress — no worker", () => {
     mount(fileThat([progress({ stage: "queued", elapsed_seconds: 0, heartbeat_at: fresh })]));
 
     await screen.findByText("影片排隊中");
-    expect(screen.queryByText(/worker 沒有回應/)).toBeNull();
+    expect(screen.queryByText(/worker 沒有回應|還沒有 worker 接手/)).toBeNull();
   });
 });
 

@@ -7,27 +7,28 @@
  *   being the player's automatic one;
  * - `text`: an aspect and how big the text should be — the frame follows,
  *   and the scale is pinned so that promise holds for every aspect;
- * - `custom`: a width and a height typed in.
+ * - `custom`: a width and a height typed in, and a text size if wanted.
  *
  * All three are equivalent as a request; they differ only in what a person
- * finds easy to say. The result is what goes into `VideoOptions`.
+ * finds easy to say. The result is what goes into `VideoOptions`. The
+ * aspects and the text sizes are the plan's table (尺寸的三種輸入法).
  */
 
-export type Aspect = "16:9" | "4:3" | "1:1" | "9:16";
-export const ASPECTS: Aspect[] = ["16:9", "4:3", "1:1", "9:16"];
+export type Aspect = "16:9" | "1:1" | "9:16";
+export const ASPECTS: Aspect[] = ["16:9", "1:1", "9:16"];
 
 /** The short side, the way frames are named: 480p … 2160p. The last two are
  * past the default ceiling (`chat_video.max_pixels` = 1920×1080); the dialog
  * hides the steps the deployment does not allow. */
 export const RESOLUTION_STEPS = [480, 720, 1080, 1440, 2160];
 
-/** Text sizes relative to the 720p layout. */
-export const TEXT_SIZES = [1, 1.25, 1.5, 2];
+/** Text sizes relative to the 720p layout: 小 / 中 / 大 / 特大. */
+export const TEXT_SIZES = [0.8, 1, 1.3, 1.6];
 
 export type SizeChoice =
   | { mode: "resolution"; aspect: Aspect; p: number }
   | { mode: "text"; aspect: Aspect; textScale: number }
-  | { mode: "custom"; width: number; height: number };
+  | { mode: "custom"; width: number; height: number; textScale?: number };
 
 export type ResolvedSize = {
   width: number;
@@ -41,13 +42,13 @@ export type ResolvedSize = {
 
 const RATIO: Record<Aspect, [number, number]> = {
   "16:9": [16, 9],
-  "4:3": [4, 3],
   "1:1": [1, 1],
   "9:16": [9, 16],
 };
 
-/** The encoder's rule: libx264 with yuv420p refuses an odd side. Every size
- * this module produces is even, so the server never has to. */
+/** The recorder rounds an odd side down to even before the encoder sees it
+ * (`VideoOptions` says why the server no longer refuses one); rounding here
+ * too keeps the size the result line SHOWS the size the file will have. */
 function even(n: number): number {
   return Math.max(16, Math.floor(n / 2) * 2);
 }
@@ -79,6 +80,8 @@ export function resolveSize(choice: SizeChoice): ResolvedSize {
   }
   const width = even(choice.width);
   const height = even(choice.height);
+  if (choice.textScale !== undefined)
+    return { width, height, scale: choice.textScale, scaleIsAuto: false };
   return { width, height, scale: autoUiScale(width, height), scaleIsAuto: true };
 }
 
@@ -88,8 +91,10 @@ export function resolveSize(choice: SizeChoice): ResolvedSize {
  * 1.8 MB / gif 18 MB, 1080p mp4 2.5 MB / gif 36 MB. Linear in length;
  * in pixels a power fitted to those two points (mp4 grows slowly with
  * pixels, gif nearly linearly). webm is the recording itself, 4.6 MB at
- * 1080p, given mp4's pixel curve. An estimate, marked as one in the UI;
- * the ceiling that matters (`chat_video.max_output_bytes`) is the server's.
+ * 1080p, given mp4's pixel curve. An estimate — the result line says
+ * "約", never "最多": a 21 s 1080p mp4 of the demo chat came out 63% over
+ * this figure — and the ceiling that matters (`chat_video.max_output_bytes`)
+ * is the server's.
  */
 const PER_SECOND_AT_720P: Record<string, { mb: number; pixelPower: number }> = {
   mp4: { mb: 1.8 / 41, pixelPower: Math.log(2.5 / 1.8) / Math.log(2.25) },

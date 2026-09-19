@@ -32,11 +32,6 @@ from workspace_app.chat_video.options import VideoOptions
         ("tool_pause_ms", 3 * 10**9, "tool_pause_ms"),
         ("max_seconds", 10**9, "max_seconds"),
         ("max_assets_total_bytes", -1, "max_assets_total_bytes"),
-        # libx264 with yuv420p refuses an odd side ("width not divisible by
-        # 2"), after the whole recording has run. Refused here, for the CLI,
-        # the job and the form alike.
-        ("width", 1001, "even"),
-        ("height", 601, "even"),
     ],
 )
 def test_nonsense_is_refused_with_the_field_named(field: str, value: object, word: str):
@@ -52,6 +47,16 @@ def test_a_job_payload_is_refused_at_decode_not_after_the_recording():
         msgspec.json.decode(b'{"fmt": ["exe"]}', type=VideoOptions)
     with pytest.raises(msgspec.ValidationError, match="speed"):
         msgspec.json.decode(b'{"speed": 0}', type=VideoOptions)
+
+
+def test_an_odd_side_is_accepted_as_it_always_was():
+    """A P7 rule refused odd sides "for the mp4 encoder"; the regression
+    review ran master: `--width 1001 --height 601` produced a 1000×600 mp4,
+    because Playwright's recorder rounds the frame before x264 sees it. The
+    rule refused inputs that worked (every format, even `--html`) for a
+    reason that does not happen on this stack. The form still offers even
+    sizes so what it shows is what comes out."""
+    assert VideoOptions(width=1001, height=601).width == 1001
 
 
 def test_the_defaults_are_valid():
@@ -72,6 +77,7 @@ def test_options_inside_the_ceilings_pass(width, height, max_seconds):
         VideoOptions(width=width, height=height, max_seconds=max_seconds),
         max_pixels=1920 * 1080,
         max_seconds=180,
+        max_output_bytes=100_000_000,
     )
 
 
@@ -93,6 +99,30 @@ def test_options_past_a_ceiling_are_refused_with_the_ceiling_named(width, height
             VideoOptions(width=width, height=height, max_seconds=max_seconds),
             max_pixels=1920 * 1080,
             max_seconds=180,
+            max_output_bytes=100_000_000,
+        )
+
+
+@pytest.mark.parametrize(
+    ("per_file", "total", "why"),
+    [
+        (4_000_000, 10**12, "max_assets_total_bytes 1,000,000,000,000; at most 100,000,000"),
+        (60_000_000, 50_000_000, "max_asset_bytes 60,000,000; at most max_assets_total_bytes"),
+    ],
+)
+def test_the_asset_budgets_are_bounded_by_the_output_ceiling(per_file, total, why):
+    """The struct accepts any non-negative budget; the deployment does not.
+    A script used to be able to send 10**12 and make the worker read a
+    whole workspace file into a 2 GiB pod. The bound is `max_output_bytes`
+    — the number the deployment already states for one video's weight."""
+    from workspace_app.chat_video.options import check_limits
+
+    with pytest.raises(ValueError, match=re.escape(why)):
+        check_limits(
+            VideoOptions(max_asset_bytes=per_file, max_assets_total_bytes=total),
+            max_pixels=1920 * 1080,
+            max_seconds=180,
+            max_output_bytes=100_000_000,
         )
 
 
@@ -102,4 +132,9 @@ def test_a_pixel_ceiling_that_is_no_whole_16_9_frame_is_named_by_the_number_alon
     with pytest.raises(
         ValueError, match=re.escape("1280×1024 is 1,310,720 pixels; at most 1,000,000")
     ):
-        check_limits(VideoOptions(width=1280, height=1024), max_pixels=1_000_000, max_seconds=180)
+        check_limits(
+            VideoOptions(width=1280, height=1024),
+            max_pixels=1_000_000,
+            max_seconds=180,
+            max_output_bytes=100_000_000,
+        )

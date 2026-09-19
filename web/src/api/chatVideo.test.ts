@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchChatTranscript, fetchChatVideoLimits, startChatVideo } from "./chatVideo";
+import {
+  cancelChatVideo,
+  fetchChatTranscript,
+  fetchChatVideoLimits,
+  startChatVideo,
+} from "./chatVideo";
 import { fetchChatExport } from "./workflows";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -66,6 +71,7 @@ describe("startChatVideo — POST …/items/{id}/chat-video", () => {
       progress_path: "/exports/chat-video/OOM-1.mp4.progress.json",
       expected_seconds: 41,
       stale_after_seconds: 60,
+      token: "job-1",
     };
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(answer, 202));
     vi.stubGlobal("fetch", fetchMock);
@@ -97,6 +103,33 @@ describe("startChatVideo — POST …/items/{id}/chat-video", () => {
     await expect(
       startChatVideo("rca", "rca:1", { transcript: { title: "t", messages: [] }, options: {} }),
     ).rejects.toThrow("a video is already being made at /x.mp4");
+  });
+});
+
+describe("cancelChatVideo — DELETE …/chat-video?path=", () => {
+  it("deletes through the route, and a 404 (already gone) is not an error", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cancelChatVideo("rca", "rca:1", "/exports/chat-video/OOM-1.mp4.progress.json");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/a/rca/items/rca%3A1/chat-video?path=");
+    expect(url).toContain(encodeURIComponent("/exports/chat-video/OOM-1.mp4.progress.json"));
+    expect(init?.method).toBe("DELETE");
+
+    vi.stubGlobal("fetch", vi.fn(async () => json({ detail: "no such progress file" }, 404)));
+    await expect(cancelChatVideo("rca", "rca:1", "/x.progress.json")).resolves.toBeUndefined();
+  });
+
+  it("surfaces a refusal as the server's sentence", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ detail: "forbidden: edit_content" }, 403)));
+
+    await expect(cancelChatVideo("rca", "rca:1", "/x.progress.json")).rejects.toThrow(
+      "forbidden: edit_content",
+    );
   });
 });
 

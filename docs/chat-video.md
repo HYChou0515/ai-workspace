@@ -152,14 +152,17 @@ chat header 的 **匯出** 開一個對話框,三種格式一組 radio:**文字 
 (`.chat.md`,貼進報告用)、**影片**。三種都可以選範圍,**從最新往回數**:全部 / 最近 N 則 / 自訂從第 k 則到第 m 則
 (#1 是最新的一則;選單上每則寫 `#k · 👤/🤖 前幾個字`)。文字直接下載;影片的部分:
 
-- **尺寸**三種輸入法,結果列永遠顯示 `W×H・文字 s×・最多約 N MB`:比例 + 解析度(480p…2160p,只列這個部署允許的)、
-  比例 + 文字大小(1×…2×,畫面跟著放大)、直接打寬高(必須是偶數——mp4 編碼器的規則,表單自己會取偶)。
-- **節奏**:打字 / 回覆(毫秒/字)、工具停頓、輸入框推近倍率、整體速度、最長秒數——和指令列的旗標一對一。
-- 送出後 header 下多一列進度(排隊中 / 錄影中 / 編碼中,`已用秒數 / 約 預估秒數`),完成後顯示影片路徑並可直接開啟;
+- **尺寸**三種輸入法,結果列永遠顯示 `W×H・文字 s×・約 N MB`(估的,不是上限——量過一支比估的多六成):比例(16:9 / 1:1 / 9:16)
+  + 解析度滑桿(停點 480p…2160p,只列這個部署允許的)、比例 + 文字大小(小 / 中 / 大 / 特大 = 0.8×…1.6×,畫面跟著放大)、
+  直接打寬高(+ 可選文字大小;奇數邊錄影器會取成偶數,表單先取好,所以顯示的就是做出來的)。
+- **節奏**:整體速度、打字(毫秒/字)、輸入框推近倍率、最長秒數——其餘旗標用指令列的預設;打超過範圍的值送出時夾到範圍內。
+- 送出後 header 的綠點右邊多一顆進度膠囊(排隊中 / 錄影中 / 編碼中,`已用秒數 / 約 預估秒數`),完成後顯示影片路徑、可開啟或下載;
   影片寫進這個 item 的 workspace `/exports/chat-video/<標題>-<時間>.<格式>`(算 workspace 額度),旁邊留著
   `<影片>.chat.json`——那份就是輸入,改一改可以用 API 再送。**取消 = 刪掉 `<影片>.progress.json`**(進度列上的取消鈕,
-  或在檔案樹裡直接刪),worker 十秒內會停下、什麼都不寫。失敗的話進度檔留著,裡面一句話寫原因。
-- 需要這個 item 的「讀取檔案」(影片要拿它秀過的圖)與「新增檔案」兩個權限;沒有的話影片那個選項會鎖住並寫原因。
+  或在檔案樹裡直接刪),worker 最慢十來秒停下(心跳 10 秒 + 錄影切片 2 秒)、什麼都不寫;還在排隊的連錄影都不開始。
+  失敗的話進度檔留著,裡面一句話寫原因。排隊超過 60 秒沒人接手,膠囊會說「還沒有 worker 接手」;錄到一半心跳停 60 秒,說「worker 沒有回應」。
+- 需要這個 item 的「讀取檔案」(影片要拿它秀過的圖)與「新增檔案」兩個權限(有「編輯檔案」的人也算——編輯包含新增);
+  沒有的話影片那個選項會鎖住並寫原因。
 
 ### 從 API 出固定字句的影片
 
@@ -176,14 +179,17 @@ curl -sS -X POST "$BASE/api/a/rca/items/$ITEM/chat-video" \
     "output_path": "videos/oom.mp4"
   }'
 # 202 {"output_path": "/videos/oom.mp4", "source_path": "/videos/oom.mp4.chat.json",
-#      "progress_path": "/videos/oom.mp4.progress.json", "expected_seconds": 7}
+#      "progress_path": "/videos/oom.mp4.progress.json", "expected_seconds": 7,
+#      "stale_after_seconds": 60, "token": "5b1c…"}
 ```
 
 `transcript` 是完整的 `.chat.json` 文件(`title` + `messages`,每則至少 `role` 與 `content`;可以只是整段對話的一部分,
 但要是一份完整的 JSON);`options` 是 `VideoOptions` 的任意子集;`output_path` 可省(伺服端命名),給了的話**副檔名決定格式**
 (`.gif` / `.mp4` / `.webm`,同指令列的 `-o`)。`GET` 同一路徑回這個部署的上限(`max_pixels` / `max_seconds` / `max_output_bytes`,
-`config.yaml` 的 `chat_video:`);超過是 422、路徑已有檔或同一支還在做是 409。之後用 `GET …/files/<progress_path>` 看進度、
-`DELETE` 它取消、`GET …/files/<output_path>` 拿影片。
+`config.yaml` 的 `chat_video:`);超過是 422、路徑已有檔是 409,同一支還在做、這個 item 有一支在做、你在別的 item 有一支在做也都是 409
+(一句話寫在做的是哪一支)。之後用 `GET …/files/<progress_path>` 看進度(`token` 對得上才是這一支的;不是的話對你來說它已經不在了)、
+`DELETE …/chat-video?path=<progress_path>` 取消(排的人自己可以刪;檔案路由的 `DELETE` 要「編輯檔案」)、
+`GET …/files/<output_path>` 拿影片(支援 `Range`,所以 `<video>` 拖得動、Safari 也肯播)。
 
 算圖在 `chat-video` worker(pod-split 部署要有 `rca-worker-chat-video`;all-in-one 要 API 自己跑 `rca-app-chat-video` image),
 見 [deployment.md §11](deployment.md#11-生產環境注意事項)。

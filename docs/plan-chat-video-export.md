@@ -39,7 +39,7 @@
 | # | 決定 | 來源 |
 |---|---|---|
 | 1 | **在 job queue 的 worker pod 跑,不進 sandbox**:依賴 ~1 GB、記憶體 GB 級,不是 sandbox 標配 | 需求 6 |
-| 2 | **影片寫進 workspace** `/exports/chat-video/<標題>-<yyyymmdd-hhmm>.<fmt>`:檔案樹看得到、既有 `GET /files/{path}` 下載、可 `show_file`、能讀 item 的人都拿得到、算 workspace 額度;不做 run 模型的 Binary | user 選 A |
+| 2 | **影片寫進 workspace** `/exports/chat-video/<標題>-<yyyymmdd-hhmmss>.<fmt>`(到秒:同一分鐘內再出一支才不會撞到「路徑已有檔」的 409):檔案樹看得到、既有 `GET /files/{path}` 下載、可 `show_file`、能讀 item 的人都拿得到、算 workspace 額度;不做 run 模型的 Binary | user 選 A |
 | 3 | worker 照 **blob-gc 先例**從 `build_app` 組(`API_REGISTRY_JOBTYPES` 加 `chat-video`),所以有 API 同一個 `WorkspaceFiles`;**不開 sandbox** | 事實 |
 | 4 | 影片 route 要 **`read_content` + `add_content`**(transcript 是呼叫者供的;活對話那條路的 `read_chat` 由前端先走的 `export-chat` 把關);route 查一次、worker 寫檔前用 `job.info.created_by` **再查一次**(同 import 的 `_may_write`);前端照三個動詞決定按鈕**顯示與否** | 第 2 題 |
 | 5 | **Markdown 匯出在伺服端**:`GET …/export-chat?format=json\|md`(預設 json 不變),`md` 回 `text/markdown` + `<標題>.chat.md`;純函式 `build_chat_markdown` 與 JSON 同一份 messages | 第 3 題 |
@@ -80,8 +80,9 @@
                     │   → ensure_room_for(len) → files.write(output) → 刪進度檔(source 留著)  │
                     │   失敗:進度檔 stage=failed + error 一句話,留著                         │
                     └───────────────────────────────────────────────────────────────────┘
-前端:輪詢 GET /files/<progress_path>(1 s → 8 s 退避)→ header 狀態列「🎬 製作中 · 預計 41 s」+ 進度條(elapsed/expected)
-      進度檔消失且輸出檔存在 → 「已存到 … [開啟] [下載]」+ invalidate 檔案樹;failed → 一句話 + [重試];[取消] = DELETE 進度檔
+前端:輪詢 GET /files/<progress_path>(1 s → 8 s 退避)→ header 綠點右邊一顆膠囊「錄影中 · 12 / 約 41 秒」+ 進度條(elapsed/expected)
+      進度檔消失且輸出檔存在 → 「已存到 … [開啟] [下載]」+ invalidate 檔案樹;消失且沒輸出 → 「已取消」;
+      failed → 一句話 + [關閉](刪掉 worker 留的檔;沒有 [重試]——輸入檔還在樹裡,再送一次就是重試);[取消] = DELETE …/chat-video?path=(排的人自己可刪)
 ```
 
 ### 進度檔(`<output>.progress.json`,JSON,人看得懂)
@@ -144,7 +145,7 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 
 | 方式 | 使用者設 | 算出 |
 |---|---|---|
-| 比例 + 解析度滑桿 | 16:9 / 1:1 / 9:16;桿 0.5×–1.5×(底 1280×720) | `width`,`height`;`scale=0`(自動 = 框 / 720p) |
+| 比例 + 解析度滑桿 | 16:9 / 1:1 / 9:16;桿的停點是 480p / 720p / 1080p / 1440p / 2160p 中這部署允許的(用名字不用倍率——人認得 1080p,認不得 1.5×) | `width`,`height`;`scale=0`(自動 = 框 / 720p) |
 | 比例 + 文字大小 | 比例;小 / 中 / 大 / 特大 = 0.8 / 1 / 1.3 / 1.6 | `scale`;`width`,`height` = 720p 版面 × 倍率(放得下標準版面) |
 | 直接寬 × 高 | 寬、高(+ 可選文字大小) | 三值直接送 |
 
@@ -157,6 +158,12 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 進度檔在檔案樹裡看得到(在 `/exports/chat-video/` 底下),失敗的會留著——這是刻意的:人看得到、也刪得掉。source 檔 `<output>.chat.json` 也留著:它就是「固定字句」,改了再 POST 一次就重生;不想要就刪。
 - 同一 item 第二次匯出會排在第一次後面(partition_key = item_id)但 route 先 409——簡單優先。
 - 匯出對話框沒有 `useDirtyClose`:它裝的是**選項**不是未存的工作,Escape / ✕ 丟掉的只是幾個下拉的選擇;`closeOnBackdrop` 照 `ModalShell` 預設 false。
+  (P8 第一版加了它,review 第一輪抓到、P10 拿掉。)
+- 結果列的「約 N MB」是估的(41 秒樣本擬合的每秒率),不是上限:demo 那份對話出 1080p mp4 比估的多 63%;真正的上限是伺服端的 `max_output_bytes`。
+- 「worker 沒有回應」是瀏覽器時鐘減伺服端 `heartbeat_at`,時鐘偏差大的機器會誤報(60 秒的規則,偏差要到分鐘級才會)。不修:沒有可靠的伺服端時間可對。
+- 進度膠囊是掛在這次 mount 上的:重新整理、切到別的對話再回來,膠囊不會回來(進度檔在樹裡看得到,也刪得掉)。
+- 心跳是「讀檔、再寫檔」,取消的 DELETE 落在這兩步之間會被寫回去、取消丟失;視窗是每 10 秒一次 read+write 的幾毫秒。不修:workspace 寫沒有 CAS,修要換機制。
+- 輸出路徑落在既有檔案底下(`videos/x.mp4/a.mp4`)是 500 不是 4xx——檔案路由本來就這樣(既有的一類),這裡沒加判斷。
 - 不做:自訂路徑、多格式一次出、在對話串裡點選範圍、進度 SSE。
 
 ## Phases(每個 = 一個 commit,TDD;每個修法先有會紅的測試)
@@ -167,7 +174,7 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 釘:`test_encoding_a_1080p_clip_stays_within_the_measured_bound`(integration,`ps` 取樣 ffmpeg 子行程)gif ≤ 1024、mp4 ≤ 512 MB;
   數字寫進 `docs/chat-video.md`〈要多少資源〉。
 
-### P2 — 文字匯出:Markdown + 範圍
+### P2 — 文字匯出:Markdown + 範圍 ✅
 - `kb/chat_export.py`:`slice_messages(messages, start, end)`(驗證 → `ValueError` 一句話)、`build_chat_markdown(title, messages)`;`chat_export_filename` 加 `suffix` 與範圍後綴。
 - route `export-chat?format=&start=&end=`;422 一句話;`Content-Disposition` 兩種副檔名。
 - 測試:格式表(每種 role 一列、reasoning、tool 截斷、shown-files 清單、stopped、error)、範圍邊界(0 / 全部 / 越界 / start≥end)、route 兩種 format。
@@ -205,18 +212,18 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 
 ### P7 — 前端的純粹部分 + 兩條伺服端小規則 ✅
 - `web/src/lib/chatExportRange.ts`:`absoluteRange(total, choice)` 把對話框「從新往舊」的選擇(全部 / 最近 N 則 / 自訂 from–to,1 = 最新)換成伺服端的 `[start, end)`;整串 = `null`(不帶參數、檔名不帶範圍)。文字匯出與影片切片都用同一個函式,所以「最近 5 則」兩邊一定是同五則。
-- `web/src/lib/videoSize.ts`:三種輸入 → 同一個 `{width, height, scale, scaleIsAuto}`:`resolution`(比例 + 短邊 480p…2160p,文字倍率 = player 的自動規則 `max(1, min(w/1280, h/720))`,鏡射 `player.ui_scale` 並釘住它文件裡的三個例子)、`text`(比例 + 文字倍率,畫面跟著放大、`scale` 釘死——自動規則對 4:3 的 1440×1080 只給 1.125,所以要釘)、`custom`(手打寬高)。每個輸出都是偶數。`estimateMegabytes(fmt, pixels, seconds)` 從 P1 量到的兩個點(720p / 1080p 各 41 秒)推,測試釘住它能還原那四個數。
+- `web/src/lib/videoSize.ts`:三種輸入 → 同一個 `{width, height, scale, scaleIsAuto}`:`resolution`(比例 + 短邊 480p…2160p,文字倍率 = player 的自動規則 `max(1, min(w/1280, h/720))`,鏡射 `player.ui_scale` 並釘住它文件裡的三個例子)、`text`(比例 + 文字倍率,畫面跟著放大、`scale` 釘死——自動規則對 1:1 的框永遠給 1,所以要釘)、`custom`(手打寬高)。每個輸出都是偶數。(P7 的表是 480p…2160p 下拉、1×…2×、含 4:3;P10 改回 plan 的表。)`estimateMegabytes(fmt, pixels, seconds)` 從 P1 量到的兩個點(720p / 1080p 各 41 秒)推,測試釘住它能還原那四個數。
 - `web/src/api/chatVideo.ts`:`fetchChatTranscript`(匯出 JSON 解析——範圍選單數的、影片切的都是它)、`startChatVideo`(POST,拒絕時丟伺服端那句話)、`fetchChatVideoLimits`(GET 同路徑:表單只提供這部署允許的尺寸);`fetchChatExport` / `downloadChatExport` 加 `{format, range}`(md 回 `text/markdown` 也驗)。
-- 伺服端:`VideoOptions` 多一條「寬高都要偶數」——親手試過 `libx264 + yuv420p` 對 1001×601 直接拒絕(`width not divisible by 2`),而且是在整段錄影跑完之後;表單只給偶數,這條是給 CLI 和 API 呼叫者的。上限例子改用 1922×1080。`GET …/chat-video` 回三個上限(P8 接)。
+- 伺服端:`VideoOptions` 多一條「寬高都要偶數」——親手試過 `libx264 + yuv420p` 對 1001×601 直接拒絕(`width not divisible by 2`),而且是在整段錄影跑完之後。**P10 拿掉了**:回歸鏡頭指出 Playwright 的錄影器本來就把奇數邊取成偶數、x264 從沒看過奇數(#817 有 1001×601 的錄影過),那條規則擋掉的是一直能出的輸入;表單仍先取偶,讓結果列顯示的尺寸就是做出來的尺寸。上限例子改用 1922×1080。`GET …/chat-video` 回三個上限(P8 接)。
 - 測試:vitest 8 + 8 + 5(含 workflows 既有 11 條一起綠);pytest options 30。
 
 ### P8 — 前端的對話框、進度列、接線 ✅
-- `components/ExportDialog.tsx`:Export 按鈕改開一個對話框(不是下拉再對話框——header 的動作列在窄欄會降成 ⋯ 選單,子選單在那一層做不出來;一個對話框三種格式,「文字 JSON / 文字 Markdown / 影片」是最上面一組 radio,同樣是 user 說的「點開分文字…以及影片」)。範圍三選一:全部(N 則,N 來自匯出的 JSON,不是猜的)/ 最近 N 則 / 自訂 from–to(選單標籤 `#k · 👤/🤖 前 24 字`,#1 = 最新、#N = 最舊);影片段落:格式 mp4/gif/webm、尺寸三模式(比例＋解析度 / 比例＋文字大小 / 寬×高)+ 永遠顯示的結果列 `W×H・文字 s×・最多約 N MB`、六個節奏旋鈕(打字、回覆、工具停頓、zoom、speed、最長秒數)。解析度與文字大小的選單只列這部署 `max_pixels` 允許的(`GET …/chat-video`);手打寬高超過就顯示上限並鎖送出;`max_seconds` 送出前夾到部署上限。影片 = 先拿匯出 JSON、用同一個 `absoluteRange` 切、再 POST;`scale` 自動就送 0(交給 player 的規則)、文字大小模式才送數字。`useDirtyClose` 守 Escape / ✕ / 取消三個出口。
-- `components/VideoProgress.tsx`:header 下一列,`useQuery` 輪詢進度檔(1 s × 5 → 2 → 4 → 8 s 封頂;`pollDelay`),三種結局都從檔案本身讀:`failed` → 那句話 + 關閉(順手刪掉 worker 留下的檔);檔案不見且沒按取消 → 完成(路徑、開啟、重抓 `qk.files`,並停止輪詢);按取消 = 刪進度檔 → 之後的不見讀成「已取消」。
-- 接線:`useItemAccess.canAddContent`(`canAddItemContent`,單一 verb,不是 `canWrite` 的聯集——只有 edit_content 的人聯集說可以、route 會 403);`WorkspaceShell` 算 `canExportVideo = canSeeFiles && canAddContent` → `ItemChatShell`(兩個 render 點)→ `AgentPanel` → `AgentHeader`;沒有就把影片那個 radio 鎖住並寫原因。i18n 兩語系 54 個 key;`styles/export-dialog.css` 自己的 class(沿用 `.chat-share__*` 會零樣式)。
+- `components/ExportDialog.tsx`:Export 按鈕改開一個對話框(不是下拉再對話框——header 的動作列在窄欄會降成 ⋯ 選單,子選單在那一層做不出來;一個對話框三種格式,「文字 JSON / 文字 Markdown / 影片」是最上面一組 radio,同樣是 user 說的「點開分文字…以及影片」)。範圍三選一:全部(N 則,N 來自匯出的 JSON,不是猜的)/ 最近 N 則 / 自訂 from–to(選單標籤 `#k · 👤/🤖 前 24 字`,#1 = 最新、#N = 最舊);影片段落:格式 mp4/gif/webm、尺寸三模式(比例＋解析度 / 比例＋文字大小 / 寬×高)+ 永遠顯示的結果列 `W×H・文字 s×・最多約 N MB`、六個節奏旋鈕(打字、回覆、工具停頓、zoom、speed、最長秒數)。解析度與文字大小的選單只列這部署 `max_pixels` 允許的(`GET …/chat-video`);手打寬高超過就顯示上限並鎖送出;`max_seconds` 送出前夾到部署上限。影片 = 先拿匯出 JSON、用同一個 `absoluteRange` 切、再 POST;`scale` 自動就送 0(交給 player 的規則)、文字大小模式才送數字。`useDirtyClose` 守 Escape / ✕ / 取消三個出口。(**P10 改掉的**:「最多約」→「約」;八個旋鈕 → 決策 9 的六個;`useDirtyClose` 拿掉,見知情取捨。)
+- `components/VideoProgress.tsx`:header 下一列,`useQuery` 輪詢進度檔(1 s × 5 → 2 → 4 → 8 s 封頂;`pollDelay`),三種結局都從檔案本身讀:`failed` → 那句話 + 關閉(順手刪掉 worker 留下的檔);檔案不見且沒按取消 → 完成(路徑、開啟、重抓 `qk.files`,並停止輪詢);按取消 = 刪進度檔 → 之後的不見讀成「已取消」。(**P10 改掉的**:「不見」要看輸出檔在不在——在就是完成、不在就是取消,不看有沒有按過取消;取消走 `DELETE …/chat-video?path=`。)
+- 接線:`useItemAccess.canAddContent`(`canAddItemContent`,不是 `canWrite` 的聯集——只有 write_meta 的人聯集說可以、route 會 403;P8 第一版寫成「只有 edit_content 的人會 403」,真實性鏡頭打 route 得到 202:伺服端 `_effective_grants` 把 edit_content 併進 add_content,P10 讓前端鏡射);`WorkspaceShell` 算 `canExportVideo = canSeeFiles && canAddContent` → `ItemChatShell`(兩個 render 點)→ `AgentPanel` → `AgentHeader`;沒有就把影片那個 radio 鎖住並寫原因。i18n 兩語系 54 個 key;`styles/export-dialog.css` 自己的 class(沿用 `.chat-share__*` 會零樣式)。
 - 測試:`ExportDialog.test.tsx` 11 條(三種格式各自的呼叫、範圍換算、上限過濾、鎖定、伺服端句子、dirty / clean)、`VideoProgress.test.tsx` 5 條(三種結局、輪詢停止、退避表)、`AgentHeader.test.tsx` 改為「開對話框、帶 slug / chatId / 影片閘」、`itemPermission` / `useItemAccess` 各加 canAddContent。16 個突變體(含對照組)各紅自己那條;web 全套 245 檔 2169 條綠(順手跑的,不是 gate)。
 - 拿掉一個守不到東西的守衛:`sawFailed`(failed 之後輪詢就停、關閉會卸載元件,所以「failed 之後不見」到不了)。
-- 已知未做:重新整理頁面後 header 的進度列不會回來(進度檔還在樹裡、可以手動刪);做影片的期間沒有第二顆進度列(route 對同人同 item 409)。
+- 已知未做:重新整理頁面後 header 的進度列不會回來(進度檔還在樹裡、可以手動刪);做影片的期間沒有第二顆進度列(route 對同 item 409)。
 
 ### P9 — image + 文件 + 親眼驗收 + web demo ✅
 - `docker/Dockerfile` 加 stage `chat-video`(`FROM app`:`uv sync --extra chat-video` + apt ffmpeg + `playwright install --with-deps chromium`,`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`,CMD 是 worker;`docker build --target chat-video -t rca-app-chat-video:latest`)。本機 build 卡在 app stage 的 LibreOffice apt 下載(75 分鐘沒過),**image 大小沒量到**,runbook 照實寫。
@@ -226,6 +233,23 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - demo 抓到的東西(review 沒看到的):**「開啟」把 mp4 丟進文字編輯器**(2.4 MB 亂碼 + invisible-unicode 警告)→ 加 `renderers/VideoRenderer.tsx`(`<video controls>` 串檔案路由,不經 editor buffer;registry `video: mp4 / webm`,gif 留給 image);錄影用的 open-source Chromium 解不了 h264 所以 GIF 裡播放器是黑的,一般瀏覽器會播。
 - user 看了 demo 的兩個回饋都做了:**對話框照 PR #825 的樣子**(Tools modal 的框:480px、`<strong>` 標題 + 12px 說明、`.btn` 取消/主要 footer、沒 ✕ 沒 icon;欄位 label 在上 + house `.input`、helper `.detail`、兩欄 grid;`.input` 這條 base.css 規則和 #825 加的一字不差,先合的留、後合的解一個顯而易見的衝突);**進度不擺中間**——改成綠點右邊的膠囊,chat 欄放不下時 header 把它整顆換行、`margin-left: auto` 靠右貼在 ⋯ 與綠點下面;路徑從左省略(`direction: rtl`,所以顯示 `relPath`,不然開頭的 `/` 會被 bidi 搬到尾巴)。
 - 探針踩到的坑:`/tmp` 100%(別的 session 留的 pytest basetemp 與孤兒 blob 目錄)讓 pytest 的輸出 ENOSPC;只清自己 user 的、一天以上的。
+
+### P10 — review 第一輪(四把鏡頭平行:符合度 / 真實性 / 缺陷 / 回歸)✅
+先列決策表再修(T1–T20 + 真實性的 V3–V9),每格一條會紅的測試;換掉的機制:
+- **排隊中的檔怎麼算活著**(缺陷 D1):`queued` 沒人改寫心跳,60 秒後被當 stale,第二次請求被收、一個輸出排了兩支。改成 `queued` 活著 ⇔ 有 PENDING / PROCESSING 的 job 列指著它(`_active_rows`,跳過軟刪的列);running 才看心跳;`is_alive(…, queued_alive=)`。
+- **這支是誰的**(D2):取消再對同一輸出送一次,舊 job 在下一次心跳看到「檔還在」就繼續錄、寫到輸出、刪掉新 job 的檔。每支 job 一個 `token`(檔、列、202 都帶);不是自己的檔 = 沒有檔(`mine()`)。前端同一條規則:token 不對或不是 JSON 的檔對這顆膠囊來說是「不見」。
+- **決策 10 的三條 409**(C1):同輸出還活著 / 這個 item 有一支活著 / 這個人在任何 item 有一支活著,各一句話點名在做的路徑;第一版只擋同人同 item。
+- **取消的權限**(V2):檔案路由的 DELETE 要 `edit_content`,只有 `add_content` 的人排得了、取消不了,而前端把 403 吞掉、最後說「已取消」但影片做出來了。新路由 `DELETE …/chat-video?path=<progress>`:排的人自己或 `edit_content` 可刪;前端的取消與關閉走它,拒絕就顯示。
+- **膠囊的結局**(D6):「不見且沒按取消 = 完成」把樹裡刪檔讀成「已存到 … [開啟]」。改看輸出檔在不在(`GET /files/exists`)。**沒人改寫的檔也要跨過規則**(V3):stale 在 render 時算,byte-identical 的 poll 讓 TanStack 回同一個物件、不重畫,runbook 寫的那句永遠不出現;每次讀檔帶 `readAt`,年齡從它算。加 [下載]。
+- **心跳 vs 失敗句**(D4):心跳的 `to_thread` 寫檔被 cancel 後仍會落地、蓋掉 `failed` 那句。心跳改用 `asyncio.Event halt` 收工、等它退出後才寫失敗;心跳裡的例外接住繼續跳。
+- **一個 coordinator 一個 loop**(D3):HttpSandbox 共用一個 `httpx.AsyncClient`,每個 job 各開 `asyncio.run` 會壞;API 抓進行中的 loop、worker 自己起一條(`_loop_for_jobs`)。
+- **排隊中就取消的 job 不開錄影**(V7):`_run` 第一件事是 `mine()`,否則 Chromium 白開到第一次心跳。
+- **檔案路由的 `Range`**(D11):`<video>` 拖不動、Safari 拒播;單段 206 / 416 / `Accept-Ranges`(`api/byte_range.py`,18 條)。
+- **尺寸**(C6 / R2):滑桿的停點、小/中/大/特大 = 0.8/1/1.3/1.6、寬高可選文字大小、16:9 / 1:1 / 9:16;伺服端的偶數規則拿掉(見 P7)。**六個旋鈕**(C7):其餘用預設,超範圍的值送出時夾。**`useDirtyClose` 拿掉**(C5)。**「約」不是「最多約」**(V5)。
+- **前端權限鏡射伺服端**(V4):`edit_content ⊇ add_content`。
+- 素材預讀先看大小、總量 `max_assets_total_bytes` first-fit(D8);`check_limits` 讓兩個素材上限不超過輸出上限。ffmpeg 兩段 gif 都 `-threads 2`、stderr 落地檔不用 PIPE(D9)。`start` 沒帶 `end` 的檔名寫成 `(3–None)`(V6)→ 半開範圍在 route 補齊;空對話匯出 200;標題砍到 64 字。
+- `workers.yaml` grace 240 → 900(錄影 300 + ffmpeg 兩段各 300,推的,寫在註解);runbook 條目搬回 `## 條目` #818 之後、補「資料」格、症狀改成前端真的會說的那句;`docs/chat-video.md` 逐句改;`FileChanged` 的兩次 publish 與「failed 不再輪詢」各補一條會紅的測試(V9)。
+- 這輪沒修、寫進知情取捨的:時鐘偏差、膠囊掛在 mount 上、心跳 read-then-write 與 DELETE 的毫秒視窗、輸出落在檔案底下是 500。
 
 ## 驗收
 

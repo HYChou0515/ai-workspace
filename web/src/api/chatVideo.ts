@@ -46,6 +46,9 @@ export type ChatVideoQueued = {
   /** The server's rule for a worker that stopped breathing: a heartbeat
    * older than this means nobody is on the job. */
   stale_after_seconds: number;
+  /** The mark on this job's progress file: a file at the path without it
+   * is another job's, which to this watcher is the same as no file. */
+  token: string;
 };
 
 export type ChatVideoLimits = {
@@ -64,6 +67,7 @@ export type ChatVideoProgress = {
   output_path: string;
   requested_by: string;
   error: string;
+  token: string;
 };
 
 const base = (slug: string, itemId: string) =>
@@ -97,6 +101,23 @@ export async function startChatVideo(
     throw new Error((await detailSentence(res)) || `chat-video failed: ${res.status}`);
   }
   return (await res.json()) as ChatVideoQueued;
+}
+
+/** Cancel (or dismiss) a video by deleting its progress file, through the
+ * route that lets the REQUESTER do it: the plain file DELETE needs
+ * `edit_content`, which `add_content` — the verb that started the video —
+ * does not include. 404 once it is gone is fine; anything else is a
+ * sentence the caller shows. */
+export async function cancelChatVideo(
+  slug: string,
+  itemId: string,
+  progressPath: string,
+): Promise<void> {
+  const q = new URLSearchParams({ path: progressPath });
+  const res = await apiFetch(`${base(slug, itemId)}/chat-video?${q}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    throw new Error((await detailSentence(res)) || `cancel failed: ${res.status}`);
+  }
 }
 
 export async function fetchChatVideoLimits(slug: string, itemId: string): Promise<ChatVideoLimits> {

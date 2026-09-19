@@ -153,11 +153,12 @@ async def test_enqueue_writes_the_transcript_and_a_queued_progress_and_a_job_of_
     item = _item(spec)
     coord = _coordinator(spec, files, _Render(), clock=clock)
 
-    source, progress = await coord.enqueue(
+    queued = await coord.enqueue(
         item_id=item, title="t", messages=MESSAGES, options=VideoOptions(fmt=("mp4",)),
         output_path=OUT, expected_seconds=41, user="alice",
     )  # fmt: skip
 
+    source, progress = queued.source_path, queued.progress_path
     assert (source, progress) == (OUT + ".chat.json", OUT + ".progress.json")
     assert parse_chat_export(await files.read(item, source)) == ("t", MESSAGES)
     p = await _progress(files, item)
@@ -167,43 +168,91 @@ async def test_enqueue_writes_the_transcript_and_a_queued_progress_and_a_job_of_
     assert job.info.created_by == "alice"
     assert job.data.partition_key == item  # two exports of one item run one at a time
     row = msgspec.to_builtins(job.data.payload)
-    assert set(row) == {"item_id", "source_path", "output_path", "progress_path", "options"}
+    assert set(row) == {
+        "item_id",
+        "source_path",
+        "output_path",
+        "progress_path",
+        "options",
+        "token",
+    }
+    # The file, the row and the answer carry the same mark: the watcher
+    # tells its file from a successor's by it.
+    assert row["token"] and row["token"] == p.token == queued.token
     assert "hi" not in json.dumps(row)
 
 
-async def test_a_second_request_while_the_first_is_alive_is_in_flight_but_a_stale_one_is_replaced():
-    """Two rules, one predicate (`progress.is_alive`): the same output with a
-    live progress file is refused, the same user with another live output on
-    the item is refused, and a file whose worker stopped breathing past
-    `stale_after_seconds` is replaced."""
+async def test_one_video_in_flight_per_item_and_one_per_person():
+    """Decision 10: one in flight per ITEM and one per PERSON (409 either
+    way), so a second export of the same item — whoever asks — waits, and
+    one person cannot fan out over every item they own. The first version
+    refused only the same person on the same item; the review found the
+    table was a row short."""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item, other = _item(spec), _item(spec)
+    coord = _coordinator(spec, files, _Render(), clock=clock, stale_after_seconds=60)
+
+    async def ask(item_id: str, output_path: str, *, user: str = "alice") -> None:
+        await coord.enqueue(
+            item_id=item_id, title="t", messages=MESSAGES, options=VideoOptions(fmt=("mp4",)),
+            output_path=output_path, expected_seconds=1, user=user,
+        )  # fmt: skip
+
+    await ask(item, OUT)
+
+    with pytest.raises(InFlight, match="already being made at " + OUT):
+        await ask(item, OUT)
+    with pytest.raises(InFlight, match="a video is already being made on this item"):
+        await ask(item, "/bob.mp4", user="bob")  # per item: another person waits too
+    with pytest.raises(InFlight, match="you already have a video being made"):
+        await ask(other, "/x.mp4")  # per person: alice, on another item
+    await ask(other, "/bob.mp4", user="bob")  # bob on the other item: neither rule
+
+
+async def test_a_queued_file_is_alive_while_its_job_row_is_and_no_longer_when_it_is_not():
+    """The review's finding: nobody rewrites a `queued` file's heartbeat
+    while the job waits in line behind a long render, so judging it by age
+    made the normal backlog "stale" — the second request was accepted and
+    the queue held two jobs for one output. A `queued` file is alive while a
+    PENDING / PROCESSING row names it; only a running stage is judged by its
+    heartbeat."""
     spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
     item = _item(spec)
     coord = _coordinator(spec, files, _Render(), clock=clock, stale_after_seconds=60)
 
-    async def ask(output_path: str, *, user: str = "alice") -> None:
+    async def ask() -> None:
         await coord.enqueue(
             item_id=item, title="t", messages=MESSAGES, options=VideoOptions(fmt=("mp4",)),
-            output_path=output_path, expected_seconds=1, user=user,
+            output_path=OUT, expected_seconds=1, user="alice",
         )  # fmt: skip
 
-    await ask(OUT)
-
+    await ask()
+    clock.t = T0 + timedelta(seconds=600)  # ten minutes in line, still queued
     with pytest.raises(InFlight, match="already being made at " + OUT):
-        await ask(OUT)
-    with pytest.raises(InFlight, match="you already have"):
-        await ask("/x.mp4")
-    await ask("/bob.mp4", user="bob")  # another user is not blocked by alice's run
+        await ask()
+    rows = spec.get_resource_manager(ChatVideoJob).list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+    assert len(list(rows)) == 1  # no duplicate job
 
-    clock.t = T0 + timedelta(seconds=61)  # the worker never breathed: stale
-    await ask(OUT)
+    # The row gone (the queue dropped it): the file is nobody's, replaced.
+    rm = spec.get_resource_manager(ChatVideoJob)
+    rm.delete(_job(spec).info.resource_id)
+    await ask()
     p = await _progress(files, item)
     assert p is not None and p.heartbeat_at == clock.t
 
-    # A hand-edited file at the progress path is nobody's claim either.
-    await files.write(item, OUT + ".progress.json", b"{not ours")
-    await ask(OUT)
+    # A running stage IS judged by its heartbeat: a worker that stopped
+    # breathing past `stale_after_seconds` is replaced …
+    await files.write(
+        item, OUT + ".progress.json", msgspec.structs.replace(p, stage="rendering").dumps()
+    )
+    clock.t += timedelta(seconds=61)
+    await ask()
     p = await _progress(files, item)
-    assert p is not None and p.stage == "queued"
+    assert p is not None and p.stage == "queued" and p.heartbeat_at == clock.t
+    # … and a hand-edited file at the path is nobody's claim either.
+    await files.write(item, OUT + ".progress.json", b"{not ours")
+    await ask()
+    assert (await _progress(files, item)) is not None
 
 
 # ─── the consumer ────────────────────────────────────────────────────────────
@@ -225,6 +274,34 @@ async def _queued(
         output_path=output_path, expected_seconds=1, user=user,
     )  # fmt: skip
     return _job(spec)
+
+
+async def test_the_worker_stops_reading_assets_once_the_total_budget_is_spent():
+    """`max_assets_total_bytes` bounds the PAGE (first-fit in reading order,
+    `player.decide_assets`); the worker used to read every file that fit
+    `max_asset_bytes` on its own and hand the page 60 MB it would then
+    discard — bytes in the worker's RAM for nothing. The same first-fit
+    walk, before the read."""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item = _item(spec)
+    for name in ("a", "b", "c"):
+        await files.write(item, f"/plots/{name}.png", _PNG + bytes(2_000))
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "![a](plots/a.png) ![b](plots/b.png) ![c](plots/c.png)"},
+    ]
+    render = _Render()
+    coord = _coordinator(spec, files, render, clock=clock)
+    await coord.enqueue(
+        item_id=item, title="t", messages=messages,
+        options=VideoOptions(fmt=("mp4",), max_asset_bytes=3_000, max_assets_total_bytes=4_500),
+        output_path=OUT, expected_seconds=1, user="alice",
+    )  # fmt: skip
+
+    await asyncio.to_thread(coord._handle, _job(spec))
+
+    # a (2,033 B) fits; b would take the total to 4,066 — fits; c would not.
+    assert sorted(render.calls[0]["assets"]) == ["/plots/a.png", "/plots/b.png"]
 
 
 async def test_the_worker_renders_from_the_source_file_and_writes_only_the_video():
@@ -273,6 +350,54 @@ async def test_deleting_the_progress_file_stops_the_render_and_writes_nothing(af
     await asyncio.gather(asyncio.to_thread(coord._handle, job), cancel_soon())
 
     assert render.stopped  # by the flag, not by giving up
+    assert await _progress(files, item) is None
+    with pytest.raises(FileNotFound):
+        await files.read(item, OUT)
+
+
+async def test_a_file_that_is_no_longer_this_jobs_stops_it_and_is_left_alone():
+    """Cancel, then resubmit the same output within one heartbeat: the file
+    at the path is the NEW job's. The old job must not carry on — it would
+    render the old transcript, write it at the output and delete the new
+    job's file. Each file carries its job's token; a file that is not mine
+    is the same as no file."""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item = _item(spec)
+    render = _Render(wait_for_stop=True)
+    coord = _coordinator(spec, files, render, clock=clock, heartbeat_seconds=0.05)  # type: ignore[arg-type]
+    job = await _queued(files, spec, coord, item)
+    mine = await _progress(files, item)
+    assert mine is not None and mine.token
+
+    async def replace_soon():
+        await asyncio.sleep(0.1)
+        theirs = msgspec.structs.replace(mine, token="someone-elses-job")
+        await files.write(item, OUT + ".progress.json", theirs.dumps())
+
+    await asyncio.gather(asyncio.to_thread(coord._handle, job), replace_soon())
+
+    assert render.stopped  # the flag, not a give-up
+    with pytest.raises(FileNotFound):
+        await files.read(item, OUT)
+    p = await _progress(files, item)
+    assert p is not None and p.token == "someone-elses-job" and p.stage == "queued"
+
+
+async def test_a_job_cancelled_while_it_waited_in_line_never_starts_the_render():
+    """The file went while the job was still queued (behind a long render,
+    say). The worker's first act is to look: a render that starts anyway
+    is Chromium up and recording until the first heartbeat sees the flag —
+    ten seconds of work for nobody, per cancelled job."""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item = _item(spec)
+    render = _Render()
+    coord = _coordinator(spec, files, render, clock=clock)
+    job = await _queued(files, spec, coord, item)
+    await files.delete(item, OUT + ".progress.json")
+
+    await asyncio.to_thread(coord._handle, job)
+
+    assert render.calls == []
     assert await _progress(files, item) is None
     with pytest.raises(FileNotFound):
         await files.read(item, OUT)
@@ -329,6 +454,82 @@ async def test_the_heartbeat_rewrites_the_stage_and_the_elapsed_seconds():
     stages = [s for s, _ in seen]
     assert stages[0] == "queued" and "rendering" in stages and "encoding" in stages
     assert max(e for _, e in seen) == 20  # elapsed comes from the clock, not a guess
+
+
+async def test_a_heartbeat_write_that_raises_does_not_take_the_job_with_it():
+    """A transient store error in the heartbeat used to end the task with the
+    exception, which `finally: await beat` re-raised AFTER the render had
+    finished: the finished video thrown away, no sentence, and `stop` could
+    never be set again. The heartbeat logs and goes on."""
+    spec, clock = make_spec(default_user="u"), _Clock()
+    writes: list[str] = []
+
+    class _Files(WorkspaceFiles):
+        async def write(self, workspace_id, path, data):
+            writes.append(path)
+            if path.endswith(".progress.json") and writes.count(path) == 3:
+                raise OSError("store hiccup")  # one heartbeat, once
+            await super().write(workspace_id, path, data)
+
+    files = _Files(MemoryFileStore())
+    item = _item(spec)
+
+    class _SlowRender(_Render):
+        def __call__(self, **kw):
+            self.calls.append(kw)
+            kw["on_stage"]("rendering")
+            time.sleep(0.3)
+            return self.result
+
+    coord = _coordinator(spec, files, _SlowRender(), clock=clock, heartbeat_seconds=0.05)  # type: ignore[arg-type]
+    job = await _queued(files, spec, coord, item)
+
+    await asyncio.to_thread(coord._handle, job)
+
+    assert await files.read(item, OUT) == b"MP4"
+    assert await _progress(files, item) is None
+
+
+async def test_the_failure_sentence_is_not_overwritten_by_a_late_heartbeat():
+    """`fail()` used to run before the heartbeat task was cancelled; a beat
+    that woke during it landed after it and put `rendering` back over
+    `failed` — the job over, the pill showing "錄影中" until the stale rule,
+    the sentence never seen. The heartbeat is stopped first."""
+    spec, clock = make_spec(default_user="u"), _Clock()
+    store = MemoryFileStore()
+
+    class _Files(WorkspaceFiles):
+        async def write(self, workspace_id, path, data):
+            # Every real store writes off the loop (a thread, an HTTP PUT):
+            # a write in flight LANDS even if its awaiter is cancelled. The
+            # heartbeat's takes longer than the failure's, so a beat that
+            # started just before `fail()` lands just after it.
+            slow = 0.02 if b'"failed"' in data else 0.05
+
+            def land():
+                time.sleep(slow)
+                store._files[workspace_id][path] = data
+
+            await asyncio.to_thread(land)
+
+    files = _Files(store)
+    item = _item(spec)
+
+    class _FailingRender(_Render):
+        def __call__(self, **kw):
+            self.calls.append(kw)
+            kw["on_stage"]("rendering")
+            time.sleep(0.12)
+            raise RuntimeError("ffmpeg failed encoding mp4: x")
+
+    coord = _coordinator(spec, files, _FailingRender(), clock=clock, heartbeat_seconds=0.001)  # type: ignore[arg-type]
+    job = await _queued(files, spec, coord, item)
+
+    await asyncio.to_thread(coord._handle, job)
+    await asyncio.sleep(0.1)  # a straggler, if there were one, would land here
+
+    p = await _progress(files, item)
+    assert p is not None and p.stage == "failed" and p.error == "ffmpeg failed encoding mp4: x"
 
 
 async def test_a_render_that_fails_leaves_the_sentence_in_the_progress_file():
@@ -510,10 +711,10 @@ def test_without_a_running_loop_every_job_runs_on_the_coordinators_one_loop():
             await super().write(workspace_id, path, data)
 
     files = _Files(MemoryFileStore())
-    item = _item(spec)
+    item, other = _item(spec), _item(spec)
     coord = _coordinator(spec, files, _Render(), clock=clock)
     first = asyncio.run(_queued(files, spec, coord, item))
-    second = asyncio.run(_queued(files, spec, coord, item, output_path="/second.mp4", user="bob"))
+    second = asyncio.run(_queued(files, spec, coord, other, output_path="/second.mp4", user="bob"))
     del loops[:]  # the enqueues above ran under their own `asyncio.run`s
     done = threading.Event()
 
@@ -527,6 +728,6 @@ def test_without_a_running_loop_every_job_runs_on_the_coordinators_one_loop():
     coord._stop_consuming()  # what the worker's `aclose` ends in
 
     assert asyncio.run(files.read(item, OUT)) == b"MP4"
-    assert asyncio.run(files.read(item, "/second.mp4")) == b"MP4"
+    assert asyncio.run(files.read(other, "/second.mp4")) == b"MP4"
     assert len(loops) >= 2 and len({id(lp) for lp in loops}) == 1, "one loop for every job"
     assert all(lp.is_closed() for lp in loops[:1])  # …and it is put away with the consumer

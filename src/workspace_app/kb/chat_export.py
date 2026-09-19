@@ -56,8 +56,8 @@ def chat_export_filename(
     twin is ``.chat.md``). A range is named the way the person read it in the
     dialog — 1-based and inclusive, ``(2–3)`` for ``[1, 3)``."""
     safe = safe_stem(title)
-    if start is not None or end is not None:
-        safe += f" ({(start or 0) + 1}–{end})"
+    if start is not None and end is not None:
+        safe += f" ({start + 1}–{end})"
     return f"{safe}{_SUFFIX[fmt]}"
 
 
@@ -69,7 +69,10 @@ def slice_messages(
     ``None`` at either end means from the first / to the last. The FE counts
     from the newest and converts; the API keeps one unambiguous coordinate
     system, so a job's payload can be replayed. A range that names nothing
-    is refused with the rule it broke."""
+    is refused with the rule it broke — but no range at all is the whole
+    thread, empty or not (decision 6: 不給 = 全部)."""
+    if start is None and end is None:
+        return list(messages)
     lo = 0 if start is None else start
     hi = len(messages) if end is None else end
     if lo < 0:
@@ -94,11 +97,17 @@ def chat_export_disposition(
     when present. We also keep an ASCII ``filename`` (Starlette drops it) so a
     client that reads only the plain parameter still gets a sane name rather than
     none. Both are built here so the two can never disagree — the ASCII one is
-    the UTF-8 one with the en dash of a range folded to a hyphen and every
-    other non-ASCII run folded to one."""
+    the title's stem with every non-ASCII run folded to one hyphen (runs of
+    hyphens collapsed), the ``chat`` fallback when nothing is left, and the
+    range after that with a plain hyphen. Folding the finished UTF-8 name
+    instead lost the fallback for a CJK title with a range
+    (``filename=" (2-3).chat.json"``) and doubled hyphens beside the stem's
+    own (``第1章 v2`` → ``1--v2``)."""
     unicode_name = chat_export_filename(title, fmt=fmt, start=start, end=end)
-    stem = unicode_name[: -len(_SUFFIX[fmt])]
-    ascii_stem = re.sub(r"[^\x20-\x7e]+", "-", stem.replace("–", "-")).strip("-") or "chat"
+    folded = re.sub(r"[^\x20-\x7e]+", "-", safe_stem(title))
+    ascii_stem = re.sub(r"-+", "-", folded).strip("-") or "chat"
+    if start is not None and end is not None:
+        ascii_stem += f" ({start + 1}-{end})"
     return (
         f'attachment; filename="{ascii_stem}{_SUFFIX[fmt]}"; '
         f"filename*=UTF-8''{quote(unicode_name, safe='')}"

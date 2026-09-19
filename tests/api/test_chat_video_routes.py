@@ -7,9 +7,11 @@ the source and the queued progress file are in the tree before it answers.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
+from httpx import ASGITransport
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.apps.rca.model import RcaInvestigation
@@ -21,7 +23,7 @@ from workspace_app.perm.model import Permission
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
-from ._client import TestClient
+from ._client import AsyncClient, TestClient
 
 # Hand-written, the way the API is meant to be driven from a script: three
 # messages a person typed into a JSON file, never exported from a real chat.
@@ -90,8 +92,43 @@ def test_a_hand_written_transcript_is_queued_and_the_three_paths_come_back():
     progress = Progress.loads(raw)
     assert progress.stage == "queued" and progress.requested_by == "bob"
     assert progress.expected_seconds == body["expected_seconds"]
+    # The mark on the file comes back too, so the watcher can tell this
+    # job's file from a later job's at the same path.
+    assert body["token"] and body["token"] == progress.token
     (job,) = [r.data for r in spec.get_resource_manager(ChatVideoJob).list_resources()]
     assert job.payload.output_path == out and job.payload.options.fmt == ("mp4",)
+
+
+async def test_queueing_broadcasts_a_file_changed_for_each_of_the_two_files():
+    """The transcript and the progress file appear in the tree from a route
+    that is not the file routes, so the viewers' refetch has to be asked for
+    here: one `FileChanged` per file, as a write through the file routes
+    sends (`test_file_broadcast`)."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    sub = client.app.state.turn_engine.subscribe(iid)  # registered before the POST
+
+    async def two():
+        seen = []
+        async for ev in sub:
+            seen.append(ev)
+            if len(seen) == 2:
+                return seen
+        return seen  # pragma: no cover - the generator never ends on its own
+
+    collector = asyncio.create_task(two())
+    async with AsyncClient(transport=ASGITransport(app=client.app), base_url="http://t") as c:
+        r = await c.post(f"/a/rca/items/{iid}/chat-video", json={"transcript": TRANSCRIPT})
+    assert r.status_code == 202, r.text
+    body = r.json()
+
+    events = await asyncio.wait_for(collector, 3)
+    assert [type(e).__name__ for e in events] == ["FileChanged", "FileChanged"]
+    assert [(e.path, e.by, e.kind) for e in events] == [
+        (body["source_path"], "bob", "written"),
+        (body["progress_path"], "bob", "written"),
+    ]
 
 
 def test_the_output_paths_extension_picks_the_format_as_the_cli_does():
@@ -208,6 +245,72 @@ def test_a_second_request_for_a_video_still_being_made_is_a_conflict():
 
     assert r.status_code == 409, r.text
     assert r.json()["detail"] == "a video is already being made at /videos/demo.mp4"
+
+
+def test_the_requester_can_cancel_their_own_video_without_edit_content():
+    """Cancel is deleting the progress file, and `DELETE /files/{path}` asks
+    `edit_content` — which `add_content`, the verb that let the person START
+    the video, does not include. So the person who queued it could not stop
+    it (the 403 was swallowed, the pill said cancelled over a video that
+    was then made). `DELETE …/chat-video?path=` deletes the job's own file
+    for its requester, or for anyone who may edit the item's content."""
+    holder = {"id": "alice"}
+    client, spec = _client_and_spec(holder)
+    perm = Permission(
+        visibility="restricted",
+        read_meta=["user:alice", "user:carol"],
+        read_content=["user:alice", "user:carol"],
+        add_content=["user:alice"],
+    )
+    iid = _item(spec, by="bob", permission=perm)
+    queued = _post(client, iid, output_path="/videos/mine.mp4").json()
+    progress = queued["progress_path"]
+
+    cancel = f"/a/rca/items/{iid}/chat-video"
+    holder["id"] = "carol"  # may read, did not ask: not hers to cancel
+    assert client.delete(cancel, params={"path": progress}).status_code == 403
+    holder["id"] = "alice"
+    r = client.delete(cancel, params={"path": progress})
+    assert r.status_code == 204, r.text
+    assert client.get(f"/a/rca/items/{iid}/files{progress}").status_code == 404
+    # Gone is gone: a second cancel is a 404, not a 500.
+    assert client.delete(cancel, params={"path": progress}).status_code == 404
+    # Not a progress file at all: refused as such, whatever the verb.
+    assert client.delete(cancel, params={"path": queued["source_path"]}).status_code == 422
+
+
+def test_an_editor_can_cancel_anyones_video_on_the_item():
+    holder = {"id": "alice"}
+    client, spec = _client_and_spec(holder)
+    perm = Permission(
+        visibility="restricted",
+        read_meta=["user:alice", "user:dave"],
+        read_content=["user:alice", "user:dave"],
+        add_content=["user:alice"],
+        edit_content=["user:dave"],
+    )
+    iid = _item(spec, by="bob", permission=perm)
+    progress = _post(client, iid, output_path="/videos/mine.mp4").json()["progress_path"]
+
+    holder["id"] = "dave"
+    cancel = f"/a/rca/items/{iid}/chat-video"
+    assert client.delete(cancel, params={"path": progress}).status_code == 204
+
+
+def test_a_very_long_title_still_names_a_file_the_store_can_take():
+    """A 300-character title made a 900-byte file name the store refused —
+    a 500 from the video export of a chat someone had renamed at length. The
+    default name keeps the first 64 characters of the stem."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    long = {**TRANSCRIPT, "title": "事故" * 150}
+
+    r = client.post(f"/a/rca/items/{iid}/chat-video", json={"transcript": long})
+
+    assert r.status_code == 202, r.text
+    name = r.json()["output_path"].rsplit("/", 1)[-1]
+    assert len(name.encode()) < 255 and name.startswith("事故" * 32)
 
 
 def test_the_deployments_ceilings_are_readable_so_the_form_never_offers_past_them():

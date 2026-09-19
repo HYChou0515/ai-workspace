@@ -38,6 +38,14 @@ class Progress(msgspec.Struct, frozen=True):
     requested_by: str
     elapsed_seconds: int = 0
     error: str = ""
+    token: str = ""
+    """Which job this file belongs to (the job's own, minted at enqueue). A
+    worker that finds a file with another token at its path — a cancel
+    followed by a new request for the same output, inside one heartbeat —
+    treats it exactly as no file: stops, writes nothing, leaves it alone.
+    Without it a job identified its file by path only, rendered the OLD
+    transcript into the new request's output and deleted the new job's
+    file."""
 
     def dumps(self) -> bytes:
         """Indented, keys in declaration order — a person opens this file
@@ -54,10 +62,20 @@ class Progress(msgspec.Struct, frozen=True):
             raise ValueError(str(exc)) from exc
 
 
-def is_alive(progress: Progress, *, now: datetime, stale_after_seconds: int) -> bool:
-    """Whether a worker still holds this file: the stage is a running one
-    AND the last heartbeat is within ``stale_after_seconds``. A ``failed``
-    file holds no claim, whatever its age."""
+def is_alive(
+    progress: Progress, *, now: datetime, stale_after_seconds: int, queued_alive: bool
+) -> bool:
+    """Whether a job still holds this file. A ``failed`` file holds no claim,
+    whatever its age. A ``queued`` file has no heartbeat to judge — nobody
+    rewrites it while the job waits in line behind another render, which is
+    the NORMAL case with one worker and renders of a minute or more — so its
+    claim is ``queued_alive``: whether the queue still holds the job (the
+    coordinator asks its rows). Judging it by age called every backlog
+    "stale", let a second request replace the file, and queued two jobs for
+    one output. A running stage IS judged by its heartbeat: within
+    ``stale_after_seconds`` of ``now``, or the worker died mid-render."""
+    if progress.stage == "queued":
+        return queued_alive
     if progress.stage not in RUNNING:
         return False
     return now - progress.heartbeat_at <= timedelta(seconds=stale_after_seconds)

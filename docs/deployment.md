@@ -507,7 +507,7 @@ RCA 的 system prompt 是純 markdown，存在
     `WorkspaceFiles`(額度、路徑 jail、鏡像),而那個 facade 只有 `create_app` 會組,所以
     worker 直接拿 API 組好的 coordinator(`worker.API_REGISTRY_JOBTYPES` 兩個成員各有各的理由)。
     它跑的是**另一個 image** `rca-app-chat-video`(`docker/Dockerfile` 的 `chat-video` stage:
-    同一個 app + headless Chromium + ffmpeg,多 0.7–1 GB,API pod 用不到所以不放進 `rca-app`):
+    同一個 app + headless Chromium + ffmpeg,估多 0.5–1 GB——**沒量**,本機 build 卡在 LibreOffice 的 apt;API pod 用不到所以不放進 `rca-app`):
     `docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .`。
     記憶體照 `workers.yaml` 上量到的數字給(錄影時 Chromium 154–172 MB + 錄影 ffmpeg 147 MB,編碼
     mp4 273–320 MB / gif 230–640 MB,兩段不重疊);OOM 只壞一支影片的進度檔,不影響 request。
