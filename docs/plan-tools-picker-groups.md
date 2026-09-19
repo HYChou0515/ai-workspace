@@ -104,6 +104,61 @@ user：「我們能針對 tool command 做控制嗎？現在只有 partial tool 
 
 user：「同一個 PR 改好」——不另開分支，接在 P8 之後。
 
+### P14 修訂：計算點放錯了（review 第一輪，2026-09-19，四把鏡頭並行，快照 `7f79327e`）
+
+四把鏡頭各自用探針證實、去重後是同一組洞。根因一句話：決定 7 把「逐指令」算在 `_agent_for`，等於 **`allowed_tools` 本身還是
+entry 粒度的舊答案**，其他每個讀它的人都拿到舊答案；而 resolve 之後收窄 `allowed_tools` 的三處帶著 `tool_ceiling`／`tool_prefs`
+進 `_agent_for`，pin 又把收窄放寬回去。
+
+| # | 洞（探針證實） | 鏡頭 |
+|---|---|---|
+| A | compaction（`allowed_tools=[]`）、sub-agent 定義、workflow step 的 `tools:` 三處在 resolve 後用 `structs.replace` 收窄，ceiling／prefs 原封帶著 → 釘 ON 的 `rca-tools:spc` 出現在摘要 sub-context／只授 `read_file` 的 step 與 sub-agent 裡；#480 段落對收窄的 turn 列出整個天花板（28–30 條「已關閉、請使用者開啟」，在沒有使用者的 headless step 上） | 四把 |
+| B | WUI `callTool`（`api/wui_routes.py`）與 `_wui_callable`（`agent/tools.py`）仍讀 entry 粒度 → 釘掉的 `pareto` 從頁面照樣 200 執行；反向（profile 沒給、pin ON 的指令）403 | 四把 |
+| C | route 自己算預設集 `prof.tools if prof.tools else ceiling`（`[]` 是 falsy → 整個天花板），resolve 是 `is not UNSET`（`[]` = 零）→ `tools: []` 的 profile picker 全亮、runner 零；route 的 module docstring／`contract.md`「同一條 resolve」已假、`app_catalog` 參數沒人用 | 四把 |
+| D | `_warn_undeclared` 拿展開後的 `wafer-history:trend` 和 `external_tools` 的鍵 `wafer-history` 比 → 每個第三方套件每次開 modal 都 WARNING「declared but not in tools[]」 | 缺陷、回歸 |
+| E | 環境變數面板 `web/src/lib/envNeeds.ts` 按**列**分組 → 整包授權的套件每個指令重複一組同樣的欄位、`wantedBy`／`undeclared` 各列一次（rca 從 5 個套件名變 15 個指令名） | 缺陷 |
+| F | `agent/context.py` 的 provisioning 用 entry 粒度判「要不要裝這包」（prod `prebuilt_dir=None` 沒踩到） | 符合度 |
+| G | `unit_pref` 的整包鍵 fallback 對**部分授權**的 `pkg:cmd` 也生效（master 對天花板外的鍵 no-op） | 缺陷、回歸 |
+| H | 天花板同時寫 `rca-tools` 和 `rca-tools:spc` → `spc` 畫兩列、建兩次 | 缺陷 |
+| I | 套件和內建同名（`exec`）→ `expand_entries` 先查套件，內建那列消失 | 缺陷 |
+| J | 「另外五個建構點」grep 是 6；`AgentConfig.tool_prefs` docstring「只當 fallback 重讀」不準；`picker_units`／`apps/base.py`／`apps-platform.md:108` 的「一條目一列」「ceiling 外的鍵 no-op」過期；P11「parity 表」與 P12「modal 測試」驗收欄沒出貨；`test_command_grants.py` 的「Parity with `_apply_tool_prefs`」沒拿它當 oracle；決定 4 寫 PUT，實際是 JSON-Patch `replace` | 真實性、符合度 |
+
+**成立的（有查）**：38 列／rca-tools 10／csv 2／data-fetch 1／sci-plot 1／python-stack 整包 1，四個 rca profile 都 38；整包鍵三處都讀得到；
+`AgentConfig` 沒註冊進 specstar，沒 migrate；`build_function_tools` 的 `_select_commands` 吃 `pkg:cmd`；規則兩根釘子（優先序、分割順序）突變都紅。
+
+#### 決定修訂
+
+| # | 原決定 | 改成 | 為什麼 |
+|---|---|---|---|
+| 2、7 | runner 與 picker 各自在有 packages 的地方叫 `command_grants`；`AgentConfig` 帶 `tool_ceiling`／`tool_prefs` 讓 `_agent_for` 算 | **config 在「packages 齊了」的那一點定案**：`apps/catalog.py:finalize_tool_grants(config, packages)` 用 `command_grants` 把 `allowed_tools`／`disabled_tools` **本身**寫成指令粒度，並把 `tool_ceiling`／`tool_prefs` **用掉清空**（沒有 ceiling 的 config 原樣回傳 → 冪等、只能定案一次）。`_agent_for` 回到 master 的碼。定案的門有四扇（下表）；門之後每個讀 `allowed_tools` 的人（runner、`_wui_callable`、provisioning、authz、sub-agent clamp、compaction、sub-agent、sizing）**由構造**一致 | 洞 A／B／F 全是「讀者拿到 entry 粒度」：讀者有八個以上，生產者只有四扇門；修讀者是逐實例、修生產者是整類消失 |
+| 新 10 | — | **收窄 = 定案之後的交集**，字面規則一個：`tooling/catalog.py:narrow_entries(entries, held)`——`e ∈ held` 留；裸名 `pkg` → held 裡它的每個 `pkg:cmd`（按名排序）；`pkg:cmd` 在 `pkg` 整包被持有時留；其餘丟；去重。三處共用：workflow step 的 `tools:`（`build_workflow_turn(tool_subset=)`，在 `_common` 定案之後做，`workflow_exec` 不再自己 `replace`）、sub-agent 載入時的 `clamp_tools`、`save_subagent` 的拒絕判準 | A 的 workflow 半邊在 resolve 之後、packages 之前收窄，字面比對在指令粒度的 held 上會把宣告 `rca-tools` 的 step／sub-agent 剝光；「宣告名單 ∩ 持有」三處是同一件事 |
+| 新 11 | — | picker route **回去叫 `resolve_agent_config`**（master 的做法），再 `finalize_tool_grants` 同一個函式 → `effective = allowed_tools`；`default_on` = `expand_entries(profile_default_tools(slug, profile))`，而 `profile_default_tools` 是**從 `resolve` 抽出來**、resolve 自己也叫的那段（UNSET → 天花板；`[]` → 零；子集檢查） | 洞 C：「A 讀檔的方式和 B 一樣」要共用函式，不能兩份手抄 |
+| 新 12 | — | `_warn_undeclared` 比對的是單位的**套件名**（`u.name.partition(":")[0]`） | 洞 D |
+| 新 13 | — | 環境變數面板按**套件**折（`group`≠`builtin` 的列以 `group` 去重、標籤用 `package`），`wantedBy`／`undeclared` 也以套件計 | 洞 E：`env_needs` 是套件的屬性，一列一組是把同一份宣告畫 N 次 |
+| 新 14 | — | `expand_entries` 去重（第一次出現為準）、命中內建名的條目不展開；`unit_pref` 的整包鍵 fallback **保留**（部分授權也管）——寫進文件 | H、I 一行各一；G 是拍板：存下來的「這個套件關掉」在 app 之後把授權縮成 `pkg:cmd` 時應該還算數，picker 與 runner 現在一致就好 |
+
+#### 門（config 與 packages 相遇的地方＝要定案的生產者；grep 導出）
+
+| 門 | packages 從哪來 | 之前 | 之後 |
+|---|---|---|---|
+| `api/turn_context.py:_common`（chat／workflow／排程／`wui/run`／goal 全走這裡） | `[*self._packages, *external.packages]` | `agent_config` 原樣進 ctx，`_agent_for` 重算 | 第一行 `finalize_tool_grants`，再 `narrow_entries(tool_subset)`；`_overhead_for`（用 tools 估 token）也量到定案後的集合 |
+| `api/wui_routes.py:wui_call_tool` | `[*bundled, *external.packages]` | `config.allowed_tools`（entry） | `finalize_tool_grants(config, available)` 再 `find_allowed_command` |
+| `api/tools_routes.py` picker | `[*pkgs, *external.packages]` | 自己 `command_grants` + 自己的預設公式 | 決定 11 |
+| `api/replay_loaders.py` → `health/replay.py:_agent_for(config, packages)` | `self._packages`（只有第一方——既有限制） | resolve 原樣 | `finalize_tool_grants(config, self._packages)`，重播的工具清單才和真 turn 一樣 |
+
+不是門的：`skill_eval`（不帶 packages）、`factories.py`（只讀 model）、KB／wiki／card-drafter 六個建構點（`tool_ceiling` 空 → 原樣）。
+
+#### 補的 phases
+
+| phase | 內容 | 驗收（先紅後綠） |
+|---|---|---|
+| P15 | 規則：`finalize_tool_grants`（`apps/catalog.py`）、`narrow_entries`、`expand_entries` 去重＋內建名守衛、`profile_default_tools` 抽出來 | 紅：定案後 `allowed_tools` 是 `pkg:cmd`、ceiling／prefs 清空、再定案一次不變、沒 ceiling 原樣；`narrow_entries` 五格（留／裸名展成持有的／整包持有時留 `pkg:cmd`／不持有丟／去重）；`tools: []` 的 profile → `[]`；resolve 的 `allowed_tools`（無 pref）＝`profile_default_tools`（parity，resolve 當 oracle） |
+| P16 | turn 那扇門：`_common` 定案＋`tool_subset`；`workflow_exec` 改傳 `tool_subset`；`_agent_for` 回 master；sub-agent `clamp_tools`／`save_subagent` 用 `narrow_entries`；P11 的三條 runner 測試改走真入口（`build_chat_turn` → ctx.agent_config） | 紅（沿用四把鏡頭的探針改寫）：step `[read_file]` + pin spc ON → 沒 spc；step `["rca-tools"]` + pin pareto OFF → 少 pareto；compaction 走真 `AgentCompactor.summarise` → 零套件工具、#480 零條；sub-agent `_child_context` 只授 `read_file` → 沒 spc；定義寫裸 `rca-tools` → 得到持有的指令列 |
+| P17 | 另外三扇門：WUI route、picker route（決定 11、12）、replay | 紅：釘掉的指令 WUI 403、profile 沒給但 pin ON 的 200；`tools: []` picker／runner 一致；第三方不再假警告；replay 的工具清單少釘掉的那個 |
+| P18 | 前端：`envNeeds.ts` 按套件折 | 紅：同套件三列 → 一組、`wantedBy` 一次、`undeclared` 一次 |
+| P19 | 文件：本紀錄、`migrations.md`（補 step／sub-agent 語意與 WUI）、`contract.md`、`apps-platform.md:108`、`AgentConfig`／`picker_units`／`apps/base.py`／`find_allowed_command` 的句子、決定 4 的 PATCH、計數 6 | `mkdocs --strict` 綠；每句寫在查證之後 |
+| P20 | review 第二輪（換了機制）、乾淨後推、對最終 sha 跑 CI、PR body | — |
+
 ## 施工紀錄
 
 - **P2**（`fe41ab62`）：`ToolMeta.group`（預設 `BUILTIN_GROUP = "builtin"`），`picker_units` 對 `pkg:cmd`／整套件／
