@@ -1,6 +1,6 @@
-# Plan — skill hub 的前端收尾：demo 錄影與你的 review 抓到的 22 條，一支 PR
+# Plan — skill hub 的收尾：demo 錄影與你的 review 抓到的 24 條，一支 PR
 
-**狀態：** 計畫，等點頭（2026-09-19）。來源是 #818 合併後錄的九支 /web-demo、你看片時提的六條、以及 7 個介面 × 6 種視窗的小尺寸量測。**純前端**；後端的兩條（工具回話的換行、伺服器句子的語言）不在此，列在「不做」。#822（技能面板一列的 cluster 換行）**併進來**，那條 draft PR 關掉。
+**狀態：** 計畫，等點頭（2026-09-19）。來源是 #818 合併後錄的九支 /web-demo、你看片時提的六條、以及 7 個介面 × 6 種視窗的小尺寸量測。以前端為主；後端的兩條（工具回話的換行、給人看的伺服器句子）**也一起**——它們不是機制問題，一條是分段、一條是照抄站內既有的「code + 參數、前端翻譯」形狀。#822（技能面板一列的 cluster 換行）**併進來**，那條 draft PR 關掉。
 
 每一項都對照一個成熟設計系統的做法，出處寫在決策表；圖示一律用現成 icon set 的 glyph，不手畫。
 
@@ -25,13 +25,14 @@ Skill hub 的功能都在（#818），但看片時它「像個工程師做的」
 | **D11** 開新 item 沒帶 skill | 新 item 表單上沒有任何關於這個 skill 的提示 | AppNewItem 收 `?skill=<entry id>` 時，表單頂端一行「建好後，到技能面板把 default-user/csv-peek 裝進來再修改」；不自動裝（建 item 是表單、裝是面板，兩步各自可見） | 同 D8 |
 | **D12** 可見範圍對話框 | 共用 `PermissionDialog`：標題 Share “…”、選項 Private/Restricted/Public 是英文，Public 說明「Everyone in the workspace」對 hub 語意錯 | `PermissionDialog` 的標題、三個選項與說明改走 i18n（zh-TW／en），並多一個 `audience` 參數：hub 傳「平台上所有人」，item 傳既有的「這個 workspace 的所有人」；其他呼叫者行為不變（預設 = 今天的字） | 共用元件的文案要可參數化；混語是缺陷 |
 | **D13** 窄寬 | picker 390px：安裝鈕占半寬、說明擠成窄欄；技能面板底部 390px：提示折三行擠在按鈕旁；面板列（#822） | picker 列與面板列同一套：文字欄 `flex: 1 1 200px`、控制項成一個 cluster 隨列換行；底部提示在容器 < 480px 時隱藏（`@container` 或 `useHeaderTier` 同款量測，不用視窗寬度常數） | #822 的量測法（Chromium 1280／390，`getClientRects().length`） |
+| **D15** 工具回話黏 bullet | `publish_skill` 的回話用單一換行接句子（`agent/tools.py:2610` `"\n".join(lines)`）；轉述時 markdown 把清單後的「It mentions these tools…」「It is public…」併進最後一則審查建議 | 段與段之間用空行（`"\n\n".join`）；清單自成一段。同檔另兩處 `"\n".join`（`:1439` 標題+清單、`:2217` ask_user）先看是不是同一種形狀，是就一併改 | markdown 的清單規則；工具回話是模型與人都會讀的文字 |
+| **D16** 給人看的伺服器句子是英文 | skill hub 路由回 `detail` 字串（「this workspace already has alice's '.skill/x/'…」「only the owner may manage this entry」「no such skill hub entry」「transfer needs a different, non-empty owner」「bob already publishes a skill named …」），前端原樣顯示，混進中文介面 | 照站內既有形狀：`detail` 改成 **`{code, …params}`**，前端用 i18n 翻（配額錯誤 `turn_gate.py`→`quotaFailure.ts`、以及 hub 自己的「修改」路由 `reason: closed/deleted/no_access`→`skillHub.edit.reason.*` 都已是這樣）。五個 code：`not_found` / `owner_only` / `transfer_owner_required` / `transfer_name_taken(owner,name)` / `folder_in_the_way(owner,path)`。`skill_folder_in_the_way` 改回**事實**（whose/path 的 struct），兩扇門各自成句：tool 給模型的英文句照舊，路由給前端 code。未知 code 的後備：狀態碼 + 通用句 | 站內先例（配額 code、edit reason）；判準在算出來的地方、句子在讀者那邊 |
 | **D14** 頂欄 390px | 「切換」折兩行、麵包屑截成「回…」「Skill h…」（共用 chrome） | 「切換」在窄寬只留圖示（有 aria-label）；麵包屑保留**最後一段**完整、前段收成「…」（GOV.UK breadcrumbs 的 collapse-on-mobile 做法） | [GOV.UK Breadcrumbs](https://design-system.service.gov.uk/components/breadcrumbs/) |
 
 ## 不做（這支 PR 之外）
 
-- **工具回話的換行**（`publish_skill` 回話單換行、markdown 黏 bullet）——後端 `agent/tools.py`，一行修，另一支。
-- **伺服器句子是英文**（拒絕／回報原句進中文介面）——後端 i18n 策略，先擱著，等你拍板要不要做。
-- 任何需要新 API 的事：D8 用既有 `/skills` 的 skill 名比對、D9 用既有 lineage 欄位、D11 用 query string——都不動後端。
+- **模型讀的工具回話改語言**：tool 回給模型的英文句照舊（真模型會用使用者的語言轉述），D16 只改路由直接給人看的那五句。
+- 新 API：D8 用既有 `/skills` 的 skill 名比對、D9 用既有 lineage 欄位、D11 用 query string；D16 改的是既有路由的 `detail` 形狀（唯一的客戶端是這個前端）。
 
 ## 形狀
 
@@ -45,7 +46,10 @@ Skill hub 的功能都在（#818），但看片時它「像個工程師做的」
 - `web/src/components/Icon.tsx`：`undo` glyph（D5）。
 - `web/src/components/PermissionDialog.tsx`：i18n + `audience`（D12）。
 - 頂欄（`ChatListRail` / 麵包屑元件，P8 時定位）（D14）。
-- `web/src/lib/i18n.tsx`：新增／改寫的字串全部 zh-TW + en 各一份。
+- `web/src/lib/i18n.tsx`：新增／改寫的字串全部 zh-TW + en 各一份（含 D16 的五個 code）。
+- `src/workspace_app/agent/tools.py`：D15 分段；`install_skill_impl` 改讀 struct 成句。
+- `src/workspace_app/apps/skills.py`：`skill_folder_in_the_way` 回事實 struct（D16）。
+- `src/workspace_app/api/skill_hub_routes.py`：五句改 `{code, …}`（D16）；`web/src/api/skillHub.ts` 的 `refused()` 讀 code 翻譯、無 code 才落到句子。
 
 ## 階段
 
@@ -60,15 +64,18 @@ Skill hub 的功能都在（#818），但看片時它「像個工程師做的」
 | **P5** | D4 「有新版」badge + 依來源分句；D5 `undo` glyph；D13 面板底部提示隱藏 | 測試：`update_available` 的列有 badge 文字；hub 副本與 package 副本的 tooltip／提示各自的句子；Chromium 390：底部提示不渲染、按鈕一行 |
 | **P6** | D11 開新 item 帶 `?skill=` 提示 | 測試：條目頁「開新 item」連結帶 `skill=`；AppNewItem 讀到就畫提示句、沒有就不畫 |
 | **P7** | D12 `PermissionDialog` i18n + `audience` | 測試：hub 呼叫顯示「平台上所有人」、item 呼叫顯示既有句；en 版兩者；未傳 `audience` 的既有呼叫者字不變（parity：對每個呼叫者 render 一次比對舊字） |
-| **P8** | D14 頂欄窄寬 | Chromium 390：「切換」單行、麵包屑最後一段完整可見；1280 不變 |
-| **P9** | 三把鏡頭自審 → 一輪 review（四把鏡頭並行）→ 修 → CI → /web-demo 補錄受影響的段（picker、面板、轉移） | 錄影裡看得到：留白、「安裝」、「有新版」、成功提示 |
+| **P8** | D15 工具回話分段 | 測試：`publish_skill` 的回話以空行分段、清單後的句子不在清單裡（用前端同款 markdown 解析驗，不是字串比對） |
+| **P9** | D16 五句改 code + 前端翻譯 | 後端：每句一測（狀態碼 + code + 參數）；`skill_folder_in_the_way` 的 struct 由 tool 與路由各自成句（parity：tool 的英文句和改前逐字相同）；前端：五個 code 各自的 zh-TW／en 句、未知 code 的後備句；demo 5 的拒絕畫面重錄 |
+| **P10** | D14 頂欄窄寬 | Chromium 390：「切換」單行、麵包屑最後一段完整可見；1280 不變 |
+| **P11** | 三把鏡頭自審 → 一輪 review（四把鏡頭並行）→ 修 → CI → /web-demo 補錄受影響的段（picker、面板、轉移、被拒） | 錄影裡看得到：留白、「安裝」、「有新版」、成功提示、中文的拒絕句 |
 
 ## 知情的風險
 
 - **D1 是整站的視覺改動**：預設 20 會讓那 5 個沒傳的對話框多出留白（這正是目的），但也要確認沒有呼叫者是「刻意沒傳、靠子元素自己留白」——P1 逐個截圖看。
 - **D12 動共用元件**：`PermissionDialog` 的其他呼叫者（item 分享）文案不變由 parity 測試釘住。
-- **D14 動共用頂欄**：範圍最大、和 hub 無關；若 review 認為該另開，P8 可以獨立拆出去不影響前面。
+- **D14 動共用頂欄**：範圍最大、和 hub 無關；若 review 認為該另開，P10 可以獨立拆出去不影響前面。
+- **D16 改了路由的 `detail` 形狀**：唯一客戶端是這個前端，且前端保留「無 code 就顯示句子」的後備，所以舊前端撞到新後端（滾動更新中）只是回到今天的英文句，不會壞。
 
 ## migrations 帳
 
-純前端、無設定、無資料——**不需要** `docs/migrations.md` 條目。`docs/design-history.md` 加一列指到本計畫。
+無設定、無資料、無新 JobType；D16 改的錯誤形狀只有自家前端讀——**不需要** `docs/migrations.md` 條目。`docs/design-history.md` 加一列指到本計畫。
