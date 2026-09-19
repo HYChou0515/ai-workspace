@@ -257,6 +257,20 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     expect(within(menu).getByRole("link", { name: "Docs" })).toHaveAttribute("href", "/a/rca/docs");
     // (the popover renders inside the nav; every link in there is the menu's)
     expect(within(nav).getAllByRole("link").every((a) => menu.contains(a))).toBe(true);
+    // …and OUTSIDE the box that clips the crumbs: an absolutely positioned
+    // panel inside an `overflow: hidden` ancestor is clipped to nothing —
+    // round 2 measured the "open" popover at 390 with every link unhittable.
+    // The clip (#464) stays, on an inner box around the crumbs only.
+    // (a crumb clips its own text too, so the box is looked for ABOVE it)
+    const clipper = within(nav)
+      .getByText("Bearing noise #1432")
+      .parentElement!.closest('[style*="overflow: hidden"]');
+    expect(clipper).not.toBeNull();
+    expect(nav.contains(clipper)).toBe(true);
+    for (let el = menu.parentElement; el; el = el.parentElement) {
+      expect(el.style.overflow, el.outerHTML.slice(0, 80)).not.toBe("hidden");
+      if (el === nav) break;
+    }
     expect(within(nav).getByText("Bearing noise #1432")).toBeInTheDocument();
     expect(more).toBeInTheDocument();
     expect(more).toHaveAttribute("aria-expanded", "true");

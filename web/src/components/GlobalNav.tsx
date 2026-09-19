@@ -160,6 +160,7 @@ function Breadcrumbs() {
   const shown: (Crumb | "…")[] = folded
     ? ["…", trail[trail.length - 1]]
     : trail;
+  const hidden = trail.slice(0, -1);
   return (
     <nav
       aria-label="Breadcrumb"
@@ -168,19 +169,16 @@ function Breadcrumbs() {
         alignItems: "center",
         gap: 6,
         minWidth: 0,
-        // #464: shrink + clip so a long crumb (e.g. the App title on a narrow
-        // viewport) can't push the whole global bar past the viewport edge.
         flexShrink: 1,
-        overflow: "hidden",
         fontSize: "var(--text-body-sm)",
         color: "var(--text-paper-d)",
       }}
     >
-      {shown.map((crumb, i) => {
-        const last = i === shown.length - 1;
-        if (crumb === "…") {
-          const hidden = trail.slice(0, -1);
-          return (
+      {/* The "…" and its popover sit OUTSIDE the clipped box below: the
+          Popover is absolutely positioned inside its trigger's wrapper, and
+          an `overflow: hidden` ancestor clips it to nothing (round 2 of #826
+          measured exactly that — "open", and no link hittable). */}
+      {folded && (
             <Popover
               key="…"
               align="start"
@@ -222,8 +220,22 @@ function Breadcrumbs() {
                 </div>
               )}
             </Popover>
-          );
-        }
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minWidth: 0,
+          // #464: shrink + clip so a long crumb (e.g. the App title on a narrow
+          // viewport) can't push the whole global bar past the viewport edge.
+          flexShrink: 1,
+          overflow: "hidden",
+        }}
+      >
+      {shown.map((crumb, i) => {
+        const last = i === shown.length - 1;
+        if (crumb === "…") return null;
         return (
           <Fragment key={`${crumb.label}-${i}`}>
             {i > 0 && <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />}
@@ -262,6 +274,7 @@ function Breadcrumbs() {
           </Fragment>
         );
       })}
+      </div>
     </nav>
   );
 }
