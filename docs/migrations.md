@@ -676,6 +676,20 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 另一個 item 的 Skills 面板「從 skill hub 裝」看得到它、裝進去後那一列有「可在此編輯」、下一輪 `read_skill` 讀得到。
 - 部署方自己的 app：`agent.tools` 有那三個、`agent.skills` 有 `skill-hub`，否則 agent 會說沒有 `publish_skill`。
 
+### 2026-09-19 · #828 工具 modal 按套件折疊；整包授權在 picker 變成逐指令列 {#pr-828}
+
+**行為**（沒有新設定；運營方不用做事，但要知道兩件事）
+
+- item 的「助理可用的工具」modal 改成按套件折疊，而且 **app 授整包的套件（`tools[]` 寫 `rca-tools` 這種）現在一個指令
+  一列**，每列可各自預設／開啟／關閉；agent 拿到的工具集也改成逐指令算（`tooling/catalog.py:command_grants`，
+  picker 與 runner 共用）。`app.json` 不用改。
+- 既有 item 存的整包鍵（`attached_tool_prefs` 裡的 `"rca-tools": false`）**繼續有效**：讀的時候當成該套件每個指令都釘成那個值
+  （指令鍵優先）。使用者在 modal 第一次儲存時，那把整包鍵會被拆成逐指令鍵寫回——資料在 item 列上，沒有 migrate 要跑。
+  漏知道的症狀：無。沒有指令的套件（`python-stack`，它是 sandbox 的 Python 載體）仍是一列。
+
+**確認做完**：開任一 rca item 的工具 modal，`Rca Tools` 是一個可展開的組（10 列）；`GET /api/a/rca/items/<id>/tools`
+的 `rca-tools:*` 列 `group` 都是 `rca-tools`。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

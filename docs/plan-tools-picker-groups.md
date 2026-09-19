@@ -132,6 +132,19 @@ user：「同一個 PR 改好」——不另開分支，接在 P8 之後。
 - **P8**（第三輪，單一問題）：72 格（條件 × 手勢 × 搜尋動作）真 DOM 對照只照 docstring 寫的 reference model，全對；四根釘子各恰一紅；
   溜過的突變是 `autoOpen` 改成聯集（表的「會少」那半沒釘）和守衛比未正規化的字串——各補一根，突變下各自獨紅。
   「搜尋中改到一致、清掉搜尋就收」是拍板：沒搜尋時只有混合的組才需要看進去，收起發生在刪詞那一下。
+- **P9**（`6a082ff1`）：第二部分的 plan 併入本檔（user：「同一個 PR 改好」）。
+- **P10**（`3d1a36f0`）：`tooling/catalog.py` 的 `expand_entries`／`unit_pref`／`command_grants`（`CommandGrants`：enabled、
+  disabled、default_on），九條測試先紅（import 失敗）後綠；含 user 那兩題：指令 pin 縮整包授權、舊整包鍵仍管每個指令。
+- **P11**（`8818df0e`）：`AgentConfig` 加 `tool_ceiling`／`tool_prefs`（只有 `resolve` 填；另外五個建構點預設空 = 不展開）；
+  `_agent_for` 有 packages 且有 ceiling 時用 `command_grants` 算給 `build_function_tools` 的 allowed 與 #480 段落。
+  三條在真入口 `_agent_for` 先紅。
+- **P12**（`40b50927`）：route 用同一個 `command_grants`（`default_on` 取 profile 的預設集——pin 之前——不能拿
+  `cfg.allowed_tools`，否則釘成關閉的內建會顯示「預設關閉」）；`picker_units(expand_entries(ceiling))`。四條先紅（含
+  picker／runner 的 parity），五條第三方測試的 key 從整包改成指令列（第三方套件同樣展開）。真後端 rca item：38 列，
+  `rca-tools` 10、`csv-column-summary` 2、`data-fetch`／`sci-plot` 各 1 指令、`python-stack` 整包；真瀏覽器展開
+  Rca Tools 十列各有真描述、整組 Off 只翻那十列。
+- **P13**：`docs/migrations.md` 加 #828 條目（行為變、沒有設定、運營方不用做事但要知道整包鍵的讀法與第一次儲存會拆）；
+  `contract.md`、`frontend.md`、本紀錄。
 
 **順手看到、沒動的**：第一方整套件列（`data-fetch`、`rca-tools`…）右邊的來源標籤是「內建／Built-in」
 （#724 的「不是第三方就是平台自己的」）——P5 把組名改掉之後不再和組名撞，但「核心工具」組裡每一列也各掛一個
