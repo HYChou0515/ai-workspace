@@ -76,6 +76,14 @@ describe("my-resources: the live panel's layout", () => {
     expect(css).not.toMatch(/\.page ul:not\(/);
     // The live title keeps the shared `> a` ellipsis — that rule is unscoped.
     expect(rule(".page ul > li > a")).toMatch(/text-overflow:\s*ellipsis/);
+    // Excluded from the generic rule, the live row no longer inherits its
+    // `gap`; the narrow layout (its own grid) needs the column gap restated —
+    // without it the dot touched the title at 390 (round 4, Chromium).
+    const narrow = css.match(/@media \(max-width: 640px\) \{([\s\S]*?)\n\}/);
+    expect(narrow).not.toBeNull();
+    const narrowLive = narrow![1]!.match(/\.page \.live-list > li \{([^}]*)\}/);
+    expect(narrowLive).not.toBeNull();
+    expect(narrowLive![1]).toMatch(/column-gap:\s*var\(--space-12\)/);
   });
 
   it.each([".page .live-list", ".page .disk-list", ".page .wui-list"])(

@@ -4,6 +4,12 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render } from "@testing-library/react";
+
+import { makeQueryClient } from "../api/queryClient";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
+import { DialogProvider } from "./Dialog";
 import { ItemEnvironmentModal } from "./ItemEnvironmentModal";
 import { renderWithQuery } from "../test/queryWrapper";
 
@@ -557,6 +563,111 @@ describe("ItemEnvironmentModal — round 2", () => {
     fireEvent.click(screen.getByTestId("itemenv-save"));
     await waitFor(() => expect(puts(f)).toHaveLength(1));
     expect(puts(f)[0]).toEqual({ cpu_cores: 1, memory: "512M" });
+  });
+});
+
+describe("ItemEnvironmentModal — round 4", () => {
+  it("caches BOTH sent dimensions when the re-read after Save fails — memory too, in bytes", async () => {
+    // The cpu half was asserted; the memory half (`parseSize` of the wire
+    // spelling) was not, and a wrong multiplier would have shown "256" under
+    // a notice saying "saved".
+    const holder = { env: STATED, failReload: true };
+    vi.stubGlobal("fetch", liveRoute(holder));
+    open();
+    fireEvent.change(await screen.findByTestId("memory-input"), { target: { value: "1.5 GB" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await screen.findByTestId("reload-failed");
+    expect(screen.getByTestId("memory-input")).toHaveValue("1536M");
+    expect(screen.getByTestId("memory-origin")).toHaveTextContent(/Set by you|你設定的/);
+  });
+
+  it("drops the 'saved, but could not re-read' notice once a later read succeeds", async () => {
+    // TanStack's own recovery (a refetch on reconnect, a later invalidation)
+    // brings the real record; a flag only the next Save cleared kept telling
+    // the person to close and reopen a modal that was already current.
+    const holder = { env: STATED, failReload: true };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    const onClose = open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await screen.findByTestId("reload-failed");
+    holder.failReload = false;
+    holder.env = { ...STATED, stated_cpu_cores: 2 };
+    await onClose.client.invalidateQueries({ queryKey: ["item-environment", "rca", "i-1"] });
+    await waitFor(() => expect(screen.queryByTestId("reload-failed")).toBeNull());
+    expect(screen.getByTestId("cpu-input")).toHaveValue(2);
+  });
+
+  it("after a failed re-read, the reopen the notice prescribes reads the server — under the real client's staleTime", async () => {
+    // setQueryData marks the record fresh; with the prod client's 30 s
+    // staleTime a reopen would have read the cache and fetched nothing, so
+    // "close it and open it again" did nothing for 30 s.
+    const holder = { env: STATED, failReload: true };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    const client = makeQueryClient();
+    const gets = () => f.mock.calls.filter((c) => String(c[0]).includes("/environment")).length;
+    const view = render(
+      <QueryClientProvider client={client}>
+        <DialogProvider>
+          <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />
+        </DialogProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await screen.findByTestId("reload-failed", {}, { timeout: 5000 });
+    view.unmount();
+    holder.failReload = false;
+    holder.env = { ...STATED, stated_cpu_cores: 2 };
+    const before = gets();
+    render(
+      <QueryClientProvider client={client}>
+        <DialogProvider>
+          <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={() => {}} />
+        </DialogProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(gets()).toBe(before + 1));
+    await waitFor(() => expect(screen.queryByTestId("reload-failed")).toBeNull());
+  });
+
+  it("a refusal that lands after the modal was closed on it reaches the app-wide notice", async () => {
+    // Under the REAL query client: its mutation cache routes every rejected
+    // mutation to the global notice unless the mutation opts out. The modal
+    // has its own inline alert while it is open — but a Discard mid-save
+    // unmounts that alert, and OLD master's banner was the only thing left.
+    resetWriteFailures();
+    let releasePut!: () => void;
+    const holder: { env: unknown; holdPut?: Promise<void>; refuse?: boolean } = {
+      env: STATED,
+      holdPut: new Promise<void>((r) => (releasePut = r)),
+    };
+    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PUT") {
+        await holder.holdPut;
+        return new Response(JSON.stringify({ detail: "sandbox_quota_exceeded" }), { status: 507 });
+      }
+      if (url.includes("/environment")) return json(holder.env);
+      if (url.includes("/me/resources")) return json(CAPPED);
+      return json({});
+    });
+    vi.stubGlobal("fetch", f);
+    const onClose = vi.fn();
+    const view = render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <DialogProvider>
+          <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />
+        </DialogProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "3" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    view.unmount(); // closed on it, mid-flight
+    releasePut();
+    await waitFor(() => expect(currentWriteFailure()).not.toBeNull());
   });
 });
 

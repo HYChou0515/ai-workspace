@@ -188,9 +188,12 @@
      gauge.css, shared with the Sandbox modal's status row; the li wears that
      class and this rule adds only the grid. The generic row rule below skips
      the live list with `:where(:not(.live-list))` — `:where` carries no
-     specificity, so the generic rule stays (0,1,2) and cannot reach the
-     one-class card's padding; a bare `:not()` would have raised it to (0,2,2)
-     and made it outrank every list-specific `.page .X > li` rule in the app. */
+     specificity, so the generic rule stays (0,1,2); it is the `:not` that
+     keeps it off the live rows and so off the one-class card's padding. A
+     bare `:not()` would have raised it to (0,2,2) and made it outrank every
+     list-specific `.page .X > li` rule in the app. Being excluded, this row
+     no longer inherits the generic `gap`, which its narrow layout below
+     relied on for the space between dot and title — restated there. */
 }
 
 /* Marks the row under the pointer. NOT a claim that the card is clickable —
@@ -637,6 +640,8 @@
   .page .live-list > li {
     grid-template-columns: auto minmax(0, 1fr) auto;
     row-gap: var(--space-4);
+    /* The generic row rule's gap no longer reaches this row (see above). */
+    column-gap: var(--space-12);
   }
 
   .page .live-list > li > a {

@@ -112,8 +112,12 @@ export function ItemEnvironmentModal({
   // Only the fields that were typed in. `{}` = nothing typed = clean.
   const [draft, setDraft] = useState<Partial<SizeDraft>>({});
   // A save went through but its re-read did not: the cached record carries
-  // the sent values (below), and this says so until a read succeeds.
-  const [staleAfterSave, setStaleAfterSave] = useState(false);
+  // the sent values (below), and the notice shows while the record is still
+  // THAT one — pinned to the query's own data timestamp, so any later read
+  // (a refetch on reconnect, a Close sandbox) retires it; a flag only the
+  // next Save cleared kept saying "close and reopen" over a current record.
+  const [staleAt, setStaleAt] = useState<number | null>(null);
+  const staleAfterSave = staleAt !== null && env.dataUpdatedAt === staleAt;
   const current: SizeDraft | null = stated
     ? { cpu: draft.cpu ?? stated.cpu, memory: draft.memory ?? stated.memory }
     : null;
@@ -154,8 +158,14 @@ export function ItemEnvironmentModal({
             statedMemoryBytes: d.memory.trim() === "" ? null : parseSize(normaliseMemory(d.memory)),
           },
         );
+        // setQueryData marks the record FRESH, so the reopen the notice
+        // prescribes would read the cache for `staleTime` and fetch nothing.
+        // Invalidated (without refetching now — that just failed), the next
+        // mount reads the server.
+        void qc.invalidateQueries({ queryKey: envKey, refetchType: "none" });
       }
-      setStaleAfterSave(failed);
+      // Stamped AFTER setQueryData, which is itself a data update.
+      setStaleAt(failed ? (qc.getQueryState(envKey)?.dataUpdatedAt ?? null) : null);
       setDraft({});
     },
     // In the OPTIONS, not per-mutate: `save.reset()` (Close sandbox) detaches

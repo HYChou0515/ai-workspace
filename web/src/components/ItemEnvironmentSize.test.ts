@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isValidCpu, isValidMemory, normaliseMemory, toSizeString } from "./ItemEnvironmentSize";
+import { isValidCpu, isValidMemory, normaliseMemory, parseSize, toSizeString } from "./ItemEnvironmentSize";
 
 describe("toSizeString — bytes the way the server reads them", () => {
   it("uses the largest unit that divides exactly, else the bare byte count", () => {
@@ -71,3 +71,18 @@ describe("normaliseMemory — what a person writes → what the server reads", (
     expect(normaliseMemory("0")).toBeNull();
   });
 });
+
+describe("parseSize — the server's spelling back to bytes", () => {
+  it("round-trips what normaliseMemory produces", () => {
+    for (const text of ["1.5 GB", "512MB", "2.5K", "1000000", "1TB"]) {
+      const wire = normaliseMemory(text)!;
+      expect(parseSize(wire), text).toBe(parseSize(normaliseMemory(toSizeString(parseSize(wire)!)!)));
+    }
+    expect(parseSize("1536M")).toBe(1536 * 1024 ** 2);
+    expect(parseSize("2G")).toBe(2 * 1024 ** 3);
+    expect(parseSize("1000000")).toBe(1000000);
+    expect(parseSize(null)).toBeNull();
+    expect(parseSize("x")).toBeNull();
+  });
+});
+
