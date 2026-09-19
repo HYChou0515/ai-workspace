@@ -77,8 +77,9 @@ class AgentConfig(Struct):
     and spent at the same door. ``resolve`` applied it once at entry level
     (``allowed_tools`` / ``disabled_tools``); ``finalize_tool_grants`` applies
     it again per unit of the expanded ceiling (``unit_pref``: a unit's own key,
-    then its package's key) — idempotent for the keys resolve already used,
-    and the only reading a ``pkg:cmd`` key ever gets."""
+    then its package's key) — idempotent for the keys resolve already used
+    (a built-in, a bare package, a ``pkg:cmd`` the App granted as such), and
+    the only reading a ``pkg:cmd`` key gets for a WHOLE-package grant."""
 
     env: dict[str, str] = field(default_factory=dict)
     sandbox_image: str = "workspace-app/sandbox:py312-ds"

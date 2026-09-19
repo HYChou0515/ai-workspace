@@ -234,7 +234,9 @@ def test_replay_offers_the_tools_the_turn_held_not_the_entry_level_grant():
     """plan-tools-picker-groups part 2 (P14 revision): the replay loader is a
     door — the resolved config meets the deploy's package list here — so a
     command the item pinned off is not on the replayed menu either, and the
-    probe's `tools` match what the live turn was offered."""
+    probe's `tools` match what the live turn was offered from the deploy's
+    first-party packages (a turn's third-party bundles are not re-fetched
+    here — the loader always worked that way)."""
     from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
     rca = PackageInfo(

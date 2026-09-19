@@ -522,6 +522,27 @@ def test_finalize_without_packages_keeps_the_entry_level_answer():
     assert "rca-tools" in final.disabled_tools
 
 
+def test_finalize_learns_the_builtin_names_without_building_their_schemas(monkeypatch):
+    """`expand_entries` must not expand an entry that names a built-in; knowing
+    the names is a set lookup, not 44 `function_tool()` schema builds (~40 ms)
+    on every turn and four times per picker GET."""
+    from workspace_app.agent import tools as tools_mod
+    from workspace_app.apps.catalog import finalize_tool_grants
+
+    calls: list[str] = []
+    real = tools_mod.function_tool
+
+    def counting(*a, **kw):
+        calls.append(kw.get("name_override", "?"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(tools_mod, "function_tool", counting)
+    cfg = AppCatalog(presets=_presets()).resolve(app_slug="rca", profile="default")
+    final = finalize_tool_grants(cfg, [_pkg("rca-tools", "spc", "pareto")])
+    assert "rca-tools:spc" in (final.allowed_tools or [])
+    assert calls == []
+
+
 def test_profile_default_tools_is_the_set_resolve_starts_from(monkeypatch):
     """Parity with `resolve` as the oracle: with no pins, `allowed_tools` IS the
     profile default — for a profile that names tools, for one that inherits
@@ -545,3 +566,51 @@ def test_profile_default_tools_is_the_set_resolve_starts_from(monkeypatch):
     )
     assert profile_default_tools("rca", "default") == []
     assert cat.resolve(app_slug="rca", profile="default").allowed_tools == []
+
+
+def test_every_shipped_app_and_profile_finalizes_to_its_resolved_grant_expanded():
+    """Parity over the whole catalog, no pins: what `finalize_tool_grants`
+    makes of a resolved config is exactly `expand_entries` of the list
+    `resolve` produced — set-wise, with and without a package list that
+    knows the shipped package names. This is the P11 acceptance the first
+    version of part 2 promised and never shipped."""
+    from workspace_app.apps.catalog import discover_app_slugs, finalize_tool_grants
+    from workspace_app.apps.profiles import list_profiles
+    from workspace_app.tooling.catalog import expand_entries
+
+    cat = AppCatalog(presets=_presets())
+    fakes = [_pkg(n, "a", "b") for n in ("rca-tools", "data-fetch", "csv-column-summary")]
+    seen = 0
+    for slug in discover_app_slugs():
+        for profile in list_profiles(slug):
+            cfg = cat.resolve(app_slug=slug, profile=profile)
+            for packages in ([], fakes):
+                final = finalize_tool_grants(cfg, packages)
+                assert set(final.allowed_tools or []) == set(
+                    expand_entries(cfg.allowed_tools or [], packages)
+                ), (slug, profile, packages)
+                seen += 1
+    assert seen >= 2
+
+
+def test_every_shipped_profile_lists_its_tools_in_the_apps_ceiling_order():
+    """A finalized grant is in ceiling order; `_apply_tool_prefs` without pins
+    returned the profile's own order. The two agree for every shipped profile
+    because each names its tools in ceiling order — derived here, so the
+    plan's sentence stays true when a profile is added."""
+    from msgspec import UNSET
+
+    from workspace_app.apps.catalog import discover_app_slugs
+    from workspace_app.apps.manifest import load_app_manifest
+    from workspace_app.apps.profiles import list_profiles, load_profile
+
+    checked = 0
+    for slug in discover_app_slugs():
+        ceiling = list(load_app_manifest(slug).agent.tools)
+        for profile in list_profiles(slug):
+            prof = load_profile(slug, profile)
+            if prof.tools is UNSET:
+                continue
+            assert sorted(prof.tools, key=ceiling.index) == list(prof.tools), (slug, profile)
+            checked += 1
+    assert checked >= 1

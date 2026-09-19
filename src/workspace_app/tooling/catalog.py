@@ -23,8 +23,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .registry import PackageInfo
+if TYPE_CHECKING:
+    from .registry import PackageInfo
 
 _WORD_SPLIT = re.compile(r"[_\-:]+")
 
@@ -164,16 +166,19 @@ def expand_entries(entries: Iterable[str], packages: Sequence[PackageInfo]) -> l
     unit, or its switch would have nothing to hang on. Built-ins, entries
     already at command granularity, and entries nothing resolves pass through
     as written; an entry that names a built-in is a built-in even when a
-    package shares the name (the runner's ``dedupe_tools`` lets the built-in
-    outrank a package's copy, so the picker draws the same winner). Deduped,
+    package shares the name — the picker draws the built-in's row, and the
+    runner's ``dedupe_tools`` lets the built-in outrank the package's copy of
+    that one name (the package's OTHER commands are still registered, as they
+    always were: a package named like a built-in is a deploy fault, logged
+    there, not something this rule repairs). Deduped,
     first position wins: ``["rca-tools", "rca-tools:spc"]`` grants ``spc``
     once, not a duplicate row and a FunctionTool built twice. Pure; every
     door that holds the package list (`apps.catalog.finalize_tool_grants`
     and the picker route) feeds it the same list, so nothing disagrees on
     what a grant expands to."""
-    from ..agent.tools import builtin_tool_descriptions
+    from ..agent.tools import builtin_tool_names
 
-    builtins = builtin_tool_descriptions()
+    builtins = builtin_tool_names()
     by_name = {p.name: p for p in packages}
     out: list[str] = []
     seen: set[str] = set()
@@ -232,7 +237,9 @@ def unit_pref(unit: str, prefs: Mapping[str, bool]) -> bool | None:
     granted at — including a package the App later narrowed to one command. A
     stored "this package is off" outlives the App changing how much of the
     package it grants; before part 2 such a key was a no-op there (it named no
-    ceiling entry), and that is the one reading that changed."""
+    ceiling entry). That, and the same key on a redundant ceiling
+    (``["rca-tools", "rca-tools:spc"]``, now deduped to one unit per command,
+    so the key reaches ``spc`` too), are the two readings that changed."""
     if unit in prefs:
         return prefs[unit]
     pkg, sep, _ = unit.partition(":")

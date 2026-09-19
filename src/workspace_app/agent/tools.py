@@ -2782,7 +2782,8 @@ async def save_subagent_impl(
     # definition may still say `pkg` — meaning what the turn holds of it.
     from ..tooling.catalog import narrow_entries
 
-    if (allowed := _subagent_tool_ceiling(ctx.context)) is not None and (
+    allowed = _subagent_tool_ceiling(ctx.context)
+    if allowed is not None and (
         outside := sorted(t for t in tools if not narrow_entries([t], allowed))
     ):
         # Two rules wearing one sentence. "it can only use tools you hold
@@ -2822,8 +2823,16 @@ async def save_subagent_impl(
     # `checked.parsed` is the definition the round-trip check already parsed —
     # re-parsing here produced a branch that could never be false, which the
     # 100% gate would have failed on.
+    # Spliced with the SAME clamp the loader applies to a file it reads: the
+    # index is what `run_agent` delegates from for the rest of this turn, and a
+    # bare package name that the refusal above accepted (it means "what this
+    # turn holds of it") must reach the index already narrowed to that.
+    from ..apps.subagents import clamp_tools
+
     others = tuple(d for d in ctx.context.subagent_defs if d.name != slug)
-    ctx.context.subagent_defs = tuple(sorted((*others, checked.parsed), key=lambda d: d.name))
+    ctx.context.subagent_defs = tuple(
+        sorted((*others, clamp_tools(checked.parsed, allowed)), key=lambda d: d.name)
+    )
     saved = f"saved sub-agent '{slug}' to {rel_path(path)}."
     # Through the SAME predicate `build_tools` and the delegation index use. This
     # was a third reader that simply assumed, so a per-item toggle switching
@@ -3741,6 +3750,15 @@ _WORKSPACE_TOOLS = [
 # schema lives in the workspace, not the tool signature), so this is correct, not
 # a workaround.
 _NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
+
+
+def builtin_tool_names() -> frozenset[str]:
+    """Every built-in tool's registered name, and nothing else — for a caller
+    that only has to tell a built-in from a package entry. A set lookup:
+    `builtin_tool_descriptions` builds every tool's schema to read its
+    description (~40 ms), which is the wrong price for a membership test that
+    runs on every turn."""
+    return frozenset(_IMPLS)
 
 
 def builtin_tool_descriptions() -> dict[str, str]:

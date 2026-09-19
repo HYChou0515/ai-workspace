@@ -1589,8 +1589,8 @@ def test_the_runner_reads_allowed_tools_as_written_and_never_applies_a_pin_itsel
 def test_a_config_without_a_ceiling_keeps_the_old_entry_rule():
     """The six other AgentConfig constructors (wiki reader + three maintainer
     configs, card drafter, catalog build) set no ceiling: their allowed_tools
-    ARE the answer, byte for byte — and `finalize_tool_grants` leaves such a
-    config untouched too."""
+    ARE the answer, byte for byte (that `finalize_tool_grants` leaves such a
+    config untouched is pinned in `tests/apps/test_app_catalog.py`)."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(

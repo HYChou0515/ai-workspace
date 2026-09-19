@@ -2,9 +2,10 @@
 ceiling of `app.json` entries plus an item's tri-state prefs into the commands
 the agent gets, at COMMAND granularity even for a whole-package grant.
 
-Both consumers (the runner's `_agent_for` and the picker route) call this; the
-tests here are the rule's own, and `test_tools_routes.py` / the runner tests
-pin that each consumer reads it."""
+`apps.catalog.finalize_tool_grants` applies it at every door where a resolved
+config meets its package list (the turn builder, the WUI callTool route, the
+picker route, the replay loader); the tests here are the rule's own, and
+`tests/api/test_tool_grant_doors.py` walks the doors."""
 
 from __future__ import annotations
 
@@ -189,3 +190,15 @@ def test_narrow_dedupes_and_keeps_the_entries_order():
         "rca-tools:spc",
         "exec",
     ]
+
+
+def test_a_bare_package_key_governs_a_command_the_app_granted_on_its_own():
+    """Decision 14 (P14 revision), named: the App narrowed its grant to one
+    command (`rca-tools:spc`), the item still holds the whole-package key it
+    stored earlier. The key governs that command — before part 2 it named no
+    ceiling entry and was a no-op."""
+    g = command_grants(
+        ["exec", "rca-tools:spc"], ["exec", "rca-tools:spc"], {"rca-tools": False}, [RCA]
+    )
+    assert g.enabled == ("exec",)
+    assert g.disabled == ("rca-tools:spc",)

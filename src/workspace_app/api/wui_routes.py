@@ -481,10 +481,21 @@ def register_wui_routes(
         # finalizes it — a command the item's picker turned off is not held by
         # the agent, and not reachable from a page either.
         config = locator.resolve_agent_config(investigation_id)
-        allowed = finalize_tool_grants(config, available).allowed_tools if config else []
+        # The App's ceiling, kept aside before the pins are spent: it decides
+        # which of two refusals below is true.
+        offered = list(config.tool_ceiling) if config else []
+        # Finalized ONCE, and that config is what the ctx below carries too:
+        # provisioning reads `allowed_tools` off the ctx to decide which
+        # bundles to install, and a door that admitted from the finished list
+        # while the ctx held the pending one installed nothing for a command
+        # it then ran.
+        if config is not None:
+            config = finalize_tool_grants(config, available)
+        allowed = config.allowed_tools if config else []
 
         try:
             found = find_allowed_command(available, allowed, name)
+            in_ceiling = found or find_allowed_command(available, offered, name)
         except ValueError as exc:
             # Two packages exporting one command name: a deploy-configuration
             # fault, not this caller's. It breaks the agent's turn identically,
@@ -497,6 +508,13 @@ def register_wui_routes(
             # of what they can act on.
             if reason := external.refused.get(name.partition(":")[0]):
                 raise HTTPException(status_code=409, detail=f"{name} is unavailable: {reason}")
+            if in_ceiling is not None:
+                # The App offers it; this item's picker turned it off. Naming
+                # app.json here would send the person to the wrong switch.
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"{name} is turned off for this item — enable it in the tool picker.",
+                )
             raise HTTPException(
                 status_code=403,
                 detail=f"This app does not offer {name} to its pages.",

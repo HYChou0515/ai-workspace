@@ -985,9 +985,11 @@ class TurnContextBuilder:
         third-party from this turn's resolve — so it is where a whole-package
         grant becomes the ``pkg:cmd`` units the item's pins leave on
         (`finalize_tool_grants`). Everything that reads ``allowed_tools`` after
-        this — the sub-agent clamp, sizing, the runner, provisioning, authz,
-        `_wui_callable` — reads the finished answer, which is why it runs
-        before `_subagent_defs` and `_common`, not inside the runner.
+        this and can tell a package command from a package — the sub-agent
+        clamp, the runner, provisioning, `_wui_callable` — reads the finished
+        answer, which is why it runs before `_subagent_defs` and `_common`, not
+        inside the runner. (Sizing and authz read the list too, but only its
+        built-in names; they cannot see the difference.)
 
         A node's ``tool_subset`` is intersected afterwards, so the pins can
         neither be re-applied on the narrowed list nor widen past it. Only

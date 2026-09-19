@@ -510,8 +510,8 @@ def _agent_for(
     # config reaches here: the turn builder finalized the grant at the door
     # where the package list became known (`apps.catalog.finalize_tool_grants`).
     # Re-deriving it here from a ceiling + pins was tried and re-widened every
-    # config that had been narrowed after resolve (compaction's "no tools", a
-    # sub-agent's own list, a workflow node's `tools:`).
+    # config that had been narrowed after resolve (a sub-agent's own list, a
+    # workflow node's `tools:`).
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # Last stop before the model sees them, and the only place every source is in

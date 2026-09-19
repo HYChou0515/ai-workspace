@@ -943,8 +943,59 @@ def test_a_command_the_item_pinned_off_is_refused_at_the_wui_door():
     loc = _ResolvedLocator(allowed=["mes"], ceiling=["mes"], prefs={"mes:lot-status": False})
     client, sandbox, _, _ = build(locator=loc)
 
-    assert client.post(URL, json={}).status_code == 403
+    resp = client.post(URL, json={})
+    assert resp.status_code == 403
     assert sandbox.calls == []
+    # The reason names the switch that would change the answer: the app DOES
+    # offer it; this item's picker turned it off. "This app does not offer"
+    # would send the person to app.json for a switch that lives in the picker.
+    assert "tool picker" in resp.json()["detail"]
+    assert "does not offer" not in resp.json()["detail"]
+
+
+def test_the_wui_door_provisions_from_the_finalized_grant(monkeypatch):
+    """The same finalized config the door admitted from is what the ctx
+    carries: provisioning (`ensure_sandbox`) reads `allowed_tools` off the
+    ctx to pick the bundles to install. Item pinned the package off (a legacy
+    whole-package key) and ONE command back on — the door admits it, so the
+    bundle must be provisioned, as a chat turn on this item would."""
+    from pathlib import Path
+
+    import workspace_app.agent.provision as prov
+
+    provisioned: list[list[str]] = []
+
+    async def _fake_provision(sandbox, handle, packages, *, prebuilt_dir):
+        provisioned.append([p.name for p in packages])
+
+    monkeypatch.setattr(prov, "provision_tools", _fake_provision)
+    app = FastAPI()
+    sb = _Sandbox()
+    loc = _ResolvedLocator(
+        allowed=[], ceiling=["mes"], prefs={"mes": False, "mes:lot-status": True}
+    )
+
+    async def _external(item_id: str) -> ExternalTools:
+        return ExternalTools()
+
+    register_wui_routes(
+        app,
+        locator=cast("ItemLocator", loc),
+        sandbox=cast("Sandbox", sb),
+        registry=_Registry(),
+        packages=[PKG],
+        prebuilt_dir=Path("/prebuilt"),
+        resolve_external=_external,
+        request_env=None,
+        get_user_id=lambda: "u",
+        orchestrator=None,
+        turn_engine=None,
+        workflows_for=_offers([]),
+    )
+    resp = TestClient(app).post(URL, json={})
+    assert resp.status_code == 200, resp.text
+    assert sb.calls  # the command ran…
+    assert provisioned == [["mes"]]  # …in a sandbox that had its bundle
 
 
 def test_a_command_the_item_pinned_on_is_admitted_even_when_the_profile_left_it_out():

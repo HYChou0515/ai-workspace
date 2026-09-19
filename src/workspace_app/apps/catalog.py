@@ -113,18 +113,22 @@ def finalize_tool_grants(config: AgentConfig, packages: Sequence[PackageInfo]) -
     the answer INTO ``allowed_tools`` / ``disabled_tools`` — a whole-package
     entry becomes the ``pkg:cmd`` units the item's pins leave on — and SPENDS
     ``tool_ceiling`` / ``tool_prefs`` (cleared), so the pins cannot be applied
-    a second time: a narrowing done after this (compaction's "no tools",
-    a sub-agent definition's own list) sticks. A config with no ceiling —
+    a second time: a narrowing done after this (a sub-agent definition's
+    own list, a workflow node's ``tools:``) sticks. A config with no ceiling —
     one that did not come from ``resolve``, or one already finalized — is
     returned as is, so the call is idempotent and the doors need not know
     which they were handed.
 
     Called at every door where a resolved config meets a package list:
-    `api.turn_context._common` (every turn), the WUI `callTool` route, the
+    `api.turn_context.TurnContextBuilder._finalized` (every chat and workflow
+    turn, before the sub-agent index is read), the WUI `callTool` route, the
     picker route and the replay loader. Every reader of ``allowed_tools``
-    downstream of a door — the runner, provisioning, authz, the sub-agent
-    clamp, `_wui_callable` — therefore sees the same answer without
-    re-deriving it; that is the point of finalizing rather than recomputing."""
+    downstream of a door that can tell a package command from a package —
+    the runner, provisioning, the sub-agent clamp, `_wui_callable` — therefore
+    sees the same answer without re-deriving it; that is the point of
+    finalizing rather than recomputing. (The pre-turn compaction context in
+    `chat_send` is not a door: it carries no package list, so nothing there
+    expands, before or after.)"""
     if not config.tool_ceiling:
         return config
     from ..tooling.catalog import command_grants
