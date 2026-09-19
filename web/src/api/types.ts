@@ -204,17 +204,22 @@ export type FieldSpec = {
   options?: string[];
 };
 
-/** One read-only step/highlight in a welcome teaching (#161). */
+/** One read-only step/highlight in a welcome teaching (#161). `title` is
+ * plain text; `body` is markdown. */
 export type OnboardingPoint = { title: string; body: string };
 
 /** Versioned, read-only welcome teaching (#161) — used both per-App (from the
  * manifest) and platform-level (a FE constant). The modal pops until the user
- * dismisses *this* `version`; bumping `version` re-shows it. */
+ * dismisses *this* `version`; bumping `version` re-shows it. `intro`, each
+ * point's `body` and `footer` are markdown: an App embeds a picture it ships
+ * under `assets/` as `![](assets/<name>)`, inline in a body or in `footer`,
+ * which is drawn under the points and above the buttons. */
 export type Onboarding = {
   version: string;
   title: string;
   intro: string;
   points: OnboardingPoint[];
+  footer?: string;
 };
 
 /** The full App manifest (GET /apps/:slug) the dashboard + workspace drive off

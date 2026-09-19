@@ -179,6 +179,7 @@ export function Launcher() {
       {ob.open && ob.content && (
         <OnboardingModal
           content={ob.content}
+          scope={{ kind: "platform" }}
           onGotIt={ob.gotIt}
           onDontShowAgain={ob.dontShowAgain}
           onSeeFull={() => {

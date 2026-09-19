@@ -7,16 +7,23 @@
  */
 
 import type { Onboarding } from "../api/types";
+import { type OnboardingScope, onboardingAssetUrl } from "../lib/onboardingAssets";
 import { pxToRem } from "../lib/pxToRem";
+import { MarkdownBody } from "../renderers/MarkdownRenderer";
 import { ModalShell } from "./ModalShell";
 
 export function OnboardingModal({
   content,
+  scope,
   onGotIt,
   onDontShowAgain,
   onSeeFull,
 }: {
   content: Onboarding;
+  /** Whose teaching this is — decides how an image ref in the markdown
+   * resolves: an App's `assets/<name>` goes to that App's assets route, the
+   * platform's pictures are absolute paths under `web/public/`. */
+  scope: OnboardingScope;
   onGotIt: () => void;
   onDontShowAgain: () => void;
   /** #230: when provided, show a "See the full guide →" link to the help page
@@ -24,6 +31,11 @@ export function OnboardingModal({
    * with no richer help target). */
   onSeeFull?: () => void;
 }) {
+  // The intro, each point's body and the footer are markdown through the one
+  // shared pipeline (`MarkdownBody`, compact) — never a second renderer. The
+  // modal sits outside any FileServiceProvider, so refs resolve through the
+  // onboarding rule instead of a workspace's file service.
+  const resolveUrl = (src: string) => onboardingAssetUrl(scope, src);
   return (
     <ModalShell
       onClose={onGotIt}
@@ -41,9 +53,9 @@ export function OnboardingModal({
             {content.title}
           </h2>
           {content.intro && (
-            <p style={{ fontSize: pxToRem(14), color: "var(--text-paper-d)", margin: 0, lineHeight: 1.5 }}>
-              {content.intro}
-            </p>
+            <div style={{ fontSize: pxToRem(14), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+              <MarkdownBody text={content.intro} resolveUrl={resolveUrl} compact />
+            </div>
           )}
         </div>
 
@@ -69,15 +81,24 @@ export function OnboardingModal({
                 >
                   {i + 1}
                 </span>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: pxToRem(14), fontWeight: 600 }}>{p.title}</div>
                   <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-                    {p.body}
+                    <MarkdownBody text={p.body} resolveUrl={resolveUrl} compact />
                   </div>
                 </div>
               </li>
             ))}
           </ol>
+        )}
+
+        {content.footer && (
+          <div
+            data-testid="onboarding-footer"
+            style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)", lineHeight: 1.5 }}
+          >
+            <MarkdownBody text={content.footer} resolveUrl={resolveUrl} compact />
+          </div>
         )}
 
         {/* #fe-responsive: at a narrow modal width these three labels wrapped
