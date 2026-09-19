@@ -42,7 +42,8 @@ vi.mock("../api", () => ({
 
 import { api } from "../api";
 import { QueryWrap } from "../test/queryWrapper";
-import { MyResourcesPage, formatAgainstLimit, formatBytes } from "./MyResourcesPage";
+import { formatAgainstLimit } from "../components/Gauge";
+import { MyResourcesPage, formatBytes } from "./MyResourcesPage";
 
 function data(over: Partial<MyResources> = {}): MyResources {
   return {

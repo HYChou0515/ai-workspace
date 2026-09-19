@@ -112,31 +112,6 @@
   margin: 0 0 var(--space-8);
 }
 
-/* One row per dimension: name on the left, the number on the right, its own bar
-   underneath. Three dimensions used to share one line and one bar, which made
-   the bar mean whichever of them it happened to be tracking. */
-.page .gauge + .gauge {
-  margin-top: var(--space-12);
-}
-
-.page .summary {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-8);
-  margin: 0 0 var(--space-4);
-  font-size: var(--text-body);
-  color: var(--text-paper);
-}
-
-.page .gauge-label {
-  flex: 1;
-  min-width: 0;
-}
-
-.page .gauge-value {
-  font-variant-numeric: tabular-nums;
-}
-
 .page .empty {
   margin: 0;
   font-size: var(--text-body-sm);
@@ -158,23 +133,6 @@
   color: var(--err);
 }
 
-/* The bar. `--paper-3` is the same track colour the app's other inset surfaces
-   use; the fill is the accent so it reads as "yours", not as an alert — being
-   near a limit is normal, not an error. */
-.meter {
-  height: 6px;
-  background: var(--paper-3);
-  border-radius: var(--radius-chip);
-  overflow: hidden;
-  margin-bottom: var(--space-12);
-}
-
-.meter-fill {
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.2s;
-}
-
 /* ── the live section ────────────────────────────────────────────────────
    Everything below exists to answer one complaint: the section READ as a
    single seven-row list whose first three rows happened to have no button.
@@ -190,58 +148,6 @@
   max-width: 62ch;
   font-size: var(--text-body);
   color: var(--text-paper-d);
-}
-
-/* The three totals as ONE block, three columns — not three full-width bars
-   stacked in the same column as the rows beneath them. Three 712px accent bars
-   in a vertical run also read as three alarms; a third of the width each, in a
-   panel of their own, reads as a dashboard, which is what they are. */
-.page .stat-row {
-  display: grid;
-  /* `auto-fit` rather than `repeat(3, …)`: the storage section puts ONE gauge
-     in this same panel, and a fixed three-column grid would leave it sitting in
-     the left third with two empty columns beside it. Empty tracks collapse, so
-     three gauges still get three columns and one gets the full width. */
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: var(--space-24);
-  margin-bottom: var(--space-24);
-  padding: var(--space-16);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
-  background: var(--paper-2);
-}
-
-/* They are columns here, so the stacking margin that separates them elsewhere
-   would only push the second and third down out of line. */
-.page .stat-row .gauge + .gauge {
-  margin-top: 0;
-}
-
-/* Label above figure, not beside it: side by side in a third of the width, a
-   long label ("記憶體" plus "4.0 GB / 6.0 GB") had nowhere to go. */
-.page .stat-row .summary {
-  display: block;
-  margin: 0;
-}
-
-.page .stat-row .gauge-label {
-  display: block;
-  font-size: var(--text-small);
-  color: var(--text-paper-d);
-}
-
-.page .stat-row .gauge-value {
-  display: block;
-  margin-top: var(--space-4);
-  font-size: var(--text-body-lg);
-  line-height: var(--leading-body-lg);
-  color: var(--text-paper);
-}
-
-/* The bar belongs to the figure above it and to nothing else, so its trailing
-   margin — which exists to separate stacked gauges — is removed here. */
-.page .stat-row .meter {
-  margin: var(--space-8) 0 0;
 }
 
 /* One card per running environment, rather than rows separated by a hairline —
@@ -278,13 +184,16 @@
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
-  padding: var(--space-12) var(--space-16);
-  /* Two classes beat the one-class `.page ul > li` below on specificity, so the
-     shared row's hairline `border-top` and `display: flex` lose here whatever
-     the order in this file. */
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
-  background: var(--paper);
+  /* The card chrome — padding, border, radius, surface — is `.live-card` in
+     gauge.css, shared with the Sandbox modal's status row; the li wears that
+     class and this rule adds only the grid. The generic row rule below skips
+     the live list with `:where(:not(.live-list))` — `:where` carries no
+     specificity, so the generic rule stays (0,1,2); it is the `:not` that
+     keeps it off the live rows and so off the one-class card's padding. A
+     bare `:not()` would have raised it to (0,2,2) and made it outrank every
+     list-specific `.page .X > li` rule in the app. Being excluded, this row
+     no longer inherits the generic `gap`, which its narrow layout below
+     relied on for the space between dot and title — restated there. */
 }
 
 /* Marks the row under the pointer. NOT a claim that the card is clickable —
@@ -300,31 +209,6 @@
    weight is what separates it from the App tag and the figures beside it. */
 .page .live-list > li > a {
   font-weight: 500;
-}
-
-/* Running, right now. Solid rather than haloed so it needs no colour outside
-   the token set, and it breathes only where motion is welcome. */
-.page .live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ok);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .page .live-dot {
-    animation: live-pulse 2.4s ease-in-out infinite;
-  }
-}
-
-@keyframes live-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
 }
 
 /* Which App a row belongs to, in that App's own colour, with that App's own
@@ -438,7 +322,7 @@
   padding: 0;
 }
 
-.page ul > li {
+.page ul:where(:not(.live-list)) > li {
   display: flex;
   align-items: center;
   gap: var(--space-12);
@@ -446,6 +330,7 @@
   border-top: 1px solid var(--paper-3);
 }
 
+/* Unscoped on purpose: the live row's title relies on this ellipsis. */
 .page ul > li > a {
   flex: 1;
   min-width: 0;
@@ -755,6 +640,8 @@
   .page .live-list > li {
     grid-template-columns: auto minmax(0, 1fr) auto;
     row-gap: var(--space-4);
+    /* The generic row rule's gap no longer reaches this row (see above). */
+    column-gap: var(--space-12);
   }
 
   .page .live-list > li > a {
@@ -865,13 +752,6 @@
     text-overflow: ellipsis;
   }
 
-  /* Three totals side by side in 342px is 114px each — narrower than
-     "4.0 GB / 6.0 GB" — so they stack rather than truncate the figures they
-     exist to show. */
-  .page .stat-row {
-    grid-template-columns: 1fr;
-    gap: var(--space-16);
-  }
 }
 
 /* ── superuser: per-person overrides ─────────────────────────────────────
