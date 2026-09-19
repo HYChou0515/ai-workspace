@@ -58,6 +58,11 @@ describe("normaliseMemory — what a person writes → what the server reads", (
     expect(normaliseMemory("2.5K")).toBe("2560");
   });
 
+  it("reads full-width digits as digits — the server's str.isdigit does too", () => {
+    expect(normaliseMemory("５１２M")).toBe("512M");
+    expect(normaliseMemory("１.５ GB")).toBe("1536M");
+  });
+
   it("passes a bare byte count through, and refuses what it cannot read", () => {
     expect(normaliseMemory("1000000")).toBe("1000000");
     expect(normaliseMemory("")).toBeNull();

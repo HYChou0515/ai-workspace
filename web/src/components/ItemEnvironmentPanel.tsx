@@ -116,6 +116,7 @@ export function ItemEnvironmentPanel({
             data-variant="secondary"
             data-size="sm"
             data-testid="close-environment"
+            disabled={busy}
             onClick={onCloseSandbox}
           >
             {t("itemenv.close")}

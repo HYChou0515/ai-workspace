@@ -186,8 +186,11 @@
   align-items: center;
   /* The card chrome — padding, border, radius, surface — is `.live-card` in
      gauge.css, shared with the Sandbox modal's status row; the li wears that
-     class and this rule adds only the grid. The generic row rule below is
-     scoped to `ul:not(.live-list)` so it cannot outrank the one-class card. */
+     class and this rule adds only the grid. The generic row rule below skips
+     the live list with `:where(:not(.live-list))` — `:where` carries no
+     specificity, so the generic rule stays (0,1,2) and cannot reach the
+     one-class card's padding; a bare `:not()` would have raised it to (0,2,2)
+     and made it outrank every list-specific `.page .X > li` rule in the app. */
 }
 
 /* Marks the row under the pointer. NOT a claim that the card is clickable —
@@ -316,7 +319,7 @@
   padding: 0;
 }
 
-.page ul:not(.live-list) > li {
+.page ul:where(:not(.live-list)) > li {
   display: flex;
   align-items: center;
   gap: var(--space-12);
@@ -324,7 +327,8 @@
   border-top: 1px solid var(--paper-3);
 }
 
-.page ul:not(.live-list) > li > a {
+/* Unscoped on purpose: the live row's title relies on this ellipsis. */
+.page ul > li > a {
   flex: 1;
   min-width: 0;
   overflow: hidden;

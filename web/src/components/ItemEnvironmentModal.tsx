@@ -29,11 +29,15 @@
  * write can still be lost; that needs the server to compare-and-swap.) So
  * the draft holds only the fields that were typed in.
  *
- * A save is one gesture from click to re-read: the fields and Save are locked
- * while the PUT is out AND while the record is being re-read, and the draft
- * is dropped only once the re-read has landed. Dropping it at the PUT's
- * success flashed the pre-save number for one round trip (the GET probes the
- * sandbox), and ate a keystroke typed meanwhile.
+ * A save is one gesture from click to re-read: the fields, Save AND "Close
+ * sandbox" are locked while the PUT is out and while the record is being
+ * re-read, and the draft is dropped only once the re-read has landed.
+ * Dropping it at the PUT's success flashed the pre-save number for one round
+ * trip (the GET probes the sandbox), and ate a keystroke typed meanwhile.
+ * Close sandbox is locked for a different reason: it `reset()`s the mutation,
+ * which detaches an in-flight one from this component — its per-mutate
+ * callbacks then never fire and its options callbacks fire on a modal that has
+ * moved on. Not offering it while a save is out means no such mutation exists.
  *
  * What the server would refuse is refused here first: a cpu of 0 or less, or
  * a memory that is not a size. The server reads only `<integer>[K|M|G|T]`;
@@ -42,23 +46,26 @@
  * spelling. A 422 only says "not saved", which leaves the person guessing.
  *
  * Because saves are dispatched while this is on screen, a refusal has
- * somewhere to be read (`saveFailed`) and the draft stays for a second try.
- * And a save that SUCCEEDED but whose re-read failed says so, with the typed
- * value kept on screen: TanStack keeps the previous record on a failed
- * refetch, so dropping the draft there would show the old numbers as if they
- * were the new ones, under a notice that reads as "not saved".
+ * somewhere to be read (`saveFailed`, beside the app-wide banner — which is
+ * also what reports a refusal that lands after the modal has been closed on
+ * it) and the draft stays for a second try. A save that SUCCEEDED but whose
+ * re-read failed says so — and writes what it sent into the cached record:
+ * TanStack keeps the previous record on a failed refetch, so the fields would
+ * otherwise show the old numbers as if they were the new ones, and a draft
+ * kept instead would make leaving ask about "unsaved changes" the notice has
+ * just called saved.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
-import { itemEnvironmentApi } from "../api/itemEnvironment";
+import { itemEnvironmentApi, type ItemEnvironment } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
-import { isValidCpu, isValidMemory, normaliseMemory, toSizeString } from "./ItemEnvironmentSize";
+import { isValidCpu, isValidMemory, normaliseMemory, parseSize, toSizeString } from "./ItemEnvironmentSize";
 import { ModalShell } from "./ModalShell";
 import { budgetFrom } from "./useItemEnvironment";
 
@@ -104,6 +111,9 @@ export function ItemEnvironmentModal({
     : null;
   // Only the fields that were typed in. `{}` = nothing typed = clean.
   const [draft, setDraft] = useState<Partial<SizeDraft>>({});
+  // A save went through but its re-read did not: the cached record carries
+  // the sent values (below), and this says so until a read succeeds.
+  const [staleAfterSave, setStaleAfterSave] = useState(false);
   const current: SizeDraft | null = stated
     ? { cpu: draft.cpu ?? stated.cpu, memory: draft.memory ?? stated.memory }
     : null;
@@ -128,16 +138,25 @@ export function ItemEnvironmentModal({
         // The person's spelling ("1.5 GB") → the server's ("1536M").
         memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
       }),
-    // The modal has its own alert for a refusal; the app-wide banner on top
-    // of it said the same thing twice.
-    meta: { silentError: true },
     // Awaited, so the mutation stays PENDING until the re-read has landed:
     // `save.isPending` is the one flag for "a save is out", PUT and re-read.
-    onSuccess: async () => {
+    onSuccess: async (_, d) => {
       await refresh();
-      // Only once the re-read has landed, and only if it did: on a failed
-      // re-read the fields keep what was typed, under the notice below.
-      if (qc.getQueryState(envKey)?.status !== "error") setDraft({});
+      const failed = qc.getQueryState(envKey)?.status === "error";
+      if (failed) {
+        // The write went through; the re-read did not. The stated values are
+        // known — they are what was sent — so the cached record takes them
+        // (its effective/clamp figures stay the old ones until a real read).
+        qc.setQueryData(envKey, (old: ItemEnvironment | undefined) =>
+          old && {
+            ...old,
+            statedCpuCores: d.cpu === "" ? null : Number(d.cpu),
+            statedMemoryBytes: d.memory.trim() === "" ? null : parseSize(normaliseMemory(d.memory)),
+          },
+        );
+      }
+      setStaleAfterSave(failed);
+      setDraft({});
     },
     // In the OPTIONS, not per-mutate: `save.reset()` (Close sandbox) detaches
     // the in-flight mutation's observer and a per-mutate callback never fires,
@@ -196,6 +215,7 @@ export function ItemEnvironmentModal({
           busy={busy}
           onDraft={(patch) => setDraft((d) => ({ ...d, ...patch }))}
           onCloseSandbox={() => {
+            if (save.isPending) return; // the button is disabled; belt and braces
             // Otherwise the "not saved" line from an earlier refusal is still
             // sitting there after the sandbox has been shut down and the panel
             // has re-rendered around it, describing a request nobody can see.
@@ -218,12 +238,17 @@ export function ItemEnvironmentModal({
           {t("itemenv.saveFailed")}
         </p>
       ) : null}
-      {env.isError && env.data ? (
-        // A re-read that failed after a write: the save went through, but
-        // the record on screen is the old one. Said as such — "couldn't read"
-        // alone reads as "not saved" next to a field still showing the draft.
+      {staleAfterSave ? (
+        // A re-read that failed after a write: the save went through and the
+        // fields show what was sent, but the effective/clamp figures are the
+        // old record's. Said as such — "couldn't read" alone reads as "not
+        // saved".
         <p data-testid="reload-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
           {t("itemenv.savedButStale")}
+        </p>
+      ) : env.isError && env.data ? (
+        <p data-testid="reload-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
+          {t("itemenv.loadFailed")}
         </p>
       ) : null}
 

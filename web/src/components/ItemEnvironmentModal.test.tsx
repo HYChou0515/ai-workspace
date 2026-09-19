@@ -468,11 +468,12 @@ describe("ItemEnvironmentModal — round 2", () => {
     expect(screen.getByTestId("cpu-input")).toHaveValue(2);
   });
 
-  it("a second Save in the modal's life still sends — and so does one after 'Close sandbox' interrupted a Save in flight", async () => {
+  it("a second Save in the modal's life still sends — and 'Close sandbox' waits for a Save in flight", async () => {
     // save.reset() (what Close sandbox does) detaches the in-flight
-    // mutation's observer, so a per-mutate onSettled never fires; a ref
-    // released only there stuck at "in flight" and every later Save was
-    // silently dropped.
+    // mutation's observer: its per-mutate callbacks never fire, and its
+    // options callbacks fire on a modal that has moved on (a stuck in-flight
+    // ref; a keystroke wiped by the late onSuccess). So the button is not
+    // offered while a save is out — there is then no such mutation to detach.
     let releasePut!: () => void;
     const holder: { env: unknown; holdPut?: Promise<void> } = {
       env: STATED,
@@ -487,8 +488,13 @@ describe("ItemEnvironmentModal — round 2", () => {
     // The sandbox starts under us; the record refetches as running.
     holder.env = { ...STATED, running: true };
     await onClose.client.invalidateQueries({ queryKey: ["item-environment", "rca", "i-1"] });
-    fireEvent.click(await screen.findByTestId("close-environment")); // save.reset()
-    releasePut(); // the detached PUT now answers — nobody is observing it
+    // Close sandbox waits for the save: a reset() under an in-flight mutation
+    // detaches its observer, and nothing good comes of that.
+    const closeSandbox = await screen.findByTestId("close-environment");
+    expect(closeSandbox).toBeDisabled();
+    releasePut();
+    await waitFor(() => expect(closeSandbox).toBeEnabled());
+    fireEvent.click(closeSandbox); // save.reset(), on a settled mutation
     holder.env = STATED;
     holder.holdPut = undefined;
     await onClose.client.invalidateQueries({ queryKey: ["item-environment", "rca", "i-1"] });
@@ -521,8 +527,36 @@ describe("ItemEnvironmentModal — round 2", () => {
     fireEvent.click(screen.getByTestId("itemenv-save"));
     const note = await screen.findByTestId("reload-failed");
     expect(note).toHaveTextContent(/已存檔|Saved/);
-    // The typed value stays on screen with it, not the pre-save number.
+    // The SAVED value stays on screen with it, not the pre-save number — and
+    // it is the record's now, not an unsaved draft: the notice says to close
+    // and reopen, so closing must not ask about "unsaved changes".
     expect(screen.getByTestId("cpu-input")).toHaveValue(2);
+    expect(screen.getByTestId("cpu-origin")).toHaveTextContent(/Set by you|你設定的/);
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
+  });
+
+  it("closing after a failed re-read asks nothing — the save went through", async () => {
+    const holder = { env: STATED, failReload: true };
+    vi.stubGlobal("fetch", liveRoute(holder));
+    const onClose = open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await screen.findByTestId("reload-failed");
+    fireEvent.click(screen.getByTestId("itemenv-cancel"));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("dialog-action-discard")).toBeNull();
+  });
+
+  it("takes full-width digits — a zh-TW IME slip — as the digits they are", async () => {
+    const f = route(CAPPED, STATED);
+    vi.stubGlobal("fetch", f);
+    open();
+    const memory = await screen.findByTestId("memory-input");
+    fireEvent.change(memory, { target: { value: "５１２M" } });
+    expect(memory).not.toHaveAttribute("aria-invalid", "true");
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(puts(f)).toHaveLength(1));
+    expect(puts(f)[0]).toEqual({ cpu_cores: 1, memory: "512M" });
   });
 });
 

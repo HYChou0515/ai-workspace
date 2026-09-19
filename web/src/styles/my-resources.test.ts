@@ -68,7 +68,14 @@ describe("my-resources: the live panel's layout", () => {
     expect(live).toMatch(/display:\s*grid/);
     // The card chrome (border-radius, surface) is `.live-card` in gauge.css —
     // guarded there — so this rule need only make the row a grid.
-    expect(rule(".page ul:not(.live-list) > li")).toMatch(/display:\s*flex/);
+    // `:where(...)` — zero specificity — keeps this generic rule at (0,1,2).
+    // A bare `:not(.live-list)` raised it to (0,2,2) and it then outranked
+    // every `.page .X > li` rule in the app: the storage list lost its grid,
+    // /wui its table, /skill-hub its chips (round 3, measured in Chromium).
+    expect(rule(".page ul:where(:not(.live-list)) > li")).toMatch(/display:\s*flex/);
+    expect(css).not.toMatch(/\.page ul:not\(/);
+    // The live title keeps the shared `> a` ellipsis — that rule is unscoped.
+    expect(rule(".page ul > li > a")).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it.each([".page .live-list", ".page .disk-list", ".page .wui-list"])(

@@ -41,12 +41,17 @@ const UNITS: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 
  * What a person writes → what `parse_size` reads, or `null` when it is not a
  * size at all. People write "512MB", "512 mb", "1.5G" and the display format
  * "512.0 MB" as readily as "512M"; the server reads only `<integer>[K|M|G|T]`.
- * So: any case, an optional space, an optional trailing B, a fraction folded
- * into the exact smaller unit ("1.5G" → "1536M"; a fraction of a byte rounds).
- * `""` is "the default", not a size — the caller sends `null` for it.
+ * So: any case, an optional space, an optional trailing B, full-width digits,
+ * a fraction WITH a unit folded into the exact smaller unit ("1.5G" →
+ * "1536M"; below a whole byte it rounds), a fraction WITHOUT one refused (a
+ * fraction of a byte is not a size). `""` is "the default", not a size — the
+ * caller sends `null` for it.
  */
 export function normaliseMemory(text: string): string | null {
-  const m = /^\s*(\d+(?:\.\d+)?)\s*(?:([kmgt])b?)?\s*$/i.exec(text);
+  // Full-width digits (a zh-TW IME slip) are digits; the server's
+  // `str.isdigit` reads them too.
+  const ascii = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(?:([kmgt])b?)?\s*$/i.exec(ascii);
   if (!m) return null;
   // A fraction is fine WITH a unit (1.5G is 1536M); without one it would be
   // a fraction of a byte, which is not a size.
@@ -61,4 +66,14 @@ export function normaliseMemory(text: string): string | null {
  *  server refuses zero on this route, unlike the operator's config. */
 export function isValidMemory(text: string): boolean {
   return text.trim() === "" || normaliseMemory(text) !== null;
+}
+
+/** The server's spelling back to bytes — for writing a just-sent size into
+ *  the cached record when its re-read failed. Only ever fed what
+ *  `normaliseMemory` produced. */
+export function parseSize(text: string | null): number | null {
+  if (text === null) return null;
+  const m = /^(\d+)([KMGT])?$/.exec(text);
+  if (!m) return null;
+  return Number(m[1]) * (m[2] ? UNITS[m[2]]! : 1);
 }
