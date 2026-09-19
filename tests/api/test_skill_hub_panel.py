@@ -58,6 +58,7 @@ async def test_a_fresh_hub_copy_lists_as_a_live_copy_with_nothing_to_update(harn
 
     assert row["source"] == "workspace"
     assert (row["is_copy"], row["upstream"], row["update_available"]) == (True, "live", False)
+    assert row["copy_of"] == "hub"
 
 
 async def test_a_republished_upstream_shows_an_update_and_refresh_brings_it(harness: Harness):
@@ -108,7 +109,7 @@ async def test_a_hand_written_skill_has_no_upstream(harness: Harness):
 
     row = _row(harness, "mine")
 
-    assert (row["is_copy"], row["upstream"]) == (False, None)
+    assert (row["is_copy"], row["upstream"], row["copy_of"]) == (False, None, "")
 
 
 async def test_the_picker_marks_exactly_the_names_an_install_would_refuse(harness: Harness):

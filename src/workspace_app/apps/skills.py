@@ -328,6 +328,12 @@ class SkillState(msgspec.Struct, frozen=True):
     #: on for good just by using it), yet its files really are here — downloadable,
     #: editable, and refreshable from upstream.
     is_copy: bool = False
+    #: What the copy is OF — ``shared`` / ``profile`` / ``hub`` (``""`` when not
+    #: a copy). ``source`` cannot say it: a copy of a package skill this App
+    #: does not declare has no row to shadow and lists as ``workspace`` just
+    #: like a hub copy, and the panel words Reset / Update by the origin
+    #: (#826 review round 1).
+    copy_of: SkillSource | Literal[""] = ""
 
 
 def effective_item_skills(
@@ -390,6 +396,7 @@ def effective_item_skills(
                 default_on=default_on,
                 effective=effective,
                 is_copy=meta.is_copy,
+                copy_of=meta.copy_of,
             )
         )
     return out

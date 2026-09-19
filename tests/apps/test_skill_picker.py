@@ -218,6 +218,25 @@ async def test_a_hub_copy_named_like_a_shared_skill_stays_a_workspace_skill():
     assert metas[0].is_copy is True and metas[0].copy_of == "hub"
     assert states["author-workflow"].source == "workspace"
     assert states["author-workflow"].is_copy is True
+    assert states["author-workflow"].copy_of == "hub"
+
+
+async def test_a_copy_of_an_undeclared_package_skill_is_a_workspace_copy_of_the_package():
+    """#826 review round 1: the front end took `source == "workspace" and
+    is_copy` for "a hub copy" — but a copy of a package skill the App does
+    NOT declare (`read_skill` materialises any skill it can resolve) has no
+    package row to shadow and lists as `workspace` + `is_copy` too, so its
+    Reset read 「還原成 hub 上的版本」 while the bytes came from the package.
+    `copy_of` says which; the state carries it, the route sends it."""
+    files = await _files_with(**{"verify-number": b"from the package"})
+    await files.write("inv", "/.skill/verify-number/.origin", b'{"source":"shared","files":{}}')
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    metas = await workspace_skill_metas(files, "inv")
+    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+
+    assert (states["verify-number"].source, states["verify-number"].is_copy) == ("workspace", True)
+    assert states["verify-number"].copy_of == "shared"
 
 
 async def test_a_package_copy_still_answers_as_the_package(monkeypatch, tmp_path):
