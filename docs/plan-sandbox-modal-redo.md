@@ -55,9 +55,12 @@ be vetoed by looking at the result.
    480px): `CPU (cores)` (a new key, `itemenv.field.cpu`; the tile keeps
    `resources.gauge.cpu`) and `Memory` (`resources.memory`); each field:
    `<label>` → `<input class="input">` (number step 0.5, min 0.5 / text
-   placeholder in the SERVER's spelling, `toSizeString(effective)` = `512M`
-   — round 1 caught the display spelling `512.0 MB` there, which `parse_size`
-   refuses) → helper line: effective value +
+   placeholder in the SERVER's spelling, `toSizeString(effective)` = `512M`,
+   or none when nothing is in effect — round 1 caught the display spelling
+   `512.0 MB` there, which `parse_size` refuses; the user then asked that
+   "MB and M both work, and likewise", so the field TAKES what people write —
+   `512MB`, `512 mb`, `512.0 MB`, `1.5 GB` — and `normaliseMemory` sends the
+   server's spelling, `1.5G` as `1536M` (P6)) → helper line: effective value +
    origin (`itemenv.size.default` / `itemenv.size.stated` + "Back to default"
    link-button) → clamp note (`…clamped.quota/app`) → `itemenv.unenforced`
    where the backend applies no ceiling (then no input, as today). Read-only:
@@ -100,6 +103,11 @@ be vetoed by looking at the result.
   row's figures broke mid-number and then ran under the button; the figures
   are now unshrinkable (`flex: 1 0 auto`, nowrap) and the row wraps, so the
   BUTTON drops to its own line. Plan record; PR body last.
+
+- **P5** Review round 1 (see the record below).
+- **P6** The memory field accepts the spellings people write (user: "mb 和 m
+  都可以 同理"); `normaliseMemory` sends the server's.
+- **P7** Review round 2 (see the record below).
 
 ## Test plan (red first, targeted only)
 
@@ -249,4 +257,60 @@ the page's rows and the modal's status row (padding restated on the page rule
 because the generic `.page ul > li` outranks a one-class card);
 `ItemEnvironmentSize` trimmed to `toSizeString` + the two validity rules, its
 test rewritten; seven new modal cases, four panel cases, five CSS guards.
+
+## Review round 2 (2026-09-19 — verify P5 only: defect / veracity / regression, in parallel)
+
+Worst finding: **MEDIUM**, two lenses on one root.
+
+- **Defect (P5's new code)**: MEDIUM — the in-flight ref was released only by
+  the per-mutate `onSettled`, which never fires once `save.reset()` (Close
+  sandbox) detached the observer: after that sequence every later Save was
+  silently dropped. LOW: whitespace-only memory sent untrimmed (P6 had already
+  fixed it); upper bounds (`_MAX_CORES` 1024, 1 PiB) not mirrored — left,
+  absurd inputs; the pre-save number flashing for one round trip after Save
+  (P3-era); the "couldn't read" copy reading as "not saved" after a successful
+  save; the "at save time" claim overreaching (the record refetches only on
+  this modal's own writes); invalid+focus showing no focus indicator; the save
+  mutation raising the app-wide banner on top of its own alert.
+- **Veracity (P5's claims)**: all seven mutations reproduce exactly. MEDIUM —
+  "the draft is dropped after Save" pinned nothing: the case let the server
+  echo what was typed, so a surviving draft read clean. Unguarded: the ref's
+  release, `min={0.5}`, `aria-describedby`. The `?? "512M"` placeholder
+  fallback is a LIVE branch (no App ceiling, no owner quota → the host's
+  default applies) and an invented number. On `/my-resources` the generic
+  `.page ul > li` (0,1,2) outranked `.live-card` (0,1,0) for the top border —
+  same token, so invisible, but "one rule" was not yet true there. "243 → 260"
+  could not be reproduced from a named suite set (struck below). "four panel
+  cases" was three new + one re-aimed.
+- **Regression (P5)**: none HIGH/MEDIUM. The draft model gives OLD master's
+  PUT bodies for every sequence tried (type / reset / type-back / clear a
+  stated value / clamp / refetch); client validation agrees with `parse_size`
+  on every ASCII input (the one false refusal: non-ASCII digits); `/my-
+  resources` live rows compute identically in Chromium before and after the
+  `.live-card` move. LOW, pre-existing: a keystroke typed while the PUT was out
+  was lost to `setDraft({})`.
+
+**P7** answers it: the ref is released in the `useMutation` options'
+`onSettled`; the re-read is awaited inside `onSuccess`, so `save.isPending`
+spans PUT + re-read and locks the fields and Save for that whole gesture (no
+flash, no lost keystroke), and the draft is dropped only once the re-read has
+landed — kept, under a "Saved — but the latest status couldn't be read back"
+notice, when it has not; the "draft is gone" case now types `512m` and expects
+the server's `512M` back; `min` / `aria-describedby` pinned; no invented
+placeholder; a focus ring on an invalid field; `meta.silentError` on the save;
+the generic row rule scoped to `ul:not(.live-list)` so `.live-card` alone
+governs a live row, padding included. Mutations: the P5-form release → the
+interrupted-save case; draft dropped before the re-read → "no flash" + "saved,
+but could not re-read"; draft never dropped → "the field shows the server's
+spelling"; `busy` not reaching the panel → "no flash"; invented placeholder;
+`min` 0; the generic rule reaching the live list. Live (built bundle):
+invalid+focus 3px ring; `512MB` saves as `512M`; cpu, memory and Save all
+disabled during the save; the field shows `512M` · "Set by you" after.
+
+Corrections to round 1's record: "243 → 260 tests green" named no suite set
+and is withdrawn — the reproducible figure is the ten touched test files:
+125 at P4 (round 1's conformance count) → 140 after P7 (`input-class`,
+`Gauge`, `gauge`, `my-resources`, `MyResourcesPage`, `ItemEnvironmentPanel`,
+`ItemEnvironmentModal`, `ItemEnvironmentSize`, `EnvVarsModal`,
+`item-environment`); "four panel cases" was three new plus one re-aimed.
 
