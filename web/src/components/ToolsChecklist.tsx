@@ -34,9 +34,10 @@ import {
  *
  *   list opens            manual = {}          autoOpen = the mixed folds now
  *   search term changes   manual keeps only    autoOpen = the mixed folds now
- *   (after trimming)      the hand-OPENED      (so a fold made mixed while a
- *                         folds — a hand-shut  search was on stays open once
- *                         fold is released     it is cleared)
+ *   (normalised: trimmed, the hand-OPENED      (re-taken, not grown: a fold
+ *   lower-cased)          folds — a hand-shut  made mixed under a search stays
+ *                         fold is released     open once it is cleared; one
+ *                                              made uniform under it shuts)
  *   header click          manual[id] = !open   —
  *   a row / fold tri-state   —                 —   (never re-derived: a fold
  *                                                   must not snap shut under
@@ -83,7 +84,7 @@ export function ToolsChecklist({
   const changeSearch = (value: string) => {
     const before = term;
     setSearch(value);
-    if (value.trim().toLowerCase() === before) return; // whitespace only: not a new question
+    if (value.trim().toLowerCase() === before) return; // normalised term unchanged: not a new question
     setManual((m) => Object.fromEntries(Object.entries(m).filter(([, open]) => open)));
     setAutoOpen(mixedNow());
   };

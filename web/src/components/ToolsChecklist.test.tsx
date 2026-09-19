@@ -406,11 +406,29 @@ describe("ToolsChecklist folds — what a search change restores", () => {
     expect(onChange).toHaveBeenLastCalledWith({ exec: false, "rca-tools:pareto": true });
   });
 
+  it("a fold made uniform during a search shuts once the search is cleared — the mixed set is re-taken, not grown", () => {
+    // Open with the core fold mixed; under a search make it uniform; clear.
+    // The resting rule (no search) opens only what is mixed NOW, so it shuts —
+    // at the erase, never under the cursor. (Hand-opening it keeps it open.)
+    render(<Host tools={GROUPED} initial={{ exec: true }} />);
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "exec" } });
+    fireEvent.click(screen.getByTestId("tool-exec-follow")); // uniform now
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "" } });
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("a search that only changed by whitespace releases nothing", () => {
     render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
     fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "核心" } });
     fireEvent.click(screen.getByTestId("tool-group-header-builtin")); // hand-shut under the search
     fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "核心 " } });
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+    // a second space, and a case-only change, are not new questions either
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "核心  " } });
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "read" } });
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin")); // hand-shut again
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "Read" } });
     expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
   });
 });
