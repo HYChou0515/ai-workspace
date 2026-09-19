@@ -41,7 +41,14 @@ from .permission_body import PermissionBody, PermissionOut, build_permission
 
 #: One wording for every "not for you" — a private entry, a deleted one and an
 #: id that never existed all answer this, so a 404 never says "exists, not for you".
-_NOT_FOUND = "no such skill hub entry"
+# Person-facing refusals are CODES (plan-skill-hub-ui-polish D16), the site's
+# shape for a sentence the front end words in the viewer's language (the
+# quota codes of `turn_gate`, this hub's own edit `reason`s); an unknown code
+# falls back to the status on the front end. One code for every 404 so a
+# refusal never says "exists, not for you" (Q10).
+_NOT_FOUND = {"error": "not_found"}
+_OWNER_ONLY = {"error": "owner_only"}
+_TRANSFER_OWNER_REQUIRED = {"error": "transfer_owner_required"}
 
 
 class SkillHubCard(BaseModel):
@@ -263,7 +270,7 @@ def register_skill_hub_routes(
         to its new owner at once."""
         entry = _readable(entry_id, viewer)
         if entry.owner != viewer:
-            raise HTTPException(status_code=403, detail="only the owner may manage this entry")
+            raise HTTPException(status_code=403, detail=_OWNER_ONLY)
         return entry
 
     @app.post("/skill-hub/entries/{entry_id}/unpublish")
@@ -318,13 +325,11 @@ def register_skill_hub_routes(
         entry = _owned(entry_id, viewer)
         new_owner = body.owner.strip()
         if not new_owner or new_owner == entry.owner:
-            raise HTTPException(
-                status_code=400, detail="transfer needs a different, non-empty owner"
-            )
+            raise HTTPException(status_code=400, detail=_TRANSFER_OWNER_REQUIRED)
         if hub.find(new_owner, entry.name) is not None:
             raise HTTPException(
                 status_code=409,
-                detail=f"{new_owner} already publishes a skill named {entry.name!r}",
+                detail={"error": "transfer_name_taken", "owner": new_owner, "name": entry.name},
             )
         hub.transfer(entry_id, new_owner)
         return SkillTransferred(id=entry_id, owner=new_owner)
@@ -385,7 +390,7 @@ def register_skill_hub_routes(
         investigation_id = locator.require_access(slug, item_id, "edit_content")
         entry = _readable(body.entry_id, viewer)
         if taken := await skill_folder_in_the_way(files, investigation_id, hub, entry.name, viewer):
-            raise HTTPException(status_code=409, detail=taken)
+            raise HTTPException(status_code=409, detail=taken.code())
         name = await install_hub_skill(files, investigation_id, hub, body.entry_id)
         return SkillInstalled(
             name=name, missing_tools=missing_tools_for(entry.referenced_tools, slug)

@@ -34,6 +34,7 @@ import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useApps } from "../hooks/useResources";
 import { useUsers } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
+import { describeRefusal } from "../lib/skillHubRefusal";
 import { DOC_ROLES } from "../lib/permission";
 
 export function SkillHubEntryPage({
@@ -258,8 +259,7 @@ function OwnerActions({
   // falling back to the id for someone the directory does not list.
   const personName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const refresh = () => qc.invalidateQueries({ queryKey: ["skillHub"] });
-  const failed = (e: unknown) =>
-    setFailure(e instanceof Error ? e.message : String(e));
+  const failed = (e: unknown) => setFailure(describeRefusal(e, t));
   // Every action here shows its own failure line (`failed`), so the query
   // client's global write-failure toast must not fire for it too — the demo
   // showed both at once, the toast under a title that was not even true

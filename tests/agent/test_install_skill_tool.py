@@ -142,7 +142,10 @@ async def test_a_folder_with_that_name_is_never_overwritten():
 
     out = await install_skill_impl(ctx, entry)
 
-    assert out.startswith("error:") and "triage-reflow" in out
+    assert out == (
+        "error: this workspace already has '.skill/triage-reflow/' — remove or rename that "
+        "folder first, then install again."
+    )
     assert await files.read(inv, f"/{WORKSPACE_SKILL_DIR}/triage-reflow/SKILL.md") == mine
     assert not await files.exists(inv, f"/{WORKSPACE_SKILL_DIR}/triage-reflow/{ORIGIN_FILE}")
 
@@ -168,7 +171,13 @@ async def test_the_refusal_names_whose_copy_is_in_the_way():
 
     out = await install_skill_impl(ctx, carols)
 
-    assert out.startswith("error:") and "alice" in out
+    # Word for word what the tool said before the route's refusal became a
+    # code (plan-skill-hub-ui-polish D16): the model's sentence and the
+    # person's code are two renderings of one fact, `FolderInTheWay`.
+    assert out == (
+        "error: this workspace already has alice's '.skill/triage-reflow/' — remove or rename "
+        "that folder first, then install again."
+    )
 
 
 async def test_an_entry_the_installer_cannot_see_is_gone_the_same_as_one_that_never_was():

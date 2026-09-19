@@ -2650,7 +2650,7 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
         return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
     name = entry.name
     if taken := await skill_folder_in_the_way(files, inv, hub, name, c.acting_user):
-        return f"error: {taken}."
+        return f"error: {taken.sentence()}."
     await install_hub_skill(files, inv, hub, entry_id)
     lines = [
         f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "

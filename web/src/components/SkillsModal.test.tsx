@@ -579,6 +579,34 @@ describe("SkillsModal — the skill hub", () => {
     expect(screen.getByTestId("skill-hub-picker")).toBeInTheDocument();
   });
 
+  it("words a coded refusal in the viewer's language (D16)", async () => {
+    const hub = fakeHub();
+    hub.install.mockRejectedValueOnce(
+      new HttpError(
+        409,
+        "install failed (409)",
+        "folder_in_the_way",
+        undefined,
+        {
+          error: "folder_in_the_way",
+          owner: "alice",
+          path: ".skill/triage-reflow/",
+        },
+      ),
+    );
+    renderWithHub(hub);
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    fireEvent.click(await screen.findByTestId("pick-install-e-1"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      word("skillHub.refused.folder_in_the_way.theirs", {
+        owner: "alice",
+        path: ".skill/triage-reflow/",
+      }),
+    );
+  });
+
   it("reports a refused install ONCE — in the picker, not also as the global write-failure toast (plan-skill-hub-ui-polish D3)", async () => {
     // Mounted on the REAL query client: its MutationCache reports every
     // failed mutation as 「儲存失敗，內容未套用」 unless the mutation says it

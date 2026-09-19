@@ -29,6 +29,7 @@ import {
   skillHubApi,
 } from "../api/skillHub";
 import { useT } from "../lib/i18n";
+import { describeRefusal } from "../lib/skillHubRefusal";
 import { pxToRem } from "../lib/pxToRem";
 import { AppTag } from "./AppTag";
 import { ModalActions } from "./ModalActions";
@@ -68,7 +69,7 @@ export function SkillHubPickerModal({
   const install = useMutation({
     mutationFn: (entryId: string) => client.install(slug, itemId, entryId),
     onSuccess: (res) => onInstalled(res.name),
-    onError: (e) => setFailure(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setFailure(describeRefusal(e, t)),
     // The refusal is shown right here (`failure`), so the query client's
     // global write-failure toast must not report it a second time — under a
     // title that is not even true, nothing was being saved

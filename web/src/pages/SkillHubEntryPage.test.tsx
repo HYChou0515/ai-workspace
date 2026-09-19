@@ -392,6 +392,41 @@ describe("SkillHubEntryPage", () => {
     );
   });
 
+  it("words a coded refusal in the viewer's language (D16)", async () => {
+    const c = client(OWNED);
+    c.transfer.mockRejectedValueOnce(
+      new HttpError(
+        409,
+        "transfer failed (409)",
+        "transfer_name_taken",
+        undefined,
+        {
+          error: "transfer_name_taken",
+          owner: "bob",
+          name: "triage-reflow",
+        },
+      ),
+    );
+    mount(c);
+    fireEvent.click(
+      await screen.findByRole("button", { name: word("skillHub.transfer") }),
+    );
+    const dialog = await screen.findByTestId("skill-hub-transfer");
+    fireEvent.click(await within(dialog).findByText("Bob Lee"));
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: word("skillHub.transfer.confirm"),
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      word("skillHub.refused.transfer_name_taken", {
+        owner: "bob",
+        name: "triage-reflow",
+      }),
+    );
+  });
+
   it("does not ALSO raise the global write-failure toast for a failure it shows itself (D3)", async () => {
     resetWriteFailures();
     const c = client(OWNED);

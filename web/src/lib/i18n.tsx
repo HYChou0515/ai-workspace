@@ -2446,6 +2446,34 @@ export const messages = {
     en: "Once it exists, install {skill} from its Skills panel and edit it there.",
   },
   "newItem.skillHint.this": { "zh-TW": "這個 skill", en: "this skill" },
+  // The routes' coded refusals (plan-skill-hub-ui-polish D16), worded by
+  // `lib/skillHubRefusal.ts`.
+  "skillHub.refused.not_found": {
+    "zh-TW": "找不到這個 skill hub 條目。",
+    en: "No such skill hub entry.",
+  },
+  "skillHub.refused.owner_only": {
+    "zh-TW": "只有 owner 能管理這個條目。",
+    en: "Only the owner may manage this entry.",
+  },
+  "skillHub.refused.transfer_owner_required": {
+    "zh-TW": "轉移要指定另一個人。",
+    en: "Transfer needs a different, non-empty owner.",
+  },
+  "skillHub.refused.transfer_name_taken": {
+    "zh-TW": "{owner} 已經發布了一個叫「{name}」的 skill。",
+    en: "{owner} already publishes a skill named “{name}”.",
+  },
+  "skillHub.refused.folder_in_the_way": {
+    "zh-TW":
+      "這個 workspace 已經有 {path}，先把那個資料夾刪掉或改名，再裝一次。",
+    en: "This workspace already has {path} — remove or rename that folder first, then install again.",
+  },
+  "skillHub.refused.folder_in_the_way.theirs": {
+    "zh-TW":
+      "這個 workspace 已經有 {owner} 的 {path}，先把那個資料夾刪掉或改名，再裝一次。",
+    en: "This workspace already has {owner}'s {path} — remove or rename that folder first, then install again.",
+  },
   "skillHub.failed": {
     "zh-TW": "沒有成功：{reason}",
     en: "That didn't work: {reason}",
