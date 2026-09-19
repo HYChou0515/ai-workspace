@@ -389,6 +389,50 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     );
   });
 
+  it("draws a copy's four icon buttons with four different glyphs, none of them Import's, each with a tooltip (plan-skill-hub-ui-polish D17)", async () => {
+    // 「看不懂 2–4 是什麼意思」「更新和還原 icon 看不出差別」「發布看起來是
+    // 上傳」: Reset and Update were mirror images, Publish shared Import's
+    // glyph, and Download had no tooltip. Each glyph is its own (Material /
+    // Lucide names: download, cloud-upload, history, refresh), and every
+    // icon-only button says what it does on hover (`title`) and to
+    // assistive tech (`aria-label`) — the words stay off the crowded row.
+    const skills: ItemSkillState[] = [
+      { ...COPIED[0], name: "from-hub", source: "workspace", upstream: "live" },
+    ];
+    renderModal({ client: fakeClient(skills) as never });
+    await screen.findByTestId("skill-row-from-hub");
+
+    const glyph = (testId: string) =>
+      screen
+        .getByTestId(testId)
+        .querySelector("[data-icon]")
+        ?.getAttribute("data-icon");
+    const glyphs = {
+      download: glyph("skill-download-from-hub"),
+      publish: glyph("skill-publish-from-hub"),
+      reset: glyph("skill-reset-from-hub"),
+      refresh: glyph("skill-refresh-from-hub"),
+    };
+    expect(glyphs).toEqual({
+      download: "download",
+      publish: "publish",
+      reset: "restore",
+      refresh: "refresh",
+    });
+    expect(new Set(Object.values(glyphs)).size).toBe(4);
+    expect(glyph("skills-import")).not.toBe(glyphs.publish);
+
+    for (const [id, label] of [
+      ["skill-download-from-hub", word("skills.download")],
+      ["skill-publish-from-hub", word("skills.publish")],
+      ["skill-reset-from-hub", word("skills.reset.hub")],
+      ["skill-refresh-from-hub", word("skills.refresh.hub")],
+    ]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("title", label);
+      expect(screen.getByTestId(id)).toHaveAccessibleName(`${label} from-hub`);
+    }
+  });
+
   it("offers no refresh for a skill that was written here", async () => {
     renderModal();
     await screen.findByTestId("skill-row-my-skill");

@@ -562,15 +562,20 @@ function SkillRow({
           <Icon name="sparkle" size={11} /> {t("skills.apply")}
         </button>
 
+        {/* Icon-only buttons, so every one says what it does on hover
+            (`title`) and to assistive tech (`aria-label`) — and each has a
+            glyph of its own (D17): ↓ download, cloud↑ publish, clock↺
+            restore, ↻ update. The words stay off the row; it is full. */}
         {onDownload && (
           <button
             type="button"
             data-testid={`skill-download-${skill.name}`}
             aria-label={`${t("skills.download")} ${skill.name}`}
+            title={t("skills.download")}
             onClick={onDownload}
             style={{ ...pillBtn, height: 24 }}
           >
-            <Icon name="download" size={12} />
+            <Icon name="download" size={14} />
           </button>
         )}
         {onPublish && (
@@ -582,7 +587,7 @@ function SkillRow({
             onClick={onPublish}
             style={{ ...pillBtn, height: 24 }}
           >
-            <Icon name="upload" size={12} />
+            <Icon name="publish" size={14} />
           </button>
         )}
         {onReset && (
@@ -594,7 +599,7 @@ function SkillRow({
             onClick={onReset}
             style={{ ...pillBtn, height: 24 }}
           >
-            <Icon name="undo" size={12} />
+            <Icon name="restore" size={14} />
           </button>
         )}
         {onRefresh && (
@@ -606,7 +611,7 @@ function SkillRow({
             onClick={onRefresh}
             style={{ ...pillBtn, height: 24 }}
           >
-            <Icon name="refresh" size={12} />
+            <Icon name="refresh" size={14} />
           </button>
         )}
 

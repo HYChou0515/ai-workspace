@@ -58,6 +58,8 @@ export const ICON_NAMES = [
   "insert_line",
   "remove_line",
   "star",
+  "publish",
+  "restore",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -346,6 +348,29 @@ export function Icon({
       <>
         <path d="M4 8 A8 8 0 1 1 5 16" {...sp} />
         <path d="M4 4 V8 H8" {...sp} />
+      </>
+    ),
+    // Publish — a cloud with an arrow going up into it (Material
+    // `cloud_upload`, Lucide `cloud-upload`): "send it to the shared place".
+    // Deliberately NOT `upload` (↑ onto a bar): that one is Import's, and
+    // the two sat on the same panel (plan-skill-hub-ui-polish D17).
+    publish: (
+      <>
+        <path
+          d="M7 18 A4.5 4.5 0 0 1 6.3 9.1 A6 6 0 0 1 17.8 8.5 A3.8 3.8 0 0 1 18 16"
+          {...sp}
+        />
+        <path d="M12 21 V12 M8.5 15.5 L12 12 L15.5 15.5" {...sp} />
+      </>
+    ),
+    // Restore — a clock inside a counter-clockwise arrow (Material `restore`,
+    // Lucide `history`): "back to an earlier state". `undo` alone was
+    // `refresh` mirrored, and the two sat side by side on a copy's row (D17).
+    restore: (
+      <>
+        <path d="M4 8 A8 8 0 1 1 5 16" {...sp} />
+        <path d="M4 4 V8 H8" {...sp} />
+        <path d="M12 8 V12 L15 14" {...sp} />
       </>
     ),
     paperclip: (
