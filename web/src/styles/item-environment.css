@@ -19,6 +19,9 @@
 /* dot · label · figures · [Close sandbox] — the live row from /my-resources. */
 .item-environment .env-status {
   display: flex;
+  /* If the row cannot hold dot · label · figures · button, the BUTTON drops to
+     its own line; the figures never break in the middle ("512.0" / "MB"). */
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-8);
   min-height: 32px;
@@ -33,9 +36,11 @@
 }
 
 .item-environment .env-status__detail {
-  flex: 1;
-  min-width: 0;
+  /* Grows to push the button right; never shrinks below its own figures —
+     with `min-width: 0` the text ran under the button instead of wrapping. */
+  flex: 1 0 auto;
   margin: 0;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 

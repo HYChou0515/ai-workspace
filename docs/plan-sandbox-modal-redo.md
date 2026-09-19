@@ -92,7 +92,10 @@ be vetoed by looking at the result.
 - **P3** The modal: Tools frame, drafts + dirty + Save/Cancel + `useDirtyClose`,
   read-only footer, saveFailed placement. Panel becomes presentational (draft
   in, `onDraft` out), status row, two labelled fields, two tiles.
-- **P4** Live check (below) and the plan's record; PR body last.
+- **P4** Live check (below): one finding fixed in it — at 390 the status
+  row's figures broke mid-number and then ran under the button; the figures
+  are now unshrinkable (`flex: 1 0 auto`, nowrap) and the row wraps, so the
+  BUTTON drops to its own line. Plan record; PR body last.
 
 ## Test plan (red first, targeted only)
 
@@ -169,3 +172,27 @@ buttons; and against `/my-resources`: same tile and row shapes.
   — replaced by the Save cases above), `MyResourcesPage.test.tsx`.
 - Styles are imported in `web/src/main.tsx` (kb :25, my-resources :31,
   item-environment :32).
+
+## Live check record (2026-09-19, worktree build on 127.0.0.1:8256, `resources.per_user` configured, real Chromium)
+
+Playground items; the running one woken with `POST …/exec {cmd:["echo","hi"]}`.
+The header's Sandbox button is tucked at 390, so the 390 shots open the modal
+at 1280 and shrink the viewport around it (the tucked button is a separate
+report, per "Deliberately not doing").
+
+| state | 1280 | 390 |
+|---|---|---|
+| idle, editable | 480×461; inputs 215×34, 1px solid, 6px radius; Save disabled; 2 tiles | 342 wide; fields 1 column (304px each); tiles 1 column; no horizontal overflow |
+| dirty (cpu → 2) | Save enabled (accent) | — |
+| Escape on dirty | "Discard unsaved changes?" with Keep editing / Discard changes; nothing sent | — |
+| after Save | one PUT; helper reads "1 core · Set by you · Back to default" + "You set 2; 1 is in effect (held down by this App's ceiling)" — the server's clamp, unchanged | — |
+| running | inputs disabled, Save disabled, "Close sandbox" (`.btn` secondary) in the status row, hint below | figures "1 core · 512.0 MB" on one line, the button wrapped to its own line |
+
+Frame parity with the Tools modal on the same build: 480px, `<h2>` 14px /
+`<strong>` 14px, 12px lede in `--text-paper-d`, `.btn` sm footer. Tile parity
+with `/my-resources`: same `Gauge` component, same `gauge.css`.
+
+Screenshots `sm-idle-1280.png`, `sm-dirty-1280.png`, `sm-escape-1280.png`,
+`sm-saved-1280.png`, `sm-running-1280.png`, `sm-running-390.png`,
+`sm-tools-1280.png` (job tmp; not committed).
+
