@@ -304,7 +304,7 @@ describe("the shapes it borrows", () => {
   it("marks a field the modal calls invalid, and shows the grammar under it", () => {
     render(
       <ItemEnvironmentPanel
-        draft={{ cpu: "0", memory: "512.0 MB" }}
+        draft={{ cpu: "0", memory: "512 MiB" }}
         invalid={{ cpu: true, memory: true }}
         onDraft={noop}
         env={IDLE}

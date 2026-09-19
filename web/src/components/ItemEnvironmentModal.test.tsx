@@ -375,18 +375,26 @@ describe("ItemEnvironmentModal — what the review found unguarded", () => {
   });
 
   it("refuses, client-side, what the server would refuse: a memory spelling it cannot parse, or a cpu of 0", async () => {
-    // The placeholder teaches the server's grammar (512M); "512.0 MB" is not
-    // it, and a 422 that only says "not saved" would leave the person guessing.
+    // A 422 only says "not saved", which leaves the person guessing at the
+    // grammar; so what the server would refuse is refused here, with the
+    // grammar under the field.
     open();
     const memory = await screen.findByTestId("memory-input");
     expect(memory).toHaveAttribute("placeholder", "512M");
-    fireEvent.change(memory, { target: { value: "512.0 MB" } });
+    fireEvent.change(memory, { target: { value: "512 MiB" } });
     expect(screen.getByTestId("itemenv-save")).toBeDisabled();
     expect(memory).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByTestId("memory-hint")).toBeTruthy();
     fireEvent.change(memory, { target: { value: "512m" } });
     expect(screen.getByTestId("itemenv-save")).toBeEnabled();
     expect(memory).not.toHaveAttribute("aria-invalid", "true");
+    // "MB" and "M" are both fine — likewise KB/GB/TB — and so is the
+    // display format typed back. What travels is the server's spelling.
+    fireEvent.change(memory, { target: { value: "512.0 MB" } });
+    expect(screen.getByTestId("itemenv-save")).toBeEnabled();
+    expect(memory).not.toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(memory, { target: { value: "1.5 GB" } });
+    expect(screen.getByTestId("itemenv-save")).toBeEnabled();
 
     const cpu = screen.getByTestId("cpu-input");
     fireEvent.change(cpu, { target: { value: "0" } });
@@ -407,6 +415,18 @@ describe("ItemEnvironmentModal — what the review found unguarded", () => {
     open({ canEdit: false });
     await screen.findByTestId("cpu-input");
     expect(screen.queryByTestId("reset-cpu")).toBeNull();
+  });
+});
+
+describe("ItemEnvironmentModal — memory spellings", () => {
+  it("sends the server's spelling whatever the person wrote: 1.5 GB travels as 1536M", async () => {
+    const f = route(CAPPED, STATED);
+    vi.stubGlobal("fetch", f);
+    open();
+    fireEvent.change(await screen.findByTestId("memory-input"), { target: { value: "1.5 GB" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(puts(f)).toHaveLength(1));
+    expect(puts(f)[0]).toEqual({ cpu_cores: 1, memory: "1536M" });
   });
 });
 

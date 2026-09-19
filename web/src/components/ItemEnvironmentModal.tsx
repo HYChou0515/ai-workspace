@@ -27,9 +27,10 @@
  * theirs. So the draft holds only the fields that were typed in.
  *
  * What the server would refuse is refused here first: a cpu of 0 or less, or
- * a memory spelling `parse_size` cannot read (it wants an integer with an
- * optional K/M/G/T — the placeholder shows that spelling). A 422 only says
- * "not saved", which leaves the person guessing at the grammar.
+ * a memory that is not a size. The server reads only `<integer>[K|M|G|T]`;
+ * people write "512MB", "1.5 GB" and the display format "512.0 MB" just as
+ * readily, so the field takes those and `normaliseMemory` sends the server's
+ * spelling. A 422 only says "not saved", which leaves the person guessing.
  *
  * Because saves are dispatched while this is on screen, a refusal has
  * somewhere to be read (`saveFailed`) and the draft stays for a second try.
@@ -47,7 +48,7 @@ import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
-import { isValidCpu, isValidMemory, toSizeString } from "./ItemEnvironmentSize";
+import { isValidCpu, isValidMemory, normaliseMemory, toSizeString } from "./ItemEnvironmentSize";
 import { ModalShell } from "./ModalShell";
 import { budgetFrom } from "./useItemEnvironment";
 
@@ -112,7 +113,8 @@ export function ItemEnvironmentModal({
     mutationFn: (d: SizeDraft) =>
       itemEnvironmentApi.setSize(slug, itemId, {
         cpuCores: d.cpu === "" ? null : Number(d.cpu),
-        memory: d.memory === "" ? null : d.memory,
+        // The person's spelling ("1.5 GB") → the server's ("1536M").
+        memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
       }),
     onSuccess: () => {
       // The stated values are about to become what was typed; drop the draft

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isValidCpu, isValidMemory, toSizeString } from "./ItemEnvironmentSize";
+import { isValidCpu, isValidMemory, normaliseMemory, toSizeString } from "./ItemEnvironmentSize";
 
 describe("toSizeString — bytes the way the server reads them", () => {
   it("uses the largest unit that divides exactly, else the bare byte count", () => {
@@ -24,18 +24,45 @@ describe("the server's refusals, asked first", () => {
     expect(isValidCpu("Infinity")).toBe(false);
   });
 
-  it("memory: empty is the default; otherwise digits with an optional K/M/G/T, not zero", () => {
+  it("memory: empty is the default; otherwise a size a person would write, not zero", () => {
     expect(isValidMemory("")).toBe(true);
     expect(isValidMemory("512M")).toBe(true);
-    expect(isValidMemory("512m")).toBe(true);
-    expect(isValidMemory(" 2G ")).toBe(true);
+    expect(isValidMemory("512MB")).toBe(true);
+    expect(isValidMemory("512 mb")).toBe(true);
+    expect(isValidMemory("512.0 MB")).toBe(true); // the display format, typed back
+    expect(isValidMemory("1.5G")).toBe(true);
     expect(isValidMemory("1000000")).toBe(true);
-    // What the display format looks like — and what the server refuses.
-    expect(isValidMemory("512.0 MB")).toBe(false);
-    expect(isValidMemory("512 MB")).toBe(false);
-    expect(isValidMemory("1.5G")).toBe(false);
     expect(isValidMemory("0")).toBe(false);
     expect(isValidMemory("0M")).toBe(false);
+    expect(isValidMemory("0.0 GB")).toBe(false);
     expect(isValidMemory("max")).toBe(false);
+    expect(isValidMemory("abc")).toBe(false);
+    expect(isValidMemory("512 MiB")).toBe(false);
+    expect(isValidMemory("1.5")).toBe(false); // a fraction of a byte is nothing
+  });
+});
+
+describe("normaliseMemory — what a person writes → what the server reads", () => {
+  it("accepts M and MB alike (and K/G/T likewise), any case, with or without a space", () => {
+    for (const text of ["512M", "512MB", "512 MB", "512mb", " 512 m ", "512.0 MB"]) {
+      expect(normaliseMemory(text), text).toBe("512M");
+    }
+    expect(normaliseMemory("2GB")).toBe("2G");
+    expect(normaliseMemory("3 kb")).toBe("3K");
+    expect(normaliseMemory("1TB")).toBe("1T");
+  });
+
+  it("turns a fraction into the exact smaller unit the server can parse", () => {
+    expect(normaliseMemory("1.5G")).toBe("1536M");
+    expect(normaliseMemory("0.5 MB")).toBe("512K");
+    expect(normaliseMemory("2.5K")).toBe("2560");
+  });
+
+  it("passes a bare byte count through, and refuses what it cannot read", () => {
+    expect(normaliseMemory("1000000")).toBe("1000000");
+    expect(normaliseMemory("")).toBeNull();
+    expect(normaliseMemory("abc")).toBeNull();
+    expect(normaliseMemory("512 MiB")).toBeNull();
+    expect(normaliseMemory("0")).toBeNull();
   });
 });
