@@ -204,6 +204,20 @@ describe("SkillHubEntryPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens the visibility dialog with 'Public' meaning everyone on the platform (D12)", async () => {
+    mount(client(OWNED));
+    fireEvent.click(
+      await screen.findByRole("button", { name: word("skillHub.share") }),
+    );
+    const dialog = await screen.findByTestId("permission-dialog");
+    expect(
+      within(dialog).getByText(word("perm.public.hint.platform")),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(word("perm.public.hint.workspace")),
+    ).toBeNull();
+  });
+
   it("unpublishes, and on a private entry offers Republish instead", async () => {
     const c = client(OWNED);
     mount(c);

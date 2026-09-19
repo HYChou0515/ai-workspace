@@ -2336,6 +2336,42 @@ export const messages = {
   "skillHub.unpublish": { "zh-TW": "下架", en: "Unpublish" },
   "skillHub.republish": { "zh-TW": "重新上架", en: "Republish" },
   "skillHub.share": { "zh-TW": "可見範圍", en: "Visibility" },
+  // The generic sharing dialog (`PermissionDialog`), plan-skill-hub-ui-polish
+  // D12: it used to be English only, inside a zh-TW page. The English is
+  // word for word what it said before (pinned by its parity tests).
+  "perm.title": { "zh-TW": "分享「{name}」", en: "Share “{name}”" },
+  "perm.caption.collection": {
+    "zh-TW": "選擇誰能存取這個 collection。",
+    en: "Choose who can access this collection.",
+  },
+  "perm.private": { "zh-TW": "私人", en: "Private" },
+  "perm.private.hint": { "zh-TW": "只有你", en: "Only you" },
+  "perm.restricted": { "zh-TW": "限定", en: "Restricted" },
+  "perm.restricted.hint": {
+    "zh-TW": "你和指定的人",
+    en: "You + specific people",
+  },
+  "perm.public": { "zh-TW": "公開", en: "Public" },
+  "perm.public.hint.workspace": {
+    "zh-TW": "這個 workspace 的所有人",
+    en: "Everyone in the workspace",
+  },
+  "perm.public.hint.platform": {
+    "zh-TW": "平台上所有人",
+    en: "Everyone on the platform",
+  },
+  "perm.tab.people": { "zh-TW": "人", en: "People" },
+  "perm.tab.groups": { "zh-TW": "群組", en: "Groups" },
+  "perm.addPeople": { "zh-TW": "加人…", en: "Add people…" },
+  "perm.addGroup": { "zh-TW": "加群組…", en: "Add a group…" },
+  "perm.roleFor": { "zh-TW": "{name} 的角色", en: "Role for {name}" },
+  "perm.remove": { "zh-TW": "移除 {name}", en: "Remove {name}" },
+  "perm.remove.button": { "zh-TW": "移除", en: "Remove" },
+  "perm.group.unknown": { "zh-TW": "未知的群組", en: "Unknown group" },
+  "perm.advanced.show": { "zh-TW": "顯示進階", en: "Show advanced" },
+  "perm.advanced.hide": { "zh-TW": "隱藏進階", en: "Hide advanced" },
+  "perm.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "perm.save": { "zh-TW": "儲存", en: "Save" },
   "skillHub.share.caption": {
     "zh-TW": "誰能在 skill hub 看到並裝這個 skill。",
     en: "Who can see and install this skill on the skill hub.",

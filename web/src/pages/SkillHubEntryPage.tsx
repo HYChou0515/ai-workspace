@@ -432,6 +432,9 @@ function OwnerActions({
           value={entry.permission}
           roles={DOC_ROLES}
           caption={t("skillHub.share.caption")}
+          // A hub entry is public to everyone on the platform, not to "this
+          // workspace" (D12).
+          audience="platform"
           pickableGroups={pickableGroups}
           busy={permission.isPending}
           onSubmit={(perm) => permission.mutate(perm)}
