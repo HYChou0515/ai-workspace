@@ -53,4 +53,19 @@ user：「工具那個 modal 可以 by tool 折疊，並且也提供 預設／�
 
 ## 施工紀錄
 
-（動工後逐 phase 補。）
+- **P2**（`fe41ab62`）：`ToolMeta.group`（預設 `BUILTIN_GROUP = "builtin"`），`picker_units` 對 `pkg:cmd`／整套件／
+  認不得的條目各填原始 id；`ItemToolState.group` 帶出；FE 型別 `group: string`（四個 fixture 檔補上）；
+  `docs/contract.md` 那列補 `group`。先紅的兩條照計劃：catalog 五種條目、route 用 `exec` vs `rca-tools`
+  當前提的對照組（線路上 `package` 都 null、`external` 都 false）。
+- **P3**（`6e74831f`）：`web/src/lib/toolGroups.ts`（純函式：`groupsOf` 分組與順序、`groupState` 導出、
+  `withGroupState` 整組改寫、`prefOf`）；`ToolsChecklist` 拆成 fold 標題列 + `ToolRow` + `TriState`；
+  `manual` 只記使用者親手開關過的組，其餘走「混合或搜尋命中就開」；單列組直接畫列。i18n 五個鍵
+  （`tools.group.builtin` 兩語系都是 `builtin`）。八條先紅：六條對平列表紅、兩條（單列組、全部回到預設）是釘子。
+  真瀏覽器（起真後端 8241、rca item：`builtin` 23 列 + 五個單列套件）1280 與 390 各按過一輪：收合／展開／組
+  「On」23 列全變／`Exec` 單獨 Off 後標題「混合」三個不亮，`scrollWidth ≤ clientWidth`；390 第一版把
+  組名截成「bui…」——次要的項數與混合標記沒讓位，改成和列的 provenance chip 同一個「先縮」寫法後組名完整。
+- **P4**：`docs/subsystems/frontend.md` 那列、本紀錄。`docs/migrations.md` 不加（運營方不用做事）。
+
+**順手看到、沒動的**：第一方整套件列（`data-fetch`、`rca-tools`…）右邊的來源標籤是「內建／Built-in」
+（#724 的「不是第三方就是平台自己的」），和上面那組叫 `builtin` 的內建函式並排時字面上撞名；
+要分就得改 #724 的來源語彙（例如「平台套件」），不在這次範圍。
