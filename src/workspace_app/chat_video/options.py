@@ -79,6 +79,13 @@ class VideoOptions(msgspec.Struct, frozen=True):
         checks = (
             (16 <= self.width <= 7680, "width must be 16..7680"),
             (16 <= self.height <= 4320, "height must be 16..4320"),
+            # libx264 with yuv420p refuses an odd side ("width not divisible
+            # by 2") — after the whole recording has run. The form only ever
+            # offers even sizes (`lib/videoSize.ts`); this is for everyone else.
+            (
+                self.width % 2 == 0 and self.height % 2 == 0,
+                "width and height must be even (the mp4 encoder's rule)",
+            ),
             (self.chat_width >= 200, "chat_width must be at least 200"),
             (self.scale >= 0, "scale must be 0 (automatic) or positive"),
             (self.zoom >= 1, "zoom must be at least 1 (1 = no push-in)"),

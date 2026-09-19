@@ -156,10 +156,10 @@ def test_a_size_past_this_deployments_ceiling_is_a_422_naming_the_ceiling():
     client, spec = _client_and_spec(holder, chat_video=ChatVideoSettings(max_pixels=1280 * 720))
     iid = _item(spec, by="bob")
 
-    r = _post(client, iid, options={"width": 1281, "height": 720})
+    r = _post(client, iid, options={"width": 1282, "height": 720})
 
     assert r.status_code == 422, r.text
-    assert r.json()["detail"] == "1281×720 is 922,320 pixels; at most 921,600 (1280×720)"
+    assert r.json()["detail"] == "1282×720 is 923,040 pixels; at most 921,600 (1280×720)"
 
 
 @pytest.mark.parametrize(
@@ -205,3 +205,27 @@ def test_a_second_request_for_a_video_still_being_made_is_a_conflict():
 
     assert r.status_code == 409, r.text
     assert r.json()["detail"] == "a video is already being made at /videos/demo.mp4"
+
+
+def test_the_deployments_ceilings_are_readable_so_the_form_never_offers_past_them():
+    """`GET` on the same path: the three numbers `check_limits` and the worker
+    apply, for the dialog to hide the sizes this deployment refuses — a form
+    that offers 2160p and then shows a 422 sentence is a form that lies."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(
+        holder, chat_video=ChatVideoSettings(max_pixels=1280 * 720, max_output_bytes=5)
+    )
+    iid = _item(spec, by="bob")
+
+    r = client.get(f"/a/rca/items/{iid}/chat-video")
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"max_pixels": 921600, "max_seconds": 180, "max_output_bytes": 5}
+
+
+def test_a_stranger_to_a_private_item_learns_nothing_from_the_limits_route():
+    holder = {"id": "carol"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=Permission(visibility="private"))
+
+    assert client.get(f"/a/rca/items/{iid}/chat-video").status_code == 404

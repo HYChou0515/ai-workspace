@@ -32,6 +32,11 @@ from workspace_app.chat_video.options import VideoOptions
         ("tool_pause_ms", 3 * 10**9, "tool_pause_ms"),
         ("max_seconds", 10**9, "max_seconds"),
         ("max_assets_total_bytes", -1, "max_assets_total_bytes"),
+        # libx264 with yuv420p refuses an odd side ("width not divisible by
+        # 2"), after the whole recording has run. Refused here, for the CLI,
+        # the job and the form alike.
+        ("width", 1001, "even"),
+        ("height", 601, "even"),
     ],
 )
 def test_nonsense_is_refused_with_the_field_named(field: str, value: object, word: str):
@@ -73,7 +78,7 @@ def test_options_inside_the_ceilings_pass(width, height, max_seconds):
 @pytest.mark.parametrize(
     ("width", "height", "max_seconds", "why"),
     [
-        (1921, 1080, 180, "1921×1080 is 2,074,680 pixels; at most 2,073,600 (1920×1080)"),
+        (1922, 1080, 180, "1922×1080 is 2,075,760 pixels; at most 2,073,600 (1920×1080)"),
         (3840, 2160, 90, "3840×2160 is 8,294,400 pixels; at most 2,073,600 (1920×1080)"),
         (1280, 720, 181, "max_seconds 181; at most 180"),
     ],

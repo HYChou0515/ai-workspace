@@ -175,9 +175,9 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 ### P3 — 上限 config ✅
 - `config/schema.py` `ChatVideoSettings` + `Settings.chat_video`;loader whitelist + `_build`(測試:預設值 = 量到的上限、寫了會被建出來);
   `configs/config.example.yaml` 附註解段(去掉 `#` 餵 loader 驗過);`docs/configuration.md` 表加一列;`docs/migrations.md` 加 #823 的條目
-  (四格;裡面提到後面 phase 才有的行為——P8 收尾時逐句回驗)。
+  (四格;裡面提到後面 phase 才有的行為——P9 收尾時逐句回驗)。
 - `options.py` `check_limits(options, *, max_pixels, max_seconds)`(不依賴 config 模組,收整數):等於過、超過 `ValueError` 一句話點名上限與數字
-  (`1921×1080 is 2,074,680 pixels; at most 2,073,600 (1920×1080)`);`max_output_bytes` 在 worker 寫檔前才能查,P5。
+  (`1922×1080 is 2,075,760 pixels; at most 2,073,600 (1920×1080)`;1921 會先被「兩邊都要偶數」擋下——mp4 編碼器的規則);`max_output_bytes` 在 worker 寫檔前才能查,P5。
 
 ### P4 — 進度檔 + 取消旗標 ✅
 - `chat_video/progress.py` 只做純的部分:`Progress` struct(msgspec,縮排 JSON 給人看)、`loads` 壞檔 → `ValueError`、
@@ -203,12 +203,19 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 測試(`tests/api/test_chat_video_routes.py` 9 個函式 12 個案例,app 開 `run_consumers=False` 因為本機有 Chromium 會真的開始錄):手寫三則中文 transcript 排進去、三個路徑與檔案樹裡的兩個檔;副檔名決定格式;兩動詞各缺一個 → 403;壞 transcript / 壞 option / 超上限 → 422 各自的句子;`..` → 400、壞副檔名 → 422;已存在 → 409;in-flight → 409。13 個突變體(含對照組)各紅自己那條;route 與 `chat_export.py` 100%。
 - 探針踩到一個坑:同秒同大小的突變體(`202`→`200`)還原後 Python 仍信任舊 pyc,三條測試紅得像程式壞了;探針 restore 後刪該模組的 pyc。
 
-### P7 — 前端
-- `ExportMenu`(Export ▾:文字 JSON / 文字 Markdown / 影片…)→ `ExportDialog`(格式、範圍三選一 + 從/到選單最新在上、尺寸三模式 + 結果列、六個影片選項);`api/workflows.ts` 的 `fetchChatExport` 加 format / range;新 `startChatVideo(slug, itemId, transcript, options)`——影片是 **先 fetch 切好的 JSON、再 POST**,前端用的就是對外那條 API。
-- `VideoProgress`(header 狀態列,`useQuery` 輪詢 `GET /files/<progress_path>`,退避 `pollAfter`;done / failed / 取消 = DELETE 進度檔);按鈕依三動詞顯示。
-- i18n 兩種語系;測試:範圍換算(快照、倒數 → 絕對)、尺寸三模式的換算表、進度輪詢的三種結局、按鈕顯示條件。
+### P7 — 前端的純粹部分 + 兩條伺服端小規則 ✅
+- `web/src/lib/chatExportRange.ts`:`absoluteRange(total, choice)` 把對話框「從新往舊」的選擇(全部 / 最近 N 則 / 自訂 from–to,1 = 最新)換成伺服端的 `[start, end)`;整串 = `null`(不帶參數、檔名不帶範圍)。文字匯出與影片切片都用同一個函式,所以「最近 5 則」兩邊一定是同五則。
+- `web/src/lib/videoSize.ts`:三種輸入 → 同一個 `{width, height, scale, scaleIsAuto}`:`resolution`(比例 + 短邊 480p…2160p,文字倍率 = player 的自動規則 `max(1, min(w/1280, h/720))`,鏡射 `player.ui_scale` 並釘住它文件裡的三個例子)、`text`(比例 + 文字倍率,畫面跟著放大、`scale` 釘死——自動規則對 4:3 的 1440×1080 只給 1.125,所以要釘)、`custom`(手打寬高)。每個輸出都是偶數。`estimateMegabytes(fmt, pixels, seconds)` 從 P1 量到的兩個點(720p / 1080p 各 41 秒)推,測試釘住它能還原那四個數。
+- `web/src/api/chatVideo.ts`:`fetchChatTranscript`(匯出 JSON 解析——範圍選單數的、影片切的都是它)、`startChatVideo`(POST,拒絕時丟伺服端那句話)、`fetchChatVideoLimits`(GET 同路徑:表單只提供這部署允許的尺寸);`fetchChatExport` / `downloadChatExport` 加 `{format, range}`(md 回 `text/markdown` 也驗)。
+- 伺服端:`VideoOptions` 多一條「寬高都要偶數」——親手試過 `libx264 + yuv420p` 對 1001×601 直接拒絕(`width not divisible by 2`),而且是在整段錄影跑完之後;表單只給偶數,這條是給 CLI 和 API 呼叫者的。上限例子改用 1922×1080。`GET …/chat-video` 回三個上限(P8 接)。
+- 測試:vitest 8 + 8 + 5(含 workflows 既有 11 條一起綠);pytest options 30。
 
-### P8 — image + k8s + 文件 + 親眼驗收
+### P8 — 前端的對話框、進度列、接線
+- Export 按鈕改開 `ExportDialog`(不是下拉再對話框——header 的動作列在窄欄會降成 ⋯ 選單,子選單在那一層做不出來;一個對話框三種格式,分「文字 JSON / 文字 Markdown / 影片」三段,同樣是 user 說的「點開分文字…以及影片」):格式、範圍三選一 + 從/到選單最新在上(標籤 `#k · 👤/🤖 前幾個字`)、影片段落:尺寸三模式 + 結果列 `W×H・文字 s×・約 N MB`、六個選項(打字 / 串流速度、工具停頓、zoom、speed、max_seconds);`useDirtyClose` 守每個出口;影片是 **先 fetch 切好的 JSON、再 POST**,前端用的就是對外那條 API。
+- `VideoProgress`(header 狀態列,`useQuery` 輪詢 `GET /files/<progress_path>`,退避 1 s → 8 s;404 = 完成(檔案樹重抓、「已存到 …」可開啟)、`failed` = 那句話 + 移除、取消 = DELETE 進度檔);影片段落只在 `read_content` + `add_content` 都有時出現(`useItemAccess.canAddContent`,經 `ItemChatShell` 傳到 `AgentPanel`)。
+- i18n 兩種語系;測試:對話框三種格式各自的呼叫、範圍換算的快照、dirty / clean 兩條、進度輪詢的三種結局、按鈕顯示條件。
+
+### P9 — image + k8s + 文件 + 親眼驗收
 - `docker/Dockerfile` 加 stage `chat-video`;`kubernetes/base/workers.yaml` 加 `rca-worker-chat-video`(limit 以 P1 量到的為準);`docs/deployment.md` §11 worker 清單加一顆、`docs/chat-video.md` 加「從前端匯出」一節、`docs/migrations.md`。
 - 本機 all-in-one(`run_consumers: true`,裝好 extra + Chromium + ffmpeg)從 UI 按到底:選範圍 → 排 job → 進度前進 → 影片出現在檔案樹 → 開啟;再試取消(刪進度檔)與失敗(上限)兩條。
 - **Web demo 給 user 看**(`/web-demo`,真瀏覽器錄 GIF):① Export ▾ → 文字 Markdown → 下載、打開看格式;② Export ▾ → 影片 → 選「最近 5 則」、比例 + 解析度滑桿拉到 1080p、格式 mp4 → 送出 → header 進度列每 10 秒前進 → 完成 →「已存到 …」→ 點開影片播;③ 再排一支、在檔案樹刪掉進度檔 → 10 秒內停;④ 用 curl 對 `POST …/chat-video` 送手寫三則的 transcript → 三個檔出現在樹裡。GIF 附在 PR 裡、也傳給 user。**做完 = user 看得到、按得動;GIF 沒錄到的功能不算做完。**
@@ -216,7 +223,7 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 ## 驗收
 
 - 前端 Export 選單三種都能出檔;md 貼進報告可讀;範圍「最近 5 則」出的內容就是最新 5 則。
-- **user 看過 web demo 的 GIF**(P8 的四段),而且是在 PR 合併之前。
+- **user 看過 web demo 的 GIF**(P9 的四段),而且是在 PR 合併之前。
 - 影片從 UI 排隊到出現在 `/exports/chat-video/`,進度條每 10 秒前進,刪進度檔 10 秒內停;上限違反時是一句話不是 traceback。
 - 用 curl 對 `POST …/chat-video` 送一份手寫三則的 transcript,也出得了影片(source / progress / mp4 三個檔都在樹裡)。
 - `run_consumers: false` + `worker chat-video` 的 pod-split 走通(本機兩個進程);`rca-app` image 大小不變。

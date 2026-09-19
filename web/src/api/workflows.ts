@@ -264,16 +264,37 @@ function dispositionFilename(headers: Headers): string {
  *
  * Returns the server's own filename alongside the blob — it names the file after
  * the chat, and deriving a second name here is how the two would drift apart. */
+export type ChatExportFormat = "json" | "md";
+
+/** What the export route takes besides the chat: the format, and the
+ * absolute half-open range — `null` for the whole thread — that
+ * `lib/chatExportRange` derives from the dialog's newest-first choice. */
+export type ChatExportOptions = {
+  format?: ChatExportFormat;
+  range?: { start: number; end: number } | null;
+};
+
+const CONTENT_TYPE_OF: Record<ChatExportFormat, string> = {
+  json: "application/json",
+  md: "text/markdown",
+};
+
 export async function fetchChatExport(
   slug: string,
   itemId: string,
   chatId: string,
+  { format = "json", range = null }: ChatExportOptions = {},
 ): Promise<{ blob: Blob; filename: string }> {
+  const params = new URLSearchParams({ format });
+  if (range) {
+    params.set("start", String(range.start));
+    params.set("end", String(range.end));
+  }
   const res = await apiFetch(
-    `${base(slug, itemId)}/chats/${encodeURIComponent(chatId)}/export-chat`,
+    `${base(slug, itemId)}/chats/${encodeURIComponent(chatId)}/export-chat?${params}`,
   );
   const contentType = res.headers.get("content-type") ?? "";
-  if (!res.ok || !contentType.includes("application/json")) {
+  if (!res.ok || !contentType.includes(CONTENT_TYPE_OF[format])) {
     throw new Error("匯出失敗：伺服器沒有回傳對話檔，請稍後再試或回報問題。");
   }
   return { blob: await res.blob(), filename: dispositionFilename(res.headers) };
@@ -286,8 +307,9 @@ export async function downloadChatExport(
   slug: string,
   itemId: string,
   chatId: string,
+  options: ChatExportOptions = {},
 ): Promise<void> {
-  const { blob, filename } = await fetchChatExport(slug, itemId, chatId);
+  const { blob, filename } = await fetchChatExport(slug, itemId, chatId, options);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

@@ -63,6 +63,12 @@ class ChatVideoQueued(BaseModel):
     expected_seconds: int
 
 
+class ChatVideoLimitsOut(BaseModel):
+    max_pixels: int
+    max_seconds: int
+    max_output_bytes: int
+
+
 def register_chat_video_routes(
     app: FastAPI | APIRouter,
     *,
@@ -74,6 +80,19 @@ def register_chat_video_routes(
     turn_engine: ChatTurnEngine,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
+    @app.get("/a/{slug}/items/{item_id}/chat-video")
+    async def chat_video_limits(slug: str, item_id: str) -> ChatVideoLimitsOut:
+        """This deployment's ceilings (`chat_video:`), for the form: it hides
+        the sizes and lengths a POST would refuse rather than offering them
+        and showing the 422. `read_meta` — whoever may see the item may
+        know what it allows; the numbers are the deployment's, not the item's."""
+        locator.require_access(slug, item_id, "read_meta")
+        return ChatVideoLimitsOut(
+            max_pixels=limits.max_pixels,
+            max_seconds=limits.max_seconds,
+            max_output_bytes=limits.max_output_bytes,
+        )
+
     @app.post("/a/{slug}/items/{item_id}/chat-video", status_code=202)
     async def queue_chat_video(slug: str, item_id: str, body: ChatVideoRequest) -> ChatVideoQueued:
         """Queue a video of ``body.transcript``. Both verbs: the job READS the
