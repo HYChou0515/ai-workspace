@@ -66,7 +66,7 @@ export function SkillHubPage({
     const id = setTimeout(() => setQ(query.trim()), 250);
     return () => clearTimeout(id);
   }, [query]);
-  const { data, isPending, isError, isFetching, isPlaceholderData, refetch } =
+  const { data, isPending, isError, isFetching, isPlaceholderData, errorUpdateCount, refetch } =
     useQuery({
       queryKey: qk.skillHub(q, mine),
       queryFn: () => client.list(q, mine),
@@ -91,8 +91,12 @@ export function SkillHubPage({
   // are states of the results area, not of the tree (review rounds 1 and 2
   // of #826: the error branch swapped the tree; so did a search after a
   // failed first load, which has no previous data to keep).
+  // …and Retry after a failed first load is a refetch of a data-less errored
+  // query, which TanStack reports as `pending` again — so "never settled"
+  // means no result AND no error so far (round 3 of #826).
   const untouched = !q && !mine;
-  if (isPending && !isError && untouched) return <p>{t("skillHub.loading")}</p>;
+  const neverSettled = isPending && !isError && errorUpdateCount === 0;
+  if (neverSettled && untouched) return <p>{t("skillHub.loading")}</p>;
   const rows = data ?? [];
 
   // Not while an error is shown: the two share a key, and a failed refetch of

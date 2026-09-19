@@ -53,7 +53,11 @@ function stripComments(src: string): string {
       if (ch === "\\") {
         out += next ?? "";
         i++;
-      } else if (ch === quote) quote = null;
+      } else if (ch === quote || (ch === "\n" && quote !== "`")) {
+        // a `'`/`"` literal cannot span a line: an apostrophe in JSX text
+        // (Don't) is not a string, and must not swallow every later comment
+        quote = null;
+      }
       continue;
     }
     if (ch === '"' || ch === "'" || ch === "`") {
@@ -145,6 +149,10 @@ describe("the guard's own reading of a source file", () => {
     "<ModalShell panelStyle={panel}>c</ModalShell>",
     "<ModalShellX panelStyle={{ padding: 0 }}>d</ModalShellX>",
     "<ModalShell panelStyle={{ padding: 0 }} backdropStyle={{ paddingTop: 80 }}>e</ModalShell>",
+    // an apostrophe in JSX TEXT must not open a "string" that keeps every
+    // later comment alive (review round 3)
+    "<p>Don't show again</p>",
+    "<ModalShell panelStyle={{ /* padding: 0 */ display: \"flex\" }}>f</ModalShell>",
   ].join("\n");
   const src = stripComments(fixture);
   const tags = openingTags(src);
@@ -155,11 +163,12 @@ describe("the guard's own reading of a source file", () => {
       "<ModalShell panelSty",
       "<ModalShell panelSty",
       "<ModalShell panelSty",
+      "<ModalShell panelSty",
     ]);
   });
 
   it("reads padding from the panelStyle object or the named one-line object, never from a comment", () => {
-    expect(tags.map((t) => decidesPadding(t, src))).toEqual([false, false, true, true]);
+    expect(tags.map((t) => decidesPadding(t, src))).toEqual([false, false, true, true, false]);
   });
 });
 

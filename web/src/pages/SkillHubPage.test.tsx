@@ -181,6 +181,32 @@ describe("SkillHubPage", () => {
     );
   });
 
+  it("keeps the tools when Retry follows a failed first load — the loading text sits in the results area (review round 3)", async () => {
+    // TanStack resets a data-less errored query to `pending` for the refetch,
+    // and the whole-tree loading line came back — the Retry button the
+    // person had just pressed gone with it. Only a page that never settled
+    // (no result, no error yet) gets the whole-tree line.
+    const c = client();
+    let first = true;
+    c.list.mockImplementation(
+      () =>
+        new Promise<SkillHubCard[]>((_resolve, reject) => {
+          if (first) {
+            first = false;
+            reject(new Error("boom"));
+          }
+        }),
+    );
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+    const alert = await screen.findByRole("alert");
+    const box = screen.getByRole("searchbox");
+    fireEvent.click(within(alert).getByRole("button", { name: word("skillHub.retry") }));
+
+    await waitFor(() => expect(c.list).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("searchbox")).toBe(box);
+    expect(screen.getByTestId("skill-hub-results")).toHaveTextContent(word("skillHub.loading"));
+  });
+
   it("keeps the tools when the first load failed and a search follows — the loading text sits in the results area (D2, review round 2)", async () => {
     // After a failed first load no query ever had data, so the next key has
     // no previous data to keep and is `isPending` — and the page swapped the

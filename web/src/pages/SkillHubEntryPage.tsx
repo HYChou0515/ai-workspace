@@ -226,13 +226,19 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
   const [sharing, setSharing] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [newItem, setNewItem] = useState<SkillEditTarget | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  // The last failure and WHICH action it came from: it clears when any
+  // action starts (`onMutate`), and each dialog draws only a failure of its
+  // own — round 3 of #826: clearing on dialog OPEN threw a page-level failure
+  // away, and a share failure outlived the retry that succeeded.
+  const [failure, setFailure] = useState<{ action: string; text: string } | null>(null);
   const users = useUsers();
   // The notice names the new owner the way the picker did (display name),
   // falling back to the id for someone the directory does not list.
   const personName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const refresh = () => qc.invalidateQueries({ queryKey: ["skillHub"] });
-  const failed = (e: unknown) => setFailure(describeRefusal(e, t));
+  const failed = (action: string) => (e: unknown) =>
+    setFailure({ action, text: describeRefusal(e, t) });
+  const starting = { onMutate: () => setFailure(null) };
   // Every action here shows its own failure line (`failed`), so the query
   // client's global write-failure toast must not fire for it too — the demo
   // showed both at once, the toast under a title that was not even true
@@ -249,7 +255,8 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
   const unpublish = useMutation({
     mutationFn: () => (entry.visibility === "private" ? client.republish(entry.id) : client.unpublish(entry.id)),
     onSuccess: refresh,
-    onError: failed,
+    onError: failed("unpublish"),
+    ...starting,
     ...own,
   });
   const permission = useMutation({
@@ -259,7 +266,8 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       setSharing(false);
       void refresh();
     },
-    onError: failed,
+    onError: failed("permission"),
+    ...starting,
     ...own,
   });
   const transfer = useMutation({
@@ -283,7 +291,8 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
         ),
       );
     },
-    onError: failed,
+    onError: failed("transfer"),
+    ...starting,
     ...own,
   });
   const remove = useMutation({
@@ -292,7 +301,8 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       void refresh();
       leaveWith(t("skillHub.deleted", { name: entry.name }));
     },
-    onError: failed,
+    onError: failed("remove"),
+    ...starting,
     ...own,
   });
   const edit = useMutation({
@@ -304,7 +314,8 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
         setNewItem(target);
       }
     },
-    onError: failed,
+    onError: failed("edit"),
+    ...starting,
     ...own,
   });
 
@@ -330,20 +341,21 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => unpublish.mutate()}>
         {entry.visibility === "private" ? t("skillHub.republish") : t("skillHub.unpublish")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => { setFailure(null); setSharing(true); }}>
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setSharing(true)}>
         {t("skillHub.share")}
       </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => { setFailure(null); setTransferring(true); }}>
+      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setTransferring(true)}>
         {t("skillHub.transfer")}
       </button>
       <button type="button" className="btn" data-size="sm" data-variant="danger" disabled={busy} onClick={() => void askDelete()}>
         {t("skillHub.delete")}
       </button>
-      {/* While a dialog is open the failure is drawn in it (round 2 of
-          #826: a line behind the backdrop was invisible); here otherwise. */}
+      {/* A dialog draws its own failure (round 2 of #826: a line behind the
+          backdrop was invisible); the page draws the rest, and only while no
+          dialog covers it. */}
       {failure && !sharing && !transferring ? (
         <p className="error" role="alert">
-          {t("skillHub.failed", { reason: failure })}
+          {t("skillHub.failed", { reason: failure.text })}
         </p>
       ) : null}
 
@@ -359,7 +371,7 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
           audience="platform"
           pickableGroups={pickableGroups}
           busy={permission.isPending}
-          error={failure ? t("skillHub.failed", { reason: failure }) : null}
+          error={failure?.action === "permission" ? t("skillHub.failed", { reason: failure.text }) : null}
           onSubmit={(perm) => permission.mutate(perm)}
           onClose={() => setSharing(false)}
         />
@@ -370,7 +382,7 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
           name={entry.name}
           owner={entry.owner}
           busy={transfer.isPending}
-          error={failure ? t("skillHub.failed", { reason: failure }) : null}
+          error={failure?.action === "transfer" ? t("skillHub.failed", { reason: failure.text }) : null}
           onSubmit={(owner) => transfer.mutate(owner)}
           onClose={() => setTransferring(false)}
         />

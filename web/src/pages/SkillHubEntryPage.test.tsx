@@ -415,6 +415,37 @@ describe("SkillHubEntryPage", () => {
     );
   });
 
+  it("clears a failure when the NEXT attempt starts, and a dialog shows only its own (review round 3)", async () => {
+    // Round 2 cleared the failure when a dialog OPENED: a page-level failure
+    // (unpublish) vanished for good on opening the share dialog, and a
+    // share failure stayed on the page after the retry SUCCEEDED. The
+    // failure belongs to the action that produced it: it clears when that
+    // or another action starts, and a dialog draws only a failure of its own.
+    const c = client(OWNED);
+    c.unpublish.mockRejectedValueOnce(new HttpError(403, "only the owner may manage this entry"));
+    c.setPermission.mockRejectedValueOnce(new HttpError(403, "only the owner may manage this entry"));
+    mount(c);
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.unpublish") }));
+    await screen.findByRole("alert");
+
+    // an unrelated dialog: the page's failure is not the dialog's, and it is back after
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.share") }));
+    const dialog = await screen.findByTestId("permission-dialog");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    fireEvent.click(within(dialog).getByTestId("permission-cancel"));
+    await waitFor(() => expect(screen.queryByTestId("permission-dialog")).toBeNull());
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // the share fails once, then succeeds: nothing stale stays behind
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.share") }));
+    const again = await screen.findByTestId("permission-dialog");
+    fireEvent.click(within(again).getByTestId("permission-save"));
+    await within(again).findByRole("alert");
+    fireEvent.click(within(again).getByTestId("permission-save"));
+    await waitFor(() => expect(screen.queryByTestId("permission-dialog")).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("leaves for the list WITH a notice after a delete (D10)", async () => {
     const c = client(OWNED);
     mount(c);
