@@ -11,6 +11,7 @@ import { sameShape } from "../lib/sameShape";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
+import { filesHere } from "../lib/skillFiles";
 import { publishAgentDraft } from "../lib/agentDraftBus";
 import { ModalShell } from "./ModalShell";
 import { SkillHubPickerModal } from "./SkillHubPickerModal";
@@ -264,9 +265,7 @@ export function SkillsModal({
               // #589: a copy's files are in the workspace even though the row reports
               // the package source it came from, so both cases are downloadable.
               onDownload={
-                s.source === "workspace" || s.is_copy
-                  ? () => void download(s.name)
-                  : undefined
+                filesHere(s) ? () => void download(s.name) : undefined
               }
               // Update only when there is something to bring; reset whenever
               // there is an upstream to bring it FROM — it is the way back
@@ -363,6 +362,7 @@ export function SkillsModal({
         <SkillHubPickerModal
           slug={slug}
           itemId={itemId}
+          taken={new Set(list.filter(filesHere).map((s) => s.name))}
           onInstalled={(name) => void installed(name)}
           onClose={() => setPicking(false)}
           client={hubClient}

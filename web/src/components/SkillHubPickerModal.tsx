@@ -9,6 +9,13 @@
  * shares its core and its refusals with the agent's `install_skill` tool: a
  * folder of that name already here is a 409 whose sentence names whose copy
  * it is, and that sentence is what the person sees.
+ *
+ * That refusal is also known BEFORE the press (plan-skill-hub-ui-polish D8):
+ * the panel hands over the names whose files are here (`taken`, the same
+ * predicate as its Download), and a row of such a name is marked 「已有同名
+ * skill」 with its Install disabled — the decision's information at the
+ * decision point, and the same condition the route refuses on, not a second
+ * rule that could drift.
  */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -30,12 +37,16 @@ import { ModalShell } from "./ModalShell";
 export function SkillHubPickerModal({
   slug,
   itemId,
+  taken,
   onInstalled,
   onClose,
   client = skillHubApi,
 }: {
   slug: string;
   itemId: string;
+  /** Names of this item's skills whose files are HERE (`filesHere`) — the
+   * names an install would be refused for. */
+  taken: ReadonlySet<string>;
   /** Called with the installed skill's name; the caller refreshes its list. */
   onInstalled: (name: string) => void;
   onClose: () => void;
@@ -97,7 +108,9 @@ export function SkillHubPickerModal({
           color: "var(--text-paper-d)",
         }}
       >
-        {t("skills.fromHub.intro")}{" "}
+        {t("skills.fromHub.intro")}
+      </p>
+      <p style={{ margin: 0, fontSize: "var(--text-body-sm)" }}>
         <Link to="/skill-hub">{t("skills.fromHub.browse")}</Link>
       </p>
       <input
@@ -158,6 +171,7 @@ export function SkillHubPickerModal({
               <PickRow
                 key={row.id}
                 row={row}
+                taken={taken.has(row.name)}
                 busy={install.isPending}
                 onInstall={() => {
                   setFailure(null);
@@ -184,10 +198,12 @@ export function SkillHubPickerModal({
 
 function PickRow({
   row,
+  taken,
   busy,
   onInstall,
 }: {
   row: SkillHubCard;
+  taken: boolean;
   busy: boolean;
   onInstall: () => void;
 }) {
@@ -197,7 +213,10 @@ function PickRow({
       data-testid={`pick-${row.id}`}
       style={{
         display: "flex",
-        alignItems: "flex-start",
+        // The panel row's shape (D13): the controls are one cluster that
+        // drops under the text when the row is too narrow for both.
+        flexWrap: "wrap",
+        alignItems: "center",
         gap: 8,
         padding: "8px 10px",
         border: "1px solid var(--paper-3)",
@@ -205,7 +224,10 @@ function PickRow({
         background: "var(--white)",
       }}
     >
-      <div style={{ flex: 1, minWidth: 0, fontSize: pxToRem(13) }}>
+      {/* A real basis, not `flex: 1` alone: wrapping is decided on the
+          hypothetical size, and a column that may be 0 wide never lets the
+          cluster wrap. */}
+      <div style={{ flex: "1 1 200px", minWidth: 0, fontSize: pxToRem(13) }}>
         <div
           style={{
             display: "flex",
@@ -252,17 +274,40 @@ function PickRow({
           </div>
         ) : null}
       </div>
-      <button
-        type="button"
-        className="btn"
-        data-size="sm"
-        data-variant="primary"
-        data-testid={`pick-install-${row.id}`}
-        disabled={busy}
-        onClick={onInstall}
+      <div
+        data-testid={`pick-actions-${row.id}`}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flex: "none",
+          marginLeft: "auto",
+        }}
       >
-        {t("skills.fromHub.install")}
-      </button>
+        {taken ? (
+          <span
+            data-testid={`pick-taken-${row.id}`}
+            style={{
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t("skills.fromHub.taken")}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="btn"
+          data-size="sm"
+          data-variant="primary"
+          data-testid={`pick-install-${row.id}`}
+          disabled={busy || taken}
+          onClick={onInstall}
+        >
+          {t("skills.fromHub.install")}
+        </button>
+      </div>
     </li>
   );
 }

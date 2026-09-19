@@ -12,7 +12,8 @@ from __future__ import annotations
 import msgspec
 
 from workspace_app.apps.skill_hub import SkillHubEntry, SkillHubReview, SkillHubStore
-from workspace_app.apps.skills import install_hub_skill
+from workspace_app.apps.skill_payload import ORIGIN_FILE, origin_for
+from workspace_app.apps.skills import install_hub_skill, skill_folder_in_the_way
 from workspace_app.files import WorkspaceFiles
 from workspace_app.perm import Permission
 
@@ -108,3 +109,40 @@ async def test_a_hand_written_skill_has_no_upstream(harness: Harness):
     row = _row(harness, "mine")
 
     assert (row["is_copy"], row["upstream"]) == (False, None)
+
+
+async def test_the_picker_marks_exactly_the_names_an_install_would_refuse(harness: Harness):
+    """plan-skill-hub-ui-polish D8 — the parity behind the picker's 「已有同名
+    skill」. The picker marks a hub entry whose name a listed skill WITH FILES
+    HERE holds (`filesHere` in `web/src/lib/skillFiles.ts`: `source ==
+    "workspace" or is_copy`); the install route refuses exactly when
+    `.skill/<name>/` is occupied (`skill_folder_in_the_way`). The two must be
+    the same set over every kind of listed skill: a hub copy, a hand-written
+    workspace skill, a copy of a package skill, and a package skill with no
+    folder here (listed, accepted, unmarked)."""
+    hub, _entry = await _installed(harness)  # the hub copy, `triage`
+    await harness.filestore.write(
+        harness.iid, "/.skill/mine/SKILL.md", _md("x").replace(b"triage", b"mine")
+    )
+    copied = {"SKILL.md": _md("x").replace(b"triage", b"author-skill")}
+    await harness.filestore.write(harness.iid, "/.skill/author-skill/SKILL.md", copied["SKILL.md"])
+    await harness.filestore.write(
+        harness.iid,
+        f"/.skill/author-skill/{ORIGIN_FILE}",
+        msgspec.json.encode(origin_for("shared", copied)),
+    )
+
+    res = harness.client.get(harness.wpath("/skills"))
+    assert res.status_code == 200, res.text
+    skills = res.json()["skills"]
+    files = WorkspaceFiles(harness.filestore)
+
+    marked = {s["name"] for s in skills if s["source"] == "workspace" or s["is_copy"]}
+    refused = {
+        s["name"]
+        for s in skills
+        if await skill_folder_in_the_way(files, harness.iid, hub, s["name"], "alice") is not None
+    }
+    assert marked == refused == {"triage", "mine", "author-skill"}
+    # The package skill with no folder here is listed — and in neither set.
+    assert "grill-me" in {s["name"] for s in skills}

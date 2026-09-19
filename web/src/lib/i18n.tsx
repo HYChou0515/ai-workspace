@@ -2398,23 +2398,31 @@ export const messages = {
     "zh-TW": "從 skill hub 裝",
     en: "Install from the skill hub",
   },
+  // plan-skill-hub-ui-polish D6: one sentence, then the link on a line of
+  // its own; the button is a verb; the warning names what is missing first.
   "skills.fromHub.intro": {
     "zh-TW":
-      "別人發布的 skill，裝進這個 item 就能用。提到這個 App 沒有的工具的，會先說。",
-    en: "Skills other people published; installed into this item, ready to use. One that mentions a tool this App lacks says so first.",
+      "裝別人發布的 skill 進這個 item；缺這個 App 沒有的 tool 時會先告訴你。",
+    en: "Install a skill someone published into this item; when it needs a tool this App does not have, the row says so first.",
   },
   "skills.fromHub.browse": {
-    "zh-TW": "到 skill hub 看全部",
-    en: "Browse the skill hub",
+    "zh-TW": "到 skill hub 看全部 →",
+    en: "Browse the skill hub →",
   },
   "skills.fromHub.none": {
     "zh-TW": "skill hub 上還沒有任何 skill。",
     en: "Nothing has been published to the skill hub yet.",
   },
-  "skills.fromHub.install": { "zh-TW": "裝進這個 item", en: "Install here" },
+  "skills.fromHub.install": { "zh-TW": "安裝", en: "Install" },
   "skills.fromHub.missing": {
-    "zh-TW": "提到 {tools}，這個 App 沒有——裝了也可能有步驟做不到。",
-    en: "Mentions {tools}, which this App does not have — some steps may not be followable here.",
+    "zh-TW": "缺少 tool：{tools}，可能有步驟無法執行",
+    en: "Missing tool: {tools} — some steps may not run here",
+  },
+  // D8: the name is already a skill folder in this item — the install route
+  // would refuse it, so the row says so and the button is off.
+  "skills.fromHub.taken": {
+    "zh-TW": "已有同名 skill",
+    en: "A skill of this name is already here",
   },
   "skills.fromHub.installed": {
     "zh-TW": "已裝入「{name}」，下一輪就能用。",

@@ -514,6 +514,86 @@ describe("SkillsModal — the skill hub", () => {
     expect(currentWriteFailure()).toBeNull();
   });
 
+  it("says 「安裝」, names the missing tool before the consequence, and keeps the browse link on its own line (plan-skill-hub-ui-polish D6)", async () => {
+    renderWithHub(fakeHub());
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+
+    expect(await screen.findByTestId("pick-install-e-1")).toHaveTextContent(
+      /^安裝$/,
+    );
+    expect(screen.getByTestId("pick-missing-e-1")).toHaveTextContent(
+      /^缺少 tool：query_entity，/,
+    );
+    const intro = screen.getByText(word("skills.fromHub.intro"));
+    const browse = screen.getByRole("link", {
+      name: word("skills.fromHub.browse"),
+    });
+    // Two lines, not one paragraph with a link glued to its last sentence.
+    expect(intro).not.toContainElement(browse);
+  });
+
+  it("marks an entry whose name a skill WITH FILES HERE already holds, and disables its Install (D8)", async () => {
+    // The install route refuses exactly when `.skill/<name>/` is occupied —
+    // a hand-written skill, a hub copy, a copy of a package skill — and
+    // accepts a name only a package skill holds (no folder here). The
+    // picker marks the same set, from the same listing the panel shows.
+    const skills: ItemSkillState[] = [
+      ...SKILLS,
+      {
+        name: "designed-pptx-copy",
+        description: "a package skill, copied here",
+        source: "shared",
+        default_on: false,
+        is_copy: true,
+        pref: "follow",
+        effective: false,
+      },
+    ];
+    const hub = fakeHub([
+      hubCard({ id: "e-1", name: "triage-reflow" }),
+      hubCard({ id: "e-2", name: "my-skill", missing_tools: [] }),
+      hubCard({ id: "e-3", name: "designed-pptx-copy", missing_tools: [] }),
+      hubCard({ id: "e-4", name: "author-skill", missing_tools: [] }),
+    ]);
+    const props: ComponentProps<typeof SkillsModal> = {
+      slug: "rca",
+      itemId: "i1",
+      fileService: fakeService().svc,
+      onClose: vi.fn(),
+      onSaveSkillPrefs: vi.fn(),
+      appliedSkills: [],
+      onToggleApply: vi.fn(),
+      client: fakeClient(skills),
+      hubClient: hub,
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillsModal {...props} />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    await screen.findByTestId("pick-install-e-1");
+
+    for (const id of ["e-2", "e-3"]) {
+      expect(screen.getByTestId(`pick-taken-${id}`)).toHaveTextContent(
+        word("skills.fromHub.taken"),
+      );
+      expect(screen.getByTestId(`pick-install-${id}`)).toBeDisabled();
+    }
+    for (const id of ["e-1", "e-4"]) {
+      expect(screen.queryByTestId(`pick-taken-${id}`)).toBeNull();
+      expect(screen.getByTestId(`pick-install-${id}`)).toBeEnabled();
+    }
+    // The mark and the button are one cluster that wraps under the text
+    // (D13, the panel row's shape) — pinned by structure, happy-dom lays
+    // nothing out.
+    const cluster = screen.getByTestId("pick-actions-e-2");
+    expect(cluster).toContainElement(screen.getByTestId("pick-taken-e-2"));
+    expect(cluster).toContainElement(screen.getByTestId("pick-install-e-2"));
+  });
+
   it("lists a fork under its root as one more thing to install", async () => {
     const hub = fakeHub([
       hubCard({
