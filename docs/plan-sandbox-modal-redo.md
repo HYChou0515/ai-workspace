@@ -108,6 +108,7 @@ be vetoed by looking at the result.
 - **P6** The memory field accepts the spellings people write (user: "mb 和 m
   都可以 同理"); `normaliseMemory` sends the server's.
 - **P7** Review round 2 (see the record below).
+- **P8** Review round 3 (see the record below).
 
 ## Test plan (red first, targeted only)
 
@@ -313,4 +314,50 @@ and is withdrawn — the reproducible figure is the ten touched test files:
 `Gauge`, `gauge`, `my-resources`, `MyResourcesPage`, `ItemEnvironmentPanel`,
 `ItemEnvironmentModal`, `ItemEnvironmentSize`, `EnvVarsModal`,
 `item-environment`); "four panel cases" was three new plus one re-aimed.
+
+## Review round 3 (2026-09-19 — verify P6 + P7: veracity / regression)
+
+Worst finding: **HIGH — introduced by P7.** Three rounds in a row, the worst
+finding was the previous round's fix; P8 was therefore designed from a table
+of the whole save gesture rather than as one more patch.
+
+- **Regression (P6)**: every ASCII input OLD master could save, NEW saves with
+  the same stored bytes (60 inputs, `parse_size` run verbatim); the new
+  spellings send what a person means. LOW: full-width digits, which the
+  server's `str.isdigit` reads and the client's `\d` did not.
+- **Regression + veracity (P7)**: HIGH — `:not(.live-list)` carries its
+  argument's specificity: the generic row rule went (0,1,2) → (0,2,2) and
+  outranked every `.page .X > li` rule in the app. Measured in Chromium:
+  `/my-resources` storage rows grid → flex (App-tag column ragged), `/wui`
+  rows flex (page title 0×22 at 390), `/skill-hub` chips became 48px rows
+  with a hairline and notes lost their bullets; and scoping the `> a` rule
+  took the live title's ellipsis (row 54 → 134px on a long title). Every
+  test stayed green: the style tests are source-text guards and happy-dom
+  computes no cascade. MEDIUM ×3: `meta.silentError` left a refusal that
+  lands after the modal was closed on it reported nowhere (OLD master's banner
+  had it); after a failed re-read the notice said "close and reopen" while
+  Escape asked to discard "unsaved" work it had just called saved; and Close
+  sandbox pressed while the PUT was still out (`save.reset()` detaching the
+  in-flight mutation) left the in-flight ref stuck AND let the late
+  `onSuccess` wipe a keystroke — P7's "no lost keystroke" was false in that
+  window. Every P7 mutation the commit named reproduced exactly.
+
+**P8**: the generic rule is `.page ul:where(:not(.live-list)) > li` — `:where`
+has zero specificity, so it stays (0,1,2) — and the `> a` rule is unscoped
+again; the guard pins the selector's shape and refuses a bare `.page ul:not(`.
+Measured on the built bundle: storage rows grid/subgrid; live row 12px 16px,
+1px border, 8px radius, title ellipsis/nowrap, 54px — the pre-P7 figures
+(`/skill-hub` and `/wui` are empty in a fresh instance and were not
+re-measured live; they broke through the same selector and mend through it).
+"Close sandbox" is disabled while a save is out: no `reset()` can land on an
+in-flight mutation, so the stuck ref and the wiped keystroke have no path.
+`silentError` dropped. A failed re-read writes the SENT stated values into the
+cached record (`setQueryData`) and drops the draft, under a local
+`staleAfterSave` flag (setQueryData resets the query's error state, so
+`env.isError` could no longer carry the notice); leaving then asks nothing.
+Full-width digits fold to ASCII. Mutations, each reddening only its own case:
+bare `:not()` → the row-shape guard; Close sandbox not locked → the
+interrupted-save case; sent values not cached → "saved, but could not
+re-read"; stale flag never raised → the three re-read cases; full-width
+digits not folded → the two IME cases.
 
