@@ -1626,6 +1626,13 @@ export const messages = {
   "tools.on": { "zh-TW": "開啟", en: "On" },
   "tools.off": { "zh-TW": "關閉", en: "Off" },
   "tools.state.aria": { "zh-TW": "{tool} 的設定", en: "Setting for {tool}" },
+  // plan-tools-picker-groups: the list folds by package. The builtin fold is
+  // literally named `builtin` in both locales — the user's word for it.
+  "tools.group.builtin": { "zh-TW": "builtin", en: "builtin" },
+  "tools.group.count": { "zh-TW": "{n} 項", en: "{n} tools" },
+  "tools.group.mixed": { "zh-TW": "混合", en: "Mixed" },
+  "tools.group.aria": { "zh-TW": "{group} 整組的設定", en: "Setting for all of {group}" },
+  "tools.group.toggle": { "zh-TW": "展開或收合 {group}", en: "Expand or collapse {group}" },
   "tools.defaultOn": { "zh-TW": "預設開啟", en: "On by default" },
   "tools.defaultOff": { "zh-TW": "預設關閉", en: "Off by default" },
   "tools.noMatch": { "zh-TW": "沒有符合「{q}」的工具。", en: "No tools match “{q}”." },

@@ -165,3 +165,120 @@ describe("ToolsChecklist", () => {
     expect(row).not.toHaveTextContent("內建");
   });
 });
+
+// plan-tools-picker-groups: the list folds by `group`. Three built-ins, two
+// commands of one package, and one lone third-party package — enough to have
+// a multi-row fold, a partially-granted package and a single-row fold.
+const row = (over: Partial<ItemToolState> & Pick<ItemToolState, "key" | "group">): ItemToolState => ({
+  label: over.key,
+  description: "",
+  default_on: true,
+  pref: "follow",
+  effective: true,
+  ...over,
+});
+const GROUPED: ItemToolState[] = [
+  row({ key: "exec", group: "builtin", label: "Exec" }),
+  row({ key: "read_file", group: "builtin", label: "Read File" }),
+  row({ key: "write_file", group: "builtin", label: "Write File" }),
+  row({ key: "rca-tools:spc", group: "rca-tools", label: "Spc", package: "Rca Tools" }),
+  row({ key: "rca-tools:pareto", group: "rca-tools", label: "Pareto", package: "Rca Tools" }),
+  row({ key: "wafer-history", group: "wafer-history", label: "Wafer History", external: true }),
+];
+
+describe("ToolsChecklist folds rows by group", () => {
+  it("draws one fold per multi-row group, builtin first and literally named builtin", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    const headers = screen.getAllByTestId(/^tool-group-header-/);
+    expect(headers.map((h) => h.getAttribute("data-testid"))).toEqual([
+      "tool-group-header-builtin",
+      "tool-group-header-rca-tools",
+    ]);
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveTextContent("builtin");
+    expect(screen.getByTestId("tool-group-header-rca-tools")).toHaveTextContent("Rca Tools");
+  });
+
+  it("opens collapsed: a fold's rows appear only once its header is pressed", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    expect(screen.queryByTestId("tool-row-exec")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin"));
+    expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument();
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("a mixed fold opens by itself, presses none of its three states and says mixed", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{ exec: true }} onChange={vi.fn()} />);
+    expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument(); // auto-expanded
+    expect(screen.getByTestId("tool-group-builtin-mixed")).toBeInTheDocument();
+    for (const opt of ["follow", "on", "off"]) {
+      expect(screen.getByTestId(`tool-group-builtin-${opt}`)).toHaveAttribute("aria-pressed", "false");
+    }
+    // the other fold is untouched, so it stays shut
+    expect(screen.queryByTestId("tool-row-rca-tools:spc")).not.toBeInTheDocument();
+  });
+
+  it("a fold's state applies to every row in it, and follow clears them all", () => {
+    const onChange = vi.fn();
+    render(<ToolsChecklist tools={GROUPED} prefs={{ exec: false }} onChange={onChange} />);
+    fireEvent.click(screen.getByTestId("tool-group-rca-tools-on"));
+    expect(onChange).toHaveBeenLastCalledWith({ exec: false, "rca-tools:spc": true, "rca-tools:pareto": true });
+
+    cleanup();
+    render(
+      <ToolsChecklist
+        tools={GROUPED}
+        prefs={{ exec: false, "rca-tools:spc": true, "rca-tools:pareto": true }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tool-group-rca-tools-follow"));
+    expect(onChange).toHaveBeenLastCalledWith({ exec: false });
+  });
+
+  it("a single-row group is just its row — no fold to open", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    expect(screen.queryByTestId("tool-group-header-wafer-history")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-row-wafer-history")).toBeInTheDocument();
+    expect(screen.getByTestId("tool-wafer-history-follow")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a search hides folds with no match and opens a matching fold on just its matches", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "spc" } });
+    expect(screen.queryByTestId("tool-group-header-builtin")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tool-row-wafer-history")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-row-rca-tools:spc")).toBeInTheDocument();
+    expect(screen.queryByTestId("tool-row-rca-tools:pareto")).not.toBeInTheDocument();
+
+    // the fold's own name matches too, and then every row of it shows
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "builtin" } });
+    expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument();
+    expect(screen.getByTestId("tool-row-write_file")).toBeInTheDocument();
+    expect(screen.queryByTestId("tool-group-header-rca-tools")).not.toBeInTheDocument();
+  });
+
+  it("a partially granted package reads On once every granted row is on — the ceiling is the whole", () => {
+    // rca-tools has more commands than the two the app granted; the fold must
+    // never look for the ones that are not here.
+    render(
+      <ToolsChecklist
+        tools={GROUPED}
+        prefs={{ "rca-tools:spc": true, "rca-tools:pareto": true }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("tool-group-rca-tools-on")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("tool-group-rca-tools-mixed")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-group-header-rca-tools")).toHaveTextContent("2");
+  });
+
+  it("reset to defaults still clears every row the modal governs, folded or not", () => {
+    const onChange = vi.fn();
+    render(
+      <ToolsChecklist tools={GROUPED} prefs={{ exec: false, "rca-tools:spc": true }} onChange={onChange} />,
+    );
+    fireEvent.click(screen.getByTestId("tools-reset"));
+    expect(onChange).toHaveBeenLastCalledWith({});
+  });
+});
