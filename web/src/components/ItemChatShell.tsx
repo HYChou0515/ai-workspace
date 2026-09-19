@@ -61,6 +61,10 @@ type AgentChrome = {
    * a refusal. Only `canResize` needs `change_permission`, since resizing spends
    * the OWNER's quota. */
   environment?: { canResize: boolean };
+  /** plan-chat-video-export: may this viewer make a video of a chat —
+   * `read_content` + `add_content`. Threaded to the AgentPanel header's Export
+   * dialog, which draws its video choice locked without it. */
+  canExportVideo?: boolean;
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -95,6 +99,7 @@ export function ItemChatShell({
   envVars,
   onSaveEnvVars,
   environment,
+  canExportVideo,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -380,6 +385,7 @@ export function ItemChatShell({
           envVars={envVars}
           onSaveEnvVars={onSaveEnvVars}
           environment={environment}
+          canExportVideo={canExportVideo}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
         />
@@ -436,6 +442,7 @@ function ItemChatPanel({
   envVars,
   onSaveEnvVars,
   environment,
+  canExportVideo,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -562,6 +569,7 @@ function ItemChatPanel({
         envVars={envVars}
         onSaveEnvVars={onSaveEnvVars}
         environment={environment}
+        canExportVideo={canExportVideo}
         onSaveSkillPrefs={onSaveSkillPrefs}
         appTitle={appTitle}
         appIcon={appIcon}

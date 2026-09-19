@@ -210,10 +210,13 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 伺服端:`VideoOptions` 多一條「寬高都要偶數」——親手試過 `libx264 + yuv420p` 對 1001×601 直接拒絕(`width not divisible by 2`),而且是在整段錄影跑完之後;表單只給偶數,這條是給 CLI 和 API 呼叫者的。上限例子改用 1922×1080。`GET …/chat-video` 回三個上限(P8 接)。
 - 測試:vitest 8 + 8 + 5(含 workflows 既有 11 條一起綠);pytest options 30。
 
-### P8 — 前端的對話框、進度列、接線
-- Export 按鈕改開 `ExportDialog`(不是下拉再對話框——header 的動作列在窄欄會降成 ⋯ 選單,子選單在那一層做不出來;一個對話框三種格式,分「文字 JSON / 文字 Markdown / 影片」三段,同樣是 user 說的「點開分文字…以及影片」):格式、範圍三選一 + 從/到選單最新在上(標籤 `#k · 👤/🤖 前幾個字`)、影片段落:尺寸三模式 + 結果列 `W×H・文字 s×・約 N MB`、六個選項(打字 / 串流速度、工具停頓、zoom、speed、max_seconds);`useDirtyClose` 守每個出口;影片是 **先 fetch 切好的 JSON、再 POST**,前端用的就是對外那條 API。
-- `VideoProgress`(header 狀態列,`useQuery` 輪詢 `GET /files/<progress_path>`,退避 1 s → 8 s;404 = 完成(檔案樹重抓、「已存到 …」可開啟)、`failed` = 那句話 + 移除、取消 = DELETE 進度檔);影片段落只在 `read_content` + `add_content` 都有時出現(`useItemAccess.canAddContent`,經 `ItemChatShell` 傳到 `AgentPanel`)。
-- i18n 兩種語系;測試:對話框三種格式各自的呼叫、範圍換算的快照、dirty / clean 兩條、進度輪詢的三種結局、按鈕顯示條件。
+### P8 — 前端的對話框、進度列、接線 ✅
+- `components/ExportDialog.tsx`:Export 按鈕改開一個對話框(不是下拉再對話框——header 的動作列在窄欄會降成 ⋯ 選單,子選單在那一層做不出來;一個對話框三種格式,「文字 JSON / 文字 Markdown / 影片」是最上面一組 radio,同樣是 user 說的「點開分文字…以及影片」)。範圍三選一:全部(N 則,N 來自匯出的 JSON,不是猜的)/ 最近 N 則 / 自訂 from–to(選單標籤 `#k · 👤/🤖 前 24 字`,#1 = 最新、#N = 最舊);影片段落:格式 mp4/gif/webm、尺寸三模式(比例＋解析度 / 比例＋文字大小 / 寬×高)+ 永遠顯示的結果列 `W×H・文字 s×・最多約 N MB`、六個節奏旋鈕(打字、回覆、工具停頓、zoom、speed、最長秒數)。解析度與文字大小的選單只列這部署 `max_pixels` 允許的(`GET …/chat-video`);手打寬高超過就顯示上限並鎖送出;`max_seconds` 送出前夾到部署上限。影片 = 先拿匯出 JSON、用同一個 `absoluteRange` 切、再 POST;`scale` 自動就送 0(交給 player 的規則)、文字大小模式才送數字。`useDirtyClose` 守 Escape / ✕ / 取消三個出口。
+- `components/VideoProgress.tsx`:header 下一列,`useQuery` 輪詢進度檔(1 s × 5 → 2 → 4 → 8 s 封頂;`pollDelay`),三種結局都從檔案本身讀:`failed` → 那句話 + 關閉(順手刪掉 worker 留下的檔);檔案不見且沒按取消 → 完成(路徑、開啟、重抓 `qk.files`,並停止輪詢);按取消 = 刪進度檔 → 之後的不見讀成「已取消」。
+- 接線:`useItemAccess.canAddContent`(`canAddItemContent`,單一 verb,不是 `canWrite` 的聯集——只有 edit_content 的人聯集說可以、route 會 403);`WorkspaceShell` 算 `canExportVideo = canSeeFiles && canAddContent` → `ItemChatShell`(兩個 render 點)→ `AgentPanel` → `AgentHeader`;沒有就把影片那個 radio 鎖住並寫原因。i18n 兩語系 54 個 key;`styles/export-dialog.css` 自己的 class(沿用 `.chat-share__*` 會零樣式)。
+- 測試:`ExportDialog.test.tsx` 11 條(三種格式各自的呼叫、範圍換算、上限過濾、鎖定、伺服端句子、dirty / clean)、`VideoProgress.test.tsx` 5 條(三種結局、輪詢停止、退避表)、`AgentHeader.test.tsx` 改為「開對話框、帶 slug / chatId / 影片閘」、`itemPermission` / `useItemAccess` 各加 canAddContent。16 個突變體(含對照組)各紅自己那條;web 全套 245 檔 2169 條綠(順手跑的,不是 gate)。
+- 拿掉一個守不到東西的守衛:`sawFailed`(failed 之後輪詢就停、關閉會卸載元件,所以「failed 之後不見」到不了)。
+- 已知未做:重新整理頁面後 header 的進度列不會回來(進度檔還在樹裡、可以手動刪);做影片的期間沒有第二顆進度列(route 對同人同 item 409)。
 
 ### P9 — image + k8s + 文件 + 親眼驗收
 - `docker/Dockerfile` 加 stage `chat-video`;`kubernetes/base/workers.yaml` 加 `rca-worker-chat-video`(limit 以 P1 量到的為準);`docs/deployment.md` §11 worker 清單加一顆、`docs/chat-video.md` 加「從前端匯出」一節、`docs/migrations.md`。

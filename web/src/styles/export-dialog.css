@@ -1,0 +1,190 @@
+/* The chat header's Export dialog (plan-chat-video-export P8) and the video
+ * progress line under the header.
+ *
+ * Its own sheet, its own class names: `chat-rail.css` scopes the share
+ * dialog's `.chat-share__*` and reusing those names here would give this
+ * panel no styles at all while every test stayed green. */
+
+.export-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-12);
+  min-width: 0;
+}
+
+.export-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.export-dialog__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.export-dialog__x {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-paper-d);
+}
+
+/* Label above field, not beside it: the video rows hold three or four
+   controls and a result line, and a side label would squeeze them into a
+   column too narrow for a 16:9 select at 390px. */
+.export-dialog__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.export-dialog__label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-mono-caps);
+  color: var(--text-paper-d);
+}
+
+.export-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* Radios and their labels on one wrapping line; a radio's inline number
+   input (the "latest N") sits inside its label. */
+.export-dialog__choices,
+.export-dialog__size,
+.export-dialog__custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-12);
+  align-items: center;
+}
+
+.export-dialog__custom {
+  padding-top: var(--space-4);
+}
+
+.export-dialog__choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+
+.export-dialog__choice input[type="radio"]:disabled + * {
+  color: var(--text-paper-d);
+}
+
+.export-dialog__num {
+  width: 5.5em;
+  padding: 2px var(--space-4);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.export-dialog select {
+  font: inherit;
+  max-width: 100%;
+}
+
+/* Six tempo knobs in two columns; one column when the panel is narrow. */
+.export-dialog__tempo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-12);
+}
+
+.export-dialog__tempo-item {
+  justify-content: space-between;
+}
+
+@media (max-width: 480px) {
+  .export-dialog__tempo {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The always-shown answer to "what will I get": W×H · text scale · ~MB. */
+.export-dialog__result {
+  font-size: var(--text-body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-paper);
+  padding: var(--space-4) var(--space-8);
+  background: var(--paper-2);
+  border-radius: 6px;
+}
+
+.export-dialog__note {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+.export-dialog__error {
+  font-size: var(--text-body-sm);
+  color: var(--err);
+  overflow-wrap: anywhere;
+}
+
+.export-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  padding-top: var(--space-4);
+}
+
+/* ── the progress line under the chat header ─────────────────────────── */
+
+.video-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  background: var(--paper-2);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.video-progress[data-state="failed"] {
+  color: var(--err);
+}
+
+.video-progress__stage {
+  font-weight: 600;
+}
+
+.video-progress__elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-paper-d);
+}
+
+.video-progress__bar {
+  flex: 1 1 80px;
+  height: 4px;
+  min-width: 40px;
+  border-radius: 2px;
+  background: var(--paper-3, var(--paper-2));
+  overflow: hidden;
+}
+
+.video-progress__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s linear;
+}
+
+.video-progress__path {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+}

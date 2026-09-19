@@ -31,6 +31,7 @@ import "./styles/sheet.css";
 import "./styles/my-resources.css";
 import "./styles/item-environment.css";
 import "./styles/skill-hub.css";
+import "./styles/export-dialog.css";
 // #698 — second-party view kinds register themselves on import. This runs
 // before the first render below, which it must: the registry is a plain map, so
 // a kind added after a view has painted would not appear in it.

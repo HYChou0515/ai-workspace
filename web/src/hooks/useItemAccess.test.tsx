@@ -100,6 +100,23 @@ describe("useItemAccess", () => {
     expect(result.current.canWriteMeta).toBe(false);
   });
 
+  // The video export's gate: it reads the item's files AND adds to them, so a
+  // Reader (read_content only) may export text and may not make a video, and
+  // an editor holding only edit_content may not either (`canWrite` would say
+  // yes — the union is the wrong question, the server answers 403).
+  it("separates adding content (the video export) from the write union", async () => {
+    signInAs("erin", false);
+    const { result } = access({
+      ...privateItem,
+      permission: { visibility: "restricted", read_content: ["user:erin"], edit_content: ["user:erin"] },
+    } as unknown as AppItem);
+
+    await waitFor(() => expect(result.current.canConverse).toBe(false));
+    expect(result.current.canSeeFiles).toBe(true);
+    expect(result.current.canWrite).toBe(true);
+    expect(result.current.canAddContent).toBe(false);
+  });
+
   it("the owner keeps full access without being a superuser", async () => {
     signInAs("alice", false);
     const { result } = access(privateItem);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canChangeItemPermission,
   canWriteItem,
+  canAddItemContent,
   canWriteItemMeta,
   itemVisibility,
   parseItemPermission,
@@ -31,6 +32,31 @@ describe("canWriteItem (mirrors backend perm/authorize for a write verb)", () =>
   });
   it("restricted + not granted → read-only", () => {
     expect(canWriteItem({ visibility: "restricted", edit_content: ["user:someone"] }, ME, OWNER, false)).toBe(false);
+  });
+});
+
+describe("canAddItemContent (the video export's second verb: add_content ALONE)", () => {
+  // `POST …/chat-video` asks read_content AND add_content. The union
+  // (`canWriteItem`) says yes to an editor who holds only edit_content — and
+  // the server then answers 403, so the union is the wrong question here.
+  it("an editor with edit_content only is NOT an adder — the union would have said yes", () => {
+    const perm = { visibility: "restricted" as const, edit_content: ["user:me1"] };
+    expect(canWriteItem(perm, ME, OWNER, false)).toBe(true);
+    expect(canAddItemContent(perm, ME, OWNER, false)).toBe(false);
+  });
+  it("a Collaborator (add_content granted) can; a Reader cannot", () => {
+    expect(
+      canAddItemContent({ visibility: "restricted", add_content: ["user:me1"] }, ME, OWNER, false),
+    ).toBe(true);
+    expect(
+      canAddItemContent({ visibility: "restricted", read_content: ["user:me1"] }, ME, OWNER, false),
+    ).toBe(false);
+  });
+  it("public allows it; the owner always may; a superuser bypasses", () => {
+    expect(canAddItemContent({ visibility: "public" }, ME, OWNER, false)).toBe(true);
+    expect(canAddItemContent({ visibility: "private" }, OWNER, OWNER, false)).toBe(true);
+    expect(canAddItemContent({ visibility: "private" }, ME, OWNER, true)).toBe(true);
+    expect(canAddItemContent({ visibility: "private" }, ME, OWNER, false)).toBe(false);
   });
 });
 
