@@ -17,6 +17,7 @@ import { Link } from "react-router-dom";
 
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
+import { Gauge } from "../components/Gauge";
 
 import {
   type LiveEnvironment,
@@ -38,56 +39,6 @@ import { api } from "../api";
 // new filename and rendered the SAME number differently ("80 MB" vs "80.0 MB"),
 // so a refusal message and the usage bar beside it disagreed.
 export { formatBytes };
-
-/** `used of limit`, or just `used` when the dimension is unlimited (limit 0). */
-export function formatAgainstLimit(
-  used: number,
-  limit: number,
-  render: (n: number) => string,
-): string {
-  return limit ? `${render(used)} / ${render(limit)}` : render(used);
-}
-
-function Meter({ used, limit }: { used: number; limit: number }) {
-  if (!limit) return null;
-  const pct = Math.min(100, Math.round((used / limit) * 100));
-  return (
-    <div className="meter" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-      <div className="meter-fill" style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-/** One dimension: what it is, how much of it you hold, and how close that is to
- * your ceiling.
- *
- * An UNLIMITED dimension still shows its usage — with no denominator and no bar,
- * because there is nothing to be a fraction of. It used to be hidden entirely,
- * so on a deploy that caps only the environment count you could not find out how
- * much cpu or memory you were holding at all. */
-function Gauge({
-  label,
-  used,
-  limit,
-  format,
-}: {
-  label: string;
-  used: number;
-  limit: number;
-  format: (n: number) => string;
-}) {
-  const t = useT();
-  return (
-    <div className="gauge">
-      <p className="summary">
-        <span className="gauge-label">{label}</span>
-        <span className="gauge-value">{formatAgainstLimit(used, limit, format)}</span>
-        {limit ? null : <span className="detail">{t("resources.gauge.unlimited")}</span>}
-      </p>
-      <Meter used={used} limit={limit} />
-    </div>
-  );
-}
 
 export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
   const t = useT();

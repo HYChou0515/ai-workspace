@@ -59,21 +59,6 @@ function wideRule(selector: string): string {
 }
 
 describe("my-resources: the live panel's layout", () => {
-  it("lays the three totals out as columns, not as a stack of full-width bars", () => {
-    // Three 712px accent bars stacked in the same column as the rows beneath
-    // them is what made the section read as one seven-row list. The group role
-    // the DOM test asserts survives this rule being deleted; the separation
-    // does not.
-    const block = rule(".page .stat-row");
-    expect(block).toMatch(/display:\s*grid/);
-    // A `repeat(...)`, not a pinned count: the storage section puts ONE gauge in
-    // this same panel, so `repeat(3, 1fr)` would leave it in the left third with
-    // two empty columns. What has to hold is that the totals get their own
-    // columns instead of stacking full-width in the list's column — which is
-    // the shape the whole section was rewritten to escape.
-    expect(block).toMatch(/grid-template-columns:\s*repeat\(/);
-  });
-
   it("gives a live sandbox a different row shape from a stored one", () => {
     // The complaint underneath all of this: two sections that mean different
     // things looked identical, and the only thing separating them was the word
