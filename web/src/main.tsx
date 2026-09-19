@@ -28,6 +28,7 @@ import "./styles/topic-hub.css";
 import "./styles/entity-views.css";
 import "./styles/chat-rail.css";
 import "./styles/sheet.css";
+import "./styles/gauge.css";
 import "./styles/my-resources.css";
 import "./styles/item-environment.css";
 import "./styles/skill-hub.css";

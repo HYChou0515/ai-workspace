@@ -1,0 +1,146 @@
+/* Gauges, meters and the stat tile row — `components/Gauge.tsx`.
+ *
+ * Unscoped on purpose: these are drawn on `/my-resources` AND inside the item
+ * Sandbox modal, and a `.page`-scoped copy is how the modal ended up with its
+ * own bar and a total that named nothing. Moved from my-resources.css, values
+ * unchanged; the comments explaining each decision came with them. */
+
+/* One row per dimension: name on the left, the number on the right, its own bar
+   underneath. Three dimensions used to share one line and one bar, which made
+   the bar mean whichever of them it happened to be tracking. */
+.gauge + .gauge {
+  margin-top: var(--space-12);
+}
+
+.summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-body);
+  color: var(--text-paper);
+}
+
+.gauge-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.gauge-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The bar. `--paper-3` is the same track colour the app's other inset surfaces
+   use; the fill is the accent so it reads as "yours", not as an alert — being
+   near a limit is normal, not an error. */
+.meter {
+  height: 6px;
+  background: var(--paper-3);
+  border-radius: var(--radius-chip);
+  overflow: hidden;
+  margin-bottom: var(--space-12);
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+/* The totals as ONE block, in columns — not full-width bars stacked in the same
+   column as the rows beneath them. Three 712px accent bars in a vertical run
+   also read as three alarms; a third of the width each, in a panel of their
+   own, reads as a dashboard, which is what they are. */
+.stat-row {
+  display: grid;
+  /* `auto-fit` rather than `repeat(3, …)`: the storage section puts ONE gauge
+     in this same panel, and a fixed three-column grid would leave it sitting in
+     the left third with two empty columns beside it. Empty tracks collapse, so
+     three gauges still get three columns and one gets the full width. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-24);
+  margin-bottom: var(--space-24);
+  padding: var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper-2);
+}
+
+/* They are columns here, so the stacking margin that separates them elsewhere
+   would only push the second and third down out of line. */
+.stat-row .gauge + .gauge {
+  margin-top: 0;
+}
+
+/* Label above figure, not beside it: side by side in a third of the width, a
+   long label ("記憶體" plus "4.0 GB / 6.0 GB") had nowhere to go. */
+.stat-row .summary {
+  display: block;
+  margin: 0;
+}
+
+.stat-row .gauge-label {
+  display: block;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.stat-row .gauge-value {
+  display: block;
+  margin-top: var(--space-4);
+  font-size: var(--text-body-lg);
+  line-height: var(--leading-body-lg);
+  color: var(--text-paper);
+}
+
+/* The bar belongs to the figure above it and to nothing else, so its trailing
+   margin — which exists to separate stacked gauges — is removed here. */
+.stat-row .meter {
+  margin: var(--space-8) 0 0;
+}
+
+/* One card per live thing — `/my-resources`' running-sandbox rows and the
+   Sandbox modal's status row. ONE rule, so the modal's row IS the page's row
+   rather than a look-alike with its own padding and surface. Layout (grid on
+   the page, flex in the modal) stays each consumer's own. */
+.live-card {
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper);
+}
+
+/* Running, right now. Solid rather than haloed so it needs no colour outside
+   the token set, and it breathes only where motion is welcome. */
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .live-dot {
+    animation: live-pulse 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Tiles side by side in a narrow column are narrower than the figures they
+   exist to show ("4.0 GB / 6.0 GB" in 114px), so they stack. The same cut the
+   page uses for its own narrow layout; the modal at phone width hits it too. */
+@media (max-width: 640px) {
+  .stat-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-16);
+  }
+}

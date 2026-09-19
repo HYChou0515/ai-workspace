@@ -153,7 +153,7 @@ export function GroupsPage({ client = groupsApi }: { client?: GroupsApi }) {
           <input
             type="search"
             data-testid="groups-search"
-            className="kb-input"
+            className="input"
             aria-label="Search groups"
             placeholder="Search groups…"
             value={q}
