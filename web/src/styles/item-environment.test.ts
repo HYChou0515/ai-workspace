@@ -56,4 +56,8 @@ describe("item-environment.css: the size fields", () => {
     expect(rule(wide, '.item-environment .input[aria-invalid="true"]')).toMatch(/border-color:\s*var\(--err\)/);
     expect(rule(wide, ".item-environment .env-field__note--invalid")).toMatch(/color:\s*var\(--err\)/);
   });
+
+  it("still show focus on an invalid field — the red border hides the accent one, so a ring", () => {
+    expect(rule(wide, '.item-environment .input[aria-invalid="true"]:focus')).toMatch(/box-shadow:/);
+  });
 });

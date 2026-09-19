@@ -316,6 +316,33 @@ describe("the shapes it borrows", () => {
     expect(screen.getByTestId("memory-input").getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByTestId("memory-hint").textContent).toMatch(/512M/);
     expect(screen.getByTestId("memory-input").getAttribute("placeholder")).toBe("2G");
+    // The hint is what describes the field, for AT as for the eye.
+    const memory = screen.getByTestId("memory-input");
+    expect(memory.getAttribute("aria-describedby")).toBe(screen.getByTestId("memory-hint").id);
+    expect(screen.getByTestId("cpu-input").getAttribute("aria-describedby")).toBe(screen.getByTestId("cpu-hint").id);
+  });
+
+  it("refuses 0 at the field itself — the server refuses it too", () => {
+    render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
+    const cpu = screen.getByTestId("cpu-input");
+    expect(Number(cpu.getAttribute("min"))).toBeGreaterThan(0);
+    expect(cpu.getAttribute("step")).toBe("0.5");
+  });
+
+  it("invents no placeholder when nothing is in effect yet", () => {
+    // A record can enforce memory while stating no effective figure (no App
+    // ceiling, no owner quota → the host's own default applies). "512M" there
+    // would be a number nobody vouched for.
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, effectiveMemoryBytes: null }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    expect(screen.getByTestId("memory-input").getAttribute("placeholder")).toBe("");
   });
 });
 

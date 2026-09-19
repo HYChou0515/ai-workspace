@@ -71,18 +71,29 @@ function route(
 
 /** Like `route`, but the environment is read from a mutable holder and a PUT
  *  can be held open — for the sequences the review found untested. */
-function liveRoute(holder: { env: unknown; resources?: unknown; hangPut?: boolean; failReload?: boolean }) {
+function liveRoute(holder: {
+  env: unknown;
+  resources?: unknown;
+  hangPut?: boolean;
+  /** When set, the PUT waits on this promise before answering. */
+  holdPut?: Promise<void>;
+  failReload?: boolean;
+  /** When set, GETs of the environment after a PUT wait on this promise. */
+  holdReload?: Promise<void>;
+}) {
   let puts = 0;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (init?.method === "PUT") {
       puts += 1;
       if (holder.hangPut) return new Promise<Response>(() => {});
+      if (holder.holdPut) await holder.holdPut;
       return json({});
     }
     if (init?.method === "DELETE" && url.includes("/me/resources/live/")) return json({});
     if (url.includes("/environment")) {
       if (holder.failReload && puts > 0) return new Response("nope", { status: 500 });
+      if (holder.holdReload && puts > 0) await holder.holdReload;
       return json(holder.env);
     }
     if (url.includes("/me/resources")) return json(holder.resources ?? CAPPED);
@@ -299,16 +310,19 @@ describe("ItemEnvironmentModal — Save", () => {
 });
 
 describe("ItemEnvironmentModal — what the review found unguarded", () => {
-  it("after a successful Save the draft is gone: Save goes grey and a Cancel closes without a prompt", async () => {
+  it("after a successful Save the draft is gone: the field shows the server's spelling, Save goes grey, Cancel closes without a prompt", async () => {
+    // Typed "512m"; the server stores 512 MiB and reads it back as "512M".
+    // A draft that survived the save would still read "512m" — that is what
+    // makes this case tell the two apart.
     const holder = { env: STATED };
     const f = liveRoute(holder);
     vi.stubGlobal("fetch", f);
     const onClose = open();
-    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
-    holder.env = { ...STATED, stated_cpu_cores: 2 }; // what the server now says
+    fireEvent.change(await screen.findByTestId("memory-input"), { target: { value: "512m" } });
+    holder.env = { ...STATED, stated_memory_bytes: 512 * 1024 ** 2 }; // what the server now says
     fireEvent.click(screen.getByTestId("itemenv-save"));
-    await waitFor(() => expect(screen.getByTestId("itemenv-save")).toBeDisabled());
-    expect(screen.getByTestId("cpu-input")).toHaveValue(2);
+    await waitFor(() => expect(screen.getByTestId("memory-input")).toHaveValue("512M"));
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
     fireEvent.click(screen.getByTestId("itemenv-cancel"));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("dialog-action-discard")).toBeNull();
@@ -427,6 +441,88 @@ describe("ItemEnvironmentModal — memory spellings", () => {
     fireEvent.click(screen.getByTestId("itemenv-save"));
     await waitFor(() => expect(puts(f)).toHaveLength(1));
     expect(puts(f)[0]).toEqual({ cpu_cores: 1, memory: "1536M" });
+  });
+});
+
+describe("ItemEnvironmentModal — round 2", () => {
+  it("keeps showing what was typed until the re-read lands — no flash of the old number after Save", async () => {
+    let release!: () => void;
+    const holder = { env: STATED, holdReload: new Promise<void>((r) => (release = r)) };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    open();
+    const gets = () => f.mock.calls.filter((c) => String(c[0]).includes("/environment")).length;
+    const before = gets();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    // The PUT is done and the re-read has been asked for but not answered:
+    // the field must not fall back to "1", and nothing may be typed or saved
+    // into that gap — a keystroke there was lost to the draft being dropped.
+    await waitFor(() => expect(gets()).toBeGreaterThan(before));
+    expect(screen.getByTestId("cpu-input")).toHaveValue(2);
+    expect(screen.getByTestId("cpu-input")).toBeDisabled();
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
+    holder.env = { ...STATED, stated_cpu_cores: 2 };
+    release();
+    await waitFor(() => expect(screen.getByTestId("cpu-origin")).toHaveTextContent(/Set by you|你設定的/));
+    expect(screen.getByTestId("cpu-input")).toHaveValue(2);
+  });
+
+  it("a second Save in the modal's life still sends — and so does one after 'Close sandbox' interrupted a Save in flight", async () => {
+    // save.reset() (what Close sandbox does) detaches the in-flight
+    // mutation's observer, so a per-mutate onSettled never fires; a ref
+    // released only there stuck at "in flight" and every later Save was
+    // silently dropped.
+    let releasePut!: () => void;
+    const holder: { env: unknown; holdPut?: Promise<void> } = {
+      env: STATED,
+      holdPut: new Promise<void>((r) => (releasePut = r)),
+    };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    const onClose = open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save")); // the PUT is out, held
+    await waitFor(() => expect(puts(f)).toHaveLength(1));
+    // The sandbox starts under us; the record refetches as running.
+    holder.env = { ...STATED, running: true };
+    await onClose.client.invalidateQueries({ queryKey: ["item-environment", "rca", "i-1"] });
+    fireEvent.click(await screen.findByTestId("close-environment")); // save.reset()
+    releasePut(); // the detached PUT now answers — nobody is observing it
+    holder.env = STATED;
+    holder.holdPut = undefined;
+    await onClose.client.invalidateQueries({ queryKey: ["item-environment", "rca", "i-1"] });
+    await waitFor(() => expect(screen.getByTestId("cpu-input")).toBeEnabled());
+    fireEvent.change(screen.getByTestId("cpu-input"), { target: { value: "3" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(puts(f)).toHaveLength(2));
+    expect(puts(f)[1]).toEqual({ cpu_cores: 3, memory: "256M" });
+  });
+
+  it("two Saves in a row, each with its own edit, are two PUTs", async () => {
+    const holder = { env: STATED };
+    const f = liveRoute(holder);
+    vi.stubGlobal("fetch", f);
+    open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    holder.env = { ...STATED, stated_cpu_cores: 2 };
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(screen.getByTestId("cpu-origin")).toHaveTextContent(/Set by you|你設定的/));
+    fireEvent.change(screen.getByTestId("cpu-input"), { target: { value: "3" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    await waitFor(() => expect(puts(f)).toHaveLength(2));
+  });
+
+  it("says 'saved, but could not re-read' — not 'not saved' — when the re-read after Save fails", async () => {
+    const holder = { env: STATED, failReload: true };
+    vi.stubGlobal("fetch", liveRoute(holder));
+    open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+    const note = await screen.findByTestId("reload-failed");
+    expect(note).toHaveTextContent(/已存檔|Saved/);
+    // The typed value stays on screen with it, not the pre-save number.
+    expect(screen.getByTestId("cpu-input")).toHaveValue(2);
   });
 });
 

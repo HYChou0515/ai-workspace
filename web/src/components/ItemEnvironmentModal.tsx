@@ -21,10 +21,19 @@
  * Escape, Cancel — goes through `useDirtyClose`, and nothing is written by a
  * keystroke that only moved focus. One PUT carries BOTH dimensions, because
  * the route replaces both — and the dimension the person did not touch is
- * read from the record AS IT IS AT SAVE TIME, not copied when typing began:
- * two `change_permission` holders can resize the same item, and a draft that
- * carried a stale copy of the other's memory would have written it back over
- * theirs. So the draft holds only the fields that were typed in.
+ * read from the record as the modal last fetched it, not copied when typing
+ * began: two `change_permission` holders can resize the same item, and a
+ * draft that carried a stale copy of the other's memory would have written it
+ * back over theirs whenever the record had since been refetched. (The record
+ * refetches only on this modal's own saves and closes — a truly concurrent
+ * write can still be lost; that needs the server to compare-and-swap.) So
+ * the draft holds only the fields that were typed in.
+ *
+ * A save is one gesture from click to re-read: the fields and Save are locked
+ * while the PUT is out AND while the record is being re-read, and the draft
+ * is dropped only once the re-read has landed. Dropping it at the PUT's
+ * success flashed the pre-save number for one round trip (the GET probes the
+ * sandbox), and ate a keystroke typed meanwhile.
  *
  * What the server would refuse is refused here first: a cpu of 0 or less, or
  * a memory that is not a size. The server reads only `<integer>[K|M|G|T]`;
@@ -34,9 +43,10 @@
  *
  * Because saves are dispatched while this is on screen, a refusal has
  * somewhere to be read (`saveFailed`) and the draft stays for a second try.
- * And a save that SUCCEEDED but whose re-read failed says so too: TanStack
- * keeps the previous record on a failed refetch, so without the notice the
- * fields would show the old numbers as if they were the new ones.
+ * And a save that SUCCEEDED but whose re-read failed says so, with the typed
+ * value kept on screen: TanStack keeps the previous record on a failed
+ * refetch, so dropping the draft there would show the old numbers as if they
+ * were the new ones, under a notice that reads as "not saved".
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -104,10 +114,12 @@ export function ItemEnvironmentModal({
     memory: current !== null && !isValidMemory(current.memory),
   };
 
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ["item-environment", slug, itemId] });
-    void qc.invalidateQueries({ queryKey: ["my-resources"] });
-  };
+  const envKey = ["item-environment", slug, itemId];
+  const refresh = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: envKey }),
+      qc.invalidateQueries({ queryKey: ["my-resources"] }),
+    ]);
 
   const save = useMutation({
     mutationFn: (d: SizeDraft) =>
@@ -116,11 +128,22 @@ export function ItemEnvironmentModal({
         // The person's spelling ("1.5 GB") → the server's ("1536M").
         memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
       }),
-    onSuccess: () => {
-      // The stated values are about to become what was typed; drop the draft
-      // so the fields follow the refetched record instead of a stale copy.
-      setDraft({});
-      refresh();
+    // The modal has its own alert for a refusal; the app-wide banner on top
+    // of it said the same thing twice.
+    meta: { silentError: true },
+    // Awaited, so the mutation stays PENDING until the re-read has landed:
+    // `save.isPending` is the one flag for "a save is out", PUT and re-read.
+    onSuccess: async () => {
+      await refresh();
+      // Only once the re-read has landed, and only if it did: on a failed
+      // re-read the fields keep what was typed, under the notice below.
+      if (qc.getQueryState(envKey)?.status !== "error") setDraft({});
+    },
+    // In the OPTIONS, not per-mutate: `save.reset()` (Close sandbox) detaches
+    // the in-flight mutation's observer and a per-mutate callback never fires,
+    // which left the ref stuck and every later Save silently dropped.
+    onSettled: () => {
+      inflight.current = false;
     },
   });
   // `save.isPending` is a render-time value; a second click that lands before
@@ -129,7 +152,7 @@ export function ItemEnvironmentModal({
   const submit = () => {
     if (!current || inflight.current) return;
     inflight.current = true;
-    save.mutate(current, { onSettled: () => (inflight.current = false) });
+    save.mutate(current);
   };
   const close = useMutation({
     mutationFn: () => myResourcesApi.closeEnvironment(itemId),
@@ -141,8 +164,8 @@ export function ItemEnvironmentModal({
 
   const attemptClose = useDirtyClose(dirty, onClose);
   const editable = env.data !== undefined && budget !== null && canEdit;
-  const canSave =
-    editable && dirty && !invalid.cpu && !invalid.memory && !env.data!.running && !save.isPending;
+  const busy = save.isPending;
+  const canSave = editable && dirty && !invalid.cpu && !invalid.memory && !env.data!.running && !busy;
 
   return (
     <ModalShell
@@ -170,6 +193,7 @@ export function ItemEnvironmentModal({
           canEdit={canEdit}
           draft={current}
           invalid={invalid}
+          busy={busy}
           onDraft={(patch) => setDraft((d) => ({ ...d, ...patch }))}
           onCloseSandbox={() => {
             // Otherwise the "not saved" line from an earlier refusal is still
@@ -195,10 +219,11 @@ export function ItemEnvironmentModal({
         </p>
       ) : null}
       {env.isError && env.data ? (
-        // A refetch that failed after a write: the numbers on screen are the
-        // OLD record, and nothing else would say so.
+        // A re-read that failed after a write: the save went through, but
+        // the record on screen is the old one. Said as such — "couldn't read"
+        // alone reads as "not saved" next to a field still showing the draft.
         <p data-testid="reload-failed" className="detail" role="alert" style={{ margin: 0, color: "var(--err)" }}>
-          {t("itemenv.loadFailed")}
+          {t("itemenv.savedButStale")}
         </p>
       ) : null}
 

@@ -35,8 +35,9 @@ describe("gauge.css", () => {
     expect(rule(narrow![1]!, ".stat-row")).toMatch(/grid-template-columns:\s*1fr/);
   });
 
-  it("draws a live thing as a card — border, radius, surface — for the page's rows and the modal's status row alike", () => {
+  it("draws a live thing as a card — padding, border, radius, surface — for the page's rows and the modal's status row alike", () => {
     const card = rule(wide, ".live-card");
+    expect(card).toMatch(/padding:/);
     expect(card).toMatch(/border:\s*1px solid/);
     expect(card).toMatch(/border-radius:/);
     expect(card).toMatch(/background:/);

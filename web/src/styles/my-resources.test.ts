@@ -68,7 +68,7 @@ describe("my-resources: the live panel's layout", () => {
     expect(live).toMatch(/display:\s*grid/);
     // The card chrome (border-radius, surface) is `.live-card` in gauge.css —
     // guarded there — so this rule need only make the row a grid.
-    expect(rule(".page ul > li")).toMatch(/display:\s*flex/);
+    expect(rule(".page ul:not(.live-list) > li")).toMatch(/display:\s*flex/);
   });
 
   it.each([".page .live-list", ".page .disk-list", ".page .wui-list"])(

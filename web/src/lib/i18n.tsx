@@ -1107,6 +1107,10 @@ export const messages = {
     en: "This deployment can't confirm a memory ceiling is applied, so there's nothing to set here.",
   },
   "itemenv.field.cpu": { "zh-TW": "CPU（核心數）", en: "CPU (cores)" },
+  "itemenv.savedButStale": {
+    "zh-TW": "已存檔，但讀不回最新狀態。關掉再開一次。",
+    en: "Saved — but the latest status couldn't be read back. Close it and open it again.",
+  },
   "itemenv.field.cpu.hint": { "zh-TW": "要大於 0，例如 1 或 0.5。", en: "More than 0 — e.g. 1 or 0.5." },
   "itemenv.field.memory.hint": {
     "zh-TW": "數字加單位，例如 512M、512MB 或 1.5G。",

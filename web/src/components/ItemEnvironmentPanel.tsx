@@ -57,6 +57,9 @@ export type ItemEnvironmentPanelProps = {
   /** Which fields hold something the server would refuse (the modal decides;
    *  this only marks the field and shows its grammar). */
   invalid?: { cpu: boolean; memory: boolean };
+  /** A save is out (PUT or its re-read): the fields hold still so a
+   *  keystroke cannot land between the write and the record catching up. */
+  busy?: boolean;
   /** Only the field that changed — the modal keeps the untouched one bound
    *  to the live record. */
   onDraft: (patch: Partial<SizeDraft>) => void;
@@ -70,11 +73,13 @@ export function ItemEnvironmentPanel({
   canEdit,
   draft,
   invalid = { cpu: false, memory: false },
+  busy = false,
   onDraft,
   onCloseSandbox,
 }: ItemEnvironmentPanelProps) {
   const t = useT();
   const locked = !canEdit || env.running;
+  const still = locked || busy;
 
   const cpuStated = env.statedCpuCores;
   const cpuEffective = env.effectiveCpuCores;
@@ -138,7 +143,7 @@ export function ItemEnvironmentPanel({
                   inputMode="decimal"
                   value={draft.cpu}
                   placeholder={cpuEffective === null ? "" : String(cpuEffective)}
-                  disabled={locked}
+                  disabled={still}
                   aria-invalid={invalid.cpu || undefined}
                   aria-describedby={invalid.cpu ? "itemenv-cpu-hint" : undefined}
                   onChange={(e) => onDraft({ cpu: e.target.value })}
@@ -197,8 +202,10 @@ export function ItemEnvironmentPanel({
                   value={draft.memory}
                   // The SERVER's spelling ("512M"), never the display one
                   // ("512.0 MB"): the placeholder is what people type back.
-                  placeholder={toSizeString(memEffective) ?? "512M"}
-                  disabled={locked}
+                  // Nothing in effect yet → no placeholder: a number here
+                  // would be one nobody vouched for.
+                  placeholder={toSizeString(memEffective) ?? ""}
+                  disabled={still}
                   aria-invalid={invalid.memory || undefined}
                   aria-describedby={invalid.memory ? "itemenv-memory-hint" : undefined}
                   onChange={(e) => onDraft({ memory: e.target.value })}
