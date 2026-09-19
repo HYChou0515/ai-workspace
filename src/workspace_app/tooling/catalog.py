@@ -82,11 +82,12 @@ def summarize_description(text: str) -> str:
     return flat
 
 
-def _meta(name: str, description: str) -> ToolMeta:
+def _meta(name: str, description: str, *, group: str = BUILTIN_GROUP) -> ToolMeta:
     return ToolMeta(
         name=name,
         label=humanize_tool_label(name),
         description=summarize_description(description),
+        group=group,
     )
 
 
@@ -144,7 +145,7 @@ def flat_catalog(packages: Sequence[PackageInfo]) -> dict[str, ToolMeta]:
     out: dict[str, ToolMeta] = {}
     for pkg in packages:
         for cmd in pkg.commands:
-            out[cmd.name] = _meta(cmd.name, cmd.description)
+            out[cmd.name] = _meta(cmd.name, cmd.description, group=pkg.name)
     for name, desc in builtin_tool_descriptions().items():
         out[name] = _meta(name, desc)
     return out

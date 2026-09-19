@@ -54,6 +54,30 @@ describe("ToolsPickerModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  // Every real app grants 11–23 built-ins, so the modal's real shape is a
+  // folded core group — the two-row fixture above never draws a fold at all.
+  it("a fold's tri-state reaches Save as one pinned key per row", async () => {
+    const onSave = vi.fn();
+    const many: ItemToolState[] = [
+      ...TOOLS,
+      { ...TOOLS[0]!, key: "read_file", label: "Read File" },
+      { ...TOOLS[0]!, key: "write_file", label: "Write File" },
+    ];
+    renderWithQuery(
+      <ToolsPickerModal slug="rca" itemId="i1" onSave={onSave} onClose={vi.fn()} client={fakeClient(many)} />,
+    );
+    const header = await screen.findByTestId("tool-group-header-builtin");
+    expect(header).toHaveAttribute("aria-expanded", "false"); // nothing mixed on open
+    fireEvent.click(screen.getByTestId("tool-group-builtin-off"));
+    expect(screen.getByTestId("tools-save")).not.toBeDisabled();
+    fireEvent.click(header); // open it: the rows carry the fold's choice
+    expect(screen.getByTestId("tool-read_file-off")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByTestId("tools-save"));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith({ "rca-tools": false, exec: false, read_file: false, write_file: false }),
+    );
+  });
+
   it("a clean cancel closes immediately (no discard prompt)", async () => {
     const onClose = vi.fn();
     renderWithQuery(

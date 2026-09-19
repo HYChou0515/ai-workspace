@@ -28,10 +28,14 @@ export const BUILTIN_GROUP = "builtin";
 export function groupsOf(tools: ItemToolState[]): ToolGroup[] {
   const byId = new Map<string, ToolGroup>();
   for (const tool of tools) {
-    let g = byId.get(tool.group);
+    // A row from a server that predates `group` (a rolling deploy can pair a
+    // new page with an old pod for a moment) folds under its own key: every
+    // such row is a single-row group, i.e. the old flat list.
+    const id = tool.group ?? tool.key;
+    let g = byId.get(id);
     if (!g) {
-      g = { id: tool.group, label: labelOf(tool), tools: [] };
-      byId.set(tool.group, g);
+      g = { id, label: labelOf(tool, id), tools: [] };
+      byId.set(id, g);
     }
     g.tools.push(tool);
   }
@@ -41,8 +45,8 @@ export function groupsOf(tools: ItemToolState[]): ToolGroup[] {
   return groups;
 }
 
-function labelOf(tool: ItemToolState): string {
-  if (tool.group === BUILTIN_GROUP) return BUILTIN_GROUP;
+function labelOf(tool: ItemToolState, id: string): string {
+  if (id === BUILTIN_GROUP) return BUILTIN_GROUP;
   return tool.package ?? tool.label;
 }
 

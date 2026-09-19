@@ -91,6 +91,15 @@ def test_picker_unit_for_unknown_bare_entry_degrades_cleanly():
     assert units[0].description == ""
 
 
+def test_flat_catalog_commands_carry_their_package_group_too():
+    """`ToolMeta.group` promises "the raw package id" for anything that is not
+    a built-in — on BOTH constructors. `flat_catalog` builds a package command's
+    meta through the built-in helper, which used to leave the default."""
+    cat = flat_catalog(packages=[_pkg("rca-tools", _cmd("spc", "Chart it."))])
+    assert cat["spc"].group == "rca-tools"
+    assert cat["exec"].group == "builtin"
+
+
 def test_summarize_description_handles_empty_text():
     from workspace_app.tooling.catalog import summarize_description
 

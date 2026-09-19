@@ -21,12 +21,23 @@ import {
  * the backend `attached_tool_prefs` storage exactly.
  *
  * Rows fold by package (plan-tools-picker-groups): every built-in under one
- * fold literally named `builtin`, a package's granted commands under its own.
+ * fold — the core fold, shown as 核心工具 / Core tools (fold id `builtin`) — and
+ * a package's granted commands under its own.
  * A fold's header carries the same tri-state, DERIVED from its rows — the one
  * state they all share, or "mixed" with nothing pressed — and pressing it sets
- * every row of the fold. Nothing is stored per fold. A fold opens collapsed
- * unless it is mixed (the only time a reader needs to look inside) or the
- * search matched inside it; a fold of one row is just that row.
+ * every row of the fold. Nothing is stored per fold.
+ *
+ * Open or shut is decided at two moments, never re-derived on every render:
+ * when the list opens (a fold that is MIXED then is open — the one time a
+ * reader needs to look inside) and when the search term changes (a fold with
+ * a hit is open, and any fold the reader had shut by hand is released). In
+ * between, only the reader's own click moves a fold — a fold must not snap
+ * shut under the cursor because the row just clicked made it uniform. A fold
+ * of one row is just that row.
+ *
+ * Under a search a fold IS its matching rows: the count, the derived state,
+ * the fold's tri-state and "reset" all cover exactly the rows drawn, so two
+ * whole-fold actions on one screen never differ in reach.
  *
  * A row in the Default state shows what the template currently resolves to, so
  * "follow" is never ambiguous. Search filters by label/key (and fold name);
@@ -49,12 +60,19 @@ export function ToolsChecklist({
 }) {
   const t = useT();
   const [search, setSearch] = useState("");
-  // A fold the reader opened or shut by hand; anything else follows the
-  // auto rule (mixed / search hit ⇒ open).
-  const [manual, setManual] = useState<Record<string, boolean>>({});
   const term = search.trim().toLowerCase();
-
   const groups = groupsOf(tools);
+  // Folds the reader opened or shut by hand since the last search change.
+  const [manual, setManual] = useState<Record<string, boolean>>({});
+  // Folds that were mixed when the list opened — latched once, so a fold
+  // that stops being mixed under the reader's own clicks stays where it is.
+  const [openedMixed] = useState<Set<string>>(
+    () => new Set(groups.filter((g) => groupState(g, prefs) === "mixed").map((g) => g.id)),
+  );
+  const changeSearch = (value: string) => {
+    setSearch(value);
+    setManual({}); // a new search is a new question; hand-shut folds are released
+  };
   const matches = (tool: ItemToolState) =>
     tool.label.toLowerCase().includes(term) || tool.key.toLowerCase().includes(term);
   // A fold whose own name matches shows every row of it; otherwise only the
@@ -89,7 +107,7 @@ export function ToolsChecklist({
         data-testid="tools-search"
         placeholder={t("tools.search")}
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => changeSearch(e.target.value)}
         style={{
           width: "100%",
           height: 30,
@@ -120,9 +138,15 @@ export function ToolsChecklist({
           if (group.tools.length === 1) {
             return <ToolRow key={group.id} tool={group.tools[0]!} state={prefOf(group.tools[0]!.key, prefs)} setState={setState} />;
           }
-          const state = groupState(group, prefs);
-          const open = manual[group.id] ?? (state === "mixed" || (term !== "" && rows.length > 0));
+          // Under a search the fold is its matching rows (see the docstring).
+          const shownFold: ToolGroup = { ...group, tools: rows };
+          const state = groupState(shownFold, prefs);
+          const open = manual[group.id] ?? (term !== "" || openedMixed.has(group.id));
           const label = group.id === BUILTIN_GROUP ? t("tools.group.builtin") : group.label;
+          const triAria =
+            state === "mixed"
+              ? `${t("tools.group.aria", { group: label })}（${t("tools.group.mixed")}）`
+              : t("tools.group.aria", { group: label });
           return (
             <div key={group.id} data-testid={`tool-group-${group.id}`} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               <div
@@ -133,14 +157,13 @@ export function ToolsChecklist({
                   padding: "6px 6px",
                   borderRadius: "var(--radius-btn)",
                   fontSize: pxToRem(13),
-                  background: "var(--paper-1)",
+                  background: "var(--paper-2)",
                 }}
               >
                 <button
                   type="button"
                   data-testid={`tool-group-header-${group.id}`}
                   aria-expanded={open}
-                  aria-label={t("tools.group.toggle", { group: label })}
                   title={group.id === BUILTIN_GROUP ? label : `${group.id} · ${label}`}
                   onClick={() => setManual((m) => ({ ...m, [group.id]: !open }))}
                   style={{
@@ -168,7 +191,7 @@ export function ToolsChecklist({
                       is what a reader scans for, and at phone width there is
                       not room for all three at full size. */}
                   <span style={secondary()}>
-                    {t("tools.group.count", { n: String(group.tools.length) })}
+                    {t("tools.group.count", { n: String(rows.length) })}
                   </span>
                   {state === "mixed" ? (
                     <span data-testid={`tool-group-${group.id}-mixed`} style={secondary()}>
@@ -177,10 +200,10 @@ export function ToolsChecklist({
                   ) : null}
                 </button>
                 <TriState
-                  aria={t("tools.group.aria", { group: label })}
+                  aria={triAria}
                   testId={`tool-group-${group.id}`}
                   state={state}
-                  onPick={(next) => onChange(withGroupState(group, prefs, next))}
+                  onPick={(next) => onChange(withGroupState(shownFold, prefs, next))}
                 />
               </div>
               {open

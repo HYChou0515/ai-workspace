@@ -1636,7 +1636,6 @@ export const messages = {
   "tools.group.count": { "zh-TW": "{n} 項", en: "{n} tools" },
   "tools.group.mixed": { "zh-TW": "混合", en: "Mixed" },
   "tools.group.aria": { "zh-TW": "{group} 整組的設定", en: "Setting for all of {group}" },
-  "tools.group.toggle": { "zh-TW": "展開或收合 {group}", en: "Expand or collapse {group}" },
   "tools.defaultOn": { "zh-TW": "預設開啟", en: "On by default" },
   "tools.defaultOff": { "zh-TW": "預設關閉", en: "Off by default" },
   "tools.noMatch": { "zh-TW": "沒有符合「{q}」的工具。", en: "No tools match “{q}”." },

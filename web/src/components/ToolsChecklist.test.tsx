@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemToolState } from "../api/types";
@@ -67,7 +68,7 @@ describe("ToolsChecklist", () => {
     // reader cannot tell which row's switch governs the tool they saw in chat.
     render(
       <ToolsChecklist
-        tools={[{ ...TOOLS[0], key: "rca-tools:spc", label: "Spc", package: "Rca Tools" }]}
+        tools={[{ ...TOOLS[0], key: "rca-tools:spc", group: "rca-tools", label: "Spc", package: "Rca Tools" }]}
         prefs={{}}
         onChange={vi.fn()}
       />,
@@ -115,7 +116,7 @@ describe("ToolsChecklist", () => {
     // credit us with a stranger's code.
     render(
       <ToolsChecklist
-        tools={[{ ...TOOLS[0], key: "wafer-history", external: true, version: "1.4.2" }]}
+        tools={[{ ...TOOLS[0], key: "wafer-history", group: "wafer-history", external: true, version: "1.4.2" }]}
         prefs={{}}
         onChange={vi.fn()}
       />,
@@ -130,7 +131,7 @@ describe("ToolsChecklist", () => {
     render(
       <ToolsChecklist
         tools={[
-          { ...TOOLS[0], key: "wafer-history", external: true, version: "1.4.2", stale: true },
+          { ...TOOLS[0], key: "wafer-history", group: "wafer-history", external: true, version: "1.4.2", stale: true },
         ]}
         prefs={{}}
         onChange={vi.fn()}
@@ -280,5 +281,93 @@ describe("ToolsChecklist folds rows by group", () => {
     );
     fireEvent.click(screen.getByTestId("tools-reset"));
     expect(onChange).toHaveBeenLastCalledWith({});
+  });
+});
+
+// Review round 1 (plan P6): every rule the first round found un-pinned, and
+// the two open/close rules it changed. A stateful host, because several of
+// these are about what happens AFTER a change lands in `prefs`.
+function Host({ tools, initial }: { tools: ItemToolState[]; initial: Record<string, boolean> }) {
+  const [prefs, setPrefs] = useState(initial);
+  return <ToolsChecklist tools={tools} prefs={prefs} onChange={setPrefs} />;
+}
+
+describe("ToolsChecklist folds — rules pinned after review", () => {
+  it("puts the core fold first even when the rows arrive package-first", () => {
+    const packageFirst = [GROUPED[3]!, GROUPED[4]!, GROUPED[5]!, GROUPED[0]!, GROUPED[1]!, GROUPED[2]!];
+    render(<ToolsChecklist tools={packageFirst} prefs={{}} onChange={vi.fn()} />);
+    const headers = screen.getAllByTestId(/^tool-group-header-/);
+    expect(headers[0]).toHaveAttribute("data-testid", "tool-group-header-builtin");
+  });
+
+  it("a row inside an opened fold is still its own switch", () => {
+    const onChange = vi.fn();
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={onChange} />);
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin"));
+    fireEvent.click(screen.getByTestId("tool-read_file-off"));
+    expect(onChange).toHaveBeenLastCalledWith({ read_file: false });
+  });
+
+  it("reset clears the rows of a fold that is collapsed and uniform", () => {
+    const onChange = vi.fn();
+    render(
+      <ToolsChecklist tools={GROUPED} prefs={{ exec: false, read_file: false, write_file: false }} onChange={onChange} />,
+    );
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByTestId("tools-reset"));
+    expect(onChange).toHaveBeenLastCalledWith({});
+  });
+
+  it("a fold that opened because it was mixed stays open when a row inside makes it uniform", () => {
+    render(<Host tools={GROUPED} initial={{ exec: true }} />);
+    expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tool-exec-follow")); // now uniform
+    expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument();
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "true");
+    // and pressing the fold's own state does not shut it either
+    fireEvent.click(screen.getByTestId("tool-group-builtin-on"));
+    expect(screen.getByTestId("tool-row-write_file")).toBeInTheDocument();
+  });
+
+  it("a new search term overrides a fold the reader had closed by hand", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin")); // open
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin")); // close by hand
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "read" } });
+    expect(screen.getByTestId("tool-row-read_file")).toBeInTheDocument();
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("under a search a fold IS its matching rows: count, state and its tri-state cover only them", () => {
+    const onChange = vi.fn();
+    render(
+      <ToolsChecklist tools={GROUPED} prefs={{ "rca-tools:pareto": false }} onChange={onChange} />,
+    );
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "spc" } });
+    const header = screen.getByTestId("tool-group-header-rca-tools");
+    expect(header).toHaveTextContent("1");
+    expect(header).not.toHaveTextContent("2");
+    // the hidden pareto row is Off, the shown spc row is Follow: the fold reads Follow, not mixed
+    expect(screen.getByTestId("tool-group-rca-tools-follow")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("tool-group-rca-tools-mixed")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tool-group-rca-tools-on"));
+    expect(onChange).toHaveBeenLastCalledWith({ "rca-tools:pareto": false, "rca-tools:spc": true });
+  });
+
+  it("names the fold for assistive tech by what is on it, and says mixed on the tri-state", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{ exec: true }} onChange={vi.fn()} />);
+    // the header button's accessible name is its visible text — name, count, mixed
+    expect(screen.getByRole("button", { name: /核心工具.*3.*混合/ })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /核心工具.*混合/ })).toBeInTheDocument();
+  });
+
+  it("rows an older server sent without a group fall back to the flat list", () => {
+    const legacy = GROUPED.map((t) => {
+      const { group: _g, ...rest } = t;
+      return rest as ItemToolState;
+    });
+    render(<ToolsChecklist tools={legacy} prefs={{}} onChange={vi.fn()} />);
+    expect(screen.queryAllByTestId(/^tool-group-header-/)).toHaveLength(0);
+    for (const t of GROUPED) expect(screen.getByTestId(`tool-row-${t.key}`)).toBeInTheDocument();
   });
 });

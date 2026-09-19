@@ -39,7 +39,7 @@ from ..apps.manifest import load_app_manifest
 from ..apps.profiles import load_profile
 from ..apps.resolve import find_work_item
 from ..sandbox.protocol import Sandbox
-from ..tooling.catalog import flat_catalog, picker_units
+from ..tooling.catalog import BUILTIN_GROUP, flat_catalog, picker_units
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
@@ -91,7 +91,7 @@ class ItemToolState(BaseModel):
     Without it two rows can read as peers while one of them is a part of the
     other, and a command seen in a chat card cannot be traced to the switch
     that governs it."""
-    group: str = "builtin"
+    group: str = BUILTIN_GROUP
     """Which fold of the picker this row lives under: ``"builtin"`` for every
     built-in, otherwise the raw package id — a ``pkg:cmd`` command and its
     whole-package row share it, and an entry nothing resolves is its own fold.
