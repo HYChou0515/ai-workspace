@@ -51,17 +51,9 @@ async def run_agent_task(
 
     `on_event` (when given) fires for every event as it happens, so the caller
     can relay the sub-agent's work into the parent turn's stream."""
-    child = _child_context(parent_ctx, defn, model)
-    parts: list[str] = []
-    failure: str | None = None
-    async for ev in runner.run(prompt, child):
-        if on_event is not None:
-            on_event(ev)
-        if isinstance(ev, MessageDelta) and not ev.reasoning:
-            parts.append(ev.text)
-        elif isinstance(ev, RunError):
-            failure = ev.message
-    answer = "".join(parts).strip()
+    answer, failure = await drive_subagent(
+        runner, parent_ctx, defn, prompt, model=model, on_event=on_event
+    )
     if failure is not None:
         # Told, not raised: one delegated step failing is something the main
         # agent can work around, whereas raising would end the whole turn.
@@ -80,6 +72,35 @@ async def run_agent_task(
             "this one yourself."
         )
     return answer
+
+
+async def drive_subagent(
+    runner: AgentRunner,
+    parent_ctx: AgentToolContext,
+    defn: SubagentDef,
+    prompt: str,
+    *,
+    model: SubagentModel | None = None,
+    on_event: Callable[[AgentEvent], None] | None = None,
+) -> tuple[str, str | None]:
+    """Run `defn`'s sub-agent over `prompt` on a child of `parent_ctx` and return
+    `(what it said, why it failed)` — the failure `None` when the turn ended
+    cleanly. The one drive loop under both `run_agent_task` (which TELLS the
+    parent agent about a failure, so it can work around it) and the skill hub
+    reviewer (which RAISES on one, because an unreviewed skill must not
+    publish): the callers differ in what a failure means, not in how the
+    sub-agent is run."""
+    child = _child_context(parent_ctx, defn, model)
+    parts: list[str] = []
+    failure: str | None = None
+    async for ev in runner.run(prompt, child):
+        if on_event is not None:
+            on_event(ev)
+        if isinstance(ev, MessageDelta) and not ev.reasoning:
+            parts.append(ev.text)
+        elif isinstance(ev, RunError):
+            failure = ev.message
+    return "".join(parts).strip(), failure
 
 
 def _child_context(
@@ -142,6 +163,10 @@ def _child_context(
         ),
         history=[],
         run_agent=None,
+        # The skill hub reviewer is a second delegation seam; nulled for the
+        # same reason as `run_agent`, and `publish_skill` — its only caller —
+        # is stripped from the child's tools above (both halves, as always).
+        review_skill_via=None,
         subagent_defs=(),
         # Conversation-scoped. `conversation_id` is what actually refuses:
         # `update_todos` is a whole-list replace on the parent's pinned checklist

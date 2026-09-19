@@ -961,13 +961,25 @@ class ChatTurnEngine:
             self._spawn_watcher(key, my_epoch, turn)
             logger.info("turns: worker %s turn started (epoch %d)", key, my_epoch)
             # The turn persists its own (partial) result via on_complete even
-            # when cancelled; swallow the cancellation here so the worker lives.
-            # Anything ELSE that escapes a turn is swallowed for the same reason:
-            # one bad turn must not take the conversation's worker with it, or
-            # every later message queues behind a task that will never run again.
+            # when cancelled; a Stop cancels the TURN, and the worker lives on
+            # for the next message. Anything ELSE that escapes a turn is
+            # swallowed for the same reason: one bad turn must not take the
+            # conversation's worker with it, or every later message queues
+            # behind a task that will never run again.
+            #
+            # But the WORKER's own cancellation (`aclose`, the loop closing)
+            # arrives through this same `await` — cancelling a task cancels
+            # what it awaits — and swallowing it too parked the worker on
+            # `queue.get()` for good: a task is delivered its cancellation
+            # once, so the loop close then waited on it forever (CI's `api-4`
+            # shard, hours, twice). Which of the two it is, the task itself
+            # says.
             try:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await turn
+                await turn
+            except asyncio.CancelledError:
+                me = asyncio.current_task()
+                if me is not None and me.cancelling():
+                    raise
             except Exception:  # noqa: BLE001 — a turn's failure is not the worker's
                 logger.exception("turns: worker %s turn raised", key)
             finally:
@@ -1511,6 +1523,9 @@ class ChatTurnEngine:
                 await asyncio.wait_for(
                     asyncio.gather(*stragglers, return_exceptions=True), _DRAIN_GRACE_S
                 )
+        # Not awaited: a worker still at `await turn` (a straggler whose
+        # teardown outran the grace above) ends when that turn does, because
+        # `_worker` re-raises its OWN cancellation; it does not park.
         for session in self._ws_sessions.values():
             if session.worker is not None:
                 session.worker.cancel()

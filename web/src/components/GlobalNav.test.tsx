@@ -114,6 +114,32 @@ describe("GlobalNav", () => {
     );
   });
 
+  it("switcher draws every row's glyph — Apps and destinations alike", () => {
+    // The look this menu and the chat rail's ☰ share is the glyph before the
+    // label; the rail's test pins its side, this pins the switcher's. The href
+    // cases above stay green with the glyphs deleted outright — they cannot
+    // see them — so this is the only guard on the switcher's icons.
+    renderNav("/a/rca");
+    fireEvent.click(screen.getByRole("button", { name: /切換/ }));
+    const links = within(screen.getByRole("dialog")).getAllByRole("link");
+    const apps = links.filter((el) => el.getAttribute("href")?.startsWith("/a/"));
+    const destinations = links.filter((el) => !el.getAttribute("href")?.startsWith("/a/"));
+    expect(apps.length).toBeGreaterThan(0);
+    expect(destinations.length).toBeGreaterThan(0);
+    for (const el of [...apps, ...destinations]) {
+      // Every row starts with NavGlyph's 22px box — whatever the glyph inside
+      // (a named icon, a file, an emoji, or nothing), the box is what lines
+      // the labels up, so it is what "has its glyph" means here.
+      expect(el.firstElementChild, el.textContent ?? "").toHaveStyle({ width: "22px", height: "22px" });
+    }
+    // An App row carries the App FORM (its own manifest icon at 22px); a
+    // destination row the destination form (16px). A hardcoded destination
+    // glyph on an App row satisfied a bare `[data-icon]` check.
+    expect(apps[0]).toHaveTextContent("Root Cause Analysis");
+    expect(apps[0]!.querySelector('[data-icon="flame"]')).toHaveAttribute("width", "22");
+    expect(destinations[0]!.querySelector("[data-icon]")).toHaveAttribute("width", "16");
+  });
+
   it("switcher marks the current location (the App you're inside)", () => {
     renderNav("/a/yield/42");
     fireEvent.click(screen.getByRole("button", { name: /切換/ }));

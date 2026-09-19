@@ -29,6 +29,10 @@ how five separate tools hid behind an argument that fitted two of them:
 * ``update_todos`` — not here because it does not touch the workspace at all:
   it writes a specstar ``ConversationTodos`` row keyed by conversation. It was
   listed for rounds under a reason that was simply untrue.
+* ``search_skill_hub`` — the same shape: it reads skill hub entries, scoped to
+  what the SPEAKER may read (``SkillHubStore.visible``), and touches nothing on
+  the item. Its two siblings that do touch the item (``publish_skill`` reads
+  ``.skill/`` out, ``install_skill`` writes it in) are in the table.
 
 This enumeration has been short FIVE times — ``list_files``/``exists``, then
 ``infer_modules``, then ``make_deck``, then the entity tools, then
@@ -210,6 +214,16 @@ TOOL_VERBS: dict[str, tuple[Verb, ...]] = {
     # was one. Same verb as the workflow it schedules.
     "save_schedules": ("edit_content",),
     "save_skill": ("edit_content",),
+    # `publish_skill` READS `.skill/<name>/` and writes it to the skill hub, so by
+    # "what it does to the item" it is a read. It takes `save_skill`'s verb
+    # instead (plan-skill-hub): what it produces is a standing instruction every
+    # user of the platform can load, and a collaborator who may only READ an
+    # item taking its owner's skill public under their own name is the case the
+    # stricter verb closes on the honest path.
+    "publish_skill": ("edit_content",),
+    # `install_skill` writes `.skill/<name>/` into the item — the same standing
+    # instruction `save_skill` writes, arriving from the skill hub instead.
+    "install_skill": ("edit_content",),
     # `search_wiki`'s `scopes` fall back to the ITEM id when a turn has no
     # collections, so it greps the workspace and returns `path:line: text`.
     "search_wiki": ("read_content",),

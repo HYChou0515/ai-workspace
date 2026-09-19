@@ -25,6 +25,7 @@ import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
 import { DeleteItemBody } from "./DeleteItemConfirm";
 import { DialogProvider, useDialog } from "./Dialog";
+import { NavGlyph } from "./NavGlyph";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
 
@@ -182,6 +183,7 @@ export function ChatListRail({
                   to={`/a/${a.slug}`}
                   onClick={closeMenu}
                 >
+                  <NavGlyph app={a} />
                   {a.title}
                 </Link>
               ))}
@@ -194,6 +196,7 @@ export function ChatListRail({
                   to={l.to}
                   onClick={closeMenu}
                 >
+                  <NavGlyph icon={l.icon} />
                   {l.label}
                 </Link>
               ))}

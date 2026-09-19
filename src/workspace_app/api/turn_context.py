@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..agent.context import AgentToolContext
+from ..agent.context import AgentToolContext, ReviewSkill
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
 from ..apps.subagents import SubagentDef, load_subagents
@@ -53,6 +53,7 @@ from .turns import history_items
 if TYPE_CHECKING:
     from specstar import SpecStar
 
+    from ..apps.skill_hub import SkillHubStore
     from ..entity.events import EntityOrigin, EntityWriteSink
     from ..factories import SubagentModel
     from ..files import WorkspaceFiles
@@ -163,6 +164,8 @@ class TurnContextBuilder:
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         run_agent: RunAgent | None = None,
         subagent_models: tuple[SubagentModel, ...] = (),
+        skill_hub: SkillHubStore | None = None,
+        review_skill: ReviewSkill | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._filestore = filestore
@@ -201,6 +204,11 @@ class TurnContextBuilder:
         # The operator's curated run_agent engines (resolve_subagent_models) —
         # deploy-lifetime like the seam above, stamped onto every turn's ctx.
         self._subagent_models = subagent_models
+        # Skill hub (docs/plan-skill-hub.md): the store `publish_skill` writes
+        # and the reviewer it consults — both properties of the deployment,
+        # wired once here like `run_agent`. None ⇒ the tool refuses.
+        self._skill_hub = skill_hub
+        self._review_skill = review_skill
         # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
         # agent's entity write fires on_event workflows. Set after construction by the
         # composition root (the EventTriggerDispatcher is built later than this builder,
@@ -785,6 +793,8 @@ class TurnContextBuilder:
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
             subagent_models=self._subagent_models,
+            skill_hub=self._skill_hub,
+            review_skill_via=self._review_skill,
             # #29 / §A: whether anything is loadable this turn — what decides
             # `read_skill`. Carried rather than re-derived because only this
             # layer can see the workspace and the per-item toggles.

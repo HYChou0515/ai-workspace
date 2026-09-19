@@ -1,0 +1,222 @@
+/*
+ * The skill hub pages (docs/plan-skill-hub.md): the list at /skill-hub and
+ * an entry at /skill-hub/:id. Its own sheet, scoped to its own classes:
+ * `my-resources.css` owns `.page` and reaches into any list under it, so a
+ * list here that borrowed a bare `ul` would inherit that sheet's one-line
+ * flex row at every width (the `.wui-list` note there).
+ */
+
+/* ── the list ─────────────────────────────────────────────────────────── */
+
+/* The 「全部 / 我的」 pair beside the search box. */
+.page .skill-hub-scope {
+  display: inline-flex;
+  gap: var(--space-4);
+}
+
+.page .skill-hub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+/* One entry: a head line (name · App · badges), the description, the owner.
+   A block, not a flex row: the head line wraps its own children, so a long
+   name at 390px folds under the App tag instead of squeezing it to 0px
+   (the lesson of PR #811's rows). */
+.page .skill-hub-row {
+  display: block;
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  min-width: 0;
+}
+
+.page .skill-hub-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.page .skill-hub-row-title {
+  font-weight: 700;
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.page .skill-hub-row-title:hover {
+  text-decoration: underline;
+}
+
+.page .skill-hub-owner {
+  font-weight: 400;
+  color: var(--text-paper-d);
+}
+
+.page .skill-hub-row-desc {
+  margin: var(--space-4) 0 0;
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.page .skill-hub-row-meta {
+  margin-top: var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-small);
+}
+
+/* Forks sit under their root, indented, in the same card shape. */
+.page .skill-hub-forks {
+  list-style: none;
+  margin: var(--space-12) 0 0;
+  padding: 0 0 0 var(--space-16);
+  border-left: 2px solid var(--paper-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.page .skill-hub-badge {
+  display: inline-block;
+  padding: 1px var(--space-8);
+  border-radius: var(--radius-btn);
+  font-size: var(--text-small);
+  background: var(--paper-2);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+
+/* The two badges that ask for a second look — review notes, an unpublished
+   entry — in the semantic warn hue, mixed the way entity-views.css tints. */
+.page .skill-hub-badge[data-kind="notes"],
+.page .skill-hub-badge[data-kind="private"] {
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--text-paper);
+}
+
+/* ── an entry ─────────────────────────────────────────────────────────── */
+
+.page.skill-hub-entry > .page-head > h1 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* The actions take their own row under the heading at every width — five
+   buttons beside a long name shared the line badly, and at 390px a second
+   row of buttons ran INTO the description when it was pulled up under them
+   (measured, P9). Plain flow instead: heading, actions, description. */
+.page .skill-hub-entry-desc {
+  margin: 0 0 var(--space-16);
+  font-size: var(--text-body-lg);
+}
+
+.page .skill-hub-entry-meta,
+.page .skill-hub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.page .skill-hub-actions {
+  flex-basis: 100%;
+  margin: calc(-1 * var(--space-16)) 0 var(--space-16);
+}
+
+.page .skill-hub-actions > .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* The first section follows the meta line, not another section, so the
+   inter-section gap does not reach it. */
+.page.skill-hub-entry > section:first-of-type {
+  margin-top: var(--space-24);
+}
+
+.page .skill-hub-lineage {
+  margin: var(--space-12) 0 0;
+  font-size: var(--text-small);
+}
+
+/* `my-resources.css` draws EVERY `.page ul > li` as a bordered flex row (the
+   resource lists). These lists are not that; each says so, or the chips came
+   out one per line with a rule between them (measured, P9). */
+.page .skill-hub-chips,
+.page .skill-hub-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.page .skill-hub-chips > li,
+.page .skill-hub-files > li {
+  display: inline;
+  padding: 0;
+  border: 0;
+}
+
+.page .skill-hub-chips code,
+.page .skill-hub-files code {
+  display: inline-block;
+  padding: 2px var(--space-8);
+  border-radius: var(--radius-btn);
+  background: var(--paper-2);
+  font-size: var(--text-small);
+}
+
+.page .skill-hub-notes {
+  margin: 0;
+  padding-left: var(--space-24);
+  list-style: disc;
+}
+
+.page .skill-hub-notes > li {
+  display: list-item;
+  padding: 0;
+  border: 0;
+}
+
+.page .skill-hub-notes > li + li {
+  margin-top: var(--space-4);
+}
+
+.page .skill-hub-list > li,
+.page .skill-hub-forks > li {
+  border-top: 0;
+}
+
+.page .skill-hub-md {
+  padding: var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  overflow-x: auto;
+}
+
+.page .muted {
+  color: var(--text-paper-d);
+}
+
+.page .small {
+  font-size: var(--text-small);
+}
+
+.modal-title {
+  font-size: var(--text-body-lg);
+  margin: 0 0 var(--space-12);
+}

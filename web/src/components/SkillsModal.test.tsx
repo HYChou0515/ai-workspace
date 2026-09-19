@@ -2,10 +2,15 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
 import type { ItemSkillState } from "../api/types";
+import { HttpError } from "../api/http";
+import type { SkillHubCard } from "../api/skillHub";
+import { subscribeAgentDraft } from "../lib/agentDraftBus";
+import { translate } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { SkillsModal } from "./SkillsModal";
 
@@ -281,5 +286,182 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     await screen.findByTestId("skill-author-skill-follow");
     fireEvent.keyDown(document, { key: "Escape" });
     expect(props.onClose).toHaveBeenCalled();
+  });
+});
+
+
+// ── the skill hub's two buttons (docs/plan-skill-hub.md, D2) ─────────────────
+
+const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
+  translate("zh-TW", key, vars);
+
+const hubCard = (over: Partial<SkillHubCard>): SkillHubCard => ({
+  id: "e-1",
+  owner: "alice",
+  name: "triage-reflow",
+  description: "Triage reflow defects.",
+  source_app: "pm",
+  referenced_tools: ["exec", "query_entity"],
+  forked_from: "",
+  review_verdict: "ok",
+  is_mine: false,
+  missing_tools: ["query_entity"],
+  forks: [],
+  ...over,
+});
+
+/** The picker links to the skill hub page, so it needs a router under it. */
+function renderWithHub(hub: ReturnType<typeof fakeHub>) {
+  const props: ComponentProps<typeof SkillsModal> = {
+    slug: "rca",
+    itemId: "i1",
+    fileService: fakeService().svc,
+    onClose: vi.fn(),
+    onSaveSkillPrefs: vi.fn(),
+    appliedSkills: [],
+    onToggleApply: vi.fn(),
+    client: fakeClient(),
+    hubClient: hub,
+  };
+  renderWithQuery(
+    <MemoryRouter>
+      <SkillsModal {...props} />
+    </MemoryRouter>,
+  );
+  return props;
+}
+
+function fakeHub(rows: SkillHubCard[] = [hubCard({})]) {
+  return {
+    list: vi.fn(async (_q?: string, _mine?: boolean, _app?: string) => rows),
+    install: vi.fn(async (_slug: string, _item: string, _entry: string) => ({
+      name: "triage-reflow",
+      missing_tools: ["query_entity"],
+    })),
+  };
+}
+
+describe("SkillsModal — the skill hub", () => {
+  it("offers Publish on a workspace skill only, and puts the sentence in the chat box", async () => {
+    const props = renderModal();
+    await screen.findByTestId("skill-row-my-skill");
+    const offered: string[] = [];
+    const unsubscribe = subscribeAgentDraft("i1", (text) => offered.push(text));
+
+    // A shared (package) skill's files are the deploy's — nothing to publish.
+    expect(screen.queryByTestId("skill-publish-author-skill")).toBeNull();
+    fireEvent.click(screen.getByTestId("skill-publish-my-skill"));
+
+    expect(offered).toEqual([word("skills.publishSentence", { name: "my-skill" })]);
+    // Offered, not sent — and the panel gets out of the way of the box.
+    expect(props.onClose).toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("opens the picker with this App's tool告知 on each row, and installs through the panel's door", async () => {
+    const hub = fakeHub();
+    renderWithHub(hub);
+    await screen.findByTestId("skill-row-my-skill");
+
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    const picker = await screen.findByTestId("skill-hub-picker");
+    await waitFor(() => expect(hub.list).toHaveBeenCalledWith("", false, "rca"));
+    expect(await screen.findByTestId("pick-missing-e-1")).toHaveTextContent(
+      word("skills.fromHub.missing", { tools: "query_entity" }),
+    );
+
+    fireEvent.click(screen.getByTestId("pick-install-e-1"));
+
+    await waitFor(() => expect(hub.install).toHaveBeenCalledWith("rca", "i1", "e-1"));
+    await waitFor(() => expect(picker).not.toBeInTheDocument());
+    expect(screen.getByTestId("skills-refresh-note")).toHaveTextContent(
+      word("skills.fromHub.installed", { name: "triage-reflow" }),
+    );
+  });
+
+  it("shows the server's refusal when a folder of that name is already here", async () => {
+    const hub = fakeHub();
+    // What the REAL client throws (see `api/skillHub.test.ts`): an `HttpError`
+    // whose message is the server's sentence — not a bare Error carrying it.
+    hub.install.mockRejectedValueOnce(
+      new HttpError(
+        409,
+        "this workspace already has alice's '.skill/triage-reflow/' — remove or rename that folder first, then install again",
+      ),
+    );
+    renderWithHub(hub);
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    fireEvent.click(await screen.findByTestId("pick-install-e-1"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("alice's '.skill/triage-reflow/'");
+    expect(screen.getByTestId("skill-hub-picker")).toBeInTheDocument();
+  });
+
+  it("lists a fork under its root as one more thing to install", async () => {
+    const hub = fakeHub([
+      hubCard({ forks: [hubCard({ id: "e-fork", owner: "bob", forked_from: "e-1", missing_tools: [] })] }),
+    ]);
+    renderWithHub(hub);
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+
+    expect(await screen.findByTestId("pick-e-fork")).toBeInTheDocument();
+    expect(screen.queryByTestId("pick-missing-e-fork")).toBeNull();
+  });
+  it("Publish is a deliberate exit, so it asks about unsaved picks first (#779)", async () => {
+    // Review round 1: Publish called the bare `onClose`, throwing away every
+    // tri-state pick in silence while Escape politely asked.
+    const props = renderModal();
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skill-author-skill-off"));
+    const offered: string[] = [];
+    const unsubscribe = subscribeAgentDraft("i1", (text) => offered.push(text));
+
+    fireEvent.click(screen.getByTestId("skill-publish-my-skill"));
+
+    // The sentence is in the box either way; the panel asks before it goes.
+    expect(offered).toHaveLength(1);
+    expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("dialog-action-discard"));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    unsubscribe();
+  });
+
+  it("offers Update and Reset only while the copy's upstream is live", async () => {
+    // Review round 1: Reset on a copy whose original was unpublished or
+    // deleted did nothing and then said "Updated to the shipped version".
+    const skills: ItemSkillState[] = [
+      { ...SKILLS[2], name: "gone", is_copy: true, upstream: "deleted", update_available: true },
+      { ...SKILLS[2], name: "hidden", is_copy: true, upstream: "unpublished" },
+      { ...SKILLS[2], name: "fine", is_copy: true, upstream: "live", update_available: true },
+    ];
+    renderModal({ client: fakeClient(skills) });
+
+    await screen.findByTestId("skill-row-fine");
+    expect(screen.getByTestId("skill-reset-fine")).toBeInTheDocument();
+    expect(screen.getByTestId("skill-refresh-fine")).toBeInTheDocument();
+    expect(screen.queryByTestId("skill-reset-gone")).toBeNull();
+    expect(screen.queryByTestId("skill-refresh-gone")).toBeNull();
+    expect(screen.queryByTestId("skill-reset-hidden")).toBeNull();
+  });
+
+  it("says on the row when a copy's skill hub original was unpublished or deleted", async () => {
+    const skills: ItemSkillState[] = [
+      { ...SKILLS[2], name: "gone", is_copy: true, upstream: "deleted" },
+      { ...SKILLS[2], name: "hidden", is_copy: true, upstream: "unpublished" },
+      { ...SKILLS[2], name: "fine", is_copy: true, upstream: "live" },
+    ];
+    renderModal({ client: fakeClient(skills) });
+
+    expect(await screen.findByTestId("skill-upstream-gone")).toHaveTextContent(
+      word("skillHub.origin.deleted"),
+    );
+    expect(screen.getByTestId("skill-upstream-hidden")).toHaveTextContent(
+      word("skillHub.origin.unpublished"),
+    );
+    expect(screen.queryByTestId("skill-upstream-fine")).toBeNull();
   });
 });

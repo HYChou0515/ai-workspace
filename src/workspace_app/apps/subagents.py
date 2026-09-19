@@ -54,7 +54,14 @@ SUBAGENT_BODY_CAP = 50_000
 #: Enforced twice on purpose: subtracted from what `save_subagent` will grant
 #: (so the agent is TOLD, per the refuse-don't-trim rule) and stripped again in
 #: the child context (so a hand-written `.agent/` file cannot slip one past).
-SUBAGENT_FORBIDDEN_TOOLS = frozenset({"run_agent", "save_subagent", "update_todos", "ask_user"})
+#: - `publish_skill` — it reaches OUTSIDE the item, putting a skill in front of
+#:   everyone under the acting user's name, and the meta-skill's rule is "only
+#:   when the user has said which skill" — which a sub-agent (no `ask_user`,
+#:   no view of the conversation) cannot have heard. Installing and searching
+#:   stay: they touch this item only.
+SUBAGENT_FORBIDDEN_TOOLS = frozenset(
+    {"run_agent", "save_subagent", "update_todos", "ask_user", "publish_skill"}
+)
 
 
 class SubagentDef(msgspec.Struct, frozen=True):

@@ -96,6 +96,65 @@ def schemas() -> list[dict]:
             {"question": s},
             ["question"],
         ),
+        # The standing-instruction tools. Offered because the scenarios that
+        # tune `author-skill` / `author-workflow` / `skill-hub` score on
+        # WHETHER the model reaches for them — a harness that never offered
+        # them could not pass those scenarios in either arm, so a run measured
+        # nothing (review round 1 of plan-skill-hub). Their doubles write the
+        # file where the real tool would, or answer as the real tool answers;
+        # none of them touches a hub or a reviewer.
+        fn(
+            "save_skill",
+            "Save a reusable skill into THIS workspace so you (and the user) can load "
+            "it later with `read_skill`. `name` is a short title, `description` a one-line "
+            "'when to use this', `body` the methodology in markdown.",
+            {"name": s, "description": s, "body": s},
+            ["name", "description", "body"],
+        ),
+        # The parameter names are the REAL tools' (pinned against `_IMPLS`):
+        # the `author-workflow` guidance under test tells the model to call
+        # `save_workflow(id, workflow_json)`, and a double that took
+        # `(name, body)` answered that call with a KeyError (review round 2).
+        fn(
+            "save_workflow",
+            "Validate and save a workspace workflow (`workflow.json`) under "
+            "`.workflows/<id>/`. `workflow_json` is the JSON text.",
+            {"id": s, "workflow_json": s},
+            ["id", "workflow_json"],
+        ),
+        fn(
+            "save_schedules",
+            "Validate and save the item's `.workflows/schedules.json` — which of the "
+            "item's workflows run on a clock. `schedules_json` is the JSON text.",
+            {"schedules_json": s},
+            ["schedules_json"],
+        ),
+        fn(
+            "search_skill_hub",
+            "Find skills other users have published to the skill hub. `query` matches "
+            "the name and description; an empty query lists everything. Each hit shows "
+            "`owner/name`, the description, which App it was written in, and the entry "
+            "id that `install_skill` takes.",
+            {"query": s},
+            ["query"],
+        ),
+        fn(
+            "install_skill",
+            "Install a skill from the skill hub into THIS workspace, as `.skill/<name>/`, "
+            "so it is loadable with `read_skill` from the next turn on. Use it after the "
+            "user has picked an entry (by id) and said to install it.",
+            {"entry_id": s},
+            ["entry_id"],
+        ),
+        fn(
+            "publish_skill",
+            "Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the "
+            "skill hub, where every user of the platform can find it and install it. "
+            "Use it when the user asks to share, publish or upload a skill — and only "
+            "after they have said which one.",
+            {"name": s},
+            ["name"],
+        ),
     ]
 
 
@@ -128,6 +187,52 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
     if name == "ask_user":
         events.append(Event("ask_user", args["question"]))
         return "(the question was put to the user; this turn ends here)"
+    if name == "save_skill":
+        slug = "-".join(
+            w for w in "".join(c if c.isalnum() else " " for c in args["name"].lower()).split()
+        )
+        target = work / ".skill" / slug / "SKILL.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            f"---\nname: {slug}\ndescription: {args['description']}\n---\n\n{args['body']}\n"
+        )
+        return (
+            f"saved skill '{slug}' to .skill/{slug}/SKILL.md. "
+            f"Load it any time with read_skill('{slug}')."
+        )
+    if name == "save_workflow":
+        target = work / ".workflows" / args["id"] / "workflow.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(args["workflow_json"])
+        return f"saved workflow '{args['id']}' to .workflows/{args['id']}/workflow.json"
+    if name == "save_schedules":
+        target = work / ".workflows" / "schedules.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(args["schedules_json"])
+        return "saved .workflows/schedules.json"
+    if name == "search_skill_hub":
+        # A fixed listing: the scoring asks whether the model SEARCHED, never
+        # what it found. One hit in another App, so the告知 line has something
+        # to relay.
+        return (
+            f"1 skill hub entry matches {args['query']!r}:\n"
+            "- alice/reflow-triage — Triage reflow defects from the log. "
+            "[written in pm; id 0123456789abcdef0123456789abcdef]\n"
+            "    mentions query_entity, which this App lacks"
+        )
+    if name == "install_skill":
+        return (
+            f"installed skill 'reflow-triage' (by alice, written in the pm App) into "
+            f".skill/reflow-triage/ (entry {args['entry_id']}). It is in the skill index "
+            "from the next turn on; load it any time with read_skill('reflow-triage')."
+        )
+    if name == "publish_skill":
+        return (
+            f"published skill '{args['name']}' to the skill hub (new; entry "
+            "0123456789abcdef0123456789abcdef).\n"
+            "The reviewer (eval) had nothing to flag.\n"
+            "It is public: everyone on the platform can find and install it."
+        )
     return f"unknown tool {name!r}"
 
 

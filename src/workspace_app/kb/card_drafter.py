@@ -16,7 +16,6 @@ contract.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
@@ -24,6 +23,7 @@ from typing import Any
 
 from .card_gen import CardDraft, DescriptionQuestionDraft, DocDigest, TermQuestionDraft
 from .llm import ILlm
+from .llm_json import balanced_objects, try_object
 
 logger = logging.getLogger(__name__)
 
@@ -206,8 +206,8 @@ def _find_digest_object(raw: str) -> dict[str, Any] | None:
     texts = [stripped] if stripped == raw else [stripped, raw]
     fallback: dict[str, Any] | None = None
     for text in texts:
-        for candidate in _balanced_objects(text):
-            obj = _try_object(candidate)
+        for candidate in balanced_objects(text):
+            obj = try_object(candidate)
             if obj is None:
                 continue
             if any(k in obj for k in _DIGEST_KEYS):
@@ -215,47 +215,3 @@ def _find_digest_object(raw: str) -> dict[str, Any] | None:
             if fallback is None:
                 fallback = obj
     return fallback
-
-
-def _balanced_objects(text: str) -> list[str]:
-    """Every top-level, brace-balanced ``{…}`` substring of ``text``, left to
-    right. String-aware: braces inside a double-quoted JSON string (respecting
-    ``\\`` escapes) don't move the depth, so a ``}`` in a value can't close the
-    object early."""
-    out: list[str] = []
-    depth = 0
-    start = -1
-    in_str = False
-    escaped = False
-    for i, c in enumerate(text):
-        if in_str:
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == '"':
-                in_str = False
-            continue
-        if c == '"':
-            in_str = True
-        elif c == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif c == "}" and depth > 0:
-            depth -= 1
-            if depth == 0:
-                out.append(text[start : i + 1])
-    return out
-
-
-def _try_object(candidate: str) -> dict[str, Any] | None:
-    """``json.loads(candidate)`` if it parses, else ``None``. ``candidate`` is a
-    brace-balanced ``{…}`` from :func:`_balanced_objects`, so a successful parse is
-    always a JSON object (never an array/scalar) — narrowed for ty."""
-    try:
-        obj = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    assert isinstance(obj, dict)  # a balanced {…} always parses to a JSON object
-    return obj
