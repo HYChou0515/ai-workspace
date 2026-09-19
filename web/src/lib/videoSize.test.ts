@@ -84,6 +84,14 @@ describe("resolveSize — three ways to say one W×H + text scale", () => {
       p: 480,
     });
     expect(allowedSteps("16:9", 500_000)).toEqual([480]);
+    // The LARGEST allowed, not the smallest: 1,000,000 px allows 480p and
+    // 720p in 16:9, and a 1080p choice lands on 720p.
+    expect(allowedSteps("16:9", 1_000_000)).toEqual([480, 720]);
+    expect(fitChoice({ mode: "resolution", aspect: "16:9", p: 1080 }, 1_000_000)).toEqual({
+      mode: "resolution",
+      aspect: "16:9",
+      p: 720,
+    });
     // 600,000 px in 16:9 allows only 小 (0.8 × 720p = 1024×576 = 589,824).
     expect(fitChoice({ mode: "text", aspect: "16:9", textScale: 1 }, 600_000)).toEqual({
       mode: "text",

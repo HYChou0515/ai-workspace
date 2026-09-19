@@ -121,7 +121,11 @@ function VideoProgressBody({
   const refetched = useRef(false);
 
   const reading = useQuery<Reading>({
-    queryKey: qk.chatVideoProgress(itemId, job.progress_path),
+    // The token is in the key: a second job at the SAME path (the default
+    // name is to the second; a script can repeat one) must not open on the
+    // first job's last reading — `gcTime: 0` is a `setTimeout(0)`, and the
+    // new body subscribes in the same commit, before it fires.
+    queryKey: qk.chatVideoProgress(itemId, job.progress_path, job.token),
     queryFn: async () => {
       polls.current += 1;
       try {
@@ -138,8 +142,6 @@ function VideoProgressBody({
       if (d?.kind === "gone" || d?.progress.stage === "failed") return false;
       return poll(polls.current);
     },
-    // The first look is answered from the network, never from a cache of
-    // the previous job at the same path.
     staleTime: 0,
     gcTime: 0,
   });

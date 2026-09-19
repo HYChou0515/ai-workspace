@@ -52,7 +52,8 @@ export const qk = {
   chatVideoLimits: (id: string) => ["chatVideoLimits", id] as const,
   // The progress file the header line polls; keyed by path so two videos of
   // one item are two queries.
-  chatVideoProgress: (id: string, path: string) => ["chatVideoProgress", id, path] as const,
+  chatVideoProgress: (id: string, path: string, token: string) =>
+    ["chatVideoProgress", id, path, token] as const,
   // A WUI's assembled document. `generation` is the Refresh counter, not a
   // cache-buster: a WUI is deliberately never reloaded on its own, so a NEW key
   // is the only thing that rebuilds one — and it also drops the old frame,

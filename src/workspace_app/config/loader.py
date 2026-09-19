@@ -330,35 +330,37 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
 
 def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
     """`chat_video:` (plan-chat-video-export decision 10): every ceiling a
-    positive integer, and `stale_after_seconds` no shorter than
+    positive integer, and `stale_after_seconds` longer than
     `heartbeat_seconds`. A `heartbeat_seconds: 0` is a hot loop rewriting
     the progress file tens of thousands of times a second (measured:
-    16,689 writes in a 0.3 s render), and a stale rule shorter than the
-    beat reads every running job as dead between beats — a second request
-    then replaces a live job's file mid-render. Only present values are
-    checked; absent ones are the bundled defaults."""
-    node = merged.get("chat_video", {})
-    for key in (
-        "max_pixels",
-        "max_seconds",
-        "max_output_bytes",
-        "heartbeat_seconds",
-        "stale_after_seconds",
-    ):
-        value = node.get(key)
-        if value is not None and (
-            not isinstance(value, int) or isinstance(value, bool) or value < 1
-        ):
-            raise ValueError(
-                f"config {source}: chat_video.{key} must be a positive integer, got {value!r}"
-            )
-    heartbeat = node.get("heartbeat_seconds", 10)
-    stale = node.get("stale_after_seconds", 60)
-    if isinstance(heartbeat, int) and isinstance(stale, int) and stale < heartbeat:
+    16,689 writes in a 0.3 s render), and a stale rule no longer than the
+    beat reads a running job as dead between beats — a second request then
+    replaces a live job's file mid-render. `merged` is the bundled defaults
+    with the file laid over them, so every key is present here, and a YAML
+    null (`heartbeat_seconds:` left blank) REPLACES the default verbatim
+    rather than falling back to it — `None` is refused like any other
+    non-integer, because a worker with `heartbeat_seconds=None` never
+    beats and never sees a cancel."""
+    node = merged.get("chat_video")
+    if not isinstance(node, dict):
         raise ValueError(
-            f"config {source}: chat_video.stale_after_seconds ({stale}) must be at least "
-            f"chat_video.heartbeat_seconds ({heartbeat}) — a shorter rule reads every running "
-            "job as dead between two beats"
+            f"config {source}: chat_video must be a mapping of the five ceilings, got {node!r}"
+            " — a header with every key commented out is a null section; drop the header too"
+        )
+    for field in dataclasses.fields(ChatVideoSettings):
+        value = node.get(field.name, field.default)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(
+                f"config {source}: chat_video.{field.name} must be a positive integer, "
+                f"got {value!r}"
+            )
+    heartbeat = node.get("heartbeat_seconds", ChatVideoSettings.heartbeat_seconds)
+    stale = node.get("stale_after_seconds", ChatVideoSettings.stale_after_seconds)
+    if stale <= heartbeat:
+        raise ValueError(
+            f"config {source}: chat_video.stale_after_seconds ({stale}) must be longer than "
+            f"chat_video.heartbeat_seconds ({heartbeat}) — a rule no longer than the beat reads "
+            "a running job as dead between two beats"
         )
 
 

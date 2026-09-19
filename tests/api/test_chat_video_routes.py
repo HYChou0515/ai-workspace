@@ -356,6 +356,23 @@ def test_a_very_long_title_still_names_a_file_the_store_can_take():
     assert len(name.encode()) < 255 and name.startswith("事故" * 21 + "-")
 
 
+def test_a_title_of_one_byte_letters_is_capped_by_characters():
+    """The character cap on its own: 300 ASCII letters are cut at 64 (the
+    byte cap, 128, is not reached). The CJK title above is cut by BYTES
+    first, so without this case the character rule had no test."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+
+    r = client.post(
+        f"/a/rca/items/{iid}/chat-video", json={"transcript": {**TRANSCRIPT, "title": "a" * 300}}
+    )
+
+    assert r.status_code == 202, r.text
+    name = r.json()["output_path"].rsplit("/", 1)[-1]
+    assert name.startswith("a" * 64 + "-") and not name.startswith("a" * 65)
+
+
 def test_a_title_of_four_byte_letters_is_capped_by_bytes_not_characters():
     """`safe_stem` keeps every letter, and CJK Extension B letters are four
     bytes each: 64 of them are 256 bytes, over the store's NAME_MAX before
@@ -373,6 +390,23 @@ def test_a_title_of_four_byte_letters_is_capped_by_bytes_not_characters():
     progress = r.json()["progress_path"].rsplit("/", 1)[-1]
     assert len(progress.encode()) <= 128 + len("-20260919-123456.mp4.progress.json")
     assert progress.startswith("\U00020000" * 32)  # 32 × 4 bytes = the 128
+
+
+def test_a_callers_output_name_too_long_for_the_store_is_a_422_before_anything_is_written():
+    """The default name is capped; a caller's own `output_path` was not,
+    and a 254-byte name — legal on its own — made `<name>.progress.json`
+    268 bytes: the store's ENAMETOOLONG surfaced as a 500 from the route's
+    first look at the path. The name plus its progress twin must fit
+    NAME_MAX, and the refusal says by how much."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+
+    r = _post(client, iid, output_path="videos/" + "n" * 250 + ".mp4")
+
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "output file name is 254 bytes; with its progress file at most 241"
+    assert list(spec.get_resource_manager(ChatVideoJob).list_resources()) == []
 
 
 def test_the_dialogs_own_request_is_accepted_under_a_small_output_ceiling():

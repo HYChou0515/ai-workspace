@@ -46,6 +46,7 @@ DEFAULT_OUTPUT_DIR = "/exports/chat-video"
 # title made a 900-byte name the store refused (a 500 for a renamed chat).
 DEFAULT_STEM_CHARS = 64
 DEFAULT_STEM_BYTES = 128
+NAME_MAX = 255  # the store's limit on one path segment, in bytes (Linux NAME_MAX)
 
 
 class ChatVideoRequest(BaseModel):
@@ -193,15 +194,20 @@ def register_chat_video_routes(
             stamp = now().strftime("%Y%m%d-%H%M%S")
             output_path = f"{DEFAULT_OUTPUT_DIR}/{default_stem(title)}-{stamp}.{options.fmt[0]}"
         try:
-            check_limits(
-                options,
-                max_pixels=limits.max_pixels,
-                max_seconds=limits.max_seconds,
-                max_output_bytes=limits.max_output_bytes,
-            )
+            check_limits(options, max_pixels=limits.max_pixels, max_seconds=limits.max_seconds)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         options = fit_asset_budgets(options, max_output_bytes=limits.max_output_bytes)
+        # D-R3-3: a caller's own output name, with its progress twin, must fit
+        # the store's NAME_MAX — the file routes 500 on a longer one
+        # (ENAMETOOLONG), and so did this route, before it queued anything.
+        name_bytes = len(output_path.rsplit("/", 1)[-1].encode("utf-8"))
+        if name_bytes + len(prog.PROGRESS_SUFFIX) > NAME_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f"output file name is {name_bytes} bytes; with its progress file at most "
+                f"{NAME_MAX - len(prog.PROGRESS_SUFFIX)}",
+            )
         if await files.exists(investigation_id, output_path):
             raise HTTPException(status_code=409, detail=f"file exists at {rel_path(output_path)}")
         timeline = build_timeline(title=title, messages=messages, options=options)

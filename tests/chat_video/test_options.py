@@ -77,7 +77,6 @@ def test_options_inside_the_ceilings_pass(width, height, max_seconds):
         VideoOptions(width=width, height=height, max_seconds=max_seconds),
         max_pixels=1920 * 1080,
         max_seconds=180,
-        max_output_bytes=100_000_000,
     )
 
 
@@ -99,7 +98,6 @@ def test_options_past_a_ceiling_are_refused_with_the_ceiling_named(width, height
             VideoOptions(width=width, height=height, max_seconds=max_seconds),
             max_pixels=1920 * 1080,
             max_seconds=180,
-            max_output_bytes=100_000_000,
         )
 
 
@@ -145,5 +143,4 @@ def test_a_pixel_ceiling_that_is_no_whole_16_9_frame_is_named_by_the_number_alon
             VideoOptions(width=1280, height=1024),
             max_pixels=1_000_000,
             max_seconds=180,
-            max_output_bytes=100_000_000,
         )

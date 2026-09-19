@@ -210,6 +210,38 @@ async def test_one_video_in_flight_per_item_and_one_per_person():
     await ask(other, "/bob.mp4", user="bob")  # bob on the other item: neither rule
 
 
+async def test_a_job_already_rendering_is_alive_to_all_three_rules_by_its_heartbeat():
+    """The producer side's running-stage cell, pinned on its own: the file
+    says `rendering` with a heartbeat inside the rule, so the same path,
+    the same item and the same person are all refused. (The stale
+    direction was pinned; this one was not — a `_alive_jobs` that dropped
+    every running job passed 48 tests, and its symptom is a second export
+    accepted mid-render, its `queued` file overwriting the live one.)"""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item, other = _item(spec), _item(spec)
+    coord = _coordinator(spec, files, _Render(), clock=clock, stale_after_seconds=60)
+
+    async def ask(item_id: str, output_path: str, *, user: str) -> None:
+        await coord.enqueue(
+            item_id=item_id, title="t", messages=MESSAGES, options=VideoOptions(fmt=("mp4",)),
+            output_path=output_path, expected_seconds=1, user=user,
+        )  # fmt: skip
+
+    await ask(item, OUT, user="alice")
+    mine = await _progress(files, item)
+    assert mine is not None
+    running = msgspec.structs.replace(mine, stage="rendering", elapsed_seconds=30)
+    await files.write(item, OUT + ".progress.json", running.dumps())
+    clock.t = T0 + timedelta(seconds=30)  # the heartbeat is 30 s old: inside the 60 s rule
+
+    with pytest.raises(InFlight, match="already being made at " + OUT):
+        await ask(item, OUT, user="carol")
+    with pytest.raises(InFlight, match="already being made on this item"):
+        await ask(item, "/bob.mp4", user="bob")
+    with pytest.raises(InFlight, match="you already have a video being made"):
+        await ask(other, "/x.mp4", user="alice")
+
+
 async def test_a_cancelled_requesters_row_does_not_borrow_a_successors_file():
     """Alice queues at a path, cancels (the file is gone; her row stays
     PENDING until the worker reaches it), and Bob queues the same path —

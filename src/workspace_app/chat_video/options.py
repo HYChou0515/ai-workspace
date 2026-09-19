@@ -111,17 +111,16 @@ class VideoOptions(msgspec.Struct, frozen=True):
                 raise ValueError(why)
 
 
-def check_limits(
-    options: VideoOptions, *, max_pixels: int, max_seconds: int, max_output_bytes: int
-) -> None:
+def check_limits(options: VideoOptions, *, max_pixels: int, max_seconds: int) -> None:
     """The server's ceilings on top of the struct's own sanity (which is what
     ANY caller may ask; these are what THIS deployment allows —
     ``config.yaml`` ``chat_video:``). The form never offers a value past
     them; a caller of the API can send anything, so the refusal names the
-    ceiling and what it is, one sentence, for a 422. The asset budgets are
-    not refused but FITTED (:func:`fit_asset_budgets`): they have defaults
-    the dialog never sends, and a refusal on a default named a knob the
-    person had no field for."""
+    ceiling and what it is, one sentence, for a 422. The output ceiling is
+    the worker's to apply (it knows the size only once the file exists), and
+    the asset budgets are not refused but FITTED (:func:`fit_asset_budgets`):
+    they have defaults the dialog never sends, and a refusal on a default
+    named a knob the person had no field for."""
     pixels = options.width * options.height
     if pixels > max_pixels:
         side = _side_of(max_pixels)

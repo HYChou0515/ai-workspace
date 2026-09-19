@@ -498,11 +498,16 @@ spec:
       # pass at `_ENCODE_TIMEOUT_S` = 300 s, and gif is two passes — 300 +
       # 600 = 900. That is one job's floor: the drain also waits for the
       # BACKLOG (`aclose` waits for no PENDING/PROCESSING rows, consuming
-      # meanwhile), so with several queued the pod is SIGKILLed mid-render
-      # anyway. Then: RabbitMQ redelivers the job (specstar ACKs after the
-      # handler), the next worker re-renders it from the start (same token,
-      # `mine()` agrees), and the pill says "worker 沒有回應" for at most
-      # `stale_after_seconds` + one beat before going back to 錄影中.
+      # meanwhile), so a backlog that outlasts the grace ends in a SIGKILL
+      # mid-render. Then: the broker redelivers (specstar ACKs after the
+      # handler) but holds the message while its own row is still
+      # PROCESSING (the partition-busy check), until specstar's stale sweep
+      # (every 60 s, 15 s without its heartbeat) marks the row; the next
+      # worker then re-renders it from the start (same token, `mine()`
+      # agrees) — up to `max_retries` (3), after which the row is FAILED and
+      # the progress file stays `rendering` until someone deletes it or a
+      # new request replaces it. The pill says "worker 沒有回應" meanwhile;
+      # with no worker consuming at all, for as long as that lasts.
       terminationGracePeriodSeconds: 900
       containers:
         - name: worker

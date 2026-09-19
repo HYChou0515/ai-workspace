@@ -120,7 +120,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | `message_queue` | 背景 job 佇列後端（`simple` / `rabbitmq`） | 多 pod / 高吞吐才改 |
 | `observability` | LLM 呼叫記錄 | 少改 |
 | `failover` | 忙碌時的 LLM 備援全域門檻 | 有多模型才改 |
-| `chat_video` | Export ▾ → 影片的伺服端上限（像素、秒數、輸出大小、進度心跳）；worker pod 的 memory limit 是照它們量的；五個值要正整數、`stale_after_seconds` ≥ `heartbeat_seconds`（否則開不了機） | 少改（改了要重量 [chat-video.md](chat-video.md#要多少資源量的41-秒的範例1080p)） |
+| `chat_video` | Export ▾ → 影片的伺服端上限（像素、秒數、輸出大小、進度心跳）；worker pod 的 memory limit 是照它們量的；五個值要正整數、`stale_after_seconds` > `heartbeat_seconds`（否則開不了機） | 少改（改了要重量 [chat-video.md](chat-video.md#要多少資源量的41-秒的範例1080p)） |
 | `llm` | preset 沒寫 `llm.*` 時的預設 endpoint ＋ 抑制重複的取樣參數 | 少改 |
 | `read_file` / `exec` | sandbox 工具的輸出上限 | 少改 |
 | `history` | 跨回合記憶的訊息數 / token 預算 | 換大 context 模型時改 |

@@ -691,8 +691,8 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 **設定**
 
 - 新段 `chat_video:`（`max_pixels` 1920×1080、`max_seconds` 180、`max_output_bytes` 100 MB、`heartbeat_seconds` 10、
-  `stale_after_seconds` 60）。都有預設，不設即生效；表單只給上限內的值、伺服端照這段擋（422 點名哪個上限）。五個值都要正整數、
-  `stale_after_seconds` 不能小於 `heartbeat_seconds`，否則開不了機（0 秒的心跳是每秒上萬次寫檔；比心跳短的規則把每支在做的都當死掉）。
+  `stale_after_seconds` 60）。都有預設，不設即生效；表單只給上限內的值、伺服端照這段擋（422 點名哪個上限）。五個值都要正整數（留空 = null 也不行）、
+  `stale_after_seconds` 要大於 `heartbeat_seconds`，否則開不了機（0 秒的心跳是每秒上萬次寫檔；不比心跳長的規則把在做的當死掉）。
   `max_output_bytes` 也是素材預讀的上限（請求的素材預算超過它會被夾到它，不是拒絕）。
   **改大 `max_pixels` 要重量 worker 的記憶體**（[chat-video.md 要多少資源](chat-video.md#要多少資源量的41-秒的範例1080p)）。
 - `server.run_consumers: true`（單機 all-in-one）時 API 進程自己吃 `chat-video` job：那台要裝 `uv sync --extra chat-video`
@@ -709,8 +709,9 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
   sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
   `workers.yaml` 的註解有數字）。`terminationGracePeriodSeconds: 900`：SIGTERM 進來時在做的那支會做完才退，最壞是它自己的三個期限相加
-  （錄影 `預估 × 1.5 + 30 s` = 300 s、ffmpeg 每段 300 s、gif 兩段）；後面還有排隊的話 drain 會等到超過 grace 被 SIGKILL，
-  那支由 RabbitMQ 重送、下一顆 worker 從頭再做（同一個 token），膠囊最多說 70 秒「worker 沒有回應」再回到錄影中。CI 要多 build / push 這個映像。
+  （錄影 `預估 × 1.5 + 30 s` = 300 s、ffmpeg 每段 300 s、gif 兩段）；排隊的比 grace 還長的話會被 SIGKILL，那支由 queue 重送——
+  但要等 specstar 的 stale sweep（每 60 秒一次、15 秒沒心跳算死）先把它的列標掉才會真的交給下一顆 worker，從頭再做（同一個 token）；
+  最多重做 3 次，之後列 FAILED、進度檔留著、膠囊一直說「worker 沒有回應」直到人刪掉它或下一次請求取代它。CI 要多 build / push 這個映像。
   漏加的症狀：前端按了「開始做影片」後進度膠囊停在「影片排隊中 0 / 約 N 秒」，`stale_after_seconds`（60 秒）後多一句
   「排隊 N 秒，還沒有 worker 接手」（排隊中的檔沒人改寫心跳，前端只說它知道的事；「worker 沒有回應」是錄到一半心跳停了才說）；
   job 永遠 pending；檔案樹裡的 `.progress.json` 的 `heartbeat_at` 停在排隊的那一刻。

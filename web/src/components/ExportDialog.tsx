@@ -390,12 +390,18 @@ export function ExportDialog({
       </Field>
 
       {form.kind === "video" &&
-        (limits.isError ? (
-          <p className="detail export-dialog__error" role="alert" data-testid="export-limits-error">
-            {t("export.limitsFailed")}
-          </p>
-        ) : ceiling === undefined ? (
-          <p className="detail">{t("export.limitsLoading")}</p>
+        (ceiling === undefined ? (
+          limits.isError ? (
+            // No ceiling known at all. (A failed REFETCH keeps the last
+            // ceiling — the query's data survives the error — and the
+            // controls are drawn from it: `ready` reads the same `ceiling`,
+            // so the sentence and the button never disagree.)
+            <p className="detail export-dialog__error" role="alert" data-testid="export-limits-error">
+              {t("export.limitsFailed")}
+            </p>
+          ) : (
+            <p className="detail">{t("export.limitsLoading")}</p>
+          )
         ) : (
           <>
             <Field label={t("export.video.size")}>
@@ -413,8 +419,8 @@ export function ExportDialog({
                       checked={form.size.mode === mode}
                       onChange={() => {
                         const aspect = "aspect" in form.size ? form.size.aspect : "16:9";
-                        if (mode === "resolution")
-                          setSize({ mode, aspect, p: steps(aspect)[0] ?? 480 });
+                        // 720p, as the dialog opens; `fitChoice` brings it under the ceiling.
+                        if (mode === "resolution") setSize({ mode, aspect, p: 720 });
                         else if (mode === "text") setSize({ mode, aspect, textScale: 1 });
                         else setSize({ mode, width: size.width, height: size.height });
                       }}

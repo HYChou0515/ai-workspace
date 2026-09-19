@@ -4,7 +4,8 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatTranscript, ChatVideoQueued } from "../api/chatVideo";
-import { renderWithQuery } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
 import { ExportDialog, type ExportDialogClient } from "./ExportDialog";
 
 /** Ten messages, oldest first, so the newest-first numbering is checkable:
@@ -199,6 +200,19 @@ describe("ExportDialog — video", () => {
     expect(body.options).toMatchObject({ width: 936, height: 936, scale: 1.3 });
   });
 
+  it("coming back to resolution mode lands on 720p, the stop the dialog opens on", async () => {
+    const c = client();
+    open(c);
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+    await screen.findByTestId("export-size-result");
+
+    fireEvent.click(screen.getByTestId("export-size-mode-text"));
+    fireEvent.click(screen.getByTestId("export-size-mode-resolution"));
+
+    expect(screen.getByTestId("export-resolution-label").textContent).toBe("720p");
+  });
+
   it("custom width × height may pin a text size too (the plan's optional third input)", async () => {
     const c = client();
     open(c);
@@ -338,6 +352,43 @@ describe("ExportDialog — video", () => {
     await screen.findByTestId("export-limits-error");
     expect(screen.queryByText("讀取對話中…")).toBeNull();
     expect(screen.getByTestId("export-submit")).toBeDisabled();
+  });
+
+  it("a ceiling cached from an earlier open is used when this open's refetch fails: controls drawn, submit works", async () => {
+    // TanStack keeps the last data through a failed refetch. The first
+    // version keyed the alert on `isError` and the submit gate on `data`,
+    // so this case showed the alert, hid the size controls and left the
+    // button enabled — two stories about one state.
+    const c = client({
+      fetchChatVideoLimits: vi.fn(async () => {
+        throw new Error("blip");
+      }),
+    });
+    const queryClient = makeTestQueryClient();
+    queryClient.setQueryData(qk.chatVideoLimits("rca:1"), {
+      max_pixels: 1920 * 1080,
+      max_seconds: 180,
+      max_output_bytes: 100_000_000,
+    });
+    renderWithQuery(
+      <ExportDialog
+        slug="rca"
+        itemId="rca:1"
+        chatId="conversation:c1"
+        canExportVideo
+        onClose={vi.fn()}
+        onVideoQueued={vi.fn()}
+        client={c}
+      />,
+      queryClient,
+    );
+    await screen.findByText("全部（10 則）");
+    fireEvent.click(screen.getByTestId("export-kind-video"));
+
+    await screen.findByTestId("export-size-result");
+    await waitFor(() => expect(c.fetchChatVideoLimits).toHaveBeenCalled());
+    expect(screen.queryByTestId("export-limits-error")).toBeNull();
+    expect(screen.getByTestId("export-submit")).not.toBeDisabled();
   });
 
   it("is offered but locked without the two verbs the route asks", async () => {

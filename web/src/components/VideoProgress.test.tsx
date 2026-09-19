@@ -60,7 +60,12 @@ function fileThat(
 
 const looks = (c: VideoProgressClient) => (c.readFile as ReturnType<typeof vi.fn>).mock.calls.length;
 
-function pill(client: VideoProgressClient, job: ChatVideoQueued, onDismiss: () => void) {
+function pill(
+  client: VideoProgressClient,
+  job: ChatVideoQueued,
+  onDismiss: () => void,
+  poll: (polls: number) => number = () => 20,
+) {
   // `poll`: the real backoff starts at a second; the tests need the next
   // answer now, and `pollDelay` has its own test below.
   return (
@@ -70,7 +75,7 @@ function pill(client: VideoProgressClient, job: ChatVideoQueued, onDismiss: () =
       job={job}
       onDismiss={onDismiss}
       client={client}
-      poll={() => 20}
+      poll={poll}
     />
   );
 }
@@ -217,18 +222,24 @@ describe("VideoProgress — one pill per job", () => {
     fireEvent.click(screen.getByTestId("video-progress-cancel"));
     await screen.findByText("影片已取消");
 
-    const jobB = { ...JOB, output_path: "/exports/b.mp4", progress_path: "/exports/b.mp4.progress.json", token: "job-2" };
+    // Job B at the SAME path (a script repeating one output): its first
+    // paint must not be A's cached "cancelled" — the token is in the query
+    // key. Its poll count starts over too (`poll` sees 1, not A's count).
+    const jobB = { ...JOB, token: "job-2" };
     const b = fileThat([progress({ token: "job-2" }), progress({ token: "job-2" }), "gone"], { outputExists: true });
     const invalidate = vi.spyOn(client, "invalidateQueries");
+    const pollB = vi.fn((_polls: number) => 20);
     // `rerender` replaces the whole tree, providers included.
     rerender(
       <QueryClientProvider client={client}>
-        <DialogProvider>{pill(b, jobB, onDismiss)}</DialogProvider>
+        <DialogProvider>{pill(b, jobB, onDismiss, pollB)}</DialogProvider>
       </QueryClientProvider>,
     );
 
+    expect(screen.queryByText("影片已取消")).toBeNull();
     await screen.findByText("錄影中");
     expect(screen.getByTestId("video-progress-cancel")).not.toBeDisabled();
+    expect(pollB).toHaveBeenCalledWith(1); // its own first look, not A's count + 1
     await screen.findByText(/影片已存到/);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.files("rca:1") });
   });
