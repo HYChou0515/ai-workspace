@@ -163,7 +163,9 @@ def _litellm_chat(cfg, num_ctx: int, timeout: int) -> Chat:
     return chat
 
 
-def _stage(scenario: Scenario, scenarios_dir: Path, work: Path, *, skill_dir: Path) -> None:
+def _stage(
+    scenario: Scenario, scenarios_dir: Path, work: Path, *, skill: tuple[str, Path] | None
+) -> None:
     """The scenario's data at the workspace root, and the skill's OWN files
     (`references/`, `scripts/`, …) under `.skill/<name>/` — the path a real
     turn holds them at (`apps.skills.materialize_skill`), copied through the
@@ -171,14 +173,22 @@ def _stage(scenario: Scenario, scenarios_dir: Path, work: Path, *, skill_dir: Pa
     second half a body that says "read `.skill/<name>/references/x.md` first"
     scores the model on a step the workspace made impossible: every such
     `read_file` answered "no such file". `SKILL.md` itself is not staged; the
-    body reaches the model through the prompt."""
+    body reaches the model through the prompt.
+
+    ``skill`` is ``(name, source folder)`` — the folder is named by the
+    registry, not by the skill, so the name is passed rather than read off
+    the path. ``None`` is the control arm: a turn that never loaded the skill
+    never received its files, so the control workspace holds none either."""
     work.mkdir(parents=True, exist_ok=True)
     for name in scenario.data:
         shutil.copy(scenarios_dir / name, work / name)
-    for rel, data in skill_payload(skill_dir).items():
+    if skill is None:
+        return
+    name, folder = skill
+    for rel, data in skill_payload(folder).items():
         if rel == "SKILL.md":
             continue
-        target = work / ".skill" / skill_dir.name / rel
+        target = work / ".skill" / name / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
@@ -234,7 +244,7 @@ def main() -> None:
     for s in scenarios:
         for arm, body in (("skill", skill_md), *((("control", ""),) if args.control else ())):
             work = args.out_dir / f"{s.name}.{arm}"
-            _stage(s, args.scenarios, work, skill_dir=skill_dir)
+            _stage(s, args.scenarios, work, skill=(name, skill_dir) if arm == "skill" else None)
             print(f"[{arm}] {s.name} …", flush=True)
             t: Transcript = run_scenario(
                 chat,

@@ -21,8 +21,8 @@ from workspace_app.skill_eval.__main__ import _resolve_skill, _stage
 from workspace_app.skill_eval.scenario import Scenario
 
 
-def _skill(root: Path, name: str, *, files: dict[str, str]) -> Path:
-    d = root / name
+def _skill(root: Path, name: str, *, files: dict[str, str], folder: str | None = None) -> Path:
+    d = root / (folder or name)
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: d\n---\n\nread .skill/{name}/references/r.md"
@@ -42,7 +42,7 @@ def test_staging_puts_the_skills_own_files_where_the_body_points(tmp_path: Path)
     (scenarios / "data.csv").write_text("a,b\n")
     work = tmp_path / "work"
 
-    _stage(Scenario(name="s", prompt="p", data=["data.csv"]), scenarios, work, skill_dir=src)
+    _stage(Scenario(name="s", prompt="p", data=["data.csv"]), scenarios, work, skill=("tidy", src))
 
     # The scenario's data at the root, as before…
     assert (work / "data.csv").read_text() == "a,b\n"
@@ -59,7 +59,7 @@ def test_a_skill_with_no_files_of_its_own_stages_nothing_extra(tmp_path: Path):
     scenarios.mkdir()
     work = tmp_path / "work"
 
-    _stage(Scenario(name="s", prompt="p"), scenarios, work, skill_dir=src)
+    _stage(Scenario(name="s", prompt="p"), scenarios, work, skill=("bare", src))
 
     assert not (work / ".skill").exists()
 
@@ -83,7 +83,7 @@ def test_staging_drops_the_same_build_noise_a_real_turn_never_receives(tmp_path:
     scenarios.mkdir()
     work = tmp_path / "work"
 
-    _stage(Scenario(name="s", prompt="p"), scenarios, work, skill_dir=src)
+    _stage(Scenario(name="s", prompt="p"), scenarios, work, skill=("tidy", src))
 
     staged = sorted(p.relative_to(work).as_posix() for p in work.rglob("*") if p.is_file())
     assert staged == [".skill/tidy/scripts/x.py"]
@@ -126,7 +126,7 @@ def test_an_edited_copy_is_named_by_its_frontmatter_and_files_come_from_the_regi
     assert folder == src
 
     work = tmp_path / "work"
-    _stage(Scenario(name="s", prompt="p"), tmp_path, work, skill_dir=folder)
+    _stage(Scenario(name="s", prompt="p"), tmp_path, work, skill=(name, folder))
     staged = sorted(p.relative_to(work).as_posix() for p in work.rglob("*") if p.is_file())
     assert staged == [".skill/tidy/references/r.md"]
 
@@ -156,3 +156,36 @@ def test_an_unregistered_name_is_refused_loudly():
     with pytest.raises(SystemExit) as e:
         _resolve_skill("nobody-registered-this")
     assert "unknown skill" in str(e.value)
+
+
+def test_the_staged_folder_is_named_by_the_skill_not_by_where_the_registry_keeps_it(
+    tmp_path: Path,
+):
+    """A deployment replaces `SHARED_SKILLS` with its own dict, so the source
+    folder can be called anything; the body points at `.skill/<name>/…` where
+    `<name>` is the skill's name. The two are the same string only by habit."""
+    src = _skill(tmp_path, "tidy", files={"references/r.md": "rules"}, folder="somewhere-else")
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    work = tmp_path / "work"
+
+    _stage(Scenario(name="s", prompt="p"), scenarios, work, skill=("tidy", src))
+
+    assert (work / ".skill" / "tidy" / "references" / "r.md").read_text() == "rules"
+    assert not (work / ".skill" / "somewhere-else").exists()
+
+
+def test_the_control_arm_gets_no_skill_files(tmp_path: Path):
+    """The control is the run with NO skill loaded. In a real turn the files
+    arrive with `read_skill` (`materialize_skill`), so a workspace that never
+    loaded the skill never holds them — and a control that could `list_files`
+    its way to the reference would pass the very scenario the skill is meant
+    to be measured by."""
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    (scenarios / "data.csv").write_text("a,b\n")
+    work = tmp_path / "work"
+
+    _stage(Scenario(name="s", prompt="p", data=["data.csv"]), scenarios, work, skill=None)
+
+    assert sorted(p.name for p in work.iterdir()) == ["data.csv"]
