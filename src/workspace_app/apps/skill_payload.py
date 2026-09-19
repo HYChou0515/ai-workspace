@@ -44,9 +44,10 @@ def _is_noise(rel: PurePosixPath) -> bool:
 
 def skill_payload(source_dir: Any) -> dict[str, bytes]:
     """Every file a skill ships, keyed by its POSIX path relative to the skill
-    folder. Sub-folders are kept — ``SKILL.md`` refers to its siblings by
-    relative path (``see references/glossary.md``), so the shape has to survive
-    the copy or the body's own instructions stop resolving."""
+    folder. Sub-folders are kept — ``SKILL.md`` refers to its siblings by their
+    path under the copy (``read .skill/<name>/references/glossary.md``), so the
+    shape has to survive the copy or the body's own instructions stop
+    resolving."""
     out: dict[str, bytes] = {}
     _walk(source_dir, PurePosixPath(), out)
     return dict(sorted(out.items()))

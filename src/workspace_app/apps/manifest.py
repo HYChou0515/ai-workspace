@@ -169,8 +169,13 @@ class Onboarding(Struct):
 
     version: str  # hand-bumped when the teaching changes (NOT a release version)
     title: str
+    # `intro`, every point's `body` and `footer` are MARKDOWN (GFM); a point's
+    # `title` is plain text. An image the App ships under `assets/` is embedded
+    # as `![](assets/<name>)` — inline in a body, or in `footer`, which the FE
+    # draws under the points and above the buttons.
     intro: str = ""
     points: list[OnboardingPoint] = field(default_factory=list)
+    footer: str = ""
 
 
 class AppManifest(Struct):
@@ -224,25 +229,48 @@ ICON_MEDIA_TYPES = {
 }
 
 
-def load_app_icon(slug: str, icon: str) -> tuple[bytes, str] | None:
-    """The bytes + media type of an App's file-based ``icon``, or ``None`` when
-    there is no file to serve.
+def load_app_asset(slug: str, subdir: str, name: str) -> tuple[bytes, str] | None:
+    """The bytes + media type of an image the App ships at ``<app>/<subdir>/<name>``
+    (``subdir=""`` ⇒ beside ``app.json``), or ``None`` when there is nothing to serve.
 
-    ``None`` covers every way an icon is not a shipped image — a named-icon key
-    or an emoji (the other two manifest forms), an extension we don't serve, and
-    a manifest naming a file that isn't there. The caller turns all of them into
-    one 404, so a mis-typed filename degrades to the FE's fallback glyph instead
-    of a 500.
+    ``None`` covers every way it is not a servable image — an extension outside
+    :data:`ICON_MEDIA_TYPES`, a name for a file that isn't there, and a name the
+    filesystem itself refuses to look up (longer than NAME_MAX: the probe raises
+    ``ENAMETOOLONG`` rather than answering "not there", and the assets route
+    hands this loader a URL segment anyone can shape). The callers turn all of
+    them into one 404.
 
-    An icon is a plain filename BESIDE ``app.json``: anything with a separator
-    is refused outright rather than resolved, so a manifest can never reach out
-    of its own App directory.
+    ``name`` is a plain filename: anything with a separator — ``/`` or ``\\`` —
+    is refused outright rather than resolved, so neither a manifest nor a URL
+    can reach out of the folder this route serves. The check is on the NAME,
+    before any path is built; there is no "resolve, then see where we landed"
+    step to get wrong. ``.`` and ``..`` need no clause of their own: their
+    suffix is ``.``, which the allowlist already refuses.
     """
-    suffix = icon[icon.rfind(".") :].lower() if "." in icon else ""
+    suffix = name[name.rfind(".") :].lower() if "." in name else ""
     media_type = ICON_MEDIA_TYPES.get(suffix)
-    if media_type is None or "/" in icon or "\\" in icon:
+    if media_type is None or "/" in name or "\\" in name:
         return None
-    path = apps_root() / slug / icon
-    if not path.is_file():
+    folder = apps_root() / slug
+    path = (folder / subdir / name) if subdir else (folder / name)
+    try:
+        if not path.is_file():
+            return None
+    except OSError:  # ENAMETOOLONG and kin — a name the filesystem cannot hold
         return None
     return path.read_bytes(), media_type
+
+
+# The folder an App's onboarding markdown embeds images from (`![](assets/x.png)`
+# → `GET /apps/{slug}/assets/x.png`). One folder so screenshots do not pile up
+# beside app.json, and so other App-shipped pictures have a home later.
+ASSETS_DIR = "assets"
+
+
+def load_app_icon(slug: str, icon: str) -> tuple[bytes, str] | None:
+    """The bytes + media type of an App's file-based ``icon``, or ``None`` when
+    there is no file to serve — a named-icon key or an emoji (the other two
+    manifest forms) has no file, and a mis-typed filename degrades to the FE's
+    fallback glyph instead of a 500. A plain filename BESIDE ``app.json``; the
+    rules are :func:`load_app_asset`'s."""
+    return load_app_asset(slug, "", icon)

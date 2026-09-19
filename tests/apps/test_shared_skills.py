@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,73 @@ def test_metas_skips_malformed_frontmatter(tmp_path, monkeypatch):
 def test_author_skill_is_registered():
     """The co-authoring meta-skill ships in the real registry."""
     assert "author-skill" in shared.SHARED_SKILLS
+
+
+def test_author_skill_ships_the_writing_rules_and_points_at_them():
+    """The author asked that a skill be TIDIED before it is saved — and chose to
+    do it the way Matt Pocock's own repo does: the rules live in the guide the
+    drafting agent reads, not in a mechanism behind `save_skill`. So the rules
+    (his `writing-for-agents`, MIT) ship as a reference file of `author-skill`,
+    and the body reaches it at the step where the draft is written — a rule the
+    body never points at is one the agent never reads, and `materialize_skill`
+    only copies what the folder actually holds."""
+    folder = shared.SHARED_SKILLS["author-skill"]
+    rules = folder / "references" / "writing-for-agents.md"
+    assert rules.is_file()
+    body = (folder / "SKILL.md").read_text()
+    # The pointer sits in the drafting step, worded as a step (read it, apply
+    # it), so it is on the path every drafting run takes.
+    draft, _, _ = body.partition("## 4.")
+    assert "`.skill/author-skill/references/writing-for-agents.md`" in draft
+    # …and the tidy-before-save pass is its own step.
+    assert "no-op" in body.lower()
+    assert "single source of truth" in body.lower()
+    # The reference carries the levers the body names, so the pointer resolves
+    # to the thing it promises.
+    text = rules.read_text()
+    for lever in ("Leading word", "Negation", "Pruning", "completion criterion"):
+        assert lever in text, lever
+    # Provenance: copied text says where it came from — and MIT requires the
+    # copyright line and the permission notice to travel with every substantial
+    # copy, which this file is (and it is copied into every workspace that
+    # reads the skill, and publishable to the hub from there).
+    assert "mattpocock/skills" in text
+    assert "Copyright (c) 2026 Matt Pocock" in text
+    assert "Permission is hereby granted, free of charge" in text
+
+
+def test_author_skill_points_at_its_files_by_the_path_a_workspace_holds_them():
+    """`read_file` resolves from the workspace root and `read_skill` returns the
+    body alone — nothing tells the agent where the skill's files landed. So a
+    pointer written `references/x.md` is a file the agent cannot open, and a
+    guide that writes it that way teaches every skill it authors the same dead
+    form. Every file path in the guide and its reference is the full
+    `.skill/<name>/…` one, backticked or not; the bare folder name may still
+    be spoken of as a folder."""
+    folder = shared.SHARED_SKILLS["author-skill"]
+    for doc in (folder / "SKILL.md", folder / "references" / "writing-for-agents.md"):
+        bare = BARE_SKILL_FILE_POINTER.findall(doc.read_text())
+        assert bare == [], (doc.name, bare)
+
+
+#: A `references/<file>` or `scripts/<file>` path not preceded by the
+#: `.skill/<name>/` prefix — the form `read_file` cannot open.
+BARE_SKILL_FILE_POINTER = re.compile(r"(?<![\w/.])(?:references|scripts)/[\w./-]*\.\w+")
+
+
+@pytest.mark.parametrize(
+    ("text", "hits"),
+    [
+        ("read `.skill/x/references/glossary.md` when …", []),
+        ("read `references/glossary.md` when …", ["references/glossary.md"]),
+        ("read references/glossary.md when unsure.", ["references/glossary.md"]),
+        ('exec(["python", ".skill/x/scripts/summarise.py"])', []),
+        ("run scripts/summarise.py first", ["scripts/summarise.py"]),
+        ("a file under the skill's `references/` folder", []),
+    ],
+)
+def test_the_bare_pointer_guard_reads_paths_not_backticks(text: str, hits: list[str]):
+    assert BARE_SKILL_FILE_POINTER.findall(text) == hits
 
 
 def test_merged_profile_skills_includes_declared_shared(tmp_registry):

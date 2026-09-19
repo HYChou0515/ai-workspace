@@ -23,6 +23,11 @@ Ask (or confirm if it's already obvious from the conversation):
 - **When should it fire?** This becomes the one-line `description` — a concrete
   "use this when…" so the agent (later) knows to reach for it. Prefer the user's
   own trigger words.
+- **What is it called?** Settle the `name` now, in kebab-case
+  (`smt-reflow-triage`): it is the folder `.skill/<name>/` every file pointer
+  in the body will use, and `save_skill` lower-cases the name and turns each
+  run of other characters into `-`, so only a name already in that form is
+  the folder you can point at before saving.
 
 State the scope back in one sentence and get a yes before drafting.
 
@@ -44,7 +49,11 @@ stop when you can write the procedure without guessing.
 
 ## 3. Draft the SKILL.md body
 
-Write the methodology as clear markdown the *future* agent will follow:
+Read `.skill/author-skill/references/writing-for-agents.md` first — the rules a
+document an agent consumes is judged by (the description as a *context
+pointer*, steps that end on a *completion criterion*, *leading words*, what to
+push into a reference file). Draft against them, then write the methodology as
+clear markdown the *future* agent will follow:
 
 - Numbered steps mirroring the user's process; imperative voice ("Compute…",
   "Group by…", "Report…").
@@ -55,8 +64,10 @@ Write the methodology as clear markdown the *future* agent will follow:
 
 If the task benefits from **reference material** (a long term table, a checklist,
 a worked example), put it in a separate file under the skill's folder and point
-to it from the body, e.g. "see `references/glossary.md`". The future agent reads
-it with `read_file` only when needed.
+to it from the body by its full workspace path, e.g. "read
+`.skill/<name>/references/glossary.md`" — `read_file` resolves from the
+workspace root, and nothing else tells the future agent where the skill's
+files are. It opens the file only when needed.
 
 If a **repeatable computation** is part of the flow, write a small Python script
 under the skill's `scripts/` folder and document how to run it, e.g.
@@ -70,13 +81,40 @@ Show the draft (the description + the body, and any reference/script files).
 Ask what's wrong or missing. Iterate until they approve. Do **not** save an
 unreviewed skill.
 
-## 5. Save it
+## 5. Tidy before saving
+
+With the content agreed, pass the draft once more through
+`.skill/author-skill/references/writing-for-agents.md`. Two of its checks are
+what the skill hub's reviewer reads for at publish time — a description the
+agent cannot trigger on, a step it cannot follow — and the rest are the ones
+nobody else runs: the reviewer is told not to comment on style or length, so
+sprawl and no-ops reach the next reader unless they are cut here. Change the
+wording, not the substance the user approved; tell them what you tightened.
+Done when every line below holds:
+
+- The **description** is the trigger and nothing else: leading word first, one
+  clause per genuinely different case it handles, no restating what the body
+  does. The agent decides from this line alone.
+- Every step ends on a **completion criterion** the future agent can check —
+  "every station has a row", not "the table is complete".
+- Each meaning lives in a **single source of truth**: a rule stated once, a
+  term defined once. Something the environment already says (a script's
+  `--help`, a file the workspace holds) is pointed at, not copied.
+- Sentence by sentence, no **no-ops**: an instruction the agent would follow
+  anyway is deleted whole, not trimmed. Where a phrase steers by prohibition,
+  it is rewritten as the target behaviour.
+- Material only some runs need (a glossary, a long checklist, a worked
+  example) is a file under the skill's `references/` folder, pointed at from
+  the body by its `.skill/<name>/references/…` path, so the body stays the
+  steps.
+
+## 6. Save it
 
 Once approved, call `save_skill(name, description, body)`:
 
-- `name` — a short title; it's slugified to kebab-case automatically.
+- `name` — the kebab-case name from step 1.
 - `description` — the one-line trigger from step 1.
-- `body` — the markdown from step 3.
+- `body` — the markdown as it stands after step 5.
 
 `save_skill` owns the file format, so you only pass those three fields. For any
 reference or script files, write them with `write_file` into the same
@@ -87,7 +125,7 @@ reference or script files, write them with `write_file` into the same
 and walk it once on real data so the user can confirm it produces what they want
 before relying on it.
 
-## 6. Close out
+## 7. Close out
 
 Tell the user, plainly:
 

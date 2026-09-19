@@ -487,6 +487,7 @@ export function AppDashboard() {
       {ob.open && ob.content && (
         <OnboardingModal
           content={ob.content}
+          scope={{ kind: "app", slug }}
           onGotIt={ob.gotIt}
           onDontShowAgain={ob.dontShowAgain}
           onSeeFull={() => {

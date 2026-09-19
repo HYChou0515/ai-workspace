@@ -9,7 +9,7 @@ import { EditModeProvider, useEditMode } from "../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../hooks/fileBuffer";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { QueryWrap } from "../test/queryWrapper";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MarkdownBody, MarkdownRenderer } from "./MarkdownRenderer";
 
 afterEach(cleanup);
 
@@ -94,5 +94,47 @@ describe("MarkdownRenderer — an image next to the document", () => {
     const { container } = await renderMd("[the data](./rows.csv)\n", "/reports/r.md");
     const link = container.querySelector("a");
     expect(link).toHaveAttribute("href", "/api/a/pm/items/item1/files/reports/rows.csv");
+  });
+});
+
+// MarkdownBody outside a workspace: the onboarding modal holds markdown in
+// memory on the Launcher / AppDashboard, where no FileServiceProvider exists.
+// A caller that says how a ref resolves gets the same pipeline without one;
+// a caller that says nothing still needs the provider — that contract stays.
+describe("MarkdownBody — resolving refs without a file service", () => {
+  it("renders with a resolveUrl and no provider, routing images and links through it", () => {
+    const resolveUrl = (src: string) => `/resolved/${src}`;
+    const { container } = render(
+      <MarkdownBody text="![shot](assets/a.png)\n\n[docs](guide.md)" resolveUrl={resolveUrl} />,
+    );
+    expect(container.querySelector("img")).toHaveAttribute("src", "/resolved/assets/a.png");
+    expect(container.querySelector("a")).toHaveAttribute("href", "/resolved/guide.md");
+  });
+
+  it("still requires the provider when no resolveUrl is given", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {}); // React logs the throw
+    expect(() => render(<MarkdownBody text="hi" path="/x.md" />)).toThrow(/FileServiceProvider/);
+    vi.restoreAllMocks();
+  });
+
+  it("takes the compact variant on request", () => {
+    const { container } = render(<MarkdownBody text="hi" resolveUrl={(s) => s} compact />);
+    expect(container.querySelector("article")).toHaveClass("md-body", "md-compact");
+    const plain = render(<MarkdownBody text="hi" resolveUrl={(s) => s} />);
+    expect(plain.container.querySelector("article")).not.toHaveClass("md-compact");
+  });
+
+  it("carries a caller's class beside its own, so a context can override .md-body", () => {
+    const { container } = render(<MarkdownBody text="hi" resolveUrl={(s) => s} compact className="onboarding-prose" />);
+    expect(container.querySelector("article")).toHaveClass("onboarding-prose", "md-body", "md-compact");
+  });
+
+  it("uses resolveUrl even when a provider is also present — the caller said how ITS refs resolve", () => {
+    const { container } = render(
+      <FileServiceProvider value={investigationFileService("pm", "item1")}>
+        <MarkdownBody text="![shot](assets/a.png)" path="/notes/x.md" resolveUrl={(src) => `/resolved/${src}`} />
+      </FileServiceProvider>,
+    );
+    expect(container.querySelector("img")).toHaveAttribute("src", "/resolved/assets/a.png");
   });
 });

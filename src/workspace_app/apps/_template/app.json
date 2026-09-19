@@ -9,9 +9,13 @@
     "title": "Welcome to My App",
     "intro": "One or two sentences on what this App helps people do.",
     "points": [
-      { "title": "First step", "body": "Describe the first thing a new user should do here." },
+      {
+        "title": "First step",
+        "body": "Describe the first thing a new user should do here. Bodies are **markdown**; a screenshot the App ships under `assets/` goes inline like this:\n\n![What the user sees first](assets/example.png)"
+      },
       { "title": "Second step", "body": "Describe the next key capability they should know about." }
-    ]
+    ],
+    "footer": "Anything under the steps — a closing line, or one more picture — goes in `footer`."
   },
   "function": { "workspace": true, "sandbox": false, "terminal": false },
   "agent": {

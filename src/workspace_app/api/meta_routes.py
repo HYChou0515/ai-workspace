@@ -171,6 +171,24 @@ def register_meta_routes(
         blob, media_type = found
         return Response(content=blob, media_type=media_type)
 
+    @app.get("/apps/{slug}/assets/{name}")
+    async def get_app_asset(slug: str, name: str) -> Response:
+        """An image the App ships under ``assets/`` — what its onboarding markdown
+        embeds as ``![](assets/<name>)``. Same contract as the icon: images only
+        (the extension allowlist), a plain filename, 404 for everything else,
+        and no authorization beyond ``/apps/{slug}`` itself — the picture is part
+        of the App's public description."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.manifest import ASSETS_DIR, load_app_asset
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        found = load_app_asset(slug, ASSETS_DIR, name)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"app {slug!r} ships no asset {name!r}")
+        blob, media_type = found
+        return Response(content=blob, media_type=media_type)
+
     @app.get("/activity")
     async def get_activity() -> list[dict]:
         """Recent activity feed (newest first) for the notifications popover."""

@@ -14,17 +14,25 @@ disclosure),只是現在改成在執行期由**使用者 + AI 共同創作、可
 
 在任何 workspace app(RCA、Topic Hub、Playground)裡,只要告訴助理你想做一個 skill——
 例如 *「幫我做一個用來分流 reflow 缺陷的 skill」*。agent 會載入內建的 **`author-skill`**
-meta-skill,走一個六步流程:
+meta-skill,走一個七步流程:
 
 1. **界定範圍 + 觸發條件(Scope + trigger)** — 這是給哪一個任務用的,以及什麼時候該觸發
    (這個 skill 的一行 description)。
 2. **抽取(Extract)** — 你的流程(有序步驟)、術語、與輸出風格。它也會讀 workspace 裡
    已經存在的東西(檔案、先前的訊息),從中挖出一個實際的範例,而不是只靠提問。
-3. **草擬(Draft)** — 一份標準格式的 `SKILL.md` 內文。
+3. **草擬(Draft)** — 一份標準格式的 `SKILL.md` 內文。動筆前它先讀
+   `.skill/author-skill/references/writing-for-agents.md`——寫給 agent 讀的文件該長什麼樣的
+   規則(description 是觸發條件不是簡介、每一步結尾要有可檢查的「做完」、一個意思只寫一處、
+   砍掉 agent 本來就會做的句子、只有部分情況用到的東西推到 reference 檔)。這份規則抄自 Matt Pocock
+   的 [`writing-for-agents`](https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents)(MIT)。
 4. **審閱(Review)** — 它把草稿給你看,反覆迭代到你核可為止。
-5. **儲存(Save)** — 它呼叫 `save_skill`,寫出帶有正確 frontmatter 的
+5. **整理(Tidy)** — 內容定案後,它再用同一份規則過一遍草稿:只改措辭不改你核可的內容,
+   並告訴你收緊了什麼。其中兩條(description 觸發不了、步驟做不到)也是發布到 skill hub 時
+   AI 審稿人會挑的;其餘(贅句、沒作用的句子)審稿人被交代**不看**風格與長度,所以不在這裡
+   砍就會原樣交到下一個讀者手上。
+6. **儲存(Save)** — 它呼叫 `save_skill`,寫出帶有正確 frontmatter 的
    `.skill/<name>/SKILL.md`(這個檔你永遠不必手動編輯)。
-6. **收尾(Close out)** — 這個 skill 現在用 `read_skill('<name>')` 就會載入;它會告訴你
+7. **收尾(Close out)** — 這個 skill 現在用 `read_skill('<name>')` 就會載入;它會告訴你
    怎麼下載/重用/升級它。
 
 ## skill 存在哪裡
@@ -41,8 +49,9 @@ meta-skill,走一個六步流程:
       summarise.py
 ```
 
-- **References** 就只是檔案,當內文指到它們時(`see references/defect-glossary.md`)
-  agent 用 `read_file` 讀。沒有特殊處理。
+- **References** 就只是檔案,當內文指到它們時(`read .skill/<name>/references/defect-glossary.md`)
+  agent 用 `read_file` 讀。沒有特殊處理——也因此內文要寫**完整路徑**:`read_file` 從
+  workspace 根目錄解析,而 `read_skill` 只回傳內文,沒有別的東西告訴 agent 檔案放在哪。
 - **Scripts** 透過 workspace 內建的 Python stack 執行——
   `exec(["python", ".skill/<name>/scripts/summarise.py", "data.csv"])`——它帶了
   pandas / numpy / scipy / matplotlib。缺的套件可以在 sandbox 裡 `pip install` 補上——`pip`
@@ -81,7 +90,7 @@ IDE 的檔案樹會把 `.skill/` 這個點開頭的資料夾藏起來,所以 cha
 
 內建的 skill **會帶著它的整包檔案**——`references/`、`scripts/`、資料檔都一樣。第一次有人
 用到它(送 Apply 或 agent 自己 `read_skill`)時,那些檔案就會被複製進該 workspace 的
-`.skill/<name>/`,所以 `SKILL.md` 裡寫的 `see references/glossary.md` 和
+`.skill/<name>/`,所以 `SKILL.md` 裡寫的 `read .skill/<name>/references/glossary.md` 和
 `exec(["python", ".skill/<name>/scripts/x.py", …])` 都能直接成立(#589)。
 
 複製之後那份就是**這個 workspace 的**:agent 可以改它、微調 script——這正是 skill 和

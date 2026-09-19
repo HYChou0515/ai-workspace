@@ -34,6 +34,7 @@ launcher 上。**沒有需要編輯的中央清單。**(像 `_template` 這種 `
 ```
 apps/<slug>/
 ├── app.json                     # identity、agent 上限、layout、lifecycle、各種開關
+├── assets/                      # （選用）onboarding 歡迎卡裡嵌的圖（`![](assets/x.png)`），GET /apps/{slug}/assets/x.png
 ├── model.py                     # WorkItem Struct（MODEL + INDEXED_FIELDS）
 ├── prompts/
 │   └── system.md                # agent 的 base system prompt
@@ -53,6 +54,7 @@ apps/<slug>/
 | `title` / `description` | launcher 卡片文字 |
 | `icon` | `flame`(具名)、一個 emoji,或**與 `app.json` 同層的圖檔名稱**(`icon.png` / `icon.svg` / `.jpg` / `.webp` / `.gif`)。填檔名時瀏覽器會去 `GET /apps/{slug}/icon` 抓圖;檔案不存在或副檔名不支援就退回具名圖示的預設字符,不會壞掉 |
 | `color` | 一個 hex → App 的 `--accent` 三色組(App 內整套重新配色) |
+| `onboarding` | 進 App 時彈的歡迎卡（#161）：`{version, title, intro, points: [{title, body}], footer}`。**`intro`、每個 `body`、`footer` 是 markdown**（GFM + `$…$` 數學，跟聊天訊息同一組 markdown 外掛；沒有 raw HTML）；`title` 是純文字。`footer` 選用，畫在條列之下、按鈕之上。要放截圖就把圖放 `assets/`、在 `body` 或 `footer` 寫 `![說明](assets/x.png)`（純檔名、png/svg/jpg/jpeg/webp/gif；絕對路徑與 `https://` 原樣通過，其他相對路徑不會被猜、會壞得看得見）。**教學內容改了就手動 bump `version`**——每個使用者會再看到一次，按「永遠不顯示」後不再出現；不要跟發版版本綁在一起。`_template/app.json` 有寫好的範例 |
 | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
 | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
 | `function.terminal` | 人用的 shell 分頁。**需要 `sandbox: true`** |

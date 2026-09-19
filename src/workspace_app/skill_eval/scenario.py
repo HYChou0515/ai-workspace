@@ -27,7 +27,11 @@ class Expect(msgspec.Struct, frozen=True):
     """What the transcript must show. Every field defaults to "don't care", so a
     scenario states only what it means to state."""
 
-    must_call: list[str] = msgspec.field(default_factory=list)
+    #: Each entry a tool name, or alternatives any one of which satisfies it —
+    #: a guide-following turn can take more than one shape (ask first and end
+    #: there, or read and draft), and a scenario has to accept every compliant
+    #: one while still failing a run that did neither.
+    must_call: list[Phrase] = msgspec.field(default_factory=list)
     must_not_call: list[str] = msgspec.field(default_factory=list)
     must_mention: list[Phrase] = msgspec.field(default_factory=list)
     must_not_mention: list[Phrase] = msgspec.field(default_factory=list)
@@ -77,10 +81,12 @@ def check(scenario: Scenario, calls: list[str], answer: str) -> Verdict:
     model's final text."""
     e, failures = scenario.expect, []
     seen = set(calls)
-    for name in e.must_call:
-        if name not in seen:
+    for entry in e.must_call:
+        alts = _alternatives(entry)
+        if not seen.intersection(alts):
             got = calls or "(none)"
-            failures.append(Failure("must_call", f"never called {name!r}; called {got}"))
+            what = repr(alts[0]) if len(alts) == 1 else f"any of {alts}"
+            failures.append(Failure("must_call", f"never called {what}; called {got}"))
     for name in e.must_not_call:
         if name in seen:
             failures.append(Failure("must_not_call", f"called {name!r}"))
