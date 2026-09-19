@@ -22,6 +22,7 @@ from importlib.resources.abc import Traversable
 import msgspec
 
 from ..files import WorkspaceFiles
+from ..tooling.catalog import narrow_entries
 from .frontmatter import FrontmatterError, parse_frontmatter
 
 logger = logging.getLogger(__name__)
@@ -208,10 +209,10 @@ def clamp_tools(defn: SubagentDef, ceiling: Collection[str] | None) -> SubagentD
     plain list, and the unclamped path used to hand back the very object
     `_shipped_subagent_defs` caches — so one `.tools.append(...)` anywhere would
     have edited every later turn's copy of a shipped definition, process-wide."""
-    kept = list(defn.tools) if ceiling is None else [t for t in defn.tools if t in ceiling]
+    kept = list(defn.tools) if ceiling is None else narrow_entries(defn.tools, ceiling)
     if ceiling is None:
         return msgspec.structs.replace(defn, tools=kept)
-    if dropped := [t for t in defn.tools if t not in ceiling]:
+    if dropped := [t for t in defn.tools if not narrow_entries([t], ceiling)]:
         logger.warning("sub-agent %r: tools outside the ceiling, dropped: %s", defn.name, dropped)
     return msgspec.structs.replace(defn, tools=kept)
 

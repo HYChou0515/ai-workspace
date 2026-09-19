@@ -2777,8 +2777,13 @@ async def save_subagent_impl(
     # Tools outside the ceiling are REFUSED, not quietly trimmed. A sub-agent that
     # starts out believing it holds `exec` and then finds it missing fails in a way
     # its caller cannot read; being told now is what lets the agent pick another way.
+    # "Outside" is judged by the same rule the loader clamps with (`narrow_entries`),
+    # at either granularity: a turn holds package tools as `pkg:cmd` units, and a
+    # definition may still say `pkg` — meaning what the turn holds of it.
+    from ..tooling.catalog import narrow_entries
+
     if (allowed := _subagent_tool_ceiling(ctx.context)) is not None and (
-        outside := sorted(t for t in tools if t not in allowed)
+        outside := sorted(t for t in tools if not narrow_entries([t], allowed))
     ):
         # Two rules wearing one sentence. "it can only use tools you hold
         # yourself" was said for the four a sub-agent may NEVER hold — which the

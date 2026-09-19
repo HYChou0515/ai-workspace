@@ -1558,46 +1558,39 @@ def _rca_pkg():
     )
 
 
-def test_a_command_pin_narrows_a_whole_package_grant_at_the_real_entry_point():
-    """plan-tools-picker-groups part 2: the app granted the whole package, the
-    item pinned one command Off. The agent gets the other two, and the one it
-    lost is advertised as available on request (#480) — by command, not by
-    package. `_agent_for` is where the runner has the package list, so this is
-    where the rule bites."""
+def test_the_runner_reads_allowed_tools_as_written_and_never_applies_a_pin_itself():
+    """plan-tools-picker-groups part 2 (P14 revision): the pins are spent at the
+    door (`finalize_tool_grants`, in the turn builder), not here. A config that
+    still carries a ceiling + pins — one that never went through a door — gets
+    exactly its `allowed_tools`, pins ignored. This is the negative pin on the
+    mechanism: re-deriving the grant here re-widened every config narrowed
+    after resolve (compaction, sub-agents, workflow nodes).
+
+    The positive side — a pinned-off command missing from what the runner
+    registers — is walked through the real doors in
+    `tests/api/test_tool_grant_doors.py`."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(
         name="ws",
-        allowed_tools=["rca-tools"],
+        allowed_tools=["rca-tools:spc", "rca-tools:wafer-history"],
+        disabled_tools=["rca-tools:pareto"],
         tool_ceiling=["rca-tools"],
-        tool_prefs={"rca-tools:pareto": False},
+        tool_prefs={"rca-tools:pareto": True, "rca-tools:spc": False},
     )
     agent = _agent_for(cfg, packages=[_rca_pkg()])
     names = {t.name for t in agent.tools}
     assert {"spc", "wafer-history"} <= names
     assert "pareto" not in names
     assert isinstance(agent.instructions, str)
-    assert "pareto" in agent.instructions  # advertised as off, so the model can ask for it
-
-
-def test_a_legacy_whole_package_pin_still_governs_every_command_at_the_runner():
-    from workspace_app.api.litellm_runner import _agent_for
-
-    cfg = AgentConfig(
-        name="ws",
-        allowed_tools=[],  # entry-level resolution already dropped the package
-        disabled_tools=["rca-tools"],
-        tool_ceiling=["rca-tools"],
-        tool_prefs={"rca-tools": False, "rca-tools:spc": True},
-    )
-    agent = _agent_for(cfg, packages=[_rca_pkg()])
-    names = {t.name for t in agent.tools}
-    assert "spc" in names and "pareto" not in names and "wafer-history" not in names
+    assert "pareto" in agent.instructions  # #480 lists `disabled_tools`, per command
 
 
 def test_a_config_without_a_ceiling_keeps_the_old_entry_rule():
-    """The five other AgentConfig constructors (wiki, card drafter, catalog
-    build…) set no ceiling: their allowed_tools ARE the answer, byte for byte."""
+    """The six other AgentConfig constructors (wiki reader + three maintainer
+    configs, card drafter, catalog build) set no ceiling: their allowed_tools
+    ARE the answer, byte for byte — and `finalize_tool_grants` leaves such a
+    config untouched too."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(

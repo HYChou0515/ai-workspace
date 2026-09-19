@@ -505,25 +505,15 @@ def _agent_for(
     # symmetric with build_tools above so bundled RCA presets
     # (allowed_tools=None) still expose every package command.
     #
-    # plan-tools-picker-groups part 2: a whole-package grant is controllable
-    # per command. `resolve` could not do this — it runs before the turn has
-    # its package list — so here, where the packages are in hand, the ceiling
-    # is brought to command granularity and the item's pins applied per
-    # command. The picker route calls the same `command_grants`, so what it
-    # shows as effective is what this registers. A config with no ceiling
-    # (every constructor but `resolve`) keeps its allowed_tools as written.
-    package_allowed: list[str] | None = config.allowed_tools
-    off_by_pref: list[str] = config.disabled_tools
-    if packages and config.tool_ceiling:
-        from ..tooling.catalog import command_grants
-
-        grants = command_grants(
-            config.tool_ceiling, config.allowed_tools or [], config.tool_prefs, packages
-        )
-        package_allowed = list(grants.enabled)
-        off_by_pref = list(grants.disabled)
+    # `allowed_tools` is read AS WRITTEN. A per-item pin on one command of a
+    # whole-package grant is already in it (`pkg:cmd` units) by the time a
+    # config reaches here: the turn builder finalized the grant at the door
+    # where the package list became known (`apps.catalog.finalize_tool_grants`).
+    # Re-deriving it here from a ceiling + pins was tried and re-widened every
+    # config that had been narrowed after resolve (compaction's "no tools", a
+    # sub-agent's own list, a workflow node's `tools:`).
     if packages:
-        tools.extend(build_function_tools(packages, allowed=package_allowed))
+        tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # Last stop before the model sees them, and the only place every source is in
     # one list: built-ins, the conditional grants, and the package commands —
     # which `build_function_tools` rejects collisions AMONG, but not against
@@ -556,7 +546,7 @@ def _agent_for(
     # that silently does nothing is worse than not advertising it.
     offerable = [
         t
-        for t in off_by_pref
+        for t in config.disabled_tools
         if t != "run_agent"
         or delegation_is_available([*(config.allowed_tools or []), t], has_subagents)
     ]

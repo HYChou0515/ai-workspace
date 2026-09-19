@@ -366,3 +366,32 @@ async def test_a_legacy_name_in_the_parents_config_still_grants_the_renamed_tool
     assert not out.startswith("error:"), out
     defs = await workspace_subagent_defs(files, "inv-1")
     assert [d.tools for d in defs] == [["list_files"]]
+
+
+async def test_a_bare_package_name_is_accepted_when_the_turn_holds_commands_of_it():
+    """plan-tools-picker-groups part 2: a turn holds package tools at command
+    granularity (`rca-tools:spc`, …). A definition that says `rca-tools` means
+    "what this turn holds of it" — accepted, saved as written, and the loader
+    narrows it to the held commands on every read, so a command the item
+    later pins off drops out of the sub-agent without the file changing."""
+    files = WorkspaceFiles(MemoryFileStore())
+    held = ["read_file", "rca-tools:spc", "rca-tools:pareto"]
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(name="main", allowed_tools=held),
+        )
+    )
+
+    out = await save_subagent_impl(ctx, "digger", "d", ["read_file", "rca-tools"], "b")
+
+    assert "error" not in out
+    saved = await workspace_subagent_defs(files, "inv-1")
+    assert saved[0].tools == ["read_file", "rca-tools"]  # the author's words
+    loaded = await workspace_subagent_defs(files, "inv-1", ceiling=set(held))
+    assert loaded[0].tools == ["read_file", "rca-tools:pareto", "rca-tools:spc"]
+
+    # And a package the turn holds nothing of is refused like any other name.
+    out = await save_subagent_impl(ctx, "plotter", "d", ["sci-plot"], "b")
+    assert "error" in out and "sci-plot" in out
