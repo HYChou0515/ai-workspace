@@ -32,7 +32,9 @@ from pathlib import Path
 
 import msgspec
 
+from ..apps.frontmatter import FrontmatterError, parse_frontmatter
 from ..apps.shared_skills import SHARED_SKILLS
+from ..apps.skill_payload import skill_payload
 from .report import Report, render, row_for
 from .runner import Chat, ToolCall, Transcript, Turn, run_scenario
 from .scenario import Scenario, load_scenarios
@@ -47,7 +49,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--skill",
         default=None,
-        help="a registered shared skill by NAME, or a path to a SKILL.md you edited",
+        help="a registered shared skill by NAME, or a path to a SKILL.md (its frontmatter "
+        "`name` says whose references/ and scripts/ it runs with: the registered skill of "
+        "that name, else the file's own folder when that folder is named after the skill)",
     )
     p.add_argument(
         "--dump-skill",
@@ -124,13 +128,30 @@ def _resolve_agent(app_slug: str, profile: str, preset: str | None, config_path:
     from ..factories import get_app_catalog
 
     settings = load(config_path=config_path)
+    known = ", ".join(sorted(settings.agents.presets))
+    if preset is not None and preset not in settings.agents.presets:
+        raise SystemExit(f"unknown preset {preset!r}. config knows: {known}")
     try:
-        return get_app_catalog(settings).resolve(
+        cfg = get_app_catalog(settings).resolve(
             app_slug=app_slug, profile=profile, attached_preset=preset
         )
     except KeyError as e:
-        known = ", ".join(sorted(settings.agents.presets))
-        raise SystemExit(f"unknown preset {preset!r} ({e}). config knows: {known}") from e
+        raise SystemExit(f"cannot resolve a turn for {app_slug}/{profile} ({e})") from e
+    if preset is not None:
+        # `resolve` honours an attached preset only when the App's picker (or
+        # the profile's subset) lists it, and falls back to the default without
+        # a word — right for a live turn, wrong here: a run that measured some
+        # other model would report a number about nothing. The preset's model
+        # and endpoint are what it contributes; if the turn does not carry
+        # them, it is not that preset's turn.
+        want = settings.agents.presets[preset]
+        if (cfg.model, cfg.llm_base_url) != (want.model, want.llm.base_url):
+            raise SystemExit(
+                f"preset {preset!r} is not in app {app_slug!r} / profile {profile!r}'s picker, "
+                f"so the turn resolved to {cfg.name!r} ({cfg.model}) instead. Name a picker "
+                f"preset, or override one of them in the config you pass with --config."
+            )
+    return cfg
 
 
 def _litellm_chat(cfg, num_ctx: int, timeout: int) -> Chat:
@@ -160,27 +181,80 @@ def _litellm_chat(cfg, num_ctx: int, timeout: int) -> Chat:
     return chat
 
 
-def _stage(scenario: Scenario, scenarios_dir: Path, work: Path) -> None:
+def _stage(
+    scenario: Scenario, scenarios_dir: Path, work: Path, *, skill: tuple[str, Path] | None
+) -> None:
+    """The scenario's data at the workspace root, and the skill's OWN files
+    (`references/`, `scripts/`, …) under `.skill/<name>/` — the path a real
+    turn holds them at (`apps.skills.materialize_skill`), copied through the
+    same `skill_payload` so build noise is left behind here too. Without the
+    second half a body that says "read `.skill/<name>/references/x.md` first"
+    scores the model on a step the workspace made impossible: every such
+    `read_file` answered "no such file". `SKILL.md` itself is not staged; the
+    body reaches the model through the prompt.
+
+    ``skill`` is ``(name, source folder)`` — the folder is named by the
+    registry, not by the skill, so the name is passed rather than read off
+    the path. ``None`` is the control arm: a turn that never loaded the skill
+    never received its files, so the control workspace holds none either."""
     work.mkdir(parents=True, exist_ok=True)
     for name in scenario.data:
         shutil.copy(scenarios_dir / name, work / name)
+    if skill is None:
+        return
+    name, folder = skill
+    for rel, data in skill_payload(folder).items():
+        if rel == "SKILL.md":
+            continue
+        target = work / ".skill" / name / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
 
 
-def _resolve_skill(spec: str) -> tuple[str, str]:
-    """``(name, SKILL.md text)`` from a registered name or a path."""
+def _resolve_skill(spec: str) -> tuple[str, str, Path]:
+    """``(name, SKILL.md text, folder)`` from a registered name or a path to a
+    body. The name is the frontmatter's — never the folder's, because
+    `--dump-skill … -o ./tune` puts the body in a folder called `tune`. The
+    folder is where `references/` and `scripts/` come from, and it is found by
+    that name: the registered skill first (the dump writes `SKILL.md` alone,
+    so an edited copy never holds better files than the registry does — and
+    whatever else sits beside it, a run's output say, is not skill content);
+    else the file's own folder when it IS a skill folder, i.e. named `<name>`
+    — the invariant the platform's loader holds every profile and workspace
+    skill folder to — which is what lets a profile skill or a skill still
+    being written run with its own files. A body neither rule can place is
+    refused rather than run without its files."""
     path = Path(spec)
+    text: str | None = None
+    name = spec
     if path.is_file():
-        return path.parent.name, path.read_text()
-    src = SHARED_SKILLS.get(spec)
+        text = path.read_text()
+        try:
+            front, _body = parse_frontmatter(text.encode())
+        except FrontmatterError as e:
+            raise SystemExit(f"{path}: {e}") from e
+        name = str(front.get("name", "")).strip()
+        if not name:
+            raise SystemExit(f"{path}: SKILL.md frontmatter has no `name`")
+    src = SHARED_SKILLS.get(name)
+    # `.resolve()`: `--skill SKILL.md` from inside the folder has parent `.`,
+    # whose own name is "" — the rule is about the folder, not the spelling.
+    own = path.resolve().parent
+    if src is None and text is not None and own.name == name:
+        src = own
     if src is None:
-        raise SystemExit(f"unknown skill {spec!r}. registered: {', '.join(sorted(SHARED_SKILLS))}")
-    return spec, (src / "SKILL.md").read_text()
+        where = f"{path} is not in a folder named {name!r} and" if text is not None else "it is"
+        raise SystemExit(
+            f"unknown skill {name!r}: {where} not registered "
+            f"(registered: {', '.join(sorted(SHARED_SKILLS))})"
+        )
+    return name, text if text is not None else (src / "SKILL.md").read_text(), src
 
 
 def main() -> None:
     args = _parse_args()
     if args.dump_skill:
-        _name, text = _resolve_skill(args.dump_skill)
+        _name, text, _folder = _resolve_skill(args.dump_skill)
         args.out_dir.mkdir(parents=True, exist_ok=True)
         target = args.out_dir / "SKILL.md"
         target.write_text(text)
@@ -189,7 +263,10 @@ def main() -> None:
     if not args.skill or not args.scenarios:
         raise SystemExit("need --skill and --scenarios (or --dump-skill)")
 
-    name, skill_md = _resolve_skill(args.skill)
+    name, skill_md, skill_dir = _resolve_skill(args.skill)
+    # Named once, because it is not always the folder beside `--skill`: an
+    # edited copy of a registered skill runs with the REGISTRY's files.
+    print(f"skill {name!r}: references/ and scripts/ from {skill_dir}")
     scenarios = load_scenarios(args.scenarios)
     if not scenarios:
         raise SystemExit(f"no *.json scenarios in {args.scenarios}")
@@ -201,7 +278,7 @@ def main() -> None:
     for s in scenarios:
         for arm, body in (("skill", skill_md), *((("control", ""),) if args.control else ())):
             work = args.out_dir / f"{s.name}.{arm}"
-            _stage(s, args.scenarios, work)
+            _stage(s, args.scenarios, work, skill=(name, skill_dir) if arm == "skill" else None)
             print(f"[{arm}] {s.name} …", flush=True)
             t: Transcript = run_scenario(
                 chat,

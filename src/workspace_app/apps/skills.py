@@ -475,9 +475,10 @@ async def materialize_skill(
     name: str,
 ) -> None:
     """#589: copy a baked-in skill's files into the workspace so the body's own
-    instructions resolve — ``see references/glossary.md`` and
+    instructions resolve — ``read .skill/<name>/references/glossary.md`` and
     ``exec(["python", ".skill/<name>/scripts/x.py"])`` only work if the files are
-    actually there.
+    actually there. (The body has to name that full path: `read_file` resolves
+    from the workspace root and `read_skill` returns the body alone.)
 
     Copy-if-absent: a workspace copy already present is left completely alone.
     That is the whole point — the AI is meant to tweak these scripts, and an
@@ -499,9 +500,11 @@ async def materialize_skill(
     # A skill that is nothing but its SKILL.md has nothing to materialize, and
     # copying it anyway would be pure cost: the copy shadows the package version,
     # so the body stops tracking upstream and the skill starts reporting as a
-    # workspace one. Every skill shipped today is exactly that shape, so the
-    # common case must stay untouched — only a skill that actually brings files
-    # becomes a local copy.
+    # workspace one. Most shipped skills are exactly that shape, so the common
+    # case must stay untouched — only a skill that actually brings files becomes
+    # a local copy. `author-skill` is one (it ships `references/`), so from its
+    # first read a workspace holds its own copy and a later edit to the shipped
+    # guide reaches that workspace only through the skills panel's Refresh.
     if set(payload) <= {"SKILL.md"}:
         return
     for rel, data in payload.items():

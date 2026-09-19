@@ -91,3 +91,15 @@ def test_a_malformed_scenario_fails_loudly(tmp_path):
 
 def test_a_forbidden_phrase_that_never_appears_passes():
     assert check(scenario(must_not_mention=[["roughly", "about"]]), [], "exactly 3.5").passed
+
+
+def test_a_must_call_entry_may_list_alternatives_any_one_of_which_satisfies_it():
+    """A guide-following turn can take more than one shape — ask first and
+    end there, or read and draft — and a scenario has to accept every
+    compliant one while still failing a run that did neither."""
+    sc = Scenario(name="s", prompt="p", expect=Expect(must_call=[["ask_user", "read_file"]]))
+    assert check(sc, ["read_file"], "").passed
+    assert check(sc, ["ask_user"], "").passed
+    v = check(sc, ["save_skill"], "")
+    assert [f.rule for f in v.failures] == ["must_call"]
+    assert "ask_user" in v.failures[0].detail and "read_file" in v.failures[0].detail

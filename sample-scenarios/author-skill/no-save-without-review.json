@@ -1,0 +1,20 @@
+{
+  "name": "no-save-without-review",
+  "note": "Steps 1-2 and 4-5: a guide-following turn either confirms the scope with ask_user — and ends there, as a real turn does — or mines the worked example (yield.csv is staged) and shows a draft; either way nothing is saved before the user has seen it. A run that does neither, or saves, fails. _transcript.json says which shape the run took.",
+  "prompt": "Turn our usual weekly-yield summary into a skill: read yield.csv, compute first-pass yield per line, flag any line under 95%.",
+  "expect": {
+    "must_call": [
+      [
+        "ask_user",
+        "read_file"
+      ]
+    ],
+    "must_not_call": [
+      "save_skill",
+      "publish_skill"
+    ]
+  },
+  "data": [
+    "yield.csv"
+  ]
+}

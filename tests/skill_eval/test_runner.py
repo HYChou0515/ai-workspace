@@ -166,3 +166,37 @@ def test_a_model_that_never_answers_stops_at_the_step_limit(tmp_path):
     t = run_scenario(chat, Scenario(name="s", prompt="q"), tmp_path, system_prompt="S", max_steps=3)
     assert (t.steps, t.ended, t.answer) == (3, "step-limit", "")
     assert t.calls == ["list_files"] * 3
+
+
+def test_asking_the_user_ends_the_run_as_it_ends_a_real_turn(tmp_path):
+    """`api/litellm_runner.py::ask_user_stop_behaviour`: the production runner
+    stops at `ask_user` STRUCTURALLY (`StopAtTools`), because the answer only
+    arrives in the next turn and a model that keeps going answers a question
+    nobody answered — "local models routinely ignore" the instruction. A
+    harness that let the model continue scored a save that a real turn could
+    never have reached. What the user saw is the answer: the reply's text and
+    the question itself."""
+    chat = scripted(
+        Turn(
+            content="One thing before I draft.",
+            tool_calls=[
+                ToolCall(id="c1", name="ask_user", args={"question": "Per line or per week?"})
+            ],
+        ),
+        Turn(
+            tool_calls=[
+                ToolCall(
+                    id="c2",
+                    name="save_skill",
+                    args={"name": "x", "description": "d", "body": "b"},
+                )
+            ]
+        ),
+        Turn(content="saved"),
+    )
+    t = run_scenario(chat, Scenario(name="s", prompt="q"), tmp_path, system_prompt="S")
+    assert t.calls == ["ask_user"]
+    assert t.ended == "asked-user"
+    assert t.events == [Event("ask_user", "Per line or per week?")]
+    assert "One thing before I draft." in t.answer and "Per line or per week?" in t.answer
+    assert not (tmp_path / ".skill").exists()

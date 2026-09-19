@@ -226,6 +226,20 @@ async def test_a_shared_skill_ships_its_files_too(tmp_path: Path, monkeypatch):
     assert await files.read(inv, "/.skill/triage-shared/scripts/x.py") == b"print('shared')\n"
 
 
+async def test_author_skill_s_writing_rules_land_in_the_workspace_on_read():
+    """The real registry, not a synthetic one: `author-skill`'s body tells the
+    agent to read `references/writing-for-agents.md` (the tidy-before-save
+    rules), so resolving the skill has to put that file where `read_file` can
+    open it — a pointer to a file that is not there is the silent-no-op the
+    rules themselves warn about."""
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    body = await resolve_skill_body(files, inv, None, None, "author-skill")
+
+    assert body is not None and "references/writing-for-agents.md" in body
+    rules = await files.read(inv, "/.skill/author-skill/references/writing-for-agents.md")
+    assert b"Leading word" in rules
+
+
 # Without this the refresh control is a coin flip: it shows on every copy, and
 # pressing it when upstream has not moved does nothing visible. "Nothing
 # happened" is indistinguishable from "it is broken".

@@ -170,10 +170,31 @@ def test_every_tool_a_shipped_scenario_scores_on_is_one_the_harness_offers():
     named: dict[str, set[str]] = {}
     for folder in sorted(p for p in root.iterdir() if p.is_dir()):
         for sc in load_scenarios(folder):
-            for tool in [*sc.expect.must_call, *sc.expect.must_not_call]:
-                named.setdefault(tool, set()).add(f"{folder.name}/{sc.name}")
+            for entry in [*sc.expect.must_call, *sc.expect.must_not_call]:
+                for tool in [entry] if isinstance(entry, str) else entry:
+                    named.setdefault(tool, set()).add(f"{folder.name}/{sc.name}")
     missing = {tool: sorted(where) for tool, where in named.items() if tool not in offered}
     assert missing == {}, f"scenarios score on tools the harness never offers: {missing}"
+
+
+def test_every_shipped_scenario_names_only_data_files_that_ship_beside_it():
+    """A scenario's `data` is copied from its own folder; a name with no file
+    behind it fails at staging, on the first run, for whoever picked the
+    scenario up — and a scenario that must be fixed before it can run is one
+    that measures nothing."""
+    from pathlib import Path
+
+    from workspace_app.skill_eval.scenario import load_scenarios
+
+    root = Path(__file__).resolve().parents[2] / "sample-scenarios"
+    absent = {
+        f"{folder.name}/{sc.name}": name
+        for folder in sorted(p for p in root.iterdir() if p.is_dir())
+        for sc in load_scenarios(folder)
+        for name in sc.data
+        if not (folder / name).is_file()
+    }
+    assert absent == {}
 
 
 def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path):
@@ -231,3 +252,14 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
         double = schema["function"]["parameters"]
         assert set(double["properties"]) <= set(real_params), (name, double["properties"])
         assert sorted(double["required"]) == sorted(real_required), (name, double["required"])
+
+
+def test_read_file_records_which_path_was_asked_for(tmp_path):
+    """Scoring is on tool NAMES, so `must_call: ["read_file"]` is satisfied by
+    any read. The transcript has to show WHICH file, or a scenario built around
+    "it opened the reference" cannot be checked by the person reading it."""
+    (tmp_path / "r.md").write_text("rules")
+    events: list[Event] = []
+    assert run("read_file", {"path": "r.md"}, tmp_path, events) == "rules"
+    assert run("read_file", {"path": "gone.md"}, tmp_path, events) == "no such file: gone.md"
+    assert events == [Event("read_file", "r.md"), Event("read_file", "gone.md")]
