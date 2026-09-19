@@ -396,6 +396,10 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     });
     expect(new Set(Object.values(glyphs)).size).toBe(4);
     expect(glyph("skills-import")).not.toBe(glyphs.publish);
+    // …and the name never breaks at its hyphen to make room for them — the
+    // re-recorded demo showed `log-` / `digest` again once the badge and the
+    // 14 px glyphs joined the row (#822 had pinned only the pills).
+    expect(within(screen.getByTestId("skill-row-from-hub")).getByText("from-hub")).toHaveStyle({ whiteSpace: "nowrap" });
 
     for (const [id, label] of [
       ["skill-download-from-hub", word("skills.download")],

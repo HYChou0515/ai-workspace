@@ -414,7 +414,10 @@ function SkillRow({
           cluster wrap. */}
       <div style={{ flex: "1 1 200px", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontWeight: 600 }}>{skill.name}</span>
+          {/* nowrap, like the pills: with the badge and four glyphs beside it
+              the name broke at its hyphen (`log-` / `digest`) at 1280; the
+              controls are the cluster that wraps, not the name. */}
+          <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{skill.name}</span>
           <span
             data-testid={`skill-source-${skill.name}`}
             style={{
