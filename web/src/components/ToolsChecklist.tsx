@@ -27,13 +27,27 @@ import {
  * state they all share, or "mixed" with nothing pressed — and pressing it sets
  * every row of the fold. Nothing is stored per fold.
  *
- * Open or shut is decided at two moments, never re-derived on every render:
- * when the list opens (a fold that is MIXED then is open — the one time a
- * reader needs to look inside) and when the search term changes (a fold with
- * a hit is open, and any fold the reader had shut by hand is released). In
- * between, only the reader's own click moves a fold — a fold must not snap
- * shut under the cursor because the row just clicked made it uniform. A fold
- * of one row is just that row.
+ * Open or shut is decided at two moments, never re-derived on every render.
+ * The state is two things: `manual`, the folds the reader opened or shut by
+ * hand, and `autoOpen`, the folds that were MIXED the last time it was taken
+ * (the one time a reader needs to look inside). The table, event by event:
+ *
+ *   list opens            manual = {}          autoOpen = the mixed folds now
+ *   search term changes   manual keeps only    autoOpen = the mixed folds now
+ *   (after trimming)      the hand-OPENED      (so a fold made mixed while a
+ *                         folds — a hand-shut  search was on stays open once
+ *                         fold is released     it is cleared)
+ *   header click          manual[id] = !open   —
+ *   a row / fold tri-state   —                 —   (never re-derived: a fold
+ *                                                   must not snap shut under
+ *                                                   the cursor because the row
+ *                                                   just clicked made it uniform)
+ *
+ *   open(id) = manual[id] ?? (term ? this fold has a hit : autoOpen has id)
+ *
+ * A fold of one granted row is just that row. A fold the search narrowed to
+ * one hit keeps its header: it names the package the hit belongs to, and a
+ * header that came and went as the term grew would be a layout jump.
  *
  * Under a search a fold IS its matching rows: the count, the derived state,
  * the fold's tri-state and "reset" all cover exactly the rows drawn, so two
@@ -62,16 +76,16 @@ export function ToolsChecklist({
   const [search, setSearch] = useState("");
   const term = search.trim().toLowerCase();
   const groups = groupsOf(tools);
-  // Folds the reader opened or shut by hand since the last search change.
+  // The open/shut state — see the table in the docstring.
   const [manual, setManual] = useState<Record<string, boolean>>({});
-  // Folds that were mixed when the list opened — latched once, so a fold
-  // that stops being mixed under the reader's own clicks stays where it is.
-  const [openedMixed] = useState<Set<string>>(
-    () => new Set(groups.filter((g) => groupState(g, prefs) === "mixed").map((g) => g.id)),
-  );
+  const mixedNow = () => new Set(groups.filter((g) => groupState(g, prefs) === "mixed").map((g) => g.id));
+  const [autoOpen, setAutoOpen] = useState<Set<string>>(mixedNow);
   const changeSearch = (value: string) => {
+    const before = term;
     setSearch(value);
-    setManual({}); // a new search is a new question; hand-shut folds are released
+    if (value.trim().toLowerCase() === before) return; // whitespace only: not a new question
+    setManual((m) => Object.fromEntries(Object.entries(m).filter(([, open]) => open)));
+    setAutoOpen(mixedNow());
   };
   const matches = (tool: ItemToolState) =>
     tool.label.toLowerCase().includes(term) || tool.key.toLowerCase().includes(term);
@@ -141,7 +155,7 @@ export function ToolsChecklist({
           // Under a search the fold is its matching rows (see the docstring).
           const shownFold: ToolGroup = { ...group, tools: rows };
           const state = groupState(shownFold, prefs);
-          const open = manual[group.id] ?? (term !== "" || openedMixed.has(group.id));
+          const open = manual[group.id] ?? (term !== "" || autoOpen.has(group.id));
           const label = group.id === BUILTIN_GROUP ? t("tools.group.builtin") : group.label;
           const triAria =
             state === "mixed"

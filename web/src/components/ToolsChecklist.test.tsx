@@ -371,3 +371,46 @@ describe("ToolsChecklist folds — rules pinned after review", () => {
     for (const t of GROUPED) expect(screen.getByTestId(`tool-row-${t.key}`)).toBeInTheDocument();
   });
 });
+
+// Review round 2 (plan P7): the open/shut state table, event by event.
+describe("ToolsChecklist folds — what a search change restores", () => {
+  it("a fold opened by hand survives a search typed and erased", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin")); // hand-open
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "r" } });
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "" } });
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("tool-row-exec")).toBeInTheDocument();
+  });
+
+  it("a fold made mixed during a search stays open once the search is cleared", () => {
+    render(<Host tools={GROUPED} initial={{}} />);
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "read" } });
+    fireEvent.click(screen.getByTestId("tool-read_file-off")); // the fold is mixed now
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "" } });
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("tool-row-read_file")).toBeInTheDocument();
+  });
+
+  it("reset under a search clears only the rows the search left in", () => {
+    const onChange = vi.fn();
+    render(
+      <ToolsChecklist
+        tools={GROUPED}
+        prefs={{ exec: false, read_file: false, "rca-tools:pareto": true }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "read" } });
+    fireEvent.click(screen.getByTestId("tools-reset"));
+    expect(onChange).toHaveBeenLastCalledWith({ exec: false, "rca-tools:pareto": true });
+  });
+
+  it("a search that only changed by whitespace releases nothing", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "核心" } });
+    fireEvent.click(screen.getByTestId("tool-group-header-builtin")); // hand-shut under the search
+    fireEvent.change(screen.getByTestId("tools-search"), { target: { value: "核心 " } });
+    expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+  });
+});
