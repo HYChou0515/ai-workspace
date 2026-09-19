@@ -29,7 +29,7 @@ import { useIsSuperuser } from "./useIsSuperuser";
 export type PlatformDestination = {
   to: string;
   label: string;
-  /** Icon name for surfaces that render one; the rail's menu is text-only. */
+  /** The glyph both menus draw before the label (`NavGlyph`). */
   icon: IconName;
 };
 

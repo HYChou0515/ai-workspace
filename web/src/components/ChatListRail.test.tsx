@@ -19,9 +19,11 @@ const manifest = {
 vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items, isPending: false }),
   useAppManifest: () => manifest,
+  // The real AppSummary always carries icon + color (the manifest's); a double
+  // without them would let the rail crash on a field GlobalNav's tests supply.
   useApps: () => [
-    { slug: "rca", title: "RCA" },
-    { slug: "pm", title: "Product" },
+    { slug: "rca", title: "RCA", description: "", icon: "flame", color: "#F0502E" },
+    { slug: "pm", title: "Product", description: "", icon: "bug", color: "#2D6CC9" },
   ],
 }));
 const newChat = vi.fn();
@@ -99,6 +101,33 @@ describe("ChatListRail", () => {
     expect(hrefs).toEqual(
       expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/wui", "/help"]),
     );
+  });
+
+  it("draws every menu entry's icon, in both sections, as the global switcher does", () => {
+    // The data was shared; the look had drifted the same way — the switcher drew
+    // an icon per entry and the rail drew text only. Assert on EACH item, not a
+    // count: a count is satisfied by one section carrying the other's share.
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /platform menu/i }));
+
+    const menu = screen.getByRole("menu");
+    const entries = within(menu).getAllByRole("menuitem");
+    const apps = entries.filter((el) => el.getAttribute("href")?.startsWith("/a/"));
+    const destinations = entries.filter((el) => !el.getAttribute("href")?.startsWith("/a/"));
+    expect(apps.length).toBeGreaterThan(0);
+    expect(destinations.length).toBeGreaterThan(0);
+    for (const el of [...apps, ...destinations]) {
+      // Every row starts with NavGlyph's 22px box — whatever the glyph inside
+      // (a named icon, a file, an emoji, or nothing), the box is what lines
+      // the labels up, so it is what "has its glyph" means here.
+      expect(el.firstElementChild, el.textContent ?? "").toHaveStyle({ width: "22px", height: "22px" });
+    }
+    // An App row carries the App FORM (its own manifest icon at 22px); a
+    // destination row the destination form (16px). A hardcoded destination
+    // glyph on an App row satisfied a bare `[data-icon]` check.
+    expect(apps[0]).toHaveTextContent("RCA");
+    expect(apps[0]!.querySelector('[data-icon="flame"]')).toHaveAttribute("width", "22");
+    expect(destinations[0]!.querySelector("[data-icon]")).toHaveAttribute("width", "16");
   });
 
   it("calls an item what the App calls it, not a chat (#pm)", () => {
