@@ -677,6 +677,35 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 部署方自己的 app：`agent.tools` 有那三個、`agent.skills` 有 `skill-hub`，否則 agent 會說沒有 `publish_skill`。
 
 ---
+### 2026-09-19 · #824 author-skill 存檔前先照 writing-for-agents 整理一遍（`references/` 隨 skill 出貨） {#pr-824}
+
+**設定** — 不動。沒有新旋鈕。
+
+**資料** — 不動。沒有新 model、沒有回填。
+
+**行為**（⚠️ 不動設定行為就變）
+
+- 內建的 `author-skill` 從此**帶著檔案**出貨（`references/writing-for-agents.md`，Matt Pocock 的規則，MIT）。
+  依 #589 的機制，帶檔案的 skill 在每個 workspace **第一次** `read_skill` / Apply 時會被複製成該 workspace 自己的
+  `.skill/author-skill/`（之前它只有 `SKILL.md`，所以從不複製、永遠讀出貨版）。從那一刻起，dev 之後改出貨的
+  `sample-skills/author-skill/SKILL.md`，**既有的 workspace 不會自動跟上**——要在那個 item 的 Skills 面板按
+  「更新為出貨版本」（`rollout 後`，不用一次做完；只在你希望某個既有 item 拿到新版 guide 時逐 item 按）。
+  漏做的症狀：部署了新版 guide，某些 item 的 agent 還照舊步驟走——不是沒部署到，是那個 item 有自己的副本。
+  新 item、以及部署前從沒在該 item 用過 `author-skill` 的 item，第一次讀到的就是新版，不用動。
+- `author-skill` 本身的步驟從五步變七步：草擬前先讀那份規則、審閱後多一步「整理」（只改措辭不改內容、告訴使用者
+  收緊了什麼）、skill 的 `name` 改成在第一步就以 kebab-case 定下（因為內文指向 `.skill/<name>/references/…` 要在
+  存檔前就寫得出來）。agent 幫使用者做 skill 時會多一輪對話與一次 `read_file`；沒有旋鈕可關。
+
+**k8s · CI 側** — 不動。`sandbox-host/`、`kubernetes/` 沒改。
+
+**確認做完**
+
+- 在任一 item 跟助理說「幫我做一個 skill」：對話裡看得到它 `read_file` 讀 `.skill/author-skill/references/writing-for-agents.md`，
+  草稿給你看之後、存檔之前多一段「整理」。
+- 那個 item 的 Skills 面板裡 `author-skill` 這一列從此是副本（多了「還原成出貨版本」）；改了出貨 guide 之後那一列才會出現
+  「更新為出貨版本」，按了才換新。
+
+---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
