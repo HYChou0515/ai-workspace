@@ -157,11 +157,17 @@ export function SkillHubPickerModal({
   );
 }
 
-function PickRow({ row, 
+function PickRow({
+  row,
   taken,
-busy, onInstall }: { row: SkillHubCard; 
+  busy,
+  onInstall,
+}: {
+  row: SkillHubCard;
   taken: boolean;
-busy: boolean; onInstall: () => void }) {
+  busy: boolean;
+  onInstall: () => void;
+}) {
   const t = useT();
   return (
     <li

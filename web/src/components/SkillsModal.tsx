@@ -283,9 +283,7 @@ export function SkillsModal({
           )}
         </div>
 
-        <div 
-        ref={footerRef}
-        style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+        <div ref={footerRef} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
           <button
             type="button"
             data-testid="skills-import"

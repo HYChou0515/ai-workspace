@@ -1,11 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import {
-  cleanup,
-  fireEvent,
-  render as rtlRender,
-  screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemChatSummary } from "../api/itemChats";
@@ -34,12 +29,7 @@ const chat = (over: Partial<ItemChatSummary>): ItemChatSummary => ({
 
 const chats = [
   chat({ chat_id: "c1", name_hint: "Compare Q3 and Q4" }),
-  chat({
-    chat_id: "c2",
-    title: "Memory digest",
-    run_id: "r1",
-    status: "running",
-  }),
+  chat({ chat_id: "c2", title: "Memory digest", run_id: "r1", status: "running" }),
 ];
 
 const props = () => ({
@@ -54,19 +44,13 @@ const props = () => ({
 describe("ManageChatsModal", () => {
   it("lists a row per chat with its workflow status", () => {
     render(<ManageChatsModal {...props()} />);
-    expect(screen.getByTestId("manage-chat-row-c1")).toHaveTextContent(
-      "Compare Q3 and Q4",
-    );
-    expect(screen.getByTestId("manage-chat-row-c2")).toHaveTextContent(
-      "running",
-    );
+    expect(screen.getByTestId("manage-chat-row-c1")).toHaveTextContent("Compare Q3 and Q4");
+    expect(screen.getByTestId("manage-chat-row-c2")).toHaveTextContent("running");
   });
 
   it("filters rows by the search box", () => {
     render(<ManageChatsModal {...props()} />);
-    fireEvent.change(screen.getByTestId("manage-chats-search"), {
-      target: { value: "memory" },
-    });
+    fireEvent.change(screen.getByTestId("manage-chats-search"), { target: { value: "memory" } });
     expect(screen.queryByTestId("manage-chat-row-c1")).not.toBeInTheDocument();
     expect(screen.getByTestId("manage-chat-row-c2")).toBeInTheDocument();
   });
