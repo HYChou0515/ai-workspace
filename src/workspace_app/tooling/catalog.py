@@ -21,7 +21,7 @@ other or from the tools the agent actually runs.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .registry import PackageInfo
@@ -149,3 +149,84 @@ def flat_catalog(packages: Sequence[PackageInfo]) -> dict[str, ToolMeta]:
     for name, desc in builtin_tool_descriptions().items():
         out[name] = _meta(name, desc)
     return out
+
+
+def expand_entries(entries: Iterable[str], packages: Sequence[PackageInfo]) -> list[str]:
+    """Bring ``app.json`` entries to COMMAND granularity, in order.
+
+    A whole-package entry becomes one ``pkg:cmd`` per command the package has
+    right now — "the whole package" keeps meaning exactly that as releases add
+    commands, since nothing is enumerated in the manifest. A package that
+    exports no command (a runtime carrier such as ``python-stack``) stays one
+    unit, or its switch would have nothing to hang on. Built-ins, entries
+    already at command granularity, and entries nothing resolves pass through
+    as written. Pure; both the runner and the picker route feed it the same
+    package list, so the two never disagree on what a grant expands to."""
+    by_name = {p.name: p for p in packages}
+    out: list[str] = []
+    for entry in entries:
+        pkg = by_name.get(entry)
+        if pkg is not None and ":" not in entry and pkg.commands:
+            out.extend(f"{entry}:{c.name}" for c in pkg.commands)
+        else:
+            out.append(entry)
+    return out
+
+
+def unit_pref(unit: str, prefs: Mapping[str, bool]) -> bool | None:
+    """The tri-state pin that governs one unit: its own key first, then — for a
+    ``pkg:cmd`` unit — the package's key (an item pinned before commands were
+    pickable holds ``{"rca-tools": false}``, and that goes on meaning the whole
+    package), else ``None`` (follow the default)."""
+    if unit in prefs:
+        return prefs[unit]
+    pkg, sep, _ = unit.partition(":")
+    if sep and pkg in prefs:
+        return prefs[pkg]
+    return None
+
+
+@dataclass(frozen=True)
+class CommandGrants:
+    """What a ceiling + default set + prefs resolve to, at command granularity.
+
+    ``enabled`` is what the agent gets, ``disabled`` the rest of the ceiling
+    (the #480 "available on request" list); together they are the expanded
+    ceiling in ceiling order, disjoint. ``default_on`` is the expanded default
+    set ∩ ceiling — what a unit follows when nobody pinned it, which is what
+    the picker shows beside "Default"."""
+
+    enabled: tuple[str, ...]
+    disabled: tuple[str, ...]
+    default_on: frozenset[str]
+
+
+def command_grants(
+    ceiling: Iterable[str],
+    default_entries: Iterable[str],
+    prefs: Mapping[str, bool] | None,
+    packages: Sequence[PackageInfo],
+) -> CommandGrants:
+    """The one rule behind the tool picker and the agent's toolset
+    (plan-tools-picker-groups part 2): expand ``ceiling`` and
+    ``default_entries`` to command granularity, then per unit take its pin
+    (``unit_pref``) or, unpinned, whether the default set has it.
+
+    ``AppCatalog.resolve`` cannot do this — it runs before the turn has
+    resolved its third-party packages — so the two places that DO hold the
+    package list call this instead, and the picker's ``effective`` is by
+    construction what the agent runs with."""
+    units = expand_entries(ceiling, packages)
+    default_units = set(expand_entries(default_entries, packages))
+    pins = prefs or {}
+    enabled: list[str] = []
+    disabled: list[str] = []
+    for unit in units:
+        pinned = unit_pref(unit, pins)
+        include = pinned if pinned is not None else unit in default_units
+        (enabled if include else disabled).append(unit)
+    return CommandGrants(
+        enabled=tuple(enabled),
+        disabled=tuple(disabled),
+        default_on=frozenset(u for u in units if u in default_units),
+    )
