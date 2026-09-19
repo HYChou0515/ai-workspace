@@ -12,7 +12,8 @@ import { readSrcFile } from "../test/readSrcFile";
  * so without an override those wrapper styles are dead and every App's card
  * reads in full black (measured in Chromium: wrapper #5C5F66, article
  * #1A1B1F). The override says: in the onboarding context, the article takes
- * whatever its wrapper set — the same shape as `.kb-msg__text.md-body`.
+ * whatever its wrapper set — a compound selector on the article itself
+ * (`.onboarding-prose.md-body`), one class more specific than `.md-body`.
  *
  * This reads the stylesheet rather than the DOM because the test environment
  * does not cascade. The browser measurement after the fix is recorded in

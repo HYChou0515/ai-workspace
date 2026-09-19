@@ -75,7 +75,8 @@ export function MarkdownRenderer({ path }: { path: string }) {
  * resolver would render broken images and say nothing). `compact` is the
  * chat-sized variant (`.md-compact`). `className` goes on the article beside
  * `md-body`, which is how a context overrides what `.md-body` sets — colour,
- * size — the way `.kb-msg__text.md-body` does. */
+ * size — with a compound selector on the same element (`.x.md-body`), one
+ * class more specific than `.md-body` alone. */
 export function MarkdownBody({
   text,
   path,

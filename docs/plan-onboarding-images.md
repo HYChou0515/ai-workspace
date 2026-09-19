@@ -19,8 +19,10 @@ grill（2026-09-19）逐題定案如下；每一條都有對應的程式碼事�
   class，沿用不會零樣式。**但它自帶 `color: var(--text-paper)` 與 `font-size`**（compact 是 13px）：modal 的
   intro 是 14px、內文是 13px、顏色是 `--text-paper-d`（暗一階），寫在外層 wrapper 的 inline style 上；元素自己的
   class 規則會蓋掉從父層繼承的值，所以 wrapper 那三個屬性會**死掉**（round 1 四把鏡頭各自量到：article
-  `13px / #1A1B1F`，wrapper `14px / #5C5F66`）。修法照 `kb.css:151` 的 `.kb-msg__text.md-body`：一個情境
-  class 讓 article `inherit` 回 wrapper 的值（見下方 as-built）。
+  `13px / #1A1B1F`，wrapper `14px / #5C5F66`）。修法：一個情境 class 跟 `md-body` 放在同一個元素上
+  （`.onboarding-prose.md-body`，比 `.md-body` 多一個 class 的複合選擇器），讓 article `inherit` 回 wrapper 的值
+  （見下方 as-built）。`kb.css` 裡有同形的 `.kb-msg__text.md-body`，但 round 2 查到 master 上沒有元素帶
+  `kb-msg__text`——那是一條死規則，不能當先例引。
 - **App 自帶檔案給瀏覽器的先例**：`GET /apps/{slug}/icon`（`api/meta_routes.py:154`）→
   `apps/manifest.py:load_app_icon`：純檔名、任何分隔符一律拒絕（不可能跳出 App 目錄）、副檔名白名單
   `ICON_MEDIA_TYPES`（png / svg / jpg / jpeg / webp / gif）、任何不成立都是 404。`/apps/{slug}` 與 `/icon`
@@ -132,19 +134,27 @@ worktree → 乾淨後對最終 sha `gh run rerun` → 綠了報。三輪預算�
 |---|---|---|---|---|
 | A | `.md-body` 的 `color`/`font-size` 蓋掉 modal wrapper 的 inline 樣式（灰→黑、intro 14→13px）；`.md-compact p` 讓每個區塊尾端多 6px | 4 | `MarkdownBody` 加 `className`；modal 每個區塊傳 `onboarding-prose`；`base.css` 在 `.md-body.md-compact` **之後**加 `.onboarding-prose.md-body { color/font-size/line-height: inherit }` 與 `> :last-child { margin-bottom: 0 }`（同權重靠來源順序） | `onboardingProse.test.ts`（CSS 原文：三個 `inherit`、順序在 compact 之後、尾段 margin）；modal 的 DOM 測試（四個 article 都帶 `onboarding-prose md-body md-compact`，順便釘住 `compact`）。搬到 compact 之前 → 順序那條紅；modal 不傳 class → DOM 那條紅；拿掉 `color: inherit` / 尾段規則 → 各自那條紅 |
 | B | `onboardingAssetUrl` 硬寫 `/api/`——`web/src` 唯一沒走 `API_PREFIX` 的後端 URL；`BASE_PATH=/my-svc/rca/` 的生產 overlay 下圖會打到 ingress 外 | 1（HIGH） | `${API_PREFIX}/apps/…`（同 `AppIcon.tsx`） | `onboardingAssets.deployBase.test.ts`（`vi.mock` `API_PREFIX=/my-svc/rca/api`）；改回 `/api` → 紅 |
-| C | 超過 NAME_MAX 的檔名讓 `is_file()` 冒 `ENAMETOOLONG` → **500**（assets 路由是第一個把 URL 片段餵進 loader 的地方，任何人可構造） | 2 | `is_file()` 的 `OSError` 一律 `None`（Python 3.13 的 `is_file` 本來就這樣；255 是檔案系統常數，zip Traversable 沒有，不放在名字守衛） | `test_load_app_asset_treats_a_name_the_filesystem_refuses_as_no_asset`（loader `None` + route 404）；拿掉 `except` → 只有它紅 |
+| C | 超過 NAME_MAX 的檔名讓 `is_file()` 冒 `ENAMETOOLONG` → **500**（assets 路由是第一個把 URL 片段餵進 loader 的地方，任何人可構造） | 2 | `is_file()` 的 `OSError` 一律 `None`（255 是檔案系統常數，zip Traversable 沒有，不放在名字守衛。round 1 我寫了「Python 3.13 的 `is_file` 本來就這樣」——round 2 在 3.13.3 實測**一樣 raise errno 36**，那句是寫在查證之前，已刪） | `test_load_app_asset_treats_a_name_the_filesystem_refuses_as_no_asset`（loader `None` + route 404）；拿掉 `except` → 只有它紅 |
 | D | `name in {".", ".."}` 是死守衛：兩者副檔名是 `.`，白名單先擋 | 1 | 拆掉，docstring 說明由白名單擋 | loader 測試多一個 `"."`；`..`/`.` 仍 `None` |
 | E | 決策 4「有 `resolveUrl` 就用它」只釘一半：provider 與 `resolveUrl` 同時在時誰贏沒測 | 1 | 只加測試 | `MarkdownRenderer.test.tsx`：provider 內帶 `resolveUrl` → 用 `resolveUrl`；改成 provider 優先 → 紅 |
 | F | assets 路由的未知 slug 守衛沒有敏感測試（`nope` 沒守衛也 404） | 1 | 只加測試 | `test_get_app_asset_serves_only_folders_that_are_apps`：`_template/assets/example.png` 磁碟上有、不是 App → 404；拿掉守衛 → 只有它紅 |
 | G | parity 測試把 pm 的反引號句跳過了（plan 點名要「去反引號後在」） | 1 | 只加測試 | modal 測試從 `pm/app.json` 讀那句：去反引號後在 `textContent`，`<code>` 剛好一個 = `issues/N.md` |
 | H | `_template/assets/example.png` 的文字有 tofu 方塊（字型缺箭頭 glyph） | 2 | 純 ASCII 重生（640×240，8.7 KB） | 目視 |
-| I | `test_get_app_asset_route_never_sees_a_path_shaped_name` 的 `../icon.png` 那格是 httpx 客戶端先正規化（送出的是 `/apps/rca/icon.png`），對任何 handler 都會過 | 1 | 刪那格、docstring 說明；留 `..%2F` 兩格（spy 證明 handler 沒被叫） | — |
+| I | `test_get_app_asset_route_never_sees_a_path_shaped_name` 的 `../icon.png` 那格是 httpx 客戶端先正規化（送出的是 `/apps/rca/icon.png`），對任何 handler 都會過 | 1 | 刪那格、docstring 說明；留 `..%2F` 兩格 | round 2 補的：測試裡 monkeypatch loader 當 spy，控制組 `hero.png` 被記到、兩個 `..%2F` 沒有——「handler 沒被叫」從 docstring 裡的一句話變成套件裡的斷言 |
 | J | 文件：runbook 的「會變排版的字元」漏 `$`（pipeline 有 remark-math，`$5 and $10` 會畫成 KaTeX）、多列 `<`（沒 rehype-raw，`<b>` 是純文字）；`adding-an-app.md` 漏 `jpeg`；`MarkdownRenderer.tsx` docstring「Two callers」 | 2 | 改字 | — |
 
 修後真瀏覽器重量（`/a/rca`，Chromium，light 1280×900 / 390×844、dark 1280×900）：四個 article（intro + 三個
 body）的 computed `font-size` = wrapper（14 / 13 / 13 / 13 px）、`color` = 「Don't show again」按鈕的
 `--text-paper-d`（light `rgb(92,95,102)`、dark `rgb(169,173,181)`）≠ 標題色（`rgb(26,27,31)` / `rgb(236,234,227)`），
 每個 article 的最後一個子元素 `margin-bottom: 0`。
+
+Round 2（三把鏡頭對 P7）：零回歸、程式碼沒有 LOW 以上的發現；修了三句假話／不精確的話（P8，只改字）：`MarkdownRenderer.tsx` 與
+`onboardingProse.test.ts` 引 `.kb-msg__text.md-body` 當先例——master 上沒有元素帶那個 class，是死規則（上面的程式碼事實已改）；
+上表 C 的「Python 3.13 本來就這樣」（實測為假）；runbook 的「`<` 照字面」漏了 `<https://…>` 自動連結這個例外。一個記下不改的特性：`> :last-child`
+只管**直接**子元素——body 以緊湊清單結尾殘留 3px（`.md-body li` 的 margin）、以 loose list / blockquote 結尾殘留 6px
+（`li > p` / `blockquote > p` 的段落 margin），真 Chromium 量的；內建五個 App 都是段落或段落+圖結尾，看不到。GitHub 的
+`.markdown-body > *:last-child` 與 Tailwind `prose` 的收尾規則同樣只做直接子元素、接受這個殘留，照抄成熟做法，不加深度表。
+另一個既有（P3 起、共用渲染器全域）的觀察：`<img>` 是 inline，圖底下有 5.5px 的 baseline 空隙，聊天訊息裡的圖一樣，不在這裡動。
 
 ## 驗證（DoD）
 

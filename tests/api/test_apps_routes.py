@@ -353,22 +353,34 @@ def test_get_app_asset_serves_only_image_types(tmp_path, monkeypatch):
 
 def test_get_app_asset_route_never_sees_a_path_shaped_name(tmp_path, monkeypatch):
     """What the ROUTER does with a traversal-shaped URL: an encoded `/` in the
-    name segment matches no route, so the handler is never called (probed with
-    a spy on the loader) and the answer is the router's 404. A literal `../`
-    is not exercised here because the HTTP client normalises it away before
-    the request leaves (`/apps/rca/assets/../icon.png` is sent as
+    name segment matches no route, so the handler is never called — the spy on
+    the loader records nothing — and the answer is the router's 404. A literal
+    `../` is not exercised here because the HTTP client normalises it away
+    before the request leaves (`/apps/rca/assets/../icon.png` is sent as
     `/apps/rca/icon.png`) — such a case would pass against any handler. This
     is not the loader's guard — that is pinned by
     ``test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename`` below,
     at the seam a name can actually arrive through."""
+    from workspace_app.apps import manifest
+
     client = _client()
     slug = _ships_assets(tmp_path, monkeypatch, {"hero.png": _PNG_1X1})
     (tmp_path / slug / "icon.png").write_bytes(_PNG_1X1)  # beside app.json
     (tmp_path / "secret.png").write_bytes(_PNG_1X1)  # beside the App
+    seen: list[str] = []
+    real = manifest.load_app_asset
+
+    def spy(slug: str, subdir: str, name: str):
+        seen.append(name)
+        return real(slug, subdir, name)
+
+    monkeypatch.setattr(manifest, "load_app_asset", spy)
 
     assert client.get(f"/apps/{slug}/assets/hero.png").status_code == 200  # the control
+    assert seen == ["hero.png"]  # the spy sees a name the router does deliver
     assert client.get(f"/apps/{slug}/assets/..%2Ficon.png").status_code == 404
     assert client.get(f"/apps/{slug}/assets/..%2F..%2Fsecret.png").status_code == 404
+    assert seen == ["hero.png"]  # and nothing for the two that never reached the handler
 
 
 def test_load_app_asset_refuses_a_name_that_is_not_a_plain_filename(tmp_path, monkeypatch):

@@ -271,6 +271,9 @@ select {
   font-size: inherit;
   line-height: inherit;
 }
+/* A block ends where its wrapper does — the direct last child only, like
+   GitHub's `.markdown-body > *:last-child`; a block that ends in a list or a
+   blockquote keeps that element's inner 3–6px (measured), accepted as they do. */
 .onboarding-prose.md-body > :last-child {
   margin-bottom: 0;
 }
