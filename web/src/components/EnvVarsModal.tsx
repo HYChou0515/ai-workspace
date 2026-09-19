@@ -277,7 +277,7 @@ export function EnvVarsModal({
             <div style={{ display: "grid", gap: 4 }}>
               <input
                 type="search"
-                className="kb-input"
+                className="input"
                 data-testid="env-tool-search"
                 value={toolQuery}
                 onChange={(e) => setToolQuery(e.target.value)}

@@ -608,20 +608,6 @@
   gap: 6px;
   margin-bottom: 12px;
 }
-.kb-input {
-  flex: 1;
-  min-width: 0;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  font-family: var(--font-body);
-  font-size: var(--text-body-sm);
-  color: var(--text-paper);
-  outline: none;
-}
-
 .kb-cols__actions {
   display: flex;
   justify-content: flex-end;
@@ -690,7 +676,7 @@
 .kb-field__req {
   color: var(--accent);
 }
-.kb-field .kb-input {
+.kb-field .input {
   width: 100%;
   flex: none;
 }
@@ -699,9 +685,6 @@
   padding: 8px 10px;
   resize: vertical;
   line-height: var(--leading-body-sm, 1.5);
-}
-.kb-input:focus {
-  border-color: var(--accent);
 }
 .kb-cols__empty {
   color: var(--text-paper-d2);

@@ -119,21 +119,12 @@ export function ToolsChecklist({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
       <input
+        className="input"
         data-testid="tools-search"
         placeholder={t("tools.search")}
         value={search}
         onChange={(e) => changeSearch(e.target.value)}
-        style={{
-          width: "100%",
-          height: 30,
-          boxSizing: "border-box",
-          padding: "0 10px",
-          fontSize: pxToRem(13),
-          borderRadius: "var(--radius-btn)",
-          border: "1px solid var(--paper-3)",
-          background: "var(--white)",
-          color: "var(--text-paper)",
-        }}
+        style={{ flex: "none", width: "100%", boxSizing: "border-box" }}
       />
 
       {tools.length > 0 && (

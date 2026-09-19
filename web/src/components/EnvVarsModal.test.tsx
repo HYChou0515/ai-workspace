@@ -153,7 +153,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
     // A search box, not another value field: they sat next to each other looking
     // identical, which is what made the panel unreadable.
     expect(search).toHaveAttribute("type", "search");
-    expect(search).toHaveClass("kb-input");
+    expect(search).toHaveClass("input");
     fireEvent.change(search, { target: { value: "wafer" } });
     expect(screen.queryByTestId("env-tool-sap-tools")).not.toBeInTheDocument();
     expect(screen.getByTestId("env-tool-wafer-history")).toBeInTheDocument();
