@@ -37,7 +37,7 @@ import type { ItemEnvironment } from "../api/itemEnvironment";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { Gauge } from "./Gauge";
-import { toSizeString } from "./ItemEnvironmentSize";
+import { type SizeFault, toSizeString } from "./ItemEnvironmentSize";
 
 export type EnvBudget = {
   cpu: number;
@@ -54,9 +54,10 @@ export type ItemEnvironmentPanelProps = {
   budget: EnvBudget | null;
   canEdit: boolean;
   draft: SizeDraft;
-  /** Which fields hold something the server would refuse (the modal decides;
-   *  this only marks the field and shows its grammar). */
-  invalid?: { cpu: boolean; memory: boolean };
+  /** Which fields hold something the server would refuse, and why (the modal
+   *  decides; this only marks the field and shows the matching hint — the
+   *  grammar for `"unreadable"`, the record's ceiling for `"over"`). */
+  fault?: { cpu: SizeFault; memory: SizeFault };
   /** A save is out (PUT or its re-read): the fields hold still so a
    *  keystroke cannot land between the write and the record catching up. */
   busy?: boolean;
@@ -72,7 +73,7 @@ export function ItemEnvironmentPanel({
   budget,
   canEdit,
   draft,
-  invalid = { cpu: false, memory: false },
+  fault = { cpu: null, memory: null },
   busy = false,
   onDraft,
   onCloseSandbox,
@@ -140,13 +141,16 @@ export function ItemEnvironmentPanel({
                   data-testid="cpu-input"
                   type="number"
                   min={0.5}
+                  // The browser's own stop, at the record's ceiling — only
+                  // when the record names one (#830).
+                  max={Number.isFinite(env.maxCpuCores) ? env.maxCpuCores : undefined}
                   step={0.5}
                   inputMode="decimal"
                   value={draft.cpu}
                   placeholder={cpuEffective === null ? "" : String(cpuEffective)}
                   disabled={still}
-                  aria-invalid={invalid.cpu || undefined}
-                  aria-describedby={invalid.cpu ? "itemenv-cpu-hint" : undefined}
+                  aria-invalid={fault.cpu !== null || undefined}
+                  aria-describedby={fault.cpu !== null ? "itemenv-cpu-hint" : undefined}
                   onChange={(e) => onDraft({ cpu: e.target.value })}
                 />
               ) : (
@@ -178,9 +182,13 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
-              {invalid.cpu ? (
+              {fault.cpu !== null ? (
                 <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
-                  {t("itemenv.field.cpu.hint")}
+                  {/* The RECORD's ceiling, in the spelling the server reads
+                      — never a number held here (#830). */}
+                  {fault.cpu === "over"
+                    ? t("itemenv.field.cpu.max", { max: String(env.maxCpuCores) })
+                    : t("itemenv.field.cpu.hint")}
                 </p>
               ) : null}
               {cpuClamped ? (
@@ -207,8 +215,8 @@ export function ItemEnvironmentPanel({
                   // would be one nobody vouched for.
                   placeholder={toSizeString(memEffective) ?? ""}
                   disabled={still}
-                  aria-invalid={invalid.memory || undefined}
-                  aria-describedby={invalid.memory ? "itemenv-memory-hint" : undefined}
+                  aria-invalid={fault.memory !== null || undefined}
+                  aria-describedby={fault.memory !== null ? "itemenv-memory-hint" : undefined}
                   onChange={(e) => onDraft({ memory: e.target.value })}
                 />
               ) : (
@@ -238,9 +246,13 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
-              {invalid.memory ? (
+              {fault.memory !== null ? (
                 <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
-                  {t("itemenv.field.memory.hint")}
+                  {/* `toSizeString`, not `formatBytes`: `1024T` is what the
+                      server reads back, `1.0 PiB` is what it refuses. */}
+                  {fault.memory === "over"
+                    ? t("itemenv.field.memory.max", { max: toSizeString(env.maxMemoryBytes) })
+                    : t("itemenv.field.memory.hint")}
                 </p>
               ) : null}
               {memClamped && memStated !== null && memEffective !== null ? (

@@ -62,6 +62,41 @@ describe("itemEnvironmentApi.get", () => {
     expect(got.running).toBe(true);
   });
 
+  it("carries the server's ceilings, and treats a record without them as unbounded here", async () => {
+    // #830: the bounds the PUT refuses against travel on the record, so the
+    // field can refuse `2048` on the keystroke the way it refuses `0`. A
+    // record from an API pod that predates the field (a rollout window) has
+    // no bound to teach — the client then refuses nothing and the server's
+    // 422 still stands, which is exactly what it did before the field.
+    vi.mocked(fetch).mockResolvedValue(
+      ok({
+        running: false,
+        stated_cpu_cores: null,
+        stated_memory_bytes: null,
+        effective_cpu_cores: 2,
+        effective_memory_bytes: null,
+        max_cpu_cores: 7,
+        max_memory_bytes: 3 * 1024 ** 3,
+      }),
+    );
+    const got = await itemEnvironmentApi.get("rca", "item-1");
+    expect(got.maxCpuCores).toBe(7);
+    expect(got.maxMemoryBytes).toBe(3 * 1024 ** 3);
+
+    vi.mocked(fetch).mockResolvedValue(
+      ok({
+        running: false,
+        stated_cpu_cores: null,
+        stated_memory_bytes: null,
+        effective_cpu_cores: 2,
+        effective_memory_bytes: null,
+      }),
+    );
+    const old = await itemEnvironmentApi.get("rca", "item-1");
+    expect(old.maxCpuCores).toBe(Number.POSITIVE_INFINITY);
+    expect(old.maxMemoryBytes).toBe(Number.POSITIVE_INFINITY);
+  });
+
   it("throws on a refusal instead of resolving with nothing", async () => {
     // The failure `myResources.closeEnvironment` was fixed for: a swallowed
     // status resolves exactly like a success, and the panel renders an empty

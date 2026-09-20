@@ -6,15 +6,23 @@
  * or the bare byte count) — so a stated size round-trips: what the record
  * holds is what the field shows and what Save sends back.
  *
- * `isValidCpu` / `isValidMemory` are the server's refusals
+ * `cpuFault` / `memoryFault` are the server's refusals
  * (`api/item_routes.py:_validated_resources`, `quota/limits.py:parse_size`)
  * asked BEFORE the PUT: a 422 only says "not saved", and the person would be
- * left guessing at the grammar. `""` is valid in both — it means "use the
- * default" and is sent as `null`. `normaliseMemory` is what lets the memory
- * field take the spellings people actually use — "MB" as well as "M", a
- * space, a fraction — and still send the one the server parses.
+ * left guessing at the grammar. Each answers with WHY — `"unreadable"` (not a
+ * number, not a size, zero) or `"over"` (past the ceiling) — because the hint
+ * under the field teaches a different thing for each. The ceiling is an
+ * argument, read from the record (`max_cpu_cores` / `max_memory_bytes`,
+ * #830), never a number of this module's own: a copy of the server's `1024`
+ * would keep teaching it after the server moved, with every test still green.
+ * `""` is valid in both — it means "use the default" and is sent as `null`.
+ * `memoryBytes` is what lets the memory field take the spellings people
+ * actually use — "MB" as well as "M", a space, a fraction — and
+ * `normaliseMemory` is that number in the one spelling the server parses.
  */
 
+export function toSizeString(bytes: number): string;
+export function toSizeString(bytes: number | null): string | null;
 export function toSizeString(bytes: number | null): string | null {
   if (bytes === null) return null;
   for (const [unit, size] of [
@@ -28,26 +36,32 @@ export function toSizeString(bytes: number | null): string | null {
   return String(bytes);
 }
 
-/** More than 0 and finite; the server refuses 0 rather than reading it as "unlimited". */
-export function isValidCpu(text: string): boolean {
-  if (text === "") return true;
+/** Why a field's text would be refused, or `null` when it would not be. */
+export type SizeFault = "unreadable" | "over" | null;
+
+/** More than 0 and finite (the server refuses 0 rather than reading it as
+ *  "unlimited"), and no larger than `max` — the server's `_within`, which is
+ *  `0 < value <= ceiling`. */
+export function cpuFault(text: string, max: number): SizeFault {
+  if (text === "") return null;
   const n = Number(text);
-  return Number.isFinite(n) && n > 0;
+  if (!Number.isFinite(n) || n <= 0) return "unreadable";
+  return n <= max ? null : "over";
 }
 
 const UNITS: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
 
 /**
- * What a person writes → what `parse_size` reads, or `null` when it is not a
- * size at all. People write "512MB", "512 mb", "1.5G" and the display format
+ * What a person writes → the bytes it means, or `null` when it is not a size
+ * at all. People write "512MB", "512 mb", "1.5G" and the display format
  * "512.0 MB" as readily as "512M"; the server reads only `<integer>[K|M|G|T]`.
  * So: any case, an optional space, an optional trailing B, full-width digits,
- * a fraction WITH a unit folded into the exact smaller unit ("1.5G" →
- * "1536M"; below a whole byte it rounds), a fraction WITHOUT one refused (a
- * fraction of a byte is not a size). `""` is "the default", not a size — the
- * caller sends `null` for it.
+ * a fraction WITH a unit folded into whole bytes ("1.5G" is 1536M; below a
+ * whole byte it rounds), a fraction WITHOUT one refused (a fraction of a byte
+ * is not a size). `""` is "the default", not a size — the caller sends `null`
+ * for it.
  */
-export function normaliseMemory(text: string): string | null {
+export function memoryBytes(text: string): number | null {
   // Full-width digits (a zh-TW IME slip) are digits; the server's
   // `str.isdigit` reads them too.
   const ascii = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
@@ -58,22 +72,20 @@ export function normaliseMemory(text: string): string | null {
   if (!m[2] && m[1].includes(".")) return null;
   const unit = m[2] ? UNITS[m[2].toUpperCase()]! : 1;
   const bytes = Math.round(Number(m[1]) * unit);
-  if (!(bytes > 0)) return null;
-  return toSizeString(bytes) ?? null;
+  return bytes > 0 ? bytes : null;
 }
 
-/** Empty = the default; otherwise something `normaliseMemory` can read. The
- *  server refuses zero on this route, unlike the operator's config. */
-export function isValidMemory(text: string): boolean {
-  return text.trim() === "" || normaliseMemory(text) !== null;
+/** `memoryBytes` in the server's spelling — what Save sends. */
+export function normaliseMemory(text: string): string | null {
+  return toSizeString(memoryBytes(text));
 }
 
-/** The server's spelling back to bytes — for writing a just-sent size into
- *  the cached record when its re-read failed. Only ever fed what
- *  `normaliseMemory` produced. */
-export function parseSize(text: string | null): number | null {
-  if (text === null) return null;
-  const m = /^(\d+)([KMGT])?$/.exec(text);
-  if (!m) return null;
-  return Number(m[1]) * (m[2] ? UNITS[m[2]]! : 1);
+/** Empty = the default; otherwise something `memoryBytes` can read, no larger
+ *  than `max`. The server refuses zero on this route, unlike the operator's
+ *  config. */
+export function memoryFault(text: string, max: number): SizeFault {
+  if (text.trim() === "") return null;
+  const bytes = memoryBytes(text);
+  if (bytes === null) return "unreadable";
+  return bytes <= max ? null : "over";
 }

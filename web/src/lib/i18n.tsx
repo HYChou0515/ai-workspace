@@ -1133,6 +1133,12 @@ export const messages = {
     "zh-TW": "數字加單位，例如 512M、512MB 或 1.5G。",
     en: "A number with a unit — e.g. 512M, 512MB or 1.5G.",
   },
+  // Past the server's hard ceiling (#830). `{max}` is the RECORD's number in
+  // the server's own spelling (`1024` / `1024T`) — what a person can type
+  // back — never a figure held here or the display format (`1.0 PiB`), which
+  // the server would refuse.
+  "itemenv.field.cpu.max": { "zh-TW": "最多 {max} 核。", en: "At most {max} cores." },
+  "itemenv.field.memory.max": { "zh-TW": "最多 {max}。", en: "At most {max}." },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
     en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",

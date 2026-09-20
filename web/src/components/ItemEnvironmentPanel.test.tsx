@@ -36,6 +36,9 @@ const IDLE = {
   // comparing the viewer's quota with a clamp made against the owner's.
   cpuBoundBy: null,
   memoryBoundBy: null,
+  // The server's hard ceilings, carried on the record (#830).
+  maxCpuCores: 1024,
+  maxMemoryBytes: 1024 ** 5,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
@@ -301,11 +304,11 @@ describe("the shapes it borrows", () => {
     expect(container.querySelectorAll("label[for]")).toHaveLength(0);
   });
 
-  it("marks a field the modal calls invalid, and shows the grammar under it", () => {
+  it("marks a field the modal calls unreadable, and shows the grammar under it", () => {
     render(
       <ItemEnvironmentPanel
         draft={{ cpu: "0", memory: "512 MiB" }}
-        invalid={{ cpu: true, memory: true }}
+        fault={{ cpu: "unreadable", memory: "unreadable" }}
         onDraft={noop}
         env={IDLE}
         budget={BUDGET}
@@ -320,6 +323,47 @@ describe("the shapes it borrows", () => {
     const memory = screen.getByTestId("memory-input");
     expect(memory.getAttribute("aria-describedby")).toBe(screen.getByTestId("memory-hint").id);
     expect(screen.getByTestId("cpu-input").getAttribute("aria-describedby")).toBe(screen.getByTestId("cpu-hint").id);
+  });
+
+  it("marks a field the modal calls over, and names the RECORD's ceiling under it in the server's spelling (#830)", () => {
+    // A ceiling the server never used, so a hint that agreed with it can only
+    // have read the record — not a number of the client's own.
+    render(
+      <ItemEnvironmentPanel
+        draft={{ cpu: "8", memory: "3073M" }}
+        fault={{ cpu: "over", memory: "over" }}
+        onDraft={noop}
+        env={{ ...IDLE, maxCpuCores: 7, maxMemoryBytes: 3 * 1024 ** 3 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    const cpu = screen.getByTestId("cpu-input");
+    const memory = screen.getByTestId("memory-input");
+    expect(cpu.getAttribute("aria-invalid")).toBe("true");
+    expect(memory.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByTestId("cpu-hint").textContent).toMatch(/7/);
+    expect(screen.getByTestId("cpu-hint").textContent).not.toMatch(/1024/);
+    // `3G`, the spelling a person can type back — not `3.0 GiB`.
+    expect(screen.getByTestId("memory-hint").textContent).toMatch(/3G/);
+    expect(screen.getByTestId("memory-hint").textContent).not.toMatch(/GiB/);
+    expect(cpu.getAttribute("aria-describedby")).toBe(screen.getByTestId("cpu-hint").id);
+    expect(memory.getAttribute("aria-describedby")).toBe(screen.getByTestId("memory-hint").id);
+    // The browser's own stop, at the same number.
+    expect(cpu.getAttribute("max")).toBe("7");
+  });
+
+  it("gives the cpu field no `max` when the record names no ceiling", () => {
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, maxCpuCores: Number.POSITIVE_INFINITY }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    expect(screen.getByTestId("cpu-input").hasAttribute("max")).toBe(false);
   });
 
   it("refuses 0 at the field itself — the server refuses it too", () => {

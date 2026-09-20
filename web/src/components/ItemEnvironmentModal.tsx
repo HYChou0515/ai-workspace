@@ -39,11 +39,14 @@
  * callbacks then never fire and its options callbacks fire on a modal that has
  * moved on. Not offering it while a save is out means no such mutation exists.
  *
- * What the server would refuse is refused here first: a cpu of 0 or less, or
- * a memory that is not a size. The server reads only `<integer>[K|M|G|T]`;
- * people write "512MB", "1.5 GB" and the display format "512.0 MB" just as
- * readily, so the field takes those and `normaliseMemory` sends the server's
- * spelling. A 422 only says "not saved", which leaves the person guessing.
+ * What the server would refuse is refused here first: a cpu of 0 or less, a
+ * memory that is not a size, or either past the hard ceiling the RECORD
+ * carries (`maxCpuCores` / `maxMemoryBytes`, #830 — the server's number,
+ * read each time, never a copy held here). The server reads only
+ * `<integer>[K|M|G|T]`; people write "512MB", "1.5 GB" and the display format
+ * "512.0 MB" just as readily, so the field takes those and `normaliseMemory`
+ * sends the server's spelling. A 422 only says "not saved", which leaves the
+ * person guessing.
  *
  * Because saves are dispatched while this is on screen, a refusal has
  * somewhere to be read (`saveFailed`, beside the app-wide banner — which is
@@ -65,7 +68,14 @@ import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
-import { isValidCpu, isValidMemory, normaliseMemory, parseSize, toSizeString } from "./ItemEnvironmentSize";
+import {
+  cpuFault,
+  memoryBytes,
+  memoryFault,
+  normaliseMemory,
+  type SizeFault,
+  toSizeString,
+} from "./ItemEnvironmentSize";
 import { ModalShell } from "./ModalShell";
 import { budgetFrom } from "./useItemEnvironment";
 
@@ -123,10 +133,15 @@ export function ItemEnvironmentModal({
     : null;
   const dirty =
     current !== null && stated !== null && (current.cpu !== stated.cpu || current.memory !== stated.memory);
-  const invalid = {
-    cpu: current !== null && !isValidCpu(current.cpu),
-    memory: current !== null && !isValidMemory(current.memory),
-  };
+  // Against the RECORD's ceilings (#830), never a number of the client's own.
+  // (`current` exists exactly when `env.data` does; the type cannot see that.)
+  const fault: { cpu: SizeFault; memory: SizeFault } =
+    env.data && current
+      ? {
+          cpu: cpuFault(current.cpu, env.data.maxCpuCores),
+          memory: memoryFault(current.memory, env.data.maxMemoryBytes),
+        }
+      : { cpu: null, memory: null };
 
   const envKey = ["item-environment", slug, itemId];
   const refresh = () =>
@@ -155,7 +170,7 @@ export function ItemEnvironmentModal({
           old && {
             ...old,
             statedCpuCores: d.cpu === "" ? null : Number(d.cpu),
-            statedMemoryBytes: d.memory.trim() === "" ? null : parseSize(normaliseMemory(d.memory)),
+            statedMemoryBytes: d.memory.trim() === "" ? null : memoryBytes(d.memory),
           },
         );
         // setQueryData marks the record FRESH, so the reopen the notice
@@ -194,7 +209,7 @@ export function ItemEnvironmentModal({
   const attemptClose = useDirtyClose(dirty, onClose);
   const editable = env.data !== undefined && budget !== null && canEdit;
   const busy = save.isPending;
-  const canSave = editable && dirty && !invalid.cpu && !invalid.memory && !env.data!.running && !busy;
+  const canSave = editable && dirty && fault.cpu === null && fault.memory === null && !env.data!.running && !busy;
 
   return (
     <ModalShell
@@ -221,7 +236,7 @@ export function ItemEnvironmentModal({
           budget={budget}
           canEdit={canEdit}
           draft={current}
-          invalid={invalid}
+          fault={fault}
           busy={busy}
           onDraft={(patch) => setDraft((d) => ({ ...d, ...patch }))}
           onCloseSandbox={() => {
