@@ -127,6 +127,14 @@ class _EnvironmentOut(BaseModel):
     #: number the App was holding.
     cpu_bound_by: str | None = None
     memory_bound_by: str | None = None
+    #: The hard ceilings the PUT refuses against (`_MAX_CORES` / `_MAX_BYTES`)
+    #: — the last sentence of the same story the fields above tell. Carried on
+    #: the record so the client can refuse `2048` cores on the keystroke, the
+    #: way it already refuses `0`, instead of green field → live Save → 422
+    #: (#830). Read from the constants at request time, never copied: a client
+    #: that held its own `1024` would keep teaching it after this one moved.
+    max_cpu_cores: float
+    max_memory_bytes: int
 
 
 class _ResourcesOut(BaseModel):
@@ -508,6 +516,8 @@ def register_item_routes(
             enforced_memory_bytes=enforced.memory_bytes,
             cpu_bound_by=cpu_bound_by,
             memory_bound_by=memory_bound_by,
+            max_cpu_cores=_MAX_CORES,
+            max_memory_bytes=_MAX_BYTES,
         )
 
     @app.put("/a/{slug}/items/{item_id}/resources")
