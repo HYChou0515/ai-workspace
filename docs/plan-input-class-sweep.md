@@ -67,12 +67,15 @@ opening tag in `web/src/**/*.tsx` (tests excluded, comments stripped), minus
      `.input-group__field { flex: 1; min-width: 0; padding: 0; border: 0;
      background: none; outline: none; font: inherit; color: inherit }` — the
      Bootstrap `input-group` shape: one box, adornments beside the control.
-     Six copies existed (`.kb-docsearch`, `.rvw__search`, `SearchPanel`'s
-     `fieldWrap`, `FileTree`'s filter box, `.ev-viewpanel__range`, `.kb-composer`).
+     Seven copies existed (`.kb-docsearch`, `.rvw__search`, `SearchPanel`'s
+     `fieldWrap`, `FileTree`'s filter box, `ItemForm`'s tag input,
+     `.ev-viewpanel__range`, `.kb-composer`).
    - `.inline-edit` keeps `height: 26px; padding: 0 8px` and gains
-     `min-height: 26px` (else `.input`'s `min-height: 34px` wins); its
-     border / radius / background / color go. Every `.inline-edit` element also
-     wears `input`.
+     `min-height: 26px` (else `.input`'s `min-height: 34px` wins) and
+     `flex: 0 1 auto` (a chip's width is its content's; the four rows that
+     want it to fill — TodoPanel's two, AskUserCard's two — say `flex: 1`);
+     its border / radius / background / color go. Every `.inline-edit`
+     element also wears `input`.
    - `.input[aria-invalid="true"] { border-color: var(--err) }` (+ the
      focus ring) moves up from `item-environment.css`, where it was scoped to
      one panel; `ItemForm`'s title field is the second user.
@@ -104,10 +107,12 @@ opening tag in `web/src/**/*.tsx` (tests excluded, comments stripped), minus
   deleted; `input-class.test.ts` rewritten as the global scan + whitelist +
   "no inline chrome on a dressed control" + "no scoped rule re-draws the
   chrome"; this plan.
-- **P2** `components/` (17 files).
-- **P3** `pages/` outside `kb/` (11) + `pages/investigation/` (5).
-- **P4** `pages/kb/` (15) + the `kb.css` scoped rules.
-- **P5** `renderers/entity/` (5) + `entity-views.css` + `WuiView`; the guard
+- **P2** `components/` (14 files) + the `.page-tools` pair (SkillHubPage,
+  WuiOverviewPage).
+- **P3** `pages/` outside `kb/` (6) + `pages/investigation/` (3, plus the
+  two whitelisted).
+- **P4** `pages/kb/` (13) + the `kb.css` scoped rules.
+- **P5** `renderers/entity/` (4) + `entity-views.css` + `WuiView`; the guard
   goes green.
 - **P6** Live check in Chromium, light AND dark (#825's lesson: the text
   guard was green while `:not()` blew three pages up); layout fix-ups found
@@ -127,3 +132,49 @@ opening tag in `web/src/**/*.tsx` (tests excluded, comments stripped), minus
   the range's own rule declares no border / background; the ring per END stays.
 - Existing component tests keep passing; those that query by class
   (`.inline-edit`, `.ev-field`) still match because the class is kept.
+
+## Live check record (2026-09-21, worktree build on 127.0.0.1:8263, real Chromium 1148, 1280×900, light AND dark)
+
+Two drivers read every rendered `<input|textarea|select>`'s computed
+`border` / `border-radius` / `background` and call it house when the border is
+`1px solid` (paper-3, or accent while focused) at `--radius-btn`, or a slot
+(border 0, transparent) inside an `.input` box. Both schemes, every state:
+
+- 20 routes as they load (`/`, `/a/playground`, `/a/playground/new`, a
+  playground item, `/a/pm`, a PM project, `/kb/collections`, a collection +
+  its cards / wiki / review tabs, `/kb/graph`, `/kb/chats`, `/groups`,
+  `/work-calendar`, `/my-resources`, `/wui`, `/skill-hub`, `/review`,
+  `/diagnostics`): 26 controls in light, the same 26 in dark, **0 not house**.
+- 19 interactive states (the item's Files and Search panes; the Env, Tools,
+  Share, Export and Sandbox modals; the PM project's view settings popover,
+  the table's and board's New-issue form, the health view; a new KB chat;
+  the collection title rename; a new context card; the diagnostics model
+  matrix with its question form; `/wui`, `/skill-hub`, `/my-resources`,
+  `/kb/graph`): 35 + 35 controls in light, the same in dark, **0 not house**
+  — the two the driver flagged are by design: the KB composer's textarea is
+  a slot in `.kb-composer`'s accent box, not an `.input` box, and
+  `ime-text-area` is Monaco's own.
+- Read by eye (screenshots in the job dir): the create-item form's title /
+  tags / description at 38px beside the 38px Owner box and Picker; the
+  Search pane's four group rows at 28px with the focused row's accent
+  border; `/review`'s toolbar one height across search and selects; the
+  view settings popover's selects at 28px and the time range as ONE box; the
+  New-issue form's eight fields at 28px in dark with the title's focus
+  accent; the cards editor's title / term / search; the KB composer's
+  accent box with a transparent slot in dark.
+
+Not reached on this instance (the default user is not an admin, and there
+were no grants, proposals, published skills or deployed pages): the
+`/my-resources` admin row, the New-group form, the `.page-tools` search /
+selects on `/wui` and `/skill-hub`, the Share / Permission role selects,
+the review drawer, `AskUserCard`, the chat rail / KB chats / attachment
+renames, `ManageChatsModal`, `TuneParsingModal`, the wiki guidance form,
+`WuiView`'s address bar, `SkillHubPickerModal`. All wear the same class and
+the same three modifiers the reached ones do; what is unverified there is
+layout (a select growing in a row), not chrome.
+
+Found and fixed by the check, before the push: `.input`'s `flex: 1` would
+have stretched every chip-sized `inline-edit` select in a flex row (the four
+`marginLeft: auto` role selects, SanityTable's category filter), so
+`.inline-edit` took a flex item's default share and the four rows that fill
+say `flex: 1` themselves.

@@ -2,7 +2,7 @@
  * `.input` is THE input chrome — one rule in base.css, not a name per surface,
  * and (#829) EVERY text control wears it.
  *
- * #825 made the class and converted the two files it touched; the other 98
+ * #825 made the class and converted the two files it touched; the other 99
  * text controls kept dressing themselves — an inline copy of the border /
  * radius / surface, a scoped `.foo input { … }` rule, or nothing at all (the
  * browser's inset grey #825 was opened for). A field could ship bare with

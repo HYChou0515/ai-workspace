@@ -334,7 +334,7 @@ export function AskUserCard({
                         }
                         onFocus={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
                         className="input inline-edit"
-                        style={{ minWidth: 80 }}
+                        style={{ flex: 1, minWidth: 80 }}
                       />
                     </div>
                   );
@@ -372,7 +372,7 @@ export function AskUserCard({
                   if (v) setPicked((p) => (p[i] ? { ...p, [i]: "" } : p));
                 }}
                 className="input inline-edit"
-                style={{ minWidth: 80 }}
+                style={{ flex: 1, minWidth: 80 }}
               />
             </div>
           </div>

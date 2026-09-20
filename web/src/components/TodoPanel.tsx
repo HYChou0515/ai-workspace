@@ -219,11 +219,13 @@ export function TodoPanel({
                 setGoalDraft("");
               }
             }}
-            // `.input` carries the `flex: 1; min-width: 0` pair: an <input>
-            // has an intrinsic min-content width from its default `size`, and
-            // without `min-width: 0` the row stayed wider than the panel and
-            // pushed "Set goal" past the clipped edge under ~870px.
-            style={{ fontSize: pxToRem(12) }}
+            // `flex: 1` fills the row (`.inline-edit` keeps a chip's width by
+            // default); `.input` carries the `min-width: 0` that lets it give
+            // width BACK — an <input> has an intrinsic min-content width from
+            // its default `size`, and without it the row stayed wider than
+            // the panel and pushed "Set goal" past the clipped edge under
+            // ~870px.
+            style={{ flex: 1, fontSize: pxToRem(12) }}
           />
           <button
             type="button"
@@ -335,7 +337,8 @@ export function TodoPanel({
             onKeyDown={(e) => {
               if (e.key === "Enter") add();
             }}
-            style={{ fontSize: pxToRem(12) }}
+            // Same row shape as the goal row above.
+            style={{ flex: 1, fontSize: pxToRem(12) }}
           />
           <button
             type="button"
