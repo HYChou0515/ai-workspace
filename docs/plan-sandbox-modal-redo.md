@@ -269,7 +269,8 @@ Worst finding: **MEDIUM**, two lenses on one root.
   sandbox) detached the observer: after that sequence every later Save was
   silently dropped. LOW: whitespace-only memory sent untrimmed (P6 had already
   fixed it); upper bounds (`_MAX_CORES` 1024, 1 PiB) not mirrored — left,
-  absurd inputs; the pre-save number flashing for one round trip after Save
+  absurd inputs (later #830, `plan-issue-830.md`: the record carries them);
+  the pre-save number flashing for one round trip after Save
   (P3-era); the "couldn't read" copy reading as "not saved" after a successful
   save; the "at save time" claim overreaching (the record refetches only on
   this modal's own writes); invalid+focus showing no focus indicator; the save
