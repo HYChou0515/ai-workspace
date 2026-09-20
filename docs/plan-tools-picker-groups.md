@@ -247,6 +247,12 @@ entry 粒度的舊答案**，其他每個讀它的人都拿到舊答案；而 re
   WARNING（typo、釘掉的都會列）。兩條先紅（內建前綴、typo 拒絕），log 那條是寫在修法之後的釘子；三個突變各紅對的測試。回歸鏡頭其餘：68 個真 turn 對第二輪 0 差；
   sub-agent 端到端只有「同回合 save 的定義」變了（就是 P20 要的）；finalize 63 ms→0.03 ms、picker 275→90 ms；寬測試 2620 綠。
   用詞：測試 docstring「44 個 schema」是一次 finalize 兩次呼叫 = 88；「22→32」是有 pin 的案例、無 pin 是 23→33；「~40 ms」量到 32–40。
+- **P22**（`/web-demo` 抓到的）：錄 GIF 時「儲存後重開」讀到**舊列**——後端存對了（逐指令鍵），但 `useUpdateItemField.setField` 用
+  `mutation.mutate`（回 void），modal 的 `await onSave` 立刻回來、`invalidateQueries(itemTools)` 搶在 PATCH 落地前 refetch，把 pre-save
+  的列重新快取，30 秒 staleTime 內重開就像「沒存到」——`useResources.ts` 註解裡 #306 的同一個形狀，這條 PR 之前就在，但逐指令開關讓它
+  變成使用者一定會撞到的。修：`setField`／`setFields` 回一個在 mutation **settled** 後才 resolve、永不 reject 的 promise。
+  一條先紅（settled 前 resolve）、一條釘住「失敗也 settle」；重錄的 GIF 重開那幕是真瀏覽器證據（Rca Tools 10 項 · 混合、釘子都在）。
+  四輪 review 沒抓到、一錄 demo 就抓到（[[feedback_done_means_visible_operable]]）。
 - **順序**（P16 起、寫進紀錄）：定案後 `allowed_tools` 一律天花板順序；master 的 `_apply_tool_prefs` 在**沒有 pref** 時回 profile 順序。
   出貨的 profile 順序都和天花板一致，所以模型看到的工具清單不變；一個把 `tools` 寫成不同順序的 profile 會看到清單重排（集合不變）。
 
