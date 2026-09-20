@@ -1,0 +1,45 @@
+{
+  "//": [
+    "The answer sheet for the size fields' client-side refusals (#830).",
+    "The SERVER grades it: tests/quota/test_item_size_parity.py asserts `max_*` equal GET /environment's,",
+    "and every row's `accepted` is the PUT's 200/422 on `sent` — or on `typed`, where the client would not",
+    "send at all (`sent: null`), so a client refusal is never one the server would have accepted.",
+    "The CLIENT is graded against it: web/tests/itemSizeParity.test.ts asserts cpuFault/memoryFault(typed, max)",
+    "is null iff `accepted`, and that Number(typed) / normaliseMemory(typed) is `sent`.",
+    "A bound copied into the client would drift with every test green; a sheet the server marks cannot.",
+    "Update it by re-reading the server, never by hand — the python test names every stale row."
+  ],
+  "max_cpu_cores": 1024,
+  "max_memory_bytes": 1125899906842624,
+  "cpu": [
+    { "typed": "0.5", "sent": 0.5, "accepted": true },
+    { "typed": "1", "sent": 1, "accepted": true },
+    { "typed": "1e3", "sent": 1000, "accepted": true },
+    { "typed": "1024", "sent": 1024, "accepted": true },
+    { "typed": "1024.5", "sent": 1024.5, "accepted": false },
+    { "typed": "1025", "sent": 1025, "accepted": false },
+    { "typed": "2048", "sent": 2048, "accepted": false },
+    { "typed": "1e300", "sent": 1e300, "accepted": false },
+    { "typed": "0", "sent": 0, "accepted": false },
+    { "typed": "-1", "sent": -1, "accepted": false }
+  ],
+  "memory": [
+    { "typed": "512M", "sent": "512M", "accepted": true },
+    { "typed": "512 MB", "sent": "512M", "accepted": true },
+    { "typed": "５１２M", "sent": "512M", "accepted": true },
+    { "typed": "1.5 GB", "sent": "1536M", "accepted": true },
+    { "typed": "1T", "sent": "1T", "accepted": true },
+    { "typed": "1024T", "sent": "1024T", "accepted": true },
+    { "typed": "1048576G", "sent": "1024T", "accepted": true },
+    { "typed": "1125899906842624", "sent": "1024T", "accepted": true },
+    { "typed": "1125899906842625", "sent": "1125899906842625", "accepted": false },
+    { "typed": "1024.5T", "sent": "1049088G", "accepted": false },
+    { "typed": "1025T", "sent": "1025T", "accepted": false },
+    { "typed": "1048577G", "sent": "1048577G", "accepted": false },
+    { "typed": "2P", "sent": null, "accepted": false },
+    { "typed": "0", "sent": null, "accepted": false },
+    { "typed": "max", "sent": null, "accepted": false },
+    { "typed": "512 MiB", "sent": null, "accepted": false },
+    { "typed": "1.5", "sent": null, "accepted": false }
+  ]
+}
