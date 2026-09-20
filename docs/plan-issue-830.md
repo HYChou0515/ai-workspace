@@ -62,3 +62,21 @@ issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前
   `_MAX_CORES` 改 2048 → Python 紅在 `stale sheet: re-read the server`；
   卷子照 2048 重改（漏了 `1024.5` 那列，也被點名）→ Python 綠、前端**零改動**綠。
 - `sent` 拼法由真前端程式碼導出（`1024.5T` → `1049088G`，不是心算）。
+
+## Live check（2026-09-21，worktree build on 127.0.0.1:8258，`per_app.default` 2 核 / 512M + `per_user` 4 核 / 8G，真 Chromium 1280）
+
+Playground item，未啟動。`GET …/environment` 回 `max_cpu_cores: 1024.0, max_memory_bytes: 1125899906842624`；
+`PUT …/resources {"cpu_cores": 2048}` 仍 422、訊息同以前。modal 裡逐步（每列是 Playwright 讀回的 DOM）：
+
+| 打的字 | `aria-invalid` | hint | Save |
+|---|---|---|---|
+| CPU `2048` | true | At most 1024 cores. | 灰 |
+| CPU `1024` | — | — | 可按 |
+| CPU `0` | true | More than 0 — e.g. 1 or 0.5. | 灰 |
+| 記憶體 `1025T` | true | At most 1024T. | 灰 |
+| 記憶體 `2P` | true | A number with a unit — e.g. 512M, 512MB or 1.5G. | 灰 |
+| 記憶體 `1024T` | — | — | 可按 |
+
+CPU 欄的 `max` 屬性 = `1024`。存 `2` / `1024T` → 一個 PUT、record `stated_memory_bytes = 1125899906842624`、
+`memory_bound_by = "app"`，欄位重讀回 `1024T`，clamp 句「You set 1024.0 TB; 512.0 MB is in effect」是既有的
+`formatBytes` 顯示格式。截圖 `live-cpu-2048.png` / `live-mem-1025T.png` / `live-after-save.png`（job tmp，不進 repo）。
