@@ -582,20 +582,7 @@ export function FileTree({
           Files
         </span>
         {searchable && (
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              margin: "0 6px",
-              padding: "1px 6px",
-              minWidth: 0,
-              border: "1px solid var(--paper-3)",
-              borderRadius: "var(--radius-chip, 6px)",
-              background: "var(--white)",
-            }}
-          >
+          <div className="input input-group" style={{ gap: 4, margin: "0 6px", minHeight: 24, padding: "0 6px" }}>
             <Icon name="search" size={12} color="var(--text-paper-d)" />
             <input
               value={query}
@@ -605,15 +592,8 @@ export function FileTree({
               }}
               placeholder="Filter files…"
               aria-label="Filter files"
-              style={{
-                flex: 1,
-                minWidth: 0,
-                border: "none",
-                outline: "none",
-                background: "transparent",
-                fontSize: pxToRem(12),
-                color: "var(--text-paper)",
-              }}
+              className="input-group__field"
+              style={{ fontSize: pxToRem(12) }}
             />
             {query && (
               <button
@@ -1002,17 +982,10 @@ function InlineEdit({
         }}
         onBlur={() => (value.trim() ? onCommit(value) : onCancel())}
         placeholder={kind === "folder" ? "folder name" : "file name"}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          border: "1px solid var(--accent)",
-          borderRadius: "var(--radius-chip)",
-          padding: "1px 4px",
-          fontSize: pxToRem(12),
-          outline: "none",
-          background: "var(--white)",
-          color: "var(--text-paper)",
-        }}
+        className="input"
+        // A tree row's height; the accent border it drew itself is what
+        // `.input:focus` draws, and it is autofocused.
+        style={{ minHeight: 22, padding: "0 4px", fontSize: pxToRem(12) }}
       />
     </div>
   );

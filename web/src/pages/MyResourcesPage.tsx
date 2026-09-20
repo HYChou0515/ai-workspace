@@ -392,6 +392,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         <span className="admin-field">
           <label htmlFor="q-count">{t("resources.admin.count")}</label>
           <input
+            className="input"
             id="q-count"
             type="number"
             min="0"
@@ -402,6 +403,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         <span className="admin-field">
           <label htmlFor="q-cpu">{t("resources.admin.cpu")}</label>
           <input
+            className="input"
             id="q-cpu"
             type="number"
             min="0"
@@ -413,6 +415,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         <span className="admin-field">
           <label htmlFor="q-mem">{t("resources.admin.memory")}</label>
           <input
+            className="input"
             id="q-mem"
             placeholder="8G"
             value={form.memory}
@@ -422,6 +425,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         <span className="admin-field">
           <label htmlFor="q-disk">{t("resources.admin.disk")}</label>
           <input
+            className="input"
             id="q-disk"
             placeholder="50G"
             value={form.disk}

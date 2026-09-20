@@ -1219,11 +1219,9 @@ export function AgentPanel({
                   ? "Add a note (optional)…"
                   : "Ask the agent…"
           }
+          className="input input--block"
           style={{
-            border: "1px solid var(--paper-3)",
-            borderRadius: "var(--radius-btn)",
             padding: 8,
-            fontSize: pxToRem(13),
             // The seam handle owns this height — and only this box grows, so
             // the rows around it keep their natural size instead of being
             // squeezed off screen.
@@ -1231,8 +1229,6 @@ export function AgentPanel({
             // The corner grip is gone: a 15px target in a corner, and it moved
             // only this box while the seam handle moves the composer as a whole.
             resize: "none",
-            outline: "none",
-            fontFamily: "var(--font-body)",
           }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", rowGap: 8 }}>

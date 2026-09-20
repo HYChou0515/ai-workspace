@@ -811,14 +811,13 @@
   gap: var(--space-8);
 }
 
+/* The fields wear `.input`; this is the row's size — 28px, and no growing,
+   since a label and its box wrap as one unit. */
 .page .admin-row input {
-  font: inherit;
+  flex: none;
   height: 28px;
+  min-height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--paper);
-  color: var(--text-paper);
 }
 
 .page .admin-row input[type="number"] {
