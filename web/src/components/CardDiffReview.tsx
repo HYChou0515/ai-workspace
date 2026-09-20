@@ -231,7 +231,8 @@ function CardDiffModal({
             onChange={(e) => setNote(e.target.value)}
             placeholder="What should change?"
             rows={2}
-            style={{ width: "100%", fontFamily: "inherit", fontSize: pxToRem(12) }}
+            className="input input--block"
+            style={{ fontSize: pxToRem(12) }}
           />
         )}
 

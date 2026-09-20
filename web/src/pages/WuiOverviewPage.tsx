@@ -208,6 +208,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
             <label>
               {t("wui.filter.app")}
               <select
+                className="input"
                 value={appPick}
                 onChange={(e) => setAppFilter(e.target.value)}
                 aria-label={t("wui.filter.app")}
@@ -226,6 +227,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
               {t("wui.mine")}
             </Chip>
             <input
+              className="input"
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -235,6 +237,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
             <label>
               {t("wui.sort")}
               <select
+                className="input"
                 value={sort}
                 onChange={(e) => setSort(e.target.value === "title" ? "title" : "newest")}
                 aria-label={t("wui.sort")}

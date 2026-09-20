@@ -243,7 +243,7 @@ export function ItemShareDialog({
                         data-testid={`item-role-${g.userId}`}
                         value={custom ? "custom" : g.role}
                         onChange={(e) => setRole(g.userId, e.target.value as ItemRoleId | "custom")}
-                        className="inline-edit"
+                        className="input inline-edit"
                         style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                       >
                         {ITEM_ROLES.map((r) => (
@@ -324,7 +324,7 @@ export function ItemShareDialog({
                           aria-label={`Role for ${groupName(g.groupId)}`}
                           data-testid={`item-group-role-${g.groupId}`}
                           value={g.role}
-                          className="inline-edit"
+                          className="input inline-edit"
                           onChange={(e) => setGroupRole(g.groupId, e.target.value as ItemRoleId)}
                           style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                         >

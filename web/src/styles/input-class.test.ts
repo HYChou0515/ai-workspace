@@ -51,9 +51,11 @@ const NON_TEXT = /\btype=\{?["'`](checkbox|radio|file|range|color|hidden|submit|
 
 /** Strip `/* … *​/` blocks and whole-line `//` comments so a `<select>` in a
  * docstring is not a control (#829's count had three of those). Strings and
- * JSX text keep their `//` (a URL is not a comment). */
+ * JSX text keep their `//` (a URL is not a comment), and a block comment
+ * only opens after whitespace, `{` or `(`: a placeholder that says `src/**`
+ * opened one that swallowed the next control. */
 function stripComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return text.replace(/(?<=^|[\s{(])\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
 type Control = { file: string; line: number; el: string; tag: string };
@@ -122,13 +124,19 @@ const WHITELIST: { file: string; label: string; why: string }[] = [
     label: 'placeholder="Go to file…"',
     why: "the palette's header row, divided from the list by a rule (the Spotlight shape); a bordered field at the top of a bordered panel is a box in a box",
   },
+  {
+    file: "renderers/SheetGrid.tsx",
+    label: 'className="sheet-cell"',
+    why: "a spreadsheet cell: the grid draws the lines, the cell shows a border only while edited; a box per cell is a form, not a sheet",
+  },
 ];
 
 /** The chrome on a tag that also wears the class is the copy this rule ends.
- * Size (`width`, `height`, `padding`, `fontSize`, `resize`) may stay inline —
- * #829 §2 keeps "尺寸 / 對齊". `borderColor` alone is a state (an active
- * filter, an invalid field), not chrome. */
-const INLINE_CHROME = /\b(border|borderRadius|background|outline|fontFamily)\s*:/;
+ * Size and type (`width`, `height`, `padding`, `fontSize`, `fontFamily` for a
+ * mono field of keys, `resize`) may stay inline — #829 §2 keeps "尺寸 /
+ * 對齊". `borderColor` alone is a state (an active filter, an invalid field),
+ * not chrome. */
+const INLINE_CHROME = /\b(border|borderRadius|background|outline)\s*:/;
 
 describe("the house input class", () => {
   it("is declared once, in base.css, with the textarea / block / group companions", () => {
@@ -136,6 +144,10 @@ describe("the house input class", () => {
     expect(base).toMatch(/^\.input \{/m);
     expect(base).toMatch(/\.input \{[^}]*border: 1px solid var\(--paper-3\)/);
     expect(base).toMatch(/\.input \{[^}]*border-radius: var\(--radius-btn\)/);
+    // The flex/<input> escape hatch every row relies on (TodoPanel's tests
+    // point here): an <input> has an intrinsic min-content width, and
+    // `min-width: auto` refuses to shrink past it.
+    expect(base).toMatch(/\.input \{[^}]*flex: 1;[^}]*min-width: 0;/);
     // A textarea with `padding: 0 10px` has its first line on the border.
     expect(base).toMatch(/^textarea\.input \{[^}]*padding: 8px 10px/m);
     // In a column `flex: 1` is the wrong axis; in a block parent an input is

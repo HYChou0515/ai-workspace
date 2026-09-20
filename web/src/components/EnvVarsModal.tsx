@@ -393,17 +393,9 @@ export function EnvVarsModal({
                 // available, so an error style would be a gate in disguise —
                 // the button works, the screen says it should not be pressed.
                 aria-invalid="false"
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "6px 8px",
-                  border: "1px solid var(--paper-3)",
-                  borderRadius: 6,
-                  background: "var(--paper)",
-                  color: "var(--text-paper)",
-                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                  fontSize: pxToRem(12),
-                }}
+                className="input input--block"
+                // Monospace: these are keys, proofread by eye (l/1, O/0).
+                style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) }}
               />
             </label>
           ))}
@@ -445,15 +437,7 @@ export function EnvVarsModal({
                 type={field.secret ? "password" : "text"}
                 value={creds[field.name] ?? ""}
                 onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "6px 8px",
-                  border: "1px solid var(--paper-3)",
-                  borderRadius: 6,
-                  background: "var(--paper)",
-                  color: "var(--text-paper)",
-                }}
+                className="input input--block"
               />
             </label>
           ))}
@@ -512,20 +496,13 @@ export function EnvVarsModal({
         placeholder={"FOO=BAR\nBAZ=HOO"}
         spellCheck={false}
         rows={10}
+        className="input input--block"
         style={{
-          width: "100%",
-          boxSizing: "border-box",
-          padding: "8px 10px",
-          border: "1px solid var(--paper-3)",
-          borderRadius: 6,
-          background: "var(--paper)",
-          color: "var(--text-paper)",
           // Monospace: these are keys, and a column of them is proofread by
           // eye. Proportional type hides the difference between l/1 and O/0.
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
           fontSize: pxToRem(12),
           lineHeight: 1.6,
-          resize: "vertical",
           whiteSpace: "pre",
           overflowWrap: "normal",
           overflowX: "auto",

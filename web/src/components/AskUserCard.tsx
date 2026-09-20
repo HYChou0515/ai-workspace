@@ -137,16 +137,6 @@ const numBadge = (active: boolean): React.CSSProperties => ({
   color: active ? "var(--white)" : "var(--text-paper-d)",
   background: active ? "var(--accent)" : "var(--paper-2)",
 });
-const noteInput: React.CSSProperties = {
-  flex: 1,
-  minWidth: 80,
-  padding: "4px 8px",
-  border: "1px solid var(--paper-3)",
-  borderRadius: 6,
-  background: "var(--paper)",
-  color: "var(--text-paper)",
-  fontSize: "0.9em",
-};
 const tabList: React.CSSProperties = {
   display: "flex",
   gap: 4,
@@ -343,7 +333,8 @@ export function AskUserCard({
                           setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
                         }
                         onFocus={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
-                        style={noteInput}
+                        className="input inline-edit"
+                        style={{ minWidth: 80 }}
                       />
                     </div>
                   );
@@ -380,7 +371,8 @@ export function AskUserCard({
                   // so a leftover pick must not ride along with it.
                   if (v) setPicked((p) => (p[i] ? { ...p, [i]: "" } : p));
                 }}
-                style={noteInput}
+                className="input inline-edit"
+                style={{ minWidth: 80 }}
               />
             </div>
           </div>

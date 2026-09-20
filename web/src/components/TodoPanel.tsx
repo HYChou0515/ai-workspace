@@ -208,7 +208,7 @@ export function TodoPanel({
           </span>
           <input
             data-testid="goal-input"
-            className="inline-edit"
+            className="input inline-edit"
             value={goalDraft}
             disabled={goalLocked}
             placeholder={t("goal.placeholder")}
@@ -219,12 +219,11 @@ export function TodoPanel({
                 setGoalDraft("");
               }
             }}
-            // `minWidth: 0` is what makes `flex: 1` actually able to give width
-            // back: an <input> carries an intrinsic min-content width from its
-            // default `size`, and `min-width: auto` refuses to shrink past it,
-            // so the row stayed wider than the panel and pushed "Set goal" out
-            // past the clipped edge on anything under ~870px.
-            style={{ flex: 1, minWidth: 0, fontSize: pxToRem(12) }}
+            // `.input` carries the `flex: 1; min-width: 0` pair: an <input>
+            // has an intrinsic min-content width from its default `size`, and
+            // without `min-width: 0` the row stayed wider than the panel and
+            // pushed "Set goal" past the clipped edge under ~870px.
+            style={{ fontSize: pxToRem(12) }}
           />
           <button
             type="button"
@@ -328,7 +327,7 @@ export function TodoPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
             data-testid="todo-add-input"
-            className="inline-edit"
+            className="input inline-edit"
             value={draft}
             disabled={locked}
             placeholder={t("todos.add.placeholder")}
@@ -336,8 +335,7 @@ export function TodoPanel({
             onKeyDown={(e) => {
               if (e.key === "Enter") add();
             }}
-            // Same flex/<input> trap as the goal row above.
-            style={{ flex: 1, minWidth: 0, fontSize: pxToRem(12) }}
+            style={{ fontSize: pxToRem(12) }}
           />
           <button
             type="button"
