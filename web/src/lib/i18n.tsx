@@ -1135,8 +1135,8 @@ export const messages = {
   },
   // Past the server's hard ceiling (#830). `{max}` is the RECORD's number in
   // the server's own spelling (`1024` / `1024T`) — what a person can type
-  // back — never a figure held here or the display format (`1.0 PiB`), which
-  // the server would refuse.
+  // back — never a figure held here or the display format (`1024.0 TB`),
+  // which the server would refuse.
   "itemenv.field.cpu.max": { "zh-TW": "最多 {max} 核。", en: "At most {max} cores." },
   "itemenv.field.memory.max": { "zh-TW": "最多 {max}。", en: "At most {max}." },
   "itemenv.readonly": {

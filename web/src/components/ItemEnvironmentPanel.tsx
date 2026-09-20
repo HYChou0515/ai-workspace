@@ -249,7 +249,7 @@ export function ItemEnvironmentPanel({
               {fault.memory !== null ? (
                 <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
                   {/* `toSizeString`, not `formatBytes`: `1024T` is what the
-                      server reads back, `1.0 PiB` is what it refuses. */}
+                      server reads back, `1024.0 TB` is what it refuses. */}
                   {fault.memory === "over"
                     ? t("itemenv.field.memory.max", { max: toSizeString(env.maxMemoryBytes) })
                     : t("itemenv.field.memory.hint")}

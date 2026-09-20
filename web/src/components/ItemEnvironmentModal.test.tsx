@@ -37,9 +37,11 @@ const ENVIRONMENT = {
   enforced_memory_bytes: 512 * 1024 * 1024,
   cpu_bound_by: null,
   memory_bound_by: null,
-  // The server's hard ceilings (#830) — what `item_routes._MAX_CORES` /
-  // `_MAX_BYTES` are today; the parity sheet (`tests/fixtures/
-  // item_size_parity.json`) is what keeps these two numbers honest.
+  // The server's hard ceilings (#830), as `item_routes._MAX_CORES` /
+  // `_MAX_BYTES` stand today. A fake record: nothing here checks these
+  // against the server (the parity sheet under `tests/fixtures/` does that
+  // for ITS numbers); the cases below only ask that the hint echoes THIS
+  // record's number, whatever it is.
   max_cpu_cores: 1024,
   max_memory_bytes: 1024 ** 5,
 };
