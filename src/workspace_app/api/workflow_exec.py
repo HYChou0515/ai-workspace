@@ -22,7 +22,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-import msgspec
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
@@ -195,16 +194,16 @@ class WorkflowExecutor:
             )
             rid, conv = self._locator.conversation_for(item_id)  # legacy fallback (default chat)
         cfg = self._locator.resolve_agent_config(item_id)
-        if cfg is not None and tools is not None:
-            # tools= ⊆ the profile's tool ceiling (manual §5.1) — drop anything the
-            # profile doesn't already allow, so a step can't widen the boundary.
-            ceiling = cfg.allowed_tools or []
-            cfg = msgspec.structs.replace(cfg, allowed_tools=[t for t in tools if t in ceiling])
         ctx = await self._turn_ctx.build_workflow_turn(
             item_id,
             agent_config=cfg,
             run_subagent=self._run_subagent,
             history_messages=conv.messages,
+            # tools= ⊆ what the item holds (manual §5.1): a step can't widen the
+            # boundary. Applied by the builder, AFTER the item's pins are
+            # finalized against the turn's package list — narrowing here, on a
+            # config whose pins were still pending, let a pin re-widen it.
+            tool_subset=tools,
             # #429 P10: an agent node's entity writes carry the run's trigger origin, so
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,

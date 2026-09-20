@@ -3,6 +3,14 @@ import { useState } from "react";
 import type { ItemToolState, ToolPref } from "../api/types";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
+import {
+  BUILTIN_GROUP,
+  type ToolGroup,
+  groupState,
+  groupsOf,
+  prefOf,
+  withGroupState,
+} from "../lib/toolGroups";
 
 /**
  * The per-item tool picker list (#322). One row per pickable App tool, each with
@@ -12,9 +20,43 @@ import { pxToRem } from "../lib/pxToRem";
  * on/off, absent = follow) and applies whatever `onChange` hands back, mirroring
  * the backend `attached_tool_prefs` storage exactly.
  *
+ * Rows fold by package (plan-tools-picker-groups): every built-in under one
+ * fold — the core fold, shown as 核心工具 / Core tools (fold id `builtin`) — and
+ * a package's granted commands under its own.
+ * A fold's header carries the same tri-state, DERIVED from its rows — the one
+ * state they all share, or "mixed" with nothing pressed — and pressing it sets
+ * every row of the fold. Nothing is stored per fold.
+ *
+ * Open or shut is decided at two moments, never re-derived on every render.
+ * The state is two things: `manual`, the folds the reader opened or shut by
+ * hand, and `autoOpen`, the folds that were MIXED the last time it was taken
+ * (the one time a reader needs to look inside). The table, event by event:
+ *
+ *   list opens            manual = {}          autoOpen = the mixed folds now
+ *   search term changes   manual keeps only    autoOpen = the mixed folds now
+ *   (normalised: trimmed, the hand-OPENED      (re-taken, not grown: a fold
+ *   lower-cased)          folds — a hand-shut  made mixed under a search stays
+ *                         fold is released     open once it is cleared; one
+ *                                              made uniform under it shuts)
+ *   header click          manual[id] = !open   —
+ *   a row / fold tri-state   —                 —   (never re-derived: a fold
+ *                                                   must not snap shut under
+ *                                                   the cursor because the row
+ *                                                   just clicked made it uniform)
+ *
+ *   open(id) = manual[id] ?? (term ? this fold has a hit : autoOpen has id)
+ *
+ * A fold of one granted row is just that row. A fold the search narrowed to
+ * one hit keeps its header: it names the package the hit belongs to, and a
+ * header that came and went as the term grew would be a layout jump.
+ *
+ * Under a search a fold IS its matching rows: the count, the derived state,
+ * the fold's tri-state and "reset" all cover exactly the rows drawn, so two
+ * whole-fold actions on one screen never differ in reach.
+ *
  * A row in the Default state shows what the template currently resolves to, so
- * "follow" is never ambiguous. Search filters by label/key; "reset to defaults"
- * clears the override for the currently-visible rows.
+ * "follow" is never ambiguous. Search filters by label/key (and fold name);
+ * "reset to defaults" clears the override for every row the search left in.
  *
  * Every row states where it came from (#724): the platform, or the third party
  * who published it and which release of theirs resolved. `app.json` grants at
@@ -34,12 +76,32 @@ export function ToolsChecklist({
   const t = useT();
   const [search, setSearch] = useState("");
   const term = search.trim().toLowerCase();
-  const visible = tools.filter(
-    (tool) => tool.label.toLowerCase().includes(term) || tool.key.toLowerCase().includes(term),
-  );
-
-  const stateOf = (key: string): ToolPref =>
-    key in prefs ? (prefs[key] ? "on" : "off") : "follow";
+  const groups = groupsOf(tools);
+  // The open/shut state — see the table in the docstring.
+  const [manual, setManual] = useState<Record<string, boolean>>({});
+  const mixedNow = () => new Set(groups.filter((g) => groupState(g, prefs) === "mixed").map((g) => g.id));
+  const [autoOpen, setAutoOpen] = useState<Set<string>>(mixedNow);
+  const changeSearch = (value: string) => {
+    const before = term;
+    setSearch(value);
+    if (value.trim().toLowerCase() === before) return; // normalised term unchanged: not a new question
+    setManual((m) => Object.fromEntries(Object.entries(m).filter(([, open]) => open)));
+    setAutoOpen(mixedNow());
+  };
+  const matches = (tool: ItemToolState) =>
+    tool.label.toLowerCase().includes(term) || tool.key.toLowerCase().includes(term);
+  // A fold whose own name matches shows every row of it; otherwise only the
+  // rows that match. No search ⇒ everything.
+  const visibleOf = (g: ToolGroup): ItemToolState[] => {
+    if (!term) return g.tools;
+    const label = g.id === BUILTIN_GROUP ? t("tools.group.builtin") : g.label;
+    if (label.toLowerCase().includes(term) || g.id.toLowerCase().includes(term)) return g.tools;
+    return g.tools.filter(matches);
+  };
+  const shown = groups
+    .map((g) => ({ group: g, rows: visibleOf(g) }))
+    .filter(({ rows }) => rows.length > 0);
+  const visible = shown.flatMap(({ rows }) => rows);
 
   const setState = (key: string, next: ToolPref) => {
     const out = { ...prefs };
@@ -61,7 +123,7 @@ export function ToolsChecklist({
         data-testid="tools-search"
         placeholder={t("tools.search")}
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => changeSearch(e.target.value)}
         style={{ flex: "none", width: "100%", boxSizing: "border-box" }}
       />
 
@@ -76,125 +138,85 @@ export function ToolsChecklist({
       <div className="scrollable"
         style={{ overflowY: "auto", minHeight: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}
       >
-        {visible.map((tool) => {
-          const state = stateOf(tool.key);
-          // The secondary line shows the follow-default hint or the tool's own
-          // description; both it and the label clip on one line, so mirror the
-          // shown text into title= for a hover tooltip when it overflows (#456).
-          const detail =
-            state === "follow"
-              ? tool.default_on
-                ? t("tools.defaultOn")
-                : t("tools.defaultOff")
-              : tool.description;
-          // Who to go to. A third-party tool names its author (or says nobody
-          // claimed it — which is NOT the same as it being ours); everything
-          // else is the platform's own.
-          //
-          // Nothing at all when it could not be resolved: there is no release
-          // and no author, so "no author published" would be describing a
-          // manifest nobody read. The reason line carries that row instead.
-          const origin = tool.unavailable
-            ? ""
-            : !tool.external
-              ? t("tools.origin.builtin")
-              : tool.author
-                ? t("tools.origin.by", { author: tool.author })
-                : t("tools.origin.noAuthor");
+        {shown.map(({ group, rows }) => {
+          // A fold of one granted row is that row: a header would show the
+          // same tri-state twice.
+          if (group.tools.length === 1) {
+            return <ToolRow key={group.id} tool={group.tools[0]!} state={prefOf(group.tools[0]!.key, prefs)} setState={setState} />;
+          }
+          // Under a search the fold is its matching rows (see the docstring).
+          const shownFold: ToolGroup = { ...group, tools: rows };
+          const state = groupState(shownFold, prefs);
+          const open = manual[group.id] ?? (term !== "" || autoOpen.has(group.id));
+          const label = group.id === BUILTIN_GROUP ? t("tools.group.builtin") : group.label;
+          const triAria =
+            state === "mixed"
+              ? `${t("tools.group.aria", { group: label })}（${t("tools.group.mixed")}）`
+              : t("tools.group.aria", { group: label });
           return (
-            <div
-              key={tool.key}
-              data-testid={`tool-row-${tool.key}`}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "6px 6px",
-                borderRadius: "var(--radius-btn)",
-                fontSize: pxToRem(13),
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
-                  <div
-                    title={tool.package ? `${tool.package} · ${tool.label}` : tool.label}
-                    style={{
-                      fontWeight: 500,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {tool.package ? (
-                      <span style={{ fontWeight: 400, color: "var(--text-paper-d)" }}>
-                        {tool.package}
-                        {" · "}
-                      </span>
-                    ) : null}
-                    {tool.label}
-                  </div>
-                  {origin || tool.version ? (
-                    <div
-                      title={tool.version ? `${tool.version} · ${origin}` : origin}
-                      style={{
-                        // Yields first. The tool's own NAME is what a reader
-                        // scans for, so provenance clips before the label does
-                        // — `Wafer His… 1.4.2 · by Wafer Team` is the wrong way
-                        // round. Both stay shrinkable so a long label cannot
-                        // push the chip off the row entirely.
-                        flexShrink: 999,
-                        minWidth: 0,
-                        fontSize: pxToRem(11),
-                        color: "var(--text-paper-d)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {tool.version ? `${tool.version} · ` : ""}
-                      {origin}
-                    </div>
-                  ) : null}
-                </div>
-                <div
-                  title={tool.unavailable ?? detail}
+            <div key={group.id} data-testid={`tool-group-${group.id}`} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "6px 6px",
+                  borderRadius: "var(--radius-btn)",
+                  fontSize: pxToRem(13),
+                  background: "var(--paper-2)",
+                }}
+              >
+                <button
+                  type="button"
+                  data-testid={`tool-group-header-${group.id}`}
+                  aria-expanded={open}
+                  title={group.id === BUILTIN_GROUP ? label : `${group.id} · ${label}`}
+                  onClick={() => setManual((m) => ({ ...m, [group.id]: !open }))}
                   style={{
-                    fontSize: pxToRem(11),
-                    color: tool.unavailable ? "var(--err)" : "var(--text-paper-d)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: 6,
+                    padding: 0,
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-paper)",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    font: "inherit",
                   }}
                 >
-                  {tool.unavailable
-                    ? t("tools.origin.unavailable", { reason: tool.unavailable })
-                    : detail}
-                  {tool.stale && !tool.unavailable ? (
-                    <span data-testid={`tool-${tool.key}-stale`}>
-                      {" · "}
-                      {t("tools.origin.stale")}
+                  <span aria-hidden="true" style={{ display: "inline-block", width: "1em", fontSize: pxToRem(11) }}>
+                    {open ? "▾" : "▸"}
+                  </span>
+                  <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {label}
+                  </span>
+                  {/* The count and the mixed mark yield first: the fold's NAME
+                      is what a reader scans for, and at phone width there is
+                      not room for all three at full size. */}
+                  <span style={secondary()}>
+                    {t("tools.group.count", { n: String(rows.length) })}
+                  </span>
+                  {state === "mixed" ? (
+                    <span data-testid={`tool-group-${group.id}-mixed`} style={secondary()}>
+                      · {t("tools.group.mixed")}
                     </span>
                   ) : null}
-                </div>
+                </button>
+                <TriState
+                  aria={triAria}
+                  testId={`tool-group-${group.id}`}
+                  state={state}
+                  onPick={(next) => onChange(withGroupState(shownFold, prefs, next))}
+                />
               </div>
-              <div
-                role="group"
-                aria-label={t("tools.state.aria", { tool: tool.label })}
-                style={{ display: "flex", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-btn)", overflow: "hidden" }}
-              >
-                {(["follow", "on", "off"] as ToolPref[]).map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    data-testid={`tool-${tool.key}-${opt}`}
-                    aria-pressed={state === opt}
-                    onClick={() => setState(tool.key, opt)}
-                    style={segBtn(state === opt)}
-                  >
-                    {t(opt === "follow" ? "tools.follow" : opt === "on" ? "tools.on" : "tools.off")}
-                  </button>
-                ))}
-              </div>
+              {open
+                ? rows.map((tool) => (
+                    <ToolRow key={tool.key} tool={tool} state={prefOf(tool.key, prefs)} setState={setState} indent />
+                  ))
+                : null}
             </div>
           );
         })}
@@ -210,6 +232,177 @@ export function ToolsChecklist({
       </div>
     </div>
   );
+}
+
+/** One granted tool: its name, where it came from, what Default means for it,
+ * and its own tri-state. */
+function ToolRow({
+  tool,
+  state,
+  setState,
+  indent = false,
+}: {
+  tool: ItemToolState;
+  state: ToolPref;
+  setState: (key: string, next: ToolPref) => void;
+  indent?: boolean;
+}) {
+  const t = useT();
+  // The secondary line shows the follow-default hint or the tool's own
+  // description; both it and the label clip on one line, so mirror the
+  // shown text into title= for a hover tooltip when it overflows (#456).
+  const detail =
+    state === "follow"
+      ? tool.default_on
+        ? t("tools.defaultOn")
+        : t("tools.defaultOff")
+      : tool.description;
+  // Who to go to. A third-party tool names its author (or says nobody
+  // claimed it — which is NOT the same as it being ours); everything
+  // else is the platform's own.
+  //
+  // Nothing at all when it could not be resolved: there is no release
+  // and no author, so "no author published" would be describing a
+  // manifest nobody read. The reason line carries that row instead.
+  const origin = tool.unavailable
+    ? ""
+    : !tool.external
+      ? t("tools.origin.builtin")
+      : tool.author
+        ? t("tools.origin.by", { author: tool.author })
+        : t("tools.origin.noAuthor");
+  return (
+    <div
+      data-testid={`tool-row-${tool.key}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "6px 6px",
+        paddingLeft: indent ? 24 : 6,
+        borderRadius: "var(--radius-btn)",
+        fontSize: pxToRem(13),
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+          <div
+            title={tool.package ? `${tool.package} · ${tool.label}` : tool.label}
+            style={{
+              fontWeight: 500,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {tool.package ? (
+              <span style={{ fontWeight: 400, color: "var(--text-paper-d)" }}>
+                {tool.package}
+                {" · "}
+              </span>
+            ) : null}
+            {tool.label}
+          </div>
+          {origin || tool.version ? (
+            <div
+              title={tool.version ? `${tool.version} · ${origin}` : origin}
+              style={{
+                // Yields first. The tool's own NAME is what a reader
+                // scans for, so provenance clips before the label does
+                // — `Wafer His… 1.4.2 · by Wafer Team` is the wrong way
+                // round. Both stay shrinkable so a long label cannot
+                // push the chip off the row entirely.
+                flexShrink: 999,
+                minWidth: 0,
+                fontSize: pxToRem(11),
+                color: "var(--text-paper-d)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {tool.version ? `${tool.version} · ` : ""}
+              {origin}
+            </div>
+          ) : null}
+        </div>
+        <div
+          title={tool.unavailable ?? detail}
+          style={{
+            fontSize: pxToRem(11),
+            color: tool.unavailable ? "var(--err)" : "var(--text-paper-d)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {tool.unavailable
+            ? t("tools.origin.unavailable", { reason: tool.unavailable })
+            : detail}
+          {tool.stale && !tool.unavailable ? (
+            <span data-testid={`tool-${tool.key}-stale`}>
+              {" · "}
+              {t("tools.origin.stale")}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <TriState
+        aria={t("tools.state.aria", { tool: tool.label })}
+        testId={`tool-${tool.key}`}
+        state={state}
+        onPick={(next) => setState(tool.key, next)}
+      />
+    </div>
+  );
+}
+
+/** The Default / On / Off segmented control. A `mixed` state presses nothing:
+ * that is what a fold looks like when its rows disagree. */
+function TriState({
+  aria,
+  testId,
+  state,
+  onPick,
+}: {
+  aria: string;
+  testId: string;
+  state: ToolPref | "mixed";
+  onPick: (next: ToolPref) => void;
+}) {
+  const t = useT();
+  return (
+    <div
+      role="group"
+      aria-label={aria}
+      style={{ display: "flex", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-btn)", overflow: "hidden", flexShrink: 0 }}
+    >
+      {(["follow", "on", "off"] as ToolPref[]).map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          data-testid={`${testId}-${opt}`}
+          aria-pressed={state === opt}
+          onClick={() => onPick(opt)}
+          style={segBtn(state === opt)}
+        >
+          {t(opt === "follow" ? "tools.follow" : opt === "on" ? "tools.on" : "tools.off")}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function secondary(): React.CSSProperties {
+  return {
+    fontSize: pxToRem(11),
+    color: "var(--text-paper-d)",
+    flexShrink: 999,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
 }
 
 function segBtn(active: boolean): React.CSSProperties {

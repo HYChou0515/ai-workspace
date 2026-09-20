@@ -61,6 +61,26 @@ class AgentConfig(Struct):
     derived value set by ``AppCatalog.resolve``; empty for stored/fallback
     configs that never went through the ceiling resolve."""
 
+    tool_ceiling: list[str] = field(default_factory=list)
+    """plan-tools-picker-groups part 2: the App's ``tools[]`` as written,
+    carried from ``AppCatalog.resolve`` — which runs before a turn has resolved
+    its third-party packages — to the door where the package list is known,
+    so ``apps.catalog.finalize_tool_grants`` can bring the grant to COMMAND
+    granularity there. SPENT by that call (cleared), so a config is finalized
+    once and a later narrowing sticks. Empty for every config that did not
+    come from ``resolve`` (the six other constructors: the wiki reader, the
+    three wiki maintainer configs, the card drafter, the catalog build) and
+    for one already finalized: then ``allowed_tools`` is read as written."""
+
+    tool_prefs: dict[str, bool] = field(default_factory=dict)
+    """The item's tri-state override, verbatim, carried for the same reason
+    and spent at the same door. ``resolve`` applied it once at entry level
+    (``allowed_tools`` / ``disabled_tools``); ``finalize_tool_grants`` applies
+    it again per unit of the expanded ceiling (``unit_pref``: a unit's own key,
+    then its package's key) — idempotent for the keys resolve already used
+    (a built-in, a bare package, a ``pkg:cmd`` the App granted as such), and
+    the only reading a ``pkg:cmd`` key gets for a WHOLE-package grant."""
+
     env: dict[str, str] = field(default_factory=dict)
     sandbox_image: str = "workspace-app/sandbox:py312-ds"
     """Default sandbox image built from `docker/Dockerfile.workspace`

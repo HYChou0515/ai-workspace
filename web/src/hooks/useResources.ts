@@ -89,11 +89,19 @@ export function useUpdateItemField(slug: string, resourceRoute: string, item: Ap
       void qc.invalidateQueries({ queryKey: qk.appItems(slug) });
     },
   });
+  // Resolves when the request has SETTLED (success or failure — the error
+  // stays on the mutation, as before), never rejects. A caller that awaits
+  // this and then invalidates a query of its own must not refetch before the
+  // write has landed: the tool picker did exactly that with `mutate`'s void,
+  // re-cached the pre-save rows, and a reopen within staleTime showed the
+  // per-command pins as "didn't take" (the #306 shape, in a real browser).
+  const commit = (patch: Record<string, unknown>) =>
+    new Promise<void>((resolve) => mutation.mutate(patch, { onSettled: () => resolve() }));
   return {
     /** Commit one field (breadcrumb/footer inline-edit). */
-    setField: (name: string, value: unknown) => mutation.mutate({ [name]: value }),
+    setField: (name: string, value: unknown) => commit({ [name]: value }),
     /** Commit several fields at once (the edit form). */
-    setFields: (patch: Record<string, unknown>) => mutation.mutate(patch),
+    setFields: (patch: Record<string, unknown>) => commit(patch),
     isPending: mutation.isPending,
   };
 }
