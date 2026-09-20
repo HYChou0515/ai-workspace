@@ -12,9 +12,9 @@ answer sheet: `tests/fixtures/item_size_parity.json`.
 THIS test grades the sheet against the server — the oracle. Every ceiling on
 it must be the one the record reports, and every row's verdict must be the
 PUT's, on the spelling the client would send. `web/tests/itemSizeParity.test.ts`
-then grades the client against the sheet. Move a constant and this test names
-every stale row; the sheet is corrected by re-reading the server, and the web
-test says whether the client followed.
+then grades the client against the sheet. Move a constant and this test fails
+on the ceiling first; correct that on the sheet and the next run names every
+row whose verdict moved; the web test then says whether the client followed.
 """
 
 from __future__ import annotations
@@ -74,6 +74,9 @@ def test_the_parity_sheet_is_the_servers_own_answer():
         assert any(r["sent"] is not None and not r["accepted"] for r in sheet["memory"]), (
             "no memory row past the ceiling"
         )
-        assert any(r["sent"] > 0 and not r["accepted"] for r in sheet["cpu"]), (
-            "no cpu row past the ceiling"
-        )
+        # `sent` is a number on every cpu row today; a null one (a text the
+        # client could not read) is compared like the memory rows are, not
+        # ordered.
+        assert any(
+            r["sent"] is not None and r["sent"] > 0 and not r["accepted"] for r in sheet["cpu"]
+        ), "no cpu row past the ceiling"

@@ -7,7 +7,8 @@
     "The CLIENT is graded against it: web/tests/itemSizeParity.test.ts asserts cpuFault/memoryFault(typed, max)",
     "is null iff `accepted`, and that Number(typed) / normaliseMemory(typed) is `sent`.",
     "A bound copied into the client would drift with every test green; a sheet the server marks cannot.",
-    "Update it by re-reading the server, never by hand — the python test names every stale row."
+    "Update it by re-reading the server, never by hand — the python test fails on a stale ceiling first,",
+    "and once that is corrected names every row whose verdict moved."
   ],
   "max_cpu_cores": 1024,
   "max_memory_bytes": 1125899906842624,

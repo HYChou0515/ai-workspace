@@ -44,6 +44,16 @@ issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前
 - `formatBytes` 顯示格式不動（hint 故意不用它）。
 - 不做跨語言的 e2e（Playwright 不在 CI）。
 
+## 留下來另開票的（review round 1 的缺陷鏡頭抓到，都是 #830 之前就有的）
+
+- **`<input type=number>` 的 `badInput`**：真 Chromium 對打壞的文字（`1e309`、`1e`）把 `value`
+  交成 `""`（`validity.badInput = true`），欄位上還看得到字；前端把 `""` 讀成「用預設」，Save 送
+  `cpu_cores: null` → 200，原本設的值被靜默清掉、沒有 hint。PR 前 `isValidCpu("")` 也是 true，
+  行為相同。修法是讀 `e.target.validity.badInput`，不是這條 PR 的事。
+- **其他文字系統的數字**：`str.isdigit()` 讓伺服器收 `٥١٢M`（阿拉伯-印度數字），前端的
+  `[０-９]` 只折全形、`\d` 只認 ASCII → 前端拒、伺服器收。109 個探針輸入裡唯一不一致的一個，
+  且是不會丟資料的方向（前端多擋）。
+
 ## Phases
 
 - **P1** 後端：`_EnvironmentOut` 兩欄；測試 monkeypatch 常數 → GET 與 PUT 閘門一起動。
@@ -62,6 +72,26 @@ issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前
   `_MAX_CORES` 改 2048 → Python 紅在 `stale sheet: re-read the server`；
   卷子照 2048 重改（漏了 `1024.5` 那列，也被點名）→ Python 綠、前端**零改動**綠。
 - `sent` 拼法由真前端程式碼導出（`1024.5T` → `1049088G`，不是心算）。
+
+## Review round 1（2026-09-21，conformance / veracity / defect / regression 四把平行，各自一棵 worktree，對 `222ed7dc`）
+
+最壞發現：**LOW**，且全是文字或測試檔。
+
+- **Conformance**：none。五個 phase 對得上；issue 四個驗收項都親自重跑成立，含它自己補做的跨語言探針
+  （`_MAX_CORES=7` 的真 GET JSON 餵進真 modal → 「最多 7 核。」「最多 3G。」、`max="7"`、Save 灰）。
+  六處與 issue 字面不同（tri-state、`1024T`、`memoryBytes`、`?? Infinity`、`max` 屬性、不記 migrations）
+  都在本文件有記載有理由；沒有無聲偏離、沒有 scope creep。
+- **Veracity**：LOW ×2，措辭。(1) parity 測試 docstring / 卷子註解「動常數就點名每一列」實為兩步
+  （先紅在上限那行，卷子改了上限後下一輪才點名列）→ 改字；(2) PR body 的 `jq` 輸出在 jq 1.6 印 `1024`
+  不是 `1024.0` → 改字。所有突變計數（1 / 2 / 4 / 2）重跑一致。
+- **Defect**：這條 PR 沒引入缺陷。三個 LOW 都既有或潛在：`badInput` 讓 `""` 當預設（既有）、
+  阿拉伯-印度數字伺服器收前端拒（既有、安全方向）→ 兩條記在「留下來另開票的」；grader 的
+  `r["sent"] > 0` 對未來 `sent: null` 列會 TypeError → 一行硬化。
+- **Regression**：none。119,808 個輸入新舊差分：PUT body 逐 byte 相同、`*Fault(x, Infinity)` 與舊 boolean
+  零差異、新增拒絕只有「超上限」且每個都釘到真 422；唯一 10 個差異在 failed-reload 回寫的 ≥1e35 位元組
+  輸入，伺服器永遠 422、回寫走不到。
+
+修法形狀：註解 + 一行測試硬化，沒有換機制 → 不再開一輪，CI 對最終 sha 跑。
 
 ## Live check（2026-09-21，worktree build on 127.0.0.1:8258，`per_app.default` 2 核 / 512M + `per_user` 4 核 / 8G，真 Chromium 1280）
 
