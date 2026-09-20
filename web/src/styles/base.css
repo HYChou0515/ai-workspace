@@ -216,6 +216,14 @@ select {
 .input:focus {
   border-color: var(--accent);
 }
+/* A disabled field means "not now" (something is running) or "not you" (you
+   may look, not change) — never "broken". It stays readable, and the sentence
+   beside it says which of the two it is. Two panels each wrote this pair
+   before #829. */
+.input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
 
 /* A textarea with `.input`'s `padding: 0 10px` has its first line on the
    border. By element, not a modifier to remember: a forgotten modifier is the

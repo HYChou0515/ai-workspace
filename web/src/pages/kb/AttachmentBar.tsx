@@ -85,7 +85,7 @@ export function AttachmentBar({
               <li key={a.resource_id} className="kb-att__card">
                 {renaming === a.resource_id ? (
                   <input
-                    className="kb-att__rename"
+                    className="input kb-att__rename"
                     autoFocus
                     value={draft}
                     aria-label={`rename ${name} to`}

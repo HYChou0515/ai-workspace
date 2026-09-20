@@ -167,9 +167,10 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
       </div>
 
       <div className="kb-cols__actions">
-        <label className="kb-docsearch kb-docsearch--inline">
+        <label className="input input-group kb-docsearch kb-docsearch--inline">
           <Icon name="search" size={14} color="var(--text-paper-d)" />
           <input
+            className="input-group__field"
             type="search"
             placeholder="Filter collections…"
             value={colQuery}

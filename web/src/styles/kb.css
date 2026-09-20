@@ -345,15 +345,13 @@
   border-radius: var(--radius-card);
   padding: 12px;
 }
+/* The composer block above is the box (accent, card radius: the page's
+   primary action, on purpose not the house chrome); its textarea is a slot
+   (`.input-group__field` in base.css draws nothing) at body size. */
 .kb-composer__input {
   width: 100%;
-  border: none;
-  background: none;
   resize: none;
-  font-family: var(--font-body);
   font-size: var(--text-body);
-  color: var(--text-paper);
-  outline: none;
 }
 .kb-composer__row {
   display: flex;
@@ -1407,16 +1405,15 @@
   background: var(--paper-2);
   color: var(--text-paper);
 }
+/* The title edited in place: the title's type (`.kb-colpage__title`) on the
+   house chrome, autofocused so `.input:focus` draws the accent it used to
+   draw itself. */
 .kb-colpage__nameedit {
   font-family: var(--font-display);
   font-weight: 800;
   font-size: var(--text-display-sm);
   letter-spacing: -0.02em;
-  color: var(--text-paper);
-  border: 1px solid var(--accent);
-  border-radius: 6px;
   padding: 2px 8px;
-  background: var(--white);
 }
 .kb-colpage__desc {
   margin: 6px 0 0;
@@ -1430,19 +1427,12 @@
   color: var(--text-paper-d2);
   font-style: italic;
 }
-.kb-colpage__descedit {
+/* The description edited in place, at the description's measure. */
+textarea.kb-colpage__descedit {
   margin: 6px 0 0;
   width: 100%;
   max-width: 560px;
-  font-family: var(--font-body);
-  font-size: var(--text-body-sm);
-  color: var(--text-paper);
-  line-height: 1.5;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
   padding: 6px 8px;
-  background: var(--white);
-  resize: vertical;
 }
 .kb-colpage__actions {
   position: relative;
@@ -1934,15 +1924,13 @@
   border-color: var(--accent);
 }
 /* #357: inline rename input takes the open button's footprint while editing. */
+/* The rename replaces the row's button (`.kb-chats__open`, 12px 14px of
+   padding around one line): an `.input` at the row's size and weight. */
 .kb-chats__rename {
-  font-size: var(--text-body-sm);
+  min-height: 44px;
+  padding: 0 14px;
   font-weight: 500;
-  color: var(--text-paper);
   cursor: text;
-}
-.kb-chats__rename:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 .kb-chats__title {
   flex: 1;
@@ -2228,29 +2216,11 @@
 
 /* ------------------------- Document filter search ------------------------- */
 
+/* An `.input.input-group` (the box, its focus ring, the bare slot inside
+   are base.css's); this is its place on the page. */
 .kb-docsearch {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
   padding: 0 12px;
   margin-bottom: 12px;
-  background: var(--white);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-}
-.kb-docsearch:focus-within {
-  border-color: var(--accent);
-}
-.kb-docsearch input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: none;
-  font-family: var(--font-body);
-  font-size: var(--text-body-sm);
-  color: var(--text-paper);
 }
 
 /* --------------------- Search results (kb_search output) --------------------- */
@@ -2564,10 +2534,8 @@
   background: transparent; color: var(--text-paper-d);
 }
 .kb-cards__mode.is-active { background: var(--paper-2); color: var(--text-paper); border-color: var(--paper-3); }
-.kb-cards__search-input {
-  padding: 4px 6px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
-  background: var(--paper); color: var(--text-paper); font-size: 0.75rem; width: 100%; box-sizing: border-box;
-}
+/* The sidebar's search: the sidebar is narrow, so a size down from the house. */
+.kb-cards__search-input { min-height: 28px; padding: 0 6px; font-size: 0.75rem; }
 .kb-cards__none { color: var(--text-paper-d2); font-size: 0.75rem; padding: 6px; }
 .kb-cards__new {
   text-align: left; padding: 3px 6px; font-size: 0.75rem; border: 1px dashed var(--paper-3);
@@ -2584,10 +2552,8 @@
 .kb-cards__item.is-active { background: var(--paper-2); border-color: var(--paper-3); }
 .kb-cards__editor { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .kb-cards__empty { color: var(--text-paper-d2); padding: 24px; }
-.kb-cards__title {
-  padding: 8px 10px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
-  background: var(--paper); color: var(--text-paper); font-size: 0.9375rem; font-weight: 600;
-}
+/* The card's title, edited in place: title type on the house chrome. */
+.kb-cards__title { font-size: 0.9375rem; font-weight: 600; }
 .kb-cards__keys { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .kb-cards__chip {
   display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px;
@@ -2741,7 +2707,7 @@
 .kb-cards__attach-drop:hover {
   border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
 }
-.kb-cards__term { flex: 1 1 120px; min-width: 120px; padding: 4px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); color: var(--text-paper); }
+.kb-cards__term { flex: 1 1 120px; min-width: 120px; min-height: 28px; padding: 0 8px; }
 .kb-cards__body { flex: 1 1 auto; min-height: 200px; }
 .kb-cards__actions { display: flex; gap: 8px; }
 /* Preview / Edit toggle + the rendered preview pane */
@@ -2792,14 +2758,6 @@
 }
 .kb-cardgen__head button { background: transparent; border: none; cursor: pointer; color: var(--text-paper-d); font-size: 1rem; }
 .kb-cardgen__body { padding: 14px 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
-.kb-cardgen__body > input,
-.kb-cardgen__todo,
-.kb-cardgen__proposal textarea,
-.kb-cardgen__proposal input {
-  padding: 6px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
-  background: var(--paper); color: var(--text-paper); font: inherit; width: 100%;
-}
-.kb-cardgen__todo { min-height: 320px; font-family: ui-monospace, monospace; font-size: 0.8125rem; }
 .kb-cardgen__docs, .kb-cardgen__proposals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 48vh; overflow: auto; }
 .kb-cardgen__docs label { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 0.8125rem; }
 .kb-cardgen__none { color: var(--text-paper-d2); padding: 12px; }
@@ -2826,7 +2784,6 @@
 .kb-review__body { padding: 0 12px 12px; border-top: 1px solid var(--paper-2); }
 /* #415 source picker: a search/select-all toolbar over a scrollable filetree. */
 .kb-cardgen__pickbar { display: flex; gap: 8px; align-items: center; }
-.kb-cardgen__pickbar input { flex: 1; padding: 6px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); color: var(--text-paper); font: inherit; }
 .kb-cardgen__pickbar button { padding: 5px 12px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); cursor: pointer; color: var(--text-paper); white-space: nowrap; }
 .kb-cardgen__tree { max-height: 48vh; overflow: auto; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); --filetree-header-bg: var(--white); }
 .kb-cardgen__viewtoggle { display: flex; gap: 6px; }
@@ -3156,24 +3113,14 @@
   align-items: center;
   gap: 8px;
 }
+/* The search grows, the filter selects keep their own width. */
+.rvw__toolbar > select {
+  flex: none;
+}
 .rvw__search {
-  display: inline-flex;
-  align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
   flex: 1 1 220px;
   min-width: 160px;
-}
-.rvw__search input {
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: var(--text-body-sm);
-  color: var(--text-paper);
-  width: 100%;
 }
 .rvw__check {
   display: inline-flex;
@@ -3509,23 +3456,6 @@
   font-size: var(--text-small);
   color: var(--text-paper-d);
 }
-.rvw-drawer__field input,
-.rvw-drawer__field textarea,
-.rvw-drawer__answer {
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  padding: 8px 10px;
-  font: inherit;
-  font-size: var(--text-body-sm);
-  color: var(--text-paper);
-  background: var(--paper);
-  resize: vertical;
-}
-.rvw-drawer__field input:disabled,
-.rvw-drawer__field textarea:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
 .rvw-drawer__label {
   font-size: var(--text-xs);
   font-weight: 700;
@@ -3556,14 +3486,12 @@
   font-size: var(--text-small);
   line-height: 1;
 }
+/* Sits among the key chips, so chip-sized. */
 .rvw-drawer__addkey {
   flex: 1 1 100px;
   min-width: 100px;
-  padding: 3px 8px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--paper);
-  color: var(--text-paper);
+  min-height: 24px;
+  padding: 0 8px;
   font-size: var(--text-xs);
 }
 .rvw-drawer__overwrite {
@@ -3700,16 +3628,14 @@
   gap: 2px;
   flex-shrink: 0;
 }
+/* The in-place rename of an attachment: a file name, so mono, at the card's
+   size (the chrome is `.input`'s; autofocused, so its accent border is
+   `.input:focus`'s). */
 .kb-att__rename {
-  flex: 1;
-  min-width: 0;
+  min-height: 28px;
+  padding: 0 8px;
   font-family: var(--font-mono);
   font-size: var(--text-small);
-  padding: 5px 8px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-btn);
-  background: var(--paper);
-  color: var(--text-paper);
 }
 
 
@@ -3956,7 +3882,7 @@
 .gbr__title { font-family: var(--font-display); font-size: var(--text-display-sm); font-weight: 680; color: var(--text-paper); margin: 0 0 2px; }
 .gbr__blurb { color: var(--text-paper-d); font-size: var(--text-body-sm); margin: 0; max-width: 62ch; }
 .gbr__filters { display: flex; gap: var(--space-8); flex-wrap: wrap; margin-bottom: var(--space-8); }
-.gbr__search, .gbr__kind, .gbr__collection { font: inherit; font-size: var(--text-body-sm); padding: 6px 10px; border: 1px solid var(--paper-3); border-radius: var(--radius-chip); background: var(--white); color: var(--text-paper); }
+/* Three `.input`s that share one wrapping row; only their flex shares differ. */
 .gbr__search { flex: 2 1 240px; }
 .gbr__kind { flex: 1 1 160px; }
 .gbr__collection { flex: 1 1 160px; }

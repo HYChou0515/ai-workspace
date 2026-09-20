@@ -282,7 +282,7 @@ export function ContextCardsTab({
             </button>
           </div>
           <input
-            className="kb-cards__search-input"
+            className="input input--block kb-cards__search-input"
             aria-label="Search cards"
             placeholder={
               mode === "name" ? "Find a card by name…" : "Paste text to find cards in it…"
@@ -376,7 +376,7 @@ export function ContextCardsTab({
             {editing ? (
               <>
                 <input
-                  className="kb-cards__title"
+                  className="input input--block kb-cards__title"
                   aria-label="Title"
                   placeholder="Title"
                   value={draft.title}
@@ -398,7 +398,7 @@ export function ContextCardsTab({
                     </span>
                   ))}
                   <input
-                    className="kb-cards__term"
+                    className="input kb-cards__term"
                     aria-label="Add a term"
                     placeholder="Add a term…"
                     value={term}
