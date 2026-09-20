@@ -108,17 +108,9 @@
 }
 
 /* A field holding what the server would refuse: the note under it says the
-   grammar, in the error colour, and `aria-invalid` says it to AT. The red
-   border outranks `.input:focus`'s accent one, so focus is shown as a ring —
-   `.input` has no outline of its own. */
-.item-environment .input[aria-invalid="true"] {
-  border-color: var(--err);
-}
-
-.item-environment .input[aria-invalid="true"]:focus {
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
+   grammar, in the error colour, and `aria-invalid` says it to AT — the red
+   border + focus ring on the field itself is `.input[aria-invalid="true"]` in
+   base.css (hoisted by #829: ItemForm's title is the second user). */
 .item-environment .env-field__note--invalid {
   color: var(--err);
 }

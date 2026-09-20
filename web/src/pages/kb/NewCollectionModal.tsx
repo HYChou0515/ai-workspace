@@ -225,7 +225,7 @@ export function NewCollectionModal({
           <label className="kb-field">
             <span className="kb-field__label">Description</span>
             <textarea
-              className="input kb-textarea"
+              className="input"
               placeholder="What lives in this collection?"
               rows={3}
               value={description}

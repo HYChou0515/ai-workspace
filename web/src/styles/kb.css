@@ -680,12 +680,6 @@
   width: 100%;
   flex: none;
 }
-.kb-textarea {
-  height: auto;
-  padding: 8px 10px;
-  resize: vertical;
-  line-height: var(--leading-body-sm, 1.5);
-}
 .kb-cols__empty {
   color: var(--text-paper-d2);
   font-size: var(--text-body-sm);

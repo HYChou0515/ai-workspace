@@ -197,7 +197,9 @@ select {
    fields shipped bare, while the same look lived under a KB-only name and as 113
    inline copies). Moved here from kb.css, values unchanged. A
    container that wants a fixed width sets it on the element; the default is
-   "fill the flex row". */
+   "fill the flex row" (`.input--block` for a column). #829 made it the ONLY
+   rule: `input-class.test.ts` fails on any text control that does not wear
+   it. */
 .input {
   flex: 1;
   min-width: 0;
@@ -215,17 +217,68 @@ select {
   border-color: var(--accent);
 }
 
-/* Compact inline editor — a select/input that replaces a chip or fills a
-   quick-create cell. Wears the token chrome (border/radius/surface) instead of
-   the bare native widget that broke the themed look mid-interaction (#445 #20).
-   Base resets already flip its font/color/background with the theme. */
+/* A textarea with `.input`'s `padding: 0 10px` has its first line on the
+   border. By element, not a modifier to remember: a forgotten modifier is the
+   "forgot to wear it" defect this rule exists to end (#829). (0,1,1) beats a
+   later single-class rule, so a textarea whose padding must differ writes
+   `textarea.x`. */
+textarea.input {
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: var(--leading-body-sm, 1.5);
+}
+
+/* A field holding what the server would refuse: `aria-invalid` says it to AT,
+   the note under it says the grammar. The red border outranks `.input:focus`'s
+   accent one, so focus is shown as a ring — `.input` has no outline of its
+   own. */
+.input[aria-invalid="true"] {
+  border-color: var(--err);
+}
+.input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* In a column "fill the flex row" is the wrong axis — `flex: 1` stretches the
+   field DOWN when the column has height to spare — and in a block parent an
+   input is its UA width (~20ch). This fills the width and nothing else. */
+.input--block {
+  width: 100%;
+  flex: none;
+}
+
+/* The input group (Bootstrap's name for it): ONE box that wears `.input`,
+   with the control inside as a bare slot beside its adornments — a search
+   box and its icon, a date range's two ends, the buttons of a find/replace
+   row. The box draws the chrome and carries the focus ring; the slot draws
+   nothing. Six copies of this shape existed before #829. */
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.input-group:focus-within {
+  border-color: var(--accent);
+}
+.input-group__field {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font: inherit;
+  color: inherit;
+}
+
+/* Compact SIZE of `.input` — a select/input that replaces a chip or fills a
+   quick-create cell wears `input inline-edit`. #445 #20 gave it the token
+   chrome of its own; #829 moved the chrome to `.input` and left the size, so
+   the two cannot drift. `min-height` because `.input`'s 34px would win. */
 .inline-edit {
   height: 26px;
+  min-height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  color: var(--text-paper);
 }
 
 /* Print: isolate the report card so "Export PDF" (window.print) emits a

@@ -197,7 +197,7 @@ export function WikiCorrectionDialog({
           <label className="kb-field">
             <span className="kb-field__label">{t("wikiCorrection.instructionLabel")}</span>
             <textarea
-              className="input kb-textarea"
+              className="input"
               rows={4}
               placeholder={t("wikiCorrection.instructionPlaceholder")}
               value={instruction}

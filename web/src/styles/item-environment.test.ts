@@ -12,6 +12,9 @@ import { describe, expect, it } from "vitest";
 const here = new URL(".", import.meta.url).pathname;
 const css = readFileSync(join(here, "item-environment.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const wide = css.replace(/@media[^{]*\{[\s\S]*?\n\}/g, "");
+// The invalid-field look is the house input's (base.css), not this panel's:
+// #829 hoisted it when ItemForm's title became its second user.
+const base = readFileSync(join(here, "base.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 function rule(sheet: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -53,11 +56,13 @@ describe("item-environment.css: the size fields", () => {
   });
 
   it("show an invalid value in the error colour, on the field and on the note", () => {
-    expect(rule(wide, '.item-environment .input[aria-invalid="true"]')).toMatch(/border-color:\s*var\(--err\)/);
+    expect(rule(base, '.input[aria-invalid="true"]')).toMatch(/border-color:\s*var\(--err\)/);
     expect(rule(wide, ".item-environment .env-field__note--invalid")).toMatch(/color:\s*var\(--err\)/);
+    // …and this sheet keeps no copy of the field half.
+    expect(wide).not.toMatch(/aria-invalid/);
   });
 
   it("still show focus on an invalid field — the red border hides the accent one, so a ring", () => {
-    expect(rule(wide, '.item-environment .input[aria-invalid="true"]:focus')).toMatch(/box-shadow:/);
+    expect(rule(base, '.input[aria-invalid="true"]:focus')).toMatch(/box-shadow:/);
   });
 });
