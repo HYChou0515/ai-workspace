@@ -67,10 +67,18 @@ describe("entity-views.css", () => {
 
     // One field, not three: the border is on the GROUP and the inputs inside
     // are bare. Two separately-bordered boxes with "to" between them are three
-    // controls for one value and did not fit the panel's narrow end.
+    // controls for one value and did not fit the panel's narrow end. Since
+    // #829 the group is an `.input.input-group` and the bare inputs are its
+    // `.input-group__field` slots (base.css, pinned in input-class.test.ts);
+    // the range's own rule keeps the mono type and draws no chrome of its own.
     const rangeInput = CSS.match(/\.ev-viewpanel__range input\[type="time"\]\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rangeInput).toMatch(/border:\s*0/);
-    expect(rangeInput).toMatch(/background:\s*none/);
+    expect(rangeInput, "the range's own rule").not.toBe("");
+    expect(rangeInput).toMatch(/font-family:\s*var\(--font-mono\)/);
+    expect(rangeInput).not.toMatch(/border:|background:/);
+    const panel = readFileSync(resolve(HERE, "../renderers/entity/ViewSettingsPanel.tsx"), "utf8");
+    expect(panel).toMatch(/className="input input-group ev-viewpanel__range"/);
+    expect(panel.match(/type="time"/g)?.length, "two ends").toBe(2);
+    expect(panel.match(/className="input-group__field"\s+type="time"/g)?.length, "both ends are slots").toBe(2);
     // The picker glyphs cost ~32px of a 224px panel and duplicate the value.
     expect(CSS).toMatch(/::-webkit-calendar-picker-indicator\s*\{[^}]*display:\s*none/);
 

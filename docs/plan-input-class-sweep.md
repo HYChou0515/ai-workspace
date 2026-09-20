@@ -12,21 +12,25 @@ The scan is the one the guard test now runs: every `<input|textarea|select`
 opening tag in `web/src/**/*.tsx` (tests excluded, comments stripped), minus
 `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 
-- 124 text-like controls in 53 files; 26 wear `.input`; **98 bare in 46 files**.
-  (#829 counted 123 / 18 / 105 on `f5fe658a`; #826 and #827 landed since, and
-  #829's scan counted three `<select>` / `<input type=date>` tokens that are in
-  comments.)
-- Of the 98 (by what the TAG carries, counted by the same scan): 46 wear a
-  class of their own (a scoped rule dresses or sizes them); 26 carry an inline
-  `style` (9 with a border copy on the tag, 4 with a slot reset — `border:
-  none` inside a wrapper that draws the box — 13 via a shared style object
-  `input` / `field` / `noteInput` / `inputStyle`); 16 wear nothing on the tag,
-  of which 15 are dressed or reset by a wrapper's descendant rule
-  (`.page-tools`, `.admin-row`, `.kb-cardgen__pickbar`, `.kb-docsearch`,
-  `.rvw-drawer__field`, `.rvw__search`, `.ev-viewpanel__range`) and ONE is
-  the browser default outright (`ItemShareManagers` "add a manager").
-  Whether a class or style amounts to the house look is what the live check
-  decides — #829 says so: "不能用 grep 判".
+- **126 text-like controls in 54 files; 27 wore `.input`; 99 bare in 46
+  files.** (#829 counted 123 / 18 / 105 on `f5fe658a`: #826 and #827 landed
+  since; #829's scan counted three `<select>` / `<input type=date>` tokens
+  that sit in comments and, like this plan's first pass, missed two — a
+  placeholder saying `src/**` opened a block comment that swallowed
+  `SearchPanel`'s fourth input, and `SheetGrid`'s cell was read past. The
+  guard's scan, which found both, is the count.)
+- Of the 99 (by what the TAG carried, same scan): 47 wore a class of their
+  own (a scoped rule dressed or sized them); 36 carried an inline `style` — 9
+  with a border copy on the tag, 4 with a slot reset (`border: none` inside a
+  wrapper that draws the box), 16 via a shared style object (`input` /
+  `field` / `noteInput` / `inputStyle` / `ta` / `box`), 7 a size / font
+  style only; 16 wore nothing on the tag, of which 15 were dressed or reset
+  by a wrapper's descendant rule (`.page-tools`, `.admin-row`,
+  `.kb-cardgen__pickbar`, `.kb-docsearch`, `.rvw-drawer__field`,
+  `.rvw__search`, `.ev-viewpanel__range`) and ONE was the browser default
+  outright (`ItemShareManagers` "add a manager"). Whether a class or style
+  amounted to the house look is what the live check decides — #829 says so:
+  "不能用 grep 判".
 
 ## Decisions
 
@@ -34,12 +38,15 @@ opening tag in `web/src/**/*.tsx` (tests excluded, comments stripped), minus
    guard.** The guard test lists the whitelist; everything else must wear the
    class, so the table below is the whole set of exceptions.
 
+   Counts are of all 126 after the sweep, by the guard's scan (classify each
+   tag by its `className`).
+
    | Treatment | Rule | Count |
    |---|---|---|
-   | A · bare or inline copy → `className="input"`; inline border / radius / background / outline / font-family removed; **size** props (`width`, `height`, `minHeight`, `padding`, `fontSize`, `resize`) may stay inline or move to `.input--block` / `.inline-edit`. | (P5) |
-   | B · a class of its own that re-draws the chrome → `className="input <cls>"`; the rule keeps only what differs (height, font, width, `resize`, a hover / disabled / active variant) and loses `border` / `border-radius` / `background` / `color` / `outline`. | (P5) |
-   | C · a slot inside a box → the box wears `className="input input-group"` (or keeps its own chrome when that chrome is deliberately not the house one — only `.kb-composer`, the accent-bordered primary action); the control wears `className="input-group__field"`. The box's `:focus-within` is the focus ring. | (P5) |
-   | W · whitelisted, with the reason in the test. | 2 |
+   | A · bare or inline copy → `className="input"`; inline border / radius / background / outline / font-family removed; **size** props (`width`, `height`, `minHeight`, `padding`, `fontSize`, `resize`) may stay inline or move to `.input--block` / `.inline-edit`. | 39 plain `input` |
+   | B · a class of its own that re-draws the chrome → `className="input <cls>"`; the rule keeps only what differs (height, font, width, `resize`, a hover / disabled / active variant) and loses `border` / `border-radius` / `background` / `color` / `outline`. | 73 (`input--block` 32, `inline-edit` 14, `ev-select` 11, `ev-field` 7, one scoped class each for the rest) |
+   | C · a slot inside a box → the box wears `className="input input-group"` (or keeps its own chrome when that chrome is deliberately not the house one — only `.kb-composer`, the accent-bordered primary action); the control wears `className="input-group__field"`. The box's `:focus-within` is the focus ring. | 11 slots in 10 boxes |
+   | W · whitelisted, with the reason in the test. | 3 |
 
 2. **Three additions to `base.css`, no new file.**
    - `textarea.input { padding: 8px 10px; resize: vertical; line-height: … }` —
