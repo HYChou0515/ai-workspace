@@ -40,6 +40,17 @@ describe("entity-views.css", () => {
     expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:hover/);
     // inline cell fields reveal their border only on hover/focus.
     expect(CSS).toMatch(/\.ev-table tbody \.ev-field\s*\{[^}]*border-color:\s*transparent/);
+    // …at the table's 26px: `.ev-field`'s `min-height: 28px` (its answer to
+    // `.input`'s 34) would otherwise beat `height: 26px` and grow every row
+    // by 2px — it did, until #832's review measured it.
+    const cell = CSS.match(/\.ev-table tbody \.ev-field\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(cell).toMatch(/height:\s*26px/);
+    expect(cell).toMatch(/min-height:\s*26px/);
+    // A read-only cell is data, not a forbidden action: the views keep their
+    // own disabled look rather than `.input:disabled`'s not-allowed cursor.
+    const off = CSS.match(/\.ev-field:disabled\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(off, ".ev-field:disabled").not.toBe("");
+    expect(off).toMatch(/cursor:\s*default/);
   });
 
   it("gives the board real columns with a drop-target + degraded state (§D)", () => {

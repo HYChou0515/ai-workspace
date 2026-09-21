@@ -572,9 +572,10 @@ function FilterSelect({
       data-active={active ? "" : undefined}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="input inline-edit"
-      // The active state is a colour on the house chrome, not a chrome of its own.
-      style={{ flex: "none", fontSize: pxToRem(12), cursor: "pointer", ...(active ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}) }}
+      className="input"
+      // 28px: level with the `Clear filters` button beside it (`.btn` sm). The
+      // active state is a colour on the house chrome, not a chrome of its own.
+      style={{ flex: "none", height: 28, minHeight: 28, padding: "0 8px", fontSize: pxToRem(12), cursor: "pointer", ...(active ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}) }}
     >
       <option value="any">{prefix} · any</option>
       {options.map((o) => (

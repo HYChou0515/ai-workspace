@@ -162,7 +162,7 @@ export function SearchPanel({
                 onChange={(e) => setReplacement(e.target.value)}
                 placeholder="Replace"
                 className="input-group__field"
-              style={input}
+                style={input}
               />
               <button
                 type="button"

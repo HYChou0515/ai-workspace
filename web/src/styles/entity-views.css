@@ -237,6 +237,13 @@
 .ev-field:hover:not(:disabled) {
   border-color: var(--text-paper-d2);
 }
+/* A disabled cell is read-only data, not a forbidden action: dimmer than
+   `.input:disabled` and with the default cursor, or a read-only table shows
+   "not allowed" on every cell (#832 review). */
+.ev-field:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .ev-field--range {
   display: inline-flex;
   gap: var(--space-4);
@@ -534,7 +541,10 @@
 }
 /* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
 .ev-table tbody .ev-field {
+  /* `min-height` too: `.ev-field`'s 28px min would otherwise beat this
+     height and grow every row by 2px (#832 review). */
   height: 26px;
+  min-height: 26px;
   border-color: transparent;
   background: transparent;
 }

@@ -218,8 +218,9 @@ select {
 }
 /* A disabled field means "not now" (something is running) or "not you" (you
    may look, not change) — never "broken". It stays readable, and the sentence
-   beside it says which of the two it is. Three sheets each wrote a version
-   of this before #829. */
+   beside it says which of the two it is. Two panels each wrote this pair
+   before #829; the entity views keep their own `.ev-field:disabled` (a
+   read-only cell is data, not a forbidden action). */
 .input:disabled {
   opacity: 0.7;
   cursor: not-allowed;
@@ -282,11 +283,14 @@ textarea.input {
 /* Compact SIZE of `.input` — a select/input that replaces a chip or fills a
    quick-create cell wears `input inline-edit`. #445 #20 gave it the token
    chrome of its own; #829 moved the chrome to `.input` and left the size, so
-   the two cannot drift. `min-height` because `.input`'s 34px would win; a
-   flex item's default share, not `.input`'s `flex: 1`, because a chip's width
-   is its content's — the row that wants it to fill says `flex: 1` itself. */
+   the two cannot drift. `min-height` because `.input`'s 34px would win.
+   `flex: none`, not `.input`'s `flex: 1`: a chip's width is its content's,
+   and with `.input`'s `min-width: 0` a shrinking chip collapses to its
+   arrow in a tight row (a 96px role select went to 18px) — it overflows
+   instead, as it did before #829. The row that wants it to FILL says
+   `flex: 1` itself and gets the shrink back with it. */
 .inline-edit {
-  flex: 0 1 auto;
+  flex: none;
   height: 26px;
   min-height: 26px;
   padding: 0 8px;

@@ -1906,13 +1906,19 @@ textarea.kb-colpage__descedit {
   align-items: center;
   gap: 6px;
 }
+/* The row's button and the rename input that replaces it share ONE padding
+   rule, so the rename has the button's footprint by construction (#357) —
+   a height computed by hand for the input was 2px short (#832 review). */
+.kb-chats__open,
+.kb-chats__rename {
+  padding: 12px 14px;
+}
 .kb-chats__open {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-btn);
@@ -1923,12 +1929,9 @@ textarea.kb-colpage__descedit {
 .kb-chats__open:hover {
   border-color: var(--accent);
 }
-/* #357: inline rename input takes the open button's footprint while editing. */
-/* The rename replaces the row's button (`.kb-chats__open`, 12px 14px of
-   padding around one line): an `.input` at the row's size and weight. */
+/* #357: the inline rename takes the open button's footprint while editing —
+   the padding is the shared rule above; this is the weight. */
 .kb-chats__rename {
-  min-height: 44px;
-  padding: 0 14px;
   font-weight: 500;
   cursor: text;
 }
