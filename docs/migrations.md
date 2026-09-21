@@ -766,7 +766,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 - **rollout 前**：多一種 JobType `chat-video` → `rca-worker-chat-video` Deployment（`python -m workspace_app.worker chat-video`），
   **用自己的映像 `rca-app-chat-video`**（`docker/Dockerfile` 的 `chat-video` stage：app + `chat-video` extra + Chromium + ffmpeg +
-  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，那一層 **+1.69 GB**（#834 量的）。不塞進 `rca-app`，每顆 API pod 沒理由多這些；
+  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，那一層 **+1.63 GB**（#834 量的）。不塞進 `rca-app`，每顆 API pod 沒理由多這些；
   **build 一定帶 `--target chat-video`**，不帶 target 做出來的是 API image——見 [#834](#pr-834)）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
   （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
   sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
@@ -807,14 +807,14 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ---
 
-### 2026-09-21 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.69 GB {#pr-834}
+### 2026-09-21 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
 
 **設定** — 不動。**資料** — 不動。
 
 **k8s · CI 側**
 
 - Docker 不帶 `--target` 就 build 檔案裡**最後一個** stage。#823 把 `chat-video` stage 放在最後，所以 #823 之後照文件的
-  `docker build -t rca-app … -f docker/Dockerfile .` 做出來的 `rca-app` 其實是 worker image：多 Chromium + ffmpeg（+1.69 GB）、
+  `docker build -t rca-app … -f docker/Dockerfile .` 做出來的 `rca-app` 其實是 worker image：多 Chromium + ffmpeg（+1.63 GB）、
   `CMD` 是 `python -m workspace_app.worker chat-video`——而 `kubernetes/base/deployment.yaml` 的 API 容器**沒有**自己的 `command`，
   所以用那顆 image 起的「API pod」跑的是 worker 進程，不 serve HTTP：`/api/readyz` 永遠不 ready、rollout 卡住、舊 pod 繼續撐著。
   這版在最後補一個 `api` stage 把預設拉回 API。**`rollout 前`**：如果你們 CI 在 #823 之後 build 過 `rca-app`，用這版**重 build 一次**

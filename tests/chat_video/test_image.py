@@ -3,7 +3,7 @@ fix): Docker builds the LAST stage when no ``--target`` is given, and the
 documented API build command gives none — so the API image is whatever
 stage comes last. #823 appended the ``chat-video`` stage at the end, and
 from then on ``docker build -t rca-app …`` produced the worker image:
-Chromium + ffmpeg (+1.69 GB, measured) and a worker CMD, on every API pod,
+Chromium + ffmpeg (+1.63 GB, measured) and a worker CMD, on every API pod,
 against the design the same file states ("API pod 用不到所以不放進
 rca-app"). The rule pinned here is the one Docker applies, read off the
 text: the final stage is the API, and the worker is reached by name.

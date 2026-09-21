@@ -507,7 +507,7 @@ RCA 的 system prompt 是純 markdown，存在
     `WorkspaceFiles`(額度、路徑 jail、鏡像),而那個 facade 只有 `create_app` 會組,所以
     worker 直接拿 API 組好的 coordinator(`worker.API_REGISTRY_JOBTYPES` 兩個成員各有各的理由)。
     它跑的是**另一個 image** `rca-app-chat-video`(`docker/Dockerfile` 的 `chat-video` stage:
-    同一個 app + headless Chromium + ffmpeg,那一層量到 **+1.69 GB**(#834 量的;API pod 用不到所以不放進 `rca-app`):
+    同一個 app + headless Chromium + ffmpeg,那一層量到 **+1.63 GB**(API 1.81 GB → worker 3.44 GB,#834 量的;API pod 用不到所以不放進 `rca-app`):
     `docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .`。
     **`--target` 不能省**:不帶 target 的 `docker build` 做的是 API image(Dockerfile 最後一個 stage `api`);
     #823 到 #834 之間那個 stage 是最後一個,所以那段時間照文件 build 的 `rca-app` 其實是 worker image——用它起的 API pod 跑的是 worker,不 serve HTTP。

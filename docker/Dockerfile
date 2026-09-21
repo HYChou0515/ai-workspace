@@ -5,7 +5,7 @@
 #   docker build -t rca-app:latest -f docker/Dockerfile .
 # Build for a sub-path deploy (e.g. https://company.com/my-svc/rca):
 #   docker build -t rca-app:rca --build-arg BASE_PATH=/my-svc/rca/ -f docker/Dockerfile .
-# Build the chat-video WORKER image (the app + Chromium + ffmpeg, +1.69 GB):
+# Build the chat-video WORKER image (the app + Chromium + ffmpeg, +1.63 GB):
 #   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
 #
 # Docker builds the LAST stage when no --target is given, so the last stage
@@ -92,7 +92,7 @@ CMD ["python", "-m", "workspace_app"]
 # ---- stage 3: the chat-video worker (plan-chat-video-export) ----
 # The same app, plus a headless Chromium and ffmpeg — the two tools a chat
 # video needs and nothing else in the platform does. Its own image so the
-# API pod (and every other worker) does not carry the 1.69 GB they add;
+# API pod (and every other worker) does not carry the 1.63 GB they add;
 # `kubernetes/base/workers.yaml` runs it as `rca-worker-chat-video`.
 #
 #   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
