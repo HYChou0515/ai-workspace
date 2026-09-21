@@ -103,7 +103,7 @@ export function HealthView({
           <div className="ev-health__filters">
             <label className="ev-health__filter">
               level{" "}
-              <select className="ev-select" aria-label="filter level" value={level} onChange={(e) => setLevel(e.target.value)}>
+              <select className="input ev-select" aria-label="filter level" value={level} onChange={(e) => setLevel(e.target.value)}>
                 <option value="">all</option>
                 <option value="error">error</option>
                 <option value="warning">warning</option>
@@ -111,7 +111,7 @@ export function HealthView({
             </label>
             <label className="ev-health__filter">
               type{" "}
-              <select className="ev-select" aria-label="filter type" value={type} onChange={(e) => setType(e.target.value)}>
+              <select className="input ev-select" aria-label="filter type" value={type} onChange={(e) => setType(e.target.value)}>
                 <option value="">all</option>
                 {types.map((t) => (
                   <option key={t} value={t}>
@@ -122,7 +122,7 @@ export function HealthView({
             </label>
             <label className="ev-health__filter">
               field{" "}
-              <select className="ev-select" aria-label="filter field" value={field} onChange={(e) => setField(e.target.value)}>
+              <select className="input ev-select" aria-label="filter field" value={field} onChange={(e) => setField(e.target.value)}>
                 <option value="">all</option>
                 {fields.map((f) => (
                   <option key={f} value={f}>

@@ -352,8 +352,9 @@ figures stay as `.export-dialog__field > input, … > select`),
 - **P3** `pages/` outside `kb/` + `pages/investigation/`.
 - **P4** `pages/kb/` + the `kb.css` scoped rules.
 - **P5** `renderers/entity/` + `entity-views.css` + `WuiView`; the guard goes
-  green; the scan's counts are checked against the table (A 32 · B 53 ·
-  C 11 · W 3).
+  green; every row of the table is checked against the swept tree (a script
+  walks each file's controls in base order and compares the assigned
+  treatment with the actual `className`: 126 rows, 0 mismatches).
 - **P6** Acceptance (below); anything it finds is fixed in P6 with a test
   that pins it.
 

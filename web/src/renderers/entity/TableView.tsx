@@ -210,7 +210,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
             <label key={f.name} className="ev-health__filter">
               {f.name}:{" "}
               <select
-                className="ev-select"
+                className="input ev-select"
                 aria-label={`batch ${f.name}`}
                 value=""
                 onChange={(e) => {
@@ -270,7 +270,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
                     <th key={c}>
                       {domain && (
                         <select
-                          className="ev-select"
+                          className="input ev-select"
                           aria-label={`filter ${c}`}
                           value={filters[c] ?? ""}
                           onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}

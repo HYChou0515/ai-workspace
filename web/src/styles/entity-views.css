@@ -220,23 +220,26 @@
 
 /* ── role widgets — the single edit-control skin (§B3) ───────────────────── */
 /* Every field control (table inline cell, board card, quick-create, file
- * editor) wears `.ev-field`. Default = token chrome (visible input). Inside a
- * table cell we strip the chrome at rest and reveal it on hover/focus so the
- * grid reads as data, not a wall of inputs. */
+ * editor) wears `input ev-field`: the chrome is the house `.input`'s (base.css,
+ * #829), this is the views' SIZE — 28px rows — plus a hover that darkens the
+ * border. Inside a table cell we strip the chrome at rest and reveal it on
+ * hover/focus so the grid reads as data, not a wall of inputs. */
 .ev-field {
+  /* The views lay their fields out by cell, not by flex share: a flex item's
+     default, not `.input`'s `flex: 1`. */
+  flex: 0 1 auto;
   height: 28px;
+  min-height: 28px;
   max-width: 100%;
   padding: 0 var(--space-8);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  color: var(--text-paper);
-  font-size: var(--text-body-sm);
   transition: border-color 0.12s, background 0.12s;
 }
 .ev-field:hover:not(:disabled) {
   border-color: var(--text-paper-d2);
 }
+/* A disabled cell is read-only data, not a forbidden action: dimmer than
+   `.input:disabled` and with the default cursor, or a read-only table shows
+   "not allowed" on every cell (#829 D9). */
 .ev-field:disabled {
   opacity: 0.6;
   cursor: default;
@@ -538,7 +541,10 @@
 }
 /* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
 .ev-table tbody .ev-field {
+  /* `min-height` too: `.ev-field`'s 28px min would otherwise beat this
+     height and grow every row by 2px. */
   height: 26px;
+  min-height: 26px;
   border-color: transparent;
   background: transparent;
 }
@@ -630,42 +636,31 @@
 .ev-menu__item:hover {
   background: var(--paper-2);
 }
-/* native selects in the filter row / batch bar wear the field chrome. */
-/* The time range shares the select's chrome rather than carrying a copy: they
- * are meant to read as the same control, and two rules that have to agree are
- * two rules that will drift. */
+/* native selects in the filter row / batch bar wear `input ev-select`; the
+ * chrome is `.input`'s, this is the views' size. The time range shares the
+ * rule rather than carrying a copy: they are meant to read as the same
+ * control, and two rules that have to agree are two rules that will drift. */
 .ev-select,
 .ev-viewpanel__range {
+  flex: 0 1 auto;
   height: 28px;
+  min-height: 28px;
   padding: 0 var(--space-8);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  color: var(--text-paper);
-  font-size: var(--text-body-sm);
 }
 /* ONE field, not three. Two bordered inputs with "to" between them are three
  * controls for one value, and at the panel's narrow end (224px) they did not
  * fit at any font size. Wrapping them was worse — a control that reflows as
- * you resize reads as broken. The border lives on the GROUP; the inputs inside
- * are bare, which is the shape every date-range control uses. */
+ * you resize reads as broken. The border lives on the GROUP — it is an
+ * `.input.input-group` — and the inputs inside are its bare slots
+ * (`.input-group__field`), which is the shape every date-range control uses. */
 .ev-viewpanel__range {
-  display: flex;
-  align-items: center;
   gap: var(--space-4);
   width: fit-content;
   max-width: 100%;
 }
 .ev-viewpanel__range input[type="time"] {
   flex: 0 1 auto;
-  min-width: 0;
-  height: auto;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
   font-family: var(--font-mono);
-  font-size: inherit;
 }
 /* The group says the FIELD has focus; the ring says WHICH END. The group alone
  * cannot: it holds two inputs, so tabbing from "day starts" to "day ends" left
@@ -677,9 +672,6 @@
   outline: none;
   box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 3px;
-}
-.ev-viewpanel__range:focus-within {
-  border-color: var(--accent);
 }
 .ev-viewpanel__range input[type="time"]::-webkit-calendar-picker-indicator {
   /* Two clock glyphs cost ~32px in a 224px panel and say nothing the field

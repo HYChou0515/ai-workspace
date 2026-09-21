@@ -1116,11 +1116,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
                     clipboard is unavailable (a non-secure context), so there is
                     one way to show the address, not two. */}
                 <input
+                  className="input"
                   aria-label="Page address"
                   readOnly
                   value={address}
                   onFocus={(e) => e.currentTarget.select()}
-                  style={{ flex: 1, minWidth: 0, font: "inherit", padding: "4px 6px" }}
+                  style={{ minHeight: 28, padding: "0 6px" }}
                 />
                 <Btn size="sm" onClick={() => void copyAddress()}>
                   {copied === "done" ? "Copied" : copied === "failed" ? "Copy failed — select it" : "Copy"}

@@ -73,7 +73,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
             </label>
             <select
               id="ev-groupby"
-              className="ev-select"
+              className="input ev-select"
               aria-label="group by"
               value={config.groupBy}
               onChange={(e) => config.onGroupBy(e.target.value)}
@@ -95,7 +95,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
             {config.sort.map((rule, i) => (
               <div key={`${rule.field}-${i}`} className="ev-viewpanel__tier">
                 <select
-                  className="ev-select"
+                  className="input ev-select"
                   aria-label={`sort field ${i + 1}`}
                   value={rule.field}
                   onChange={(e) => setTier(i, { field: e.target.value })}
@@ -220,8 +220,9 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                           label competing for width is what makes this panel
                           wrap in the first place. */}
                       <div className="ev-viewpanel__hint">Hours the chart draws each day</div>
-                      <div className="ev-viewpanel__range">
+                      <div className="input input-group ev-viewpanel__range">
                       <input
+                        className="input-group__field"
                         type="time"
                         aria-label="day starts"
                         value={clockText(config.workHours.from)}
@@ -231,6 +232,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                         –
                       </span>
                       <input
+                        className="input-group__field"
                         type="time"
                         aria-label="day ends"
                         value={clockText(config.workHours.to)}
@@ -248,7 +250,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
             <section className="ev-viewpanel__sec">
               <div className="ev-viewpanel__label">Colour</div>
               <select
-                className="ev-select"
+                className="input ev-select"
                 aria-label="colour by"
                 value={config.colorBy ?? ""}
                 onChange={(e) => config.onSetColorBy?.(e.target.value)}
@@ -276,7 +278,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                 Always show the week
               </label>
               <select
-                className="ev-select"
+                className="input ev-select"
                 aria-label="weekday format"
                 value={config.weekday ?? "number"}
                 onChange={(e) => config.onSetWeekday?.(e.target.value)}
@@ -285,7 +287,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                 <option value="short">Weekdays as Mon Tue</option>
               </select>
               <select
-                className="ev-select"
+                className="input ev-select"
                 aria-label="day of month"
                 value={config.dayOfMonth ?? "hidden"}
                 onChange={(e) => config.onSetDayOfMonth?.(e.target.value)}
@@ -304,7 +306,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
               </label>
               <select
                 id="ev-people"
-                className="ev-select"
+                className="input ev-select"
                 aria-label="people display"
                 value={config.assigneeDisplay ?? "avatar"}
                 onChange={(e) => config.onSetAssigneeDisplay?.(e.target.value)}
