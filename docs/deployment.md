@@ -530,7 +530,8 @@ RCA 的 system prompt 是純 markdown，存在
     `$PLAYWRIGHT_BROWSERS_PATH/ffmpeg-<rev>/ffmpeg-linux` 找自己那顆 ffmpeg,只查檔案在不在,系統的 ffmpeg 有 libvpx、
     錄 webm 的參數吃得下(`<rev>` 是 `playwright` 套件 `browsers.json` 裡 ffmpeg 的 revision,1.49 是 1010)。
     驗:`docker run --rm <image> python -m workspace_app.chat_video x.chat.json -o x.mp4 --chromium /usr/bin/chromium`
-    出得了檔就通(2026-09-21 在 python:3.12-slim = Debian 13 上驗過:Playwright 1.49 驅動 apt 的 Chromium 錄影 OK)。
+    出得了檔就通(2026-09-21 在 python:3.12-slim = Debian 13 上驗過:`uv sync --extra chat-video` + apt 的 Chromium 153,
+    這條指令出 h264 1280×720 的 mp4、中文有字)。
     另外兩件在 Debian 13(trixie;`python:3.12-slim` 這種會漂的 tag 現在就是它)上要知道的:`--with-deps` 在 Playwright 1.49
     只認 Debian 11 / 12,trixie 會落到 Ubuntu 的套件名而死在 `ttf-unifont` / `ttf-ubuntu-font-family`——相依自己用 apt 裝
     (`playwright install-deps chromium --dry-run` 印的清單,`ttf-unifont` → `fonts-unifont`、`ttf-ubuntu-font-family` 拿掉),
