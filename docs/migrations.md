@@ -830,6 +830,30 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ---
 
+### 2026-09-21 · #840 `server.run_consumers` 可以填清單；`${RUN_CONSUMERS}` 給的字串從此會被正確解析 {#pr-840}
+
+**設定**（純 opt-in 的部分不用動；但要知道一個**行為改變**）
+
+- 新形狀：`server.run_consumers: [index, card-gen, …]` = 只消費列出的 JobType（單機全包但跳過 `chat-video` 這種）。
+  `true` / `false` 照舊。名字對 worker CLI 那張表驗證，拼錯**開機就拒絕**。不改設定的部署，行為不變——**除了下面這條**。
+- **行為改變、沒有開關**：以前 loader 不做型別轉換，`run_consumers: ${RUN_CONSUMERS}` 配 configmap 的 `RUN_CONSUMERS: "false"`
+  到手的是**字串** `'false'`（truthy），所以照 `kubernetes/base/configmap.yaml` 註解接線的 API pod **一直在消費所有 JobType**，
+  不是文件說的純 producer。這版起 `"false"` 就是 `false`。**`rollout 前`確認 worker Deployment 真的在跑**
+  （base 的 `workers.yaml` 每種 JobType 一個；`kubectl get deploy | grep rca-worker-`）：worker 是冪等的 durable-queue 消費者，
+  和舊 API pod 並存是安全的，先起再滾。如果你們的 `config.yaml` 寫的是字面 `false`，這條對你們沒有影響。
+  漏做的症狀：rollout 後 help 文件停在 `indexing`、上傳的封存包一直 `pending`、blob GC 不再跑——API 的 log 會有一行
+  `NOT consumed on this process: …`（新版才有）點名沒人消費的 JobType。
+
+**資料** — 不動。**k8s · CI 側** — manifest 沒改；只有 configmap 的註解補了清單寫法。
+
+**確認做完**
+
+- `kubectl logs deploy/rca-app | grep 'run_consumers='` 印的是 `run_consumers=False`（不是 `run_consumers=false` 這種帶引號的字串形），
+  且沒有 `start index consumer` 之類的 boot step；`kubectl get deploy | grep -c rca-worker-` ≥ 2（`index` 與 `card-gen` 最少）。
+- 單機清單寫法：boot log 出現 `NOT consumed on this process: chat-video`（列你沒列的那幾種）。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
