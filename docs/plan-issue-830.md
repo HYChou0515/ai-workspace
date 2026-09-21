@@ -1,0 +1,89 @@
+# Plan — #830 沙盒大小的硬上限由 record 帶給前端
+
+issue #830（PR #825 review round 2 留下的「upper bounds not mirrored」）。issue 本身定了修法的四步；
+本文件記 grill 過的決定（2026-09-21）、程式碼事實、phase 與測試。
+
+## 背景
+
+沙盒 modal 的 CPU / 記憶體欄位在客端只擋「> 0 + 文法對」；伺服器另有硬上限
+`_MAX_CORES = 1024.0` / `_MAX_BYTES = 1 PiB`（`src/workspace_app/api/item_routes.py:147-148`），
+超過只在 PUT 後 422。同一個欄位對 `0` 打字當下就紅、對 `1025` 卻要送出才知道——兩種回饋節奏。
+
+issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前端不會跟，兩邊各自的單元測試永遠綠。
+
+## 程式碼事實（決定形狀的）
+
+- `_MAX_CORES` / `_MAX_BYTES` 只在 `_validated_resources()` 用到；`_within` 是 `0 < value <= ceiling`
+  （上限本身可以）。`_validated_resources()` 是純函式：吃 `_ResourcesBody`，回 `(cpu, memory)` 或 raise
+  `HTTPException(422)`；路由另外兩種拒絕（404 未知 app、409 執行中）跟「值收不收」無關。
+- GET `/a/{slug}/items/{id}/environment`（`_EnvironmentOut`）已經在講 `stated_* / effective_* /
+  enforced_* / *_bound_by`；硬上限是同一個故事的最後一句。`_EnvironmentOut` 只在那一個路由被建構。
+- 前端 `web/src/components/ItemEnvironmentSize.ts`：`isValidCpu(text)` / `isValidMemory(text)` 回 boolean；
+  `normaliseMemory(text)` 回伺服器拼法、`parseSize(wire)` 回位元組；`toSizeString(1024**5)` 印 `1024T`
+  （伺服器 `parse_size` 收的拼法；`formatBytes` 印的是 `1024.0 TB`，伺服器不收）。
+- panel 的 `invalid: {cpu: boolean, memory: boolean}` 只能畫一句文法 hint；輸入框只在
+  `enforced_* !== null` 時才畫（#825 規則）。
+- CI：backend job 只裝 `uv`、沒有 `node_modules`；frontend job 只裝 `pnpm`、沒有 `uv`（`.github/workflows/ci.yml`）。
+  本機 node v20 跑不了 TS。要伸出 `web/` 外的前端測試放 `web/tests/`（`tsconfig` 只編 `src`、docker 只
+  `COPY web/`；先例 `web/tests/shippedWuiExample.test.ts`）。
+- repo 裡沒有 Python 測試與前端測試共用同一份資料檔的先例。
+
+## 已拍板的決定（grill 2026-09-21）
+
+| # | 決定 | 內容 | 為什麼 |
+|---|---|---|---|
+| 1 | 伺服器 | `_EnvironmentOut` 加 `max_cpu_cores: float` / `max_memory_bytes: int`，請求當下讀 `_MAX_CORES` / `_MAX_BYTES` | issue 定的；同一個常數同時餵 GET 和 422 閘門 |
+| 2 | 前端規則的形狀 | `cpuFault(text, max)` / `memoryFault(text, max)` 回 `null \| { type: "unreadable" \| "over", detail: string }`；舊 boolean 函式刪掉 | 同一個欄位要能顯示兩句 hint，boolean 分不出是哪種錯；一次 parse、一個判準；user：「一般是 type 和 detail」 |
+| 3 | `detail` 裝資料 | `over` → 上限的伺服器拼法（cpu `"1024"`、記憶體 `"1024T"` = `toSizeString(max)`）；`unreadable` → 文法範例（cpu `"1 或 0.5"`、記憶體 `"512M、512MB 或 1.5G"`） | `ItemEnvironmentSize.ts` 是純函式沒有 locale；句子屬於 panel 的 `useT` |
+| 4 | hint | i18n 每欄兩個 key：`itemenv.field.{cpu,memory}.unreadable` / `.over`，各帶 `{detail}`；超上限顯示「最多 1024 核。」/「最多 1024T。」 | issue 規則 3：教伺服器收的拼法，不印 `1024.0 TB` |
+| 5 | Save | 任一欄位有 fault 就灰 | issue 定的 |
+| 6 | parity | 答案卷 `tests/fixtures/item_size_parity.json`：每列「打的字 → 前端會送的拼法 → 收/拒」+ 兩個上限。Python 測試逐列**直接呼叫 `_validated_resources()`** 改分（毫秒級；卷子的 max 對 `_MAX_*` 常數）；`web/tests/itemSizeParity.test.ts` 逐列驗 `cpuFault/memoryFault(typed, 卷上的 max)` 與 `normaliseMemory(typed) === sent` | 兩個 CI job 工具鏈不同，跑不到對方；卷子由伺服器改分、常數一動就紅；不開 app 所以不慢 |
+| 7 | 突變證明 | 伺服器：monkeypatch 常數 → GET 報的數字與 PUT 閘門一起動（路由級）；前端：假 record 上限 7 → 打 8 → hint 寫 7 | issue 4(b) 在 CI 上是組合證明：常數→GET、record→hint、常數→卷→前端判準 |
+| 8 | 缺欄位 | 不處理：wire type 必有 `number`，沒有 fallback | 前後端一起更新；user：「這題不重要，選最簡單的」 |
+
+## 不做的
+
+- 伺服器的上限值、`_within`、`parse_size`、422 訊息不動。
+- 不加 `<input type=number max>` 屬性（issue 沒要）。
+- 不重構 `normaliseMemory` / `parseSize`：比較位元組就用現有的 `parseSize(normaliseMemory(text))`。
+- 不記 `docs/migrations.md`（純新增回應欄位、無旋鈕、運營方不用動手）。
+- 不做跨語言 e2e（Playwright 不在 CI）。
+- 上一輪 review 抓到、#830 之前就有的兩條，不在這條 PR（要不要開票由 user 決定）：
+  真 Chromium 的 `<input type=number>` 對 `1e309` / `1e` 把 value 交成 `""`（`badInput`），前端當「用預設」
+  → Save 送 `cpu_cores: null` 靜默清掉設定值；阿拉伯-印度數字 `٥١٢M` 伺服器 `str.isdigit()` 收、前端拒。
+
+## Phases（flat integer，一個 commit 一個）
+
+- **P1 後端**：`_EnvironmentOut` 兩欄 + 路由填值。測試：`test_the_environment_reports_the_ceilings_the_put_refuses_against`
+  （monkeypatch `_MAX_CORES=7`、`_MAX_BYTES=3G` → GET 報 7 / 3G；PUT 7 → 200、7.5 → 422、3G → 200、3073M → 422）。
+- **P2 前端規則**：`cpuFault` / `memoryFault` `{type, detail}`；刪 `isValidCpu` / `isValidMemory`；
+  `ItemEnvironmentSize.test.ts` 改寫（每個舊案例保留、加上限案例、加「上限是 record 給的不是模組自己的」案例）。
+- **P3 前端 panel / modal / i18n**：`invalid` prop → `fault: {cpu, memory}`；hint 照 `type` 挑 key、`detail` 插值；
+  `canSave` 看 fault；mapper 加兩欄。測試：panel（over 案 hint 帶 record 的數字、unreadable 案帶文法）、
+  modal（record 上限 7：打 8 → 紅 + hint 7 + Save 灰；打 7 → 恢復；記憶體同）、api mapper。
+- **P4 答案卷**：`tests/fixtures/item_size_parity.json` + `tests/quota/test_item_size_parity.py`
+  （`_validated_resources()` 改分、對 `_MAX_*`、正控制：每維度兩種判決都有、至少一列「超上限」）
+  + `web/tests/itemSizeParity.test.ts`（逐列 fault、`Number(typed) === sent`、`normaliseMemory(typed) === sent`、
+  超上限列必須是 `over` 不是 `unreadable`）。卷上的 `sent` 由真前端程式碼導出，不心算。
+- **P5 review → CI**：push 後砍 CI；四鏡頭（conformance / veracity / defect / regression）各自 worktree 平行；
+  乾淨後 CI 對最終 sha。
+
+## 測試（先紅）
+
+每條新測試先在未修的程式碼上跑紅，再寫綠；每個「X 被 Y 釘住」的宣稱用檔案拷貝突變 X、看只有 Y 紅、還原。
+
+| 測試 | 未修時紅在哪 | 突變探針 |
+|---|---|---|
+| P1 路由級 | `KeyError: 'max_cpu_cores'` | 路由寫死 `1024.0` → `assert 1024.0 == 7.0` |
+| P2 size | `cpuFault is not a function` | `n <= max` 改 `n <= 1024` → 「上限是 record 給的」案例紅 |
+| P3 panel / modal | hint 沒有數字 / `isValidCpu` 不存在 | hint 寫死 `"1024"` → over 案例紅 |
+| P4 Python 卷 | — （改卷子的測試；證明會紅：翻一列判決 → 點名那列；`_MAX_CORES` 改 2048 → 紅在上限那行） | |
+| P4 前端卷 | `cpuFault` 不存在 | `over` 改回傳 `unreadable` → 正控制案例紅 |
+
+## 驗證（DoD）
+
+- targeted 測試 + `ruff check` / `ruff format --check` / `ty check` / `pnpm run typecheck`。
+- 真 Chromium 親自按：worktree build、config 要 `resources.per_app.default: {cpu: 2, memory: 512M}`
+  （只設 `per_user` 時 `enforced_*` 是 null，panel 畫「無法確認」沒有輸入框）+ `per_user`；打 `2048` /
+  `1024` / `0` / `1025T` / `2P` / `1024T` 六個狀態，讀回 `aria-invalid`、hint、Save。
+- PR body 末尾「在 prod 環境怎麼驗證」：curl GET 看兩個 key；modal 打 `2048` 看 hint；PUT 2048 仍 422；舊行為都在。
