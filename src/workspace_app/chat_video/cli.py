@@ -35,6 +35,7 @@ class Args(argparse.Namespace):
     html: Path | None
     files: Path | None
     options: VideoOptions
+    chromium: str
 
 
 def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[str, bytes]:
@@ -138,6 +139,13 @@ def parse_args(argv: list[str]) -> Args:
         default=d.max_assets_total_bytes,
         help="the page's whole budget for inlined images, first-fit in reading order",
     )
+    p.add_argument(
+        "--chromium",
+        default="",
+        metavar="PATH",
+        help="a Chromium binary to record with (e.g. /usr/bin/chromium from apt) instead of "
+        "the one `playwright install chromium` downloads; the worker's `chat_video.chromium_path`",
+    )
 
     ns = p.parse_args(argv, namespace=Args())
     ns.out = ns.out or ns.source.with_suffix(".gif")
@@ -214,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
                 options=ns.options,
                 workdir=Path(tmp),
                 assets=assets,
+                chromium_path=ns.chromium,
             )
     except RendererUnavailable as exc:
         print(str(exc), file=sys.stderr)

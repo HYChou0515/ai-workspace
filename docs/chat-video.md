@@ -32,6 +32,7 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `--fmt gif\|mp4\|webm` | — | 多寫一種格式(可重複);檔名跟 `-o` 同名換副檔名 |
 | `--html preview.html` | — | 只吐播放器頁面、不錄影;用瀏覽器開來看,改 JSON 再錄 |
 | `--files DIR` | — | workspace 資料夾:`show_file` / 畫圖工具秀出的檔案、回答裡 `![](路徑)` 的圖,從這裡讀進頁面(見下) |
+| `--chromium PATH` | — | 用這個 Chromium 錄影(例如 apt 裝的 `/usr/bin/chromium`),不用 `playwright install chromium` 抓的那顆;worker 的 `chat_video.chromium_path` 是同一個開關 |
 | `--width / --height` | 1280 / 720 | 輸出像素。**錄影就是 viewport**,不縮放 |
 | `--chat-width` | 760 | 聊天欄寬度(CSS px,放大前) |
 | `--scale` | 0 = 自動 | 整個 UI 的放大倍率;自動 = 畫面相對 1280×720、不小於 1(1080p 是 1.5、4K 是 3) |

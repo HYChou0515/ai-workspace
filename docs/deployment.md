@@ -518,6 +518,25 @@ RCA 的 system prompt 是純 markdown，存在
     `recording needs Playwright …`);要在單 pod 出影片,
     API 本身就要跑 `rca-app-chat-video`(它是 `rca-app` 的超集,serve 一樣)。
 
+    **斷網的 build(抓不到 Playwright 的 CDN)**:`playwright install chromium` 其實抓三個 zip——瀏覽器、
+    headless shell、還有它**錄影用的 ffmpeg**——都在 `playwright.azureedge.net`。抓不到就改用 Debian mirror 上的
+    Chromium,三步(在你們 fork 的 `chat-video` stage 裡取代 `playwright install --with-deps chromium`):
+    ```dockerfile
+    RUN apt-get update && apt-get install -y --no-install-recommends chromium ffmpeg fonts-noto-cjk \
+        && mkdir -p /ms-playwright/ffmpeg-1010 && ln -s /usr/bin/ffmpeg /ms-playwright/ffmpeg-1010/ffmpeg-linux
+    ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    ```
+    再在 configmap 設 `chat_video.chromium_path: /usr/bin/chromium`。symlink 是給 Playwright 的錄影器:它到
+    `$PLAYWRIGHT_BROWSERS_PATH/ffmpeg-<rev>/ffmpeg-linux` 找自己那顆 ffmpeg,只查檔案在不在,系統的 ffmpeg 有 libvpx、
+    錄 webm 的參數吃得下(`<rev>` 是 `playwright` 套件 `browsers.json` 裡 ffmpeg 的 revision,1.49 是 1010)。
+    驗:`docker run --rm <image> python -m workspace_app.chat_video x.chat.json -o x.mp4 --chromium /usr/bin/chromium`
+    出得了檔就通(2026-09-21 在 python:3.12-slim = Debian 13 上驗過:`uv sync --extra chat-video` + apt 的 Chromium 153,
+    這條指令出 h264 1280×720 的 mp4、中文有字)。
+    另外兩件在 Debian 13(trixie;`python:3.12-slim` 這種會漂的 tag 現在就是它)上要知道的:`--with-deps` 在 Playwright 1.49
+    只認 Debian 11 / 12,trixie 會落到 Ubuntu 的套件名而死在 `ttf-unifont` / `ttf-ubuntu-font-family`——相依自己用 apt 裝
+    (`playwright install-deps chromium --dry-run` 印的清單,`ttf-unifont` → `fonts-unifont`、`ttf-ubuntu-font-family` 拿掉),
+    或 base 釘 `-bookworm`。
+
     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
     worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。
   - **前提:共享後端**。in-memory 預設會讓每個 pod 各自一份 queue，worker 抓不到
