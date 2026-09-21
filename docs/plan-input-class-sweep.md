@@ -42,9 +42,9 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
   `.kb-field .input`, `.export-dialog__field > .input`,
   `.item-environment .env-field > .input` (all `width: 100%; flex: none`).
 - Three versions of the disabled look, one of `aria-invalid`.
-- The scoped rules that re-draw the chrome are what the guard's CSS check
-  lists on this base; the number is derived when P1 runs it, not written
-  here first.
+- 23 scoped rules (66 declarations) draw a control's chrome on this base —
+  the guard's CSS check, run with the plan's class list, lists exactly them
+  (the second table below).
 
 ## Decisions (grill-me, 2026-09-21; each against how MUI / Ant / Radix / shadcn / Bootstrap do it)
 
@@ -140,7 +140,7 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 - **D13 · Acceptance is three measurements, not one (Q13).** See
   "Acceptance" below.
 
-### Treatments (the rule each control gets; counts derived by the scan after the sweep)
+### Treatments (the rule each control gets; the per-control table below assigns them and carries the counts)
 
 | Treatment | Rule |
 |---|---|
@@ -163,6 +163,181 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
   `.kb-colpage__nameedit` / `__descedit`, FileTree's) drew an accent border
   themselves; `.input:focus` draws it now, and they commit on blur.
 
+## The table (derived from the base by a script over the guard's scan; counts come OUT of it)
+
+Of the 126: **27 already wear the class** (some change anyway: the two
+`input kb-textarea` drop the modifier, the controls under the three
+fill-the-width wrappers and ToolsChecklist's search gain `input--block` —
+P1 counts them as it edits them), **99 do not: A 32 · B 53 · C 11 · W 3**.
+
+| File · line | Element · label | Today | Treatment · target |
+|---|---|---|---|
+| `components/AskUserCard.tsx:334` | `<input>` “補充:${opt.label}” | shared style `noteInput` | **B** input inline-edit + inline flex:1, minWidth:80 — `noteInput` object deleted |
+| `components/AskUserCard.tsx:370` | `<input>` “自己回答” | shared style `noteInput` | **B** input inline-edit + inline flex:1, minWidth:80 — `noteInput` object deleted |
+| `components/CardDiffReview.tsx:228` | `<textarea>` “What should change?” | inline size only | **A** input input--block |
+| `components/ChatListRail.tsx:295` | `<input>` “Rename ${noun}” | class `chat-rail__rename` | **B** input input--block chat-rail__rename — `.chat-rail__rename` → min-height 30 + padding |
+| `components/CollectionsChecklist.tsx:53` | `<input>` “collections-search” | inline border | **A** input input--block |
+| `components/DomainField.tsx:35` | `<select>`  | class `inline-edit` | **B** input inline-edit |
+| `components/DomainField.tsx:55` | `<input>`  | class `inline-edit` | **B** input inline-edit |
+| `components/EnvVarsModal.tsx:278` | `<input>` “env-tool-search” | wears .input | **—** input input--block (+ inline mono font) |
+| `components/EnvVarsModal.tsx:386` | `<input>` “env-field-${field.name}” | inline border | **A** input input--block (+ inline mono font) |
+| `components/EnvVarsModal.tsx:443` | `<input>` “env-cred-${field.name}” | inline border | **A** input input--block (+ inline mono font) |
+| `components/EnvVarsModal.tsx:507` | `<textarea>` “env-text” | inline border | **A** input input--block (+ inline mono font) |
+| `components/ExportDialog.tsx:323` | `<input>` “export-latest-n” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:357` | `<select>` “export-${end}” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:435` | `<select>` “export-fmt” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:452` | `<select>` “export-aspect” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:500` | `<select>` “export-text-size” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:522` | `<input>` “export-width” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:539` | `<input>` “export-height” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:556` | `<select>` “export-custom-text” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/ExportDialog.tsx:607` | `<input>` “export-${key.replace(/_/g, "-"” | wears .input | **—** already `input` (#823); `export-dialog__field > .input` → `input--block` |
+| `components/GroupPicker.tsx:48` | `<input>`  | wears .input | **—** already `input` |
+| `components/ItemEnvironmentPanel.tsx:137` | `<input>` “cpu-input” | wears .input | **—** already `input`; `.env-field > .input` → `input--block` |
+| `components/ItemEnvironmentPanel.tsx:199` | `<input>` “memory-input” | wears .input | **—** already `input`; `.env-field > .input` → `input--block` |
+| `components/ItemForm.tsx:106` | `<input>` “+ add” | inline slot reset | **C** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
+| `components/ItemForm.tsx:217` | `<input>`  | spread of `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
+| `components/ItemForm.tsx:246` | `<input>`  | shared style `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
+| `components/ItemForm.tsx:286` | `<textarea>`  | spread of `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
+| `components/ItemShareDialog.tsx:241` | `<select>` “Role for ${g.userId}” | class `inline-edit` | **B** input inline-edit (marginLeft auto stays) |
+| `components/ItemShareDialog.tsx:323` | `<select>` “Role for ${groupName(g.groupId” | class `inline-edit` | **B** input inline-edit (marginLeft auto stays) |
+| `components/ItemShareManagers.tsx:66` | `<input>` “manager-add” | nothing | **A** input input--block |
+| `components/ManageChatsModal.tsx:82` | `<input>` “manage-rename-input-${id}” | class `manage-chats__rename` | **B** search: input input--block manage-chats__search; rename: input input--block inline-edit — `.manage-chats__search` → margin only; `.manage-chats__rename` deleted |
+| `components/ManageChatsModal.tsx:225` | `<input>` “Search chats” | class `manage-chats__search` | **B** search: input input--block manage-chats__search; rename: input input--block inline-edit — `.manage-chats__search` → margin only; `.manage-chats__rename` deleted |
+| `components/PermissionDialog.tsx:238` | `<select>` “role-${g.userId}” | class `inline-edit` | **B** input inline-edit |
+| `components/PermissionDialog.tsx:303` | `<select>` “group-role-${g.groupId}” | class `inline-edit` | **B** input inline-edit |
+| `components/SkillHubPickerModal.tsx:103` | `<input>`  | inline border | **A** input input--block |
+| `components/TodoPanel.tsx:209` | `<input>` “goal-input” | class `inline-edit` | **B** input inline-edit + inline flex:1 |
+| `components/TodoPanel.tsx:329` | `<input>` “todo-add-input” | class `inline-edit` | **B** input inline-edit + inline flex:1 |
+| `components/ToolsChecklist.tsx:121` | `<input>` “tools-search” | wears .input | **—** already `input`; its inline `flex:none; width:100%` → `input--block` |
+| `components/UserPicker.tsx:50` | `<input>`  | wears .input | **—** already `input` |
+| `components/WorkflowDecisionCard.tsx:97` | `<textarea>` “What should change?” | inline size only | **A** input input--block |
+| `pages/AppDashboard.tsx:570` | `<select>`  | inline size only | **A** input + inline height/minHeight 28, padding, flex:none; active → inline color/borderColor (D3) |
+| `pages/GroupsPage.tsx:153` | `<input>` “Search groups” | wears .input | **—** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
+| `pages/GroupsPage.tsx:364` | `<input>` “Group name” | class `inline-edit` | **B** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
+| `pages/GroupsPage.tsx:626` | `<input>` “Group name” | shared style `input` | **A** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
+| `pages/GroupsPage.tsx:635` | `<input>` “Group description” | shared style `input` | **A** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
+| `pages/MyResourcesPage.tsx:394` | `<input>` “q-count” | nothing | **B** input (rule `.page .admin-row input` keeps 28px, flex:none) |
+| `pages/MyResourcesPage.tsx:404` | `<input>` “q-cpu” | nothing | **B** input (rule `.page .admin-row input` keeps 28px, flex:none) |
+| `pages/MyResourcesPage.tsx:415` | `<input>` “8G” | nothing | **B** input (rule `.page .admin-row input` keeps 28px, flex:none) |
+| `pages/MyResourcesPage.tsx:424` | `<input>` “50G” | nothing | **B** input (rule `.page .admin-row input` keeps 28px, flex:none) |
+| `pages/SanityQuestions.tsx:98` | `<input>` “q-category” | shared style `field` | **A** input input--block — `field` object deleted |
+| `pages/SanityQuestions.tsx:105` | `<textarea>` “q-prompt” | shared style `field` | **A** input input--block — `field` object deleted |
+| `pages/SanityQuestions.tsx:113` | `<textarea>` “q-expected” | shared style `field` | **A** input input--block — `field` object deleted |
+| `pages/SanityTable.tsx:291` | `<select>` “category-filter” | inline border | **B** input inline-edit |
+| `pages/SkillHubPage.tsx:128` | `<input>`  | nothing | **B** input (rule `.page-tools > input[type=search]` keeps 32px, flex basis) |
+| `pages/WorkCalendarPage.tsx:106` | `<textarea>` “Calendar exceptions” | shared style `box` | **A** input input--block (+ inline mono font) — `box` object deleted |
+| `pages/WuiOverviewPage.tsx:210` | `<select>`  | nothing | **B** input (rules `.page-tools …` keep 32px; select flex:none) |
+| `pages/WuiOverviewPage.tsx:228` | `<input>`  | nothing | **B** input (rules `.page-tools …` keep 32px; select flex:none) |
+| `pages/WuiOverviewPage.tsx:237` | `<select>`  | nothing | **B** input (rules `.page-tools …` keep 32px; select flex:none) |
+| `pages/investigation/AgentPanel.tsx:1197` | `<textarea>`  | inline border | **A** input input--block (+ inline height from the seam, resize:none) |
+| `pages/investigation/CommandPalette.tsx:115` | `<input>` “Go to file…” | inline slot reset | **W** whitelist (D1) |
+| `pages/investigation/FileTree.tsx:600` | `<input>` “Filter files” | inline slot reset | **C** filter: box `input input-group` + `input-group__field`; rename: input (+ inline 22px, 12px) |
+| `pages/investigation/FileTree.tsx:995` | `<input>`  | inline border | **A** filter: box `input input-group` + `input-group__field`; rename: input (+ inline 22px, 12px) |
+| `pages/investigation/SearchPanel.tsx:137` | `<input>` “Search” | shared style `input` | **C** four rows: box `input input-group` (28px) + `input-group__field` — `fieldWrap` / `input` objects → size only |
+| `pages/investigation/SearchPanel.tsx:159` | `<input>` “Replace” | shared style `input` | **C** four rows: box `input input-group` (28px) + `input-group__field` — `fieldWrap` / `input` objects → size only |
+| `pages/investigation/SearchPanel.tsx:179` | `<input>` “files to include — e.g. *.md, ” | shared style `input` | **C** four rows: box `input input-group` (28px) + `input-group__field` — `fieldWrap` / `input` objects → size only |
+| `pages/investigation/SearchPanel.tsx:187` | `<input>` “files to exclude” | shared style `input` | **C** four rows: box `input input-group` (28px) + `input-group__field` — `fieldWrap` / `input` objects → size only |
+| `pages/investigation/TerminalPane.tsx:189` | `<input>` “terminal command” | inline slot reset | **W** whitelist (D1) |
+| `pages/kb/AttachmentBar.tsx:87` | `<input>` “rename ${name} to” | class `kb-att__rename` | **B** input kb-att__rename — `.kb-att__rename` → 28px, mono |
+| `pages/kb/AutoGenerateCards.tsx:131` | `<input>` “Search sources” | nothing | **B** input — `.kb-cardgen__pickbar input` deleted; dead `.kb-cardgen__proposal …` rule deleted (D12) |
+| `pages/kb/CodeConnectionEditor.tsx:65` | `<input>`  | wears .input | **—** already `input` |
+| `pages/kb/CodeConnectionEditor.tsx:69` | `<input>` “(default branch)” | wears .input | **—** already `input` |
+| `pages/kb/CodeConnectionEditor.tsx:78` | `<input>` “leave blank to keep the curren” | wears .input | **—** already `input` |
+| `pages/kb/ContextCardsTab.tsx:284` | `<input>` “Search cards” | class `kb-cards__search-input` | **B** search/title: input input--block kb-cards__…; term: input kb-cards__term — `.kb-cards__search-input` → 28px/12px; `.kb-cards__title` → type only; `.kb-cards__term` → flex/28px |
+| `pages/kb/ContextCardsTab.tsx:378` | `<input>` “Title” | class `kb-cards__title` | **B** search/title: input input--block kb-cards__…; term: input kb-cards__term — `.kb-cards__search-input` → 28px/12px; `.kb-cards__title` → type only; `.kb-cards__term` → flex/28px |
+| `pages/kb/ContextCardsTab.tsx:400` | `<input>` “Add a term” | class `kb-cards__term` | **B** search/title: input input--block kb-cards__…; term: input kb-cards__term — `.kb-cards__search-input` → 28px/12px; `.kb-cards__title` → type only; `.kb-cards__term` → flex/28px |
+| `pages/kb/GraphBrowsePage.tsx:89` | `<input>`  | class `gbr__search` | **B** input gbr__search / gbr__kind / gbr__collection — `.gbr__*` → flex shares only |
+| `pages/kb/GraphBrowsePage.tsx:96` | `<input>`  | class `gbr__kind` | **B** input gbr__search / gbr__kind / gbr__collection — `.gbr__*` → flex shares only |
+| `pages/kb/GraphBrowsePage.tsx:102` | `<select>`  | class `gbr__collection` | **B** input gbr__search / gbr__kind / gbr__collection — `.gbr__*` → flex shares only |
+| `pages/kb/KbChatPanel.tsx:356` | `<textarea>` “Ask the knowledge base…” | class `kb-composer__input` | **C** input-group__field kb-composer__input (box = `.kb-composer`, D7) — `.kb-composer__input` → width/resize/font-size |
+| `pages/kb/KbChatsPage.tsx:154` | `<input>` “Rename ${label}” | class `kb-chats__open kb-chats__rename` | **B** input kb-chats__rename — `.kb-chats__open, .kb-chats__rename { padding }` shared; `.kb-chats__rename` → weight only |
+| `pages/kb/KbCollectionPage.tsx:570` | `<input>`  | class `kb-colpage__nameedit` | **B** input kb-colpage__nameedit / kb-colpage__descedit — `.kb-colpage__nameedit` → type only; `textarea.kb-colpage__descedit` → measure only |
+| `pages/kb/KbCollectionPage.tsx:609` | `<textarea>` “Add a description…” | class `kb-colpage__descedit` | **B** input kb-colpage__nameedit / kb-colpage__descedit — `.kb-colpage__nameedit` → type only; `textarea.kb-colpage__descedit` → measure only |
+| `pages/kb/KbCollectionsGrid.tsx:172` | `<input>` “Filter collections…” | nothing | **C** box `input input-group kb-docsearch` + `input-group__field` — `.kb-docsearch` → padding/margin; `.kb-docsearch input` deleted |
+| `pages/kb/NewCollectionModal.tsx:198` | `<input>` “https://github.com/owner/repo.” | wears .input | **—** already `input`; `kb-textarea` dropped (D5); `.kb-field .input` → `input--block` |
+| `pages/kb/NewCollectionModal.tsx:216` | `<input>` “New collection name…” | wears .input | **—** already `input`; `kb-textarea` dropped (D5); `.kb-field .input` → `input--block` |
+| `pages/kb/NewCollectionModal.tsx:227` | `<textarea>` “What lives in this collection?” | wears .input | **—** already `input`; `kb-textarea` dropped (D5); `.kb-field .input` → `input--block` |
+| `pages/kb/NewCollectionModal.tsx:250` | `<input>` “(default branch)” | wears .input | **—** already `input`; `kb-textarea` dropped (D5); `.kb-field .input` → `input--block` |
+| `pages/kb/NewCollectionModal.tsx:259` | `<input>` “for a private repo” | wears .input | **—** already `input`; `kb-textarea` dropped (D5); `.kb-field .input` → `input--block` |
+| `pages/kb/QualityRubricEditor.tsx:67` | `<textarea>`  | inline border | **A** input input--block (+ minHeight) |
+| `pages/kb/ReviewDrawer.tsx:119` | `<input>`  | nothing | **A** title/body/answer: input input--block; add-key: input rvw-drawer__addkey — `.rvw-drawer__field input, textarea, .rvw-drawer__answer` deleted; `.rvw-drawer__addkey` → 24px/xs |
+| `pages/kb/ReviewDrawer.tsx:127` | `<textarea>`  | nothing | **A** title/body/answer: input input--block; add-key: input rvw-drawer__addkey — `.rvw-drawer__field input, textarea, .rvw-drawer__answer` deleted; `.rvw-drawer__addkey` → 24px/xs |
+| `pages/kb/ReviewDrawer.tsx:148` | `<input>`  | class `rvw-drawer__addkey` | **B** title/body/answer: input input--block; add-key: input rvw-drawer__addkey — `.rvw-drawer__field input, textarea, .rvw-drawer__answer` deleted; `.rvw-drawer__addkey` → 24px/xs |
+| `pages/kb/ReviewDrawer.tsx:263` | `<textarea>`  | class `rvw-drawer__answer` | **A** title/body/answer: input input--block; add-key: input rvw-drawer__addkey — `.rvw-drawer__field input, textarea, .rvw-drawer__answer` deleted; `.rvw-drawer__addkey` → 24px/xs |
+| `pages/kb/ReviewPage.tsx:140` | `<input>`  | nothing | **C** search: box `input input-group rvw__search` + slot; selects: input (34px, D3) — `.rvw__search` → flex/gap; `.rvw__search input` deleted; `.rvw__toolbar > select { flex:none }` |
+| `pages/kb/ReviewPage.tsx:149` | `<select>`  | class `inline-edit` | **A** search: box `input input-group rvw__search` + slot; selects: input (34px, D3) — `.rvw__search` → flex/gap; `.rvw__search input` deleted; `.rvw__toolbar > select { flex:none }` |
+| `pages/kb/ReviewPage.tsx:163` | `<select>`  | class `inline-edit` | **A** search: box `input input-group rvw__search` + slot; selects: input (34px, D3) — `.rvw__search` → flex/gap; `.rvw__search input` deleted; `.rvw__toolbar > select { flex:none }` |
+| `pages/kb/ReviewPage.tsx:178` | `<select>`  | class `inline-edit` | **A** search: box `input input-group rvw__search` + slot; selects: input (34px, D3) — `.rvw__search` → flex/gap; `.rvw__search input` deleted; `.rvw__toolbar > select { flex:none }` |
+| `pages/kb/TuneParsingModal.tsx:190` | `<input>`  | shared style `inputStyle` | **A** input input--block — `inputStyle` object deleted |
+| `pages/kb/TuneParsingModal.tsx:247` | `<textarea>`  | spread of `inputStyle` | **A** input input--block — `inputStyle` object deleted |
+| `pages/kb/WikiBrowser.tsx:149` | `<textarea>` “e.g. Group pages by reflow zon” | shared style `ta` | **A** input input--block — `ta` object deleted |
+| `pages/kb/WikiBrowser.tsx:161` | `<textarea>` “e.g. Lead with a one-line summ” | shared style `ta` | **A** input input--block — `ta` object deleted |
+| `pages/kb/WikiCorrectionDialog.tsx:181` | `<input>`  | wears .input | **—** already `input`; `kb-textarea` dropped (D5) |
+| `pages/kb/WikiCorrectionDialog.tsx:199` | `<textarea>`  | wears .input | **—** already `input`; `kb-textarea` dropped (D5) |
+| `pages/kb/WikiCorrectionDialog.tsx:210` | `<input>`  | wears .input | **—** already `input`; `kb-textarea` dropped (D5) |
+| `renderers/SheetGrid.tsx:239` | `<input>`  | class `sheet-cell` | **W** whitelist (D1) |
+| `renderers/entity/HealthView.tsx:106` | `<select>` “filter level” | class `ev-select` | **B** input ev-select — `.ev-select, .ev-viewpanel__range` → 28px, flex 0 1 auto |
+| `renderers/entity/HealthView.tsx:114` | `<select>` “filter type” | class `ev-select` | **B** input ev-select — `.ev-select, .ev-viewpanel__range` → 28px, flex 0 1 auto |
+| `renderers/entity/HealthView.tsx:125` | `<select>` “filter field” | class `ev-select` | **B** input ev-select — `.ev-select, .ev-viewpanel__range` → 28px, flex 0 1 auto |
+| `renderers/entity/TableView.tsx:212` | `<select>` “batch ${f.name}” | class `ev-select` | **B** input ev-select |
+| `renderers/entity/TableView.tsx:272` | `<select>` “filter ${c}” | class `ev-select` | **B** input ev-select |
+| `renderers/entity/ViewSettingsPanel.tsx:74` | `<select>` “group by” | class `ev-select` | **B** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:97` | `<select>` “sort field ${i + 1}” | class `ev-select` | **B** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:224` | `<input>` “day starts” | nothing | **C** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:233` | `<input>` “day ends” | nothing | **C** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:250` | `<select>` “colour by” | class `ev-select` | **B** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:278` | `<select>` “weekday format” | class `ev-select` | **B** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:287` | `<select>` “day of month” | class `ev-select` | **B** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/ViewSettingsPanel.tsx:305` | `<select>` “people display” | class `ev-select` | **B** selects: input ev-select; range: box `input input-group ev-viewpanel__range` + two `input-group__field` — `.ev-viewpanel__range input[type=time]` → flex/mono only |
+| `renderers/entity/roleWidget.tsx:80` | `<select>`  | class from a prop | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/entity/roleWidget.tsx:120` | `<select>`  | class from a prop | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/entity/roleWidget.tsx:185` | `<input>` “${name} start” | class from a prop | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/entity/roleWidget.tsx:196` | `<input>` “${name} end” | class from a prop | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/entity/roleWidget.tsx:234` | `<select>`  | class from a prop | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/entity/roleWidget.tsx:302` | `<input>`  | class `ev-field` | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/entity/roleWidget.tsx:356` | `<input>`  | class `ev-field` | **B** input ev-field (literal; `className` prop removed, D11) — `.ev-field` → 28px, flex 0 1 auto, hover; `.ev-field:disabled` kept (D9); tbody rule gains min-height 26 |
+| `renderers/wui/WuiView.tsx:1118` | `<input>` “Page address” | inline size only | **A** input (+ inline 28px) |
+
+### Scoped rules that draw a control's chrome on the base (23 rules, 66 declarations — the guard's CSS check lists exactly these), and what each keeps
+
+| Sheet | Rule (base) | Chrome it draws today | After |
+|---|---|---|---|
+| `base.css` | `.inline-edit` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `flex: none; height: 26px; min-height: 26px; padding: 0 8px` (D3, D4) |
+| `chat-rail.css` | `.chat-rail__rename` | border: 1px solid var(--accent); border-radius: var(--radius-card); background: var(--white) | → `min-height: 30px; padding: 0 var(--space-8)` (autofocused; `.input:focus` draws the accent) |
+| `entity-views.css` | `.ev-field` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `flex: 0 1 auto; height: 28px; min-height: 28px; max-width; padding; transition`; `:hover` border-color and `:disabled` stay (D9); tbody rule gains `min-height: 26px` |
+| `entity-views.css` | `.ev-select, .ev-viewpanel__range` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `flex: 0 1 auto; height: 28px; min-height: 28px; padding` (the range is also an `.input-group` box) |
+| `item-environment.css` | `.item-environment .input[aria-invalid="true"]` | border-color: var(--err) | → hoisted to base.css as `.input[aria-invalid="true"]` (D8); the sheet keeps the note's colour only |
+| `kb.css` | `.kb-colpage__nameedit` | border: 1px solid var(--accent); border-radius: 6px; background: var(--white) | → display type + padding only |
+| `kb.css` | `.kb-colpage__descedit` | border: 1px solid var(--accent); border-radius: 6px; background: var(--white) | → `textarea.kb-colpage__descedit`: margin / width / max-width / padding only |
+| `kb.css` | `.kb-docsearch` | background: var(--white); border: 1px solid var(--paper-3); border-radius: var(--radius-btn) | → `padding: 0 12px; margin-bottom: 12px` (the box wears `input input-group`); `.kb-docsearch input` deleted (slot) |
+| `kb.css` | `.kb-cards__search-input` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → `min-height: 28px; padding: 0 6px; font-size: 0.75rem` |
+| `kb.css` | `.kb-cards__title` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → `font-size: 0.9375rem; font-weight: 600` |
+| `kb.css` | `.kb-cards__term` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → `flex: 1 1 120px; min-width: 120px; min-height: 28px; padding: 0 8px` |
+| `kb.css` | `.kb-cardgen__body > input, .kb-cardgen__todo, .kb-cardgen__proposal textarea, .kb-cardgen__proposal input` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → deleted (dead: no tsx uses these classes) (D12) |
+| `kb.css` | `.kb-cardgen__pickbar input` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → deleted (the input wears `input`) |
+| `kb.css` | `.rvw__search` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `gap: 6px; flex: 1 1 220px; min-width: 160px` (the box wears `input input-group`); `.rvw__search input` deleted (slot); `.rvw__toolbar > select { flex: none }` added |
+| `kb.css` | `.rvw-drawer__field input, .rvw-drawer__field textarea, .rvw-drawer__answer` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → deleted (all wear `input input--block`); its `:disabled` pair → base.css (D9) |
+| `kb.css` | `.rvw-drawer__addkey` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → `flex: 1 1 100px; min-width: 100px; min-height: 24px; padding: 0 8px; font-size: var(--text-xs)` |
+| `kb.css` | `.kb-att__rename` | border: 1px solid var(--accent); border-radius: var(--radius-btn); background: var(--paper) | → `min-height: 28px; padding: 0 8px; font-family: mono; font-size: small` |
+| `kb.css` | `.gbr__search, .gbr__kind, .gbr__collection` | border: 1px solid var(--paper-3); border-radius: var(--radius-chip); background: var(--white) | → flex shares only (`.gbr__search { flex: 2 1 240px }` …) |
+| `my-resources.css` | `.page > .page-tools > input[type="search"]` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `flex: 1 1 200px; height: 32px; min-height: 32px; padding; font-size: small` |
+| `my-resources.css` | `.page > .page-tools select` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `flex: none; height: 32px; min-height: 32px; padding; font-size: small` |
+| `my-resources.css` | `.page .admin-row input` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper) | → `flex: none; height: 28px; min-height: 28px; padding: 0 8px` |
+| `topic-hub.css` | `.manage-chats__search` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white) | → `margin: 12px 0` |
+| `topic-hub.css` | `.manage-chats__rename` | border: 1px solid var(--paper-3); border-radius: var(--radius-btn) | → deleted (wears `input input--block inline-edit`) |
+
+Slot resets replaced by `.input-group__field` (base.css): `.kb-docsearch input`,
+`.rvw__search input`, `.ev-viewpanel__range input[type="time"]`'s border /
+background / padding (its mono type and per-end focus ring stay),
+`.kb-composer__input`'s border / background / outline (its width / resize /
+font-size stay), and the inline resets on `SearchPanel`'s `input` object,
+`FileTree`'s filter and `ItemForm`'s tag input.
+
+Fill-the-width copies replaced by `.input--block` (D6): `.kb-field .input`
+(12 controls), `.export-dialog__field > .input` (10, keeps its
+`font-variant-numeric`), `.item-environment .env-field > .input` (1, same).
+
 ## Phases (one commit each; flat numbers; the guard is RED from P1 until the last conversion)
 
 - **P1** `base.css`: `textarea.input`, `.input--block`, `.input-group` +
@@ -175,7 +350,8 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 - **P3** `pages/` outside `kb/` + `pages/investigation/`.
 - **P4** `pages/kb/` + the `kb.css` scoped rules.
 - **P5** `renderers/entity/` + `entity-views.css` + `WuiView`; the guard goes
-  green; the treatment counts are derived and written here.
+  green; the scan's counts are checked against the table (A 32 · B 53 ·
+  C 11 · W 3).
 - **P6** Acceptance (below); anything it finds is fixed in P6 with a test
   that pins it.
 
