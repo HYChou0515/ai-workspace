@@ -205,6 +205,11 @@ def _collect_operator_sources(raw: Any, prefix: str, out: dict[str, Source]) -> 
         for k, v in raw.items():
             _collect_operator_sources(v, _join(prefix, str(k)), out)
     elif isinstance(raw, list):
+        # An empty list is a leaf the operator wrote (`superusers: []`,
+        # `run_consumers: []`); with nothing to walk it recorded no source
+        # and the dump labelled it `default`.
+        if not raw:
+            out[prefix] = Source(SOURCE_CONFIG)
         for i, v in enumerate(raw):
             _collect_operator_sources(v, f"{prefix}[{i}]", out)
     elif isinstance(raw, str) and has_env_reference(raw):
@@ -230,7 +235,20 @@ def _assign_settings_sources(
         for i, v in enumerate(node):
             _assign_settings_sources(v, f"{prefix}[{i}]", op_sources, out)
     else:
-        out[prefix] = op_sources.get(prefix, Source(SOURCE_DEFAULT))
+        out[prefix] = op_sources.get(prefix) or _parent_list_source(prefix, op_sources)
+
+
+def _parent_list_source(prefix: str, op_sources: dict[str, Source]) -> Source:
+    """The source for a list element the operator did not write as an
+    element: `server.run_consumers: ${RUN_CONSUMERS}` is ONE env scalar that
+    `consumer_selection` turns into a list, so `server.run_consumers[0]` has
+    no operator path of its own — it takes the scalar's. Anything else is a
+    bundled default."""
+    if prefix.endswith("]"):
+        parent = prefix[: prefix.rfind("[")]
+        if parent in op_sources:
+            return op_sources[parent]
+    return Source(SOURCE_DEFAULT)
 
 
 def _flatten_bundled_sub_agents(bundled: dict[str, Any]) -> None:
@@ -350,6 +368,11 @@ def consumer_selection(raw: object, *, source: str = "config") -> bool | list[st
                 f"separated by commas (valid: {valid})"
             )
         names: list[object] = [part.strip() for part in text.split(",") if part.strip()]
+        if not names:  # `","` — separators and nothing between them
+            raise ValueError(
+                f"{field}: no JobType names in {raw!r} ({source}) — write true, false, "
+                f"or names separated by commas (valid: {valid})"
+            )
     elif isinstance(raw, list):
         names = list(raw)
     else:
@@ -363,7 +386,10 @@ def consumer_selection(raw: object, *, source: str = "config") -> bool | list[st
                 f"{field}: JobType names are strings, got {name!r} ({source}); valid: {valid}"
             )
         if name not in _JOBTYPE_ATTR:
-            raise ValueError(f"{field}: unknown JobType {name!r} ({source}) — valid: {valid}")
+            raise ValueError(
+                f"{field}: unknown JobType {name!r} ({source}) — valid: {valid}; "
+                f"or true / false for all / none"
+            )
     return [n for n in names if isinstance(n, str)]
 
 

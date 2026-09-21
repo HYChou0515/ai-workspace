@@ -450,8 +450,12 @@ message_queue:
 - `false` = API 純 producer（仍註冊 + enqueue，只是不消化），另跑 worker pod 各消化一個 JobType（見 [§5-C](#c-多-podk8s)）。
 - `[index, card-gen, …]` = **只消費列出的 JobType**，其餘留在 queue 給 worker（或永遠不跑）。單機想要「全部，但 `chat-video` 除外」
   就是這種寫法。名字對 `python -m workspace_app.worker` 那張表驗證（`index` / `wiki` / `card-gen` / `sanity` / `eval` /
-  `graph` / `kb-import` / `blob-gc` / `chat-video`）——拼錯**開機就拒絕**並列出合法名；沒列到的那幾種，開機 log 會有一行
-  `NOT consumed on this process: …`，這是 job 一直 `pending` 時唯一會說出原因的地方。
+  `graph` / `kb-import` / `blob-gc` / `chat-video`）——拼錯**開機就拒絕**並列出合法名。沒列到的那幾種，開機 stdout 上
+  `→ start index consumer …` 那幾步之後會有一行 `⚠ consumers: NOT consumed on this process: chat-video, graph, … (their jobs
+  stay pending until a worker takes them)`（名字排序），這是 job 一直 `pending` 時唯一會說出原因的地方。列了但這個部署
+  沒接線的（例如沒設 KB LLM 就沒有 `graph`）另有一行 `⚠ consumers: listed in run_consumers but not wired on this
+  deployment: graph (nothing to start)`。只有這三種形狀：YAML 的 `null`（含 `run_consumers:` 空值）/ `0` / `1` / ``，
+  和環境變數給的任何不是 `true` / `false` / JobType 名的字串（`no`、`0`、`,`），一律開機拒絕並印出合法寫法。
 - 用環境變數給（`run_consumers: ${RUN_CONSUMERS}`）三種都吃：`true` / `false`（不分大小寫）/ `index,card-gen`（逗號分隔）。
   ⚠️ 在這版之前，`${RUN_CONSUMERS}` 給 `"false"` 到手的是**字串** `'false'`——truthy——所以「純 producer」的 API 其實在消費所有 job；
   這版起字串會被正確解析（[migrations.md#pr-840](migrations.md#pr-840)）。

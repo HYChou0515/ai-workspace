@@ -841,16 +841,25 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   不是文件說的純 producer。這版起 `"false"` 就是 `false`。**`rollout 前`確認 worker Deployment 真的在跑**
   （base 的 `workers.yaml` 每種 JobType 一個；`kubectl get deploy | grep rca-worker-`）：worker 是冪等的 durable-queue 消費者，
   和舊 API pod 並存是安全的，先起再滾。如果你們的 `config.yaml` 寫的是字面 `false`，這條對你們沒有影響。
-  漏做的症狀：rollout 後 help 文件停在 `indexing`、上傳的封存包一直 `pending`、blob GC 不再跑——API 的 log 會有一行
-  `NOT consumed on this process: …`（新版才有）點名沒人消費的 JobType。
+  漏做的症狀（哪種 job 沒 worker 就出哪種）：help 文件停在 `indexing`（`index`）、wiki 不再更新（`wiki`）、
+  上傳的封存包一直 `pending`（`kb-import`）、blob GC 不再跑（`blob-gc`）、聊天影片匯出停在排隊（`chat-video`）。
+  新版 API 的 stdout 會有一行 `⚠ consumers: NOT consumed on this process: …` 點名沒人消費的 JobType。
+- **從「靜默接受」變「拒絕開機」**：YAML 的 `run_consumers:`（空值 / `null`）、`0` / `1`、`""`，和 `${RUN_CONSUMERS}` 給的
+  `no` / `0` / `1` / `,` 以前都被吞掉（`null` 和 `0` 是 falsy → 純 producer；`1` → 全消費；env 給的字串一律 truthy → 全消費），
+  這版起開機拒絕。`rollout 前` 看一眼你們的 `config.yaml` 這個 key 是不是上面三種形狀之一（YAML 的 `yes` / `no` / `on` / `off`
+  是 PyYAML 布林，照常算 true / false）；漏做的症狀：新 pod CrashLoop，log 最後一行是
+  `ValueError: server.run_consumers: …`（load 在印 `config:` 之前就跑，所以 traceback 前面什麼都沒有）。
 
-**資料** — 不動。**k8s · CI 側** — manifest 沒改；只有 configmap 的註解補了清單寫法。
+**資料** — 不動。**k8s · CI 側** — manifest 沒改；configmap 的註解補了清單寫法，並把示範改成 block form
+（原本的 `server: { run_consumers: ${RUN_CONSUMERS} }` 是 YAML parse error，照抄的 pod 從來起不來）。
 
 **確認做完**
 
-- `kubectl logs deploy/rca-app | grep 'run_consumers='` 印的是 `run_consumers=False`（不是 `run_consumers=false` 這種帶引號的字串形），
-  且沒有 `start index consumer` 之類的 boot step；`kubectl get deploy | grep -c rca-worker-` ≥ 2（`index` 與 `card-gen` 最少）。
-- 單機清單寫法：boot log 出現 `NOT consumed on this process: chat-video`（列你沒列的那幾種）。
+- 純 producer：`kubectl logs deploy/rca-app | grep 'run_consumers:'` 印的是 `run_consumers: false  # ← env`（舊版是帶引號的
+  `run_consumers: "false"  # ← env`——引號就是字串沒被解析的證據），且 log 裡沒有任何 `→ start … consumer …` 這種 boot step。
+  worker 那邊：`kubectl get deploy | grep rca-worker-` 列出你要的每一種（base 的 `workers.yaml` 九種都有）。
+- 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
+  （你沒列的那幾種，排序）。
 
 ---
 

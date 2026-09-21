@@ -465,7 +465,7 @@ RCA 的 system prompt 是純 markdown，存在
 
   - **API 設 `server.run_consumers: false`** ⇒ API 變**純 producer**：照常服務 HTTP
     + `enqueue`，但不消費任何 queue。（第三種形狀：`run_consumers: [index, card-gen]` 只消費列出的
-    JobType——單機想跳過 `chat-video` 這種有額外依賴的就這樣寫；沒列的開機 log 會點名。見
+    JobType——單機想跳過 `chat-video` 這種有額外依賴的就這樣寫；沒列的開機 stdout 會有一行 `⚠ consumers:` 點名。見
     [configuration.md §8](configuration.md#8-訊息佇列message-queue)。）
   - 每個 JobType 各跑一個 **worker 進程**，block-consume 自己那一種:
 

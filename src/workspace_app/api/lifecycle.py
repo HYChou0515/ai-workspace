@@ -547,15 +547,25 @@ def build_lifespan(
         # drain loop below had its own hand-written list that had already
         # drifted (`kb_import` was missing from it). What is NOT consumed is
         # said out loud: a `pending` job looks to its caller exactly like a
-        # queue that never moves, and this line is the only place that says
-        # why. An unwired coordinator (`None`) is neither started nor named —
-        # it is not a choice the operator made.
+        # queue that never moves, and this is the only place that says why.
+        # PRINTED, like the resources warning above and the `boot_step` lines:
+        # this app configures Python logging nowhere (`perf_trace.py` records
+        # the trap), so a `logger.info` here reaches no real pod's log — the
+        # first version of this line was exactly that, and the review found
+        # it by booting the image. The logger line stays for anyone who does
+        # wire a handler. An unwired coordinator (`None`) is not a choice the
+        # operator made, so it is neither started nor counted as "not
+        # consumed" — but one they LISTED and this deployment has not wired
+        # is said too, or the list silently names nothing.
         selected = consumer_set(run_consumers)
         logger.info("lifespan: run_consumers=%s", run_consumers)
         skipped: list[str] = []
+        unwired: list[str] = []
         for jobtype, attr in _JOBTYPE_ATTR.items():
             coordinator = getattr(app.state, f"{attr}_coordinator", None)
             if coordinator is None:
+                if jobtype in selected and run_consumers is not True:
+                    unwired.append(jobtype)
                 continue
             if jobtype not in selected:
                 skipped.append(jobtype)
@@ -565,11 +575,19 @@ def build_lifespan(
             with boot_step(f"start {jobtype} consumer"):
                 coordinator.start_consuming()
         if skipped:
-            logger.info(
-                "lifespan: NOT consumed on this process: %s (their jobs stay pending "
-                "until a worker takes them)",
-                ", ".join(skipped),
+            sentence = (
+                f"NOT consumed on this process: {', '.join(sorted(skipped))} "
+                "(their jobs stay pending until a worker takes them)"
             )
+            print(f"  ⚠ consumers: {sentence}", flush=True)
+            logger.info("lifespan: %s", sentence)
+        if unwired:
+            sentence = (
+                f"listed in run_consumers but not wired on this deployment: "
+                f"{', '.join(sorted(unwired))} (nothing to start)"
+            )
+            print(f"  ⚠ consumers: {sentence}", flush=True)
+            logger.info("lifespan: %s", sentence)
         # #230: seed the platform Help collection from packaged content (repo =
         # source of truth; identical bytes are a no-op). The STORE runs here (off
         # the loop, best-effort — a dead backend leaves the collection
