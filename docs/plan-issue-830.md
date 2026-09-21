@@ -89,7 +89,7 @@ issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前
 | P1 `ef902719` | `KeyError: 'max_cpu_cores'` | route 寫死 `max_cpu_cores=1024.0` → 只有這條紅，`assert 1024.0 == 7.0` |
 | P2 `0f076105` | `cpuFault is not a function` ×2、`memoryFault` ×2 | 兩個比較改成模組常數、detail 寫死 → 只有兩條「上限是 record 給的」紅 |
 | P3 `0c02565b` | mapper `expected undefined to be 7`；panel 兩條；modal 整檔（還 import 舊名） | panel 的 cpu hint `detail` 寫死 `"1024"` → 4 條紅（panel 兩條 hint、modal record-7、modal over/unreadable） |
-| P4 `cab0ecc6` | —（改卷子的測試） | 翻 `1025` 為 accepted → `cpu '1025': server says False`；`_MAX_CORES` 改 2048 → `stale sheet … assert 1024 == 2048.0`；前端 `over` 改回 `unreadable` → `itemSizeParity.test.ts` 裡只有正控制那條紅（整組跑另有 Size 檔兩條） |
+| P4 `cab0ecc6` | —（改卷子的測試） | 翻 `1025` 為 accepted → `cpu '1025': server says False`；`_MAX_CORES` 改 2048 → `stale sheet … assert 1024 == 2048.0`；前端 `over` 改回 `unreadable` → `itemSizeParity.test.ts` 裡只有正控制那條紅（整組跑另有 Size 檔兩條；P5 之後 modal 的句子釘子也抓到，整組 5 條） |
 
 兩個 plan 沒寫到的細節：`detail` 是資料、不能含「或」這種 locale 字，範例用 ` / ` 接
 （`"1 / 0.5"`、`"512M / 512MB / 1.5G"`），「例如 {detail}」留在 i18n；`toSizeString` 多了兩個 overload 簽名
@@ -126,14 +126,22 @@ cpu input 沒有 `max` 屬性（「不做的」）。存 `2` / `1024T` → recor
 - **Conformance**：none。它另外做了字面的 4(b)：伺服器 `_MAX_CORES=2048` 的真 GET body 餵真 modal →
   「最多 2048 核。」。備註：`toSizeString` overload 沒寫進 plan（型別、已補上一段）。
 - **Defect**：none。55 個 cpu 文字 + 78 個記憶體文字，前端 vs 真路由（含 pydantic JSON 解析）vs `_validated_resources()`
-  直呼三方零分歧；真 Chromium 逐字打進 `<input type=number>` 能產生的每個字串都在探針裡。備註（非缺陷）：22 位以上
-  無單位的天文數字 `normaliseMemory` 回非 wire 字串，hint 說「文法」而不是「上限」，Save 照灰、伺服器照 422。
+  直呼三方零分歧；真 Chromium 逐字打進 `<input type=number>` 能產生的每個字串都在探針裡。備註（非缺陷）：天文數字
+  （無單位 34 位以上，或 22 位帶 `T`）`normaliseMemory` 回非 wire 字串（指數記法），hint 說「文法」而不是「上限」，
+  Save 照灰、伺服器照 422。
 - **Regression**：LOW — 新 bundle 打到舊 pod（ingress 依 item id 雜湊、`staleTime` 30 秒）時 hint 印「最多 undefined 核。」、
   Save 灰；這是決定 8 拍板的「不處理」，兩把鏡頭都點出「一起更新」是以 image 為單位不是以 request 為單位。
   其餘：109 / 25 / 30 個輸入的 `normaliseMemory` / `parseSize` / `toSizeString` 新舊零差異；新拒絕的全是超上限且伺服器
-  也 422；#825 的 35 條 modal 行為全在。
+  也 422；#825 的 33 條 modal 案例全在（加上 #830 自己的 2 條共 35）。
 
-修法形狀：補測試釘子 + 文字，沒有換機制 → 不再開一輪，CI 對最終 sha。
+修法形狀：補測試釘子 + 文字，沒有換機制 → 不是全面再一輪，但要一題的 verify-the-fix。
+
+## Verify-the-fix（2026-09-21，一把 veracity，對 `6a271255`）
+
+最壞發現：**LOW**，三句文字（本節上方已改）。修法本身：永遠 `.unreadable` 紅 3、永遠 `.over` 紅 2、對調紅 4；
+只動記憶體那半也各自紅 3 / 2（cpu / memory 兩半獨立守住）；把測試檔換回 P5 之前配同樣突變 → 96 全綠、tsc 綠，
+證明 MEDIUM 是真的、P5 關掉了它。三句：PR body「另有 Size 檔兩條」在最終 sha 是 5（P5 的釘子連 type 翻轉也抓到）；
+「22 位以上無單位」實測是無單位 34 位以上或 22 位帶 `T`；「#825 的 35 條」是 33 + #830 的 2。收斂判斷：不用再一輪。
 
 ## 驗證（DoD）
 
