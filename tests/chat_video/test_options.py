@@ -32,6 +32,8 @@ from workspace_app.chat_video.options import VideoOptions
         ("tool_pause_ms", 3 * 10**9, "tool_pause_ms"),
         ("max_seconds", 10**9, "max_seconds"),
         ("max_assets_total_bytes", -1, "max_assets_total_bytes"),
+        ("theme", "sepia", "theme"),
+        ("theme", "", "theme"),
     ],
 )
 def test_nonsense_is_refused_with_the_field_named(field: str, value: object, word: str):

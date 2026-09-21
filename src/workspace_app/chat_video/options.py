@@ -12,6 +12,7 @@ import msgspec
 
 Format = str  # "gif" | "mp4" | "webm"
 FORMATS: tuple[Format, ...] = ("gif", "mp4", "webm")
+THEMES: tuple[str, ...] = ("dark", "light")
 
 
 class VideoOptions(msgspec.Struct, frozen=True):
@@ -69,6 +70,9 @@ class VideoOptions(msgspec.Struct, frozen=True):
     than the transcript: a 100 MB page is a slow, memory-hungry recording.
     base64 makes the page about a third larger than the budget."""
     fmt: tuple[Format, ...] = ("gif",)
+    theme: str = "dark"
+    """The page's palette, whole-video: ``dark`` (the player's own) or
+    ``light`` (the app's light tokens — paper, white, ink)."""
 
     def __post_init__(self) -> None:
         """Refuse nonsense here, once, for every reader — a flag, a decoded job
@@ -105,6 +109,7 @@ class VideoOptions(msgspec.Struct, frozen=True):
             (self.max_assets_total_bytes >= 0, "max_assets_total_bytes must not be negative"),
             (bool(self.fmt), "fmt must name at least one format"),
             (all(f in FORMATS for f in self.fmt), f"fmt must be among {', '.join(FORMATS)}"),
+            (self.theme in THEMES, f"theme must be one of {', '.join(THEMES)}"),
         )
         for ok, why in checks:
             if not ok:

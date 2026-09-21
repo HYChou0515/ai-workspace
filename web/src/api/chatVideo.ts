@@ -29,6 +29,8 @@ export type ChatVideoOptions = {
   max_seconds?: number;
   tool_output_chars?: number;
   fmt?: string[];
+  /** The page's palette for the whole video: "dark" (default) or "light". */
+  theme?: "dark" | "light";
 };
 
 export type ChatVideoRequest = {

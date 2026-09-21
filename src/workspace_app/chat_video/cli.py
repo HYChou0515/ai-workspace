@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 from ..kb.chat_export import parse_chat_export
-from .options import FORMATS, VideoOptions
+from .options import FORMATS, THEMES, VideoOptions
 from .player import NOT_HANDED, decide_assets, render_player_html
 from .render import RendererUnavailable
 from .service import render_chat_video
@@ -36,6 +36,7 @@ class Args(argparse.Namespace):
     files: Path | None
     options: VideoOptions
     chromium: str
+    theme: str
 
 
 def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[str, bytes]:
@@ -94,6 +95,12 @@ def parse_args(argv: list[str]) -> Args:
         choices=FORMATS,
         default=[],
         help="an extra format to write beside --out",
+    )
+    p.add_argument(
+        "--theme",
+        choices=THEMES,
+        default=d.theme,
+        help="the page's palette for the whole video: dark (default) or light (the app's)",
     )
     p.add_argument("--html", type=Path, help="write the player page here and record nothing")
     p.add_argument(
@@ -167,7 +174,7 @@ def _options(ns: Args, fmt: tuple[str, ...]) -> VideoOptions:
         type_ms=ns.type_speed, stream_ms=ns.stream_speed, tool_pause_ms=ns.tool_pause,
         speed=ns.speed, max_seconds=ns.max_seconds, tool_output_chars=ns.tool_output_chars,
         max_asset_bytes=ns.max_asset_bytes, max_assets_total_bytes=ns.max_assets_total_bytes,
-        fmt=fmt,
+        fmt=fmt, theme=ns.theme,
     )  # fmt: skip
 
 

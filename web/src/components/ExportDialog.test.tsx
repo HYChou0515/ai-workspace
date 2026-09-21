@@ -154,6 +154,9 @@ describe("ExportDialog — video", () => {
     fireEvent.change(slider, { target: { value: "2" } });
     expect(screen.getByTestId("export-resolution-label").textContent).toBe("1080p");
     fireEvent.change(screen.getByTestId("export-type-ms"), { target: { value: "40" } });
+    // The palette is whole-video: dark (the default) or the app's light.
+    expect((screen.getByTestId("export-theme") as HTMLSelectElement).value).toBe("dark");
+    fireEvent.change(screen.getByTestId("export-theme"), { target: { value: "light" } });
     // The result line is the same numbers the request will carry.
     expect(screen.getByTestId("export-size-result").textContent).toContain("1920×1080");
     expect(screen.getByTestId("export-size-result").textContent).toContain("1.5×");
@@ -176,6 +179,7 @@ describe("ExportDialog — video", () => {
       scale: 0, // automatic: the player's own rule, not a number typed here
       fmt: ["mp4"],
       type_ms: 40,
+      theme: "light",
     });
     expect(body.output_path).toBeNull();
     expect(onVideoQueued).toHaveBeenCalledWith(QUEUED);

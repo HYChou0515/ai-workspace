@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" data-theme="/*THEME*/">
 <head>
 <meta charset="utf-8">
 <title>chat video</title>
@@ -8,6 +8,13 @@
     --frame-w: /*FRAME_W*/px; --frame-h: /*FRAME_H*/px; --chat-w: /*CHAT_W*/px; --ui-scale: /*UI_SCALE*/;
     --bg:#0f1115; --panel:#171a21; --panel-user:#1f2a44; --line:#2a2f3a; --line-user:#2f3f66;
     --fg:#e6e8ee; --dim:#8b93a7; --acc:#6ea8fe; --err:#ff6b6b; --err-bg:#2a1518;
+  }
+  /* `theme: light` — the app's own light palette (web/src/styles/tokens.css):
+     paper for the page, white for a bubble, paper-2 for the user's, paper-3
+     for strokes, ink for text, the accent and err inks as the app draws them. */
+  :root[data-theme="light"] {
+    --bg:#F1ECE0; --panel:#FBF9F4; --panel-user:#E5E0D2; --line:#D8D2C2; --line-user:#C9C2B0;
+    --fg:#1A1B1F; --dim:#5C5F66; --acc:#F0502E; --err:#C44A3A; --err-bg:#FCE4DC;
   }
   html, body { margin:0; width:var(--frame-w); height:var(--frame-h); background:var(--bg); color:var(--fg);
     font: 16px/1.55 ui-sans-serif, system-ui, "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", sans-serif;

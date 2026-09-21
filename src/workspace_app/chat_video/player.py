@@ -208,6 +208,7 @@ def render_player_html(
         .replace("/*FRAME_H*/", str(options.height))
         .replace("/*CHAT_W*/", str(options.chat_width))
         .replace("/*UI_SCALE*/", _css_number(ui_scale(options)))
+        .replace("/*THEME*/", options.theme)
         .replace("/*TIMELINE*/", _embed_json(payload))
         .replace("/*OPTIONS*/", _embed_json(msgspec.to_builtins(options)))
         .replace("/*PACING*/", _embed_json(PACING))

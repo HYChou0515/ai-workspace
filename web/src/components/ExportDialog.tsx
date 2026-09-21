@@ -79,6 +79,8 @@ const realClient: ExportDialogClient = {
 type Kind = "json" | "md" | "video";
 type Fmt = "mp4" | "gif" | "webm";
 const FORMATS: Fmt[] = ["mp4", "gif", "webm"];
+type Theme = "dark" | "light";
+const THEMES: Theme[] = ["dark", "light"];
 
 /** The tempo knobs of decision 9 — speed, typing, the composer push-in and
  * the length; with the size and the format that is the six, and every other
@@ -112,6 +114,7 @@ type Form = {
   kind: Kind;
   range: RangeChoice;
   fmt: Fmt;
+  theme: Theme;
   size: SizeChoice;
   tempo: Tempo;
 };
@@ -120,6 +123,7 @@ const INITIAL: Form = {
   kind: "json",
   range: { kind: "all" },
   fmt: "mp4",
+  theme: "dark",
   size: { mode: "resolution", aspect: "16:9", p: 720 },
   tempo: TEMPO_DEFAULTS,
 };
@@ -237,6 +241,7 @@ export function ExportDialog({
             // 0 = the player's automatic rule; a text-size choice pins it.
             scale: size.scaleIsAuto ? 0 : size.scale,
             fmt: [form.fmt],
+            theme: form.theme,
             ...tempo,
           },
           output_path: null,
@@ -442,6 +447,22 @@ export function ExportDialog({
                     {FORMATS.map((f) => (
                       <option key={f} value={f}>
                         {f}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="export-dialog__field">
+                  <label htmlFor="export-theme">{t("export.video.theme")}</label>
+                  <select
+                    id="export-theme"
+                    data-testid="export-theme"
+                    className="input"
+                    value={form.theme}
+                    onChange={(e) => patch({ theme: e.target.value as Theme })}
+                  >
+                    {THEMES.map((th) => (
+                      <option key={th} value={th}>
+                        {t(`export.video.theme.${th}`)}
                       </option>
                     ))}
                   </select>
