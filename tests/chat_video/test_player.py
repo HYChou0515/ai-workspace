@@ -97,6 +97,17 @@ def test_the_theme_reaches_the_page_and_light_is_the_apps_own_palette():
     assert ':root[data-theme="light"]' in light
     for token in ("#F1ECE0", "#FBF9F4", "#1A1B1F"):
         assert token in light
+    # The composer's focus ring and glow follow the theme's accent — the
+    # rule reads the two variables and carries no literal colour of its own
+    # (a hard-coded blue put a blue halo around light's orange border), and
+    # the light block sets them in its accent's hue.
+    focused = re.search(r"#composer\.focused \{[^}]*\}", light)
+    assert focused is not None
+    assert "var(--acc-ring)" in focused.group(0) and "var(--acc-glow)" in focused.group(0)
+    assert "rgba(" not in focused.group(0)
+    light_block = re.search(r':root\[data-theme="light"\] \{[^}]*\}', light)
+    assert light_block is not None
+    assert "--acc-ring:rgba(240,80,46" in light_block.group(0)
 
 
 def test_the_ui_scales_with_the_frame_unless_told_otherwise():

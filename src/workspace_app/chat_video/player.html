@@ -8,6 +8,7 @@
     --frame-w: /*FRAME_W*/px; --frame-h: /*FRAME_H*/px; --chat-w: /*CHAT_W*/px; --ui-scale: /*UI_SCALE*/;
     --bg:#0f1115; --panel:#171a21; --panel-user:#1f2a44; --line:#2a2f3a; --line-user:#2f3f66;
     --fg:#e6e8ee; --dim:#8b93a7; --acc:#6ea8fe; --err:#ff6b6b; --err-bg:#2a1518;
+    --acc-ring:rgba(110,168,254,.25); --acc-glow:rgba(110,168,254,.25);
   }
   /* `theme: light` — the app's own light palette (web/src/styles/tokens.css):
      paper for the page, white for a bubble, paper-2 for the user's, paper-3
@@ -15,6 +16,7 @@
   :root[data-theme="light"] {
     --bg:#F1ECE0; --panel:#FBF9F4; --panel-user:#E5E0D2; --line:#D8D2C2; --line-user:#C9C2B0;
     --fg:#1A1B1F; --dim:#5C5F66; --acc:#F0502E; --err:#C44A3A; --err-bg:#FCE4DC;
+    --acc-ring:rgba(240,80,46,.14); --acc-glow:rgba(240,80,46,.12);
   }
   html, body { margin:0; width:var(--frame-w); height:var(--frame-h); background:var(--bg); color:var(--fg);
     font: 16px/1.55 ui-sans-serif, system-ui, "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", sans-serif;
@@ -73,7 +75,9 @@
     width:min(var(--chat-w), calc(var(--frame-w) / var(--ui-scale) - 32px)); box-sizing:border-box;
     background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px 16px;
     display:flex; align-items:center; gap:10px; transition: box-shadow 400ms, border-color 400ms; }
-  #composer.focused { border-color:var(--acc); box-shadow:0 0 0 4px rgba(110,168,254,.25), 0 0 40px rgba(110,168,254,.25); }
+  /* The focus ring and glow take the theme's accent hue: a literal blue here
+     put a blue halo around the light theme's orange border. */
+  #composer.focused { border-color:var(--acc); box-shadow:0 0 0 4px var(--acc-ring), 0 0 40px var(--acc-glow); }
   #input { flex:1; min-height:24px; white-space:pre-wrap; overflow-wrap:anywhere; }
   #input:empty::before { content:"傳訊息給 AI…"; color:var(--dim); }
   .caret { display:inline-block; width:2px; height:1.1em; background:var(--fg); vertical-align:-2px;
