@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isValidCpu, isValidMemory, normaliseMemory, parseSize, toSizeString } from "./ItemEnvironmentSize";
+import { cpuFault, memoryFault, normaliseMemory, parseSize, toSizeString } from "./ItemEnvironmentSize";
 
 describe("toSizeString — bytes the way the server reads them", () => {
   it("uses the largest unit that divides exactly, else the bare byte count", () => {
@@ -14,31 +14,59 @@ describe("toSizeString — bytes the way the server reads them", () => {
 });
 
 describe("the server's refusals, asked first", () => {
-  it("cpu: empty is the default; otherwise a finite number above 0", () => {
-    expect(isValidCpu("")).toBe(true);
-    expect(isValidCpu("0.5")).toBe(true);
-    expect(isValidCpu("2")).toBe(true);
-    expect(isValidCpu("0")).toBe(false);
-    expect(isValidCpu("-1")).toBe(false);
-    expect(isValidCpu("abc")).toBe(false);
-    expect(isValidCpu("Infinity")).toBe(false);
+  // The ceilings come from the RECORD (#830), so every case names one.
+  const MAX_CORES = 1024;
+
+  it("cpu: empty is the default; otherwise a finite number above 0, no larger than the ceiling", () => {
+    expect(cpuFault("", MAX_CORES)).toBeNull();
+    expect(cpuFault("0.5", MAX_CORES)).toBeNull();
+    expect(cpuFault("2", MAX_CORES)).toBeNull();
+    expect(cpuFault("1024", MAX_CORES)).toBeNull(); // the bound itself passes (`<=`)
+    for (const text of ["0", "-1", "abc", "Infinity"]) {
+      expect(cpuFault(text, MAX_CORES)?.type, text).toBe("unreadable");
+    }
+    for (const text of ["1024.5", "2048"]) {
+      expect(cpuFault(text, MAX_CORES)?.type, text).toBe("over");
+    }
   });
 
-  it("memory: empty is the default; otherwise a size a person would write, not zero", () => {
-    expect(isValidMemory("")).toBe(true);
-    expect(isValidMemory("512M")).toBe(true);
-    expect(isValidMemory("512MB")).toBe(true);
-    expect(isValidMemory("512 mb")).toBe(true);
-    expect(isValidMemory("512.0 MB")).toBe(true); // the display format, typed back
-    expect(isValidMemory("1.5G")).toBe(true);
-    expect(isValidMemory("1000000")).toBe(true);
-    expect(isValidMemory("0")).toBe(false);
-    expect(isValidMemory("0M")).toBe(false);
-    expect(isValidMemory("0.0 GB")).toBe(false);
-    expect(isValidMemory("max")).toBe(false);
-    expect(isValidMemory("abc")).toBe(false);
-    expect(isValidMemory("512 MiB")).toBe(false);
-    expect(isValidMemory("1.5")).toBe(false); // a fraction of a byte is nothing
+  it("cpu: `over` carries the RECORD's ceiling, `unreadable` the grammar — data, not copy", () => {
+    // A ceiling the server never used, so a detail that agrees with it can
+    // only have come from the argument — not from a number of this module's own.
+    expect(cpuFault("8", 7)).toEqual({ type: "over", detail: "7" });
+    expect(cpuFault("7", 7)).toBeNull();
+    // The examples the grammar hint shows, joined for either locale.
+    expect(cpuFault("0", 7)).toEqual({ type: "unreadable", detail: "1 / 0.5" });
+  });
+
+  const MAX_BYTES = 1024 ** 5;
+
+  it("memory: empty is the default; otherwise a size a person would write, not zero, within the ceiling", () => {
+    expect(memoryFault("", MAX_BYTES)).toBeNull();
+    expect(memoryFault("512M", MAX_BYTES)).toBeNull();
+    expect(memoryFault("512MB", MAX_BYTES)).toBeNull();
+    expect(memoryFault("512 mb", MAX_BYTES)).toBeNull();
+    expect(memoryFault("512.0 MB", MAX_BYTES)).toBeNull(); // the display format, typed back
+    expect(memoryFault("1.5G", MAX_BYTES)).toBeNull();
+    expect(memoryFault("1000000", MAX_BYTES)).toBeNull();
+    expect(memoryFault("1024T", MAX_BYTES)).toBeNull(); // the bound itself passes (`<=`)
+    // `2P`: P is not a unit the server reads, so it is unreadable, not over.
+    for (const text of ["0", "0M", "0.0 GB", "max", "abc", "512 MiB", "1.5", "2P"]) {
+      expect(memoryFault(text, MAX_BYTES)?.type, text).toBe("unreadable");
+    }
+    for (const text of ["1025T", "1024.5 TB", "1048577G"]) {
+      expect(memoryFault(text, MAX_BYTES)?.type, text).toBe("over");
+    }
+  });
+
+  it("memory: `over` carries the RECORD's ceiling in the server's spelling, `unreadable` the grammar", () => {
+    // `3G`, the spelling a person can type back — not `3.0 GB`.
+    expect(memoryFault("3073M", 3 * 1024 ** 3)).toEqual({ type: "over", detail: "3G" });
+    expect(memoryFault("3G", 3 * 1024 ** 3)).toBeNull();
+    expect(memoryFault("abc", 3 * 1024 ** 3)).toEqual({
+      type: "unreadable",
+      detail: "512M / 512MB / 1.5G",
+    });
   });
 });
 

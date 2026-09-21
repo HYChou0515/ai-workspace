@@ -36,6 +36,9 @@ const IDLE = {
   // comparing the viewer's quota with a clamp made against the owner's.
   cpuBoundBy: null,
   memoryBoundBy: null,
+  // The server's hard ceilings, carried on the record (#830).
+  maxCpuCores: 1024,
+  maxMemoryBytes: 1024 ** 5,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
@@ -301,11 +304,14 @@ describe("the shapes it borrows", () => {
     expect(container.querySelectorAll("label[for]")).toHaveLength(0);
   });
 
-  it("marks a field the modal calls invalid, and shows the grammar under it", () => {
+  it("marks a field the modal calls unreadable, and shows the grammar under it", () => {
     render(
       <ItemEnvironmentPanel
         draft={{ cpu: "0", memory: "512 MiB" }}
-        invalid={{ cpu: true, memory: true }}
+        fault={{
+          cpu: { type: "unreadable", detail: "1 / 0.5" },
+          memory: { type: "unreadable", detail: "512M / 512MB / 1.5G" },
+        }}
         onDraft={noop}
         env={IDLE}
         budget={BUDGET}
@@ -314,12 +320,55 @@ describe("the shapes it borrows", () => {
     );
     expect(screen.getByTestId("cpu-input").getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByTestId("memory-input").getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByTestId("memory-hint").textContent).toMatch(/512M/);
+    // The grammar's examples are the fault's `detail`, interpolated — not a
+    // sentence of the panel's own.
+    // The SENTENCE as well as the detail: the grammar sentence, not the
+    // ceiling one — a panel that picked the wrong key for the right number
+    // would read "At most 1 / 0.5 cores", and nothing else here would notice.
+    const cpuHint = screen.getByTestId("cpu-hint").textContent ?? "";
+    const memoryHint = screen.getByTestId("memory-hint").textContent ?? "";
+    expect(cpuHint).toMatch(/1 \/ 0\.5/);
+    expect(cpuHint).toMatch(/要大於|More than 0/);
+    expect(cpuHint).not.toMatch(/最多|At most/);
+    expect(memoryHint).toMatch(/512M \/ 512MB \/ 1\.5G/);
+    expect(memoryHint).toMatch(/數字加單位|A number with a unit/);
+    expect(memoryHint).not.toMatch(/最多|At most/);
     expect(screen.getByTestId("memory-input").getAttribute("placeholder")).toBe("2G");
     // The hint is what describes the field, for AT as for the eye.
     const memory = screen.getByTestId("memory-input");
     expect(memory.getAttribute("aria-describedby")).toBe(screen.getByTestId("memory-hint").id);
     expect(screen.getByTestId("cpu-input").getAttribute("aria-describedby")).toBe(screen.getByTestId("cpu-hint").id);
+  });
+
+  it("marks a field the modal calls over, and names the ceiling the fault carries (#830)", () => {
+    // A ceiling the server never used: a hint that agrees with it read the
+    // fault, not a number of the panel's own. `3G` is the server's spelling,
+    // what a person can type back — not `3.0 GB`.
+    render(
+      <ItemEnvironmentPanel
+        draft={{ cpu: "8", memory: "3073M" }}
+        fault={{ cpu: { type: "over", detail: "7" }, memory: { type: "over", detail: "3G" } }}
+        onDraft={noop}
+        env={{ ...IDLE, maxCpuCores: 7, maxMemoryBytes: 3 * 1024 ** 3 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+    const cpu = screen.getByTestId("cpu-input");
+    const memory = screen.getByTestId("memory-input");
+    expect(cpu.getAttribute("aria-invalid")).toBe("true");
+    expect(memory.getAttribute("aria-invalid")).toBe("true");
+    // The ceiling SENTENCE around the record's number — not the grammar one.
+    const cpuHint = screen.getByTestId("cpu-hint").textContent ?? "";
+    const memoryHint = screen.getByTestId("memory-hint").textContent ?? "";
+    expect(cpuHint).toMatch(/7/);
+    expect(cpuHint).toMatch(/最多|At most/);
+    expect(cpuHint).not.toMatch(/1024|0\.5|要大於|More than 0/);
+    expect(memoryHint).toMatch(/3G/);
+    expect(memoryHint).toMatch(/最多|At most/);
+    expect(memoryHint).not.toMatch(/GB|512M|數字加單位|A number with a unit/);
+    expect(cpu.getAttribute("aria-describedby")).toBe(screen.getByTestId("cpu-hint").id);
+    expect(memory.getAttribute("aria-describedby")).toBe(screen.getByTestId("memory-hint").id);
   });
 
   it("refuses 0 at the field itself — the server refuses it too", () => {
