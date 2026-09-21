@@ -1,0 +1,724 @@
+diff --git a/configs/config.example.yaml b/configs/config.example.yaml
+index d5514dd7..56fc1d31 100644
+--- a/configs/config.example.yaml
++++ b/configs/config.example.yaml
+@@ -513,6 +513,11 @@
+ #                               #   this often; deleting the file is the cancel
+ #   stale_after_seconds: 60     # no heartbeat for this long ⇒ the worker died and the
+ #                               #   progress file may be replaced by a new request
++#   chromium_path: ""           # a Chromium binary to record with instead of the one
++#                               #   `playwright install chromium` downloads — an image built
++#                               #   without reach to Playwright's CDN uses apt's
++#                               #   /usr/bin/chromium (docs/deployment.md §11, 斷網); empty =
++#                               #   Playwright's own
+ 
+ # `vision: true` — the preset's model NATIVELY sees images. A workspace turn then
+ # feeds attached images straight into the main model's message, and `read_image`
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 4df0cbda..7f67c2cf 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -101,7 +101,9 @@ CMD ["python", "-m", "workspace_app"]
+ #
+ # `--with-deps` installs Chromium's shared libraries through apt; the
+ # browser itself lands under PLAYWRIGHT_BROWSERS_PATH, outside the venv, so
+-# a later `uv sync` cannot remove it. The worker boots the API's own
++# a later `uv sync` cannot remove it. A build with no reach to Playwright's
++# CDN uses apt's chromium instead — `chat_video.chromium_path` + a symlink
++# for the recorder's ffmpeg; the recipe is in docs/deployment.md §11 (斷網). The worker boots the API's own
+ # composition (`build_app`, never served — see workers.yaml), so it needs
+ # what the API needs at boot: the same configmap and mounts.
+ FROM app AS chat-video
+diff --git a/docs/chat-video.md b/docs/chat-video.md
+index 6105fdeb..d4879a4b 100644
+--- a/docs/chat-video.md
++++ b/docs/chat-video.md
+@@ -32,6 +32,7 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
+ | `--fmt gif\|mp4\|webm` | — | 多寫一種格式(可重複);檔名跟 `-o` 同名換副檔名 |
+ | `--html preview.html` | — | 只吐播放器頁面、不錄影;用瀏覽器開來看,改 JSON 再錄 |
+ | `--files DIR` | — | workspace 資料夾:`show_file` / 畫圖工具秀出的檔案、回答裡 `![](路徑)` 的圖,從這裡讀進頁面(見下) |
++| `--chromium PATH` | — | 用這個 Chromium 錄影(例如 apt 裝的 `/usr/bin/chromium`),不用 `playwright install chromium` 抓的那顆;worker 的 `chat_video.chromium_path` 是同一個開關 |
+ | `--width / --height` | 1280 / 720 | 輸出像素。**錄影就是 viewport**,不縮放 |
+ | `--chat-width` | 760 | 聊天欄寬度(CSS px,放大前) |
+ | `--scale` | 0 = 自動 | 整個 UI 的放大倍率;自動 = 畫面相對 1280×720、不小於 1(1080p 是 1.5、4K 是 3) |
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 0afcbef3..c0f3ed2c 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -120,7 +120,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
+ | `message_queue` | 背景 job 佇列後端（`simple` / `rabbitmq`） | 多 pod / 高吞吐才改 |
+ | `observability` | LLM 呼叫記錄 | 少改 |
+ | `failover` | 忙碌時的 LLM 備援全域門檻 | 有多模型才改 |
+-| `chat_video` | Export ▾ → 影片的伺服端上限（像素、秒數、輸出大小、進度心跳）；worker pod 的 memory limit 是照它們量的；五個值要正整數、`stale_after_seconds` > `heartbeat_seconds`（否則開不了機） | 少改（改了要重量 [chat-video.md](chat-video.md#要多少資源量的41-秒的範例1080p)） |
++| `chat_video` | Export ▾ → 影片的伺服端上限（像素、秒數、輸出大小、進度心跳）；worker pod 的 memory limit 是照它們量的；五個值要正整數、`stale_after_seconds` > `heartbeat_seconds`（否則開不了機）。`chromium_path`（預設空）：改用這個 Chromium 錄影而不是 `playwright install` 抓的那顆——斷網 image 用 apt 的 `/usr/bin/chromium`（[deployment.md §11](deployment.md#11-生產環境注意事項)） | 少改（改了要重量 [chat-video.md](chat-video.md#要多少資源量的41-秒的範例1080p)） |
+ | `llm` | preset 沒寫 `llm.*` 時的預設 endpoint ＋ 抑制重複的取樣參數 | 少改 |
+ | `read_file` / `exec` | sandbox 工具的輸出上限 | 少改 |
+ | `history` | 跨回合記憶的訊息數 / token 預算 | 換大 context 模型時改 |
+diff --git a/docs/deployment.md b/docs/deployment.md
+index 2c0bc0c0..7bc7d011 100644
+--- a/docs/deployment.md
++++ b/docs/deployment.md
+@@ -518,6 +518,25 @@ RCA 的 system prompt 是純 markdown，存在
+     `recording needs Playwright …`);要在單 pod 出影片,
+     API 本身就要跑 `rca-app-chat-video`(它是 `rca-app` 的超集,serve 一樣)。
+ 
++    **斷網的 build(抓不到 Playwright 的 CDN)**:`playwright install chromium` 其實抓三個 zip——瀏覽器、
++    headless shell、還有它**錄影用的 ffmpeg**——都在 `playwright.azureedge.net`。抓不到就改用 Debian mirror 上的
++    Chromium,三步(在你們 fork 的 `chat-video` stage 裡取代 `playwright install --with-deps chromium`):
++    ```dockerfile
++    RUN apt-get update && apt-get install -y --no-install-recommends chromium ffmpeg fonts-noto-cjk \
++        && mkdir -p /ms-playwright/ffmpeg-1010 && ln -s /usr/bin/ffmpeg /ms-playwright/ffmpeg-1010/ffmpeg-linux
++    ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
++    ```
++    再在 configmap 設 `chat_video.chromium_path: /usr/bin/chromium`。symlink 是給 Playwright 的錄影器:它到
++    `$PLAYWRIGHT_BROWSERS_PATH/ffmpeg-<rev>/ffmpeg-linux` 找自己那顆 ffmpeg,只查檔案在不在,系統的 ffmpeg 有 libvpx、
++    錄 webm 的參數吃得下(`<rev>` 是 `playwright` 套件 `browsers.json` 裡 ffmpeg 的 revision,1.49 是 1010)。
++    驗:`docker run --rm <image> python -m workspace_app.chat_video x.chat.json -o x.mp4 --chromium /usr/bin/chromium`
++    出得了檔就通(2026-09-21 在 python:3.12-slim = Debian 13 上驗過:`uv sync --extra chat-video` + apt 的 Chromium 153,
++    這條指令出 h264 1280×720 的 mp4、中文有字)。
++    另外兩件在 Debian 13(trixie;`python:3.12-slim` 這種會漂的 tag 現在就是它)上要知道的:`--with-deps` 在 Playwright 1.49
++    只認 Debian 11 / 12,trixie 會落到 Ubuntu 的套件名而死在 `ttf-unifont` / `ttf-ubuntu-font-family`——相依自己用 apt 裝
++    (`playwright install-deps chromium --dry-run` 印的清單,`ttf-unifont` → `fonts-unifont`、`ttf-ubuntu-font-family` 拿掉),
++    或 base 釘 `-bookworm`。
++
+     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
+     worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。
+   - **前提:共享後端**。in-memory 預設會讓每個 pod 各自一份 queue，worker 抓不到
+diff --git a/src/workspace_app/apps/_template/app.json b/src/workspace_app/apps/_template/app.json
+index 5a7a2ee7..82da2e61 100644
+--- a/src/workspace_app/apps/_template/app.json
++++ b/src/workspace_app/apps/_template/app.json
+@@ -20,8 +20,24 @@
+   "function": { "workspace": true, "sandbox": false, "terminal": false },
+   "agent": {
+     "prompt_file": "prompts/system.md",
+-    "tools": ["ask_user", "update_todos", "read_file", "show_file", "write_file", "edit_file", "list_files", "exists", "delete_file", "save_workflow", "save_schedules"],
+-    "skills": ["author-skill", "author-workflow", "grill-me"],
++    "tools": [
++      "ask_user",
++      "update_todos",
++      "read_file",
++      "show_file",
++      "write_file",
++      "edit_file",
++      "list_files",
++      "exists",
++      "delete_file",
++      "save_workflow",
++      "save_schedules"
++    ],
++    "skills": [
++      "author-skill",
++      "author-workflow",
++      "grill-me"
++    ],
+     "picker": [{ "preset": "qwen3-local", "name": "My App · Qwen3 (local)" }],
+     "suggestions": [{ "label": "Summarise", "prompt": "Summarise this item." }]
+   },
+diff --git a/src/workspace_app/apps/playground/app.json b/src/workspace_app/apps/playground/app.json
+index f77d8b83..38eb8961 100644
+--- a/src/workspace_app/apps/playground/app.json
++++ b/src/workspace_app/apps/playground/app.json
+@@ -17,12 +17,39 @@
+   "function": { "workspace": true, "sandbox": true, "terminal": true },
+   "agent": {
+     "prompt_file": "prompts/system.md",
+-    "tools": ["ask_user", "update_todos", 
+-      "exec", "read_file", "read_image", "show_file", "write_file", "edit_file", "list_files", "exists",
+-      "delete_file", "ask_knowledge_base", "run_agent", "request_wiki_update", "make_deck", "sci-plot", "python-stack", "save_skill", "publish_skill", "install_skill", "search_skill_hub", "save_subagent", "save_workflow", "save_schedules",
++    "tools": [
++      "ask_user",
++      "update_todos",
++      "exec",
++      "read_file",
++      "read_image",
++      "show_file",
++      "write_file",
++      "edit_file",
++      "list_files",
++      "exists",
++      "delete_file",
++      "ask_knowledge_base",
++      "run_agent",
++      "request_wiki_update",
++      "make_deck",
++      "sci-plot",
++      "python-stack",
++      "save_skill",
++      "publish_skill",
++      "install_skill",
++      "search_skill_hub",
++      "save_subagent",
++      "save_workflow",
++      "save_schedules",
+       "csv-column-summary:summarise"
+     ],
+-    "skills": ["author-skill", "author-workflow", "grill-me", "skill-hub"],
++    "skills": [
++      "author-skill",
++      "author-workflow",
++      "grill-me",
++      "skill-hub"
++    ],
+     "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],
+     "suggestions": [
+       { "label": "List files", "prompt": "List the files in the workspace." },
+diff --git a/src/workspace_app/apps/pm/app.json b/src/workspace_app/apps/pm/app.json
+index d9b8efc5..cc509a67 100644
+--- a/src/workspace_app/apps/pm/app.json
++++ b/src/workspace_app/apps/pm/app.json
+@@ -18,11 +18,37 @@
+   "agent": {
+     "prompt_file": "prompts/system.md",
+     "tools": [
+-      "exec", "read_file", "show_file", "write_file", "edit_file", "list_files", "exists",
+-      "delete_file", "create_entity", "update_entity", "query_entity", "link_entity",
+-      "ask_knowledge_base", "run_agent", "lookup_user", "ask_user", "update_todos", "save_skill", "publish_skill", "install_skill", "search_skill_hub", "save_subagent", "save_workflow", "save_schedules"
++      "exec",
++      "read_file",
++      "show_file",
++      "write_file",
++      "edit_file",
++      "list_files",
++      "exists",
++      "delete_file",
++      "create_entity",
++      "update_entity",
++      "query_entity",
++      "link_entity",
++      "ask_knowledge_base",
++      "run_agent",
++      "lookup_user",
++      "ask_user",
++      "update_todos",
++      "save_skill",
++      "publish_skill",
++      "install_skill",
++      "search_skill_hub",
++      "save_subagent",
++      "save_workflow",
++      "save_schedules"
++    ],
++    "skills": [
++      "author-skill",
++      "author-workflow",
++      "grill-me",
++      "skill-hub"
+     ],
+-    "skills": ["author-skill", "author-workflow", "grill-me", "skill-hub"],
+     "picker": [
+       { "preset": "qwen3-local", "name": "PM · Qwen3 (local)" },
+       { "preset": "claude-opus", "name": "PM · Claude Opus" },
+diff --git a/src/workspace_app/apps/rca/app.json b/src/workspace_app/apps/rca/app.json
+index d713f230..8874fdff 100644
+--- a/src/workspace_app/apps/rca/app.json
++++ b/src/workspace_app/apps/rca/app.json
+@@ -22,11 +22,42 @@
+     "prompt_file": "prompts/system.md",
+     "context_files": ["collections.json"],
+     "tools": [
+-      "exec", "read_file", "read_image", "show_file", "write_file", "edit_file", "list_files", "exists",
+-      "delete_file", "ask_knowledge_base", "run_agent", "request_wiki_update", "lookup_user", "ask_user", "update_todos", "make_deck", "data-fetch",
+-      "csv-column-summary", "sci-plot", "rca-tools", "python-stack", "save_skill", "publish_skill", "install_skill", "search_skill_hub", "save_subagent", "save_workflow", "save_schedules"
++      "exec",
++      "read_file",
++      "read_image",
++      "show_file",
++      "write_file",
++      "edit_file",
++      "list_files",
++      "exists",
++      "delete_file",
++      "ask_knowledge_base",
++      "run_agent",
++      "request_wiki_update",
++      "lookup_user",
++      "ask_user",
++      "update_todos",
++      "make_deck",
++      "data-fetch",
++      "csv-column-summary",
++      "sci-plot",
++      "rca-tools",
++      "python-stack",
++      "save_skill",
++      "publish_skill",
++      "install_skill",
++      "search_skill_hub",
++      "save_subagent",
++      "save_workflow",
++      "save_schedules"
++    ],
++    "skills": [
++      "author-skill",
++      "author-workflow",
++      "grill-me",
++      "verify-number",
++      "skill-hub"
+     ],
+-    "skills": ["author-skill", "author-workflow", "grill-me", "verify-number", "skill-hub"],
+     "picker": [
+       { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },
+       { "preset": "claude-opus", "name": "RCA · Claude Opus" },
+diff --git a/src/workspace_app/apps/topic-hub/app.json b/src/workspace_app/apps/topic-hub/app.json
+index a6057b53..fd90f959 100644
+--- a/src/workspace_app/apps/topic-hub/app.json
++++ b/src/workspace_app/apps/topic-hub/app.json
+@@ -17,7 +17,9 @@
+   "function": { "workspace": true, "sandbox": true, "terminal": false },
+   "agent": {
+     "prompt_file": "prompts/system.md",
+-    "tools": ["ask_user", "update_todos", 
++    "tools": [
++      "ask_user",
++      "update_todos",
+       "read_file",
+       "read_image",
+       "show_file",
+@@ -32,10 +34,19 @@
+       "update_context_card",
+       "ask_knowledge_base",
+       "request_wiki_update",
+-      "save_skill", "publish_skill", "install_skill", "search_skill_hub",
+-      "save_workflow", "save_schedules"
++      "save_skill",
++      "publish_skill",
++      "install_skill",
++      "search_skill_hub",
++      "save_workflow",
++      "save_schedules"
++    ],
++    "skills": [
++      "author-skill",
++      "author-workflow",
++      "grill-me",
++      "skill-hub"
+     ],
+-    "skills": ["author-skill", "author-workflow", "grill-me", "skill-hub"],
+     "context_files": ["MEMORY.md", "collections.json"],
+     "picker": [
+       { "preset": "qwen3-local", "name": "Topic Hub · Qwen3 (local)" },
+diff --git a/src/workspace_app/chat_video/cli.py b/src/workspace_app/chat_video/cli.py
+index 2cf0bac7..9a8e336e 100644
+--- a/src/workspace_app/chat_video/cli.py
++++ b/src/workspace_app/chat_video/cli.py
+@@ -35,6 +35,7 @@ class Args(argparse.Namespace):
+     html: Path | None
+     files: Path | None
+     options: VideoOptions
++    chromium: str
+ 
+ 
+ def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[str, bytes]:
+@@ -138,6 +139,13 @@ def parse_args(argv: list[str]) -> Args:
+         default=d.max_assets_total_bytes,
+         help="the page's whole budget for inlined images, first-fit in reading order",
+     )
++    p.add_argument(
++        "--chromium",
++        default="",
++        metavar="PATH",
++        help="a Chromium binary to record with (e.g. /usr/bin/chromium from apt) instead of "
++        "the one `playwright install chromium` downloads; the worker's `chat_video.chromium_path`",
++    )
+ 
+     ns = p.parse_args(argv, namespace=Args())
+     ns.out = ns.out or ns.source.with_suffix(".gif")
+@@ -214,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
+                 options=ns.options,
+                 workdir=Path(tmp),
+                 assets=assets,
++                chromium_path=ns.chromium,
+             )
+     except RendererUnavailable as exc:
+         print(str(exc), file=sys.stderr)
+diff --git a/src/workspace_app/chat_video/jobs.py b/src/workspace_app/chat_video/jobs.py
+index c44b9c72..cfa18b05 100644
+--- a/src/workspace_app/chat_video/jobs.py
++++ b/src/workspace_app/chat_video/jobs.py
+@@ -430,6 +430,7 @@ class ChatVideoCoordinator:
+                 assets=assets,
+                 should_stop=stop.is_set,
+                 on_stage=on_stage,
++                chromium_path=self._limits.chromium_path,
+             )
+         except Cancelled:
+             return  # the file is gone; nothing to write, nothing to say
+diff --git a/src/workspace_app/chat_video/render.py b/src/workspace_app/chat_video/render.py
+index 496102e8..bd5fbf56 100644
+--- a/src/workspace_app/chat_video/render.py
++++ b/src/workspace_app/chat_video/render.py
+@@ -69,9 +69,19 @@ def record(
+     *,
+     expected_ms: int = 0,
+     should_stop: StopCheck | None = None,
++    chromium_path: str = "",
+ ) -> Path:
+     """Play ``html`` in a headless Chromium sized to the frame and return the
+-    ``.webm`` it recorded. The page marks ``document.body.dataset.done`` when
++    ``.webm`` it recorded. ``chromium_path`` is a Chromium binary to launch
++    instead of the one ``playwright install chromium`` downloads
++    (``chat_video.chromium_path``): an air-gapped build cannot reach
++    Playwright's CDN but its Debian mirror has ``chromium``, and Playwright
++    drives any Chromium through ``executable_path``. Its recorder still
++    wants an ffmpeg at ``$PLAYWRIGHT_BROWSERS_PATH/ffmpeg-<rev>/ffmpeg-linux``
++    — a symlink to the system one satisfies it (it only checks the file is
++    there); ``docs/deployment.md`` §11 has the recipe.
++
++    The page marks ``document.body.dataset.done`` when
+     its script is finished; the deadline (``expected_ms`` × 1.5 + 30 s of
+     slack) fails it instead, as :class:`RecordingTimedOut`. The wait is in
+     ``RECORD_SLICE_MS`` slices with ``should_stop`` asked between them: a
+@@ -96,12 +106,24 @@ def record(
+ 
+     with sync_playwright() as pw:
+         try:
+-            browser = pw.chromium.launch()
++            browser = (
++                pw.chromium.launch(executable_path=chromium_path)
++                if chromium_path
++                else pw.chromium.launch()
++            )
+         except Error as exc:
+-            # The Python package is here but `playwright install chromium`
+-            # was never run — Playwright's own message is a traceback with a
+-            # boxed hint. One sentence, the same install step.
+-            if "Executable doesn't exist" in str(exc):
++            # Playwright's own message is a traceback with a boxed hint. One
++            # sentence naming the step that fixes it: the download nobody
++            # ran, or the path the config points at. The two texts differ in
++            # case ("Executable doesn't exist at …" for its own browser,
++            # "Failed to launch chromium because executable doesn't exist
++            # at …" for a given path) — matched without it.
++            if "executable doesn't exist" in str(exc).lower():
++                if chromium_path:
++                    raise RendererUnavailable(
++                        f"recording needs Chromium: chat_video.chromium_path {chromium_path} "
++                        "does not exist in this image"
++                    ) from exc
+                 raise RendererUnavailable(
+                     "recording needs Chromium: run `playwright install chromium` once"
+                 ) from exc
+diff --git a/src/workspace_app/chat_video/service.py b/src/workspace_app/chat_video/service.py
+index 20ac4cff..fe115511 100644
+--- a/src/workspace_app/chat_video/service.py
++++ b/src/workspace_app/chat_video/service.py
+@@ -29,6 +29,7 @@ def render_chat_video(
+     assets: Mapping[str, bytes] | None = None,
+     should_stop: StopCheck | None = None,
+     on_stage: Callable[[str], None] | None = None,
++    chromium_path: str = "",
+ ) -> dict[Format, bytes]:
+     """Render ``messages`` (the ``build_chat_export`` shape) to every format
+     in ``options.fmt``. ``workdir`` is scratch: whatever is left there — the
+@@ -55,7 +56,12 @@ def render_chat_video(
+         if on_stage is not None:
+             on_stage("rendering")
+         recording = record(
+-            html, options, scratch, expected_ms=timeline.playback_ms, should_stop=should_stop
++            html,
++            options,
++            scratch,
++            expected_ms=timeline.playback_ms,
++            should_stop=should_stop,
++            chromium_path=chromium_path,
+         )
+         if on_stage is not None:
+             on_stage("encoding")
+diff --git a/src/workspace_app/config/loader.py b/src/workspace_app/config/loader.py
+index 145ad4ca..6969cfd9 100644
+--- a/src/workspace_app/config/loader.py
++++ b/src/workspace_app/config/loader.py
+@@ -351,6 +351,13 @@ def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
+         )
+     for field in dataclasses.fields(ChatVideoSettings):
+         value = node.get(field.name, field.default)
++        if field.type in ("str", str):
++            if not isinstance(value, str):
++                raise ValueError(
++                    f"config {source}: chat_video.{field.name} must be a string (a path, or "
++                    f"empty for Playwright's own Chromium), got {value!r}"
++                )
++            continue
+         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+             raise ValueError(
+                 f"config {source}: chat_video.{field.name} must be a positive integer, "
+diff --git a/src/workspace_app/config/schema.py b/src/workspace_app/config/schema.py
+index eeb856e2..77d0c8b6 100644
+--- a/src/workspace_app/config/schema.py
++++ b/src/workspace_app/config/schema.py
+@@ -1356,13 +1356,18 @@ class ChatVideoSettings:
+     than write it; ``heartbeat_seconds`` is how often the worker re-reads and
+     rewrites the progress file (its absence is the cancel);
+     ``stale_after_seconds`` without a heartbeat means the worker died and the
+-    file may be replaced. See docs/plan-chat-video-export.md, decisions 10–12."""
++    file may be replaced. See docs/plan-chat-video-export.md, decisions 10–12.
++    ``chromium_path`` launches that Chromium binary instead of the one
++    ``playwright install chromium`` downloads — for an image built without
++    reach to Playwright's CDN, whose Debian mirror has ``chromium``; empty
++    (the default) is Playwright's own."""
+ 
+     max_pixels: int = 1920 * 1080
+     max_seconds: int = 180
+     max_output_bytes: int = 100_000_000
+     heartbeat_seconds: int = 10
+     stale_after_seconds: int = 60
++    chromium_path: str = ""
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/tests/apps/test_app_json_layout.py b/tests/apps/test_app_json_layout.py
+new file mode 100644
+index 00000000..fc39a0f5
+--- /dev/null
++++ b/tests/apps/test_app_json_layout.py
+@@ -0,0 +1,59 @@
++"""The shipped `app.json` manifests list `agent.tools` and `agent.skills` ONE
++entry per line.
++
++A diff of a manifest is read by a person deciding what an App may do, and a
++grant is a line of that diff: with six names packed on one line, adding or
++removing one shows as a rewrite of the whole line and the reviewer has to
++diff it by eye. One per line makes every grant its own `+`/`-`.
++
++A layout rule, guarded here because nothing else can see it: the loader
++parses the JSON and cannot tell how it was laid out, and a manifest edited by
++hand drifts back to packed lines the moment somebody appends to the end of
++one. The check is on the RAW text, on purpose.
++"""
++
++from __future__ import annotations
++
++import json
++import re
++from pathlib import Path
++
++import pytest
++
++APPS = Path(__file__).resolve().parents[2] / "src" / "workspace_app" / "apps"
++MANIFESTS = sorted(APPS.glob("*/app.json"))
++LISTS = ("tools", "skills")
++
++#: One entry on a line: optional indent, one quoted string, an optional comma.
++ONE_ENTRY = re.compile(r'^\s*"[^"]+",?\s*$')
++
++
++def _array_lines(text: str, key: str) -> list[str]:
++    """The raw lines BETWEEN `"key": [` and its closing `]`, or `[]` when the
++    manifest has no such key. The key is looked up under `agent`, which is
++    where the loader reads it."""
++    m = re.search(rf'^\s*"{key}":\s*\[(.*?)^\s*\]', text, re.S | re.M)
++    if m is None:
++        return []
++    return [line for line in m.group(1).splitlines() if line.strip()]
++
++
++@pytest.mark.parametrize("manifest", MANIFESTS, ids=lambda p: p.parent.name)
++@pytest.mark.parametrize("key", LISTS)
++def test_agent_list_is_one_entry_per_line(manifest: Path, key: str) -> None:
++    text = manifest.read_text(encoding="utf-8")
++    entries = json.loads(text)["agent"].get(key, [])
++    lines = _array_lines(text, key)
++    packed = [line.strip() for line in lines if not ONE_ENTRY.match(line)]
++    where = f"{manifest.parent.name}/app.json `{key}`"
++    assert not packed, f"{where}: more than one entry on a line:\n  " + "\n  ".join(packed)
++    # And the line-per-entry layout accounts for every entry the loader sees —
++    # a `["a", "b"]` on the `"key": [` line itself would leave zero lines
++    # between the brackets and pass the check above with nothing checked.
++    assert len(lines) == len(entries), f"{where}: {len(entries)} entries, {len(lines)} lines"
++
++
++def test_the_guard_sees_every_shipped_manifest() -> None:
++    # A glob that silently matches nothing is a guard that guards nothing.
++    shipped = {"rca", "pm", "playground", "topic-hub", "_template"}
++    assert {p.parent.name for p in MANIFESTS} >= shipped
+diff --git a/tests/chat_video/test_cli.py b/tests/chat_video/test_cli.py
+index 41b8d193..ef6442c2 100644
+--- a/tests/chat_video/test_cli.py
++++ b/tests/chat_video/test_cli.py
+@@ -328,6 +328,25 @@ def test_recording_writes_every_format_and_says_how_long_it_will_play(
+     assert "will play" in out and "s" in out and "wrote" in out
+ 
+ 
++def test_chromium_names_the_binary_to_record_with_and_is_playwrights_own_by_default(
++    tmp_path, monkeypatch
++):
++    """`--chromium /usr/bin/chromium`: an image whose Debian mirror has
++    Chromium but no reach to Playwright's CDN records with that binary —
++    the same knob the worker reads as `chat_video.chromium_path`."""
++    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "hi"}]})
++    seen: list[dict] = []
++    monkeypatch.setattr(
++        "workspace_app.chat_video.cli.render_chat_video",
++        lambda **k: (seen.append(k), {"gif": b"g"})[1],
++    )
++
++    main([str(src), "-o", str(tmp_path / "a.gif")])
++    main([str(src), "-o", str(tmp_path / "b.gif"), "--chromium", "/usr/bin/chromium"])
++
++    assert [k["chromium_path"] for k in seen] == ["", "/usr/bin/chromium"]
++
++
+ @pytest.mark.parametrize(
+     ("exc", "code", "word"),
+     [
+diff --git a/tests/chat_video/test_jobs.py b/tests/chat_video/test_jobs.py
+index cdfae893..38f50b91 100644
+--- a/tests/chat_video/test_jobs.py
++++ b/tests/chat_video/test_jobs.py
+@@ -396,9 +396,25 @@ async def test_the_worker_renders_from_the_source_file_and_writes_only_the_video
+     call = render.calls[0]
+     assert (call["title"], call["messages"]) == ("t", MESSAGES)
+     assert call["assets"] == {"/plots/a.png": _PNG}  # z.png absent, big.png over budget
++    assert call["chromium_path"] == ""  # Playwright's own browser unless the config says
+     assert isinstance(call["workdir"], Path) and not call["workdir"].exists()  # scratch cleaned
+ 
+ 
++async def test_the_worker_records_with_the_configured_chromium_when_one_is_set():
++    """`chat_video.chromium_path` is the worker's, not the request's: an
++    air-gapped image points it at apt's `/usr/bin/chromium`, and every job
++    on that worker records with it."""
++    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
++    item = _item(spec)
++    render = _Render()
++    coord = _coordinator(spec, files, render, clock=clock, chromium_path="/usr/bin/chromium")
++    job = await _queued(files, spec, coord, item)
++
++    await asyncio.to_thread(coord._handle, job)
++
++    assert render.calls[0]["chromium_path"] == "/usr/bin/chromium"
++
++
+ @pytest.mark.parametrize(
+     "after_stop",
+     [Cancelled("stopped"), RuntimeError("the browser closed under the recording")],
+diff --git a/tests/chat_video/test_render.py b/tests/chat_video/test_render.py
+index 89e8df7b..7d229caa 100644
+--- a/tests/chat_video/test_render.py
++++ b/tests/chat_video/test_render.py
+@@ -202,6 +202,7 @@ def _fake_playwright(
+ 
+     state: dict[str, int] = {"waits": 0, "closed": 0}
+     timeouts: list[int] = []
++    launches: list[dict] = []
+ 
+     class Error(Exception):
+         pass
+@@ -256,7 +257,8 @@ def _fake_playwright(
+             state["closed"] += 1
+ 
+     class _Chromium:
+-        def launch(self):
++        def launch(self, **kwargs):
++            launches.append(kwargs)
+             if launch_error_text is not None:
+                 raise Error(launch_error_text)
+             return _Browser()
+@@ -273,6 +275,7 @@ def _fake_playwright(
+     mod = types.ModuleType("playwright.sync_api")
+     mod.sync_playwright = lambda: _PW()  # ty: ignore[unresolved-attribute]
+     mod.Error = Error  # ty: ignore[unresolved-attribute]
++    mod.launches = launches  # ty: ignore[unresolved-attribute]
+     mod.TimeoutError = TimeoutError  # ty: ignore[unresolved-attribute]
+     mod.ViewportSize = dict  # ty: ignore[unresolved-attribute]
+     mod.state = state  # ty: ignore[unresolved-attribute]
+@@ -291,6 +294,38 @@ def test_a_chromium_that_was_never_installed_is_the_install_sentence(monkeypatch
+         record("<html></html>", VideoOptions(), tmp_path)
+ 
+ 
++def test_the_recorder_launches_playwrights_own_chromium_unless_a_path_is_given(
++    monkeypatch, tmp_path
++):
++    """An air-gapped build cannot download Playwright's browser, but its
++    Debian mirror has `chromium`; `chromium_path` hands that binary to
++    Playwright (`executable_path`), which drives any Chromium. Empty — the
++    default — keeps Playwright's own, exactly as before."""
++    mod = _fake_playwright(monkeypatch)
++    record("<html></html>", VideoOptions(), tmp_path)
++    record("<html></html>", VideoOptions(), tmp_path, chromium_path="/usr/bin/chromium")
++
++    assert mod.launches == [{}, {"executable_path": "/usr/bin/chromium"}]
++
++
++def test_a_chromium_path_that_does_not_exist_names_the_knob_not_the_install_step(
++    monkeypatch, tmp_path
++):
++    """The install hint is wrong advice when the person pointed at a binary:
++    `playwright install` would not put one at THAT path. The text is
++    Playwright 1.49's own for this case — lowercase "executable", unlike
++    the no-install message; a double with the other case passed while the
++    real run was a traceback."""
++    _fake_playwright(
++        monkeypatch,
++        "BrowserType.launch: Failed to launch chromium because executable doesn't exist at "
++        "/usr/bin/chromium",
++    )
++
++    with pytest.raises(RendererUnavailable, match="chromium_path /usr/bin/chromium"):
++        record("<html></html>", VideoOptions(), tmp_path, chromium_path="/usr/bin/chromium")
++
++
+ def test_a_page_that_never_finishes_fails_the_recording_by_name(monkeypatch, tmp_path):
+     """The deadline is the last resort and it says so: no webm comes out of a
+     page that hung, and the error names the deadline rather than a traceback
+diff --git a/tests/chat_video/test_service.py b/tests/chat_video/test_service.py
+index faee7213..c3a0a50d 100644
+--- a/tests/chat_video/test_service.py
++++ b/tests/chat_video/test_service.py
+@@ -33,10 +33,17 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(
+     encode_stops: list[object] = []
+ 
+     def fake_record(
+-        html: str, options: VideoOptions, workdir: Path, *, expected_ms: int, should_stop
++        html: str,
++        options: VideoOptions,
++        workdir: Path,
++        *,
++        expected_ms: int,
++        should_stop,
++        chromium_path: str = "",
+     ) -> Path:
+         seen["html"] = html
+         seen["expected_ms"] = expected_ms
++        seen["chromium_path"] = chromium_path
+         seen["workdir"] = workdir
+         seen["record_stop"] = should_stop
+         out = workdir / "recording.webm"
+@@ -68,9 +75,11 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(
+         assets={"/chart.png": b"\x89PNG\r\n\x1a\n" + b"\0" * 8},
+         should_stop=stop,
+         on_stage=stages.append if with_stages else None,
++        chromium_path="/usr/bin/chromium",
+     )
+ 
+     assert result == {"gif": b"gif:WEBM", "mp4": b"mp4:WEBM"}
++    assert seen["chromium_path"] == "/usr/bin/chromium"  # the knob reaches the recorder
+     # The worker's heartbeat names the stage from this: once before the
+     # recording, once before the encodes (one for all formats).
+     assert stages == (["rendering", "encoding"] if with_stages else [])
+diff --git a/tests/config/test_loader.py b/tests/config/test_loader.py
+index 82d80730..6028f082 100644
+--- a/tests/config/test_loader.py
++++ b/tests/config/test_loader.py
+@@ -1425,6 +1425,21 @@ def test_a_chat_video_ceiling_that_cannot_work_refuses_to_boot(tmp_path: Path, s
+         load(config_path=cfg, env={})
+ 
+ 
++def test_chat_video_chromium_path_is_a_string_knob_among_the_integer_ceilings(tmp_path: Path):
++    """The one non-integer key: a path to record with (an air-gapped image's
++    apt Chromium), empty by default. The positive-integer rule must skip it
++    — a first version applied that rule to every field and refused the
++    default `""` on every boot — and it refuses a non-string."""
++    assert load(config_path=tmp_path / "missing.yaml", env={}).chat_video.chromium_path == ""
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text("chat_video:\n  chromium_path: /usr/bin/chromium\n", encoding="utf-8")
++    assert load(config_path=cfg, env={}).chat_video.chromium_path == "/usr/bin/chromium"
++
++    cfg.write_text("chat_video:\n  chromium_path: 5\n", encoding="utf-8")
++    with pytest.raises(ValueError, match=re.escape("chat_video.chromium_path must be a string")):
++        load(config_path=cfg, env={})
++
++
+ def test_a_chat_video_header_with_every_key_commented_out_is_refused_as_a_null_section(
+     tmp_path: Path,
+ ):
