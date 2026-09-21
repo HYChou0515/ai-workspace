@@ -82,6 +82,34 @@ def test_the_frame_size_reaches_the_page_as_variables():
     assert "--chat-w: 900px" in page
 
 
+def test_the_theme_reaches_the_page_and_light_is_the_apps_own_palette():
+    """One video is all dark or all light (`VideoOptions.theme`); the page
+    switches on `<html data-theme>`, the way the app does. The light
+    colours are the app's light tokens (`web/src/styles/tokens.css`:
+    paper / white / ink), not a palette of the player's own."""
+    dark = _page([])
+    light = _page([], theme="light")
+
+    assert '<html lang="zh-Hant" data-theme="dark">' in dark
+    assert '<html lang="zh-Hant" data-theme="light">' in light
+    # The light block exists in every page (it is the same template) and
+    # carries the app's paper, white and ink.
+    assert ':root[data-theme="light"]' in light
+    for token in ("#F1ECE0", "#FBF9F4", "#1A1B1F"):
+        assert token in light
+    # The composer's focus ring and glow follow the theme's accent — the
+    # rule reads the two variables and carries no literal colour of its own
+    # (a hard-coded blue put a blue halo around light's orange border), and
+    # the light block sets them in its accent's hue.
+    focused = re.search(r"#composer\.focused \{[^}]*\}", light)
+    assert focused is not None
+    assert "var(--acc-ring)" in focused.group(0) and "var(--acc-glow)" in focused.group(0)
+    assert "rgba(" not in focused.group(0)
+    light_block = re.search(r':root\[data-theme="light"\] \{[^}]*\}', light)
+    assert light_block is not None
+    assert "--acc-ring:rgba(240,80,46" in light_block.group(0)
+
+
 def test_the_ui_scales_with_the_frame_unless_told_otherwise():
     """A 1080p frame is not a 720p page with more black around it: the whole
     UI grows with the frame (1.5× at 1080p, 3× at 4K), never below 1, and

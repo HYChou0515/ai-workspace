@@ -26,7 +26,7 @@ def test_every_field_has_a_flag_and_the_output_name_picks_the_format():
             "--zoom", "1.4", "--zoom-ms", "700",
             "--type-speed", "40", "--stream-speed", "15", "--tool-pause", "900",
             "--speed", "1.5", "--max-seconds", "45", "--tool-output-chars", "300",
-            "--max-asset-bytes", "1000",
+            "--max-asset-bytes", "1000", "--theme", "light",
         ]
     )  # fmt: skip
 
@@ -35,7 +35,7 @@ def test_every_field_has_a_flag_and_the_output_name_picks_the_format():
         zoom=1.4, zoom_ms=700,
         type_ms=40, stream_ms=15, tool_pause_ms=900,
         speed=1.5, max_seconds=45, tool_output_chars=300, max_asset_bytes=1000,
-        fmt=("mp4",),
+        fmt=("mp4",), theme="light",
     )  # fmt: skip
 
 
