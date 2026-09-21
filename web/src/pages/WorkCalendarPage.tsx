@@ -110,7 +110,8 @@ export function WorkCalendarPage({ client = workCalendarApi }: { client?: WorkCa
           readOnly={!canEdit}
           rows={8}
           onChange={(e) => setText(e.target.value)}
-          style={box}
+          className="input input--block"
+          style={{ fontFamily: "var(--font-mono)" }}
         />
         {errors.length > 0 && (
           <ul data-testid="calendar-errors" style={errorList}>
@@ -166,16 +167,6 @@ const dayLabel: React.CSSProperties = {
   alignItems: "center",
   gap: 6,
   fontSize: pxToRem(13),
-};
-const box: React.CSSProperties = {
-  width: "100%",
-  fontFamily: "var(--font-mono)",
-  fontSize: pxToRem(13),
-  padding: 8,
-  borderRadius: 6,
-  border: "1px solid var(--paper-3)",
-  background: "var(--paper-2)",
-  color: "inherit",
 };
 const errorList: React.CSSProperties = {
   margin: 0,

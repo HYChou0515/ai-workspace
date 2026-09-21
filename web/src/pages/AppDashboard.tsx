@@ -572,7 +572,10 @@ function FilterSelect({
       data-active={active ? "" : undefined}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      style={{ height: 28, padding: "0 8px", fontSize: pxToRem(12), fontFamily: "inherit", color: active ? "var(--accent)" : "var(--text-paper)", background: "var(--white)", border: `1px solid ${active ? "var(--accent)" : "var(--paper-3)"}`, borderRadius: "var(--radius-btn)", cursor: "pointer" }}
+      className="input"
+      // 28px: level with the `Clear filters` button beside it (`.btn` sm). The
+      // active state is a colour on the house chrome, not a chrome of its own.
+      style={{ flex: "none", height: 28, minHeight: 28, padding: "0 8px", fontSize: pxToRem(12), cursor: "pointer", ...(active ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}) }}
     >
       <option value="any">{prefix} · any</option>
       {options.map((o) => (
