@@ -80,6 +80,38 @@ issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前
 | P4 Python 卷 | — （改卷子的測試；證明會紅：翻一列判決 → 點名那列；`_MAX_CORES` 改 2048 → 紅在上限那行） | |
 | P4 前端卷 | `cpuFault` 不存在 | `over` 改回傳 `unreadable` → 正控制案例紅 |
 
+## As-built（2026-09-21，P1–P4 對 `origin/master` `ca9d33a8`）
+
+每條測試都先在未修的程式碼上跑紅，突變探針用檔案拷貝、跑完還原：
+
+| Phase | 未修時 | 突變 → 紅在哪 |
+|---|---|---|
+| P1 `ef902719` | `KeyError: 'max_cpu_cores'` | route 寫死 `max_cpu_cores=1024.0` → 只有這條紅，`assert 1024.0 == 7.0` |
+| P2 `0f076105` | `cpuFault is not a function` ×2、`memoryFault` ×2 | 兩個比較改成模組常數、detail 寫死 → 只有兩條「上限是 record 給的」紅 |
+| P3 `0c02565b` | mapper `expected undefined to be 7`；panel 兩條；modal 整檔（還 import 舊名） | panel 的 cpu hint `detail` 寫死 `"1024"` → 4 條紅（panel 兩條 hint、modal record-7、modal over/unreadable） |
+| P4 `cab0ecc6` | —（改卷子的測試） | 翻 `1025` 為 accepted → `cpu '1025': server says False`；`_MAX_CORES` 改 2048 → `stale sheet … assert 1024 == 2048.0`；前端 `over` 改回 `unreadable` → 只有正控制那條紅 |
+
+一個 plan 沒寫到的細節：`detail` 是資料、不能含「或」這種 locale 字，範例用 ` / ` 接
+（`"1 / 0.5"`、`"512M / 512MB / 1.5G"`），「例如 {detail}」留在 i18n。Python 卷子改分 2.9 秒（import），
+上一版開 app 的做法 8–11 秒。
+
+## Live check（2026-09-21，worktree build on 127.0.0.1:8258，`per_app.default` 2 核 / 512M + `per_user` 4 核 / 8G，真 Chromium 1280）
+
+Playground item，未啟動。`GET …/environment` 回 `max_cpu_cores: 1024.0, max_memory_bytes: 1125899906842624`；
+`PUT …/resources {"cpu_cores": 2048}` 仍 422、訊息同以前。modal 裡逐步（每列是 Playwright 讀回的 DOM）：
+
+| 打的字 | `aria-invalid` | hint | Save |
+|---|---|---|---|
+| CPU `2048` | true | At most 1024 cores. | 灰 |
+| CPU `1024` | — | — | 可按 |
+| CPU `0` | true | More than 0 — e.g. 1 / 0.5. | 灰 |
+| 記憶體 `1025T` | true | At most 1024T. | 灰 |
+| 記憶體 `2P` | true | A number with a unit — e.g. 512M / 512MB / 1.5G. | 灰 |
+| 記憶體 `1024T` | — | — | 可按 |
+
+cpu input 沒有 `max` 屬性（決定 8）。存 `2` / `1024T` → record `stated_memory_bytes = 1125899906842624`、
+`memory_bound_by = "app"`。截圖 `live2-cpu-2048.png` / `live2-mem-1025T.png` / `live2-after-save.png`（job tmp，不進 repo）。
+
 ## 驗證（DoD）
 
 - targeted 測試 + `ruff check` / `ruff format --check` / `ty check` / `pnpm run typecheck`。
