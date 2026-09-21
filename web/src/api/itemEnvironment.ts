@@ -42,6 +42,12 @@ export type ItemEnvironment = {
    *  against the owner's, which for a delegate are different people. */
   cpuBoundBy: "app" | "quota" | null;
   memoryBoundBy: "app" | "quota" | null;
+  /** The hard ceilings the server refuses a stated size against (#830) — the
+   *  last sentence of the story `stated`/`effective`/`enforced` tell. Read
+   *  from the record, never held here: a copy would keep teaching `1024`
+   *  after the server moved. */
+  maxCpuCores: number;
+  maxMemoryBytes: number;
 };
 
 /** A size to store. `null` in either dimension CLEARS it — which is not zero,
@@ -63,6 +69,8 @@ type Wire = {
   enforced_memory_bytes: number | null;
   cpu_bound_by: "app" | "quota" | null;
   memory_bound_by: "app" | "quota" | null;
+  max_cpu_cores: number;
+  max_memory_bytes: number;
 };
 
 export type ItemEnvironmentApi = {
@@ -91,6 +99,8 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       enforcedMemoryBytes: w.enforced_memory_bytes ?? null,
       cpuBoundBy: w.cpu_bound_by ?? null,
       memoryBoundBy: w.memory_bound_by ?? null,
+      maxCpuCores: w.max_cpu_cores,
+      maxMemoryBytes: w.max_memory_bytes,
     };
   },
   async setSize(slug, itemId, size) {

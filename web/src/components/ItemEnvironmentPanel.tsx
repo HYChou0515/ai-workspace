@@ -37,7 +37,7 @@ import type { ItemEnvironment } from "../api/itemEnvironment";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { Gauge } from "./Gauge";
-import { toSizeString } from "./ItemEnvironmentSize";
+import { type SizeFault, toSizeString } from "./ItemEnvironmentSize";
 
 export type EnvBudget = {
   cpu: number;
@@ -54,9 +54,11 @@ export type ItemEnvironmentPanelProps = {
   budget: EnvBudget | null;
   canEdit: boolean;
   draft: SizeDraft;
-  /** Which fields hold something the server would refuse (the modal decides;
-   *  this only marks the field and shows its grammar). */
-  invalid?: { cpu: boolean; memory: boolean };
+  /** Which fields hold something the server would refuse, and why (the modal
+   *  decides; this only marks the field and shows the matching hint — the
+   *  grammar for `"unreadable"`, the record's ceiling for `"over"` — with the
+   *  fault's `detail` interpolated). */
+  fault?: { cpu: SizeFault; memory: SizeFault };
   /** A save is out (PUT or its re-read): the fields hold still so a
    *  keystroke cannot land between the write and the record catching up. */
   busy?: boolean;
@@ -72,7 +74,7 @@ export function ItemEnvironmentPanel({
   budget,
   canEdit,
   draft,
-  invalid = { cpu: false, memory: false },
+  fault = { cpu: null, memory: null },
   busy = false,
   onDraft,
   onCloseSandbox,
@@ -145,8 +147,8 @@ export function ItemEnvironmentPanel({
                   value={draft.cpu}
                   placeholder={cpuEffective === null ? "" : String(cpuEffective)}
                   disabled={still}
-                  aria-invalid={invalid.cpu || undefined}
-                  aria-describedby={invalid.cpu ? "itemenv-cpu-hint" : undefined}
+                  aria-invalid={fault.cpu !== null || undefined}
+                  aria-describedby={fault.cpu !== null ? "itemenv-cpu-hint" : undefined}
                   onChange={(e) => onDraft({ cpu: e.target.value })}
                 />
               ) : (
@@ -178,9 +180,13 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
-              {invalid.cpu ? (
+              {fault.cpu !== null ? (
                 <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
-                  {t("itemenv.field.cpu.hint")}
+                  {/* One key per fault type; the fault's `detail` (the
+                      grammar's examples, or the record's ceiling) is data. */}
+                  {t(fault.cpu.type === "over" ? "itemenv.field.cpu.over" : "itemenv.field.cpu.unreadable", {
+                    detail: fault.cpu.detail,
+                  })}
                 </p>
               ) : null}
               {cpuClamped ? (
@@ -207,8 +213,8 @@ export function ItemEnvironmentPanel({
                   // would be one nobody vouched for.
                   placeholder={toSizeString(memEffective) ?? ""}
                   disabled={still}
-                  aria-invalid={invalid.memory || undefined}
-                  aria-describedby={invalid.memory ? "itemenv-memory-hint" : undefined}
+                  aria-invalid={fault.memory !== null || undefined}
+                  aria-describedby={fault.memory !== null ? "itemenv-memory-hint" : undefined}
                   onChange={(e) => onDraft({ memory: e.target.value })}
                 />
               ) : (
@@ -238,9 +244,12 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
-              {invalid.memory ? (
+              {fault.memory !== null ? (
                 <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
-                  {t("itemenv.field.memory.hint")}
+                  {t(
+                    fault.memory.type === "over" ? "itemenv.field.memory.over" : "itemenv.field.memory.unreadable",
+                    { detail: fault.memory.detail },
+                  )}
                 </p>
               ) : null}
               {memClamped && memStated !== null && memEffective !== null ? (

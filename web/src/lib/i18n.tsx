@@ -1128,11 +1128,18 @@ export const messages = {
     "zh-TW": "已存檔，但讀不回最新狀態。關掉再開一次。",
     en: "Saved — but the latest status couldn't be read back. Close it and open it again.",
   },
-  "itemenv.field.cpu.hint": { "zh-TW": "要大於 0，例如 1 或 0.5。", en: "More than 0 — e.g. 1 or 0.5." },
-  "itemenv.field.memory.hint": {
-    "zh-TW": "數字加單位，例如 512M、512MB 或 1.5G。",
-    en: "A number with a unit — e.g. 512M, 512MB or 1.5G.",
+  // One key per fault type (#830). `{detail}` is the fault's data: the
+  // grammar's examples (`1 / 0.5`, `512M / 512MB / 1.5G`) for `unreadable`,
+  // the RECORD's ceiling in the server's own spelling (`1024` / `1024T`) for
+  // `over` — what a person can type back, never the display format
+  // (`1024.0 TB`), which the server would refuse.
+  "itemenv.field.cpu.unreadable": { "zh-TW": "要大於 0，例如 {detail}。", en: "More than 0 — e.g. {detail}." },
+  "itemenv.field.cpu.over": { "zh-TW": "最多 {detail} 核。", en: "At most {detail} cores." },
+  "itemenv.field.memory.unreadable": {
+    "zh-TW": "數字加單位，例如 {detail}。",
+    en: "A number with a unit — e.g. {detail}.",
   },
+  "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
     en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",
