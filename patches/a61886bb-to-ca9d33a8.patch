@@ -1,0 +1,241 @@
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 39077aa1..4df0cbda 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -5,6 +5,13 @@
+ #   docker build -t rca-app:latest -f docker/Dockerfile .
+ # Build for a sub-path deploy (e.g. https://company.com/my-svc/rca):
+ #   docker build -t rca-app:rca --build-arg BASE_PATH=/my-svc/rca/ -f docker/Dockerfile .
++# Build the chat-video WORKER image (the app + Chromium + ffmpeg, +1.63 GB):
++#   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
++#
++# Docker builds the LAST stage when no --target is given, so the last stage
++# here is `api` — the app image as is. The worker stage sits before it and is
++# reached only by name; while it was the last stage (#823), a bare build
++# handed every API pod the worker image.
+ #
+ # (This is the APP image. docker/Dockerfile.workspace is the agent SANDBOX image.)
+ 
+@@ -85,11 +92,13 @@ CMD ["python", "-m", "workspace_app"]
+ # ---- stage 3: the chat-video worker (plan-chat-video-export) ----
+ # The same app, plus a headless Chromium and ffmpeg — the two tools a chat
+ # video needs and nothing else in the platform does. Its own image so the
+-# API pod (and every other worker) does not carry the ~0.7–1 GB they add;
++# API pod (and every other worker) does not carry the 1.63 GB they add;
+ # `kubernetes/base/workers.yaml` runs it as `rca-worker-chat-video`.
+ #
+ #   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
+ #
++# NOT the last stage: see `api` below.
++#
+ # `--with-deps` installs Chromium's shared libraries through apt; the
+ # browser itself lands under PLAYWRIGHT_BROWSERS_PATH, outside the venv, so
+ # a later `uv sync` cannot remove it. The worker boots the API's own
+@@ -103,3 +112,8 @@ RUN uv sync --frozen --no-dev --extra chat-video \
+     && playwright install --with-deps chromium \
+     && rm -rf /var/lib/apt/lists/*
+ CMD ["python", "-m", "workspace_app.worker", "chat-video"]
++
++# ---- stage 4: the API image, the default target ----
++# Nothing but a name: a `docker build` with no --target builds the last stage,
++# and the app image is what that must be (tests/chat_video/test_image.py).
++FROM app AS api
+diff --git a/docs/deployment.md b/docs/deployment.md
+index e9240356..2c0bc0c0 100644
+--- a/docs/deployment.md
++++ b/docs/deployment.md
+@@ -507,8 +507,10 @@ RCA 的 system prompt 是純 markdown，存在
+     `WorkspaceFiles`(額度、路徑 jail、鏡像),而那個 facade 只有 `create_app` 會組,所以
+     worker 直接拿 API 組好的 coordinator(`worker.API_REGISTRY_JOBTYPES` 兩個成員各有各的理由)。
+     它跑的是**另一個 image** `rca-app-chat-video`(`docker/Dockerfile` 的 `chat-video` stage:
+-    同一個 app + headless Chromium + ffmpeg,估多 0.5–1 GB——**沒量**,本機 build 卡在 LibreOffice 的 apt;API pod 用不到所以不放進 `rca-app`):
++    同一個 app + headless Chromium + ffmpeg,那一層量到 **+1.63 GB**(API 1.81 GB → worker 3.44 GB,#834 量的;API pod 用不到所以不放進 `rca-app`):
+     `docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .`。
++    **`--target` 不能省**:不帶 target 的 `docker build` 做的是 API image(Dockerfile 最後一個 stage `api`);
++    #823 到 #834 之間那個 stage 是最後一個,所以那段時間照文件 build 的 `rca-app` 其實是 worker image——用它起的 API pod 跑的是 worker,不 serve HTTP。
+     記憶體照 `workers.yaml` 上量到的數字給(錄影時 Chromium 154–172 MB + 錄影 ffmpeg 147 MB,編碼
+     mp4 273–320 MB / gif 230–640 MB,兩段不重疊);OOM 只壞一支影片的進度檔,不影響 request。
+     all-in-one(`run_consumers: true`)的 API 也會消費這種 job——但 `rca-app` image 沒有
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 964b8cd8..9117ed54 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -740,27 +740,6 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+   「更新為出貨版本」，按了才換新。
+ 
+ ---
+-### 2026-09-19 · #828 工具 modal 按套件折疊；整包授權在 picker 變成逐指令列 {#pr-828}
+-
+-**行為**（沒有新設定；運營方不用做事，但要知道以下幾件事）
+-
+-- item 的「助理可用的工具」modal 改成按套件折疊，而且 **app 授整包的套件（`tools[]` 寫 `rca-tools` 這種）現在一個指令
+-  一列**，每列可各自預設／開啟／關閉；agent 拿到的工具集也改成逐指令算——config 在「packages 齊了」的那一點定案
+-  （`apps/catalog.py:finalize_tool_grants`），chat／workflow／排程 turn、WUI 頁面的 `callTool`、picker、replay 讀的是同一份答案。
+-  `app.json` 不用改。
+-- 既有 item 存的整包鍵（`attached_tool_prefs` 裡的 `"rca-tools": false`）**繼續有效**：讀的時候當成該套件每個指令都釘成那個值
+-  （指令鍵優先）。使用者在 modal 第一次（有改動的）儲存時，那把整包鍵會被拆成逐指令鍵寫回——資料在 item 列上，沒有 migrate 要跑。
+-  漏知道的症狀：無。沒有指令的套件（`python-stack`，它是 sandbox 的 Python 載體）仍是一列。
+-- 隨之而來、沒有開關的幾個語意（都是「picker 關掉的指令就是關掉」）：workflow step 的 `tools:` 寫 `rca-tools` 時拿到的是
+-  **這個 item 持有的那幾個指令**（被釘掉的不在），寫 `rca-tools:spc` 這種指令名也可以（驗證器認得部署有的套件指令：拼錯的指令名會被拒；解不出的套件或沒有指令的套件寫 `pkg:x` 驗證器擋不了，執行時丟掉並在 log 留一行 `workflow node: tools not held by this item, dropped`）；sub-agent 定義的 `tools`
+-  可以寫整包名或指令名（`save_subagent` 接受、載入與委派時縮成持有的指令；它拒絕時的「Available」清單從此列的是指令名）；
+-  WUI 頁面叫一個被釘掉的指令會 403（訊息指向 tool picker）。一個整包鍵現在也管到 app 只授部分指令的套件（以前那種鍵是 no-op）。
+-
+-**確認做完**：開任一 rca item 的工具 modal，`Rca Tools` 是一個可展開的組（10 列）；`GET /api/a/rca/items/<id>/tools`
+-的 `rca-tools:*` 列 `group` 都是 `rca-tools`。
+-
+----
+-
+ ### 2026-09-19 · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
+ 
+ **行為**（不動設定也會多出來的東西）
+@@ -787,8 +766,8 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+ 
+ - **rollout 前**：多一種 JobType `chat-video` → `rca-worker-chat-video` Deployment（`python -m workspace_app.worker chat-video`），
+   **用自己的映像 `rca-app-chat-video`**（`docker/Dockerfile` 的 `chat-video` stage：app + `chat-video` extra + Chromium + ffmpeg +
+-  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，估 +0.5–1 GB——**沒量**，本機的 image build 卡在
+-  LibreOffice 的 apt 下載；CI 第一次 build 完把數字記回這裡。不塞進 `rca-app`，每顆 API pod 沒理由多這些）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
++  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，那一層 **+1.63 GB**（#834 量的）。不塞進 `rca-app`，每顆 API pod 沒理由多這些；
++  **build 一定帶 `--target chat-video`**，不帶 target 做出來的是 API image——見 [#834](#pr-834)）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
+   （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
+   sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
+   `workers.yaml` 的註解有數字）。`terminationGracePeriodSeconds: 900`：SIGTERM 進來時在做的那支會做完才退，最壞是它自己的三個期限相加
+@@ -807,6 +786,50 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+ 
+ ---
+ 
++### 2026-09-19 · #828 工具 modal 按套件折疊；整包授權在 picker 變成逐指令列 {#pr-828}
++
++**行為**（沒有新設定；運營方不用做事，但要知道以下幾件事）
++
++- item 的「助理可用的工具」modal 改成按套件折疊，而且 **app 授整包的套件（`tools[]` 寫 `rca-tools` 這種）現在一個指令
++  一列**，每列可各自預設／開啟／關閉；agent 拿到的工具集也改成逐指令算——config 在「packages 齊了」的那一點定案
++  （`apps/catalog.py:finalize_tool_grants`），chat／workflow／排程 turn、WUI 頁面的 `callTool`、picker、replay 讀的是同一份答案。
++  `app.json` 不用改。
++- 既有 item 存的整包鍵（`attached_tool_prefs` 裡的 `"rca-tools": false`）**繼續有效**：讀的時候當成該套件每個指令都釘成那個值
++  （指令鍵優先）。使用者在 modal 第一次（有改動的）儲存時，那把整包鍵會被拆成逐指令鍵寫回——資料在 item 列上，沒有 migrate 要跑。
++  漏知道的症狀：無。沒有指令的套件（`python-stack`，它是 sandbox 的 Python 載體）仍是一列。
++- 隨之而來、沒有開關的幾個語意（都是「picker 關掉的指令就是關掉」）：workflow step 的 `tools:` 寫 `rca-tools` 時拿到的是
++  **這個 item 持有的那幾個指令**（被釘掉的不在），寫 `rca-tools:spc` 這種指令名也可以（驗證器認得部署有的套件指令：拼錯的指令名會被拒；解不出的套件或沒有指令的套件寫 `pkg:x` 驗證器擋不了，執行時丟掉並在 log 留一行 `workflow node: tools not held by this item, dropped`）；sub-agent 定義的 `tools`
++  可以寫整包名或指令名（`save_subagent` 接受、載入與委派時縮成持有的指令；它拒絕時的「Available」清單從此列的是指令名）；
++  WUI 頁面叫一個被釘掉的指令會 403（訊息指向 tool picker）。一個整包鍵現在也管到 app 只授部分指令的套件（以前那種鍵是 no-op）。
++
++**確認做完**：開任一 rca item 的工具 modal，`Rca Tools` 是一個可展開的組（10 列）；`GET /api/a/rca/items/<id>/tools`
++的 `rca-tools:*` 列 `group` 都是 `rca-tools`。
++
++---
++
++### 2026-09-21 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
++
++**設定** — 不動。**資料** — 不動。
++
++**k8s · CI 側**
++
++- Docker 不帶 `--target` 就 build 檔案裡**最後一個** stage。#823 把 `chat-video` stage 放在最後，所以 #823 之後照文件的
++  `docker build -t rca-app … -f docker/Dockerfile .` 做出來的 `rca-app` 其實是 worker image：多 Chromium + ffmpeg（+1.63 GB）、
++  `CMD` 是 `python -m workspace_app.worker chat-video`——而 `kubernetes/base/deployment.yaml` 的 API 容器**沒有**自己的 `command`，
++  所以用那顆 image 起的「API pod」跑的是 worker 進程，不 serve HTTP：`/api/readyz` 永遠不 ready、rollout 卡住、舊 pod 繼續撐著。
++  這版在最後補一個 `api` stage 把預設拉回 API。**`rollout 前`**：如果你們 CI 在 #823 之後 build 過 `rca-app`，用這版**重 build 一次**
++  就瘦回去；worker image 一律 `--target chat-video`（`docs/deployment.md` §11 兩條指令）。
++  漏做的症狀：新的 API pod 永遠不 ready，`kubectl logs` 裡是 worker 在消費 job、沒有 uvicorn；image 3 GB 級；
++  `docker image inspect rca-app --format '{{.Config.Cmd}}'` 印的是 worker。
++
++**確認做完**
++
++- `docker image inspect rca-app:<tag> --format '{{.Config.Cmd}}'` 是 `[python -m workspace_app]`（不是 `workspace_app.worker chat-video`）；
++  `docker run --rm rca-app:<tag> sh -c 'which ffmpeg; ls /ms-playwright'` 兩個都空。
++- `docker run --rm rca-app-chat-video:<tag> sh -c 'which ffmpeg; ls /ms-playwright'` 有 `/usr/bin/ffmpeg` 與 `chromium-*`。
++
++---
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/docs/plan-chat-video-export.md b/docs/plan-chat-video-export.md
+index 850938a6..fa179d62 100644
+--- a/docs/plan-chat-video-export.md
++++ b/docs/plan-chat-video-export.md
+@@ -27,7 +27,7 @@
+   都壓不掉雙峰,time-box 到此,規格照量到的邊界寫:integration 測試釘 gif ≤ 1024 MB、mp4 ≤ 512 MB(舊碼 2,119 / 1,260 紅)。
+ - 檔案大小:720p 41 s mp4 **1.8 MB**、gif **18.2 MB**。
+ - 依賴大小:Chromium 380–550 MB、`fonts-noto-cjk` 87 MB、ffmpeg + libav 約 20 MB(apt 完整閉包更多)、`playwright` wheel 幾十 MB
+-  ⇒ image 約 **+0.7–1 GB**。
++  ⇒ image 約 **+0.7–1 GB**(量到是 +1.63 GB,見 P14)。
+ - 現有碼:`ImportCoordinator`(`kb/import_jobs.py`)是 job 的形狀範本;`WorkspaceFiles.write` 走 `_warm` → `resolve_io_handle`
+   **不開 session** 的全域解析(暖的寫活目錄、冷的寫 durable);worker 的精簡組成 `build_bundle` **沒有** `files`,但 blob-gc worker
+   走 `build_app`(永遠不 serve)拿 API 的整個組成(`worker.API_REGISTRY_JOBTYPES`);blob-gc 的 k8s 已掛 `/data` + `/scratch` +
+@@ -271,6 +271,10 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範
+ - **P13(CI 抓到的)**:`_check_chat_video` 把「沒有 `chat_video` 這個 key」當成 null 段落拒絕——production 的 merged 一定有這段(預設值疊上去),但 `_validate` 也被既有測試拿部分 dict 直接呼叫(`test_cov_fill_config`),`rest` 分片紅;改成 key 不在就不查、在但是 null 才拒。教訓:改 loader 要跑整個 `tests/config`,不是只跑 `test_loader.py`。
+ - 文件三句改掉:「最多 70 秒回到錄影中」是公式不是接手順序(broker 要等 stale sweep 把自己那列標掉;最多重送 3 次);「all-in-one 沒有重送」是假的(`start_consume` 先 `recover_stale_jobs`);「後面有排隊就被 SIGKILL」只在排隊比 grace 長時成立。P11 的 commit message 寫「十二個突變」,`r2_mutants.py` 數起來是 8 + 3 = 11。
+ 
++### P14 — image 終於 build 過(PR #834,合併後才做)
++- 本機用「`app` stage 去掉 LibreOffice + `chat-video` 那四行一字不差」的探針 Dockerfile build 過:那一層 +1.69 GB(整顆 3.06 GB);之後真 Dockerfile 也 build 過了(LibreOffice 的 apt 這次過了):API 1.81 GB、worker 3.44 GB,那一層 **+1.63 GB**(LibreOffice 的相依已經帶了一些共用函式庫),文件用這個數。容器裡 `python -m workspace_app.chat_video` 17 秒出 mp4(h264 1280×720 yuv420p 11.5 s)+ gif,中文有字型;Chromium 在 `/ms-playwright`。之前寫的「估 +0.5–1 GB」低估了,三處文件改成量到的。
++- **user 讀 Dockerfile 抓到的缺陷**:`chat-video` stage 放在最後,Docker 不帶 `--target` 就 build 最後一個 stage,所以 #823 之後照文件的指令 build 出來的 `rca-app` 是 worker image(+1.63 GB、CMD 是 worker;API Deployment 沒有自己的 `command`,所以用它起的 API pod 跑的是 worker、不 serve HTTP,rollout 會卡在 readiness)。修法:最後補一個空的 `FROM app AS api` 把預設拉回 API;`tests/chat_video/test_image.py` 釘住「最後一個 stage 是 api」(對 #823 的檔案會紅)。這是 image 從沒 build 過的直接後果——review 三輪都在讀那四行,沒有人 build。
++
+ ## 驗收
+ 
+ - 前端 Export 選單三種都能出檔;md 貼進報告可讀;範圍「最近 5 則」出的內容就是最新 5 則。
+diff --git a/kubernetes/base/workers.yaml b/kubernetes/base/workers.yaml
+index a2ca8c4d..4a0fb3c7 100644
+--- a/kubernetes/base/workers.yaml
++++ b/kubernetes/base/workers.yaml
+@@ -454,10 +454,10 @@ spec:
+ # ── chat-video render (plan-chat-video-export) — fixed 1 replica, no HPA ──────
+ # One job = one headless Chromium recording the transcript replay in real time
+ # (a 41-second video takes 41 seconds to record) and one ffmpeg encode. The
+-# image is NOT `rca-app`: Chromium + ffmpeg add an estimated 0.5–1 GB (not
+-# measured yet — the local build stalled on LibreOffice's apt) the API pod has
+-# no use for, so `docker/Dockerfile`'s `chat-video` stage builds
+-# `rca-app-chat-video` — the same app, plus the two tools.
++# image is NOT `rca-app`: Chromium + ffmpeg add 1.63 GB (measured, #834) the
++# API pod has no use for, so `docker/Dockerfile`'s `chat-video` stage builds
++# `rca-app-chat-video` — the same app, plus the two tools; build it with
++# `--target chat-video` (a bare build is the API image).
+ #
+ # Like blob-gc, this worker boots the API's OWN composition (`build_app`, never
+ # served): the job reads its transcript and writes its video through the API's
+diff --git a/tests/chat_video/test_image.py b/tests/chat_video/test_image.py
+new file mode 100644
+index 00000000..6d230db5
+--- /dev/null
++++ b/tests/chat_video/test_image.py
+@@ -0,0 +1,40 @@
++"""`docker/Dockerfile`'s stages (plan-chat-video-export P9, the follow-up
++fix): Docker builds the LAST stage when no ``--target`` is given, and the
++documented API build command gives none — so the API image is whatever
++stage comes last. #823 appended the ``chat-video`` stage at the end, and
++from then on ``docker build -t rca-app …`` produced the worker image:
++Chromium + ffmpeg (+1.63 GB, measured) and a worker CMD, on every API pod,
++against the design the same file states ("API pod 用不到所以不放進
++rca-app"). The rule pinned here is the one Docker applies, read off the
++text: the final stage is the API, and the worker is reached by name.
++"""
++
++from __future__ import annotations
++
++import re
++from pathlib import Path
++
++DOCKERFILE = Path(__file__).resolve().parents[2] / "docker" / "Dockerfile"
++
++
++def _stages() -> list[tuple[str, str]]:
++    """``(base, name)`` per ``FROM`` line, in file order."""
++    text = DOCKERFILE.read_text(encoding="utf-8")
++    return re.findall(r"^FROM\s+(\S+)\s+AS\s+(\S+)\s*$", text, re.MULTILINE)
++
++
++def test_the_default_build_target_is_the_api_not_the_worker():
++    stages = _stages()
++    assert stages, "no named FROM stages found"
++    base, name = stages[-1]
++    assert name == "api", f"the last stage is {name!r}: a bare `docker build` makes THAT image"
++    assert base == "app", f"the api stage must be the app stage as is, got FROM {base}"
++
++
++def test_the_worker_image_is_its_own_named_stage_on_top_of_the_app():
++    stages = dict((name, base) for base, name in _stages())
++    assert stages.get("chat-video") == "app"
++    text = DOCKERFILE.read_text(encoding="utf-8")
++    # The two build commands the docs give, both present in the header.
++    assert "docker build -t rca-app:latest -f docker/Dockerfile ." in text
++    assert "docker build --target chat-video -t rca-app-chat-video:latest" in text
