@@ -91,7 +91,7 @@ describe("AskUserCard", () => {
     for (const label of ["補充:Postgres", "自己回答"]) {
       const note = screen.getByLabelText(label) as HTMLInputElement;
       expect(note.classList.contains("input"), label).toBe(true);
-      expect(note.style.flexGrow || note.style.flex, `${label}: flex: 1 on the tag`).toMatch(/^1/);
+      expect(note.style.flexGrow, `${label}: flex: 1 on the tag`).toBe("1");
     }
   });
 

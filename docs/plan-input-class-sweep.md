@@ -13,9 +13,11 @@ under `web/src` changes until it is agreed.
 
 ## Ground truth (counted on `72903920`, the branch base, by the guard's own scan)
 
-The scan: every `<input|textarea|select` opening tag in `web/src/**/*.tsx`
-(tests excluded; comments blanked, newlines kept), bracket-aware across lines,
-minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
+The reader is the guard's: every `<input|textarea|select` JSX element in
+`web/src/**/*.tsx` (tests excluded), through the TypeScript compiler's
+parser (P7; the first reader was a regex scan, and both agree on every
+control of this base and of the swept tree), minus
+`type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 
 - **126 text-like controls in 54 files; 27 wear `.input`; 99 bare in 46
   files.** (#829 counted 123 / 18 / 105 on `f5fe658a`; its scan is not in
@@ -28,7 +30,8 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
   template literal), 4 with a slot reset (`border: none` inside a wrapper
   that draws the box), 16 via a shared style object (`inputStyle`, `input`,
   `field`, `noteInput`, `ta`, `box` — eight objects, six names), 6 other
-  (one a `{...inputStyle, border}` spread, the rest size / font only); 16
+  (three `{...inputStyle, …}` spreads — one adding a border — and three
+  size / font only); 16
   wear nothing on the tag, of which 15 are dressed or reset by
   a wrapper's descendant rule (`.page-tools`, `.admin-row`,
   `.kb-cardgen__pickbar`, `.kb-docsearch`, `.rvw-drawer__field`,
@@ -419,6 +422,17 @@ figures stay as `.export-dialog__field > input, … > select`),
   removed; `.kb-docsearch--inline` gets its floor; `.kb-cardgen__todo` is
   restored; two indentation slips; this plan's counts and the acceptance
   record.
+- **P8** Review round 2 (veracity / defect / regression on P7's snapshot; no
+  regression, no product defect; all three judged a further round not
+  worth running): the reader resolves a `style` const by its ONE
+  declaration in the file (a sibling component's own `const input` carrying
+  a border was read as the module's), refuses a spread on the tag, reads a
+  quoted key and refuses a computed one, holds a box to the inline-chrome
+  rule, and fails on a file the parser could not read; `.kb-composer`'s
+  box / ring and the doc search's floor are pinned (deleting either passed
+  every test); the `.ev-field` `height` pin no longer matches the tail of
+  `min-height`; the fill rows pin `flexGrow` exactly `"1"`; the record's
+  "After P7" says what the differential measured and what a focus probe did.
 
 ## Test plan (red first; targeted only)
 
@@ -428,8 +442,10 @@ figures stay as `.export-dialog__field > input, … > select`),
   control wears the class as a literal or sits in the whitelist; a
   whitelist entry must carry a reason and match exactly one bare control; a
   computed class is refused; a dressed control's `style` (an object literal
-  or a same-file const, anything else refused) carries no border (shorthand
-  or longhand), radius, background, box-shadow or outline; a slot has a JSX
+  or the ONE `const` of its name in the file — a name declared twice, a
+  `let`, a spread on the tag, a computed key: refused) carries no border
+  (shorthand or longhand), radius, background, box-shadow or outline, and a
+  box (any element wearing `input`) is held to the same; a slot has a JSX
   ancestor that wears `input input-group` or is the composer; no CSS rule
   whose selector names a control element or a class that rides beside
   `input` on any element (derived from the sources, never listed by hand)
@@ -442,8 +458,13 @@ figures stay as `.export-dialog__field > input, … > select`),
   placeholder saying `src/**` or `e.g. /*.md`, a `>` in a string, a computed
   class, an apostrophe in a trailing comment inside a tag, a quote in a
   regex literal, a slot in a box / in a box without `input` / outside any
-  box, a `style` const with and without a border, a conditional style;
-  every reported line is checked to hold its tag. base.css's companions are
+  box, a `style` const with and without a border, a conditional style, a
+  quoted and a computed key, a spread on the tag, a name declared in two
+  components, a `let`, a box with a border, a file the parser cannot read
+  (a failure, not a pass); every reported line is checked to hold its tag.
+  `.kb-composer`'s box, its ring and `.kb-docsearch--inline`'s floor are
+  pinned by regex (the one box the slot rule accepts by name was otherwise
+  unguarded). base.css's companions are
   pinned by regex (`textarea.input` padding, `.input--block`, `.input-group`
   + slot, `.inline-edit`'s `flex: none` and `min-height`, `.input:disabled`,
   `.input[aria-invalid]` with no second focus ring, no `outline` on
@@ -504,8 +525,14 @@ that replaces a mechanism gets another round; three rounds is the budget. CI
 runs on the final sha only after a round comes back clean — if reviewers
 cannot be launched (the account's spend limit), stop and report; do not run
 CI in their place. Round 1 (2026-09-21) ran all four on snapshots; its
-findings are P7. P7 replaced the guard's reader (a mechanism), so a second
-round verifies P7 before CI.
+findings are P7. P7 replaced the guard's reader (a mechanism), so round 2
+(veracity / defect / regression) verified P7: no regression (the two readers
+agree on all 126 controls of base and HEAD, and on the fixtures where they
+differ the new one is right), no product defect, three low findings inside
+the fix itself — P8, which adjusts the reader and adds pins, replaces
+nothing. All three lenses judged a third round not worth running as a
+sweep; the one question they left (do P8's pins redden on their mutations)
+is answered by the probe table above. CI runs on P8's sha.
 
 ## Acceptance record (2026-09-21, worktree build on 127.0.0.1:8263, Chromium 1148, 1280×900, light AND dark)
 
@@ -526,12 +553,12 @@ the job dir; the control run after all restores is green):
 | M08 | `.ev-select { border-top }` beside an allowed `border-color` | guard: no scoped re-draw |
 | M09 | `.inline-edit` loses `flex: none` | guard: companions |
 | M10 | `.input` loses `min-width: 0` | guard: companions |
-| M11 | `outline: none` back on `.input` | guard: companions |
+| M11 | `outline: none` back on `.input` | guard: companions (+ item-environment: the invalid field's focus is the ring) |
 | M12 | the table's `min-height: 26px` removed | entity-views: keeps the table calm |
 | M13 | `.ev-field:disabled` removed | entity-views: keeps the table calm |
 | M14 | ItemForm's `aria-invalid` removed | ItemForm: says the empty title with aria-invalid |
 | M15 | TodoPanel's goal row loses `input` | TodoPanel: rows shrink (both) + guard |
-| M16 | SearchPanel's row loses `input input-group` | SearchPanel.layout: row shrinks |
+| M16 | SearchPanel's row loses `input input-group` | SearchPanel.layout: row shrinks (+ guard: its slot is loose) |
 | M17 | item-environment.css copies `aria-invalid` back | guard: no other sheet names `.input` + item-environment (two) |
 | M18 | one range end loses the slot | entity-views: skins every control + guard |
 | M19 | `.input-group__field` loses `border: 0` | guard: companions |
@@ -616,15 +643,33 @@ term adder among chips, TodoPanel's goal row, SearchPanel's find row):
   the shape D4 rejected): role and sanity **collapse to 18px** and are
   reported so — the criterion bites.
 
-### After P7
+### After P7 and P8
 
-P7 changed no rest-state chrome: the differential re-run on its stylesheets
-lists the same 80 controls in light and in dark (the one dark-only 1/255
-difference of the first run is gone), with the expected focus-only deltas
-(the range's box no longer adds a third ring; the invalid field no longer
-adds a second). The HEAD-in-browser numbers above are from the P6 build; the
-P7 additions — the doc search's floor, the composer's ring — are measured in
-the differential and the tight-row probe.
+P7 changed no rest-state chrome. The differential re-run on its stylesheets
+(`measurements.json`, 123 entries per scheme: 77 controls + 46 rows / boxes)
+has 80 differing entries in light and the same 80 in dark — 63 of the 77
+controls and 17 rows / boxes, with 9 focus-outline changes among the
+controls; the one dark-only 1/255 difference of the first run is gone. The
+differential records focus on controls only, so the three focus claims were
+measured separately (`focus-probe.cjs`, this branch's stylesheets vs the
+base's, real Chromium): Tab into the PM range's start → the end's inset
+1px ring and the box's accent border, the box's outline `none` (two
+indicators; on P6 the box's outline was `solid 2px`, a third); click an
+invalid `.input` → border `--err`, outline `solid 2px`, `box-shadow: none`;
+click or Tab into the KB composer's textarea → the slot's outline `none`,
+the box's `solid 2px` (on base: nothing changed on screen). The HEAD-in-
+browser numbers above are from the P6 build; the P7 additions — the doc
+search's floor, the composer's ring — are measured in the tight-row probe
+and the focus probe. P8 changed tests and the guard only.
+
+Round 2's probes (P8; `probe_guard4.sh`, each restored): a sibling
+component's `const input` with a border, a `{...{ style }}` spread on a
+control, a quoted `"border"` key, a computed `["boxShadow"]` key, a box
+with an inline border → "no inline copy"; the `.kb-composer` rule, its ring,
+the doc search's floor deleted → "keeps the composer's box"; `.ev-field`'s
+`height` alone deleted → entity-views; a fill row at `flex: 10` and at
+`flex: none` → TodoPanel. Eleven, each on its own guard; the control run
+green.
 
 ### Not reached on this instance
 

@@ -42,7 +42,9 @@ describe("entity-views.css", () => {
     // `height` and `min-height`, or `.input`'s 34px min would win (#829 D3).
     const field = CSS.match(/\n\.ev-field\s*\{[^}]*\}/)?.[0] ?? "";
     expect(field, ".ev-field").not.toBe("");
-    expect(field).toMatch(/height:\s*28px/);
+    // `height` by itself, not the `-height` tail of `min-height`: without it
+    // a stretched flex row (`align-items: stretch`) made the field 60px.
+    expect(field).toMatch(/(^|[^-])height:\s*28px/);
     expect(field).toMatch(/min-height:\s*28px/);
     // inline cell fields reveal their border only on hover/focus.
     expect(CSS).toMatch(/\.ev-table tbody \.ev-field\s*\{[^}]*border-color:\s*transparent/);

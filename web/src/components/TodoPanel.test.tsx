@@ -223,14 +223,18 @@ describe("TodoPanel rows shrink instead of pushing their button off-screen (#fe-
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("goal-input")) as HTMLInputElement;
     expect(input.classList.contains("input")).toBe(true);
-    expect(input.style.flexGrow || input.style.flex, "flex: 1 on the tag").toMatch(/^1/);
+    // `flexGrow` exactly "1": happy-dom expands `flex: 1` to grow 1 / shrink 1
+    // / basis 0%, and would read `flex: 10` as "1" too under a looser match.
+    expect(input.style.flexGrow, "flex: 1 on the tag").toBe("1");
   });
 
   it("lets the add-todo input shrink so its Add button stays inside the panel", async () => {
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("todo-add-input")) as HTMLInputElement;
     expect(input.classList.contains("input")).toBe(true);
-    expect(input.style.flexGrow || input.style.flex, "flex: 1 on the tag").toMatch(/^1/);
+    // `flexGrow` exactly "1": happy-dom expands `flex: 1` to grow 1 / shrink 1
+    // / basis 0%, and would read `flex: 10` as "1" too under a looser match.
+    expect(input.style.flexGrow, "flex: 1 on the tag").toBe("1");
   });
 });
 
