@@ -312,9 +312,14 @@ def test_a_chromium_path_that_does_not_exist_names_the_knob_not_the_install_step
     monkeypatch, tmp_path
 ):
     """The install hint is wrong advice when the person pointed at a binary:
-    `playwright install` would not put one at THAT path."""
+    `playwright install` would not put one at THAT path. The text is
+    Playwright 1.49's own for this case — lowercase "executable", unlike
+    the no-install message; a double with the other case passed while the
+    real run was a traceback."""
     _fake_playwright(
-        monkeypatch, "BrowserType.launch: Executable doesn't exist at /usr/bin/chromium"
+        monkeypatch,
+        "BrowserType.launch: Failed to launch chromium because executable doesn't exist at "
+        "/usr/bin/chromium",
     )
 
     with pytest.raises(RendererUnavailable, match="chromium_path /usr/bin/chromium"):

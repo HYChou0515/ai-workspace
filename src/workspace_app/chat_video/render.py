@@ -114,8 +114,11 @@ def record(
         except Error as exc:
             # Playwright's own message is a traceback with a boxed hint. One
             # sentence naming the step that fixes it: the download nobody
-            # ran, or the path the config points at.
-            if "Executable doesn't exist" in str(exc):
+            # ran, or the path the config points at. The two texts differ in
+            # case ("Executable doesn't exist at …" for its own browser,
+            # "Failed to launch chromium because executable doesn't exist
+            # at …" for a given path) — matched without it.
+            if "executable doesn't exist" in str(exc).lower():
                 if chromium_path:
                     raise RendererUnavailable(
                         f"recording needs Chromium: chat_video.chromium_path {chromium_path} "
