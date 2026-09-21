@@ -322,8 +322,17 @@ describe("the shapes it borrows", () => {
     expect(screen.getByTestId("memory-input").getAttribute("aria-invalid")).toBe("true");
     // The grammar's examples are the fault's `detail`, interpolated — not a
     // sentence of the panel's own.
-    expect(screen.getByTestId("cpu-hint").textContent).toMatch(/1 \/ 0\.5/);
-    expect(screen.getByTestId("memory-hint").textContent).toMatch(/512M \/ 512MB \/ 1\.5G/);
+    // The SENTENCE as well as the detail: the grammar sentence, not the
+    // ceiling one — a panel that picked the wrong key for the right number
+    // would read "At most 1 / 0.5 cores", and nothing else here would notice.
+    const cpuHint = screen.getByTestId("cpu-hint").textContent ?? "";
+    const memoryHint = screen.getByTestId("memory-hint").textContent ?? "";
+    expect(cpuHint).toMatch(/1 \/ 0\.5/);
+    expect(cpuHint).toMatch(/要大於|More than 0/);
+    expect(cpuHint).not.toMatch(/最多|At most/);
+    expect(memoryHint).toMatch(/512M \/ 512MB \/ 1\.5G/);
+    expect(memoryHint).toMatch(/數字加單位|A number with a unit/);
+    expect(memoryHint).not.toMatch(/最多|At most/);
     expect(screen.getByTestId("memory-input").getAttribute("placeholder")).toBe("2G");
     // The hint is what describes the field, for AT as for the eye.
     const memory = screen.getByTestId("memory-input");
@@ -349,10 +358,15 @@ describe("the shapes it borrows", () => {
     const memory = screen.getByTestId("memory-input");
     expect(cpu.getAttribute("aria-invalid")).toBe("true");
     expect(memory.getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByTestId("cpu-hint").textContent).toMatch(/7/);
-    expect(screen.getByTestId("cpu-hint").textContent).not.toMatch(/1024|0\.5/);
-    expect(screen.getByTestId("memory-hint").textContent).toMatch(/3G/);
-    expect(screen.getByTestId("memory-hint").textContent).not.toMatch(/GB|512M/);
+    // The ceiling SENTENCE around the record's number — not the grammar one.
+    const cpuHint = screen.getByTestId("cpu-hint").textContent ?? "";
+    const memoryHint = screen.getByTestId("memory-hint").textContent ?? "";
+    expect(cpuHint).toMatch(/7/);
+    expect(cpuHint).toMatch(/最多|At most/);
+    expect(cpuHint).not.toMatch(/1024|0\.5|要大於|More than 0/);
+    expect(memoryHint).toMatch(/3G/);
+    expect(memoryHint).toMatch(/最多|At most/);
+    expect(memoryHint).not.toMatch(/GB|512M|數字加單位|A number with a unit/);
     expect(cpu.getAttribute("aria-describedby")).toBe(screen.getByTestId("cpu-hint").id);
     expect(memory.getAttribute("aria-describedby")).toBe(screen.getByTestId("memory-hint").id);
   });

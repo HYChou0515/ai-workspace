@@ -89,11 +89,12 @@ issue 明令**不要**在前端寫一份 `MAX_CORES = 1024`：伺服器改了前
 | P1 `ef902719` | `KeyError: 'max_cpu_cores'` | route 寫死 `max_cpu_cores=1024.0` → 只有這條紅，`assert 1024.0 == 7.0` |
 | P2 `0f076105` | `cpuFault is not a function` ×2、`memoryFault` ×2 | 兩個比較改成模組常數、detail 寫死 → 只有兩條「上限是 record 給的」紅 |
 | P3 `0c02565b` | mapper `expected undefined to be 7`；panel 兩條；modal 整檔（還 import 舊名） | panel 的 cpu hint `detail` 寫死 `"1024"` → 4 條紅（panel 兩條 hint、modal record-7、modal over/unreadable） |
-| P4 `cab0ecc6` | —（改卷子的測試） | 翻 `1025` 為 accepted → `cpu '1025': server says False`；`_MAX_CORES` 改 2048 → `stale sheet … assert 1024 == 2048.0`；前端 `over` 改回 `unreadable` → 只有正控制那條紅 |
+| P4 `cab0ecc6` | —（改卷子的測試） | 翻 `1025` 為 accepted → `cpu '1025': server says False`；`_MAX_CORES` 改 2048 → `stale sheet … assert 1024 == 2048.0`；前端 `over` 改回 `unreadable` → `itemSizeParity.test.ts` 裡只有正控制那條紅（整組跑另有 Size 檔兩條） |
 
-一個 plan 沒寫到的細節：`detail` 是資料、不能含「或」這種 locale 字，範例用 ` / ` 接
-（`"1 / 0.5"`、`"512M / 512MB / 1.5G"`），「例如 {detail}」留在 i18n。Python 卷子改分 2.9 秒（import），
-上一版開 app 的做法 8–11 秒。
+兩個 plan 沒寫到的細節：`detail` 是資料、不能含「或」這種 locale 字，範例用 ` / ` 接
+（`"1 / 0.5"`、`"512M / 512MB / 1.5G"`），「例如 {detail}」留在 i18n；`toSizeString` 多了兩個 overload 簽名
+（`number` 進就 `string` 出），純型別、沒有 runtime 變化，是 `detail: toSizeString(max)` 要過 `tsc` 的前提。
+Python 卷子改分 2.9 秒（import），上一版開 app 的做法 8–11 秒。
 
 ## Live check（2026-09-21，worktree build on 127.0.0.1:8258，`per_app.default` 2 核 / 512M + `per_user` 4 核 / 8G，真 Chromium 1280）
 
@@ -109,8 +110,30 @@ Playground item，未啟動。`GET …/environment` 回 `max_cpu_cores: 1024.0, 
 | 記憶體 `2P` | true | A number with a unit — e.g. 512M / 512MB / 1.5G. | 灰 |
 | 記憶體 `1024T` | — | — | 可按 |
 
-cpu input 沒有 `max` 屬性（決定 8）。存 `2` / `1024T` → record `stated_memory_bytes = 1125899906842624`、
+cpu input 沒有 `max` 屬性（「不做的」）。存 `2` / `1024T` → record `stated_memory_bytes = 1125899906842624`、
 `memory_bound_by = "app"`。截圖 `live2-cpu-2048.png` / `live2-mem-1025T.png` / `live2-after-save.png`（job tmp，不進 repo）。
+
+## Review round 1（2026-09-21，conformance / veracity / defect / regression 四把平行，各自一棵 worktree，對 `02691b73`）
+
+最壞發現：**MEDIUM**，一條，測試守衛。
+
+- **Veracity**：MEDIUM — panel 裡「`over` 選 `.over` key、否則 `.unreadable`」那一行沒有測試釘住：改成永遠
+  `.unreadable`（或永遠 `.over`）→ 7 檔 96 條全綠、typecheck 綠，因為每條 hint 測試都只斷言數字，沒斷言句子。
+  修法：panel / modal 四個案例補斷言句子（`最多|At most` vs `要大於|More than 0` / `數字加單位|A number with a unit`）。
+  重跑：永遠 `.unreadable` → 3 條紅、永遠 `.over` → 2 條紅。LOW ×3 措辭：PR body 的「只有兩條紅」整組跑是 3
+  （Size 兩條 + modal record-7）；「left as separate reports」其實沒開票，只記在本文件；`max` 屬性出處寫錯成決定 8、
+  modal 一句註解「typed back 會被拒」對欄位不成立（`normaliseMemory` 收 `1024.0 TB`）。
+- **Conformance**：none。它另外做了字面的 4(b)：伺服器 `_MAX_CORES=2048` 的真 GET body 餵真 modal →
+  「最多 2048 核。」。備註：`toSizeString` overload 沒寫進 plan（型別、已補上一段）。
+- **Defect**：none。55 個 cpu 文字 + 78 個記憶體文字，前端 vs 真路由（含 pydantic JSON 解析）vs `_validated_resources()`
+  直呼三方零分歧；真 Chromium 逐字打進 `<input type=number>` 能產生的每個字串都在探針裡。備註（非缺陷）：22 位以上
+  無單位的天文數字 `normaliseMemory` 回非 wire 字串，hint 說「文法」而不是「上限」，Save 照灰、伺服器照 422。
+- **Regression**：LOW — 新 bundle 打到舊 pod（ingress 依 item id 雜湊、`staleTime` 30 秒）時 hint 印「最多 undefined 核。」、
+  Save 灰；這是決定 8 拍板的「不處理」，兩把鏡頭都點出「一起更新」是以 image 為單位不是以 request 為單位。
+  其餘：109 / 25 / 30 個輸入的 `normaliseMemory` / `parseSize` / `toSizeString` 新舊零差異；新拒絕的全是超上限且伺服器
+  也 422；#825 的 35 條 modal 行為全在。
+
+修法形狀：補測試釘子 + 文字，沒有換機制 → 不再開一輪，CI 對最終 sha。
 
 ## 驗證（DoD）
 

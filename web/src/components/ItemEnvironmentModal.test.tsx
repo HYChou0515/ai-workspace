@@ -444,6 +444,8 @@ describe("ItemEnvironmentModal — what the review found unguarded", () => {
     expect(cpu).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByTestId("cpu-hint").textContent).toContain("7");
     expect(screen.getByTestId("cpu-hint").textContent).not.toContain("1024");
+    // The ceiling SENTENCE, not the grammar one wrapped around the number.
+    expect(screen.getByTestId("cpu-hint").textContent).toMatch(/最多|At most/);
     fireEvent.change(cpu, { target: { value: "7" } }); // the bound itself is allowed
     expect(screen.getByTestId("itemenv-save")).toBeEnabled();
     expect(screen.queryByTestId("cpu-hint")).toBeNull();
@@ -454,6 +456,7 @@ describe("ItemEnvironmentModal — what the review found unguarded", () => {
     expect(memory).toHaveAttribute("aria-invalid", "true");
     // The server's spelling of the ceiling — what a person can type back.
     expect(screen.getByTestId("memory-hint").textContent).toContain("3G");
+    expect(screen.getByTestId("memory-hint").textContent).toMatch(/最多|At most/);
     fireEvent.change(memory, { target: { value: "3 GB" } });
     expect(screen.getByTestId("itemenv-save")).toBeEnabled();
     expect(screen.queryByTestId("memory-hint")).toBeNull();
@@ -462,20 +465,30 @@ describe("ItemEnvironmentModal — what the review found unguarded", () => {
   it("tells 'over' from 'unreadable': the ceiling hint carries the number, the grammar hint the examples", async () => {
     open(); // ENVIRONMENT carries the server's real ceilings: 1024 cores, 1 PiB
     const cpu = await screen.findByTestId("cpu-input");
+    // Each fault type gets ITS sentence: the number alone would also match a
+    // panel that picked the grammar key and interpolated the ceiling into it.
     fireEvent.change(cpu, { target: { value: "2048" } });
     expect(screen.getByTestId("cpu-hint").textContent).toContain("1024");
+    expect(screen.getByTestId("cpu-hint").textContent).toMatch(/最多|At most/);
+    expect(screen.getByTestId("cpu-hint").textContent).not.toMatch(/要大於|More than 0/);
     fireEvent.change(cpu, { target: { value: "0" } });
     expect(screen.getByTestId("cpu-hint").textContent).not.toContain("1024");
     expect(screen.getByTestId("cpu-hint").textContent).toContain("0.5");
+    expect(screen.getByTestId("cpu-hint").textContent).toMatch(/要大於|More than 0/);
+    expect(screen.getByTestId("cpu-hint").textContent).not.toMatch(/最多|At most/);
 
     const memory = screen.getByTestId("memory-input");
     fireEvent.change(memory, { target: { value: "1025T" } });
-    // 1 PiB in the server's spelling is `1024T` — not `1024.0 TB`, which it
-    // would refuse if typed back.
+    // 1 PiB in the server's spelling is `1024T` — not `1024.0 TB`, which the
+    // server would refuse (the field would still take it: `normaliseMemory`
+    // reads the display format too).
     expect(screen.getByTestId("memory-hint").textContent).toContain("1024T");
+    expect(screen.getByTestId("memory-hint").textContent).toMatch(/最多|At most/);
     fireEvent.change(memory, { target: { value: "2P" } }); // not a unit the server reads
     expect(screen.getByTestId("memory-hint").textContent).not.toContain("1024T");
     expect(screen.getByTestId("memory-hint").textContent).toContain("512M");
+    expect(screen.getByTestId("memory-hint").textContent).toMatch(/數字加單位|A number with a unit/);
+    expect(screen.getByTestId("memory-hint").textContent).not.toMatch(/最多|At most/);
     expect(screen.getByTestId("itemenv-save")).toBeDisabled();
   });
 
