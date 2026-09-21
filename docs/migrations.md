@@ -835,20 +835,21 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 **設定**（純 opt-in 的部分不用動；但要知道一個**行為改變**）
 
 - 新形狀：`server.run_consumers: [index, card-gen, …]` = 只消費列出的 JobType（單機全包但跳過 `chat-video` 這種）。
-  `true` / `false` 照舊。名字對 worker CLI 那張表驗證，拼錯**開機就拒絕**。不改設定的部署，行為不變——**除了下面這條**。
+  `true` / `false` 照舊。名字對 worker CLI 那張表驗證，拼錯**開機就拒絕**。不改設定的部署，行為不變——**除了下面兩條**。
 - **行為改變、沒有開關**：以前 loader 不做型別轉換，`run_consumers: ${RUN_CONSUMERS}` 配 configmap 的 `RUN_CONSUMERS: "false"`
-  到手的是**字串** `'false'`（truthy），所以照 `kubernetes/base/configmap.yaml` 註解接線的 API pod **一直在消費所有 JobType**，
+  到手的是**字串** `'false'`（truthy），所以用 `${RUN_CONSUMERS}` 接線的 API pod **一直在消費所有 JobType**，
   不是文件說的純 producer。這版起 `"false"` 就是 `false`。**`rollout 前`確認 worker Deployment 真的在跑**
   （base 的 `workers.yaml` 每種 JobType 一個；`kubectl get deploy | grep rca-worker-`）：worker 是冪等的 durable-queue 消費者，
   和舊 API pod 並存是安全的，先起再滾。如果你們的 `config.yaml` 寫的是字面 `false`，這條對你們沒有影響。
   漏做的症狀（哪種 job 沒 worker 就出哪種）：help 文件停在 `indexing`（`index`）、wiki 不再更新（`wiki`）、
   上傳的封存包一直 `pending`（`kb-import`）、blob GC 不再跑（`blob-gc`）、聊天影片匯出停在排隊（`chat-video`）。
   新版 API 的 stdout 會有一行 `⚠ consumers: NOT consumed on this process: …` 點名沒人消費的 JobType。
-- **從「靜默接受」變「拒絕開機」**：YAML 的 `run_consumers:`（空值 / `null`）、`0` / `1`、`""`，和 `${RUN_CONSUMERS}` 給的
-  `no` / `0` / `1` / `,` 以前都被吞掉（`null` 和 `0` 是 falsy → 純 producer；`1` → 全消費；env 給的字串一律 truthy → 全消費），
-  這版起開機拒絕。`rollout 前` 看一眼你們的 `config.yaml` 這個 key 是不是上面三種形狀之一（YAML 的 `yes` / `no` / `on` / `off`
-  是 PyYAML 布林，照常算 true / false）；漏做的症狀：新 pod CrashLoop，log 最後一行是
-  `ValueError: server.run_consumers: …`（load 在印 `config:` 之前就跑，所以 traceback 前面什麼都沒有）。
+- **從「靜默接受」變「拒絕開機」**：YAML 的 `run_consumers:`（空值 / `null`）、`0` / `1`、`""`、mapping，和 `${RUN_CONSUMERS}`
+  給的 `no` / `0` / `1` / `,` 以前都被吞掉（`null`、`0`、`""` 是 falsy → 純 producer；`1` 和 mapping → 全消費；env 給的
+  `no` / `0` / `1` / `,` 是非空字串 → truthy → 全消費），這版起開機拒絕。`rollout 前` 看一眼你們的 `config.yaml` 這個 key
+  是不是上面三種形狀之一（YAML 的 `yes` / `no` / `on` / `off` 是 PyYAML 布林，照常算 true / false）；漏做的症狀：新 pod
+  CrashLoop，log 裡沒有 `config:` 那行也沒有 config dump（load 在它們之前跑；前面只有 nltk / LiteLLM 的 import 雜訊），
+  最後一行是 `ValueError: server.run_consumers: …`。
 
 **資料** — 不動。**k8s · CI 側** — manifest 沒改；configmap 的註解補了清單寫法，並把示範改成 block form
 （原本的 `server: { run_consumers: ${RUN_CONSUMERS} }` 是 YAML parse error，照抄的 pod 從來起不來）。

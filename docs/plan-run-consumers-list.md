@@ -68,10 +68,11 @@ def consumer_selection(raw: object) -> bool | list[str]:
 - Anything else is refused at load: YAML `null` (a bare `run_consumers:`),
   `0` / `1`, `""`, a mapping; from the env, any string that is not
   `true` / `false` / JobType names (`no`, `0`, `1`). Measured on the branch
-  (`shapes_probe.py`): every one of these LOADED before — `null` and `0`
-  falsy (a pure producer by accident), `1` and every env string truthy —
-  so this is "refuses to boot" for the runbook. YAML `yes` / `no` / `on` /
-  `off` are PyYAML booleans and load as before.
+  (`shapes_probe.py`): every one of these LOADED before — `null`, `0` and
+  `""` falsy (a pure producer by accident), `1`, a mapping and every
+  non-empty env string truthy — so this is "refuses to boot" for the
+  runbook. YAML `yes` / `no` / `on` / `off` are PyYAML booleans and load as
+  before.
 - `worker/__init__.py` imports nothing from `config` at runtime — its only
   module-level imports are `asyncio` and `threading`; `CoordinatorBundle` is
   under `TYPE_CHECKING` — so the loader importing `_JOBTYPE_ATTR` is not a cycle.
@@ -142,7 +143,7 @@ warning (`lifecycle.py:535`), and the tests read it with `capsys`.
   → `APP_PORT: "8000"` (`server.port: int`), `SANDBOX_ISOLATE: "false"`
   (`sandbox.isolate: bool | None`), `SANDBOX_ISOLATION_ENABLED: "false"`
   (`sandbox.isolation.enabled: bool | None` — the configmap's own comment at
-  `:41` (master `:38`) teaches mapping it; `factories.py:314` takes the value as is and `:331`
+  `:41` (master `:35`) teaches mapping it; `factories.py:314` takes the value as is and `:331`
   `elif want_uid_isolation:` is truthy for the string `"false"`, so it reads
   as the explicit opt-in: uid isolation ON, or a boot failure on a host that
   cannot isolate — read, not yet probed),
@@ -203,10 +204,11 @@ Phase 2 (`tests/api/test_consumer_gate.py`, real `create_app` + `LifespanManager
   `wiki, kb-import, blob-gc, chat-video`), and no `⚠ consumers:` line for
   `True`; `[index, graph]` on the test app (no `graph_coordinator`) carries
   the `listed … but not wired` line and no `graph` in the NOT-consumed one.
-- `[]` behaves as `False` (nothing consuming, line says all nine).
-- Shutdown: with the list, `aclose` is called on the two consumed coordinators
-  and NOT on the others (spy on `aclose`); with `False`, on none — the existing
-  pure-producer assertion, kept.
+- `[]` behaves as `False` (nothing consuming; the line names every WIRED
+  JobType — six on the test app, nine on a default real boot).
+- Shutdown: with `["index"]`, `aclose` is called on `index_coordinator` and NOT
+  on `wiki` / `card_gen` (spy on `aclose`); with `False`, on none — the
+  existing pure-producer assertion, kept.
 - Mutation: delete the `jobtype not in selected` check → the list case
   reddens; `or jobtype == "kb-import"` on the DRAIN loop's check → the `True`
   case reddens on its `assert not kb_import_coordinator.consuming` after the
@@ -264,7 +266,7 @@ Nothing to migrate in the store.
 - `kubernetes/base/configmap.yaml:16-19` — the `${RUN_CONSUMERS}` mapping
   advice + `RUN_CONSUMERS: "false"`; `configs/config.example.yaml:63-69`;
   `docs/configuration.md:81,115,140` and §8 (`:433-452`); `docs/deployment.md`
-  §11 (`:461-491`), §13 `RUN_CONSUMERS=true/false` (`:1268-1269`, `:1317`).
+  §11 (`:461-491`), §13 `RUN_CONSUMERS=true/false` (`:1268-1269`; §14 `:1317`).
 
 ## Review round 1 (2026-09-21, four lenses in parallel on `1d8a620c`, P1–P3)
 
@@ -299,3 +301,49 @@ Round 1 fixes replace no mechanism (the gate loop, the loader step and the
 provenance walk are the same; the sentence moved from a logger to stdout and
 two rules were added to the provenance walk with a test each), so P4 gets a
 verify-the-fix pass, not a fourth lens round.
+
+## Review round 2 — verify the fix (2026-09-22, veracity + defect/regression on `e54aaaf0`, P4)
+
+Veracity: ten findings, every one a sentence — no code. Fixed in P5:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | **HIGH** `configuration.md` §8 wrote the empty string as an empty backtick pair; Python-Markdown opened a code span there and every span to the end of §8 rendered inverted. `mkdocs build --strict` is blind to it. | `` `""` ``; the "三種形狀" sentence reordered so the refused shapes are not read as the three. |
+| 2 | Runbook contradiction: "照 configmap 註解接線的 pod 一直在消費" vs "flow form 從來起不來" — one pod cannot be both. | "用 `${RUN_CONSUMERS}` 接線的 API pod". |
+| 3 | "traceback 前面什麼都沒有" — eight nltk / LiteLLM import lines precede it. | "沒有 `config:` 那行也沒有 config dump … 最後一行是 `ValueError: …`". |
+| 4–7 | Plan pointers: configmap master `:38` → `:35`; `deployment.md:1317` is §14 not §13; "line says all nine" → every WIRED (six on the test app); "two consumed coordinators" → `["index"]`, one. | Corrected. |
+| 8–9 | "除了下面這條" → 兩條; YAML `""` (old: falsy → pure producer) and a mapping (truthy) were missing from the before/after list. | Added, measured through both loaders by the lens. |
+| 10 | "沒設 KB LLM 就沒有 `graph`" — a default boot HAS `graph` (the bundled `kb-retrieval` preset); it is `None` only with `kb.retrieval_llm: null` (`coordinators.py:319-320`). | Reworded. |
+
+The lens re-ran all six P4 mutation probes (each reddened exactly the claimed
+test) and the "6/6 green before" claim on `1d8a620c` (6 passed), booted the
+real app with the list shape (lines 676-680 as recorded; `grep -c lifespan:`
+= 0, so the surviving `logger.info` reaches nothing), and compared old/new
+loaders and `emit_config_dump` on every shape. FYI it noted, not claimed by
+this PR: `config.example.yaml:1068,1071,1088` carry the same commented
+flow-form `llm: { api_key: ${OPENAI_API_KEY} }` — a third instance of the
+parse-error class for the sweep PR.
+
+Defect + regression (same round, code only): **no defect in P4.** 61 input
+shapes through `load_with_provenance` on `1d8a620c` and `e54aaaf0` differ only
+where P4 says (the `","` class refused; env/YAML-string list elements and `[]`
+relabelled; the true/false hint); `emit_config_dump` for the six shapes
+matches the runbook strings; sixteen mutations (the six claimed + ten of the
+lens's own) reddened exactly the expected test, and the two expected to survive
+did (`flush=True` — the next `boot_step` print flushes the same buffer; the
+order of the two warning lines). Targeted set 292 green vs 287 (= the five
+tests P4 adds). Three LOW notes, all pre-existing and untouched by P4, for
+tickets, not this PR:
+
+- A refusal of an env-fed value names the config FILE as its source
+  (`loader.py:152-155` passes `source=str(path)`), never the `${VAR}`; the
+  type refusals (`null` / `0` / mapping) name the type, not the value.
+- A scalar written where a list is expected is char-split with no refusal
+  (`kb.parsers: pdf` → `['p','d','f']`, `loader.py:1084/:1094`); P4 only makes
+  its provenance label truthful (`config.yaml` / `env` instead of `default`).
+- The legacy single-dict sub-agent shape (`agents.kb_chat: {preset: …}`) is
+  wrapped into a one-element list, so its dump labels read `default`
+  (`_normalize_usage_list`); `_parent_list_source` does not reach it.
+
+Round 2 is clean on the code and its findings are sentences, so P5 is docs
+only and buys no third round.
