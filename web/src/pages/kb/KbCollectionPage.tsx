@@ -568,7 +568,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             </div>
             {editingName ? (
               <input
-                className="kb-colpage__nameedit"
+                className="input kb-colpage__nameedit"
                 // biome-ignore lint/a11y/noAutofocus: rename input should grab focus
                 autoFocus
                 value={nameDraft}
@@ -607,7 +607,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             )}
             {editingDesc ? (
               <textarea
-                className="kb-colpage__descedit"
+                className="input kb-colpage__descedit"
                 // biome-ignore lint/a11y/noAutofocus: description editor should grab focus
                 autoFocus
                 rows={2}
