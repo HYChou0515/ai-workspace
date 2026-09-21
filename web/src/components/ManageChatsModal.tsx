@@ -80,7 +80,7 @@ function ChatRow({
       <td className="manage-chats__name">
         {editing ? (
           <input
-            className="manage-chats__rename"
+            className="input input--block inline-edit"
             data-testid={`manage-rename-input-${id}`}
             value={draft}
             autoFocus
@@ -223,7 +223,7 @@ export function ManageChatsModal({
         </button>
       </header>
       <input
-        className="manage-chats__search"
+        className="input input--block manage-chats__search"
         type="search"
         placeholder="Search chats"
         aria-label="Search chats"

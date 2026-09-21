@@ -303,14 +303,12 @@
 .chat-rail__menu-item--danger {
   color: var(--err);
 }
+/* The in-place rename replaces a row: `input input--block`, sized to the row
+   (the chrome is `.input`'s — it is autofocused, so the accent border it used
+   to draw itself is what `.input:focus` draws anyway). */
 .chat-rail__rename {
-  width: 100%;
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-card);
-  background: var(--white);
-  color: var(--text-paper);
-  font-size: var(--text-body-sm);
+  min-height: 30px;
+  padding: 0 var(--space-8);
 }
 .chat-rail__empty {
   padding: var(--space-8);

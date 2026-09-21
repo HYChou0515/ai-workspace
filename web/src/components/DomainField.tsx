@@ -33,7 +33,7 @@ export function DomainField({
   if (editing && field.kind === "select") {
     return (
       <select
-        className="inline-edit"
+        className="input inline-edit"
         autoFocus
         defaultValue={text}
         onChange={(e) => {
@@ -53,7 +53,7 @@ export function DomainField({
   if (editing && field.kind === "text") {
     return (
       <input
-        className="inline-edit"
+        className="input inline-edit"
         autoFocus
         defaultValue={text}
         onBlur={(e) => {

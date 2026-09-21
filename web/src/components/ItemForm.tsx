@@ -1,7 +1,8 @@
 /**
  * Schema-driven create/edit form for an App item (#89 P7b), styled to the
- * design-handoff "Start an RCA" modal. Renders the Tier-1 `title` (accent
- * field) + `description` (brief textarea) plus the App's `layout.form` domain
+ * design-handoff "Start an RCA" modal. Renders the Tier-1 `title` (required —
+ * an empty submit marks it `aria-invalid`) + `description` (brief textarea)
+ * plus the App's `layout.form` domain
  * fields — each by its schema `kind`: `select` → a segmented {@link Picker},
  * `tags` → a chip {@link TagInput}, `text` → an input. So the form is
  * App-agnostic, not RCA-hardcoded.
@@ -25,19 +26,10 @@ import { UserAvatar } from "./UserChip";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
 
-const inputStyle: CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  height: 38,
-  padding: "0 12px",
-  fontSize: pxToRem(14),
-  fontFamily: "inherit",
-  color: "var(--text-paper)",
-  background: "var(--white)",
-  border: "1px solid var(--paper-3)",
-  borderRadius: "var(--radius-btn)",
-  outline: "none",
-};
+/* The create form's fields are a size up from the house 34px / 13px — the
+   Owner box and the segmented Picker beside them are 38px, and a grid row of
+   mismatched heights reads as broken. The chrome is `.input`'s. */
+const fieldSize: CSSProperties = { minHeight: 38, fontSize: pxToRem(14) };
 
 /** Drop empty values before submit so omitted optional/enum fields take their
  * backend default — sending `severity=""` would fail msgspec enum conversion.
@@ -94,7 +86,7 @@ function TagInput({ label, value, onChange }: { label: string; value: string[]; 
     setDraft("");
   };
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, minHeight: 38, padding: "6px 10px", background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-btn)" }}>
+    <div className="input input-group" style={{ flexWrap: "wrap", gap: 6, minHeight: 38, padding: "6px 10px" }}>
       {value.map((t) => (
         <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 4px 2px 8px", borderRadius: "var(--radius-chip)", background: "var(--paper-2)", fontSize: pxToRem(12) }}>
           {t}
@@ -115,7 +107,8 @@ function TagInput({ label, value, onChange }: { label: string; value: string[]; 
         }}
         onBlur={add}
         placeholder="+ add"
-        style={{ flex: 1, minWidth: 80, border: "none", outline: "none", background: "transparent", fontSize: pxToRem(13), fontFamily: "inherit", color: "var(--text-paper)" }}
+        className="input-group__field"
+        style={{ minWidth: 80, fontSize: pxToRem(13) }}
       />
     </div>
   );
@@ -223,7 +216,9 @@ export function ItemForm({
             if (titleError) setTitleError(false);
           }}
           placeholder={`Name this ${manifest.item.noun.toLowerCase()}`}
-          style={{ ...inputStyle, border: `1.5px solid ${titleError ? "var(--err)" : "var(--accent)"}` }}
+          className="input input--block"
+          aria-invalid={titleError || undefined}
+          style={fieldSize}
         />
         {titleError && (
           <div style={{ fontSize: pxToRem(11), color: "var(--err)", marginTop: 4 }}>Title is required</div>
@@ -243,7 +238,7 @@ export function ItemForm({
                 ) : field.kind === "tags" ? (
                   <TagInput label={label} value={Array.isArray(values[n]) ? (values[n] as string[]) : []} onChange={(v) => set(n, v)} />
                 ) : (
-                  <input aria-label={label} value={String(values[n] ?? "")} onChange={(e) => set(n, e.target.value)} style={inputStyle} />
+                  <input aria-label={label} value={String(values[n] ?? "")} onChange={(e) => set(n, e.target.value)} className="input input--block" style={fieldSize} />
                 )}
               </Field>
             );
@@ -288,7 +283,8 @@ export function ItemForm({
             value={String(values.description ?? "")}
             onChange={(e) => set("description", e.target.value)}
             rows={3}
-            style={{ ...inputStyle, height: "auto", minHeight: 84, padding: 12, lineHeight: 1.5, resize: "vertical" }}
+            className="input input--block"
+            style={{ ...fieldSize, minHeight: 84, padding: 12 }}
           />
         </Field>
       )}

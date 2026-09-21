@@ -212,19 +212,21 @@ describe("TodoPanel", () => {
  * on a flex item refuses to shrink past it. `flex: 1` therefore could not
  * actually give width back, so the row stayed wider than its container and
  * pushed the trailing button out of the clipped panel. Both rows in this panel
- * are built the same way, so both need the same escape hatch.
+ * are built the same way, so both need the same escape hatch — since #829 it
+ * is `.input`'s `min-width: 0` (pinned in styles/input-class.test.ts), so
+ * what is asserted here is that both rows wear the class.
  */
 describe("TodoPanel rows shrink instead of pushing their button off-screen (#fe-responsive)", () => {
   it("lets the goal input shrink so 'Set goal' stays inside the panel", async () => {
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("goal-input")) as HTMLInputElement;
-    expect(input.style.minWidth).toBe("0");
+    expect(input.classList.contains("input")).toBe(true);
   });
 
   it("lets the add-todo input shrink so its Add button stays inside the panel", async () => {
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("todo-add-input")) as HTMLInputElement;
-    expect(input.style.minWidth).toBe("0");
+    expect(input.classList.contains("input")).toBe(true);
   });
 });
 

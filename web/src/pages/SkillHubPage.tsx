@@ -126,6 +126,7 @@ export function SkillHubPage({
         <>
           <div className="page-tools">
             <input
+              className="input"
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}

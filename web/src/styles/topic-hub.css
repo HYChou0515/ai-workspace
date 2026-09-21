@@ -344,11 +344,6 @@
 }
 .manage-chats__search {
   margin: 12px 0;
-  padding: 6px 10px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  font-size: var(--text-body-sm);
 }
 .manage-chats__tableWrap {
   overflow-y: auto;
@@ -382,13 +377,6 @@
 .manage-chats__name {
   font-weight: 600;
   color: var(--text-paper);
-}
-.manage-chats__rename {
-  width: 100%;
-  padding: 3px 6px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  font-size: var(--text-body-sm);
 }
 .manage-chats__type {
   display: inline-flex;

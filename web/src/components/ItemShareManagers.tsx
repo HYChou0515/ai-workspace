@@ -64,6 +64,7 @@ export function ItemShareManagers({
 
       <form data-testid="manager-add-form" onSubmit={add}>
         <input
+          className="input input--block"
           data-testid="manager-add"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
