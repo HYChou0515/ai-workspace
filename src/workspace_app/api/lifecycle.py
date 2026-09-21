@@ -33,6 +33,7 @@ from ..config.schema import OffHoursSettings
 from ..health.service import HealthService
 from ..kernels import KernelService
 from ..observability.boot import boot_step
+from ..worker import _JOBTYPE_ATTR
 from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
 from .notification_delivery import INotificationChannel, deliver_pending
@@ -76,6 +77,17 @@ def _utcnow() -> datetime:
     """Timezone-aware wall clock in UTC — the trigger sweeper's ``now_utc`` (each schedule
     converts it into its own zone for the period math)."""
     return datetime.now(UTC)
+
+
+def consumer_set(run_consumers: bool | list[str]) -> frozenset[str]:
+    """The JobTypes this process consumes: every one for `True`, none for
+    `False`, exactly the named ones for a list (the loader has already refused
+    a name that is not a JobType)."""
+    if run_consumers is True:
+        return frozenset(_JOBTYPE_ATTR)
+    if run_consumers is False:
+        return frozenset()
+    return frozenset(run_consumers)
 
 
 def build_lifespan(
@@ -521,47 +533,43 @@ def build_lifespan(
                     # what moving off `__main__` cost — the boot dump on stdout,
                     # which is what an operator redirecting `> boot.log` reads.
                     print(f"  ⚠ resources: {warning}")
-        # #312: in-process consumers run only when `run_consumers` is on. Default
-        # True keeps the all-in-one behaviour; a pod-split deploy sets it False so
-        # the API is a pure producer and dedicated worker pods drain each JobType.
-        # The shared, partitioned queues drain regardless of which process
-        # enqueued, so a worker pod (or another all-in-one pod) picks the jobs up.
+        # #312: which in-process consumers run. `True` (the default) keeps the
+        # all-in-one behaviour; a pod-split deploy sets `False` so the API is a
+        # pure producer and dedicated worker pods drain each JobType; a LIST
+        # names the JobTypes this process consumes (plan-run-consumers-list) —
+        # a single machine that wants everything but `chat-video`. The shared,
+        # partitioned queues drain regardless of which process enqueued, so a
+        # worker pod (or another all-in-one pod) picks the rest up.
+        #
+        # ONE loop over the worker's table rather than nine hand-written
+        # blocks: a coordinator wired everywhere except this list accepted
+        # jobs and silently never ran them (#715 shipped that way), and the
+        # drain loop below had its own hand-written list that had already
+        # drifted (`kb_import` was missing from it). What is NOT consumed is
+        # said out loud: a `pending` job looks to its caller exactly like a
+        # queue that never moves, and this line is the only place that says
+        # why. An unwired coordinator (`None`) is neither started nor named —
+        # it is not a choice the operator made.
+        selected = consumer_set(run_consumers)
         logger.info("lifespan: run_consumers=%s", run_consumers)
-        if run_consumers:
-            # #59: wiki-maintenance consumer. Idempotent + non-blocking.
-            with boot_step("start wiki-maintenance consumer"):
-                app.state.wiki_coordinator.start_consuming()
-            # #82: indexing consumer (so a slow embed never starves the request path).
-            with boot_step("start indexing consumer"):
-                app.state.index_coordinator.start_consuming()
-            # Model-sanity battery consumer (when wired) — drains SanityRun jobs.
-            if app.state.sanity_coordinator is not None:
-                with boot_step("start model-sanity consumer"):
-                    app.state.sanity_coordinator.start_consuming()
-            # #535: retrieval-eval consumer (when wired) — drains EvalJob jobs.
-            if app.state.eval_coordinator is not None:
-                with boot_step("start retrieval-eval consumer"):
-                    app.state.eval_coordinator.start_consuming()
-            # #534: metric-extraction consumer (when wired) — drains GraphJob jobs.
-            if app.state.graph_coordinator is not None:
-                with boot_step("start metric-extraction consumer"):
-                    app.state.graph_coordinator.start_consuming()
-            # #175: context-card generation consumer.
-            with boot_step("start context-card generation consumer"):
-                app.state.card_gen_coordinator.start_consuming()
-            # #715: archive-import consumer — without it an upload is accepted,
-            # staged, and never written, which reads to the caller as a queue that
-            # simply never moves.
-            with boot_step("start archive-import consumer"):
-                app.state.import_coordinator.start_consuming()
-            # #245: blob-GC consumer — the all-in-one pod runs its own reconcile.
-            with boot_step("start blob-GC consumer"):
-                app.state.blob_gc_coordinator.start_consuming()
-            # plan-chat-video-export: the all-in-one pod renders its own videos
-            # (it needs Chromium + ffmpeg on this image for that; without them
-            # every job fails with the sentence `ensure_tools` writes).
-            with boot_step("start chat-video consumer"):
-                app.state.chat_video_coordinator.start_consuming()
+        skipped: list[str] = []
+        for jobtype, attr in _JOBTYPE_ATTR.items():
+            coordinator = getattr(app.state, f"{attr}_coordinator", None)
+            if coordinator is None:
+                continue
+            if jobtype not in selected:
+                skipped.append(jobtype)
+                continue
+            # Every consumer is idempotent + non-blocking: a thread that drains
+            # its queue, so a slow embed / render never starves the request path.
+            with boot_step(f"start {jobtype} consumer"):
+                coordinator.start_consuming()
+        if skipped:
+            logger.info(
+                "lifespan: NOT consumed on this process: %s (their jobs stay pending "
+                "until a worker takes them)",
+                ", ".join(skipped),
+            )
         # #230: seed the platform Help collection from packaged content (repo =
         # source of truth; identical bytes are a no-op). The STORE runs here (off
         # the loop, best-effort — a dead backend leaves the collection
@@ -687,22 +695,21 @@ def build_lifespan(
             # so a worker would do them (#804) — on every rollout, holding the
             # pod past its grace period. A pure producer has nothing in flight;
             # pending jobs are durable and the workers pick them up.
-            if run_consumers:
+            # Per coordinator, from the same table the start loop used: only
+            # what THIS process consumed is drained, so a list that left
+            # `chat-video` to a worker does not run its pending renders on
+            # the way out either.
+            selected = consumer_set(run_consumers)
+            if selected:
                 # The same deadline as the turns above: a queue that cannot
                 # empty in time (an index job on a big PDF; the boot's own
                 # Help-doc jobs took 16 s on a fresh local boot) is left to
                 # specstar's stale-job recovery — that is what a durable queue
                 # is for — instead of holding the pod past its grace period.
-                for name in (
-                    "wiki_coordinator",
-                    "index_coordinator",
-                    "sanity_coordinator",
-                    "eval_coordinator",
-                    "graph_coordinator",
-                    "card_gen_coordinator",
-                    "blob_gc_coordinator",
-                    "chat_video_coordinator",
-                ):
+                for jobtype, attr in _JOBTYPE_ATTR.items():
+                    if jobtype not in selected:
+                        continue
+                    name = f"{attr}_coordinator"
                     coordinator = getattr(app.state, name, None)
                     if coordinator is None:
                         continue

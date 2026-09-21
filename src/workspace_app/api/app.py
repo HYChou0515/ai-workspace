@@ -1721,7 +1721,10 @@ def create_app(
     app.state.card_gen_coordinator = card_gen_coordinator
     # #715: the archive-import consumer. On app.state because the lifespan's
     # consumer gate reaches every coordinator through it.
-    app.state.import_coordinator = coordinators.kb_import
+    # `kb_import_coordinator`, not `import_coordinator`: the lifespan finds every
+    # consumer by `f"{_JOBTYPE_ATTR[jobtype]}_coordinator"`, so the state
+    # attribute is spelled from the worker's table rather than by hand.
+    app.state.kb_import_coordinator = coordinators.kb_import
     # #245: the blob-GC reconcile consumer; the sweeper's ask goes through it.
     app.state.blob_gc_coordinator = coordinators.blob_gc
     # plan-chat-video-export: the video job reads its transcript and writes its
