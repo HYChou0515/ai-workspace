@@ -335,8 +335,10 @@ font-size stay), and the inline resets on `SearchPanel`'s `input` object,
 `FileTree`'s filter and `ItemForm`'s tag input.
 
 Fill-the-width copies replaced by `.input--block` (D6): `.kb-field .input`
-(12 controls), `.export-dialog__field > .input` (10, keeps its
-`font-variant-numeric`), `.item-environment .env-field > .input` (1, same).
+(11 controls in NewCollectionModal / WikiCorrectionDialog /
+CodeConnectionEditor), `.export-dialog__field > .input` (8; the tabular
+figures stay as `.export-dialog__field > input, … > select`),
+`.item-environment .env-field > .input` (2, same).
 
 ## Phases (one commit each; flat numbers; the guard is RED from P1 until the last conversion)
 

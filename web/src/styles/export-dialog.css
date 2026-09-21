@@ -85,10 +85,10 @@
   color: var(--text-paper-d);
 }
 
-/* The class sets `flex: 1` for row layouts; in a column it must fill. */
-.export-dialog__field > .input {
-  width: 100%;
-  flex: none;
+/* The fields wear `input input--block` (a column fills, #829 D6); the figures
+   are tabular so a value does not shift as it is typed. */
+.export-dialog__field > input,
+.export-dialog__field > select {
   font-variant-numeric: tabular-nums;
 }
 

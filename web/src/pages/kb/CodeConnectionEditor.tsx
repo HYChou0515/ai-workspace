@@ -62,12 +62,12 @@ export function CodeConnectionEditor({
 
       <div className="kb-field" style={{ marginBottom: 4 }}>
         <span className="kb-field__label">Git URL</span>
-        <input className="input" value={collection.git_url ?? ""} readOnly disabled />
+        <input className="input input--block" value={collection.git_url ?? ""} readOnly disabled />
       </div>
       <label className="kb-field">
         <span className="kb-field__label">Branch</span>
         <input
-          className="input"
+          className="input input--block"
           placeholder="(default branch)"
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
@@ -76,7 +76,7 @@ export function CodeConnectionEditor({
       <label className="kb-field">
         <span className="kb-field__label">Access token</span>
         <input
-          className="input"
+          className="input input--block"
           type="password"
           autoComplete="off"
           placeholder="leave blank to keep the current token"
