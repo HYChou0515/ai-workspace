@@ -422,3 +422,117 @@ that replaces a mechanism gets another round; three rounds is the budget. CI
 runs on the final sha only after a round comes back clean — if reviewers
 cannot be launched (the account's spend limit), stop and report; do not run
 CI in their place.
+
+## Acceptance record (2026-09-21, worktree build on 127.0.0.1:8263, Chromium 1148, 1280×900, light AND dark)
+
+### Mutation probes (before the push; each restored by file copy, the tree clean after)
+
+Nineteen, each reddening exactly the test that guards it (`probe_guard2.sh` in
+the job dir; the control run after all restores is green):
+
+| # | Mutation | Reddened |
+|---|---|---|
+| M01 | a control loses `input` | guard: dresses every text control |
+| M02 | a control's class becomes `{draft ? … : …}` | guard: dresses every text control (computed) |
+| M03 | the whitelisted terminal line gains `input` | guard: whitelist entry stale (+ inline copy) |
+| M04 | inline `backgroundColor` on a dressed control | guard: no inline copy |
+| M05 | `.ev-field { background-color }` | guard: no scoped re-draw |
+| M06 | a class invented on the spot beside `input`, with a `box-shadow` | guard: no scoped re-draw (the list is derived) |
+| M07 | `.kb-field .input { … }` in kb.css | guard: no other sheet names `.input` |
+| M08 | `.ev-select { border-top }` beside an allowed `border-color` | guard: no scoped re-draw |
+| M09 | `.inline-edit` loses `flex: none` | guard: companions |
+| M10 | `.input` loses `min-width: 0` | guard: companions |
+| M11 | `outline: none` back on `.input` | guard: companions |
+| M12 | the table's `min-height: 26px` removed | entity-views: keeps the table calm |
+| M13 | `.ev-field:disabled` removed | entity-views: keeps the table calm |
+| M14 | ItemForm's `aria-invalid` removed | ItemForm: says the empty title with aria-invalid |
+| M15 | TodoPanel's goal row loses `input` | TodoPanel: rows shrink (both) + guard |
+| M16 | SearchPanel's row loses `input input-group` | SearchPanel.layout: row shrinks |
+| M17 | item-environment.css copies `aria-invalid` back | guard: no other sheet names `.input` + item-environment (two) |
+| M18 | one range end loses the slot | entity-views: skins every control + guard |
+| M19 | `.input-group__field` loses `border: 0` | guard: companions |
+
+### 1 · HEAD in the browser (numbers derived from the drivers' `report.json`)
+
+Order matters: build, THEN start the app — a rebuild under a running app
+replaces `web/dist` and every SPA route answers 404, and the driver then
+reports "0 controls, 0 not house" for every page, which is nothing at all.
+(That happened once in this run; the pages were re-measured on a restarted app.)
+
+- 20 routes as they load (`/`, `/a/playground`, `/a/playground/new`, a
+  playground item, `/a/pm`, a PM project, `/kb/collections`, a collection +
+  its cards / wiki / review tabs, `/kb/graph`, `/kb/chats`, `/groups`,
+  `/work-calendar`, `/my-resources`, `/wui`, `/skill-hub`, `/review`,
+  `/diagnostics`): 26 controls in light, 26 in dark, **0 not house**; eight
+  of the routes have no text control when they load.
+- 20 interactive states (the item's Files and Search panes; the Env, Tools,
+  Share, Export and Sandbox modals; the PM project's view-settings popover,
+  the table's and the board's New-issue form, the table with one row created,
+  the health view; a new KB chat; the collection title rename; a new context
+  card; the diagnostics model matrix with its question form; `/wui`,
+  `/skill-hub`, `/my-resources`, `/kb/graph`): 82 controls in light, 84 in
+  dark (the row created in the light pass shows the table's two filter
+  selects in the dark pass), **2 flagged in each, both by design** — the KB
+  composer's textarea is a slot in `.kb-composer`'s own accent box (D7), and
+  `ime-text-area` is Monaco's. Everything else is house.
+- Read by eye: the create-item form's title / tags / description at 38px
+  beside the 38px Owner box; `/review`'s toolbar one height in dark; the PM
+  view-settings popover in dark with the time range as ONE box and a row in
+  the timeline.
+
+### 2 · Base vs HEAD differential (the same 26 harness cases, 77 controls + their rows, both schemes)
+
+The stylesheets of `72903920` and of this branch under one markup, each
+control dressed as its own tsx dresses it on either side; every difference
+read out and matched:
+
+- **Nothing outside "Deliberately not unified".** Surfaces `--paper` /
+  `--paper-2` → `--white` (admin row, AskUserCard, cards, drawer, env, groups,
+  pickbar, rubric, sanity, tune, work calendar); radii 4 / 8 / 0 → 6 (chat
+  rail rename, FileTree, graph filters, rubric, tune, address bar, the
+  managers field); type 14 → 13 where no size rule keeps it (the same set
+  plus `/review`'s toolbar); heights to 34 where only padding had set them
+  (drawer 38 → 34, env 32.6 / 35.7 → 34, groups 39.7 → 34, tune 37.5 → 34,
+  the collections search 30 → 34, the skill picker 32 → 34) and to the
+  compact size where the row is dense (AskUserCard 29.5 → 26, sanity's filter
+  29 → 26, ManageChats' rename 28 → 26, the attachment rename 30.6 → 28, the
+  add-key 25 → 24, the address bar 32 → 28 = the button beside it);
+  `/review`'s selects 26 → 34 with their box 32 → 34 (D3); the graph filters'
+  2:1:1 shares finally realised (270 / 210 / 175 → 288 / 184 / 184) now that
+  `min-width: 0` lets them; the rest-state accent border gone from the title
+  (D8) and the autofocused renames; keyboard focus `outline: none → solid`
+  on the nine harness controls that had switched it off (D10).
+- **Unchanged, as the plan says they must be**: the table's cells 26px with
+  the default cursor and 0.6 opacity when disabled; the time range 28px and
+  its two ends; `.kb-field`'s controls 34px full-width; the App dashboard's
+  filters 28px; the KB chats rename the same 46.1px as the row button it
+  replaces; TodoPanel's rows fill and shrink; `.page-tools` 32px; the admin
+  row 28px.
+- One non-control differs in dark only: the button beside the WUI address
+  bar reads `rgb(236, 234, 227)` on base and `rgb(235, 233, 226)` here — a
+  1/255 rendering difference on an element this change does not touch.
+
+### 3 · Tight-row probe (240px rows with long neighbours, base vs HEAD)
+
+Nine rows (`probe-tight2.cjs`): the Share role select, the sanity table's
+category filter, the App dashboard's filter, `.page-tools`, the admin row,
+the cards' term adder among chips, the graph filters, TodoPanel's goal row,
+SearchPanel's find row. On both sides every control's width ≥ its content's
+(`scrollWidth`), so none collapses; the role select and the dashboard filter
+overflow their row on both sides exactly as before (544 / 322 px of content
+in 240). The three that read narrower are content-width changes — 14 → 13px
+type on the category filter and the admin fields, the find row's padding
+moved from the slot to its box.
+
+### Not reached on this instance
+
+The default user is not an admin and there were no grants, proposals,
+findings, published skills or deployed pages: the `/my-resources` admin row,
+the New-group form, the `.page-tools` search / selects on `/wui` and
+`/skill-hub`, the Share / Permission role selects, the review drawer,
+`AskUserCard`, the chat rail / KB chats / attachment renames,
+`ManageChatsModal`, `TuneParsingModal`, the wiki guidance form, `WuiView`'s
+address bar, `SkillHubPickerModal`, `HealthView`'s filters (they render only
+with findings), the table's cells in the live app. Every one of them is in
+the differential and the tight-row probe above; what is unverified there is
+their page's layout around them, not the control.
