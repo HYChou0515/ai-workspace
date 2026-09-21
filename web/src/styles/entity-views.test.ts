@@ -38,6 +38,12 @@ describe("entity-views.css", () => {
     // their own background — see #GH-projects A).
     expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:nth-child\(even\)/);
     expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:hover/);
+    // A field outside a cell is the views' 28px — `.ev-field` says both
+    // `height` and `min-height`, or `.input`'s 34px min would win (#829 D3).
+    const field = CSS.match(/\n\.ev-field\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(field, ".ev-field").not.toBe("");
+    expect(field).toMatch(/height:\s*28px/);
+    expect(field).toMatch(/min-height:\s*28px/);
     // inline cell fields reveal their border only on hover/focus.
     expect(CSS).toMatch(/\.ev-table tbody \.ev-field\s*\{[^}]*border-color:\s*transparent/);
     // …at the table's 26px: `.ev-field`'s `min-height: 28px` (its answer to
@@ -102,6 +108,9 @@ describe("entity-views.css", () => {
     if (/outline:\s*none/.test(ring)) {
       expect(ring, "outline removed with nothing put back").toMatch(/box-shadow:[^;]*var\(--accent/);
     }
+    // …and the box does not add a third: its `.input-group` ring is off here
+    // because the end's ring above is the keyboard indicator (#829 D10).
+    expect(CSS).toMatch(/\.ev-viewpanel__range:has\(:focus-visible\)\s*\{[^}]*outline:\s*none/);
 
     // NOTHING in the panel wraps. Wrapping was tried and is worse: on the
     // shared field class it drops a checkbox's label below its box, and on the

@@ -575,7 +575,7 @@ function FilterSelect({
       className="input"
       // 28px: level with the `Clear filters` button beside it (`.btn` sm). The
       // active state is a colour on the house chrome, not a chrome of its own.
-      style={{ flex: "none", height: 28, minHeight: 28, padding: "0 8px", fontSize: pxToRem(12), cursor: "pointer", ...(active ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}) }}
+      style={{ flex: "none", height: 28, minHeight: 28, padding: "0 8px", fontSize: pxToRem(12), cursor: "pointer", color: active ? "var(--accent)" : undefined, borderColor: active ? "var(--accent)" : undefined }}
     >
       <option value="any">{prefix} · any</option>
       {options.map((o) => (

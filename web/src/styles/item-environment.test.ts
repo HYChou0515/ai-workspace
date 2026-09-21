@@ -63,7 +63,11 @@ describe("item-environment.css: the size fields", () => {
     expect(wide).not.toMatch(/aria-invalid/);
   });
 
-  it("still show focus on an invalid field — the red border hides the accent one, so a ring", () => {
-    expect(rule(base, '.input[aria-invalid="true"]:focus')).toMatch(/box-shadow:/);
+  it("still show focus on an invalid field — the red border hides the accent one, so the ring", () => {
+    // The ring is the global `:focus-visible` one: `.input` sets no outline
+    // (pinned in input-class.test.ts), so no second ring is needed here and
+    // none is declared.
+    expect(rule(base, ".input")).not.toMatch(/outline/);
+    expect(base).not.toMatch(/aria-invalid="true"\]:focus/);
   });
 });

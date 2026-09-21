@@ -18,18 +18,18 @@ The scan: every `<input|textarea|select` opening tag in `web/src/**/*.tsx`
 minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 
 - **126 text-like controls in 54 files; 27 wear `.input`; 99 bare in 46
-  files.** (#829 counted 123 / 18 / 105 on `f5fe658a`: #826, #827 and #828
-  landed since; #829's scan also counted three `<select>` / `<input
-  type=date>` tokens that sit in comments, and read past two — a placeholder
-  saying `src/**` opened a block comment that swallowed `SearchPanel`'s
-  fourth input, and `SheetGrid`'s cell.)
+  files.** (#829 counted 123 / 18 / 105 on `f5fe658a`; its scan is not in
+  the tree and cannot be reproduced — this guard's reader on `f5fe658a` gives
+  117 / 18 / 99. The three `<select>` / `<input type=date>` tokens in
+  comments account for part of the gap; the rest is #829's own tool.)
 - Of the 99, by what the TAG carries: 47 wear a class of their own (a scoped
-  rule dresses or sizes them); 36 carry an inline `style` — 9 with a
-  `border: "1px …"` on the tag, 4 with a slot reset (`border: none` inside a
-  wrapper that draws the box), 16 via a shared style object (`inputStyle`,
-  `input`, `field`, `noteInput`, `ta`, `box` — eight objects, six names), 7
-  other (two of them a `{...inputStyle, border}` spread, the rest size /
-  font only); 16 wear nothing on the tag, of which 15 are dressed or reset by
+  rule dresses or sizes them); 36 carry an inline `style` — 10 with a
+  border on the tag (nine as `border: "1px …"`, `AppDashboard`'s as a
+  template literal), 4 with a slot reset (`border: none` inside a wrapper
+  that draws the box), 16 via a shared style object (`inputStyle`, `input`,
+  `field`, `noteInput`, `ta`, `box` — eight objects, six names), 6 other
+  (one a `{...inputStyle, border}` spread, the rest size / font only); 16
+  wear nothing on the tag, of which 15 are dressed or reset by
   a wrapper's descendant rule (`.page-tools`, `.admin-row`,
   `.kb-cardgen__pickbar`, `.kb-docsearch`, `.rvw-drawer__field`,
   `.rvw__search`, `.ev-viewpanel__range`) and ONE is the browser default
@@ -93,14 +93,21 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 - **D6 · `.input--block { width: 100%; flex: none }` for a column (Q6).** The
   MUI `fullWidth` shape rather than Bootstrap's block-by-default (which would
   change #825's row default and not cure `flex: 1` stretching a field DOWN in
-  a fixed-height column). The three wrapper-scoped copies are rewritten to
-  use it and deleted.
+  a fixed-height column). `flex: none` also removes flex-SHRINK: in a column
+  squeezed below its content a `.input--block` textarea keeps its rows and
+  the column scrolls (a modal's own safety net) instead of the textarea
+  crushing to nothing — on base it shrank to 70px. The three wrapper-scoped
+  copies are rewritten to use it and deleted.
 - **D7 · The KB composer keeps its own box; the app composer wears `.input`
   (Q7).** ChatGPT / Claude / Slack composers are one heavier box around text
   + attachments + send; `.kb-composer`'s accent 1.5px card-radius box stays
   and its textarea is a slot (`input-group__field`); `AgentPanel`'s textarea
-  draws its own paper-3 border today and becomes `input input--block`. That
-  the two chats' composers differ is a design question for another ticket.
+  draws its own paper-3 border today and becomes `input input--block`. The
+  slot reset drops the UA's 2px textarea padding (the box's 12px is the
+  spacing), and the composer box gets the same `:has(:focus-visible)` ring
+  every group box gets — its slot has no outline and its border is accent at
+  rest, so keyboard focus moved with nothing on screen. That the two chats'
+  composers differ is a design question for another ticket.
 - **D8 · `ItemForm`'s title loses its permanent accent border (Q8).** No
   design system marks a "primary field" by border colour; required is `*`,
   wrong is `aria-invalid`. The house look at rest, accent on focus, red via
@@ -111,27 +118,43 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
   default; the entity views keep `.ev-field:disabled { opacity: .6; cursor:
   default }` (Q9).** A read-only table draws every cell as a disabled input
   (#448); a not-allowed cursor on each says "forbidden", and a cell is data.
-- **D10 · Keyboard focus keeps the global 2px ring (Q10).** `.input`'s
+- **D10 · Focus keeps the global 2px ring (Q10).** `.input`'s
   `outline: none` (moved unchanged from `.kb-input` by #825) breaks
   base.css's own rule ("never to none") and would downgrade ~50 controls
   from the 2px `:focus-visible` ring to a 1px colour change — below WCAG
   2.4.11's 2px-equivalent, and no design system does it (MUI 2px border,
-  shadcn `ring-2`, Ant 2px shadow). `.input` drops `outline: none`; mouse
-  focus keeps the accent border (`:focus`), keyboard focus gets the global
-  ring; an input group's box gets the ring via `.input-group:has(:focus-visible)`
-  (its slot's own outline stays off, or the ring would sit inside the box).
-  The `aria-invalid` focus ring stays a box-shadow so red + ring both show.
+  shadcn `ring-2`, Ant 2px shadow). `.input` drops `outline: none`: a
+  focused field shows the accent border AND the global ring. The grill
+  said "mouse = border, keyboard = ring"; Chromium does not offer that split
+  — it applies `:focus-visible` to a text field (and a `<select>`) on click
+  as well as on Tab — so mouse and keyboard look the same, border colour
+  plus ring, which is the shadcn / Ant shape (border-ring + ring-[3px];
+  border + 2px shadow). Found by the review round's defect lens and kept.
+  An input group's box gets the ring via `.input-group:has(:focus-visible)`
+  (its slot's own outline stays off, or the ring would sit inside the box) —
+  and a toggle button inside the box lights the box too: the box is the
+  field. Two places would have shown THREE indicators and show two: the PM
+  time range keeps its per-end inset ring and drops the box's
+  (`.ev-viewpanel__range:has(:focus-visible) { outline: none }` — not
+  "none": the end's ring stays); the invalid field's extra soft shadow is
+  gone (red border + the ring).
 - **D11 · The guard reads string-literal class lists only (Q11).** A computed
   `className={…}` is refused with its own message — a branch the scan cannot
   see is a branch that can be bare — and state goes on `data-` attributes, as
   `.btn[data-active]` does. No control uses a computed class today; the one
   pass-through (`roleWidget`'s `className` prop, every caller passing
   `"ev-field"`) is replaced by the literal `input ev-field` and the prop
-  removed.
+  removed. The same holds for `style` on a dressed control: an object
+  literal, or a same-file `const` object literal (`style={fieldSize}`,
+  `{...fieldSize}`) which the guard reads; anything else (an import, a call,
+  a conditional spread) is refused — a review probe put a border into
+  `SearchPanel`'s shared `input` const and the tag-text check stayed green.
 - **D12 · Three things #829 did not name, done and named (Q12).** The dead
   `.kb-cardgen__body > input, .kb-cardgen__todo, .kb-cardgen__proposal …`
   rule (no tsx uses those classes) is deleted because it draws a chrome the
-  guard flags — the rest of cardgen's dead CSS is another ticket; the three
+  guard flags — the rest of cardgen's dead CSS, `.kb-cardgen__todo`'s size
+  rule included, is another ticket (P5 had deleted that one too; P7 put it
+  back); the three
   fill-the-width copies use `.input--block` (D6); `/review`'s selects go to
   the house size (D3). Not touched: anything server-side, config / schema /
   manifest (no `docs/migrations.md` entry), `sandbox-host/`, any handler /
@@ -162,6 +185,18 @@ minus `type=checkbox|radio|file|range|color|hidden|submit|button|image|reset`.
 - The autofocused in-place renames (`.chat-rail__rename`, `.kb-att__rename`,
   `.kb-colpage__nameedit` / `__descedit`, FileTree's) drew an accent border
   themselves; `.input:focus` draws it now, and they commit on blur.
+- Textareas take `textarea.input`'s line-height (`--leading-body-sm`, 1.5)
+  where they inherited the body's 1.55, its `8px 10px` padding where they
+  had 2px (CardDiffReview's and WorkflowDecisionCard's notes grow 43 → 54px)
+  and `resize: vertical` where the UA allowed both.
+- `/my-resources`' admin row: the `UserPicker` search inside it already wore
+  `.input` (34px); the row's descendant rule now sizes it with the row's
+  fields, 28px. `ItemShareManagers`' add field fills its form (218px UA
+  width → the form's).
+- `.kb-docsearch--inline` gains `min-width: 160px` (the floor `.rvw__search`
+  has): with `.input`'s `min-width: 0` it shrank to 20px at 390px wide; on
+  base the row overflowed off the left edge instead — both broken, and the
+  plan's rule is "overflow is fine, collapse is not".
 
 ## The table (derived from the base by a script over the guard's scan; counts come OUT of it)
 
@@ -179,7 +214,7 @@ P1 counts them as it edits them), **99 do not: A 32 · B 53 · C 11 · W 3**.
 | `components/CollectionsChecklist.tsx:53` | `<input>` “collections-search” | inline border | **A** input input--block |
 | `components/DomainField.tsx:35` | `<select>`  | class `inline-edit` | **B** input inline-edit |
 | `components/DomainField.tsx:55` | `<input>`  | class `inline-edit` | **B** input inline-edit |
-| `components/EnvVarsModal.tsx:278` | `<input>` “env-tool-search” | wears .input | **—** input input--block (+ inline mono font) |
+| `components/EnvVarsModal.tsx:278` | `<input>` “env-tool-search” | wears .input | **—** already `input` (+ inline `width: 100%` in its grid); unchanged |
 | `components/EnvVarsModal.tsx:386` | `<input>` “env-field-${field.name}” | inline border | **A** input input--block (+ inline mono font) |
 | `components/EnvVarsModal.tsx:443` | `<input>` “env-cred-${field.name}” | inline border | **A** input input--block (+ inline mono font) |
 | `components/EnvVarsModal.tsx:507` | `<textarea>` “env-text” | inline border | **A** input input--block (+ inline mono font) |
@@ -196,7 +231,7 @@ P1 counts them as it edits them), **99 do not: A 32 · B 53 · C 11 · W 3**.
 | `components/ItemEnvironmentPanel.tsx:137` | `<input>` “cpu-input” | wears .input | **—** already `input`; `.env-field > .input` → `input--block` |
 | `components/ItemEnvironmentPanel.tsx:199` | `<input>` “memory-input” | wears .input | **—** already `input`; `.env-field > .input` → `input--block` |
 | `components/ItemForm.tsx:106` | `<input>` “+ add” | inline slot reset | **C** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
-| `components/ItemForm.tsx:217` | `<input>`  | spread of `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
+| `components/ItemForm.tsx:217` | `<input>`  | spread of `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline, as one shared `fieldSize` const); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
 | `components/ItemForm.tsx:246` | `<input>`  | shared style `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
 | `components/ItemForm.tsx:286` | `<textarea>`  | spread of `inputStyle` | **A** title / fields / description: input input--block (+ minHeight 38, 14px inline); tags: box `input input-group`, field `input-group__field` — `inputStyle` object deleted; title's accent border → `aria-invalid` (D8) |
 | `components/ItemShareDialog.tsx:241` | `<select>` “Role for ${g.userId}” | class `inline-edit` | **B** input inline-edit (marginLeft auto stays) |
@@ -212,7 +247,7 @@ P1 counts them as it edits them), **99 do not: A 32 · B 53 · C 11 · W 3**.
 | `components/ToolsChecklist.tsx:121` | `<input>` “tools-search” | wears .input | **—** already `input`; its inline `flex:none; width:100%` → `input--block` |
 | `components/UserPicker.tsx:50` | `<input>`  | wears .input | **—** already `input` |
 | `components/WorkflowDecisionCard.tsx:97` | `<textarea>` “What should change?” | inline size only | **A** input input--block |
-| `pages/AppDashboard.tsx:570` | `<select>`  | inline size only | **A** input + inline height/minHeight 28, padding, flex:none; active → inline color/borderColor (D3) |
+| `pages/AppDashboard.tsx:570` | `<select>`  | inline border (a template literal) | **A** input + inline height/minHeight 28, padding, flex:none; active → inline color/borderColor (D3) |
 | `pages/GroupsPage.tsx:153` | `<input>` “Search groups” | wears .input | **—** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
 | `pages/GroupsPage.tsx:364` | `<input>` “Group name” | class `inline-edit` | **B** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
 | `pages/GroupsPage.tsx:626` | `<input>` “Group name” | shared style `input` | **A** rename: input inline-edit (existing); form: input input--block — `input` object deleted |
@@ -332,7 +367,11 @@ Slot resets replaced by `.input-group__field` (base.css): `.kb-docsearch input`,
 background / padding (its mono type and per-end focus ring stay),
 `.kb-composer__input`'s border / background / outline (its width / resize /
 font-size stay), and the inline resets on `SearchPanel`'s `input` object,
-`FileTree`'s filter and `ItemForm`'s tag input.
+`FileTree`'s filter and `ItemForm`'s tag input. Their focus companions go
+with them — `.kb-docsearch:focus-within`, `.ev-viewpanel__range:focus-within`,
+`.kb-chats__rename:focus` — the box's accent border and ring are base.css's.
+`.kb-docsearch--inline` (on the base already: `flex: 0 1 280px; margin: 0`)
+gains `min-height`-style protection as `min-width: 160px`.
 
 Fill-the-width copies replaced by `.input--block` (D6): `.kb-field .input`
 (11 controls in NewCollectionModal / WikiCorrectionDialog /
@@ -347,7 +386,13 @@ figures stay as `.export-dialog__field > input, … > select`),
   D10), `.inline-edit` reduced to its size with `flex: none`; `.kb-textarea`
   and the three fill-the-width copies deleted (their users updated);
   `input-class.test.ts` rewritten as the global guard (below), red on this
-  base with the bare controls listed by `file:line`.
+  base with the bare controls listed by `file:line`. P1 corrected this plan
+  as it edited: the fill-the-width counts are 11 + 8 + 2 (the plan had said
+  12 / 10 / 1), and `.export-dialog__field`'s tabular figures moved to
+  `> input, > select` because the guard forbids `.input` in another sheet.
+  On the base the guard's CSS check cannot list the 23 rules by itself (its
+  modifier list is derived from tags that do not wear `input` yet); the
+  count came from a script with the plan's class list.
 - **P2** `components/` + the `.page-tools` pair (SkillHubPage, WuiOverviewPage).
 - **P3** `pages/` outside `kb/` + `pages/investigation/`.
 - **P4** `pages/kb/` + the `kb.css` scoped rules.
@@ -357,39 +402,69 @@ figures stay as `.export-dialog__field > input, … > select`),
   treatment with the actual `className`: 126 rows, 0 mismatches).
 - **P6** Acceptance (below); anything it finds is fixed in P6 with a test
   that pins it.
+- **P7** Review round 1 (four lenses on `git archive` snapshots; every
+  finding below is pinned by a test or a probe): the guard reads the JSX
+  through the TypeScript compiler's parser instead of a regex scan (the scan
+  could be made to swallow the control after a tag holding a `// don't`
+  comment or a regex literal with a quote — never live, but the reader is
+  the guard's core), finds a slot's box by walking its JSX ancestors (the
+  per-file grep passed a renamed composer, a stray slot, and SearchPanel's
+  rows 2–4 losing `input`), reads `style` consts (a border in `SearchPanel`'s
+  shared `input` object passed), and refuses an empty whitelist reason;
+  TodoPanel's and AskUserCard's fill rows pin their `flex: 1` (removing it
+  passed 47 tests while "Set goal" left the panel again in Chromium);
+  `.ev-field`'s 28px is pinned; the tight-row probe gets a criterion that
+  can fail and a positive control; D10 is rewritten to what Chromium does
+  and the range's third ring and the invalid field's second ring are
+  removed; `.kb-docsearch--inline` gets its floor; `.kb-cardgen__todo` is
+  restored; two indentation slips; this plan's counts and the acceptance
+  record.
 
 ## Test plan (red first; targeted only)
 
-- `web/src/styles/input-class.test.ts` — the scan of Ground truth. Every
+- `web/src/styles/input-class.test.ts` — the reader of Ground truth: every
+  `<input|textarea|select` JSX element of every `.tsx` under `src/`, through
+  `typescript`'s parser (P7; the first reader was a regex scan). Every
   control wears the class as a literal or sits in the whitelist; a
-  whitelist entry must match exactly one bare control; a computed class is
-  refused; a dressed control's tag carries no inline border (shorthand or
-  longhand), radius, background, box-shadow or outline; no CSS rule whose
-  selector names a control element, `.input` outside base.css, or a class
-  that rides beside `input` on any tag (derived from the sources, never
-  listed by hand) declares one of those (`0` / `none` / `transparent` and
-  state selectors excepted; base.css's theme reset excepted by exact
-  selector; a rule keyed on an id or a data attribute is not seen — none
-  targets a control today, said in the comment). The scanner's edges are
+  whitelist entry must carry a reason and match exactly one bare control; a
+  computed class is refused; a dressed control's `style` (an object literal
+  or a same-file const, anything else refused) carries no border (shorthand
+  or longhand), radius, background, box-shadow or outline; a slot has a JSX
+  ancestor that wears `input input-group` or is the composer; no CSS rule
+  whose selector names a control element or a class that rides beside
+  `input` on any element (derived from the sources, never listed by hand)
+  declares a chrome (`0` / `none` / `transparent` and state selectors
+  excepted; base.css's theme reset excepted by exact selector; a rule keyed
+  on an id, a data attribute or a universal child, and a state rule drawing
+  a whole second chrome, are not seen — none exists today, said in the
+  comment); no sheet but base.css names `.input`. The reader's edges are
   pinned on a temp-dir fixture: a docblock's `<select>`, a JSX comment, a
   placeholder saying `src/**` or `e.g. /*.md`, a `>` in a string, a computed
-  class; every reported line is checked to hold its tag. base.css's
-  companions are pinned by regex (`textarea.input` padding, `.input--block`,
-  `.input-group` + slot, `.inline-edit`'s `flex: none` and `min-height`,
-  `.input:disabled`, `.input[aria-invalid]`, no `outline: none` on `.input`).
+  class, an apostrophe in a trailing comment inside a tag, a quote in a
+  regex literal, a slot in a box / in a box without `input` / outside any
+  box, a `style` const with and without a border, a conditional style;
+  every reported line is checked to hold its tag. base.css's companions are
+  pinned by regex (`textarea.input` padding, `.input--block`, `.input-group`
+  + slot, `.inline-edit`'s `flex: none` and `min-height`, `.input:disabled`,
+  `.input[aria-invalid]` with no second focus ring, no `outline` on
+  `.input`).
 - Mutation probes, on file copies, before the push: each guarantee above is
   broken once and exactly its test must redden — recorded here with the
   mutation and the test that caught it.
 - `entity-views.test.ts`: the range's ends are slots and the range's rule
-  draws no chrome; the table's cells keep `height: 26px` AND `min-height:
-  26px` (a `min-height` on `.ev-field` would otherwise win); `.ev-field:disabled`
+  draws no chrome; the range's box does not add a third ring; `.ev-field`
+  keeps `height: 28px` AND `min-height: 28px`, the table's cells `26px` of
+  both (else `.input`'s 34 / `.ev-field`'s 28 would win); `.ev-field:disabled`
   keeps the default cursor.
 - `item-environment.test.ts`: the `aria-invalid` rules are base.css's and the
   sheet keeps no copy; `ItemForm.test.tsx`: `aria-invalid` on the empty
   submit, gone on the first keystroke.
 - Tests that pinned an inline `minWidth: 0` (`TodoPanel.test.tsx`,
   `SearchPanel.layout.test.tsx`) assert the class instead, and the guard pins
-  `.input { flex: 1; min-width: 0 }` — each link reddens on its own mutation.
+  `.input { flex: 1; min-width: 0 }`; the rows that FILL (TodoPanel's two,
+  AskUserCard's two) also pin their own `flex: 1` — `.inline-edit` is a
+  chip's width, so the tag's `flex: 1` is the growing half and the shrinking
+  half at once (D4) — each link reddens on its own mutation.
 - Per-change gate: the touched directories' suites + `ruff check` /
   `ruff format --check` / `ty check` / `pnpm typecheck`; the full suite is CI's.
 
@@ -409,7 +484,14 @@ figures stay as `.export-dialog__field > input, … > select`),
    called a regression. This is what a HEAD-only check cannot see: a cell
    that grew 2px, a rename 2px shorter than the row it replaces.
 3. **Tight-row probe**: every control that sits in a flex row, in a 240px row
-   with long neighbours — overflow is fine, collapse is not.
+   with long neighbours — overflow is fine, collapse is not. The criterion:
+   a chip-sized control is exactly as wide in the 240px row as in a 2000px
+   one; a filling one keeps at least its placeholder's first word (60px).
+   `scrollWidth` is not it — for a form control it equals `clientWidth`, so
+   "width ≥ scrollWidth" is always true (the first record used it). A
+   positive control — the same page with `.inline-edit { flex: 0 1 auto }`,
+   the shape D4 rejected — must be reported as collapsed, or the criterion
+   is empty.
 
 ## Review and CI
 
@@ -421,7 +503,9 @@ refused by the harness and two reviewers probed in the author's tree). A fix
 that replaces a mechanism gets another round; three rounds is the budget. CI
 runs on the final sha only after a round comes back clean — if reviewers
 cannot be launched (the account's spend limit), stop and report; do not run
-CI in their place.
+CI in their place. Round 1 (2026-09-21) ran all four on snapshots; its
+findings are P7. P7 replaced the guard's reader (a mechanism), so a second
+round verifies P7 before CI.
 
 ## Acceptance record (2026-09-21, worktree build on 127.0.0.1:8263, Chromium 1148, 1280×900, light AND dark)
 
@@ -512,17 +596,35 @@ read out and matched:
   bar reads `rgb(236, 234, 227)` on base and `rgb(235, 233, 226)` here — a
   1/255 rendering difference on an element this change does not touch.
 
-### 3 · Tight-row probe (240px rows with long neighbours, base vs HEAD)
+### 3 · Tight-row probe (240px rows with long neighbours, base vs HEAD; re-run at P7 with a criterion that can fail)
 
-Nine rows (`probe-tight2.cjs`): the Share role select, the sanity table's
-category filter, the App dashboard's filter, `.page-tools`, the admin row,
-the cards' term adder among chips, the graph filters, TodoPanel's goal row,
-SearchPanel's find row. On both sides every control's width ≥ its content's
-(`scrollWidth`), so none collapses; the role select and the dashboard filter
-overflow their row on both sides exactly as before (544 / 322 px of content
-in 240). The three that read narrower are content-width changes — 14 → 13px
-type on the category filter and the admin fields, the find row's padding
-moved from the slot to its box.
+The first record's criterion ("width ≥ `scrollWidth`") was empty — for a
+form control the two are equal, and the veracity lens showed the D4 collapse
+(96 → 18px) passing it. `probe-tight3.cjs` measures each control in a
+2000px row (its intrinsic width) and in a 240px row: a chip-sized control
+(`flex: none`) must not lose a pixel; a filling one keeps ≥ 60px. Seven rows
+(the Share role select, the sanity category filter, the App dashboard's
+filter, the KB collections doc search beside its three buttons, the cards'
+term adder among chips, TodoPanel's goal row, SearchPanel's find row):
+
+- **HEAD: 0 collapsed.** role 96 = 96, sanity 127 = 127 (13px type; base
+  134), dashboard 122 = 122 — each overflowing its 240px row by 304 / 126 /
+  82px, as base does; the doc search 280 → 160 (its new floor; base 211.8,
+  the row's min-content), the term adder and the find row 240 (they wrap or
+  fill), the goal row 121.8 on both sides.
+- **Positive control** (the same page with `.inline-edit { flex: 0 1 auto }`,
+  the shape D4 rejected): role and sanity **collapse to 18px** and are
+  reported so — the criterion bites.
+
+### After P7
+
+P7 changed no rest-state chrome: the differential re-run on its stylesheets
+lists the same 80 controls in light and in dark (the one dark-only 1/255
+difference of the first run is gone), with the expected focus-only deltas
+(the range's box no longer adds a third ring; the invalid field no longer
+adds a second). The HEAD-in-browser numbers above are from the P6 build; the
+P7 additions — the doc search's floor, the composer's ring — are measured in
+the differential and the tight-row probe.
 
 ### Not reached on this instance
 

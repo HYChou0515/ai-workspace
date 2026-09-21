@@ -662,6 +662,13 @@
   flex: 0 1 auto;
   font-family: var(--font-mono);
 }
+/* The box's own ring (`.input-group:has(:focus-visible)`) would be a THIRD
+   indicator here — the box already turns accent, and each end draws the inset
+   ring below that says WHICH end. Two is the answer; not "none": the end's
+   ring stays. */
+.ev-viewpanel__range:has(:focus-visible) {
+  outline: none;
+}
 /* The group says the FIELD has focus; the ring says WHICH END. The group alone
  * cannot: it holds two inputs, so tabbing from "day starts" to "day ends" left
  * the border already accent-coloured and the move was invisible. Dropping the

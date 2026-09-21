@@ -82,6 +82,19 @@ describe("AskUserCard", () => {
     expect(screen.getByLabelText("補充:SQLite")).toBeTruthy();
   });
 
+  it("lets each note fill the rest of its option's row (#829 D4)", () => {
+    // The note wears the compact house field (`input inline-edit`), whose
+    // default is a chip's width; filling the row is the tag's own `flex: 1`
+    // — the half a review found unpinned. `.input`'s `min-width: 0` (pinned
+    // in styles/input-class.test.ts) is what lets it give width back.
+    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} />);
+    for (const label of ["補充:Postgres", "自己回答"]) {
+      const note = screen.getByLabelText(label) as HTMLInputElement;
+      expect(note.classList.contains("input"), label).toBe(true);
+      expect(note.style.flexGrow || note.style.flex, `${label}: flex: 1 on the tag`).toMatch(/^1/);
+    }
+  });
+
   it("selects on click and commits on 送出 — not on the first click", () => {
     // With a per-option note to type, sending on the click would fire before the
     // person finished. So a click highlights; 送出 sends.

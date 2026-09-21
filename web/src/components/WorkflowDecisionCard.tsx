@@ -101,7 +101,7 @@ export function WorkflowDecisionCard({
           placeholder="What should change?"
           rows={3}
           className="input input--block"
-            style={{ fontSize: pxToRem(12) }}
+          style={{ fontSize: pxToRem(12) }}
         />
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>

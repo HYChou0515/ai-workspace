@@ -199,8 +199,10 @@ select {
    `input-class.test.ts` fails on any text control that does not wear it, and
    on any other sheet that names it. A container that wants a fixed width sets
    it on the element; the default is "fill the flex row" (`.input--block` for
-   a column). Mouse focus is the accent border; keyboard focus keeps the global
-   2px `:focus-visible` ring (the class sets no outline — "never to none"). */
+   a column). Focus is the accent border plus the global 2px `:focus-visible`
+   ring (the class sets no outline — "never to none"); Chromium applies
+   `:focus-visible` to a text field on click as well as on Tab, so mouse and
+   keyboard look the same — the shadcn / Ant shape, border colour and ring. */
 .input {
   flex: 1;
   min-width: 0;
@@ -226,13 +228,10 @@ select {
   cursor: not-allowed;
 }
 /* A field holding what the server would refuse: `aria-invalid` says it to AT,
-   the note under it says the grammar. The red border outranks the accent one,
-   so focus is also shown as a ring. */
+   the note under it says the grammar. The red border outranks the accent one;
+   focus still shows as the ring every field gets. */
 .input[aria-invalid="true"] {
   border-color: var(--err);
-}
-.input[aria-invalid="true"]:focus {
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* A textarea with `.input`'s `padding: 0 10px` has its first line on the
@@ -259,8 +258,9 @@ textarea.input {
    that wears `.input`, with the control inside as a bare slot beside its
    adornments — a search box and its icon, a date range's two ends, a
    find/replace row's toggles. The box draws the chrome and carries the focus
-   ring for whatever is focused inside it; the slot draws nothing. Seven copies
-   of this shape existed before #829 (D2). */
+   ring for whatever is focused inside it (a toggle button beside the slot
+   included — the box is the field); the slot draws nothing. Seven copies of
+   this shape existed before #829 (D2). */
 .input-group {
   display: flex;
   align-items: center;

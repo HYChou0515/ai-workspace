@@ -345,6 +345,13 @@
   border-radius: var(--radius-card);
   padding: 12px;
 }
+/* Keyboard focus in the composer: its slot has no outline, and the box's
+   border is accent at rest, so without this the focus moved with nothing on
+   screen. The same ring every `.input-group` box gets (#829 D10). */
+.kb-composer:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 /* The composer block above is the box (accent, card radius: the page's
    primary action, on purpose not the house chrome — #829 D7); its textarea is
    a slot (`.input-group__field` in base.css draws nothing) at body size. */
@@ -1175,6 +1182,10 @@
 }
 .kb-docsearch--inline {
   flex: 0 1 280px;
+  /* `.input`'s `min-width: 0` would let the box shrink to its icon beside
+     the three buttons; below this it overflows instead (the same floor as
+     `.rvw__search`). */
+  min-width: 160px;
   margin: 0;
 }
 .kb-grid {
@@ -2784,6 +2795,7 @@ textarea.kb-colpage__descedit {
 .kb-review__dismiss:disabled { opacity: 0.45; cursor: not-allowed; }
 .kb-review__body { padding: 0 12px 12px; border-top: 1px solid var(--paper-2); }
 /* #415 source picker: a search/select-all toolbar over a scrollable filetree. */
+.kb-cardgen__todo { min-height: 320px; font-family: ui-monospace, monospace; font-size: 0.8125rem; }
 .kb-cardgen__pickbar { display: flex; gap: 8px; align-items: center; }
 .kb-cardgen__pickbar button { padding: 5px 12px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); cursor: pointer; color: var(--text-paper); white-space: nowrap; }
 .kb-cardgen__tree { max-height: 48vh; overflow: auto; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); --filetree-header-bg: var(--white); }
