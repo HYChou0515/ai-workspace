@@ -24,6 +24,7 @@ import msgspec
 
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SUBAGENT_FORBIDDEN_TOOLS, SubagentDef
+from ..tooling.catalog import narrow_entries
 from .events import AgentEvent, MessageDelta, RunError
 from .runner import AgentRunner
 
@@ -159,7 +160,24 @@ def _child_context(
             # handed a tool that can only refuse — the #537 shape, aimed at a
             # sub-agent. `save_subagent` refuses these up front; this is the
             # backstop for files it never saw.
-            allowed_tools=[t for t in defn.tools if t not in SUBAGENT_FORBIDDEN_TOOLS],
+            #
+            # And bounded by what the PARENT holds, here, where the child's
+            # list is made — not only where definitions are loaded. The loader
+            # clamps a file it reads; `save_subagent` splices a definition into
+            # the running turn's index for immediate use, and that copy had no
+            # clamp, so a definition saying `rca-tools` handed the child every
+            # command of it, the ones the item pinned off included. One rule
+            # (`narrow_entries`) at the one place every source passes through.
+            # `None` (the parent did not restrict) leaves the list as written.
+            allowed_tools=[
+                t
+                for t in (
+                    narrow_entries(defn.tools, parent_cfg.allowed_tools)
+                    if parent_cfg.allowed_tools is not None
+                    else list(defn.tools)
+                )
+                if t not in SUBAGENT_FORBIDDEN_TOOLS
+            ],
         ),
         history=[],
         run_agent=None,

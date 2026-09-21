@@ -21,12 +21,18 @@ other or from the tools the agent actually runs.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .registry import PackageInfo
+if TYPE_CHECKING:
+    from .registry import PackageInfo
 
 _WORD_SPLIT = re.compile(r"[_\-:]+")
+
+
+BUILTIN_GROUP = "builtin"
+"""The one picker fold every built-in tool shares (#322 grouping)."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,15 @@ class ToolMeta:
     side by side can mean "this whole bundle" and "this one command of that
     bundle". Told only its command name, a reader cannot tell which — nor which
     row's switch governs the tool they saw in a chat card."""
+    group: str = BUILTIN_GROUP
+    """Which fold of the picker this unit lives under: ``"builtin"`` for every
+    built-in, otherwise the raw package id (a ``pkg:cmd`` command and its
+    whole-package row share it; an entry nothing resolves is its own group).
+
+    Named here, on the server, because the FE cannot tell a whole-package row
+    of a first-party package from a built-in — both carry no ``package`` and
+    no ``external`` flag. The raw id, not the humanized label, so the fold key
+    is stable whatever locale renders it."""
 
 
 def humanize_tool_label(name: str) -> str:
@@ -69,21 +84,25 @@ def summarize_description(text: str) -> str:
     return flat
 
 
-def _meta(name: str, description: str) -> ToolMeta:
+def _meta(name: str, description: str, *, group: str = BUILTIN_GROUP) -> ToolMeta:
     return ToolMeta(
         name=name,
         label=humanize_tool_label(name),
         description=summarize_description(description),
+        group=group,
     )
 
 
 def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> list[ToolMeta]:
-    """One display unit per ``app.json`` ``tools[]`` entry — the picker's
-    pickable granularity (#322). The unit ``name`` IS the entry string verbatim,
-    so a tri-state pref keyed by it lines up with what ``AppCatalog.resolve``
-    adds/removes. A built-in or ``pkg:cmd`` entry resolves to that tool's meta; a
-    bare package entry becomes one unit whose description lists the tools it
-    bundles (so the user knows what a single checkbox grants)."""
+    """One display unit per entry of ``app_tools`` — the picker's pickable
+    granularity (#322). The route hands it the ceiling already brought to
+    command granularity (``expand_entries``), so a whole-package grant arrives
+    as ``pkg:cmd`` entries and draws one row per command; a bare package entry
+    reaches here only when the package has no commands or is unknown. The unit
+    ``name`` IS the entry string verbatim, so a tri-state pref keyed by it is
+    what ``unit_pref`` reads. A built-in or ``pkg:cmd`` entry resolves to that
+    tool's meta; a bare package entry becomes one unit whose description lists
+    the tools it bundles (so the user knows what a single checkbox grants)."""
     from ..agent.tools import builtin_tool_descriptions
 
     builtins = builtin_tool_descriptions()
@@ -102,6 +121,7 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
                     humanize_tool_label(cmd_name),
                     summarize_description(cmd.description if cmd else ""),
                     package=humanize_tool_label(pkg_name),
+                    group=pkg_name,
                 )
             )
         elif entry in pkgs:
@@ -112,11 +132,11 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
             # away anyway.
             granted = ", ".join(humanize_tool_label(c.name) for c in pkg.commands)
             desc = pkg.description.strip() or (f"Bundled tools: {granted}." if granted else "")
-            units.append(ToolMeta(entry, humanize_tool_label(entry), desc))
+            units.append(ToolMeta(entry, humanize_tool_label(entry), desc, group=entry))
         else:
             # Unknown entry (deploy without that package built) — still show it so
             # the user can toggle it; no description available.
-            units.append(ToolMeta(entry, humanize_tool_label(entry), ""))
+            units.append(ToolMeta(entry, humanize_tool_label(entry), "", group=entry))
     return units
 
 
@@ -130,7 +150,156 @@ def flat_catalog(packages: Sequence[PackageInfo]) -> dict[str, ToolMeta]:
     out: dict[str, ToolMeta] = {}
     for pkg in packages:
         for cmd in pkg.commands:
-            out[cmd.name] = _meta(cmd.name, cmd.description)
+            out[cmd.name] = _meta(cmd.name, cmd.description, group=pkg.name)
     for name, desc in builtin_tool_descriptions().items():
         out[name] = _meta(name, desc)
     return out
+
+
+def expand_entries(entries: Iterable[str], packages: Sequence[PackageInfo]) -> list[str]:
+    """Bring ``app.json`` entries to COMMAND granularity, in order.
+
+    A whole-package entry becomes one ``pkg:cmd`` per command the package has
+    right now — "the whole package" keeps meaning exactly that as releases add
+    commands, since nothing is enumerated in the manifest. A package that
+    exports no command (a runtime carrier such as ``python-stack``) stays one
+    unit, or its switch would have nothing to hang on. Built-ins, entries
+    already at command granularity, and entries nothing resolves pass through
+    as written; an entry that names a built-in is a built-in even when a
+    package shares the name — the picker draws the built-in's row, and the
+    runner's ``dedupe_tools`` lets the built-in outrank the package's copy of
+    that one name (the package's OTHER commands are still registered, as they
+    always were: a package named like a built-in is a deploy fault, logged
+    there, not something this rule repairs). Deduped,
+    first position wins: ``["rca-tools", "rca-tools:spc"]`` grants ``spc``
+    once, not a duplicate row and a FunctionTool built twice. Pure; every
+    door that holds the package list (`apps.catalog.finalize_tool_grants`
+    and the picker route) feeds it the same list, so nothing disagrees on
+    what a grant expands to."""
+    from ..agent.tools import builtin_tool_names
+
+    builtins = builtin_tool_names()
+    by_name = {p.name: p for p in packages}
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        pkg = by_name.get(entry)
+        if pkg is not None and ":" not in entry and entry not in builtins and pkg.commands:
+            units = [f"{entry}:{c.name}" for c in pkg.commands]
+        else:
+            units = [entry]
+        for unit in units:
+            if unit not in seen:
+                seen.add(unit)
+                out.append(unit)
+    return out
+
+
+def narrow_entries(entries: Iterable[str], held: Iterable[str]) -> list[str]:
+    """``entries`` ∩ ``held``, at whichever granularity each side is written —
+    the one rule behind every "a declared list, bounded by what this turn
+    holds": a workflow step's ``tools:``, a sub-agent definition's ``tools``
+    (at load and at ``save_subagent``).
+
+    An entry that is held verbatim stays. A bare ``pkg`` becomes the commands
+    of it that are held (``pkg:cmd`` units, by name), so an item's pins bind
+    the delegate too — a step that says ``rca-tools`` on an item that pinned
+    ``pareto`` off does not get ``pareto``. A ``pkg:cmd`` entry stays when the
+    bare ``pkg`` is held (a config that never met its package list) — unless
+    ``pkg`` names a built-in, which has no commands: ``exec:foo`` is nothing,
+    not "a command of exec". Anything else is dropped. Deduped, in
+    ``entries`` order. String-level on purpose: it needs no package list, so
+    it can run wherever the held list is — which also means it cannot tell
+    ``rca-tools:typo`` from ``rca-tools:spc`` when ``held`` still says bare
+    ``rca-tools``; a caller that has the packages passes the held list
+    EXPANDED (``expand_entries``), and then only real commands survive."""
+    from ..agent.tools import builtin_tool_names
+
+    builtins = builtin_tool_names()
+    held_set = set(held)
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        pkg, sep, _ = entry.partition(":")
+        if entry in held_set:
+            units = [entry]
+        elif not sep:
+            units = sorted(h for h in held_set if ":" in h and h.partition(":")[0] == entry)
+        elif pkg in held_set and pkg not in builtins:
+            units = [entry]
+        else:
+            units = []
+        for unit in units:
+            if unit not in seen:
+                seen.add(unit)
+                out.append(unit)
+    return out
+
+
+def unit_pref(unit: str, prefs: Mapping[str, bool]) -> bool | None:
+    """The tri-state pin that governs one unit: its own key first, then — for a
+    ``pkg:cmd`` unit — the package's key (an item pinned before commands were
+    pickable holds ``{"rca-tools": false}``, and that goes on meaning the whole
+    package), else ``None`` (follow the default).
+
+    The package key governs a ``pkg:cmd`` unit whatever granularity the App
+    granted at — including a package the App later narrowed to one command. A
+    stored "this package is off" outlives the App changing how much of the
+    package it grants; before part 2 such a key was a no-op there (it named no
+    ceiling entry). That, and the same key on a redundant ceiling
+    (``["rca-tools", "rca-tools:spc"]``, now deduped to one unit per command,
+    so the key reaches ``spc`` too), are the two readings that changed."""
+    if unit in prefs:
+        return prefs[unit]
+    pkg, sep, _ = unit.partition(":")
+    if sep and pkg in prefs:
+        return prefs[pkg]
+    return None
+
+
+@dataclass(frozen=True)
+class CommandGrants:
+    """What a ceiling + default set + prefs resolve to, at command granularity.
+
+    ``enabled`` is what the agent gets, ``disabled`` the rest of the ceiling
+    (the #480 "available on request" list); together they are the expanded
+    ceiling in ceiling order, disjoint. ``default_on`` is the expanded default
+    set ∩ ceiling — what a unit follows when nobody pinned it, which is what
+    the picker shows beside "Default"."""
+
+    enabled: tuple[str, ...]
+    disabled: tuple[str, ...]
+    default_on: frozenset[str]
+
+
+def command_grants(
+    ceiling: Iterable[str],
+    default_entries: Iterable[str],
+    prefs: Mapping[str, bool] | None,
+    packages: Sequence[PackageInfo],
+) -> CommandGrants:
+    """The one rule behind the tool picker and the agent's toolset
+    (plan-tools-picker-groups part 2): expand ``ceiling`` and
+    ``default_entries`` to command granularity, then per unit take its pin
+    (``unit_pref``) or, unpinned, whether the default set has it.
+
+    ``AppCatalog.resolve`` cannot do this — it runs before the turn has
+    resolved its third-party packages — so it is applied where the packages
+    are: `apps.catalog.finalize_tool_grants` writes the answer INTO the
+    config's ``allowed_tools`` / ``disabled_tools`` at every door that holds
+    the package list, and the picker route reads the same finalized config,
+    so its ``effective`` is by construction what the agent runs with."""
+    units = expand_entries(ceiling, packages)
+    default_units = set(expand_entries(default_entries, packages))
+    pins = prefs or {}
+    enabled: list[str] = []
+    disabled: list[str] = []
+    for unit in units:
+        pinned = unit_pref(unit, pins)
+        include = pinned if pinned is not None else unit in default_units
+        (enabled if include else disabled).append(unit)
+    return CommandGrants(
+        enabled=tuple(enabled),
+        disabled=tuple(disabled),
+        default_on=frozenset(u for u in units if u in default_units),
+    )

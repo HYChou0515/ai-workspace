@@ -44,8 +44,8 @@ opening tag in `web/src/**/*.tsx` (tests excluded, comments stripped), minus
 
    | Treatment | Rule | Count |
    |---|---|---|
-   | A · bare or inline copy → `className="input"`; inline border / radius / background / outline removed; **size and type** props (`width`, `height`, `minHeight`, `padding`, `fontSize`, `resize`, and `fontFamily` for a mono field of keys — EnvVarsModal, WorkCalendarPage) may stay inline or move to `.input--block` / `.inline-edit`. | 39 plain `input` |
-   | B · a class of its own that re-draws the chrome → `className="input <cls>"`; the rule keeps only what differs (height, font, width, `resize`, a hover / disabled / active variant) and loses `border` / `border-radius` / `background` / `color` / `outline`. | 73 (`input--block` 32, `inline-edit` 14, `ev-select` 11, `ev-field` 7, one scoped class each for 15 — the four overlap: 5 wear `input--block` with a scoped class, 1 wears `input--block inline-edit`) |
+   | A · bare or inline copy → `className="input"`; inline border / radius / background / outline removed; **size and type** props (`width`, `height`, `minHeight`, `padding`, `fontSize`, `resize`, and `fontFamily` for a mono field of keys — EnvVarsModal, WorkCalendarPage) may stay inline or move to `.input--block` / `.inline-edit`. | 40 plain `input` |
+   | B · a class of its own that re-draws the chrome → `className="input <cls>"`; the rule keeps only what differs (height, font, width, `resize`, a hover / disabled / active variant) and loses `border` / `border-radius` / `background` / `color` / `outline`. | 72 (`input--block` 32, `inline-edit` 13, `ev-select` 11, `ev-field` 7, one scoped class each for 15 — the four overlap: 5 wear `input--block` with a scoped class, 1 wears `input--block inline-edit`) |
    | C · a slot inside a box → the box wears `className="input input-group"` (or keeps its own chrome when that chrome is deliberately not the house one — only `.kb-composer`, the accent-bordered primary action); the control wears `className="input-group__field"`. The box's `:focus-within` is the focus ring. | 11 slots in 10 boxes |
    | W · whitelisted, with the reason in the test. | 3 |
 

@@ -418,7 +418,7 @@ FE/後端絕不解析它;`path`/`collection_id` 來自 record +
 
 | Method | Path | 用途 | 狀態 |
 |---|---|---|---|
-| `GET`    | `/a/{slug}/items/{item_id}/tools`     | per-item tool picker 狀態:`ItemTools{tools:[ItemToolState{key, label, description, default_on, pref:"follow"\|"on"\|"off", effective}]}`;`effective` 由 turn 用的同一條 resolve 在 server 端算出（anti-drift） | ✅ |
+| `GET`    | `/a/{slug}/items/{item_id}/tools`     | per-item tool picker 狀態:`ItemTools{tools:[ItemToolState{key, label, description, default_on, pref:"follow"\|"on"\|"off", effective, group, package?, external, …}]}`;`group` 是 picker 折疊用的 fold（內建一律 `"builtin"`,否則套件原始 id）;一列 = 天花板展開到**指令粒度**後的一個單位——整包授權的套件（有指令的）一個指令一列（`pkg:cmd`),沒有指令的套件仍是整包一列;`effective` 讀自 **turn 用的同一個定案 config**（`resolve` → `apps/catalog.py:finalize_tool_grants`,和 `turn_context` 的門同一個函式、同一條第三方 resolve,anti-drift;turn 那份清單在 sandbox 活著時會 `confine_to_mounted`、picker 不會——#674 既有）,`default_on` = `profile_default_tools`（resolve 自己起手的那段）展開,`pref` = `unit_pref` | ✅ |
 | `GET`    | `/a/{slug}/items/{item_id}/workflows` | 列出此 item `.workflows/` 內使用者自寫的 workflow manifest(id + title + phases) | ✅ |
 
 `pref` 對應 `WorkItemBase.attached_tool_prefs: dict[str, bool]`(#322,Tier-1

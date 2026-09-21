@@ -73,4 +73,38 @@ describe("useUpdateItemField", () => {
     const sent = vi.mocked(api.patchAppItemFields).mock.calls.at(-1)![2];
     expect(sent).not.toHaveProperty("permission");
   });
+  // The tool picker awaits `onSave` and THEN invalidates its rows so the reopened
+  // modal reads what was just saved. `mutate` returns void, so the await was
+  // over before the PATCH had left — the refetch raced the write, cached the
+  // PRE-save rows, and reopening within staleTime showed the change as
+  // "didn't take" (the #306 shape, on the tool picker; seen in a real-browser
+  // demo of per-command pins). The promise settles when the request has.
+  it("setField resolves only after the PATCH has settled", async () => {
+    let finish!: (v: { resource_id: string }) => void;
+    vi.mocked(api.patchAppItemFields).mockReturnValue(
+      new Promise<{ resource_id: string }>((res) => {
+        finish = res;
+      }),
+    );
+    const { result } = render();
+
+    let settled = false;
+    const p = Promise.resolve(result.current.setField("severity", "P0")).then(() => {
+      settled = true;
+    });
+    await waitFor(() => expect(api.patchAppItemFields).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false); // the request is still in flight
+
+    finish({ resource_id: item.resource_id });
+    await p;
+    expect(settled).toBe(true);
+  });
+
+  it("setField settles (never rejects) when the PATCH fails", async () => {
+    vi.mocked(api.patchAppItemFields).mockRejectedValue(new Error("403"));
+    const { result } = render();
+
+    await expect(Promise.resolve(result.current.setField("severity", "P0"))).resolves.toBeUndefined();
+  });
 });

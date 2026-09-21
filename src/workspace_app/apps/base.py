@@ -44,12 +44,16 @@ class WorkItemBase(Struct):
 
     attached_tool_prefs: dict[str, bool] = field(default_factory=dict)
     """Tier 1 — per-item tri-state tool override (#322), sibling of
-    ``attached_preset``. Each entry pins one App-ceiling tool ON (``True``) or OFF
-    (``False``); an absent key follows the profile/App default (so future
-    default changes still flow through). Empty (the default) → every tool follows
-    the default. The override ceiling is the App's ``tools``, not the profile.
-    Resolved by ``AppCatalog.resolve(tool_prefs=...)``; edited in the web tool
-    picker."""
+    ``attached_preset``. Each entry pins one unit of the App ceiling ON
+    (``True``) or OFF (``False``) — a built-in, or a package COMMAND (``pkg:cmd``)
+    even when the App granted the package whole (plan-tools-picker-groups
+    part 2); a bare package key pins every command of it. An absent key follows
+    the profile/App default (so future default changes still flow through).
+    Empty (the default) → every tool follows the default. The override ceiling
+    is the App's ``tools``, not the profile. Carried by
+    ``AppCatalog.resolve(tool_prefs=...)`` and applied per command by
+    ``finalize_tool_grants`` where the package list is known; edited in the web
+    tool picker, which writes one key per command."""
 
     attached_skill_prefs: dict[str, bool] = field(default_factory=dict)
     """Tier 1 — per-item tri-state *skill* override (#380), the skill sibling of

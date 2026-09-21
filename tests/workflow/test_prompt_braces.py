@@ -65,3 +65,37 @@ async def test_an_escaped_brace_renders_as_a_literal_brace():
 
 async def test_a_whole_template_of_escaped_braces_is_not_a_lookup():
     assert await _resolve('{{"count": 3}}', {}, _wf()) == '{"count": 3}'
+
+
+def test_the_validator_accepts_a_command_of_a_package_the_profile_grants_whole():
+    """plan-tools-picker-groups part 2: the run narrows a node's `tools:` with
+    `narrow_entries`, where `rca-tools:spc` is held when `rca-tools` is. The
+    validator judges by the same rule, or an author writes what the picker
+    shows and is refused for it — while a tool the profile really lacks is
+    still refused."""
+
+    def with_tools(tools: list[str]) -> Any:
+        return parse_def(
+            json.dumps(
+                {
+                    "id": "wf",
+                    "phases": [{"id": "p"}],
+                    "steps": [
+                        {
+                            "type": "agent",
+                            "cache": True,
+                            "name": "s",
+                            "phase": "p",
+                            "out": "o",
+                            "prompt": "go",
+                            "tools": tools,
+                        }
+                    ],
+                }
+            )
+        )
+
+    ceiling = {"exec", "rca-tools"}
+    assert validate_def(with_tools(["rca-tools:spc", "exec"]), tool_ceiling=ceiling) == []
+    errs = validate_def(with_tools(["sci-plot:chart"]), tool_ceiling=ceiling)
+    assert errs and "outside the profile's allowed tools" in errs[0]
