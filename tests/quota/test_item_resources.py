@@ -2289,3 +2289,49 @@ def test_the_item_fact_memo_is_a_cache_and_not_a_map(monkeypatch):
         assert isinstance(served, FastAPI)
         facts = served.state.item_facts
         assert len(facts) <= app_mod._ITEM_FACT_MAX + 1, len(facts)
+
+
+# ── #830: the ceilings travel with the record ─────────────────────────────
+
+
+def test_the_environment_reports_the_ceilings_the_put_refuses_against(monkeypatch):
+    """#830. The client learned the upper bounds (`_MAX_CORES`, `_MAX_BYTES`)
+    only by being refused: the field stayed green, Save stayed live, and the
+    422 arrived after the click — for a value the same field had rejected on
+    the keystroke when it was `0`. The record now carries both bounds, so the
+    client can refuse the way it already refuses zero.
+
+    Pinned by MOVING the constants and watching the GET and the PUT move
+    together: the number the record reports must be the number the gate holds,
+    or the client would be teaching one bound while the server enforces
+    another — the exact drift the issue forbids the client from creating with
+    a copy of its own."""
+    from workspace_app.api import item_routes
+
+    uncapped = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0)
+    with _app(PerUserResources(cpu=0.0), app_resources={"rca": uncapped}) as (
+        client,
+        spec,
+        _sandbox,
+    ):
+        item = _mk(spec, "alice")
+
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+        assert body["max_cpu_cores"] == item_routes._MAX_CORES
+        assert body["max_memory_bytes"] == item_routes._MAX_BYTES
+
+        monkeypatch.setattr(item_routes, "_MAX_CORES", 7.0)
+        monkeypatch.setattr(item_routes, "_MAX_BYTES", 3 * 1024**3)
+
+        moved = client.get(f"/a/rca/items/{item}/environment").json()
+        assert moved["max_cpu_cores"] == 7.0
+        assert moved["max_memory_bytes"] == 3 * 1024**3
+
+        # …and the gate is the same number: the bound itself passes, one step
+        # over it is refused. Both dimensions, because one standing in for the
+        # other is how this feature keeps nearly shipping one-dimensional checks.
+        put = f"/a/rca/items/{item}/resources"
+        assert client.put(put, json={"cpu_cores": 7.0}).status_code == 200
+        assert client.put(put, json={"cpu_cores": 7.5}).status_code == 422
+        assert client.put(put, json={"memory": "3G"}).status_code == 200
+        assert client.put(put, json={"memory": "3073M"}).status_code == 422
