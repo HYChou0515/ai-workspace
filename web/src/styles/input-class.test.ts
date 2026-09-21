@@ -309,7 +309,10 @@ describe("the house input class", () => {
     // toggle a chrome rather than draw a second one. base.css's theme reset
     // (`input, textarea, select { … background-color }`) is the one element
     // rule allowed a surface: it flips the UA white with the theme, and
-    // `.input` overrides it.
+    // `.input` overrides it. Not seen: a rule keyed on an id or a data
+    // attribute (`#q-count`, `[data-testid=…]`) — none targets a control
+    // today; it would be the same "second look" and belongs here if one
+    // appears.
     expect(MODIFIERS.size).toBeGreaterThan(10);
     expect(MODIFIERS.has("inline-edit")).toBe(true);
     expect(MODIFIERS.has("ev-field")).toBe(true);
