@@ -33,10 +33,17 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(
     encode_stops: list[object] = []
 
     def fake_record(
-        html: str, options: VideoOptions, workdir: Path, *, expected_ms: int, should_stop
+        html: str,
+        options: VideoOptions,
+        workdir: Path,
+        *,
+        expected_ms: int,
+        should_stop,
+        chromium_path: str = "",
     ) -> Path:
         seen["html"] = html
         seen["expected_ms"] = expected_ms
+        seen["chromium_path"] = chromium_path
         seen["workdir"] = workdir
         seen["record_stop"] = should_stop
         out = workdir / "recording.webm"
@@ -68,9 +75,11 @@ def test_it_records_the_rendered_page_once_and_encodes_each_format(
         assets={"/chart.png": b"\x89PNG\r\n\x1a\n" + b"\0" * 8},
         should_stop=stop,
         on_stage=stages.append if with_stages else None,
+        chromium_path="/usr/bin/chromium",
     )
 
     assert result == {"gif": b"gif:WEBM", "mp4": b"mp4:WEBM"}
+    assert seen["chromium_path"] == "/usr/bin/chromium"  # the knob reaches the recorder
     # The worker's heartbeat names the stage from this: once before the
     # recording, once before the encodes (one for all formats).
     assert stages == (["rendering", "encoding"] if with_stages else [])

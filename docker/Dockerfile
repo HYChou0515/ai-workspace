@@ -101,7 +101,9 @@ CMD ["python", "-m", "workspace_app"]
 #
 # `--with-deps` installs Chromium's shared libraries through apt; the
 # browser itself lands under PLAYWRIGHT_BROWSERS_PATH, outside the venv, so
-# a later `uv sync` cannot remove it. The worker boots the API's own
+# a later `uv sync` cannot remove it. A build with no reach to Playwright's
+# CDN uses apt's chromium instead — `chat_video.chromium_path` + a symlink
+# for the recorder's ffmpeg; the recipe is in docs/deployment.md §11 (斷網). The worker boots the API's own
 # composition (`build_app`, never served — see workers.yaml), so it needs
 # what the API needs at boot: the same configmap and mounts.
 FROM app AS chat-video

@@ -1425,6 +1425,21 @@ def test_a_chat_video_ceiling_that_cannot_work_refuses_to_boot(tmp_path: Path, s
         load(config_path=cfg, env={})
 
 
+def test_chat_video_chromium_path_is_a_string_knob_among_the_integer_ceilings(tmp_path: Path):
+    """The one non-integer key: a path to record with (an air-gapped image's
+    apt Chromium), empty by default. The positive-integer rule must skip it
+    — a first version applied that rule to every field and refused the
+    default `""` on every boot — and it refuses a non-string."""
+    assert load(config_path=tmp_path / "missing.yaml", env={}).chat_video.chromium_path == ""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("chat_video:\n  chromium_path: /usr/bin/chromium\n", encoding="utf-8")
+    assert load(config_path=cfg, env={}).chat_video.chromium_path == "/usr/bin/chromium"
+
+    cfg.write_text("chat_video:\n  chromium_path: 5\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=re.escape("chat_video.chromium_path must be a string")):
+        load(config_path=cfg, env={})
+
+
 def test_a_chat_video_header_with_every_key_commented_out_is_refused_as_a_null_section(
     tmp_path: Path,
 ):

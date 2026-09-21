@@ -328,6 +328,25 @@ def test_recording_writes_every_format_and_says_how_long_it_will_play(
     assert "will play" in out and "s" in out and "wrote" in out
 
 
+def test_chromium_names_the_binary_to_record_with_and_is_playwrights_own_by_default(
+    tmp_path, monkeypatch
+):
+    """`--chromium /usr/bin/chromium`: an image whose Debian mirror has
+    Chromium but no reach to Playwright's CDN records with that binary —
+    the same knob the worker reads as `chat_video.chromium_path`."""
+    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "hi"}]})
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "workspace_app.chat_video.cli.render_chat_video",
+        lambda **k: (seen.append(k), {"gif": b"g"})[1],
+    )
+
+    main([str(src), "-o", str(tmp_path / "a.gif")])
+    main([str(src), "-o", str(tmp_path / "b.gif"), "--chromium", "/usr/bin/chromium"])
+
+    assert [k["chromium_path"] for k in seen] == ["", "/usr/bin/chromium"]
+
+
 @pytest.mark.parametrize(
     ("exc", "code", "word"),
     [

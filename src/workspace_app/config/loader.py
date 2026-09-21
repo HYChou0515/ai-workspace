@@ -351,6 +351,13 @@ def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
         )
     for field in dataclasses.fields(ChatVideoSettings):
         value = node.get(field.name, field.default)
+        if field.type in ("str", str):
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"config {source}: chat_video.{field.name} must be a string (a path, or "
+                    f"empty for Playwright's own Chromium), got {value!r}"
+                )
+            continue
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(
                 f"config {source}: chat_video.{field.name} must be a positive integer, "

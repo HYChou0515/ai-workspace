@@ -202,6 +202,7 @@ def _fake_playwright(
 
     state: dict[str, int] = {"waits": 0, "closed": 0}
     timeouts: list[int] = []
+    launches: list[dict] = []
 
     class Error(Exception):
         pass
@@ -256,7 +257,8 @@ def _fake_playwright(
             state["closed"] += 1
 
     class _Chromium:
-        def launch(self):
+        def launch(self, **kwargs):
+            launches.append(kwargs)
             if launch_error_text is not None:
                 raise Error(launch_error_text)
             return _Browser()
@@ -273,6 +275,7 @@ def _fake_playwright(
     mod = types.ModuleType("playwright.sync_api")
     mod.sync_playwright = lambda: _PW()  # ty: ignore[unresolved-attribute]
     mod.Error = Error  # ty: ignore[unresolved-attribute]
+    mod.launches = launches  # ty: ignore[unresolved-attribute]
     mod.TimeoutError = TimeoutError  # ty: ignore[unresolved-attribute]
     mod.ViewportSize = dict  # ty: ignore[unresolved-attribute]
     mod.state = state  # ty: ignore[unresolved-attribute]
@@ -289,6 +292,33 @@ def test_a_chromium_that_was_never_installed_is_the_install_sentence(monkeypatch
 
     with pytest.raises(RendererUnavailable, match="playwright install chromium"):
         record("<html></html>", VideoOptions(), tmp_path)
+
+
+def test_the_recorder_launches_playwrights_own_chromium_unless_a_path_is_given(
+    monkeypatch, tmp_path
+):
+    """An air-gapped build cannot download Playwright's browser, but its
+    Debian mirror has `chromium`; `chromium_path` hands that binary to
+    Playwright (`executable_path`), which drives any Chromium. Empty — the
+    default — keeps Playwright's own, exactly as before."""
+    mod = _fake_playwright(monkeypatch)
+    record("<html></html>", VideoOptions(), tmp_path)
+    record("<html></html>", VideoOptions(), tmp_path, chromium_path="/usr/bin/chromium")
+
+    assert mod.launches == [{}, {"executable_path": "/usr/bin/chromium"}]
+
+
+def test_a_chromium_path_that_does_not_exist_names_the_knob_not_the_install_step(
+    monkeypatch, tmp_path
+):
+    """The install hint is wrong advice when the person pointed at a binary:
+    `playwright install` would not put one at THAT path."""
+    _fake_playwright(
+        monkeypatch, "BrowserType.launch: Executable doesn't exist at /usr/bin/chromium"
+    )
+
+    with pytest.raises(RendererUnavailable, match="chromium_path /usr/bin/chromium"):
+        record("<html></html>", VideoOptions(), tmp_path, chromium_path="/usr/bin/chromium")
 
 
 def test_a_page_that_never_finishes_fails_the_recording_by_name(monkeypatch, tmp_path):

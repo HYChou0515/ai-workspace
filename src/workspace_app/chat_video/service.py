@@ -29,6 +29,7 @@ def render_chat_video(
     assets: Mapping[str, bytes] | None = None,
     should_stop: StopCheck | None = None,
     on_stage: Callable[[str], None] | None = None,
+    chromium_path: str = "",
 ) -> dict[Format, bytes]:
     """Render ``messages`` (the ``build_chat_export`` shape) to every format
     in ``options.fmt``. ``workdir`` is scratch: whatever is left there — the
@@ -55,7 +56,12 @@ def render_chat_video(
         if on_stage is not None:
             on_stage("rendering")
         recording = record(
-            html, options, scratch, expected_ms=timeline.playback_ms, should_stop=should_stop
+            html,
+            options,
+            scratch,
+            expected_ms=timeline.playback_ms,
+            should_stop=should_stop,
+            chromium_path=chromium_path,
         )
         if on_stage is not None:
             on_stage("encoding")

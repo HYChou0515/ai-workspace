@@ -396,7 +396,23 @@ async def test_the_worker_renders_from_the_source_file_and_writes_only_the_video
     call = render.calls[0]
     assert (call["title"], call["messages"]) == ("t", MESSAGES)
     assert call["assets"] == {"/plots/a.png": _PNG}  # z.png absent, big.png over budget
+    assert call["chromium_path"] == ""  # Playwright's own browser unless the config says
     assert isinstance(call["workdir"], Path) and not call["workdir"].exists()  # scratch cleaned
+
+
+async def test_the_worker_records_with_the_configured_chromium_when_one_is_set():
+    """`chat_video.chromium_path` is the worker's, not the request's: an
+    air-gapped image points it at apt's `/usr/bin/chromium`, and every job
+    on that worker records with it."""
+    spec, files, clock = make_spec(default_user="u"), WorkspaceFiles(MemoryFileStore()), _Clock()
+    item = _item(spec)
+    render = _Render()
+    coord = _coordinator(spec, files, render, clock=clock, chromium_path="/usr/bin/chromium")
+    job = await _queued(files, spec, coord, item)
+
+    await asyncio.to_thread(coord._handle, job)
+
+    assert render.calls[0]["chromium_path"] == "/usr/bin/chromium"
 
 
 @pytest.mark.parametrize(

@@ -513,6 +513,11 @@
 #                               #   this often; deleting the file is the cancel
 #   stale_after_seconds: 60     # no heartbeat for this long ⇒ the worker died and the
 #                               #   progress file may be replaced by a new request
+#   chromium_path: ""           # a Chromium binary to record with instead of the one
+#                               #   `playwright install chromium` downloads — an image built
+#                               #   without reach to Playwright's CDN uses apt's
+#                               #   /usr/bin/chromium (docs/deployment.md §11, 斷網); empty =
+#                               #   Playwright's own
 
 # `vision: true` — the preset's model NATIVELY sees images. A workspace turn then
 # feeds attached images straight into the main model's message, and `read_image`
