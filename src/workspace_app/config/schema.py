@@ -47,8 +47,11 @@ class ServerSettings:
     # True (default) = all-in-one (local dev / single-pod). A pod-split deploy
     # sets it False on the API Deployment so the API is a pure producer and
     # dedicated worker pods (`python -m workspace_app.worker <jobtype>`) consume
-    # each JobType under their own HPA.
-    run_consumers: bool = True
+    # each JobType under their own HPA. A LIST names the JobTypes this process
+    # consumes and nothing else (plan-run-consumers-list): a single machine that
+    # wants everything but `chat-video`. The loader parses it — from YAML or from
+    # the `${RUN_CONSUMERS}` string — and refuses a name that is not a JobType.
+    run_consumers: bool | list[str] = True
     # #349: how often an in-flight turn polls the shared cross-pod cancel epoch.
     # Under degraded sticky routing (a Stop / new message landing on a peer pod)
     # the cancel latency equals this interval; the same-pod fast-path is instant.

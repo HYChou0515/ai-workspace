@@ -144,6 +144,16 @@ def load_with_provenance(
     # 5 — strict validation
     _validate(merged, source=str(path) if path else "<bundled defaults>")
 
+    # 5b — `server.run_consumers` is one key with three shapes (bool / list /
+    # the `${VAR}` string of either), parsed HERE because `_build` is
+    # `cls(**sub)` and coerces nothing: the documented `${RUN_CONSUMERS}`
+    # mapping used to hand the dataclass the string `'false'`, and a pure
+    # producer consumed every JobType.
+    merged["server"]["run_consumers"] = consumer_selection(
+        merged["server"].get("run_consumers", True),
+        source=str(path) if path else "<bundled defaults>",
+    )
+
     _pack_merged_sub_agents(merged)
 
     # 6 — construct typed Settings
@@ -310,6 +320,51 @@ def _walk_strings(node: Any, fn) -> Any:
 
 
 # ─── validation ─────────────────────────────────────────────────────────
+
+
+def consumer_selection(raw: object, *, source: str = "config") -> bool | list[str]:
+    """`server.run_consumers` as the loader hands it on: `True` (every
+    JobType), `False` (none), or the JobType names to consume.
+
+    Accepts what YAML gives (a bool or a list) and what a `${VAR}` marker gives
+    (a string): `"true"` / `"false"` case-insensitively, anything else as a
+    comma-separated list. Every name must be one `python -m workspace_app.worker`
+    accepts — `worker._JOBTYPE_ATTR`, the one table — so a typo refuses to
+    boot, naming the field, the name and the valid ones, instead of becoming a
+    queue that never moves."""
+    from ..worker import _JOBTYPE_ATTR  # module-level imports are asyncio/threading only
+
+    valid = ", ".join(_JOBTYPE_ATTR)
+    field = "server.run_consumers"
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.lower() == "true":
+            return True
+        if text.lower() == "false":
+            return False
+        if not text:
+            raise ValueError(
+                f"{field}: empty string ({source}) — write true, false, or JobType names "
+                f"separated by commas (valid: {valid})"
+            )
+        names: list[object] = [part.strip() for part in text.split(",") if part.strip()]
+    elif isinstance(raw, list):
+        names = list(raw)
+    else:
+        raise ValueError(
+            f"{field}: expected true, false or a list of JobType names, got "
+            f"{type(raw).__name__} ({source}); valid names: {valid}"
+        )
+    for name in names:
+        if not isinstance(name, str):
+            raise ValueError(
+                f"{field}: JobType names are strings, got {name!r} ({source}); valid: {valid}"
+            )
+        if name not in _JOBTYPE_ATTR:
+            raise ValueError(f"{field}: unknown JobType {name!r} ({source}) — valid: {valid}")
+    return [n for n in names if isinstance(n, str)]
 
 
 def _validate(merged: dict[str, Any], *, source: str) -> None:

@@ -85,7 +85,7 @@ def build_lifespan(
     kernels: KernelService,
     health_service: HealthService,
     monitor: IMonitor,
-    run_consumers: bool,
+    run_consumers: bool | list[str],
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
     uv_cache_max_bytes: int | None,

@@ -444,7 +444,7 @@ def create_app(
     # producer (it still enqueues), and dedicated worker pods consume each
     # JobType under their own HPA. Sweepers (idle/mirror/index/blob-gc/code-sync)
     # are NOT gated — they always run on the API (the always-on control plane).
-    run_consumers: bool = True,
+    run_consumers: bool | list[str] = True,
     # #349: how often a running turn polls the shared (cross-pod) cancel epoch.
     # The cancel latency under degraded sticky routing equals this interval; the
     # in-pod fast-path is unaffected. Threaded from
