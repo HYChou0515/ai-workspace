@@ -454,10 +454,10 @@ spec:
 # ── chat-video render (plan-chat-video-export) — fixed 1 replica, no HPA ──────
 # One job = one headless Chromium recording the transcript replay in real time
 # (a 41-second video takes 41 seconds to record) and one ffmpeg encode. The
-# image is NOT `rca-app`: Chromium + ffmpeg add an estimated 0.5–1 GB (not
-# measured yet — the local build stalled on LibreOffice's apt) the API pod has
-# no use for, so `docker/Dockerfile`'s `chat-video` stage builds
-# `rca-app-chat-video` — the same app, plus the two tools.
+# image is NOT `rca-app`: Chromium + ffmpeg add 1.69 GB (measured, #834) the
+# API pod has no use for, so `docker/Dockerfile`'s `chat-video` stage builds
+# `rca-app-chat-video` — the same app, plus the two tools; build it with
+# `--target chat-video` (a bare build is the API image).
 #
 # Like blob-gc, this worker boots the API's OWN composition (`build_app`, never
 # served): the job reads its transcript and writes its video through the API's
