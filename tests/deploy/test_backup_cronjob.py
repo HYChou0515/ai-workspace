@@ -85,7 +85,9 @@ def test_two_runs_can_never_overlap():
 def test_every_claim_it_mounts_exists():
     """A manifest that mounts a claim nobody provisioned fails at apply time, in
     the middle of a deploy, for a job nobody was watching."""
-    declared = {d["metadata"]["name"] for d in _docs(_PVC) if d.get("kind") == "PersistentVolumeClaim"}
+    declared = {
+        d["metadata"]["name"] for d in _docs(_PVC) if d.get("kind") == "PersistentVolumeClaim"
+    }
     mounted = {
         v["persistentVolumeClaim"]["claimName"]
         for v in _job_spec()["template"]["spec"]["volumes"]

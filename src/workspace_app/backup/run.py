@@ -195,8 +195,19 @@ def run_backup(
     started = dt.datetime.now(dt.UTC)
     results: list[SourceResult] = []
     for source in sources:
-        for seq, window in enumerate(windows):
-            results.append(_archive(source, spec, run_dir, seq=seq, window=window))
+        if source.kind == "specstar":
+            for seq, window in enumerate(windows):
+                results.append(_archive(source, spec, run_dir, seq=seq, window=window))
+            continue
+        # A tree is NOT sliced, and the reason is what slicing is for: bounding
+        # the memory `SpecStar.load` needs. Extracting a tar is streaming, so
+        # there is nothing to bound — and slicing it would be actively wrong. A
+        # full run's lower bound comes from the oldest record in SPECSTAR, and a
+        # workspace file can easily be older than that, so a sliced tree would
+        # silently drop every file predating the store's first row. One archive
+        # per run: everything on a full, changed-since on an incremental.
+        tree_window: Window = (None if kind == "full" else window_start, now)
+        results.append(_archive(source, spec, run_dir, seq=0, window=tree_window))
     # Verify BEFORE the receipt: the receipt's presence is what marks a run
     # complete, so a run that cannot prove its archives hold what they reference
     # must not leave one behind. The directory stays for diagnosis and is
