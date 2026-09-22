@@ -31,7 +31,6 @@ import json
 import logging
 import os
 import shutil
-import tarfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -47,6 +46,7 @@ from specstar.query_types import (
 from ..config.schema import Settings
 from .ledger import BackupLedger
 from .sources import DurableSource, durable_sources
+from .tree import Manifest, tar_tree
 from .verify import verify_archives
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -104,6 +104,11 @@ class SourceResult:
     # (tree). Counted from what was actually done, never from what was expected.
     models: tuple[str, ...] = ()
     files: int = 0
+    # Tree sources only: where this run's walk was recorded, and what it could
+    # not carry. `skipped` is named rather than counted — a number with no
+    # names is not something an operator can act on.
+    manifest: str = ""
+    skipped: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,8 +184,20 @@ def run_backup(
         for source in sources:
             _require_mount(source)
 
+    for source in sources:
+        _require_readable(source)
+
     run_id = _unique_run_id(dest, now)
     previous = None if full else _latest_receipt(dest)
+    if previous is not None and _chain_is_stale(previous, now, settings.backup.full_every_days):
+        # Retention deletes along chains, so a deployment that never starts a new
+        # one can never delete anything: `keep_chains` is set, nothing is ever
+        # pruned, and the destination grows until it is full. Rotating on a
+        # schedule is what makes the knob reachable at all.
+        logger.info(
+            "backup: chain %s is older than full_every_days; starting a new one", previous["chain"]
+        )
+        previous = None
     if previous is None:
         kind, chain, parent = "full", run_id, None
         window_start = since if since is not None else _earliest_updated(spec)
@@ -190,29 +207,32 @@ def run_backup(
 
     run_dir = dest / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    started_at = dt.datetime.now(dt.UTC)
 
-    windows = _windows(window_start, now, settings.backup.slice_days)
-    started = dt.datetime.now(dt.UTC)
-    results: list[SourceResult] = []
-    for source in sources:
-        if source.kind == "specstar":
-            for seq, window in enumerate(windows):
-                results.append(_archive(source, spec, run_dir, seq=seq, window=window))
-            continue
-        # A tree is NOT sliced, and the reason is what slicing is for: bounding
-        # the memory `SpecStar.load` needs. Extracting a tar is streaming, so
-        # there is nothing to bound — and slicing it would be actively wrong. A
-        # full run's lower bound comes from the oldest record in SPECSTAR, and a
-        # workspace file can easily be older than that, so a sliced tree would
-        # silently drop every file predating the store's first row. One archive
-        # per run: everything on a full, changed-since on an incremental.
-        tree_window: Window = (None if kind == "full" else window_start, now)
-        results.append(_archive(source, spec, run_dir, seq=0, window=tree_window))
-    # Verify BEFORE the receipt: the receipt's presence is what marks a run
-    # complete, so a run that cannot prove its archives hold what they reference
-    # must not leave one behind. The directory stays for diagnosis and is
-    # invisible to every chain query, because those key on the receipt.
-    verified = _verify(spec, results, window_start, now, settings.backup.verify_sample)
+    if window_start is not None and window_start > now:
+        # A window that ends before it begins matches nothing. Every archive
+        # comes out empty, verification samples the same empty window and
+        # reports success, and the ledger records a run that holds nothing. The
+        # usual causes are a mistyped `--since` year and a clock that stepped.
+        raise ValueError(
+            f"the window would start at {window_start.isoformat()} and end at "
+            f"{now.isoformat()} — it ends before it begins, so every archive "
+            "would be empty and the run would report success. Check --since, and "
+            "check the clock on this pod against the pods that write."
+        )
+
+    try:
+        results, verified = _write_archives(
+            settings, spec, sources, run_dir, kind, previous, window_start, now
+        )
+    except BaseException:
+        # A run that did not finish must not leave its archives behind. Nothing
+        # ever reclaims them: `_prune_chains` walks receipts, and a failed run
+        # has none — so on a nightly schedule with one retry, two partial runs
+        # per night accumulate until the destination is full, at which point
+        # every future run dies on ENOSPC and leaves another one.
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
 
     finished = dt.datetime.now(dt.UTC)
 
@@ -224,7 +244,7 @@ def run_backup(
         kind=kind,
         window_start=window_start.isoformat() if window_start else None,
         window_end=now.isoformat(),
-        started_at=started.isoformat(),
+        started_at=started_at.isoformat(),
         finished_at=finished.isoformat(),
         mount_checked=checked,
         verified_blobs=verified,
@@ -232,12 +252,23 @@ def run_backup(
         source_results=results,
     )
     _write_receipt(run_dir, receipt)
-    # Record the run where the PLATFORM can see it, not only where the operator
-    # can. A receipt on the destination volume answers "did this run finish"; a
-    # ledger row is what lets the API notice that no run has finished lately,
-    # which is the failure that produces no event of its own.
-    BackupLedger(spec).record(receipt)
-    _prune_chains(dest, settings.backup.keep_chains, keep=chain)
+    # Everything past the receipt is bookkeeping, and bookkeeping must not turn
+    # a good backup into a reported failure. The archives are on disk and the
+    # receipt says so; a store hiccup here would otherwise print `backup: FAILED`
+    # over a complete, restorable run.
+    try:
+        BackupLedger(spec).record(receipt)
+    except Exception:
+        logger.exception(
+            "backup: run %s is complete on disk but could not be recorded in the "
+            "ledger. The staleness sweeper will read this deployment as having no "
+            "recent backup until the next run records one.",
+            run_id,
+        )
+    try:
+        _prune_chains(dest, settings.backup.keep_chains, keep=chain)
+    except Exception:
+        logger.exception("backup: retention pass failed after run %s", run_id)
     logger.info(
         "backup: %s run %s (chain %s) wrote %d archive(s), %d bytes total",
         kind,
@@ -247,6 +278,47 @@ def run_backup(
         sum(r.bytes for r in results),
     )
     return receipt
+
+
+def _write_archives(
+    settings: Settings,
+    spec: SpecStar,
+    sources: tuple[DurableSource, ...],
+    run_dir: Path,
+    kind: str,
+    previous: dict[str, Any] | None,
+    window_start: dt.datetime | None,
+    now: dt.datetime,
+) -> tuple[list[SourceResult], int]:
+    """Produce every archive for this run, and prove they hold what they claim."""
+    windows = _windows(window_start, now, settings.backup.slice_days)
+    results: list[SourceResult] = []
+    for source in sources:
+        if source.kind == "specstar":
+            for seq, window in enumerate(windows):
+                results.append(_archive(source, spec, run_dir, seq=seq, window=window))
+            continue
+        # A tree is NOT sliced, and the reason is what slicing is for: bounding
+        # the memory `SpecStar.load` needs. Extracting a tar is streaming, so
+        # there is nothing to bound. One archive per run.
+        #
+        # Nor is it filtered by an mtime lower bound. Change detection is a
+        # MANIFEST DIFF, because mtime is not a change detector: `unzip`,
+        # `tar x`, `cp -p` and a restore all stamp a brand-new file with an old
+        # timestamp, and an mtime floor drops every one of them — into no
+        # archive at all, since every later window starts later still. Diffing
+        # against the previous run's `{path: (size, mtime)}` catches them as
+        # what they are: paths that were not there before. `window_end` stays,
+        # because writes after it genuinely belong to the next run.
+        previous_manifest = None if kind == "full" else _previous_manifest(previous, source.name)
+        results.append(
+            _archive(source, spec, run_dir, seq=0, window=(None, now), previous=previous_manifest)
+        )
+    # Verify BEFORE the receipt: the receipt's presence is what marks a run
+    # complete, so a run that cannot prove its archives hold what they reference
+    # must not leave one behind.
+    verified = _verify(spec, results, window_start, now, settings.backup.verify_sample)
+    return results, verified
 
 
 def _verify(
@@ -320,8 +392,15 @@ def _earliest_updated(spec: SpecStar) -> dt.datetime | None:
     """The oldest `updated_time` in the store, so an initial full can be sliced.
 
     Without a lower bound the first run is one unbounded archive, which is
-    precisely the restore that `load` cannot hold in memory. One indexed,
-    limit-one query per model is a cheap price for bounding it.
+    precisely the restore that `load` cannot hold in memory.
+
+    ⚠️ NOT a cheap query on the backend this deployment runs. `limit=1` with a
+    sort is an index scan on Postgres, but `DiskMetaStore.iter_search` has no
+    index: it reads and decodes every meta file of the model and sorts them all
+    in Python before applying the limit. On a disk store this is a full metadata
+    scan per model, and it is the FIRST thing a full run does. Bounding the
+    archive is still worth it — an unbounded archive cannot be restored at all —
+    but the cost is real and belongs in the pod's memory and time budget.
     """
     oldest: dt.datetime | None = None
     for name in spec.resource_managers:
@@ -369,16 +448,72 @@ def _require_mount(source: DurableSource) -> None:
         )
 
 
+def _require_readable(source: DurableSource) -> None:
+    """Refuse a source whose root is not a directory we can walk.
+
+    Distinct from `_require_mount`, and needed even when that check is off. A
+    tree root that does not exist walks to nothing, tars to an empty archive,
+    and passes the coverage check on the way back — because coverage compares
+    source NAMES and the name is there. The restore then writes an empty tree
+    over a deployment and reports success. An absent root is not "an empty
+    workspace"; it is a mount or a path that is wrong.
+    """
+    if source.kind != "tree" or not source.root:
+        return
+    root = Path(source.root)
+    if not root.is_dir():
+        raise ValueError(
+            f"backup source {source.name!r} at {source.root!r} is not a directory. "
+            "Archiving it would produce an empty tar that restores as an empty "
+            "workspace tree, and nothing downstream can tell that apart from a "
+            "deployment that genuinely has no files."
+        )
+
+
+def _chain_is_stale(previous: dict[str, Any], now: dt.datetime, full_every_days: int) -> bool:
+    """Has the current chain's full run aged past `full_every_days`?
+
+    Retention deletes along chains. A deployment that never starts a second one
+    can therefore never delete anything — `keep_chains` is set, nothing is
+    pruned, and the destination fills. Rotating on a schedule is what makes the
+    knob reachable, and it also bounds how many archives a restore must replay.
+    """
+    if full_every_days <= 0:
+        return False
+    try:
+        began = dt.datetime.strptime(str(previous["chain"])[:16], "%Y%m%dT%H%M%S").replace(
+            tzinfo=dt.UTC
+        )
+    except (KeyError, ValueError):
+        # An unparseable chain id is not a reason to start a new chain — that
+        # would abandon the archives retention is counting. Leave it alone and
+        # let the operator's `--full` decide.
+        return False
+    return now - began >= dt.timedelta(days=full_every_days)
+
+
 def _archive(
-    source: DurableSource, spec: SpecStar, run_dir: Path, *, seq: int, window: Window
+    source: DurableSource,
+    spec: SpecStar,
+    run_dir: Path,
+    *,
+    seq: int,
+    window: Window,
+    previous: Manifest | None = None,
 ) -> SourceResult:
     started = time.monotonic()
     stem = f"{source.name}-{seq:04d}"
+    manifest_path = ""
+    skipped: tuple[str, ...] = ()
     match source.kind:
         case "specstar":
             artifact, models, files = _dump_specstar(spec, run_dir, stem, window)
         case "tree":
-            artifact, models, files = _tar_tree(Path(source.root), run_dir, stem, window)
+            artifact = run_dir / f"{stem}.tar"
+            _start, end = window
+            result = tar_tree(Path(source.root), artifact, previous=previous, window_end=end)
+            models, files, skipped = (), result.files, result.skipped
+            manifest_path = str(_write_manifest(run_dir, stem, result.manifest))
         case other:  # pragma: no cover - `durable_sources` cannot produce another kind
             raise ValueError(f"no archiver for source kind {other!r}")
     start, end = window
@@ -395,7 +530,46 @@ def _archive(
         window_end=end.isoformat(),
         models=models,
         files=files,
+        manifest=manifest_path,
+        skipped=skipped,
     )
+
+
+def _write_manifest(run_dir: Path, stem: str, manifest: Manifest) -> Path:
+    """The tree as this run walked it, beside the tar rather than in the receipt.
+
+    A receipt an operator reads should stay readable; a workspace tree can hold
+    hundreds of thousands of paths. Written as a separate file so the next run
+    can diff against it without the receipt growing without bound.
+    """
+    path = run_dir / f"{stem}.manifest.json"
+    path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def _previous_manifest(receipt: dict[str, Any] | None, name: str) -> Manifest | None:
+    """The manifest the previous run left for source `name`, or None for a full.
+
+    A manifest that cannot be read is treated as absent, which costs a full tree
+    pass and carries everything — expensive, never wrong. That is the right way
+    round: the alternative is skipping files because a JSON file was corrupt.
+    """
+    if receipt is None:
+        return None
+    for source in receipt.get("sources", []):
+        if source.get("name") != name or not source.get("manifest"):
+            continue
+        try:
+            raw = json.loads(Path(str(source["manifest"])).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning(
+                "backup: previous manifest for %s is unreadable; this run carries the "
+                "whole tree rather than risking a skipped file",
+                name,
+            )
+            return None
+        return {str(k): (int(v[0]), int(v[1])) for k, v in raw.items()}
+    return None
 
 
 def _dump_specstar(
@@ -404,11 +578,22 @@ def _dump_specstar(
     """specstar's own archive for one window, streamed to a file.
 
     `SpecStar.dump` writes one length-prefixed frame per record straight to the
-    stream, and on a disk backend `ResourceManager.dump` yields one resource at a
-    time, so this holds one record in memory rather than the dataset. The ceiling
-    it cannot dodge is a single blob: one blob is one record, and the encoder
-    copies it once more before the write (#450 S7), so peak memory is about twice
-    the largest file in the deployment.
+    stream, and on a disk backend `ResourceManager.dump` yields one REVISION
+    PAYLOAD at a time (`resource_store/simple.py` has no `dump_all_revisions`, so
+    the bulk path is never taken). That is the part that streams.
+
+    ⚠️ The rest does not, and an earlier version of this docstring claimed it did.
+    `ResourceManager.dump` does `metas_list = list(metas)` plus a frozenset of
+    every resource id and a set of every referenced blob id — per model, per
+    window — and underneath it `DiskMetaStore.iter_search` reads and decodes
+    EVERY meta file of the model, filters in Python and sorts, with no index.
+    This repo already documents that exact pattern as an OOM cause in
+    `filestore/blob_gc.py`. Slicing bounds the retained metas per window; it does
+    not bound the read.
+
+    So peak memory is: the largest single blob, twice over (one record, encoded
+    once more before the write — #450 S7), PLUS one model-window's metas. Size
+    the pod from a measurement on the real store, not from either half alone.
     """
     artifact = run_dir / f"{stem}.acbak"
     models = tuple(sorted(spec.resource_managers))
@@ -422,39 +607,6 @@ def _dump_specstar(
     with artifact.open("wb") as fh:
         spec.dump(fh, model_queries=queries)
     return artifact, models, 0
-
-
-def _tar_tree(
-    root: Path, run_dir: Path, stem: str, window: Window
-) -> tuple[Path, tuple[str, ...], int]:
-    """The workspace tree, as an uncompressed tar of what the window covers.
-
-    Uncompressed on purpose: the contents are user documents and already
-    compressed formats, so compression would buy little and cost CPU on every
-    pass. Counting happens in the filter, the only place that sees what actually
-    went in — a separate walk to count would be a second traversal AND could
-    disagree with it.
-
-    Directories always ride along whatever the window is: a tar that carries a
-    file without its parent restores into nothing.
-    """
-    artifact = run_dir / f"{stem}.tar"
-    start, end = window
-    counted = 0
-
-    def _keep(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
-        nonlocal counted
-        if not info.isdir() and start is not None:
-            stamp = dt.datetime.fromtimestamp(info.mtime, dt.UTC)
-            if stamp < start or stamp > end:
-                return None
-        counted += 1
-        return info
-
-    with tarfile.open(artifact, "w") as tar:
-        if root.exists():
-            tar.add(root, arcname=".", filter=_keep)
-    return artifact, (), counted
 
 
 # ── receipts, chains, retention ──────────────────────────────────────────

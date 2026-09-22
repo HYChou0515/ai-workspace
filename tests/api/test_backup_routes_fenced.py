@@ -79,3 +79,73 @@ def test_both_doors_stay_closed_for_a_superuser_too():
     # The refusal has to point somewhere, or it just looks like a bug.
     assert "workspace_app.backup" in export.json()["detail"]
     assert "workspace_app.restore" in imported.json()["detail"]
+
+
+def test_every_model_transfer_door_is_closed_not_just_the_global_pair():
+    """It is a class, not two routes.
+
+    specstar emits `GET /{model}/export` and `POST /{model}/import` for every
+    registered model, with exactly the same absence of authorization as the
+    global pair. On this deployment that is around ninety doors. Fencing two of
+    them and writing "the hole is closed" in the runbook would have left the
+    same hole open forty-five times over.
+
+    Derived from the registry rather than listed, so a model added tomorrow has
+    to be fenced the day it appears — which is the whole point of not
+    enumerating.
+    """
+    holder = {"id": "nobody"}
+    spec = make_spec(default_user=lambda: holder["id"])
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        get_user_id=lambda: holder["id"],
+    )
+    client = TestClient(app)
+    models = sorted(spec.resource_managers)
+    assert len(models) > 20, "the registry looks empty — this guard would prove nothing"
+
+    answers = [
+        (name, verb, response.status_code)
+        for name in models
+        for verb, response in (
+            ("GET", client.get(f"/{name}/export")),
+            ("POST", client.post(f"/{name}/import", files={"file": ("x", b"y")})),
+        )
+    ]
+
+    # 404 is as closed as 403: a model registered AFTER `spec.apply` — the
+    # internal coordination rows — never gets CRUD routes in the first place, so
+    # there is no door to fence. What must never appear is a 2xx.
+    open_doors = [a for a in answers if a[2] not in (403, 404)]
+    assert not open_doors, f"unfenced transfer doors: {open_doors[:5]}"
+
+    # The positive control, because "everything 404s" would satisfy the line
+    # above while proving the fence does nothing.
+    fenced = [a for a in answers if a[2] == 403]
+    assert len(fenced) > 40, f"only {len(fenced)} door(s) were actively fenced"
+
+
+def test_a_model_export_leaks_nothing():
+    """The status code is the mechanism; this is the consequence. Before the
+    fence, an unauthenticated `GET /api/collection/export` returned 200 with
+    another user's collection name in the body."""
+    holder = {"id": "owner"}
+    spec = make_spec(default_user=lambda: holder["id"])
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        get_user_id=lambda: holder["id"],
+    )
+    client = TestClient(app)
+    client.post("/kb/collections", json={"name": SECRET})
+
+    holder["id"] = "nobody"
+    response = client.get("/collection/export")
+
+    assert response.status_code == 403
+    assert SECRET.encode() not in response.content

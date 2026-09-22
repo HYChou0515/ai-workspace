@@ -1517,6 +1517,13 @@ class BackupSettings:
     # dropping the full out of a chain leaves archives that restore nothing while
     # still looking like a full directory.
     keep_chains: int = 0
+    # How often a run starts a NEW chain instead of continuing one. This is what
+    # makes keep_chains reachable: retention deletes along chain boundaries, so a
+    # deployment that never rotates has exactly one chain forever and prunes
+    # nothing no matter what keep_chains says. It also bounds how many archives a
+    # restore has to replay. 0 disables rotation (only an explicit --full starts
+    # a chain).
+    full_every_days: int = 7
     # How many live blob references one run checks against its own archives. The
     # run's exit status cannot carry this — specstar's dump skips a blob it
     # cannot read and still finishes cleanly (specstar#450 S2) — and a COUNT
@@ -1528,9 +1535,17 @@ class BackupSettings:
     # How old the newest completed run may be before the platform says so. A
     # failed run is visible (the CronJob goes red); a run that never STARTED
     # produces no event at all, so absence has to be turned into a row somebody
-    # reads. Sized above the interval plus one missed run, so a single retry does
-    # not page anyone. 0 disables the check.
-    stale_after_hours: int = 26
+    # reads.
+    #
+    # 50 is DERIVED from the shipped CronJob, not chosen: a nightly schedule
+    # (24 h) plus a run allowed to take `activeDeadlineSeconds` (20 h) plus slack
+    # — because with `concurrencyPolicy: Forbid`, a run that uses its whole
+    # deadline pushes the next success well past the interval. A threshold below
+    # that pages on a backup that is merely slow, and an alarm that cries wolf
+    # gets muted. `tests/deploy/test_backup_cronjob.py` pins the relationship, so
+    # changing the schedule or the deadline fails there rather than here.
+    # 0 disables the check.
+    stale_after_hours: int = 50
 
 
 # ─── top-level Settings ────────────────────────────────────────────────

@@ -85,10 +85,34 @@ def main(argv: list[str] | None = None) -> int:
     from ..config.loader import load_with_provenance
 
     args = _parse_args(argv)
-    settings, _provenance = load_with_provenance(config_path=args.config)
+    try:
+        settings, _provenance = load_with_provenance(config_path=args.config)
+    except Exception as exc:
+        print(f"backup: FAILED — config could not be loaded: {exc}", file=sys.stderr)
+        return 1
     config_dir = args.config.parent if args.config else None
 
-    spec = build_backup_spec(settings, config_dir=config_dir)
+    # Refuse BEFORE composing the app. `build_backup_spec` builds the whole API
+    # and runs `spec.apply` — the DB-schema step — against the production store.
+    # A deployment that never opted into backups would otherwise do all of that
+    # nightly, then refuse.
+    if not settings.backup.dest:
+        print(
+            "backup: nothing to do — backup.dest is unset, so this deployment has "
+            "not configured a backup destination. Set it in config.yaml (or drop "
+            "cronjob-backup.yaml from your kustomization if you do not want one).",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        spec = build_backup_spec(settings, config_dir=config_dir)
+    except Exception as exc:
+        # Inside the `backup:` prefix, because `kubectl logs | grep '^backup:'`
+        # is what the runbook tells an operator to check. A composition failure
+        # used to escape as a bare traceback with no matching line at all.
+        print(f"backup: FAILED — could not compose the app: {exc}", file=sys.stderr)
+        return 1
     try:
         receipt = run_backup(
             settings,

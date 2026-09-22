@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,11 +28,17 @@ from typing import TYPE_CHECKING
 from ..config.schema import Settings
 from .run import RECEIPT_NAME
 from .sources import durable_sources
+from .tree import extract_tree
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from specstar import SpecStar
 
 logger = logging.getLogger(__name__)
+
+
+class ChainIncomplete(Exception):
+    """A chain is missing runs, so replaying what survives would restore less than
+    the chain claims — and report success."""
 
 
 class CoverageMismatch(Exception):
@@ -89,7 +94,9 @@ def restore_chain(
     if not runs:
         raise ValueError(f"no run in {dest} belongs to chain {target!r}.")
 
+    _check_chain_is_whole(target, runs)
     _check_coverage(settings, runs)
+    _check_models_are_known(spec, runs)
     # Where a tree goes is THIS deployment's business, not the archive's. The
     # receipt records the root it was read from, but restoring onto a different
     # mount is ordinary — a rebuilt cluster, a staging drill — and extracting to
@@ -144,37 +151,111 @@ def _completed_runs(dest: Path) -> list[dict]:
     return out
 
 
+def _check_chain_is_whole(target: str, runs: list[dict]) -> None:
+    """Refuse a chain that is missing RUNS, not just missing files.
+
+    The replay only checks that each named artifact exists. A deleted run
+    directory is invisible to that: it takes its receipt with it, so the run
+    simply is not in the list. If the missing one is the FULL, what replays is a
+    handful of increments — every record older than the first surviving window is
+    gone, and the restore reports success.
+
+    Nobody has to do anything silly for that to happen: an operator tidying up, a
+    sync of the destination that started after the full was written, a
+    partially-failed prune. So the chain is checked for a full at the front and
+    for an unbroken `parent -> run_id` spine.
+    """
+    if str(runs[0].get("kind")) != "full":
+        raise ChainIncomplete(
+            f"chain {target} does not start with a full run — its oldest surviving "
+            f"run is {runs[0]['run_id']!r} ({runs[0].get('kind')!r}). The full that "
+            "every increment builds on is missing, so replaying what is left would "
+            "restore only the records inside the surviving windows and report "
+            "success. Restore a different chain, or recover the missing run."
+        )
+    seen = {str(runs[0]["run_id"])}
+    for run in runs[1:]:
+        parent = run.get("parent")
+        if parent is None or str(parent) not in seen:
+            raise ChainIncomplete(
+                f"chain {target} has a hole: run {run['run_id']!r} builds on "
+                f"{parent!r}, which is not present. Every run after a gap assumes "
+                "the records the missing one carried."
+            )
+        seen.add(str(run["run_id"]))
+
+
 def _check_coverage(settings: Settings, runs: list[dict]) -> None:
     """Refuse when the archive and this config disagree about which stores exist.
 
+    Checked PER RUN, not against the union across the chain. A union hides the
+    case this exists to catch: a chain whose full was taken with
+    `sandbox.durable.kind: ""` and whose later increments were taken after the
+    operator switched to `nfs_tree`. The union then holds both source names and
+    matches, while every workspace file untouched since the switch is in no
+    archive at all.
+
     Compared by source NAME rather than by path: a restore onto a different mount
-    point is ordinary and fine, while a restore that silently drops a whole store
-    is the thing this exists to stop.
+    point is ordinary and fine.
     """
-    archived = {str(s["name"]) for run in runs for s in run["sources"]}
     expected = {s.name for s in durable_sources(settings)}
-    if archived == expected:
-        return
-    missing_here = sorted(archived - expected)
-    missing_there = sorted(expected - archived)
-    raise CoverageMismatch(
-        "this deployment and the archive do not hold the same set of stores. "
-        f"In the archive but not in this config: {missing_here or 'none'}. "
-        f"In this config but not in the archive: {missing_there or 'none'}. "
-        "Restoring the overlap would come back up, serve, and be missing a whole "
-        "store with no error anywhere — so nothing was restored. Point this "
-        "deployment's config at the shape the archive was taken from, or restore "
-        "a chain that matches it."
-    )
+    for run in runs:
+        archived = {str(s["name"]) for s in run["sources"]}
+        if archived == expected:
+            continue
+        missing_here = sorted(archived - expected)
+        missing_there = sorted(expected - archived)
+        raise CoverageMismatch(
+            f"run {run['run_id']!r} and this deployment do not hold the same set of "
+            f"stores. In that run but not in this config: {missing_here or 'none'}. "
+            f"In this config but not in that run: {missing_there or 'none'}. "
+            "Restoring the overlap would come back up, serve, and be missing a whole "
+            "store with no error anywhere — so nothing was restored. Point this "
+            "deployment's config at the shape the archive was taken from, or restore "
+            "a chain that matches it."
+        )
+
+
+def _check_models_are_known(spec: SpecStar, runs: list[dict]) -> None:
+    """Refuse before writing anything if the target cannot load the whole archive.
+
+    `spec.load` raises on a model its registry does not know — but it raises
+    MID-STREAM, after every model that sorted earlier has already been flushed.
+    There is no transaction, so the store is left holding a partial mixture with
+    nothing recording how far it got. The receipt already names the models each
+    archive carries, so this is answerable before the first byte is written.
+
+    The usual cause is restoring a current archive onto a rolled-back image.
+    """
+    known = set(spec.resource_managers)
+    for run in runs:
+        for source in run["sources"]:
+            unknown = sorted(set(source.get("models", [])) - known)
+            if unknown:
+                raise CoverageMismatch(
+                    f"run {run['run_id']!r} carries model(s) this deployment does not "
+                    f"register: {unknown}. `load` would fail part-way through and "
+                    "leave the store holding a partial mixture of restored and "
+                    "existing data. This is usually an archive from a newer image "
+                    "than the one running — restore onto a matching version."
+                )
 
 
 def _extract_tree(artifact: Path, root: Path) -> None:
     """Unpack a workspace tar over `root`.
 
-    `filter="data"` on purpose: a tar member can name a path outside the
-    destination, and a restore is exactly the moment somebody is running this as
-    root against a tree they did not produce.
+    Delegates to `tree.extract_tree`, which applies the same safety rules
+    `filter="data"` applies but SKIPS what it refuses instead of raising. That
+    difference is the whole point: `data` raises part-way through on an absolute
+    symlink or a special file, and those are inputs this system's own backup
+    produces from an ordinary `ln -s` in a user's workspace. One such link would
+    otherwise take down every restore from then on.
     """
-    root.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(artifact, "r") as tar:
-        tar.extractall(root, filter="data")
+    result = extract_tree(artifact, root)
+    if result.skipped:
+        logger.warning(
+            "restore: %s — %d member(s) skipped: %s",
+            artifact.name,
+            len(result.skipped),
+            ", ".join(result.skipped[:10]),
+        )

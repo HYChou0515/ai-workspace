@@ -771,8 +771,9 @@ backup:
   require_mounted_sources: true   # 來源根目錄必須是 mount point，否則拒跑
   slice_days: 7                   # 一份封存檔涵蓋多寬的時間窗
   keep_chains: 0                  # 保留幾條「鏈」。0 = 全留
+  full_every_days: 7              # 每幾天開一條新鏈(keep_chains 的前提)
   verify_sample: 32               # 一趟抽查幾個 blob 參照
-  stale_after_hours: 26           # 最新一趟超過這個時數沒完成就通知 superuser
+  stale_after_hours: 50           # 最新一趟超過這個時數沒完成就通知 superuser
 ```
 
 - **`dest` 掛在哪由部署決定。** 程式只是寫普通檔案,所以另一台機器的 NFS export、掛進 pod 的物件儲存都行 ——
@@ -785,6 +786,8 @@ backup:
   `ModelEndRecord` 才寫出,所以還原需要的記憶體是「一個 model 在一份封存檔裡的量」。切窄一點,那個量就小一點。
   增量只是同一刀的副產品。**切片救不了的地板**:單一 blob 是單一 record,編碼時還會再複製一份,
   所以尖峰記憶體約是 `filestore.max_file_size` 的兩倍 —— 備份 pod 的記憶體照那個訂,切再細都沒用。
+- **`full_every_days` 是 `keep_chains` 能生效的前提。** 保留政策按鏈刪,所以永遠不換鏈的部署永遠刪不掉
+  任何東西 —— 設幾都一樣,目的地一路長到滿。
 - **`keep_chains` 刪的是「鏈」不是「趟」。** 一條鏈 = 一次 full 加上建立在它上面的增量。刪掉最舊的**那一趟**
   會把後面每個增量都依賴的 full 一起帶走,留下一個滿滿是檔案、卻什麼都還原不了的目錄。預設 0(全留)
   是刻意的:一設目的地就開始刪東西的保留政策,是沒有人選過的政策。
@@ -793,7 +796,10 @@ backup:
   live 記錄指到的 blob 依定義不是孤兒,GC 不會刪它,它不在封存檔裡就是確定的錯。設 0 關掉,receipt 會記下來。
 - **`stale_after_hours` 針對的是「根本沒跑」。** 跑失敗的 CronJob 是紅的、看得到;被停用的排程不會產生任何事件。
   所以每趟成功都留一列,sweeper 讀最新那一列,太舊就寫一筆 `Notification` 給 `server.superusers` ——
-  由部署方自己實作的 `INotificationChannel` 送出去(見 §11.5 同一個 seam 的形狀)。預設 26 小時 = 一天的排程加一次漏跑。
+  由部署方自己實作的 `INotificationChannel` 送出去(那個 seam 怎麼實作見 [`extending-the-platform.md`](extending-the-platform.md);§11.5 是 LLM 憑證,不是這個)。預設 **50** 小時,而且是從 CronJob **導出來**的,不是挑的:一天的排程(24h)加上一趟允許跑到
+  `activeDeadlineSeconds`(20h)再加餘裕 —— 因為 `concurrencyPolicy: Forbid` 之下,一趟用滿期限會把
+  下一次**成功**推到遠超過排程間隔。門檻低於這個數字就會對「只是跑得慢」的備份發警報,而會狼來了的
+  警報會被靜音。`tests/deploy/test_backup_cronjob.py` 把這個關係釘住了。
 
 ---
 

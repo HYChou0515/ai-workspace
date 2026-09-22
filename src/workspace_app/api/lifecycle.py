@@ -501,22 +501,38 @@ def build_lifespan(
     async def backup_staleness_sweeper() -> None:
         """Say so when the newest backup is too old — or has never happened.
 
-        Stays on the API for the reason the lifecycle convention allows: it reads
+        Stays on the API under the lifecycle convention's own terms: it asks for
         ONE row (the newest ledger entry) and writes at most one notification per
-        operator per window. Nothing here grows with content, so every pod
-        running it costs N cheap reads rather than N full scans, and the
-        send-once fingerprint collapses the duplicates. No `ScanLease` for the
-        same reason — a lease would be more machinery than the work it guards.
+        operator per window. The ledger grows by one row per run, not with
+        content, so this is bounded by how often backups happen rather than by
+        how much data the deployment holds — which is what the convention is
+        about. The healthy path returns before touching anything else.
+
+        ⚠️ Two honest caveats. On the disk backend the limit-one query is still a
+        scan of that small model, and once a deployment IS stale the send-once
+        check queries the `Notification` model, which does grow. And the dedup is
+        check-then-create, not a CAS, so three pods on the same tick can each
+        write one. That is duplicate mail, not lost data; a `ScanLease` would be
+        more machinery than the work it guards, and this says so rather than
+        claiming a guarantee it does not have.
         """
         assert backup_staleness is not None  # gated by caller
         try:
             while True:
-                await asyncio.sleep(backup_staleness_interval.total_seconds())
-                # One bad sweep must not end the loop. The next tick retries, and
-                # a backup that is stale now is still stale in an hour — this is
-                # the one alert that does not need to be timely to the minute.
-                with contextlib.suppress(Exception):
+                # One bad sweep must not end the loop — the next tick retries,
+                # and a backup that is stale now is still stale in an hour. But
+                # it is LOGGED, not swallowed: this is the only mechanism that
+                # notices backups have stopped, and a mistyped knob that makes it
+                # raise every tick would otherwise leave a deployment believing
+                # it is monitored while nothing is ever reported.
+                try:
                     await asyncio.to_thread(backup_staleness)
+                except Exception:
+                    logger.exception(
+                        "lifespan: the backup-staleness check failed. Until this is "
+                        "fixed, nothing will report a backup that has stopped running."
+                    )
+                await asyncio.sleep(backup_staleness_interval.total_seconds())
         except asyncio.CancelledError:
             return
 

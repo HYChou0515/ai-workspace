@@ -27,12 +27,41 @@ import workspace_app.factories as factories_module
 from workspace_app.backup import UnsupportedDeployment, durable_sources
 from workspace_app.config.schema import (
     FilestoreSettings,
+    MessageQueueSettings,
     SandboxDurableSettings,
     SandboxSettings,
     Settings,
 )
 
 _FACTORIES = pathlib.Path(factories_module.__file__)
+
+
+def _queue_kinds() -> frozenset[str]:
+    """Legal `message_queue.kind` values, read off the factory that builds one.
+
+    `get_job_queue_factory` is an if/elif chain rather than a `match`, so the
+    literals are extracted from its comparisons. The axis matters even though
+    `durable_sources` returns no source for it: `kind: simple` stores a job as a
+    specstar resource, which is WHY the queue needs no source of its own. A third
+    kind that persisted somewhere else would break that reasoning silently.
+    """
+    tree = ast.parse(_FACTORIES.read_text())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or "queue" not in node.name:
+            continue
+        found = {
+            c.value
+            for cmp in ast.walk(node)
+            if isinstance(cmp, ast.Compare) and "kind" in ast.unparse(cmp.left)
+            for c in cmp.comparators
+            if isinstance(c, ast.Constant) and isinstance(c.value, str)
+        }
+        if found:
+            return frozenset(found)
+    raise AssertionError(
+        "no message_queue kind comparison found in factories — the extractor is "
+        "reading the wrong shape, so this axis proves nothing."
+    )
 
 
 def _match_arms(func_name: str, subject: str) -> frozenset[str]:
@@ -65,6 +94,7 @@ def _match_arms(func_name: str, subject: str) -> frozenset[str]:
 FILESTORE_KINDS = _match_arms("get_filestore", "settings.filestore.kind")
 DURABLE_KINDS = _match_arms("get_sandbox_filestore", "d.kind")
 MIGRATE_FROMS = _match_arms("get_sandbox_filestore", "d.migrate_from")
+QUEUE_KINDS = _queue_kinds()
 
 
 def test_the_extractor_still_reads_the_arms_it_is_supposed_to():
@@ -75,6 +105,7 @@ def test_the_extractor_still_reads_the_arms_it_is_supposed_to():
     assert "nfs_tree" in DURABLE_KINDS
     assert "" in DURABLE_KINDS  # the "follow the API filestore" alias
     assert "specstar" in MIGRATE_FROMS
+    assert "rabbitmq" in QUEUE_KINDS
 
 
 @pytest.mark.parametrize("kind", sorted(FILESTORE_KINDS))
@@ -115,3 +146,27 @@ def test_a_kind_factories_does_not_accept_is_refused_here_too():
 
     with pytest.raises(UnsupportedDeployment):
         durable_sources(Settings(filestore=FilestoreSettings(kind=unknown, disk_root="/data")))
+
+
+@pytest.mark.parametrize("kind", sorted(QUEUE_KINDS))
+def test_every_bootable_queue_kind_still_needs_no_source_of_its_own(kind: str):
+    """The queue is excluded from the backup for a REASON, and the reason is
+    conditional on which kinds exist.
+
+    `kind: simple` stores a job as a specstar resource, so it is already inside
+    the specstar source; `rabbitmq` keeps it in the broker, and queued work is
+    not data worth restoring. Both are fine. A third kind that persisted
+    somewhere else would make the exclusion wrong — and would boot, and would be
+    silently unbacked, with CI green. So the set is pinned rather than the
+    conclusion.
+    """
+    settings = Settings(
+        filestore=FilestoreSettings(kind="specstar", disk_root="/data"),
+        message_queue=MessageQueueSettings(kind=kind),
+    )
+    sources = durable_sources(settings)
+
+    assert [s.name for s in sources] == ["specstar"], (
+        f"message_queue.kind={kind!r} changed what the backup covers — if this "
+        "kind persists jobs outside specstar, it needs a source and a handler"
+    )

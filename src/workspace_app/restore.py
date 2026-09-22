@@ -53,10 +53,16 @@ def main(argv: list[str] | None = None) -> int:
     from .config.loader import load_with_provenance
 
     args = _parse_args(argv)
-    settings, _provenance = load_with_provenance(config_path=args.config)
-    config_dir = args.config.parent if args.config else None
-
-    spec = build_backup_spec(settings, config_dir=config_dir)
+    try:
+        settings, _provenance = load_with_provenance(config_path=args.config)
+        config_dir = args.config.parent if args.config else None
+        spec = build_backup_spec(settings, config_dir=config_dir)
+    except Exception as exc:
+        # Under the `restore:` prefix like every other failure here — a bare
+        # traceback from the composition step looks like a different kind of
+        # problem than a refused restore, and at 3am that distinction costs time.
+        print(f"restore: FAILED — could not compose the app: {exc}", file=sys.stderr)
+        return 1
     try:
         report = restore_chain(settings, spec, confirm=args.confirm, chain=args.chain)
     except Exception as exc:
@@ -73,10 +79,12 @@ def main(argv: list[str] | None = None) -> int:
         f"{report.trees_extracted} workspace tree(s)"
     )
     print(
-        "restore: NOTE the file-tree index is extracted at write time, so a "
-        "deployment restored onto a fresh store may need "
-        "`POST /workspace-file/migrate/execute` before the file tree answers "
-        "path queries — /api/readyz 503s until it does."
+        "restore: NOTE the indexes travel with the archive — `load_records_bulk` "
+        "saves each ResourceMeta verbatim rather than re-extracting it — so no "
+        "migrate is needed for what was restored. A migrate IS still owed if the "
+        "archive predates a Schema version bump this deployment has since taken: "
+        "those rows come back at the old version, exactly as un-migrated rows "
+        "always do. docs/migrations.md says which."
     )
     return 0
 

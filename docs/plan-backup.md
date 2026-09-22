@@ -32,7 +32,7 @@
 | 5 | LLM call log | `observability.llm_log.dir`(預設 `logs/llm`,`keep_days: 0`) | 每次 outbound LLM 呼叫一筆 | 不是資料,但**無上限成長**,是另一筆帳 |
 
 **#2 存不存在,由一個設定鍵決定,而預設是「不存在」** —— 這正是 user 那句需求的具體形狀。
-`factories.py:411-437` 的 `build_sandbox_filestore`:
+`factories.py:408-438` 的 `get_sandbox_filestore`:
 
 - `sandbox.durable.kind: ""`(**預設**)→ 直接 return API 的 filestore。sandbox 檔案以
   `WorkspaceFile` 記錄存進 specstar,bytes 落在 `_blobs`。**只有一棵樹。**
@@ -95,14 +95,14 @@ file_id = key if key is not None else xxh3_128_hexdigest(data)
 `kb/wiki/store.py:202,243`、`api/kb_routes.py:2747`、`filestore/specstar_impl.py:155,281,288`)
 **都沒有傳 `key=`**。所以 `_blobs` 是 append-only:改一個檔案是產生**新** blob,舊的變孤兒等 GC。
 
-開了 `nfs_tree` 之後,`__main__.py:213` 把 `sandbox_filestore`(NAS 樹)傳給
+開了 `nfs_tree` 之後,`__main__.py:260` 把 `sandbox_filestore`(NAS 樹)傳給
 `create_app(filestore=...)`,`api_filestore` 只剩「註冊 `WorkspaceFile` 模型」和「當 M2 fallback」
 兩個作用,沒有東西寫它。所以 **`_blobs` 裝的是 KB 和 wiki 的內容**(`SourceDoc.content`、
 `preview`、`ImportJob.archive`、`WikiPage.content`),不含 workspace 工作檔。
 
 ### 1.4 blob GC 的時間窗
 
-`config/schema.py:316-318` + `filestore/blob_gc.py:5-6`:
+`config/schema.py:319-321` + `filestore/blob_gc.py:5-6`:
 
 ```
 gc_interval_sec: 3600.0   # 每小時問一次
@@ -180,9 +180,13 @@ limit 蓋掉,所以時間窗匯出**不會**被 `SPECSTAR_DEFAULT_QUERY_LIMIT`(`
    composition 建 registry,讓兩邊「by construction」相等。
 2. **遇到不認得的 kind 就炸。** 對應 `worker/__init__.py:67`
    「fail loud rather than idle silently on a queue nothing feeds」。
-3. **窮盡性測試**:列舉每個 kind 欄位的所有合法值(`filestore.kind` ∈ {memory, specstar}、
-   `sandbox.durable.kind` ∈ {"", nfs_tree}、`message_queue.kind` ∈ {simple, rabbitmq}),
-   斷言每種組合都有 handler。少一個 → **CI 紅**,不是上線後靜默漏備。
+3. **窮盡性測試**:合法值不是列出來的,是用 AST 從 `factories.py` 自己的分支讀出來的 ——
+   `filestore.kind`、`sandbox.durable.kind`、`sandbox.durable.migrate_from` 的 `match` arms,
+   以及 `message_queue.kind` 的比較式。少一個 → **CI 紅**,不是上線後靜默漏備。
+   `message_queue` 這一軸即使不產生 source 也要釘:「`kind: simple` 的 job 本身就是 specstar resource」
+   正是它不需要自己的 source 的**理由**,第三種 kind 會讓那個理由默默失效。
+   (初稿寫的是「斷言每種**組合**都有 handler」;實作是逐軸 parametrize,不是笛卡兒積 ——
+   因為 `durable_sources` 對三軸的處理是獨立的,組合不會多測到任何分支。)
 
 ### 不變量二:切片大小界住還原所需的記憶體
 
@@ -240,15 +244,25 @@ blob 讀取包在 `except Exception: pass`,**讀不到的 blob 被靜默跳過,d
 
 ## 5. Phase
 
-- **P1 — `_backup/*` 授權止血。** 照 `api/app.py:1658` `_block_raw_permanent` 的既有形狀,
-  在 `spec.apply` 前佔住 `_backup/export|import` 改走 superuser 檢查。
-  測試必須對**未修版本驗紅**(下面 §6.1 的重現就是紅的來源)。
+- **P1 — 資料轉移路由的授權止血。** 照 `api/app.py` `_block_raw_permanent` 的既有形狀,在 `spec.apply` 前
+  佔住路由。測試必須對**未修版本驗紅**(下面 §6.1 的重現就是紅的來源)。
+
+  **實作時和這份初稿差了兩點,兩點都是變嚴:**
+
+  1. **範圍是整類,不是兩條。** specstar 不只註冊 `_backup/export|import`,還替**每個 model** 各發一組
+     `GET /{model}/export` / `POST /{model}/import` —— 這個部署上約 90 道門,全部同樣不經授權
+     (實測 `/api/collection/export` 回 200 並帶出別人的 collection 名字)。只關那兩道、然後在 runbook 寫
+     「洞關了」,就是修一個實例宣稱整類。守衛從 registry 導出,新 model 一出現就被關。
+  2. **一律 403,不是 superuser 檢查。** HTTP 路由把整份封存塞進 `BytesIO` 才回應,在 100G–2T 對**任何人**
+     都不能用,所以權限高低不改變答案。拒絕訊息指向 in-process 入口。
 - **P2 — `durable_sources(settings)` + 窮盡性測試。** 純函式,無 I/O。不變量一。
 - **P3 — `python -m workspace_app.backup`。** specstar 半走 `spec.dump` 串流落地;
   NAS 半走檔案層級;mount point 前置檢查;寫 receipt(涵蓋的時間窗 / model / 筆數 / bytes / 耗時)。
 - **P4 — 切片。** `updated_time_start` 時間窗 + 切片大小上界的測試 + 全量/增量鏈的保留策略。
   不變量二。
-- **P5 — 驗證與告警。** 抽樣參照完整性(把 snapshot `load` 進暫存 spec 比對)+
+- **P5 — 驗證與告警。** 抽樣參照完整性 —— **實作不是「load 進暫存 spec 比對」**(那要把封存檔整個吃進去,
+  正是 `load` 撐不住的事):先從來源抽一小組 live 記錄的 `Binary.file_id`,再把封存檔**串流讀一遍**
+  檢查這組 id 在不在。記憶體是固定的,2TB 和 2MB 一樣貴。+
   寫 `Notification` row → 既有 `INotificationChannel`,收件人 `server.superusers` +
   dead-man sweeper(讀最新 receipt,超過 N 小時沒更新就寫 row,**把「缺席」變成「一筆存在的資料」**)。
 - **P6 — k8s CronJob + Secret + overlay。**
@@ -269,7 +283,7 @@ platform cannot guess a relay, a from-address, or a compliance regime」。備�
 它只要往 specstar 寫一筆 `Notification` row,API 既有的 `notification_delivery_sweeper`
 負責交付與重試;同一筆也進 in-app 鈴鐺(docstring 說那是 record of truth),
 email channel 掛了告警也沒消失。`Notification` 本身有 `dedup_key`
-(`notification_delivery.py:61`),多個 pod 同時發現同一件事只會出一封。
+(`resources/notification.py:48`),多個 pod 同時發現同一件事只會出一封。
 
 ### 5.2 為什麼是 CronJob 而不是 JobType
 
@@ -280,7 +294,7 @@ email channel 掛了告警也沒消失。`Notification` 本身有 `dedup_key`
 - 行程結束就把記憶體還給系統,對不變量二那個「最大單檔 × 2」的峰值有實際差別。
 - 失敗是叢集層級可見的事件。
 
-⚠️ 順帶記一個**沒查清楚的矛盾**:specstar 的 queue 是心跳制,`basic.py:553` 用
+⚠️ 順帶記一個**沒查清楚的矛盾**:specstar 的 queue 是心跳制,`basic.py:554` 用
 `heartbeat_timeout_seconds = self._heartbeat_interval * 3`(`_heartbeat_interval = 5.0`,`basic.py:82`),
 `basic.py:493-494` 明說有近期心跳的 job 會被跳過 —— 所以**心跳活著就不會被重投,沒有固定上限**。
 但 `cronjob-graph.yaml` 的註解寫著「the tail ran past the 30-minute ceiling, where a job is
@@ -326,6 +340,10 @@ middleware 只有 CORS / 版本標頭 / perf trace;`__main__.py:122` 是
   每次都會把這三個數字印出來,所以在 stg 或 prod 上是多少,跑一次就知道。
 - **目的地實體。** 先做 dev server(確定有),S3 是改一個 backend URL。
   容量抓 live size 的 1.5–2 倍。
-- **加密金鑰必須存在叢集之外**,否則叢集沒了備份也打不開。這是 runbook 的一行,不是設計選項。
+- **加密:這一版沒有做,而且這是一個決定,不是遺漏。** 封存檔是明文的 `.acbak` 和 `.tar`。
+  理由:`backup.dest` 掛的是什麼由部署決定,而那一層(NFS export 的權限、物件儲存的 SSE、磁碟加密)
+  是運營方已經有的機制;在程式裡再加一層會引進一個「金鑰放哪」的問題,而那個問題的正確答案
+  ——「叢集之外」—— 這個程式沒有辦法幫忙保證。**要加密就在 `dest` 那一層加**,並且記得:
+  金鑰跟叢集一起沒了,備份就打不開。這句話現在寫在 `deployment.md §16` 裡,不再只是計畫裡的一個待辦。
 - **NAS 本身沒有 snapshot / replication**(user 確認),所以那棵樹也得我們自己來,
   範圍不能縮。

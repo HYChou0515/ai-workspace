@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
     # here would be circular. `SubagentModel` values arrive through parameters.
     from ..factories import SubagentModel
-from ..backup.ledger import register_backup_ledger
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -1713,16 +1712,32 @@ def create_app(
     # (#450 S5), so the HTTP door cannot serve this deployment at any privilege
     # level. The supported path is the in-process one, which reads the same
     # config the app boots from — see `docs/plan-backup.md`.
-    def _block_specstar_backup_routes() -> None:
-        @api.get("/_backup/export", include_in_schema=False)
-        async def _refuse_export() -> None:
-            raise HTTPException(status_code=403, detail=_BACKUP_DOOR_CLOSED)
+    # It is a CLASS, not two routes. specstar emits the same unauthorized door
+    # for EVERY registered model — `GET /{model}/export` and
+    # `POST /{model}/import` — alongside the two global `_backup` ones, which is
+    # ~90 doors on this deployment, not 2. Verified by probe: an unauthenticated
+    # `GET /api/collection/export` returned 200 with another user's collection
+    # name in the body. Blocking only `_backup/*` would have left the same hole
+    # open 45 times over while the runbook claimed it was closed.
+    #
+    # Derived from the registry rather than listed, so a model added tomorrow is
+    # fenced the day it appears. Only models registered BEFORE `spec.apply` get
+    # CRUD routes at all, which is exactly the set this iterates.
+    def _block_specstar_transfer_routes() -> None:
+        def _closed(path: str, *, post: bool) -> None:
+            register = api.post if post else api.get
 
-        @api.post("/_backup/import", include_in_schema=False)
-        async def _refuse_import() -> None:
-            raise HTTPException(status_code=403, detail=_BACKUP_DOOR_CLOSED)
+            @register(path, include_in_schema=False)
+            async def _refuse() -> None:
+                raise HTTPException(status_code=403, detail=_BACKUP_DOOR_CLOSED)
 
-    _block_specstar_backup_routes()
+        _closed("/_backup/export", post=False)
+        _closed("/_backup/import", post=True)
+        for model_name in sorted(spec.resource_managers):
+            _closed(f"/{model_name}/export", post=False)
+            _closed(f"/{model_name}/import", post=True)
+
+    _block_specstar_transfer_routes()
 
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
@@ -1748,6 +1763,13 @@ def create_app(
     # set is what a backup archives and what a restore can load: registering it
     # lazily would make an archive's contents depend on which code path ran
     # first.
+    # Imported HERE, not at module scope. `backup/staleness.py` imports
+    # `api.notifications`, so a top-level import makes the two packages import
+    # each other — and it contradicts this module's own claim, four hundred lines
+    # below, that it grows no dependency on the backup package. One line from a
+    # real cycle is not a place to leave it.
+    from ..backup.ledger import register_backup_ledger
+
     register_backup_ledger(spec)
     # These four used to be registered by the lifespan — two of them only when
     # their feature was on. The blob-gc worker composes THIS function and never

@@ -18,6 +18,7 @@ from datetime import timedelta
 from starlette.testclient import TestClient
 
 from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.config.schema import BackupSettings, Settings
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
@@ -49,14 +50,31 @@ def test_the_lifespan_actually_runs_the_staleness_probe():
     assert calls, "the lifespan started but never ran the backup-staleness probe"
 
 
-def test_a_deploy_without_a_destination_starts_no_loop():
-    """`None` is the absence of the feature, not a degraded mode. A timer that
-    wakes forever to decide it has nothing to say is a loop nobody asked for."""
+def test_a_deploy_without_a_destination_gets_no_probe_at_all():
+    """`None` is the absence of the feature, not a degraded mode — and the gate
+    is in `__main__`, where the settings are.
+
+    This used to be a test with no assertions, which meant it stayed green under
+    every mutation and proved nothing while being described as a control. The
+    discriminating question is whether the probe is built at all, so that is what
+    it asks now — both ways, because "always returns None" would satisfy half of
+    it.
+    """
+    from workspace_app.__main__ import _backup_staleness_probe
+
+    spec = make_spec()
+
+    off = Settings(backup=BackupSettings(dest=""))
+    on = Settings(backup=BackupSettings(dest="/backups"))
+
+    assert _backup_staleness_probe(off, spec) is None
+    assert callable(_backup_staleness_probe(on, spec))
+
+
+def test_the_lifespan_is_clean_when_no_probe_is_configured():
+    """The gate has to be on the right side of the `if`: a deploy that never
+    opted in must still boot, serve and shut down."""
     app = _app(backup_staleness=None, backup_staleness_interval=timedelta(milliseconds=10))
 
-    with TestClient(app):
-        time.sleep(0.1)
-
-    # Nothing to assert on the probe itself; what matters is that entering and
-    # leaving the lifespan with no probe configured is clean — a crash here would
-    # mean the gate is on the wrong side of the `if`.
+    with TestClient(app) as client:
+        assert client.get("/api/readyz").status_code in (200, 503)

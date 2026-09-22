@@ -104,9 +104,14 @@ data:
   # docs/plan-backup.md — where the nightly backup writes. Empty means this
   # deployment has not opted in: `python -m workspace_app.backup` refuses to run
   # and the API starts no staleness sweeper. Map it in your config.yaml as
-  #   backup: { dest: ${BACKUP_DEST} }
-  # The mount comes from cronjob-backup.yaml (the `backups` PVC), and that claim
-  # must resolve to storage OUTSIDE this cluster — see pvc.yaml.
+  #   backup:
+  #     dest: ${BACKUP_DEST}
+  # BLOCK form, not `backup: { dest: ${BACKUP_DEST} }` — a `{` inside a flow
+  # mapping is a YAML parse error and the pod never boots. Same trap as the
+  # run_consumers note above; it has already caught somebody once.
+  # The CronJob and its `backups` PVC are commented out in kustomization.yaml /
+  # pvc.yaml, so setting this alone changes nothing — see docs/migrations.md#pr-842.
+  # That claim must resolve to storage OUTSIDE this cluster.
   #
   # The other backup knobs (slice_days, keep_chains, verify_sample,
   # stale_after_hours, require_mounted_sources) are deliberately NOT here. They

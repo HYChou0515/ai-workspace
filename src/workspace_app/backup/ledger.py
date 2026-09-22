@@ -89,9 +89,15 @@ class BackupLedger:
     def newest(self) -> _BackupRun | None:
         """The most recently finished run, or None when there has never been one.
 
-        Sorted by the row's own `updated_time` rather than by scanning: the
-        ledger grows by one row per run forever, and a sweeper that reads all of
-        them is the shape that took an API pod down once already (#804).
+        Asked as a sorted, limit-one query rather than by reading the table and
+        picking — the ledger grows by one row per run forever, and a sweeper that
+        reads all of them is the shape that took an API pod down once already
+        (#804).
+
+        ⚠️ On the disk backend that is still a full scan of THIS model's meta
+        tree: `DiskMetaStore.iter_search` has no index and applies the limit
+        after reading, decoding and sorting everything. It is a small model — one
+        row per run — so the cost is small, but "not a scan" would be untrue.
         """
         rm = self._spec.get_resource_manager(_BackupRun)
         query = ResourceMetaSearchQuery(

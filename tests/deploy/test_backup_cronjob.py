@@ -82,19 +82,38 @@ def test_two_runs_can_never_overlap():
     assert _cronjob()["spec"]["concurrencyPolicy"] == "Forbid"
 
 
-def test_every_claim_it_mounts_exists():
-    """A manifest that mounts a claim nobody provisioned fails at apply time, in
-    the middle of a deploy, for a job nobody was watching."""
-    declared = {
-        d["metadata"]["name"] for d in _docs(_PVC) if d.get("kind") == "PersistentVolumeClaim"
-    }
+def test_every_claim_it_mounts_is_at_least_written_down():
+    """A manifest that mounts a claim nobody wrote down fails at apply time, in
+    the middle of a deploy, for a job nobody was watching. Both this CronJob and
+    its `backups` claim are opt-in, so they are checked against the file's text
+    rather than its active documents — enabling one without the other is the
+    mistake worth catching."""
+    pvc_text = _PVC.read_text()
     mounted = {
         v["persistentVolumeClaim"]["claimName"]
         for v in _job_spec()["template"]["spec"]["volumes"]
         if "persistentVolumeClaim" in v
     }
 
-    assert mounted <= declared, f"{sorted(mounted - declared)} are mounted but never declared"
+    missing = [name for name in mounted if f"name: {name}" not in pvc_text]
+    assert not missing, f"{missing} are mounted but appear nowhere in pvc.yaml"
+
+
+def test_the_specstar_mount_is_not_read_only():
+    """Counter-intuitive and load-bearing, so it is pinned.
+
+    A backup "has no business writing to what it archives" is a tempting edit,
+    and it breaks every run: `build_backup_spec` composes the API (so `spec.apply`
+    runs the schema step) and the run records itself in the ledger — which, on a
+    `filestore.kind: specstar` deployment, lives on this very volume.
+    """
+    data_mounts = [m for m in _container()["volumeMounts"] if m["mountPath"] == "/data"]
+
+    assert data_mounts, "the /data mount is what the backup reads"
+    assert not data_mounts[0].get("readOnly"), (
+        "making /data read-only breaks the schema apply and the ledger write — "
+        "see the comment in the manifest before changing this"
+    )
 
 
 def test_it_mounts_the_specstar_store_it_is_meant_to_archive():
@@ -106,8 +125,63 @@ def test_it_mounts_the_specstar_store_it_is_meant_to_archive():
     assert "/data" in mounts
 
 
-def test_the_cronjob_is_part_of_the_base_kustomization():
-    """A manifest outside `resources:` is a file nobody applies."""
-    kustomization = yaml.safe_load(_KUSTOMIZATION.read_text())
+def test_the_cronjob_is_opt_in_and_the_kustomization_says_how():
+    """Deliberately NOT in `resources:`.
 
-    assert _CRONJOB.name in kustomization["resources"]
+    Every doc says the feature is off until `backup.dest` is set, and the code
+    honours that — but applying the manifest unasked does not: the claim is
+    provisioned and the job fails at 02:00 every night forever, because the run
+    refuses without a destination. The `workspaces` claim beside it has been
+    opt-in for the same reason since #492.
+
+    Opt-in is only defensible if the file says so where somebody will read it,
+    hence the second half of this test.
+    """
+    raw = _KUSTOMIZATION.read_text()
+    kustomization = yaml.safe_load(raw)
+
+    assert _CRONJOB.name not in (kustomization.get("resources") or [])
+    assert f"# - {_CRONJOB.name}" in raw, "opt-in with no instructions is just missing"
+    assert "BACKUP_DEST" in raw
+
+
+def test_the_backups_claim_is_opt_in_too():
+    """Enabling the job without its claim fails at apply time, mid-deploy. The
+    two have to move together, so neither is live by default."""
+    declared = {
+        d["metadata"]["name"] for d in _docs(_PVC) if d.get("kind") == "PersistentVolumeClaim"
+    }
+
+    assert "backups" not in declared
+    assert "backups" in _PVC.read_text(), "the claim should be present but commented out"
+
+
+def test_the_staleness_threshold_is_above_what_a_slow_run_legitimately_costs():
+    """An alarm that cries wolf gets muted, and then it is not an alarm.
+
+    With `concurrencyPolicy: Forbid`, a run that uses its whole
+    `activeDeadlineSeconds` pushes the next SUCCESS past the schedule interval —
+    so the newest completed run can legitimately be (interval + deadline) old
+    without anything being wrong. A threshold below that pages on a backup that
+    is merely slow.
+
+    Both numbers are read off the manifest and the settings rather than restated,
+    so moving the schedule or the deadline fails here instead of quietly turning
+    the alarm into noise.
+    """
+    from workspace_app.config.schema import BackupSettings
+
+    minute, hour, *_ = _cronjob()["spec"]["schedule"].split()
+    assert minute.isdigit() and hour.isdigit(), (
+        "this guard assumes a fixed daily time; a different cron shape needs a "
+        "different interval calculation rather than a silently wrong one"
+    )
+    interval_s = 24 * 3600
+    deadline_s = _job_spec()["activeDeadlineSeconds"]
+    threshold_s = BackupSettings().stale_after_hours * 3600
+
+    assert threshold_s > interval_s + deadline_s, (
+        f"stale_after_hours ({threshold_s // 3600}h) is not above the schedule "
+        f"interval ({interval_s // 3600}h) plus the deadline ({deadline_s // 3600}h), "
+        "so a slow-but-healthy run will page the operators"
+    )

@@ -1373,12 +1373,18 @@ job queue(`kind: simple` 時 job 本身就是 specstar resource,已含在內)、
 
 ### 一趟長什麼樣
 
+實際輸出長這樣(這是一次真的執行,不是排版出來的範例 —— 所以大小是 bytes 的整數而不是 `8.1 GB`,
+程式沒有做人類可讀的單位換算):
+
 ```
-backup: full run 20260923T020000Z (chain 20260923T020000Z) -> /backups/20260923T020000Z
-backup:   window 2026-01-01T00:00:00+00:00 .. 2026-09-23T02:00:00+00:00
-backup:   specstar (filestore.kind: specstar) -> specstar-0000.acbak 8.1 GB models=67 in 412.3s
-backup:   sandbox-workspaces (sandbox.durable.kind: nfs_tree) -> sandbox-workspaces-0000.tar …
+backup: full run 20260922T173551Z (chain 20260922T173551Z) -> /backups/20260922T173551Z
+backup:   window 2026-09-22T17:35:49.043600+00:00 .. 2026-09-22T17:35:51.020063+00:00
+backup:   specstar (filestore.kind: specstar) -> specstar-0000.acbak 7923 bytes models=68 in 0.004s
+backup:   sandbox-workspaces (sandbox.durable.kind: nfs_tree) -> sandbox-workspaces-0000.tar 20480 bytes files=6 in 0.001s
 ```
+
+`models=` 是這次 dump 涵蓋的 model 數(也就是 registry 的大小,不是「有資料的」數量);
+`files=` 是這一趟實際打進 tar 的項目數,不是樹裡的總檔案數 —— 增量只帶變動的那些。
 
 每趟在 `backup.dest/<run id>/` 留一份 `receipt.json`:涵蓋了哪些來源、**是哪一行設定把它列進來的**、
 每份封存檔多大、抽查了幾個 blob 參照、這趟有沒有做 mount 檢查。receipt 是**最後**寫的而且是原子的,
@@ -1403,16 +1409,25 @@ python -m workspace_app.restore --config /etc/rca/config.yaml --confirm
 # 指定某一條鏈:--chain 20260923T020000Z
 ```
 
-三個會讓它整個拒絕的情況,每一個都是因為「做一半」比「不做」更糟:
+五個會讓它整個拒絕的情況,每一個都是因為「做一半」比「不做」更糟:
 
 1. **封存與當下 config 的來源集合不一致。** 只還原對得上的那半會成功、會起得來、會少掉一整個 store,
-   而且沒有任何錯誤訊息。
-2. **鏈上缺了一份封存檔。** 缺口之後的每一趟都假設它帶來的記錄已經在了。
-3. **沒帶 `--confirm`。** `load` 是 `on_duplicate=overwrite`,這道指令會覆蓋目標既有的每一列。
+   而且沒有任何錯誤訊息。逐 run 比對,不是跨整條鏈聯集 —— 聯集會放過「full 是舊形狀、增量是新形狀」那條鏈。
+2. **鏈的 full 不見了。** 只檢查封存檔在不在是不夠的:一個被刪掉的 run 目錄把自己的 receipt 一起帶走,
+   所以它根本不在清單裡。剩下的增量照樣replay、照樣回報成功,而第一個存活窗之前的資料全部沒了。
+3. **鏈上缺了一份封存檔,或 `parent` 斷鏈。** 缺口之後的每一趟都假設它帶來的記錄已經在了。
+4. **封存檔帶著這個部署不認得的 model。** `load` 會在串流中途炸,而且前面已經寫進去的 model 不會回滾 ——
+   通常是拿新版映像的封存檔往回滾過的版本還原。
+5. **沒帶 `--confirm`。** `load` 是 `on_duplicate=overwrite`,這道指令會覆蓋目標既有的每一列。
 
-還原完之後,檔案樹的 `path` 索引要跑一次回填才會回答查詢 ——
-`POST /workspace-file/migrate/execute`(步驟見 [`migrations.md#pr-668`](migrations.md#pr-668)),
-在那之前 `/api/readyz` 會 503。
+**還原完不需要跑 migrate。** 索引是跟著封存檔一起回來的 —— specstar 的 `load_records_bulk` 把每一筆
+`ResourceMeta` **原樣**存回、不重新萃取 `indexed_data`,所以 `path` 索引在還原後就是好的,`/api/readyz` 不會 503。
+唯一的例外是**舊封存檔**:在某次 `Schema` 升版之前取的封存,那些列會以舊版本回來,跟任何沒回填過的舊列一樣,
+要跑的是那次升版自己條目所列的 migrate。
+
+⚠️ **還原是合併,不是取代。** `load` 只覆蓋 id 相同的列,不會刪掉目標已有而封存檔沒有的列;tar 也是解壓到既有的樹上。
+所以還原到一個「出事後又服務了一週」的部署,那一週的資料會留著,而備份之前被刪掉的東西會**復活** ——
+得到的是一個從未存在過的狀態。要乾淨的時間點,先把目標的 `disk_root` 和工作檔案樹清空再還原。
 
 ### 演練
 
@@ -1424,6 +1439,15 @@ python scripts/backup_drill.py --source-config stg.yaml --target-config stg-rest
 `during`(備份進行中寫入的,多少被這趟接到 —— 這是**量出來的**,不是規定的;剩下的由下一個增量接手)、
 `after`(必須是 0,否則時間窗的邊界不在 receipt 說的地方)。兩個配置必須指向**同一個 `dest`**、
 **不同的 `disk_root`**,腳本會自己擋。
+
+### 加密:程式不做,`dest` 那一層做
+
+封存檔是**明文**的 `.acbak` 和 `.tar`。這是決定不是遺漏:`backup.dest` 掛的是什麼由你決定,
+而那一層本來就有機制(NFS export 的權限、物件儲存的 SSE、磁碟加密),在程式裡再加一層只會多一個
+「金鑰放哪」的問題,而那個問題的正確答案 —— **叢集之外** —— 程式沒辦法幫你保證。
+
+⚠️ 如果你在 `dest` 那一層加密:**金鑰必須存在這個叢集之外**。叢集沒了、金鑰跟著沒了,
+備份就打不開 —— 那和沒有備份是同一件事,只是多花了儲存費。
 
 ### 和「知識庫封存包」的關係
 

@@ -7,11 +7,8 @@
 #     magnitude longer than that.
 #   * A CronJob has `activeDeadlineSeconds` and `concurrencyPolicy: Forbid`,
 #     which is what a long single-shot job wants.
-#   * The process exiting hands its memory back. That matters: one blob is one
-#     record and specstar's encoder copies it once more before the write, so peak
-#     RSS is about twice the largest single file in the deployment
-#     (`filestore.max_file_size`, 2 GiB by default). Size `resources.limits.memory`
-#     from that, not from the archive size.
+#   * The process exiting hands its memory back, which matters here more than
+#     it usually would — see the limit below.
 #
 # The pod carries the API's whole composition on purpose — the backup builds
 # `__main__.build_app` so its model registry equals the API's by construction.
@@ -33,9 +30,14 @@ kind: CronJob
 metadata:
   name: rca-backup
 spec:
-  schedule: "0 2 * * *" # 02:00 Asia/Taipei, nightly — before the 03:00 code-sync
-  # and clear of the Saturday 03:00 graph pass, so the two do not contend for the
-  # same NFS volume.
+  schedule: "0 2 * * *" # 02:00 Asia/Taipei, nightly. Before the 03:00 code-sync
+  # (`kb.git.daily_sync`) and the Saturday 03:00 graph pass, so a long run does
+  # not overlap either.
+  #
+  # ⚠️ `cronjob-eval.yaml` is ALSO "0 2 * * *". They do not contend for the same
+  # volume — eval curls the API to enqueue a job and exits in milliseconds, while
+  # this reads /data — but if you move either one, move it knowing the other is
+  # there.
   timeZone: "Asia/Taipei" # needs Kubernetes >= 1.27 for the GA field. Spelling
   # the zone out spares every future editor the UTC day-shift arithmetic.
   concurrencyPolicy: Forbid # two passes must never overlap: they would write
@@ -43,17 +45,23 @@ spec:
   # not finished writing.
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
-  # A run that has not finished in 20 hours is not going to finish before the
-  # next one starts. Deliberately under the 25-hour window that blob-GC's
-  # quarantine gives us (`gc_t1` + `gc_t2`): past that, a record archived early
-  # in the run can reference a blob that GC deleted before the run reached it.
+  # How late a MISSED schedule may still start (a controller outage, a node
+  # coming back). An hour: later than that and the run collides with the next
+  # night's. Unrelated to how long a run may take — that is
+  # `activeDeadlineSeconds` below.
   startingDeadlineSeconds: 3600
   jobTemplate:
     spec:
       backoffLimit: 1 # one retry. More would mean a failing backup silently
       # burning hours; the staleness sweeper is what escalates a run that keeps
       # failing, and it does not need four attempts to notice.
-      activeDeadlineSeconds: 72000 # 20h — see the comment above.
+      # 20 h, and the ceiling is not arbitrary: it must stay under the 25-hour
+      # window blob-GC's quarantine gives us (`filestore.gc_t1` + `gc_t2`). Past
+      # that, a record archived early in the run can reference a blob the
+      # collector deleted before the run reached it, and the archive is quietly
+      # short. `tests/deploy/test_backup_cronjob.py` derives the bound from
+      # FilestoreSettings, so lowering gc_t2 fails there rather than here.
+      activeDeadlineSeconds: 72000
       template:
         spec:
           restartPolicy: Never
@@ -65,9 +73,12 @@ spec:
                 - configMapRef:
                     name: rca-config
               volumeMounts:
-                # The specstar store — read-only, because a backup has no business
-                # writing to what it is archiving. (The ledger row it writes goes
-                # through the app's own store, not this mount.)
+                # NOT read-only, and it cannot be. `build_backup_spec` composes
+                # the API (`spec.apply` runs the schema step) and the run records
+                # itself in the `-backuprun` ledger — and on a `filestore.kind:
+                # specstar` deployment that store IS this volume. Adding
+                # `readOnly: true` here breaks every run before it writes an
+                # archive. Left writable deliberately; do not "fix" it.
                 - name: data
                   mountPath: /data
                 # The sandbox workspace tree, when `sandbox.durable.kind: nfs_tree`
@@ -85,9 +96,15 @@ spec:
                   memory: "2Gi"
                 limits:
                   cpu: "2"
-                  # Twice the largest single file, not a fraction of the archive:
-                  # slicing bounds a RESTORE's memory, but one blob is still one
-                  # record and the encoder copies it before writing.
+                  # ⚠️ A STARTING POINT, not a derivation. Peak RSS is the largest
+                  # single blob twice over (one record, encoded once more before
+                  # the write) PLUS one model-window's metadata — because
+                  # `ResourceManager.dump` materialises every ResourceMeta in the
+                  # window and `DiskMetaStore.iter_search` reads the model's whole
+                  # meta tree to answer a query. 6Gi covers the blob half for a
+                  # 2 GiB `filestore.max_file_size`; the metadata half depends on
+                  # how many records a window holds, which nobody has measured on
+                  # this deployment. Watch the first few runs and raise it.
                   memory: "6Gi"
           volumes:
             - name: data

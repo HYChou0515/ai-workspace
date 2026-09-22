@@ -29,7 +29,7 @@ USAGE
     python scripts/backup_drill.py \
         --source-config /etc/rca/config.yaml \
         --target-config /etc/rca/config.restore.yaml \
-        [--files 200] [--writers 4]
+        [--files 200]
 
 The two configs must name the SAME `backup.dest` and DIFFERENT
 `filestore.disk_root` (and different `sandbox.durable.nfs_root`, if set) — the
@@ -60,6 +60,11 @@ from workspace_app.config.schema import Settings  # noqa: E402
 from workspace_app.filestore.specstar_impl import SpecstarFileStore  # noqa: E402
 
 WORKSPACE = "backup-drill"
+#: Every run writes under its own prefix. Without it a second run re-archives the
+#: previous run's `after` batch — same paths, same deterministic bytes — and then
+#: reports `after: 5/5 present` and FAILS, accusing the window logic of a bug
+#: that is not there. The drill is the acceptance gate; it has to be repeatable.
+RUN_TAG = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%f")
 
 
 def _load(path: Path) -> Settings:
@@ -98,7 +103,7 @@ def _payload(tag: str, n: int) -> bytes:
 def _write_batch(files: SpecstarFileStore, tag: str, count: int) -> list[str]:
     paths = []
     for n in range(count):
-        path = f"/{tag}/{n:05d}.bin"
+        path = f"/{RUN_TAG}/{tag}/{n:05d}.bin"
         asyncio.run(files.write(WORKSPACE, path, _payload(tag, n)))
         paths.append(path)
     return paths
@@ -117,15 +122,20 @@ class _Writer(threading.Thread):
         self._files = files
         self._halt = threading.Event()
         self.written: list[str] = []
+        self.failure: str | None = None
 
     def run(self) -> None:
         n = 0
         while not self._halt.is_set():
-            path = f"/during/{n:05d}.bin"
+            path = f"/{RUN_TAG}/during/{n:05d}.bin"
             try:
                 asyncio.run(self._files.write(WORKSPACE, path, _payload("during", n)))
             except Exception as exc:  # pragma: no cover - drill script
-                print(f"  writer: {type(exc).__name__}: {exc}", file=sys.stderr)
+                # Recorded, not swallowed. A writer that dies on its first file
+                # leaves `during: 0/0` and a cheerful PASS — a drill reporting
+                # success over a measurement that never happened.
+                self.failure = f"{type(exc).__name__}: {exc}"
+                print(f"  writer: {self.failure}", file=sys.stderr)
                 return
             self.written.append(path)
             n += 1
@@ -188,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{report.trees_extracted} tree(s), sources {', '.join(report.sources)}"
     )
 
+    tree_sources = [s for s in receipt.source_results if s.kind == "tree"]
     target_files = SpecstarFileStore(target_spec)
     missing_before = [
         path
@@ -208,6 +219,20 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     failed = False
+    if writer.failure is not None:
+        failed = True
+        print(
+            f"FAIL: the concurrent writer died ({writer.failure}), so the `during` "
+            "number measures nothing. A drill that reports PASS over a measurement "
+            "that never happened is worse than one that fails."
+        )
+    if not tree_sources:
+        print(
+            "NOTE: this deployment keeps workspace files in specstar "
+            '(`sandbox.durable.kind: ""`), so the tar half of the backup was not '
+            "exercised. On an nfs_tree deployment it is, and it is the half that "
+            "carries user files."
+        )
     if missing_before:
         failed = True
         print(
