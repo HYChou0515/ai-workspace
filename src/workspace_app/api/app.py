@@ -156,6 +156,16 @@ logger = logging.getLogger(__name__)
 _ITEM_FACT_TTL_S = 5.0
 _ITEM_FACT_MAX = 4096
 
+# plan-backup P1 — what both closed specstar backup doors say. One constant so the
+# two refusals cannot drift into saying different things about the same policy.
+_BACKUP_DOOR_CLOSED = (
+    "the specstar /_backup routes are closed on this deployment. Backup and "
+    "restore run in-process, off the same config the app boots from: "
+    "`python -m workspace_app.backup` and `python -m workspace_app.restore`. "
+    "Serving an archive of this size over HTTP would buffer it whole in memory, "
+    "and an HTTP import replaces the database from an uploaded file."
+)
+
 
 def resolve_durable_backfill(
     filestore: FileStore, *, host_managed_durable: bool
@@ -1670,6 +1680,36 @@ def create_app(
 
     for app_slug in registered_apps():
         _block_raw_permanent(resource_route(app_slug))
+
+    # plan-backup P1: specstar registers `GET /_backup/export` and
+    # `POST /_backup/import` globally and unconditionally (`_apply_backup_routes`,
+    # reached from `spec.apply`), and NEITHER consults the permission checker, the
+    # access scope, or any `Depends`. Export streams every registered model with
+    # blob bytes inline; import defaults to `on_duplicate=overwrite`, i.e. it
+    # replaces the database from an uploaded file. Nothing in front of them
+    # authenticates — the `/api` router carries no `dependencies=` and the
+    # `cronjob-*` manifests show that an in-cluster caller reaches the service
+    # unauthenticated by design. The sandbox runs user code, so "in-cluster"
+    # includes anyone with a workspace. Reported upstream as
+    # HYChou0515/specstar#450 (S4); `pyproject` pins the version, so an upstream
+    # fix still needs a bump plus a regression pass — this is the stopgap.
+    #
+    # Registered BEFORE `spec.apply` so first-match-wins takes the door. Both are
+    # refused rather than superuser-gated: the archive is 100 GB – 2 TB and
+    # specstar's own export buffers it whole into a `BytesIO` before responding
+    # (#450 S5), so the HTTP door cannot serve this deployment at any privilege
+    # level. The supported path is the in-process one, which reads the same
+    # config the app boots from — see `docs/plan-backup.md`.
+    def _block_specstar_backup_routes() -> None:
+        @api.get("/_backup/export", include_in_schema=False)
+        async def _refuse_export() -> None:
+            raise HTTPException(status_code=403, detail=_BACKUP_DOOR_CLOSED)
+
+        @api.post("/_backup/import", include_in_schema=False)
+        async def _refuse_import() -> None:
+            raise HTTPException(status_code=403, detail=_BACKUP_DOOR_CLOSED)
+
+    _block_specstar_backup_routes()
 
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
