@@ -862,6 +862,72 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
   （你沒列的那幾種，排序）。
 
+### 2026-09-23 · #842 備份機制：每晚一趟 CronJob、切片增量、還原工具;`/_backup/*` 兩個未授權路由關掉 {#pr-842}
+
+**設定**
+
+- 新區塊 `backup:`，**預設全關**(`dest: ""`)。不填就是沒有備份:`python -m workspace_app.backup` 拒絕執行,
+  API 也不會起 staleness sweeper。要開就填 `backup.dest`(configmap 有 `BACKUP_DEST`,在 `config.yaml` 接成
+  `backup: { dest: ${BACKUP_DEST} }`)。
+- 其餘四個 knob **故意不放 configmap**:`slice_days`(預設 7)、`keep_chains`(預設 0 = 全留)、
+  `verify_sample`(預設 32)、`stale_after_hours`(預設 26)、`require_mounted_sources`(預設 `true`)。
+  它們是 int 和 bool,而 `${VAR}` 內插交給 loader 的是**字串** —— bool 的 `"false"` 是 truthy,#840 剛被這個咬過。
+  請直接寫進 `config.yaml`,讓 YAML 去定型。
+- **`require_mounted_sources: true` 是預設,而且它會擋下開機以外的東西**:來源根目錄不是 mount point 就拒跑。
+  這是為了擋「NFS 沒掛上 → 看起來是空目錄 → 備份成功 → 保留政策把有資料的那幾份刪掉」。單機開發環境
+  `/data` 本來就不是獨立 mount,那種部署才設 `false`,而且 receipt 會記下這趟沒檢查。
+
+**資料** — 不動。沒有新的 `Schema` 版本,不用跑 migrate。新增一個內部協調用的 model(`-backuprun`,一趟成功的備份一列),
+post-`spec.apply` 註冊所以**沒有 CRUD 路由** —— 那張表能被任意寫就等於備份新鮮度可以被偽造。
+
+**k8s · CI 側**
+
+- 新 `kubernetes/base/cronjob-backup.yaml`(每天 02:00 Asia/Taipei)和新 PVC `backups`,兩者都已進 `kustomization.yaml`。
+  **`rollout 前`** 要先把 `backups` 這顆 PVC 的 `storageClassName` 指到**這個叢集故障域外面**的儲存
+  (另一台機器的 NFS export、掛進來的物件儲存都行)。漏做的症狀:備份看起來一切正常,直到 `rca-data` 真的掛掉那天,
+  才發現備份跟它躺在同一組磁碟上 —— 這條沒有任何自動檢查擋得住,只有這句話。
+- **`rollout 後`、讓排程接手之前,先手動跑第一趟 full 並且帶 `--since`**:
+  ```bash
+  kubectl create job --from=cronjob/rca-backup backup-first -- \
+      python -m workspace_app.backup --since 2026-01-01T00:00:00+00:00
+  ```
+  不帶 `--since` 的第一趟會產生**一份沒有上界的封存檔**,而還原時 specstar 的 `load` 會把一個 model 的記錄
+  全部累積在記憶體裡才寫出(上游 specstar#450 S1)—— 也就是「備得起來、還不回去」。之後的每晚增量不需要這個參數。
+- `sandbox.durable.kind: nfs_tree` 的部署,要把 `cronjob-backup.yaml` 裡 `workspaces` 那段 volume/mount 的註解拿掉。
+  漏做的症狀:備份**只涵蓋 specstar 那半**,而 `durable_sources` 會如實把兩個來源都列進 receipt,
+  所以還原時 `restore` 會拒絕(缺 `sandbox-workspaces`)—— 會在還原那天才爆,不是備份那天。
+
+**行為改變、沒有開關**:`GET /api/_backup/export` 與 `POST /api/_backup/import` 這兩個 specstar 無條件註冊的路由
+**現在一律回 403**。修之前它們**不經任何授權**:實測一個沒有任何 header 的請求拿回 200 和剛寫進去的檔案內容,
+而 import 的 `on_duplicate` 預設是 `overwrite`。叢集內任何能連到 `http://rca-app/api/` 的東西都走得到,
+**而 sandbox 是在跑使用者的程式碼**。沒有人該在用這兩個路由 —— 它們把整份封存塞進記憶體才回應,
+在這個資料量級本來就打不動。備份與還原改走 in-process 入口。
+
+**確認做完**
+
+- 這個洞關了:`curl -s -o /dev/null -w '%{http_code}\n' http://rca-app/api/_backup/export` 回 **403**(修之前是 200)。
+- 第一趟備份成功:`kubectl logs job/backup-first | grep '^backup:'`,要看到 `backup: full run <id> (chain <id>)`、
+  每個來源一行(`specstar (filestore.kind: specstar) -> …`、有開 nfs_tree 的話還有 `sandbox-workspaces (…) -> …`),
+  以及 receipt 落在 `backup.dest/<run id>/receipt.json`。
+- **來源清單對得上你的部署**:receipt 的 `sources[].why` 會直接寫出是哪一行設定把它列進來的。
+  只有一個來源、但你跑的是 `nfs_tree` → 上一條的 volume 註解沒拿掉。
+- **驗證真的有跑**:receipt 的 `verified_blobs` 大於 0。它是 0 表示這趟沒有抽到任何 blob 參照可檢查 ——
+  空的樣本會通過任何檢查,所以這個數字要自己看。
+- **演練過才算數**:在 stg 跑 `python scripts/backup_drill.py --source-config … --target-config …`。
+  它會在備份進行中持續寫入,最後印 `before / during / after` 三個數字並給 PASS/FAIL。
+  `before` 不是全數還原就是資料遺失,不是一致性細節。
+
+**還原怎麼做**(不會自動發生,要人下指令)
+
+```bash
+python -m workspace_app.restore --config /etc/rca/config.yaml --confirm
+```
+
+`--confirm` 是必要的:`load` 是 `on_duplicate=overwrite`,這道指令會覆蓋目標部署既有的每一列。
+還原會**先比對封存與當下 config 的來源集合**,不一致就整個拒絕 —— 因為「只還原對得上的那半」會成功、會起得來、
+會少掉一整個 store 而且沒有任何錯誤訊息。還原完成後,檔案樹的 `path` 索引要等一次回填才會回答查詢:
+跑 `POST /workspace-file/migrate/execute`(步驟見 [#668](#pr-668)),在那之前 `/api/readyz` 會 503。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

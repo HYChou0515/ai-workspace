@@ -759,6 +759,44 @@ observability:
 
 ---
 
+## 12.5 備份（backup）
+
+預設**全關**。`dest` 是空字串就是「這個部署沒有備份」:`python -m workspace_app.backup` 拒絕執行,
+API 也不會起那個「太久沒備份就叫」的 sweeper。設計與理由在 [`plan-backup.md`](plan-backup.md),
+部署步驟在 [`migrations.md#pr-842`](migrations.md#pr-842)。
+
+```yaml
+backup:
+  dest: ""                        # 寫到哪（一個目錄）。空 = 沒開。configmap 有 BACKUP_DEST
+  require_mounted_sources: true   # 來源根目錄必須是 mount point，否則拒跑
+  slice_days: 7                   # 一份封存檔涵蓋多寬的時間窗
+  keep_chains: 0                  # 保留幾條「鏈」。0 = 全留
+  verify_sample: 32               # 一趟抽查幾個 blob 參照
+  stale_after_hours: 26           # 最新一趟超過這個時數沒完成就通知 superuser
+```
+
+- **`dest` 掛在哪由部署決定。** 程式只是寫普通檔案,所以另一台機器的 NFS export、掛進 pod 的物件儲存都行 ——
+  重點只有一個:**失去這個叢集不能同時失去那顆磁碟**,否則備份保不到「整份沒了」這個情境。
+- **`require_mounted_sources` 擋的是最安靜的那種失敗。** NFS 沒掛上留下的是一個普通的空目錄,走訪找不到東西,
+  封存檔開開心心寫出來,然後保留政策把真的有資料的那幾份刪掉。用「不是 mount point」當判準是精確的:
+  blob GC 本來就會讓數量合法地下降,所以任何「比上次少就失敗」的門檻都會在每次 GC 後誤報。
+  單機開發環境的 `/data` 本來就不是獨立 mount,那種才設 `false` —— 而且 receipt 會記下這趟沒檢查。
+- **`slice_days` 是還原時的記憶體上界,不是傳輸最佳化。** specstar 的 `load` 會把一個 model 的記錄累積到
+  `ModelEndRecord` 才寫出,所以還原需要的記憶體是「一個 model 在一份封存檔裡的量」。切窄一點,那個量就小一點。
+  增量只是同一刀的副產品。**切片救不了的地板**:單一 blob 是單一 record,編碼時還會再複製一份,
+  所以尖峰記憶體約是 `filestore.max_file_size` 的兩倍 —— 備份 pod 的記憶體照那個訂,切再細都沒用。
+- **`keep_chains` 刪的是「鏈」不是「趟」。** 一條鏈 = 一次 full 加上建立在它上面的增量。刪掉最舊的**那一趟**
+  會把後面每個增量都依賴的 full 一起帶走,留下一個滿滿是檔案、卻什麼都還原不了的目錄。預設 0(全留)
+  是刻意的:一設目的地就開始刪東西的保留政策,是沒有人選過的政策。
+- **`verify_sample` 是在補一個函式庫層級的洞。** specstar 的 dump 讀不到某個 blob 時會**靜默跳過**並且正常結束
+  (上游 specstar#450 S2),所以「這趟成功了」不能當作「封存檔是完整的」。抽查的是**參照完整性**:
+  live 記錄指到的 blob 依定義不是孤兒,GC 不會刪它,它不在封存檔裡就是確定的錯。設 0 關掉,receipt 會記下來。
+- **`stale_after_hours` 針對的是「根本沒跑」。** 跑失敗的 CronJob 是紅的、看得到;被停用的排程不會產生任何事件。
+  所以每趟成功都留一列,sweeper 讀最新那一列,太舊就寫一筆 `Notification` 給 `server.superusers` ——
+  由部署方自己實作的 `INotificationChannel` 送出去(見 §11.5 同一個 seam 的形狀)。預設 26 小時 = 一天的排程加一次漏跑。
+
+---
+
 ## 13. 環境變數★重點
 
 環境變數分**三類**，別搞混：

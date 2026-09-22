@@ -196,6 +196,11 @@ limit 蓋掉,所以時間窗匯出**不會**被 `SPECSTAR_DEFAULT_QUERY_LIMIT`(`
 ⚠️ 這條約束**沒有任何東西強制它** —— 它靠測試和 runbook 維持。specstar issue #450 的 S1
 修好之後這條可以降級為「純增量手段」。
 
+**切片只適用 specstar,工作檔案樹不切。** 這一條是實作時才發現的,而且切樹是**錯的**:
+full 的時間窗下界是從 specstar 最舊的那一列導出來的(`_earliest_updated`),而一個工作檔很容易
+比那一列還老 —— 切過的樹會靜靜地漏掉每一個早於「資料庫第一列」的檔案。而解 tar 是串流的,
+本來就沒有 `load` 那種記憶體上界要界。所以樹是每趟一份:full 全收,增量收 mtime 落在窗內的。
+
 **切片救不了的地板**:`filestore.max_file_size` 預設 2 GiB,單一 blob 是單一 record,
 而 `DumpStreamWriter.write` 還要 `_encoder.encode(record)` 再複製一份 ——
 峰值 RSS ≈ 最大單檔 × 2。備份 pod 的記憶體照這個訂,切再細都沒用。
@@ -315,8 +320,10 @@ middleware 只有 CORS / 版本標頭 / perf trace;`__main__.py:122` 是
 - **`/data` 與 NAS 樹的實際大小、檔案數。** 只有「合計 100 GB – 2 TB」這個 user 提供的數字。
   P3 之前要在 prod 量:`du -sh /data`、`du -sh /data/_blobs`、`find /data -type f | wc -l`。
   切片大小要照這個訂。
-- **dump 在 app 持續寫入時的一致性。** specstar 官方文件明說沒有保證。
-  P8 用「一邊寫一邊備」實測,不現在紙上推。
+- ~~**dump 在 app 持續寫入時的一致性。**~~ **已量出答案(P8 演練)**:時間窗的上界是 run 開始時
+  取的 `now`,所以備份進行中寫入的資料一律落在窗外,由下一趟增量接手。本機演練 100/100 的
+  before 全數還原、after 0/5、during 0/8 —— 語意是可預期的,不是碰運氣。`scripts/backup_drill.py`
+  每次都會把這三個數字印出來,所以在 stg 或 prod 上是多少,跑一次就知道。
 - **目的地實體。** 先做 dev server(確定有),S3 是改一個 backend URL。
   容量抓 live size 的 1.5–2 倍。
 - **加密金鑰必須存在叢集之外**,否則叢集沒了備份也打不開。這是 runbook 的一行,不是設計選項。

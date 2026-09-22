@@ -1345,3 +1345,89 @@ specstar 自帶 CRUD route,不用自訂 endpoint：
 GET /api/graph-claim?qb=norm_metric==<指標>   # 列出某指標在所有 deck / 期別的值
 GET /api/graph-claim/{id}                      # 單筆（含 provenance:來自哪個 deck/chunk）
 ```
+
+---
+
+## 16. 備份與還原（plan-backup）
+
+預設**不開**。`backup.dest` 是空字串時,備份指令拒絕執行,API 也不會起那個「太久沒備份就叫」的 sweeper。
+設定欄位逐條說明在 [`configuration.md` §12.5](configuration.md#125-備份backup);升級步驟、要先做什麼、
+怎麼確認做完在 [`migrations.md#pr-842`](migrations.md#pr-842)。設計與被否決的替代方案在
+[`plan-backup.md`](plan-backup.md)。
+
+### 它備份什麼
+
+**來源清單是從你這份 `config.yaml` 導出來的,不是寫死的路徑。** 同一個判斷式 `factories` 開機時也在用,
+所以 `sandbox.durable.kind` 從 `nfs_tree` 改回空字串,備份涵蓋的東西會自動跟著變。遇到不認得的 backend
+會**整趟失敗**,而不是少備一份 —— 「備份成功但少了一個 store」只會在還原那天才被發現。
+
+| `sandbox.durable.kind` | 備幾棵樹 |
+|---|---|
+| `""`(預設) | **一棵**。sandbox 的檔案是以 `WorkspaceFile` 存進 specstar 的,已經含在裡面 |
+| `nfs_tree` | **兩棵**。specstar 一棵,`nfs_root` 那棵工作檔案樹一棵 |
+| `nfs_tree` + `migrate_from: specstar` | 還是兩棵,但 specstar 那棵**也**還裝著沒回填完的工作檔 |
+
+刻意**不**備份的:`sandbox.root`(scratch,設計上可拋,idle reaper 會把活檔回收進耐久層)、
+job queue(`kind: simple` 時 job 本身就是 specstar resource,已含在內)、
+`observability.llm_log`(是呼叫紀錄不是使用者資料 —— 但它**沒有上限地長**,那是另一筆帳)。
+
+### 一趟長什麼樣
+
+```
+backup: full run 20260923T020000Z (chain 20260923T020000Z) -> /backups/20260923T020000Z
+backup:   window 2026-01-01T00:00:00+00:00 .. 2026-09-23T02:00:00+00:00
+backup:   specstar (filestore.kind: specstar) -> specstar-0000.acbak 8.1 GB models=67 in 412.3s
+backup:   sandbox-workspaces (sandbox.durable.kind: nfs_tree) -> sandbox-workspaces-0000.tar …
+```
+
+每趟在 `backup.dest/<run id>/` 留一份 `receipt.json`:涵蓋了哪些來源、**是哪一行設定把它列進來的**、
+每份封存檔多大、抽查了幾個 blob 參照、這趟有沒有做 mount 檢查。receipt 是**最後**寫的而且是原子的,
+所以「有 receipt」就等於「這趟跑完了」—— 沒有 receipt 的目錄是中斷的一趟,不是鏈上的一環。
+
+### 為什麼要切片
+
+specstar 的 `load` 會把一個 model 的記錄累積到 `ModelEndRecord` 才寫出(上游 specstar#450 S1),
+所以**還原**需要的記憶體是「一個 model 在一份封存檔裡的量」。切成時間窗讓 `ModelEndRecord` 提早到,
+記憶體就被切片大小界住,而不是被資料總量界住。增量是同一刀的副產品。
+
+工作檔案樹**不切**,而且理由就是上面這條:解 tar 是串流的,沒有東西要界。更重要的是,切它是**錯的** ——
+full 的時間窗下界是從 specstar 最舊的那一列導出來的,而一個工作檔很容易比那一列還老,
+切過的樹會靜靜地漏掉每一個早於「資料庫第一列」的檔案。
+
+### 還原
+
+**不會自動發生。** 要人下指令,而且要帶 `--confirm`:
+
+```bash
+python -m workspace_app.restore --config /etc/rca/config.yaml --confirm
+# 指定某一條鏈:--chain 20260923T020000Z
+```
+
+三個會讓它整個拒絕的情況,每一個都是因為「做一半」比「不做」更糟:
+
+1. **封存與當下 config 的來源集合不一致。** 只還原對得上的那半會成功、會起得來、會少掉一整個 store,
+   而且沒有任何錯誤訊息。
+2. **鏈上缺了一份封存檔。** 缺口之後的每一趟都假設它帶來的記錄已經在了。
+3. **沒帶 `--confirm`。** `load` 是 `on_duplicate=overwrite`,這道指令會覆蓋目標既有的每一列。
+
+還原完之後,檔案樹的 `path` 索引要跑一次回填才會回答查詢 ——
+`POST /workspace-file/migrate/execute`(步驟見 [`migrations.md#pr-668`](migrations.md#pr-668)),
+在那之前 `/api/readyz` 會 503。
+
+### 演練
+
+```bash
+python scripts/backup_drill.py --source-config stg.yaml --target-config stg-restore.yaml
+```
+
+它會在備份進行中持續寫入,最後印三個數字:`before`(必須全數還原,少一個就是資料遺失)、
+`during`(備份進行中寫入的,多少被這趟接到 —— 這是**量出來的**,不是規定的;剩下的由下一個增量接手)、
+`after`(必須是 0,否則時間窗的邊界不在 receipt 說的地方)。兩個配置必須指向**同一個 `dest`**、
+**不同的 `disk_root`**,腳本會自己擋。
+
+### 和「知識庫封存包」的關係
+
+[`collection-archive.md`](collection-archive.md) 的 zip 是**單一 collection 的可攜格式**,
+解的是「把知識庫搬到另一個部署」和「使用者自助救回一個 collection」。它不含工作檔案、不含對話、
+不含 App item、不含排程,也沒有排程與保留期。**兩者不互相取代**:有了備份不代表不需要它,
+有了它也不代表有備份。
