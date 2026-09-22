@@ -1517,13 +1517,20 @@ class BackupSettings:
     # dropping the full out of a chain leaves archives that restore nothing while
     # still looking like a full directory.
     keep_chains: int = 0
-    # How often a run starts a NEW chain instead of continuing one. This is what
-    # makes keep_chains reachable: retention deletes along chain boundaries, so a
-    # deployment that never rotates has exactly one chain forever and prunes
-    # nothing no matter what keep_chains says. It also bounds how many archives a
-    # restore has to replay. 0 disables rotation (only an explicit --full starts
-    # a chain).
-    full_every_days: int = 7
+    # How often a run starts a NEW chain instead of continuing one, and the other
+    # half of `keep_chains`: retention deletes along chain boundaries, so a
+    # deployment that never rotates has one chain forever and prunes nothing
+    # whatever keep_chains says. Rotation also bounds how many archives a restore
+    # replays.
+    #
+    # ⚠️ They are ONE policy and default OFF together. A new chain begins with a
+    # FULL — everything back to the oldest record — so rotating without retaining
+    # adds a complete copy of the deployment to the destination every period,
+    # forever. `0` here plus `0` in keep_chains is the small-footprint default:
+    # one chain, increments after the first full. Turn them on as a pair, and
+    # size the destination for `keep_chains` copies. `run_backup` warns if it
+    # sees rotation without retention.
+    full_every_days: int = 0
     # How many live blob references one run checks against its own archives. The
     # run's exit status cannot carry this — specstar's dump skips a blob it
     # cannot read and still finishes cleanly (specstar#450 S2) — and a COUNT

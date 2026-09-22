@@ -232,10 +232,11 @@ def test_a_file_excluded_by_the_window_is_carried_by_the_NEXT_run(tmp_path: Path
     saw "unchanged", and skipped it. It was in no archive, ever, and not in
     `skipped` either.
 
-    **Three windows, not two.** A two-run test passes on the buggy version: run 1
-    excludes it, run 2 skips it, and if you only assert on run 2 you have to be
-    looking for exactly this to notice. The third run is what makes the hole
-    visible as permanence rather than a delay.
+    ⚠️ The original version of this docstring said a two-run test would pass on
+    the buggy code. Measured, it does not: the mutation reddens the run-2
+    assertion below. What the third run actually buys is a control against the
+    opposite fix — "record nothing, ever" would satisfy run 2 and then
+    re-archive the file forever, which run 3 catches.
     """
     root = _tree(tmp_path)
     late = root / "item-1" / "late.txt"
@@ -490,3 +491,87 @@ def test_a_device_member_is_refused(tmp_path: Path):
     report = extract_tree(archive, tmp_path / "restored")
 
     assert any("null" in s for s in report.skipped)
+
+
+def test_one_directory_that_cannot_be_chmodded_does_not_abort_the_restore(
+    tmp_path: Path, monkeypatch
+):
+    """The bytes were already on disk when this used to throw.
+
+    `TarFile.chmod` / `chown` / `utime` re-raise an OSError as
+    `tarfile.ExtractError`, which is NOT an OSError — so a `suppress(OSError)`
+    around them catches nothing any of the three can raise. One directory the
+    restore may not chmod (an NFS export with root_squash; a live tree whose
+    directories belong to per-item sandbox uids) threw away a recovery that had
+    already succeeded, and the operator got `restore: FAILED — could not change
+    mode` with no path in it.
+    """
+    root = _tree(tmp_path)
+    (root / "item-1" / "note.md").write_bytes(b"the bytes that matter")
+    tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0)
+
+    real = os.chmod
+
+    def _refuse_one(path, mode, **kw):
+        if str(path).endswith("item-1"):
+            raise PermissionError(13, "Operation not permitted")
+        return real(path, mode, **kw)
+
+    monkeypatch.setattr(os, "chmod", _refuse_one)
+    out = tmp_path / "restored"
+    report = extract_tree(tmp_path / "t.tar", out)
+
+    assert (out / "item-1" / "note.md").read_bytes() == b"the bytes that matter"
+    assert any("item-1" in s for s in report.skipped), (
+        "the directory whose attributes could not be set has to be NAMED — "
+        "silently succeeding would hide a mode a restore did not reproduce"
+    )
+
+
+def test_a_file_stamped_in_the_future_is_named_rather_than_lost(tmp_path: Path):
+    """The symmetric twin of the mtime-floor defect, and it was still open.
+
+    A file whose mtime is after the window is excluded by every run — this one
+    and every later one, because each window ends at its own `now`. So it is in
+    no archive at all. The module's rule is that anything which cannot be
+    carried is counted and named; this was neither, so it was simply gone.
+
+    Reachable from `touch -d 2030`, an unzip of an archive with future stamps,
+    or a clock-skewed writer — and `rsync -rlptD` carries the stamp into the
+    durable tree.
+    """
+    root = _tree(tmp_path)
+    ahead = root / "item-1" / "from-the-future.txt"
+    ahead.write_bytes(b"stamped in 2035")
+    when = (dt.datetime.now(dt.UTC) + dt.timedelta(days=3650)).timestamp()
+    os.utime(ahead, (when, when))
+
+    result = tar_tree(
+        root, tmp_path / "t.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
+
+    assert "./item-1/from-the-future.txt" not in result.paths
+    assert any("from-the-future" in s for s in result.skipped)
+
+
+def test_a_hardlink_to_a_member_that_is_not_in_the_archive_is_skipped(tmp_path: Path):
+    """`TarFile._find_link_target` raises `KeyError` for a hardlink whose target
+    is neither on disk nor in the archive — and `KeyError` is not in the except
+    tuple, so it escaped the member loop. It is reachable: `gettarinfo`
+    registers an inode before the `open()` that the walk may then fail and skip,
+    leaving the sibling hardlink pointing at a member nobody wrote."""
+    import tarfile
+
+    archive = tmp_path / "orphan-link.tar"
+    with tarfile.open(archive, "w") as tar:
+        d = tarfile.TarInfo("./item-1")
+        d.type, d.mode = tarfile.DIRTYPE, 0o755
+        tar.addfile(d)
+        link = tarfile.TarInfo("./item-1/b")
+        link.type = tarfile.LNKTYPE
+        link.linkname = "./item-1/a"  # never added
+        tar.addfile(link)
+
+    report = extract_tree(archive, tmp_path / "restored")
+
+    assert any("b" in s for s in report.skipped)

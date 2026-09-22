@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import os
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,14 @@ FIRST = b"first-payload-" + b"a" * 512
 SECOND = b"second-payload-" + b"b" * 512
 
 
-def _settings(root: Path, dest: Path, *, slice_days: int = 7, keep_chains: int = 0) -> Settings:
+def _settings(
+    root: Path,
+    dest: Path,
+    *,
+    slice_days: int = 7,
+    keep_chains: int = 0,
+    full_every_days: int = 0,
+) -> Settings:
     return Settings(
         filestore=FilestoreSettings(kind="specstar", disk_root=str(root)),
         sandbox=SandboxSettings(durable=SandboxDurableSettings(kind="")),
@@ -45,6 +53,7 @@ def _settings(root: Path, dest: Path, *, slice_days: int = 7, keep_chains: int =
             require_mounted_sources=False,
             slice_days=slice_days,
             keep_chains=keep_chains,
+            full_every_days=full_every_days,
         ),
     )
 
@@ -211,7 +220,7 @@ def test_a_chain_older_than_full_every_days_rotates(tmp_path: Path):
     would have passed on that.
     """
     dest = tmp_path / "backups"
-    settings = _settings(tmp_path / "data", dest)
+    settings = _settings(tmp_path / "data", dest, full_every_days=7, keep_chains=2)
     spec, files = _live(settings)
     asyncio.run(files.write("ws-1", "/one.txt", FIRST))
 
@@ -275,6 +284,12 @@ def test_an_incremental_reads_the_previous_runs_tree_manifest(tmp_path: Path):
     tree = tmp_path / "workspaces"
     (tree / "item-1").mkdir(parents=True)
     (tree / "item-1" / "kept.md").write_bytes(b"there before the full")
+    # Settled ON PURPOSE. `tar_tree` deliberately does not record a file whose
+    # timestamps are too fresh to trust, so without this the assertions below
+    # would hold only because `spec.apply` happens to take longer than the
+    # slack — a test resting on a sleep nobody wrote.
+    long_ago = (dt.datetime.now(dt.UTC) - dt.timedelta(days=30)).timestamp()
+    os.utime(tree / "item-1" / "kept.md", (long_ago, long_ago))
     settings = Settings(
         filestore=FilestoreSettings(kind="specstar", disk_root=str(tmp_path / "data")),
         sandbox=SandboxSettings(
@@ -291,6 +306,7 @@ def test_an_incremental_reads_the_previous_runs_tree_manifest(tmp_path: Path):
     assert Path(tree_full.manifest).is_file(), "the run must leave a manifest to diff against"
 
     (tree / "item-1" / "added.md").write_bytes(b"written after the full")
+    os.utime(tree / "item-1" / "added.md", (long_ago, long_ago))
     incremental = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
     tree_inc = next(s for s in incremental.source_results if s.kind == "tree")
 
@@ -313,3 +329,35 @@ def test_an_incremental_reads_the_previous_runs_tree_manifest(tmp_path: Path):
 
     assert (target_tree / "item-1" / "kept.md").read_bytes() == b"there before the full"
     assert (target_tree / "item-1" / "added.md").read_bytes() == b"written after the full"
+
+
+def test_rotation_without_retention_is_warned_about(tmp_path: Path, caplog):
+    """The two knobs are one policy. A new chain begins with a FULL covering all
+    history, so rotating without retaining adds a complete copy of the
+    deployment to the destination every period and never removes one — which
+    fills the volume and then fails every night, silently at first.
+
+    Not a refusal: an archive-everything site may mean it. But not silent."""
+    dest = tmp_path / "backups"
+    settings = Settings(
+        filestore=FilestoreSettings(kind="specstar", disk_root=str(tmp_path / "data")),
+        sandbox=SandboxSettings(durable=SandboxDurableSettings(kind="")),
+        backup=BackupSettings(
+            dest=str(dest), require_mounted_sources=False, full_every_days=7, keep_chains=0
+        ),
+    )
+    spec, files = _live(settings)
+    asyncio.run(files.write("ws-1", "/one.txt", FIRST))
+
+    with caplog.at_level("WARNING"):
+        run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+
+    assert any("keep_chains" in r.message for r in caplog.records)
+
+
+def test_the_shipped_defaults_do_not_rotate(tmp_path: Path):
+    """The control. With rotation off by default the destination holds one chain
+    — one full plus increments — which is the smallest footprint and what P10
+    shipped before the knob was alive."""
+    assert BackupSettings().full_every_days == 0
+    assert BackupSettings().keep_chains == 0

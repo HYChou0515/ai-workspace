@@ -127,10 +127,11 @@ def _window_start_ms(stamp: dt.datetime, threshold_hours: int) -> str:
     says so — and it is worth being accurate about why, since the obvious reason
     is wrong.
 
-    Bucket INDICES at different widths cannot collide: a deployment's history at
-    26 h sits around 19124 and at 13 h around 38248, disjoint bands. CLAIMING
-    otherwise (an earlier version of this comment did) sends a future editor
-    looking for the wrong hazard. CLAUDE.md's actual reason is about a
+    Bucket indices at different widths do not collide for the pair that matters
+    here — 26 h sits around 19124 and 13 h around 38248 — though the general
+    claim would be false (24 h reached 19123 in 2022, 26 h reaches it in 2026).
+    An earlier version of this comment asserted the general form and sent a
+    future editor looking for the wrong hazard. CLAUDE.md's actual reason is about a
     `ScanLease`, where the window is COMPARED and a raised interval locks every
     pod out; here it is only a dedup-key string, so the index form was harmless.
 

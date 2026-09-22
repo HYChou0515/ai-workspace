@@ -113,8 +113,10 @@ data:
   # staleness sweeper, and with no completed run the sweeper's first tick — at
   # pod boot — says "no backup run has ever completed". So a deployment that
   # sets BACKUP_DEST without also uncommenting cronjob-backup.yaml and the
-  # `backups` PVC will alert its superusers about a backup it has not scheduled
-  # yet. Do all three together, or none. See docs/migrations.md#pr-842.
+  # `backups` PVC starts reporting a backup it has not scheduled yet — as a
+  # notification to `server.superusers` if that list is set, and otherwise as an
+  # hourly WARNING in every API pod's log, because it ships EMPTY. Do all three
+  # together, or none. See docs/migrations.md#pr-842.
   # The `backups` claim must resolve to storage OUTSIDE this cluster.
   #
   # The other backup knobs (slice_days, keep_chains, verify_sample,

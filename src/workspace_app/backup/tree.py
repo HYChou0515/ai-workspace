@@ -43,7 +43,6 @@ left out of the manifest, so the next run carries it again.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 import shutil
@@ -160,7 +159,16 @@ def tar_tree(
 
             current = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
             if stat.st_mtime_ns > cutoff_ns:
-                _not_ours(arcname)  # belongs to the next run's window
+                _not_ours(arcname)
+                if arcname not in held:
+                    # A stamp in the FUTURE is excluded by this run and by every
+                    # later one too, because each window ends at its own `now`.
+                    # So it is in no archive at all — and the rule this module
+                    # states is that anything which cannot be carried is named.
+                    # Reachable from `touch -d 2030`, an unzip of an archive with
+                    # future stamps, or a clock-skewed writer; `rsync -rlptD`
+                    # carries the stamp into the durable tree either way.
+                    skipped.append(f"{arcname}: mtime is after this run's window")
                 continue
             if previous is not None and held.get(arcname) == current:
                 manifest[arcname] = current  # unchanged, and the chain has it
@@ -283,19 +291,34 @@ def extract_tree(artifact: Path, root: Path) -> ExtractResult:
                 # have its own children written into it, so one read-only folder
                 # in one workspace takes its whole subtree with it.
                 tar.extract(member, root, set_attrs=not member.isdir(), filter="tar")
-            except (OSError, tarfile.TarError) as exc:
+            except (OSError, tarfile.TarError, KeyError) as exc:
+                # KeyError is `_find_link_target` on a hardlink whose target is
+                # neither on disk nor in the archive — reachable because
+                # `gettarinfo` registers an inode before the `open()` the walk
+                # may then fail and skip.
                 skipped.append(f"{member.name}: {type(exc).__name__}")
                 continue
             if member.isdir():
                 directories.append(member)
             restored += 1
 
-        # Deepest last: a parent's mode must not stop a child's being set.
+        # Deepest FIRST (`reverse=True` on the names), so a parent's mode is set
+        # only after its children have theirs — setting the parent first can make
+        # the children unreachable.
         for member in sorted(directories, key=lambda m: m.name, reverse=True):
-            with contextlib.suppress(OSError):
+            # `TarFile.chown` / `chmod` / `utime` re-raise an OSError as
+            # `tarfile.ExtractError`, which is NOT an OSError — so catching only
+            # OSError here caught nothing any of the three can throw, and one
+            # unchmoddable directory aborted a restore whose files were already
+            # on disk. Both are in the tuple now, and the failure is NAMED
+            # rather than swallowed: a mode the restore could not reproduce is
+            # something an operator has to be able to find out about.
+            try:
                 tar.chown(member, str(root / member.name), numeric_owner=False)
                 tar.chmod(member, str(root / member.name))
                 tar.utime(member, str(root / member.name))
+            except (OSError, tarfile.TarError) as exc:
+                skipped.append(f"{member.name}: {type(exc).__name__} setting attributes")
 
     if skipped:
         logger.warning(

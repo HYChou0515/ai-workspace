@@ -886,9 +886,11 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - **`require_mounted_sources: true` 是預設,而且它會擋下開機以外的東西**:來源根目錄不是 mount point 就拒跑。
   這是為了擋「NFS 沒掛上 → 看起來是空目錄 → 備份成功 → 保留政策把有資料的那幾份刪掉」。單機開發環境
   `/data` 本來就不是獨立 mount,那種部署才設 `false`,而且 receipt 會記下這趟沒檢查。
-- **`full_every_days` 是讓 `keep_chains` 有作用的前提。** 保留政策是**按鏈**刪的(刪掉最舊的那「趟」會把後面
-  每個增量都依賴的 full 一起帶走),所以一個永遠不換鏈的部署永遠刪不掉任何東西 —— `keep_chains` 設幾都一樣,
-  目的地一路長到滿。預設每 7 天開一條新鏈。
+- **`full_every_days` 和 `keep_chains` 是同一條政策的兩半,預設(`0` / `0`)一起關著。** 保留政策是**按鏈**刪的
+  (刪掉最舊的那「趟」會把後面每個增量都依賴的 full 一起帶走),所以不換鏈就刪不掉東西 —— 但**只開輪替更糟**:
+  一條新鏈是從一次 full 開始的,而 full 涵蓋全部歷史,所以那等於每個週期往目的地多放一份**完整副本**、永不清理。
+  預設兩個都關 = 一條鏈、第一次 full 之後全是增量,佔用最小。要開就**一起開**,並且照 `keep_chains` 份副本訂
+  `backups` PVC 的大小。只開一邊時 `backup:` 的 log 會出現一行警告。
 
 **資料** — 不動。沒有新的 `Schema` 版本,不用跑 migrate。新增一個內部協調用的 model(`-backuprun`,一趟成功的備份一列),
 post-`spec.apply` 註冊所以**沒有 CRUD 路由** —— 那張表能被任意寫就等於備份新鮮度可以被偽造。
@@ -955,6 +957,10 @@ collection 名字,而 import 的 `on_duplicate` 預設是 `overwrite`。叢集�
   kubectl logs deploy/rca-app | grep -i 'no operator to notify'   # 要沒有這一行
   ```
   漏做的症狀:備份哪天真的停了,沒有任何人知道 —— 而這整個 sweeper 存在的理由就是這件事。
+- **目的地會不會長爆**:`kubectl exec` 進去看 `du -sh $BACKUP_DEST`,對照你設的 `keep_chains`。
+  只開 `full_every_days` 沒開 `keep_chains` 的話,每個週期會多一份完整副本 —— log 裡會有一行
+  `full_every_days=… with keep_chains=0` 的警告。漏看的症狀:兩三個週期之後 PVC 滿,
+  之後每晚 job 都紅,而且**沒有東西會自己清**。
 - **演練過才算數**:在 stg 跑 `python scripts/backup_drill.py --source-config … --target-config …`。
   它會在備份進行中持續寫入,最後印 `before / during / after` 三個數字並給 PASS/FAIL。
   `before` 不是全數還原就是資料遺失,不是一致性細節。

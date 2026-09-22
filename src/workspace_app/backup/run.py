@@ -203,6 +203,19 @@ def run_backup(
             "real data."
         )
 
+    if settings.backup.full_every_days > 0 and settings.backup.keep_chains <= 0:
+        # Not a refusal — an archive-everything site may mean it — but not silent
+        # either. Every rotation starts a FULL covering the whole history, so
+        # this combination adds a complete copy of the deployment to the
+        # destination every `full_every_days` and never removes one.
+        logger.warning(
+            "backup: full_every_days=%d with keep_chains=0 means a complete new "
+            "copy of the deployment every %d days and nothing ever pruned. Set "
+            "keep_chains, or set full_every_days: 0 to stay on one chain.",
+            settings.backup.full_every_days,
+            settings.backup.full_every_days,
+        )
+
     checked = settings.backup.require_mounted_sources
     if checked:
         for source in sources:

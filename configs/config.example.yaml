@@ -1205,10 +1205,12 @@
 #   slice_days: 7                   # how wide one archive's window is. This is
 #                                   # the memory bound on a RESTORE, not a
 #                                   # transfer tweak.
-#   full_every_days: 7              # how often a run starts a new chain. This is
-#                                   # what makes keep_chains reachable at all.
-#   keep_chains: 0                  # 0 = keep everything. Retention deletes
-#                                   # whole chains, never a run out of one.
+#   # These two are ONE policy and ship off together. A new chain starts with
+#   # a FULL covering all history, so rotating without retaining adds a
+#   # complete copy of the deployment every period and never removes one.
+#   full_every_days: 0              # 0 = stay on one chain (default)
+#   keep_chains: 0                  # 0 = keep everything (default). Retention
+#                                   # deletes whole chains, never a run out of one.
 #   verify_sample: 32               # live blob references checked per run.
 #                                   # 0 disables and the receipt says so.
 #   stale_after_hours: 50           # how old the newest run may be before the
