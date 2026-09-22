@@ -116,6 +116,12 @@ def build_lifespan(
     # plan-graceful-shutdown P3: how often a pod looks for turns whose pod is
     # gone. None ⇒ no sweeper (a single-pod deploy has no peer to take over).
     turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
+    # plan-backup P5: "no backup has happened lately" produces no event of its
+    # own, so a loop has to go looking. A callable rather than the settings, so
+    # this module keeps knowing nothing about backups; None ⇒ the deploy has not
+    # configured a destination and there is nothing to watch.
+    backup_staleness: Callable[[], int] | None = None,
+    backup_staleness_interval: timedelta = timedelta(hours=1),
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
     warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -492,6 +498,44 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def backup_staleness_sweeper() -> None:
+        """Say so when the newest backup is too old — or has never happened.
+
+        Stays on the API under the lifecycle convention's own terms: it asks for
+        ONE row (the newest ledger entry) and writes at most one notification per
+        operator per window. The ledger grows by one row per run, not with
+        content, so this is bounded by how often backups happen rather than by
+        how much data the deployment holds — which is what the convention is
+        about. The healthy path returns before touching anything else.
+
+        ⚠️ Two honest caveats. On the disk backend the limit-one query is still a
+        scan of that small model, and once a deployment IS stale the send-once
+        check queries the `Notification` model, which does grow. And the dedup is
+        check-then-create, not a CAS, so three pods on the same tick can each
+        write one. That is duplicate mail, not lost data; a `ScanLease` would be
+        more machinery than the work it guards, and this says so rather than
+        claiming a guarantee it does not have.
+        """
+        assert backup_staleness is not None  # gated by caller
+        try:
+            while True:
+                # One bad sweep must not end the loop — the next tick retries,
+                # and a backup that is stale now is still stale in an hour. But
+                # it is LOGGED, not swallowed: this is the only mechanism that
+                # notices backups have stopped, and a mistyped knob that makes it
+                # raise every tick would otherwise leave a deployment believing
+                # it is monitored while nothing is ever reported.
+                try:
+                    await asyncio.to_thread(backup_staleness)
+                except Exception:
+                    logger.exception(
+                        "lifespan: the backup-staleness check failed. Until this is "
+                        "fixed, nothing will report a backup that has stopped running."
+                    )
+                await asyncio.sleep(backup_staleness_interval.total_seconds())
+        except asyncio.CancelledError:
+            return
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
@@ -654,6 +698,12 @@ def build_lifespan(
             # can disagree — and a deploy with triggers off gets no surprise
             # background loop from a page.
             bg.append(asyncio.create_task(user_schedule_loop()))
+        if backup_staleness is not None:
+            # Only when a destination is configured. Without one the deploy has
+            # not opted into backups, and a loop that wakes forever to decide
+            # there is nothing to say is a loop nobody asked for.
+            bg.append(asyncio.create_task(backup_staleness_sweeper()))
+            logger.debug("lifespan: backup-staleness sweeper enabled")
 
         if notification_channel is not None:
             # Only when a deploy named one. Without a channel there is nowhere to

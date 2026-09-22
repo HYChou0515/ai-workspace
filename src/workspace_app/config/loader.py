@@ -27,6 +27,7 @@ from .interpolate import expand_env, has_env_reference
 from .merge import merge_layered
 from .schema import (
     AgentsSettings,
+    BackupSettings,
     ChatVideoSettings,
     ChunkerSettings,
     ClusterSettings,
@@ -739,6 +740,7 @@ _TOP_SCHEMA: dict[str, Any] = {
     # whitelisted AND built below, or the route would enforce the bundled
     # defaults whatever the operator wrote.
     "chat_video": _dataclass_keys(ChatVideoSettings),
+    "backup": _dataclass_keys(BackupSettings),
 }
 
 
@@ -1109,6 +1111,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         ),
         failover=_build_failover(d["failover"]),
         chat_video=_build(ChatVideoSettings, d["chat_video"]),
+        backup=_build(BackupSettings, d["backup"]),
     )
 
 

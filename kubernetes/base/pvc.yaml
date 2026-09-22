@@ -61,3 +61,37 @@ spec:
 #     requests:
 #       storage: 20Gi
 #   # storageClassName: nfs   # MUST be an NFS RWX class
+# ---
+# plan-backup: where `python -m workspace_app.backup` writes. OPT-IN — commented
+# out with its CronJob (kustomization.yaml), because applying it unasked gives a
+# deployment a 200 Gi claim and a nightly job that always fails.
+# ---
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: backups
+# spec:
+#   # docs/plan-backup.md — where `python -m workspace_app.backup` writes.
+#   #
+#   # ⚠️ This claim MUST be backed by storage OUTSIDE this cluster's failure
+#   # domain. The whole point of the backup is the case where rca-data is gone,
+#   # and a claim on the same storageClass as rca-data goes with it. An NFS export
+#   # on another machine, an object store mounted in, a second site's filer — the
+#   # program does not care which, because it writes plain files; it only matters
+#   # that losing this cluster does not lose this volume.
+#   #
+#   # ReadWriteOnce is enough: exactly one CronJob pod writes here at a time
+#   # (`concurrencyPolicy: Forbid`), and a restore mounts it separately.
+#   accessModes:
+#     - ReadWriteOnce
+#   resources:
+#     requests:
+#       # ⚠️ A PLACEHOLDER, not a measurement. Nobody has run `du` on this
+#       # deployment yet: the only figure on record is the operator's "100 GB
+#       # - 2 TB in total", and 1.5-2x of that is 150 GB - 4 TB. So 200Gi is the
+#       # bottom of the range and almost certainly wrong for you.
+#       # Measure `du -sh /data` and `du -sh /mnt/workspaces` and set it from
+#       # that; `backup.keep_chains` and `full_every_days` decide the multiplier,
+#       # because a chain holds a full plus its increments.
+#       storage: 200Gi
+#   # storageClassName: ""   # MUST resolve to off-cluster storage. See above.

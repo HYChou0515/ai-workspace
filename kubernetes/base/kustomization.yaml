@@ -11,4 +11,11 @@ resources:
   - workers.yaml # #312: per-JobType job-worker Deployments + HPAs
   - cronjob-eval.yaml # #535: nightly retrieval-quality eval trigger
   - cronjob-graph.yaml # #534: weekly metric-extraction trigger
+  # plan-backup: the nightly backup. OPT-IN, like the `workspaces` claim in
+  # pvc.yaml and for the same reason — applying it without opting in gives every
+  # deployment a 200 Gi claim it did not ask for and a job that fails at 02:00
+  # every night forever, because `backup.dest` is empty and the run refuses.
+  # To enable: uncomment this line AND the `backups` claim in pvc.yaml, set
+  # BACKUP_DEST, and point that claim at storage outside this cluster.
+  # - cronjob-backup.yaml
   - ingress.yaml

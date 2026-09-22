@@ -156,6 +156,16 @@ logger = logging.getLogger(__name__)
 _ITEM_FACT_TTL_S = 5.0
 _ITEM_FACT_MAX = 4096
 
+# plan-backup P1 — what both closed specstar backup doors say. One constant so the
+# two refusals cannot drift into saying different things about the same policy.
+_BACKUP_DOOR_CLOSED = (
+    "the specstar /_backup routes are closed on this deployment. Backup and "
+    "restore run in-process, off the same config the app boots from: "
+    "`python -m workspace_app.backup` and `python -m workspace_app.restore`. "
+    "Serving an archive of this size over HTTP would buffer it whole in memory, "
+    "and an HTTP import replaces the database from an uploaded file."
+)
+
 
 def resolve_durable_backfill(
     filestore: FileStore, *, host_managed_durable: bool
@@ -421,6 +431,16 @@ def create_app(
     # A deploy's outbound notification channel (`server.notification_channel`).
     # None ⇒ notifications stay in-app, exactly as before this seam existed.
     notification_channel: INotificationChannel | None = None,
+    # plan-backup P5: what this pod calls to notice that no backup has completed
+    # lately. `__main__` passes a closure over the deploy's settings +
+    # superusers; None ⇒ no `backup.dest`, so there is nothing to watch. A
+    # callable rather than the settings, so neither this module nor `lifecycle`
+    # grows a dependency on the backup package.
+    backup_staleness: Callable[[], int] | None = None,
+    # How often that probe runs. Hourly is plenty — the threshold it compares
+    # against is measured in days, and an alert about a backup that stopped
+    # yesterday does not get better for being an hour fresher.
+    backup_staleness_interval: timedelta = timedelta(hours=1),
     # Most schedules ONE PAGE may declare (`server.max_page_schedules`). A
     # runaway guard, not a policy limit — see the sweeper's constant.
     max_page_schedules: int = DEFAULT_MAX_ROWS,
@@ -1341,6 +1361,8 @@ def create_app(
         # app already resolved.
         user_schedule_sweeper=user_schedule_sweeper,
         notification_channel=notification_channel,
+        backup_staleness=backup_staleness,
+        backup_staleness_interval=backup_staleness_interval,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         # #674: warm every app's declared third-party bundles at boot.
@@ -1671,6 +1693,52 @@ def create_app(
     for app_slug in registered_apps():
         _block_raw_permanent(resource_route(app_slug))
 
+    # plan-backup P1: specstar registers `GET /_backup/export` and
+    # `POST /_backup/import` globally and unconditionally (`_apply_backup_routes`,
+    # reached from `spec.apply`), and NEITHER consults the permission checker, the
+    # access scope, or any `Depends`. Export streams every registered model with
+    # blob bytes inline; import defaults to `on_duplicate=overwrite`, i.e. it
+    # replaces the database from an uploaded file. Nothing in front of them
+    # authenticates — the `/api` router carries no `dependencies=` and the
+    # `cronjob-*` manifests show that an in-cluster caller reaches the service
+    # unauthenticated by design. The sandbox runs user code, so "in-cluster"
+    # includes anyone with a workspace. Reported upstream as
+    # HYChou0515/specstar#450 (S4); `pyproject` pins the version, so an upstream
+    # fix still needs a bump plus a regression pass — this is the stopgap.
+    #
+    # Registered BEFORE `spec.apply` so first-match-wins takes the door. Both are
+    # refused rather than superuser-gated: the archive is 100 GB – 2 TB and
+    # specstar's own export buffers it whole into a `BytesIO` before responding
+    # (#450 S5), so the HTTP door cannot serve this deployment at any privilege
+    # level. The supported path is the in-process one, which reads the same
+    # config the app boots from — see `docs/plan-backup.md`.
+    # It is a CLASS, not two routes. specstar emits the same unauthorized door
+    # for EVERY registered model — `GET /{model}/export` and
+    # `POST /{model}/import` — alongside the two global `_backup` ones, which is
+    # ~90 doors on this deployment, not 2. Verified by probe: an unauthenticated
+    # `GET /api/collection/export` returned 200 with another user's collection
+    # name in the body. Blocking only `_backup/*` would have left the same hole
+    # open 45 times over while the runbook claimed it was closed.
+    #
+    # Derived from the registry rather than listed, so a model added tomorrow is
+    # fenced the day it appears. Only models registered BEFORE `spec.apply` get
+    # CRUD routes at all, which is exactly the set this iterates.
+    def _block_specstar_transfer_routes() -> None:
+        def _closed(path: str, *, post: bool) -> None:
+            register = api.post if post else api.get
+
+            @register(path, include_in_schema=False)
+            async def _refuse() -> None:
+                raise HTTPException(status_code=403, detail=_BACKUP_DOOR_CLOSED)
+
+        _closed("/_backup/export", post=False)
+        _closed("/_backup/import", post=True)
+        for model_name in sorted(spec.resource_managers):
+            _closed(f"/{model_name}/export", post=False)
+            _closed(f"/{model_name}/import", post=True)
+
+    _block_specstar_transfer_routes()
+
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
 
@@ -1688,6 +1756,21 @@ def create_app(
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
+    # plan-backup P5: the completed-run ledger, post-apply for the same two
+    # reasons as the rows above. No CRUD routes — a world-writable backup-run
+    # table would let anyone forge freshness or delete the evidence that backups
+    # stopped. And the model has to exist in THIS composition, because the model
+    # set is what a backup archives and what a restore can load: registering it
+    # lazily would make an archive's contents depend on which code path ran
+    # first.
+    # Imported HERE, not at module scope. `backup/staleness.py` imports
+    # `api.notifications`, so a top-level import makes the two packages import
+    # each other — and it contradicts this module's own claim, four hundred lines
+    # below, that it grows no dependency on the backup package. One line from a
+    # real cycle is not a place to leave it.
+    from ..backup.ledger import register_backup_ledger
+
+    register_backup_ledger(spec)
     # These four used to be registered by the lifespan — two of them only when
     # their feature was on. The blob-gc worker composes THIS function and never
     # enters a lifespan, and the API's ask names every model the API holds, so

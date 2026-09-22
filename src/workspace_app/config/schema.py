@@ -1477,6 +1477,84 @@ class GoalSettings:
     goal read as exhausted the next morning."""
 
 
+# ─── backup (docs/plan-backup.md) ──────────────────────────────────────
+@dataclass(frozen=True)
+class BackupSettings:
+    """Where a backup run writes, and what it refuses to do without.
+
+    Off by default: ``dest: ""`` means this deployment has no backup configured
+    and `python -m workspace_app.backup` refuses to run rather than inventing a
+    location. Nothing else in the app reads these — the backup is a separate
+    process, deliberately, so a 100 GB - 2 TB pass cannot touch an API pod.
+
+    ``dest`` is a directory. Whatever it is mounted on is the deploy's choice —
+    an NFS export on another machine, an object store mounted into the CronJob's
+    pod — which is what lets one artifact serve "S3 or another cluster or a dev
+    server" without the program knowing which.
+
+    ``require_mounted_sources`` is the precondition that catches the failure a
+    size heuristic cannot: a volume that did not mount leaves an empty directory,
+    the walk finds nothing, the archive is written happily, and retention
+    eventually deletes the archives that held real data. A path that is not a
+    mount point is an exact, false-positive-free signal for it. Turn it off only
+    where the durable root genuinely is not its own mount (single-machine dev) —
+    and the receipt records that the run skipped it, so nobody reads an unchecked
+    run as a checked one.
+    """
+
+    dest: str = ""
+    require_mounted_sources: bool = True
+    # How wide one archive's time window is. This is the memory bound on a
+    # RESTORE, not a transfer optimisation: `SpecStar.load` buffers a model's
+    # records until `ModelEndRecord`, so a narrower slice is a smaller buffer.
+    # A week is a guess until someone measures this deployment; `docs/plan-backup.md`
+    # says what to measure.
+    slice_days: int = 7
+    # How many CHAINS of runs to keep — a chain being a full plus the increments
+    # built on it. 0 keeps everything, and that is the default on purpose: a
+    # retention policy that starts deleting the moment someone sets a destination
+    # is a policy nobody chose. Retention never deletes a single run, because
+    # dropping the full out of a chain leaves archives that restore nothing while
+    # still looking like a full directory.
+    keep_chains: int = 0
+    # How often a run starts a NEW chain instead of continuing one, and the other
+    # half of `keep_chains`: retention deletes along chain boundaries, so a
+    # deployment that never rotates has one chain forever and prunes nothing
+    # whatever keep_chains says. Rotation also bounds how many archives a restore
+    # replays.
+    #
+    # ⚠️ They are ONE policy and default OFF together. A new chain begins with a
+    # FULL — everything back to the oldest record — so rotating without retaining
+    # adds a complete copy of the deployment to the destination every period,
+    # forever. `0` here plus `0` in keep_chains is the small-footprint default:
+    # one chain, increments after the first full. Turn them on as a pair, and
+    # size the destination for `keep_chains` copies. `run_backup` warns if it
+    # sees rotation without retention.
+    full_every_days: int = 0
+    # How many live blob references one run checks against its own archives. The
+    # run's exit status cannot carry this — specstar's dump skips a blob it
+    # cannot read and still finishes cleanly (specstar#450 S2) — and a COUNT
+    # comparison cannot either, because blob-gc shrinks counts on purpose. A
+    # sample of referential integrity is immune to that: a blob a live record
+    # points at is by definition not an orphan. Raise it to trade run time for
+    # confidence; 0 disables the check and says so on the receipt.
+    verify_sample: int = 32
+    # How old the newest completed run may be before the platform says so. A
+    # failed run is visible (the CronJob goes red); a run that never STARTED
+    # produces no event at all, so absence has to be turned into a row somebody
+    # reads.
+    #
+    # 50 is DERIVED from the shipped CronJob, not chosen: a nightly schedule
+    # (24 h) plus a run allowed to take `activeDeadlineSeconds` (20 h) plus slack
+    # — because with `concurrencyPolicy: Forbid`, a run that uses its whole
+    # deadline pushes the next success well past the interval. A threshold below
+    # that pages on a backup that is merely slow, and an alarm that cries wolf
+    # gets muted. `tests/deploy/test_backup_cronjob.py` pins the relationship, so
+    # changing the schedule or the deadline fails there rather than here.
+    # 0 disables the check.
+    stale_after_hours: int = 50
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1505,3 +1583,4 @@ class Settings:
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     failover: FailoverSettings = field(default_factory=FailoverSettings)
     chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)
+    backup: BackupSettings = field(default_factory=BackupSettings)

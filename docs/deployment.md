@@ -1345,3 +1345,114 @@ specstar 自帶 CRUD route,不用自訂 endpoint：
 GET /api/graph-claim?qb=norm_metric==<指標>   # 列出某指標在所有 deck / 期別的值
 GET /api/graph-claim/{id}                      # 單筆（含 provenance:來自哪個 deck/chunk）
 ```
+
+---
+
+## 16. 備份與還原（plan-backup）
+
+預設**不開**。`backup.dest` 是空字串時,備份指令拒絕執行,API 也不會起那個「太久沒備份就叫」的 sweeper。
+設定欄位逐條說明在 [`configuration.md` §12.5](configuration.md#125-備份backup);升級步驟、要先做什麼、
+怎麼確認做完在 [`migrations.md#pr-842`](migrations.md#pr-842)。設計與被否決的替代方案在
+[`plan-backup.md`](plan-backup.md)。
+
+### 它備份什麼
+
+**來源清單是從你這份 `config.yaml` 導出來的,不是寫死的路徑。** 同一個判斷式 `factories` 開機時也在用,
+所以 `sandbox.durable.kind` 從 `nfs_tree` 改回空字串,備份涵蓋的東西會自動跟著變。遇到不認得的 backend
+會**整趟失敗**,而不是少備一份 —— 「備份成功但少了一個 store」只會在還原那天才被發現。
+
+| `sandbox.durable.kind` | 備幾棵樹 |
+|---|---|
+| `""`(預設) | **一棵**。sandbox 的檔案是以 `WorkspaceFile` 存進 specstar 的,已經含在裡面 |
+| `nfs_tree` | **兩棵**。specstar 一棵,`nfs_root` 那棵工作檔案樹一棵 |
+| `nfs_tree` + `migrate_from: specstar` | 還是兩棵,但 specstar 那棵**也**還裝著沒回填完的工作檔 |
+
+刻意**不**備份的:`sandbox.root`(scratch,設計上可拋,idle reaper 會把活檔回收進耐久層)、
+job queue(`kind: simple` 時 job 本身就是 specstar resource,已含在內)、
+`observability.llm_log`(是呼叫紀錄不是使用者資料 —— 但它**沒有上限地長**,那是另一筆帳)。
+
+### 一趟長什麼樣
+
+實際輸出長這樣 —— 這是一次真的執行,不是排版出來的範例,所以大小是 bytes 的整數而不是 `8.1 GB`
+(程式沒有做人類可讀的單位換算)。那次執行是在開發機上跑的,所以還多印了一行
+`backup:   NOTE mount precondition was disabled …`,那行在 production 不會出現,下面就沒有貼:
+
+```
+backup: full run 20260922T173551Z (chain 20260922T173551Z) -> /backups/20260922T173551Z
+backup:   window 2026-09-22T17:35:49.043600+00:00 .. 2026-09-22T17:35:51.020063+00:00
+backup:   specstar (filestore.kind: specstar) -> specstar-0000.acbak 7923 bytes models=68 in 0.004s
+backup:   sandbox-workspaces (sandbox.durable.kind: nfs_tree) -> sandbox-workspaces-0000.tar 20480 bytes files=6 in 0.001s
+```
+
+`models=` 是這次 dump 涵蓋的 model 數(也就是 registry 的大小,不是「有資料的」數量);
+`files=` 是這一趟實際打進 tar 的項目數,不是樹裡的總檔案數 —— 增量只帶變動的那些。
+
+每趟在 `backup.dest/<run id>/` 留一份 `receipt.json`:涵蓋了哪些來源、**是哪一行設定把它列進來的**、
+每份封存檔多大、抽查了幾個 blob 參照、這趟有沒有做 mount 檢查。receipt 是**最後**寫的而且是原子的,
+所以「有 receipt」就等於「這趟跑完了」—— 沒有 receipt 的目錄是中斷的一趟,不是鏈上的一環。
+
+### 為什麼要切片
+
+specstar 的 `load` 會把一個 model 的記錄累積到 `ModelEndRecord` 才寫出(上游 specstar#450 S1),
+所以**還原**需要的記憶體是「一個 model 在一份封存檔裡的量」。切成時間窗讓 `ModelEndRecord` 提早到,
+記憶體就被切片大小界住,而不是被資料總量界住。增量是同一刀的副產品。
+
+工作檔案樹**不切**,而且理由就是上面這條:解 tar 是串流的,沒有東西要界。更重要的是,切它是**錯的** ——
+full 的時間窗下界是從 specstar 最舊的那一列導出來的,而一個工作檔很容易比那一列還老,
+切過的樹會靜靜地漏掉每一個早於「資料庫第一列」的檔案。
+
+### 還原
+
+**不會自動發生。** 要人下指令,而且要帶 `--confirm`:
+
+```bash
+python -m workspace_app.restore --config /etc/rca/config.yaml --confirm
+# 指定某一條鏈:--chain 20260923T020000Z
+```
+
+五個會讓它整個拒絕的情況,每一個都是因為「做一半」比「不做」更糟:
+
+1. **封存與當下 config 的來源集合不一致。** 只還原對得上的那半會成功、會起得來、會少掉一整個 store,
+   而且沒有任何錯誤訊息。逐 run 比對,不是跨整條鏈聯集 —— 聯集會放過「full 是舊形狀、增量是新形狀」那條鏈。
+2. **鏈的 full 不見了。** 只檢查封存檔在不在是不夠的:一個被刪掉的 run 目錄把自己的 receipt 一起帶走,
+   所以它根本不在清單裡。剩下的增量照樣replay、照樣回報成功,而第一個存活窗之前的資料全部沒了。
+3. **鏈上缺了一份封存檔,或 `parent` 斷鏈。** 缺口之後的每一趟都假設它帶來的記錄已經在了。
+4. **封存檔帶著這個部署不認得的 model。** `load` 會在串流中途炸,而且前面已經寫進去的 model 不會回滾 ——
+   通常是拿新版映像的封存檔往回滾過的版本還原。
+5. **沒帶 `--confirm`。** `load` 是 `on_duplicate=overwrite`,這道指令會覆蓋目標既有的每一列。
+
+**還原完不需要跑 migrate。** 索引是跟著封存檔一起回來的 —— specstar 的 `load_records_bulk` 把每一筆
+`ResourceMeta` **原樣**存回、不重新萃取 `indexed_data`,所以 `path` 索引在還原後就是好的,`/api/readyz` 不會 503。
+唯一的例外是**舊封存檔**:在某次 `Schema` 升版之前取的封存,那些列會以舊版本回來,跟任何沒回填過的舊列一樣,
+要跑的是那次升版自己條目所列的 migrate。
+
+⚠️ **還原是合併,不是取代。** `load` 只覆蓋 id 相同的列,不會刪掉目標已有而封存檔沒有的列;tar 也是解壓到既有的樹上。
+所以還原到一個「出事後又服務了一週」的部署,那一週的資料會留著,而備份之前被刪掉的東西會**復活** ——
+得到的是一個從未存在過的狀態。要乾淨的時間點,先把目標的 `disk_root` 和工作檔案樹清空再還原。
+
+### 演練
+
+```bash
+python scripts/backup_drill.py --source-config stg.yaml --target-config stg-restore.yaml
+```
+
+它會在備份進行中持續寫入,最後印三個數字:`before`(必須全數還原,少一個就是資料遺失)、
+`during`(備份進行中寫入的,多少被這趟接到 —— 這是**量出來的**,不是規定的;剩下的由下一個增量接手)、
+`after`(必須是 0,否則時間窗的邊界不在 receipt 說的地方)。兩個配置必須指向**同一個 `dest`**、
+**不同的 `disk_root`**,腳本會自己擋。
+
+### 加密:程式不做,`dest` 那一層做
+
+封存檔是**明文**的 `.acbak` 和 `.tar`。這是決定不是遺漏:`backup.dest` 掛的是什麼由你決定,
+而那一層本來就有機制(NFS export 的權限、物件儲存的 SSE、磁碟加密),在程式裡再加一層只會多一個
+「金鑰放哪」的問題,而那個問題的正確答案 —— **叢集之外** —— 程式沒辦法幫你保證。
+
+⚠️ 如果你在 `dest` 那一層加密:**金鑰必須存在這個叢集之外**。叢集沒了、金鑰跟著沒了,
+備份就打不開 —— 那和沒有備份是同一件事,只是多花了儲存費。
+
+### 和「知識庫封存包」的關係
+
+[`collection-archive.md`](collection-archive.md) 的 zip 是**單一 collection 的可攜格式**,
+解的是「把知識庫搬到另一個部署」和「使用者自助救回一個 collection」。它不含工作檔案、不含對話、
+不含 App item、不含排程,也沒有排程與保留期。**兩者不互相取代**:有了備份不代表不需要它,
+有了它也不代表有備份。

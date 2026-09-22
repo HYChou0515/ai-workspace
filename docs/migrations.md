@@ -862,6 +862,126 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
   （你沒列的那幾種，排序）。
 
+### 2026-09-23 · #842 備份機制：每晚一趟 CronJob、切片增量、還原工具;`/_backup/*` 兩個未授權路由關掉 {#pr-842}
+
+**設定**
+
+- 新區塊 `backup:`,**預設全關**(`dest: ""`)。不填就是沒有備份:`python -m workspace_app.backup` 拒絕執行
+  (而且是在組 app **之前**就拒絕,所以不會白跑一趟 `spec.apply`),API 也不會起 staleness sweeper。
+  ⚠️ **但「只填 `backup.dest`」不是 no-op。** 它會打開 API 的 staleness sweeper,而在還沒有任何一趟
+  成功的 run 時,sweeper 的第一次檢查(pod 一開機就跑)得到的結論是「從來沒有備份完成過」。
+  所以 `BACKUP_DEST`、`kustomization.yaml` 的 CronJob、`pvc.yaml` 的 `backups` claim **三件要一起開**,
+  否則 rollout 當下就會對 superuser 發警報 —— 而第一趟排程根本還沒到。
+  要開就填 `backup.dest`;configmap 有 `BACKUP_DEST`,在 `config.yaml` 接成 **block form**:
+  ```yaml
+  backup:
+    dest: ${BACKUP_DEST}
+  ```
+  ⚠️ **不要寫成 `backup: { dest: ${BACKUP_DEST} }`** —— flow mapping 裡的 `{` 是 YAML parse error,
+  照抄的 pod 起不來。#840 的條目為了同一件事已經踩過一次。
+- **其餘六個 knob 故意不放 configmap**:`slice_days`(預設 7)、`keep_chains`(預設 0 = 全留)、
+  `full_every_days`(預設 7)、`verify_sample`(預設 32)、`stale_after_hours`(預設 50)、
+  `require_mounted_sources`(預設 `true`)。它們是 int 和 bool,而 `${VAR}` 內插交給 loader 的是**字串** ——
+  bool 的 `"false"` 是 truthy,#840 剛被這個咬過。請直接寫進 `config.yaml`,讓 YAML 去定型。
+- **`require_mounted_sources: true` 是預設,而且它會擋下開機以外的東西**:來源根目錄不是 mount point 就拒跑。
+  這是為了擋「NFS 沒掛上 → 看起來是空目錄 → 備份成功 → 保留政策把有資料的那幾份刪掉」。單機開發環境
+  `/data` 本來就不是獨立 mount,那種部署才設 `false`,而且 receipt 會記下這趟沒檢查。
+- **`full_every_days` 和 `keep_chains` 是同一條政策的兩半,預設(`0` / `0`)一起關著。** 保留政策是**按鏈**刪的
+  (刪掉最舊的那「趟」會把後面每個增量都依賴的 full 一起帶走),所以不換鏈就刪不掉東西 —— 但**只開輪替更糟**:
+  一條新鏈是從一次 full 開始的,而 full 涵蓋全部歷史,所以那等於每個週期往目的地多放一份**完整副本**、永不清理。
+  預設兩個都關 = 一條鏈、第一次 full 之後全是增量,佔用最小。要開就**一起開**,並且照 `keep_chains` 份副本訂
+  `backups` PVC 的大小。只開一邊時 `backup:` 的 log 會出現一行警告。
+
+**資料** — 不動。沒有新的 `Schema` 版本,不用跑 migrate。新增一個內部協調用的 model(`-backuprun`,一趟成功的備份一列),
+post-`spec.apply` 註冊所以**沒有 CRUD 路由** —— 那張表能被任意寫就等於備份新鮮度可以被偽造。
+
+**k8s · CI 側**
+
+- **新的 CronJob 和 PVC 都是 opt-in,預設沒有生效。** `kubernetes/base/cronjob-backup.yaml` 和 `pvc.yaml` 裡的
+  `backups` claim 都**註解掉**,跟 #492 的 `workspaces` claim 同樣的處理。不想要備份的部署什麼都不用做。
+  要開的話三件事一起做:把 `kustomization.yaml` 的 `# - cronjob-backup.yaml` 取消註解、把 `pvc.yaml` 的
+  `backups` claim 取消註解、填 `BACKUP_DEST`。只做前兩件的症狀:job 每晚 02:00 起來、拒絕執行、退出 1、
+  重試一次、變紅,一直到有人填 `dest` 為止。
+- **`rollout 前`:把 `backups` 這顆 PVC 的 `storageClassName` 指到「這個叢集故障域外面」的儲存**
+  (另一台機器的 NFS export、掛進來的物件儲存都行)。沒有指令可以代勞,這是一個 storageClass 名字的選擇。
+  漏做的症狀:備份看起來一切正常,直到 `rca-data` 真的掛掉那天,才發現備份跟它躺在同一組磁碟上 ——
+  **這條沒有任何自動檢查擋得住,只有這句話。** 另外 `storage: 200Gi` 是**佔位值不是量出來的**:
+  目前手上只有「合計 100 GB – 2 TB」,1.5–2 倍是 150 GB – 4 TB,所以 200Gi 是那個範圍的下緣。
+  跑 `du -sh /data`、`du -sh /mnt/workspaces` 之後再定。
+- **`sandbox.durable.kind: nfs_tree` 的部署,要把 `cronjob-backup.yaml` 裡 `workspaces` 那段 volume/mount
+  的註解拿掉。** 漏做的症狀:**第一晚就紅,不是等到還原那天** —— `require_mounted_sources` 預設是 `true`,
+  而 `/mnt/workspaces` 沒掛上就不是 mount point,`run_backup` 在寫任何東西之前就拒絕。
+  (如果你把 `require_mounted_sources` 設成 `false`,那個目錄不存在的情況也還是會被 `_require_readable` 擋下來 ——
+  空目錄打包成空 tar、還原成空工作區、而且每一層檢查都會通過,是這整份計畫最不能發生的那種結果。)
+- **第一趟不需要、也不應該帶 `--since`。** 不帶參數的 full 會去問每個 model 最舊的 `updated_time`
+  (`_earliest_updated`)並據此切片,本來就是有界的。`--since` 做的是**把時間窗的下界往後推**,
+  所以照著打一個日期上去,等於讓**那個日期之前的所有資料永遠不在任何封存檔裡** —— 而且後續增量從上一趟的
+  `window_end` 開始,永遠不會回頭補。這一步在本條目的初稿裡是「必做」,那是錯的,已經刪掉。
+  想先手動跑一趟確認管線通,直接用預設就好:
+  ```bash
+  kubectl create job --from=cronjob/rca-backup backup-first
+  ```
+  (`kubectl create job --from=` **不接受** command override,所以舊稿那道帶 `-- python -m ...` 的指令
+  連跑都跑不起來。)
+
+**行為改變、沒有開關**:specstar 無條件註冊的**資料轉移路由全部回 403** —— 不只 `_backup/export|import` 這兩個,
+還有它**每個 model 各一組**的 `GET /{model}/export` 和 `POST /{model}/import`。這個部署上總共約 90 道門。
+修之前它們**不經任何授權**:實測一個沒有任何 header 的請求對 `/api/collection/export` 拿回 200 和別人的
+collection 名字,而 import 的 `on_duplicate` 預設是 `overwrite`。叢集內任何能連到 `http://rca-app/api/` 的
+東西都走得到,**而 sandbox 是在跑使用者的程式碼**。沒有人該在用這些路由 —— 它們把整份封存塞進記憶體才回應,
+在這個資料量級本來就打不動。備份與還原改走 in-process 入口。
+
+**確認做完**
+
+- **這個洞關了 —— 而且要查兩道門,不是一道。** 全域那組和隨便一個 model 的那組都要回 **403**(修之前都是 200):
+  ```sh
+  curl -s -o /dev/null -w '_backup %{http_code}\n'    http://rca-app/api/_backup/export
+  curl -s -o /dev/null -w 'collection %{http_code}\n' http://rca-app/api/collection/export
+  ```
+  只查前者會漏掉 specstar 每個 model 各發一組的那 ~88 道門。
+- 第一趟備份成功:`kubectl logs job/backup-first | grep '^backup:'`,要看到 `backup: full run <id> (chain <id>)`、
+  每個來源一行(`specstar (filestore.kind: specstar) -> …`、有開 nfs_tree 的話還有 `sandbox-workspaces (…) -> …`),
+  以及 receipt 落在 `backup.dest/<run id>/receipt.json`。**失敗也會是 `backup:` 開頭的一行** ——
+  設定讀不到、組 app 失敗都被接住了,所以這個 grep 不會在最該看到東西的時候空白。
+- **來源清單對得上你的部署**:receipt 的 `sources[].why` 會直接寫出是哪一行設定把它列進來的。
+  只有一個來源、但你跑的是 `nfs_tree` → 上一條的 volume 註解沒拿掉。
+- **驗證真的有跑**:receipt 的 `verified_blobs` 大於 0。它是 0 表示這趟沒有抽到任何 blob 參照可檢查 ——
+  空的樣本會通過任何檢查,所以這個數字要自己看。
+- **⚠️ 警報有沒有收件人。** `sweep_backup_staleness` 是唯一會注意到「備份停了」的機制,而它寫的
+  `Notification` 是寄給 `server.superusers` 的 —— 那個欄位**預設是空的**(`config/schema.py` 自己寫著
+  「Empty (default) ⇒ no superusers, as in prod today」)。空的時候 sweeper 只會在 log 留一行 WARNING,
+  不會有任何人收到。而且就算設了 superuser,`server.notification_channel` 預設也是空字串,
+  那則通知就只會停在 in-app 鈴鐺、不會寄出去。所以這兩個要一起確認:
+  ```sh
+  kubectl logs deploy/rca-app | grep 'server.superusers'      # config dump 裡要有人
+  kubectl logs deploy/rca-app | grep -i 'no operator to notify'   # 要沒有這一行
+  ```
+  漏做的症狀:備份哪天真的停了,沒有任何人知道 —— 而這整個 sweeper 存在的理由就是這件事。
+- **目的地會不會長爆**:`kubectl exec` 進去看 `du -sh $BACKUP_DEST`,對照你設的 `keep_chains`。
+  只開 `full_every_days` 沒開 `keep_chains` 的話,每個週期會多一份完整副本 —— log 裡會有一行
+  `full_every_days=… with keep_chains=0` 的警告。漏看的症狀:兩三個週期之後 PVC 滿,
+  之後每晚 job 都紅,而且**沒有東西會自己清**。
+- **演練過才算數**:在 stg 跑 `python scripts/backup_drill.py --source-config … --target-config …`。
+  它會在備份進行中持續寫入,最後印 `before / during / after` 三個數字並給 PASS/FAIL。
+  `before` 不是全數還原就是資料遺失,不是一致性細節。
+
+**還原怎麼做**(不會自動發生,要人下指令)
+
+```bash
+python -m workspace_app.restore --config /etc/rca/config.yaml --confirm
+```
+
+`--confirm` 是必要的:`load` 是 `on_duplicate=overwrite`,這道指令會覆蓋目標部署既有的每一列。
+
+還原前會擋下三種「做一半會成功」的情況:鏈的 **full 不在**(只剩增量就還原,會安靜地少掉第一個窗之前的所有資料)、
+**來源集合和當下 config 不符**(逐 run 比對,不是跨鏈聯集)、**封存檔帶著這個部署不認得的 model**
+(`load` 會在串流中途炸,而且前面已經寫進去的 model 不會回滾)。
+
+**不需要跑 migrate。** 索引是跟著封存檔一起回來的 —— specstar 的 `load_records_bulk` 是把每一筆
+`ResourceMeta` **原樣**存回,不重新萃取 `indexed_data`,所以 `workspace-file` 的 `path` 索引在還原後就是好的,
+`/api/readyz` 不會 503。(唯一的例外是舊封存檔:如果它是在某次 `Schema` 升版**之前**取的,那些列會以舊版本回來,
+跟任何沒回填過的舊列一樣 —— 那時要跑的是那次升版自己的條目所列的 migrate,不是這一條。)
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

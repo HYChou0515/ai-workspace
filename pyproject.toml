@@ -109,6 +109,12 @@ omit = [
     "src/workspace_app/changelog/__main__.py",  # #441: git-log walk + file IO glue
     "src/workspace_app/skill_eval/__main__.py",  # CLI glue + litellm IO; the library is unit-tested
     "src/workspace_app/chat_video/__main__.py",  # two lines of `raise SystemExit(main())`; cli.py is tested
+    # plan-backup: argparse + config-load + print glue. The libraries underneath
+    # (`backup/run.py`, `backup/restore.py`, `backup/tree.py`, …) are unit-tested,
+    # and `build_backup_spec` — the one piece with a correctness claim — is pinned
+    # by tests/backup/test_registry_parity.py.
+    "src/workspace_app/backup/__main__.py",
+    "src/workspace_app/restore.py",
 ]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.

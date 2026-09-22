@@ -1178,3 +1178,41 @@
 #   pkg:<dotted-package>/<file.md>   bundled (ships with the wheel)
 #   /absolute/path.md                absolute filesystem path
 #   relative/path.md                 relative to THIS file's directory
+
+# ─────────────────────────────────────────────────────────────────────────────
+# backup — docs/plan-backup.md, docs/migrations.md#pr-842
+#
+# OFF by default, and off means off: with `dest` empty,
+# `python -m workspace_app.backup` refuses before it even composes the app, and
+# the API starts no staleness sweeper. The CronJob and its PVC are also
+# commented out in kubernetes/base, so this section alone changes nothing.
+#
+# ⚠️ BLOCK form. `backup: { dest: ${BACKUP_DEST} }` is a YAML parse error — a
+# `{` inside a flow mapping — and the pod will not boot. Same trap as
+# `server.run_consumers`.
+# backup:
+#   dest: ${BACKUP_DEST}        # a directory. MUST be on storage that survives
+#                               # losing this cluster, or it protects nothing.
+#
+#   # Everything below is typed (ints and a bool), so write the VALUES here
+#   # rather than ${VAR}: env interpolation hands the loader a string, and a
+#   # bool "false" is truthy.
+#   require_mounted_sources: true   # refuse a source root that is not a mount
+#                                   # point — an unmounted volume looks like an
+#                                   # empty directory and archives as success.
+#                                   # false only where the root genuinely is not
+#                                   # its own mount (single-machine dev).
+#   slice_days: 7                   # how wide one archive's window is. This is
+#                                   # the memory bound on a RESTORE, not a
+#                                   # transfer tweak.
+#   # These two are ONE policy and ship off together. A new chain starts with
+#   # a FULL covering all history, so rotating without retaining adds a
+#   # complete copy of the deployment every period and never removes one.
+#   full_every_days: 0              # 0 = stay on one chain (default)
+#   keep_chains: 0                  # 0 = keep everything (default). Retention
+#                                   # deletes whole chains, never a run out of one.
+#   verify_sample: 32               # live blob references checked per run.
+#                                   # 0 disables and the receipt says so.
+#   stale_after_hours: 50           # how old the newest run may be before the
+#                                   # operators are told. Derived from the
+#                                   # CronJob: 24h schedule + 20h deadline + slack.

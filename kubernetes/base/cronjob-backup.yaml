@@ -1,0 +1,122 @@
+# docs/plan-backup.md — the nightly backup. Runs `python -m workspace_app.backup`
+# directly rather than enqueuing a job, and that difference is deliberate:
+#
+#   * The job queue is the wrong shape for this. The longest job this system runs
+#     once failed to converge past a 30-minute ceiling whose cause is still not
+#     written down (see cronjob-graph.yaml), and a full pass here is an order of
+#     magnitude longer than that.
+#   * A CronJob has `activeDeadlineSeconds` and `concurrencyPolicy: Forbid`,
+#     which is what a long single-shot job wants.
+#   * The process exiting hands its memory back, which matters here more than
+#     it usually would — see the limit below.
+#
+# The pod carries the API's whole composition on purpose — the backup builds
+# `__main__.build_app` so its model registry equals the API's by construction.
+# `spec.dump` archives the models in the registry, and a registry short one model
+# produces an archive short one model that still reports success.
+#
+# WHAT THIS NEEDS BEFORE IT WILL WORK
+#   1. `backup.dest` set in config.yaml (map it to ${BACKUP_DEST} like every
+#      other env-backed setting). Unset ⇒ the run refuses rather than guessing.
+#   2. The `backups` PVC provisioned and pointed at storage OUTSIDE this
+#      cluster's failure domain. See pvc.yaml — a claim on the same storageClass
+#      as rca-data defeats the entire point of the exercise.
+#   3. NOT `--since`. A full with no arguments already derives its lower bound
+#      from the oldest record in the store and slices from there. `--since` moves
+#      that bound LATER, so passing a date puts every record older than it in no
+#      archive, permanently — each increment starts at the previous window_end
+#      and nothing goes back. To rehearse by hand:
+#          kubectl create job --from=cronjob/rca-backup backup-first
+#      (`--from` and a command override are mutually exclusive, so a `-- python
+#      -m ...` form does not run at all.)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rca-backup
+spec:
+  schedule: "0 2 * * *" # 02:00 Asia/Taipei, nightly. Before the 03:00 code-sync
+  # (`kb.git.daily_sync`) and the Saturday 03:00 graph pass, so a long run does
+  # not overlap either.
+  #
+  # ⚠️ `cronjob-eval.yaml` is ALSO "0 2 * * *". They do not contend for the same
+  # volume — eval curls the API to enqueue a job and exits in milliseconds, while
+  # this reads /data — but if you move either one, move it knowing the other is
+  # there.
+  timeZone: "Asia/Taipei" # needs Kubernetes >= 1.27 for the GA field. Spelling
+  # the zone out spares every future editor the UTC day-shift arithmetic.
+  concurrencyPolicy: Forbid # two passes must never overlap: they would write
+  # into two run directories and the second would continue a chain the first has
+  # not finished writing.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # How late a MISSED schedule may still start (a controller outage, a node
+  # coming back). An hour: later than that and the run collides with the next
+  # night's. Unrelated to how long a run may take — that is
+  # `activeDeadlineSeconds` below.
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 1 # one retry. More would mean a failing backup silently
+      # burning hours; the staleness sweeper is what escalates a run that keeps
+      # failing, and it does not need four attempts to notice.
+      # 20 h, and the ceiling is not arbitrary: it must stay under the 25-hour
+      # window blob-GC's quarantine gives us (`filestore.gc_t1` + `gc_t2`). Past
+      # that, a record archived early in the run can reference a blob the
+      # collector deleted before the run reached it, and the archive is quietly
+      # short. `tests/deploy/test_backup_cronjob.py` derives the bound from
+      # FilestoreSettings, so lowering gc_t2 fails there rather than here.
+      activeDeadlineSeconds: 72000
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: rca-app:latest # overlays pin a tag via `images:`
+              command: ["python", "-m", "workspace_app.backup"]
+              envFrom:
+                - configMapRef:
+                    name: rca-config
+              volumeMounts:
+                # NOT read-only, and it cannot be. `build_backup_spec` composes
+                # the API (`spec.apply` runs the schema step) and the run records
+                # itself in the `-backuprun` ledger — and on a `filestore.kind:
+                # specstar` deployment that store IS this volume. Adding
+                # `readOnly: true` here breaks every run before it writes an
+                # archive. Left writable deliberately; do not "fix" it.
+                - name: data
+                  mountPath: /data
+                # The sandbox workspace tree, when `sandbox.durable.kind: nfs_tree`
+                # is on. Uncomment WITH the volume below and the `workspaces` PVC.
+                # Leave both off for the local shared-dir topology, or apply fails
+                # on the missing claim.
+                # - name: workspaces
+                #   mountPath: /mnt/workspaces
+                #   readOnly: true
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "2Gi"
+                limits:
+                  cpu: "2"
+                  # ⚠️ A STARTING POINT, not a derivation. Peak RSS is the largest
+                  # single blob twice over (one record, encoded once more before
+                  # the write) PLUS one model-window's metadata — because
+                  # `ResourceManager.dump` materialises every ResourceMeta in the
+                  # window and `DiskMetaStore.iter_search` reads the model's whole
+                  # meta tree to answer a query. 6Gi covers the blob half for a
+                  # 2 GiB `filestore.max_file_size`; the metadata half depends on
+                  # how many records a window holds, which nobody has measured on
+                  # this deployment. Watch the first few runs and raise it.
+                  memory: "6Gi"
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: rca-data
+            - name: backups
+              persistentVolumeClaim:
+                claimName: backups
+            # - name: workspaces
+            #   persistentVolumeClaim:
+            #     claimName: workspaces
