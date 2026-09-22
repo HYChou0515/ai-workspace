@@ -36,13 +36,13 @@ NOW = dt.datetime(2026, 9, 23, 3, 0, tzinfo=dt.UTC)
 PAYLOAD = b"THE-BYTES-THAT-MUST-SURVIVE-" + b"z" * 2048
 
 
-def _settings(root: Path, dest: Path, **backup: object) -> Settings:
+def _settings(root: Path, dest: Path) -> Settings:
     return Settings(
         filestore=FilestoreSettings(kind="specstar", disk_root=str(root)),
         sandbox=SandboxSettings(durable=SandboxDurableSettings(kind="")),
         # tmp_path is not a mount point; the precondition is exercised on its own
         # in test_refuses_an_unmounted_source.
-        backup=BackupSettings(dest=str(dest), require_mounted_sources=False, **backup),
+        backup=BackupSettings(dest=str(dest), require_mounted_sources=False),
     )
 
 

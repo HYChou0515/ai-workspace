@@ -58,6 +58,26 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--config", type=Path, default=None, help="path to config.yaml")
+    p.add_argument(
+        "--full",
+        action="store_true",
+        help=(
+            "start a new chain instead of continuing the newest one. Retention "
+            "deletes along chain boundaries, so this is also how an operator "
+            "makes an archive that stands on its own."
+        ),
+    )
+    p.add_argument(
+        "--since",
+        type=dt.datetime.fromisoformat,
+        default=None,
+        help=(
+            "ISO-8601 lower bound for this run's window, overriding the chain's. "
+            "Use it to bound an initial full over a long history: without a lower "
+            "bound the run is one archive, and one archive is what a restore "
+            "cannot hold in memory."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -70,7 +90,13 @@ def main(argv: list[str] | None = None) -> int:
 
     spec = build_backup_spec(settings, config_dir=config_dir)
     try:
-        receipt = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+        receipt = run_backup(
+            settings,
+            spec,
+            now=dt.datetime.now(dt.UTC),
+            since=args.since,
+            full=args.full,
+        )
     except Exception as exc:
         # `print`, not `logger.error`: a CronJob's pod log is what an operator
         # reads when the job goes red, and logging config is not guaranteed to be
@@ -78,7 +104,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"backup: FAILED — {exc}", file=sys.stderr)
         return 1
 
-    print(f"backup: run {receipt.run_id} -> {receipt.directory}")
+    print(
+        f"backup: {receipt.kind} run {receipt.run_id} (chain {receipt.chain}) "
+        f"-> {receipt.directory}"
+    )
+    print(f"backup:   window {receipt.window_start or '(everything)'} .. {receipt.window_end}")
     for source in receipt.source_results:
         detail = (
             f"models={len(source.models)}" if source.kind == "specstar" else f"files={source.files}"

@@ -1504,6 +1504,19 @@ class BackupSettings:
 
     dest: str = ""
     require_mounted_sources: bool = True
+    # How wide one archive's time window is. This is the memory bound on a
+    # RESTORE, not a transfer optimisation: `SpecStar.load` buffers a model's
+    # records until `ModelEndRecord`, so a narrower slice is a smaller buffer.
+    # A week is a guess until someone measures this deployment; `docs/plan-backup.md`
+    # says what to measure.
+    slice_days: int = 7
+    # How many CHAINS of runs to keep — a chain being a full plus the increments
+    # built on it. 0 keeps everything, and that is the default on purpose: a
+    # retention policy that starts deleting the moment someone sets a destination
+    # is a policy nobody chose. Retention never deletes a single run, because
+    # dropping the full out of a chain leaves archives that restore nothing while
+    # still looking like a full directory.
+    keep_chains: int = 0
 
 
 # ─── top-level Settings ────────────────────────────────────────────────

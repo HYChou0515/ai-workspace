@@ -11,7 +11,7 @@ fenced off in `api/app.py` — at 100 GB – 2 TB an HTTP export would buffer th
 archive whole, and an HTTP import replaces the database from an uploaded file.
 """
 
-from .run import RECEIPT_NAME, Receipt, SourceResult, run_backup
+from .run import RECEIPT_NAME, Receipt, SourceResult, chain_of, run_backup
 from .sources import DurableSource, SourceKind, UnsupportedDeployment, durable_sources
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "SourceKind",
     "SourceResult",
     "UnsupportedDeployment",
+    "chain_of",
     "durable_sources",
     "run_backup",
 ]
