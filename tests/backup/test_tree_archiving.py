@@ -63,12 +63,18 @@ def test_a_file_with_an_old_mtime_is_still_carried_by_an_incremental(tmp_path: P
     unpacked.write_bytes(b"unpacked just now, stamped 2017")
     os.utime(unpacked, (ANCIENT, ANCIENT))
 
-    result = tar_tree(root, tmp_path / "inc.tar", previous=None, window_end=_window_end())
+    result = tar_tree(
+        root, tmp_path / "inc.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
     assert "./item-1/from-a-zip.txt" in result.paths
 
     # And on the next run, unchanged, it is correctly NOT carried again.
     again = tar_tree(
-        root, tmp_path / "inc2.tar", previous=result.manifest, window_end=_window_end()
+        root,
+        tmp_path / "inc2.tar",
+        previous=result.manifest,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
     )
     assert "./item-1/from-a-zip.txt" not in again.paths
 
@@ -80,12 +86,20 @@ def test_a_changed_file_is_carried_even_when_its_mtime_moves_backwards(tmp_path:
     root = _tree(tmp_path)
     target = root / "item-1" / "notes" / "log.txt"
     target.write_bytes(b"first")
-    first = tar_tree(root, tmp_path / "a.tar", previous=None, window_end=_window_end())
+    first = tar_tree(
+        root, tmp_path / "a.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
 
     target.write_bytes(b"second, and longer than the first")
     os.utime(target, (ANCIENT, ANCIENT))
 
-    second = tar_tree(root, tmp_path / "b.tar", previous=first.manifest, window_end=_window_end())
+    second = tar_tree(
+        root,
+        tmp_path / "b.tar",
+        previous=first.manifest,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+    )
     assert "./item-1/notes/log.txt" in second.paths
 
 
@@ -95,7 +109,7 @@ def test_a_symlink_survives_a_round_trip(tmp_path: Path):
     (root / "item-1" / "real.txt").write_bytes(b"target")
     (root / "item-1" / "link").symlink_to("real.txt")
 
-    tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end())
+    tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0)
     out = tmp_path / "restored"
     report = extract_tree(tmp_path / "t.tar", out)
 
@@ -112,7 +126,7 @@ def test_an_absolute_symlink_is_skipped_and_counted_rather_than_raising(tmp_path
     (root / "item-1" / "keep.txt").write_bytes(b"this must survive")
     (root / "item-1" / "escape").symlink_to("/etc/passwd")
 
-    tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end())
+    tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0)
     out = tmp_path / "restored"
     report = extract_tree(tmp_path / "t.tar", out)
 
@@ -128,7 +142,9 @@ def test_a_fifo_does_not_take_the_backup_or_the_restore_down(tmp_path: Path):
     (root / "item-1" / "data.txt").write_bytes(b"ordinary")
     os.mkfifo(root / "item-1" / "pipe")
 
-    result = tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end())
+    result = tar_tree(
+        root, tmp_path / "t.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
     assert "./item-1/data.txt" in result.paths
     assert any("pipe" in s for s in result.skipped)
 
@@ -151,27 +167,42 @@ def test_a_file_that_vanishes_mid_walk_is_counted_not_fatal(tmp_path: Path):
             path.unlink()
 
     result = tar_tree(
-        root, tmp_path / "t.tar", previous=None, window_end=_window_end(), _before_add=_vanish
+        root,
+        tmp_path / "t.tar",
+        previous=None,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+        _before_add=_vanish,
     )
 
     assert "./item-1/stays.txt" in result.paths
     assert any("gone.txt" in s for s in result.skipped)
 
 
-def test_a_deleted_file_leaves_the_manifest_so_a_later_run_does_not_resurrect_it(
-    tmp_path: Path,
-):
-    """Not restoring deletions is a documented limitation, but the manifest must
-    at least stay honest about what is there — otherwise an unchanged file that
-    was deleted and recreated identically would never be carried again."""
+def test_a_deleted_file_drops_out_of_the_manifest(tmp_path: Path):
+    """The manifest tracks what the chain holds of the CURRENT tree.
+
+    ⚠️ Deliberately NOT named for preventing a resurrection, because it does
+    not prevent one: a chain replay still writes back everything deleted after
+    the full, since a tar has nowhere to record a deletion. What this does buy
+    is that a path deleted and later recreated identically is carried again
+    rather than diffed against a stale entry."""
     root = _tree(tmp_path)
     doomed = root / "item-1" / "temp.txt"
     doomed.write_bytes(b"here for now")
-    first = tar_tree(root, tmp_path / "a.tar", previous=None, window_end=_window_end())
+    first = tar_tree(
+        root, tmp_path / "a.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
     assert "./item-1/temp.txt" in first.manifest
 
     doomed.unlink()
-    second = tar_tree(root, tmp_path / "b.tar", previous=first.manifest, window_end=_window_end())
+    second = tar_tree(
+        root,
+        tmp_path / "b.tar",
+        previous=first.manifest,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+    )
 
     assert "./item-1/temp.txt" not in second.manifest
 
@@ -185,6 +216,183 @@ def test_the_window_end_still_excludes_writes_that_land_after_it(tmp_path: Path)
     future = dt.datetime.now(dt.UTC) + dt.timedelta(hours=1)
     os.utime(late, (future.timestamp(), future.timestamp()))
 
-    result = tar_tree(root, tmp_path / "t.tar", previous=None, window_end=_window_end())
+    result = tar_tree(
+        root, tmp_path / "t.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
 
     assert "./item-1/late.txt" not in result.paths
+
+
+def test_a_file_excluded_by_the_window_is_carried_by_the_NEXT_run(tmp_path: Path):
+    """The manifest describes what the CHAIN holds, not what the tree looks like.
+
+    This is the round-1 defect coming back in a new shape. A file written after
+    the window closed is correctly excluded — and the first version of this code
+    then recorded it in the manifest anyway, so the next run diffed against it,
+    saw "unchanged", and skipped it. It was in no archive, ever, and not in
+    `skipped` either.
+
+    **Three windows, not two.** A two-run test passes on the buggy version: run 1
+    excludes it, run 2 skips it, and if you only assert on run 2 you have to be
+    looking for exactly this to notice. The third run is what makes the hole
+    visible as permanence rather than a delay.
+    """
+    root = _tree(tmp_path)
+    late = root / "item-1" / "late.txt"
+    late.write_bytes(b"written just after the window closed")
+
+    closed = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=30)
+    first = tar_tree(root, tmp_path / "1.tar", previous=None, window_end=closed, stamp_slack_ns=0)
+    assert "./item-1/late.txt" not in first.paths  # correct: outside the window
+
+    later = _window_end()
+    second = tar_tree(
+        root, tmp_path / "2.tar", previous=first.manifest, window_end=later, stamp_slack_ns=0
+    )
+    third = tar_tree(
+        root, tmp_path / "3.tar", previous=second.manifest, window_end=later, stamp_slack_ns=0
+    )
+
+    assert "./item-1/late.txt" in second.paths, (
+        "the run whose window covers it must carry it — the previous run recorded "
+        "it in the manifest without archiving it"
+    )
+    assert "./item-1/late.txt" not in third.paths  # and then it is genuinely done
+
+
+def test_a_file_that_could_not_be_read_is_retried_by_the_next_run(tmp_path: Path):
+    """Same invariant from the other side. A path skipped because it vanished (or
+    could not be read) must not be recorded as held — the next run has to try
+    again rather than diff against an entry for bytes nobody ever archived."""
+    root = _tree(tmp_path)
+    flaky = root / "item-1" / "flaky.txt"
+    flaky.write_bytes(b"here now")
+
+    def _vanish(path: Path) -> None:
+        if path.name == "flaky.txt":
+            path.unlink()
+
+    first = tar_tree(
+        root,
+        tmp_path / "1.tar",
+        previous=None,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+        _before_add=_vanish,
+    )
+    assert any("flaky" in s for s in first.skipped)
+
+    flaky.write_bytes(b"here now")
+    second = tar_tree(
+        root,
+        tmp_path / "2.tar",
+        previous=first.manifest,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+    )
+
+    assert "./item-1/flaky.txt" in second.paths
+
+
+def test_a_path_whose_type_changed_restores_over_the_old_one(tmp_path: Path):
+    """Replaying a chain writes over what an earlier run already put there. A
+    path that was a file and became a directory (or the reverse) used to be
+    skipped with a `FileExistsError`, taking its whole subtree with it."""
+    root = _tree(tmp_path)
+    (root / "item-1" / "thing").write_bytes(b"i was a file")
+    first = tar_tree(
+        root, tmp_path / "1.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
+
+    (root / "item-1" / "thing").unlink()
+    (root / "item-1" / "thing").mkdir()
+    (root / "item-1" / "thing" / "inner.txt").write_bytes(b"now i am a directory")
+    tar_tree(
+        root,
+        tmp_path / "2.tar",
+        previous=first.manifest,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+    )
+
+    out = tmp_path / "restored"
+    extract_tree(tmp_path / "1.tar", out)
+    report = extract_tree(tmp_path / "2.tar", out)
+
+    assert (out / "item-1" / "thing" / "inner.txt").read_bytes() == b"now i am a directory"
+    assert report.skipped == ()
+
+
+def test_a_hardlink_pointing_out_of_the_tree_is_refused(tmp_path: Path):
+    """A hardlink's `linkname` is ROOT-relative in tar, not relative to the
+    member's directory — so resolving it the way a symlink is resolved lets
+    `../etc/passwd` through. `filter="tar"` does not check link targets at all,
+    so this is the only check there is."""
+    import tarfile
+
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"SECRET-OUTSIDE-THE-TREE")
+    archive = tmp_path / "evil.tar"
+    with tarfile.open(archive, "w") as tar:
+        d = tarfile.TarInfo("./a")
+        d.type = tarfile.DIRTYPE
+        d.mode = 0o755
+        tar.addfile(d)
+        link = tarfile.TarInfo("./a/h")
+        link.type = tarfile.LNKTYPE
+        link.linkname = "../outside.txt"
+        tar.addfile(link)
+
+    out = tmp_path / "restored"
+    report = extract_tree(archive, out)
+
+    assert any("h" in s for s in report.skipped), f"the hardlink was written: {report}"
+    assert not (out / "a" / "h").exists()
+
+
+def test_a_file_written_while_the_walk_was_running_is_carried_again_next_run(
+    tmp_path: Path,
+):
+    """The live-tree hole that `(size, mtime, ctime)` cannot see.
+
+    A workspace file rewritten in the same clock granule the walk stat'd it in
+    keeps all three values — and on a coarse filesystem a "granule" is a whole
+    second. Measured on this machine: /tmp reports whole-second mtime AND ctime,
+    so the triple genuinely does not separate them.
+
+    So a file that fresh is archived and deliberately left OUT of the manifest.
+    It costs one re-carry; the alternative costs the file.
+    """
+    root = _tree(tmp_path)
+    fresh = root / "item-1" / "being-written.txt"
+    fresh.write_bytes(b"written during the walk")
+
+    first = tar_tree(root, tmp_path / "1.tar", previous=None, window_end=_window_end())
+    assert "./item-1/being-written.txt" in first.paths
+    assert "./item-1/being-written.txt" not in first.manifest, (
+        "a file this fresh must not be recorded as held — the next run has to "
+        "re-evaluate it rather than trust a timestamp that may not have settled"
+    )
+
+    second = tar_tree(root, tmp_path / "2.tar", previous=first.manifest, window_end=_window_end())
+
+    assert "./item-1/being-written.txt" in second.paths
+
+
+def test_the_same_fresh_file_IS_recorded_when_the_slack_is_off(tmp_path: Path):
+    """The control, separated from the test above by a different mutation.
+
+    Same file, same freshness, only the slack changes — so if the run above ever
+    passes for some other reason (a bug that records nothing, say), this one
+    fails. Without it, "never record anything" would satisfy both.
+    """
+    root = _tree(tmp_path)
+    fresh = root / "item-1" / "being-written.txt"
+    fresh.write_bytes(b"written during the walk")
+
+    result = tar_tree(
+        root, tmp_path / "1.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
+
+    assert "./item-1/being-written.txt" in result.paths
+    assert "./item-1/being-written.txt" in result.manifest

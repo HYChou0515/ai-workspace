@@ -88,7 +88,7 @@ def test_every_model_transfer_door_is_closed_not_just_the_global_pair():
     registered model, with exactly the same absence of authorization as the
     global pair. On this deployment that is around ninety doors. Fencing two of
     them and writing "the hole is closed" in the runbook would have left the
-    same hole open forty-five times over.
+    same hole open forty-four times over — 44 models, 88 doors.
 
     Derived from the registry rather than listed, so a model added tomorrow has
     to be fenced the day it appears — which is the whole point of not

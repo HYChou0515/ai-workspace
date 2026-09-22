@@ -123,14 +123,20 @@ def _hours(age: dt.timedelta) -> int:
 def _window_start_ms(stamp: dt.datetime, threshold_hours: int) -> str:
     """The epoch-millisecond START of the window `stamp` falls in.
 
-    An epoch START, never `now // interval`. The lifecycle convention says so
-    and the reason bites here: dedup keys outlive the config. With a bucket
-    INDEX, tightening `stale_after_hours` from 26 to 13 roughly doubles every
-    index, so the new keys collide with ones written months ago — and
-    `notification_sent` then silently swallows the alert. Tightening the
-    threshold would make the alarm quieter, which is the opposite of what the
-    operator asked for. A start timestamp cannot collide with a different
-    interval's.
+    An epoch START rather than a bucket index, because the lifecycle convention
+    says so — and it is worth being accurate about why, since the obvious reason
+    is wrong.
+
+    Bucket INDICES at different widths cannot collide: a deployment's history at
+    26 h sits around 19124 and at 13 h around 38248, disjoint bands. CLAIMING
+    otherwise (an earlier version of this comment did) sends a future editor
+    looking for the wrong hazard. CLAUDE.md's actual reason is about a
+    `ScanLease`, where the window is COMPARED and a raised interval locks every
+    pod out; here it is only a dedup-key string, so the index form was harmless.
+
+    A start timestamp is the convention's shape, and it introduces a hazard of
+    its own: a 26-hour window start is also a 13-hour window start. That is what
+    `{threshold_hours}h` in the key is for — see the caller.
     """
     width_ms = threshold_hours * 3_600_000
     now_ms = int(stamp.timestamp() * 1000)

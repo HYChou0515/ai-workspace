@@ -1373,8 +1373,9 @@ job queue(`kind: simple` 時 job 本身就是 specstar resource,已含在內)、
 
 ### 一趟長什麼樣
 
-實際輸出長這樣(這是一次真的執行,不是排版出來的範例 —— 所以大小是 bytes 的整數而不是 `8.1 GB`,
-程式沒有做人類可讀的單位換算):
+實際輸出長這樣 —— 這是一次真的執行,不是排版出來的範例,所以大小是 bytes 的整數而不是 `8.1 GB`
+(程式沒有做人類可讀的單位換算)。那次執行是在開發機上跑的,所以還多印了一行
+`backup:   NOTE mount precondition was disabled …`,那行在 production 不會出現,下面就沒有貼:
 
 ```
 backup: full run 20260922T173551Z (chain 20260922T173551Z) -> /backups/20260922T173551Z

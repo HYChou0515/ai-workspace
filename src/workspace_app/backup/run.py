@@ -56,6 +56,15 @@ logger = logging.getLogger(__name__)
 
 RECEIPT_NAME = "receipt.json"
 
+#: How a run id — and therefore a chain id — is spelled. ONE constant, shared by
+#: the code that writes it and the code that reads it back, because the first
+#: version of this had `strftime("%Y%m%dT%H%M%SZ")` on one side and
+#: `strptime(chain[:16], "%Y%m%dT%H%M%S")` on the other. A real id is exactly
+#: sixteen characters INCLUDING the `Z`, so the slice kept it, `strptime` raised,
+#: an `except` swallowed it, and chain rotation silently never happened.
+_RUN_ID_FORMAT = "%Y%m%dT%H%M%SZ"
+_RUN_ID_LEN = 16
+
 # The windows are half-open: a slice ends one tick before the next begins, so a
 # record written exactly on a boundary lands in exactly one archive. specstar's
 # `updated_time_end` is inclusive, hence the subtraction rather than a `<`.
@@ -189,7 +198,19 @@ def run_backup(
 
     run_id = _unique_run_id(dest, now)
     previous = None if full else _latest_receipt(dest)
-    if previous is not None and _chain_is_stale(previous, now, settings.backup.full_every_days):
+    if previous is not None and _coverage_changed(previous, sources):
+        # The day an operator turns on `nfs_tree`, continuing the chain would
+        # give it a full covering {specstar} and increments covering
+        # {specstar, sandbox-workspaces}. The restore checks coverage PER RUN —
+        # a union across the chain hides exactly this — so such a chain is
+        # refused with the old config AND with the new one. Unrestorable with
+        # any config, forever, while the nightly run keeps reporting success.
+        logger.info(
+            "backup: the set of durable stores changed since chain %s; starting a new one",
+            previous["chain"],
+        )
+        previous = None
+    elif previous is not None and _chain_is_stale(previous, now, settings.backup.full_every_days):
         # Retention deletes along chains, so a deployment that never starts a new
         # one can never delete anything: `keep_chains` is set, nothing is ever
         # pruned, and the destination grows until it is full. Rotating on a
@@ -205,21 +226,19 @@ def run_backup(
         kind, chain, parent = "incremental", str(previous["chain"]), str(previous["run_id"])
         window_start = since if since is not None else _parse(str(previous["window_end"]))
 
-    run_dir = dest / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    started_at = dt.datetime.now(dt.UTC)
-
     if window_start is not None and window_start > now:
-        # A window that ends before it begins matches nothing. Every archive
-        # comes out empty, verification samples the same empty window and
-        # reports success, and the ledger records a run that holds nothing. The
-        # usual causes are a mistyped `--since` year and a clock that stepped.
+        # Checked BEFORE the directory exists. Raising after `mkdir` but before
+        # the try/except that cleans up left an orphan directory on every retry.
         raise ValueError(
             f"the window would start at {window_start.isoformat()} and end at "
             f"{now.isoformat()} — it ends before it begins, so every archive "
             "would be empty and the run would report success. Check --since, and "
             "check the clock on this pod against the pods that write."
         )
+
+    run_dir = dest / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    started_at = dt.datetime.now(dt.UTC)
 
     try:
         results, verified = _write_archives(
@@ -470,6 +489,13 @@ def _require_readable(source: DurableSource) -> None:
         )
 
 
+def _coverage_changed(previous: dict[str, Any], sources: tuple[DurableSource, ...]) -> bool:
+    """Does this run cover a different set of stores than the previous one did?"""
+    was = {str(s["name"]) for s in previous.get("sources", [])}
+    now_covering = {s.name for s in sources}
+    return was != now_covering
+
+
 def _chain_is_stale(previous: dict[str, Any], now: dt.datetime, full_every_days: int) -> bool:
     """Has the current chain's full run aged past `full_every_days`?
 
@@ -481,7 +507,7 @@ def _chain_is_stale(previous: dict[str, Any], now: dt.datetime, full_every_days:
     if full_every_days <= 0:
         return False
     try:
-        began = dt.datetime.strptime(str(previous["chain"])[:16], "%Y%m%dT%H%M%S").replace(
+        began = dt.datetime.strptime(str(previous["chain"])[:_RUN_ID_LEN], _RUN_ID_FORMAT).replace(
             tzinfo=dt.UTC
         )
     except (KeyError, ValueError):
@@ -561,14 +587,18 @@ def _previous_manifest(receipt: dict[str, Any] | None, name: str) -> Manifest | 
             continue
         try:
             raw = json.loads(Path(str(source["manifest"])).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            # The conversion belongs INSIDE the try. It used to sit outside, so a
+            # structurally wrong manifest (`{"./x": [1]}`, or a list at the top
+            # level) raised IndexError / AttributeError, killed the run and had
+            # its directory rmtree'd — the exact opposite of the sentence above.
+            return {str(k): (int(v[0]), int(v[1]), int(v[2])) for k, v in raw.items()}
+        except (OSError, ValueError, TypeError, IndexError, AttributeError, KeyError):
             logger.warning(
                 "backup: previous manifest for %s is unreadable; this run carries the "
                 "whole tree rather than risking a skipped file",
                 name,
             )
             return None
-        return {str(k): (int(v[0]), int(v[1])) for k, v in raw.items()}
     return None
 
 
@@ -620,7 +650,7 @@ def _unique_run_id(dest: Path, now: dt.datetime) -> str:
     directory and overwrite its receipt — losing a link out of the middle of a
     chain, which is the one thing retention is careful never to do.
     """
-    base = now.strftime("%Y%m%dT%H%M%SZ")
+    base = now.strftime(_RUN_ID_FORMAT)
     candidate, n = base, 1
     while (dest / candidate).exists():
         candidate = f"{base}-{n:02d}"

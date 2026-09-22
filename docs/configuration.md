@@ -796,7 +796,7 @@ backup:
   live 記錄指到的 blob 依定義不是孤兒,GC 不會刪它,它不在封存檔裡就是確定的錯。設 0 關掉,receipt 會記下來。
 - **`stale_after_hours` 針對的是「根本沒跑」。** 跑失敗的 CronJob 是紅的、看得到;被停用的排程不會產生任何事件。
   所以每趟成功都留一列,sweeper 讀最新那一列,太舊就寫一筆 `Notification` 給 `server.superusers` ——
-  由部署方自己實作的 `INotificationChannel` 送出去(那個 seam 怎麼實作見 [`extending-the-platform.md`](extending-the-platform.md);§11.5 是 LLM 憑證,不是這個)。預設 **50** 小時,而且是從 CronJob **導出來**的,不是挑的:一天的排程(24h)加上一趟允許跑到
+  由部署方自己實作的 `INotificationChannel` 送出去(那個 seam 的介面是 `api/notification_delivery.py` 的 `INotificationChannel`,由 `server.notification_channel` 指向部署方自己的實作;§11.5 是 LLM 憑證,不是這個)。預設 **50** 小時,而且是從 CronJob **導出來**的,不是挑的:一天的排程(24h)加上一趟允許跑到
   `activeDeadlineSeconds`(20h)再加餘裕 —— 因為 `concurrencyPolicy: Forbid` 之下,一趟用滿期限會把
   下一次**成功**推到遠超過排程間隔。門檻低於這個數字就會對「只是跑得慢」的備份發警報,而會狼來了的
   警報會被靜音。`tests/deploy/test_backup_cronjob.py` 把這個關係釘住了。

@@ -49,6 +49,21 @@ def build_backup_spec(settings: Settings, *, config_dir: Path | None) -> SpecSta
     return spec
 
 
+def _aware_isoformat(text: str) -> dt.datetime:
+    """An ISO-8601 stamp that definitely carries a timezone.
+
+    `--since 2026-01-01` parses to a NAIVE datetime, which then meets an aware
+    one inside the run and raises `TypeError: can't compare offset-naive and
+    offset-aware datetimes` — a traceback about datetimes for what is really "you
+    left the timezone off". Assume UTC and say so.
+    """
+    parsed = dt.datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        print(f"backup: --since {text!r} has no timezone; reading it as UTC", file=sys.stderr)
+        return parsed.replace(tzinfo=dt.UTC)
+    return parsed
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="python -m workspace_app.backup",
@@ -69,13 +84,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--since",
-        type=dt.datetime.fromisoformat,
+        type=_aware_isoformat,
         default=None,
         help=(
             "ISO-8601 lower bound for this run's window, overriding the chain's. "
-            "Use it to bound an initial full over a long history: without a lower "
-            "bound the run is one archive, and one archive is what a restore "
-            "cannot hold in memory."
+            "You almost certainly do not want this: a full already derives its "
+            "lower bound from the oldest record and slices from there, so passing "
+            "a date only moves the bound LATER and puts everything before it in no "
+            "archive, permanently. It exists for re-archiving a known range."
         ),
     )
     return p.parse_args(argv)

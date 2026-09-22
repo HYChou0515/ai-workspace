@@ -21,10 +21,14 @@
 #   2. The `backups` PVC provisioned and pointed at storage OUTSIDE this
 #      cluster's failure domain. See pvc.yaml — a claim on the same storageClass
 #      as rca-data defeats the entire point of the exercise.
-#   3. The first run bounded: `--since <ISO-8601>`, or it is one unbounded
-#      archive and one archive is what a restore cannot hold in memory. Run it by
-#      hand (`kubectl create job --from=cronjob/rca-backup ...`) before letting
-#      the schedule take over.
+#   3. NOT `--since`. A full with no arguments already derives its lower bound
+#      from the oldest record in the store and slices from there. `--since` moves
+#      that bound LATER, so passing a date puts every record older than it in no
+#      archive, permanently — each increment starts at the previous window_end
+#      and nothing goes back. To rehearse by hand:
+#          kubectl create job --from=cronjob/rca-backup backup-first
+#      (`--from` and a command override are mutually exclusive, so a `-- python
+#      -m ...` form does not run at all.)
 apiVersion: batch/v1
 kind: CronJob
 metadata:

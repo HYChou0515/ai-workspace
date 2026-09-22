@@ -165,16 +165,19 @@ def test_the_staleness_threshold_is_above_what_a_slow_run_legitimately_costs():
     without anything being wrong. A threshold below that pages on a backup that
     is merely slow.
 
-    Both numbers are read off the manifest and the settings rather than restated,
-    so moving the schedule or the deadline fails here instead of quietly turning
-    the alarm into noise.
+    The deadline and the threshold are read off the manifest and the settings.
+    The interval is 24h by assumption — and the assumption is ASSERTED above
+    rather than assumed, because a weekly schedule would otherwise keep this
+    green at 24h while the real interval was 168.
     """
     from workspace_app.config.schema import BackupSettings
 
-    minute, hour, *_ = _cronjob()["spec"]["schedule"].split()
-    assert minute.isdigit() and hour.isdigit(), (
-        "this guard assumes a fixed daily time; a different cron shape needs a "
-        "different interval calculation rather than a silently wrong one"
+    minute, hour, dom, month, dow = _cronjob()["spec"]["schedule"].split()
+    assert minute.isdigit() and hour.isdigit() and dom == "*" and month == "*" and dow == "*", (
+        f"schedule {_cronjob()['spec']['schedule']!r} is not a fixed daily time. "
+        "The interval below assumes one; a weekly or monthly schedule needs a "
+        "different calculation rather than a guard that stays green at 24h while "
+        "the real interval is 168."
     )
     interval_s = 24 * 3600
     deadline_s = _job_spec()["activeDeadlineSeconds"]

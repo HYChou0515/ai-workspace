@@ -196,3 +196,67 @@ def test_an_unreadable_previous_receipt_does_not_silently_become_a_full(tmp_path
 
     with pytest.raises(ValueError, match="receipt"):
         run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+
+
+def test_a_chain_older_than_full_every_days_rotates(tmp_path: Path):
+    """`keep_chains` deletes along chain boundaries, so a deployment that never
+    starts a new chain can never prune anything — the destination grows until it
+    is full no matter what the knob says.
+
+    ⚠️ The chain id here comes from `run_backup` itself, never from a
+    hand-written string. The first version of this rotation parsed
+    `chain[:16]` with `"%Y%m%dT%H%M%S"`, and a real id is exactly sixteen
+    characters INCLUDING its trailing `Z` — so `strptime` raised, the `except`
+    swallowed it, and the knob was dead. A test written with `"20260101T020000"`
+    would have passed on that.
+    """
+    dest = tmp_path / "backups"
+    settings = _settings(tmp_path / "data", dest)
+    spec, files = _live(settings)
+    asyncio.run(files.write("ws-1", "/one.txt", FIRST))
+
+    started = dt.datetime.now(dt.UTC)
+    first = run_backup(settings, spec, now=started)
+    soon = run_backup(settings, spec, now=started + dt.timedelta(days=1))
+    assert soon.chain == first.chain, "a one-day-old chain must not rotate at 7"
+
+    later = run_backup(settings, spec, now=started + dt.timedelta(days=30))
+
+    assert later.kind == "full"
+    assert later.chain != first.chain, (
+        "a 30-day-old chain must rotate — otherwise keep_chains prunes nothing, "
+        "ever, on any deployment"
+    )
+
+
+def test_a_coverage_change_starts_a_new_chain_rather_than_a_chain_nobody_can_restore(
+    tmp_path: Path,
+):
+    """The day an operator turns on `nfs_tree`, the chain would otherwise hold a
+    full covering {specstar} and increments covering {specstar, workspaces}.
+
+    The restore checks coverage PER RUN (it has to — a union hides exactly this),
+    so such a chain is refused with the old config AND with the new one. It is
+    unrestorable with any config, forever, while the nightly backup keeps
+    reporting success. The only safe answer is to start a new chain at the moment
+    the set changes.
+    """
+    dest = tmp_path / "backups"
+    tree = tmp_path / "workspaces"
+    tree.mkdir()
+    before = _settings(tmp_path / "data", dest)
+    spec, files = _live(before)
+    asyncio.run(files.write("ws-1", "/one.txt", FIRST))
+    first = run_backup(before, spec, now=dt.datetime.now(dt.UTC))
+
+    after = Settings(
+        filestore=FilestoreSettings(kind="specstar", disk_root=str(tmp_path / "data")),
+        sandbox=SandboxSettings(
+            durable=SandboxDurableSettings(kind="nfs_tree", nfs_root=str(tree))
+        ),
+        backup=BackupSettings(dest=str(dest), require_mounted_sources=False),
+    )
+    second = run_backup(after, spec, now=dt.datetime.now(dt.UTC))
+
+    assert second.kind == "full"
+    assert second.chain != first.chain
