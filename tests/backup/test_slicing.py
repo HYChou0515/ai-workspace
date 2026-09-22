@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-from workspace_app.backup import chain_of, run_backup
+from workspace_app.backup import chain_of, restore_chain, run_backup
 from workspace_app.backup.ledger import register_backup_ledger
 from workspace_app.config.schema import (
     BackupSettings,
@@ -260,3 +260,56 @@ def test_a_coverage_change_starts_a_new_chain_rather_than_a_chain_nobody_can_res
 
     assert second.kind == "full"
     assert second.chain != first.chain
+
+
+def test_an_incremental_reads_the_previous_runs_tree_manifest(tmp_path: Path):
+    """The wiring from one run's receipt to the next run's tree diff.
+
+    Every other run-level test in this file uses `sandbox.durable.kind: ""`, so
+    until this one no test exercised a tree source through `run_backup` at all —
+    `_previous_manifest`, the manifest file it reads, and the incremental tar
+    path all had zero coverage. Both failure directions are silent: a full tree
+    every night, or files skipped forever.
+    """
+    dest = tmp_path / "backups"
+    tree = tmp_path / "workspaces"
+    (tree / "item-1").mkdir(parents=True)
+    (tree / "item-1" / "kept.md").write_bytes(b"there before the full")
+    settings = Settings(
+        filestore=FilestoreSettings(kind="specstar", disk_root=str(tmp_path / "data")),
+        sandbox=SandboxSettings(
+            durable=SandboxDurableSettings(kind="nfs_tree", nfs_root=str(tree))
+        ),
+        backup=BackupSettings(dest=str(dest), require_mounted_sources=False),
+    )
+    spec, files = _live(settings)
+    asyncio.run(files.write("ws-1", "/a.txt", FIRST))
+
+    full = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+    tree_full = next(s for s in full.source_results if s.kind == "tree")
+    assert tree_full.files >= 2, "the full has to carry the tree it found"
+    assert Path(tree_full.manifest).is_file(), "the run must leave a manifest to diff against"
+
+    (tree / "item-1" / "added.md").write_bytes(b"written after the full")
+    incremental = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+    tree_inc = next(s for s in incremental.source_results if s.kind == "tree")
+
+    assert incremental.kind == "incremental"
+    assert 0 < tree_inc.files < tree_full.files, (
+        "the incremental must carry the new file and NOT the whole tree — "
+        f"full carried {tree_full.files}, incremental carried {tree_inc.files}"
+    )
+
+    target_tree = tmp_path / "restored-workspaces"
+    target = Settings(
+        filestore=FilestoreSettings(kind="specstar", disk_root=str(tmp_path / "restored")),
+        sandbox=SandboxSettings(
+            durable=SandboxDurableSettings(kind="nfs_tree", nfs_root=str(target_tree))
+        ),
+        backup=BackupSettings(dest=str(dest), require_mounted_sources=False),
+    )
+    target_spec, _ = _live(target)
+    restore_chain(target, target_spec, confirm=True)
+
+    assert (target_tree / "item-1" / "kept.md").read_bytes() == b"there before the full"
+    assert (target_tree / "item-1" / "added.md").read_bytes() == b"written after the full"

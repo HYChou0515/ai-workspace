@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
+import shutil
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 
-from workspace_app.backup import CoverageMismatch, run_backup
+from workspace_app.backup import ChainIncomplete, CoverageMismatch, run_backup
 from workspace_app.backup.ledger import register_backup_ledger
 from workspace_app.backup.restore import restore_chain
 from workspace_app.config.schema import (
@@ -139,3 +141,70 @@ def test_an_empty_destination_says_so_rather_than_succeeding_quietly(tmp_path: P
 
     with pytest.raises(ValueError, match="no completed backup"):
         restore_chain(settings, spec, confirm=True)
+
+
+def test_a_chain_whose_full_is_missing_is_refused(tmp_path: Path):
+    """A deleted run directory takes its receipt with it, so the run is simply
+    absent from the list — invisible to an "is every named artifact there?"
+    check. If the missing one is the full, the increments replay and the restore
+    reports success while every record older than the first surviving window
+    stays lost."""
+    dest = tmp_path / "backups"
+    settings = _settings(tmp_path / "data", dest)
+    spec, files = _live(settings)
+    asyncio.run(files.write("ws-1", "/one.txt", KEPT))
+    full = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+    asyncio.run(files.write("ws-1", "/two.txt", LATER))
+    run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+
+    shutil.rmtree(dest / full.run_id)
+
+    target_spec, _ = _live(_settings(tmp_path / "restored", dest))
+    with pytest.raises(ChainIncomplete, match="does not start with a full run"):
+        restore_chain(_settings(tmp_path / "restored", dest), target_spec, confirm=True)
+
+
+def test_a_chain_with_a_hole_in_the_middle_is_refused(tmp_path: Path):
+    """Same class, harder to see: the full survives and an increment in the
+    middle does not, so every run after the gap assumes records nobody has."""
+    dest = tmp_path / "backups"
+    settings = _settings(tmp_path / "data", dest)
+    spec, files = _live(settings)
+    asyncio.run(files.write("ws-1", "/one.txt", KEPT))
+    run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+    asyncio.run(files.write("ws-1", "/two.txt", LATER))
+    middle = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+    asyncio.run(files.write("ws-1", "/three.txt", KEPT + b"3"))
+    run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+
+    shutil.rmtree(dest / middle.run_id)
+
+    target_spec, _ = _live(_settings(tmp_path / "restored", dest))
+    with pytest.raises(ChainIncomplete, match="has a hole"):
+        restore_chain(_settings(tmp_path / "restored", dest), target_spec, confirm=True)
+
+
+def test_an_archive_carrying_an_unknown_model_is_refused_before_anything_is_written(
+    tmp_path: Path,
+):
+    """`spec.load` raises on an unknown model MID-STREAM, after every model that
+    sorted earlier has already been flushed — no transaction, no record of how
+    far it got. The receipt names the models, so this is answerable first.
+
+    The real-world shape is an archive from a newer image restored onto a
+    rolled-back one."""
+    dest = tmp_path / "backups"
+    settings = _settings(tmp_path / "data", dest)
+    spec, files = _live(settings)
+    asyncio.run(files.write("ws-1", "/one.txt", KEPT))
+    receipt = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
+
+    # Forge what a newer image's archive would look like from this one's.
+    path = Path(receipt.directory) / "receipt.json"
+    raw = json.loads(path.read_text())
+    raw["sources"][0]["models"] = [*raw["sources"][0]["models"], "a-model-from-the-future"]
+    path.write_text(json.dumps(raw))
+
+    target_spec, _ = _live(_settings(tmp_path / "restored", dest))
+    with pytest.raises(CoverageMismatch, match="a-model-from-the-future"):
+        restore_chain(_settings(tmp_path / "restored", dest), target_spec, confirm=True)

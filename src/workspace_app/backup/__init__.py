@@ -12,7 +12,7 @@ archive whole, and an HTTP import replaces the database from an uploaded file.
 """
 
 from .ledger import BackupLedger
-from .restore import CoverageMismatch, RestoreReport, restore_chain
+from .restore import ChainIncomplete, CoverageMismatch, RestoreReport, restore_chain
 from .run import RECEIPT_NAME, Receipt, SourceResult, chain_of, run_backup
 from .sources import DurableSource, SourceKind, UnsupportedDeployment, durable_sources
 from .staleness import sweep_backup_staleness
@@ -21,6 +21,7 @@ from .verify import IncompleteArchive, verify_archives
 __all__ = [
     "RECEIPT_NAME",
     "BackupLedger",
+    "ChainIncomplete",
     "CoverageMismatch",
     "DurableSource",
     "IncompleteArchive",

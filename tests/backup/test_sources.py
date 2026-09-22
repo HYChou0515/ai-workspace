@@ -137,3 +137,15 @@ def test_nfs_tree_without_a_root_raises():
 
     with pytest.raises(UnsupportedDeployment, match="nfs_root"):
         durable_sources(settings)
+
+
+def test_a_naive_since_is_read_as_utc_rather_than_exploding_later():
+    """`--since 2026-01-01` is what an operator types. It parses to a NAIVE
+    datetime, which then meets an aware one inside the run and raises
+    `TypeError: can't compare offset-naive and offset-aware datetimes` — a
+    traceback about datetimes for what is really "you left the timezone off"."""
+    from workspace_app.backup.run import parse_since
+
+    assert parse_since("2026-01-01").tzinfo is not None
+    offset = parse_since("2026-01-01T00:00:00+08:00").utcoffset()
+    assert offset is not None and offset.total_seconds() == 8 * 3600

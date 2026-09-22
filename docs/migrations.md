@@ -868,6 +868,10 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 - 新區塊 `backup:`,**預設全關**(`dest: ""`)。不填就是沒有備份:`python -m workspace_app.backup` 拒絕執行
   (而且是在組 app **之前**就拒絕,所以不會白跑一趟 `spec.apply`),API 也不會起 staleness sweeper。
+  ⚠️ **但「只填 `backup.dest`」不是 no-op。** 它會打開 API 的 staleness sweeper,而在還沒有任何一趟
+  成功的 run 時,sweeper 的第一次檢查(pod 一開機就跑)得到的結論是「從來沒有備份完成過」。
+  所以 `BACKUP_DEST`、`kustomization.yaml` 的 CronJob、`pvc.yaml` 的 `backups` claim **三件要一起開**,
+  否則 rollout 當下就會對 superuser 發警報 —— 而第一趟排程根本還沒到。
   要開就填 `backup.dest`;configmap 有 `BACKUP_DEST`,在 `config.yaml` 接成 **block form**:
   ```yaml
   backup:
@@ -941,6 +945,16 @@ collection 名字,而 import 的 `on_duplicate` 預設是 `overwrite`。叢集�
   只有一個來源、但你跑的是 `nfs_tree` → 上一條的 volume 註解沒拿掉。
 - **驗證真的有跑**:receipt 的 `verified_blobs` 大於 0。它是 0 表示這趟沒有抽到任何 blob 參照可檢查 ——
   空的樣本會通過任何檢查,所以這個數字要自己看。
+- **⚠️ 警報有沒有收件人。** `sweep_backup_staleness` 是唯一會注意到「備份停了」的機制,而它寫的
+  `Notification` 是寄給 `server.superusers` 的 —— 那個欄位**預設是空的**(`config/schema.py` 自己寫著
+  「Empty (default) ⇒ no superusers, as in prod today」)。空的時候 sweeper 只會在 log 留一行 WARNING,
+  不會有任何人收到。而且就算設了 superuser,`server.notification_channel` 預設也是空字串,
+  那則通知就只會停在 in-app 鈴鐺、不會寄出去。所以這兩個要一起確認:
+  ```sh
+  kubectl logs deploy/rca-app | grep 'server.superusers'      # config dump 裡要有人
+  kubectl logs deploy/rca-app | grep -i 'no operator to notify'   # 要沒有這一行
+  ```
+  漏做的症狀:備份哪天真的停了,沒有任何人知道 —— 而這整個 sweeper 存在的理由就是這件事。
 - **演練過才算數**:在 stg 跑 `python scripts/backup_drill.py --source-config … --target-config …`。
   它會在備份進行中持續寫入,最後印 `before / during / after` 三個數字並給 PASS/FAIL。
   `before` 不是全數還原就是資料遺失,不是一致性細節。

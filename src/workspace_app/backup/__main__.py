@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..config.schema import Settings
-from .run import run_backup
+from .run import parse_since, run_backup
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from specstar import SpecStar
@@ -47,21 +47,6 @@ def build_backup_spec(settings: Settings, *, config_dir: Path | None) -> SpecSta
     app = build_app(settings, config_dir=config_dir)
     spec = app.state.spec
     return spec
-
-
-def _aware_isoformat(text: str) -> dt.datetime:
-    """An ISO-8601 stamp that definitely carries a timezone.
-
-    `--since 2026-01-01` parses to a NAIVE datetime, which then meets an aware
-    one inside the run and raises `TypeError: can't compare offset-naive and
-    offset-aware datetimes` — a traceback about datetimes for what is really "you
-    left the timezone off". Assume UTC and say so.
-    """
-    parsed = dt.datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        print(f"backup: --since {text!r} has no timezone; reading it as UTC", file=sys.stderr)
-        return parsed.replace(tzinfo=dt.UTC)
-    return parsed
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -84,7 +69,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--since",
-        type=_aware_isoformat,
+        type=parse_since,
         default=None,
         help=(
             "ISO-8601 lower bound for this run's window, overriding the chain's. "

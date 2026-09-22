@@ -86,6 +86,21 @@ def _parse(stamp: str) -> dt.datetime:
     return parsed
 
 
+def parse_since(text: str) -> dt.datetime:
+    """An ISO-8601 stamp that definitely carries a timezone.
+
+    `--since 2026-01-01` parses to a NAIVE datetime, which then meets an aware
+    one inside the run and raises `TypeError: can't compare offset-naive and
+    offset-aware datetimes` — a traceback about datetimes for what is really "you
+    left the timezone off". Assume UTC and say so.
+    """
+    parsed = dt.datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        logger.warning("backup: --since %r has no timezone; reading it as UTC", text)
+        return parsed.replace(tzinfo=dt.UTC)
+    return parsed
+
+
 @dataclass(frozen=True)
 class SourceResult:
     """What one store contributed for one window.

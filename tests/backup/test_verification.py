@@ -94,3 +94,19 @@ def test_verification_reports_how_many_it_actually_checked(tmp_path: Path):
     receipt = run_backup(settings, spec, now=dt.datetime.now(dt.UTC))
 
     assert receipt.verified_blobs >= 5
+
+
+def test_a_blob_nested_in_a_dict_field_is_sampled():
+    """The walker handles dicts on purpose, and the reason is this repo's own
+    blob-GC note: specstar builds a blob collector for any list / dict / union
+    field whatever its value type, so "models with a Binary attribute" is not
+    the real set. That branch had no test, so the generality was asserted and
+    never exercised."""
+    from specstar.types import Binary
+
+    from workspace_app.backup import verify
+
+    payload = Binary(data=b"nested", file_id="deadbeef")
+    found = list(verify._binaries({"outer": [{"inner": payload}]}))
+
+    assert [b.file_id for b in found] == ["deadbeef"]

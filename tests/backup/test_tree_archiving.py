@@ -396,3 +396,97 @@ def test_the_same_fresh_file_IS_recorded_when_the_slack_is_off(tmp_path: Path):
 
     assert "./item-1/being-written.txt" in result.paths
     assert "./item-1/being-written.txt" in result.manifest
+
+
+def test_an_unchanged_file_the_window_excluded_is_not_re_archived_forever(tmp_path: Path):
+    """The carry-forward half of the manifest invariant.
+
+    Its sibling — "never record what you did not archive" — is what stops data
+    loss, and `test_a_file_excluded_by_the_window_is_carried_by_the_NEXT_run`
+    pins that. THIS one pins the other direction: a file an earlier run DID
+    archive, which a later run happens to exclude by the window, must not be
+    carried again forever afterwards. Dropping its entry entirely would be safe
+    and would re-archive it every single run.
+
+    That distinction matters because the line it exercises
+    (`manifest[arcname] = held[arcname]`) was executed by no test at all until
+    this one — the invariant was written, reviewed, committed, and never run.
+    """
+    root = _tree(tmp_path)
+    settled = root / "item-1" / "settled.txt"
+    settled.write_bytes(b"archived once, never touched again")
+    old = dt.datetime.now(dt.UTC) - dt.timedelta(days=30)
+    os.utime(settled, (old.timestamp(), old.timestamp()))
+
+    first = tar_tree(
+        root, tmp_path / "1.tar", previous=None, window_end=_window_end(), stamp_slack_ns=0
+    )
+    assert "./item-1/settled.txt" in first.paths
+    assert "./item-1/settled.txt" in first.manifest
+
+    # A run whose window closed before the file's timestamp — a clock step, or a
+    # run whose `now` was captured before the tree was touched.
+    excluded = tar_tree(
+        root,
+        tmp_path / "2.tar",
+        previous=first.manifest,
+        window_end=old - dt.timedelta(days=1),
+        stamp_slack_ns=0,
+    )
+    assert "./item-1/settled.txt" not in excluded.paths
+    assert (
+        excluded.manifest.get("./item-1/settled.txt") == first.manifest["./item-1/settled.txt"]
+    ), (
+        "the entry the earlier run earned must be carried forward — dropping it "
+        "would re-archive an untouched file on every run from now on"
+    )
+
+    third = tar_tree(
+        root,
+        tmp_path / "3.tar",
+        previous=excluded.manifest,
+        window_end=_window_end(),
+        stamp_slack_ns=0,
+    )
+
+    assert "./item-1/settled.txt" not in third.paths
+
+
+def test_a_member_naming_a_path_outside_the_tree_is_refused(tmp_path: Path):
+    """The plain traversal check. `extract_tree` deliberately does not use
+    `extractall(filter="data")`, so this is the only thing standing between a
+    user-authored workspace and the rest of the filesystem — and it had never
+    been executed by a test."""
+    import tarfile
+
+    archive = tmp_path / "evil.tar"
+    payload = b"i should never be written"
+    with tarfile.open(archive, "w") as tar:
+        info = tarfile.TarInfo("../escaped.txt")
+        info.size = len(payload)
+        import io
+
+        tar.addfile(info, io.BytesIO(payload))
+
+    out = tmp_path / "restored"
+    report = extract_tree(archive, out)
+
+    assert any("escaped" in s for s in report.skipped)
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_a_device_member_is_refused(tmp_path: Path):
+    """A tar can name a character device. `filter="data"` raises on one; this
+    skips and counts it, which is only true if the branch actually runs."""
+    import tarfile
+
+    archive = tmp_path / "dev.tar"
+    with tarfile.open(archive, "w") as tar:
+        info = tarfile.TarInfo("./null")
+        info.type = tarfile.CHRTYPE
+        info.devmajor, info.devminor = 1, 3
+        tar.addfile(info)
+
+    report = extract_tree(archive, tmp_path / "restored")
+
+    assert any("null" in s for s in report.skipped)

@@ -109,9 +109,13 @@ data:
   # BLOCK form, not `backup: { dest: ${BACKUP_DEST} }` — a `{` inside a flow
   # mapping is a YAML parse error and the pod never boots. Same trap as the
   # run_consumers note above; it has already caught somebody once.
-  # The CronJob and its `backups` PVC are commented out in kustomization.yaml /
-  # pvc.yaml, so setting this alone changes nothing — see docs/migrations.md#pr-842.
-  # That claim must resolve to storage OUTSIDE this cluster.
+  # ⚠️ Setting this ALONE is not a no-op. It is what switches on the API's
+  # staleness sweeper, and with no completed run the sweeper's first tick — at
+  # pod boot — says "no backup run has ever completed". So a deployment that
+  # sets BACKUP_DEST without also uncommenting cronjob-backup.yaml and the
+  # `backups` PVC will alert its superusers about a backup it has not scheduled
+  # yet. Do all three together, or none. See docs/migrations.md#pr-842.
+  # The `backups` claim must resolve to storage OUTSIDE this cluster.
   #
   # The other backup knobs (slice_days, keep_chains, verify_sample,
   # stale_after_hours, require_mounted_sources) are deliberately NOT here. They

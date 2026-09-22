@@ -138,3 +138,13 @@ def test_no_superusers_means_nobody_to_tell_and_it_says_so(tmp_path: Path, caplo
 
     assert sent == 0
     assert any("superuser" in r.message for r in caplog.records)
+
+
+def test_setting_the_threshold_to_zero_disables_the_check(tmp_path: Path):
+    """`0` is the documented off-switch. Untested until now, which is how an
+    off-switch quietly becomes an on-switch."""
+    settings = _settings(tmp_path / "data", tmp_path / "backups", stale_after_hours=0)
+    spec, _ = _live(settings)
+
+    assert sweep_backup_staleness(spec, settings, superusers=SUPERUSERS) == 0
+    assert _alerts(spec) == []
