@@ -69,7 +69,10 @@ from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from fastapi import FastAPI
+    from specstar import SpecStar
 
     from workspace_app.config.schema import Settings
 
@@ -93,6 +96,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     return p.parse_args(argv)
+
+
+def _backup_staleness_probe(settings: Settings, spec: SpecStar) -> Callable[[], int] | None:
+    """What the API pod calls to notice that backups have stopped.
+
+    ``None`` when no ``backup.dest`` is set: that deploy has not opted into
+    backups, and alerting it about one it never asked for is how an alert becomes
+    something people filter out. Built here rather than inside ``create_app`` so
+    the API package keeps no dependency on the backup package — the same shape as
+    the notification channel and the request-env seam beside it.
+    """
+    if not settings.backup.dest:
+        return None
+    from .backup import sweep_backup_staleness
+
+    superusers = frozenset(settings.server.superusers)
+    return lambda: sweep_backup_staleness(spec, settings, superusers=superusers)
 
 
 def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
@@ -221,6 +241,12 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             # The deploy's outbound channel for notifications. Empty ⇒ in-app
             # only, which is where they have always been.
             notification_channel=get_notification_channel(settings.server.notification_channel),
+            # plan-backup P5: a backup that never RAN produces no event, so a
+            # pod has to go looking. Built here because this is where the
+            # settings and the superuser set already are; None when no
+            # `backup.dest` is configured, which is the deploy saying it has not
+            # opted in.
+            backup_staleness=_backup_staleness_probe(settings, spec),
             # A runaway guard on how many schedules one page may declare.
             max_page_schedules=settings.server.max_page_schedules,
             # #750: the deploy's own credential->variable implementations.

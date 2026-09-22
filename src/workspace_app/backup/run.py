@@ -45,7 +45,9 @@ from specstar.query_types import (
 )
 
 from ..config.schema import Settings
+from .ledger import BackupLedger
 from .sources import DurableSource, durable_sources
+from .verify import verify_archives
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from specstar import SpecStar
@@ -126,6 +128,11 @@ class Receipt:
     started_at: str
     finished_at: str
     mount_checked: bool
+    # How many live blob references were checked against this run's own archives.
+    # Recorded rather than implied: a sample of zero passes every check ever
+    # written, so "verified" has to be distinguishable from "found nothing to
+    # verify".
+    verified_blobs: int
     sources: list[dict[str, Any]] = field(default_factory=list)
     source_results: list[SourceResult] = field(default_factory=list)
 
@@ -190,6 +197,12 @@ def run_backup(
     for source in sources:
         for seq, window in enumerate(windows):
             results.append(_archive(source, spec, run_dir, seq=seq, window=window))
+    # Verify BEFORE the receipt: the receipt's presence is what marks a run
+    # complete, so a run that cannot prove its archives hold what they reference
+    # must not leave one behind. The directory stays for diagnosis and is
+    # invisible to every chain query, because those key on the receipt.
+    verified = _verify(spec, results, window_start, now, settings.backup.verify_sample)
+
     finished = dt.datetime.now(dt.UTC)
 
     receipt = Receipt(
@@ -203,10 +216,16 @@ def run_backup(
         started_at=started.isoformat(),
         finished_at=finished.isoformat(),
         mount_checked=checked,
+        verified_blobs=verified,
         sources=[asdict(r) for r in results],
         source_results=results,
     )
     _write_receipt(run_dir, receipt)
+    # Record the run where the PLATFORM can see it, not only where the operator
+    # can. A receipt on the destination volume answers "did this run finish"; a
+    # ledger row is what lets the API notice that no run has finished lately,
+    # which is the failure that produces no event of its own.
+    BackupLedger(spec).record(receipt)
     _prune_chains(dest, settings.backup.keep_chains, keep=chain)
     logger.info(
         "backup: %s run %s (chain %s) wrote %d archive(s), %d bytes total",
@@ -217,6 +236,34 @@ def run_backup(
         sum(r.bytes for r in results),
     )
     return receipt
+
+
+def _verify(
+    spec: SpecStar,
+    results: list[SourceResult],
+    start: dt.datetime | None,
+    end: dt.datetime,
+    sample: int,
+) -> int:
+    """Check a sample of this run's own blob references against its archives.
+
+    Sampled over the run's whole window and checked across all of its specstar
+    archives, so a reference that landed in a different slice than expected still
+    counts as present. Sampling outside the window would fail an incremental for
+    records it was never meant to carry.
+    """
+    if sample <= 0:
+        return 0
+    archives = [Path(r.artifact) for r in results if r.kind == "specstar"]
+    if not archives:
+        return 0
+
+    def _query_for(_name: str) -> ResourceMetaSearchQuery:
+        if start is None:
+            return ResourceMetaSearchQuery(limit=sample)
+        return ResourceMetaSearchQuery(updated_time_start=start, updated_time_end=end, limit=sample)
+
+    return verify_archives(spec, _query_for, archives, limit=sample)
 
 
 def chain_of(dest: Path | str, chain: str) -> list[str]:
@@ -468,6 +515,7 @@ def _write_receipt(run_dir: Path, receipt: Receipt) -> None:
         "started_at": receipt.started_at,
         "finished_at": receipt.finished_at,
         "mount_checked": receipt.mount_checked,
+        "verified_blobs": receipt.verified_blobs,
         "sources": receipt.sources,
     }
     tmp = run_dir / f".{RECEIPT_NAME}.partial"

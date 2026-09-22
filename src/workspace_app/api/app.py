@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
     # here would be circular. `SubagentModel` values arrive through parameters.
     from ..factories import SubagentModel
+from ..backup.ledger import register_backup_ledger
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -431,6 +432,16 @@ def create_app(
     # A deploy's outbound notification channel (`server.notification_channel`).
     # None ⇒ notifications stay in-app, exactly as before this seam existed.
     notification_channel: INotificationChannel | None = None,
+    # plan-backup P5: what this pod calls to notice that no backup has completed
+    # lately. `__main__` passes a closure over the deploy's settings +
+    # superusers; None ⇒ no `backup.dest`, so there is nothing to watch. A
+    # callable rather than the settings, so neither this module nor `lifecycle`
+    # grows a dependency on the backup package.
+    backup_staleness: Callable[[], int] | None = None,
+    # How often that probe runs. Hourly is plenty — the threshold it compares
+    # against is measured in days, and an alert about a backup that stopped
+    # yesterday does not get better for being an hour fresher.
+    backup_staleness_interval: timedelta = timedelta(hours=1),
     # Most schedules ONE PAGE may declare (`server.max_page_schedules`). A
     # runaway guard, not a policy limit — see the sweeper's constant.
     max_page_schedules: int = DEFAULT_MAX_ROWS,
@@ -1351,6 +1362,8 @@ def create_app(
         # app already resolved.
         user_schedule_sweeper=user_schedule_sweeper,
         notification_channel=notification_channel,
+        backup_staleness=backup_staleness,
+        backup_staleness_interval=backup_staleness_interval,
         offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         # #674: warm every app's declared third-party bundles at boot.
@@ -1728,6 +1741,14 @@ def create_app(
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
+    # plan-backup P5: the completed-run ledger, post-apply for the same two
+    # reasons as the rows above. No CRUD routes — a world-writable backup-run
+    # table would let anyone forge freshness or delete the evidence that backups
+    # stopped. And the model has to exist in THIS composition, because the model
+    # set is what a backup archives and what a restore can load: registering it
+    # lazily would make an archive's contents depend on which code path ran
+    # first.
+    register_backup_ledger(spec)
     # These four used to be registered by the lifespan — two of them only when
     # their feature was on. The blob-gc worker composes THIS function and never
     # enters a lifespan, and the API's ask names every model the API holds, so

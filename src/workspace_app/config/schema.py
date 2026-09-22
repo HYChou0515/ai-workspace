@@ -1517,6 +1517,20 @@ class BackupSettings:
     # dropping the full out of a chain leaves archives that restore nothing while
     # still looking like a full directory.
     keep_chains: int = 0
+    # How many live blob references one run checks against its own archives. The
+    # run's exit status cannot carry this — specstar's dump skips a blob it
+    # cannot read and still finishes cleanly (specstar#450 S2) — and a COUNT
+    # comparison cannot either, because blob-gc shrinks counts on purpose. A
+    # sample of referential integrity is immune to that: a blob a live record
+    # points at is by definition not an orphan. Raise it to trade run time for
+    # confidence; 0 disables the check and says so on the receipt.
+    verify_sample: int = 32
+    # How old the newest completed run may be before the platform says so. A
+    # failed run is visible (the CronJob goes red); a run that never STARTED
+    # produces no event at all, so absence has to be turned into a row somebody
+    # reads. Sized above the interval plus one missed run, so a single retry does
+    # not page anyone. 0 disables the check.
+    stale_after_hours: int = 26
 
 
 # ─── top-level Settings ────────────────────────────────────────────────

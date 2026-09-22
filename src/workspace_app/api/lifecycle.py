@@ -116,6 +116,12 @@ def build_lifespan(
     # plan-graceful-shutdown P3: how often a pod looks for turns whose pod is
     # gone. None ⇒ no sweeper (a single-pod deploy has no peer to take over).
     turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
+    # plan-backup P5: "no backup has happened lately" produces no event of its
+    # own, so a loop has to go looking. A callable rather than the settings, so
+    # this module keeps knowing nothing about backups; None ⇒ the deploy has not
+    # configured a destination and there is nothing to watch.
+    backup_staleness: Callable[[], int] | None = None,
+    backup_staleness_interval: timedelta = timedelta(hours=1),
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
     warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -492,6 +498,28 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def backup_staleness_sweeper() -> None:
+        """Say so when the newest backup is too old — or has never happened.
+
+        Stays on the API for the reason the lifecycle convention allows: it reads
+        ONE row (the newest ledger entry) and writes at most one notification per
+        operator per window. Nothing here grows with content, so every pod
+        running it costs N cheap reads rather than N full scans, and the
+        send-once fingerprint collapses the duplicates. No `ScanLease` for the
+        same reason — a lease would be more machinery than the work it guards.
+        """
+        assert backup_staleness is not None  # gated by caller
+        try:
+            while True:
+                await asyncio.sleep(backup_staleness_interval.total_seconds())
+                # One bad sweep must not end the loop. The next tick retries, and
+                # a backup that is stale now is still stale in an hour — this is
+                # the one alert that does not need to be timely to the minute.
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(backup_staleness)
+        except asyncio.CancelledError:
+            return
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
@@ -654,6 +682,12 @@ def build_lifespan(
             # can disagree — and a deploy with triggers off gets no surprise
             # background loop from a page.
             bg.append(asyncio.create_task(user_schedule_loop()))
+        if backup_staleness is not None:
+            # Only when a destination is configured. Without one the deploy has
+            # not opted into backups, and a loop that wakes forever to decide
+            # there is nothing to say is a loop nobody asked for.
+            bg.append(asyncio.create_task(backup_staleness_sweeper()))
+            logger.debug("lifespan: backup-staleness sweeper enabled")
 
         if notification_channel is not None:
             # Only when a deploy named one. Without a channel there is nowhere to

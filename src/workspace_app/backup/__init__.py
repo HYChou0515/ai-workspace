@@ -11,12 +11,17 @@ fenced off in `api/app.py` — at 100 GB – 2 TB an HTTP export would buffer th
 archive whole, and an HTTP import replaces the database from an uploaded file.
 """
 
+from .ledger import BackupLedger
 from .run import RECEIPT_NAME, Receipt, SourceResult, chain_of, run_backup
 from .sources import DurableSource, SourceKind, UnsupportedDeployment, durable_sources
+from .staleness import sweep_backup_staleness
+from .verify import IncompleteArchive, verify_archives
 
 __all__ = [
     "RECEIPT_NAME",
+    "BackupLedger",
     "DurableSource",
+    "IncompleteArchive",
     "Receipt",
     "SourceKind",
     "SourceResult",
@@ -24,4 +29,6 @@ __all__ = [
     "chain_of",
     "durable_sources",
     "run_backup",
+    "sweep_backup_staleness",
+    "verify_archives",
 ]

@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 
 from workspace_app.backup import chain_of, run_backup
+from workspace_app.backup.ledger import register_backup_ledger
 from workspace_app.config.schema import (
     BackupSettings,
     FilestoreSettings,
@@ -49,8 +50,17 @@ def _settings(root: Path, dest: Path, *, slice_days: int = 7, keep_chains: int =
 
 
 def _live(settings: Settings):
+    """A deployment's spec, composed the way `create_app` composes one.
+
+    Both registrations matter for a restore, and for the same reason: `load`
+    refuses a model its registry does not know, so the target has to hold every
+    model the source archived. `WorkspaceFile` comes from the filestore and the
+    run ledger from `register_backup_ledger` — neither is in `make_spec`, which
+    is exactly why the real entry points build the API's own composition.
+    """
     spec = get_spec(settings)
     spec.apply(FastAPI())
+    register_backup_ledger(spec)
     return spec, SpecstarFileStore(spec)
 
 
