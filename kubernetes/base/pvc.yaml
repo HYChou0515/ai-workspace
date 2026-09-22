@@ -61,3 +61,30 @@ spec:
 #     requests:
 #       storage: 20Gi
 #   # storageClassName: nfs   # MUST be an NFS RWX class
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backups
+spec:
+  # docs/plan-backup.md — where `python -m workspace_app.backup` writes.
+  #
+  # ⚠️ This claim MUST be backed by storage OUTSIDE this cluster's failure
+  # domain. The whole point of the backup is the case where rca-data is gone,
+  # and a claim on the same storageClass as rca-data goes with it. An NFS export
+  # on another machine, an object store mounted in, a second site's filer — the
+  # program does not care which, because it writes plain files; it only matters
+  # that losing this cluster does not lose this volume.
+  #
+  # ReadWriteOnce is enough: exactly one CronJob pod writes here at a time
+  # (`concurrencyPolicy: Forbid`), and a restore mounts it separately.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Sized from the live data, not from a guess: roughly 1.5-2x, because a
+      # chain holds a full plus its increments and `backup.keep_chains` decides
+      # how many chains survive. Measure `du -sh /data` and `du -sh /mnt/workspaces`
+      # first — plan-backup.md §6.2 says so and means it.
+      storage: 200Gi
+  # storageClassName: ""   # MUST resolve to off-cluster storage. See above.

@@ -1,0 +1,101 @@
+# docs/plan-backup.md — the nightly backup. Runs `python -m workspace_app.backup`
+# directly rather than enqueuing a job, and that difference is deliberate:
+#
+#   * The job queue is the wrong shape for this. The longest job this system runs
+#     once failed to converge past a 30-minute ceiling whose cause is still not
+#     written down (see cronjob-graph.yaml), and a full pass here is an order of
+#     magnitude longer than that.
+#   * A CronJob has `activeDeadlineSeconds` and `concurrencyPolicy: Forbid`,
+#     which is what a long single-shot job wants.
+#   * The process exiting hands its memory back. That matters: one blob is one
+#     record and specstar's encoder copies it once more before the write, so peak
+#     RSS is about twice the largest single file in the deployment
+#     (`filestore.max_file_size`, 2 GiB by default). Size `resources.limits.memory`
+#     from that, not from the archive size.
+#
+# The pod carries the API's whole composition on purpose — the backup builds
+# `__main__.build_app` so its model registry equals the API's by construction.
+# `spec.dump` archives the models in the registry, and a registry short one model
+# produces an archive short one model that still reports success.
+#
+# WHAT THIS NEEDS BEFORE IT WILL WORK
+#   1. `backup.dest` set in config.yaml (map it to ${BACKUP_DEST} like every
+#      other env-backed setting). Unset ⇒ the run refuses rather than guessing.
+#   2. The `backups` PVC provisioned and pointed at storage OUTSIDE this
+#      cluster's failure domain. See pvc.yaml — a claim on the same storageClass
+#      as rca-data defeats the entire point of the exercise.
+#   3. The first run bounded: `--since <ISO-8601>`, or it is one unbounded
+#      archive and one archive is what a restore cannot hold in memory. Run it by
+#      hand (`kubectl create job --from=cronjob/rca-backup ...`) before letting
+#      the schedule take over.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rca-backup
+spec:
+  schedule: "0 2 * * *" # 02:00 Asia/Taipei, nightly — before the 03:00 code-sync
+  # and clear of the Saturday 03:00 graph pass, so the two do not contend for the
+  # same NFS volume.
+  timeZone: "Asia/Taipei" # needs Kubernetes >= 1.27 for the GA field. Spelling
+  # the zone out spares every future editor the UTC day-shift arithmetic.
+  concurrencyPolicy: Forbid # two passes must never overlap: they would write
+  # into two run directories and the second would continue a chain the first has
+  # not finished writing.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # A run that has not finished in 20 hours is not going to finish before the
+  # next one starts. Deliberately under the 25-hour window that blob-GC's
+  # quarantine gives us (`gc_t1` + `gc_t2`): past that, a record archived early
+  # in the run can reference a blob that GC deleted before the run reached it.
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 1 # one retry. More would mean a failing backup silently
+      # burning hours; the staleness sweeper is what escalates a run that keeps
+      # failing, and it does not need four attempts to notice.
+      activeDeadlineSeconds: 72000 # 20h — see the comment above.
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: rca-app:latest # overlays pin a tag via `images:`
+              command: ["python", "-m", "workspace_app.backup"]
+              envFrom:
+                - configMapRef:
+                    name: rca-config
+              volumeMounts:
+                # The specstar store — read-only, because a backup has no business
+                # writing to what it is archiving. (The ledger row it writes goes
+                # through the app's own store, not this mount.)
+                - name: data
+                  mountPath: /data
+                # The sandbox workspace tree, when `sandbox.durable.kind: nfs_tree`
+                # is on. Uncomment WITH the volume below and the `workspaces` PVC.
+                # Leave both off for the local shared-dir topology, or apply fails
+                # on the missing claim.
+                # - name: workspaces
+                #   mountPath: /mnt/workspaces
+                #   readOnly: true
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "2Gi"
+                limits:
+                  cpu: "2"
+                  # Twice the largest single file, not a fraction of the archive:
+                  # slicing bounds a RESTORE's memory, but one blob is still one
+                  # record and the encoder copies it before writing.
+                  memory: "6Gi"
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: rca-data
+            - name: backups
+              persistentVolumeClaim:
+                claimName: backups
+            # - name: workspaces
+            #   persistentVolumeClaim:
+            #     claimName: workspaces

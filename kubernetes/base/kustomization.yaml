@@ -11,4 +11,5 @@ resources:
   - workers.yaml # #312: per-JobType job-worker Deployments + HPAs
   - cronjob-eval.yaml # #535: nightly retrieval-quality eval trigger
   - cronjob-graph.yaml # #534: weekly metric-extraction trigger
+  - cronjob-backup.yaml # plan-backup: nightly backup of every durable store
   - ingress.yaml
