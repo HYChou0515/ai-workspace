@@ -1477,6 +1477,35 @@ class GoalSettings:
     goal read as exhausted the next morning."""
 
 
+# ─── backup (docs/plan-backup.md) ──────────────────────────────────────
+@dataclass(frozen=True)
+class BackupSettings:
+    """Where a backup run writes, and what it refuses to do without.
+
+    Off by default: ``dest: ""`` means this deployment has no backup configured
+    and `python -m workspace_app.backup` refuses to run rather than inventing a
+    location. Nothing else in the app reads these — the backup is a separate
+    process, deliberately, so a 100 GB - 2 TB pass cannot touch an API pod.
+
+    ``dest`` is a directory. Whatever it is mounted on is the deploy's choice —
+    an NFS export on another machine, an object store mounted into the CronJob's
+    pod — which is what lets one artifact serve "S3 or another cluster or a dev
+    server" without the program knowing which.
+
+    ``require_mounted_sources`` is the precondition that catches the failure a
+    size heuristic cannot: a volume that did not mount leaves an empty directory,
+    the walk finds nothing, the archive is written happily, and retention
+    eventually deletes the archives that held real data. A path that is not a
+    mount point is an exact, false-positive-free signal for it. Turn it off only
+    where the durable root genuinely is not its own mount (single-machine dev) —
+    and the receipt records that the run skipped it, so nobody reads an unchecked
+    run as a checked one.
+    """
+
+    dest: str = ""
+    require_mounted_sources: bool = True
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1505,3 +1534,4 @@ class Settings:
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     failover: FailoverSettings = field(default_factory=FailoverSettings)
     chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)
+    backup: BackupSettings = field(default_factory=BackupSettings)
