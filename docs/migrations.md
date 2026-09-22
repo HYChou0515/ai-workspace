@@ -830,7 +830,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ---
 
-### 2026-09-21 · #840 `server.run_consumers` 可以填清單；`${RUN_CONSUMERS}` 給的字串從此會被正確解析 {#pr-840}
+### 2026-09-22 · 86890da3 · #840 `server.run_consumers` 可以填清單；`${RUN_CONSUMERS}` 給的字串從此會被正確解析 {#pr-840}
 
 **設定**（純 opt-in 的部分不用動；但要知道一個**行為改變**）
 
