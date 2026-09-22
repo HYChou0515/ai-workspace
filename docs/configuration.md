@@ -79,6 +79,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **檔案要持久化（重啟不掉）** | `filestore.kind: specstar` + `filestore.pg_dsn: ${SPECSTAR_PG_DSN}` + `disk_root` |
 | **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-podk8s)） |
 | **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列message-queue)） |
+| **單機全包，但某幾種 job 不要在這個進程跑**（例如 `chat-video` 要 Chromium + ffmpeg） | `server.run_consumers: [index, wiki, card-gen, kb-import, blob-gc]`——列出要消費的 JobType，沒列的留在 queue（見 [§8](#8-訊息佇列message-queue)） |
 | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
 | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
 | **讓使用者用帳號密碼換出工具要的變數** | `server.env_providers: ["你的套件.YourLogin"]`——一份 `IEnvProvider` 清單(可以有好幾個:SAP 登入、AD 登入、API key 交換)。工具只宣告變數**名字**,平台用名字比對決定給哪顆登入鈕,所以第三方工具作者無從決定你的 UI 向使用者要哪組憑證。沒設 = 沒有登入鈕,變數仍可手填。見[擴充平台](extending-the-platform.md)與[部署指南](deployment.md) §15.2 |
@@ -444,9 +445,21 @@ message_queue:
 - **`rabbitmq`**：broker 撐更高吞吐。旗鈕（`url` / `queue_prefix` / `max_retries` / `heartbeat_seconds`…）全可選，
   未設就吃 specstar 預設。⚠️ 慢的 index job 若比 `heartbeat_seconds` 久，要**調高**否則被回收。
 
-搭配 `server.run_consumers`：
-- `true`（預設）= 全包（本機/單 pod），API 進程自己消化。
+搭配 `server.run_consumers`——一把鑰匙、三種形狀：
+- `true`（預設）= 全包（本機/單 pod），API 進程自己消化每一種 JobType。
 - `false` = API 純 producer（仍註冊 + enqueue，只是不消化），另跑 worker pod 各消化一個 JobType（見 [§5-C](#c-多-podk8s)）。
+- `[index, card-gen, …]` = **只消費列出的 JobType**，其餘留在 queue 給 worker（或永遠不跑）。單機想要「全部，但 `chat-video` 除外」
+  就是這種寫法。名字對 `python -m workspace_app.worker` 那張表驗證（`index` / `wiki` / `card-gen` / `sanity` / `eval` /
+  `graph` / `kb-import` / `blob-gc` / `chat-video`）——拼錯**開機就拒絕**並列出合法名。沒列到的那幾種，開機 stdout 上
+  `→ start index consumer …` 那幾步之後會有一行 `⚠ consumers: NOT consumed on this process: chat-video, graph, … (their jobs
+  stay pending until a worker takes them)`（名字排序），這是 job 一直 `pending` 時唯一會說出原因的地方。列了但這個部署
+  沒接線的（例如 `kb.retrieval_llm: null` 的部署沒有 `graph`）另有一行 `⚠ consumers: listed in run_consumers but not wired
+  on this deployment: graph (nothing to start)`。就這三種形狀，其餘一律開機拒絕並印出合法寫法：YAML 的 `null`（含
+  `run_consumers:` 空值）、`0` / `1`、空字串 `""`、mapping，和環境變數給的任何不是 `true` / `false` / JobType 名的字串
+  （`no`、`0`、`,`）。
+- 用環境變數給（`run_consumers: ${RUN_CONSUMERS}`）三種都吃：`true` / `false`（不分大小寫）/ `index,card-gen`（逗號分隔）。
+  ⚠️ 在這版之前，`${RUN_CONSUMERS}` 給 `"false"` 到手的是**字串** `'false'`——truthy——所以「純 producer」的 API 其實在消費所有 job；
+  這版起字串會被正確解析（[migrations.md#pr-840](migrations.md#pr-840)）。
 
 ---
 

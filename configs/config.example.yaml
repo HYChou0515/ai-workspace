@@ -60,13 +60,19 @@
 #   superusers: []             # #262: user ids with UNRESTRICTED collection
 #                              # access (read every collection, manage any).
 #                              # e.g. ["alice@example.com"]. Empty = none.
-#   run_consumers: true        # #312: whether THIS process drains the job queues
-#                              # in-process. true (default) = all-in-one (local
-#                              # dev / single pod). Set false on the API in a
-#                              # pod-split deploy so it's a pure producer and
-#                              # dedicated worker pods (`python -m
-#                              # workspace_app.worker <jobtype>`) consume each
-#                              # JobType under their own HPA. e.g. ${RUN_CONSUMERS}
+#   run_consumers: true        # #312: which job queues THIS process drains in-process.
+#                              # true (default) = all-in-one (local dev / single pod):
+#                              # every JobType. false = a pure producer (pod-split:
+#                              # dedicated worker pods, `python -m workspace_app.worker
+#                              # <jobtype>`, consume each JobType under their own HPA).
+#                              # A LIST names the JobTypes to consume and nothing else:
+#                              #   run_consumers: [index, wiki, card-gen, kb-import, blob-gc]
+#                              # (a single machine without Chromium + ffmpeg leaves
+#                              # chat-video out). Names are the worker CLI's; a typo
+#                              # refuses to boot. What is not consumed is named on
+#                              # stdout at boot (`⚠ consumers: NOT consumed on this
+#                              # process: …`). From the env, ${RUN_CONSUMERS} takes
+#                              # true / false / a comma-separated list (index,card-gen).
 #   turn_cancel_poll_seconds: 0.5  # #349: how often an in-flight turn polls the
 #                              # shared cross-pod cancel epoch. Under degraded
 #                              # sticky routing (Stop / new message routed to a
