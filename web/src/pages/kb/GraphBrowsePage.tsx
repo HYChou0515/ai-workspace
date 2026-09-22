@@ -88,19 +88,19 @@ export function GraphBrowsePage() {
       <div className="gbr__filters">
         <input
           type="search"
-          className="gbr__search"
+          className="input gbr__search"
           placeholder={t("graph.browse.searchPlaceholder")}
           value={q}
           onChange={(e) => narrow(setQ)(e.target.value)}
         />
         <input
-          className="gbr__kind"
+          className="input gbr__kind"
           placeholder={t("graph.browse.kindPlaceholder")}
           value={kind}
           onChange={(e) => narrow(setKind)(e.target.value)}
         />
         <select
-          className="gbr__collection"
+          className="input gbr__collection"
           value={collection}
           onChange={(e) => narrow(setCollection)(e.target.value)}
           aria-label={t("graph.browse.collectionLabel")}

@@ -364,7 +364,7 @@ function GroupNameEditor({
     <input
       // eslint-disable-next-line jsx-a11y/no-autofocus
       autoFocus
-      className="inline-edit"
+      className="input inline-edit"
       aria-label="Group name"
       data-testid={`group-name-input-${group.resource_id}`}
       value={draft}
@@ -627,7 +627,7 @@ function CreateGroupModal({
             aria-label="Group name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            style={input}
+            className="input input--block"
           />
         </label>
         <label style={field}>
@@ -636,7 +636,7 @@ function CreateGroupModal({
             aria-label="Group description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            style={input}
+            className="input input--block"
           />
         </label>
         <div style={field}>
@@ -714,4 +714,3 @@ const memberPill: React.CSSProperties = {
   fontSize: pxToRem(12),
 };
 const field: React.CSSProperties = { display: "grid", gap: 4, marginBottom: 10 };
-const input: React.CSSProperties = { padding: "8px 10px", borderRadius: 6, border: "1px solid var(--paper-3)", background: "var(--paper)", color: "var(--text-paper)" };

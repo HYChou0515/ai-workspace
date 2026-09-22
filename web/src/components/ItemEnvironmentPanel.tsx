@@ -137,7 +137,7 @@ export function ItemEnvironmentPanel({
               <label htmlFor={cpuEnforced ? "itemenv-cpu" : undefined}>{t("itemenv.field.cpu")}</label>
               {cpuEnforced ? (
                 <input
-                  className="input"
+                  className="input input--block"
                   id="itemenv-cpu"
                   data-testid="cpu-input"
                   type="number"
@@ -203,7 +203,7 @@ export function ItemEnvironmentPanel({
               <label htmlFor={memEnforced ? "itemenv-memory" : undefined}>{t("resources.memory")}</label>
               {memEnforced ? (
                 <input
-                  className="input"
+                  className="input input--block"
                   id="itemenv-memory"
                   data-testid="memory-input"
                   value={draft.memory}

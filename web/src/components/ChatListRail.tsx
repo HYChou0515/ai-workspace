@@ -295,7 +295,7 @@ function ChatRailItem({
       <input
         // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
-        className="chat-rail__rename"
+        className="input input--block chat-rail__rename"
         aria-label={`Rename ${noun}`}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}

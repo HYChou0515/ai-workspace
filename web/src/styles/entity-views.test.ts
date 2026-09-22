@@ -38,8 +38,27 @@ describe("entity-views.css", () => {
     // their own background — see #GH-projects A).
     expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:nth-child\(even\)/);
     expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:hover/);
+    // A field outside a cell is the views' 28px — `.ev-field` says both
+    // `height` and `min-height`, or `.input`'s 34px min would win (#829 D3).
+    const field = CSS.match(/\n\.ev-field\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(field, ".ev-field").not.toBe("");
+    // `height` by itself, not the `-height` tail of `min-height`: without it
+    // a stretched flex row (`align-items: stretch`) made the field 60px.
+    expect(field).toMatch(/(^|[^-])height:\s*28px/);
+    expect(field).toMatch(/min-height:\s*28px/);
     // inline cell fields reveal their border only on hover/focus.
     expect(CSS).toMatch(/\.ev-table tbody \.ev-field\s*\{[^}]*border-color:\s*transparent/);
+    // …at the table's 26px: `.ev-field`'s `min-height: 28px` (its answer to
+    // `.input`'s 34) would otherwise beat `height: 26px` and grow every row
+    // by 2px (#829 D3).
+    const cell = CSS.match(/\.ev-table tbody \.ev-field\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(cell).toMatch(/height:\s*26px/);
+    expect(cell).toMatch(/min-height:\s*26px/);
+    // A read-only cell is data, not a forbidden action: the views keep their
+    // own disabled look rather than `.input:disabled`'s not-allowed cursor (D9).
+    const off = CSS.match(/\.ev-field:disabled\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(off, ".ev-field:disabled").not.toBe("");
+    expect(off).toMatch(/cursor:\s*default/);
   });
 
   it("gives the board real columns with a drop-target + degraded state (§D)", () => {
@@ -67,10 +86,18 @@ describe("entity-views.css", () => {
 
     // One field, not three: the border is on the GROUP and the inputs inside
     // are bare. Two separately-bordered boxes with "to" between them are three
-    // controls for one value and did not fit the panel's narrow end.
+    // controls for one value and did not fit the panel's narrow end. Since
+    // #829 the group is an `.input.input-group` and the bare inputs are its
+    // `.input-group__field` slots (base.css, pinned in input-class.test.ts);
+    // the range's own rule keeps the mono type and draws no chrome of its own.
     const rangeInput = CSS.match(/\.ev-viewpanel__range input\[type="time"\]\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rangeInput).toMatch(/border:\s*0/);
-    expect(rangeInput).toMatch(/background:\s*none/);
+    expect(rangeInput, "the range's own rule").not.toBe("");
+    expect(rangeInput).toMatch(/font-family:\s*var\(--font-mono\)/);
+    expect(rangeInput).not.toMatch(/border:|background:/);
+    const panel = readFileSync(resolve(HERE, "../renderers/entity/ViewSettingsPanel.tsx"), "utf8");
+    expect(panel).toMatch(/className="input input-group ev-viewpanel__range"/);
+    expect(panel.match(/type="time"/g)?.length, "two ends").toBe(2);
+    expect(panel.match(/className="input-group__field"\s+type="time"/g)?.length, "both ends are slots").toBe(2);
     // The picker glyphs cost ~32px of a 224px panel and duplicate the value.
     expect(CSS).toMatch(/::-webkit-calendar-picker-indicator\s*\{[^}]*display:\s*none/);
 
@@ -83,6 +110,9 @@ describe("entity-views.css", () => {
     if (/outline:\s*none/.test(ring)) {
       expect(ring, "outline removed with nothing put back").toMatch(/box-shadow:[^;]*var\(--accent/);
     }
+    // …and the box does not add a third: its `.input-group` ring is off here
+    // because the end's ring above is the keyboard indicator (#829 D10).
+    expect(CSS).toMatch(/\.ev-viewpanel__range:has\(:focus-visible\)\s*\{[^}]*outline:\s*none/);
 
     // NOTHING in the panel wraps. Wrapping was tried and is worse: on the
     // shared field class it drops a checkbox's label below its box, and on the

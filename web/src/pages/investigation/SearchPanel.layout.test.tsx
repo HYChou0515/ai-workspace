@@ -37,6 +37,10 @@ describe("<SearchPanel /> layout (#460 P2)", () => {
 
   it("lets the search field row shrink instead of pushing the toggles out (min-width 0)", () => {
     renderPanel();
-    expect(screen.getByTestId("search-field").style.minWidth).toBe("0");
+    // The row is an `.input.input-group` box since #829; `min-width: 0` is
+    // `.input`'s (pinned in styles/input-class.test.ts).
+    const row = screen.getByTestId("search-field");
+    expect(row.classList.contains("input")).toBe(true);
+    expect(row.classList.contains("input-group")).toBe(true);
   });
 });

@@ -62,7 +62,6 @@ function StatusSelect({
   blank,
   disabled,
   required,
-  className,
   onCommit,
 }: {
   name: string;
@@ -71,7 +70,6 @@ function StatusSelect({
   blank?: boolean;
   disabled?: boolean;
   required?: boolean;
-  className?: string;
   onCommit: (next: string) => void;
 }) {
   const text = fieldText(value);
@@ -79,7 +77,7 @@ function StatusSelect({
   return (
     <select
       aria-label={name}
-      className={className}
+      className="input ev-field"
       value={text}
       disabled={disabled}
       required={required}
@@ -103,7 +101,6 @@ function ActorSelect({
   users,
   disabled,
   required,
-  className,
   onCommit,
 }: {
   name: string;
@@ -111,7 +108,6 @@ function ActorSelect({
   users?: User[];
   disabled?: boolean;
   required?: boolean;
-  className?: string;
   onCommit: (next: string) => void;
 }) {
   const text = fieldText(value);
@@ -119,7 +115,7 @@ function ActorSelect({
   return (
     <select
       aria-label={name}
-      className={className}
+      className="input ev-field"
       value={text}
       disabled={disabled}
       required={required}
@@ -158,13 +154,11 @@ function DateRangeInput({
   name,
   value,
   disabled,
-  className,
   onCommit,
 }: {
   name: string;
   value: unknown;
   disabled?: boolean;
-  className?: string;
   onCommit: (next: unknown) => void;
 }) {
   const init = splitRange(value);
@@ -184,7 +178,7 @@ function DateRangeInput({
     <span className="ev-field--range">
       <input
         aria-label={`${name} start`}
-        className={className}
+        className="input ev-field"
         type="date"
         value={start}
         disabled={disabled}
@@ -195,7 +189,7 @@ function DateRangeInput({
       />
       <input
         aria-label={`${name} end`}
-        className={className}
+        className="input ev-field"
         type="date"
         value={end}
         disabled={disabled}
@@ -218,7 +212,6 @@ function RefSelect({
   options,
   disabled,
   required,
-  className,
   onCommit,
 }: {
   name: string;
@@ -226,14 +219,13 @@ function RefSelect({
   options: RefOption[];
   disabled?: boolean;
   required?: boolean;
-  className?: string;
   onCommit: (next: unknown) => void;
 }) {
   const text = fieldText(value);
   return (
     <select
       aria-label={name}
-      className={className}
+      className="input ev-field"
       value={text}
       disabled={disabled}
       required={required}
@@ -267,12 +259,12 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
   if (widget === "readonly") return <span className="ev-readonly">{fieldText(value)}</span>;
   if (widget === "select")
     return (
-      <StatusSelect name={name} value={value} values={values} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />
+      <StatusSelect name={name} value={value} values={values} disabled={disabled} required={required} onCommit={onCommit} />
     );
   if (widget === "actor")
-    return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />;
+    return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} onCommit={onCommit} />;
   if (widget === "datetimerange")
-    return <DateRangeInput name={name} value={value} disabled={disabled} className="ev-field" onCommit={onCommit} />;
+    return <DateRangeInput name={name} value={value} disabled={disabled} onCommit={onCommit} />;
   // A ref is a pointer to another collection's record, so it edits as a #N-title
   // picker whenever the caller wired options — even an EMPTY list (no targets yet)
   // shows the dropdown (with just "—"), never a raw number box: a bare number that
@@ -280,7 +272,7 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
   // (caller didn't load referenced records) keep the number fallback below.
   if (widget === "ref" && refOptions)
     return (
-      <RefSelect name={name} value={value} options={refOptions} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />
+      <RefSelect name={name} value={value} options={refOptions} disabled={disabled} required={required} onCommit={onCommit} />
     );
 
   const text = fieldText(value);
@@ -302,7 +294,7 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
     <input
       key={text}
       aria-label={name}
-      className="ev-field"
+      className="input ev-field"
       type={numeric ? "number" : widget === "date" ? "date" : "text"}
       defaultValue={text}
       disabled={disabled}
@@ -332,12 +324,12 @@ export type RoleCreateInputProps = {
 export function RoleCreateInput({ widget, name, value, values, users, refOptions, required, onChange }: RoleCreateInputProps) {
   if (widget === "select")
     return (
-      <StatusSelect name={name} value={value} values={values} blank required={required} className="ev-field" onCommit={onChange} />
+      <StatusSelect name={name} value={value} values={values} blank required={required} onCommit={onChange} />
     );
   if (widget === "actor")
-    return <ActorSelect name={name} value={value} users={users} required={required} className="ev-field" onCommit={onChange} />;
+    return <ActorSelect name={name} value={value} users={users} required={required} onCommit={onChange} />;
   if (widget === "datetimerange")
-    return <DateRangeInput name={name} value={value} className="ev-field" onCommit={(next) => onChange(next == null ? "" : String(next))} />;
+    return <DateRangeInput name={name} value={value} onCommit={(next) => onChange(next == null ? "" : String(next))} />;
   if (widget === "ref" && refOptions)
     return (
       <RefSelect
@@ -345,7 +337,6 @@ export function RoleCreateInput({ widget, name, value, values, users, refOptions
         value={value}
         options={refOptions}
         required={required}
-        className="ev-field"
         onCommit={(next) => onChange(next == null ? "" : String(next))}
       />
     );
@@ -354,7 +345,7 @@ export function RoleCreateInput({ widget, name, value, values, users, refOptions
   const placeholder = widget === "ref" ? "#" : "";
   return (
     <input
-      className="ev-field"
+      className="input ev-field"
       aria-label={name}
       type={type}
       value={value}

@@ -69,19 +69,8 @@ export function QualityRubricEditor({
         value={draft}
         placeholder={t("kb.quality.rubric.placeholder")}
         onChange={(e) => setDraft(e.target.value)}
-        style={{
-          width: "100%",
-          minHeight: 96,
-          resize: "vertical",
-          padding: "8px 10px",
-          borderRadius: 8,
-          border: "1px solid var(--paper-3)",
-          background: "var(--paper)",
-          font: "inherit",
-          fontSize: pxToRem(13),
-          lineHeight: 1.5,
-          boxSizing: "border-box",
-        }}
+        className="input input--block"
+        style={{ minHeight: 96 }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
         <button

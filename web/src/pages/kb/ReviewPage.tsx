@@ -135,9 +135,10 @@ export function ReviewPage() {
 
       <div className="rvw__toolbar" role="search">
         {!isMerges && (
-          <label className="rvw__search">
+          <label className="input input-group rvw__search">
             <Icon name="search" size={14} color="var(--text-paper-d2)" />
             <input
+              className="input-group__field"
               type="search"
               aria-label={t("review.filter.search")}
               placeholder={t("review.filter.search")}
@@ -147,7 +148,7 @@ export function ReviewPage() {
           </label>
         )}
         <select
-          className="inline-edit"
+          className="input"
           aria-label={t("review.filter.collection")}
           value={collectionId}
           onChange={(e) => setCollectionId(e.target.value)}
@@ -161,7 +162,7 @@ export function ReviewPage() {
         </select>
         {isMerges && (
           <select
-            className="inline-edit"
+            className="input"
             aria-label={t("merge.filterKind")}
             value={kind}
             onChange={(e) => setKind(e.target.value)}
@@ -176,7 +177,7 @@ export function ReviewPage() {
         )}
         {isFlat && (
           <select
-            className="inline-edit"
+            className="input"
             aria-label={t("review.filter.type")}
             value={type}
             onChange={(e) => setType(e.target.value as TypeFilter)}

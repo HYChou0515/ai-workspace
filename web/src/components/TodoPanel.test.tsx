@@ -212,19 +212,29 @@ describe("TodoPanel", () => {
  * on a flex item refuses to shrink past it. `flex: 1` therefore could not
  * actually give width back, so the row stayed wider than its container and
  * pushed the trailing button out of the clipped panel. Both rows in this panel
- * are built the same way, so both need the same escape hatch.
+ * are built the same way, so both need the same escape hatch — since #829 it
+ * is two halves: the tag's own `flex: 1` (`.inline-edit` is a chip's width by
+ * default, D4) and `.input`'s `min-width: 0` (pinned in
+ * styles/input-class.test.ts). Both halves are asserted here; the review that
+ * found the first half unpinned watched "Set goal" leave the panel again.
  */
 describe("TodoPanel rows shrink instead of pushing their button off-screen (#fe-responsive)", () => {
   it("lets the goal input shrink so 'Set goal' stays inside the panel", async () => {
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("goal-input")) as HTMLInputElement;
-    expect(input.style.minWidth).toBe("0");
+    expect(input.classList.contains("input")).toBe(true);
+    // `flexGrow` exactly "1": happy-dom expands `flex: 1` to grow 1 / shrink 1
+    // / basis 0%, and would read `flex: 10` as "1" too under a looser match.
+    expect(input.style.flexGrow, "flex: 1 on the tag").toBe("1");
   });
 
   it("lets the add-todo input shrink so its Add button stays inside the panel", async () => {
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("todo-add-input")) as HTMLInputElement;
-    expect(input.style.minWidth).toBe("0");
+    expect(input.classList.contains("input")).toBe(true);
+    // `flexGrow` exactly "1": happy-dom expands `flex: 1` to grow 1 / shrink 1
+    // / basis 0%, and would read `flex: 10` as "1" too under a looser match.
+    expect(input.style.flexGrow, "flex: 1 on the tag").toBe("1");
   });
 });
 

@@ -292,7 +292,7 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
           data-testid="category-filter"
           value={category}
           onChange={(e) => setCategory(e.target.value)}
-          style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid var(--paper-3)" }}
+          className="input inline-edit"
         >
           <option value="">{t("sanity.table.allCategories")}</option>
           {categories.map((c) => (

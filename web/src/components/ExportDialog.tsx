@@ -362,7 +362,7 @@ export function ExportDialog({
                       <select
                         id={`export-${end}`}
                         data-testid={`export-${end}`}
-                        className="input"
+                        className="input input--block"
                         value={custom[end]}
                         onChange={(e) => {
                           const next = { ...custom, [end]: Number(e.target.value) };
@@ -440,7 +440,7 @@ export function ExportDialog({
                   <select
                     id="export-fmt"
                     data-testid="export-fmt"
-                    className="input"
+                    className="input input--block"
                     value={form.fmt}
                     onChange={(e) => patch({ fmt: e.target.value as Fmt })}
                   >
@@ -473,7 +473,7 @@ export function ExportDialog({
                     <select
                       id="export-aspect"
                       data-testid="export-aspect"
-                      className="input"
+                      className="input input--block"
                       value={form.size.aspect}
                       onChange={(e) => {
                         // The stop / text size follows through `fitChoice`.
@@ -521,7 +521,7 @@ export function ExportDialog({
                     <select
                       id="export-text-size"
                       data-testid="export-text-size"
-                      className="input"
+                      className="input input--block"
                       value={choice.textScale}
                       onChange={(e) =>
                         choice.mode === "text" &&
@@ -544,7 +544,7 @@ export function ExportDialog({
                         id="export-width"
                         type="number"
                         data-testid="export-width"
-                        className="input"
+                        className="input input--block"
                         min={16}
                         max={7680}
                         step={2}
@@ -561,7 +561,7 @@ export function ExportDialog({
                         id="export-height"
                         type="number"
                         data-testid="export-height"
-                        className="input"
+                        className="input input--block"
                         min={16}
                         max={4320}
                         step={2}
@@ -577,7 +577,7 @@ export function ExportDialog({
                       <select
                         id="export-custom-text"
                         data-testid="export-custom-text"
-                        className="input"
+                        className="input input--block"
                         value={form.size.textScale ?? ""}
                         onChange={(e) => {
                           if (form.size.mode !== "custom") return;
@@ -629,7 +629,7 @@ export function ExportDialog({
                       id={`export-${key}`}
                       type="number"
                       data-testid={`export-${key.replace(/_/g, "-")}`}
-                      className="input"
+                      className="input input--block"
                       min={TEMPO_BOUNDS[key].min}
                       max={key === "max_seconds" ? ceiling.max_seconds : TEMPO_BOUNDS[key].max}
                       step={TEMPO_BOUNDS[key].step}
