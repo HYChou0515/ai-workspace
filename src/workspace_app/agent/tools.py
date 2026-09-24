@@ -435,7 +435,7 @@ async def show_file_impl(
     if layout is not None:
         if path is not None:
             return both_or_neither
-        return await _show_layout(fs, inv, layout, caption)
+        return await _show_layout(ctx.context, fs, inv, layout, caption)
     if path is None:
         return both_or_neither
     shown = await describe_for_display(fs, inv, path)
@@ -544,17 +544,23 @@ async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: st
 
 
 async def _show_layout(
-    fs: WorkspaceFiles, workspace_id: str, layout: PaneLayout, caption: str | None
+    actx: AgentToolContext,
+    fs: WorkspaceFiles,
+    workspace_id: str,
+    layout: PaneLayout,
+    caption: str | None,
 ) -> str:
-    """`show_file(layout=…)`: every leaf resolved the way a single `path` is, and
-    one failure declares nothing — a card with an empty pane is the broken card
-    the single-path rule already refuses to draw."""
+    """`show_file(layout=…)`: every leaf resolved — and every plugin view
+    validated (#854 P9) — the way a single `path` is, and one failure declares
+    nothing: a card with an empty or broken pane is the card the single-path
+    rule already refuses to draw."""
     try:
         tree = layout_tree(layout)
     except LayoutError as e:
         return f"error: layout {e} — nothing was shown."
     paths = layout_paths(tree)
     shown: list[dict[str, Any]] = []
+    verdicts: list[str] = []
     for p in paths:
         entry = await describe_for_display(fs, workspace_id, p)
         if not entry:
@@ -562,11 +568,21 @@ async def _show_layout(
                 f"error: file not found: {rel_path(p)} — nothing was shown. "
                 f"Check the path (list_files) and call show_file again."
             )
+        verdict = await _check_plugin_view(actx, fs, workspace_id, p)
+        if verdict is not None and verdict.startswith("error:"):
+            return verdict
+        if verdict:
+            verdicts.append(f"{rel_path(p)}: {verdict}")
         shown.append(entry)
     listed = ", ".join(rel_path(p) for p in paths)
-    return declare_shown_files(
+    said = (
         f"A layout of {len(paths)} files ({listed}) is now displayed in the chat as one "
-        f"card — the user can open it.",
+        f"card — the user can open it."
+    )
+    if verdicts:
+        said += " " + "; ".join(verdicts)
+    return declare_shown_files(
+        said,
         shown,
         layout=tree,
         caption=caption,
