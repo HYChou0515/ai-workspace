@@ -60,11 +60,17 @@ COMMANDS: dict[str, dict[str, Any]] = {
 }
 
 
+# Every facet command also takes an optional integer `epoch`, which the
+# sandbox ignores: the gallery bumps it to retry a failed chain as NEW queries
+# (the args are the query key; a cached failure would otherwise stay cached).
+_EPOCH = {"type": "integer", "description": "The gallery's retry epoch; ignored here."}
+
+
 def schema(name: str) -> dict[str, Any]:
     props = COMMANDS[name]["properties"]
     return {
         "type": "object",
-        "properties": props,
+        "properties": {**props, "epoch": _EPOCH},
         "required": list(props),
         "additionalProperties": False,
     }
@@ -80,8 +86,10 @@ def _args(name: str, raw: str) -> dict[str, Any]:
     except (json.JSONDecodeError, RecursionError) as e:  # nested past the decoder
         raise ValueError(f"argument is not JSON this command can read: {e}") from None
     want = set(COMMANDS[name]["properties"])
-    if not isinstance(args, dict) or set(args) != want:
-        raise ValueError(f"{name} takes exactly {sorted(want)}")
+    if not isinstance(args, dict) or set(args) - {"epoch"} != want:
+        raise ValueError(f"{name} takes exactly {sorted(want)} (and an optional epoch)")
+    if "epoch" in args and type(args.pop("epoch")) is not int:
+        raise ValueError("epoch must be an integer")
     # Checked here, before the cache is looked for: a wrong call must be 2 even
     # with no cache yet, not 3 ("build it"), which would build for nothing.
     if "positions" in args and not (

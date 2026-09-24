@@ -211,10 +211,17 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
       the pointer. The pointer is mapped to a cache cell through `gallery.cellAt`,
       which is the lattice's own placement (sorted axes, filled gaps, nulls
       dropped).
-    - Exit 3 from the index or a page asks for one rebuild. When the rebuild answers,
-      the index is refetched, because its key is unchanged and the cached exit 3
-      would otherwise stay. Exit 4 from a page refetches the index. Each failed
-      answer asks its remedy once, however often the gallery re-renders.
+    - Recovery is an epoch carried in every facet call's arguments. The facet
+      commands accept an optional integer `epoch` and ignore it. The args are the
+      query key, so a new epoch asks the whole chain (build, index, pages, exact)
+      again as new queries.
+      - Waiting on a cached answer's identity would not work: `useSandboxRun`'s
+        `refetch` returns nothing to await, and TanStack's structural sharing keeps
+        the same data object for the same JSON.
+      - A failure (exit 3 or 4) at epoch `at` asks for `max(epoch, at + 1)`. Pages
+        failing together move it once, a late failure from an old epoch moves
+        nothing, and a re-render moves nothing.
+      - After 2 recoveries the gallery stops and shows why.
     - With a multi-column facet, the marking holds each column's values separately
       (`column → set`, #856), so selecting (L1, 1) and (L2, 2) also lights (L1, 2)
       and (L2, 1). That is the platform's matching rule, not the gallery's.

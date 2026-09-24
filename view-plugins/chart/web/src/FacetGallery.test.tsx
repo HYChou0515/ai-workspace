@@ -64,13 +64,16 @@ const INDEX: FacetIndex = {
 };
 const KEY = "k".repeat(64);
 
-const refetch = { build: vi.fn(), index: vi.fn(), page: vi.fn(), exact: vi.fn() };
 const ok = (out: unknown) => ({ stdout: JSON.stringify(out), stderr: "", exit_code: 0 });
 const fail = (code: number) => ({ stdout: "", stderr: `exit ${code}`, exit_code: code });
 
 let answers: { build?: Run["data"]; index?: Run["data"]; page?: (positions: number[]) => Run["data"] };
 const write = vi.fn();
 let INDEX_OVER: Partial<FacetIndex> = {};
+let failUntil = { index: 0, page: 0, exact: 0 };
+let failCode = { index: 3, page: 3, exact: 3 };
+const answerCache = new Map<string, Run["data"]>();
+const epochsSeen: number[] = [];
 let exactValues: number[] = [1.5];
 const f64b64 = (values: number[]) =>
   btoa(String.fromCharCode(...new Uint8Array(new Float64Array(values).buffer)));
@@ -86,15 +89,31 @@ beforeEach(() => {
     index: ok(INDEX),
     page: (positions) => ok({ build: INDEX.build, groups: positions.map(() => q8([10], 0, 254)) }),
   };
+  failUntil = { index: 0, page: 0, exact: 0 };
+  failCode = { index: 3, page: 3, exact: 3 };
+  answerCache.clear();
+  epochsSeen.length = 0;
   sdk.useSandboxRun.mockImplementation((_plugin: string, cmd: string, args: Record<string, unknown>, opts?: { enabled?: boolean }): Run => {
     const enabled = opts?.enabled ?? true;
-    const base = { error: null, isLoading: false };
-    if (!enabled) return { ...base, data: undefined, refetch: vi.fn() };
-    if (cmd === "facet_build") return { ...base, data: answers.build, refetch: refetch.build };
-    if (cmd === "facet_index") return { ...base, data: answers.index, refetch: refetch.index };
-    if (cmd === "facet_page") return { ...base, data: answers.page?.(args.positions as number[]), refetch: refetch.page };
-    if (cmd === "facet_exact") return { ...base, data: ok({ kind: "f64", data: f64b64(exactValues) }), refetch: refetch.exact };
-    return { ...base, data: undefined, refetch: vi.fn() };
+    const base = { error: null, isLoading: false, refetch: vi.fn() };
+    if (!enabled) return { ...base, data: undefined };
+    const epoch = typeof args.epoch === "number" ? args.epoch : 0;
+    epochsSeen.push(epoch);
+    // the real hook hands back ONE data object per (command, args) -- as the
+    // query cache does -- so a double that made a new one each render would
+    // hide an effect keyed on it
+    const cacheKey = `${cmd} ${JSON.stringify(args)}`;
+    if (!answerCache.has(cacheKey)) {
+      let data: Run["data"];
+      if (cmd === "facet_build") data = answers.build;
+      else if (cmd === "facet_index") data = epoch < failUntil.index ? fail(failCode.index) : answers.index;
+      else if (cmd === "facet_page")
+        data = epoch < failUntil.page ? fail(failCode.page) : answers.page?.(args.positions as number[]);
+      else if (cmd === "facet_exact")
+        data = epoch < failUntil.exact ? fail(failCode.exact) : ok({ kind: "f64", data: f64b64(exactValues) });
+      answerCache.set(cacheKey, data);
+    }
+    return { ...base, data: answerCache.get(cacheKey) };
   });
 });
 afterEach(cleanup);
@@ -109,8 +128,8 @@ function calls(cmd: string) {
 describe("FacetGallery", () => {
   it("builds the cache from the spec text, then opens its index by key — never runs query", () => {
     view();
-    expect(calls("facet_build")[0][2]).toEqual({ spec: JSON.stringify(DOC) });
-    expect(calls("facet_index")[0][2]).toEqual({ key: KEY });
+    expect(calls("facet_build")[0][2]).toEqual({ spec: JSON.stringify(DOC), epoch: 0 });
+    expect(calls("facet_index")[0][2]).toEqual({ key: KEY, epoch: 0 });
     expect(calls("query")).toHaveLength(0);
     expect(screen.getByText(/1000 groups/)).toBeTruthy();
   });
@@ -165,50 +184,55 @@ describe("FacetGallery", () => {
     expect(screen.getByText(/2 of 1000 marked/)).toBeTruthy();
   });
 
-  it("rebuilds when the index finds no cache (exit 3), and refetches the index when a page is stale (exit 4)", () => {
-    answers.index = fail(3);
-    const { unmount } = view();
-    act(() => {});
-    expect(refetch.build).toHaveBeenCalled();
-    unmount();
-    answers.index = ok(INDEX);
-    answers.page = () => fail(4);
-    const second = view();
-    act(() => {});
-    expect(refetch.index).toHaveBeenCalled();
-    second.unmount();
-    refetch.build.mockClear();
-    answers.page = () => fail(3); // the cache went (a reap) between index and page
+  it("recovers from an index with no cache (exit 3) by asking the whole chain again at the next epoch", () => {
+    failUntil.index = 1;
     view();
-    act(() => {});
-    expect(refetch.build).toHaveBeenCalled();
+    expect(calls("facet_build").some((c) => c[2].epoch === 1)).toBe(true);
+    expect(calls("facet_index").some((c) => c[2].epoch === 1)).toBe(true);
+    expect(screen.getByText(/1000 groups/)).toBeTruthy();
   });
 
-  it("asks for a rebuild ONCE per failed answer, however often it re-renders", () => {
-    answers.index = fail(3);
-    const { rerender } = view();
-    for (let i = 0; i < 5; i++)
-      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
-    expect(refetch.build).toHaveBeenCalledTimes(1);
+  it.each([
+    [3, "the cache went (a reap)"],
+    [4, "the cache was rebuilt since the index"],
+  ])("recovers a page that answers exit %i (%s) at the next epoch", (code) => {
+    failUntil.page = 1;
+    failCode.page = code;
+    view();
+    const pages = calls("facet_page").map((c) => c[2] as { epoch: number });
+    expect(pages.some((p) => p.epoch === 1)).toBe(true);
+    expect(Math.max(...epochsSeen)).toBe(1);
   });
 
-  it("refetches the index once the rebuild answers (same key, so the old exit 3 would stay cached)", () => {
-    answers.index = fail(3);
+  it("moves the epoch ONCE for any number of pages failing in it, and not again on re-render", () => {
+    // big records make small pages (groupsPerPage(60k) is 19), so a screen and
+    // its lookahead mount several pages at once, all failing at epoch 0: that
+    // must move the epoch to 1, not once per page
+    answers.index = ok({ ...INDEX, cells: 60_000 });
+    failUntil.page = 1;
     const { rerender } = view();
-    expect(refetch.index).not.toHaveBeenCalled();
-    answers.build = ok({ key: KEY, build: "c".repeat(32), groups: N, cells: 1, built: true }); // the rebuild's answer
-    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
-    expect(refetch.index).toHaveBeenCalledTimes(1);
+    const pagesAtZero = new Set(
+      calls("facet_page")
+        .filter((c) => c[2].epoch === 0)
+        .map((c) => (c[2] as { positions: number[] }).positions[0]),
+    );
+    expect(pagesAtZero.size).toBeGreaterThan(1);
+    for (let i = 0; i < 5; i++) rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(Math.max(...epochsSeen)).toBe(1);
   });
 
-  it("asks a failed page's remedy ONCE, however often the gallery re-renders", () => {
-    answers.page = () => fail(4);
-    const staleAnswer = answers.page([0]);
-    answers.page = () => staleAnswer; // one answer object, as the query cache holds it
-    const { rerender } = view();
-    for (let i = 0; i < 5; i++)
-      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
-    expect(refetch.index).toHaveBeenCalledTimes(1);
+  it("stops after two recoveries and says why, rather than rebuilding forever", () => {
+    failUntil.index = 99;
+    view();
+    expect(Math.max(...epochsSeen)).toBe(2);
+    expect(screen.getByRole("alert").textContent).toContain("exit 3");
+  });
+
+  it("recovers an enlarged group whose exact values come back exit 3", () => {
+    failUntil.exact = 1;
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    expect(calls("facet_exact").some((c) => c[2].epoch === 1)).toBe(true);
   });
 
   it("selects the run of sorted positions between a click and a shift-click (P7)", () => {
@@ -280,7 +304,7 @@ describe("FacetGallery", () => {
     view();
     fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
     const exact = calls("facet_exact").at(-1)![2] as { key: string; build: string; position: number };
-    expect(exact).toEqual({ key: KEY, build: INDEX.build, position: N - 1 });
+    expect(exact).toEqual({ key: KEY, build: INDEX.build, position: N - 1, epoch: 0 });
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });
