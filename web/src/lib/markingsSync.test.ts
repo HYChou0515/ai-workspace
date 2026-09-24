@@ -68,6 +68,18 @@ describe("syncMarkingsAcrossTabs", () => {
     expect(heard).toBe(1);
   });
 
+  it("ignores a message that is not the shape it sends, rather than throwing", async () => {
+    const chat = tab("pm/1");
+    const stray = new BroadcastChannel("aiws-markings:pm/1");
+    for (const junk of [null, "x", { kind: "set" }, { kind: "set", name: "a", columns: 3 }]) {
+      stray.postMessage(junk);
+    }
+    stray.postMessage({ kind: "set", name: "ok", columns: { lot: ["L1"] }, source: null });
+    await tick();
+    stray.close();
+    expect(chat.names()).toEqual(["ok"]);
+  });
+
   it("is a no-op where BroadcastChannel does not exist", () => {
     const saved = globalThis.BroadcastChannel;
     // @ts-expect-error — simulating an environment without it
