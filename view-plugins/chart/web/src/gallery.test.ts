@@ -5,8 +5,9 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { type FacetIndex, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail } from "./gallery";
+import { cellAt, type FacetIndex, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail } from "./gallery";
 import { toOption } from "./option";
+import { lattice } from "./raster";
 import { answer, base, layer, q8 } from "./testAnswer";
 
 function index(over: Partial<FacetIndex> = {}): FacetIndex {
@@ -83,7 +84,36 @@ describe("groupsLit", () => {
   });
 });
 
+describe("cellAt", () => {
+  // lattice() sorts each axis, fills integer gaps and drops null coordinates;
+  // the enlarged view must read back through the SAME placement
+  it.each([
+    ["unsorted x", [1, 0, 1, 0], [0, 0, 1, 1]],
+    ["y written top-first", [0, 1, 0, 1], [1, 1, 0, 0]],
+    ["a gap in x", [0, 2, 0, 2], [0, 0, 1, 1]],
+    ["a null coordinate", [null, 0, 1, 0], [0, 0, 0, 1]],
+  ] as const)("maps a drawn cell back to its cache cell (%s)", (_name, x, y) => {
+    const idx = index({ cells: x.length, layout: { x: [...x], y: [...y] } });
+    const cells = lattice([...x], [...y], x.map((_, i) => i));
+    for (let row = 0; row < cells.height; row++)
+      for (let col = 0; col < cells.width; col++) expect(cellAt(idx, col, row)).toBe(cells.rowAt(col, row));
+  });
+});
+
+describe("cellAt, outside the drawing", () => {
+  it("is no cell, not another group's cell, past any edge", () => {
+    const idx = index({ cells: 2, layout: { x: [0, 1], y: [0, 0] } });
+    expect([cellAt(idx, -1, 0), cellAt(idx, 2, 0), cellAt(idx, 0, 1), cellAt(idx, 0, -1)]).toEqual([-1, -1, -1, -1]);
+  });
+});
+
 describe("thumbnail", () => {
+  it("paints a page column shorter than the lattice as missing cells, not a crash", () => {
+    const thumb = thumbnail(index(), q8([10], 0, 254), "sequential");
+    const alphas = Array.from({ length: 4 }, (_, i) => thumb.data[i * 4 + 3]);
+    expect(alphas.filter((a) => a > 0)).toHaveLength(1);
+  });
+
   // diverging reads the range (a sequential ramp only reads the code), so both
   // schemes are needed for a wrong range on one path to show
   it.each(["sequential", "diverging"] as const)(

@@ -989,11 +989,13 @@ log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`
     例：200 組 × 50,000 格的連續值約 90 MB。
   - 上限：每次建快取時，沙盒依 spec 的 `facet.cache_mb`（預設 500 MB）把整個 `.home/.cache/views/`
     修到上限內，最久沒用的先刪。這個目錄是**同一個沙盒裡所有縮圖牆共用**的，所以一份 spec 設的上限管的是全部。
-  - **scratch 容量要這樣估**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
-    再加上原本 workspace 與 `.home` 的用量。
+  - **scratch 容量要這樣估（rollout 前）**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
+    再加上原本 workspace 與 `.home` 的用量。為什麼在 rollout 前：換版之後第一個打開縮圖牆的人就開始寫快取；
+    沒估的症狀是 scratch 卷寫滿，連帶所有沙盒的寫檔一起失敗，不只縮圖牆。
 - **建快取的成本在沙盒的 cgroup 裡。** review 時在開發機實測（不是 CI 數字）：500k 列約 1.8 秒；1000 組 × 5000 格
   （5M 列）約 17.5 秒、峰值記憶體約 1.27 GB。沙盒的記憶體上限低於這個量級時，大來源的第一次打開會被 OOM 殺掉：
-  面板顯示那次建置的錯誤（被殺掉的 exit code，例如 `exit 137`），重試也一樣。
+  面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
+  是依指令的輸出方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
   畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
 - chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 5105 變成
@@ -1001,7 +1003,7 @@ log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`
 
 **k8s · CI 側**
 
-- **sandbox-host 要和 API 一起換版。** 縮圖牆的四個沙盒指令（`facet_build` / `facet_index` / `facet_page` /
+- **sandbox-host 要和 API 一起換版（rollout 時，同一批）。** 縮圖牆的四個沙盒指令（`facet_build` / `facet_index` / `facet_page` /
   `facet_exact`）在 chart 的沙盒 bundle 裡，而那個 bundle 由 sandbox-host image 的 tools stage 建進
   `builtin/chart`（[#855](#pr-855) 那條的同一個機制）。只換 API、沒換 sandbox-host 的症狀：打開任何 `facet:` 的
   chart，面板顯示 `unknown command: facet_build. available: validate, query`。
