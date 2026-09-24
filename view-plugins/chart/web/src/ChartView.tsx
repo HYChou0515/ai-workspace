@@ -185,7 +185,7 @@ function Plot({
   );
 }
 
-export function ChartView({ spec, path }: EntityViewProps) {
+export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   // Keyed on the text: the container rebuilds `spec` on every render.
   const text = JSON.stringify(viewDocument(spec));
   const doc = useMemo(() => JSON.parse(text) as Record<string, unknown>, [text]);
@@ -203,7 +203,9 @@ export function ChartView({ spec, path }: EntityViewProps) {
     body = <Notice role="alert">{run.data.stderr.trim() || run.data.stdout.trim() || `exit ${run.data.exit_code}`}</Notice>;
   else if (typeof answer === "string") body = <Notice role="alert">{answer}</Notice>;
   else if (answer) {
-    const marking = typeof doc.marking === "string" && doc.marking ? doc.marking : null;
+    // The header's choice (#847 P3) when the platform manages it; else the file's.
+    const fromFile = typeof doc.marking === "string" && doc.marking ? doc.marking : null;
+    const marking = chosen !== undefined ? chosen : fromFile;
     body = <Plot doc={doc} answer={answer} marking={marking} source={path ?? null} />;
   }
   else body = <Notice>Computing the chart in the sandbox…</Notice>;
