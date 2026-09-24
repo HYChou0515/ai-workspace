@@ -48,7 +48,7 @@ export type { SandboxRun, SandboxRunArgs, SandboxRunResult } from "../../viewPlu
 // will disagree about which rows are lit. `projectOntoKeys` turns selected
 // rows into what a view writes (`null` for a view without `keys:`). Additive
 // to SDK 1: no major bump.
-export { useMarking } from "../../hooks/useMarking";
+export { useMarking, useMarkingNames } from "../../hooks/useMarking";
 export type { WriteMarking } from "../../hooks/useMarking";
 export { isLit, projectOntoKeys } from "../../lib/markings";
 export type { Marking, MarkingEntry } from "../../lib/markings";
