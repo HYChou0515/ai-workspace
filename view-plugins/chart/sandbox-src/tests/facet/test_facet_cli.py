@@ -189,6 +189,25 @@ def test_arguments_nested_past_the_decoder_exit_2_not_a_traceback(
     assert "JSON" in capsys.readouterr().err
 
 
+def test_an_epoch_is_accepted_and_changes_nothing(
+    views: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The gallery puts a recovery epoch in every call's arguments, so a retry is
+    a new query rather than the cached failure; the sandbox ignores it."""
+    key = _build(views)
+    code, plain, _ = _run(capsys, "facet_index", {"key": key})
+    code2, with_epoch, _ = _run(capsys, "facet_index", {"key": key, "epoch": 3})
+    assert (code, code2) == (0, 0) and plain == with_epoch
+
+
+@pytest.mark.parametrize("epoch", ["1", 1.5, True, None])
+def test_an_epoch_that_is_not_an_integer_exits_2(
+    views: Path, capsys: pytest.CaptureFixture[str], epoch: object
+) -> None:
+    code, _, err = _run(capsys, "facet_index", {"key": _build(views), "epoch": epoch})
+    assert code == 2 and "epoch" in err
+
+
 def test_arguments_that_are_not_json_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["facet_index", "{nope"]) == 2
     assert "JSON" in capsys.readouterr().err
