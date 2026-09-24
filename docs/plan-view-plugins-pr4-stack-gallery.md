@@ -111,6 +111,14 @@ fixtures.
 - A cross-group `aggregate` over `groupby: [x, y]` returns one lattice.
 - Diff is two aggregates over the two groups the spec names, subtracted.
 - Both go through PR 2's `query` and reuse its output format.
+- **Built:** no new code. PR 2 already has `aggregate` over `groupby` and `diff`
+  (`chart_view/transforms.py`). `tests/facet/test_stack_diff.py` pins both on a `grid`
+  spec through `spec_errors` and `query.build`:
+  - three groups on one 2 × 2 lattice come back as one 4-row lattice of per-cell
+    means;
+  - `diff` of W3 minus W1 comes back cell by cell.
+
+  Swapping `diff`'s `of` / `minus`, or dropping `groupby`, reddens them.
 
 **P6 — the gallery.**
 
