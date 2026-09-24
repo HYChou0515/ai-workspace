@@ -28,6 +28,7 @@ does not evaluate is an error.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -215,25 +216,34 @@ def _encode(df: pd.DataFrame, kinds: Mapping[str, str]) -> dict[str, Any]:
     return {name: encode_column(df[name], kind) for name, kind in kinds.items()}
 
 
-def _build_layer(
-    spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str, Any]
-) -> dict[str, Any]:
+@dataclass
+class LayerRows:
+    """One layer's rows before binning and encoding — what `validate` reads."""
+
+    mark: str
+    encoding: Mapping[str, Any]
+    rows: pd.DataFrame
+    kinds: dict[str, str]
+    lit: pd.Series | None
+    outliers: pd.DataFrame | None = None
+    outlier_kinds: dict[str, str] = field(default_factory=dict)
+
+
+def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str, Any]) -> LayerRows:
     mark, props = _mark(layer)
     encoding = layer["encoding"]
     channels = _field_channels(encoding)
     df = apply_transforms(base, layer.get("transform", []))
     need_columns(df, *(d["field"] for _, d in channels))
     kinds = _kinds(mark, channels)
-    out: dict[str, Any] = {"mark": mark, "binned": None, "outliers": None}
+    outliers, outlier_kinds = None, {}
 
     if not channels:  # a rule / text drawn only from `datum`s
         df = df.iloc[0:0][[]]
     elif mark == "boxplot":
-        df, extra = _boxplot(df, channels, encoding)
+        df, outliers = _boxplot(df, channels, encoding)
         groups = {f: kinds[f] for f in _group_fields(channels, encoding["y"]["field"])}
-        if extra is not None:
-            extra_kinds = {**groups, encoding["y"]["field"]: "f64"}
-            out["outliers"] = {"rows": len(extra), "columns": _encode(extra, extra_kinds)}
+        outlier_kinds = {**groups, encoding["y"]["field"]: "f64"}
         kinds = {**groups, **{k: "f64" for k in ("$lo", "$q1", "$mid", "$q3", "$hi")}}
     elif mark == "errorbar" and "y2" not in encoding:
         df = _errorbar(df, channels, encoding, props.get("extent", "stderr"))
@@ -245,19 +255,36 @@ def _build_layer(
     keys = [k for k in spec.get("keys", []) if k in df.columns and k not in kinds]
     kinds.update({k: "cat" for k in keys})
     lit = _highlight(df, spec.get("highlight"))
+    return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds)
 
-    threshold = spec.get("bin_threshold", DEFAULT_BIN_THRESHOLD)
-    if (
-        mark == "scatter"
-        and len(df) > threshold
-        and all(encoding[a]["type"] in _CONTINUOUS for a in ("x", "y"))
-    ):
+
+def layer_rows(spec: Mapping[str, Any], frame: pd.DataFrame) -> list[LayerRows]:
+    """Each layer's rows over `frame` (its source, already read)."""
+    base = apply_transforms(frame, spec.get("transform", []))
+    return [_layer_rows(spec, base, ly) for ly in _layers(spec)]
+
+
+def binned(spec: Mapping[str, Any], layer: LayerRows) -> bool:
+    """Whether `layer` is a scatter drawn as bins."""
+    return (
+        layer.mark == "scatter"
+        and len(layer.rows) > spec.get("bin_threshold", DEFAULT_BIN_THRESHOLD)
+        and all(layer.encoding[a]["type"] in _CONTINUOUS for a in ("x", "y"))
+    )
+
+
+def _answer(spec: Mapping[str, Any], layer: LayerRows) -> dict[str, Any]:
+    df, kinds, lit = layer.rows, layer.kinds, layer.lit
+    out: dict[str, Any] = {"mark": layer.mark, "binned": None, "outliers": None}
+    if layer.outliers is not None:
+        columns = _encode(layer.outliers, layer.outlier_kinds)
+        out["outliers"] = {"rows": len(layer.outliers), "columns": columns}
+    if binned(spec, layer):
         points = len(df)
-        df, lit = _bin(df, encoding, lit)
+        df, lit = _bin(df, layer.encoding, lit)
         kinds = {f: k for f, k in kinds.items() if f in df.columns}
         kinds["$count"] = "f64"
         out["binned"] = {"points": points, "bins": len(df)}
-
     out["rows"] = len(df)
     out["columns"] = _encode(df, kinds)
     out["highlight"] = bitset(lit) if lit is not None else None
@@ -267,5 +294,4 @@ def _build_layer(
 
 def build(spec: Mapping[str, Any], frame: pd.DataFrame) -> dict[str, Any]:
     """What `spec` draws over `frame` (its source, already read)."""
-    base = apply_transforms(frame, spec.get("transform", []))
-    return {"format": FORMAT, "layers": [_build_layer(spec, base, ly) for ly in _layers(spec)]}
+    return {"format": FORMAT, "layers": [_answer(spec, ly) for ly in layer_rows(spec, frame)]}
