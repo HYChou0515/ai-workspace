@@ -17,8 +17,10 @@ still a question, and the reason travels on the chip.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
+from ..perm import Verb
 from ..quota.disk_ledger import UserDiskFull
 from ..resources.conversation import SentMarking
 from .schemas import MarkingInput
@@ -42,10 +44,19 @@ def _name_problem(name: str) -> str | None:
 
 
 async def write_markings(
-    files: WorkspaceFiles, workspace_id: str, markings: list[MarkingInput]
+    files: WorkspaceFiles,
+    workspace_id: str,
+    markings: list[MarkingInput],
+    may_write: Callable[[Verb], str | None],
 ) -> list[SentMarking]:
     """Write each non-empty marking; one `SentMarking` per marking, in order.
-    A marking with no values is not a marking and is dropped."""
+    A marking with no values is not a marking and is dropped.
+
+    `may_write(verb)` answers for the SENDER: None if they hold `verb`, else the
+    reason. A new file asks `add_content`, replacing one asks `edit_content` —
+    what every other write into the workspace asks. Sending a message only
+    asks `converse`, so without this a member who may chat but not write could
+    create or overwrite files here."""
     out: list[SentMarking] = []
     for m in markings:
         columns = {c: sorted(set(v)) for c, v in m.columns.items() if v}
@@ -63,6 +74,11 @@ async def write_markings(
             "sources": [m.source] if m.source else [],
             "columns": columns,
         }
+        verb: Verb = "edit_content" if await files.exists(workspace_id, path) else "add_content"
+        if (refused := may_write(verb)) is not None:
+            sent.error = refused
+            out.append(sent)
+            continue
         try:
             await files.write(
                 workspace_id, path, json.dumps(doc, ensure_ascii=False, indent=1).encode()

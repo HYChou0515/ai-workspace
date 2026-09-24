@@ -60,6 +60,9 @@ export class MarkingStore {
   private nameList: readonly string[] = [];
   private allListeners = new Set<() => void>();
   private all: ReadonlyMap<string, MarkingEntry> = new Map();
+  private writeListeners = new Set<
+    (name: string, entry: MarkingEntry | undefined, fromPeer: boolean) => void
+  >();
 
   get(name: string): MarkingEntry | undefined {
     return this.entries.get(name);
@@ -72,7 +75,12 @@ export class MarkingStore {
 
   /** Write `name`. An empty marking (or `null`) clears it. The sets are copied:
    * a caller mutating its own set afterwards does not change the marking. */
-  set(name: string, marking: Marking | null, source: string | null): void {
+  set(
+    name: string,
+    marking: Marking | null,
+    source: string | null,
+    opts: { fromPeer?: boolean } = {},
+  ): void {
     const had = this.entries.has(name);
     if (isEmpty(marking)) {
       if (!had) return;
@@ -91,6 +99,18 @@ export class MarkingStore {
       this.nameList = [...this.entries.keys()].sort();
       for (const cb of this.nameListeners) cb();
     }
+    const entry = this.entries.get(name);
+    for (const cb of this.writeListeners) cb(name, entry, opts.fromPeer ?? false);
+  }
+
+  /** Every write, with whether it came from another tab (`markingsSync`). */
+  subscribeWrites(
+    cb: (name: string, entry: MarkingEntry | undefined, fromPeer: boolean) => void,
+  ): () => void {
+    this.writeListeners.add(cb);
+    return () => {
+      this.writeListeners.delete(cb);
+    };
   }
 
   subscribe(name: string, cb: () => void): () => void {
