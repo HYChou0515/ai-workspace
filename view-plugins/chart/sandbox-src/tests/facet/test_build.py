@@ -228,8 +228,10 @@ def test_a_missing_text_value_is_a_missing_cell_not_a_category(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("column", "vega_type", "wire_kind"),
     [
+        # the fall-back hour: 02:30+02:00 then 02:30+01:00, which sort the wrong
+        # way round as text -- the wire sends epoch ms, in time order
         (
-            pd.to_datetime(["2026-03-29 00:30", "2026-03-29 01:30"])
+            pd.to_datetime(["2026-10-25 00:30", "2026-10-25 01:30"])
             .tz_localize("UTC")
             .tz_convert("Europe/Berlin"),
             "temporal",
@@ -238,7 +240,7 @@ def test_a_missing_text_value_is_a_missing_cell_not_a_category(tmp_path: Path) -
         (["10", "9"], "quantitative", "f64"),
         ([3, "b"], "nominal", "cat"),
     ],
-    ids=["temporal-across-dst", "quantitative-from-text", "nominal-mixed"],
+    ids=["temporal-across-fall-back", "quantitative-from-text", "nominal-mixed"],
 )
 def test_an_axis_is_the_value_the_chart_wire_sends_for_its_type(
     tmp_path: Path, column: Any, vega_type: str, wire_kind: str
@@ -257,6 +259,48 @@ def test_an_axis_is_the_value_the_chart_wire_sends_for_its_type(
     else:
         expect = list(np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8"))
     assert read_index(path).layout["x"] == expect
+
+
+def test_a_group_with_no_placeable_row_stays_as_an_empty_thumbnail(tmp_path: Path) -> None:
+    """Dropping it would leave a linked marking on "b" with nothing to light and
+    nothing naming why; the group exists, it has no cell to draw."""
+    frame = pd.DataFrame({"g": ["a", "b"], "x": [0.0, math.nan], "y": [0, 0], "v": [1.0, 2.0]})
+    path = tmp_path / "c.vcache"
+    build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=path)
+    index = read_index(path)
+    assert [g.key for g in index.groups] == [("a",), ("b",)]
+    assert index.scale.decode(read_groups(path, index, [1])[0]) == [None]
+
+
+def test_the_axis_kind_is_the_one_query_gives_the_same_channels(tmp_path: Path) -> None:
+    """x and y naming one field: query lets the first channel (x) decide its
+    wire kind for both, so the thumbnail must too."""
+    frame = pd.DataFrame({"g": ["a", "a"], "d": [10, 9], "v": [1.0, 2.0]})
+    path = tmp_path / "c.vcache"
+    build_facet_cache(
+        frame,
+        facet=["g"],
+        x="d",
+        y="d",
+        value="v",
+        path=path,
+        x_type="quantitative",
+        y_type="ordinal",
+    )
+    layout = read_index(path).layout
+    assert layout == {"x": [10.0, 9.0], "y": [10.0, 9.0]}
+    # f64 on both (10.0), not cat levels (10) -- equal in Python, not on the wire
+    assert all(type(v) is float for v in layout["x"] + layout["y"])
+
+
+def test_an_axis_type_that_is_not_a_vega_lite_type_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(BuildError, match="'time'"):
+        _one(tmp_path, [{"g": "a", "x": 0, "y": 0, "v": 1.0}], x_type="time")
+
+
+def test_an_infinite_key_is_refused_saying_so(tmp_path: Path) -> None:
+    with pytest.raises(BuildError, match="not finite"):
+        _one(tmp_path, [{"g": math.inf, "x": 0, "y": 0, "v": 1.0}])
 
 
 def test_the_build_reports_its_progress(tmp_path: Path) -> None:
