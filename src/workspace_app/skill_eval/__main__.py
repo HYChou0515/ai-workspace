@@ -258,10 +258,10 @@ def register_view_plugins(config_path: Path | None) -> None:
     and the turn's `## Available skills` index would lack it."""
     from ..config.loader import load
     from ..view_plugins.discovery import discover_view_plugins, resolve_plugins_dir
-    from ..view_plugins.skills import register_plugin_skills
+    from ..view_plugins.skills import register_for_agents
 
     settings = load(config_path=config_path)
-    register_plugin_skills(discover_view_plugins(resolve_plugins_dir(settings.view_plugins)))
+    register_for_agents(discover_view_plugins(resolve_plugins_dir(settings.view_plugins)))
 
 
 def main() -> None:

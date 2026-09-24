@@ -18,7 +18,7 @@ etc.) rather than imported by name, so a test that reloads ``skills`` (to reset 
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -70,6 +70,20 @@ PLUGIN_SKILLS: dict[str, Path] = {}
 #: show it. Plugin skills and the `## Available views` index go to exactly the
 #: items whose RESOLVED tool set holds both.
 VIEW_DRAWING_TOOLS = frozenset({"write_file", "show_file"})
+
+
+#: `(kind, when)` for each view plugin `views` entry — the lines of the
+#: `## Available views` prompt index. Set with the plugin skills.
+PLUGIN_VIEWS: list[tuple[str, str]] = []
+
+
+def set_plugin_views(views: Sequence[tuple[str, str]]) -> None:
+    PLUGIN_VIEWS[:] = list(views)
+
+
+def plugin_views_for(tools: Collection[str] | None) -> list[tuple[str, str]]:
+    """The `## Available views` lines an item with this RESOLVED tool set gets."""
+    return list(PLUGIN_VIEWS) if can_draw_views(tools) else []
 
 
 def set_plugin_skills(sources: Mapping[str, Path]) -> None:

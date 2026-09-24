@@ -58,3 +58,13 @@ def plugin_skill_sources(plugins: Sequence[ViewPlugin]) -> dict[str, Path]:
 
 def register_plugin_skills(plugins: Sequence[ViewPlugin]) -> None:
     shared_skills.set_plugin_skills(plugin_skill_sources(plugins))
+
+
+def register_for_agents(plugins: Sequence[ViewPlugin]) -> None:
+    """Everything an agent learns from the installed plugins: their skills and
+    the `## Available views` lines. One call, so no composition registers one
+    half and forgets the other."""
+    register_plugin_skills(plugins)
+    shared_skills.set_plugin_views(
+        [(v.kind, v.when.strip()) for p in plugins for v in p.manifest.views]
+    )

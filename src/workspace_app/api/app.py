@@ -68,7 +68,7 @@ from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
 from ..view_plugins import ViewPlugin
 from ..view_plugins.sandbox_half import artifact_plugins
-from ..view_plugins.skills import register_plugin_skills
+from ..view_plugins.skills import register_for_agents
 from ..workcalendar import OffHoursCalendar
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
@@ -1603,7 +1603,7 @@ def create_app(
     # #847/#848 P7: each plugin's skill joins the shared skills, for the items
     # whose resolved tools can draw a view. Wholesale, so this composition's
     # plugins replace any earlier one's in the same process.
-    register_plugin_skills(view_plugins)
+    register_for_agents(view_plugins)
     app.state.ingestor = ingestor
     # #312: the background job coordinators are built by the shared
     # `build_coordinators` composition root — the SAME one the standalone worker
