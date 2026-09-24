@@ -12,6 +12,7 @@
  * number on a category axis as an index, so a category whose labels are
  * numbers would otherwise land on the wrong tick.
  */
+import { DIM_OPACITY, litRows } from "./highlight";
 import { colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
 import { decodeColumn, type Column, type Scalar, type WireColumn } from "./wire";
 
@@ -297,6 +298,10 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const wire = answer.layers[li];
     const n = wire.rows;
     const all = Array.from({ length: n }, (_, i) => i);
+    // `highlight:` — an unlit row is drawn dimmed in its own data item.
+    const lit = litRows(wire);
+    const item = <T,>(value: T, row: number): T | { value: T; itemStyle: { opacity: number } } =>
+      lit && !lit[row] ? { value, itemStyle: { opacity: DIM_OPACITY } } : value;
     const push = (s: Record<string, unknown>, r: number[]) => {
       series.push(s);
       rows.push({ layer: li, rows: r });
@@ -307,7 +312,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const cells = gridCells as Cells;
       const c = cols[enc.color?.field as string];
       const scheme = enc.color?.scale?.scheme ?? "sequential";
-      const image = paintCells(cells, colourTable(scheme, c?.min ?? 0, c?.max ?? 0));
+      const image = paintCells(cells, colourTable(scheme, c?.min ?? 0, c?.max ?? 0), lit ?? undefined);
       const source = opts.gridImage?.({ cells, image });
       grids.push({ layer: li, seriesIndex: series.length, cells, image });
       visualMaps.push({
@@ -356,7 +361,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     if (mark.type === "pie") {
       const theta = cols[enc.theta?.field as string];
       const colour = cols[enc.color?.field as string];
-      const data = all.map((r) => ({ name: colour ? String(colour.value(r) ?? NONE) : String(r), value: theta.value(r) }));
+      const data = all.map((r) => ({
+        name: colour ? String(colour.value(r) ?? NONE) : String(r),
+        value: theta.value(r),
+        ...(lit && !lit[r] ? { itemStyle: { opacity: DIM_OPACITY } } : {}),
+      }));
       legend.push(...data.map((d) => d.name));
       push({ type: "pie", data, radius: ["0%", "70%"], ...common(mark) }, all);
       return;
@@ -377,13 +386,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         calculable: true,
         inRange: { color: palette(scheme, vmin, vmax) },
       });
-      push({ type: "heatmap", data: all.map((r) => point(li, r, [c.value(r) as number | null])), ...common(mark) }, all);
+      push({ type: "heatmap", data: all.map((r) => item(point(li, r, [c.value(r) as number | null]), r)), ...common(mark) }, all);
       return;
     }
 
     if (mark.type === "boxplot") {
       const five = ["$lo", "$q1", "$mid", "$q3", "$hi"].map((k) => cols[k]);
-      const data = all.map((r) => [xAt(li, r), ...five.map((c) => c.value(r) as number)]);
+      const data = all.map((r) => item([xAt(li, r), ...five.map((c) => c.value(r) as number)], r));
       push({ type: "boxplot", data, encode: { x: 0, y: [1, 2, 3, 4, 5] }, ...common(mark) }, all);
       if (wire.outliers) {
         const out = Object.fromEntries(Object.entries(wire.outliers.columns).map(([k, w]) => [k, decodeColumn(w)]));
@@ -479,7 +488,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const type = mark.type === "area" ? "line" : mark.type === "text" ? "scatter" : mark.type;
       const s: Record<string, unknown> = {
         type,
-        data: members.map((r) => point(li, r, extras.map((c) => c.value(r) as number | null))),
+        data: members.map((r) => item(point(li, r, extras.map((c) => c.value(r) as number | null)), r)),
         ...common(mark),
       };
       if (splitCol) {
@@ -494,7 +503,8 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         if (mark.smooth) s.smooth = true;
       }
       if ((mark.type === "area" || mark.type === "bar") && mark.stack) s.stack = "stack";
-      if (mark.type === "scatter" && n > 2000) s.large = true;
+      // Large mode drops per-point styles, so a highlighted layer keeps it off.
+      if (mark.type === "scatter" && n > 2000 && !lit) s.large = true;
       if (textCol) {
         s.label = { show: true, formatter: (p: { dataIndex: number }) => show(textCol, members[p.dataIndex]) };
       }
@@ -532,7 +542,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const lengthIsValue = specs.some((s) => ["bar", "area"].includes(markOf(s).type));
     option.xAxis = [axisOption(xAxis, gridCells, "x", lengthIsValue)];
     option.yAxis = [axisOption(yAxis, gridCells, "y", lengthIsValue)];
-    option.grid = { containLabel: true, left: 16, right: visualMaps.length ? 80 : 16, top: 48, bottom: 16 };
+    // containLabel reserves room for tick labels only; the axis names (centred
+    // beside their axis, NAME_AT) need their own margin or they are clipped.
+    option.grid = { containLabel: true, left: 48, right: visualMaps.length ? 80 : 16, top: 48, bottom: 32 };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
   if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));

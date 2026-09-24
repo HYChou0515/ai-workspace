@@ -69,6 +69,11 @@ describe("axes", () => {
     const { option } = toOption(spec, answer(layer("scatter", 1, { a: f64([1]), b: f64([2]) })));
     expect(option.xAxis).toMatchObject([{ name: "a", nameLocation: "middle" }]);
     expect(option.yAxis).toMatchObject([{ name: "b", nameLocation: "middle" }]);
+    // containLabel makes room for tick labels only: the names need their own
+    // margin, or the rotated y name is clipped at the panel's left edge.
+    const grid = option.grid as { left: number; bottom: number };
+    expect(grid.left).toBeGreaterThanOrEqual(48);
+    expect(grid.bottom).toBeGreaterThanOrEqual(32);
   });
 
   it("orders a category axis by sort", () => {

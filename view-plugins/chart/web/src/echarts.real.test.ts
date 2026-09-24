@@ -13,7 +13,6 @@ import { describe, expect, it } from "vitest";
 const settle = () => new Promise((r) => setTimeout(r, 400));
 
 import "./echarts"; // registers the chart's series + components
-import { highlightTargets } from "./highlight";
 import { toOption } from "./option";
 import { type BrushSelected, selectionFromBrush } from "./selection";
 import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
@@ -104,13 +103,16 @@ describe("against real ECharts", () => {
     chart.dispose();
   });
 
-  it("accepts the highlight actions the chart dispatches", () => {
-    const { chart, built } = chartFor(scatter, scatterAnswer);
-    const targets = highlightTargets(built, scatterAnswer);
-    expect(targets.length).toBeGreaterThan(0);
-    for (const t of targets) {
-      expect(() => chart.dispatchAction({ type: "highlight", seriesIndex: t.seriesIndex, dataIndex: t.dataIndex })).not.toThrow();
-    }
+  it("draws a highlight's unlit rows dimmed, as ECharts itself resolves the style", () => {
+    // Rows 0 and 2 are lit (0b0101): lot A's two points; lot B's are not.
+    const { chart } = chartFor(scatter, scatterAnswer);
+    const opacity = (series: number, i: number) => {
+      const model = (chart as unknown as { getModel(): { getSeriesByIndex(n: number): { getData(): { getItemVisual(i: number, k: string): { opacity?: number } } } } }).getModel();
+      return model.getSeriesByIndex(series).getData().getItemVisual(i, "style").opacity ?? 1;
+    };
+    // Lit keep the series default (a scatter is 0.8 in ECharts); unlit are dimmed.
+    expect([opacity(0, 0), opacity(0, 1)]).toEqual([0.8, 0.8]);
+    expect([opacity(1, 0), opacity(1, 1)]).toEqual([0.15, 0.15]);
     chart.dispose();
   });
 });
