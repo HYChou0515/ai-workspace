@@ -3,9 +3,10 @@
  * (Q6): a marking is `column name → set of values`, both opaque strings. Which
  * columns link is each spec's `keys:`; views link on same-named columns.
  *
- * One store per item (`MarkingProvider`, inside `WorkspaceProviders`), so the
- * workspace's panes and the editor-area page each have their own. Subscriptions
- * are per NAME: a write to one marking re-renders only the views on it.
+ * One store per item (`MarkingProvider`, inside `WorkspaceProviders`), kept in
+ * step across the item's browser tabs (`markingsSync`), so the workspace and the
+ * editor-area page see one set. Subscriptions are per NAME: a write to one
+ * marking re-renders only the views on it.
  */
 
 /** `column → values`. Values compare as strings; nothing is parsed. */
@@ -89,9 +90,13 @@ export class MarkingStore {
     name: string,
     marking: Marking | null,
     source: string | null,
-    opts: { fromPeer?: boolean } = {},
+    opts: { fromPeer?: boolean; ifEmpty?: boolean } = {},
   ): void {
     const had = this.entries.has(name);
+    // A seed (a view's `highlight:` on open) never overwrites a selection: the
+    // check is HERE, at write time, because two views opened in one commit both
+    // saw "empty" when they rendered.
+    if (opts.ifEmpty && had) return;
     const held = this.entries.get(name);
     // The same write again changes nothing, so it tells no one: a view redrawn
     // with its new lit rows may report the same selection, and re-notifying

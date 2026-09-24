@@ -21,18 +21,16 @@ export function useViewMarking(
   fromFile: string | null,
 ): [string | null, (next: string | null) => void] {
   const storageKey = viewKey ? `view-marking:${viewKey}` : null;
-  const [chosen, setChosen] = useState<{ name: string | null } | null>(() => {
-    if (!storageKey) return null;
-    try {
-      const raw = localStorage.getItem(storageKey);
-      return raw ? (JSON.parse(raw) as { name: string | null }) : null;
-    } catch {
-      return null;
-    }
-  });
+  // The state remembers WHICH view it was loaded for: the IDE keeps one panel
+  // mounted and swaps the file under it, and a choice read once would follow
+  // the panel to the next file (the class `usePersistentSet` fixed). A new key
+  // re-reads during the render that sees it.
+  const [state, setState] = useState(() => ({ key: storageKey, chosen: load(storageKey) }));
+  if (state.key !== storageKey) setState({ key: storageKey, chosen: load(storageKey) });
+  const chosen = state.key === storageKey ? state.chosen : load(storageKey);
   const choose = useCallback(
     (name: string | null) => {
-      setChosen({ name });
+      setState({ key: storageKey, chosen: { name } });
       if (!storageKey) return;
       try {
         localStorage.setItem(storageKey, JSON.stringify({ name }));
@@ -43,6 +41,16 @@ export function useViewMarking(
     [storageKey],
   );
   return [chosen ? chosen.name : fromFile, choose];
+}
+
+function load(storageKey: string | null): { name: string | null } | null {
+  if (!storageKey) return null;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    return raw ? (JSON.parse(raw) as { name: string | null }) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function MarkingControl({

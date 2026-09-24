@@ -8,4 +8,11 @@ import { registerViewKind } from "@aiws/view-sdk";
 
 import { ChartView } from "./ChartView";
 
-registerViewKind({ kind: "chart", Component: ChartView, ownsEmptyState: true, suppressQuickCreate: true });
+registerViewKind({
+  kind: "chart",
+  Component: ChartView,
+  ownsEmptyState: true,
+  suppressQuickCreate: true,
+  // Every chart can be put on a named marking from its header (#847 PR 3).
+  linkable: true,
+});
