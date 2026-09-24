@@ -1,0 +1,11 @@
+{
+  "name": "chart",
+  "sdk": "1",
+  "kinds": ["chart"],
+  "views": [
+    { "kind": "chart", "when": "a relationship, trend, distribution or comparison you are claiming" },
+    { "kind": "chart", "when": "with `mark: grid`, a value's pattern over a 2-D lattice" }
+  ],
+  "skill": "skill",
+  "sandbox": { "bundle": "sandbox" }
+}
