@@ -1,6 +1,9 @@
 # Keep the build context small + reproducible (the image rebuilds deps/SPA).
 .git
 .venv
+# view-plugins/<name>/{sandbox-src/.venv, web/node_modules} are dev envs too:
+# the image builds each plugin from its lockfiles.
+**/.venv
 **/__pycache__
 **/*.pyc
 .pytest_cache
@@ -8,6 +11,7 @@
 .coverage
 htmlcov
 node_modules
+**/node_modules
 web/node_modules
 # #847/#848: a view plugin's own install (view-plugins/*/web/node_modules) too —
 # a bare pattern matches the context root only.
