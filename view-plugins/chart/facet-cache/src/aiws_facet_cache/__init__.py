@@ -39,6 +39,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import struct
 import sys
@@ -54,14 +55,19 @@ MISSING = 255
 LEVELS = 254  # the top quantized code; codes run 0..LEVELS, MISSING is outside
 TMP_SUFFIX = ".tmp"  # a build in progress, or one a SIGKILL left behind
 _BUILD_ID = 32  # hex chars, so the id can never contain the header's "{"
+_HEX_ID = re.compile(rb"[0-9a-f]{%d}" % _BUILD_ID)
 _LEN = struct.Struct("<I")
 _EXACT = 8  # bytes per exact value (float64)
 _JSON_INT = 2**53  # past this JSON.parse rounds an integer
 
 
 class CacheUnusable(Exception):
-    """Missing, unreadable, of another format, cut short, or replaced since its
-    index was read: the caller rebuilds."""
+    """Missing, unreadable, of another format, or cut short: the caller rebuilds."""
+
+
+class CacheRebuilt(CacheUnusable):
+    """The cache is fine, but it is a later build than the index the read was
+    given: the caller refetches the index rather than rebuilding again."""
 
 
 def transform_hash(transform: Mapping[str, Any]) -> str:
@@ -121,7 +127,8 @@ class ContinuousScale:
             # codes it, so a thumbnail and the full view paint the same pixels
             if v is None or not math.isfinite(v):
                 out.append(MISSING)
-            elif span <= 0 or v <= self.lo:
+            elif span <= 0 or not math.isfinite(span) or v <= self.lo:
+                # a range too wide for a float (hi - lo = inf) codes 0, as _q8 does
                 out.append(0)
             elif v >= self.hi:
                 out.append(LEVELS)
@@ -336,9 +343,12 @@ def _open_checked(path: Path) -> tuple[BinaryIO, bytes, int]:
     except OSError as e:  # an I/O error after the open: close the file, don't leak it
         f.close()
         raise CacheUnusable(f"{path}: {e.strerror or e}") from None
-    if magic != MAGIC:  # a short build id leaves the length field short, caught next
+    if magic != MAGIC:
         f.close()
         raise CacheUnusable(f"{path}: not a facet cache in this format")
+    if not _HEX_ID.fullmatch(build_id):  # also a short one, cut before the header
+        f.close()
+        raise CacheUnusable(f"{path}: its build id is not {_BUILD_ID} hex characters")
     return f, build_id, size
 
 
@@ -367,9 +377,12 @@ def read_index(path: Path) -> CacheIndex:
 
 def _open_same(path: Path, index: CacheIndex) -> BinaryIO:
     f, build_id, size = _open_checked(path)
-    if build_id != index.build_id or size != index.size:
+    if build_id != index.build_id:
         f.close()
-        raise CacheUnusable(f"{path}: rebuilt after its index was read")
+        raise CacheRebuilt(f"{path}: rebuilt after its index was read")
+    if size != index.size:  # same build, fewer bytes: cut short since
+        f.close()
+        raise CacheUnusable(f"{path}: {size} bytes, not the {index.size} its index expects")
     return f
 
 
