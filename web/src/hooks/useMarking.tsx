@@ -49,6 +49,20 @@ export function useMarkingNames(): readonly string[] {
   return useSyncExternalStore(subscribe, () => (store ? store.names() : EMPTY));
 }
 
+const NONE: ReadonlyMap<string, MarkingEntry> = new Map();
+
+/** Every marking of the item, sorted by name — the composer's send chips (P7).
+ * Re-renders on any write, which is right for the composer and wrong for a
+ * view: a view uses `useMarking(name)`. */
+export function useAllMarkings(): ReadonlyMap<string, MarkingEntry> {
+  const store = useContext(MarkingContext);
+  const subscribe = useCallback(
+    (cb: () => void) => (store ? store.subscribeAll(cb) : noop()),
+    [store],
+  );
+  return useSyncExternalStore(subscribe, () => (store ? store.snapshot() : NONE));
+}
+
 /** The item's store itself, for code that reads every marking at once (P7). */
 export function useMarkingStore(): MarkingStore | null {
   return useContext(MarkingContext);
