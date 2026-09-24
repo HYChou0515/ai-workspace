@@ -70,11 +70,13 @@ fixtures.
     x_type, y_type, progress)`.
     - Keys are `canon()` of each facet value, so they match a linked view's marking.
       A missing key (NaN, NA) is refused, never keyed `"<NA>"`.
-    - Cell x / y are asked of the chart's wire: `encode_column` for the axis type
-      (`f64` quantitative, `time` temporal, `cat` otherwise, as `query` sends a
-      grid), decoded. A thumbnail's `lattice` gets exactly what the full view's
-      gets. A row with no x or y is left out, as `lattice` leaves it out, and the
-      progress lines say how many.
+    - Cell x / y are asked of the chart itself: the wire kind `query._kinds` gives a
+      grid's x / y channels, then `encode_column` of that kind, decoded. A
+      thumbnail's `lattice` gets exactly what the full view's gets.
+    - A row with no x or y is left out, as `lattice` leaves it out, and the progress
+      lines say how many.
+    - A group all of whose rows are left out stays, as an empty thumbnail, so a
+      marking that names it still finds it.
     - Two rows in one group's cell, or a sort value that varies inside a group, is
       refused by name; aggregating belongs to the transforms.
     - A bool value is a `true` / `false` category.
