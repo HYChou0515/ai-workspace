@@ -1,6 +1,7 @@
 """The pager's launch commands (plan-view-plugins-pr4 P4), dispatched by
 ``chart_view.cli``. Standard library only: they run on every scroll.
 
+- ``facet_build {"spec"}`` -- build or reuse the cache (``build_command``);
 - ``facet_index {"key"}`` -- the index a gallery sorts and marks from;
 - ``facet_page {"key", "build", "positions"}`` -- records at sorted positions;
 - ``facet_exact {"key", "build", "position"}`` -- one group's exact values.
@@ -30,6 +31,12 @@ _KEY = {"type": "string", "description": "The cache digest the build returned."}
 _BUILD = {"type": "string", "description": "The build id of the index the call sorted from."}
 
 COMMANDS: dict[str, dict[str, Any]] = {
+    "facet_build": {
+        "description": (
+            "Build (or reuse) the cache a facet: spec opens as a gallery; answer its key and build."
+        ),
+        "properties": {"spec": {"type": "string", "description": "The chart file's YAML text."}},
+    },
     "facet_index": {
         "description": (
             "A facet cache's index: scale, facet columns, layout, each group's key and sort values."
@@ -83,7 +90,7 @@ def _args(name: str, raw: str) -> dict[str, Any]:
         raise ValueError("positions must be a list of integer group positions")
     if "position" in args and type(args["position"]) is not int:
         raise ValueError("position must be an integer group position")
-    for text in ("key", "build"):
+    for text in ("key", "build", "spec"):
         # a build that is not text would read as "rebuilt since" (exit 4) and
         # send the gallery round a refetch loop instead of naming the bad call
         if text in args and not isinstance(args[text], str):
@@ -94,6 +101,11 @@ def _args(name: str, raw: str) -> dict[str, Any]:
 def run(name: str, raw: str) -> int:
     try:
         args = _args(name, raw)
+        if name == "facet_build":
+            # pandas lives behind this import, so only a build pays for it
+            from chart_view.facet.build_command import run as build
+
+            return build(args["spec"])
         if name == "facet_index":
             answer = index_payload(_root(), args["key"])
         elif name == "facet_page":
