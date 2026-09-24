@@ -68,6 +68,7 @@ from workspace_app.quota.limits import resolve_discovered_apps
 from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 from workspace_app.view_plugins.discovery import discover_view_plugins, resolve_plugins_dir
+from workspace_app.view_plugins.sandbox_half import merge_tools_root
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -194,6 +195,18 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
     # The sandbox mounts the tools dir read-only at /.tools (outside the
     # workspace) — no per-sandbox copy. Only point at it once it's built.
     tools_dir = tools_root if packages else None
+    # #847/#848: a view plugin's sandbox bundle joins that root under the local
+    # backend (the jail mounts ONE root, so it is a merged copy, not a link).
+    # With no bundle plugins this returns the root unchanged. `http` gets its
+    # plugin bundles from sandbox-host; `docker` has no tools at all.
+    if settings.sandbox.kind == "local":
+        with boot_step("merge view-plugin sandbox bundles"):
+            tools_dir = merge_tools_root(
+                tools_dir,
+                [p.name for p in packages],
+                view_plugins,
+                tools_root.parent / f"{tools_root.name}-with-view-plugins",
+            )
     with boot_step("init embedder"):
         embedder = get_embedder(settings)
     with boot_step("init KB LLM"):

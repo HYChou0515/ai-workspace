@@ -279,7 +279,9 @@ def register_tools_routes(
         if not declared:
             return ExternalTools()
         try:
-            return await resolve_item_tools(sandbox, locator, item_id)
+            # The picker never creates a sandbox, so it has no view plugin to
+            # mount — and a plugin is not a pickable tool anyway.
+            return await resolve_item_tools(sandbox, locator, item_id, plugin_artifacts={})
         except Exception as exc:  # noqa: BLE001 - any failure degrades the same way
             logger.warning("item %s: third-party tools could not be resolved: %s", item_id, exc)
             return ExternalTools(refused=dict.fromkeys(declared, str(exc)))

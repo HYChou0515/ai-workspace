@@ -196,6 +196,44 @@ exec "$ld" "$here/python/bin/python{ver}" "$@"
 """
 
 
+# View-plugin sandbox bundles (#847/#848). A plugin's commands are the
+# PLATFORM's — `validate`, a chart's aggregation — run whenever a view opens, so
+# what they import must be what the bundle shipped, not whatever the user has
+# `pip install`ed. `_LAUNCH` deliberately puts the user site FIRST (#581); this
+# one keeps it out entirely: `-s` drops the user site from `sys.path`, and
+# `PYTHONPATH` is set to the bundle's own site-packages ALONE — no user
+# `PYTHONPATH` pass-through and no restore of the item's variables over it.
+# `PYTHONHOME` / `PYTHONSTARTUP` are unset because either could still redirect
+# the interpreter. The item's other variables stay in the environment as-is.
+# A package opts in with `[tool.workspace-tool] launch = "isolated"`.
+_ISOLATED_LAUNCH = """\
+#!/bin/sh
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
+export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
+unset PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE
+export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages"
+export PYTHONNOUSERSITE=1
+ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
+exec "$ld" "$here/python/bin/python{ver}" -s "$here/.venv/bin/{tool}" "$@"
+"""
+
+#: `[tool.workspace-tool] launch = ...` values a package source may declare.
+_LAUNCH_MODES = ("default", "isolated")
+
+
+def _launch_mode(source: Path) -> str:
+    """Which launch template ``source`` asks for (#847/#848)."""
+    data = tomllib.loads((source / "pyproject.toml").read_text())
+    mode = data.get("tool", {}).get("workspace-tool", {}).get("launch", "default")
+    if mode not in _LAUNCH_MODES:
+        raise RuntimeError(
+            f"package source {source}: [tool.workspace-tool] launch = {mode!r} — "
+            f"expected one of {list(_LAUNCH_MODES)}"
+        )
+    return mode
+
+
 def _drop_externally_managed(python_dir: Path) -> None:
     """Clear PEP 668's `EXTERNALLY-MANAGED` from the interpreter we just bundled.
 
@@ -310,7 +348,8 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
         (dst / "commands.json").write_text("[]")
         (dst / "schemas").mkdir()
     else:
-        launch.write_text(_LAUNCH.format(ver=ver, tool=name))
+        template = _ISOLATED_LAUNCH if _launch_mode(source) == "isolated" else _LAUNCH
+        launch.write_text(template.format(ver=ver, tool=name))
         launch.chmod(0o755)
         # Sandbox-side `launch` is invoked through bash + a custom loader;
         # here at build time we want the host's venv-bin script directly
@@ -457,7 +496,12 @@ def _builder_fingerprint() -> str:
     is folded in for the same reason — otherwise editing it would leave every
     cached bundle still refusing `pip install` while the code read as fixed."""
     h = hashlib.sha256()
-    for tpl in (_LAUNCH, _PYTHON_LAUNCH, inspect.getsource(_drop_externally_managed)):
+    for tpl in (
+        _LAUNCH,
+        _PYTHON_LAUNCH,
+        _ISOLATED_LAUNCH,
+        inspect.getsource(_drop_externally_managed),
+    ):
         h.update(tpl.encode())
         h.update(b"\0")
     return h.hexdigest()

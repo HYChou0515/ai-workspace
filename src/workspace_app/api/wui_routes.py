@@ -27,7 +27,7 @@ import codecs
 import json
 import logging
 import shlex
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +178,7 @@ def register_wui_routes(
     packages: list[PackageInfo] | None,
     prebuilt_dir: Path | None,
     resolve_external: Callable[[str], Any] | None = None,
+    view_plugin_artifacts: Mapping[str, str],
     request_env: IRequestEnv | None = None,
     get_user_id: Callable[[], str] | None = None,
     orchestrator: Any = None,
@@ -245,7 +246,10 @@ def register_wui_routes(
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
             return await resolve_external(item_id)
-        return await resolve_item_tools(sandbox, locator, item_id)
+        # With the view plugins: this call may create the item's sandbox.
+        return await resolve_item_tools(
+            sandbox, locator, item_id, plugin_artifacts=view_plugin_artifacts
+        )
 
     @app.post("/a/{slug}/items/{item_id}/wui/build")
     # No `request` parameter: this route composes no per-request environment,

@@ -160,6 +160,7 @@ def build(
 
     register_wui_routes(
         app,
+        view_plugin_artifacts={},
         # Contract doubles: each implements the members this route reaches for
         # and nothing else, so a change in what it reaches for shows up as a
         # failure rather than being absorbed by a stub of the whole protocol.
@@ -980,6 +981,7 @@ def test_the_wui_door_provisions_from_the_finalized_grant(monkeypatch):
 
     register_wui_routes(
         app,
+        view_plugin_artifacts={},
         locator=cast("ItemLocator", loc),
         sandbox=cast("Sandbox", sb),
         registry=_Registry(),

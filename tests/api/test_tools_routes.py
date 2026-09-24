@@ -54,7 +54,8 @@ def _resolving(monkeypatch, answer: ExternalTools) -> list[str]:
 
     asked: list[str] = []
 
-    async def _fake(sandbox, locator, item_id):
+    async def _fake(sandbox, locator, item_id, *, plugin_artifacts):
+        assert plugin_artifacts == {}  # the picker mounts nothing
         asked.append(item_id)
         return answer
 
@@ -336,7 +337,7 @@ def test_item_tools_still_answers_when_the_third_party_host_is_unreachable(
     to press — it may only cost those rows their provenance."""
     from workspace_app.api import tools_routes
 
-    async def _boom(sandbox, locator, item_id):
+    async def _boom(sandbox, locator, item_id, *, plugin_artifacts):
         raise RuntimeError("connection refused")
 
     monkeypatch.setattr(tools_routes, "resolve_item_tools", _boom)

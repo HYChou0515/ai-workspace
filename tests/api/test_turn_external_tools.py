@@ -58,10 +58,13 @@ class _Host:
         }
 
 
-def _builder(*, slug: str | None, sandbox: object) -> TurnContextBuilder:
+def _builder(
+    *, slug: str | None, sandbox: object, plugins: dict[str, str] | None = None
+) -> TurnContextBuilder:
     builder = object.__new__(TurnContextBuilder)
     builder._locator = _Locator(slug)  # type: ignore[attr-defined]
     builder._sandbox = sandbox  # type: ignore[attr-defined]
+    builder._view_plugin_artifacts = dict(plugins or {})  # type: ignore[attr-defined]
     return builder
 
 
@@ -107,7 +110,7 @@ def _declaring(monkeypatch, **tools: str) -> None:
     )
 
 
-async def _resolve(host: _Host, item: str = "item-1"):
+async def _resolve(host: _Host, item: str = "item-1", plugins: dict[str, str] | None = None):
     """Call the module function with this file's doubles.
 
     `Sandbox` and `ItemLocator` are cast rather than implemented: the function
@@ -117,7 +120,10 @@ async def _resolve(host: _Host, item: str = "item-1"):
     from workspace_app.api.turn_context import resolve_item_tools
 
     return await resolve_item_tools(
-        cast("Sandbox", host), cast("ItemLocator", _Locator("rca")), item
+        cast("Sandbox", host),
+        cast("ItemLocator", _Locator("rca")),
+        item,
+        plugin_artifacts=plugins or {},
     )
 
 
@@ -279,3 +285,53 @@ async def test_a_turn_that_states_its_tools_is_not_second_guessed() -> None:
 
     assert asked == []
     assert sandbox.specs[-1].tools == {}
+
+
+# ── #847/#848: a view plugin's `{artifact: url}` sandbox half ──────────────
+
+
+async def test_a_view_plugin_artifact_is_mounted_but_is_not_an_agent_tool(monkeypatch) -> None:
+    """Its sha goes into the sandbox this item is created with — so the
+    plugin's commands find their launcher — and nothing an agent or the tool
+    picker reads mentions it."""
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    host = _Host()
+    got = await _resolve(host, plugins={"chart": "https://g/chart"})
+    assert host.asked == [{"chart": "https://g/chart", "wafer-history": "https://g/m"}]
+    assert set(got.shas) == {"chart", "wafer-history"}
+    assert [p.name for p in got.packages] == ["wafer-history"]
+
+
+async def test_an_unresolvable_view_plugin_is_not_an_agent_facing_refusal(monkeypatch) -> None:
+    _declaring(monkeypatch)
+
+    class _Refusing(_Host):
+        async def resolve_tools(self, declared: dict[str, str]) -> dict[str, Any]:
+            return {"tools": {}, "refused": dict.fromkeys(declared, "artifact store unreachable")}
+
+    got = await _resolve(_Refusing(), plugins={"chart": "https://g/chart"})
+    assert got.refused == {}
+    assert got.shas == {}
+
+
+async def test_an_app_tool_of_the_same_name_wins_over_the_plugin(monkeypatch, caplog) -> None:
+    _declaring(monkeypatch, chart="https://g/app-chart")
+    host = _Host()
+    with caplog.at_level("WARNING"):
+        got = await _resolve(host, plugins={"chart": "https://g/plugin-chart"})
+    assert host.asked == [{"chart": "https://g/app-chart"}]
+    assert [p.name for p in got.packages] == ["chart"]
+    assert "shadows the view plugin" in caplog.text
+
+
+async def test_a_turn_on_a_live_sandbox_without_the_plugin_tells_the_agent_nothing(
+    monkeypatch,
+) -> None:
+    """`confine_to_mounted` refuses what the live sandbox lacks; for a view
+    plugin that refusal is the runner's to report, not the agent's to read."""
+    _declaring(monkeypatch)
+    builder = _builder(slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"})
+    session = type("S", (), {"handle": object(), "tools": {}})()
+    got = await builder._external_tools("item-1", session)
+    assert got.refused == {}
+    assert got.packages == ()
