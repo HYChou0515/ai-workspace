@@ -85,6 +85,7 @@ def build_facet_cache(
     path: Path,
     x_type: str = "ordinal",
     y_type: str = "ordinal",
+    continuous: bool | None = None,
     progress: Callable[[str], None] = lambda _line: None,
 ) -> None:
     missing_columns = [c for c in [*facet, x, y, value, *sort] if c not in frame.columns]
@@ -116,8 +117,13 @@ def build_facet_cache(
                 f"{gaps} rows have no {c!r} value (missing, or a number that is not finite)"
             )
 
-    numeric = pd.api.types.is_numeric_dtype(frame[value]) and not pd.api.types.is_bool_dtype(
-        frame[value]
+    # ``continuous`` is the chart's own decision when a spec is at hand (a grid
+    # colour that is not quantitative is categories whatever its dtype, as
+    # query sends it); without one, the column's dtype decides
+    numeric = (
+        pd.api.types.is_numeric_dtype(frame[value]) and not pd.api.types.is_bool_dtype(frame[value])
+        if continuous is None
+        else continuous
     )
     if numeric:
         values = pd.to_numeric(frame[value], errors="coerce").astype(float)
