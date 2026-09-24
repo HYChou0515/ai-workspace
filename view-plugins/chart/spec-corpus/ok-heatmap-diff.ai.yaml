@@ -1,0 +1,11 @@
+view: chart
+source: data/dies.csv
+mark: heatmap
+encoding:
+  x: {field: die_x, type: ordinal}
+  y: {field: die_y, type: ordinal}
+  color: {field: delta, type: quantitative, scale: {scheme: diverging}}
+transform:
+  - diff: {by: phase, of: after, minus: before}
+    aggregate: [{op: mean, field: thickness, as: delta}]
+    groupby: [die_x, die_y]

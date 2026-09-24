@@ -1,0 +1,75 @@
+/**
+ * The spec corpus, read the way the host reads a view file.
+ *
+ * `view-plugins/chart/spec-corpus/` is shared with the sandbox's own test
+ * (`sandbox-src/tests/test_spec_corpus.py`), which runs the same files through
+ * its YAML reader and the same schema file. The verdict comes from the file name
+ * (`ok-*` / `bad-*`), so both readers are held to the same answer.
+ *
+ * `ok-*.expect.json` is the document js-yaml — the host's parser — produces.
+ * This test pins it; the sandbox's test then holds its own reader to it.
+ */
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { load } from "js-yaml";
+import { describe, expect, it } from "vitest";
+
+import { specErrors } from "./spec";
+
+const corpus = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "spec-corpus");
+const files = readdirSync(corpus)
+  .filter((n) => n.endsWith(".ai.yaml"))
+  .sort();
+
+function verdict(text: string): string[] {
+  let doc: unknown;
+  try {
+    doc = load(text);
+  } catch (e) {
+    return [`not valid YAML: ${(e as Error).message}`];
+  }
+  return specErrors(doc);
+}
+
+describe("spec corpus", () => {
+  it("has both verdicts and nothing else", () => {
+    expect(files.some((n) => n.startsWith("ok-"))).toBe(true);
+    expect(files.some((n) => n.startsWith("bad-"))).toBe(true);
+    expect(files.every((n) => n.startsWith("ok-") || n.startsWith("bad-"))).toBe(true);
+  });
+
+  it.each(files)("%s gets the verdict its name says", (name) => {
+    const errors = verdict(readFileSync(join(corpus, name), "utf8"));
+    if (name.startsWith("ok-")) expect(errors).toEqual([]);
+    else expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it.each(files.filter((n) => n.startsWith("ok-")))("%s's expect.json is what js-yaml reads", (name) => {
+    const expected = JSON.parse(readFileSync(join(corpus, name.replace(/\.ai\.yaml$/, ".expect.json")), "utf8"));
+    expect(load(readFileSync(join(corpus, name), "utf8"))).toEqual(expected);
+  });
+});
+
+describe("messages", () => {
+  const base = "view: chart\nsource: data/a.csv\n";
+  const enc = "encoding:\n  x: {field: a, type: quantitative}\n  y: {field: b, type: quantitative}\n";
+
+  it("states the schema's own sentence for a choice between mark and layer", () => {
+    expect(verdict(base + "title: t\n")).toEqual([
+      "(top level): draw with either mark + encoding, or layer — not both, and not neither",
+    ]);
+  });
+
+  it("states it for a source that is not a table file", () => {
+    const [line] = verdict("view: chart\nsource: data/a.xlsx\nmark: line\n" + enc);
+    expect(line).toContain("source: ");
+    expect(line).toContain(".csv, .tsv or .parquet");
+  });
+
+  it("names the key for an unsupported mark", () => {
+    const [line] = verdict(base + "mark: geoshape\n" + enc);
+    expect(line.startsWith("mark")).toBe(true);
+  });
+});

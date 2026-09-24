@@ -1,0 +1,641 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiws.local/view-plugins/chart/spec.schema.json",
+  "title": "view: chart",
+  "description": "A Vega-Lite subset written as YAML, plus source / keys / marking / highlight. The ONE schema: the sandbox's `validate` and the renderer both read this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "view",
+    "source"
+  ],
+  "properties": {
+    "view": {
+      "const": "chart"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "keys": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "marking": {
+      "$ref": "#/$defs/name"
+    },
+    "highlight": {
+      "$ref": "#/$defs/highlight"
+    },
+    "transform": {
+      "$ref": "#/$defs/transforms"
+    },
+    "bin_threshold": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mark": {
+      "$ref": "#/$defs/mark"
+    },
+    "encoding": {
+      "$ref": "#/$defs/encoding"
+    },
+    "layer": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/layer"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/drawing"
+    }
+  ],
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scalar": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "\\.(csv|tsv|parquet)$",
+          "description": "A workspace table file: .csv, .tsv or .parquet.",
+          "errorMessage": {
+            "pattern": "a table file in the workspace, ending in .csv, .tsv or .parquet"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entity"
+          ],
+          "properties": {
+            "entity": {
+              "$ref": "#/$defs/name"
+            }
+          }
+        }
+      ]
+    },
+    "highlight": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "where"
+          ],
+          "properties": {
+            "where": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "values"
+          ],
+          "properties": {
+            "values": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/scalar"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "op": {
+      "enum": [
+        "count",
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "rate"
+      ]
+    },
+    "aggregateItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "as"
+      ],
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "as": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "if": {
+        "properties": {
+          "op": {
+            "not": {
+              "const": "count"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "field"
+        ]
+      }
+    },
+    "aggregateList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/aggregateItem"
+      }
+    },
+    "groupby": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "uniqueItems": true
+    },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "equal": {
+          "$ref": "#/$defs/scalar"
+        },
+        "oneOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/scalar"
+          }
+        },
+        "range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "lt": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "lte": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "gt": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "gte": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "equal"
+          ]
+        },
+        {
+          "required": [
+            "oneOf"
+          ]
+        },
+        {
+          "required": [
+            "range"
+          ]
+        },
+        {
+          "required": [
+            "lt"
+          ]
+        },
+        {
+          "required": [
+            "lte"
+          ]
+        },
+        {
+          "required": [
+            "gt"
+          ]
+        },
+        {
+          "required": [
+            "gte"
+          ]
+        },
+        {
+          "required": [
+            "valid"
+          ]
+        }
+      ],
+      "errorMessage": {
+        "anyOf": "a field predicate needs a test: equal, oneOf, range, lt, lte, gt, gte, valid"
+      }
+    },
+    "transform": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "filter"
+          ],
+          "properties": {
+            "filter": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "A pandas query expression."
+                },
+                {
+                  "$ref": "#/$defs/predicate"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "aggregate"
+          ],
+          "properties": {
+            "aggregate": {
+              "$ref": "#/$defs/aggregateList"
+            },
+            "groupby": {
+              "$ref": "#/$defs/groupby"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "diff",
+            "aggregate"
+          ],
+          "properties": {
+            "diff": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "by",
+                "of",
+                "minus"
+              ],
+              "properties": {
+                "by": {
+                  "$ref": "#/$defs/name"
+                },
+                "of": {
+                  "$ref": "#/$defs/scalar"
+                },
+                "minus": {
+                  "$ref": "#/$defs/scalar"
+                }
+              }
+            },
+            "aggregate": {
+              "$ref": "#/$defs/aggregateList"
+            },
+            "groupby": {
+              "$ref": "#/$defs/groupby"
+            }
+          }
+        }
+      ]
+    },
+    "transforms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/transform"
+      }
+    },
+    "markType": {
+      "enum": [
+        "line",
+        "bar",
+        "scatter",
+        "heatmap",
+        "grid",
+        "area",
+        "pie",
+        "boxplot",
+        "rule",
+        "text",
+        "errorbar"
+      ]
+    },
+    "mark": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/markType"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/markType"
+            },
+            "color": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "point": {
+              "type": "boolean"
+            },
+            "smooth": {
+              "type": "boolean"
+            },
+            "stack": {
+              "type": "boolean"
+            },
+            "extent": {
+              "enum": [
+                "stderr",
+                "stdev",
+                "iqr"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "fieldType": {
+      "enum": [
+        "quantitative",
+        "nominal",
+        "ordinal",
+        "temporal"
+      ]
+    },
+    "channel": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "field",
+            "type"
+          ],
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/name"
+            },
+            "type": {
+              "$ref": "#/$defs/fieldType"
+            },
+            "aggregate": {
+              "$ref": "#/$defs/op"
+            },
+            "title": {
+              "type": "string"
+            },
+            "sort": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "ascending",
+                    "descending"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/scalar"
+                  }
+                }
+              ]
+            },
+            "scale": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "enum": [
+                    "linear",
+                    "log"
+                  ]
+                },
+                "zero": {
+                  "type": "boolean"
+                },
+                "domain": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "$ref": "#/$defs/scalar"
+                  }
+                },
+                "scheme": {
+                  "enum": [
+                    "sequential",
+                    "diverging"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "datum"
+          ],
+          "properties": {
+            "datum": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "encoding": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/channel"
+        },
+        "y": {
+          "$ref": "#/$defs/channel"
+        },
+        "x2": {
+          "$ref": "#/$defs/channel"
+        },
+        "y2": {
+          "$ref": "#/$defs/channel"
+        },
+        "color": {
+          "$ref": "#/$defs/channel"
+        },
+        "size": {
+          "$ref": "#/$defs/channel"
+        },
+        "theta": {
+          "$ref": "#/$defs/channel"
+        },
+        "text": {
+          "$ref": "#/$defs/channel"
+        },
+        "tooltip": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/channel"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/channel"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mark",
+        "encoding"
+      ],
+      "properties": {
+        "mark": {
+          "$ref": "#/$defs/mark"
+        },
+        "encoding": {
+          "$ref": "#/$defs/encoding"
+        },
+        "transform": {
+          "$ref": "#/$defs/transforms"
+        }
+      }
+    },
+    "drawing": {
+      "oneOf": [
+        {
+          "required": [
+            "mark",
+            "encoding"
+          ],
+          "not": {
+            "required": [
+              "layer"
+            ]
+          }
+        },
+        {
+          "required": [
+            "layer"
+          ],
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "mark"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "encoding"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "errorMessage": {
+        "oneOf": "draw with either mark + encoding, or layer \u2014 not both, and not neither"
+      }
+    }
+  }
+}
