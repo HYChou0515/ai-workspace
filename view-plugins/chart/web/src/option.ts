@@ -166,24 +166,41 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
   return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null };
 }
 
-function axisOption(axis: Axis | null, grid: Cells | null, which: "x" | "y"): Record<string, unknown> {
+/** Where an axis name goes: centred beside its axis. At ECharts' default (the
+ * axis end) a long field name ran past the plot and was cut off. */
+const NAME_AT = { x: { nameLocation: "middle", nameGap: 28 }, y: { nameLocation: "middle", nameGap: 44 } };
+
+function axisOption(
+  axis: Axis | null,
+  grid: Cells | null,
+  which: "x" | "y",
+  zeroByDefault: boolean,
+): Record<string, unknown> {
   if (!axis) return { type: "value" };
   const name = axis.channel.title ?? axis.channel.field;
   if (axis.kind === "index" && grid) {
     const n = which === "x" ? grid.width : grid.height;
+    // Ticks and labels at the cell CENTRES: left to itself the axis ticks at
+    // -0.5, 0.5, … (its min plus the interval), the cell edges, where no label
+    // belongs — every label came out blank.
+    const centres = Array.from({ length: n }, (_, i) => i);
     return {
       type: "value",
       name,
+      ...NAME_AT[which],
       min: -0.5,
       max: n - 0.5,
-      interval: 1,
       splitLine: { show: false },
-      axisLabel: { formatter: (i: number) => (Number.isInteger(i) && i >= 0 && i < n ? String(axis.labels[i]) : "") },
+      axisTick: { customValues: centres },
+      axisLabel: { customValues: centres, formatter: (i: number) => String(axis.labels[i] ?? "") },
     };
   }
-  if (axis.kind === "category") return { type: "category", name, data: axis.labels.map(String) };
-  const out: Record<string, unknown> = { type: axis.kind, name };
-  if (axis.channel.scale?.zero === false) out.scale = true;
+  if (axis.kind === "category") return { type: "category", name, ...NAME_AT[which], data: axis.labels.map(String) };
+  const out: Record<string, unknown> = { type: axis.kind, name, ...NAME_AT[which] };
+  // Zero is in the domain only where a mark's LENGTH is its value (bar, area)
+  // or the spec asks for it: a scatter of values near 100 squeezed against a
+  // zero it never reaches hides the very spread it was drawn to show.
+  if (axis.kind !== "time" && !(axis.channel.scale?.zero ?? zeroByDefault)) out.scale = true;
   const domain = axis.channel.scale?.domain;
   if (domain && typeof domain[0] === "number") {
     out.min = domain[0];
@@ -512,8 +529,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   };
   if (typeof spec.title === "string") option.title = { text: spec.title, left: "center", textStyle: { fontSize: 14 } };
   if (cartesian) {
-    option.xAxis = [axisOption(xAxis, gridCells, "x")];
-    option.yAxis = [axisOption(yAxis, gridCells, "y")];
+    const lengthIsValue = specs.some((s) => ["bar", "area"].includes(markOf(s).type));
+    option.xAxis = [axisOption(xAxis, gridCells, "x", lengthIsValue)];
+    option.yAxis = [axisOption(yAxis, gridCells, "y", lengthIsValue)];
     option.grid = { containLabel: true, left: 16, right: visualMaps.length ? 80 : 16, top: 48, bottom: 16 };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };

@@ -36,6 +36,8 @@ def test_the_skill_is_one_file():
 def test_the_sandbox_half_is_built_from_sandbox_src_under_the_isolated_launcher():
     m = _manifest()
     assert m.sandbox is not None and m.sandbox.bundle == "sandbox"
+    # show_file runs `validate` before it shows a chart file (#854 P9).
+    assert m.sandbox.validate is True
     project = tomllib.loads((CHART / "sandbox-src" / "pyproject.toml").read_text())
     # The bundle is installed as /.tools/chart and its launcher execs
     # `.venv/bin/<plugin name>`.
