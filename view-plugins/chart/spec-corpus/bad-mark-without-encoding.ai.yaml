@@ -1,0 +1,3 @@
+view: chart
+source: data/a.csv
+mark: line
