@@ -161,3 +161,75 @@ export type LayoutNode = LayoutLeaf | LayoutSplit;
 export function layoutPaths(node: LayoutNode): string[] {
   return node.type === "leaf" ? [node.path] : [...layoutPaths(node.a), ...layoutPaths(node.b)];
 }
+
+/** The part of an editor group placement needs. Structural, so the shell's
+ * `EditorGroup` fits without this module importing the hook. */
+export type PlacedTab = { path: string; preview?: boolean; pinned?: boolean };
+export type PlacedGroup = { id: string; tabs: PlacedTab[]; activePath: string | null };
+
+/** Where a layout card opens (Q17), as a pure step over (tree, groups):
+ *
+ * - one pane: the card's layout replaces it and the pane's tabs join the
+ *   layout's top-left leaf;
+ * - already split: the whole existing tree moves left, the layout opens right.
+ *
+ * A card file already open anywhere is moved into its leaf, never duplicated;
+ * a pane that move empties is dropped (an emptied SOLE pane leaves just the
+ * layout). The shape decision reads the tree as it was, before the move. */
+export function placeLayout(
+  tree: PaneNode,
+  groups: Record<string, PlacedGroup>,
+  layout: LayoutNode,
+  newId: () => string,
+): { tree: PaneNode; groups: Record<string, PlacedGroup>; activeGroupId: string } {
+  const cardPaths = new Set(layoutPaths(layout));
+  const out: Record<string, PlacedGroup> = {};
+  for (const [id, g] of Object.entries(groups)) {
+    const tabs = g.tabs.filter((t) => !cardPaths.has(t.path));
+    const activePath =
+      g.activePath && cardPaths.has(g.activePath) ? (tabs[0]?.path ?? null) : g.activePath;
+    out[id] = { ...g, tabs, activePath };
+  }
+
+  const cardLeafIds: string[] = [];
+  const build = (node: LayoutNode): PaneNode => {
+    if (node.type === "leaf") {
+      const id = newId();
+      out[id] = { id, tabs: [{ path: node.path }], activePath: node.path };
+      cardLeafIds.push(id);
+      return leaf(id);
+    }
+    const ratio = Math.max(MIN_RATIO, Math.min(MAX_RATIO, node.ratio));
+    return { type: "split", dir: node.dir, ratio, a: build(node.a), b: build(node.b) };
+  };
+  const card = build(layout);
+  const topLeft = cardLeafIds[0]!;
+
+  if (tree.type === "leaf") {
+    const old = out[tree.id];
+    delete out[tree.id];
+    if (old && old.tabs.length > 0) {
+      const mine = out[topLeft]!;
+      out[topLeft] = { ...mine, tabs: [...old.tabs, ...mine.tabs] };
+    }
+    return { tree: card, groups: out, activeGroupId: topLeft };
+  }
+
+  let left: PaneNode | null = tree;
+  for (const id of leafIds(tree)) {
+    if ((out[id]?.tabs.length ?? 0) > 0) continue;
+    delete out[id];
+    left = left && pruneLeaf(left, id);
+  }
+  return {
+    tree: left ? { type: "split", dir: "row", ratio: 0.5, a: left, b: card } : card,
+    groups: out,
+    activeGroupId: topLeft,
+  };
+}
+
+/** `removeLeaf`, except removing the sole leaf yields `null` (nothing left). */
+function pruneLeaf(node: PaneNode, id: string): PaneNode | null {
+  if (node.type === "leaf") return node.id === id ? null : node;
+  return removeLeaf(node, id);
+}
