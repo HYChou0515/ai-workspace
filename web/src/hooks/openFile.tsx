@@ -11,6 +11,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 
+import type { ViewPageTarget } from "../lib/viewPage";
 import type { LayoutNode } from "../pages/investigation/paneTree";
 
 export type OpenFile = (path: string, opts?: { preview?: boolean }) => void;
@@ -44,6 +45,27 @@ export function OpenLayoutProvider({
 /** The workspace layout opener, or `null` outside a `WorkspaceShell`. */
 export function useOpenLayout(): OpenLayout | null {
   return useContext(OpenLayoutContext);
+}
+
+/** The item's editor-area-only page for a file or layout (#847 Q5.3) — where a
+ * shown-file card sends the user when the workspace is folded away. Published
+ * by the `WorkspaceShell`; `null` on surfaces with no item (KB chat). */
+export type ViewPageHref = (target: ViewPageTarget) => string;
+
+const ViewPageHrefContext = createContext<ViewPageHref | null>(null);
+
+export function ViewPageHrefProvider({
+  value,
+  children,
+}: {
+  value: ViewPageHref;
+  children: ReactNode;
+}) {
+  return <ViewPageHrefContext.Provider value={value}>{children}</ViewPageHrefContext.Provider>;
+}
+
+export function useViewPageHref(): ViewPageHref | null {
+  return useContext(ViewPageHrefContext);
 }
 
 // Whether that opener leads anywhere the user can SEE. Collapsing the workspace

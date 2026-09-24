@@ -11,7 +11,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
-import { useOpenLayout } from "../../hooks/openFile";
+import { useOpenLayout, useViewPageHref } from "../../hooks/openFile";
+import { viewPageHref } from "../../lib/viewPage";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { WorkspaceShell } from "./WorkspaceShell";
 
@@ -20,7 +21,10 @@ import { WorkspaceShell } from "./WorkspaceShell";
 vi.mock("../../components/ItemChatShell", () => ({
   ItemChatShell: () => {
     const openLayout = useOpenLayout();
+    const viewHref = useViewPageHref();
     return (
+      <>
+      <span data-testid="view-href">{viewHref?.({ path: "/v/a.md" }) ?? "none"}</span>
       <button
         type="button"
         data-testid="open-layout-from-chat"
@@ -37,6 +41,7 @@ vi.mock("../../components/ItemChatShell", () => ({
       >
         open layout
       </button>
+      </>
     );
   },
 }));
@@ -96,6 +101,17 @@ afterEach(() => {
 });
 
 describe("WorkspaceShell — opening a layout from the chat", () => {
+  it("publishes the item's editor-area page for the chat's cards (#847 Q5.3)", async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell manifest={manifest} item={item} files={[]} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("view-href")).toHaveTextContent(
+      viewPageHref("playground", "PG-1", { path: "/v/a.md" }),
+    );
+  });
+
   it("splits the editor area into the card's panes", async () => {
     renderWithQuery(
       <MemoryRouter>

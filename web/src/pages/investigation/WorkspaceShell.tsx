@@ -45,8 +45,11 @@ import {
   type OpenLayout,
   OpenFileProvider,
   OpenLayoutProvider,
+  type ViewPageHref,
+  ViewPageHrefProvider,
   WorkspaceVisibleProvider,
 } from "../../hooks/openFile";
+import { viewPageHref } from "../../lib/viewPage";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -178,10 +181,43 @@ export function WorkspaceShell({
   onFilesChanged?: () => void;
   onInvestigationChanged?: () => void;
 }) {
-  const service = useMemo(
-    () => investigationFileService(manifest.slug, item.resource_id),
-    [manifest.slug, item.resource_id],
+  return (
+    <WorkspaceProviders slug={manifest.slug} itemId={item.resource_id} unwalked={unwalked}>
+      {(bufferStore) => (
+        <ShellBody
+          item={item}
+          manifest={manifest}
+          files={files}
+          dirs={dirs}
+          unwalked={unwalked}
+          truncated={truncated}
+          ideCollapsed={ideCollapsed}
+          onIdeCollapsedChange={onIdeCollapsedChange}
+          onFilesChanged={onFilesChanged}
+          onInvestigationChanged={onInvestigationChanged}
+          bufferStore={bufferStore}
+        />
+      )}
+    </WorkspaceProviders>
   );
+}
+
+/** Everything an item's editor area reads from context: its file service and
+ * buffers, its agent (a report renders the agent's state), edit mode, the lazy
+ * folders. Shared by the workspace and the editor-area-only page (#847 Q5.3), so
+ * a file renders the same in both. */
+export function WorkspaceProviders({
+  slug,
+  itemId,
+  unwalked = [],
+  children,
+}: {
+  slug: string;
+  itemId: string;
+  unwalked?: string[];
+  children: (bufferStore: FileBufferStore) => React.ReactNode;
+}) {
+  const service = useMemo(() => investigationFileService(slug, itemId), [slug, itemId]);
   const queryClient = useQueryClient();
   const bufferStore = useMemo(() => {
     // The buffer reads/writes file content THROUGH the shared qk.file cache, so
@@ -191,31 +227,81 @@ export function WorkspaceShell({
     return new FileBufferStore(io, reactQueryContentCache(queryClient, service.scopeId, io));
   }, [service, queryClient]);
   return (
-    <WorkspaceSlugProvider value={manifest.slug}>
+    <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>
-        <AgentProvider investigationId={item.resource_id}>
+        <AgentProvider investigationId={itemId}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
               <LazyFoldersContext.Provider value={unwalked}>
-              <ShellBody
-                item={item}
-                manifest={manifest}
-                files={files}
-                dirs={dirs}
-                unwalked={unwalked}
-                truncated={truncated}
-                ideCollapsed={ideCollapsed}
-                onIdeCollapsedChange={onIdeCollapsedChange}
-                onFilesChanged={onFilesChanged}
-                onInvestigationChanged={onInvestigationChanged}
-                bufferStore={bufferStore}
-              />
+                {children(bufferStore)}
               </LazyFoldersContext.Provider>
             </EditModeProvider>
           </FileBufferProvider>
         </AgentProvider>
       </FileServiceProvider>
     </WorkspaceSlugProvider>
+  );
+}
+
+/** Close a tab, asking first when it holds the only copy of unsaved edits. */
+export function useRequestCloseTab(groups: Groups, bufferStore: FileBufferStore) {
+  const dialog = useDialog();
+  const gRef = useRef(groups);
+  gRef.current = groups;
+  return useCallback(
+    async (groupId: string, path: string) => {
+      const g = gRef.current;
+      const openElsewhere = Object.entries(g.groups).some(
+        ([gid, grp]) => gid !== groupId && grp.tabs.some((t) => t.path === path),
+      );
+      if (bufferStore.isDirty(path) && !openElsewhere) {
+        const choice = await dialog.confirm({
+          title: `Save changes to ${basename(path)}?`,
+          body: "Your changes will be lost if you don't save them.",
+          actions: [
+            { id: "save", label: "Save", variant: "primary" },
+            { id: "discard", label: "Don't Save", variant: "danger" },
+            { id: "cancel", label: "Cancel" },
+          ],
+        });
+        if (choice === null || choice === "cancel") return;
+        if (choice === "save") await bufferStore.save(path);
+        if (choice === "discard") bufferStore.discard(path);
+      }
+      gRef.current.closeTab(groupId, path);
+    },
+    [bufferStore, dialog],
+  );
+}
+
+/** The editor area's panes alone — the SAME component the workspace draws —
+ * for the editor-area-only page (#847 Q5.3): no file tree, no chat, no bottom
+ * panel. Tabs close through the same unsaved-edits question. */
+export function EditorPanes({
+  groups,
+  investigationId,
+  files,
+  bufferStore,
+}: {
+  groups: Groups;
+  investigationId: string;
+  files: FileInfo[];
+  bufferStore: FileBufferStore;
+}) {
+  const requestCloseTab = useRequestCloseTab(groups, bufferStore);
+  return (
+    <RequestCloseContext.Provider value={requestCloseTab}>
+      <div
+        style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, background: "var(--white)" }}
+      >
+        <GroupTreeView
+          node={groups.tree}
+          groups={groups}
+          investigationId={investigationId}
+          files={files}
+        />
+      </div>
+    </RequestCloseContext.Provider>
   );
 }
 
@@ -245,7 +331,6 @@ function ShellBody({
   bufferStore: FileBufferStore;
 }) {
   const [editOpen, setEditOpen] = useState(false);
-  const dialog = useDialog();
   // Inline-edit of domain fields (breadcrumb/statusbar) goes through the generic
   // per-App item update (read-modify-PUT), driven by the manifest's field schema.
   const { setField, setFields } = useUpdateItemField(
@@ -521,6 +606,12 @@ function ShellBody({
     },
     [groups, dispatchSidebar],
   );
+  // Where a shown-file card sends the user while the workspace is folded: this
+  // item's editor-area page, which renders a view as the view (#847 Q5.3).
+  const viewHref = useCallback<ViewPageHref>(
+    (target) => viewPageHref(manifest.slug, item.resource_id, target),
+    [manifest.slug, item.resource_id],
+  );
   // Is the file pane actually on screen? Same condition the IDE column renders
   // under — anything else would have the chat believe in a pane that isn't there.
   const workspaceVisible = Boolean(manifest.function.workspace && !ideCollapsed && _canSeeFiles);
@@ -559,30 +650,7 @@ function ShellBody({
 
   // Close a tab, prompting to save when it's the LAST open view of a dirty
   // file (a sibling pane still showing it means no data is at risk).
-  const requestCloseTab = useCallback(
-    async (groupId: string, path: string) => {
-      const g = gRef.current;
-      const openElsewhere = Object.entries(g.groups).some(
-        ([gid, grp]) => gid !== groupId && grp.tabs.some((t) => t.path === path),
-      );
-      if (bufferStore.isDirty(path) && !openElsewhere) {
-        const choice = await dialog.confirm({
-          title: `Save changes to ${basename(path)}?`,
-          body: "Your changes will be lost if you don't save them.",
-          actions: [
-            { id: "save", label: "Save", variant: "primary" },
-            { id: "discard", label: "Don't Save", variant: "danger" },
-            { id: "cancel", label: "Cancel" },
-          ],
-        });
-        if (choice === null || choice === "cancel") return;
-        if (choice === "save") await bufferStore.save(path);
-        if (choice === "discard") bufferStore.discard(path);
-      }
-      gRef.current.closeTab(groupId, path);
-    },
-    [bufferStore, dialog],
-  );
+  const requestCloseTab = useRequestCloseTab(groups, bufferStore);
   const requestCloseRef = useRef(requestCloseTab);
   requestCloseRef.current = requestCloseTab;
 
@@ -633,6 +701,7 @@ function ShellBody({
   return (
     <OpenFileProvider value={openFile}>
       <OpenLayoutProvider value={openLayout}>
+      <ViewPageHrefProvider value={viewHref}>
       <WorkspaceVisibleProvider value={workspaceVisible}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
@@ -941,6 +1010,7 @@ function ShellBody({
       </div>
     </RequestCloseContext.Provider>
       </WorkspaceVisibleProvider>
+      </ViewPageHrefProvider>
       </OpenLayoutProvider>
     </OpenFileProvider>
   );

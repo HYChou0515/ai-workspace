@@ -7,7 +7,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OpenLayoutProvider, WorkspaceVisibleProvider } from "../hooks/openFile";
+import {
+  OpenLayoutProvider,
+  ViewPageHrefProvider,
+  WorkspaceVisibleProvider,
+} from "../hooks/openFile";
 import type { LayoutNode } from "../pages/investigation/paneTree";
 import type { ShownLayout } from "../renderers/shownFiles";
 import { ShownLayoutCard } from "./ShownLayoutCard";
@@ -31,8 +35,14 @@ const shown: ShownLayout = {
 
 afterEach(cleanup);
 
-function renderCard(opts: { openLayout?: (l: LayoutNode) => void; visible?: boolean; href?: string } = {}) {
-  const ui = <ShownLayoutCard shown={shown} href={opts.href} />;
+function renderCard(
+  opts: { openLayout?: (l: LayoutNode) => void; visible?: boolean; href?: string } = {},
+) {
+  let ui = <ShownLayoutCard shown={shown} />;
+  if (opts.href) {
+    const href = opts.href;
+    ui = <ViewPageHrefProvider value={() => href}>{ui}</ViewPageHrefProvider>;
+  }
   if (!opts.openLayout) return render(ui);
   return render(
     <OpenLayoutProvider value={opts.openLayout}>
