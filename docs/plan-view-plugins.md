@@ -140,12 +140,14 @@ The outcome is four things:
 
   What that means:
   - Re-reading the source dominates. It happens **once per (source version, spec)** and
-    builds a cache: an index of per-group sort keys and offsets, plus fixed-size
-    per-group records. Pages are byte slices of that cache.
+    builds a cache: an index of per-group keys and sort values, plus fixed-size
+    per-group records whose offsets are derived from the index. Pages are byte slices
+    of that cache. (As built in #857 P2 — see that plan.)
   - **No downsampling.** Full resolution is cheap, and downsampling erases a thin edge
     ring.
-  - **Binary, not JSON.** Categories are 1 byte. Continuous values are quantized to 256
-    levels for colour, and the exact value is fetched on enlarge.
+  - **Binary, not JSON.** Categories are 1 byte. Continuous values are quantized to 255
+    levels for colour (the 256th code marks a missing cell), and the exact value is
+    fetched on enlarge from a float64 section of the same cache.
   - At 50k cells per group, a page must be tens of groups, and a 1 GB CSV takes 10–20 s
     to read, so **parquet ships in this plan** **[user]**.
 - **Q12.** The cache lives in `.home/.cache/views/`, the per-sandbox infra area
