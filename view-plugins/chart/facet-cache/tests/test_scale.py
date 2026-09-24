@@ -25,6 +25,23 @@ def test_the_ends_of_the_range_decode_exactly() -> None:
     assert scale.decode(scale.encode([-2.5, 7.5])) == [-2.5, 7.5]
 
 
+def test_infinite_values_clamp_to_the_ends() -> None:
+    scale = ContinuousScale(0.0, 1.0)
+    assert scale.decode(scale.encode([-math.inf, math.inf])) == [0.0, 1.0]
+
+
+@pytest.mark.parametrize(
+    ("lo", "hi"),
+    [(math.nan, 1.0), (0.0, math.inf), (-math.inf, 0.0), (2.0, 1.0)],
+    ids=["nan", "inf", "-inf", "reversed"],
+)
+def test_a_range_that_is_not_finite_and_ordered_is_refused(lo: float, hi: float) -> None:
+    """Every cell missing leaves the builder a NaN range; that is its bug to
+    handle, never a header a browser cannot parse."""
+    with pytest.raises(ValueError, match="range"):
+        ContinuousScale(lo, hi)
+
+
 def test_more_categories_than_one_byte_holds_are_refused() -> None:
     CategoryScale(labels=[str(i) for i in range(255)])
     with pytest.raises(ValueError, match="256 categories"):

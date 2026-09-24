@@ -2,6 +2,7 @@
 (like `sample-tools/`), which this repo's `testpaths` never collects. Run them
 here so CI does — a suite nobody runs guards nothing."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,9 +19,14 @@ def test_the_facet_cache_package_is_found() -> None:
 
 @pytest.mark.parametrize("package", _PACKAGES, ids=lambda p: p.name)
 def test_view_plugin_package_suite_passes(package: Path) -> None:
+    # CI's relative COVERAGE_PROCESS_START would resolve against the package's
+    # own pyproject and leave a stray .coverage there; this repo's coverage does
+    # not measure plugin packages, so the child runs without it.
+    env = {k: v for k, v in os.environ.items() if k != "COVERAGE_PROCESS_START"}
     run = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(package / "tests")],
         cwd=package,
+        env=env,
         capture_output=True,
         text=True,
     )
