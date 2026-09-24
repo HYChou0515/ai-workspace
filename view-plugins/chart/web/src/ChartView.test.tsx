@@ -13,6 +13,9 @@ const sdk = vi.hoisted(() => ({
   useSandboxRun: vi.fn(),
   viewDocument: vi.fn(),
   registerViewKind: vi.fn(),
+  // Markings are exercised in ChartView.marking.test.tsx; here, no marking.
+  useMarking: vi.fn(() => [undefined, vi.fn()]),
+  isLit: vi.fn(() => false),
 }));
 vi.mock("@aiws/view-sdk", () => sdk);
 
