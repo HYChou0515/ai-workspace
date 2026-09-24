@@ -114,6 +114,34 @@ def test_a_rebuild_between_the_build_check_and_the_read_is_stale_too(
             exact_payload(tmp_path, digest, build, 0)
 
 
+@pytest.mark.parametrize("read", ["page", "exact"])
+def test_a_cache_cut_short_in_the_same_build_is_rebuilt_not_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read: str
+) -> None:
+    """Refetching the index would find the same broken build: this one must go
+    to the command's rebuild path (CacheUnusable), never StaleIndex. Cut after
+    the build check, so it is the record read that finds it."""
+    import aiws_facet_cache.pager as pager
+
+    digest = _build(tmp_path)
+    build = index_payload(tmp_path, digest)["build"]
+    path = cache_file(tmp_path, KEY)
+    real = pager.read_index
+
+    def index_then_cut(p: Path):  # type: ignore[no-untyped-def]
+        index = real(p)
+        path.write_bytes(path.read_bytes()[:-3])
+        return index
+
+    monkeypatch.setattr(pager, "read_index", index_then_cut)
+    with pytest.raises(CacheUnusable) as caught:
+        if read == "page":
+            page_payload(tmp_path, digest, build, [0])
+        else:
+            exact_payload(tmp_path, digest, build, 0)
+    assert type(caught.value) is CacheUnusable  # not its CacheRebuilt subclass
+
+
 def test_a_corrupt_build_id_is_unusable_not_a_decode_error(tmp_path: Path) -> None:
     digest = _build(tmp_path)
     path = cache_file(tmp_path, KEY)

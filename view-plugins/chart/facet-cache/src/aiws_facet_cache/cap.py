@@ -5,7 +5,9 @@ atime is unreliable on NFS)."""
 
 from __future__ import annotations
 
+import os
 import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,11 +30,26 @@ def _entries(root: Path) -> list[tuple[Path, int, float]]:
             continue
         try:
             st = p.lstat()
-        except OSError:  # removed by another build since the listing
+        except OSError:  # gone since the listing (another build), or unreadable
             continue
         if stat.S_ISREG(st.st_mode):
             out.append((p, st.st_size, st.st_mtime))
     return out
+
+
+def _fs_now(root: Path) -> float:
+    """The file system's own clock: the mtime it stamps on a file made now. On
+    NFS that is the server's clock, the one every temp file was stamped by, so
+    a pod clock that is off cannot age a live build's temp file."""
+    try:
+        fd, name = tempfile.mkstemp(dir=root, prefix=".clock.", suffix=".probe")
+    except OSError:  # no such dir, or not writable: nothing of ours is in it to age
+        return time.time()
+    try:
+        return os.fstat(fd).st_mtime
+    finally:
+        os.close(fd)
+        Path(name).unlink(missing_ok=True)
 
 
 def _remove(path: Path) -> bool:
@@ -57,15 +74,18 @@ def enforce_cap(
     - ``keep`` (the cache being opened, a file in ``root``) is never removed,
       even if it alone is over the cap: the view that asked must still open.
       It is matched by name, so any spelling of its path protects it.
-    - A temp file stamped more than ``tmp_grace_s`` from now, either way, is a
-      build that died (a SIGKILL skips its cleanup; a skewed clock stamps the
-      future) and is always removed. A nearer one is a build in progress: it
-      counts toward the total but is left, since removing it would fail that
-      build's ``os.replace``.
+    - "Now" is the file system's own clock by default (``_fs_now``), the one
+      that stamped every temp file, so a pod clock that is off does not age
+      them. A temp file stamped more than ``tmp_grace_s`` from that now, either
+      way, is treated as dead and removed: it is older than any build takes (a
+      SIGKILL skipped its cleanup), or stamped further ahead than a live build
+      could be. The cap cannot see a build's process, so a single write that
+      stalls past ``tmp_grace_s`` would be swept and fail its ``os.replace``
+      loudly. A nearer temp file counts toward the total but is left.
     - Nothing but regular cache and temp files in ``root`` is touched or
       counted, and a file that cannot be removed is skipped.
     """
-    now = time.time() if now is None else now
+    now = _fs_now(root) if now is None else now
     keep_name = keep.name if keep is not None else None
     removed: list[Path] = []
     total = 0
