@@ -28,6 +28,13 @@ const sdk = vi.hoisted(() => ({
 }));
 vi.mock("@aiws/view-sdk", () => sdk);
 vi.mock("./echarts", () => ({ createChart: vi.fn() }));
+// thumbnail() itself, recorded: which groups were painted dimmed
+const thumbnailSpy = vi.hoisted(() => vi.fn());
+vi.mock("./gallery", async (original) => {
+  const real = await original<typeof import("./gallery")>();
+  thumbnailSpy.mockImplementation(real.thumbnail);
+  return { ...real, thumbnail: thumbnailSpy };
+});
 
 import { ChartView } from "./ChartView";
 
@@ -63,9 +70,15 @@ const fail = (code: number) => ({ stdout: "", stderr: `exit ${code}`, exit_code:
 
 let answers: { build?: Run["data"]; index?: Run["data"]; page?: (positions: number[]) => Run["data"] };
 const write = vi.fn();
+let INDEX_OVER: Partial<FacetIndex> = {};
+let exactValues: number[] = [1.5];
+const f64b64 = (values: number[]) =>
+  btoa(String.fromCharCode(...new Uint8Array(new Float64Array(values).buffer)));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  INDEX_OVER = {};
+  exactValues = [1.5];
   sdk.viewDocument.mockReturnValue(DOC);
   sdk.useMarking.mockReturnValue([undefined, write]);
   answers = {
@@ -80,7 +93,7 @@ beforeEach(() => {
     if (cmd === "facet_build") return { ...base, data: answers.build, refetch: refetch.build };
     if (cmd === "facet_index") return { ...base, data: answers.index, refetch: refetch.index };
     if (cmd === "facet_page") return { ...base, data: answers.page?.(args.positions as number[]), refetch: refetch.page };
-    if (cmd === "facet_exact") return { ...base, data: ok({ kind: "f64", data: btoa(String.fromCharCode(...new Uint8Array(new Float64Array([1.5]).buffer))) }), refetch: refetch.exact };
+    if (cmd === "facet_exact") return { ...base, data: ok({ kind: "f64", data: f64b64(exactValues) }), refetch: refetch.exact };
     return { ...base, data: undefined, refetch: vi.fn() };
   });
 });
@@ -169,6 +182,91 @@ describe("FacetGallery", () => {
     view();
     act(() => {});
     expect(refetch.build).toHaveBeenCalled();
+  });
+
+  it("asks for a rebuild ONCE per failed answer, however often it re-renders", () => {
+    answers.index = fail(3);
+    const { rerender } = view();
+    for (let i = 0; i < 5; i++)
+      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(refetch.build).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches the index once the rebuild answers (same key, so the old exit 3 would stay cached)", () => {
+    answers.index = fail(3);
+    const { rerender } = view();
+    expect(refetch.index).not.toHaveBeenCalled();
+    answers.build = ok({ key: KEY, build: "c".repeat(32), groups: N, cells: 1, built: true }); // the rebuild's answer
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(refetch.index).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a failed page's remedy ONCE, however often the gallery re-renders", () => {
+    answers.page = () => fail(4);
+    const staleAnswer = answers.page([0]);
+    answers.page = () => staleAnswer; // one answer object, as the query cache holds it
+    const { rerender } = view();
+    for (let i = 0; i < 5; i++)
+      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(refetch.index).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects the run of sorted positions between a click and a shift-click (P7)", () => {
+    view();
+    const tiles = screen.getAllByRole("button", { name: /^group / });
+    fireEvent.click(tiles[2]);
+    fireEvent.click(tiles[5], { shiftKey: true });
+    const wafers = (write.mock.calls.at(-1)![0] as Record<string, Set<string>>).wafer;
+    // ranks 3..6 of a descending sort over 1000
+    expect([...wafers].sort()).toEqual(["994", "995", "996", "997"]);
+    expect(tiles.slice(2, 6).every((t) => t.getAttribute("aria-pressed") === "true")).toBe(true);
+  });
+
+  it("forgets its outlines when the marking is cleared elsewhere", () => {
+    const { rerender } = view();
+    fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]);
+    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["999"]) }, source: "views/w.ai.yaml" }, write]);
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(screen.getAllByRole("button", { name: /^group / })[0].getAttribute("aria-pressed")).toBe("true");
+    sdk.useMarking.mockReturnValue([undefined, write]); // another view cleared it
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(screen.getAllByRole("button", { name: /^group / })[0].getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("starts fetching the next page a screen before it scrolls into view", () => {
+    view();
+    const scroller = document.querySelector("[data-gallery-scroll]") as HTMLElement;
+    // 200 groups a page at 7 tiles a row: page 1 starts at row 28 (y 3136);
+    // at scrollTop 2400 the view shows rows 21-26 — page 0 only, without lookahead
+    Object.defineProperty(scroller, "scrollTop", { value: 2400, configurable: true });
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+    const firsts = new Set(calls("facet_page").map((c) => (c[2] as { positions: number[] }).positions[0]));
+    expect(firsts.has(N - 1 - 200)).toBe(true); // page 1's first group, descending
+  });
+
+  it("shows the exact value of the cell under the pointer, placed as lattice places it", () => {
+    // x written unsorted: the drawn column order is not the written order
+    INDEX_OVER.layout = { x: [1, 0], y: [0, 0] };
+    INDEX_OVER.cells = 2;
+    answers.index = ok({ ...INDEX, ...INDEX_OVER });
+    answers.page = (positions) => ok({ build: INDEX.build, groups: positions.map(() => q8([10, 20], 0, 254)) });
+    exactValues = [111, 222]; // cache cell 0 is drawn at x=1 (right), cell 1 at x=0 (left)
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    const canvas = screen.getByRole("dialog").querySelector("canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.mouseMove(canvas, { clientX: 10, clientY: 10 }); // the left column
+    expect(screen.getByRole("dialog").textContent).toContain("value: 222");
+  });
+
+  it("paints an unlit group's thumbnail dimmed", () => {
+    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["999"]) }, source: "x" }, write]);
+    view();
+    const lits = thumbnailSpy.mock.calls.map((c) => c[3]);
+    expect(lits).toContain(true); // wafer 999, rank 1
+    expect(lits).toContain(false); // the rest
   });
 
   it("shows a refused spec's reason and asks for nothing else", () => {
