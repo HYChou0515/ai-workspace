@@ -2,6 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { leafIds } from "../pages/investigation/paneTree";
 import { useEditorGroups } from "./useEditorGroups";
 
 describe("useEditorGroups — empty panes are removed", () => {
@@ -82,5 +83,40 @@ describe("useEditorGroups — split pane ratio", () => {
     expect(after.a.ratio).toBeCloseTo(0.3);
     // …and the B-side ratio MUST follow (forced alignment).
     expect(after.b.ratio).toBeCloseTo(0.3);
+  });
+});
+
+describe("useEditorGroups — openLayout (#847 Q17)", () => {
+  const card = {
+    type: "split" as const,
+    dir: "row" as const,
+    ratio: 0.5,
+    a: { type: "leaf" as const, path: "/a.ai.yaml" },
+    b: { type: "leaf" as const, path: "/b.ai.yaml" },
+  };
+  const panes = (r: ReturnType<typeof useEditorGroups>) =>
+    leafIds(r.tree).map((id) => r.groups[id]!.tabs.map((t) => t.path));
+
+  it("one pane: the card replaces it, existing tabs join its top-left pane", () => {
+    const { result } = renderHook(() => useEditorGroups(["/n.md", "/b.ai.yaml"]));
+    act(() => result.current.openLayout(card));
+    expect(panes(result.current)).toEqual([["/n.md", "/a.ai.yaml"], ["/b.ai.yaml"]]);
+    expect(result.current.activeFile).toBe("/a.ai.yaml");
+  });
+
+  it("already split: the old panes move left, the card opens right", () => {
+    const { result } = renderHook(() => useEditorGroups(["/n.md"]));
+    act(() => result.current.splitActive("down", "/m.md"));
+    act(() => result.current.openLayout(card));
+    expect(panes(result.current)).toEqual([["/n.md"], ["/m.md"], ["/a.ai.yaml"], ["/b.ai.yaml"]]);
+  });
+
+  it("a later split never reuses a group id the layout minted", () => {
+    const { result } = renderHook(() => useEditorGroups(["/n.md"]));
+    act(() => result.current.openLayout(card));
+    act(() => result.current.splitActive("right", "/z.md"));
+    const ids = leafIds(result.current.tree);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(panes(result.current).flat()).toContain("/z.md");
   });
 });
