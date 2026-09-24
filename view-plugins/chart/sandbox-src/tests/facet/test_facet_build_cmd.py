@@ -157,6 +157,27 @@ def test_one_file_spelled_another_way_is_the_same_cache(
     assert second["key"] == first["key"] and second["built"] is False
 
 
+def test_the_file_keyed_is_the_file_read(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`link/../data/w.csv` folds to data/w.csv as text, but the OS walks the
+    symlink first and lands in another directory. Keying one path and reading
+    the other served one file's thumbnails under another file's key."""
+    ws = workspace / "ws"
+    (ws / "sub" / "data").mkdir(parents=True)
+    (ws / "sub" / "data" / "w.csv").write_text(CSV.replace("L1,", "L9,"))
+    (ws / "sub" / "deep").mkdir()
+    (ws / "link").symlink_to(ws / "sub" / "deep")
+    _, via_link, err = _call(
+        capsys, "facet_build", {"spec": SPEC.replace("data/w.csv", "link/../data/w.csv")}
+    )
+    assert isinstance(via_link, dict), err
+    _, index, _ = _call(capsys, "facet_index", {"key": via_link["key"]})
+    assert isinstance(index, dict)
+    # the cache is keyed on data/w.csv (lot L1), so it must hold data/w.csv's rows
+    assert {g["key"][0] for g in index["groups"]} == {"L1"}
+
+
 def test_reusing_a_cache_marks_it_recently_used(
     workspace: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
