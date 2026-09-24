@@ -68,8 +68,13 @@ describe("messages", () => {
     expect(line).toContain(".csv, .tsv or .parquet");
   });
 
-  it("names the key for an unsupported mark", () => {
-    const [line] = verdict(base + "mark: geoshape\n" + enc);
-    expect(line.startsWith("mark")).toBe(true);
+  it("names the key for an unsupported mark, and the marks there are", () => {
+    const lines = verdict(base + "mark: geoshape\n" + enc);
+    expect(lines.every((l) => l.startsWith("mark"))).toBe(true);
+    expect(lines.join("\n")).toContain("scatter, heatmap");
+  });
+
+  it("names an unknown key", () => {
+    expect(verdict(base + "colour: red\nmark: line\n" + enc)).toContain("(top level): unknown key 'colour'");
   });
 });
