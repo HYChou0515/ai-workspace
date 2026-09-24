@@ -191,13 +191,15 @@ def test_tune_runs_skill_eval_on_the_installed_skill_with_control(tmp_path, monk
     monkeypatch.setattr("workspace_app.skill_eval.__main__.main", lambda argv: seen.append(argv))
     cfg = _config(tmp_path, plugins)
     out = str(tmp_path / "out")
-    assert cli.main(["tune", "heat", "--config", cfg, "--preset", "p1", "-o", out]) == 0
+    argv_in = ["tune", "heat", "--config", cfg, "--preset", "p1", "-o", out, "--num-ctx", "16384"]
+    assert cli.main(argv_in) == 0
     [argv] = seen
     assert argv[argv.index("--skill") + 1] == str(d / "skill" / "SKILL.md")
     assert argv[argv.index("--scenarios") + 1] == str(d / "scenarios")
     assert "--control" in argv
     assert argv[argv.index("--preset") + 1] == "p1"
     assert argv[argv.index("--config") + 1] == cfg
+    assert argv[argv.index("--num-ctx") + 1] == "16384"
 
 
 def test_tune_reports_skill_eval_failures_as_its_exit_code(tmp_path, monkeypatch):

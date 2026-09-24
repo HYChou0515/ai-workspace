@@ -177,6 +177,8 @@ def _cmd_tune(args: argparse.Namespace) -> int:
         argv += ["--preset", args.preset]
     if args.config:
         argv += ["--config", args.config]
+    if args.num_ctx:
+        argv += ["--num-ctx", str(args.num_ctx)]
     print(f"tuning {folder / skill / 'SKILL.md'} — edit that file and rerun to retune")
     try:
         skill_eval(argv)
@@ -207,6 +209,12 @@ def _build_parser() -> argparse.ArgumentParser:
     t.add_argument("--profile", default="default")
     t.add_argument("--config", default=None, help="config.yaml (view_plugins.dir, presets)")
     t.add_argument("-o", "--out-dir", default="./view-plugin-tune")
+    t.add_argument(
+        "--num-ctx",
+        type=int,
+        default=0,
+        help="ollama context window (skill_eval --num-ctx); a truncated prompt scores the window",
+    )
     return p
 
 
