@@ -223,6 +223,18 @@ fixtures.
   - the knob;
   - the check that confirms it: open a gallery and see `.home/.cache/views/` in the
     sandbox dir.
+- **Built:**
+  - `SKILL.md` gains a Facet section and a "many groups that share a shape" line.
+    Its example is test-checked like the others; the body grows from 5105 to 6128
+    characters, measured.
+  - `docs/view-plugin-chart.md` gains a 縮圖牆 section on how the gallery works,
+    linking to SKILL.md for the syntax, as that page's no-third-copy rule asks.
+  - `docs/migrations.md` #pr-857 covers:
+    - scratch sizing and the shared cap;
+    - the measured build cost and the sandbox memory it needs;
+    - the entity refusal;
+    - sandbox-host shipping with the API, and what an API-only rollout looks like;
+    - the checks.
 
 ## Verification
 
