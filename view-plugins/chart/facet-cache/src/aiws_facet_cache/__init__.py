@@ -2,13 +2,19 @@
 
 Layout, little-endian::
 
-    MAGIC (8 bytes) | header length (u32) | header (UTF-8 JSON)
+    MAGIC (8 bytes) | build id (32 hex chars) | header length (u32)
+    | header (UTF-8 JSON)
     | records: one per group, ``cells`` bytes each
     | exact values (continuous scales only): one per group, ``cells`` float64 each
 
+The build id is random per write. A page read checks it against the index it
+was given, so a page is never sliced out of a rebuilt file at the old
+offsets. (Inode, size and mtime cannot tell: ext4 reuses a freed inode at once
+and its mtime is coarse.)
+
 The header is the index: the scale, the facet columns, the cell count, an
 opaque ``layout`` the builder uses to place cells, and one entry per group (its
-key, one value per facet column, and its sort values). Group ``i``'s record
+key, one text value per facet column, and its sort values). Group ``i``'s record
 starts at ``data_offset + i * cells`` and its exact values at
 ``exact_offset + i * cells * 8`` — offsets are derived, never stored, so they
 cannot disagree with the data.
@@ -19,17 +25,20 @@ for. The quantized record colours a thumbnail; the exact values back an
 enlarged group's tooltips, so neither needs the source re-read.
 
 The header is strict JSON (no NaN/Infinity literals), because the gallery
-parses it in the browser. Reading needs only the standard library, so the
-pager never pays a pandas import (plan-view-plugins-pr4 P2/P4).
+parses it in the browser. The format takes plain Python values only and does
+not guess at pandas/numpy types (NaT, datetime64 and tz offsets each guess
+wrong): the builder converts, or the write fails naming the field. Reading
+needs only the standard library, so the pager never pays a pandas import
+(plan-view-plugins-pr4 P2/P4).
 """
 
 from __future__ import annotations
 
-import datetime as _dt
 import hashlib
 import json
 import math
 import os
+import secrets
 import struct
 import sys
 import tempfile
@@ -43,8 +52,10 @@ MAGIC = b"AIWSVC01"
 MISSING = 255
 LEVELS = 254  # the top quantized code; codes run 0..LEVELS, MISSING is outside
 TMP_SUFFIX = ".tmp"  # a build in progress, or one a SIGKILL left behind
+_BUILD_ID = 32  # hex chars, so the id can never contain the header's "{"
 _LEN = struct.Struct("<I")
 _EXACT = 8  # bytes per exact value (float64)
+_JSON_INT = 2**53  # past this JSON.parse rounds an integer
 
 
 class CacheUnusable(Exception):
@@ -62,7 +73,8 @@ def transform_hash(transform: Mapping[str, Any]) -> str:
 @dataclass(frozen=True)
 class CacheKey:
     """What a cache was built from. ``size`` and ``mtime_ns`` stand in for the
-    source's version, so an edited source is a new file, never a stale hit."""
+    source's version: an edit that changes either is a new file. (An edit that
+    keeps both — same size, mtime restored — is a stale hit.)"""
 
     source_path: str
     size: int
@@ -97,6 +109,8 @@ class ContinuousScale:
         span = self.hi - self.lo
         out = bytearray()
         for v in values:
+            if not (v is None or isinstance(v, (int, float))) or isinstance(v, bool):
+                raise ValueError(f"cell value {v!r} is not a number")
             if v is None or math.isnan(v):  # pandas' missing cell is NaN
                 out.append(MISSING)
             elif span <= 0 or v <= self.lo:
@@ -127,12 +141,17 @@ class CategoryScale:
                 f"{len(self.labels)} categories; one byte per cell holds at most {LEVELS + 1}"
             )
 
-    def encode(self, values: Sequence[str | None]) -> bytes:
+    def encode(self, values: Sequence[str | float | None]) -> bytes:
         code = {label: i for i, label in enumerate(self.labels)}
-        try:
-            return bytes(MISSING if v is None else code[v] for v in values)
-        except KeyError as e:
-            raise ValueError(f"value {e.args[0]!r} is not one of the scale's categories") from None
+        out = bytearray()
+        for v in values:
+            if _is_missing(v):  # pandas fills a missing text cell with NaN
+                out.append(MISSING)
+            elif isinstance(v, str) and v in code:
+                out.append(code[v])
+            else:
+                raise ValueError(f"value {v!r} is not one of the scale's categories")
+        return bytes(out)
 
     def decode(self, record: bytes) -> list[str | None]:
         try:
@@ -142,6 +161,10 @@ class CategoryScale:
 
     def to_json(self) -> dict[str, Any]:
         return {"kind": "category", "labels": list(self.labels)}
+
+
+def _is_missing(v: object) -> bool:
+    return v is None or (isinstance(v, float) and math.isnan(v))
 
 
 Scale = ContinuousScale | CategoryScale
@@ -168,10 +191,7 @@ class CacheIndex:
     layout: dict[str, Any]
     groups: list[IndexEntry]
     data_offset: int
-    # Which file this index describes: a rebuild swaps in a new file (os.replace
-    # gives it a new inode), and a page read through a stale index must fail
-    # rather than slice the new file at the old offsets.
-    identity: tuple[int, int, int]
+    build_id: bytes  # which write this index describes; see the module docstring
 
     @property
     def exact_offset(self) -> int:
@@ -183,22 +203,18 @@ class CacheIndex:
         return self.exact_offset + (exact if isinstance(self.scale, ContinuousScale) else 0)
 
 
-def _identity(st: os.stat_result) -> tuple[int, int, int]:
-    return (st.st_ino, st.st_size, st.st_mtime_ns)
-
-
 def _sort_value(field: str, v: Any) -> Any:
-    """A sort value as strict JSON: NaN (pandas' missing) is null, a numpy
-    scalar is its Python value, a date is ISO text (which sorts correctly)."""
-    if hasattr(v, "item") and not isinstance(v, (str, bytes)):
-        v = v.item()
-    if isinstance(v, (_dt.datetime, _dt.date)):
-        return v.isoformat()
+    """A sort value as strict JSON the browser reads back exactly: a non-finite
+    float (pandas' missing NaN, or +/-inf) is null. Only None, bool, int within
+    +/-2**53, float and str are taken; anything else (a date, a numpy scalar) is
+    refused by field name, for the builder to convert."""
     if isinstance(v, float) and not math.isfinite(v):
         return None
-    if v is None or isinstance(v, (bool, int, float, str)):
+    if isinstance(v, int) and not isinstance(v, bool) and abs(v) > _JSON_INT:
+        raise ValueError(f"sort value {field!r} is {v}, past what JSON.parse keeps exact")
+    if v is None or type(v) in (bool, int, float, str):
         return v
-    raise ValueError(f"sort value {field!r} is a {type(v).__name__}, which JSON cannot carry")
+    raise ValueError(f"sort value {field!r} is a {type(v).__name__}, not a plain JSON scalar")
 
 
 def _scale_from_json(raw: Mapping[str, Any]) -> Scale:
@@ -229,6 +245,9 @@ def write_cache(
             raise ValueError(
                 f"group {g.key!r} has {len(g.key)} key values, the facet is {tuple(facet)!r}"
             )
+        if not all(type(k) is str for k in g.key):
+            # a marking value is an opaque string (Q6): 12 would never match "12"
+            raise ValueError(f"group key {g.key!r} is not all text")
         if len(g.values) != cells:
             raise ValueError(f"group {g.key!r} has {len(g.values)} cells, the cache has {cells}")
         records.append(scale.encode(g.values))
@@ -256,6 +275,7 @@ def write_cache(
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(MAGIC)
+            f.write(secrets.token_hex(_BUILD_ID // 2).encode())
             f.write(_LEN.pack(len(header)))
             f.write(header)
             for record in records:
@@ -267,10 +287,11 @@ def write_cache(
         raise
 
 
-def _parse_index(raw: Any, data_offset: int, st: os.stat_result) -> CacheIndex:
-    # Only we write this header, so a malformed one is corruption, and a missing
-    # key or wrong type surfaces as the KeyError/TypeError read_index turns into
-    # CacheUnusable. ``cells`` is checked because every offset is computed from it.
+def _parse_index(raw: Any, data_offset: int, build_id: bytes) -> CacheIndex:
+    # Only we write this header, so it is not re-validated field by field: a
+    # missing key or most wrong types fail as KeyError/TypeError (CacheUnusable
+    # in read_index), and the size check catches a header whose counts do not
+    # match the file. ``cells`` is checked because every offset is computed from it.
     cells = raw["cells"]
     if not (isinstance(cells, int) and not isinstance(cells, bool) and cells >= 1):
         raise TypeError(f"cells is {cells!r}")
@@ -281,47 +302,57 @@ def _parse_index(raw: Any, data_offset: int, st: os.stat_result) -> CacheIndex:
         layout=raw["layout"],
         groups=[IndexEntry(key=tuple(g["key"]), sort=g["sort"]) for g in raw["groups"]],
         data_offset=data_offset,
-        identity=_identity(st),
+        build_id=build_id,
     )
+
+
+def _open_checked(path: Path) -> tuple[BinaryIO, bytes, int]:
+    """Open a cache and read its magic and build id: (file, build id, size)."""
+    try:
+        f = path.open("rb")
+        size = os.fstat(f.fileno()).st_size
+        magic, build_id = f.read(len(MAGIC)), f.read(_BUILD_ID)
+    except OSError as e:  # missing, a directory, unreadable
+        raise CacheUnusable(f"{path}: {e.strerror or e}") from None
+    if magic != MAGIC:  # a short build id leaves the length field short, caught next
+        f.close()
+        raise CacheUnusable(f"{path}: not a facet cache in this format")
+    return f, build_id, size
 
 
 def read_index(path: Path) -> CacheIndex:
     """Read the header only. Raises ``CacheUnusable`` for anything short of a
     complete cache in this format, including a last record cut short — a
     gallery sorts from the index before it reads any page."""
-    try:
-        with path.open("rb") as f:
-            if f.read(len(MAGIC)) != MAGIC:
-                raise CacheUnusable(f"{path}: not a facet cache in this format")
+    f, build_id, size = _open_checked(path)
+    with f:
+        try:
             head = f.read(_LEN.size)
             if len(head) != _LEN.size:
                 raise CacheUnusable(f"{path}: cut short in its header")
             (n,) = _LEN.unpack(head)
             raw = json.loads(f.read(n))
-            index = _parse_index(raw, len(MAGIC) + _LEN.size + n, os.fstat(f.fileno()))
-    except OSError as e:  # missing, a directory, unreadable
-        raise CacheUnusable(f"{path}: {e.strerror or e}") from None
-    except (ValueError, KeyError, TypeError) as e:  # JSONDecodeError is a ValueError
-        raise CacheUnusable(f"{path}: unreadable header ({e})") from None
-    if index.identity[1] != index.size:
-        raise CacheUnusable(f"{path}: {index.identity[1]} bytes, not the {index.size} expected")
+            index = _parse_index(raw, len(MAGIC) + _BUILD_ID + _LEN.size + n, build_id)
+        except (ValueError, KeyError, TypeError) as e:  # JSONDecodeError is a ValueError
+            raise CacheUnusable(f"{path}: unreadable header ({e})") from None
+    if size != index.size:
+        raise CacheUnusable(f"{path}: {size} bytes, not the {index.size} expected")
     return index
 
 
 def _open_same(path: Path, index: CacheIndex) -> BinaryIO:
-    try:
-        f = path.open("rb")
-    except OSError as e:
-        raise CacheUnusable(f"{path}: {e.strerror or e}") from None
-    if _identity(os.fstat(f.fileno())) != index.identity:
+    f, build_id, size = _open_checked(path)
+    if build_id != index.build_id or size != index.size:
         f.close()
-        raise CacheUnusable(f"{path}: replaced after its index was read")
+        raise CacheUnusable(f"{path}: rebuilt after its index was read")
     return f
 
 
 def _check_positions(index: CacheIndex, positions: Sequence[int]) -> None:
     n = len(index.groups)
     for p in positions:
+        if type(p) is not int:
+            raise TypeError(f"group position {p!r} is not an int")
         if not 0 <= p < n:
             raise IndexError(f"group position {p} is outside 0..{n - 1}")
 
