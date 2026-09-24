@@ -36,7 +36,7 @@ def _b64(array: np.ndarray) -> str:
     return base64.b64encode(array.tobytes()).decode("ascii")
 
 
-def _js_number(x: float) -> str:
+def js_number(x: float) -> str:
     """ECMAScript Number::toString for a finite float (shortest round-trip digits)."""
     if x == 0:
         return "0"
@@ -66,7 +66,7 @@ def canon(value: Any) -> str | None:
         return str(int(value))
     if isinstance(value, float | np.floating):
         f = float(value)
-        return _js_number(f) if math.isfinite(f) else None
+        return js_number(f) if math.isfinite(f) else None
     return str(value)
 
 
