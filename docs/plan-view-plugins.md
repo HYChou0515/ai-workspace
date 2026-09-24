@@ -314,10 +314,28 @@ each result below replaces the assumption it tested.
      tree down**, not just its panel. Hence two requirements:
      - The loader must contain it.
      - `view_plugin check` must refuse a plugin that bundles React.
-   - **Unproven:** the dev server (`pnpm run dev`). The spike's import-map plugin is a
-     no-op in dev. This is PR 1 P1's only remaining check.
+   - **The dev server (`pnpm run dev`) works too**, also driven in Chromium:
+     - In dev, the map points at the facades as Vite serves them
+       (`/@id/__x00__shared:react`, …) and at the SDK source.
+     - Vite rewrites the facade's `import "react"` to the same pre-bundled URL the host
+       imports, so there is still one React.
+     - Never hardcode `.vite/deps` URLs: their `?v=` hash changes.
+     - The map plugin therefore has a dev branch and a build branch.
+   - Gotchas the spike found. Each one is a requirement in PR 1:
+     - `shared/*.js` have fixed, unhashed names, so they are served no-cache or
+       revalidated.
+     - A plugin built in dev mode imports `react/jsx-dev-runtime`, so plugins must be
+       production builds, and `view_plugin check` refuses that import.
+     - `import(url)` needs `/* @vite-ignore */`.
+     - A plugin served from Vite's `public/` fails in dev with a 500, because Vite adds
+       `?import`. Served under `/api` (the real path) it works. A cross-origin plugin
+       URL needs CORS.
+     - Without the map, the plugin fails with `Failed to resolve module specifier
+       "react/jsx-runtime"`.
    - `SPA_CSP` (`api/spa.py:34`) sets only `frame-src`, so the inline import map is
-     allowed. Re-check this if a `script-src` is ever added.
+     allowed. The spike confirmed that `script-src 'self'` would block the map, and that
+     adding the map's `sha256-…` would unblock it. So if a `script-src` is ever added,
+     it must carry the map's hash or a nonce.
 4. **Docker.** The stages are `web`, `app`, `chat-video`, `api`, and `api` is last and
    therefore the default target. Plugin build stages go before `api`.
 5. **Does an operator's skill edit reach existing workspaces?**

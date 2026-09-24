@@ -32,15 +32,20 @@ Base: master `6488a7ac`.
 Each phase follows `/tdd`. Each phase is a commit, and every behaviour starts from a test
 that reddens on the unfixed code.
 
-**P1 — the dev-server import map (no product code).**
+**P1 — the shared-module build and the import map.**
 
-The build path is proven (master plan, check 3). What remains is whether `pnpm run dev`
-can load a runtime plugin: the import map has to point at modules the dev server serves
-for `react` and the SDK, and those must be the same instances the app itself uses.
+Both the build path and the dev server are proven (master plan, check 3). This phase
+turns the spike into the real `web/vite.config.ts`:
 
-- If yes, record how.
-- If no, the dev loop is: build the SPA, then serve it with `vite preview` behind the
-  backend proxy. Record that choice in the authoring docs.
+- an ESM facade per CommonJS React package;
+- fixed `shared/<name>.js` entries with `preserveEntrySignatures: "strict"`;
+- a `transformIndexHtml` map (`order: "post"`, `head-prepend`) with a dev branch that
+  points at the Vite-served facades and a build branch that points at `shared/`;
+- `shared/*.js` served no-cache.
+
+Pin it with a built-bundle test: after `pnpm run build`, the map exists, every mapped
+file exists, and `shared/react.js` exports `useState` by name. That last check is the
+CommonJS trap.
 
 **P2 — config and discovery.**
 
@@ -176,8 +181,9 @@ for `react` and the SDK, and those must be the same instances the app itself use
   - the loop is: edit that file, rerun, done;
   - it fails loudly, by name, when the plugin has no skill or no scenarios.
 - `view_plugin check` refuses a built `web/index.js` that carries its own React (the
-  spike's failure mode, master plan check 3), with a message pointing at the externals
-  config.
+  spike's failure mode, master plan check 3), or that imports `react/jsx-dev-runtime`
+  (a dev build). Each refusal points at the externals config or at the production
+  build.
 - The scaffold writes a `scenarios/` stub with one should-call and one should-not-call
   scenario.
 
