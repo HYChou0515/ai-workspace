@@ -1,8 +1,11 @@
 """``facet_build {"spec"}`` (plan-view-plugins-pr4 P3/P6): a ``facet:`` spec
 in, the cache a gallery opens out.
 
-Built once per (source path, size, mtime, the spec's facet / encoding /
-transform), so a second open, or a gallery refetching its index, reuses it;
+Built once per (normalised source path, its size and mtime, and only what
+shapes the bytes: the facet columns, the sort field, x / y / color field and
+type, the transform), so a second open, or a gallery refetching its index,
+reuses it -- sorting the other way or retitling costs no rebuild. The path
+keyed is the path read, so the cache can never hold another file's rows;
 every build then bounds the cache dir by the spec's ``facet.cache_mb`` (P3).
 That dir is shared by every gallery in the sandbox, so the cap a spec names
 bounds all of them, not just its own cache.
@@ -53,7 +56,8 @@ def _channel(spec: dict[str, Any], name: str) -> dict[str, Any]:
     return channel
 
 
-def _key(root: Path, spec: dict[str, Any]) -> CacheKey:
+def _key(root: Path, spec: dict[str, Any]) -> tuple[CacheKey, str]:
+    """The cache key, and the source path it was keyed on -- the one to read."""
     source = spec["source"]
     if not isinstance(source, str):
         raise _Refused("a facet gallery reads a table file; source: {entity: ...} is not one")
@@ -74,12 +78,13 @@ def _key(root: Path, spec: dict[str, Any]) -> CacheKey:
         },
         "transform": spec.get("transform", []),
     }
-    return CacheKey(
+    key = CacheKey(
         source_path=relative,
         size=stat.st_size,
         mtime_ns=stat.st_mtime_ns,
         transform_hash=transform_hash(shape),
     )
+    return key, relative
 
 
 def _answer(path: Path, key: CacheKey, built: bool) -> dict[str, Any]:
@@ -103,7 +108,7 @@ def _build(text: str) -> dict[str, Any]:
     x, y, color = (_channel(spec, c) for c in ("x", "y", "color"))
     channels: list[tuple[str, Mapping[str, Any]]] = [("x", x), ("y", y), ("color", color)]
     workspace = Path.cwd()
-    key = _key(workspace, spec)
+    key, relative = _key(workspace, spec)
     views = Path.home() / ".cache" / "views"
     views.mkdir(parents=True, exist_ok=True)
     path = cache_file(views, key)
@@ -117,7 +122,9 @@ def _build(text: str) -> dict[str, Any]:
 
     facet = spec["facet"]
     fields = facet["field"] if isinstance(facet["field"], list) else [facet["field"]]
-    frame = apply_transforms(read_source(workspace, spec["source"]), spec.get("transform", []))
+    # read the path the key was made from: folding `..` as text and letting the
+    # OS walk a symlink first can name two different files
+    frame = apply_transforms(read_source(workspace, relative), spec.get("transform", []))
     build_facet_cache(
         frame,
         facet=fields,
