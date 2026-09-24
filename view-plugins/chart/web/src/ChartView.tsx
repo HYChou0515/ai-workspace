@@ -214,7 +214,9 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
 
   let body: ReactNode;
   if (errors.length) body = <Notice role="alert">{`This chart file does not fit the chart spec:\n${errors.join("\n")}`}</Notice>;
-  else if (faceted) body = <FacetGallery doc={doc} text={text} marking={marking} source={path ?? null} />;
+  // keyed on the text: an edited spec is a new gallery -- its own epoch, and
+  // not the old one's having given up
+  else if (faceted) body = <FacetGallery key={text} doc={doc} text={text} marking={marking} source={path ?? null} />;
   else if (run.error) body = <Notice role="alert">{run.error.message}</Notice>;
   else if (run.data && run.data.exit_code !== 0)
     body = <Notice role="alert">{run.data.stderr.trim() || run.data.stdout.trim() || `exit ${run.data.exit_code}`}</Notice>;
