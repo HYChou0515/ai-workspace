@@ -88,6 +88,52 @@ def test_a_page_asked_with_an_older_build_is_stale_never_served(tmp_path: Path) 
         exact_payload(tmp_path, digest, old, 0)
 
 
+@pytest.mark.parametrize("read", ["page", "exact"])
+def test_a_rebuild_between_the_build_check_and_the_read_is_stale_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read: str
+) -> None:
+    """The build check and the record read open the file separately: a rebuild
+    landing between them must still tell the gallery to refetch, not the command
+    to rebuild (which would mint yet another build and fail the page again)."""
+    import aiws_facet_cache.pager as pager
+
+    digest = _build(tmp_path)
+    build = index_payload(tmp_path, digest)["build"]
+    real = pager.read_index
+
+    def index_then_rebuild(path: Path):  # type: ignore[no-untyped-def]
+        index = real(path)
+        _build(tmp_path)  # lands after the check, before the record read
+        return index
+
+    monkeypatch.setattr(pager, "read_index", index_then_rebuild)
+    with pytest.raises(StaleIndex):
+        if read == "page":
+            page_payload(tmp_path, digest, build, [0])
+        else:
+            exact_payload(tmp_path, digest, build, 0)
+
+
+def test_a_corrupt_build_id_is_unusable_not_a_decode_error(tmp_path: Path) -> None:
+    digest = _build(tmp_path)
+    path = cache_file(tmp_path, KEY)
+    data = bytearray(path.read_bytes())
+    data[8] = 0xFF  # first byte of the build id
+    path.write_bytes(bytes(data))
+    with pytest.raises(CacheUnusable):
+        index_payload(tmp_path, digest)
+
+
+def test_an_infinite_exact_value_travels_as_is(tmp_path: Path) -> None:
+    import math
+    import struct
+
+    digest = _build(tmp_path, values=[[math.inf, -math.inf]] + [[1.0, 2.0]] * 4)
+    build = index_payload(tmp_path, digest)["build"]
+    got = exact_payload(tmp_path, digest, build, 0)
+    assert struct.unpack("<2d", base64.b64decode(got["data"])) == (math.inf, -math.inf)
+
+
 def test_the_exact_values_travel_as_f64_with_missing_as_nan(tmp_path: Path) -> None:
     import struct
 
