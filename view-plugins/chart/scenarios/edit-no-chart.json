@@ -1,0 +1,13 @@
+{
+  "name": "edit-no-chart",
+  "note": "A file edit has no claim to show.",
+  "data": [
+    "daily.csv"
+  ],
+  "prompt": "Rename the column thickness to thk_nm in daily.csv.",
+  "expect": {
+    "must_not_call": [
+      "show_file"
+    ]
+  }
+}
