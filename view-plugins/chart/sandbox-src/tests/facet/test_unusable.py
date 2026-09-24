@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aiws_facet_cache import (
+from chart_view.facet import (
     CacheUnusable,
     CategoryScale,
     ContinuousScale,
@@ -119,6 +119,33 @@ def test_a_rebuild_that_keeps_inode_size_and_mtime_is_still_caught(tmp_path: Pat
         read_exact(path, index, 0)
 
 
+def test_an_io_error_after_the_open_is_unusable_and_closes_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An NFS read can fail after the open succeeded: that is a cache to
+    rebuild, and the file handle must not leak."""
+    import chart_view.facet as facet
+
+    path = tmp_path / "c.vcache"
+    _write(path)
+    opened = []
+    real_open = Path.open
+
+    def tracking_open(self: Path, *a, **kw):  # type: ignore[no-untyped-def]
+        f = real_open(self, *a, **kw)
+        opened.append(f)
+        return f
+
+    def eio(_fd: int) -> os.stat_result:
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+    monkeypatch.setattr(facet.os, "fstat", eio)
+    with pytest.raises(CacheUnusable, match="Input/output error"):
+        read_index(path)
+    assert opened and all(f.closed for f in opened)
+
+
 def test_a_directory_at_the_cache_path_is_unusable(tmp_path: Path) -> None:
     path = tmp_path / "c.vcache"
     path.mkdir()
@@ -190,7 +217,7 @@ def test_a_rewrite_that_fails_while_writing_keeps_the_old_cache_readable(
     def disk_full(*_: object) -> None:
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr("aiws_facet_cache.os.replace", disk_full)
+    monkeypatch.setattr("chart_view.facet.os.replace", disk_full)
     with pytest.raises(OSError):
         _write(path, n=2)
     assert [g.key for g in read_index(path).groups] == [(f"g{i}",) for i in range(5)]

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from aiws_facet_cache import (
+from chart_view.facet import (
     CategoryScale,
     ContinuousScale,
     Group,
