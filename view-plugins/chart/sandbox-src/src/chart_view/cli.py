@@ -14,6 +14,11 @@
 
 Hand-written (no pydantic): two commands with one string argument each, and a
 bundle that stays small.
+
+The facet pager's commands (``facet_index`` / ``facet_page`` / ``facet_exact``,
+#857) live in ``chart_view.facet.cli``. They run on every scroll, so nothing
+here imports pandas at module level: ``validate`` and ``query`` import what
+they need when they run.
 """
 
 from __future__ import annotations
@@ -23,11 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from chart_view.query import build
-from chart_view.sources import SourceError, inside_workspace, read_source
-from chart_view.spec import SpecError, parse_spec, spec_errors
-from chart_view.transforms import TransformError
-from chart_view.validate import check
+from chart_view.facet import cli as facet_cli
 
 COMMANDS: dict[str, dict[str, Any]] = {
     "validate": {
@@ -65,6 +66,9 @@ def _argument(name: str, raw: str) -> str:
 
 
 def _validate(path: str) -> int:
+    from chart_view.sources import SourceError, inside_workspace, read_source
+    from chart_view.validate import check
+
     root = Path.cwd()
     try:
         text = inside_workspace(root, path).read_text(encoding="utf-8")
@@ -83,6 +87,11 @@ def _validate(path: str) -> int:
 
 
 def _query(text: str) -> int:
+    from chart_view.query import build
+    from chart_view.sources import SourceError, read_source
+    from chart_view.spec import SpecError, parse_spec, spec_errors
+    from chart_view.transforms import TransformError
+
     try:
         spec = parse_spec(text)
         errors = spec_errors(spec)
@@ -99,23 +108,28 @@ def _query(text: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     a = sys.argv[1:] if argv is None else argv
+    every = {**COMMANDS, **facet_cli.COMMANDS}
     if not a:
-        print(
-            json.dumps([{"name": n, "description": c["description"]} for n, c in COMMANDS.items()])
-        )
+        print(json.dumps([{"name": n, "description": c["description"]} for n, c in every.items()]))
         return 0
     name = a[0]
-    if name not in COMMANDS:
-        print(f"unknown command: {name}. available: {', '.join(COMMANDS)}", file=sys.stderr)
+    if name not in every:
+        print(f"unknown command: {name}. available: {', '.join(every)}", file=sys.stderr)
         return 2
     if len(a) == 1:
-        c = COMMANDS[name]
+        params = facet_cli.schema(name) if name in facet_cli.COMMANDS else _schema(name)
         print(
             json.dumps(
-                {"name": name, "description": c["description"], "params_json_schema": _schema(name)}
+                {
+                    "name": name,
+                    "description": every[name]["description"],
+                    "params_json_schema": params,
+                }
             )
         )
         return 0
+    if name in facet_cli.COMMANDS:
+        return facet_cli.run(name, a[1])
     try:
         value = _argument(name, a[1])
     except ValueError as e:
