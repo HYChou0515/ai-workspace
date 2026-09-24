@@ -151,8 +151,8 @@ fixtures.
   - `facet:` in the one spec schema:
     `facet: {field: <col> | [<cols>], sort?: {field, order?}, cache_mb?}`. It needs
     `mark: grid`, and the refusal says so. The corpus has `ok-facet-gallery` and
-    two `bad-facet-*` files. The web reader's verdict on them rests on CI: the web
-    half's `node_modules` could not be installed with `/home` full.
+    two `bad-facet-*` files. The web reader agrees on all three (its corpus test,
+    run locally, passes).
   - `facet_build {"spec"}`:
     - builds once per key, then reuses the cache and marks it recently used. The key
       is the normalised source path, its size and mtime, plus only what shapes the
@@ -180,15 +180,23 @@ fixtures.
   - `FacetGallery.tsx`, which `ChartView` renders for a `facet:` spec; `query` is
     disabled for it.
     - It runs `facet_build` then `facet_index`.
-    - Only the pages overlapping the viewport mount, each asking `facet_page` for its
-      run of sorted positions.
+    - Only the pages within a screen of the viewport mount (one screen of lookahead
+      each way), each asking `facet_page` for its run of sorted positions.
     - The sort order toggles over the index in hand.
     - A thumbnail is `thumbnail()`, the full grid's own calls, and is pinned
-      pixel-for-pixel by the Q13 parity test for both colour schemes.
+      pixel-for-pixel by the Q13 parity test for both colour schemes. Each tile
+      paints once per (column, lit), not on every scroll.
     - Enlarge opens a dialog that fetches `facet_exact` and shows the value under
-      the pointer.
-    - Exit 3 from the index or a page rebuilds; exit 4 from a page refetches the
-      index.
+      the pointer. The pointer is mapped to a cache cell through `gallery.cellAt`,
+      which is the lattice's own placement (sorted axes, filled gaps, nulls
+      dropped).
+    - Exit 3 from the index or a page asks for one rebuild. When the rebuild answers,
+      the index is refetched, because its key is unchanged and the cached exit 3
+      would otherwise stay. Exit 4 from a page refetches the index. Each failed
+      answer asks its remedy once, however often the gallery re-renders.
+    - With a multi-column facet, the marking holds each column's values separately
+      (`column → set`, #856), so selecting (L1, 1) and (L2, 2) also lights (L1, 2)
+      and (L2, 1). That is the platform's matching rule, not the gallery's.
 
 **P7 — selection over positions.**
 
