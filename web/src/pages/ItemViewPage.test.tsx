@@ -8,13 +8,18 @@ import { cleanup, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useMarkingStore } from "../hooks/useMarking";
 import { viewPageHref } from "../lib/viewPage";
 import type { LayoutNode } from "./investigation/paneTree";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ItemViewPage } from "./ItemViewPage";
 
 vi.mock("../renderers/FileView", () => ({
-  FileView: ({ path }: { path: string }) => <div data-testid="file-view">{path}</div>,
+  FileView: ({ path }: { path: string }) => (
+    <div data-testid="file-view" data-marking-store={useMarkingStore() ? "yes" : "no"}>
+      {path}
+    </div>
+  ),
 }));
 vi.mock("../hooks/useAgent", () => ({
   AgentProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -73,6 +78,13 @@ describe("ItemViewPage", () => {
     visit(viewPageHref("pm", "PG-1", { path: "/v/a.ai.yaml" }));
     expect(screen.getAllByTestId("editor-group")).toHaveLength(1);
     expect(screen.getByTestId("file-view")).toHaveTextContent("/v/a.ai.yaml");
+  });
+
+  it("gives its views the item's markings, as the workspace does (#847 P1)", () => {
+    visit(viewPageHref("pm", "PG-1", { layout }));
+    for (const v of screen.getAllByTestId("file-view")) {
+      expect(v).toHaveAttribute("data-marking-store", "yes");
+    }
   });
 
   it("has no file tree and no chat", () => {
