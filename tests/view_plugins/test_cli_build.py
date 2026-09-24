@@ -37,10 +37,20 @@ def calls(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, list] = {"node": [], "prebuild": []}
 
     def fake_run(argv, check):
+        # Stands in for build-web.mjs: what it installs is what `check` reads.
         seen["node"].append(argv)
+        src, dest = Path(argv[2]), Path(argv[3])
+        name = json.loads((src / "plugin.json").read_text())["name"]
+        (dest / name / "web").mkdir(parents=True, exist_ok=True)
+        (dest / name / "web" / "index.js").write_text("export {};\n")
+        (dest / name / "plugin.json").write_text((src / "plugin.json").read_text())
 
     def fake_build(*, name, source, dst, force):
         seen["prebuild"].append((name, source, dst, force))
+        dst.mkdir(parents=True)
+        (dst / "launch").write_text("#!/bin/sh\n")
+        (dst / "launch").chmod(0o755)
+        (dst / "commands.json").write_text("[]")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     monkeypatch.setattr(cli, "build_package", fake_build)
@@ -81,3 +91,19 @@ def test_all_builds_every_plugin_folder(tmp_path, calls):
         str(tmp_path / "src" / "a"),
         str(tmp_path / "src" / "b"),
     ]
+
+
+def test_a_build_that_installs_a_broken_plugin_fails(tmp_path, monkeypatch, capsys):
+    """`build` checks what it installed — a web half carrying React fails here,
+    not in a user's panel."""
+    src = _src(tmp_path / "src", "leaky")
+
+    def leaky_node(argv, check):
+        out = Path(argv[3]) / "leaky"
+        (out / "web").mkdir(parents=True)
+        (out / "web" / "index.js").write_text('const x = "react.transitional.element";\n')
+        (out / "plugin.json").write_text((src / "plugin.json").read_text())
+
+    monkeypatch.setattr(cli.subprocess, "run", leaky_node)
+    assert cli.main(["build", str(src), str(tmp_path / "out")]) == 1
+    assert "own copy of React" in capsys.readouterr().out

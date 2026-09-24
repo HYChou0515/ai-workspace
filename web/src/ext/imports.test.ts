@@ -231,17 +231,21 @@ describe("src/ext import boundary", () => {
 // A runtime plugin's source lives in `view-plugins/<name>/web/src/` at the repo
 // root and is built SEPARATELY, against `@aiws/view-sdk` — the import map's
 // name for this app's public barrel. So its rule is stricter than `ext/`'s: no
-// relative path may leave its own `web/src` at all (it would compile a second
-// copy of the host's module into the plugin — a second registry, a second set
-// of React contexts), and a bare `@aiws/view-sdk` is the only door in.
+// relative path may leave the PLUGIN's own folder (reaching into the host would
+// compile a second copy of a host module into the plugin — a second registry,
+// a second set of React contexts), and a bare `@aiws/view-sdk` is the only door
+// in. Inside its own folder it may reach across halves: the chart's one spec
+// schema lives in `sandbox-src/` and is read by both the sandbox and the web.
 
 const PLUGINS_DIR = fileURLToPath(new URL("../../../view-plugins/", import.meta.url));
 
-/** Does a specifier in a plugin's `web/src/<fileRel>` reach outside it? */
+/** Does a specifier in a plugin's `web/src/<fileRel>` reach outside the
+ * plugin's own folder (`view-plugins/<name>/`)? */
 export function pluginViolates(fileRel: string, spec: string): boolean {
   if (spec.startsWith("/")) return true;
   if (!spec.startsWith(".")) return false; // bare package: react, @aiws/view-sdk, echarts…
-  return posix.normalize(posix.join(posix.dirname(fileRel), spec)).startsWith("../");
+  // Resolved from the plugin root, where this file sits at `web/src/<fileRel>`.
+  return posix.normalize(posix.join("web/src", posix.dirname(fileRel), spec)).startsWith("../");
 }
 
 describe("pluginViolates()", () => {
@@ -250,10 +254,15 @@ describe("pluginViolates()", () => {
     expect(pluginViolates("index.tsx", "react")).toBe(false);
     expect(pluginViolates("deep/View.tsx", "../index")).toBe(false);
   });
-  it("rejects any relative path out of its own web/src, even to the barrel", () => {
+  it("accepts a file elsewhere in its OWN folder — the chart's shared spec schema", () => {
+    expect(pluginViolates("spec.ts", "../../sandbox-src/src/chart_view/spec.schema.json")).toBe(false);
+    expect(pluginViolates("deep/View.tsx", "../../../plugin.json")).toBe(false);
+  });
+  it("rejects any relative path out of its own folder, even to the barrel", () => {
     expect(pluginViolates("index.tsx", "../../../web/src/renderers/entity/public")).toBe(true);
-    expect(pluginViolates("index.tsx", "./../x")).toBe(true);
-    expect(pluginViolates("deep/View.tsx", "../../x")).toBe(true);
+    expect(pluginViolates("index.tsx", "../../../other-plugin/web/src/x")).toBe(true);
+    expect(pluginViolates("deep/View.tsx", "../../../../web/src/x")).toBe(true);
+    expect(pluginViolates("index.tsx", "./../../../x")).toBe(true);
     expect(pluginViolates("index.tsx", "/src/api/entities")).toBe(true);
   });
 });
@@ -273,6 +282,6 @@ describe("view-plugins/*/web/src import boundary", () => {
         }
       }
     }
-    expect(offenders, "a runtime plugin may only import @aiws/view-sdk, packages, or its own files").toEqual([]);
+    expect(offenders, "a runtime plugin may only import @aiws/view-sdk, packages, or its own folder's files").toEqual([]);
   });
 });

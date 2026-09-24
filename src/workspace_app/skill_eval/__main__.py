@@ -264,8 +264,8 @@ def register_view_plugins(config_path: Path | None) -> None:
     register_for_agents(discover_view_plugins(resolve_plugins_dir(settings.view_plugins)))
 
 
-def main() -> None:
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
     register_view_plugins(args.config)
     if args.dump_skill:
         _name, text, _folder = _resolve_skill(args.dump_skill)

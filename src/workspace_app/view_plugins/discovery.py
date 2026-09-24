@@ -73,7 +73,7 @@ def _inside(base: Path, rel: str) -> bool:
     return target == base.resolve() or base.resolve() in target.parents
 
 
-def _load_one(sub: Path) -> ViewPlugin:
+def load_view_plugin(sub: Path) -> ViewPlugin:
     folder = sub.name
     path = sub / MANIFEST
 
@@ -145,7 +145,7 @@ def discover_view_plugins(plugins_dir: Path) -> list[ViewPlugin]:
     for sub in sorted(plugins_dir.iterdir()):
         if not sub.is_dir():
             continue
-        plugin = _load_one(sub)
+        plugin = load_view_plugin(sub)
         for kind in plugin.manifest.kinds:
             if kind in owner:
                 raise ViewPluginError(

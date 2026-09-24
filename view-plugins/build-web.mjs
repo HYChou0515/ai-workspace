@@ -36,7 +36,9 @@ const run = (cmd, args) => execFileSync(cmd, args, { cwd: web, stdio: "inherit" 
 
 rmSync(join(to, "web"), { recursive: true, force: true });
 mkdirSync(to, { recursive: true });
-run("pnpm", ["install", "--frozen-lockfile"]);
+// Frozen when the plugin committed a lockfile (it must, to ship); a freshly
+// scaffolded plugin has none yet, and its first install writes it.
+run("pnpm", existsSync(join(web, "pnpm-lock.yaml")) ? ["install", "--frozen-lockfile"] : ["install"]);
 run("pnpm", ["exec", "vite", "build", "--outDir", join(to, "web"), "--emptyOutDir"]);
 if (!existsSync(join(to, "web", "index.js"))) {
   console.error(`build-web: ${name}: the build wrote no web/index.js — check its vite.config.ts lib.fileName`);
