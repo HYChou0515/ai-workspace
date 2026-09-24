@@ -34,5 +34,13 @@ export function specErrors(doc: unknown): string[] {
   const errors = all.filter((e) => e.keyword === "errorMessage" || !stated.some((s) => e.schemaPath.startsWith(s)));
   const inner = errors.filter((e) => !CHOICE.has(e.keyword));
   const shown = inner.length > 0 ? inner : errors;
-  return [...new Set(shown.map((e) => `${where(e)}: ${e.message ?? e.keyword}`))];
+  return [...new Set(shown.map((e) => `${where(e)}: ${say(e)}`))];
+}
+
+/** ajv's sentence, with the specifics it leaves in `params`: WHICH key is
+ * unknown, which values are allowed — the part a person fixes. */
+function say(e: ErrorObject): string {
+  if (e.keyword === "additionalProperties") return `unknown key '${String(e.params.additionalProperty)}'`;
+  if (e.keyword === "enum") return `${e.message}: ${(e.params.allowedValues as unknown[]).join(", ")}`;
+  return e.message ?? e.keyword;
 }
