@@ -15,6 +15,7 @@ from collections.abc import Callable, Collection, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
+import yaml
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, ToolOutputText, function_tool
 from specstar.types import ResourceIDNotFoundError
 
@@ -426,13 +427,69 @@ async def show_file_impl(
             f"error: file not found: {rel_path(path)} — nothing was shown. "
             f"Check the path (list_files) and call show_file again."
         )
+    # #847/#848 P9: a view plugin checks its own view before it is shown.
+    verdict = await _check_plugin_view(ctx.context, fs, inv, path)
+    if verdict is not None and verdict.startswith("error:"):
+        return verdict  # declares nothing, like an unresolvable path
     if caption:
         shown["caption"] = caption
     # A sentence, not JSON: this is what the model reads back, and being told the
     # file is visible is what stops it narrating the contents next.
-    return declare_shown_files(
-        f"{rel_path(path)} is now displayed in the chat — the user can see it.", [shown]
-    )
+    said = f"{rel_path(path)} is now displayed in the chat — the user can see it."
+    if verdict:
+        said += f" {verdict}"
+    return declare_shown_files(said, [shown])
+
+
+async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: str) -> str | None:
+    """#847/#848 P9: `None` to show as-is, an `error: …` line to refuse, or the
+    plugin's one-line summary to append.
+
+    Only a `*.ai.yaml` whose `view:` is an installed plugin's kind is touched —
+    built-in kinds and every other file are unchanged. Such a file must parse;
+    if the plugin declares `validate`, its command runs in the item's sandbox
+    first, and a non-zero exit is the refusal."""
+    from ..apps.shared_skills import PLUGIN_KINDS
+
+    if not PLUGIN_KINDS or not rel_path(path).endswith(".ai.yaml"):
+        return None
+    text = (await fs.read(inv, path)).decode("utf-8", "replace")
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        # Unparseable, so `view:` cannot be read from the document; the
+        # top-level line is still enough to know whose view this claims to be.
+        kind = next(
+            (ln.partition(":")[2].strip() for ln in text.splitlines() if ln.startswith("view:")),
+            "",
+        )
+        if kind in PLUGIN_KINDS:
+            return (
+                f"error: {rel_path(path)} does not parse as YAML ({e}) — nothing was shown. "
+                "Fix the file and call show_file again."
+            )
+        return None
+    kind = doc.get("view") if isinstance(doc, dict) else None
+    if not isinstance(kind, str) or kind not in PLUGIN_KINDS:
+        return None
+    plugin, validates = PLUGIN_KINDS[kind]
+    if not validates or actx.sandbox is None:
+        return None
+    from ..tooling.registry import PackageInfo, exec_package_command
+
+    handle = await actx.ensure_sandbox(prepare_env=False)
+    pkg = PackageInfo(name=plugin, install_dir=f"../.tools/{plugin}", commands=())
+    args = json.dumps({"path": rel_path(path)})
+    result = await exec_package_command(actx, handle, pkg, "validate", args)
+    out = result.stdout.decode("utf-8", "replace").strip()
+    err = result.stderr.decode("utf-8", "replace").strip()
+    if result.exit_code != 0:
+        why = err or out or f"exit {result.exit_code}"
+        return (
+            f"error: view plugin {plugin!r} refused {rel_path(path)} — nothing was shown:\n"
+            f"{why}\nFix the file and call show_file again."
+        )
+    return out.splitlines()[0] if out else None
 
 
 async def make_deck_impl(

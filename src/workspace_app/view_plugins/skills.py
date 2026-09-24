@@ -61,10 +61,17 @@ def register_plugin_skills(plugins: Sequence[ViewPlugin]) -> None:
 
 
 def register_for_agents(plugins: Sequence[ViewPlugin]) -> None:
-    """Everything an agent learns from the installed plugins: their skills and
-    the `## Available views` lines. One call, so no composition registers one
-    half and forgets the other."""
+    """Everything an agent learns from the installed plugins: their skills, the
+    `## Available views` lines, and which kinds `show_file` must validate. One
+    call, so no composition registers one part and forgets another."""
     register_plugin_skills(plugins)
     shared_skills.set_plugin_views(
         [(v.kind, v.when.strip()) for p in plugins for v in p.manifest.views]
+    )
+    shared_skills.set_plugin_kinds(
+        {
+            kind: (p.name, p.manifest.sandbox is not None and p.manifest.sandbox.validate)
+            for p in plugins
+            for kind in p.manifest.kinds
+        }
     )

@@ -32,6 +32,11 @@ class SandboxHalf(Struct, forbid_unknown_fields=True):
 
     bundle: str | None = None
     artifact: str | None = None
+    #: The half has a ``validate`` command (#847/#848 P9). ``show_file`` then
+    #: runs ``launch validate {"path": <workspace-relative .ai.yaml>}`` before
+    #: showing one of this plugin's views: a non-zero exit refuses it (stderr is
+    #: the reason), a zero exit's first stdout line is appended to the reply.
+    validate: bool = False
 
 
 class PluginManifest(Struct, forbid_unknown_fields=True):

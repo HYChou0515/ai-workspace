@@ -81,6 +81,16 @@ def set_plugin_views(views: Sequence[tuple[str, str]]) -> None:
     PLUGIN_VIEWS[:] = list(views)
 
 
+#: `view kind → (plugin name, has validate)` for every installed plugin kind —
+#: what `show_file` asks before showing a `*.ai.yaml` (#847/#848 P9).
+PLUGIN_KINDS: dict[str, tuple[str, bool]] = {}
+
+
+def set_plugin_kinds(kinds: Mapping[str, tuple[str, bool]]) -> None:
+    PLUGIN_KINDS.clear()
+    PLUGIN_KINDS.update(kinds)
+
+
 def plugin_views_for(tools: Collection[str] | None) -> list[tuple[str, str]]:
     """The `## Available views` lines an item with this RESOLVED tool set gets."""
     return list(PLUGIN_VIEWS) if can_draw_views(tools) else []
