@@ -78,10 +78,15 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 - Reports progress lines, which the view shows during a first open.
 - Enforces the LRU cap, default 500 MB and a spec-level knob, on every build.
   - It counts `*.vcache` **and** `*.tmp` (`TMP_SUFFIX`): a SIGKILLed build leaves its
-    temp file. It removes a `*.tmp` only when old enough to be dead, because removing a
-    live build's temp file fails that build's `os.replace`.
-  - Recency needs a signal the pager sets (e.g. `os.utime` on read); atime is
+    temp file. It removes a `*.tmp` only when stamped more than a grace period (1 h)
+    from now, either way, because removing a live build's temp file fails that
+    build's `os.replace`. "Now" is the file system's own clock, so on NFS a pod clock
+    that is off does not age a live build's temp file.
+  - Recency is the mtime the pager sets on every read (`os.utime`); atime is
     unreliable on NFS.
+  - **Built:** `aiws_facet_cache.cap.enforce_cap`. The builder itself waits for the
+    rebase onto #855: it reads sources through `chart_view`'s readers and keys through
+    its `canon()`.
 - Converts what the format refuses, in one place, with a test per rule:
   - key values to text, the same way PR 2's `query` stringifies the values a linked
     view compares against;
@@ -102,13 +107,13 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 - A `CacheUnusable` (missing after a reap, cut short, corrupt) is rebuilt
   transparently.
 - A page or exact read names the build its positions were sorted from. If the cache
-  is a later build, the pager raises `StaleIndex` rather than `CacheUnusable`: the
+  is any other build, the pager raises `StaleIndex` rather than `CacheUnusable`: the
   gallery refetches the index. Rebuilding again would mint yet another build and fail
-  the page a second time.
+  the page a second time. A cache of the same build that is cut short is still
+  `CacheUnusable`, because refetching would find the same broken file.
 - **Built so far:** `aiws_facet_cache.pager` (`index_payload`, `page_payload`,
-  `exact_payload`) and `aiws_facet_cache.cap.enforce_cap`. Answers use PR 2's wire
-  shapes (`q8`, width-1 `cat`, `f64`). Wiring them as launch commands in the chart
-  bundle waits for #855's P1 bundle.
+  `exact_payload`). Answers use PR 2's wire shapes (`q8`, width-1 `cat`, `f64`).
+  Wiring them as launch commands in the chart bundle waits for #855's P1 bundle.
 - The per-call argv stays tiny: the cache key plus a page's positions (tens of ints).
 
 **P5 — stack and diff.**
