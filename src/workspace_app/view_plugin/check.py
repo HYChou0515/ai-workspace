@@ -38,7 +38,7 @@ _DEV_BUILD = ("react/jsx-dev-runtime",)
 #: Vite's LIBRARY mode leaves `process.env.NODE_ENV` in (an app build replaces
 #: it); a bundled library's dev checks then throw `process is not defined` in
 #: the browser — which a node-based test never sees (#855's live check).
-_PROCESS_ENV = ("process.env",)
+_PROCESS_ENV = ("process.env.NODE_ENV",)
 #: What only the isolated launcher template sets (`tooling.prebuild`).
 _ISOLATED_MARK = "PYTHONNOUSERSITE=1"
 
@@ -62,7 +62,7 @@ def _check_web(p: ViewPlugin, report: Report) -> None:
             )
         if any(m in text for m in _PROCESS_ENV):
             report.errors.append(
-                f"{rel} still reads process.env (the browser has no `process`) — add "
+                f"{rel} still reads process.env.NODE_ENV (the browser has no `process`) — add "
                 'define: {"process.env.NODE_ENV": JSON.stringify("production")} to the '
                 "plugin's vite.config.ts; library mode does not replace it"
             )

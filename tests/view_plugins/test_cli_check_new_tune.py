@@ -264,3 +264,11 @@ def test_a_scaffolded_plugin_builds_and_passes_check(tmp_path):
     commands = json.loads((installed / "sandbox" / "commands.json").read_text())
     assert [c["name"] for c in commands] == ["validate"]
     assert check_plugin(installed).errors == []
+
+
+def test_a_guarded_read_of_another_env_key_is_not_refused(tmp_path):
+    """`debug`'s browser build reads `process.env.DEBUG` behind a `typeof
+    process` guard — harmless, and no `define` removes it. Only the unreplaced
+    `process.env.NODE_ENV` (what library mode leaves in) is refused."""
+    js = "if (typeof process !== 'undefined' && 'env' in process) { r = process.env.DEBUG; }\n"
+    assert check_plugin(_installed(tmp_path, "dbg", js)).errors == []

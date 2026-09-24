@@ -305,7 +305,7 @@ uv run python -m workspace_app.view_plugin tune <name> [--preset P] [--app A --p
 
 它對**已安裝的** `<plugin 目錄>/<name>/<plugin.json 的 skill>/SKILL.md` 與 `scenarios/` 跑
 `skill_eval --control`，印出報告。流程就是：改那一個檔、重跑。沒有 skill 或沒有情境會直接點名報錯。
-本機的 Ollama 模型記得加 `--num-ctx`（預設 4k 會把整段 prompt 截掉，量到的是窗口不是 skill）。
+本機的 Ollama 模型記得加 `--num-ctx`：Ollama 自己的預設窗口比組好的 prompt 小時會靜默截掉，量到的是窗口不是 skill。
 情境格式見 [擴充平台](extending-the-platform.md) 的 skill_eval 一節。
 
 ## 8. 工具：`new` / `build` / `check`

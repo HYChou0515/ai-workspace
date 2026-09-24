@@ -10,7 +10,7 @@
 * ``check [name]`` — check the INSTALLED plugins (``view_plugins.dir``) without
   booting the app (``check.py``).
 * ``tune <name>`` — the operator's one-command retune: ``skill_eval`` on the
-  installed ``<dir>/<name>/skill/SKILL.md`` with ``<dir>/<name>/scenarios/`` and
+  installed ``<dir>/<name>/<plugin.json skill>/SKILL.md`` with ``<dir>/<name>/scenarios/`` and
   ``--control``. Edit that file, rerun, done.
 
 ``main(argv)`` returns the process exit code; ``__main__`` wraps it in
@@ -57,6 +57,8 @@ def build_one(src: Path, dest_root: Path) -> None:
     manifest = json.loads((src / "plugin.json").read_text())
     name = manifest["name"]
     sandbox_src = src / "sandbox-src"
+    if sandbox_src.is_dir() and not (sandbox_src / "pyproject.toml").is_file():
+        raise BuildError(f"{sandbox_src}/pyproject.toml is missing — sandbox-src/ is a uv project")
     if sandbox_src.is_dir():
         declared = (manifest.get("sandbox") or {}).get("bundle")
         if declared != SANDBOX_BUNDLE:

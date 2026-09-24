@@ -252,3 +252,10 @@ def test_a_command_name_must_be_a_plain_word(tmp_path, cmd):
     resp = client.post(f"/a/pm/items/i1/view-plugins/chart/{cmd}", json={"args": {}})
     assert resp.status_code == 404
     assert sb.calls == []
+
+
+def test_a_command_name_with_a_trailing_newline_is_refused(tmp_path):
+    client, sb, *_ = _client(tmp_path)
+    resp = client.post("/a/pm/items/i1/view-plugins/chart/summary%0A", json={"args": {}})
+    assert resp.status_code == 404
+    assert sb.calls == []

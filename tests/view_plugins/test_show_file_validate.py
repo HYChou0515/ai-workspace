@@ -184,3 +184,21 @@ async def test_a_quoted_view_line_in_an_unparseable_file_is_still_recognised():
     out, _ = await _show('view: "sketch"\ntitle: [unclosed\n', ExecResult(exit_code=0))
     assert _declared(out) == []
     assert "does not parse" in out
+
+
+async def test_a_sandbox_that_fails_to_run_the_check_shows_the_view_with_a_note():
+    class _Broken(_Sandbox):
+        async def exec(self, handle, cmd, on_output=None, env=None):
+            raise RuntimeError("sandbox host unreachable")
+
+    files = WorkspaceFiles(MemoryFileStore())
+    await files.write("inv-1", "/views/yield.ai.yaml", CHART.encode())
+    ctx = AgentToolContext(
+        investigation_id="inv-1",
+        files=files,
+        sandbox=cast("Sandbox", _Broken(ExecResult(exit_code=0))),
+        handle=SandboxHandle(id="h"),
+    )
+    out = await show_file_impl(RunContextWrapper(ctx), "views/yield.ai.yaml")
+    assert len(_declared(out)) == 1
+    assert "could not check" in out.split(SHOWN_FILES_MARKER)[0]

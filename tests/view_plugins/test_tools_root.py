@@ -166,3 +166,54 @@ def test_a_prebuilt_bundle_is_stamped_by_its_build_marker(tmp_path: Path):
     (prebuilt / "data-fetch" / ".built").write_text("hash-2")
     merge_tools_root(prebuilt, ["data-fetch"], plugins, tmp_path / "merged")
     assert not (merged / "marker").exists()  # rebuilt
+
+
+def test_a_forced_rebuild_with_the_same_build_marker_is_still_seen(tmp_path: Path):
+    """`view_plugin build` always forces, and a forced rebuild of the same
+    source writes byte-identical `.built` — but a NEW file (and new inodes the
+    old hard links no longer point at). The stamp must see the rebuild."""
+    prebuilt = tmp_path / "prebuilt"
+    _package(prebuilt, "data-fetch")
+    (prebuilt / "data-fetch" / ".built").write_text("same")
+    _plugin(tmp_path / "plugins", "chart")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    merged = merge_tools_root(prebuilt, ["data-fetch"], plugins, tmp_path / "merged")
+    assert merged is not None
+    import shutil
+
+    shutil.rmtree(prebuilt / "data-fetch")  # what build_package does
+    _package(prebuilt, "data-fetch")
+    (prebuilt / "data-fetch" / "launch").write_text("#!/bin/sh\necho v2\n")
+    (prebuilt / "data-fetch" / ".built").write_text("same")
+    merge_tools_root(prebuilt, ["data-fetch"], plugins, tmp_path / "merged")
+    assert "v2" in (merged / "data-fetch" / "launch").read_text()
+
+
+def test_a_second_merge_waits_for_the_lock(tmp_path: Path):
+    """The lock, not luck, keeps two booting processes apart: while another
+    holder has it, a merge does not start."""
+    import fcntl
+    import threading
+
+    _plugin(tmp_path / "plugins", "chart")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    lock = open(tmp_path / "merged.lock", "w")  # noqa: SIM115
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    t = threading.Thread(target=merge_tools_root, args=(None, [], plugins, tmp_path / "merged"))
+    t.start()
+    t.join(0.5)
+    assert t.is_alive() and not (tmp_path / "merged").exists()
+    fcntl.flock(lock, fcntl.LOCK_UN)
+    lock.close()
+    t.join(10)
+    assert (tmp_path / "merged" / "chart" / "launch").is_file()
+
+
+def test_leftovers_of_any_crashed_merge_are_cleared(tmp_path: Path):
+    _plugin(tmp_path / "plugins", "chart")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    (tmp_path / "merged.staging-99999").mkdir()
+    (tmp_path / "merged.retired-88888").mkdir()
+    merge_tools_root(None, [], plugins, tmp_path / "merged")
+    assert not (tmp_path / "merged.staging-99999").exists()
+    assert not (tmp_path / "merged.retired-88888").exists()

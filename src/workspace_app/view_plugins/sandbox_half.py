@@ -57,8 +57,8 @@ def _link_or_copy(src: str, dst: str) -> None:
 
 def _stamp(pairs) -> str:
     """What the merged root was built from, per mounted name: a prebuilt
-    bundle's `.built` stamp, else every source file's path, size and mtime. Any
-    rebuild of a package or re-install of a plugin changes it."""
+    bundle's `.built` marker (its bytes, inode and mtime), else every source
+    file's path, size and mtime."""
     h = hashlib.sha256()
     for target, src in pairs:
         h.update(f"{target}\0".encode())
@@ -67,7 +67,11 @@ def _stamp(pairs) -> str:
             # A prebuilt bundle's own build stamp (source hash + launcher
             # fingerprint) changes on every rebuild — one read instead of a
             # stat per file of a python + venv (seconds, measured, at boot).
-            h.update(built.read_bytes())
+            # Bytes AND identity: a forced rebuild of the same source writes
+            # the same bytes into a NEW file (`build_package` rmtrees first),
+            # and the hard links in the merged root still point at old inodes.
+            st = built.stat()
+            h.update(built.read_bytes() + f"\0{st.st_ino}\0{st.st_mtime_ns}".encode())
             continue
         for f in sorted(src.rglob("*")):
             st = f.lstat()
@@ -85,7 +89,7 @@ def merge_tools_root(
 
     With no bundle plugins this is ``prebuilt`` unchanged (or ``None`` when
     there are no packages either) — a deployment without plugins sees exactly
-    what it saw before. Otherwise ``dst`` is rebuilt from scratch: every package
+    what it saw before. Otherwise ``dst`` is (re)built when its sources changed: every package
     in ``packages`` hard-linked from ``prebuilt``, every plugin bundle copied.
     Built beside ``dst`` and swapped in, so a crash mid-copy never leaves a
     half-merged root behind for the next boot to trust; under an exclusive lock,
@@ -131,11 +135,17 @@ def merge_tools_root(
             # Unchanged — and possibly under live sandboxes of another process
             # that merged it first. Leave it exactly as it is.
             return dst
+        # Under the lock no other merge is running, so any staging/retired tree
+        # here is a crashed merge's leftover, whatever pid it was named for.
+        for d in dst.parent.glob(f"{dst.name}.staging-*"):
+            shutil.rmtree(d)
+        for d in dst.parent.glob(f"{dst.name}.retired-*"):
+            shutil.rmtree(d)
+        # Forget the old stamp first: a crash between the swap and the new
+        # stamp must not leave a stamp describing a tree that is gone.
+        stamp_file.unlink(missing_ok=True)
         staging = dst.with_name(f"{dst.name}.staging-{os.getpid()}")
         retired = dst.with_name(f"{dst.name}.retired-{os.getpid()}")
-        for d in (staging, retired):
-            if d.exists():
-                shutil.rmtree(d)
         staging.mkdir()
         for name in packages:
             assert prebuilt is not None

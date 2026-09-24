@@ -142,7 +142,7 @@ def register_view_plugin_runner(
             raise HTTPException(
                 status_code=404, detail=f"view plugin {plugin!r} has no sandbox commands"
             )
-        if not _CMD.match(cmd):
+        if not _CMD.fullmatch(cmd):
             raise HTTPException(
                 status_code=404, detail=f"view plugin {plugin!r} has no command {cmd!r}"
             )

@@ -503,10 +503,14 @@ async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: st
         return cannot(f"an app tool is also called {plugin!r}")
     from ..tooling.registry import PackageInfo, exec_package_command
 
-    handle = await actx.ensure_sandbox(prepare_env=False)
     pkg = PackageInfo(name=plugin, install_dir=f"../.tools/{plugin}", commands=())
     args = json.dumps({"path": rel_path(path)})
-    result = await exec_package_command(actx, handle, pkg, "validate", args)
+    try:
+        handle = await actx.ensure_sandbox(prepare_env=False)
+        result = await exec_package_command(actx, handle, pkg, "validate", args)
+    except Exception as e:  # noqa: BLE001 — a check that cannot RUN is not a verdict on the file
+        _LOGGER.warning("show_file: plugin %s validate could not run", plugin, exc_info=True)
+        return cannot(f"its sandbox could not run the check ({e})")
     out = result.stdout.decode("utf-8", "replace").strip()
     err = result.stderr.decode("utf-8", "replace").strip()
     if result.exit_code == 127 and f".tools/{plugin}/launch" in err:

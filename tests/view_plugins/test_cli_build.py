@@ -125,3 +125,10 @@ def test_a_sandbox_src_must_opt_into_the_isolated_launcher(tmp_path, calls, caps
     assert cli.main(["build", str(src), str(tmp_path / "out")]) == 1
     assert 'launch = "isolated"' in capsys.readouterr().out
     assert calls["prebuild"] == []
+
+
+def test_a_sandbox_src_without_pyproject_is_a_build_error(tmp_path, calls, capsys):
+    src = _src(tmp_path / "src", "chart", sandbox_src=True)
+    (src / "sandbox-src" / "pyproject.toml").unlink()
+    assert cli.main(["build", str(src), str(tmp_path / "out")]) == 1
+    assert "pyproject.toml" in capsys.readouterr().out
