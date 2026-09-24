@@ -147,6 +147,24 @@ fixtures.
   groups at 50k cells.
 - Sorting uses the index already in hand, with no rebuild.
 - Enlarging fetches the one group's exact values.
+- **Built, sandbox side:**
+  - `facet:` in the one spec schema:
+    `facet: {field: <col> | [<cols>], sort?: {field, order?}, cache_mb?}`. It needs
+    `mark: grid`, and the refusal says so. The corpus has `ok-facet-gallery` and
+    two `bad-facet-*` files. The web reader's verdict on them rests on CI: the web
+    half's `node_modules` could not be installed with `/home` full.
+  - `facet_build {"spec"}`:
+    - builds once per (source path, size, mtime, facet + x/y/color + transform) and
+      reuses the cache otherwise; `cache_mb` is not in the key;
+    - bounds the dir by `cache_mb` (default 500) on every build;
+    - answers `{key, build, groups, cells, built}`;
+    - refuses an entity source, since there is no file version to key a cache on.
+  - The progress lines go to stderr. `useSandboxRun` hands them back with the answer
+    rather than streaming them, so "first open shows progress" still needs a
+    streaming path, or a build long enough to warrant polling.
+- **Not built yet:** the web half, i.e. the virtualized thumbnail grid, paging,
+  sort and enlarge, painted with PR 2's `raster.ts`. It waits for disk space to
+  install the chart web half's dependencies.
 
 **P7 — selection over positions.**
 

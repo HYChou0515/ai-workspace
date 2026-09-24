@@ -42,7 +42,14 @@ def test_bare_launch_lists_the_commands(capsys):
     assert main([]) == 0
     names = [c["name"] for c in json.loads(capsys.readouterr().out)]
     # the facet pager's commands (#857) follow; tests/facet/test_facet_cli.py pins them
-    assert names == ["validate", "query", "facet_index", "facet_page", "facet_exact"]
+    assert names == [
+        "validate",
+        "query",
+        "facet_build",
+        "facet_index",
+        "facet_page",
+        "facet_exact",
+    ]
 
 
 @pytest.mark.parametrize("cmd", ["validate", "query"])
