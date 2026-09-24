@@ -132,7 +132,7 @@ async def discover_catalog(
 ) -> tuple[EntityCatalog, list[Diagnostic]]:
     """Scan `.entity/<type>/` into the item's `EntityCatalog`. No `.entity/`
     dir → empty catalog (opt-in guard)."""
-    from ..files.facade import read_all_existing
+    from ..filestore.batch import read_all_existing
 
     paths = await store.ls(workspace_id, prefix=_ENTITY_ROOT)
     # Whether a type's files are there falls straight out of the listing we

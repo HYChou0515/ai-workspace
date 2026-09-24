@@ -1,0 +1,34 @@
+[project]
+name = "aiws-view-sdk"
+version = "0.1.0"
+description = "The platform's Python SDK for view-plugin sandbox halves: read_entity_records, vendored from src/workspace_app so a plugin runs the SAME entity reader as the app."
+requires-python = ">=3.12"
+dependencies = ["msgspec>=0.18", "pyyaml>=6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Nothing lives here: the wheel is the platform's own modules, taken from
+# src/workspace_app at build time, so there is no copy to drift. They must stay
+# importable with msgspec + PyYAML alone — the chart plugin's tests import them
+# in an environment without the app's other dependencies, which is the guard.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../src/workspace_app/__init__.py" = "workspace_app/__init__.py"
+"../../src/workspace_app/filestore/__init__.py" = "workspace_app/filestore/__init__.py"
+"../../src/workspace_app/filestore/protocol.py" = "workspace_app/filestore/protocol.py"
+"../../src/workspace_app/filestore/batch.py" = "workspace_app/filestore/batch.py"
+"../../src/workspace_app/entity/__init__.py" = "workspace_app/entity/__init__.py"
+"../../src/workspace_app/entity/catalog.py" = "workspace_app/entity/catalog.py"
+"../../src/workspace_app/entity/diagnostics.py" = "workspace_app/entity/diagnostics.py"
+"../../src/workspace_app/entity/events.py" = "workspace_app/entity/events.py"
+"../../src/workspace_app/entity/local.py" = "workspace_app/entity/local.py"
+"../../src/workspace_app/entity/numbering.py" = "workspace_app/entity/numbering.py"
+"../../src/workspace_app/entity/parser.py" = "workspace_app/entity/parser.py"
+"../../src/workspace_app/entity/projection.py" = "workspace_app/entity/projection.py"
+"../../src/workspace_app/entity/schema.py" = "workspace_app/entity/schema.py"
+"../../src/workspace_app/entity/skeleton.py" = "workspace_app/entity/skeleton.py"
+"../../src/workspace_app/entity/store.py" = "workspace_app/entity/store.py"
