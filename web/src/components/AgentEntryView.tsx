@@ -26,6 +26,7 @@ import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
 import { ShownFiles } from "./ShownFiles";
+import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
@@ -802,6 +803,12 @@ function MessageBlock({
         >
           {message.content}
         </div>
+        {message.markings && message.markings.length > 0 && (
+          // #847 P7: what was sent with it — the thread's record of the chips.
+          <div style={{ marginLeft: mine ? 0 : 28 }}>
+            <MarkingChips markings={message.markings} />
+          </div>
+        )}
       </div>
     );
   }
