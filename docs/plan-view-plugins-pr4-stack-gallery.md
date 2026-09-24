@@ -86,9 +86,18 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     that is off does not age a live build's temp file.
   - Recency is the mtime the pager sets on every read (`os.utime`); atime is
     unreliable on NFS.
-  - **Built:** `chart_view.facet.cap.enforce_cap`. The builder itself waits for the
-    rebase onto #855: it reads sources through `chart_view`'s readers and keys through
-    its `canon()`.
+  - **Built:** `chart_view.facet.cap.enforce_cap`, and the builder
+    `chart_view.facet.build.build_facet_cache(frame, facet, x, y, value, sort, path,
+    progress)`.
+    - Keys are `canon()` of each facet value, so they match a linked view's marking.
+    - Cell x / y are what the chart's wire sends (`_json_scalar`), so a thumbnail's
+      `lattice` places cells where the full view does.
+    - Two rows in one group's cell, or a sort value that varies inside a group, is
+      refused by name; aggregating belongs to the transforms.
+    - A bool value is a `true` / `false` category.
+    - Still to wire: reading the frame through `read_source` and the spec's
+      transforms, and the `facet_build` launch command with the cap on every build.
+      That waits for P6, where `facet:` joins the spec schema.
 - Converts what the format refuses, in one place, with a test per rule:
   - key values to text, the same way PR 2's `query` stringifies the values a linked
     view compares against;
