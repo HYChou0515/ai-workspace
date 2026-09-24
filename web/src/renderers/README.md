@@ -116,10 +116,13 @@ whole panel — the one error boundary in this app, because this is the one plac
 that runs code the platform team didn't write. It covers the header too, since
 that renders `spec.title`, which is where a hostile view file actually crashed.
 
-Maintainer-authored kinds live in `../../ext/`, import solely from
-`entity/public.ts` (enforced by `../../ext/imports.test.ts`), and are registered
-from `../../ext/index.ts`, which `main.tsx` imports for its side effects.
-Guide: `docs/view-kind-authoring.md`. Example: `../../ext/CsvTableView.tsx`.
+Maintainer-authored kinds are runtime view plugins (#847/#848): a folder in the
+operator's plugin dir whose `web/index.js` the SPA `import()`s before its first
+render (`../viewPlugins/loader.ts`), reaching `entity/public.ts` as
+`@aiws/view-sdk` through the import map. The build-time channel `../../ext/`
+(imported by `main.tsx` for its side effects) stays for builds that carry their
+own kinds; both are held to the barrel by `../../ext/imports.test.ts`.
+Guide: `docs/view-kind-authoring.md`. Example: `view-plugins/csv-table/` (a runtime plugin).
 
 Test a new kind through the **file**, like `entity/viewKindPlugin.test.tsx` does
 — not by calling `resolveViewRenderer` directly. That shortcut is why the

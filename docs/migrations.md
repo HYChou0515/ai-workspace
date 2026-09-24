@@ -862,6 +862,39 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
   （你沒列的那幾種，排序）。
 
+### 2026-09-25 · #854 runtime view plugin 平台；`csv-table` 搬出 SPA、改由 plugin 目錄提供 {#pr-854}
+
+**設定** — 不用動。新增選用的 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ `<repo>/.view-plugins`，
+映像裡是 `/app/.view-plugins`）。目錄不存在 = 沒有 plugin；**目錄裡任何一個 plugin 壞掉就拒絕開機**，
+log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`。
+
+**資料** — 不動。
+
+**k8s · CI 側**
+
+- **映像要經過新的 `view-plugins` stage 建出來**（`rollout 前`，build 時）。`docker/Dockerfile` 不帶 `--target`
+  的 build 已經包含它（它排在 `app` 之前，`app` 把產物 `COPY` 到 `/app/.view-plugins`）；**自己寫 Dockerfile
+  或自訂 build 流程的**要照做：`node view-plugins/build-web.mjs view-plugins/<name> <目錄>`。
+  為什麼：`csv-table` 不再編進 SPA bundle，而是 SPA 開機時從 `GET /api/view-plugins` 載入。
+  漏做的症狀：每個 `view: csv-table` 的面板顯示 `Unsupported view kind: csv-table`，其他畫面正常。
+- **自己掛 plugin 目錄的**（設了 `view_plugins.dir` 或 `WORKSPACE_VIEW_PLUGINS_DIR` 指到 volume）要把
+  `csv-table` 也建進去（`rollout 前`）：`uv run python -m workspace_app.view_plugin build view-plugins/csv-table <目錄>`。
+  為什麼：映像裡的 `/app/.view-plugins` 只在沒改目錄時被讀到。漏做的症狀同上。
+- **不走容器、`sandbox.kind: local` 直接跑 repo 的部署**：`rollout 前`跑 `make view-plugins`（寫到 `<repo>/.view-plugins`）。
+  漏做的症狀同上。
+- 反向代理 / CDN：SPA 的 `/shared/*.js`（import map 的目標，固定檔名）回 `Cache-Control: no-cache`；
+  **不要**另外設規則把它們長期快取——重 build 之後舊的 `shared/*.js` 會配到新的雜湊 chunk，
+  plugin 面板顯示 `view plugin "<名字>" is unavailable: …`。
+- sandbox-host 這版**不用動**：本 PR 沒有任何 plugin 帶沙盒半邊。
+
+**確認做完**
+
+- `kubectl logs deploy/rca-app | grep 'view plugins:'` 看到 `view plugins: csv-table ← /app/.view-plugins`
+  （你改過目錄就是你的路徑）。
+- 登入後 `GET /api/view-plugins` 回
+  `[{"name": "csv-table", "sdk": "1", "kinds": ["csv-table"], "entry_url": "/view-plugins/csv-table/index.js"}]`。
+- 在任一 item 開一個 `view: csv-table` + `source:` 指向 CSV 的 `*.ai.yaml`，畫出表格。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

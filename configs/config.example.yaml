@@ -503,6 +503,15 @@
 #     qwen3-32b-local: { model: ollama_chat/qwen3:32b, llm: { base_url: http://gpu-2:11434 } }
 #     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30, num_retries: 1 }  # hosted ⇒ relax ttft
 #
+# ─── view_plugins (#847/#848: runtime `*.ai.yaml` renderers) ──────────────
+# Where the operator installs runtime view plugins (docs/view-kind-authoring.md).
+# Empty ⇒ $WORKSPACE_VIEW_PLUGINS_DIR, else <repo>/.view-plugins — in the app
+# image that is /app/.view-plugins, which carries `csv-table`. A dir that does
+# not exist means no plugins; a malformed plugin in it refuses boot, by name.
+# Mounting your own dir? Build `csv-table` into it too, or that view kind is gone.
+# view_plugins:
+#   dir: /opt/view-plugins
+
 # ─── chat_video (Export ▾ → 影片) ─────────────────────────────────────────
 # The ceilings on what a video job may ask for (docs/plan-chat-video-export.md,
 # decision 10). The form only offers values inside them; the server refuses

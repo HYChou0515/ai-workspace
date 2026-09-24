@@ -122,6 +122,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | `observability` | LLM 呼叫記錄 | 少改 |
 | `failover` | 忙碌時的 LLM 備援全域門檻 | 有多模型才改 |
 | `chat_video` | Export ▾ → 影片的伺服端上限（像素、秒數、輸出大小、進度心跳）；worker pod 的 memory limit 是照它們量的；五個值要正整數、`stale_after_seconds` > `heartbeat_seconds`（否則開不了機）。`chromium_path`（預設空）：改用這個 Chromium 錄影而不是 `playwright install` 抓的那顆——斷網 image 用 apt 的 `/usr/bin/chromium`（[deployment.md §11](deployment.md#11-生產環境注意事項)） | 少改（改了要重量 [chat-video.md](chat-video.md#要多少資源量的41-秒的範例1080p)） |
+| `view_plugins` | runtime view plugin 的安裝目錄 `dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ `<repo>/.view-plugins`，映像裡是 `/app/.view-plugins`，內含 `csv-table`）。目錄不存在 = 沒有 plugin；有任何一個壞掉就拒絕開機並點名。怎麼寫 plugin 見 [view-kind-authoring.md](view-kind-authoring.md) | 自己掛 plugin 目錄時改（記得把 `csv-table` 一起帶上） |
 | `llm` | preset 沒寫 `llm.*` 時的預設 endpoint ＋ 抑制重複的取樣參數 | 少改 |
 | `read_file` / `exec` | sandbox 工具的輸出上限 | 少改 |
 | `history` | 跨回合記憶的訊息數 / token 預算 | 換大 context 模型時改 |
@@ -771,6 +772,7 @@ observability:
 | `WORKSPACE_LLM_LOG` | `0` = 關掉 LLM 呼叫記錄（不用改 config 的正式 off-switch） |
 | `WORKSPACE_AGENT_STREAM` | `0` = 非串流逃生門（agent 一次抓完整回應，不逐字串流） |
 | `WORKSPACE_TOOLS_DIR` | 預建工具包目錄（等同 `tools` 區塊；`prebuilt` 模式的產物路徑） |
+| `WORKSPACE_VIEW_PLUGINS_DIR` | runtime view plugin 目錄；`view_plugins.dir` 有填時以設定為準 |
 | `KB_EMBED_DIM` | **嵌入維度**（明確指定，優先最高）。設錯會毀掉向量欄 |
 | `KB_EMBED_MODEL` | 沒設 `KB_EMBED_DIM` 時，用模型名去內建表推維度（單旋鈕設法） |
 | `KB_CODE_EMBED_MODEL` | 同上，code 專用嵌入的維度來源 |
