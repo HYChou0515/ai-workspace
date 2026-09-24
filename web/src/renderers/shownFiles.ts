@@ -12,6 +12,8 @@
  *
  * Mirrors `SHOWN_FILES_MARKER` in `agent/tools.py` — keep them in sync.
  */
+import { type LayoutNode, layoutPaths } from "../pages/investigation/paneTree";
+
 const MARKER = "\n[shown-files]";
 
 export type ShownFile = {
@@ -54,6 +56,48 @@ export function parseShownFiles(output: string | undefined | null): ShownFile[] 
     out.push(file);
   }
   return out;
+}
+
+/** A `show_file(layout=…)` declaration (#847): one card that opens `layout`. */
+export type ShownLayout = { layout: LayoutNode; files: ShownFile[]; caption?: string };
+
+/** The layout `output` declared, or `null` — for an ordinary declaration, a
+ * truncated one, or a tree the chat could not draw (the files then render one
+ * by one, as `parseShownFiles` reads them). Never throws. */
+export function parseShownLayout(output: string | undefined | null): ShownLayout | null {
+  if (!output) return null;
+  const at = output.lastIndexOf(MARKER);
+  if (at < 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output.slice(at + MARKER.length));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const { layout, caption } = parsed as Record<string, unknown>;
+  if (!isLayoutNode(layout) || layout.type !== "split") return null;
+  const files = parseShownFiles(output);
+  const described = new Set(files.map((f) => f.path));
+  if (!layoutPaths(layout).every((p) => described.has(p))) return null;
+  const out: ShownLayout = { layout, files };
+  if (typeof caption === "string" && caption) out.caption = caption;
+  return out;
+}
+
+function isLayoutNode(node: unknown): node is LayoutNode {
+  if (!node || typeof node !== "object") return false;
+  const n = node as Record<string, unknown>;
+  if (n.type === "leaf") return typeof n.path === "string" && n.path !== "";
+  return (
+    n.type === "split" &&
+    (n.dir === "row" || n.dir === "col") &&
+    typeof n.ratio === "number" &&
+    n.ratio > 0 &&
+    n.ratio < 1 &&
+    isLayoutNode(n.a) &&
+    isLayoutNode(n.b)
+  );
 }
 
 /** `output` without its declaration — what the tool card body shows.
