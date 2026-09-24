@@ -1,0 +1,14 @@
+{
+  "name": "trend-shown",
+  "note": "A trend claim: the answer should rest on a chart the user can open. Passes when a chart file is written and shown.",
+  "data": [
+    "daily.csv"
+  ],
+  "prompt": "Is thickness drifting upward over the month in daily.csv? I need to convince the process owner.",
+  "expect": {
+    "must_call": [
+      "write_file",
+      "show_file"
+    ]
+  }
+}
