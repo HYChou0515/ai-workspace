@@ -137,6 +137,8 @@ class ContinuousScale:
         return bytes(out)
 
     def decode(self, record: bytes) -> list[float | None]:
+        # A range too wide for a float gives step = inf, and present cells then
+        # decode to NaN -- as the browser's q8 arithmetic does with such a range.
         step = (self.hi - self.lo) / LEVELS
         return [
             None if b == MISSING else self.hi if b == LEVELS else self.lo + b * step for b in record
