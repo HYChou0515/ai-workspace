@@ -175,9 +175,21 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     two `bad-facet-*` files. The web reader's verdict on them rests on CI: the web
     half's `node_modules` could not be installed with `/home` full.
   - `facet_build {"spec"}`:
-    - builds once per (source path, size, mtime, facet + x/y/color + transform) and
-      reuses the cache otherwise; `cache_mb` is not in the key;
-    - bounds the dir by `cache_mb` (default 500) on every build;
+    - builds once per key, then reuses the cache and marks it recently used. The key
+      is the normalised source path, its size and mtime, plus only what shapes the
+      bytes:
+      - the facet columns and the sort field;
+      - x / y / color field and type;
+      - the transform.
+
+      The sort order, titles, colour schemes and `cache_mb` are left out, so sorting
+      the other way costs no rebuild.
+    - colours as the chart does: `query._kinds` decides ramp (`q8`) or categories,
+      so a `type: nominal` number column is categories on the thumbnail too;
+    - refuses an encoding `aggregate` and points to a `transform:` aggregate whose
+      `groupby` includes the facet columns;
+    - bounds the dir by `cache_mb` (default 500) on every build. The dir is shared
+      by every gallery in the sandbox, so one spec's cap bounds them all;
     - answers `{key, build, groups, cells, built}`;
     - refuses an entity source, since there is no file version to key a cache on.
   - The progress lines go to stderr. `useSandboxRun` hands them back with the answer

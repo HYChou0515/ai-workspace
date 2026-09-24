@@ -108,6 +108,66 @@ def test_a_changed_spec_is_a_new_cache_but_a_changed_cap_is_not(
     assert new["key"] != first["key"]
 
 
+def test_a_nominal_number_colour_is_categories_as_the_full_grid_draws_it(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """query sends a grid colour that is not quantitative as `cat`, whatever
+    the column's dtype; a thumbnail painted as a ramp would disagree."""
+    spec = SPEC.replace("color: {field: v, type: quantitative}", "color: {field: v, type: nominal}")
+    _, built, err = _call(capsys, "facet_build", {"spec": spec})
+    assert isinstance(built, dict), err
+    _, index, _ = _call(capsys, "facet_index", {"key": built["key"]})
+    assert isinstance(index, dict)
+    assert index["scale"]["kind"] == "category"
+    assert index["scale"]["labels"] == sorted(index["scale"]["labels"])
+    assert "10" in index["scale"]["labels"]  # the marking string of 10
+
+
+def test_an_encoding_aggregate_is_refused_pointing_at_transform(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = SPEC.replace(
+        "color: {field: v, type: quantitative}",
+        "color: {field: v, type: quantitative, aggregate: mean}",
+    )
+    code, _, err = _call(capsys, "facet_build", {"spec": spec})
+    assert code == 2 and "transform" in err
+
+
+def test_what_does_not_shape_the_cache_does_not_rebuild_it(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Sorting the other way, or retitling, reuses the index in hand (P6)."""
+    _, first, _ = _call(capsys, "facet_build", {"spec": SPEC})
+    reordered = SPEC.replace("order: descending", "order: ascending").replace(
+        "x: {field: x, type: ordinal}", "x: {field: x, type: ordinal, title: Column}"
+    )
+    _, second, _ = _call(capsys, "facet_build", {"spec": reordered})
+    assert isinstance(first, dict) and isinstance(second, dict)
+    assert second["key"] == first["key"] and second["built"] is False
+
+
+@pytest.mark.parametrize("spelling", ["/data/w.csv", "./data/w.csv", "data//w.csv"])
+def test_one_file_spelled_another_way_is_the_same_cache(
+    workspace: Path, capsys: pytest.CaptureFixture[str], spelling: str
+) -> None:
+    _, first, _ = _call(capsys, "facet_build", {"spec": SPEC})
+    _, second, _ = _call(capsys, "facet_build", {"spec": SPEC.replace("data/w.csv", spelling)})
+    assert isinstance(first, dict) and isinstance(second, dict)
+    assert second["key"] == first["key"] and second["built"] is False
+
+
+def test_reusing_a_cache_marks_it_recently_used(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, built, _ = _call(capsys, "facet_build", {"spec": SPEC})
+    assert isinstance(built, dict)
+    path = workspace / "home" / ".cache" / "views" / f"{built['key']}.vcache"
+    os.utime(path, (1, 1))
+    _call(capsys, "facet_build", {"spec": SPEC})
+    assert path.stat().st_mtime > 1
+
+
 def test_every_build_bounds_the_cache_dir_by_the_spec_cap(
     workspace: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
