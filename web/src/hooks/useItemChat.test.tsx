@@ -73,6 +73,22 @@ describe("useItemChat", () => {
     expect(result.current.log.streaming).toBe(true);
   });
 
+  it("send carries the markings kept as chips to the wire (#847 P7)", async () => {
+    // This is the surface the workspace uses; a field that stops here never
+    // reaches the backend, silently (`answers` once did exactly that).
+    const client = fakeClient();
+    const { result } = render(client);
+    const markings = [{ name: "fail", source: null, columns: { lot: ["L1"] } }];
+    await act(async () => {
+      await result.current.send("why?", { markings });
+    });
+    const sentBody = (client.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sentBody.markings).toEqual(markings);
+    // …and the sender sees the chip on their own message at once.
+    const last = result.current.log.entries.at(-1)!;
+    expect(last.kind === "message" && last.message.markings?.[0]?.name).toBe("fail");
+  });
+
   it("undo drops turns on THIS chat and re-snapshots the log", async () => {
     const undone: ItemChat = {
       ...CHAT,

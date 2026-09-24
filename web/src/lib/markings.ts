@@ -58,6 +58,8 @@ export class MarkingStore {
   private listeners = new Map<string, Set<() => void>>();
   private nameListeners = new Set<() => void>();
   private nameList: readonly string[] = [];
+  private allListeners = new Set<() => void>();
+  private all: ReadonlyMap<string, MarkingEntry> = new Map();
 
   get(name: string): MarkingEntry | undefined {
     return this.entries.get(name);
@@ -83,6 +85,8 @@ export class MarkingStore {
       this.entries.set(name, { marking: copy, source });
     }
     for (const cb of this.listeners.get(name) ?? []) cb();
+    this.all = new Map([...this.entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    for (const cb of this.allListeners) cb();
     if (had !== this.entries.has(name)) {
       this.nameList = [...this.entries.keys()].sort();
       for (const cb of this.nameListeners) cb();
@@ -95,6 +99,19 @@ export class MarkingStore {
     set.add(cb);
     return () => {
       set.delete(cb);
+    };
+  }
+
+  /** Every marking, sorted by name — a new object only after a write. For the
+   * composer, which shows them all; a VIEW subscribes to its one name instead. */
+  snapshot(): ReadonlyMap<string, MarkingEntry> {
+    return this.all;
+  }
+
+  subscribeAll(cb: () => void): () => void {
+    this.allListeners.add(cb);
+    return () => {
+      this.allListeners.delete(cb);
     };
   }
 

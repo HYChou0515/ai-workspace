@@ -121,6 +121,21 @@ describe("MarkingStore", () => {
     expect(s.names()).toBe(s.names());
   });
 
+  it("offers one snapshot of every marking, new only after a write (the composer's chips)", () => {
+    const s = new MarkingStore();
+    const onAny = vi.fn();
+    s.subscribeAll(onAny);
+    const empty = s.snapshot();
+    expect(s.snapshot()).toBe(empty);
+    s.set("fail", { lot: new Set(["L1"]) }, "/v/a.ai.yaml");
+    s.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/a.ai.yaml");
+    expect(onAny).toHaveBeenCalledTimes(2);
+    const snap = s.snapshot();
+    expect(snap).not.toBe(empty);
+    expect([...snap.keys()]).toEqual(["fail"]);
+    expect(snap.get("fail")!.marking.lot!.size).toBe(2);
+  });
+
   it("does not keep the caller's sets — a later mutation cannot change the marking", () => {
     const s = new MarkingStore();
     const lots = new Set(["L1"]);

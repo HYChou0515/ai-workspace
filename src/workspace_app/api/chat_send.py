@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 import magic
+import msgspec
 from fastapi import HTTPException
 
 from ..agent.context import KbGrepBudget, KbSearchBudget, WikiSearchBudget
@@ -38,6 +39,7 @@ from ..kb.collections import (
     resolve_withheld,
 )
 from ..resources import Conversation, Message
+from ..resources.conversation import SentMarking
 from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
@@ -46,6 +48,7 @@ from .events import GoalUpdated, RunError, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
+from .markings import markings_prompt_block, write_markings
 from .notifications import notify
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
@@ -115,6 +118,15 @@ async def _load_inline_image_urls(
             continue
         urls.append(f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}")
     return urls
+
+
+def _sent_markings(conv: Conversation, created: int, author: str) -> list[SentMarking]:
+    """The markings recorded on this turn's user message (#847 P7), found by
+    the stamp `_send` gave it. [] when there are none or it cannot be found."""
+    for m in reversed(conv.messages):
+        if m.role == "user" and m.created_at == created and m.author == author:
+            return m.markings
+    return []
 
 
 def _ran_out_of_steps(outcome: str) -> bool:
@@ -858,6 +870,14 @@ class ChatSendService:
         # #43: stamp the sender so a shared workspace's chat shows who said what,
         # and broadcast the message to live viewers (below, before the turn runs).
         created = now_ms()
+        # #847 P7: the markings the user kept as chips are written BEFORE the
+        # message is persisted, so the message records what actually landed — a
+        # refused write fails its chip (with the reason), never the send.
+        sent_markings = (
+            await write_markings(self._files, investigation_id, body.markings)
+            if body.markings
+            else []
+        )
         conv.messages.append(
             Message(
                 role="user",
@@ -868,6 +888,7 @@ class ChatSendService:
                 # #615: mark a driver's round, so "has a human spoken lately?"
                 # is answerable without sniffing the message text.
                 driven_by=driven_by,
+                markings=sent_markings,
             )
         )
         self._conv_rm.update(rid, conv)
@@ -1417,7 +1438,14 @@ class ChatSendService:
                     if body.apply_skills
                     else ""
                 )
-                prefix = "\n\n".join(p for p in (block, skills_block, applied_block) if p)
+                # #847 P7: the markings sent with this message, read off the
+                # PERSISTED message — what landed, not what was asked for — so a
+                # peer's re-run tells the model the same thing the first run did.
+                sent_markings = _sent_markings(conv, created, author)
+                markings_block = markings_prompt_block(sent_markings)
+                prefix = "\n\n".join(
+                    p for p in (block, skills_block, applied_block, markings_block) if p
+                )
                 turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
 
                 # #43: broadcast the human's message to every live viewer, then queue the
@@ -1428,7 +1456,12 @@ class ChatSendService:
                 if announce:
                     self._turn_engine.publish(
                         engine_key,
-                        UserMessage(author=author, content=body.content, created_at=created),
+                        UserMessage(
+                            author=author,
+                            content=body.content,
+                            created_at=created,
+                            markings=[msgspec.to_builtins(m) for m in sent_markings],
+                        ),
                     )
                 # #492: flush the item's live sandbox to durable when THIS turn ends, so
                 # durable lags by at most one turn (guarantee (2)). Runs on the engine's
