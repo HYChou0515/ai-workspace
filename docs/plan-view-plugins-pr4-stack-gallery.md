@@ -128,9 +128,22 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   gallery refetches the index. Rebuilding again would mint yet another build and fail
   the page a second time. A cache of the same build that is cut short is still
   `CacheUnusable`, because refetching would find the same broken file.
-- **Built so far:** `chart_view.facet.pager` (`index_payload`, `page_payload`,
+- **Built:** `chart_view.facet.pager` (`index_payload`, `page_payload`,
   `exact_payload`). Answers use PR 2's wire shapes (`q8`, width-1 `cat`, `f64`).
-  Wiring them as launch commands in the chart bundle waits for #855's P1 bundle.
+  They are wired as the chart bundle's launch commands (`chart_view.facet.cli`):
+  - `facet_index {"key"}`
+  - `facet_page {"key", "build", "positions"}`
+  - `facet_exact {"key", "build", "position"}`
+
+  The cache root is `~/.cache/views`, since the isolated launcher's HOME is the
+  sandbox's `.home`. Exit codes:
+  - 0: the JSON answer;
+  - 2: a wrong call;
+  - 3: the cache cannot be used; build it again;
+  - 4: stale; refetch the index.
+
+  `chart_view.cli` imports nothing heavy at module level, so these commands never
+  load pandas (checked in a fresh process).
 - The per-call argv stays tiny: the cache key plus a page's positions (tens of ints).
 
 **P5 — stack and diff.**
