@@ -96,6 +96,8 @@ uv run python -m workspace_app.chat_video my.chat.json --files ./my-workspace -o
 
 1. **`show_file`**:工具結果尾端一行 `[shown-files]{"shown_files":[{"path":"/plots/a.png","mime":"image/png","size":1234,"caption":"…"}]}`
    (Export 出來就長這樣;手寫也行,`path` / `mime` / `size` 必填、`caption` 選填)。沒有卡片,圖直接出現。
+   `show_file(layout=…)` 的宣告多一個 `layout` 樹(和一個 `caption`),`shown_files` 仍列出每個檔:聊天視窗畫**一張**
+   版面卡、點了才在分割窗格裡打開;影片沒有窗格可開,**逐檔**照上面的規則秀出來(`layout` 不讀)。
 2. **任何工具**結果尾端帶同一行宣告(畫圖工具的輸出會被正規化成它):卡片下面接檔案。
 3. **回答裡的 `![](plots/a.png)`**:workspace 路徑就渲染成圖。
 
