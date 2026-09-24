@@ -124,6 +124,8 @@ def test_a_read_against_an_older_build_exits_4_for_the_gallery_to_refetch(
         ("facet_page", {"key": "a" * 64, "build": "b" * 32, "positions": [99]}),
         ("facet_exact", {"key": "a" * 64, "build": "b" * 32, "position": 1.5}),
         ("facet_page", {"key": "a" * 64, "build": 7, "positions": [0]}),
+        ("facet_page", {"key": "a" * 64, "build": "b" * 32, "positions": ""}),
+        ("facet_page", {"key": "a" * 64, "build": "b" * 32, "positions": {}}),
     ],
     ids=[
         "no-key",
@@ -134,6 +136,8 @@ def test_a_read_against_an_older_build_exits_4_for_the_gallery_to_refetch(
         "position-out-of-range",
         "position-a-float",
         "build-not-text",
+        "positions-empty-text",
+        "positions-empty-object",
     ],
 )
 def test_a_wrong_call_exits_2_naming_what_is_wrong(
@@ -146,6 +150,43 @@ def test_a_wrong_call_exits_2_naming_what_is_wrong(
             args["build"] = index["build"]
     code, out, err = _run(capsys, cmd, args)
     assert (code, out) == (2, "") and err.strip()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"key": KEY.digest(), "build": "b" * 32, "positions": None},
+        {"key": KEY.digest(), "build": "b" * 32, "positions": [0.5]},
+    ],
+    ids=["positions-null", "positions-float"],
+)
+def test_a_wrong_call_is_named_before_the_cache_is_looked_for(
+    views: Path, capsys: pytest.CaptureFixture[str], args: dict
+) -> None:
+    """With no cache yet, a wrong call must still be 2, not 3: 3 sends the
+    gallery to build a cache for a call that will then fail anyway."""
+    code, out, err = _run(capsys, "facet_page", args)
+    assert (code, out) == (2, "") and err.strip()
+
+
+def test_a_wrong_exact_position_is_named_before_the_cache_is_looked_for(
+    views: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = {"key": KEY.digest(), "build": "b" * 32, "position": "0"}
+    code, out, err = _run(capsys, "facet_exact", args)
+    assert (code, out) == (2, "") and err.strip()
+
+
+@pytest.mark.parametrize("cmd", ["facet_index", "query"])
+def test_arguments_nested_past_the_decoder_exit_2_not_a_traceback(
+    capsys: pytest.CaptureFixture[str], cmd: str
+) -> None:
+    """Within the runner's 128 KiB argv, JSON can nest deeper than Python's
+    decoder recurses."""
+    raw = "[" * 60_000 + "]" * 60_000
+    assert len(raw) < 131_072
+    assert main([cmd, raw]) == 2
+    assert "JSON" in capsys.readouterr().err
 
 
 def test_arguments_that_are_not_json_exit_2(capsys: pytest.CaptureFixture[str]) -> None:

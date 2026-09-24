@@ -16,7 +16,7 @@ Hand-written (no pydantic): two commands with one string argument each, and a
 bundle that stays small.
 
 The facet pager's commands (``facet_index`` / ``facet_page`` / ``facet_exact``,
-#857) live in ``chart_view.facet.cli``. They run on every scroll, so nothing
+#848, PR #857) live in ``chart_view.facet.cli``. They run on every scroll, so nothing
 here imports pandas at module level: ``validate`` and ``query`` import what
 they need when they run.
 """
@@ -58,8 +58,8 @@ def _argument(name: str, raw: str) -> str:
     key = COMMANDS[name]["argument"]
     try:
         args = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"argument is not JSON: {e}") from e
+    except (json.JSONDecodeError, RecursionError) as e:  # nested past the decoder
+        raise ValueError(f"argument is not JSON this command can read: {e}") from None
     if not isinstance(args, dict) or not isinstance(args.get(key), str):
         raise ValueError(f"argument must be {{{key!r}: <string>}}")
     return args[key]
