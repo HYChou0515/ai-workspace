@@ -34,8 +34,15 @@ describe("brush and lasso", () => {
     const built = toOption(scatter, scatterAnswer);
     const sel = selectionFromBrush(
       {
-        areas: [{ brushType: "rect" }],
-        batch: [{ selected: [{ seriesIndex: 0, dataIndex: [1] }, { seriesIndex: 1, dataIndex: [0, 1] }] }],
+        batch: [
+          {
+            areas: [{ brushType: "rect" }],
+            selected: [
+              { seriesIndex: 0, dataIndex: [1] },
+              { seriesIndex: 1, dataIndex: [0, 1] },
+            ],
+          },
+        ],
       },
       built,
     );
@@ -45,7 +52,7 @@ describe("brush and lasso", () => {
   it("calls a polygon a lasso", () => {
     const built = toOption(scatter, scatterAnswer);
     const sel = selectionFromBrush(
-      { areas: [{ brushType: "polygon" }], batch: [{ selected: [{ seriesIndex: 0, dataIndex: [0] }] }] },
+      { batch: [{ areas: [{ brushType: "polygon" }], selected: [{ seriesIndex: 0, dataIndex: [0] }] }] },
       built,
     );
     expect(sel).toEqual([{ source: "lasso", layer: 0, rows: [0] }]);
@@ -53,7 +60,10 @@ describe("brush and lasso", () => {
 
   it("clears to nothing when the brush is removed", () => {
     const built = toOption(scatter, scatterAnswer);
-    expect(selectionFromBrush({ areas: [], batch: [{ selected: [] }] }, built)).toEqual([]);
+    expect(selectionFromBrush({ batch: [{ areas: [], selected: [] }] }, built)).toEqual([]);
+    // ECharts fires one on setup with no areas at all.
+    expect(selectionFromBrush({ batch: [{}] }, built)).toEqual([]);
+    expect(selectionFromBrush({ batch: [] }, built)).toEqual([]);
   });
 
   it("hit-tests grid cells by their centre, since the raster has no points", () => {
@@ -78,7 +88,7 @@ describe("brush and lasso", () => {
     // Axis values are cell indices: a rect over x 0.5..2.5, y -0.5..0.5 holds
     // the centres (1,0) and (2,0) — data rows 1 and 2.
     const rect = selectionFromBrush(
-      { areas: [{ brushType: "rect", coordRange: [[0.5, 2.5], [-0.5, 0.5]] }], batch: [{ selected: [] }] },
+      { batch: [{ areas: [{ brushType: "rect", coordRange: [[0.5, 2.5], [-0.5, 0.5]] }], selected: [] }] },
       built,
     );
     expect(rect).toEqual([{ source: "brush", layer: 0, rows: [1, 2] }]);
@@ -86,8 +96,7 @@ describe("brush and lasso", () => {
     // (1,1) clear of its edges; (1,0) and (2,1) lie outside.
     const lasso = selectionFromBrush(
       {
-        areas: [{ brushType: "polygon", coordRange: [[-0.4, -0.6], [-0.4, 1.4], [1.6, 1.4]] }],
-        batch: [{ selected: [] }],
+        batch: [{ areas: [{ brushType: "polygon", coordRange: [[-0.4, -0.6], [-0.4, 1.4], [1.6, 1.4]] }], selected: [] }],
       },
       built,
     );

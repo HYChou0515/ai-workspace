@@ -75,9 +75,10 @@ Every key sits in this list; the file is checked against it.
 Channels: `x`, `y`, `x2`, `y2`, `color`, `size`, `theta`, `text`, and
 `tooltip` (one channel or a list). Each is `{field: <column>, type: <type>}`
 with optional `aggregate`, `title`, `sort` (`ascending`, `descending` or a list
-of values), `scale` (`type: log`, `zero: false`, `domain: [lo, hi]`,
+of values), `scale` (`type: log`, `zero: true` / `false`, `domain: [lo, hi]`,
 `scheme: sequential` or `diverging`), or `{datum: <value>, title}` for a
-constant.
+constant. A number axis includes zero for `bar` and `area`, where length is
+the value, and fits the data for every other mark; `zero:` overrides either.
 
 Types: `quantitative` (numbers), `temporal` (dates and times), `nominal`
 (categories), `ordinal` (ordered categories).
