@@ -25,6 +25,12 @@ def test_the_ends_of_the_range_decode_exactly() -> None:
     assert scale.decode(scale.encode([-2.5, 7.5])) == [-2.5, 7.5]
 
 
+def test_a_range_too_wide_for_a_float_codes_every_cell_0_as_q8_does() -> None:
+    """hi - lo overflows to inf; PR 2's _q8 then codes every present cell 0."""
+    scale = ContinuousScale(-1.7e308, 1.7e308)
+    assert scale.encode([-1.7e308, 0.0, 1.7e308, None]) == bytes([0, 0, 0, MISSING])
+
+
 def test_infinite_values_are_missing_as_in_the_chart_q8_wire() -> None:
     """PR 2's `q8` (chart_view/wire.py `_q8`) codes a non-finite value 255, and
     the one raster core paints both, so a thumbnail must too: same cells, same

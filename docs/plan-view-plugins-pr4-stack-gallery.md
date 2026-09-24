@@ -78,8 +78,16 @@ fixtures.
     page is scattered positions (`read_groups`).
   - The exact-values call (`read_exact`) can return `±inf`, which JSON cannot carry;
     the output encodes it.
-- Any `CacheUnusable` (missing after a reap, cut short, rebuilt since the index was
-  read) is rebuilt transparently.
+- A `CacheUnusable` (missing after a reap, cut short, corrupt) is rebuilt
+  transparently.
+- A page or exact read names the build its positions were sorted from. If the cache
+  is a later build, the pager raises `StaleIndex` rather than `CacheUnusable`: the
+  gallery refetches the index. Rebuilding again would mint yet another build and fail
+  the page a second time.
+- **Built so far:** `aiws_facet_cache.pager` (`index_payload`, `page_payload`,
+  `exact_payload`) and `aiws_facet_cache.cap.enforce_cap`. Answers use PR 2's wire
+  shapes (`q8`, width-1 `cat`, `f64`). Wiring them as launch commands in the chart
+  bundle waits for #855's P1 bundle.
 - The per-call argv stays tiny: the cache key plus a page's positions (tens of ints).
 
 **P5 — stack and diff.**
