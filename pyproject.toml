@@ -147,4 +147,6 @@ exclude = [
     "sample-tools/**",
     "sandbox-host/**",
     "tool-starter/**",
+    # A plugin's sandbox half is its own package with its own deps, like sample-tools.
+    "view-plugins/**",
 ]
