@@ -4,8 +4,8 @@ path, clocks that disagree, and entries that are not regular files."""
 import os
 from pathlib import Path
 
-from aiws_facet_cache import TMP_SUFFIX
-from aiws_facet_cache.cap import enforce_cap
+from chart_view.facet import TMP_SUFFIX
+from chart_view.facet.cap import enforce_cap
 
 NOW = 1_000_000.0
 
@@ -91,3 +91,25 @@ def test_a_cache_the_cap_cannot_remove_is_skipped_and_the_sweep_goes_on(
     monkeypatch.setattr(Path, "unlink", refuse_stuck)
     removed = enforce_cap(tmp_path, cap_bytes=100, keep=None, now=NOW)
     assert [p.name for p in removed] == ["b.vcache", "c.vcache"]
+
+
+def test_a_dead_temp_file_the_cap_cannot_remove_is_not_reported_removed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    stuck = _file(tmp_path, f".x.vcache.a{TMP_SUFFIX}", 10, 7200)
+    real_unlink = Path.unlink
+
+    def refuse(self: Path, missing_ok: bool = False) -> None:
+        if self == stuck:
+            raise PermissionError(13, "Permission denied")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    assert enforce_cap(tmp_path, cap_bytes=100, keep=None, now=NOW, tmp_grace_s=3600) == []
+    assert stuck.exists()
+
+
+def test_a_missing_cache_dir_needs_no_clock_of_its_own(tmp_path: Path) -> None:
+    """With no dir to probe, "now" falls back to the pod's clock; there is
+    nothing in it to age anyway."""
+    assert enforce_cap(tmp_path / "nope", cap_bytes=1, keep=None) == []

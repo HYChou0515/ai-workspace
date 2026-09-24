@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiws_facet_cache import CacheKey, cache_file, transform_hash
+from chart_view.facet import CacheKey, cache_file, transform_hash
 
 BASE = CacheKey(
     source_path="data/wafers.csv",

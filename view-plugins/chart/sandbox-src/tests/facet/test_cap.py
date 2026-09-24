@@ -4,8 +4,8 @@ quota (Q12), so every build bounds `.home/.cache/views/` itself."""
 import os
 from pathlib import Path
 
-from aiws_facet_cache import TMP_SUFFIX
-from aiws_facet_cache.cap import enforce_cap
+from chart_view.facet import TMP_SUFFIX
+from chart_view.facet.cap import enforce_cap
 
 NOW = 1_000_000.0
 

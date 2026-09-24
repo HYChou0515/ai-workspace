@@ -11,7 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aiws_facet_cache import TMP_SUFFIX
+from chart_view.facet import TMP_SUFFIX
 
 CACHE_SUFFIX = ".vcache"
 
