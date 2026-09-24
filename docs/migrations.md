@@ -907,6 +907,47 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
+### 2026-09-25 · #855 chart view plugin：AI 用 `show_file` 秀出可互動圖表（`view: chart`） {#pr-855}
+
+**設定**：沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
+
+- 凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多這些：
+  - `## Available views` 兩行，含標題約 160 字元；
+  - skill 索引的 `chart` 一行，229 字元；
+  - SKILL.md 本文約 4.8k 字元，只在 AI `read_skill('chart')` 時才載入。
+- AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
+- **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。只對某個 item 關掉，就在該 item 的
+  skill 偏好把 `chart` 關掉。
+- **為你們的模型重調**：`uv run python -m workspace_app.view_plugin tune chart`，改
+  `<plugin 目錄>/chart/skill/SKILL.md` 再重跑。下一輪對話就生效。
+
+細節見 [chart：互動圖表 view plugin](view-plugin-chart.md)。
+
+**資料**：不動。沒有 `Schema` 升版。
+
+**k8s · CI 側**
+
+- **sandbox-host 映像要重 build，時機是 `rollout 前`**。
+  - 做什麼：它的 tools stage 現在會把 `view-plugins/*/sandbox-src` 建進 `builtin/chart`。圖表的聚合，
+    以及 `show_file` 的 `validate`，都在沙盒裡跑這個 bundle。
+  - 順序：sandbox-host 先上、API 後上。
+  - 漏做的症狀：
+    - 打開任何 chart 檔，面板顯示 `view plugin "chart" could not run "query"`（502，沒有 `.tools/chart/launch`）；
+    - AI 的 `show_file` 對 chart 檔一律回 `error: view plugin 'chart' refused …`，對話裡不出現卡片。
+- API 映像的 plugin stage（`view_plugin build`，前端 `index.js` + skill）見 #854 的條目。這個 PR 只是在
+  `view-plugins/` 多放一個 plugin。
+
+**確認做完**
+
+- 在 sandbox-host pod 裡：`/opt/tools/builtin/chart/launch` 沒帶參數，印出含 `validate` 與 `query` 的 JSON 清單。
+- `GET /api/view-plugins` 列出 `chart`。
+- 在一個 workspace 放一份 CSV，叫 AI「用圖表說明 X 和 Y 的關係」：
+  - 回覆出現一行 `… rows; <欄位> <最小>–<最大>` 摘要與一張卡片；
+  - 點開卡片是可以框選的圖表；
+  - 有 `highlight:` 時，被點亮的點保持原色，其餘變淡。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
