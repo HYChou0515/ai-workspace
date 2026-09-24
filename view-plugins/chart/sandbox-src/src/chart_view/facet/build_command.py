@@ -4,6 +4,8 @@ in, the cache a gallery opens out.
 Built once per (source path, size, mtime, the spec's facet / encoding /
 transform), so a second open, or a gallery refetching its index, reuses it;
 every build then bounds the cache dir by the spec's ``facet.cache_mb`` (P3).
+That dir is shared by every gallery in the sandbox, so the cap a spec names
+bounds all of them, not just its own cache.
 The answer is ``{"key", "build", "groups", "cells", "built"}``; the progress
 lines go to stderr, which the runner hands back with the answer (it does not
 stream them).
@@ -15,13 +17,17 @@ commands beside it must not.
 from __future__ import annotations
 
 import json
+import posixpath
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from chart_view.facet import CacheKey, CacheUnusable, cache_file, read_index, transform_hash
 from chart_view.facet.build import build_facet_cache
 from chart_view.facet.cap import enforce_cap
+from chart_view.facet.pager import _used
+from chart_view.query import _kinds
 from chart_view.sources import read_source
 from chart_view.spec import parse_spec, spec_errors
 from chart_view.transforms import apply_transforms
@@ -39,6 +45,11 @@ def _channel(spec: dict[str, Any], name: str) -> dict[str, Any]:
     channel = spec["encoding"].get(name)
     if channel is None:
         raise _Refused(f"a facet gallery draws each grid by encoding.{name}: the spec has none")
+    if "aggregate" in channel:
+        raise _Refused(
+            f"encoding.{name} aggregates, which a facet gallery cannot do per group: aggregate"
+            " in transform: with the facet columns in its groupby"
+        )
     return channel
 
 
@@ -46,18 +57,25 @@ def _key(root: Path, spec: dict[str, Any]) -> CacheKey:
     source = spec["source"]
     if not isinstance(source, str):
         raise _Refused("a facet gallery reads a table file; source: {entity: ...} is not one")
+    # one file, one cache: "/data/w.csv", "./data/w.csv" and "data//w.csv" are it
+    relative = posixpath.normpath(source.lstrip("/"))
     try:
-        stat = (root / source.lstrip("/")).stat()
+        stat = (root / relative).stat()
     except OSError:
         raise _Refused(f"source {source!r} is not a file in the workspace") from None
-    facet = {k: v for k, v in spec["facet"].items() if k != "cache_mb"}  # the cap shapes no cache
+    # only what shapes the cache's bytes: not the sort ORDER (the gallery sorts
+    # the index in hand), not titles or colour schemes, not the cap
+    facet = spec["facet"]
     shape = {
-        "facet": facet,
-        "encoding": {c: spec["encoding"][c] for c in ("x", "y", "color")},
+        "facet": {"field": facet["field"], "sort": facet.get("sort", {}).get("field")},
+        "encoding": {
+            c: {"field": spec["encoding"][c]["field"], "type": spec["encoding"][c]["type"]}
+            for c in ("x", "y", "color")
+        },
         "transform": spec.get("transform", []),
     }
     return CacheKey(
-        source_path=source,
+        source_path=relative,
         size=stat.st_size,
         mtime_ns=stat.st_mtime_ns,
         transform_hash=transform_hash(shape),
@@ -83,15 +101,19 @@ def _build(text: str) -> dict[str, Any]:
     if "facet" not in spec:
         raise _Refused("facet_build needs a spec with facet:")
     x, y, color = (_channel(spec, c) for c in ("x", "y", "color"))
+    channels: list[tuple[str, Mapping[str, Any]]] = [("x", x), ("y", y), ("color", color)]
     workspace = Path.cwd()
     key = _key(workspace, spec)
     views = Path.home() / ".cache" / "views"
     views.mkdir(parents=True, exist_ok=True)
     path = cache_file(views, key)
     try:
-        return _answer(path, key, built=False)
+        answer = _answer(path, key, built=False)
     except CacheUnusable:
         pass  # none yet, or unusable: build it
+    else:
+        _used(path)  # reused is used: the cap evicts the least recently used
+        return answer
 
     facet = spec["facet"]
     fields = facet["field"] if isinstance(facet["field"], list) else [facet["field"]]
@@ -106,6 +128,8 @@ def _build(text: str) -> dict[str, Any]:
         path=path,
         x_type=x["type"],
         y_type=y["type"],
+        # the colour's kind as query sends a grid's (q8 = a ramp, else categories)
+        continuous=_kinds("grid", channels)[color["field"]] == "q8",
         progress=lambda line: print(line, file=sys.stderr),
     )
     enforce_cap(views, cap_bytes=facet.get("cache_mb", DEFAULT_CAP_MB) * _MB, keep=path)
