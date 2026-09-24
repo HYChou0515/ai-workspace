@@ -154,7 +154,7 @@ async def workspace_workflow_listing(
     written before a field became required, never went through that guard, and a
     workflow that vanishes from the panel in silence is one a person cannot fix.
     One bad file still cannot break the rest of the list."""
-    from ..files.facade import read_all_existing
+    from ..filestore.batch import read_all_existing
 
     prefix = f"/{WORKSPACE_WORKFLOW_DIR}/"
     wanted = [
