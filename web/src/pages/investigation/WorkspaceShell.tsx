@@ -69,6 +69,7 @@ import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { MarkingProvider } from "../../hooks/useMarking";
 import { MarkingStore } from "../../lib/markings";
+import { syncMarkingsAcrossTabs } from "../../lib/markingsSync";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { shellIsNarrow, useContainerWidth } from "../../hooks/useContainerWidth";
@@ -231,6 +232,10 @@ export function WorkspaceProviders({
   // Named markings (#847 Q5.1) link the views of ONE item: a fresh store per
   // item, so moving to another item never carries a selection across.
   const markings = useMemo(() => new MarkingStore(), [slug, itemId]);
+  // …and the SAME item's store in every tab: chat mode opens views on the
+  // editor-area page in a new tab, and the composer that sends markings is in
+  // the chat tab (#847 Q5.3 × Q10).
+  useEffect(() => syncMarkingsAcrossTabs(markings, `${slug}/${itemId}`), [markings, slug, itemId]);
   return (
     <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>

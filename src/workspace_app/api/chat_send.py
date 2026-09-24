@@ -38,6 +38,7 @@ from ..kb.collections import (
     resolve_named_collection_ids,
     resolve_withheld,
 )
+from ..perm import Verb
 from ..resources import Conversation, Message
 from ..resources.conversation import SentMarking
 from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
@@ -873,11 +874,31 @@ class ChatSendService:
         # #847 P7: the markings the user kept as chips are written BEFORE the
         # message is persisted, so the message records what actually landed — a
         # refused write fails its chip (with the reason), never the send.
-        sent_markings = (
-            await write_markings(self._files, investigation_id, body.markings)
-            if body.markings
-            else []
-        )
+        sent_markings: list[SentMarking] = []
+        if body.markings:
+            # Sending asks `converse`; writing a file asks what every other
+            # write path asks — `add_content` for a new one, `edit_content` to
+            # replace one. Refused, the chip fails and the message still goes.
+            slug = self._locator.slug_of(investigation_id)
+
+            def may_write(verb: Verb) -> str | None:
+                if slug is None:  # no App claims the item: nothing can be authorised
+                    return "this item's permissions could not be checked"
+                try:
+                    self._locator.require_access(slug, investigation_id, verb)
+                except HTTPException:
+                    return f"you may not {verb.replace('_', ' ')} in this workspace"
+                return None
+
+            sent_markings = await write_markings(
+                self._files, investigation_id, body.markings, may_write
+            )
+            # The writes can wait on a cold sandbox; a reply saved meanwhile
+            # (the previous turn's `on_complete`) lives only in the store, and
+            # saving the copy the route read would erase it.
+            fresh = self._conv_rm.get(rid).data
+            assert isinstance(fresh, Conversation)
+            conv = fresh
         conv.messages.append(
             Message(
                 role="user",

@@ -63,10 +63,11 @@ LAYOUT_KEY = "layout"
 # Four explicit depths rather than one recursive model: `build_tools` inlines
 # `$defs` for local chat templates (#613), and a self-referencing model has no
 # finite inlining — it would reach the model as a dangling `$ref`. Three levels
-# of split is eight panes, more than a screen holds. Every field is present at
-# every depth (strict mode lists them all as required), so a node is one shape
-# the model fills the same way at any level; which fields a leaf vs a split
-# may set is checked in `layout_tree`, which says what is wrong.
+# of split is eight panes, more than a screen holds. Above the deepest level
+# every node has every field (strict mode lists them all as required), so the
+# model fills one shape at each level that can split; the deepest level is a
+# leaf only (`type`, `path`). Which fields a leaf vs a split may set is checked
+# in `layout_tree`, which says what is wrong.
 
 
 class _Pane0(BaseModel):
