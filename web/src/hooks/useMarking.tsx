@@ -16,7 +16,13 @@ export function MarkingProvider({ store, children }: { store: MarkingStore; chil
 const noop = () => () => {};
 const EMPTY: readonly string[] = [];
 
-export type WriteMarking = (marking: Marking | null, source: string | null) => void;
+/** `opts.ifEmpty`: write only if the marking holds nothing at that moment — for
+ * a view seeding its own default, which must never overwrite a selection. */
+export type WriteMarking = (
+  marking: Marking | null,
+  source: string | null,
+  opts?: { ifEmpty?: boolean },
+) => void;
 
 /** `[entry, write]` for marking `name`. `null` is a detached view: it reads
  * nothing and its writes go nowhere. Outside a provider (a standalone preview)
@@ -31,8 +37,8 @@ export function useMarking(name: string | null): [MarkingEntry | undefined, Writ
     store && name ? store.get(name) : undefined,
   );
   const write = useCallback<WriteMarking>(
-    (marking, source) => {
-      if (store && name) store.set(name, marking, source);
+    (marking, source, opts) => {
+      if (store && name) store.set(name, marking, source, { ifEmpty: opts?.ifEmpty });
     },
     [store, name],
   );
