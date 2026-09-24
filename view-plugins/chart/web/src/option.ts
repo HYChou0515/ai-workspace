@@ -81,6 +81,10 @@ export type Options = {
   /** Turn a grid's pixels into something ECharts can draw (a canvas, in the
    * browser). Omitted in a host-free test, where the series draws nothing. */
   gridImage?: (grid: { cells: Cells; image: RasterImage }) => unknown;
+  /** #847 PR 3: per layer, the rows a NAMED MARKING lights, replacing the
+   * spec's own `highlight:` bitset (`null` = this layer is not linked, drawn
+   * undimmed). Omitted: the spec's highlight, as before. */
+  lit?: (boolean[] | null)[];
 };
 
 const NONE = "(none)";
@@ -344,7 +348,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const n = wire.rows;
     const all = Array.from({ length: n }, (_, i) => i);
     // `highlight:` — an unlit row is drawn dimmed in its own data item.
-    const lit = litRows(wire);
+    const lit = opts.lit ? (opts.lit[li] ?? null) : litRows(wire);
     const item = <T,>(value: T, row: number): T | { value: T; itemStyle: { opacity: number } } =>
       lit && !lit[row] ? { value, itemStyle: { opacity: DIM_OPACITY } } : value;
     const push = (s: Record<string, unknown>, r: number[]) => {
