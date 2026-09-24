@@ -56,7 +56,7 @@ export type { ViewRenderer } from "./viewKindRegistry";
 // (`columns`, `card`, `sort`, `label`, `span`, `title`, `group_by`, `week`, …)
 // still reads back the way you wrote it.
 export type { EntityViewProps, ViewSpec } from "./types";
-export { viewParam, viewParamString } from "./shared";
+export { viewDocument, viewParam, viewParamString } from "./shared";
 
 // ── workspace files: where a plug-in's data comes from ─────────────────────
 // `useFileBuffer(path)` is the cached read (it also tracks external writes);
