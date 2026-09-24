@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from aiws_facet_cache import (
+from chart_view.facet import (
     CategoryScale,
     ContinuousScale,
     Group,
@@ -29,8 +29,8 @@ def test_continuous_groups_round_trip_within_half_a_level(tmp_path: Path) -> Non
     records = read_records(path, index, 0, 2)
     assert len(records) == 2
     step = (scale.hi - scale.lo) / 254
-    for got, group in zip(records, groups):
-        for d, v in zip(index.scale.decode(got), group.values):
+    for got, group in zip(records, groups, strict=True):
+        for d, v in zip(index.scale.decode(got), group.values, strict=True):
             if v is None:
                 assert d is None
             else:

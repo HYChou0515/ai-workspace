@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from aiws_facet_cache import (
+from chart_view.facet import (
     CacheKey,
     CacheUnusable,
     CategoryScale,
@@ -17,7 +17,7 @@ from aiws_facet_cache import (
     cache_file,
     write_cache,
 )
-from aiws_facet_cache.pager import StaleIndex, exact_payload, index_payload, page_payload
+from chart_view.facet.pager import StaleIndex, exact_payload, index_payload, page_payload
 
 KEY = CacheKey(source_path="d.csv", size=1, mtime_ns=1, transform_hash="t")
 
@@ -95,7 +95,7 @@ def test_a_rebuild_between_the_build_check_and_the_read_is_stale_too(
     """The build check and the record read open the file separately: a rebuild
     landing between them must still tell the gallery to refetch, not the command
     to rebuild (which would mint yet another build and fail the page again)."""
-    import aiws_facet_cache.pager as pager
+    import chart_view.facet.pager as pager
 
     digest = _build(tmp_path)
     build = index_payload(tmp_path, digest)["build"]
@@ -121,7 +121,7 @@ def test_a_cache_cut_short_in_the_same_build_is_rebuilt_not_stale(
     """Refetching the index would find the same broken build: this one must go
     to the command's rebuild path (CacheUnusable), never StaleIndex. Cut after
     the build check, so it is the record read that finds it."""
-    import aiws_facet_cache.pager as pager
+    import chart_view.facet.pager as pager
 
     digest = _build(tmp_path)
     build = index_payload(tmp_path, digest)["build"]

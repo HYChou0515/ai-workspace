@@ -15,6 +15,7 @@ gallery to refetch the index.
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
 import re
 import sys
@@ -23,7 +24,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from aiws_facet_cache import (
+from chart_view.facet import (
     CacheIndex,
     CacheRebuilt,
     CategoryScale,
@@ -51,10 +52,8 @@ def _path(root: Path, digest: str) -> Path:
 
 def _used(path: Path) -> None:
     """Mark the cache recently used for the cap's LRU (atime is unreliable on NFS)."""
-    try:
+    with contextlib.suppress(OSError):  # removed since the read: the next read reports it
         os.utime(path)
-    except OSError:  # removed since the read: the next read reports it
-        pass
 
 
 def _current(root: Path, digest: str, build: str) -> tuple[Path, CacheIndex]:
