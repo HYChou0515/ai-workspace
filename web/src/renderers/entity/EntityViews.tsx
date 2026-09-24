@@ -218,7 +218,8 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   // #847 P3: a view that names a marking or keys can be linked; its header
   // carries the control, and the kind is told which marking it is on.
   const fileMarking = viewParam(spec, "marking");
-  const linkable = fileMarking !== undefined || viewParam(spec, "keys") !== undefined;
+  const linkable =
+    !!renderer.linkable || fileMarking !== undefined || viewParam(spec, "keys") !== undefined;
   const [marking, setMarking] = useViewMarking(
     props.viewKey,
     typeof fileMarking === "string" && fileMarking ? fileMarking : null,

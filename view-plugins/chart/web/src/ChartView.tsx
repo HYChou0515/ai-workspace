@@ -87,8 +87,15 @@ function Plot({
   const [entry, write] = useMarking(marking);
   // On a marking that holds something, IT decides what is lit (the platform's
   // rule, over the columns each layer carries); otherwise the spec's highlight.
+  // On an EMPTY marking nothing is lit: every view on it draws undimmed, rather
+  // than each falling back to its own `highlight:` and disagreeing.
   const lit = useMemo(
-    () => (marking && entry ? markingLit(answer, entry.marking, isLit) : undefined),
+    () =>
+      marking
+        ? entry
+          ? markingLit(answer, entry.marking, isLit)
+          : answer.layers.map(() => null)
+        : undefined,
     [marking, entry, answer],
   );
   const built: Built = useMemo(
@@ -114,14 +121,16 @@ function Plot({
 
   // The spec's `highlight:` seeds its marking on open — only an EMPTY one: a
   // marking another view already holds is the person's, not this file's.
-  const seeded = useRef<string | null>(null);
+  // Once per open: re-attaching through the header later must not re-seed a
+  // marking the person has since cleared. `ifEmpty` is checked by the store at
+  // write time — two views opened together both RENDERED an empty marking.
+  const seeded = useRef(false);
   useEffect(() => {
-    if (!marking || seeded.current === marking) return;
-    seeded.current = marking;
-    if (entry) return;
+    if (!marking || seeded.current) return;
+    seeded.current = true;
     const values = highlightMarking(answer, keys);
-    if (values && Object.keys(values).length > 0) write(values, source);
-  }, [marking, entry, answer, keys, write, source]);
+    if (values && Object.keys(values).length > 0) write(values, source, { ifEmpty: true });
+  }, [marking, answer, keys, write, source]);
 
   useEffect(() => {
     if (!el.current) return;

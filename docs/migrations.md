@@ -990,8 +990,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   （只有編輯區的頁面），不再是原始檔案的下載網址——`.ai.yaml` 從此顯示成 view 而不是 YAML 原文。
   圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
 
-- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文從約 5.0k 變成約 5.4k 字元
-  （[#855](#pr-855) 那條的數字是它當時的）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變。
+- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文（去掉 frontmatter）
+  從約 4.7k 變成約 5.1k 字元（[#855](#pr-855) 那條寫的 5.0k 是整個檔案的位元組數）；只在 AI `read_skill('chart')` 時載入，
+  每輪 prompt 的固定成本不變。
 
 **k8s · CI 側** — 不動（新頁面是 SPA 路由，同一個 image）。
 
