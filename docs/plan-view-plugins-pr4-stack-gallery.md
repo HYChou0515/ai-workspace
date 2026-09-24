@@ -52,10 +52,24 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 
 - Built once per `(source path, size, mtime, spec transform hash)`.
 - Contents:
-  - an index: per-group key, sort values, and offset;
-  - fixed-size per-group records: 1 byte per cell for categories, 256-level quantized
-    for continuous values, and a header that holds the scale's range.
+  - an index: the facet columns, and per group its key (one text value per facet
+    column, so a marking gets `column → values` back) and sort values. Offsets are
+    derived from the index, never stored;
+  - fixed-size per-group records: 1 byte per cell. A category code, or a continuous
+    value quantized to 255 levels; code 255 is a missing cell. The header holds the
+    scale's range or labels;
+  - for continuous scales, a float64 section with each group's exact values, for
+    P6's enlarge;
+  - a random build id per write. A page read through an index from an earlier build
+    fails instead of slicing the new file (inode and mtime cannot tell: ext4 reuses
+    inodes at once).
+- The header is strict JSON, since the browser parses it. The format takes plain
+  Python values only and refuses the rest by name; converting pandas/numpy values is
+  P3's job.
 - Tests pin the round trip and that any key component changes the cache path.
+- **Built:** the stdlib-only package `view-plugins/chart/facet-cache/`
+  (`write_cache`, `read_index`, `read_groups`, `read_records`, `read_exact`,
+  `CacheUnusable`).
 
 **P3 — the builder.**
 
@@ -63,15 +77,31 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   `.home/.cache/views/`, the infra area (Q12).
 - Reports progress lines, which the view shows during a first open.
 - Enforces the LRU cap, default 500 MB and a spec-level knob, on every build.
+  - It counts `*.vcache` **and** `*.tmp` (`TMP_SUFFIX`): a SIGKILLed build leaves its
+    temp file. It removes a `*.tmp` only when old enough to be dead, because removing a
+    live build's temp file fails that build's `os.replace`.
+  - Recency needs a signal the pager sets (e.g. `os.utime` on read); atime is
+    unreliable on NFS.
+- Converts what the format refuses, in one place, with a test per rule:
+  - key values to text, the same way PR 2's `query` stringifies the values a linked
+    view compares against;
+  - dates and times to a number (UTC epoch ms), so they sort in time order across tz
+    offsets and stay exact in `JSON.parse`; `NaT` to null;
+  - numpy scalars to Python values, and `pd.NA` to `None`.
 - Sized by rule of thumb, not measured (Q11): about 3–5 s for 1000 × 5000 from CSV.
   The phase's test proves correctness, not speed.
 
 **P4 — the pager.**
 
-- A sandbox command with no pandas import. It slices `[i, j)` records out of the cache
-  and returns base64.
-- A missing cache, for example after a reap, is rebuilt transparently.
-- The per-call argv stays tiny: the cache key plus a range.
+- A sandbox command with no pandas import. It reads records out of the cache and
+  returns base64.
+  - A page is a list of positions, not a range: P6 sorts from the index, so a sorted
+    page is scattered positions (`read_groups`).
+  - The exact-values call (`read_exact`) can return `±inf`, which JSON cannot carry;
+    the output encodes it.
+- Any `CacheUnusable` (missing after a reap, cut short, rebuilt since the index was
+  read) is rebuilt transparently.
+- The per-call argv stays tiny: the cache key plus a page's positions (tens of ints).
 
 **P5 — stack and diff.**
 
@@ -101,7 +131,8 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 - A `docs/migrations.md` entry. It is needed because the scratch volume now holds view
   caches, bounded per sandbox by the LRU cap and reaped with the sandbox. The entry
   covers:
-  - scratch sizing;
+  - scratch sizing. A continuous cache is about 9 bytes per cell (1 quantized + 8
+    exact), so 200 × 50 000 cells is about 90 MB, against a 500 MB default cap;
   - the knob;
   - the check that confirms it: open a gallery and see `.home/.cache/views/` in the
     sandbox dir.

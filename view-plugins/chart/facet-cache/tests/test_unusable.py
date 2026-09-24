@@ -1,6 +1,7 @@
 """The pager rebuilds a cache it cannot use (plan-view-plugins-pr4 P4), so every
 way a cache can be unusable must surface as the one error it catches."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from aiws_facet_cache import (
     CategoryScale,
     ContinuousScale,
     Group,
+    read_exact,
     read_index,
     read_records,
     write_cache,
@@ -36,15 +38,30 @@ def test_a_file_of_another_format_is_unusable(tmp_path: Path) -> None:
         read_index(path)
 
 
-@pytest.mark.parametrize("keep", [4, 10, 20, -1])
+@pytest.mark.parametrize("keep", [4, 20, 42, 60, -1])  # magic 0-8, id 8-40, length 40-44
 def test_a_truncated_cache_is_unusable(tmp_path: Path, keep: int) -> None:
-    """Cut in the magic, in the length field, in the header, and in the last
-    record — caught
-    by the index read alone, since a gallery sorts from the index before it
-    reads any page."""
+    """Cut in the magic, in the build id, in the length field, in the header,
+    and in the exact section — caught by the index read alone, since a gallery
+    sorts from the index before it reads any page."""
     path = tmp_path / "c.vcache"
     _write(path)
     path.write_bytes(path.read_bytes()[:keep])
+    with pytest.raises(CacheUnusable):
+        read_index(path)
+
+
+def test_a_cache_cut_in_its_last_record_is_unusable(tmp_path: Path) -> None:
+    """A category cache has no exact section, so its file ends in a record."""
+    path = tmp_path / "c.vcache"
+    write_cache(
+        path,
+        scale=CategoryScale(["x"]),
+        facet=("g",),
+        cells=2,
+        layout={},
+        groups=[Group(key=("a",), sort={}, values=["x", "x"])],
+    )
+    path.write_bytes(path.read_bytes()[:-1])
     with pytest.raises(CacheUnusable):
         read_index(path)
 
@@ -71,6 +88,34 @@ def test_a_cache_rebuilt_after_its_index_was_read_is_unusable(tmp_path: Path, n:
         read_records(path, index, 0, 1)
 
 
+def test_a_rebuild_that_keeps_inode_size_and_mtime_is_still_caught(tmp_path: Path) -> None:
+    """ext4 hands a freed inode straight back and its mtime is coarse, so two
+    rebuilds can leave (inode, size, mtime) exactly as the index saw them —
+    reproduced 2871/3000 times on the dev box. Simulated here by writing the new
+    bytes into the SAME inode and restoring the old mtime."""
+    path = tmp_path / "c.vcache"
+    _write(path, n=5, key="old")
+    index = read_index(path)
+    before = os.stat(path)
+
+    other = tmp_path / "other.vcache"
+    _write(other, n=5, key="new")
+    with path.open("r+b") as f:  # same inode
+        f.write(other.read_bytes())
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = os.stat(path)
+    assert (after.st_ino, after.st_size, after.st_mtime_ns) == (
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+
+    with pytest.raises(CacheUnusable):
+        read_records(path, index, 0, 1)
+    with pytest.raises(CacheUnusable):
+        read_exact(path, index, 0)
+
+
 def test_a_directory_at_the_cache_path_is_unusable(tmp_path: Path) -> None:
     path = tmp_path / "c.vcache"
     path.mkdir()
@@ -82,13 +127,22 @@ def test_a_header_with_the_wrong_types_is_unusable(tmp_path: Path) -> None:
     path = tmp_path / "c.vcache"
     _write(path)
     data = path.read_bytes()
-    path.write_bytes(
-        data.replace(b'"cells":2', b'"cells":"2"').replace(
-            data[8:12], (int.from_bytes(data[8:12], "little") + 2).to_bytes(4, "little")
-        )
-    )
-    with pytest.raises(CacheUnusable):
+    n = int.from_bytes(data[40:44], "little")  # the length field, after magic + build id
+    header = data[44 : 44 + n].replace(b'"cells":2', b'"cells":"2"')
+    assert header != data[44 : 44 + n]
+    path.write_bytes(data[:40] + len(header).to_bytes(4, "little") + header + data[44 + n :])
+    with pytest.raises(CacheUnusable, match="cells"):
         read_index(path)
+
+
+def test_a_cache_cut_short_after_its_index_was_read_is_unusable(tmp_path: Path) -> None:
+    """Same build, fewer bytes: a page must fail, not come back short."""
+    path = tmp_path / "c.vcache"
+    _write(path, n=3)
+    index = read_index(path)
+    path.write_bytes(path.read_bytes()[: index.data_offset + 2])
+    with pytest.raises(CacheUnusable):
+        read_records(path, index, 2, 3)
 
 
 def test_a_category_code_outside_the_labels_is_unusable(tmp_path: Path) -> None:
@@ -125,8 +179,8 @@ def test_a_rewrite_that_fails_while_writing_keeps_the_old_cache_readable(
 ) -> None:
     """Past validation, a write can still fail (disk full): a reader must never
     see the half-written file in the old one's place. (A SIGKILL skips the
-    cleanup and leaves the temp file; the LRU cap removes those — see
-    ``TMP_SUFFIX``.)"""
+    cleanup and leaves the temp file; its ``TMP_SUFFIX`` is for P3's cache cap
+    to sweep.)"""
     path = tmp_path / "c.vcache"
     _write(path, n=5)
 
