@@ -49,6 +49,16 @@ export function projectOntoKeys(
   return out;
 }
 
+function sameMarking(a: Marking, b: Marking): boolean {
+  const cols = Object.keys(b).filter((c) => b[c]!.size > 0);
+  if (cols.length !== Object.keys(a).length) return false;
+  return cols.every((c) => {
+    const x = a[c];
+    const y = b[c]!;
+    return x !== undefined && x.size === y.size && [...y].every((v) => x.has(v));
+  });
+}
+
 function isEmpty(marking: Marking | null): boolean {
   return !marking || Object.values(marking).every((v) => v.size === 0);
 }
@@ -82,6 +92,13 @@ export class MarkingStore {
     opts: { fromPeer?: boolean } = {},
   ): void {
     const had = this.entries.has(name);
+    const held = this.entries.get(name);
+    // The same write again changes nothing, so it tells no one: a view redrawn
+    // with its new lit rows may report the same selection, and re-notifying
+    // would redraw it, and so on without end.
+    if (held && !isEmpty(marking) && held.source === source && sameMarking(held.marking, marking!)) {
+      return;
+    }
     if (isEmpty(marking)) {
       if (!had) return;
       this.entries.delete(name);

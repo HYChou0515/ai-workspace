@@ -136,6 +136,24 @@ describe("MarkingStore", () => {
     expect(snap.get("fail")!.marking.lot!.size).toBe(2);
   });
 
+  it("writing what it already holds notifies no one (breaks write → redraw → write loops)", () => {
+    // A chart redrawn with its new lit rows can report the same selection again;
+    // if that write re-notified, it would redraw, report, write… forever.
+    const s = new MarkingStore();
+    s.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/a.ai.yaml");
+    const cb = vi.fn();
+    s.subscribe("fail", cb);
+    s.subscribeAll(cb);
+    s.subscribeWrites(cb);
+    const before = s.get("fail");
+    s.set("fail", { lot: new Set(["L2", "L1"]) }, "/v/a.ai.yaml");
+    expect(cb).not.toHaveBeenCalled();
+    expect(s.get("fail")).toBe(before);
+    // A different source is a different write.
+    s.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/b.ai.yaml");
+    expect(cb).toHaveBeenCalled();
+  });
+
   it("does not keep the caller's sets — a later mutation cannot change the marking", () => {
     const s = new MarkingStore();
     const lots = new Set(["L1"]);

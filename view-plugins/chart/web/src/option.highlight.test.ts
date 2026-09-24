@@ -36,6 +36,21 @@ describe("highlight", () => {
     expect(s[1].data).toEqual([[2, 6], { value: [4, 8], ...dim }]);
   });
 
+  it("a marking's lit rows replace the spec highlight when given (#847 PR 3)", () => {
+    const spec = {
+      ...base,
+      mark: "scatter",
+      encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative" } },
+    };
+    const a = answer(layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]) }, lit));
+    const marked = toOption(spec, a, { lit: [[true, false, false]] }).option.series as { data: unknown[] }[];
+    expect(marked[0].data).toEqual([[1, 4], { value: [2, 5], ...dim }, { value: [3, 6], ...dim }]);
+    // A null entry means "this layer is not linked": drawn undimmed, the
+    // spec's own highlight notwithstanding.
+    const unlinked = toOption(spec, a, { lit: [null] }).option.series as { data: unknown[] }[];
+    expect(unlinked[0].data).toEqual([[1, 4], [2, 5], [3, 6]]);
+  });
+
   it("dims bars, pie slices and heatmap cells the same way", () => {
     const four = { k: cat(["a", "b", "c", "d"]), v: f64([1, 2, 3, 4]) };
     const bar = {
