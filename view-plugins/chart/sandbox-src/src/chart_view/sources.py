@@ -1,8 +1,8 @@
-"""Reading a chart's `source:` — a table file in the workspace.
+"""Reading a chart's `source:` — a table file in the workspace, or entity records.
 
 The command runs with the workspace as its root. A view file names a source the
 way the file tree shows it, so `/data/a.csv` and `data/a.csv` are the same file.
-(`source: {entity: …}` goes through the platform's reader, not this module.)
+`{entity: …}` goes through the platform's own reader, vendored by aiws-view-sdk.
 """
 
 from __future__ import annotations
@@ -10,10 +10,23 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+from workspace_app.entity.local import read_entity_records
 
 
 class SourceError(ValueError):
     """The source cannot be read."""
+
+
+def read_source(root: Path, source: str | dict[str, str]) -> pd.DataFrame:
+    """A spec's `source:` as a frame: a table file, or `{entity: <type>}`'s
+    records as the entity views project them (`number` plus each field)."""
+    if isinstance(source, str):
+        return read_table(root, source)
+    try:
+        records = read_entity_records(root, source["entity"])
+    except LookupError as e:
+        raise SourceError(str(e)) from e
+    return pd.DataFrame.from_records(records)
 
 
 def read_table(root: Path, source: str) -> pd.DataFrame:

@@ -209,7 +209,7 @@ class EntityStore:
         entity_type = self._catalog.get(type_name)
         paths = await self._fs.ls(self._ws, prefix=f"/{entity_type.records_path}/")
         numbered = sorted((n, p) for p in paths if (n := _record_number(p)) is not None)
-        from ..files.facade import read_all
+        from ..filestore.batch import read_all
 
         blobs = await read_all(self._fs, self._ws, [p for _, p in numbered])
         return [
