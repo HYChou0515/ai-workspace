@@ -222,6 +222,7 @@ export const messages = {
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
   "shownFile.open": { "zh-TW": "開啟", en: "Open" },
+  "shownLayout.files": { "zh-TW": "{n} 個檔案並排", en: "{n} files side by side" },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },
   "entry.sources": { "zh-TW": "來源", en: "Sources" },
   // Permission-disclosure: relevant sources the user can see-exist but not read.
