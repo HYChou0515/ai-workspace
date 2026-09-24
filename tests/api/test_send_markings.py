@@ -51,6 +51,115 @@ def _user_messages(spec, iid):
     return [m for m in conv.messages if m.role == "user"]
 
 
+def _perm_app(holder: dict[str, str]):
+    """An app whose acting user is `holder["id"]` (review round 1, defect 1)."""
+    spec = make_spec(default_user=lambda: holder["id"])
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Capture(),
+        get_user_id=lambda: holder["id"],
+    )
+    return TestClient(app), spec
+
+
+def _restricted_item(spec, **grants):
+    from workspace_app.apps.rca.model import RcaInvestigation
+    from workspace_app.perm import Permission
+
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        return rm.create(
+            RcaInvestigation(
+                title="t",
+                owner="bob",
+                permission=Permission(visibility="restricted", **grants),
+            )
+        ).resource_id
+
+
+def test_a_member_who_may_only_chat_cannot_write_a_file_through_a_marking():
+    """Every other way into the workspace's files asks for a content-write verb;
+    sending a message asks for `converse`. So a marking from someone who may
+    chat but not write is refused on ITS chip — the message still goes."""
+    holder = {"id": "bob"}
+    client, spec = _perm_app(holder)
+    carol = ["user:carol"]
+    iid = _restricted_item(
+        spec, read_meta=carol, read_content=carol, read_chat=carol, converse=carol
+    )
+    holder["id"] = "carol"
+    assert (
+        client.put(f"/a/rca/items/{iid}/files/.markings/fail.json", content=b"x").status_code == 403
+    )
+
+    r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [FAIL]})
+
+    assert r.status_code == 202
+    assert client.get(f"/a/rca/items/{iid}/files/.markings/fail.json").status_code == 404
+    [msg] = _user_messages(spec, iid)
+    [m] = msg.markings
+    assert m.path == "" and m.error is not None
+
+
+def test_adding_a_marking_file_asks_add_content_and_replacing_one_asks_edit_content():
+    holder = {"id": "bob"}
+    client, spec = _perm_app(holder)
+    dan = ["user:dan"]
+    iid = _restricted_item(
+        spec,
+        read_meta=dan,
+        read_content=dan,
+        read_chat=dan,
+        converse=dan,
+        add_content=dan,
+    )
+    holder["id"] = "dan"
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "q1", "markings": [FAIL]})
+    assert client.get(f"/a/rca/items/{iid}/files/.markings/fail.json").status_code == 200
+
+    again = {**FAIL, "columns": {"lot": ["L9"]}}
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "q2", "markings": [again]})
+
+    first, second = _user_messages(spec, iid)
+    assert first.markings[0].error is None
+    assert second.markings[0].error is not None
+    got = client.get(f"/a/rca/items/{iid}/files/.markings/fail.json")
+    assert "L9" not in got.text
+
+
+def test_a_reply_saved_while_the_markings_are_written_is_not_lost(monkeypatch):
+    """Review round 1, defect 2: the route loads the conversation, then the send
+    awaits the marking writes (a cold sandbox can take seconds). A previous
+    turn's reply saved in that window must survive the user message's save."""
+    from workspace_app.api import chat_send
+    from workspace_app.resources.conversation import Message
+
+    cap = _Capture()
+    app, spec = _app(cap)
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+    rm = spec.get_resource_manager(Conversation)
+    real = chat_send.write_markings
+
+    async def slow_write(files, workspace_id, markings, may_write):
+        # Meanwhile, turn 1's on_complete re-reads the thread and saves its reply.
+        [meta] = rm.search_resources(query=None)
+        conv = rm.get(meta.resource_id).data
+        conv.messages.append(Message(role="assistant", content="ANSWER-ONE"))
+        rm.update(meta.resource_id, conv)
+        return await real(files, workspace_id, markings, may_write)
+
+    monkeypatch.setattr(chat_send, "write_markings", slow_write)
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [FAIL]})
+
+    [meta] = rm.search_resources(query=None)
+    contents = [m.content for m in rm.get(meta.resource_id).data.messages]
+    assert "ANSWER-ONE" in contents
+    assert "q" in contents
+
+
 def test_a_sent_marking_is_written_where_the_ai_can_read_it():
     cap = _Capture()
     app, spec = _app(cap)
