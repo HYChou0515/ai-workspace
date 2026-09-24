@@ -1,0 +1,35 @@
+{
+  "view": "chart",
+  "source": "data/particles.parquet",
+  "marking": "lots",
+  "keys": [
+    "lot"
+  ],
+  "mark": {
+    "type": "area",
+    "stack": true,
+    "opacity": 0.6
+  },
+  "encoding": {
+    "x": {
+      "field": "time",
+      "type": "temporal"
+    },
+    "y": {
+      "field": "count",
+      "type": "quantitative",
+      "scale": {
+        "type": "log"
+      }
+    },
+    "color": {
+      "field": "size_bin",
+      "type": "ordinal",
+      "sort": [
+        "small",
+        "medium",
+        "large"
+      ]
+    }
+  }
+}
