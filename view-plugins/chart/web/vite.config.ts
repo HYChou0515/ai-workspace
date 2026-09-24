@@ -1,47 +1,32 @@
 /**
- * The chart plugin's web half.
+ * The chart plugin's web build (#847/#848): ONE ES module, `index.js`, with
+ * React and the view SDK left external — the SPA's import map hands it the
+ * host's copies (a plugin bundling its own React takes the whole app down,
+ * plan check 3). ECharts, ajv and the spec schema ARE bundled: they are this
+ * plugin's own.
  *
- * build — what `view_plugin build` runs (`vite build --outDir <dest>/chart/web`):
- * one ES module, `index.js`, with React and `@aiws/view-sdk` left EXTERNAL so
- * the host's import map hands it the host's single copies (a plugin that
- * bundles its own React takes the whole app down — plan check 3). ECharts,
- * ajv and the schema ARE bundled: they are this plugin's own.
+ * A production build, always: a dev build imports `react/jsx-dev-runtime`,
+ * which the import map does not provide.
  *
- * test — React, the testing library and the SDK resolve to the host's `web/`,
- * the same copies the import map serves at runtime.
+ * `view-plugins/build-web.mjs` runs this with `--outDir <installed>/web`. The
+ * sources and tests are type-checked and run by web/'s tsc + vitest.
  */
-import { resolve } from "node:path";
-
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite";
 
-const host = resolve(__dirname, "../../../web");
-const SHARED = ["react", "react/jsx-runtime", "react-dom", "react-dom/client", "@aiws/view-sdk"];
-
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   plugins: [react()],
-  resolve:
-    command === "build"
-      ? {}
-      : {
-          alias: [
-            { find: "@aiws/view-sdk", replacement: resolve(host, "src/renderers/entity/public.ts") },
-            { find: /^react-dom(\/.*)?$/, replacement: `${resolve(host, "node_modules/react-dom")}$1` },
-            { find: /^react(\/.*)?$/, replacement: `${resolve(host, "node_modules/react")}$1` },
-            {
-              find: /^@testing-library\/react$/,
-              replacement: resolve(host, "node_modules/@testing-library/react"),
-            },
-          ],
-        },
+  mode: "production",
+  // Library mode leaves `process.env.NODE_ENV` in the output, and a browser
+  // has no `process`: ECharts reads it ~200 times for its dev-only checks, so
+  // the plugin threw `process is not defined` on import (found in a real
+  // browser — node-based tests have a `process`, so they could not see it).
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
   build: {
-    outDir: "dist",
-    emptyOutDir: true,
-    lib: { entry: resolve(__dirname, "src/index.ts"), formats: ["es"], fileName: () => "index.js" },
-    rollupOptions: { external: SHARED },
+    lib: { entry: "src/index.ts", formats: ["es"], fileName: () => "index.js" },
+    rollupOptions: {
+      external: ["react", "react/jsx-runtime", "react-dom", "react-dom/client", "@aiws/view-sdk"],
+    },
+    sourcemap: true,
   },
-  test: {
-    environment: "happy-dom",
-    include: ["src/**/*.test.{ts,tsx}"],
-  },
-}));
+});

@@ -20,9 +20,11 @@ import { canon, decodeColumn } from "./wire";
 export type Selection = { source: "brush" | "lasso" | "legend"; layer: number; rows: number[] };
 
 type BrushArea = { brushType: string; coordRange?: unknown };
+/** ECharts' `brushselected` payload. The areas sit INSIDE each batch entry,
+ * beside what they selected — not at the top (ECharts also fires this once
+ * when a brush component is first set up, with no areas). */
 export type BrushSelected = {
-  areas: BrushArea[];
-  batch: { selected: { seriesIndex: number; dataIndex: number[] }[] }[];
+  batch: { areas?: BrushArea[]; selected?: { seriesIndex: number; dataIndex: number[] }[] }[];
 };
 
 function group(source: Selection["source"], pairs: [number, number][]): Selection[] {
@@ -55,8 +57,9 @@ function inside(point: [number, number], area: BrushArea): boolean {
 }
 
 export function selectionFromBrush(event: BrushSelected, built: Built): Selection[] {
-  if (event.areas.length === 0) return [];
-  const source = event.areas.some((a) => a.brushType === "polygon") ? "lasso" : "brush";
+  const areas = event.batch?.[0]?.areas ?? [];
+  if (areas.length === 0) return [];
+  const source = areas.some((a) => a.brushType === "polygon") ? "lasso" : "brush";
   const pairs: [number, number][] = [];
   for (const s of event.batch[0]?.selected ?? []) {
     const map = built.series[s.seriesIndex];
@@ -69,7 +72,7 @@ export function selectionFromBrush(event: BrushSelected, built: Built): Selectio
       for (let c = 0; c < cells.width; c++) {
         const row = cells.rowAt(c, r);
         // Axis values are cell indices; row r from the top is y index height-1-r.
-        if (row >= 0 && event.areas.some((a) => a.coordRange && inside([c, cells.height - 1 - r], a))) {
+        if (row >= 0 && areas.some((a) => a.coordRange && inside([c, cells.height - 1 - r], a))) {
           pairs.push([g.layer, row]);
         }
       }

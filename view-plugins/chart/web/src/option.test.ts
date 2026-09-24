@@ -43,6 +43,34 @@ describe("axes", () => {
     expect(option.yAxis).toMatchObject([{ type: "log" }]);
   });
 
+  it("starts a value axis at zero only where length carries the value", () => {
+    const xy = (mark: unknown, y: object = {}) => ({
+      ...base,
+      mark,
+      encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative", ...y } },
+    });
+    const one = answer(layer("scatter", 1, { a: f64([100]), b: f64([0.3]) }));
+    // A scatter of values near 100 squeezed against a zero it never reaches
+    // hides the claim; a bar's length means nothing without zero.
+    expect(toOption(xy("scatter"), one).option.yAxis).toMatchObject([{ scale: true }]);
+    expect((toOption(xy("bar"), one).option.yAxis as object[])[0]).not.toHaveProperty("scale");
+    expect((toOption(xy("area"), one).option.yAxis as object[])[0]).not.toHaveProperty("scale");
+    expect((toOption(xy("scatter", { scale: { zero: true } }), one).option.yAxis as object[])[0]).not.toHaveProperty(
+      "scale",
+    );
+  });
+
+  it("puts axis names beside their axis, where they are not cut off", () => {
+    const spec = {
+      ...base,
+      mark: "scatter",
+      encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative" } },
+    };
+    const { option } = toOption(spec, answer(layer("scatter", 1, { a: f64([1]), b: f64([2]) })));
+    expect(option.xAxis).toMatchObject([{ name: "a", nameLocation: "middle" }]);
+    expect(option.yAxis).toMatchObject([{ name: "b", nameLocation: "middle" }]);
+  });
+
   it("orders a category axis by sort", () => {
     const enc = (sort: unknown) => ({
       ...base,
@@ -222,6 +250,9 @@ describe("series", () => {
     expect(grids).toHaveLength(1);
     expect(grids[0].cells.width).toBe(3);
     expect(option.xAxis).toMatchObject([{ type: "value", min: -0.5, max: 2.5 }]);
+    // Labels and ticks at the cell centres, not at the -0.5 / 0.5 edges the
+    // axis would place them at by itself (which left every label blank).
+    expect(option.xAxis).toMatchObject([{ axisLabel: { customValues: [0, 1, 2] }, axisTick: { customValues: [0, 1, 2] } }]);
     expect(option.series).toMatchObject([{ type: "custom" }]);
     expect(option.visualMap).toMatchObject([{ min: 0, max: 1 }]);
   });

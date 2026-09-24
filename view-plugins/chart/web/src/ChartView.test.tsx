@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The `view: chart` panel: spec → sandbox `query` → ECharts, with every state
  * visible. The SDK and the ECharts instance are doubles; what they are handed is
@@ -119,12 +120,11 @@ describe("ChartView", () => {
     view();
     act(() =>
       chart.handlers.get("brushselected")?.({
-        areas: [{ brushType: "rect" }],
-        batch: [{ selected: [{ seriesIndex: 0, dataIndex: [0, 1] }] }],
+        batch: [{ areas: [{ brushType: "rect" }], selected: [{ seriesIndex: 0, dataIndex: [0, 1] }] }],
       }),
     );
     expect(screen.getByText("2 selected")).toBeTruthy();
-    act(() => chart.handlers.get("brushselected")?.({ areas: [], batch: [{ selected: [] }] }));
+    act(() => chart.handlers.get("brushselected")?.({ batch: [{ areas: [], selected: [] }] }));
     expect(screen.queryByText(/selected/)).toBeNull();
   });
 
