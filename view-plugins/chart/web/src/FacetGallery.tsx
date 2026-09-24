@@ -14,11 +14,14 @@
  * - A selection is a range of SORTED positions (shift-click, or ranks a–b); it
  *   writes every group in it to the marking, loaded or not (P7). Groups the
  *   marking holds are lit by the platform's `isLit`.
- * - Exit 3 (no usable cache) rebuilds, and once the rebuild answers, refetches
- *   the index — the key is the same, so the cached exit 3 would otherwise stay.
- *   Exit 4 (the cache was rebuilt since the index) refetches the index. Each
- *   failed ANSWER asks its remedy once: the effects are keyed on the answer,
- *   never on objects a render makes anew.
+ * - Recovery is an EPOCH carried in every call's arguments. A failed answer
+ *   (exit 3: no usable cache; exit 4: the cache was rebuilt since the index)
+ *   moves the epoch on, and the args being the query key, the whole chain —
+ *   build, index, pages — is asked again as new queries. Nothing waits on a
+ *   cached answer's identity (a refetch with the same JSON keeps the same data
+ *   object). Only a failure seen AT the current epoch moves it, so any number
+ *   of pages failing together cost one rebuild, and a re-render costs none.
+ *   After MAX_RECOVERIES the gallery stops and shows why.
  */
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -34,6 +37,7 @@ const STALE = 4;
 const TILE = 112; // px, a thumbnail and its label
 const THUMB = 96;
 const FALLBACK_VIEWPORT = { width: 800, height: 600 };
+const MAX_RECOVERIES = 2;
 
 type RunData = { stdout: string; stderr: string; exit_code: number } | undefined;
 
@@ -96,6 +100,7 @@ function Canvas({
 type Shared = {
   index: FacetIndex;
   cacheKey: string;
+  epoch: number;
   scheme: "sequential" | "diverging";
   columns: number;
   lit: boolean[] | null;
@@ -104,7 +109,8 @@ type Shared = {
   onEnlarge: (position: number) => void;
 };
 
-type Remedies = { onStale: () => void; onUnusable: () => void };
+/** Report a failed answer (exit 3 or 4) from the epoch it was asked in. */
+type FailedAt = (epoch: number, why: string) => void;
 
 /** One tile; its thumbnail is painted once per (column, lit), not per render. */
 const Tile = memo(function Tile({
@@ -170,20 +176,19 @@ function Page({
   positions,
   first,
   shared,
-  remedies,
+  failedAt,
 }: {
   positions: number[];
   first: number;
   shared: Shared;
-  remedies: { current: Remedies };
+  failedAt: { current: FailedAt };
 }) {
-  const { index, cacheKey } = shared;
-  const run = useSandboxRun(PLUGIN, "facet_page", { key: cacheKey, build: index.build, positions });
-  // keyed on the ANSWER: one remedy per failed answer, however often we render
+  const { index, cacheKey, epoch } = shared;
+  const run = useSandboxRun(PLUGIN, "facet_page", { key: cacheKey, build: index.build, positions, epoch });
+  const code = run.data?.exit_code;
   useEffect(() => {
-    if (run.data?.exit_code === STALE) remedies.current.onStale();
-    else if (run.data?.exit_code === UNUSABLE) remedies.current.onUnusable();
-  }, [run.data, remedies]);
+    if (code === STALE || code === UNUSABLE) failedAt.current(epoch, run.data?.stderr ?? "");
+  }, [code, epoch, failedAt, run.data]);
   const page = useMemo(() => parse<{ groups: WireColumn[] }>(run.data), [run.data]);
   return (
     <>
@@ -206,10 +211,25 @@ function Page({
   );
 }
 
-function Enlarged({ shared, position, onClose }: { shared: Shared; position: number; onClose: () => void }) {
-  const { index, cacheKey } = shared;
-  const page = useSandboxRun(PLUGIN, "facet_page", { key: cacheKey, build: index.build, positions: [position] });
-  const exact = useSandboxRun(PLUGIN, "facet_exact", { key: cacheKey, build: index.build, position });
+function Enlarged({
+  shared,
+  position,
+  onClose,
+  failedAt,
+}: {
+  shared: Shared;
+  position: number;
+  onClose: () => void;
+  failedAt: { current: FailedAt };
+}) {
+  const { index, cacheKey, epoch } = shared;
+  const page = useSandboxRun(PLUGIN, "facet_page", { key: cacheKey, build: index.build, positions: [position], epoch });
+  const exact = useSandboxRun(PLUGIN, "facet_exact", { key: cacheKey, build: index.build, position, epoch });
+  const codes = [page.data?.exit_code, exact.data?.exit_code];
+  const failed = codes.some((c) => c === STALE || c === UNUSABLE);
+  useEffect(() => {
+    if (failed) failedAt.current(epoch, "");
+  }, [failed, epoch, failedAt]);
   const column = useMemo(() => parse<{ groups: WireColumn[] }>(page.data)?.groups[0], [page.data]);
   const values = useMemo(() => {
     const wire = parse<WireColumn>(exact.data);
@@ -258,39 +278,31 @@ export function FacetGallery({
   const encoding = doc.encoding as { color?: { scale?: { scheme?: "sequential" | "diverging" } } };
   const scheme = encoding.color?.scale?.scheme ?? "sequential";
 
-  const build = useSandboxRun(PLUGIN, "facet_build", { spec: text });
+  const [epoch, setEpoch] = useState(0);
+  const [gaveUp, setGaveUp] = useState<string | null>(null);
+  const build = useSandboxRun(PLUGIN, "facet_build", { spec: text, epoch });
   // parsed once per answer: a fresh object every render would re-run every
   // effect and memo keyed on it
   const built = useMemo(() => parse<{ key: string; build: string; groups: number }>(build.data), [build.data]);
-  const index = useSandboxRun(PLUGIN, "facet_index", { key: built?.key ?? "" }, { enabled: !!built });
+  const index = useSandboxRun(PLUGIN, "facet_index", { key: built?.key ?? "", epoch }, { enabled: !!built });
   const idx = useMemo(() => parse<FacetIndex>(index.data), [index.data]);
 
-  // The run objects are new every render; the remedies read the latest through
-  // refs, and fire from effects keyed on the ANSWERS.
-  const runs = useRef({ build, index });
-  runs.current = { build, index };
-  const recovering = useRef(false);
-  const remedies = useRef<Remedies>({
-    onStale: () => runs.current.index.refetch(),
-    onUnusable: () => {
-      recovering.current = true;
-      runs.current.build.refetch();
-    },
-  });
-  useEffect(() => {
-    if (index.data?.exit_code === UNUSABLE) remedies.current.onUnusable();
-  }, [index.data]);
-  // The rebuild's answer: same key, so the index's cached exit 3 (or a stale
-  // index) stays unless asked again — ask once.
-  const seenBuild = useRef(build.data);
-  useEffect(() => {
-    if (seenBuild.current === build.data) return;
-    seenBuild.current = build.data;
-    if (recovering.current && build.data?.exit_code === 0) {
-      recovering.current = false;
-      runs.current.index.refetch();
+  // A failure at epoch `at` asks for epoch at + 1, and the epoch only ever moves
+  // forward (max): any number of failures from one epoch move it once, and a
+  // late one from an older epoch, already recovered from, moves nothing.
+  const failedAt = useRef<FailedAt>(() => {});
+  failedAt.current = (at, why) => {
+    if (at >= MAX_RECOVERIES) {
+      setGaveUp(why.trim() || "the gallery's cache could not be read");
+      return;
     }
-  }, [build.data]);
+    setEpoch((e) => Math.max(e, at + 1));
+  };
+  const indexCode = index.data?.exit_code;
+  useEffect(() => {
+    if (indexCode === UNUSABLE) failedAt.current(epoch, index.data?.stderr || `exit ${indexCode}`);
+  }, [indexCode, epoch, index.data]);
+
   const [order, setOrder] = useState(facet.sort?.order ?? "ascending");
   const sorted = useMemo(
     () => (idx ? sortedPositions(idx, facet.sort ? { field: facet.sort.field, order } : null) : []),
@@ -360,6 +372,7 @@ export function FacetGallery({
     [],
   );
 
+  if (gaveUp) return <Notice role="alert">{`The gallery could not be opened: ${gaveUp}`}</Notice>;
   if (build.error) return <Notice role="alert">{build.error.message}</Notice>;
   if (build.data && build.data.exit_code !== 0)
     return <Notice role="alert">{build.data.stderr.trim() || `exit ${build.data.exit_code}`}</Notice>;
@@ -371,6 +384,7 @@ export function FacetGallery({
   const shared: Shared = {
     index: idx,
     cacheKey: built.key,
+    epoch,
     scheme,
     columns: Math.max(1, Math.floor(viewport.width / TILE)),
     lit,
@@ -428,12 +442,14 @@ export function FacetGallery({
               positions={sorted.slice(n * perPage, (n + 1) * perPage)}
               first={n * perPage}
               shared={shared}
-              remedies={remedies}
+              failedAt={failedAt}
             />
           ))}
         </div>
       </div>
-      {enlarged !== null && <Enlarged shared={shared} position={enlarged} onClose={() => setEnlarged(null)} />}
+      {enlarged !== null && (
+        <Enlarged shared={shared} position={enlarged} onClose={() => setEnlarged(null)} failedAt={failedAt} />
+      )}
     </div>
   );
 }
