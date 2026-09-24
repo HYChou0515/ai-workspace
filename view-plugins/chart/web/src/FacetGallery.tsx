@@ -190,6 +190,12 @@ function Page({
     if (code === STALE || code === UNUSABLE) failedAt.current(epoch, run.data?.stderr ?? "");
   }, [code, epoch, failedAt, run.data]);
   const page = useMemo(() => parse<{ groups: WireColumn[] }>(run.data), [run.data]);
+  if (run.error)
+    return (
+      <div role="alert" style={{ position: "absolute", left: 0, top: Math.floor(first / shared.columns) * TILE, padding: 8, color: "var(--err)" }}>
+        {run.error.message}
+      </div>
+    );
   return (
     <>
       {positions.map((p, k) => (
@@ -225,11 +231,11 @@ function Enlarged({
   const { index, cacheKey, epoch } = shared;
   const page = useSandboxRun(PLUGIN, "facet_page", { key: cacheKey, build: index.build, positions: [position], epoch });
   const exact = useSandboxRun(PLUGIN, "facet_exact", { key: cacheKey, build: index.build, position, epoch });
-  const codes = [page.data?.exit_code, exact.data?.exit_code];
-  const failed = codes.some((c) => c === STALE || c === UNUSABLE);
+  const failure = [page.data, exact.data].find((d) => d?.exit_code === STALE || d?.exit_code === UNUSABLE);
   useEffect(() => {
-    if (failed) failedAt.current(epoch, "");
-  }, [failed, epoch, failedAt]);
+    if (failure) failedAt.current(epoch, failure.stderr.trim() || `exit ${failure.exit_code}`);
+  }, [failure, epoch, failedAt]);
+  const httpError = page.error ?? exact.error;
   const column = useMemo(() => parse<{ groups: WireColumn[] }>(page.data)?.groups[0], [page.data]);
   const values = useMemo(() => {
     const wire = parse<WireColumn>(exact.data);
@@ -254,7 +260,13 @@ function Enlarged({
           Close
         </button>
       </div>
-      {image ? <Canvas image={image} size={384} onHover={setAt} /> : <Notice>Loading…</Notice>}
+      {httpError ? (
+        <Notice role="alert">{httpError.message}</Notice>
+      ) : image ? (
+        <Canvas image={image} size={384} onHover={setAt} />
+      ) : (
+        <Notice>Loading…</Notice>
+      )}
       <div style={{ fontSize: 12 }}>
         {hovered === null || hovered === undefined ? "Hover a cell for its exact value" : `value: ${String(hovered)}`}
       </div>
@@ -302,6 +314,11 @@ export function FacetGallery({
   useEffect(() => {
     if (indexCode === UNUSABLE) failedAt.current(epoch, index.data?.stderr || `exit ${indexCode}`);
   }, [indexCode, epoch, index.data]);
+  // the build itself can find its fresh cache gone before it reads it back
+  const buildCode = build.data?.exit_code;
+  useEffect(() => {
+    if (buildCode === UNUSABLE) failedAt.current(epoch, build.data?.stderr || `exit ${buildCode}`);
+  }, [buildCode, epoch, build.data]);
 
   const [order, setOrder] = useState(facet.sort?.order ?? "ascending");
   const sorted = useMemo(
@@ -324,10 +341,15 @@ export function FacetGallery({
 
   const scroller = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, ...FALLBACK_VIEWPORT });
+  // where the person had scrolled: a recovery reloads build and index, which
+  // unmounts the scroller; the new one opens where the old one was
+  const savedTop = useRef(0);
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    if (el.scrollTop === 0 && savedTop.current > 0) el.scrollTop = savedTop.current;
     const measure = () => {
+      savedTop.current = el.scrollTop;
       const next = {
         top: el.scrollTop,
         width: el.clientWidth || FALLBACK_VIEWPORT.width,
@@ -374,9 +396,10 @@ export function FacetGallery({
 
   if (gaveUp) return <Notice role="alert">{`The gallery could not be opened: ${gaveUp}`}</Notice>;
   if (build.error) return <Notice role="alert">{build.error.message}</Notice>;
-  if (build.data && build.data.exit_code !== 0)
+  if (build.data && build.data.exit_code !== 0 && build.data.exit_code !== UNUSABLE)
     return <Notice role="alert">{build.data.stderr.trim() || `exit ${build.data.exit_code}`}</Notice>;
   if (!built) return <Notice>Building the gallery in the sandbox…</Notice>;
+  if (index.error) return <Notice role="alert">{index.error.message}</Notice>;
   if (index.data && index.data.exit_code !== 0 && index.data.exit_code !== UNUSABLE)
     return <Notice role="alert">{index.data.stderr.trim() || `exit ${index.data.exit_code}`}</Notice>;
   if (!idx) return <Notice>Opening the gallery…</Notice>;
