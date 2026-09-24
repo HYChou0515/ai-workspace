@@ -27,6 +27,22 @@ COPY web/ ./
 ARG BASE_PATH=/
 RUN VITE_BASE_PATH="$BASE_PATH" pnpm run build   # → /web/dist
 
+# ---- stage 1b: the runtime view plugins (#847/#848) ----
+# Each `view-plugins/<name>/` is built by the ONE shared script into
+# /out/<name>/{plugin.json, web/index.js, skill/, scenarios/} and copied into
+# the app below at its default plugin dir. `csv-table` is one of them — it left
+# the SPA bundle, so an image built around this stage loses that view kind.
+# Web halves only: this is the API image, and under `sandbox.kind: http` a
+# plugin's sandbox half lives in sandbox-host, not here.
+FROM node:22-bookworm-slim AS view-plugins
+WORKDIR /src
+RUN npm install -g pnpm@9
+COPY view-plugins/ ./view-plugins/
+RUN mkdir -p /out \
+    && for d in view-plugins/*/; do \
+         if [ -f "$d/plugin.json" ]; then node view-plugins/build-web.mjs "$d" /out || exit 1; fi; \
+       done
+
 # ---- stage 2: backend + bundled SPA ----
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS app
 ENV UV_COMPILE_BYTECODE=1 \
@@ -71,6 +87,10 @@ COPY sample-workflows/ ./sample-workflows/
 
 # create_app mounts <repo>/web/dist at /; here <repo> == /app.
 COPY --from=web /web/dist ./web/dist
+# #847/#848: the view plugins, at the default `view_plugins.dir`
+# (<repo>/.view-plugins). An operator mounting their own dir instead must carry
+# `csv-table` into it too (docs/migrations.md).
+COPY --from=view-plugins /out ./.view-plugins
 
 # Login-shell PATH guard, for `sandbox.kind: local` — the app then runs the
 # agent's `exec` in THIS image, unjailed, and `bash -lc "python3 …"` loses the

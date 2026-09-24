@@ -1,5 +1,6 @@
 /**
- * `view: csv-table` — the worked example a maintainer copies (#698).
+ * `view: csv-table` — the worked example a plugin author copies (#698; a
+ * runtime plugin since #847/#848).
  *
  * It is deliberately the NON-entity shape, because that is the path this repo
  * opened: it declares no `entity:`, so nothing about the item's entity types
@@ -17,13 +18,16 @@
  * `viewParamString`, which hand back the original document (so a key of yours
  * that collides with a platform one still reads the way you wrote it).
  *
- * Everything here comes from `renderers/entity/public` — see that module for
- * why, and `docs/view-kind-authoring.md` for the guide this file mirrors.
+ * Everything here comes from `@aiws/view-sdk` — the host's public barrel,
+ * reached through the import map — see `docs/view-kind-authoring.md` for the
+ * guide this file mirrors.
  */
 
-import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer, viewParamString } from "../renderers/entity/public";
+import type { ReactNode } from "react";
 
-function Notice({ children }: { children: React.ReactNode }) {
+import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer, viewParamString } from "@aiws/view-sdk";
+
+function Notice({ children }: { children: ReactNode }) {
   return (
     <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
       {children}

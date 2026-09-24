@@ -1,0 +1,13 @@
+{
+  "//": "Only for esbuild's JSX settings during `vite build`. The plugin's sources are type-checked by web/'s `tsc`, against the real @aiws/view-sdk barrel (web/tsconfig.json `include`).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}

@@ -141,3 +141,27 @@ export function sharedModules(): Plugin {
     },
   };
 }
+
+/** Resolve a bare import made by a file under the repo's `view-plugins/`
+ * (#847/#848): from THIS package first, then — if this package lacks it — the
+ * normal way, from the plugin's own `node_modules`. A plugin's sources and
+ * tests are type-checked and tested here, against this package's React, SDK
+ * barrel and test libraries, which is why this package wins; a plugin's own
+ * runtime dependencies (a chart library) are found in its own install. The
+ * tsconfig `paths` `*` entry is the type-checker's half of the same rule — tsc
+ * tries `paths` first and falls back to walking up from the importing file.
+ * So a plugin must not depend on a DIFFERENT version of a package this one
+ * already has: it would be tested against this one and shipped with its own. */
+export function pluginSourcesResolveFromHere(): Plugin {
+  const pluginsDir = resolve(__dirname, "..", "..", "view-plugins");
+  const anchor = resolve(__dirname, "..", "index.html");
+  return {
+    name: "aiws-plugin-sources-resolve-from-web",
+    enforce: "pre",
+    async resolveId(id, importer, options) {
+      if (!importer || !importer.startsWith(pluginsDir)) return null;
+      if (id.startsWith(".") || id.startsWith("/") || id.startsWith("\0")) return null;
+      return (await this.resolve(id, anchor, { ...options, skipSelf: true })) ?? null;
+    },
+  };
+}

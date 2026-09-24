@@ -21,6 +21,11 @@ build/
 .claude/settings.local.json
 .workspace-tools/
 .workspace-tools-uvrun/
+.workspace-tools-with-view-plugins/
+# #847/#848: installed runtime view plugins (`make view-plugins`) and each
+# plugin package's own build deps.
+.view-plugins/
+view-plugins/*/web/node_modules/
 
 # Per-deploy config (copy from config.example.yaml).  See factories.Settings.
 /config.yaml

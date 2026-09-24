@@ -279,6 +279,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # #847/#848: web/'s tsc + vitest also cover view-plugins/*/web/src, and a
+      # plugin's own runtime deps (a chart library) come from its own install.
+      - name: Install view-plugin dependencies
+        working-directory: .
+        run: |
+          for d in view-plugins/*/web; do
+            if [ -f "$d/pnpm-lock.yaml" ]; then (cd "$d" && pnpm install --frozen-lockfile) || exit 1; fi
+          done
+
       - name: Type check
         run: pnpm run typecheck
 
@@ -287,6 +296,14 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      # The same script the image's `view-plugins` stage runs.
+      - name: Build view plugins
+        working-directory: .
+        run: |
+          for d in view-plugins/*/; do
+            if [ -f "$d/plugin.json" ]; then node view-plugins/build-web.mjs "$d" "$RUNNER_TEMP/view-plugins" || exit 1; fi
+          done
 
       - name: Upload frontend coverage to Codecov
         uses: codecov/codecov-action@v5

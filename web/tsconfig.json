@@ -16,9 +16,14 @@
     "useDefineForClassFields": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "@aiws/view-sdk": ["./src/renderers/entity/public.ts"],
+      "*": ["./node_modules/@types/*", "./node_modules/*"]
+    }
   },
-  "include": ["src"],
+  "//include": "view-plugins/*/web/src: the runtime view plugins are type-checked HERE, against the real SDK barrel (`paths`), so a change to public.ts that breaks a shipped plugin is a red typecheck rather than a broken panel. Every other bare import (`*`) is mapped to this package's node_modules too: a plugin file lives outside it.",
+  "include": ["src", "../view-plugins/*/web/src"],
   "//exclude": "autocrud/ and routes/ are specstar's `autocrud` codegen output (a standalone Mantine + TanStack Router admin UI with its own entry). Our app (App.tsx, react-router-dom) never imports them; they pull deps we don't install and aren't strict-clean. Kept on disk as a schema/query reference, excluded from our typecheck + build so `pnpm run build` stays green. Re-include once/if the admin UI is wired up.",
   "exclude": ["src/autocrud", "src/routes"]
 }

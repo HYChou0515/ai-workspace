@@ -43,3 +43,11 @@ release:
 	echo "✅ 已 commit \"bump $$new\" 並建立本地 tag $$new。接著執行:"; \
 	echo "     git push origin HEAD --follow-tags"; \
 	echo "   → .github/workflows/release.yml 會自動建立 GitHub Release。"
+
+# #847/#848: install the repo's runtime view plugins into the default plugin dir
+# (`<repo>/.view-plugins`, what `view_plugins.dir` resolves to when unset) — the
+# local-dev twin of the image's `view-plugins` stage, through the same script,
+# plus each plugin's `sandbox-src/` prebuilt for `sandbox.kind: local`.
+.PHONY: view-plugins
+view-plugins:
+	@uv run python -m workspace_app.view_plugin build --all view-plugins .view-plugins

@@ -18,12 +18,8 @@
  * See `docs/view-kind-authoring.md`.
  */
 
-import { registerViewKind } from "../renderers/entity/public";
-import { CsvTableView } from "./CsvTableView";
-
-registerViewKind({
-  kind: "csv-table",
-  Component: CsvTableView,
-  // No `needsEntity` — this kind reads a workspace file, so a view file using
-  // it declares no `entity:` and the entity props arrive empty.
-});
+// Registers nothing in this repo since #847/#848: `csv-table`, the example that
+// lived here, is a RUNTIME plugin now (`view-plugins/csv-table/`). The channel
+// stays — a build that carries its own second-party kinds (EE does) adds its
+// `registerViewKind` calls here, importing `../renderers/entity/public` only.
+export {};
