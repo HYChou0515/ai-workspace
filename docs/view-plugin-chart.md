@@ -52,7 +52,8 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   這份 skill 只有一個檔案，改完**下一輪對話就生效**，不需要 Refresh 或重 build。
   情境不計分，只是讓你在自己的模型上比較改前改後。
 - **prompt 成本**：凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多兩樣東西：
-  - `## Available views` 兩行，含標題約 160 字元；
-  - skill 索引一行，229 字元。
+  - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有宣告
+    views，所以這整段是因為 chart 才出現；
+  - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文約 4.8k 字元，只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文約 5.0k 字元，只在 AI `read_skill('chart')` 時才載入。
