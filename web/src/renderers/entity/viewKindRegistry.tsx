@@ -66,6 +66,12 @@ export function registerViewKind(def: ViewRenderer): void {
   registry.set(def.kind, def);
 }
 
+/** Whether a kind is registered. For the runtime plugin loader (#847/#848) —
+ * not re-exported from `public.ts`: a plug-in has no reason to ask. */
+export function hasViewKind(kind: string): boolean {
+  return registry.has(kind);
+}
+
 /** Remove a kind. Test-only seam, so the module-level registry doesn't leak
  * between cases — deliberately NOT re-exported from `public.ts`, or the
  * duplicate check above would be opt-out for the very code it guards against. */

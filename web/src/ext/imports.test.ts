@@ -189,6 +189,18 @@ describe("the entry point still loads ext/", () => {
     expect(scanImports(readFileSync(MAIN, "utf-8"), "main.tsx")).toContain("./ext");
   });
 
+  it("renders only once the runtime view plugins have loaded (#847/#848)", () => {
+    // The same reason as `./ext`: a plugin registers its kinds on import, and
+    // the registry is a plain map. The render is the loader's continuation.
+    const text = readFileSync(MAIN, "utf-8");
+    expect(scanImports(text, "main.tsx")).toContain("./viewPlugins/loader");
+    expect(text).toMatch(/loadViewPlugins\(\)\.finally\(\(\) => mount\(root\)\)/);
+    const mountDef = text.indexOf("function mount(");
+    const render = text.indexOf("createRoot(");
+    expect(mountDef).toBeGreaterThan(-1);
+    expect(render).toBeGreaterThan(mountDef); // createRoot lives inside mount()
+  });
+
   it("imports it BEFORE the first render, since the registry is a plain map", () => {
     const text = readFileSync(MAIN, "utf-8");
     const wiring = text.indexOf('import "./ext"');
