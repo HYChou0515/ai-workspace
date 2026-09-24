@@ -117,11 +117,13 @@ class ContinuousScale:
                     v = float(v)
                 except OverflowError:
                     raise ValueError(f"cell value {v} does not fit a float") from None
-            if v is None or math.isnan(v):  # pandas' missing cell is NaN
+            # pandas' missing cell is NaN; +/-inf is missing too, as PR 2's q8 wire
+            # codes it, so a thumbnail and the full view paint the same pixels
+            if v is None or not math.isfinite(v):
                 out.append(MISSING)
             elif span <= 0 or v <= self.lo:
                 out.append(0)
-            elif v >= self.hi:  # also +inf, which round() cannot take
+            elif v >= self.hi:
                 out.append(LEVELS)
             else:
                 out.append(round((v - self.lo) / span * LEVELS))
