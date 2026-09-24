@@ -178,6 +178,26 @@ describe("ChartView on a named marking", () => {
     expect(store.get("fail")).toBeDefined();
   });
 
+  it("follows the header's choice over the file: detached, it writes nothing", () => {
+    const store = new MarkingStore();
+    sdk.viewDocument.mockImplementation((s: { __doc: unknown }) => s.__doc);
+    render(
+      <MarkingProvider store={store}>
+        <ChartView
+          spec={{ __doc: docOn("fail") } as never}
+          marking={null}
+          path="/v/a.ai.yaml"
+          type={null}
+          entities={[]}
+          onCreate={() => {}}
+          onPatch={() => {}}
+        />
+      </MarkingProvider>,
+    );
+    brush(charts.made[0]!, [0]);
+    expect(store.names()).toEqual([]);
+  });
+
   it("clearing the brush the person drew clears the marking", () => {
     const store = new MarkingStore();
     mount(store, [docOn("fail")]);
