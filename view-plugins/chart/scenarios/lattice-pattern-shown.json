@@ -1,0 +1,14 @@
+{
+  "name": "lattice-pattern-shown",
+  "note": "A spatial-pattern claim over a 2-D lattice. The shown file should use mark: grid with an aggregate grouped by die_x, die_y \u2014 read it in _transcript.json; the expect can only see that a chart was shown.",
+  "data": [
+    "dies.csv"
+  ],
+  "prompt": "Across all lots in dies.csv, where on the die lattice do failures concentrate?",
+  "expect": {
+    "must_call": [
+      "write_file",
+      "show_file"
+    ]
+  }
+}
