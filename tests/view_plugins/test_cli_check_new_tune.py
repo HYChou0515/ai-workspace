@@ -41,10 +41,28 @@ def test_a_production_build_with_externals_passes(tmp_path):
 
 @pytest.mark.parametrize("cjs", ["react.production.js", "react-jsx-runtime.production.js"])
 def test_a_build_carrying_its_own_react_is_refused(tmp_path, cjs):
-    """The fixture IS React's own shipped code, as a bundler would inline it."""
+    """The fixture IS React's own shipped code, as a bundler would inline it —
+    read from web/'s install, which only a checkout with `pnpm install` has (the
+    python CI job does not; the marker test below runs everywhere)."""
+    if not (WEB_REACT / cjs).is_file():
+        pytest.skip("web/node_modules not installed")
     js = (WEB_REACT / cjs).read_text()
     [err] = check_plugin(_installed(tmp_path, "leaky", js)).errors
     assert "own copy of React" in err and "external" in err.lower()
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE",  # react 19
+        "__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED",  # react 18
+        "react.transitional.element",  # the jsx runtime's element symbol
+    ],
+)
+def test_each_bundled_react_marker_is_refused(tmp_path, marker):
+    js = f'const x = "{marker}";\n'
+    [err] = check_plugin(_installed(tmp_path, "leaky", js)).errors
+    assert "own copy of React" in err
 
 
 def test_a_development_build_is_refused(tmp_path):
