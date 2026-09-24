@@ -67,6 +67,7 @@ from workspace_app.observability.setup import install_llm_logging
 from workspace_app.quota.limits import resolve_discovered_apps
 from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
+from workspace_app.view_plugins.discovery import discover_view_plugins, resolve_plugins_dir
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -153,6 +154,14 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
     # `uv run`, so editing a tool takes effect immediately. The bundles are
     # built fresh at startup into a sibling dir and the sandbox is forced
     # non-isolated (handled in get_sandbox).
+    # #847/#848: the operator's runtime view plugins. Strict like the tool
+    # discovery below — a malformed plugin refuses boot, naming it — but a
+    # missing dir is simply "no plugins".
+    with boot_step("discover view plugins"):
+        view_plugins_dir = resolve_plugins_dir(settings.view_plugins)
+        view_plugins = discover_view_plugins(view_plugins_dir)
+        if view_plugins:
+            print(f"  view plugins: {', '.join(p.name for p in view_plugins)} ← {view_plugins_dir}")
     tools_root = PREBUILT_DIR
     with boot_step("discover tool packages"):
         if PACKAGES and settings.tools.mode == "uv-run":
@@ -334,6 +343,7 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             kb_cluster_sweep_seconds=settings.kb.cluster.sweep_interval_seconds,
             monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
             root_path=settings.server.root_path,
+            view_plugins=view_plugins,
             cors_allowed_origins=settings.server.cors_allowed_origins,
             read_file_max_lines=settings.read_file.max_lines,
             read_file_max_chars=settings.read_file.max_chars,

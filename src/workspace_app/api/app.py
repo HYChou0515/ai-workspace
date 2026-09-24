@@ -66,6 +66,7 @@ from ..tooling.external import prewarm_external_tools
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
+from ..view_plugins import ViewPlugin
 from ..workcalendar import OffHoursCalendar
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
@@ -628,6 +629,9 @@ def create_app(
     # the caller's identity is the shared session cookie, which needs
     # `allow_credentials`, and browsers refuse to pair that with a `*` wildcard.
     cors_allowed_origins: Sequence[str] = (),
+    # #847/#848: the operator's runtime view plugins, discovered (strictly) by
+    # the composition root. Empty ⇒ no plugins, which is every test's default.
+    view_plugins: Sequence[ViewPlugin] = (),
 ) -> FastAPI:
     logger.info(
         "boot: composing app (run_consumers=%s, host_managed_durable=%s)",
@@ -1592,6 +1596,7 @@ def create_app(
     # closure, so without a seam the only way to assert "this is a cache, not a
     # map" is not to. `app.state` is where this file already puts such handles.
     app.state.item_facts = _item_facts
+    app.state.view_plugins = tuple(view_plugins)
     app.state.ingestor = ingestor
     # #312: the background job coordinators are built by the shared
     # `build_coordinators` composition root — the SAME one the standalone worker

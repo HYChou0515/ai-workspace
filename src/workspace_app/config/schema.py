@@ -1477,6 +1477,19 @@ class GoalSettings:
     goal read as exhausted the next morning."""
 
 
+# ─── view_plugins (#847/#848: runtime `*.ai.yaml` renderer plugins) ────
+@dataclass(frozen=True)
+class ViewPluginsSettings:
+    """Where the operator installs runtime view plugins.
+
+    ``dir`` empty (the default) ⇒ ``$WORKSPACE_VIEW_PLUGINS_DIR`` if set, else
+    ``<repo>/.view-plugins`` — the same shape as ``.workspace-tools``. A dir that
+    does not exist means no plugins; a malformed plugin in it refuses boot,
+    naming the plugin (``view_plugins.discover_view_plugins``)."""
+
+    dir: str = ""
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1505,3 +1518,4 @@ class Settings:
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     failover: FailoverSettings = field(default_factory=FailoverSettings)
     chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)
+    view_plugins: ViewPluginsSettings = field(default_factory=ViewPluginsSettings)

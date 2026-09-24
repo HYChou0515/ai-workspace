@@ -72,6 +72,7 @@ from .schema import (
     ServerSettings,
     Settings,
     ToolsSettings,
+    ViewPluginsSettings,
     WikiSettings,
 )
 
@@ -739,6 +740,8 @@ _TOP_SCHEMA: dict[str, Any] = {
     # whitelisted AND built below, or the route would enforce the bundled
     # defaults whatever the operator wrote.
     "chat_video": _dataclass_keys(ChatVideoSettings),
+    # #847/#848: where runtime view plugins are installed.
+    "view_plugins": _dataclass_keys(ViewPluginsSettings),
 }
 
 
@@ -1109,6 +1112,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         ),
         failover=_build_failover(d["failover"]),
         chat_video=_build(ChatVideoSettings, d["chat_video"]),
+        view_plugins=_build(ViewPluginsSettings, d["view_plugins"]),
     )
 
 
