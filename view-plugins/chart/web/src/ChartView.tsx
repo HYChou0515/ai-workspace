@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } from "@aiws/view-sdk";
 
 import { createChart, type Chart } from "./echarts";
+import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, toOption } from "./option";
 import { highlightMarking, markingLit, selectionMarking } from "./marking";
 import type { Cells, RasterImage } from "./raster";
@@ -199,24 +200,26 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   const text = JSON.stringify(viewDocument(spec));
   const doc = useMemo(() => JSON.parse(text) as Record<string, unknown>, [text]);
   const errors = useMemo(() => specErrors(doc), [doc]);
-  const run = useSandboxRun(PLUGIN, "query", { spec: text }, { enabled: errors.length === 0 });
+  // A `facet:` spec is a gallery (#848): it builds a cache instead of a query.
+  const faceted = doc.facet !== undefined;
+  const run = useSandboxRun(PLUGIN, "query", { spec: text }, { enabled: errors.length === 0 && !faceted });
   const answer = useMemo(
     () => (run.data && run.data.exit_code === 0 ? readAnswer(run.data.stdout) : null),
     [run.data],
   );
 
+  // The header's choice (#847 P3) when the platform manages it; else the file's.
+  const fromFile = typeof doc.marking === "string" && doc.marking ? doc.marking : null;
+  const marking = chosen !== undefined ? chosen : fromFile;
+
   let body: ReactNode;
   if (errors.length) body = <Notice role="alert">{`This chart file does not fit the chart spec:\n${errors.join("\n")}`}</Notice>;
+  else if (faceted) body = <FacetGallery doc={doc} text={text} marking={marking} source={path ?? null} />;
   else if (run.error) body = <Notice role="alert">{run.error.message}</Notice>;
   else if (run.data && run.data.exit_code !== 0)
     body = <Notice role="alert">{run.data.stderr.trim() || run.data.stdout.trim() || `exit ${run.data.exit_code}`}</Notice>;
   else if (typeof answer === "string") body = <Notice role="alert">{answer}</Notice>;
-  else if (answer) {
-    // The header's choice (#847 P3) when the platform manages it; else the file's.
-    const fromFile = typeof doc.marking === "string" && doc.marking ? doc.marking : null;
-    const marking = chosen !== undefined ? chosen : fromFile;
-    body = <Plot doc={doc} answer={answer} marking={marking} source={path ?? null} />;
-  }
+  else if (answer) body = <Plot doc={doc} answer={answer} marking={marking} source={path ?? null} />;
   else body = <Notice>Computing the chart in the sandbox…</Notice>;
 
   return (
