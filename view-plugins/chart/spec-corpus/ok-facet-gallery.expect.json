@@ -1,0 +1,31 @@
+{
+  "view": "chart",
+  "title": "Every wafer, worst first",
+  "source": "data/dies.parquet",
+  "facet": {
+    "field": [
+      "lot",
+      "wafer"
+    ],
+    "sort": {
+      "field": "fail_rate",
+      "order": "descending"
+    },
+    "cache_mb": 200
+  },
+  "mark": "grid",
+  "encoding": {
+    "x": {
+      "field": "die_x",
+      "type": "ordinal"
+    },
+    "y": {
+      "field": "die_y",
+      "type": "ordinal"
+    },
+    "color": {
+      "field": "bin",
+      "type": "nominal"
+    }
+  }
+}

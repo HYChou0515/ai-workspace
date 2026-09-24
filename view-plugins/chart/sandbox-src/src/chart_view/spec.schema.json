@@ -39,6 +39,53 @@
     "transform": {
       "$ref": "#/$defs/transforms"
     },
+    "facet": {
+      "type": "object",
+      "description": "Draw one small grid map per group (a gallery), grouped by these columns; mark must be grid.",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "properties": {
+        "field": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/name"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/name"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        },
+        "sort": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "field"
+          ],
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/name"
+            },
+            "order": {
+              "enum": [
+                "ascending",
+                "descending"
+              ]
+            }
+          }
+        },
+        "cache_mb": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "bin_threshold": {
       "type": "integer",
       "minimum": 1
@@ -66,6 +113,44 @@
     },
     {
       "$ref": "#/$defs/datumChannels"
+    },
+    {
+      "if": {
+        "required": [
+          "facet"
+        ]
+      },
+      "then": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "anyOf": [
+              {
+                "const": "grid"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "grid"
+                  }
+                }
+              }
+            ],
+            "errorMessage": {
+              "anyOf": "grid, since facet draws a gallery of grid maps"
+            }
+          }
+        },
+        "errorMessage": {
+          "required": "facet draws a gallery of grid maps: it needs mark: grid"
+        }
+      }
     }
   ],
   "$defs": {
