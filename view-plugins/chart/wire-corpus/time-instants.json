@@ -1,0 +1,13 @@
+{
+  "kind": "time",
+  "values": [
+    "2024-01-01T00:00:00Z",
+    "2024-06-30T12:34:56.789Z",
+    null,
+    "1969-12-31T23:59:59Z"
+  ],
+  "wire": {
+    "kind": "time",
+    "data": "AABAHyXMeEIAUMlCkgZ5QgAAAAAAAPh/AAAAAABAj8A="
+  }
+}

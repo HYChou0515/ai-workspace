@@ -29,6 +29,7 @@ dev = ["pytest>=8", "ruff>=0.6", "coverage>=7", "ty", "types-pyyaml"]
 # Self-contained rootdir so `pytest` doesn't walk up into the parent repo's config.
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 source = ["chart_view"]
