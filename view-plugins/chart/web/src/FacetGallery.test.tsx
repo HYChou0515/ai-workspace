@@ -70,8 +70,10 @@ const fail = (code: number) => ({ stdout: "", stderr: `exit ${code}`, exit_code:
 let answers: { build?: Run["data"]; index?: Run["data"]; page?: (positions: number[]) => Run["data"] };
 const write = vi.fn();
 let INDEX_OVER: Partial<FacetIndex> = {};
-let failUntil = { index: 0, page: 0, exact: 0 };
-let failCode = { index: 3, page: 3, exact: 3 };
+let failUntil = { build: 0, index: 0, page: 0, exact: 0 };
+let failCode = { build: 3, index: 3, page: 3, exact: 3 };
+/** The epoch whose build is still loading (no answer yet); -1 for none. */
+let loadingBuildAt = -1;
 const answerCache = new Map<string, Run["data"]>();
 const epochsSeen: number[] = [];
 let exactValues: number[] = [1.5];
@@ -89,8 +91,9 @@ beforeEach(() => {
     index: ok(INDEX),
     page: (positions) => ok({ build: INDEX.build, groups: positions.map(() => q8([10], 0, 254)) }),
   };
-  failUntil = { index: 0, page: 0, exact: 0 };
-  failCode = { index: 3, page: 3, exact: 3 };
+  failUntil = { build: 0, index: 0, page: 0, exact: 0 };
+  failCode = { build: 3, index: 3, page: 3, exact: 3 };
+  loadingBuildAt = -1;
   answerCache.clear();
   epochsSeen.length = 0;
   sdk.useSandboxRun.mockImplementation((_plugin: string, cmd: string, args: Record<string, unknown>, opts?: { enabled?: boolean }): Run => {
@@ -102,10 +105,11 @@ beforeEach(() => {
     // the real hook hands back ONE data object per (command, args) -- as the
     // query cache does -- so a double that made a new one each render would
     // hide an effect keyed on it
+    if (cmd === "facet_build" && epoch === loadingBuildAt) return { ...base, data: undefined };
     const cacheKey = `${cmd} ${JSON.stringify(args)}`;
     if (!answerCache.has(cacheKey)) {
       let data: Run["data"];
-      if (cmd === "facet_build") data = answers.build;
+      if (cmd === "facet_build") data = epoch < failUntil.build ? fail(failCode.build) : answers.build;
       else if (cmd === "facet_index") data = epoch < failUntil.index ? fail(failCode.index) : answers.index;
       else if (cmd === "facet_page")
         data = epoch < failUntil.page ? fail(failCode.page) : answers.page?.(args.positions as number[]);
@@ -226,6 +230,66 @@ describe("FacetGallery", () => {
     view();
     expect(Math.max(...epochsSeen)).toBe(2);
     expect(screen.getByRole("alert").textContent).toContain("exit 3");
+  });
+
+  it("starts over — epoch and all — when the spec is edited, even after giving up", () => {
+    failUntil.index = 99;
+    const { rerender } = view();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    failUntil.index = 0;
+    answerCache.clear();
+    epochsSeen.length = 0;
+    sdk.viewDocument.mockReturnValue({ ...DOC, title: "edited" });
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/1000 groups/)).toBeTruthy();
+    expect(Math.max(...epochsSeen)).toBe(0);
+  });
+
+  it("recovers a build that answers exit 3 (its cache went between write and read)", () => {
+    failUntil.build = 1;
+    view();
+    expect(calls("facet_build").some((c) => c[2].epoch === 1)).toBe(true);
+    expect(screen.getByText(/1000 groups/)).toBeTruthy();
+  });
+
+  it.each(["facet_index", "facet_page"])("shows %s's HTTP error rather than waiting forever", (cmd) => {
+    const real = sdk.useSandboxRun.getMockImplementation()!;
+    sdk.useSandboxRun.mockImplementation((plugin: string, c: string, args: Record<string, unknown>, opts?: { enabled?: boolean }) =>
+      c === cmd && (opts?.enabled ?? true)
+        ? { data: undefined, error: new Error(`view plugin "chart" could not run "${cmd}": HTTP 502`), isLoading: false, refetch: vi.fn() }
+        : real(plugin, c, args, opts),
+    );
+    view();
+    expect(screen.getByRole("alert").textContent).toContain("HTTP 502");
+  });
+
+  it("gives up an enlarged group with the sandbox's reason, not a generic one", () => {
+    failUntil.exact = 99;
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    expect(screen.getByRole("alert").textContent).toContain("exit 3");
+  });
+
+  it("keeps the scroll position through a recovery", () => {
+    const { rerender } = view();
+    const before = document.querySelector("[data-gallery-scroll]") as HTMLElement;
+    before.scrollTop = 2400;
+    act(() => {
+      fireEvent.scroll(before);
+    });
+    // a page fails: the next epoch's build is still loading, so the gallery is
+    // replaced by a notice and its scroller unmounts ...
+    failUntil.page = 1;
+    loadingBuildAt = 1;
+    answerCache.clear();
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(document.querySelector("[data-gallery-scroll]")).toBeNull();
+    // ... and when the build answers, the scroller comes back where it was
+    loadingBuildAt = -1;
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    const after = document.querySelector("[data-gallery-scroll]") as HTMLElement;
+    expect(after.scrollTop).toBe(2400);
   });
 
   it("recovers an enlarged group whose exact values come back exit 3", () => {
