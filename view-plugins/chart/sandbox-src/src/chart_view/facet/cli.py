@@ -70,12 +70,19 @@ def _root() -> Path:
 def _args(name: str, raw: str) -> dict[str, Any]:
     try:
         args = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"argument is not JSON: {e}") from None
+    except (json.JSONDecodeError, RecursionError) as e:  # nested past the decoder
+        raise ValueError(f"argument is not JSON this command can read: {e}") from None
     want = set(COMMANDS[name]["properties"])
     if not isinstance(args, dict) or set(args) != want:
         raise ValueError(f"{name} takes exactly {sorted(want)}")
-    # positions that are not a list of ints are refused by read_groups (TypeError)
+    # Checked here, before the cache is looked for: a wrong call must be 2 even
+    # with no cache yet, not 3 ("build it"), which would build for nothing.
+    if "positions" in args and not (
+        isinstance(args["positions"], list) and all(type(p) is int for p in args["positions"])
+    ):
+        raise ValueError("positions must be a list of integer group positions")
+    if "position" in args and type(args["position"]) is not int:
+        raise ValueError("position must be an integer group position")
     for text in ("key", "build"):
         # a build that is not text would read as "rebuilt since" (exit 4) and
         # send the gallery round a refetch loop instead of naming the bad call
