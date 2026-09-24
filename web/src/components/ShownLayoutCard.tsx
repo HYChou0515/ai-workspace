@@ -2,9 +2,9 @@
  * A `show_file(layout=…)` arrangement in the chat (#847 PR 3 P4): ONE card for
  * the whole thing, drawn as a miniature of its panes, that opens it in one
  * click — in the workspace's split panes when the workspace is on screen, else
- * on the editor-area page (`href`, chat mode).
+ * on the item's editor-area page in a new tab (chat mode, `useViewPageHref`).
  */
-import { useOpenLayout, useWorkspaceVisible } from "../hooks/openFile";
+import { useOpenLayout, useViewPageHref, useWorkspaceVisible } from "../hooks/openFile";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import type { LayoutNode } from "../pages/investigation/paneTree";
@@ -15,10 +15,11 @@ import { Icon } from "./Icon";
 const MINI_W = 280;
 const MINI_H = 140;
 
-export function ShownLayoutCard({ shown, href }: { shown: ShownLayout; href?: string }) {
+export function ShownLayoutCard({ shown }: { shown: ShownLayout }) {
   const t = useT();
   const opener = useOpenLayout();
   const openLayout = useWorkspaceVisible() ? opener : null;
+  const href = useViewPageHref()?.({ layout: shown.layout });
   const count = shown.files.length;
 
   const body = (

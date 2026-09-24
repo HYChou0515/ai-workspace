@@ -12,7 +12,7 @@
  *
  * Mirrors `SHOWN_FILES_MARKER` in `agent/tools.py` — keep them in sync.
  */
-import { type LayoutNode, layoutPaths } from "../pages/investigation/paneTree";
+import { isLayoutNode, type LayoutNode, layoutPaths } from "../pages/investigation/paneTree";
 
 const MARKER = "\n[shown-files]";
 
@@ -83,21 +83,6 @@ export function parseShownLayout(output: string | undefined | null): ShownLayout
   const out: ShownLayout = { layout, files };
   if (typeof caption === "string" && caption) out.caption = caption;
   return out;
-}
-
-function isLayoutNode(node: unknown): node is LayoutNode {
-  if (!node || typeof node !== "object") return false;
-  const n = node as Record<string, unknown>;
-  if (n.type === "leaf") return typeof n.path === "string" && n.path !== "";
-  return (
-    n.type === "split" &&
-    (n.dir === "row" || n.dir === "col") &&
-    typeof n.ratio === "number" &&
-    n.ratio > 0 &&
-    n.ratio < 1 &&
-    isLayoutNode(n.a) &&
-    isLayoutNode(n.b)
-  );
 }
 
 /** `output` without its declaration — what the tool card body shows.
