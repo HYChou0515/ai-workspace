@@ -974,8 +974,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **行為**（沒有開關；運營方不用做事，但要知道）
 
-- **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在 `chart` view 上框選（寫進有名字的 marking；框選寫入是這個 PR 的
-  P2，接在 #855 的 chart plugin 上——在那之前沒有任何 view 會寫 marking，這一條不會發生）之後送訊息，composer 上方會列出
+- **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在 `chart` view（#855）上框選、寫進有名字的 marking
+  （同一個 `marking:` 的圖彼此連動，見 [chart 說明](view-plugin-chart.md)）之後送訊息，composer 上方會列出
   這些 marking 的 chip；留著的那幾個隨訊息寫成 `.markings/<name>.json`（marking 的值），AI 讀這個檔案。
   為什麼寫檔而不是塞進 prompt：值可以上千個，每輪都塞進 prompt 太大；prompt 只放一行摘要（名稱、每欄幾個值、路徑），值留在檔案裡。
   沒送出的選取什麼都不寫。檔案出現在檔案樹、會被備份、**算進 workspace 額度**，和使用者自己寫的檔一樣；刪掉沒有副作用
@@ -989,6 +989,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - 聊天模式（workspace 收起來）點 `show_file` 秀出的檔案卡，改成在新分頁開 `/a/<app>/<item>/view?path=…`
   （只有編輯區的頁面），不再是原始檔案的下載網址——`.ai.yaml` 從此顯示成 view 而不是 YAML 原文。
   圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
+
+- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文從約 5.0k 變成約 5.4k 字元
+  （[#855](#pr-855) 那條的數字是它當時的）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變。
 
 **k8s · CI 側** — 不動（新頁面是 SPA 路由，同一個 image）。
 
