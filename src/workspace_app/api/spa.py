@@ -63,4 +63,9 @@ class SpaStaticFiles(StaticFiles):
             # On the document, not the assets: this governs the frames the
             # document mounts, and index.html is the only response that is one.
             response.headers["Content-Security-Policy"] = SPA_CSP
+        elif path.startswith("shared/"):
+            # #847/#848: the import-map targets runtime view plugins resolve
+            # `react` through (web/vite-plugins/sharedModules.ts). Their names are
+            # fixed, not hashed, so a cached copy would outlive a rebuild.
+            response.headers["Cache-Control"] = "no-cache"
         return response

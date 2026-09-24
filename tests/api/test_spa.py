@@ -27,6 +27,8 @@ def _client(tmp_path: Path) -> TestClient:
     (tmp_path / "index.html").write_text("<!doctype html><div id=root>RCA SPA</div>")
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "app.js").write_text("console.log('app')")
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "react.js").write_text("export const useState = 1;")
     spec = make_spec(default_user="u")
     app = create_app(
         spec=spec,
@@ -64,6 +66,18 @@ def test_index_is_served_no_cache(tmp_path: Path):
     assert client.get("/").headers.get("cache-control") == "no-cache"
     fallback = client.get("/a/rca/items/abc-123")
     assert fallback.headers.get("cache-control") == "no-cache"
+
+
+def test_shared_module_is_served_no_cache(tmp_path: Path):
+    """#847/#848: `shared/*.js` are the import-map targets runtime view plugins
+    resolve `react` through. Their names are FIXED (a plugin cannot know a
+    hash), so a cached copy would pair a stale facade with a rebuild's new
+    hashed chunks — they must be revalidated like index.html."""
+    resp = _client(tmp_path).get("/shared/react.js")
+    assert resp.status_code == 200
+    assert resp.headers.get("cache-control") == "no-cache"
+    # ...but not the document's CSP: that belongs on the document only.
+    assert "content-security-policy" not in resp.headers
 
 
 def test_hashed_asset_is_not_no_cache(tmp_path: Path):

@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+import { sharedModules } from "./vite-plugins/sharedModules";
+
 // Version-skew handshake: bake the SAME version string the backend serves
 // (pyproject.toml is the single source; `make release` bumps it) so the
 // bundle can compare itself against the api's X-App-Version header.
@@ -24,7 +26,9 @@ export default defineConfig({
   // Bakes asset URLs + import.meta.env.BASE_URL, which the router basename and
   // the API fetch prefix both read. Default "/" (root).
   base: process.env.VITE_BASE_PATH || "/",
-  plugins: [react()],
+  // #847/#848: `shared/*.js` + the import map runtime view plugins resolve
+  // `react` / the view SDK through. See vite-plugins/sharedModules.ts.
+  plugins: [react(), sharedModules()],
   server: {
     port: 5173,
     // #177: the whole backend lives under /api, so one proxy rule covers it and
