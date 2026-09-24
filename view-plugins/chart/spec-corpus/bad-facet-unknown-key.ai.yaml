@@ -1,0 +1,8 @@
+view: chart
+source: data/dies.parquet
+facet: {field: wafer, columns: 8}
+mark: grid
+encoding:
+  x: {field: die_x, type: ordinal}
+  y: {field: die_y, type: ordinal}
+  color: {field: bin, type: nominal}
