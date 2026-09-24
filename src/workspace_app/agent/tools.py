@@ -419,13 +419,14 @@ async def show_file_impl(
     what the user is looking at ("monthly revenue trend") — include it whenever
     the filename alone would not tell them.
 
-    To show several files side by side as one arrangement, give `layout`
+    To show several files together as one arrangement, give `layout`
     instead of `path`: a `split` pane divides into `a` and `b` (`dir` `row` =
     side by side, `col` = stacked; `ratio` is `a`'s share), and each `leaf`
     pane shows one file by `path`. The user gets one card that opens them all
     in split panes.
 
-    Call it once per file, as soon as the file exists, then carry on.
+    Call it once per file — or once per layout — as soon as the files exist,
+    then carry on.
     """
     if (denied := authorize_tool(ctx.context, "read_content")) is not None:
         return denied
