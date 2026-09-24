@@ -143,3 +143,21 @@ export function edgeForPoint(
   const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
   return (Object.entries(d).sort((p, q) => p[1] - q[1])[0]?.[0] as Edge) ?? "center";
 }
+
+/** A layout an agent declares (`show_file(layout=…)`): the pane-tree shape with
+ * workspace paths as leaves instead of group ids. Mirrors the backend's
+ * `agent/shown_files.py` layout validation. */
+export type LayoutLeaf = { type: "leaf"; path: string };
+export type LayoutSplit = {
+  type: "split";
+  dir: "row" | "col";
+  ratio: number;
+  a: LayoutNode;
+  b: LayoutNode;
+};
+export type LayoutNode = LayoutLeaf | LayoutSplit;
+
+/** Leaf paths in visual order (left→right / top→bottom). */
+export function layoutPaths(node: LayoutNode): string[] {
+  return node.type === "leaf" ? [node.path] : [...layoutPaths(node.a), ...layoutPaths(node.b)];
+}
