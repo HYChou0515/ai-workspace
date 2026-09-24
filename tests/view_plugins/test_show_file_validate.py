@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from agents import RunContextWrapper
@@ -18,7 +19,7 @@ from workspace_app.agent import AgentToolContext, show_file_impl
 from workspace_app.agent.shown_files import SHOWN_FILES_MARKER
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.sandbox.protocol import ExecResult, SandboxHandle
+from workspace_app.sandbox.protocol import ExecResult, Sandbox, SandboxHandle
 from workspace_app.view_plugins import discover_view_plugins
 from workspace_app.view_plugins.skills import register_for_agents
 
@@ -61,7 +62,10 @@ async def _show(text: str, result: ExecResult, path: str = "/views/yield.ai.yaml
     await files.write("inv-1", path, text.encode())
     sb = _Sandbox(result)
     ctx = AgentToolContext(
-        investigation_id="inv-1", files=files, sandbox=sb, handle=SandboxHandle(id="h")
+        investigation_id="inv-1",
+        files=files,
+        sandbox=cast("Sandbox", sb),
+        handle=SandboxHandle(id="h"),
     )
     out = await show_file_impl(RunContextWrapper(ctx), path.lstrip("/"))
     return out, sb.calls
