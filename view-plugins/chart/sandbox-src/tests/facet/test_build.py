@@ -2,6 +2,7 @@
 cell, becomes one facet cache. It is the one place pandas values are turned
 into the plain ones the format takes."""
 
+import base64
 import datetime as dt
 import math
 from pathlib import Path
@@ -169,6 +170,93 @@ def test_a_frame_that_is_not_one_facet_cache_is_refused_by_name(
 ) -> None:
     with pytest.raises(BuildError, match=message):
         _one(tmp_path, rows, **kw)
+
+
+@pytest.mark.parametrize(
+    "x",
+    [[0.0, math.nan, 1.0], pd.array([0, pd.NA, 1], dtype="Int64")],
+    ids=["float-nan", "Int64-NA"],
+)
+def test_a_row_with_no_x_or_y_is_left_out_as_lattice_leaves_it(tmp_path: Path, x: Any) -> None:
+    lines: list[str] = []
+    frame = pd.DataFrame({"g": ["a", "a", "a"], "x": x, "y": [0, 0, 0], "v": [1.0, 2.0, 3.0]})
+    path = tmp_path / "c.vcache"
+    build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=path, progress=lines.append)
+    # the placed rows' x, as the chart's wire sends them (Int64 levels travel as
+    # their marking strings there, so the thumbnail gets the same)
+    from chart_view.wire import encode_column
+
+    wire = encode_column(frame["x"], "cat")
+    codes = np.frombuffer(base64.b64decode(wire["codes"]), dtype="<u1")
+    sent = [wire["levels"][c] for c in codes if c != 255]
+    assert read_index(path).layout == {"x": sent, "y": [0, 0]}
+    assert "left out 1 row with no x or y" in lines
+
+
+def test_a_row_with_no_x_on_a_quantitative_axis_is_left_out_too(tmp_path: Path) -> None:
+    frame = pd.DataFrame({"g": ["a", "a"], "x": [0.5, math.nan], "y": [0, 0], "v": [1.0, 2.0]})
+    path = tmp_path / "c.vcache"
+    build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=path, x_type="quantitative")
+    assert read_index(path).layout == {"x": [0.5], "y": [0]}
+
+
+def test_a_frame_with_no_placeable_row_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(BuildError, match="no row has both"):
+        _one(tmp_path, [{"g": "a", "x": None, "y": 0, "v": 1.0}])
+
+
+def test_a_missing_text_key_is_refused_not_keyed_na(tmp_path: Path) -> None:
+    """pandas' NA in a string column is not a group named "<NA>"."""
+    frame = pd.DataFrame(
+        {"g": pd.array(["a", pd.NA], dtype="string"), "x": [0, 1], "y": [0, 0], "v": [1.0, 2.0]}
+    )
+    with pytest.raises(BuildError, match="'g'"):
+        build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=tmp_path / "c")
+
+
+def test_a_missing_text_value_is_a_missing_cell_not_a_category(tmp_path: Path) -> None:
+    frame = pd.DataFrame(
+        {"g": ["a", "a"], "x": [0, 1], "y": [0, 0], "v": pd.array(["ok", pd.NA], dtype="string")}
+    )
+    path = tmp_path / "c.vcache"
+    build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=path)
+    index = read_index(path)
+    assert index.scale == CategoryScale(["ok"])
+    assert index.scale.decode(read_groups(path, index, [0])[0]) == ["ok", None]
+
+
+@pytest.mark.parametrize(
+    ("column", "vega_type", "wire_kind"),
+    [
+        (
+            pd.to_datetime(["2026-03-29 00:30", "2026-03-29 01:30"])
+            .tz_localize("UTC")
+            .tz_convert("Europe/Berlin"),
+            "temporal",
+            "time",
+        ),
+        (["10", "9"], "quantitative", "f64"),
+        ([3, "b"], "nominal", "cat"),
+    ],
+    ids=["temporal-across-dst", "quantitative-from-text", "nominal-mixed"],
+)
+def test_an_axis_is_the_value_the_chart_wire_sends_for_its_type(
+    tmp_path: Path, column: Any, vega_type: str, wire_kind: str
+) -> None:
+    """The oracle is chart_view.wire.encode_column itself, decoded: whatever the
+    full view's lattice gets for this axis, the thumbnail's gets too."""
+    from chart_view.wire import encode_column
+
+    frame = pd.DataFrame({"g": ["a", "a"], "x": column, "y": [0, 0], "v": [1.0, 2.0]})
+    path = tmp_path / "c.vcache"
+    build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=path, x_type=vega_type)
+    wire = encode_column(frame["x"], wire_kind)
+    if wire_kind == "cat":
+        codes = np.frombuffer(base64.b64decode(wire["codes"]), dtype="<u1")
+        expect = [wire["levels"][c] for c in codes]
+    else:
+        expect = list(np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8"))
+    assert read_index(path).layout["x"] == expect
 
 
 def test_the_build_reports_its_progress(tmp_path: Path) -> None:

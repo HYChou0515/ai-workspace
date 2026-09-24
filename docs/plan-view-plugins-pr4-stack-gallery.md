@@ -88,10 +88,14 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     unreliable on NFS.
   - **Built:** `chart_view.facet.cap.enforce_cap`, and the builder
     `chart_view.facet.build.build_facet_cache(frame, facet, x, y, value, sort, path,
-    progress)`.
+    x_type, y_type, progress)`.
     - Keys are `canon()` of each facet value, so they match a linked view's marking.
-    - Cell x / y are what the chart's wire sends (`_json_scalar`), so a thumbnail's
-      `lattice` places cells where the full view does.
+      A missing key (NaN, NA) is refused, never keyed `"<NA>"`.
+    - Cell x / y are asked of the chart's wire: `encode_column` for the axis type
+      (`f64` quantitative, `time` temporal, `cat` otherwise, as `query` sends a
+      grid), decoded. A thumbnail's `lattice` gets exactly what the full view's
+      gets. A row with no x or y is left out, as `lattice` leaves it out, and the
+      progress lines say how many.
     - Two rows in one group's cell, or a sort value that varies inside a group, is
       refused by name; aggregating belongs to the transforms.
     - A bool value is a `true` / `false` category.
@@ -165,6 +169,10 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   covers:
   - scratch sizing. A continuous cache is about 9 bytes per cell (1 quantized + 8
     exact), so 200 × 50 000 cells is about 90 MB, against a 500 MB default cap;
+  - build cost, measured by a reviewer on the dev box (not a CI number): 500k rows
+    took 1.8 s. 1000 groups × 5000 cells (5M rows) took 17.5 s at a 1.27 GB peak
+    RSS. That memory sits inside the sandbox's own cgroup limit, so a large source
+    needs a sandbox sized for it;
   - the knob;
   - the check that confirms it: open a gallery and see `.home/.cache/views/` in the
     sandbox dir.
