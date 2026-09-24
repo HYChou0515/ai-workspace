@@ -174,9 +174,21 @@ fixtures.
   - The progress lines go to stderr. `useSandboxRun` hands them back with the answer
     rather than streaming them, so "first open shows progress" still needs a
     streaming path, or a build long enough to warrant polling.
-- **Not built yet:** the web half, i.e. the virtualized thumbnail grid, paging,
-  sort and enlarge, painted with PR 2's `raster.ts`. It waits for disk space to
-  install the chart web half's dependencies.
+- **Built, web side:**
+  - `gallery.ts` (pure): `sortedPositions`, `groupsPerPage`, `thumbnail`,
+    `rangeMarking`, `groupsLit`.
+  - `FacetGallery.tsx`, which `ChartView` renders for a `facet:` spec; `query` is
+    disabled for it.
+    - It runs `facet_build` then `facet_index`.
+    - Only the pages overlapping the viewport mount, each asking `facet_page` for its
+      run of sorted positions.
+    - The sort order toggles over the index in hand.
+    - A thumbnail is `thumbnail()`, the full grid's own calls, and is pinned
+      pixel-for-pixel by the Q13 parity test for both colour schemes.
+    - Enlarge opens a dialog that fetches `facet_exact` and shows the value under
+      the pointer.
+    - Exit 3 from the index or a page rebuilds; exit 4 from a page refetches the
+      index.
 
 **P7 — selection over positions.**
 
@@ -184,6 +196,17 @@ fixtures.
   mounted elements. They resolve to group keys from the index and write the full set to
   the marking.
 - A test selects across unloaded pages and asserts the complete set.
+- **Built:** click selects one group, and shift-click selects the run of sorted
+  positions between it and the last click. "from rank / to rank" selects ranks a–b.
+  - Each writes `rangeMarking` of every group in the run, loaded or not, to the
+    view's marking, with the view file as source.
+  - "Clear selection" writes `{}`.
+  - Groups the marking holds are lit by the platform's `isLit`, and the header
+    counts them ("N of M marked").
+  - The test selects ranks 1–300 of 1000 with only the first page loaded, and
+    asserts all 300 keys.
+  - A rubber-band box over the grid is not built; the rank range covers the same
+    need over sorted positions.
 
 **P8 — docs and runbook.**
 
