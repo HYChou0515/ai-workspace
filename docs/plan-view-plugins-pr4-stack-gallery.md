@@ -46,9 +46,11 @@ fixtures.
   Python values only and refuses the rest by name; converting pandas/numpy values is
   P3's job.
 - Tests pin the round trip and that any key component changes the cache path.
-- **Built:** the stdlib-only package `view-plugins/chart/facet-cache/`
-  (`write_cache`, `read_index`, `read_groups`, `read_records`, `read_exact`,
-  `CacheUnusable`).
+- **Built:** `chart_view.facet` in the chart plugin's sandbox half
+  (`view-plugins/chart/sandbox-src`): `write_cache`, `read_index`, `read_groups`,
+  `read_records`, `read_exact`, `CacheUnusable`. It imports only the standard
+  library, so the pager never loads pandas, and it runs under the half's own CI
+  job (`chart-plugin-test`, 100% coverage).
 
 **P3 — the builder.**
 
@@ -63,7 +65,7 @@ fixtures.
     that is off does not age a live build's temp file.
   - Recency is the mtime the pager sets on every read (`os.utime`); atime is
     unreliable on NFS.
-  - **Built:** `aiws_facet_cache.cap.enforce_cap`. The builder itself waits for the
+  - **Built:** `chart_view.facet.cap.enforce_cap`. The builder itself waits for the
     rebase onto #855: it reads sources through `chart_view`'s readers and keys through
     its `canon()`.
 - Converts what the format refuses, in one place, with a test per rule:
@@ -90,7 +92,7 @@ fixtures.
   gallery refetches the index. Rebuilding again would mint yet another build and fail
   the page a second time. A cache of the same build that is cut short is still
   `CacheUnusable`, because refetching would find the same broken file.
-- **Built so far:** `aiws_facet_cache.pager` (`index_payload`, `page_payload`,
+- **Built so far:** `chart_view.facet.pager` (`index_payload`, `page_payload`,
   `exact_payload`). Answers use PR 2's wire shapes (`q8`, width-1 `cat`, `f64`).
   Wiring them as launch commands in the chart bundle waits for #855's P1 bundle.
 - The per-call argv stays tiny: the cache key plus a page's positions (tens of ints).

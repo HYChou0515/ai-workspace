@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from aiws_facet_cache import MISSING, CategoryScale, ContinuousScale
+from chart_view.facet import MISSING, CategoryScale, ContinuousScale
 
 
 def test_nan_is_a_missing_cell_like_none() -> None:
