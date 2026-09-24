@@ -67,6 +67,8 @@ import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
+import { MarkingProvider } from "../../hooks/useMarking";
+import { MarkingStore } from "../../lib/markings";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { shellIsNarrow, useContainerWidth } from "../../hooks/useContainerWidth";
@@ -226,15 +228,20 @@ export function WorkspaceProviders({
     const io = bufferIO(service);
     return new FileBufferStore(io, reactQueryContentCache(queryClient, service.scopeId, io));
   }, [service, queryClient]);
+  // Named markings (#847 Q5.1) link the views of ONE item: a fresh store per
+  // item, so moving to another item never carries a selection across.
+  const markings = useMemo(() => new MarkingStore(), [slug, itemId]);
   return (
     <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>
         <AgentProvider investigationId={itemId}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
-              <LazyFoldersContext.Provider value={unwalked}>
-                {children(bufferStore)}
-              </LazyFoldersContext.Provider>
+              <MarkingProvider store={markings}>
+                <LazyFoldersContext.Provider value={unwalked}>
+                  {children(bufferStore)}
+                </LazyFoldersContext.Provider>
+              </MarkingProvider>
             </EditModeProvider>
           </FileBufferProvider>
         </AgentProvider>
