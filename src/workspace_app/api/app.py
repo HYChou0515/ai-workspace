@@ -143,6 +143,7 @@ from .turn_gate import TurnRefused, quota_body
 from .turn_reclaim import RECLAIM_TICK_S
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
+from .view_plugin_routes import register_view_plugin_routes
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
@@ -2407,6 +2408,13 @@ def create_app(
         spec=spec,
         get_user_id=get_user_id,
         superusers=superusers,
+    )
+
+    # #847/#848: runtime view plugins — the list + each plugin's web/ files.
+    register_view_plugin_routes(
+        api,
+        get_plugins=lambda: app.state.view_plugins,
+        get_user_id=get_user_id,
     )
 
     register_tools_routes(
