@@ -1007,6 +1007,46 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   重新整理還在；檔案樹多了 `.markings/<name>.json`，內容是 `{"name", "sources", "columns"}`。
 - 聊天模式點一張 `show_file` 卡：新分頁的網址是 `…/view?path=…`，畫面只有編輯區（沒有檔案樹、沒有聊天）。
 
+### 2026-09-25 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
+
+**設定** — 沒有新 config key。`facet.cache_mb` 是 **spec 裡**的旋鈕（寫在 `.ai.yaml`），不是部署設定。
+**資料** — 不用 migrate，沒有 `Schema` 升版。
+
+**行為**（沒有開關；運營方要知道的是沙盒的 scratch 磁碟）
+
+- **每個沙盒的 `.home/.cache/views/` 會出現縮圖牆的快取檔（`*.vcache`）。** `facet:` 的 chart 第一次打開時，
+  沙盒讀一次來源檔、建一份快取，之後捲動、換排序、放大都從快取取，不再讀來源。
+  - 位置在沙盒的 infra 區（`.home`，和 workspace 並列）：**不算 workspace 額度、不出現在檔案樹、不備份**，
+    沙盒被回收時一起刪掉。
+  - 大小：連續值每格約 9 bytes（1 byte 量化色碼 + 8 bytes 精確值），類別值每格 1 byte。
+    例：200 組 × 50,000 格的連續值約 90 MB。
+  - 上限：每次建快取時，沙盒依 spec 的 `facet.cache_mb`（預設 500 MB）把整個 `.home/.cache/views/`
+    修到上限內，最久沒用的先刪。這個目錄是**同一個沙盒裡所有縮圖牆共用**的，所以一份 spec 設的上限管的是全部。
+  - **scratch 容量要這樣估**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
+    再加上原本 workspace 與 `.home` 的用量。
+- **建快取的成本在沙盒的 cgroup 裡。** review 時在開發機實測（不是 CI 數字）：500k 列約 1.8 秒；1000 組 × 5000 格
+  （5M 列）約 17.5 秒、峰值記憶體約 1.27 GB。沙盒的記憶體上限低於這個量級時，大來源的第一次打開會被 OOM 殺掉：
+  面板顯示那次建置的錯誤（被殺掉的 exit code，例如 `exit 137`），重試也一樣。
+- `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
+  畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
+- chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 5105 變成
+  6128 字元；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
+
+**k8s · CI 側**
+
+- **sandbox-host 要和 API 一起換版。** 縮圖牆的四個沙盒指令（`facet_build` / `facet_index` / `facet_page` /
+  `facet_exact`）在 chart 的沙盒 bundle 裡，而那個 bundle 由 sandbox-host image 的 tools stage 建進
+  `builtin/chart`（[#855](#pr-855) 那條的同一個機制）。只換 API、沒換 sandbox-host 的症狀：打開任何 `facet:` 的
+  chart，面板顯示 `unknown command: facet_build. available: validate, query`。
+
+**確認做完**
+
+- 在 sandbox-host pod 裡：`/opt/tools/builtin/chart/launch` 不帶參數，印出的清單含 `facet_build`、`facet_index`、
+  `facet_page`、`facet_exact`。
+- 打開一份 `facet:` 的 chart（寫法見 chart 的 `SKILL.md` 的 Facet 段落）：先出現「Building the gallery…」，
+  接著是縮圖牆與「N groups」；捲動會載入後面的縮圖；按排序按鈕立刻重排、不再出現「Building…」。
+- 在那個 item 的沙盒目錄裡看得到 `.home/.cache/views/<64 個 hex>.vcache`。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

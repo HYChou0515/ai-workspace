@@ -110,12 +110,34 @@ transform:
     groupby: [cell_x, cell_y]                     # per group both sides have
 ```
 
+### Facet: one small grid per group
+
+```yaml
+facet: {field: [lot, wafer], sort: {field: fail_rate, order: descending}}
+```
+
+`facet` draws the `grid` once per group, as a gallery of small maps. It works for
+hundreds or thousands of groups, because only what is on screen is loaded.
+
+- `field` names the column or columns that identify a group.
+- `sort` orders the gallery by a per-group column. The person can flip the order
+  without anything being recomputed.
+- It needs `mark: grid`, with `x`, `y` and a `color` field and no `aggregate` on
+  them. To reduce rows first, aggregate in `transform:` with the facet columns in
+  its `groupby`.
+- The person can select a run of groups (ranks 1–30, say). The selection goes to
+  the gallery's `marking:` under the facet columns, so other views on that marking
+  light the same groups.
+
 ## Shapes that carry a claim
 
 - **A value's pattern across a 2-D lattice**: `grid`, with an `aggregate`
   grouped by the lattice columns.
 - **The change between two conditions**: a `diff` transform, drawn as `grid` or
   `heatmap` with `scale: {scheme: diverging}`.
+- **Many groups that share a shape**: `facet` over a `grid`, sorted by the
+  column that ranks them, on a `marking:`, so the ones that stand out can be
+  selected and seen in the other views.
 - **A limit or target**: a `layer` with the data mark and a `rule` at the limit.
 - **Variation per group**: `boxplot`, or `errorbar` layered over `bar`.
 - **A trend**: `line` on a `temporal` x, `color` per series.
