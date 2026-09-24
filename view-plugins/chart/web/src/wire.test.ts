@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { wideCodes } from "./testAnswer";
 import { canon, decodeBits, decodeColumn, type WireColumn } from "./wire";
 
 const corpus = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire-corpus");
@@ -40,6 +41,15 @@ describe("wire corpus", () => {
         expect(Math.abs((got as number) - (v as number))).toBeLessThanOrEqual((w.max - w.min) / 254 / 2 + 1e-12);
       } else expect(got).toBe(v);
     });
+  });
+});
+
+describe("wide categories", () => {
+  it("reads two- and four-byte codes, with the width's max as missing", () => {
+    const two = decodeColumn({ kind: "cat", levels: ["a", "b"], width: 2, codes: wideCodes(2, [1, 65535, 0]) });
+    expect([two.value(0), two.value(1), two.value(2)]).toEqual(["b", null, "a"]);
+    const four = decodeColumn({ kind: "cat", levels: ["a"], width: 4, codes: wideCodes(4, [0, 2 ** 32 - 1]) });
+    expect([four.value(0), four.value(1)]).toEqual(["a", null]);
   });
 });
 
