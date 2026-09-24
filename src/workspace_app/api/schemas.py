@@ -14,6 +14,14 @@ from pydantic import BaseModel, Field, StringConstraints
 from .kb_chat_routes import EnhancementsInput
 
 
+class MarkingInput(BaseModel):
+    """One sent marking: `column → values`, opaque strings (#847 Q6)."""
+
+    name: str
+    source: str | None = None
+    columns: dict[str, list[str]]
+
+
 class _MessageBody(BaseModel):
     content: str
     # grill-me: the `tool_call_id` of the `ask_user` question this message
@@ -53,6 +61,10 @@ class _MessageBody(BaseModel):
     # flow), so this carries paths, not bytes. Ignored for text-only models (the
     # `Attached \`path\`` note in `content` still steers them to `read_image`).
     image_paths: list[str] | None = None
+    # #847 P7: the named markings the user kept as chips when sending. Each is
+    # written to `.markings/<name>.json`, recorded on the persisted message and
+    # summarised to the model in one line (`api/markings.py`).
+    markings: list[MarkingInput] | None = None
 
 
 class _UndoOut(BaseModel):
