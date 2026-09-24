@@ -1,0 +1,10 @@
+view: chart
+title: Open issues per assignee
+source: {entity: issue}
+keys: [assignee]
+mark: bar
+encoding:
+  x: {field: assignee, type: nominal, sort: descending}
+  y: {field: number, type: quantitative, aggregate: count}
+highlight:
+  values: {assignee: [alice, bob]}

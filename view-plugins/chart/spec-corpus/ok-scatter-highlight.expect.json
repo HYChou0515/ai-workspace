@@ -1,0 +1,37 @@
+{
+  "view": "chart",
+  "title": "Fail rate vs thickness",
+  "source": "data/wafers.csv",
+  "keys": [
+    "lot",
+    "wafer"
+  ],
+  "mark": "scatter",
+  "encoding": {
+    "x": {
+      "field": "thickness",
+      "type": "quantitative"
+    },
+    "y": {
+      "field": "fail_rate",
+      "type": "quantitative"
+    },
+    "color": {
+      "field": "lot",
+      "type": "nominal"
+    },
+    "tooltip": [
+      {
+        "field": "wafer",
+        "type": "nominal"
+      },
+      {
+        "field": "fail_rate",
+        "type": "quantitative"
+      }
+    ]
+  },
+  "highlight": {
+    "where": "fail_rate > 0.3"
+  }
+}

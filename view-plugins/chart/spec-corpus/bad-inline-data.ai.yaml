@@ -1,0 +1,6 @@
+view: chart
+data: {values: [{a: 1, b: 2}]}
+mark: line
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}

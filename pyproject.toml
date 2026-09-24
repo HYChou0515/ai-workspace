@@ -132,7 +132,9 @@ target-version = "py312"
 # fully independent project (own pyproject + uv.lock + CI job) — see #251.
 # tool-starter/ is handed to external authors as a repository of their own
 # (#674): it must stand alone, so it is neither built nor typed with ours.
-extend-exclude = ["sample-tools", "sandbox-host", "tool-starter"]
+# view-plugins/*/sandbox-src are plugin sandbox halves, each its own project
+# with its own CI job, like sandbox-host.
+extend-exclude = ["sample-tools", "sandbox-host", "tool-starter", "view-plugins"]
 
 [tool.ruff.lint]
 # TC004: an import parked under `TYPE_CHECKING` that is used at runtime. `ty`
@@ -147,4 +149,5 @@ exclude = [
     "sample-tools/**",
     "sandbox-host/**",
     "tool-starter/**",
+    "view-plugins/**",
 ]

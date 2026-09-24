@@ -1,0 +1,7 @@
+view: chart
+source: data/bins.csv
+mark: pie
+encoding:
+  theta: {field: count, type: quantitative, aggregate: sum}
+  color: {field: bin, type: nominal}
+bin_threshold: 20000
