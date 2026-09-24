@@ -25,9 +25,12 @@ def test_the_ends_of_the_range_decode_exactly() -> None:
     assert scale.decode(scale.encode([-2.5, 7.5])) == [-2.5, 7.5]
 
 
-def test_infinite_values_clamp_to_the_ends() -> None:
+def test_infinite_values_are_missing_as_in_the_chart_q8_wire() -> None:
+    """PR 2's `q8` (chart_view/wire.py `_q8`) codes a non-finite value 255, and
+    the one raster core paints both, so a thumbnail must too: same cells, same
+    pixels (Q13)."""
     scale = ContinuousScale(0.0, 1.0)
-    assert scale.decode(scale.encode([-math.inf, math.inf])) == [0.0, 1.0]
+    assert scale.encode([-math.inf, math.inf]) == bytes([MISSING, MISSING])
 
 
 @pytest.mark.parametrize(
