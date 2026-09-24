@@ -41,7 +41,12 @@ import { useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { OpenFileProvider, WorkspaceVisibleProvider } from "../../hooks/openFile";
+import {
+  type OpenLayout,
+  OpenFileProvider,
+  OpenLayoutProvider,
+  WorkspaceVisibleProvider,
+} from "../../hooks/openFile";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -507,6 +512,15 @@ function ShellBody({
     },
     [groups, recentFiles, dispatchSidebar],
   );
+  // A `show_file(layout=…)` card (#847): the arrangement opens in these panes,
+  // placed by Q17 (`paneTree.placeLayout`). Same fold rule as `openFile`.
+  const openLayout = useCallback<OpenLayout>(
+    (layout) => {
+      groups.openLayout(layout);
+      dispatchSidebar({ type: "outside" });
+    },
+    [groups, dispatchSidebar],
+  );
   // Is the file pane actually on screen? Same condition the IDE column renders
   // under — anything else would have the chat believe in a pane that isn't there.
   const workspaceVisible = Boolean(manifest.function.workspace && !ideCollapsed && _canSeeFiles);
@@ -618,6 +632,7 @@ function ShellBody({
 
   return (
     <OpenFileProvider value={openFile}>
+      <OpenLayoutProvider value={openLayout}>
       <WorkspaceVisibleProvider value={workspaceVisible}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
@@ -926,6 +941,7 @@ function ShellBody({
       </div>
     </RequestCloseContext.Provider>
       </WorkspaceVisibleProvider>
+      </OpenLayoutProvider>
     </OpenFileProvider>
   );
 }
@@ -2204,6 +2220,7 @@ function GroupPane({
 
   return (
     <div
+      data-testid="editor-group"
       onMouseDown={() => groups.focusGroup(group.id)}
       onDragOver={(e) => {
         if (!hasPayload(e)) return;
