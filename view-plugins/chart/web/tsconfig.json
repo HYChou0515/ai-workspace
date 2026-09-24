@@ -1,20 +1,14 @@
 {
+  "//": "Only for esbuild's settings during `vite build`. The plugin's sources are type-checked by web/'s `tsc`, against the real @aiws/view-sdk barrel (web/tsconfig.json `include`).",
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "resolveJsonModule": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
     "isolatedModules": true,
-    "noEmit": true,
-    "types": ["node"]
+    "resolveJsonModule": true,
+    "skipLibCheck": true
   },
-  "include": ["src", "scripts"]
+  "include": ["src"]
 }
