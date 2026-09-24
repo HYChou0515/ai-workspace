@@ -25,6 +25,7 @@ from typing import Any
 
 from aiws_facet_cache import (
     CacheIndex,
+    CacheRebuilt,
     CategoryScale,
     ContinuousScale,
     read_exact,
@@ -90,14 +91,20 @@ def _column(scale: ContinuousScale | CategoryScale, record: bytes) -> dict[str, 
 
 def page_payload(root: Path, digest: str, build: str, positions: Sequence[int]) -> dict[str, Any]:
     path, index = _current(root, digest, build)
-    records = read_groups(path, index, positions)
+    try:
+        records = read_groups(path, index, positions)
+    except CacheRebuilt:  # a rebuild landed between the build check and this read
+        raise StaleIndex(f"cache {digest} was rebuilt; refetch its index") from None
     _used(path)
     return {"build": build, "groups": [_column(index.scale, r) for r in records]}
 
 
 def exact_payload(root: Path, digest: str, build: str, position: int) -> dict[str, Any]:
     path, index = _current(root, digest, build)
-    values = read_exact(path, index, position)
+    try:
+        values = read_exact(path, index, position)
+    except CacheRebuilt:  # a rebuild landed between the build check and this read
+        raise StaleIndex(f"cache {digest} was rebuilt; refetch its index") from None
     _used(path)
     data = array("d", (float("nan") if v is None else v for v in values))
     if sys.byteorder != "little":  # pragma: no cover - the wire is little-endian
