@@ -49,7 +49,7 @@ const ANSWER = answer(
     "scatter",
     3,
     { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["A", "B", "A"]) },
-    { highlight: btoa(String.fromCharCode(0b100)), lit: 1 },
+    { highlight: btoa(String.fromCharCode(0b110)), lit: 2 },
   ),
 );
 
@@ -98,15 +98,20 @@ describe("ChartView", () => {
     expect(screen.getByRole("alert").textContent).toContain("HTTP 502");
   });
 
-  it("draws the answer and lights the highlight with ECharts' own action", () => {
+  it("draws the answer with the highlight already in it, dispatching nothing", () => {
     run({ data: ok() });
     view();
     expect(chart.createChart).toHaveBeenCalledTimes(1);
     const [option, notMerge] = chart.instance.setOption.mock.calls[0];
     expect(notMerge).toBe(true);
     expect((option as { series: unknown[] }).series).toHaveLength(2);
-    // Row 2 is lit: lot A → series 0, its second point.
-    expect(chart.instance.dispatchAction).toHaveBeenCalledWith({ type: "highlight", seriesIndex: 0, dataIndex: [1] });
+    // Rows 1 and 2 are lit (lot B's first point, lot A's second); row 0 is
+    // not, so it is dimmed in the data. No hover-state action: a mouse passing
+    // over the chart would clear it.
+    const series = (option as { series: { data: unknown[] }[] }).series;
+    expect(series[0].data[0]).toMatchObject({ itemStyle: { opacity: 0.15 } });
+    expect(Array.isArray(series[0].data[1])).toBe(true);
+    expect(chart.instance.dispatchAction).not.toHaveBeenCalled();
   });
 
   it("says when a scatter was binned", () => {
