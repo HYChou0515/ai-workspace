@@ -1,0 +1,18 @@
+{
+  "kind": "cat",
+  "values": [
+    true,
+    false,
+    null,
+    true
+  ],
+  "wire": {
+    "kind": "cat",
+    "levels": [
+      false,
+      true
+    ],
+    "width": 1,
+    "codes": "AQD/AQ=="
+  }
+}

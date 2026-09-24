@@ -1,0 +1,19 @@
+{
+  "kind": "cat",
+  "values": [
+    3,
+    1,
+    3,
+    2
+  ],
+  "wire": {
+    "kind": "cat",
+    "levels": [
+      1,
+      2,
+      3
+    ],
+    "width": 1,
+    "codes": "AgACAQ=="
+  }
+}
