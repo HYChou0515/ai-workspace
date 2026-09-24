@@ -17,15 +17,17 @@ plugin with all four parts.
 
 ## Phases
 
-**P1 — verify the sandbox runtime (no product code).**
+**P1 — the chart plugin's sandbox bundle.**
 
-- Build the plugin's sandbox half as its own prebuilt bundle with pandas and pyarrow,
-  since the carrier has no pyarrow.
-- Check whether #581's user-site prepend to `PYTHONPATH` reaches this bundle's
-  interpreter. If it does, a user's `pip install --upgrade pandas` changes our pandas.
-  Then either the launcher runs with `-s` / a clean `PYTHONPATH`, or the code is written
-  to the pandas floor and tested on it.
-- Record the finding here before P2.
+- Add a prebuilt bundle with its own python, pandas and pyarrow (the carrier has no
+  pyarrow), launched through PR 1's **isolated** template. A user-site pandas therefore
+  cannot reach it (master plan check 2, verified by PR 1's test).
+- Shipped as a first-party `{bundle: …}` plugin:
+  - baked into sandbox-host `builtin/` next to `sample-tools/`, which touches
+    `sandbox-host/Dockerfile`;
+  - copied into the local merged root for `kind: local`.
+- The PR body's carry-over list names `sandbox-host/`, because a merge that misses it
+  leaves prod with a chart view whose every call fails, and the error names the plugin.
 
 **P2 — one spec schema, two readers.**
 
@@ -88,7 +90,9 @@ plugin with all four parts.
 - `plugin.json` `views`:
   - `` `chart`: a relationship, trend, distribution or comparison you are claiming ``
   - `` `chart` with `mark: grid`: a value's pattern over a 2-D lattice ``
-- `skill/SKILL.md` covers how to write a spec (source, keys, highlight) and when a claim
+- `skill/SKILL.md` is **one file**, with the spec reference inline, so an operator's
+  edit reaches the next turn with no Refresh (master plan check 5). It covers how to
+  write a spec (source, keys, highlight) and when a claim
   needs one. It is generic, with no domain knowledge (Q6).
 - `view-plugins/chart/scenarios/` ships unscored for operators (Q19, user). It covers:
   - claims that should call `write_file` + `show_file`;

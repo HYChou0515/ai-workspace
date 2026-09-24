@@ -19,7 +19,8 @@ Base: master `6488a7ac`.
 
 ```
 <view_plugins.dir>/<name>/
-  plugin.json     # {name, sdk: "1", kinds: [...], views: [{kind, when}], sandbox?: "<pkg>", skill?: "skill"}
+  plugin.json     # {name, sdk: "1", kinds: [...], views: [{kind, when}], skill?: "skill",
+                  #  sandbox?: {bundle: "sandbox"} | {artifact: "<#674 artifact URL>"}}
   web/index.js    # ES module; calls registerViewKind from "@aiws/view-sdk"
   sandbox/        # optional: a standard prebuilt tool bundle (has `launch`)
   skill/SKILL.md  # optional
@@ -31,23 +32,15 @@ Base: master `6488a7ac`.
 Each phase follows `/tdd`. Each phase is a commit, and every behaviour starts from a test
 that reddens on the unfixed code.
 
-**P1 — verify the three assumptions (no product code).** Each finding is written into
-this file before P2 starts.
+**P1 — the dev-server import map (no product code).**
 
-- **Import maps.** Can the Vite build emit `react`, `react-dom`, `react/jsx-runtime` and
-  the SDK as stable-named ES modules, with an inline `<script type="importmap">` in
-  `index.html` ahead of the entry? Prove it in a throwaway branch: a hand-built plugin
-  that `import`s `react` and `@aiws/view-sdk` renders, and there is **one** React. The
-  test is that a hook in the plugin works; two Reacts throw on the first hook.
-- **The tools root.** `/.tools` is one mounted root (`__main__.py:196`,
-  `tools_dir = tools_root`). Read `discover_packages` (`tooling/registry.py:169`) and the
-  mount code (`sandbox/local_process.py:63-67`, `:446-451`, plus the `sandbox-host`
-  copy). Pick one: (a) boot links or copies each plugin's `sandbox/` into the tools root,
-  or (b) the mount learns several roots. Prefer (a) if it touches neither sandbox-host
-  nor the jail bootstrap.
-- **Docker.** Confirm the stage order in `docker/Dockerfile` (`web`, `app`, `chat-video`,
-  `api`, with `api` last and therefore the default target). The plugin build stage goes
-  **before** `api`.
+The build path is proven (master plan, check 3). What remains is whether `pnpm run dev`
+can load a runtime plugin: the import map has to point at modules the dev server serves
+for `react` and the SDK, and those must be the same instances the app itself uses.
+
+- If yes, record how.
+- If no, the dev loop is: build the SPA, then serve it with `vite preview` behind the
+  backend proxy. Record that choice in the authoring docs.
 
 **P2 — config and discovery.**
 
@@ -74,6 +67,10 @@ this file before P2 starts.
   not block the app. Every `*.ai.yaml` naming its kinds renders a **loud per-panel
   error** that names the plugin and the reason, reusing the view-panel error boundary.
 - A kind nobody registered still says "Unsupported view kind".
+- **A plugin that bundles its own React must not take the app down.** In the spike it
+  threw during render and killed the whole host tree. So the plugin component is
+  mounted inside the panel's error boundary. A test uses a fixture plugin that bundles
+  React and asserts that only its panel shows the error.
 
 **P5 — the SDK.**
 
@@ -83,17 +80,40 @@ this file before P2 starts.
 - `ext/imports.test.ts`'s rule ("import only the public barrel") is extended to
   `view-plugins/*/web/src`.
 
-**P6 — the sandbox half.**
+**P6 — the sandbox half.** Delivery follows the master plan's check 1 (user: reuse #674).
 
-- Apply P1's choice so a plugin's `sandbox/` bundle is discovered as a package.
-- `POST /a/{slug}/items/{id}/view-plugins/{plugin}/{cmd}` takes `{args}`. It is
-  authorized as `read_content` and runs `exec_package_command`
+- **An isolated launch template for plugin bundles** (check 2): `python -s`, with
+  `PYTHONPATH` set to the bundle's own site-packages only and no user `PYTHONPATH`
+  pass-through.
+  - It lives beside `_LAUNCH` in `tooling/prebuild.py`, and both are folded into
+    `_builder_fingerprint`.
+  - A test pins that a user-site `pandas` is **not** imported by a plugin bundle, and
+    that an ordinary tool bundle still does import it, as #581 intended.
+- **`kind: local`:** boot copies each `{bundle: …}` plugin bundle into a merged tools
+  root beside the prebuilt ones. Copies are used, not symlinks, because the jail
+  bind-mounts one root.
+  - Fix `__main__.py:163`: discovery must run when `PACKAGES` is empty but plugins
+    exist.
+  - A name clash between a plugin bundle and a tool package refuses boot, and names
+    both.
+- **`kind: http`:**
+  - An `{artifact: url}` sandbox half goes through #674's `POST /tools/resolve`, with
+    the same resolve, cache and per-sandbox view as `external_tools`. It keeps #674's
+    rule that the schema and the bundle come from the same resolve.
+  - A `{bundle: …}` plugin under http means "already in sandbox-host `builtin/`". Its
+    absence is a loud per-call error naming the plugin, not a silent no-op.
+- **`kind: docker`:** plugin sandbox halves are unsupported, as tools are. Calls fail
+  loudly.
+- **The runner:** `POST /a/{slug}/items/{id}/view-plugins/{plugin}/{cmd}` takes
+  `{args}`. It is authorized as `read_content` and runs `exec_package_command`
   (`tooling/registry.py:319`, the same entry WUI's `callTool` uses), returning
   `{stdout, stderr, exit_code}`.
 - **Plugin commands are not agent tools.** They never enter any app's tool ceiling, and
   a test pins it.
 - Arguments go in argv, so an args string over the argv limit is refused with a message
   saying to pass a file path.
+- **What the operator carries over:** this phase touches `sandbox-host/` only if the
+  resolve path needs it. The PR body lists every top-level directory the PR touches.
 
 **P7 — plugin skills.**
 
@@ -103,7 +123,9 @@ this file before P2 starts.
   `write_file` and `show_file` sees plugin skills. It is decided on the resolved set,
   not the manifest flag, which is the lesson from #581's preamble.
 - Per-item `skill_prefs` still turns one off.
-- `materialize_skill` copies plugin skills like any shared skill.
+- `materialize_skill` copies plugin skills like any shared skill. Verified: a
+  `SKILL.md`-only skill is never copied and always reads the source live, while a
+  multi-file one is frozen at first read until Refresh. The authoring docs state both.
 - `skill_eval` resolves plugin skills too. Today `--dump-skill` / `--skill` look names up
   in `SHARED_SKILLS` only (`skill_eval/__main__.py:239`), so a plugin skill would be
   "unknown skill".
@@ -153,6 +175,9 @@ this file before P2 starts.
     `<dir>/<name>/scenarios/` and `--control`, then prints the report;
   - the loop is: edit that file, rerun, done;
   - it fails loudly, by name, when the plugin has no skill or no scenarios.
+- `view_plugin check` refuses a built `web/index.js` that carries its own React (the
+  spike's failure mode, master plan check 3), with a message pointing at the externals
+  config.
 - The scaffold writes a `scenarios/` stub with one should-call and one should-not-call
   scenario.
 

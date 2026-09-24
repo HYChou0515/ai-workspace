@@ -231,7 +231,11 @@ The outcome is four things:
 - **Q16.** A plugin is **one folder with four parts**, all wired at boot **[agreed]**:
   - `plugin.json`
   - `web/index.js`
-  - `sandbox/`, a standard prebuilt tool bundle mounted under `/.tools`
+  - a sandbox half, a standard prebuilt tool bundle that reaches `/.tools` by backend
+    (check 1 below):
+    - `kind: local` copies it into a merged root;
+    - prod `kind: http` uses a #674 artifact URL, or sandbox-host `builtin/` for our own
+      plugin
   - `skill/SKILL.md`, which becomes a shared skill, so `SHARED_SKILLS` gains plugin
     sources
   - optionally `scenarios/`, the unscored `skill_eval` set that `view_plugin tune` runs
@@ -250,23 +254,82 @@ The outcome is four things:
   `docs/migrations.md` entry wherever the operator must act **[agreed]**. This plan goes
   straight to master **[user]**.
 
-## Checks that must happen before building on an assumption
+## Checks done while planning (2026-09-25, on `a967877c`)
 
-Each of these is the first phase of the PR that depends on it:
+These were open assumptions. Each was checked by reading the code or by a spike, and
+each result below replaces the assumption it tested.
 
-1. **Tool bundle loading is strict** (`__main__.py:156-205`), and `/.tools` is **one
-   mounted root** (`tools_dir = tools_root`). Plugin bundles must end up under that root,
-   or the mount must learn several roots. (PR 1)
-2. **The carrier has no `pyarrow`**, and the repo has none either. The chart plugin's
-   sandbox half is its own prebuilt bundle with its own venv, carrying pandas and
-   pyarrow. Whether #581's user-site `PYTHONPATH` prepend reaches a bundle's venv decides
-   whether "the user upgraded pandas" can break it. (PR 2)
-3. **Import maps with Vite.** The host must emit React and the SDK as stable, separately
-   addressable ES modules, and the import map must be in place before the first plugin
-   `import()`. `SPA_CSP` (`api/spa.py:34`) sets only `frame-src`, so an inline import map
-   is not blocked today. Re-check this if a `script-src` is ever added. (PR 1)
-4. **Docker.** The stages are `web`, `app`, `chat-video`, `api`, and `api` is last, so it
-   is the default target. A plugin build stage must not be appended after it. (PR 1)
+1. **Where tool bundles live. The plan was wrong for prod.**
+   - Under `kind: http`, the API pod ships **no tools** (`docker/Dockerfile:67,78`).
+   - sandbox-host has its own root, `SANDBOX_HOST_TOOLS_DIR`
+     (`sandbox-host/src/sandbox_host/config.py:85`), laid out as `builtin/` plus
+     `ext/<sha>`:
+     - `builtin/` is baked into the image by prebuilding `sample-tools/`.
+     - `ext/<sha>` is #674's third-party path: `POST /tools/resolve`, fetched, cached,
+       and linked into a per-sandbox `/.tools` view.
+   - So a plugin dir on the API pod never reaches a prod sandbox.
+   - **Decision [user]: reuse #674.**
+     - A second-party plugin's `plugin.json` names a #674 artifact URL for its sandbox
+       half, built by the author's CI with the existing builder image.
+     - Our own chart plugin's sandbox half is baked into sandbox-host `builtin/`, like
+       `sample-tools/`.
+     - For `kind: local`, boot **copies** plugin bundles into a merged tools root.
+       Symlinks will not do: the jail bind-mounts one root, and links out of it break
+       (`sandbox/local_process.py:63-67`).
+   - Related facts:
+     - `discover_packages` accepts bundles that are not in `PACKAGES`, but discovery is
+       skipped entirely when `PACKAGES` is empty (`__main__.py:163`). A plugin-only
+       deployment must not lose `/.tools`, so this is fixed in PR 1.
+     - `kind: docker` has no tools support. Plugin sandbox halves are unsupported there,
+       as tools already are.
+2. **A user's `pip install --user` reaches tool bundles, not only the carrier.**
+   - Every bundle's `launch` (`tooling/prebuild.py:79`) puts `$HOME/.local/.../site-packages`
+     first on `PYTHONPATH`.
+   - It also re-exports a user-set `PYTHONPATH` last (`:97-98`).
+   - **Decision [mine, open to override]:** plugin sandbox bundles get an **isolated**
+     launch template: `python -s` with `PYTHONPATH` set to the bundle's own
+     site-packages only, and no user `PYTHONPATH` pass-through.
+     - Existing tool bundles are unchanged, because #581 deliberately lets users
+       upgrade.
+     - `_builder_fingerprint` (`prebuild.py:443-463`) hashes the templates, so the new
+       one rebuilds every cached bundle.
+   - Observation, not in scope: existing third-party tool bundles have the same exposure.
+   - The carrier has no `pyarrow` and neither does the repo. The chart plugin's sandbox
+     half is its own bundle carrying pandas and pyarrow.
+3. **Import maps with Vite: proven in a spike.** Versions: Vite 6.4.2, React 19.2.6, and
+   the repo's `web/` pins `^6` / `^19.1`.
+   - Mechanism:
+     - React ships CJS, so each shared package is emitted through an ESM **facade**
+       that re-exports every key by name.
+     - Extra rollup inputs use `preserveEntrySignatures: "strict"` and fixed
+       `shared/<name>.js` names.
+     - A `transformIndexHtml` plugin prepends the inline import map.
+   - Result, driven in headless Chromium:
+     - A separately built plugin with `react` / `@aiws/view-sdk` external registered its
+       kind, and its `useState` counter worked (`counter:2`).
+     - `import("react")` returned the host's React, and the SDK registry was the
+       host's instance.
+   - Negative control: the same plugin bundling its own React threw
+     `Cannot read properties of null (reading 'useState')` and **took the whole host
+     tree down**, not just its panel. Hence two requirements:
+     - The loader must contain it.
+     - `view_plugin check` must refuse a plugin that bundles React.
+   - **Unproven:** the dev server (`pnpm run dev`). The spike's import-map plugin is a
+     no-op in dev. This is PR 1 P1's only remaining check.
+   - `SPA_CSP` (`api/spa.py:34`) sets only `frame-src`, so the inline import map is
+     allowed. Re-check this if a `script-src` is ever added.
+4. **Docker.** The stages are `web`, `app`, `chat-video`, `api`, and `api` is last and
+   therefore the default target. Plugin build stages go before `api`.
+5. **Does an operator's skill edit reach existing workspaces?**
+   - A `SKILL.md`-only skill is never copied into a workspace, so the index line and
+     `read_skill` both read the source live and uncached (`apps/shared_skills.py:60-105`,
+     `agent/tools.py:~2319`). The edit shows on the next turn.
+   - A skill with other files is copied on the first `read_skill`, and that copy wins
+     until the user presses Refresh (#589, `refresh_skill`).
+   - **Decision [mine, open to override]:**
+     - The chart plugin's skill is a single `SKILL.md`, so `view_plugin tune` is really
+       edit-and-rerun.
+     - Multi-file plugin skills follow the existing Refresh rule. The author docs say so.
 
 ## Not in this plan
 
