@@ -90,9 +90,12 @@ def test_a_cache_rebuilt_after_its_index_was_read_is_unusable(tmp_path: Path, n:
 
 def test_a_rebuild_that_keeps_inode_size_and_mtime_is_still_caught(tmp_path: Path) -> None:
     """ext4 hands a freed inode straight back and its mtime is coarse, so two
-    rebuilds can leave (inode, size, mtime) exactly as the index saw them —
-    reproduced 2871/3000 times on the dev box. Simulated here by writing the new
-    bytes into the SAME inode and restoring the old mtime."""
+    rebuilds can leave (inode, size, mtime) exactly as the index saw them. On
+    the dev box, three back-to-back writes of a 100-byte cache (all inside one
+    mtime tick) collided ~2900 times in 3000; a real build that reads a source
+    first will collide far less often, but any collision is a wrong page.
+    Simulated here by writing the new bytes into the SAME inode and restoring
+    the old mtime."""
     path = tmp_path / "c.vcache"
     _write(path, n=5, key="old")
     index = read_index(path)
