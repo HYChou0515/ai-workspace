@@ -25,9 +25,10 @@ for. The quantized record colours a thumbnail; the exact values back an
 enlarged group's tooltips, so neither needs the source re-read.
 
 The header is strict JSON (no NaN/Infinity literals), because the gallery
-parses it in the browser. The format takes plain Python values only and does
-not guess at pandas/numpy types (NaT, datetime64 and tz offsets each guess
-wrong): the builder converts, or the write fails naming the field. Reading
+parses it in the browser. The format takes plain Python values only, checked
+by exact type (a numpy float64 or str_ is a subclass and is refused too), and
+does not guess at pandas/numpy types (NaT, datetime64 and tz offsets each guess
+wrong): the builder converts, or the write fails naming what it refused. Reading
 needs only the standard library, so the pager never pays a pandas import
 (plan-view-plugins-pr4 P2/P4).
 """
@@ -109,8 +110,13 @@ class ContinuousScale:
         span = self.hi - self.lo
         out = bytearray()
         for v in values:
-            if not (v is None or isinstance(v, (int, float))) or isinstance(v, bool):
-                raise ValueError(f"cell value {v!r} is not a number")
+            if v is not None:
+                if type(v) not in (int, float):
+                    raise ValueError(f"cell value {v!r} is a {type(v).__name__}, not a number")
+                try:
+                    v = float(v)
+                except OverflowError:
+                    raise ValueError(f"cell value {v} does not fit a float") from None
             if v is None or math.isnan(v):  # pandas' missing cell is NaN
                 out.append(MISSING)
             elif span <= 0 or v <= self.lo:
@@ -136,6 +142,8 @@ class CategoryScale:
     labels: Sequence[str]
 
     def __post_init__(self) -> None:
+        if not all(type(label) is str for label in self.labels):
+            raise ValueError(f"category labels {list(self.labels)!r} are not all text")
         if len(self.labels) > LEVELS + 1:
             raise ValueError(
                 f"{len(self.labels)} categories; one byte per cell holds at most {LEVELS + 1}"
@@ -147,10 +155,12 @@ class CategoryScale:
         for v in values:
             if _is_missing(v):  # pandas fills a missing text cell with NaN
                 out.append(MISSING)
-            elif isinstance(v, str) and v in code:
+            elif type(v) is str and v in code:
                 out.append(code[v])
             else:
-                raise ValueError(f"value {v!r} is not one of the scale's categories")
+                raise ValueError(
+                    f"value {v!r} ({type(v).__name__}) is not one of the scale's categories"
+                )
         return bytes(out)
 
     def decode(self, record: bytes) -> list[str | None]:
@@ -207,14 +217,17 @@ def _sort_value(field: str, v: Any) -> Any:
     """A sort value as strict JSON the browser reads back exactly: a non-finite
     float (pandas' missing NaN, or +/-inf) is null. Only None, bool, int within
     +/-2**53, float and str are taken; anything else (a date, a numpy scalar) is
-    refused by field name, for the builder to convert."""
-    if isinstance(v, float) and not math.isfinite(v):
+    refused by field name, for the builder to convert. Types are exact: a numpy
+    float64 is a float subclass and is refused, NaN or not."""
+    if type(field) is not str:
+        raise ValueError(f"sort field name {field!r} is not text (JSON keys are text)")
+    if v is not None and type(v) not in (bool, int, float, str):
+        raise ValueError(f"sort value {field!r} is a {type(v).__name__}, not a plain JSON scalar")
+    if type(v) is float and not math.isfinite(v):
         return None
-    if isinstance(v, int) and not isinstance(v, bool) and abs(v) > _JSON_INT:
+    if type(v) is int and abs(v) > _JSON_INT:
         raise ValueError(f"sort value {field!r} is {v}, past what JSON.parse keeps exact")
-    if v is None or type(v) in (bool, int, float, str):
-        return v
-    raise ValueError(f"sort value {field!r} is a {type(v).__name__}, not a plain JSON scalar")
+    return v
 
 
 def _scale_from_json(raw: Mapping[str, Any]) -> Scale:
@@ -238,6 +251,8 @@ def write_cache(
     the cache cap to sweep."""
     if cells < 1:
         raise ValueError(f"a group needs at least one cell, not cells={cells}")
+    if not all(type(c) is str for c in facet):
+        raise ValueError(f"facet columns {tuple(facet)!r} are not all text")
     records = []
     exact = array("d")
     for g in groups:
@@ -247,7 +262,8 @@ def write_cache(
             )
         if not all(type(k) is str for k in g.key):
             # a marking value is an opaque string (Q6): 12 would never match "12"
-            raise ValueError(f"group key {g.key!r} is not all text")
+            types = ", ".join(type(k).__name__ for k in g.key)
+            raise ValueError(f"group key {g.key!r} is not all str (it is {types})")
         if len(g.values) != cells:
             raise ValueError(f"group {g.key!r} has {len(g.values)} cells, the cache has {cells}")
         records.append(scale.encode(g.values))
@@ -310,9 +326,13 @@ def _open_checked(path: Path) -> tuple[BinaryIO, bytes, int]:
     """Open a cache and read its magic and build id: (file, build id, size)."""
     try:
         f = path.open("rb")
+    except OSError as e:  # missing, a directory, unreadable
+        raise CacheUnusable(f"{path}: {e.strerror or e}") from None
+    try:
         size = os.fstat(f.fileno()).st_size
         magic, build_id = f.read(len(MAGIC)), f.read(_BUILD_ID)
-    except OSError as e:  # missing, a directory, unreadable
+    except OSError as e:  # an I/O error after the open: close the file, don't leak it
+        f.close()
         raise CacheUnusable(f"{path}: {e.strerror or e}") from None
     if magic != MAGIC:  # a short build id leaves the length field short, caught next
         f.close()
@@ -333,8 +353,11 @@ def read_index(path: Path) -> CacheIndex:
             (n,) = _LEN.unpack(head)
             raw = json.loads(f.read(n))
             index = _parse_index(raw, len(MAGIC) + _BUILD_ID + _LEN.size + n, build_id)
-        except (ValueError, KeyError, TypeError) as e:  # JSONDecodeError is a ValueError
-            raise CacheUnusable(f"{path}: unreadable header ({e})") from None
+        # JSONDecodeError is a ValueError; a huge int in the range overflows a float,
+        # and a header nested too deep exhausts the decoder's recursion.
+        except (ValueError, KeyError, TypeError, OverflowError, RecursionError) as e:
+            reason = f"{type(e).__name__}: {str(e)[:200]}"
+            raise CacheUnusable(f"{path}: unreadable header ({reason})") from None
     if size != index.size:
         raise CacheUnusable(f"{path}: {size} bytes, not the {index.size} expected")
     return index
