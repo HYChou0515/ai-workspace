@@ -1,0 +1,518 @@
+/**
+ * A chart spec plus the sandbox's answer → an ECharts option. Pure: it builds
+ * plain objects and closures and never touches a chart instance or the DOM, so
+ * the renderer (P6) only mounts it and wires events.
+ *
+ * Besides the option it returns `series`: for series i, `rows[j]` is the layer
+ * row that data point j draws. A brush, a lasso, a legend click and a
+ * highlight bitset all speak in layer rows, so this table is how each one maps
+ * to and from what ECharts reports (dataIndex per seriesIndex).
+ *
+ * Category axes carry INDICES in the data, never the labels: ECharts reads a
+ * number on a category axis as an index, so a category whose labels are
+ * numbers would otherwise land on the wrong tick.
+ */
+import { colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
+import { decodeColumn, type Column, type Scalar, type WireColumn } from "./wire";
+
+export type WireLayer = {
+  mark: string;
+  rows: number;
+  columns: Record<string, WireColumn>;
+  highlight: string | null;
+  lit: number | null;
+  binned: { points: number; bins: number } | null;
+  outliers: { rows: number; columns: Record<string, WireColumn> } | null;
+};
+
+export type Answer = { format: 1; layers: WireLayer[] };
+
+type Channel = {
+  field?: string;
+  type?: "quantitative" | "nominal" | "ordinal" | "temporal";
+  datum?: number | string;
+  aggregate?: string;
+  title?: string;
+  sort?: "ascending" | "descending" | Scalar[];
+  scale?: { type?: "linear" | "log"; zero?: boolean; domain?: Scalar[]; scheme?: "sequential" | "diverging" };
+};
+
+type Encoding = Partial<Record<"x" | "y" | "x2" | "y2" | "color" | "size" | "theta" | "text", Channel>> & {
+  tooltip?: Channel | Channel[];
+};
+
+type MarkDef = {
+  type: string;
+  color?: string;
+  opacity?: number;
+  point?: boolean;
+  smooth?: boolean;
+  stack?: boolean;
+  extent?: string;
+};
+
+type LayerSpec = { mark: string | MarkDef; encoding: Encoding };
+
+export type ChartSpec = Record<string, unknown> & {
+  mark?: string | MarkDef;
+  encoding?: Encoding;
+  layer?: LayerSpec[];
+};
+
+export type SeriesRows = { layer: number; rows: number[] };
+
+export type GridLayer = { layer: number; seriesIndex: number; cells: Cells; image: RasterImage };
+
+export type Built = {
+  option: Record<string, unknown>;
+  series: SeriesRows[];
+  grids: GridLayer[];
+  notes: string[];
+};
+
+export type Options = {
+  /** Turn a grid's pixels into something ECharts can draw (a canvas, in the
+   * browser). Omitted in a host-free test, where the series draws nothing. */
+  gridImage?: (grid: { cells: Cells; image: RasterImage }) => unknown;
+};
+
+const NONE = "(none)";
+const PALETTE_STOPS = 9;
+
+function layersOf(spec: ChartSpec): LayerSpec[] {
+  if (spec.layer) return spec.layer;
+  return [{ mark: spec.mark as string | MarkDef, encoding: spec.encoding as Encoding }];
+}
+
+function markOf(layer: LayerSpec): MarkDef {
+  return typeof layer.mark === "string" ? { type: layer.mark } : layer.mark;
+}
+
+function escape(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+function show(col: Column, row: number): string {
+  const v = col.value(row);
+  if (v === null) return "—";
+  if (col.kind === "time") return new Date(v as number).toISOString();
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(6)));
+  return String(v);
+}
+
+function hex(table: Uint8ClampedArray, code: number): string {
+  const c = code * 4;
+  return `#${[table[c], table[c + 1], table[c + 2]].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function palette(scheme: "sequential" | "diverging", min: number, max: number): string[] {
+  const table = colourTable(scheme, min, max);
+  return Array.from({ length: PALETTE_STOPS }, (_, i) => hex(table, Math.round((i / (PALETTE_STOPS - 1)) * 254)));
+}
+
+/** A category axis's labels: every level any layer has for `field`, in spec order. */
+function categories(field: string, channel: Channel, decoded: Record<string, Column>[]): Scalar[] {
+  const seen: Scalar[] = [];
+  for (const cols of decoded) {
+    const col = cols[field];
+    if (!col) continue;
+    for (let i = 0; i < col.length; i++) {
+      const v = col.value(i);
+      if (v !== null && !seen.includes(v)) seen.push(v);
+    }
+  }
+  seen.sort((a, b) =>
+    typeof a === "number" && typeof b === "number" ? a - b : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0,
+  );
+  if (channel.sort === "descending") seen.reverse();
+  else if (Array.isArray(channel.sort)) {
+    const first = channel.sort.filter((v) => seen.some((s) => String(s) === String(v)));
+    const firstKeys = new Set(first.map(String));
+    return [...first.map((v) => seen.find((s) => String(s) === String(v)) as Scalar), ...seen.filter((s) => !firstKeys.has(String(s)))];
+  }
+  return seen;
+}
+
+type Axis = {
+  channel: Channel;
+  kind: "value" | "log" | "time" | "category" | "index";
+  labels: Scalar[];
+  /** The axis position of layer row `row` of a column. */
+  at(col: Column, row: number): number | null;
+};
+
+function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[], grid: Cells | null, which: "x" | "y"): Axis | null {
+  if (grid) {
+    const labels = which === "x" ? grid.xs : grid.ys;
+    return { channel: channel ?? {}, kind: "index", labels, at: () => null };
+  }
+  if (!channel?.field) return null;
+  if (channel.type === "nominal" || channel.type === "ordinal") {
+    const labels = categories(channel.field, channel, decoded);
+    const index = new Map(labels.map((v, i) => [String(v), i]));
+    return {
+      channel,
+      kind: "category",
+      labels,
+      at: (col, row) => {
+        const v = col.value(row);
+        return v === null ? null : (index.get(String(v)) ?? null);
+      },
+    };
+  }
+  const kind = channel.type === "temporal" ? "time" : channel.scale?.type === "log" ? "log" : "value";
+  return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null };
+}
+
+function axisOption(axis: Axis | null, grid: Cells | null, which: "x" | "y"): Record<string, unknown> {
+  if (!axis) return { type: "value" };
+  const name = axis.channel.title ?? axis.channel.field;
+  if (axis.kind === "index" && grid) {
+    const n = which === "x" ? grid.width : grid.height;
+    return {
+      type: "value",
+      name,
+      min: -0.5,
+      max: n - 0.5,
+      interval: 1,
+      splitLine: { show: false },
+      axisLabel: { formatter: (i: number) => (Number.isInteger(i) && i >= 0 && i < n ? String(axis.labels[i]) : "") },
+    };
+  }
+  if (axis.kind === "category") return { type: "category", name, data: axis.labels.map(String) };
+  const out: Record<string, unknown> = { type: axis.kind, name };
+  if (axis.channel.scale?.zero === false) out.scale = true;
+  const domain = axis.channel.scale?.domain;
+  if (domain && typeof domain[0] === "number") {
+    out.min = domain[0];
+    out.max = domain[domain.length - 1];
+  }
+  return out;
+}
+
+function tooltipChannels(enc: Encoding): Channel[] {
+  const tips = enc.tooltip === undefined ? [] : Array.isArray(enc.tooltip) ? enc.tooltip : [enc.tooltip];
+  const all = [enc.x, enc.y, enc.x2, enc.y2, enc.color, enc.size, enc.theta, enc.text, ...tips];
+  const seen = new Set<string>();
+  return all.filter((c): c is Channel => {
+    if (!c?.field || seen.has(c.field)) return false;
+    seen.add(c.field);
+    return true;
+  });
+}
+
+function range(col: Column): [number, number] {
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < col.length; i++) {
+    const v = col.value(i);
+    if (typeof v === "number") {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+  }
+  return lo <= hi ? [lo, hi] : [0, 0];
+}
+
+/** `doc` is a chart document that already passed `specErrors`. */
+export function toOption(doc: object, answer: Answer, opts: Options = {}): Built {
+  const spec = doc as ChartSpec;
+  const specs = layersOf(spec);
+  const decoded = answer.layers.map((ly) =>
+    Object.fromEntries(Object.entries(ly.columns).map(([k, w]) => [k, decodeColumn(w)])),
+  );
+
+  const series: Record<string, unknown>[] = [];
+  const rows: SeriesRows[] = [];
+  const grids: GridLayer[] = [];
+  const notes: string[] = [];
+  const visualMaps: Record<string, unknown>[] = [];
+  const legend: string[] = [];
+
+  // One pair of axes for the whole chart, from the first layer that names each.
+  const gridIndex = specs.findIndex((s) => markOf(s).type === "grid");
+  let gridCells: Cells | null = null;
+  if (gridIndex >= 0) {
+    const enc = specs[gridIndex].encoding;
+    const cols = decoded[gridIndex];
+    const x = cols[enc.x?.field as string];
+    const y = cols[enc.y?.field as string];
+    const c = cols[enc.color?.field as string];
+    const n = answer.layers[gridIndex].rows;
+    gridCells = lattice(
+      Array.from({ length: n }, (_, i) => x.value(i)),
+      Array.from({ length: n }, (_, i) => y.value(i)),
+      Array.from({ length: n }, (_, i) => (c?.code ? c.code(i) : 255)),
+    );
+  }
+  const xChannel = specs.map((s) => s.encoding.x).find((c) => c?.field);
+  const yChannel = specs.map((s) => s.encoding.y).find((c) => c?.field);
+  const xAxis = axisFor(xChannel, decoded, gridCells, "x");
+  const yAxis = axisFor(yChannel, decoded, gridCells, "y");
+  const cartesian = specs.some((s) => markOf(s).type !== "pie");
+
+  const point = (li: number, row: number, extra: (number | null)[] = []): (number | null)[] => {
+    const enc = specs[li].encoding;
+    const cols = decoded[li];
+    const px = xAxis && enc.x?.field ? xAxis.at(cols[enc.x.field], row) : null;
+    const py = yAxis && enc.y?.field ? yAxis.at(cols[enc.y.field], row) : null;
+    return [px, py, ...extra];
+  };
+  // Boxplot / errorbar rows carry `$` summaries instead of the y field.
+  const xAt = (li: number, row: number): number | null => {
+    const f = specs[li].encoding.x?.field;
+    return xAxis && f ? xAxis.at(decoded[li][f], row) : null;
+  };
+
+  const common = (mark: MarkDef) => ({
+    emphasis: { focus: "self" },
+    blur: { itemStyle: { opacity: 0.15 }, lineStyle: { opacity: 0.15 } },
+    ...(mark.color ? { itemStyle: { color: mark.color } } : {}),
+  });
+
+  specs.forEach((ly, li) => {
+    const mark = markOf(ly);
+    const enc = ly.encoding;
+    const cols = decoded[li];
+    const wire = answer.layers[li];
+    const n = wire.rows;
+    const all = Array.from({ length: n }, (_, i) => i);
+    const push = (s: Record<string, unknown>, r: number[]) => {
+      series.push(s);
+      rows.push({ layer: li, rows: r });
+    };
+
+    if (mark.type === "grid") {
+      const cells = gridCells as Cells;
+      const c = cols[enc.color?.field as string];
+      const scheme = enc.color?.scale?.scheme ?? "sequential";
+      const image = paintCells(cells, colourTable(scheme, c?.min ?? 0, c?.max ?? 0));
+      const source = opts.gridImage?.({ cells, image });
+      grids.push({ layer: li, seriesIndex: series.length, cells, image });
+      visualMaps.push({
+        type: "continuous",
+        min: c?.min ?? 0,
+        max: c?.max ?? 0,
+        calculable: false,
+        seriesIndex: series.length,
+        inRange: { color: palette(scheme, c?.min ?? 0, c?.max ?? 0) },
+      });
+      push(
+        {
+          type: "custom",
+          silent: true,
+          data: [[0, 0]],
+          renderItem: (_params: unknown, api: { coord: (p: number[]) => number[] }) => {
+            if (!source) return null;
+            const tl = api.coord([-0.5, cells.height - 0.5]);
+            const br = api.coord([cells.width - 0.5, -0.5]);
+            return { type: "image", style: { image: source, x: tl[0], y: tl[1], width: br[0] - tl[0], height: br[1] - tl[1] } };
+          },
+        },
+        [],
+      );
+      return;
+    }
+
+    if (mark.type === "rule") {
+      const line = { lineStyle: { color: mark.color ?? "#888", type: "dashed" }, symbol: "none", label: { show: true } };
+      let data: unknown[];
+      if (enc.y?.datum !== undefined) data = [{ yAxis: enc.y.datum, name: enc.y.title }];
+      else if (enc.x?.datum !== undefined) data = [{ xAxis: enc.x.datum, name: enc.x.title }];
+      else if (enc.y?.field && !enc.x?.field) data = all.map((r) => ({ yAxis: cols[enc.y!.field!].value(r) }));
+      else if (enc.x?.field && !enc.y?.field) data = all.map((r) => ({ xAxis: cols[enc.x!.field!].value(r) }));
+      else
+        data = all.map((r) => {
+          const [x, y] = point(li, r);
+          const x2 = enc.x2?.field ? (xAxis?.at(cols[enc.x2.field], r) ?? x) : x;
+          const y2 = enc.y2?.field ? (yAxis?.at(cols[enc.y2.field], r) ?? y) : y;
+          return [{ coord: [x, y] }, { coord: [x2, y2] }];
+        });
+      push({ type: "line", data: [], markLine: { ...line, data } }, []);
+      return;
+    }
+
+    if (mark.type === "pie") {
+      const theta = cols[enc.theta?.field as string];
+      const colour = cols[enc.color?.field as string];
+      const data = all.map((r) => ({ name: colour ? String(colour.value(r) ?? NONE) : String(r), value: theta.value(r) }));
+      legend.push(...data.map((d) => d.name));
+      push({ type: "pie", data, radius: ["0%", "70%"], ...common(mark) }, all);
+      return;
+    }
+
+    if (mark.type === "heatmap") {
+      const c = cols[enc.color?.field as string];
+      const [lo, hi] = range(c);
+      const scheme = enc.color?.scale?.scheme ?? "sequential";
+      const reach = Math.max(Math.abs(lo), Math.abs(hi));
+      const [vmin, vmax] = scheme === "diverging" ? [-reach, reach] : [lo, hi];
+      visualMaps.push({
+        type: "continuous",
+        min: vmin,
+        max: vmax,
+        dimension: 2,
+        seriesIndex: series.length,
+        calculable: true,
+        inRange: { color: palette(scheme, vmin, vmax) },
+      });
+      push({ type: "heatmap", data: all.map((r) => point(li, r, [c.value(r) as number | null])), ...common(mark) }, all);
+      return;
+    }
+
+    if (mark.type === "boxplot") {
+      const five = ["$lo", "$q1", "$mid", "$q3", "$hi"].map((k) => cols[k]);
+      const data = all.map((r) => [xAt(li, r), ...five.map((c) => c.value(r) as number)]);
+      push({ type: "boxplot", data, encode: { x: 0, y: [1, 2, 3, 4, 5] }, ...common(mark) }, all);
+      if (wire.outliers) {
+        const out = Object.fromEntries(Object.entries(wire.outliers.columns).map(([k, w]) => [k, decodeColumn(w)]));
+        const data2 = Array.from({ length: wire.outliers.rows }, (_, r) => [
+          xAxis && enc.x?.field ? xAxis.at(out[enc.x.field], r) : null,
+          out[enc.y?.field as string].value(r) as number,
+        ]);
+        push({ type: "scatter", data: data2, symbolSize: 5, ...common(mark) }, []);
+      }
+      return;
+    }
+
+    if (mark.type === "errorbar") {
+      const [lo, hi] = enc.y2?.field ? [cols[enc.y!.field!], cols[enc.y2.field]] : [cols.$lo, cols.$hi];
+      const data = all.map((r) => [xAt(li, r), lo.value(r) as number, hi.value(r) as number]);
+      push(
+        {
+          type: "custom",
+          data,
+          encode: { x: 0, y: [1, 2] },
+          renderItem: (_p: unknown, api: { value: (d: number) => number; coord: (p: number[]) => number[]; style: () => unknown }) => {
+            const x = api.value(0);
+            const a = api.coord([x, api.value(1)]);
+            const b = api.coord([x, api.value(2)]);
+            const cap = 4;
+            const style = { stroke: mark.color ?? "#555", lineWidth: 1.5 };
+            return {
+              type: "group",
+              children: [
+                { type: "line", shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, style },
+                { type: "line", shape: { x1: a[0] - cap, y1: a[1], x2: a[0] + cap, y2: a[1] }, style },
+                { type: "line", shape: { x1: b[0] - cap, y1: b[1], x2: b[0] + cap, y2: b[1] }, style },
+              ],
+            };
+          },
+          ...common(mark),
+        },
+        all,
+      );
+      return;
+    }
+
+    // line / area / bar / scatter / text: split by a categorical colour.
+    const extras: Column[] = [];
+    let sizeDim = -1;
+    const colourCh = enc.color;
+    if (colourCh?.field && colourCh.type === "quantitative") {
+      const c = cols[colourCh.field];
+      const [lo, hi] = range(c);
+      const scheme = colourCh.scale?.scheme ?? "sequential";
+      visualMaps.push({
+        type: "continuous",
+        min: lo,
+        max: hi,
+        dimension: 2,
+        seriesIndex: series.length,
+        calculable: true,
+        inRange: { color: palette(scheme, lo, hi) },
+      });
+      extras.push(c);
+    }
+    const sizeCol = wire.binned ? cols.$count : enc.size?.field ? cols[enc.size.field] : undefined;
+    if (sizeCol) {
+      sizeDim = 2 + extras.length;
+      extras.push(sizeCol);
+    }
+    if (wire.binned) notes.push(`${wire.binned.points.toLocaleString("en-US")} points drawn as ${wire.binned.bins.toLocaleString("en-US")} bins`);
+    const [smin, smax] = sizeCol ? range(sizeCol) : [0, 0];
+    const symbolSize =
+      sizeDim >= 0
+        ? (v: number[]) => (smax === smin ? 10 : 4 + ((v[sizeDim] - smin) / (smax - smin)) * 20)
+        : mark.type === "text"
+          ? 0
+          : undefined;
+
+    const groups = new Map<string, number[]>();
+    const splitCol = colourCh?.field && colourCh.type !== "quantitative" ? cols[colourCh.field] : undefined;
+    for (const r of all) {
+      const key = splitCol ? String(splitCol.value(r) ?? NONE) : "";
+      const list = groups.get(key) ?? [];
+      list.push(r);
+      groups.set(key, list);
+    }
+    const order = splitCol
+      ? [
+          ...categories(colourCh!.field!, colourCh!, [cols]).map(String).filter((k) => groups.has(k)),
+          ...(groups.has(NONE) ? [NONE] : []),
+        ]
+      : [""];
+    const textCol = enc.text?.field ? cols[enc.text.field] : undefined;
+    for (const key of order) {
+      const members = groups.get(key) ?? [];
+      const type = mark.type === "area" ? "line" : mark.type === "text" ? "scatter" : mark.type;
+      const s: Record<string, unknown> = {
+        type,
+        data: members.map((r) => point(li, r, extras.map((c) => c.value(r) as number | null))),
+        ...common(mark),
+      };
+      if (splitCol) {
+        s.name = key;
+        legend.push(key);
+      }
+      if (symbolSize !== undefined) s.symbolSize = symbolSize;
+      if (mark.type === "area") s.areaStyle = { opacity: mark.opacity ?? 0.7 };
+      else if (mark.opacity !== undefined) s.itemStyle = { ...(s.itemStyle as object), opacity: mark.opacity };
+      if (mark.type === "line") {
+        s.showSymbol = mark.point ?? false;
+        if (mark.smooth) s.smooth = true;
+      }
+      if ((mark.type === "area" || mark.type === "bar") && mark.stack) s.stack = "stack";
+      if (mark.type === "scatter" && n > 2000) s.large = true;
+      if (textCol) {
+        s.label = { show: true, formatter: (p: { dataIndex: number }) => show(textCol, members[p.dataIndex]) };
+      }
+      push(s, members);
+    }
+  });
+
+  const tooltip = {
+    trigger: "item",
+    confine: true,
+    formatter: (p: { seriesIndex: number; dataIndex: number }) => {
+      const where = rows[p.seriesIndex];
+      if (!where) return "";
+      const row = where.rows[p.dataIndex];
+      if (row === undefined) return "";
+      const enc = specs[where.layer].encoding;
+      const cols = decoded[where.layer];
+      const lines = tooltipChannels(enc)
+        .filter((c) => cols[c.field!])
+        .map((c) => `${escape(c.title ?? c.field!)}: <b>${escape(show(cols[c.field!], row))}</b>`);
+      if (answer.layers[where.layer].binned && cols.$count) lines.push(`points: <b>${escape(show(cols.$count, row))}</b>`);
+      return lines.join("<br/>");
+    },
+  };
+
+  const option: Record<string, unknown> = {
+    animation: false,
+    tooltip,
+    series,
+    brush: { toolbox: ["rect", "polygon", "clear"], xAxisIndex: cartesian ? 0 : undefined, throttleType: "debounce", throttleDelay: 250 },
+    toolbox: { feature: { brush: { type: ["rect", "polygon", "clear"] } } },
+  };
+  if (typeof spec.title === "string") option.title = { text: spec.title, left: "center", textStyle: { fontSize: 14 } };
+  if (cartesian) {
+    option.xAxis = [axisOption(xAxis, gridCells, "x")];
+    option.yAxis = [axisOption(yAxis, gridCells, "y")];
+    option.grid = { containLabel: true, left: 16, right: visualMaps.length ? 80 : 16, top: 48, bottom: 16 };
+  }
+  if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
+  if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));
+  return { option, series: rows, grids, notes };
+}
