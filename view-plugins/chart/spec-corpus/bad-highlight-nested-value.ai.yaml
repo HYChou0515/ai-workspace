@@ -1,0 +1,8 @@
+view: chart
+source: data/a.csv
+mark: scatter
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}
+highlight:
+  values: {a: [[1, 2]]}

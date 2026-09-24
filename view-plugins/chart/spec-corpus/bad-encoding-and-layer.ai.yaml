@@ -1,0 +1,9 @@
+view: chart
+source: data/a.csv
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}
+layer:
+  - mark: rule
+    encoding:
+      y: {datum: 1}

@@ -1,0 +1,7 @@
+view: chart
+source: data/a.csv
+layer:
+  - mark: line
+    source: data/b.csv
+    encoding:
+      x: {field: a, type: quantitative}

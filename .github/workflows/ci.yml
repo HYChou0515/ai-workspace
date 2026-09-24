@@ -256,6 +256,51 @@ jobs:
           uv run coverage run -m pytest -m "not integration"
           uv run coverage report
 
+  chart-plugin-test:
+    # The chart view plugin (#847 #848) is two projects of its own: a sandbox
+    # half (own pyproject + uv.lock, excluded by the root config like
+    # sandbox-host) and a web half (own package.json). Both read the one spec
+    # schema and the shared spec-corpus/, so a reader that drifts fails here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.9"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sandbox half — sync, lint, type, test
+        working-directory: view-plugins/chart/sandbox-src
+        run: |
+          uv sync --frozen
+          uv run ruff check
+          uv run ruff format --check
+          uv run ty check src tests
+          uv run coverage run -m pytest
+          uv run coverage report --fail-under=100
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: view-plugins/chart/web/pnpm-lock.yaml
+
+      - name: Web half — install, type, test
+        working-directory: view-plugins/chart/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm exec vitest run
+
   frontend-test:
     runs-on: ubuntu-latest
     defaults:
