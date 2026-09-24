@@ -16,7 +16,19 @@ BLOCKS = re.findall(r"```yaml\n(.*?)```", SKILL, flags=re.S)
 
 
 def test_the_skill_has_its_examples():
-    assert len(BLOCKS) == 2
+    assert len(BLOCKS) == 3
+
+
+def test_the_facet_example_is_valid_on_a_grid():
+    """#848: the gallery's own example, dropped into a grid spec as a model
+    would drop it."""
+    spec = parse_spec(
+        "view: chart\nsource: a.csv\nmark: grid\nencoding:\n"
+        "  x: {field: die_x, type: ordinal}\n  y: {field: die_y, type: ordinal}\n"
+        "  color: {field: bin, type: nominal}\n" + BLOCKS[2]
+    )
+    assert "facet" in spec
+    assert spec_errors(spec) == []
 
 
 def test_the_full_example_is_a_valid_spec():

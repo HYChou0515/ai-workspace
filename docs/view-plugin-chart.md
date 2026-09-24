@@ -20,7 +20,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - **給人和 AI 讀的參考**：`view-plugins/chart/skill/SKILL.md`。這份就是 AI 用的 skill，
   範例由測試保證能通過 schema。
 - **機器驗證用**：`view-plugins/chart/sandbox-src/src/chart_view/spec.schema.json`，只有這一份。
-  沙盒端的 `validate` 和瀏覽器端的 renderer 讀的都是它，`view-plugins/chart/spec-corpus/` 的 47 個
+  沙盒端的 `validate` 和瀏覽器端的 renderer 讀的都是它，`view-plugins/chart/spec-corpus/` 的 50 個
   範例檔同時餵給兩邊，判定必須一致。
 
 一句話摘要：Vega-Lite 子集寫成 YAML（`mark` / `encoding` / `transform` / `layer`），
@@ -40,6 +40,25 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - 連動的範圍是一個 item。同一個 item 開在好幾個分頁（例如聊天模式開出來的純編輯區頁面）也是同一組 marking。
 - AI 可以用 `show_file(layout=…)` 把幾張連動的圖一次放進分割窗格；送訊息時，composer 上方的 marking chip
   會把選取寫成 `.markings/<名字>.json` 給 AI 讀（見升級手冊 [#856](migrations.md#pr-856)）。
+
+## 縮圖牆：`facet:`（#857）
+
+`grid` 加上 `facet:`，就不是畫一張圖，而是**每個群組畫一張小圖**，排成一面可以捲動的縮圖牆，
+幾百到幾千組都行。寫法見 `SKILL.md` 的 Facet 段落（範例由測試保證能通過 schema）；這裡只講它怎麼運作。
+
+- **第一次打開時，沙盒建一份快取**（讀一次來源檔），之後捲動、換排序、放大都從快取取，不再讀來源。
+  來源檔或 spec 中會影響內容的部分（facet 欄位、排序欄位、x / y / color 的欄位與型別、transform）一改，
+  下次打開就重建；只換排序方向、標題或配色則不會重建。
+- **只載入看得到的部分**：畫面外的縮圖不會向沙盒要資料，捲到附近才載入。
+- **縮圖和大圖畫出來的像素完全一樣**：兩邊用同一份量化與配色（有測試逐像素比對）。點縮圖旁的 ⤢ 可以放大，
+  滑鼠停在格子上會顯示該格的**精確值**（不是量化後的顏色值）。
+- **選取是依排名，不是依畫面上的元素**：點一張、shift 點另一張，會選取兩者之間的所有排名；也可以直接輸入
+  「第 a 到第 b 名」。選取會把範圍內**每一組**（包括還沒捲到、還沒載入的）的 facet 欄位值寫進這張圖的 marking，
+  同一個 marking 上的其他圖會亮起對應的列。
+- **疊圖與相減不需要 `facet`**：`transform:` 裡對 lattice 欄位做 `aggregate`，就是把所有群組疊成一張；
+  `diff` 則是兩組相減（見 `SKILL.md` 的 Transforms）。
+- 快取放在沙盒的 `.home/.cache/views/`，不算 workspace 額度、不備份、隨沙盒回收；上限與容量估算見升級手冊
+  [#857](migrations.md#pr-857)。`facet:` 的來源必須是表格檔，`{entity: …}` 會被拒絕。
 
 ## 計算在哪裡跑
 
