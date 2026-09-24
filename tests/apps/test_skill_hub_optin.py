@@ -48,5 +48,5 @@ def test_the_skill_is_on_by_default_in_each_granting_apps_default_profile(slug: 
     granted — the regression lens's finding."""
     manifest = load_app_manifest(slug)
     profile = manifest.default_profile
-    states = {s.name: s for s in effective_item_skills(slug, profile, {}, [])}
+    states = {s.name: s for s in effective_item_skills(slug, profile, {}, [], tools=None)}
     assert states[SKILL].default_on is True, (slug, profile, load_profile(slug, profile).skills)

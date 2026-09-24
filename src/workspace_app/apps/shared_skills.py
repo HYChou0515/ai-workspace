@@ -18,6 +18,7 @@ etc.) rather than imported by name, so a test that reloads ``skills`` (to reset 
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -57,6 +58,41 @@ SHARED_SKILLS: dict[str, Path] = {
 }
 
 
+# #847/#848: each runtime view plugin's `skill/` joins the shared skills. Set
+# WHOLESALE at composition (`view_plugins.skills.register_plugin_skills`), never
+# appended to, so a second `create_app` in one process (every test) starts from
+# what IT discovered. Kept apart from `SHARED_SKILLS` because the two differ in
+# who gets them: an app DECLARES a shipped skill in `agent.skills`, while a
+# plugin skill reaches every item that can draw a view (`plugin_skills_for`).
+PLUGIN_SKILLS: dict[str, Path] = {}
+
+#: The tools that make an item able to draw a view: write the `*.ai.yaml`, then
+#: show it. Plugin skills and the `## Available views` index go to exactly the
+#: items whose RESOLVED tool set holds both.
+VIEW_DRAWING_TOOLS = frozenset({"write_file", "show_file"})
+
+
+def set_plugin_skills(sources: Mapping[str, Path]) -> None:
+    PLUGIN_SKILLS.clear()
+    PLUGIN_SKILLS.update(sources)
+
+
+def can_draw_views(tools: Collection[str] | None) -> bool:
+    """``None`` is an unrestricted tool set (``allowed_tools=None``), which holds
+    everything."""
+    return tools is None or set(tools) >= VIEW_DRAWING_TOOLS
+
+
+def shared_skill_source(name: str) -> Path | None:
+    """Where a shared skill's folder is — a shipped one or a view plugin's."""
+    return SHARED_SKILLS.get(name) or PLUGIN_SKILLS.get(name)
+
+
+def plugin_skills_for(tools: Collection[str] | None) -> list[SkillMeta]:
+    """The plugin skills an item with this RESOLVED tool set gets."""
+    return shared_skill_metas(sorted(PLUGIN_SKILLS)) if can_draw_views(tools) else []
+
+
 def shared_skill_metas(names: list[str]) -> list[SkillMeta]:
     """``(name, description)`` for each declared shared skill that resolves to a
     well-formed SKILL.md, in the given order. Names absent from the registry, or
@@ -74,10 +110,10 @@ def load_shared_skill(name: str) -> str:
     """A shared skill's body markdown (frontmatter stripped). Raises
     ``skills.SkillError`` on an unregistered name, a missing SKILL.md, or a body
     over the cap."""
-    src = SHARED_SKILLS.get(name)
+    src = shared_skill_source(name)
     skill_md = None if src is None else src / "SKILL.md"
     if skill_md is None or not skill_md.is_file():
-        avail = ", ".join(sorted(SHARED_SKILLS)) or "(none)"
+        avail = ", ".join(sorted({*SHARED_SKILLS, *PLUGIN_SKILLS})) or "(none)"
         raise skills.SkillError(f"unknown shared skill {name!r}. available: {avail}")
     _front, body = skills._parse_frontmatter(skill_md.read_bytes())
     if len(body) > skills.SKILL_BODY_CAP:
@@ -88,7 +124,7 @@ def load_shared_skill(name: str) -> str:
 
 
 def _meta(name: str) -> SkillMeta | None:
-    src = SHARED_SKILLS.get(name)
+    src = shared_skill_source(name)
     if src is None:
         return None
     skill_md = src / "SKILL.md"

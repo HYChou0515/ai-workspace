@@ -646,7 +646,9 @@ class TurnContextBuilder:
             return ()
         return tuple(defs)
 
-    async def _skills_reachable(self, item_id: str, facts: TurnFacts) -> bool | None:
+    async def _skills_reachable(
+        self, item_id: str, facts: TurnFacts, agent_config: AgentConfig | None
+    ) -> bool | None:
         """Whether this turn can load ANY skill — what `read_skill` is granted on.
 
         Asked of the two producers that actually render this turn's indexes, not
@@ -673,7 +675,10 @@ class TurnContextBuilder:
         if slug is None or profile is None:
             return None
         try:
-            if any(s.effective for s in effective_item_skills(slug, profile, prefs, [])):
+            tools = agent_config.allowed_tools if agent_config is not None else ()
+            if any(
+                s.effective for s in effective_item_skills(slug, profile, prefs, [], tools=tools)
+            ):
                 return True
             return bool(await advertised_workspace_skills(self._files, item_id, prefs))
         except Exception:  # noqa: BLE001 — never break a turn over a skill index
@@ -908,7 +913,7 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts),
+                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,
@@ -1011,7 +1016,7 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts),
+                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,

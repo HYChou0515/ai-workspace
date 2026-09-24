@@ -337,7 +337,7 @@ class AppCatalog:
             )
         skill_metas = [
             SkillMeta(name=s.name, description=s.description)
-            for s in effective_item_skills(app_slug, profile, skill_prefs or {}, [])
+            for s in effective_item_skills(app_slug, profile, skill_prefs or {}, [], tools=tools)
             if s.effective
         ]
 

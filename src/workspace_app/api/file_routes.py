@@ -320,7 +320,11 @@ def register_file_routes(
         profile = locator.profile_of(investigation_id)
         prefs = locator.skill_prefs_of(investigation_id)
         ws_metas = await workspace_skill_metas(files, investigation_id)
-        states = effective_item_skills(slug, profile, prefs, ws_metas)
+        # The item's RESOLVED tools decide whether view-plugin skills apply —
+        # the same set the turn's prompt index is composed from.
+        config = locator.resolve_agent_config(investigation_id)
+        tools = config.allowed_tools if config is not None else ()
+        states = effective_item_skills(slug, profile, prefs, ws_metas, tools=tools)
         # Only a copy has an upstream, so only copies are resolved — this reads
         # the package (or the hub) on every panel open and is deliberately kept
         # off the turn's hot path.

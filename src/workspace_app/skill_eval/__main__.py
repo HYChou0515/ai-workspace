@@ -33,7 +33,7 @@ from pathlib import Path
 import msgspec
 
 from ..apps.frontmatter import FrontmatterError, parse_frontmatter
-from ..apps.shared_skills import SHARED_SKILLS
+from ..apps.shared_skills import PLUGIN_SKILLS, SHARED_SKILLS, shared_skill_source
 from ..apps.skill_payload import skill_payload
 from .report import Report, render, row_for
 from .runner import Chat, ToolCall, Transcript, Turn, run_scenario
@@ -236,7 +236,7 @@ def _resolve_skill(spec: str) -> tuple[str, str, Path]:
         name = str(front.get("name", "")).strip()
         if not name:
             raise SystemExit(f"{path}: SKILL.md frontmatter has no `name`")
-    src = SHARED_SKILLS.get(name)
+    src = shared_skill_source(name)
     # `.resolve()`: `--skill SKILL.md` from inside the folder has parent `.`,
     # whose own name is "" — the rule is about the folder, not the spelling.
     own = path.resolve().parent
@@ -246,13 +246,27 @@ def _resolve_skill(spec: str) -> tuple[str, str, Path]:
         where = f"{path} is not in a folder named {name!r} and" if text is not None else "it is"
         raise SystemExit(
             f"unknown skill {name!r}: {where} not registered "
-            f"(registered: {', '.join(sorted(SHARED_SKILLS))})"
+            f"(registered: {', '.join(sorted({*SHARED_SKILLS, *PLUGIN_SKILLS}))})"
         )
     return name, text if text is not None else (src / "SKILL.md").read_text(), src
 
 
+def register_view_plugins(config_path: Path | None) -> None:
+    """#847/#848: make the installed view plugins' skills resolvable here, the
+    way `create_app` does for a live turn — from the same config, the same dir,
+    the same strict discovery. Without it a plugin skill is "unknown skill",
+    and the turn's `## Available skills` index would lack it."""
+    from ..config.loader import load
+    from ..view_plugins.discovery import discover_view_plugins, resolve_plugins_dir
+    from ..view_plugins.skills import register_plugin_skills
+
+    settings = load(config_path=config_path)
+    register_plugin_skills(discover_view_plugins(resolve_plugins_dir(settings.view_plugins)))
+
+
 def main() -> None:
     args = _parse_args()
+    register_view_plugins(args.config)
     if args.dump_skill:
         _name, text, _folder = _resolve_skill(args.dump_skill)
         args.out_dir.mkdir(parents=True, exist_ok=True)
