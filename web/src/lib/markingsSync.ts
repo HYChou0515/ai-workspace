@@ -24,6 +24,27 @@ function fromWire(columns: Record<string, string[]> | null): Marking | null {
   return Object.fromEntries(Object.entries(columns).map(([c, v]) => [c, new Set(v)]));
 }
 
+function asWire(data: unknown): Wire | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (d.kind === "hello") return { kind: "hello" };
+  if (d.kind !== "set" || typeof d.name !== "string" || !d.name) return null;
+  if (d.source !== null && typeof d.source !== "string") return null;
+  const cols = d.columns;
+  if (cols !== null) {
+    if (!cols || typeof cols !== "object" || Array.isArray(cols)) return null;
+    for (const v of Object.values(cols)) {
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) return null;
+    }
+  }
+  return {
+    kind: "set",
+    name: d.name,
+    columns: cols as Record<string, string[]> | null,
+    source: d.source as string | null,
+  };
+}
+
 function sameAsHeld(store: MarkingStore, msg: Extract<Wire, { kind: "set" }>): boolean {
   const held = store.get(msg.name);
   if (!held || !msg.columns) return !held && !msg.columns;
@@ -53,8 +74,11 @@ export function syncMarkingsAcrossTabs(store: MarkingStore, itemKey: string): ()
       source: entry?.source ?? null,
     });
   });
-  channel.onmessage = (ev: MessageEvent<Wire>) => {
-    const msg = ev.data;
+  channel.onmessage = (ev: MessageEvent<unknown>) => {
+    const msg = asWire(ev.data);
+    // Anything else on the channel (another build of the app, a stray post)
+    // is not ours to apply — and throwing here would be an unhandled error.
+    if (!msg) return;
     if (msg.kind === "hello") {
       for (const [name, entry] of store.snapshot()) {
         post({ kind: "set", name, columns: toWire(entry.marking), source: entry.source });
