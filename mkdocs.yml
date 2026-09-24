@@ -109,6 +109,7 @@ nav:
       - 擴充平台（Tools / Skills / Workflows）: extending-the-platform.md
       - 寫一支工具（外部作者）: tool-authoring.md
       - 寫一個 View Kind（runtime view plugin）: view-kind-authoring.md
+      - chart：互動圖表 view plugin: view-plugin-chart.md
       - 從外部系統交棒進來（外部團隊）: external-handoff.md
       - 撰寫 Workflow: workflows-authoring.md
       - 共創 Skills: skills-authoring.md
