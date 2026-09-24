@@ -5,20 +5,25 @@ This is the one place pandas values meet the cache format, so it is the one
 place they are made plain (the format refuses anything else, by name):
 
 - a group's key is ``canon`` of each facet column's value -- the string a
-  linked view's marking compares (Q6), so a key written here always matches;
-- a cell's x / y is what the chart's wire sends a browser for the same value
-  (``wire._json_scalar``), so a thumbnail's ``lattice`` places cells where the
-  full view does;
-- a sort value is None when missing (NaN, NaT, NA), a number of UTC epoch
-  milliseconds when a date or time (exact in JSON.parse, and in time order
-  across tz offsets), and the Python value of a numpy scalar.
+  linked view's marking compares (Q6), so a key written here always matches.
+  A missing key (NaN, NA, None) is refused, never keyed "<NA>";
+- a cell's x / y is asked of the chart's wire itself: ``wire.encode_column``
+  for the axis type (``f64`` quantitative, ``time`` temporal, ``cat``
+  otherwise, as ``query`` sends a grid), decoded. A thumbnail's ``lattice``
+  then gets exactly what the full view's gets. A row with no x or y is left
+  out, as ``lattice`` leaves it out;
+- a sort value is None when missing (NaN, NaT, NA), UTC epoch milliseconds
+  when a date or a timestamp (exact in JSON.parse, and in time order across tz
+  offsets), and the Python value of a numpy scalar. A ``datetime.time`` or a
+  ``Timedelta`` is not converted, and the format refuses it by name.
 
-Pandas is imported here and only here: the pager (``chart_view.facet.pager``)
-never loads it.
+Within ``chart_view.facet`` only this module imports pandas: the pager and the
+cap never load it.
 """
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -28,7 +33,9 @@ import numpy as np
 import pandas as pd
 
 from chart_view.facet import CategoryScale, ContinuousScale, Group, write_cache
-from chart_view.wire import _json_scalar, canon
+from chart_view.wire import canon, encode_column
+
+_WIRE_KIND = {"quantitative": "f64", "temporal": "time"}  # anything else is "cat"
 
 
 class BuildError(ValueError):
@@ -47,6 +54,26 @@ def _plain_sort(value: Any) -> Any:
     return value
 
 
+def _axis(column: pd.Series, vega_type: str) -> list[Any]:
+    """The axis values the chart's wire sends a browser for ``column`` (None
+    where it sends a missing value): the same call, decoded."""
+    kind = _WIRE_KIND.get(vega_type, "cat")
+    wire = encode_column(column, kind)
+    if kind != "cat":
+        floats = np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8")
+        return [None if np.isnan(v) else float(v) for v in floats]
+    width = wire["width"]
+    codes = np.frombuffer(base64.b64decode(wire["codes"]), dtype=f"<u{width}")
+    missing = 2 ** (8 * width) - 1
+    return [None if c == missing else wire["levels"][c] for c in codes]
+
+
+def _texts(column: pd.Series) -> list[str | None]:
+    """canon of each value, None where pandas says missing (NaN, NaT, NA)."""
+    missing = column.isna().to_numpy()
+    return [None if m else canon(v) for v, m in zip(column, missing, strict=True)]
+
+
 def build_facet_cache(
     frame: pd.DataFrame,
     *,
@@ -56,23 +83,28 @@ def build_facet_cache(
     value: str,
     sort: Sequence[str] = (),
     path: Path,
+    x_type: str = "ordinal",
+    y_type: str = "ordinal",
     progress: Callable[[str], None] = lambda _line: None,
 ) -> None:
-    missing = [c for c in [*facet, x, y, value, *sort] if c not in frame.columns]
-    if missing:
-        raise BuildError(f"the source has no column {', '.join(map(repr, missing))}")
+    missing_columns = [c for c in [*facet, x, y, value, *sort] if c not in frame.columns]
+    if missing_columns:
+        raise BuildError(f"the source has no column {', '.join(map(repr, missing_columns))}")
     progress(f"read {len(frame)} rows")
 
-    keys = pd.DataFrame({c: frame[c].map(canon) for c in facet})
+    xs, ys = _axis(frame[x], x_type), _axis(frame[y], y_type)
+    placed = [i for i in range(len(frame)) if xs[i] is not None and ys[i] is not None]
+    if len(placed) < len(frame):
+        left_out = len(frame) - len(placed)
+        progress(f"left out {left_out} row{'s' if left_out > 1 else ''} with no x or y")
+    if not placed:
+        raise BuildError(f"no row has both a {x!r} and a {y!r} value")
+
+    keys = {c: _texts(frame[c]) for c in facet}
     for c in facet:
-        if keys[c].isna().any():
-            raise BuildError(f"{int(keys[c].isna().sum())} rows have no {c!r} value")
-    xs = frame[x].map(_json_scalar)
-    ys = frame[y].map(_json_scalar)
-    cell_of: dict[tuple[Any, Any], int] = {}
-    for cx, cy in zip(xs, ys, strict=True):
-        cell_of.setdefault((cx, cy), len(cell_of))
-    cells = len(cell_of)
+        gaps = sum(keys[c][i] is None for i in placed)
+        if gaps:
+            raise BuildError(f"{gaps} rows have no {c!r} value")
 
     numeric = pd.api.types.is_numeric_dtype(frame[value]) and not pd.api.types.is_bool_dtype(
         frame[value]
@@ -87,33 +119,35 @@ def build_facet_cache(
         # chart's q8 does; the exact section keeps inf and reads NaN back as None
         cell_values: list[Any] = [float(v) for v in values]
     else:
-        texts = frame[value].map(canon)
-        scale = CategoryScale(sorted({t for t in texts if t is not None}))
-        cell_values = list(texts)
+        cell_values = _texts(frame[value])
+        scale = CategoryScale(sorted({t for t in cell_values if t is not None}))
+
+    cell_of: dict[tuple[Any, Any], int] = {}
+    rows_of: dict[tuple[str, ...], list[int]] = {}
+    for i in placed:
+        cell_of.setdefault((xs[i], ys[i]), len(cell_of))
+        key = tuple(str(keys[c][i]) for c in facet)  # no None left: refused above
+        rows_of.setdefault(key, []).append(i)
+    cells = len(cell_of)
 
     groups: list[Group] = []
-    order = list(dict.fromkeys(zip(*(keys[c] for c in facet), strict=True)))
-    rows_of: dict[tuple[str, ...], list[int]] = {k: [] for k in order}
-    for i, k in enumerate(zip(*(keys[c] for c in facet), strict=True)):
-        rows_of[k].append(i)
-    for k in order:
+    for k, rows in rows_of.items():
         record: list[Any] = [None] * cells
         seen: set[int] = set()
-        for i in rows_of[k]:
-            cell = cell_of[(xs.iat[i], ys.iat[i])]
+        for i in rows:
+            cell = cell_of[(xs[i], ys[i])]
             if cell in seen:
                 raise BuildError(
-                    f"group {k!r} has more than one row at ({xs.iat[i]!r}, {ys.iat[i]!r});"
-                    " aggregate first"
+                    f"group {k!r} has more than one row at ({xs[i]!r}, {ys[i]!r}); aggregate first"
                 )
             seen.add(cell)
             record[cell] = cell_values[i]
         sort_values = {}
         for c in sort:
-            distinct = {repr(_plain_sort(frame[c].iat[i])) for i in rows_of[k]}
+            distinct = {repr(_plain_sort(frame[c].iat[i])) for i in rows}
             if len(distinct) > 1:
                 raise BuildError(f"group {k!r} has more than one {c!r}; a sort value is per group")
-            sort_values[c] = _plain_sort(frame[c].iat[rows_of[k][0]])
+            sort_values[c] = _plain_sort(frame[c].iat[rows[0]])
         groups.append(Group(key=k, sort=sort_values, values=record))
     progress(f"{len(groups)} groups over {cells} cells")
 
