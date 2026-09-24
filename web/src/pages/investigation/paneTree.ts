@@ -157,6 +157,24 @@ export type LayoutSplit = {
 };
 export type LayoutNode = LayoutLeaf | LayoutSplit;
 
+/** Whether `node` is a layout the panes can draw: every split has a direction
+ * and a ratio strictly inside (0, 1), every leaf a path. Untrusted input — a
+ * tool declaration, a URL — goes through this before it becomes a tree. */
+export function isLayoutNode(node: unknown): node is LayoutNode {
+  if (!node || typeof node !== "object") return false;
+  const n = node as Record<string, unknown>;
+  if (n.type === "leaf") return typeof n.path === "string" && n.path !== "";
+  return (
+    n.type === "split" &&
+    (n.dir === "row" || n.dir === "col") &&
+    typeof n.ratio === "number" &&
+    n.ratio > 0 &&
+    n.ratio < 1 &&
+    isLayoutNode(n.a) &&
+    isLayoutNode(n.b)
+  );
+}
+
 /** Leaf paths in visual order (left→right / top→bottom). */
 export function layoutPaths(node: LayoutNode): string[] {
   return node.type === "leaf" ? [node.path] : [...layoutPaths(node.a), ...layoutPaths(node.b)];
