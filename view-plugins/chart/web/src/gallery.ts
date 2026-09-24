@@ -10,7 +10,7 @@
  *   loaded or not, and lights groups by the platform's own `isLit`.
  */
 import type { MarkingValues, IsLit } from "./marking";
-import { colourTable, lattice, paintCells, type Cell, type RasterImage } from "./raster";
+import { colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
 import { decodeColumn, type WireColumn } from "./wire";
 
 export type FacetScale =
@@ -69,6 +69,21 @@ export function groupsLit(index: FacetIndex, marking: MarkingValues, isLit: IsLi
   return index.groups.map((g) => isLit(Object.fromEntries(index.facet.map((c, k) => [c, g.key[k]])), marking));
 }
 
+const placements = new WeakMap<FacetIndex, Cells>();
+
+/** The cache cell drawn at (col, row) of a group's lattice, or -1 for none.
+ * Read back through lattice() itself -- it sorts each axis, fills integer gaps
+ * and drops null coordinates, so no hand inversion of its placement agrees. */
+export function cellAt(index: FacetIndex, col: number, row: number): number {
+  let cells = placements.get(index);
+  if (!cells) {
+    cells = lattice(index.layout.x, index.layout.y, new Array<number>(index.cells).fill(0));
+    placements.set(index, cells);
+  }
+  if (col < 0 || row < 0 || col >= cells.width || row >= cells.height) return -1;
+  return cells.rowAt(col, row);
+}
+
 /** One group's thumbnail: its page column (`q8` or `cat`) painted over the
  * cache's lattice. `lit === false` dims every cell, as an unlit row is dimmed
  * in the full grid. */
@@ -79,7 +94,9 @@ export function thumbnail(
   lit?: boolean,
 ): RasterImage {
   const col = decodeColumn(column);
-  const codes = Array.from({ length: index.cells }, (_, i) => (col.code ? col.code(i) : 255));
+  // a column shorter than the lattice (a short page) leaves the rest missing
+  // rather than reading past its bytes
+  const codes = Array.from({ length: index.cells }, (_, i) => (col.code && i < col.length ? col.code(i) : 255));
   const cells = lattice(index.layout.x, index.layout.y, codes);
   const rows = lit === undefined ? undefined : new Array<boolean>(index.cells).fill(lit);
   return paintCells(cells, colourTable(scheme, col.min ?? 0, col.max ?? 0), rows);
