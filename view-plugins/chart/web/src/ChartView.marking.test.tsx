@@ -17,10 +17,18 @@ const sdk = vi.hoisted(() => ({
   viewDocument: vi.fn(),
   registerViewKind: vi.fn(),
 }));
+// Every render of a Plot calls useMarking once — so counting calls per name
+// counts RE-RENDERS, which is what "does not react" has to mean.
+const renders = vi.hoisted(() => new Map<string, number>());
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  const useMarking = (name: string | null) => {
+    const k = name ?? "(none)";
+    renders.set(k, (renders.get(k) ?? 0) + 1);
+    return hooks.useMarking(name);
+  };
+  return { ...sdk, useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
 });
 
 type Handler = (p: unknown) => void;
@@ -116,8 +124,12 @@ describe("ChartView on a named marking", () => {
     mount(store, [docOn("fail"), docOn("other"), docOn(null)]);
     const [a, other, none] = charts.made;
     const before = [other!.setOption.mock.calls.length, none!.setOption.mock.calls.length];
+    const rendersBefore = [renders.get("other"), renders.get("(none)"), renders.get("fail")];
     brush(a!, [0]);
     expect([other!.setOption.mock.calls.length, none!.setOption.mock.calls.length]).toEqual(before);
+    expect([renders.get("other"), renders.get("(none)")]).toEqual(rendersBefore.slice(0, 2));
+    // …while the chart on "fail" did re-render: the counter can see a render.
+    expect(renders.get("fail")).toBeGreaterThan(rendersBefore[2]!);
     expect(lastData(other!)).toEqual([[1, 4], [2, 5], [3, 6]]);
   });
 
@@ -146,6 +158,61 @@ describe("ChartView on a named marking", () => {
     sdk.useSandboxRun.mockReturnValue(ok(lit));
     mount(store, [docOn("fail")]);
     expect([...store.get("fail")!.marking.lot!]).toEqual(["L1"]);
+  });
+
+  it("two charts opened together on an empty marking: the first seed stands", () => {
+    // Both effects run in one commit and both saw "empty" when they rendered.
+    const litAt = (bit: number) =>
+      answer(
+        layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L3"]) }, {
+          highlight: btoa(String.fromCharCode(bit)),
+          lit: 1,
+        }),
+      );
+    sdk.useSandboxRun.mockImplementation((_p: string, _c: string, args: { spec: string }) =>
+      ok(args.spec.includes('"title":"B"') ? litAt(0b100) : litAt(0b010)),
+    );
+    const store = new MarkingStore();
+    mount(store, [docOn("fail", { title: "A" }), docOn("fail", { title: "B" })]);
+    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+  });
+
+  it("re-attaching through the header does not seed again", () => {
+    const lit = answer(
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+        highlight: btoa(String.fromCharCode(0b010)),
+        lit: 1,
+      }),
+    );
+    sdk.useSandboxRun.mockReturnValue(ok(lit));
+    const store = new MarkingStore();
+    sdk.viewDocument.mockImplementation((s: { __doc: unknown }) => s.__doc);
+    const spec = { __doc: docOn("fail") } as never;
+    const el = (marking: string | null) => (
+      <MarkingProvider store={store}>
+        <ChartView spec={spec} marking={marking} path="/v/a.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />
+      </MarkingProvider>
+    );
+    const view = render(el("fail"));
+    expect(store.names()).toEqual(["fail"]);
+    act(() => store.set("fail", null, null)); // the person cleared it
+    view.rerender(el("other"));
+    view.rerender(el("fail"));
+    expect(store.names()).toEqual([]);
+  });
+
+  it("charts on a cleared marking all draw undimmed — none falls back to its own highlight", () => {
+    const lit = answer(
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+        highlight: btoa(String.fromCharCode(0b010)),
+        lit: 1,
+      }),
+    );
+    sdk.useSandboxRun.mockReturnValue(ok(lit));
+    const store = new MarkingStore();
+    mount(store, [docOn("fail")]);
+    act(() => store.set("fail", null, null));
+    expect(lastData(charts.made[0]!)).toEqual([[1, 4], [2, 5], [3, 6]]);
   });
 
   it("a chart without keys can be lit but never writes", () => {

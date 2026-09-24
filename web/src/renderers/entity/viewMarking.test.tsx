@@ -66,6 +66,13 @@ function Probe({ marking, path }: EntityViewProps) {
 }
 
 registerViewKind({ kind: "probe-chart", Component: Probe, ownsEmptyState: true, suppressQuickCreate: true });
+registerViewKind({
+  kind: "probe-linkable",
+  Component: Probe,
+  ownsEmptyState: true,
+  suppressQuickCreate: true,
+  linkable: true,
+});
 
 afterEach(() => {
   cleanup();
@@ -122,4 +129,18 @@ describe("the view header's marking control", () => {
   });
 });
 
-afterAll(() => unregisterViewKind("probe-chart"));
+describe("a kind that declares itself linkable", () => {
+  it("gets the control on a view whose file names neither marking nor keys", async () => {
+    renderView("view: probe-linkable\n");
+    expect(await screen.findByTestId("probe")).toHaveTextContent("detached");
+    fireEvent.change(screen.getByRole("combobox", { name: /marking/i }), { target: { value: "\u0000new" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /new marking/i }), { target: { value: "lots" } });
+    fireEvent.submit(screen.getByRole("textbox", { name: /new marking/i }));
+    expect(screen.getByTestId("probe")).toHaveTextContent("on:lots");
+  });
+});
+
+afterAll(() => {
+  unregisterViewKind("probe-chart");
+  unregisterViewKind("probe-linkable");
+});
