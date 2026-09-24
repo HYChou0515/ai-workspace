@@ -6,7 +6,14 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { SHARED_MODULES, facadeSource, importMap, sharedExportNames } from "../vite-plugins/sharedModules";
+import {
+  SDK_SPECIFIER,
+  SHARED_MODULES,
+  facadeSource,
+  importMap,
+  sharedExportNames,
+  sharedInputs,
+} from "../vite-plugins/sharedModules";
 
 describe("facadeSource", () => {
   it("re-exports every key BY NAME, because React ships CommonJS", () => {
@@ -40,7 +47,7 @@ describe("importMap", () => {
     const map = importMap("build", "/");
     expect(map.imports.react).toBe("/shared/react.js");
     expect(map.imports["react/jsx-runtime"]).toBe("/shared/react-jsx-runtime.js");
-    expect(Object.keys(map.imports).sort()).toEqual(Object.keys(SHARED_MODULES).sort());
+    expect(Object.keys(map.imports).sort()).toEqual([...Object.keys(SHARED_MODULES), SDK_SPECIFIER].sort());
   });
 
   it("honours a sub-path base", () => {
@@ -52,5 +59,14 @@ describe("importMap", () => {
     const map = importMap("serve", "/");
     expect(map.imports.react).toBe("/@id/__x00__shared:react");
     for (const url of Object.values(map.imports)) expect(url).not.toContain(".vite/deps");
+  });
+});
+
+describe("the view SDK", () => {
+  it("is the host's own public barrel: shared/view-sdk.js in a build, the source under dev", () => {
+    expect(SDK_SPECIFIER).toBe("@aiws/view-sdk");
+    expect(importMap("build", "/").imports[SDK_SPECIFIER]).toBe("/shared/view-sdk.js");
+    expect(importMap("serve", "/").imports[SDK_SPECIFIER]).toBe("/src/renderers/entity/public.ts");
+    expect(sharedInputs()["shared/view-sdk"]).toMatch(/src\/renderers\/entity\/public\.ts$/);
   });
 });

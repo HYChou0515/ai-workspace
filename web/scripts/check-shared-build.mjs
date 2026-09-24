@@ -12,6 +12,7 @@
  *     setting that also covers the app's own entry turns each of its imports
  *     into a script tag of its own);
  *   - every URL in it names a file that exists in `dist/`;
+ *   - `shared/view-sdk.js` exports the SDK's names (`registerViewKind`, …);
  *   - `shared/react.js` exports `useState` BY NAME — the CommonJS trap: a naive
  *     `export * from "react"` builds fine and exports nothing a plugin can use.
  *
@@ -46,6 +47,18 @@ if (maps.length !== 1) {
       continue;
     }
     if (!existsSync(join(dist, url.slice(base.length)))) failures.push(`${spec} → ${url}: no such file in ${dist}`);
+  }
+  const sdkUrl = imports["@aiws/view-sdk"];
+  if (!sdkUrl) {
+    failures.push("the import map has no entry for @aiws/view-sdk");
+  } else {
+    const file = join(dist, sdkUrl.slice(base.length));
+    if (existsSync(file)) {
+      const names = exportedNames(readFileSync(file, "utf-8"));
+      for (const n of ["registerViewKind", "SDK_VERSION", "useSandboxRun"]) {
+        if (!names.has(n)) failures.push(`${sdkUrl} does not export ${n}`);
+      }
+    }
   }
   const reactUrl = imports.react;
   if (!reactUrl) {

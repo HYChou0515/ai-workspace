@@ -15,11 +15,11 @@
  * author fixes their own test, with CI telling them, rather than this module
  * having warned anyone in advance.
  *
- * This is NOT a frozen API and carries no version. Plug-ins live in this repo
- * and compile in the same CI run, so when we change something here the breakage
- * shows up as a red build, not as a broken screen for someone's users. The
- * point of the barrel is that the blast radius of a change is *visible* at the
- * moment you make it.
+ * For `ext/` (built-time plug-ins in this repo) the breakage of a change here
+ * shows up as a red build. For RUNTIME plugins (#847/#848) it does not — see
+ * `SDK_VERSION` below: this barrel is also `@aiws/view-sdk`, so it is versioned.
+ * Either way the point of the barrel is that the blast radius of a change is
+ * *visible* at the moment you make it.
  *
  * What a plug-in gets:
  *   - `registerViewKind` — how a kind joins the registry (see `ext/index.ts`)
@@ -28,6 +28,18 @@
  *   - the entity props — populated only when the kind declares `needsEntity`
  *   - small presentation helpers, so the common cases stay short
  */
+
+// ── the runtime-plugin SDK (#847/#848) ─────────────────────────────────────
+// This barrel IS `@aiws/view-sdk`: a runtime plugin (built outside this repo,
+// loaded from the operator's plugin dir) imports it by that name, and the
+// import map points the name at the host's own copy of this module. So unlike
+// `ext/`, a runtime plugin is compiled against a SNAPSHOT of this surface —
+// removing or changing an export here breaks already-built plugins at runtime,
+// not at compile time. Such a change bumps `SDK_VERSION`'s major, and the
+// loader then refuses the old plugins per panel, loudly.
+export { SDK_VERSION } from "../../viewPlugins/sdkVersion";
+export { useSandboxRun } from "../../viewPlugins/useSandboxRun";
+export type { SandboxRun, SandboxRunArgs, SandboxRunResult } from "../../viewPlugins/useSandboxRun";
 
 // ── registration ───────────────────────────────────────────────────────────
 // `unregisterViewKind` is deliberately absent: it is a test seam, and exporting

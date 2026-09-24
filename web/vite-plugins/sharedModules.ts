@@ -46,6 +46,14 @@ export const SHARED_MODULES: Record<string, string> = {
   "react-dom/client": "react-dom-client",
 };
 
+/** The view SDK a plugin imports. Unlike React it is ESM source of our own,
+ * so it needs no facade: its entry IS the public barrel, and because the host
+ * imports the same modules, rollup shares their chunks — one registry, one set
+ * of React contexts. */
+export const SDK_SPECIFIER = "@aiws/view-sdk";
+const SDK_SOURCE = "src/renderers/entity/public.ts";
+const SDK_FILE = "view-sdk";
+
 const VIRTUAL_PREFIX = "shared:";
 const IDENT = /^[A-Za-z_$][\w$]*$/;
 
@@ -74,12 +82,16 @@ export function importMap(command: "serve" | "build", base: string): { imports: 
   for (const [spec, file] of Object.entries(SHARED_MODULES)) {
     imports[spec] = command === "serve" ? `${root}@id/__x00__${VIRTUAL_PREFIX}${spec}` : `${root}shared/${file}.js`;
   }
+  imports[SDK_SPECIFIER] = command === "serve" ? `${root}${SDK_SOURCE}` : `${root}shared/${SDK_FILE}.js`;
   return { imports };
 }
 
 /** Rollup inputs for the facades, keyed by output name (`shared/<file>`). */
 export function sharedInputs(): Record<string, string> {
-  return Object.fromEntries(Object.entries(SHARED_MODULES).map(([spec, file]) => [`shared/${file}`, VIRTUAL_PREFIX + spec]));
+  return {
+    ...Object.fromEntries(Object.entries(SHARED_MODULES).map(([spec, file]) => [`shared/${file}`, VIRTUAL_PREFIX + spec])),
+    [`shared/${SDK_FILE}`]: resolve(__dirname, "..", SDK_SOURCE),
+  };
 }
 
 export function sharedModules(): Plugin {
