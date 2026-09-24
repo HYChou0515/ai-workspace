@@ -952,13 +952,17 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **行為**（沒有開關；運營方不用做事，但要知道）
 
-- **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在圖表上框選（有名字的 marking）之後送訊息，composer 上方會列出
+- **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在 `chart` view 上框選（寫進有名字的 marking；框選寫入是這個 PR 的
+  P2，接在 #855 的 chart plugin 上——在那之前沒有任何 view 會寫 marking，這一條不會發生）之後送訊息，composer 上方會列出
   這些 marking 的 chip；留著的那幾個隨訊息寫成 `.markings/<name>.json`（marking 的值），AI 讀這個檔案。
-  為什麼寫檔而不是塞進 prompt：值可以上千個，而工具參數有長度上限；一行摘要進 prompt、值留在檔案裡。
+  為什麼寫檔而不是塞進 prompt：值可以上千個，每輪都塞進 prompt 太大；prompt 只放一行摘要（名稱、每欄幾個值、路徑），值留在檔案裡。
   沒送出的選取什麼都不寫。檔案出現在檔案樹、會被備份、**算進 workspace 額度**，和使用者自己寫的檔一樣；刪掉沒有副作用
   （下次送同一個 marking 會再寫一次）。
-- 額度已滿時，寫不進去的那個 chip 會標成「未送出」並附原因（檔案層拒絕寫入的那句，例如
-  `workspace is full: … bytes used, and this write does not fit`），**訊息本身照送**。
+- workspace 還有空間、但放不下某個 marking 檔時，那個 chip 會標成「未送出」並附原因（檔案層拒絕寫入的那句，例如
+  `workspace is full: … bytes used, and this write does not fit`），**訊息本身照送**。workspace **已經滿了**的話，
+  和以前一樣整則訊息在送出時就被 507 擋下（#538 的 `admit_turn`），不會走到寫 marking 這一步。
+- 寫 marking 檔要的權限和其他寫檔路徑一樣：新檔要 `add_content`、覆寫要 `edit_content`。只有 `converse`（能聊天、不能寫檔）
+  的成員送 marking，那個 chip 會標成「未送出」，訊息照送。
   漏知道的症狀：使用者回報「我框的東西 AI 說沒看到」——看那則訊息上的 chip 是不是紅的。
 - 聊天模式（workspace 收起來）點 `show_file` 秀出的檔案卡，改成在新分頁開 `/a/<app>/<item>/view?path=…`
   （只有編輯區的頁面），不再是原始檔案的下載網址——`.ai.yaml` 從此顯示成 view 而不是 YAML 原文。

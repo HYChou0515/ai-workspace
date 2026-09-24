@@ -24,8 +24,10 @@ pane, and the linked views in other panes light up.
   It holds `name → {column → set of values}`.
 - Exposed through the SDK as `useMarking(name)`, which reads and writes.
 - It is knowledge-free: columns and values are opaque strings (Q6).
-- Matching rule: a row is lit when, for every column it shares with the marking, its
-  value is in the set.
+- Matching rule: a row is lit when it shares **at least one** column with the marking
+  and, for every column it shares, its value is in the set. ("At least one" was added
+  while building P1 [mine, open to override]: with none shared, "every shared column
+  matches" is vacuously true and would light every row of an unrelated view.)
 - A view without `keys:` can be lit but cannot write.
 
 **P2 — writing and reading marks in `chart`.**
