@@ -15,6 +15,33 @@ plugin with all four parts.
 - `show_file` refuses a broken spec and summarises a good one.
 - The source is CSV, parquet, or entity records.
 
+## Start gate and hand-off
+
+The PRs are stacked, and a later PR builds on the earlier one's interfaces. The rules:
+
+- **Rebase, never merge.** When the PR below yours pushes, rebase onto its branch tip.
+- **Freeze notice.** When you reach your freeze point, comment on the PR above yours
+  with the sha and the list of frozen contracts. After that, a change to a frozen
+  contract gets its own comment on every PR above yours, saying what changed and why.
+- **Early phases** touch only code that no earlier PR defines. Anything else waits for
+  the gate.
+
+- **Gate: #854's freeze notice (P6).**
+- **Early phases**, which can start before the gate because they are pure Python or
+  pure TypeScript with no platform calls:
+  - P2 (the spec schema and its parity corpus);
+  - P4 (transforms over an in-memory frame), with its sandbox entry wired after the
+    gate;
+  - the ECharts option translation in P6, tested as a pure function.
+
+  The P3 entity reader needs the platform's `read_entity_records`, so it waits for the
+  gate.
+- **Freeze point: P7 pushed.** Post a notice on #856 listing:
+  - the `query` output format (P4);
+  - how a chart reports a brush, lasso or legend selection (the P6 event that PR 3 turns
+    into a marking write);
+  - how highlight is resolved and applied (P7).
+
 ## Phases
 
 **P1 — the chart plugin's sandbox bundle.**

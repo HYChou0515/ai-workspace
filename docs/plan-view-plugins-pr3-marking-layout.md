@@ -16,6 +16,30 @@ pane, and the linked views in other panes light up.
 - A marked set sent with a message is visible as chips, persisted, and readable by the
   AI at `.markings/<name>.json`.
 
+## Start gate and hand-off
+
+The PRs are stacked, and a later PR builds on the earlier one's interfaces. The rules:
+
+- **Rebase, never merge.** When the PR below yours pushes, rebase onto its branch tip.
+- **Freeze notice.** When you reach your freeze point, comment on the PR above yours
+  with the sha and the list of frozen contracts. After that, a change to a frozen
+  contract gets its own comment on every PR above yours, saying what changed and why.
+- **Early phases** touch only code that no earlier PR defines. Anything else waits for
+  the gate.
+
+- **Gate: #855's freeze notice (P7).**
+- **Early phases**, which touch no chart code:
+  - P4's `layout` argument and the `[shown-files]` tree;
+  - P5's pure `paneTree.ts` placement functions and their tests;
+  - P6's editor-area-only route.
+
+  P1's marking store can also start, because it is SDK-side state with no chart
+  dependency.
+- **Freeze point: P2 pushed.** Post a notice on #857 listing:
+  - `useMarking(name)` and its read/write shape (P1);
+  - the matching rule (P1);
+  - how a view writes a selection projected onto `keys` (P2).
+
 ## Phases
 
 **P1 — the marking store.**

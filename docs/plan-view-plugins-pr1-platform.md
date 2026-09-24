@@ -15,6 +15,28 @@ Base: master `6488a7ac`.
 - `csv-table` works exactly as before, now delivered as a runtime plugin.
 - A malformed plugin fails **loudly and by name**.
 
+## Start gate and hand-off
+
+The PRs are stacked, and a later PR builds on the earlier one's interfaces. The rules:
+
+- **Rebase, never merge.** When the PR below yours pushes, rebase onto its branch tip.
+- **Freeze notice.** When you reach your freeze point, comment on the PR above yours
+  with the sha and the list of frozen contracts. After that, a change to a frozen
+  contract gets its own comment on every PR above yours, saying what changed and why.
+- **Early phases** touch only code that no earlier PR defines. Anything else waits for
+  the gate.
+
+- **Gate:** none. This PR starts first.
+- **Freeze point: P6 pushed.** Post a notice on #855 listing:
+  - the `plugin.json` schema (P2): field names, the `sandbox` union and `views`;
+  - the SDK surface (P5): `registerViewKind`, `SDK_VERSION`, and
+    `useSandboxRun(plugin, cmd, args)` with its return shape;
+  - the runner contract (P6): the route, the argv JSON in, `{stdout, stderr, exit_code}`
+    out, and the argv-size refusal;
+  - the isolated launch template (P6).
+- P7–P12 continue after the freeze. They add, and must not change, the frozen
+  contracts.
+
 ## Shape
 
 ```

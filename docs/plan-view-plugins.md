@@ -253,6 +253,11 @@ The outcome is four things:
 - **Q21.** Four stacked PRs, each run through `/tdd` and its own review rounds, with a
   `docs/migrations.md` entry wherever the operator must act **[agreed]**. This plan goes
   straight to master **[user]**.
+  - The PRs are #854 ← #855 ← #856 ← #857, and each goes to its own session **[user]**.
+  - A later PR builds on the earlier one's interfaces. So each PR plan has a
+    **Start gate and hand-off** section that says when it may start, which of its
+    phases can start early, and the freeze point where it posts a notice on the PR above
+    it.
 
 ## Checks done while planning (2026-09-25, on `a967877c`)
 

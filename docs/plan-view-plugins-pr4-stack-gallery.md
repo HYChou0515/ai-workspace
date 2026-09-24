@@ -17,6 +17,27 @@ fixtures.
     including groups not yet loaded.
 - The source can be CSV or parquet.
 
+## Start gate and hand-off
+
+The PRs are stacked, and a later PR builds on the earlier one's interfaces. The rules:
+
+- **Rebase, never merge.** When the PR below yours pushes, rebase onto its branch tip.
+- **Freeze notice.** When you reach your freeze point, comment on the PR above yours
+  with the sha and the list of frozen contracts. After that, a change to a frozen
+  contract gets its own comment on every PR above yours, saying what changed and why.
+- **Early phases** touch only code that no earlier PR defines. Anything else waits for
+  the gate.
+
+- **Gate: #856's freeze notice (P2).** That notice implies #855's freeze (P4 output
+  format, P6 `grid` host), because #856 stacks on #855.
+- **Early phases:**
+  - P2's cache format and its round-trip tests, which are pure Python;
+  - P1's raster core as a pure function. Its parity test needs #855's `grid` host, so
+    that test waits for the gate.
+  - P3's builder and P4's pager, which can start once #854 has frozen, because they only
+    need the runner contract.
+- **Freeze point:** none. Nothing stacks on this PR.
+
 ## Phases
 
 **P1 — the shared raster core.**
