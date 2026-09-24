@@ -4,8 +4,8 @@
  * The document is checked against the shared schema here first (a refused spec
  * shows its errors and runs nothing), then sent WHOLE to the sandbox's `query`
  * as JSON — JSON is YAML 1.2, so the sandbox reads it with the same parser it
- * reads view files with. The answer becomes an ECharts option (`toOption`);
- * `highlight:` is applied with ECharts' own highlight action; a brush, lasso or
+ * reads view files with. The answer becomes an ECharts option (`toOption`),
+ * `highlight:` already in it (unlit rows dimmed in their data); a brush, lasso or
  * legend click becomes a `Selection` in layer rows, local to the view until
  * markings (PR 3) link views.
  */
@@ -14,7 +14,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type EntityViewProps, useSandboxRun, viewDocument } from "@aiws/view-sdk";
 
 import { createChart, type Chart } from "./echarts";
-import { highlightTargets } from "./highlight";
 import { type Answer, type Built, toOption } from "./option";
 import type { Cells, RasterImage } from "./raster";
 import { type BrushSelected, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
@@ -96,10 +95,7 @@ function Plot({ doc, answer }: { doc: Record<string, unknown>; answer: Answer })
     if (!chart) return;
     chart.setOption(built.option, true);
     setSelection([]);
-    for (const t of highlightTargets(built, answer)) {
-      chart.dispatchAction({ type: "highlight", seriesIndex: t.seriesIndex, dataIndex: t.dataIndex });
-    }
-  }, [built, answer]);
+  }, [built]);
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   return (

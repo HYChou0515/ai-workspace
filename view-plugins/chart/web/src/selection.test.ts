@@ -4,7 +4,6 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { highlightTargets } from "./highlight";
 import { toOption } from "./option";
 import { selectionFromBrush, selectionFromLegend, selectionValues } from "./selection";
 import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
@@ -120,21 +119,5 @@ describe("selectionValues", () => {
   it("gives each key's values over the selected rows, as marking strings, once each", () => {
     const values = selectionValues({ source: "brush", layer: 0, rows: [0, 2, 1] }, scatterAnswer, ["wafer", "lot", "gone"]);
     expect(values).toEqual({ wafer: ["7", "9", "8"], lot: ["A", "B"] });
-  });
-});
-
-describe("highlightTargets", () => {
-  it("turns the layer's highlight bitset into data indices per series", () => {
-    // Rows 1 and 2 lit: bits 0b0110.
-    const lit = answer({ ...scatterAnswer.layers[0], highlight: btoa(String.fromCharCode(0b0110)), lit: 2 });
-    const built = toOption(scatter, lit);
-    expect(highlightTargets(built, lit)).toEqual([
-      { seriesIndex: 0, dataIndex: [1] },
-      { seriesIndex: 1, dataIndex: [0] },
-    ]);
-  });
-
-  it("lights nothing without a highlight", () => {
-    expect(highlightTargets(toOption(scatter, scatterAnswer), scatterAnswer)).toEqual([]);
   });
 });

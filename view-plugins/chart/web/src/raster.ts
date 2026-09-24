@@ -120,7 +120,12 @@ export function colourTable(scheme: "sequential" | "diverging", min: number, max
   return table;
 }
 
-export function paintCells(cells: Cells, table: Uint8ClampedArray): RasterImage {
+/** Alpha of a cell a highlight leaves unlit (a lit or unhighlighted cell is opaque). */
+export const DIM_ALPHA = 64;
+
+/** `lit`, when given, says per DATA ROW whether it is lit (`Cells.rowAt` maps
+ * a cell to its row); an unlit cell is painted at DIM_ALPHA. */
+export function paintCells(cells: Cells, table: Uint8ClampedArray, lit?: readonly boolean[]): RasterImage {
   const data = new Uint8ClampedArray(cells.width * cells.height * 4);
   for (let i = 0; i < cells.codes.length; i++) {
     const c = cells.codes[i] * 4;
@@ -128,6 +133,10 @@ export function paintCells(cells: Cells, table: Uint8ClampedArray): RasterImage 
     data[i * 4 + 1] = table[c + 1];
     data[i * 4 + 2] = table[c + 2];
     data[i * 4 + 3] = table[c + 3];
+    if (lit && data[i * 4 + 3] > 0) {
+      const row = cells.rowAt(i % cells.width, Math.floor(i / cells.width));
+      if (row >= 0 && !lit[row]) data[i * 4 + 3] = DIM_ALPHA;
+    }
   }
   return { width: cells.width, height: cells.height, data };
 }
