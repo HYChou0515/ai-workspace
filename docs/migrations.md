@@ -902,9 +902,10 @@ log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`
 **設定**：沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
 
 - 凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多這些：
-  - `## Available views` 兩行，含標題約 160 字元；
-  - skill 索引的 `chart` 一行，229 字元；
-  - SKILL.md 本文約 4.8k 字元，只在 AI `read_skill('chart')` 時才載入。
+  - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有 views，
+    所以這段是因為 chart 才出現；
+  - skill 索引的 `chart` 一行，約 230 字元；
+  - SKILL.md 本文約 5.0k 字元，只在 AI `read_skill('chart')` 時才載入。
 - AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
 - **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。只對某個 item 關掉，就在該 item 的
   skill 偏好把 `chart` 關掉。
