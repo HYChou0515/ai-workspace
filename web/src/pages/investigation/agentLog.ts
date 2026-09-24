@@ -11,7 +11,7 @@
 import type { QuotaHolder } from "../../lib/quotaHolding";
 import { isTerminal } from "../../events";
 import type { AgentEvent } from "../../events";
-import type { Message, MessageCitation } from "../../api/types";
+import type { Message, MessageCitation, SentMarking } from "../../api/types";
 import { type MsgKey, initialLocale, translate } from "../../lib/i18n";
 
 export type ToolCallView = {
@@ -232,7 +232,10 @@ const TURN_OVER = {
  * broadcast lands. If that broadcast never comes the entry simply stays, and
  * the next `reconcileSnapshot` replaces it with the stored copy — the message
  * was persisted before it was ever broadcast, so the store is where it heals. */
-export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string }): AgentLog {
+export function drawOwnAsk(
+  log: AgentLog,
+  ask: { author: string; content: string; markings?: SentMarking[] },
+): AgentLog {
   return {
     ...log,
     streaming: true,
@@ -249,7 +252,14 @@ export function drawOwnAsk(log: AgentLog, ask: { author: string; content: string
       {
         kind: "message",
         pending: true,
-        message: { role: "user", author: ask.author, content: ask.content },
+        message: {
+          role: "user",
+          author: ask.author,
+          content: ask.content,
+          // #847 P7: the chips it was sent with, until the broadcast brings
+          // what the server actually recorded.
+          ...(ask.markings?.length ? { markings: ask.markings } : {}),
+        },
       },
     ],
   };
@@ -1110,7 +1120,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       );
       const own = mine >= 0 ? entries[mine] : undefined;
       if (own !== undefined && own.kind === "message") {
-        entries[mine] = { kind: "message", at: askedAt, message: own.message };
+        // #847 P7: the server's record of the markings replaces the draft
+        // chips — it knows which were written and which were refused.
+        const message = ev.markings ? { ...own.message, markings: ev.markings } : own.message;
+        entries[mine] = { kind: "message", at: askedAt, message };
       } else {
         const alreadyDrawn = entries.some(
           (e) =>
@@ -1125,7 +1138,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           entries.push({
             kind: "message",
             at: askedAt,
-            message: { role: "user", author: ev.author, content: ev.content },
+            message: {
+              role: "user",
+              author: ev.author,
+              content: ev.content,
+              ...(ev.markings?.length ? { markings: ev.markings } : {}),
+            },
           });
         }
       }
