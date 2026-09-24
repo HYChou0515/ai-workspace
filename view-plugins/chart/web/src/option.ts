@@ -66,6 +66,8 @@ export type GridLayer = { layer: number; seriesIndex: number; cells: Cells; imag
 export type Built = {
   option: Record<string, unknown>;
   series: SeriesRows[];
+  /** Series i's legend name, when it has one (a nominal colour's level). */
+  names: (string | undefined)[];
   grids: GridLayer[];
   notes: string[];
 };
@@ -224,6 +226,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
 
   const series: Record<string, unknown>[] = [];
   const rows: SeriesRows[] = [];
+  const names: (string | undefined)[] = [];
   const grids: GridLayer[] = [];
   const notes: string[] = [];
   const visualMaps: Record<string, unknown>[] = [];
@@ -280,6 +283,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const push = (s: Record<string, unknown>, r: number[]) => {
       series.push(s);
       rows.push({ layer: li, rows: r });
+      names.push(typeof s.name === "string" ? s.name : undefined);
     };
 
     if (mark.type === "grid") {
@@ -514,5 +518,5 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
   if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));
-  return { option, series: rows, grids, notes };
+  return { option, series: rows, names, grids, notes };
 }
