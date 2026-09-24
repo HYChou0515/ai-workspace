@@ -119,8 +119,9 @@ def test_runs_the_plugin_launch_in_the_items_sandbox(tmp_path):
     assert loc.verbs == ["read_content"]
     # The sandbox it wakes is created with what a turn would mount.
     assert reg.tools == [{"app-tool": "a" * 64}]
-    # The item's variables, the same as a tool call gets.
-    assert sb.envs[0]["API_KEY"] == "sk-1"
+    # NOT the item's variables: this route is open to anyone who may READ the
+    # item, and the variables are the owner's credentials for their own tools.
+    assert "API_KEY" not in sb.envs[0]
 
 
 def test_a_non_zero_exit_is_an_answer(tmp_path):
@@ -226,4 +227,28 @@ def test_docker_backend_is_unsupported(tmp_path, monkeypatch: pytest.MonkeyPatch
     resp = client.post(URL, json={"args": {}})
     assert resp.status_code == 501
     assert "docker" in resp.json()["detail"]
+    assert sb.calls == []
+
+
+def test_a_plugin_shadowed_by_an_app_tool_is_refused(tmp_path):
+    """The app's own third-party tool of the same name owns `/.tools/chart`;
+    running `launch` there would run THAT tool, past its picker and verb."""
+    from workspace_app.tooling.registry import PackageInfo
+
+    ext = ExternalTools(
+        packages=(PackageInfo(name="chart", install_dir="../.tools/chart", commands=()),),
+        shas={"chart": "a" * 64},
+    )
+    client, sb, *_ = _client(tmp_path, external=ext)
+    resp = client.post(URL, json={"args": {}})
+    assert resp.status_code == 409
+    assert "app tool" in resp.json()["detail"]
+    assert sb.calls == []
+
+
+@pytest.mark.parametrize("cmd", ["--help", "-x", "a b", "UPPER", "x;y"])
+def test_a_command_name_must_be_a_plain_word(tmp_path, cmd):
+    client, sb, *_ = _client(tmp_path)
+    resp = client.post(f"/a/pm/items/i1/view-plugins/chart/{cmd}", json={"args": {}})
+    assert resp.status_code == 404
     assert sb.calls == []

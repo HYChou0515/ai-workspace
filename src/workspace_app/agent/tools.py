@@ -441,40 +441,66 @@ async def show_file_impl(
     return declare_shown_files(said, [shown])
 
 
+def _backend_has_no_tools(sandbox: object) -> bool:
+    """`sandbox.kind: docker` mounts no `/.tools`, so no plugin command can run."""
+    from ..sandbox.docker import DockerSandbox
+
+    return isinstance(sandbox, DockerSandbox)
+
+
+def _parse_view_kind(text: str) -> tuple[str | None, str | None]:
+    """`(kind, parse error)` of a `*.ai.yaml` — the kind from the document when it
+    parses, else from its top-level `view:` line (quotes and a trailing comment
+    stripped), so an unparseable file still says whose view it claims to be."""
+    try:
+        doc = yaml.safe_load(text)
+    except Exception as e:  # noqa: BLE001 — YAMLError, and RecursionError on deep nesting
+        line = next((ln for ln in text.splitlines() if ln.startswith("view:")), "")
+        kind = line.partition(":")[2].split(" #")[0].strip().strip("'\"")
+        return (kind or None), str(e) or type(e).__name__
+    kind = doc.get("view") if isinstance(doc, dict) else None
+    return (kind if isinstance(kind, str) else None), None
+
+
 async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: str) -> str | None:
-    """#847/#848 P9: `None` to show as-is, an `error: …` line to refuse, or the
-    plugin's one-line summary to append.
+    """#847/#848 P9: `None` to show as-is, an `error: …` line to refuse, or a
+    sentence to append (the plugin's one-line summary, or why it could not check).
 
     Only a `*.ai.yaml` whose `view:` is an installed plugin's kind is touched —
     built-in kinds and every other file are unchanged. Such a file must parse;
     if the plugin declares `validate`, its command runs in the item's sandbox
-    first, and a non-zero exit is the refusal."""
+    first, and a non-zero exit is the refusal. When the check cannot RUN — no
+    tools on this backend, an app tool owns the name, the launcher is not in
+    this sandbox — the view is shown and the reply says so: that fault is the
+    deployment's, and refusing would send the agent to "fix" a correct file."""
     from ..apps.shared_skills import PLUGIN_KINDS
 
     if not PLUGIN_KINDS or not rel_path(path).endswith(".ai.yaml"):
         return None
-    text = (await fs.read(inv, path)).decode("utf-8", "replace")
     try:
-        doc = yaml.safe_load(text)
-    except yaml.YAMLError as e:
-        # Unparseable, so `view:` cannot be read from the document; the
-        # top-level line is still enough to know whose view this claims to be.
-        kind = next(
-            (ln.partition(":")[2].strip() for ln in text.splitlines() if ln.startswith("view:")),
-            "",
+        text = (await fs.read(inv, path)).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — the file was just described; showing beats a new failure
+        _LOGGER.warning("show_file: could not re-read %s for its plugin check", path, exc_info=True)
+        return None
+    kind, parse_error = await asyncio.to_thread(_parse_view_kind, text)
+    if kind is None or kind not in PLUGIN_KINDS:
+        return None
+    if parse_error is not None:
+        return (
+            f"error: {rel_path(path)} does not parse as YAML ({parse_error}) — nothing was "
+            "shown. Fix the file and call show_file again."
         )
-        if kind in PLUGIN_KINDS:
-            return (
-                f"error: {rel_path(path)} does not parse as YAML ({e}) — nothing was shown. "
-                "Fix the file and call show_file again."
-            )
-        return None
-    kind = doc.get("view") if isinstance(doc, dict) else None
-    if not isinstance(kind, str) or kind not in PLUGIN_KINDS:
-        return None
     plugin, validates = PLUGIN_KINDS[kind]
     if not validates or actx.sandbox is None:
         return None
+
+    def cannot(why: str) -> str:
+        return f"(view plugin {plugin!r} could not check this view: {why})"
+
+    if _backend_has_no_tools(actx.sandbox):
+        return cannot("this sandbox backend runs no plugin commands")
+    if any(p.name == plugin for p in actx.packages or ()):
+        return cannot(f"an app tool is also called {plugin!r}")
     from ..tooling.registry import PackageInfo, exec_package_command
 
     handle = await actx.ensure_sandbox(prepare_env=False)
@@ -483,6 +509,8 @@ async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: st
     result = await exec_package_command(actx, handle, pkg, "validate", args)
     out = result.stdout.decode("utf-8", "replace").strip()
     err = result.stderr.decode("utf-8", "replace").strip()
+    if result.exit_code == 127 and f".tools/{plugin}/launch" in err:
+        return cannot("its sandbox commands are not installed in this sandbox")
     if result.exit_code != 0:
         why = err or out or f"exit {result.exit_code}"
         return (

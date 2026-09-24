@@ -37,3 +37,18 @@ def test_the_app_stage_installs_them_where_the_default_dir_resolves():
     assert DEFAULT_PLUGINS_DIR.name == ".view-plugins"
     app = DOCKERFILE.split("AS app", 1)[1].split("\nFROM ", 1)[0]
     assert re.search(r"^COPY --from=view-plugins /out \./\.view-plugins$", app, re.MULTILINE)
+
+
+def test_no_node_modules_rides_into_the_build_context():
+    """A plugin's own `web/node_modules` (left by `make view-plugins`) must not
+    be copied into the image's plugin stage: a host-built esbuild is the wrong
+    platform there. `.dockerignore`'s bare `node_modules` matches the context
+    root only."""
+    ignore = (REPO / ".dockerignore").read_text().split()
+    assert "**/node_modules" in ignore
+
+
+def test_the_image_checks_the_plugins_it_ships():
+    app = DOCKERFILE.split("AS app", 1)[1].split("\nFROM ", 1)[0]
+    copied = app.index("COPY --from=view-plugins")
+    assert app.index("RUN python -m workspace_app.view_plugin check") > copied

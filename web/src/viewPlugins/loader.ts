@@ -31,7 +31,7 @@ export type ViewPluginInfo = {
 type Options = {
   list?: () => Promise<ViewPluginInfo[]>;
   importModule?: (url: string) => Promise<unknown>;
-  /** Per plugin. The first render waits on this, so it is bounded. */
+  /** For the list request, and for each plugin's import. */
   timeoutMs?: number;
 };
 
@@ -80,38 +80,44 @@ function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+async function loadOne(p: ViewPluginInfo, importModule: (url: string) => Promise<unknown>, timeoutMs: number) {
+  const hostMajor = SDK_VERSION.split(".")[0];
+  const major = String(p.sdk).split(".")[0];
+  if (major !== hostMajor) {
+    const why = `it was built for view SDK ${p.sdk}, and this app provides SDK ${SDK_VERSION}`;
+    for (const k of p.kinds) registerFailure(p.name, k, why);
+    return;
+  }
+  // Which declared kinds were free before the import: a kind something else
+  // already holds is not this plugin's to claim, so its absence afterwards is
+  // not a failure of this plugin to register it.
+  const free = p.kinds.filter((k) => !hasViewKind(k));
+  try {
+    await withTimeout(importModule(`${API_PREFIX}${p.entry_url}`), timeoutMs);
+  } catch (e) {
+    console.error(`view plugin "${p.name}" failed to load`, e);
+    for (const k of free) registerFailure(p.name, k, reasonOf(e));
+    return;
+  }
+  for (const k of free) {
+    if (!hasViewKind(k)) registerFailure(p.name, k, `it declares view kind "${k}" but did not register it`);
+  }
+}
+
+/** Load every installed plugin. The first render waits on this, so it is
+ * bounded twice over: the list request by `timeoutMs`, and the plugins — loaded
+ * side by side, not one after another — each by `timeoutMs` too, so the whole
+ * wait is at most about two timeouts however many plugins hang. */
 export async function loadViewPlugins(opts: Options = {}): Promise<void> {
   const list = opts.list ?? fetchList;
   const importModule = opts.importModule ?? importUrl;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   let plugins: ViewPluginInfo[];
   try {
-    plugins = await list();
+    plugins = await withTimeout(list(), timeoutMs);
   } catch (e) {
     console.error("view plugins: could not list them; the app runs without", e);
     return;
   }
-  const hostMajor = SDK_VERSION.split(".")[0];
-  for (const p of plugins) {
-    const major = String(p.sdk).split(".")[0];
-    if (major !== hostMajor) {
-      const why = `it was built for view SDK ${p.sdk}, and this app provides SDK ${SDK_VERSION}`;
-      for (const k of p.kinds) registerFailure(p.name, k, why);
-      continue;
-    }
-    // Which declared kinds were free before the import: a kind something else
-    // already holds is not this plugin's to claim, so its absence afterwards is
-    // not a failure of this plugin to register it.
-    const free = p.kinds.filter((k) => !hasViewKind(k));
-    try {
-      await withTimeout(importModule(`${API_PREFIX}${p.entry_url}`), timeoutMs);
-    } catch (e) {
-      console.error(`view plugin "${p.name}" failed to load`, e);
-      for (const k of free) registerFailure(p.name, k, reasonOf(e));
-      continue;
-    }
-    for (const k of free) {
-      if (!hasViewKind(k)) registerFailure(p.name, k, `it declares view kind "${k}" but did not register it`);
-    }
-  }
+  await Promise.allSettled(plugins.map((p) => loadOne(p, importModule, timeoutMs)));
 }

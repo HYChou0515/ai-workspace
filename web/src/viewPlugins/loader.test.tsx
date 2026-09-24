@@ -134,6 +134,39 @@ describe("loadViewPlugins", () => {
     expect(screen.getByRole("status")).toHaveTextContent("timed out");
   });
 
+  it("a list that never answers is given up on, so the app still mounts", async () => {
+    vi.useFakeTimers();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const importModule = vi.fn();
+    let settled = false;
+    const done = loadViewPlugins({ list: () => new Promise(() => {}), importModule, timeoutMs: 1000 }).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1001);
+    await done;
+    expect(settled).toBe(true);
+    expect(importModule).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("plugins load side by side: two hung imports cost one timeout, not two", async () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const done = loadViewPlugins({
+      list: async () => [info("h1", ["hang1"]), info("h2", ["hang2"])],
+      importModule: () => new Promise(() => {}),
+      timeoutMs: 1000,
+    }).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(settled).toBe(true);
+    await done;
+    vi.useRealTimers();
+    renderKind("hang2");
+    expect(screen.getByRole("status")).toHaveTextContent("timed out");
+  });
+
   it("a list that fails to load leaves the app running with no plugins", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(

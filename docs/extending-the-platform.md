@@ -822,7 +822,7 @@ title: Wafer yield
 source: /data/wafer.csv     # 這個 key 是那個 kind 自己的
 ```
 
-平台內建 `table` / `board` / `gantt` / `health`;維運方自建的是一個 **runtime view plugin**:
+平台內建 `table` / `board` / `gantt` / `health` / `wui`;維運方自建的是一個 **runtime view plugin**:
 一個資料夾(`plugin.json` + 建好的 `web/index.js`,選配沙盒指令與 skill),放進 `view_plugins.dir`
 重啟就上線,SPA 在第一次 render 前 `import()` 它。元件吃 `EntityViewProps`,
 從 `@aiws/view-sdk` 呼叫 `registerViewKind({ kind, Component })`。

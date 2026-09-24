@@ -125,3 +125,62 @@ async def test_other_files_never_run_anything():
     out, calls = await _show(CHART, ExecResult(exit_code=1), path="/views/yield.yaml")
     assert calls == []
     assert len(_declared(out)) == 1
+
+
+# ── when the check cannot run, the view is shown and the reply says why ────
+# Refusing there sent the agent round a fix loop on a correct file: the fault
+# is the deployment's (no launcher, no tools on this backend), not the view's.
+
+
+async def test_a_missing_launcher_shows_the_view_with_a_note():
+    gone = ExecResult(exit_code=127, stderr=b"sh: 1: ../.tools/chart/launch: not found\n")
+    out, calls = await _show(CHART, gone)
+    assert len(calls) == 1
+    assert len(_declared(out)) == 1
+    head = out.split(SHOWN_FILES_MARKER)[0]
+    assert "could not check" in head and "chart" in head
+    assert not out.startswith("error:")
+
+
+async def test_a_backend_with_no_tools_shows_the_view_with_a_note(monkeypatch):
+    import workspace_app.agent.tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, "_backend_has_no_tools", lambda sandbox: True)
+    out, calls = await _show(CHART, ExecResult(exit_code=1))
+    assert calls == []
+    assert len(_declared(out)) == 1
+    assert "could not check" in out.split(SHOWN_FILES_MARKER)[0]
+
+
+async def test_a_plugin_shadowed_by_an_agent_tool_is_not_run():
+    """An app tool of the same name owns `/.tools/chart`; running its
+    `validate` would be running somebody else's command."""
+    from workspace_app.tooling.registry import PackageInfo
+
+    files = WorkspaceFiles(MemoryFileStore())
+    await files.write("inv-1", "/views/yield.ai.yaml", CHART.encode())
+    sb = _Sandbox(ExecResult(exit_code=1))
+    ctx = AgentToolContext(
+        investigation_id="inv-1",
+        files=files,
+        sandbox=cast("Sandbox", sb),
+        handle=SandboxHandle(id="h"),
+        packages=[PackageInfo(name="chart", install_dir="../.tools/chart", commands=())],
+    )
+    out = await show_file_impl(RunContextWrapper(ctx), "views/yield.ai.yaml")
+    assert sb.calls == []
+    assert len(_declared(out)) == 1
+    assert "could not check" in out.split(SHOWN_FILES_MARKER)[0]
+
+
+async def test_a_pathologically_nested_file_does_not_break_show_file():
+    deep = "view: sketch\nx: " + "[" * 5000 + "]" * 5000 + "\n"
+    out, calls = await _show(deep, ExecResult(exit_code=0))
+    assert calls == []
+    assert not out.startswith("error: Traceback")
+
+
+async def test_a_quoted_view_line_in_an_unparseable_file_is_still_recognised():
+    out, _ = await _show('view: "sketch"\ntitle: [unclosed\n', ExecResult(exit_code=0))
+    assert _declared(out) == []
+    assert "does not parse" in out

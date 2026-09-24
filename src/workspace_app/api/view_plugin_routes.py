@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 #: oversized call is refused here, with a message saying what to do instead,
 #: rather than failing inside the sandbox as E2BIG.
 ARGV_MAX = 128 * 1024
+
+#: A command name is one plain word — never an option (`--help`) or anything a
+#: shell or a CLI parser could read as more than the name.
+_CMD = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class ViewPluginOut(BaseModel):
@@ -137,6 +142,10 @@ def register_view_plugin_runner(
             raise HTTPException(
                 status_code=404, detail=f"view plugin {plugin!r} has no sandbox commands"
             )
+        if not _CMD.match(cmd):
+            raise HTTPException(
+                status_code=404, detail=f"view plugin {plugin!r} has no command {cmd!r}"
+            )
         args_json = json.dumps(body.args)
         if len(args_json.encode()) >= ARGV_MAX:
             raise HTTPException(
@@ -164,6 +173,16 @@ def register_view_plugin_runner(
                 ),
             )
         external = await resolve_tools(investigation_id)
+        if any(pkg.name == plugin for pkg in external.packages):
+            # The app's own tool of that name owns `/.tools/<plugin>`: `launch`
+            # there is THAT tool, reached past its picker and its verb.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"view plugin {plugin!r}: an app tool is also called {plugin!r}, so "
+                    "its sandbox commands cannot be told apart — rename the plugin"
+                ),
+            )
         if half.artifact and plugin not in external.shas:
             raise HTTPException(
                 status_code=502,
@@ -193,7 +212,9 @@ def register_view_plugin_runner(
             investigation_id=investigation_id,
             sandbox=sandbox,
             sandbox_spec=SandboxSpec(tools=external.shas),
-            user_env=locator.env_vars_of(investigation_id),
+            # No item variables: this route is open to anyone who may READ the
+            # item, and those are the owner's credentials for their own tools. A
+            # plugin command reads workspace files, which a reader may see anyway.
             ensure_sandbox_via=lambda on_progress, tools: registry.ensure_handle(
                 session, tools=tools, on_progress=on_progress
             ),

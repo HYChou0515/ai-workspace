@@ -266,7 +266,10 @@ def register_view_plugins(config_path: Path | None) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
-    register_view_plugins(args.config)
+    # Plugin skills need the config (it names the plugin dir); dumping a shipped
+    # skill never did, so a config that cannot load must not stop it.
+    if not (args.dump_skill and args.dump_skill in SHARED_SKILLS):
+        register_view_plugins(args.config)
     if args.dump_skill:
         _name, text, _folder = _resolve_skill(args.dump_skill)
         args.out_dir.mkdir(parents=True, exist_ok=True)

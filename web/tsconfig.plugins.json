@@ -1,0 +1,12 @@
+{
+  "//": "#847/#848: the runtime view plugins (../view-plugins/*/web/src) are type-checked here, against the REAL SDK barrel, so a change to public.ts that breaks a shipped plugin is a red typecheck rather than a broken panel. A separate project on purpose: its `paths` send every bare import to THIS package's node_modules (a plugin file lives outside it), and applied to the app's own sources that mapping would change which declaration files they resolve (it skips package `exports`). A plugin's own dependencies still resolve: when `paths` finds nothing, tsc walks up from the importing file to the plugin's own node_modules.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@aiws/view-sdk": ["./src/renderers/entity/public.ts"],
+      "*": ["./node_modules/@types/*", "./node_modules/*"]
+    }
+  },
+  "include": ["../view-plugins/*/web/src", "src/**/*.d.ts"],
+  "exclude": []
+}

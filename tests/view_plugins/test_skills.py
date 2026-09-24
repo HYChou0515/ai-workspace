@@ -173,3 +173,14 @@ def test_the_skills_panel_lists_it_by_the_items_resolved_tools(tmp_path: Path, p
         assert ("chart" in {r["name"] for r in rows}) is listed
     finally:
         register_plugin_skills([])
+
+
+def test_dumping_a_shipped_skill_needs_no_loadable_config(tmp_path: Path):
+    """`--dump-skill author-skill` read nothing but the skill before plugins
+    were resolvable; a broken config (an unset `${VAR}`) must not stop it."""
+    from workspace_app.skill_eval.__main__ import main
+
+    bad = tmp_path / "config.yaml"
+    bad.write_text("server:\n  default_user: ${NOT_SET_ANYWHERE_854}\n")
+    main(["--dump-skill", "author-skill", "-o", str(tmp_path / "out"), "--config", str(bad)])
+    assert (tmp_path / "out" / "SKILL.md").is_file()

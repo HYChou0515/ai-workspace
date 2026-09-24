@@ -32,8 +32,10 @@ RUN VITE_BASE_PATH="$BASE_PATH" pnpm run build   # → /web/dist
 # /out/<name>/{plugin.json, web/index.js, skill/, scenarios/} and copied into
 # the app below at its default plugin dir. `csv-table` is one of them — it left
 # the SPA bundle, so an image built around this stage loses that view kind.
-# Web halves only: this is the API image, and under `sandbox.kind: http` a
-# plugin's sandbox half lives in sandbox-host, not here.
+# Web halves only: under `sandbox.kind: http` (production) a plugin's sandbox
+# half lives in sandbox-host, not here. Running THIS image with
+# `sandbox.kind: local`, a plugin with a `bundle` sandbox half refuses boot (no
+# `sandbox/`) — mount a plugin dir installed by `view_plugin build` instead.
 FROM node:22-bookworm-slim AS view-plugins
 WORKDIR /src
 RUN npm install -g pnpm@9
@@ -91,6 +93,9 @@ COPY --from=web /web/dist ./web/dist
 # (<repo>/.view-plugins). An operator mounting their own dir instead must carry
 # `csv-table` into it too (docs/migrations.md).
 COPY --from=view-plugins /out ./.view-plugins
+# ...and refuse an image whose plugins would break in the browser (a bundled
+# React, a dev build, a leftover `process.env`) or refuse to boot.
+RUN python -m workspace_app.view_plugin check
 
 # Login-shell PATH guard, for `sandbox.kind: local` — the app then runs the
 # agent's `exec` in THIS image, unjailed, and `bash -lc "python3 …"` loses the

@@ -64,6 +64,14 @@ def build_one(src: Path, dest_root: Path) -> None:
                 f"{src}/plugin.json: a plugin with a sandbox-src/ installs it as "
                 f'`{SANDBOX_BUNDLE}/`, so it must say "sandbox": {{"bundle": "{SANDBOX_BUNDLE}"}}'
             )
+        launch = tomllib.loads((sandbox_src / "pyproject.toml").read_text())
+        mode = launch.get("tool", {}).get("workspace-tool", {}).get("launch")
+        if mode != "isolated":
+            raise BuildError(
+                f"{sandbox_src}/pyproject.toml: a view plugin's sandbox commands are the "
+                "platform's, so a user's `pip install` must not change what they import — "
+                'add [tool.workspace-tool] launch = "isolated"'
+            )
     subprocess.run(["node", str(BUILD_WEB), str(src), str(dest_root)], check=True)
     if sandbox_src.is_dir():
         # Forced: an explicit build trusts no stamp. `_should_rebuild` hashes

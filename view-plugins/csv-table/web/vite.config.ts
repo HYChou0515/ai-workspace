@@ -15,6 +15,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   mode: "production",
+  // Library mode leaves `process.env.NODE_ENV` in the output, and the browser
+  // has no `process`: a bundled library's dev checks would throw on import.
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
   build: {
     lib: { entry: "src/index.tsx", formats: ["es"], fileName: () => "index.js" },
     rollupOptions: {

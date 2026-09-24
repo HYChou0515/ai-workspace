@@ -866,7 +866,8 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 **設定** — 不用動。新增選用的 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ `<repo>/.view-plugins`，
 映像裡是 `/app/.view-plugins`）。目錄不存在 = 沒有 plugin；**目錄裡任何一個 plugin 壞掉就拒絕開機**，
-log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`。
+log 最後一行以 `ViewPluginError:` 開頭（完整名稱 `workspace_app.view_plugins.discovery.ViewPluginError`），
+後面點名是哪個 plugin 或哪個 kind。點開頭的目錄與 `lost+found` 會被略過。
 
 **資料** — 不動。
 
@@ -874,7 +875,8 @@ log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`
 
 - **映像要經過新的 `view-plugins` stage 建出來**（`rollout 前`，build 時）。`docker/Dockerfile` 不帶 `--target`
   的 build 已經包含它（它排在 `app` 之前，`app` 把產物 `COPY` 到 `/app/.view-plugins`）；**自己寫 Dockerfile
-  或自訂 build 流程的**要照做：`node view-plugins/build-web.mjs view-plugins/<name> <目錄>`。
+  或自訂 build 流程的**要照做：`node view-plugins/build-web.mjs view-plugins/<name> <目錄>`（需要 node 與 pnpm），
+  再跑 `python -m workspace_app.view_plugin check`。
   為什麼：`csv-table` 不再編進 SPA bundle，而是 SPA 開機時從 `GET /api/view-plugins` 載入。
   漏做的症狀：每個 `view: csv-table` 的面板顯示 `Unsupported view kind: csv-table`，其他畫面正常。
 - **自己掛 plugin 目錄的**（設了 `view_plugins.dir` 或 `WORKSPACE_VIEW_PLUGINS_DIR` 指到 volume）要把
@@ -886,6 +888,9 @@ log 最後一行是 `ViewPluginError: view plugin '<名字>' (…): <欄位>…`
   **不要**另外設規則把它們長期快取——重 build 之後舊的 `shared/*.js` 會配到新的雜湊 chunk，
   plugin 面板顯示 `view plugin "<名字>" is unavailable: …`。
 - sandbox-host 這版**不用動**：本 PR 沒有任何 plugin 帶沙盒半邊。
+- **本機 / VM 的 `.workspace-tools` 快取會全部重建一次**（`uv run python scripts/prebuild_tools.py`，下次跑時自動發生）：
+  工具包的建置標記納入了新的隔離 launcher 樣板。正式映像在 build 時就重建，沒有執行期成本；
+  本機第一次會比平常久。
 
 **確認做完**
 

@@ -82,15 +82,56 @@ def test_plugins_only_still_gets_a_tools_root(tmp_path: Path):
     assert merged is not None and (merged / "chart" / "launch").is_file()
 
 
-def test_a_rebuild_replaces_the_previous_merge(tmp_path: Path):
+def test_unchanged_inputs_leave_the_merged_root_untouched(tmp_path: Path):
+    """The API and the blob-gc worker both boot `build_app`: the second boot
+    must not tear down the tree the first one's live sandboxes are using."""
     _plugin(tmp_path / "plugins", "chart")
     plugins = discover_view_plugins(tmp_path / "plugins")
     merged = merge_tools_root(None, [], plugins, tmp_path / "merged")
     assert merged is not None
-    (merged / "stale-plugin").mkdir()
+    (merged / "in-use").write_text("a sandbox's view of this tree")
+    before = merged.stat().st_ino
+    assert merge_tools_root(None, [], plugins, tmp_path / "merged") == merged
+    assert merged.stat().st_ino == before
+    assert (merged / "in-use").exists()
+
+
+def test_changed_inputs_rebuild_it_whole(tmp_path: Path):
+    _plugin(tmp_path / "plugins", "chart")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    merged = merge_tools_root(None, [], plugins, tmp_path / "merged")
+    assert merged is not None
+    (merged / "stale").mkdir()
+    (tmp_path / "plugins" / "chart" / "sandbox" / "launch").write_text("#!/bin/sh\necho v2\n")
     merge_tools_root(None, [], plugins, tmp_path / "merged")
-    assert not (merged / "stale-plugin").exists()
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["merged", "plugins"]  # no temp left
+    assert not (merged / "stale").exists()
+    assert "v2" in (merged / "chart" / "launch").read_text()
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("merged."))
+    assert leftovers == ["merged.lock", "merged.stamp"]  # no staging or retired tree left
+
+
+def _merge_in_a_process(root: str, q) -> None:  # module-level: picklable for spawn
+    try:
+        plugins = discover_view_plugins(Path(root) / "plugins")
+        merge_tools_root(None, [], plugins, Path(root) / "merged")
+        q.put("ok")
+    except Exception as e:  # noqa: BLE001 — reported to the parent
+        q.put(f"{type(e).__name__}: {e}")
+
+
+def test_two_processes_merging_at_once_both_boot(tmp_path: Path):
+    import multiprocessing as mp
+
+    _plugin(tmp_path / "plugins", "chart")
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
+    procs = [ctx.Process(target=_merge_in_a_process, args=(str(tmp_path), q)) for _ in range(3)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(60)
+    assert sorted(q.get(timeout=5) for _ in procs) == ["ok", "ok", "ok"]
+    assert (tmp_path / "merged" / "chart" / "launch").is_file()
 
 
 def test_a_plugin_named_like_a_tool_package_refuses_boot_naming_both(tmp_path: Path):
@@ -107,3 +148,21 @@ def test_a_bundle_without_launch_refuses_boot(tmp_path: Path):
     plugins = discover_view_plugins(tmp_path / "plugins")
     with pytest.raises(ViewPluginError, match=r"'chart'.*launch"):
         merge_tools_root(None, [], plugins, tmp_path / "merged")
+
+
+def test_a_prebuilt_bundle_is_stamped_by_its_build_marker(tmp_path: Path):
+    """A rebuild rewrites `.built`; nothing else about a prebuilt package needs
+    walking at boot (a python + venv is thousands of files)."""
+    prebuilt = tmp_path / "prebuilt"
+    _package(prebuilt, "data-fetch")
+    (prebuilt / "data-fetch" / ".built").write_text("hash-1")
+    _plugin(tmp_path / "plugins", "chart")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    merged = merge_tools_root(prebuilt, ["data-fetch"], plugins, tmp_path / "merged")
+    assert merged is not None
+    (merged / "marker").write_text("x")
+    merge_tools_root(prebuilt, ["data-fetch"], plugins, tmp_path / "merged")
+    assert (merged / "marker").exists()  # same stamp: untouched
+    (prebuilt / "data-fetch" / ".built").write_text("hash-2")
+    merge_tools_root(prebuilt, ["data-fetch"], plugins, tmp_path / "merged")
+    assert not (merged / "marker").exists()  # rebuilt

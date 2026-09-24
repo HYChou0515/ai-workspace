@@ -199,3 +199,12 @@ def test_a_plugin_with_no_built_web_entry_refuses_boot(tmp_path: Path):
 def test_sdk_must_be_a_major_version_string(tmp_path: Path):
     _plugin(tmp_path, "p", {"name": "p", "sdk": "one", "kinds": ["k"]})
     assert "sdk" in _refusal(tmp_path)
+
+
+@pytest.mark.parametrize("stray", ["lost+found", ".snapshot", ".staging"])
+def test_filesystem_furniture_is_not_a_plugin(tmp_path: Path, stray: str):
+    """An ext4 volume mounted as the plugin dir always carries `lost+found`; a
+    NAS adds `.snapshot`. Neither is a half-installed plugin."""
+    _plugin(tmp_path, "a")
+    (tmp_path / stray).mkdir()
+    assert [p.name for p in discover_view_plugins(tmp_path)] == ["a"]

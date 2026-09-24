@@ -17,7 +17,14 @@ import pytest
 from workspace_app.view_plugin import cli
 
 
-def _src(root: Path, name: str, *, sandbox_src: bool = False, bundle: str = "sandbox") -> Path:
+def _src(
+    root: Path,
+    name: str,
+    *,
+    sandbox_src: bool = False,
+    bundle: str = "sandbox",
+    isolated: bool = True,
+) -> Path:
     d = root / name
     (d / "web").mkdir(parents=True)
     manifest: dict = {"name": name, "sdk": "1", "kinds": [name]}
@@ -27,6 +34,7 @@ def _src(root: Path, name: str, *, sandbox_src: bool = False, bundle: str = "san
         (d / "sandbox-src" / "pyproject.toml").write_text(
             f'[project]\nname = "{name}-sb"\nversion = "0"\n'
             f'[project.scripts]\n{name}-cmd = "x:main"\n'
+            + ('[tool.workspace-tool]\nlaunch = "isolated"\n' if isolated else "")
         )
     (d / "plugin.json").write_text(json.dumps(manifest))
     return d
@@ -107,3 +115,13 @@ def test_a_build_that_installs_a_broken_plugin_fails(tmp_path, monkeypatch, caps
     monkeypatch.setattr(cli.subprocess, "run", leaky_node)
     assert cli.main(["build", str(src), str(tmp_path / "out")]) == 1
     assert "own copy of React" in capsys.readouterr().out
+
+
+def test_a_sandbox_src_must_opt_into_the_isolated_launcher(tmp_path, calls, capsys):
+    """A plugin's commands are the platform's: a user's `pip install --upgrade`
+    must not change what they compute (#581's user-site-first launcher is for
+    tools, not plugins)."""
+    src = _src(tmp_path / "src", "chart", sandbox_src=True, isolated=False)
+    assert cli.main(["build", str(src), str(tmp_path / "out")]) == 1
+    assert 'launch = "isolated"' in capsys.readouterr().out
+    assert calls["prebuild"] == []

@@ -135,6 +135,14 @@ def resolve_plugins_dir(
     return Path(e[ENV_VAR]) if e.get(ENV_VAR) else DEFAULT_PLUGINS_DIR
 
 
+def is_furniture(name: str) -> bool:
+    """A folder in the plugin dir that is the filesystem's, not a plugin: a
+    dot-folder (`.snapshot` on a NAS) or ext4's `lost+found`, which every freshly
+    formatted volume mounted as the plugin dir carries. A plugin name can be
+    neither (it is a `[a-z0-9]…` slug)."""
+    return name.startswith(".") or name == "lost+found"
+
+
 def discover_view_plugins(plugins_dir: Path) -> list[ViewPlugin]:
     """Every plugin under ``plugins_dir``, sorted by name; ``[]`` when the dir
     does not exist. Raises ``ViewPluginError`` naming the first bad plugin."""
@@ -143,7 +151,7 @@ def discover_view_plugins(plugins_dir: Path) -> list[ViewPlugin]:
     out: list[ViewPlugin] = []
     owner: dict[str, str] = {}
     for sub in sorted(plugins_dir.iterdir()):
-        if not sub.is_dir():
+        if not sub.is_dir() or is_furniture(sub.name):
             continue
         plugin = load_view_plugin(sub)
         for kind in plugin.manifest.kinds:

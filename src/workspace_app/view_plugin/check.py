@@ -9,7 +9,10 @@ two a boot cannot see, found in the built web half:
 - a dev build — it imports `react/jsx-dev-runtime`, which the import map does
   not provide, so the import fails before the plugin registers anything.
 
-Both are read off the built files' TEXT: markers only a bundled React or a dev
+It also refuses a web half that still reads `process.env` (Vite's library mode
+leaves it in), and a python sandbox bundle not built with the isolated launcher.
+
+The web checks are read off the built files' TEXT: markers only a bundled React or a dev
 JSX transform put there (the React 19 internals export, the element symbol the
 JSX runtime stamps, the dev runtime's specifier). A production build with those
 packages external contains none of them.
@@ -22,7 +25,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..view_plugins.discovery import ViewPlugin, ViewPluginError, load_view_plugin
+from ..view_plugins.discovery import ViewPlugin, ViewPluginError, is_furniture, load_view_plugin
 from ..view_plugins.skills import plugin_skill_sources
 
 #: text → why a built web half carrying it is refused, and what to change.
@@ -32,6 +35,12 @@ _BUNDLED_REACT = (
     "react.transitional.element",
 )
 _DEV_BUILD = ("react/jsx-dev-runtime",)
+#: Vite's LIBRARY mode leaves `process.env.NODE_ENV` in (an app build replaces
+#: it); a bundled library's dev checks then throw `process is not defined` in
+#: the browser — which a node-based test never sees (#855's live check).
+_PROCESS_ENV = ("process.env",)
+#: What only the isolated launcher template sets (`tooling.prebuild`).
+_ISOLATED_MARK = "PYTHONNOUSERSITE=1"
 
 
 @dataclass
@@ -50,6 +59,12 @@ def _check_web(p: ViewPlugin, report: Report) -> None:
                 f"{rel} carries its own copy of React — mark react, react/jsx-runtime, "
                 "react-dom and react-dom/client EXTERNAL in the plugin's vite.config.ts "
                 "(build.rollupOptions.external); the SPA provides them"
+            )
+        if any(m in text for m in _PROCESS_ENV):
+            report.errors.append(
+                f"{rel} still reads process.env (the browser has no `process`) — add "
+                'define: {"process.env.NODE_ENV": JSON.stringify("production")} to the '
+                "plugin's vite.config.ts; library mode does not replace it"
             )
         if any(m in text for m in _DEV_BUILD):
             report.errors.append(
@@ -73,6 +88,12 @@ def _check_sandbox(p: ViewPlugin, report: Report) -> None:
     if not launch.is_file() or not os.access(launch, os.X_OK):
         report.errors.append(f"{half.bundle}/launch is missing or not executable")
         return
+    if (bundle / ".venv").is_dir() and _ISOLATED_MARK not in launch.read_text("utf-8", "replace"):
+        report.errors.append(
+            f"{half.bundle}/launch is not the isolated launcher, so a user's `pip install` "
+            "would change what this plugin's commands import — add "
+            '[tool.workspace-tool] launch = "isolated" to the bundle\'s pyproject.toml and rebuild'
+        )
     commands_json = bundle / "commands.json"
     names = (
         {c.get("name") for c in json.loads(commands_json.read_text())}
@@ -104,4 +125,8 @@ def check_dir(plugins_dir: Path, name: str | None) -> list[Report]:
         return [check_plugin(plugins_dir / name)]
     if not plugins_dir.is_dir():
         return []
-    return [check_plugin(d) for d in sorted(plugins_dir.iterdir()) if d.is_dir()]
+    return [
+        check_plugin(d)
+        for d in sorted(plugins_dir.iterdir())
+        if d.is_dir() and not is_furniture(d.name)
+    ]

@@ -2,7 +2,10 @@
 
 你可以自己寫一種畫面，讓 workspace 裡的 `*.ai.yaml` 檔案用它來呈現資料。做法是寫一個
 **runtime view plugin**：一個資料夾，維運方把它放進 plugin 目錄、重啟 app，就上線了——
-**不用改這個 repo 的程式碼，也不用重新 build SPA**（#847/#848）。
+**不用改平台的程式碼，也不用重新 build SPA**（#847/#848）。
+
+原始碼放在這個 repo 的 `view-plugins/<name>/` 時，`web/` 的型別檢查與測試會一起涵蓋它、
+CI 與映像也會建它（本頁的工具都以此為預設）。放在別處也能 build、能安裝，只是沒有這些檢查。
 
 這頁只講你要做的事。
 
@@ -107,7 +110,8 @@ source: /data/wafer.csv  # 這是「你自己的」key，見第 4 節
 
 **載入失敗也一樣只影響自己的面板。** plugin 的 `import()` 丟例外、逾時（15 秒）、SDK 主版號不合、
 或是 import 完卻沒註冊它宣告的 kind——app 照樣開起來，每個用到那些 kind 的 `*.ai.yaml` 會顯示
-一則點名 plugin 與原因的錯誤。沒人宣告的 kind 仍然是 "Unsupported view kind"。
+一則點名 plugin 與原因的錯誤。沒人宣告的 kind 仍然是 "Unsupported view kind"。第一次 render 會等
+plugin 載入：清單請求與每個 plugin 的 import 各有 15 秒上限，plugin 之間平行載入。
 
 ⚠️ **`spec` 每次 render 都是新物件。** 別把它放進 `useEffect` 的相依陣列（會每次都觸發）。
 要相依就相依你真正讀出來的值，例如 `viewParamString(spec, "source")`。
@@ -122,8 +126,11 @@ plugin 的 web 半邊是**一支 ES module**（`web/index.js`），用 Vite 的 
 - **把 React 打包進去會壞**：你的 hook 會跑在一份沒 render 過任何東西的 React 上，第一次 render 就丟
   `Cannot read properties of null (reading 'useState')`。
 - **development build 也會壞**：它 import `react/jsx-dev-runtime`，import map 不提供。
+- **`process.env` 要換掉**：Vite 的 lib 模式**不會**替換 `process.env.NODE_ENV`，打包進去的第三方函式庫
+  （例如圖表庫）的 dev 檢查會在瀏覽器丟 `process is not defined`——node 跑的測試看不到。在
+  `vite.config.ts` 加 `define: { "process.env.NODE_ENV": JSON.stringify("production") }`。
 
-`view_plugin check` 兩種都會擋下來（見第 8 節）。`view_plugin new` 產生的 `vite.config.ts` 已經設好。
+`view_plugin check` 三種都會擋下來（見第 8 節）。`view_plugin new` 產生的 `vite.config.ts` 已經設好。
 
 你自己的 runtime 依賴（例如圖表函式庫）照常放進 plugin 的 `package.json`，會被打包進 `index.js`。
 **不要依賴和 `web/` 不同版本的同一個套件**：plugin 的原始碼與測試是由 `web/` 的 `tsc` 與 vitest 檢查的
@@ -153,7 +160,7 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 複本——改它不會影響平台手上的 spec）。要「未知的 key 當錯誤」時用它：`viewParam` 只能讀你已經知道
 名字的 key，找不到拼錯的那一個。
 
-這兩個存取器回傳的是**原始 YAML 文件**的值，不是平台轉型後的版本。所以就算你的 key 剛好跟
+這三個存取器回傳的是**原始 YAML 文件**的值，不是平台轉型後的版本。所以就算你的 key 剛好跟
 平台的撞名——`view`、`entity`、`title`、`columns`、`card`、`sort`、`hidden_fields`、
 `group_by`、`span`、`label`、`assignee`、`assignee_display`、`skip_weekends`、`week`、
 `schedule`——你讀回來的仍然是你寫下去的東西。（不過還是**建議避開這些名字**，因為平台
@@ -234,6 +241,10 @@ const run = useSandboxRun("chart", "query", { source: "data/yield.csv", group_by
 - **args 走 argv**：`JSON.stringify(args)` 到 128 KiB 會直接被拒（413）——大的輸入（一串值、一張表）
   先寫成 workspace 檔案，傳路徑。
 - plugin 的指令**不是 agent 的工具**，不會出現在任何 app 的工具清單或工具選擇器裡。
+- 指令名只能是一個簡單的字（`[a-z0-9][a-z0-9_-]*`）；執行時**不帶** item 的環境變數（這條路讀得到
+  item 的人都能呼叫，而那些變數是擁有者給自己的工具用的憑證）。
+- 同一個 item 的 app 若有同名的第三方工具，`/.tools/<名字>` 是那個工具的，呼叫會被拒絕（409）——
+  換個 plugin 名字。
 
 **用隔離的 launcher。** 在 bundle 原始碼的 `pyproject.toml` 宣告：
 
@@ -270,6 +281,9 @@ site-packages，使用者的 user site 與 `PYTHONPATH` 都進不來。
   `highlight matches 3/25 groups; fail_rate 0.02–0.41`）。
 - 非 0 ⇒ 回覆錯誤（`stderr`，沒有就 `stdout`），**什麼都不顯示**——跟路徑解析不到時同一條規則。
 - 沒宣告 `validate` 時，唯一的檢查是 YAML 能 parse。內建 kind 與其他檔案完全不受影響。
+- **驗證跑不起來時照常顯示**，回覆附一句 `(view plugin '<名字>' could not check this view: …)`：
+  這個沙盒後端不跑 plugin 指令（`docker`）、app 有同名工具、或沙盒裡沒有這個 plugin 的 launcher。
+  那是部署的問題，不是那份 view 檔的，拒絕只會讓 agent 去「修」一份正確的檔案。
 
 ## 7. 給 agent 的：skill 與 `## Available views`
 
@@ -289,8 +303,9 @@ site-packages，使用者的 user site 與 `PYTHONPATH` 都進不來。
 uv run python -m workspace_app.view_plugin tune <name> [--preset P] [--app A --profile B] [--config config.yaml]
 ```
 
-它對**已安裝的** `<plugin 目錄>/<name>/skill/SKILL.md` 與 `scenarios/` 跑 `skill_eval --control`，
-印出報告。流程就是：改那一個檔、重跑。沒有 skill 或沒有情境會直接點名報錯。
+它對**已安裝的** `<plugin 目錄>/<name>/<plugin.json 的 skill>/SKILL.md` 與 `scenarios/` 跑
+`skill_eval --control`，印出報告。流程就是：改那一個檔、重跑。沒有 skill 或沒有情境會直接點名報錯。
+本機的 Ollama 模型記得加 `--num-ctx`（預設 4k 會把整段 prompt 截掉，量到的是窗口不是 skill）。
 情境格式見 [擴充平台](extending-the-platform.md) 的 skill_eval 一節。
 
 ## 8. 工具：`new` / `build` / `check`
@@ -307,14 +322,22 @@ make view-plugins        # = build --all view-plugins .view-plugins
 uv run python -m workspace_app.view_plugin check [name] [--config config.yaml]
 ```
 
-`check` 用開機時同一套規則檢查 manifest 與 skill，另外擋下開機看不出來的兩件事：`web/` 裡**自帶 React**
-的建置、以及 **development build**（每一條都指出該改哪個設定）；`"validate": true` 卻沒有 `validate`
-指令也會擋。
+`check` 用開機時同一套規則檢查 manifest 與 skill，另外擋下開機看不出來的事：`web/` 裡**自帶 React**
+的建置、**development build**、還讀著 **`process.env`** 的建置（每一條都指出該改哪個設定）；
+`"validate": true` 卻沒有 `validate` 指令、或 python 沙盒半邊不是用隔離 launcher 建的，也會擋。
+CI 與映像建完 plugin 都會跑它。
 
-原始碼的 `sandbox-src/`（一個 uv 專案，恰好一個 `[project.scripts]`）由 `build` 裝成 `sandbox/`，
-所以有 `sandbox-src/` 的 plugin，`plugin.json` 要寫 `"sandbox": {"bundle": "sandbox"}`。
+原始碼的 `sandbox-src/`（一個 uv 專案，恰好一個 `[project.scripts]`，宣告 `launch = "isolated"`）由
+`build` 裝成 `sandbox/`，所以有 `sandbox-src/` 的 plugin，`plugin.json` 要寫 `"sandbox": {"bundle": "sandbox"}`。
 app 映像的 `view-plugins` stage 用**同一支** `build-web.mjs` 建每個 plugin 的 web 半邊，裝到
-`/app/.view-plugins`；正式環境的沙盒半邊在 sandbox-host。
+`/app/.view-plugins`——**只有 web 半邊**：正式環境（`sandbox.kind: http`）的沙盒半邊在 sandbox-host；
+用這個映像跑 `sandbox.kind: local` 時，帶 `bundle` 的 plugin 會因為沒有 `sandbox/` 而拒絕開機，
+要自己掛一個用 `view_plugin build` 裝好的 plugin 目錄。
+
+**開發時**：`make view-plugins` 裝到 `<repo>/.view-plugins`（`view_plugins.dir` 沒設時的預設），重啟 app；
+`pnpm run dev` 的 dev server 也會輸出 import map（指向 Vite 自己 serve 的 React facade 與 SDK 原始碼；
+plugin 經 `/api` proxy 從後端載入——規劃期的 spike 在 dev server 上驗過這條路）。改了 plugin 的 web 原始碼要重跑 build，
+改已安裝的 `SKILL.md` 則下一輪就生效。
 
 ## 9. 邊界與相容性
 

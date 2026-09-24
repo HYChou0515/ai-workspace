@@ -18,6 +18,8 @@ agent-facing package list.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import logging
 import os
 import shutil
@@ -53,6 +55,26 @@ def _link_or_copy(src: str, dst: str) -> None:
         shutil.copy2(src, dst)
 
 
+def _stamp(pairs) -> str:
+    """What the merged root was built from, per mounted name: a prebuilt
+    bundle's `.built` stamp, else every source file's path, size and mtime. Any
+    rebuild of a package or re-install of a plugin changes it."""
+    h = hashlib.sha256()
+    for target, src in pairs:
+        h.update(f"{target}\0".encode())
+        built = src / ".built"
+        if built.is_file():
+            # A prebuilt bundle's own build stamp (source hash + launcher
+            # fingerprint) changes on every rebuild — one read instead of a
+            # stat per file of a python + venv (seconds, measured, at boot).
+            h.update(built.read_bytes())
+            continue
+        for f in sorted(src.rglob("*")):
+            st = f.lstat()
+            h.update(f"{f.relative_to(src)}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+    return h.hexdigest()
+
+
 def merge_tools_root(
     prebuilt: Path | None,
     packages: Sequence[str],
@@ -66,7 +88,10 @@ def merge_tools_root(
     what it saw before. Otherwise ``dst`` is rebuilt from scratch: every package
     in ``packages`` hard-linked from ``prebuilt``, every plugin bundle copied.
     Built beside ``dst`` and swapped in, so a crash mid-copy never leaves a
-    half-merged root behind for the next boot to trust.
+    half-merged root behind for the next boot to trust; under an exclusive lock,
+    and skipped entirely when a stamp of the sources says ``dst`` is current —
+    so a second process booting on the same filesystem never tears down the
+    tree the first one's live sandboxes are using.
 
     Raises ``ViewPluginError`` naming both sides when a plugin and a tool
     package share a name (both would be ``/.tools/<name>``), and naming the
@@ -89,23 +114,43 @@ def merge_tools_root(
                 f"{p.manifest.sandbox.bundle!r} has no executable `launch` — it must be a "
                 "prebuilt tool bundle"
             )
-    staging = dst.with_name(f"{dst.name}.staging")
-    retired = dst.with_name(f"{dst.name}.retired")
-    for d in (staging, retired):
-        if d.exists():
-            shutil.rmtree(d)
-    staging.mkdir(parents=True)
-    for name in packages:
-        assert prebuilt is not None
-        shutil.copytree(prebuilt / name, staging / name, symlinks=True, copy_function=_link_or_copy)
-    for p in bundles:
-        assert p.manifest.sandbox is not None and p.manifest.sandbox.bundle is not None
-        shutil.copytree(p.dir / p.manifest.sandbox.bundle, staging / p.name, symlinks=True)
-    if dst.exists():
-        dst.rename(retired)
-    staging.rename(dst)
-    if retired.exists():
-        shutil.rmtree(retired)
+    sources = [prebuilt / name for name in packages if prebuilt is not None] + [
+        p.dir / p.manifest.sandbox.bundle
+        for p in bundles
+        if p.manifest.sandbox is not None and p.manifest.sandbox.bundle is not None
+    ]
+    targets = [*packages, *(p.name for p in bundles)]
+    stamp = _stamp(zip(targets, sources, strict=True))
+    stamp_file = dst.with_name(f"{dst.name}.stamp")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    # One merge at a time per root: the API and the blob-gc worker both boot
+    # `build_app`, on the same filesystem under `kind: local`.
+    with open(dst.with_name(f"{dst.name}.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if dst.is_dir() and stamp_file.is_file() and stamp_file.read_text() == stamp:
+            # Unchanged — and possibly under live sandboxes of another process
+            # that merged it first. Leave it exactly as it is.
+            return dst
+        staging = dst.with_name(f"{dst.name}.staging-{os.getpid()}")
+        retired = dst.with_name(f"{dst.name}.retired-{os.getpid()}")
+        for d in (staging, retired):
+            if d.exists():
+                shutil.rmtree(d)
+        staging.mkdir()
+        for name in packages:
+            assert prebuilt is not None
+            shutil.copytree(
+                prebuilt / name, staging / name, symlinks=True, copy_function=_link_or_copy
+            )
+        for p in bundles:
+            assert p.manifest.sandbox is not None and p.manifest.sandbox.bundle is not None
+            shutil.copytree(p.dir / p.manifest.sandbox.bundle, staging / p.name, symlinks=True)
+        if dst.exists():
+            dst.rename(retired)
+        staging.rename(dst)
+        stamp_file.write_text(stamp)
+        if retired.exists():
+            shutil.rmtree(retired)
     logger.info(
         "view plugins: tools root %s = %d package(s) + plugin bundle(s) %s",
         dst,

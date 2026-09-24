@@ -53,6 +53,33 @@ def test_a_development_build_is_refused(tmp_path):
     assert "development build" in err and "production" in err
 
 
+def test_a_build_that_left_process_env_in_is_refused(tmp_path):
+    """Vite's library mode does not replace `process.env.NODE_ENV`; a bundled
+    third-party library's dev checks then throw `process is not defined` in the
+    browser (found by #855's live check — node tests cannot see it)."""
+    js = 'if (process.env.NODE_ENV !== "production") console.warn("x");\n'
+    [err] = check_plugin(_installed(tmp_path, "envy", js)).errors
+    assert "process.env" in err and "define" in err
+
+
+def _python_bundle(d: Path, launch: str) -> None:
+    (d / "sandbox" / ".venv").mkdir(parents=True, exist_ok=True)
+    (d / "sandbox" / "launch").write_text(launch)
+    (d / "sandbox" / "launch").chmod(0o755)
+    (d / "sandbox" / "commands.json").write_text("[]")
+
+
+def test_a_python_bundle_must_use_the_isolated_launcher(tmp_path):
+    from workspace_app.tooling.prebuild import _ISOLATED_LAUNCH, _LAUNCH
+
+    d = _installed(tmp_path, "py", sandbox={"bundle": "sandbox"})
+    _python_bundle(d, _LAUNCH.format(ver="3.12", tool="x"))
+    [err] = check_plugin(d).errors
+    assert "isolated" in err and 'launch = "isolated"' in err
+    _python_bundle(d, _ISOLATED_LAUNCH.format(ver="3.12", tool="x"))
+    assert check_plugin(d).errors == []
+
+
 def test_chunks_are_checked_too(tmp_path):
     d = _installed(tmp_path, "chunky")
     (d / "web" / "chunk-a.js").write_text("const x = 'react.transitional.element';")
@@ -119,6 +146,7 @@ def test_new_writes_the_web_half_and_a_manifest(tmp_path):
     vite = (tmp_path / "heat" / "web" / "vite.config.ts").read_text()
     for ext in ("react", "react/jsx-runtime", "react-dom", "@aiws/view-sdk"):
         assert f'"{ext}"' in vite
+    assert '"process.env.NODE_ENV": JSON.stringify("production")' in vite
 
 
 def test_new_with_sandbox_and_skill(tmp_path, monkeypatch):

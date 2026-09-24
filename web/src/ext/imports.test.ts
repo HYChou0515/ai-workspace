@@ -176,12 +176,13 @@ describe("violates() resolves the path instead of matching a prefix", () => {
   });
 });
 
-// The whole seam hangs off one side-effect import in the app's entry point.
-// Nothing else can cover it: `CsvTableView.test.tsx` imports `./index` itself,
-// so it stays green with the wiring deleted — and so does every other test,
-// while in production every plug-in kind silently degrades to "Unsupported view
-// kind". One line, no compiler help (it has no bindings to go unused), and the
-// failure only shows in a browser.
+// The build-time seam hangs off one side-effect import in the app's entry point,
+// and the runtime one off the loader call before the first render. Nothing else
+// can cover either: a kind's own test registers it itself, so it stays green
+// with the wiring deleted — and so does every other test, while in production
+// every plug-in kind silently degrades to "Unsupported view kind". No compiler
+// help (a side-effect import has no bindings to go unused), and the failure only
+// shows in a browser.
 describe("the entry point still loads ext/", () => {
   const MAIN = fileURLToPath(new URL("../main.tsx", import.meta.url));
 
@@ -234,8 +235,8 @@ describe("src/ext import boundary", () => {
 // relative path may leave the PLUGIN's own folder (reaching into the host would
 // compile a second copy of a host module into the plugin — a second registry,
 // a second set of React contexts), and a bare `@aiws/view-sdk` is the only door
-// in. Inside its own folder it may reach across halves: the chart's one spec
-// schema lives in `sandbox-src/` and is read by both the sandbox and the web.
+// in. Inside its own folder it may reach across halves — e.g. one spec schema
+// kept in `sandbox-src/` and read by both the sandbox command and the web half.
 
 const PLUGINS_DIR = fileURLToPath(new URL("../../../view-plugins/", import.meta.url));
 
@@ -254,7 +255,7 @@ describe("pluginViolates()", () => {
     expect(pluginViolates("index.tsx", "react")).toBe(false);
     expect(pluginViolates("deep/View.tsx", "../index")).toBe(false);
   });
-  it("accepts a file elsewhere in its OWN folder — the chart's shared spec schema", () => {
+  it("accepts a file elsewhere in its OWN folder — a spec schema shared with its sandbox half", () => {
     expect(pluginViolates("spec.ts", "../../sandbox-src/src/chart_view/spec.schema.json")).toBe(false);
     expect(pluginViolates("deep/View.tsx", "../../../plugin.json")).toBe(false);
   });
