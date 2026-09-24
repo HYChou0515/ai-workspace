@@ -90,7 +90,12 @@ plugin with all four parts.
   - `` `chart` with `mark: grid`: a value's pattern over a 2-D lattice ``
 - `skill/SKILL.md` covers how to write a spec (source, keys, highlight) and when a claim
   needs one. It is generic, with no domain knowledge (Q6).
-- `sample-scenarios/chart/` ships unscored for operators (Q19, unconfirmed).
+- `view-plugins/chart/scenarios/` ships unscored for operators (Q19, user). It covers:
+  - claims that should call `write_file` + `show_file`;
+  - claims that need `mark: grid`;
+  - requests that must not show anything.
+
+  `view_plugin tune chart` runs it (PR 1 P11).
 
 **P9 — docs and runbook.**
 
@@ -100,6 +105,7 @@ plugin with all four parts.
   changes cost and behaviour. The entry covers:
   - which prompts grow;
   - how to disable it (remove the plugin from the dir);
+  - how to retune its skill for their model (`view_plugin tune chart`);
   - the check that confirms it is live (`GET /api/view-plugins` lists `chart`).
 
 ## Verification

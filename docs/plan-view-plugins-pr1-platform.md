@@ -23,6 +23,7 @@ Base: master `6488a7ac`.
   web/index.js    # ES module; calls registerViewKind from "@aiws/view-sdk"
   sandbox/        # optional: a standard prebuilt tool bundle (has `launch`)
   skill/SKILL.md  # optional
+  scenarios/      # optional: skill_eval scenarios for `view_plugin tune`; never copied into workspaces
 ```
 
 ## Phases
@@ -103,6 +104,13 @@ this file before P2 starts.
   not the manifest flag, which is the lesson from #581's preamble.
 - Per-item `skill_prefs` still turns one off.
 - `materialize_skill` copies plugin skills like any shared skill.
+- `skill_eval` resolves plugin skills too. Today `--dump-skill` / `--skill` look names up
+  in `SHARED_SKILLS` only (`skill_eval/__main__.py:239`), so a plugin skill would be
+  "unknown skill".
+- **Check:** an operator's edit to `<dir>/<name>/skill/SKILL.md` must reach the next
+  turn. `materialize_skill` does nothing when `/.skill/<name>/` already exists in a
+  workspace, so find out whether an already-materialized copy shadows the edit. If it
+  does, the tune loop is broken, and the fix belongs in this phase.
 
 **P8 — `## Available views`.**
 
@@ -139,6 +147,14 @@ this file before P2 starts.
   writes a buildable plugin, mirroring `workflow new`.
 - `view_plugin check [name]` validates `plugin.json` and the built `web/index.js` exist
   without booting the app.
+- `view_plugin tune <name> [--preset P] [--app A --profile B]` is the operator's
+  **one-command retune** (Q19, user):
+  - it runs `skill_eval` on the **installed** `<dir>/<name>/skill/SKILL.md` with
+    `<dir>/<name>/scenarios/` and `--control`, then prints the report;
+  - the loop is: edit that file, rerun, done;
+  - it fails loudly, by name, when the plugin has no skill or no scenarios.
+- The scaffold writes a `scenarios/` stub with one should-call and one should-not-call
+  scenario.
 
 **P12 — docs.**
 
@@ -163,6 +179,8 @@ this file before P2 starts.
   - open a `*.ai.yaml` of each;
   - hit the runner route;
   - read the composed prompt for the index line;
+  - run `view_plugin tune` on the scratch plugin, edit its `SKILL.md`, rerun, and confirm
+    the report and a live turn both see the edit;
   - repeat with a malformed `plugin.json` and read the boot error.
 - Base differential: the same steps on master show `csv-table` rendering from the
   bundle.

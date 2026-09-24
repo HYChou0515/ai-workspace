@@ -13,7 +13,8 @@ Every decision is tagged with who made it:
 - **[user]** means the user proposed or required it.
 - **[agreed]** means I proposed it and the user said yes.
 - **[unconfirmed]** means I proposed it and the user did not answer it. It is a working
-  assumption, not a decision.
+  assumption, not a decision. None remain: Q19's scenarios were confirmed on
+  2026-09-25.
 
 ## What this is
 
@@ -52,9 +53,15 @@ The outcome is four things:
 - **Q19.** Trigger rate (whether the AI actually summons charts) is **not** part of the
   DoD **[user]**. Whether a model uses a skill depends on the model, and prod runs a
   model we do not see, so a local number neither passes nor fails prod.
-  - **[unconfirmed]** Ship `sample-scenarios/chart/` anyway, unscored, as the operator's
-    tool for retuning the skill on their own model. This follows CLAUDE.md's
-    `skill_eval` rationale.
+  - Ship scenarios anyway, unscored, as the operator's tool for retuning the skill on
+    their own model **[user]**. This follows CLAUDE.md's `skill_eval` rationale.
+  - **Retuning must be simple for the operator [user].**
+    - Scenarios travel inside the plugin as `<plugin>/scenarios/`, a sibling of
+      `skill/`, so they are never copied into workspaces.
+    - One command, `view_plugin tune <name>`, runs `skill_eval` on the installed
+      `skill/SKILL.md` with those scenarios plus `--control`.
+    - The operator edits that one file in the plugin dir and reruns. No rebuild and no
+      repo change are needed.
 
 ### Rendering
 
@@ -227,6 +234,7 @@ The outcome is four things:
   - `sandbox/`, a standard prebuilt tool bundle mounted under `/.tools`
   - `skill/SKILL.md`, which becomes a shared skill, so `SHARED_SKILLS` gains plugin
     sources
+  - optionally `scenarios/`, the unscored `skill_eval` set that `view_plugin tune` runs
 
   How it reaches agents:
   - Its `plugin.json` `views` entries become lines of a new `## Available views` index.
