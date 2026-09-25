@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
 import { MarkingStore } from "../../../../web/src/lib/markings";
-import { answer, cat, f64, layer } from "./testAnswer";
+import { answer, cat, f64, layer, q8 } from "./testAnswer";
 
 const sdk = vi.hoisted(() => ({
   useSandboxRun: vi.fn(),
@@ -275,6 +275,62 @@ describe("ChartView on a named marking", () => {
     // the person drew stays on the chart — and can be cleared.
     expect(a!.setOption.mock.calls.at(-1)![1]).toEqual({ replaceMerge: ["series"] });
     act(() => a!.handlers.get("brushselected")!({ batch: [{ areas: [], selected: [] }] }));
+    expect(store.get("fail")).toBeUndefined();
+  });
+
+  // #847/#848 P9: the brush above is not the only gesture that writes. A lasso
+  // and a legend click reach the marking through the same ChartView handlers.
+  it("a lasso in a scatter writes the marking with the rows it took", () => {
+    const store = new MarkingStore();
+    mount(store, [docOn("fail")], ["/v/scatter.ai.yaml"]);
+    const [a] = charts.made;
+    act(() =>
+      a!.handlers.get("brushselected")!({
+        batch: [
+          {
+            areas: [{ brushType: "polygon", coordRange: [[0, 0], [9, 0], [9, 9]] }],
+            selected: [{ seriesIndex: 0, dataIndex: [1, 2] }], // lots L2, L1
+          },
+        ],
+      }),
+    );
+    expect([...store.get("fail")!.marking.lot!].sort()).toEqual(["L1", "L2"]);
+    expect(store.get("fail")!.source).toBe("/v/scatter.ai.yaml");
+  });
+
+  it("a lasso on a grid writes the cells inside its outline", () => {
+    // ECharts hands a grid's lasso over as the outline alone (a custom series
+    // has no dataIndex to select), so the view finds the cells in it.
+    sdk.useSandboxRun.mockReturnValue(
+      ok(answer(layer("grid", 3, { x: f64([0, 1, 2]), y: f64([0, 0, 0]), v: q8([0, 127, 254], 0, 1), lot: cat(["L1", "L2", "L3"]) }))),
+    );
+    const grid = docOn("fail", {
+      mark: "grid",
+      encoding: {
+        x: { field: "x", type: "ordinal" },
+        y: { field: "y", type: "ordinal" },
+        color: { field: "v", type: "quantitative" },
+      },
+    });
+    const store = new MarkingStore();
+    mount(store, [grid]);
+    const [a] = charts.made;
+    // a pentagon around the centres of cells 1 and 2 (axis values are cell indices), not cell 0's
+    const outline = [[0.6, -0.4], [2.9, -0.4], [2.9, 0.4], [1.5, 0.6], [0.6, 0.4]];
+    act(() => a!.handlers.get("brushselected")!({ batch: [{ areas: [{ brushType: "polygon", coordRange: outline }], selected: [] }] }));
+    expect([...store.get("fail")!.marking.lot!].sort()).toEqual(["L2", "L3"]);
+  });
+
+  it("a legend click writes the marking with the rows still shown", () => {
+    const coloured = docOn("fail", { encoding: { ...enc, color: { field: "lot", type: "nominal" } } });
+    const store = new MarkingStore();
+    mount(store, [coloured], ["/v/legend.ai.yaml"]);
+    const [a] = charts.made;
+    act(() => a!.handlers.get("legendselectchanged")!({ selected: { L1: false, L2: true } }));
+    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+    expect(store.get("fail")!.source).toBe("/v/legend.ai.yaml");
+    // every entry shown again is no selection: the marking empties
+    act(() => a!.handlers.get("legendselectchanged")!({ selected: { L1: true, L2: true } }));
     expect(store.get("fail")).toBeUndefined();
   });
 });
