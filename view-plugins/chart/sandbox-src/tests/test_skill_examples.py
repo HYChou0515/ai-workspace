@@ -70,3 +70,19 @@ def test_every_mark_the_schema_has_is_in_the_skill_table():
     first_cells = re.findall(r"^\| ([^|]*) \|", SKILL, flags=re.M)
     in_table = {m for cell in first_cells for m in re.findall(r"`(\w+)`", cell)}
     assert set(spec_schema()["$defs"]["markType"]["enum"]) <= in_table
+
+
+# Q23 (docs/plan-view-plugins.md): a wafer map is a generic map, and the domain
+# words in #847/#848 are examples. The skill is what every model copies, so
+# its examples use generic column names, and so do the scenarios that score it.
+DOMAIN = re.compile(r"\b(lots?|wafers?|dies?|die_[xy]|yield|defects?|fab)\b", re.I)
+
+
+def test_the_skill_teaches_no_one_domain():
+    assert DOMAIN.findall(SKILL) == []
+
+
+def test_the_skill_scenarios_are_not_one_domain_either():
+    scenarios = Path(__file__).resolve().parents[2] / "scenarios"
+    found = {p.name: DOMAIN.findall(p.read_text()) for p in sorted(scenarios.iterdir())}
+    assert found and {name: words for name, words in found.items() if words} == {}

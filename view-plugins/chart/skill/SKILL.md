@@ -129,7 +129,7 @@ transform:
 ### Facet: one small grid per group
 
 ```yaml
-facet: {field: [lot, wafer], sort: {field: fail_rate, order: descending}}
+facet: {field: [batch, unit], sort: {field: fail_rate, order: descending}}
 ```
 
 `facet` draws the `grid` once per group, as a gallery of small maps. It works for
