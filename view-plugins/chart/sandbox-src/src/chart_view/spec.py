@@ -19,6 +19,7 @@ imports the same file. Nothing here restates it.
 from __future__ import annotations
 
 import json
+import math
 import re
 from functools import cache
 from importlib import resources
@@ -90,14 +91,16 @@ def _as_js_number(n: int) -> int | float:
     return float(n) if abs(n) > 2**53 else n
 
 
-def _construct_float(loader: _Loader, node: yaml.ScalarNode) -> float:
+def _construct_float(loader: _Loader, node: yaml.ScalarNode) -> float | str:
     text = str(loader.construct_scalar(node))
     lowered = text.lower()
     if lowered.endswith(".inf"):
         return float("-inf") if text.startswith("-") else float("inf")
     if lowered == ".nan":
         return float("nan")
-    return float(text)
+    value = float(text)
+    # js-yaml keeps a float that overflows ("1e400") as the text it was.
+    return text if math.isinf(value) else value
 
 
 _Loader.add_implicit_resolver(_TAG_NULL, _NULL, ["~", "n", "N", ""])

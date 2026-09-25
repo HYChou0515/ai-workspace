@@ -1,0 +1,11 @@
+view: chart
+title: 1e400
+source: data/daily.csv
+layer:
+  - mark: line
+    encoding:
+      x: {field: day, type: temporal}
+      y: {field: thickness, type: quantitative}
+  - mark: rule
+    encoding:
+      y: {datum: 1e3}

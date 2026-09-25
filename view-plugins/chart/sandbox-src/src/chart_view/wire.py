@@ -98,6 +98,25 @@ def encode_column(s: pd.Series, kind: str) -> dict[str, Any]:
     return _cat(s)
 
 
+def decode_column(wire: dict[str, Any]) -> list[Any]:
+    """The values the renderer's `decodeColumn` reads from `wire` (None =
+    missing), held to wire-corpus/ as the renderer is. What validate judges a
+    rule's datum against: the rows as the chart receives them, after binning
+    and each layer's own kind, not as pandas holds them."""
+    kind = wire["kind"]
+    if kind in ("f64", "time"):
+        data = np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8")
+        return [None if math.isnan(v) else float(v) for v in data]
+    if kind == "cat":
+        width = wire["width"]
+        codes = np.frombuffer(base64.b64decode(wire["codes"]), dtype=dict(_WIDTHS)[width])
+        missing = 2 ** (8 * width) - 1
+        return [None if c == missing else wire["levels"][c] for c in codes.tolist()]
+    codes = np.frombuffer(base64.b64decode(wire["codes"]), dtype="<u1")
+    span = wire["max"] - wire["min"]
+    return [None if c == 255 else wire["min"] + (c / 254) * span for c in codes.tolist()]
+
+
 def epoch_ms(s: pd.Series) -> np.ndarray:
     """A temporal column as epoch milliseconds (NaN = missing).
 

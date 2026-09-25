@@ -93,11 +93,11 @@ def _query(text: str) -> int:
         layers = layer_rows(spec, read_source(Path.cwd(), spec["source"]))
         # What validate refuses, query refuses too: a hand-edited file
         # would otherwise draw with the rule silently missing.
-        errors = datum_errors(layers)
+        reply = answer(spec, layers)
+        errors = datum_errors(spec, reply)
         if errors:
             print("\n".join(errors), file=sys.stderr)
             return 2
-        reply = answer(spec, layers)
     except (SpecError, SourceError, TransformError) as e:
         print(str(e), file=sys.stderr)
         return 2
