@@ -621,6 +621,14 @@ describe("FacetGallery", () => {
       expect(lastBuiltSort()).toEqual({ field: "v", stat: "max" });
     });
 
+    it("keeps the statistic select its own width in the toolbar row", () => {
+      // `.input` is `flex: 1` (fill the row): at 1440 the statistic select took
+      // every pixel the toolbar had left
+      view();
+      fireEvent.change(sortBy(), { target: { value: "v" } });
+      expect(statistic()!.style.flex).toMatch(/^(none|0 0 auto)$/);
+    });
+
     it("offers text only its counts, and a date its ends and count", () => {
       view();
       fireEvent.change(sortBy(), { target: { value: "tool" } });

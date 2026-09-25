@@ -752,6 +752,8 @@ export function FacetGallery({
           <select
             className="input"
             aria-label="sort statistic"
+            // its own width: `.input` fills a flex row, and this one is the toolbar
+            style={{ flex: "none" }}
             value={choice.stat ?? ""}
             onChange={(e) => setChoice({ field: choice.field, stat: e.target.value })}
           >
