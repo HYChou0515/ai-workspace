@@ -77,3 +77,39 @@ def test_a_predicate_without_a_test_lists_the_tests():
 def test_nothing_to_draw_says_what_is_missing():
     [line] = _errors(BASE + "title: t\n")
     assert "either mark + encoding, or layer" in line
+
+
+OFF_RULE = "a datum is drawn only as a rule's x or y — name a field here"
+
+
+def test_a_datum_where_none_is_drawn_says_why():
+    # Review round 8: the line said only "'field' is a required property", and
+    # a model tried another datum. The renderer's spec.test.ts reads the same.
+    area = (
+        "mark: area\nencoding:\n  x: {field: a, type: quantitative}\n"
+        "  y: {field: b, type: quantitative}\n  y2: {datum: 0}\n"
+    )
+    assert _errors(BASE + area) == [f"encoding.y2: {OFF_RULE}"]
+
+
+def test_a_datum_on_a_mark_that_also_needs_the_field_says_it_once():
+    grid = (
+        "mark: grid\nencoding:\n  x: {datum: 1}\n  y: {field: b, type: ordinal}\n"
+        "  color: {field: c, type: quantitative}\n"
+    )
+    lines = _errors(BASE + grid)
+    assert f"encoding.x: {OFF_RULE}" in lines and len(set(lines)) == len(lines)
+
+
+def test_a_line_with_an_x_datum_gets_one_line_that_says_why():
+    # Round 8 regression lens: markChannels and datumChannels each refused it,
+    # so the model read the same key refused twice, once without a reason.
+    text = BASE + "mark: line\nencoding:\n  x: {datum: 1}\n  y: {field: b, type: quantitative}\n"
+    assert _errors(text) == [f"encoding.x: {OFF_RULE}"]
+
+
+def test_a_colour_datum_is_refused_too():
+    # SKILL.md says a datum is a rule's x or y only; the schema took one on
+    # color / size / tooltip, which the renderer never reads.
+    text = BASE + "mark: scatter\n" + ENC + "  color: {datum: red}\n"
+    assert _errors(text) == [f"encoding.color: {OFF_RULE}"]

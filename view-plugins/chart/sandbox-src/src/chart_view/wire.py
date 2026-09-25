@@ -60,6 +60,8 @@ def js_number(x: float) -> str:
 
 def canon(value: Any) -> str | None:
     """The marking string for `value`, or None when it has none (missing, ±inf)."""
+    if isinstance(value, np.ndarray):  # a parquet list cell: the list it holds
+        value = value.tolist()
     if value is None or value is pd.NaT:
         return None
     if isinstance(value, bool | np.bool_):
@@ -201,10 +203,20 @@ def _stdlib_ms(v: Any) -> float:
     return (v - _EPOCH) / dt.timedelta(milliseconds=1)
 
 
+def unhashable_as_text(s: pd.Series) -> pd.Series:
+    """`s` with each list / mapping / array cell as its marking string — the
+    one form every reader of the rows (grouping, highlight, the wire) can hash
+    and compare. An entity field can hold a list; pyarrow reads a parquet list
+    column as numpy arrays."""
+    if s.dtype != object:
+        return s
+    return s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v)
+
+
 def _cat(s: pd.Series) -> dict[str, Any]:
     integral = pd.api.types.is_integer_dtype(s.dtype)  # before the map below makes it object
-    # A list or a mapping (an entity field, or a parquet list column read as
-    # numpy arrays) has no hash to group by; it becomes its marking string.
+    # A list or a mapping has no hash to group by; it becomes its marking
+    # string (the map also makes a nullable integer column object, below).
     s = s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v)
     try:
         codes, uniques = pd.factorize(s, sort=True, use_na_sentinel=True)

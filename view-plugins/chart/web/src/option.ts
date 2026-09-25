@@ -424,9 +424,19 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         }
         return [{ [`${c}Axis`]: at, name: title }];
       };
-      const placed = (key: "xAxis" | "yAxis", at: (r: number) => number | null) => {
+      // A rule's own values — a single field's rows, a segment's four ends —
+      // are placed one way: through the axis's `pos`, with a number sent as
+      // text (a layer that typed the field otherwise) read as ECharts reads
+      // it. What has no place is left out and counted in a note.
+      const place = (axis: Axis | null, c: Channel | undefined, r: number): number | null => {
+        if (!axis || !c?.field) return null;
+        const v = cols[c.field].value(r);
+        const numeric = (axis.kind === "value" || axis.kind === "log") && typeof v === "string" && v.trim() !== "";
+        return axis.pos(numeric ? Number(v) : v);
+      };
+      const placed = (key: "xAxis" | "yAxis", axis: Axis | null, c: Channel | undefined) => {
         const lines = all.flatMap((r) => {
-          const v = at(r);
+          const v = place(axis, c, r);
           return v === null ? [] : [{ [key]: v }];
         });
         const off = all.length - lines.length;
@@ -435,19 +445,16 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       };
       if (enc.y?.datum !== undefined) data = datumLine("y", yAxis, enc.y.datum, enc.y.title);
       else if (enc.x?.datum !== undefined) data = datumLine("x", xAxis, enc.x.datum, enc.x.title);
-      else if (enc.y?.field && !enc.x?.field)
-        data = placed("yAxis", (r) => (yAxis ? yAxis.pos(cols[enc.y!.field!].value(r)) : null));
-      else if (enc.x?.field && !enc.y?.field)
-        data = placed("xAxis", (r) => (xAxis ? xAxis.pos(cols[enc.x!.field!].value(r)) : null));
+      else if (enc.y?.field && !enc.x?.field) data = placed("yAxis", yAxis, enc.y);
+      else if (enc.x?.field && !enc.y?.field) data = placed("xAxis", xAxis, enc.x);
       else {
-        // A segment needs both ends: one missing (or an x2 / y2 with no place,
-        // which used to fall back to x / y) leaves the row out.
-        const end = (axis: Axis | null, c: Channel | undefined, r: number, start: number | null) =>
-          c?.field ? (axis?.at(cols[c.field], r) ?? null) : start;
+        // A segment needs both ends placed (an x2 / y2 with no place used to
+        // fall back to x / y); a row with one that is not is left out.
         data = all.flatMap((r) => {
-          const [x, y] = point(li, r);
-          const x2 = end(xAxis, enc.x2, r, x);
-          const y2 = end(yAxis, enc.y2, r, y);
+          const x = place(xAxis, enc.x, r);
+          const y = place(yAxis, enc.y, r);
+          const x2 = enc.x2?.field ? place(xAxis, enc.x2, r) : x;
+          const y2 = enc.y2?.field ? place(yAxis, enc.y2, r) : y;
           return [x, y, x2, y2].some((v) => v === null) ? [] : [[{ coord: [x, y] }, { coord: [x2, y2] }]];
         });
         const off = all.length - data.length;

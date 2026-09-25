@@ -15,7 +15,7 @@ import pytest
 
 from chart_view.cli import main
 from chart_view.transforms import TransformError, apply_transforms
-from chart_view.wire import encode_column, epoch_ms
+from chart_view.wire import canon, encode_column, epoch_ms
 
 
 def _f64s(wire: dict) -> list[float]:
@@ -332,3 +332,26 @@ def test_a_parquet_list_column_is_marking_text_not_a_traceback(tmp_path: Path, m
     )
     assert main(["validate", json.dumps({"path": "v.chart.yaml"})]) == 2
     assert "x: datum 'a' is not a value the axis shows" in capsys.readouterr().err
+
+
+def test_a_parquet_list_column_can_be_grouped(tmp_path: Path, monkeypatch, capsys):
+    # Review round 8: P27 turned the arrays into text only when encoding, after
+    # grouping — an aggregate over a list column still crashed.
+    pd.DataFrame({"k": [["a", "b"], ["b"], ["b"]], "v": [1.0, 2.0, 3.0]}).to_parquet(
+        tmp_path / "a.parquet"
+    )
+    monkeypatch.chdir(tmp_path)
+    spec = (
+        "view: chart\nsource: a.parquet\nmark: bar\nencoding:\n"
+        "  x: {field: k, type: nominal}\n"
+        "  y: {field: v, type: quantitative, aggregate: sum}\n"
+    )
+    assert main(["query", json.dumps({"spec": spec})]) == 0
+    answer = json.loads(capsys.readouterr().out)
+    assert answer["layers"][0]["columns"]["k"]["levels"] == ["['a', 'b']", "['b']"]
+
+
+def test_an_array_reads_as_the_list_it_holds():
+    # A parquet list and an entity list are one marking, whatever their length.
+    assert canon(np.array(["a", "b"])) == canon(["a", "b"]) == "['a', 'b']"
+    assert canon(np.array([1, 2])) == canon([1, 2]) == "[1, 2]"
