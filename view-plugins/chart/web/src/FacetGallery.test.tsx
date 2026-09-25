@@ -77,6 +77,7 @@ let loadingBuildAt = -1;
 const answerCache = new Map<string, Run["data"]>();
 const epochsSeen: number[] = [];
 let exactValues: number[] = [1.5];
+let exactAnswer: (() => Run["data"]) | null = null;
 const f64b64 = (values: number[]) =>
   btoa(String.fromCharCode(...new Uint8Array(new Float64Array(values).buffer)));
 
@@ -84,6 +85,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   INDEX_OVER = {};
   exactValues = [1.5];
+  exactAnswer = null;
   sdk.viewDocument.mockReturnValue(DOC);
   sdk.useMarking.mockReturnValue([undefined, write]);
   answers = {
@@ -114,7 +116,7 @@ beforeEach(() => {
       else if (cmd === "facet_page")
         data = epoch < failUntil.page ? fail(failCode.page) : answers.page?.(args.positions as number[]);
       else if (cmd === "facet_exact")
-        data = epoch < failUntil.exact ? fail(failCode.exact) : ok({ kind: "f64", data: f64b64(exactValues) });
+        data = epoch < failUntil.exact ? fail(failCode.exact) : (exactAnswer?.() ?? ok({ kind: "f64", data: f64b64(exactValues) }));
       answerCache.set(cacheKey, data);
     }
     return { ...base, data: answerCache.get(cacheKey) };
@@ -459,6 +461,30 @@ describe("FacetGallery", () => {
     } finally {
       document.removeEventListener("keydown", heard);
     }
+  });
+
+  it("shows the label under the pointer on an enlarged CATEGORY tile", () => {
+    // The sandbox answered exit 2 for every category tile's exact values, and
+    // the enlarged view sat at "Hover a cell…" for good.
+    INDEX_OVER = { scale: { kind: "category", labels: ["ok", "off"] }, cells: 2, layout: { x: [0, 1], y: [0, 0] } };
+    answers.index = ok({ ...INDEX, ...INDEX_OVER });
+    const cat = (codes: number[]) => ({ kind: "cat", levels: ["ok", "off"], width: 1, codes: btoa(String.fromCharCode(...codes)) });
+    answers.page = (positions) => ok({ build: INDEX.build, groups: positions.map(() => cat([0, 1])) });
+    exactAnswer = () => ok(cat([0, 1]));
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    const canvas = screen.getByRole("dialog").querySelector("canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.mouseMove(canvas, { clientX: 150, clientY: 10 }); // the right column: x = 1
+    expect(screen.getByRole("dialog").textContent).toContain("value: off");
+  });
+
+  it("shows why when an enlarged tile's values are refused (exit 2), rather than waiting", () => {
+    exactAnswer = () => ({ stdout: "", stderr: "position must be an integer group position", exit_code: 2 });
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    const alert = screen.getByRole("dialog").querySelector("[role=alert]");
+    expect(alert?.textContent).toContain("position must be an integer");
   });
 
   it("enlarges one group with its exact values", () => {

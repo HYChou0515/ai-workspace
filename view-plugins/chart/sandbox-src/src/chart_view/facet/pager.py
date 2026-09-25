@@ -102,6 +102,12 @@ def page_payload(root: Path, digest: str, build: str, positions: Sequence[int]) 
 def exact_payload(root: Path, digest: str, build: str, position: int) -> dict[str, Any]:
     path, index = _current(root, digest, build)
     try:
+        if isinstance(index.scale, CategoryScale):
+            # a category cache stores codes only, and a code IS the exact value:
+            # the enlarged tile reads the label under the pointer from its record
+            (record,) = read_groups(path, index, [position])
+            _used(path)
+            return _column(index.scale, record)
         values = read_exact(path, index, position)
     except CacheRebuilt:  # a rebuild landed between the build check and this read
         raise StaleIndex(f"cache {digest} was rebuilt; refetch its index") from None

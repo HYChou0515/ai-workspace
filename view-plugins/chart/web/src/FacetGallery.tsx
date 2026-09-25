@@ -249,7 +249,11 @@ function Enlarged({
   useEffect(() => {
     if (failure) failedAt.current(epoch, failure.stderr.trim() || `exit ${failure.exit_code}`);
   }, [failure, epoch, failedAt]);
-  const httpError = page.error ?? exact.error;
+  // any other exit (2: the call was refused) is not recovered by a rebuild:
+  // say why, rather than sit at "Hover a cell…" for good
+  const refused = [page.data, exact.data].find((d) => d && d.exit_code !== 0 && d.exit_code !== STALE && d.exit_code !== UNUSABLE);
+  const httpError =
+    page.error ?? exact.error ?? (refused ? new Error(refused.stderr.trim() || `exit ${refused.exit_code}`) : null);
   const column = useMemo(() => parse<{ groups: WireColumn[] }>(page.data)?.groups[0], [page.data]);
   const values = useMemo(() => {
     const wire = parse<WireColumn>(exact.data);

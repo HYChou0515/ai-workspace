@@ -203,3 +203,24 @@ def test_every_read_marks_the_cache_recently_used(tmp_path: Path) -> None:
         os.utime(path, ns=(0, 0))
         read()
         assert path.stat().st_mtime_ns > 0
+
+
+def test_a_category_groups_exact_values_are_its_labels(tmp_path: Path) -> None:
+    """An enlarged tile on a category gallery shows the label under the pointer:
+    its "exact" values are the record itself, as a cat column (a category cache
+    stores codes only, and a code IS the exact value)."""
+    digest = _build(
+        tmp_path,
+        scale=CategoryScale(["pass", "fail"]),
+        values=[
+            ["pass", "fail"],
+            ["fail", None],
+            ["pass", "pass"],
+            ["fail", "fail"],
+            ["pass", None],
+        ],
+    )
+    build = index_payload(tmp_path, digest)["build"]
+    got = exact_payload(tmp_path, digest, build, 1)
+    assert got["kind"] == "cat" and got["levels"] == ["pass", "fail"] and got["width"] == 1
+    assert base64.b64decode(got["codes"]) == bytes([1, 255])

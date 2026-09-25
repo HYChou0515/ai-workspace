@@ -20,7 +20,14 @@ from pathlib import Path
 import pytest
 
 from chart_view.cli import main
-from chart_view.facet import CacheKey, ContinuousScale, Group, cache_file, write_cache
+from chart_view.facet import (
+    CacheKey,
+    CategoryScale,
+    ContinuousScale,
+    Group,
+    cache_file,
+    write_cache,
+)
 
 KEY = CacheKey(source_path="data/w.csv", size=1, mtime_ns=1, transform_hash="t")
 
@@ -230,3 +237,23 @@ def test_the_pager_commands_never_load_pandas(views: Path) -> None:
         text=True,
     )
     assert run.stderr.strip().splitlines()[-1] == "CLEAN", run.stderr
+
+
+def test_exact_on_a_category_cache_answers_its_labels_not_exit_2(
+    views: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """It raised TypeError, which the command answers as a wrong call (2): the
+    enlarged tile of every category gallery never showed a value."""
+    write_cache(
+        cache_file(views, KEY),
+        scale=CategoryScale(["a", "b"]),
+        facet=["g"],
+        cells=2,
+        layout={"x": [0, 1], "y": [0, 0]},
+        groups=[Group(key=("g0",), sort={}, values=["b", "a"])],
+    )
+    build = json.loads(_run(capsys, "facet_index", {"key": KEY.digest()})[1])["build"]
+    args = {"key": KEY.digest(), "build": build, "position": 0}
+    code, out, err = _run(capsys, "facet_exact", args)
+    assert code == 0, err
+    assert json.loads(out)["kind"] == "cat"
