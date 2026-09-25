@@ -5,15 +5,17 @@
  * selects what ECharts' own selector for that mark finds; the marking is the
  * host's real store, through the SDK double.
  */
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import * as echarts from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
 import { MarkingStore } from "../../../../web/src/lib/markings";
+import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer } from "./testAnswer";
+import { clickAt, sliceAt } from "./testGesture";
 
 const sdk = vi.hoisted(() => ({
   useSandboxRun: vi.fn(),
@@ -51,12 +53,12 @@ echarts.use([SVGRenderer]);
 // The chart debounces brush events (throttleDelay 250 ms in the option).
 const settle = () => act(() => new Promise((r) => setTimeout(r, 400)));
 
-function mount(store: MarkingStore, doc: object, a: Answer) {
+function mount(store: MarkingStore, doc: object, a: Answer, marking: string | null = "m") {
   const stdout = JSON.stringify(a);
   sdk.useSandboxRun.mockReturnValue({ data: { stdout, stderr: "", exit_code: 0 }, error: null, isLoading: false, refetch: vi.fn() });
   render(
     <MarkingProvider store={store}>
-      <ChartView spec={{ __doc: doc } as never} marking="m" path="/v/a.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />
+      <ChartView spec={{ __doc: doc } as never} marking={marking} path="/v/a.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />
     </MarkingProvider>,
   );
   return made.charts.at(-1)!;
@@ -164,5 +166,102 @@ describe("a selection on every mark writes the marking", () => {
     // a band around c's line at y 22, clear of a and b
     await lasso(chart, [[1.7, 21.5], [2.3, 21.5], [2.3, 22.5], [1.7, 22.5]]);
     expect(marked(store)).toEqual({ lot: ["L3"] });
+  });
+});
+
+const PIE = {
+  view: "chart",
+  source: "data/a.csv",
+  keys: ["lot"],
+  mark: "pie",
+  encoding: { theta: { field: "n", type: "quantitative" }, color: { field: "lot", type: "nominal" } },
+};
+const SLICES = answer(layer("pie", 3, { n: f64([5, 3, 2]), lot: cat(["L1", "L2", "L3"]) }));
+const click = (chart: echarts.ECharts, at: number[]) => act(() => clickAt(chart, at));
+
+describe("a click on a pie's slice writes the marking", () => {
+  it("writes that slice's lot", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    expect(marked(store)).toEqual({ lot: ["L2"] });
+    expect(store.get("m")!.source).toBe("/v/a.ai.yaml");
+  });
+
+  it("a click on another slice takes its place", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    click(chart, sliceAt(chart, 2));
+    expect(marked(store)).toEqual({ lot: ["L3"] });
+  });
+
+  it("a second click on the same slice clears it", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    click(chart, sliceAt(chart, 1));
+    expect(store.get("m")).toBeUndefined();
+  });
+
+  it("a click on empty space clears it", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    click(chart, [5, 395]); // the bottom-left corner: no slice, no legend
+    expect(store.get("m")).toBeUndefined();
+  });
+
+  it("a click on empty space clears nothing it did not select", () => {
+    // another view's selection on the marking is not this pie's to clear
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    click(chart, [5, 395]);
+    expect(marked(store)).toEqual({ lot: ["L1"] });
+  });
+
+  it("a click on empty space after a legend click clears nothing: the legend's choice is the legend's", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => chart.dispatchAction({ type: "legendToggleSelect", name: "L1" }));
+    click(chart, [5, 395]);
+    expect(marked(store)).toEqual({ lot: ["L2", "L3"] });
+  });
+
+  it("a click on another mark's point leaves the marking as it is: those are brushed", () => {
+    const store = new MarkingStore();
+    const doc = { ...byGroup("scatter"), encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } } };
+    const chart = mount(store, doc, answer(layer("scatter", 2, { x: f64([1, 2]), y: f64([1, 2]), lot: cat(["L1", "L2"]) })));
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    click(chart, chart.convertToPixel({ gridIndex: 0 }, [2, 2]) as number[]);
+    expect(marked(store)).toEqual({ lot: ["L1"] });
+  });
+
+  it("a pie on its own has no brush tool, in the chart as drawn", () => {
+    const chart = mount(new MarkingStore(), PIE, SLICES);
+    const model = (chart as unknown as { getModel(): { getComponent(main: string): unknown } }).getModel();
+    expect(model.getComponent("brush")).toBeUndefined();
+    expect(model.getComponent("toolbox")).toBeUndefined();
+  });
+
+  it("on no marking, the slice it picked is lit and the rest dimmed", () => {
+    const chart = mount(new MarkingStore(), PIE, SLICES, null);
+    click(chart, sliceAt(chart, 1));
+    type Data = { count(): number; getItemVisual(i: number, k: "style"): { opacity?: number } };
+    type Model = { getSeriesByIndex(i: number): { getData(): Data } };
+    const data = (chart as unknown as { getModel(): Model }).getModel().getSeriesByIndex(0).getData();
+    const opacity = Array.from({ length: data.count() }, (_, i) => data.getItemVisual(i, "style").opacity ?? 1);
+    expect(opacity).toEqual([DIM_OPACITY, 1, DIM_OPACITY]);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
+  it("the legend still selects the slices left shown", async () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    // the toggle a click on a legend entry dispatches (echarts LegendView)
+    act(() => chart.dispatchAction({ type: "legendToggleSelect", name: "L1" }));
+    expect(marked(store)).toEqual({ lot: ["L2", "L3"] });
   });
 });

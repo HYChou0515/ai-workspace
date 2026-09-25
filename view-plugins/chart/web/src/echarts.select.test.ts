@@ -13,8 +13,9 @@ import { describe, expect, it } from "vitest";
 
 import "./echarts"; // registers the chart's series + components (and their brush selectors)
 import { toOption } from "./option";
-import { type BrushSelected, type Selection, selectionFromBrush } from "./selection";
+import { type BrushSelected, type ClickParams, type Selection, selectionFromBrush, selectionFromClick } from "./selection";
 import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
+import { clickAt, sliceAt } from "./testGesture";
 
 echarts.use([SVGRenderer, BrushComponent]);
 
@@ -159,6 +160,50 @@ describe("brushing an errorbar, against real ECharts", () => {
       coordRange: [[-0.3, 2], [0.3, 2], [0.3, 2.5], [-0.3, 2.5]],
     });
     expect(sel).toEqual([{ source: "lasso", layer: 0, rows: [0] }]);
+  });
+});
+
+const PIE = {
+  ...base,
+  mark: "pie",
+  encoding: { theta: { field: "n", type: "quantitative" }, color: { field: "k", type: "nominal" } },
+};
+const slices = answer(layer("pie", 3, { n: f64([5, 3, 2]), k: cat(["a", "b", "c"]) }));
+
+describe("clicking a pie, against real ECharts", () => {
+  it("a click on a slice selects that slice's row", async () => {
+    const built = toOption(PIE, slices);
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 600, height: 400 });
+    const clicks: Selection[][] = [];
+    chart.on("click", (p) => {
+      clicks.push(selectionFromClick(p as ClickParams, built));
+    });
+    chart.setOption(built.option, true);
+    clickAt(chart, sliceAt(chart, 1));
+    clickAt(chart, sliceAt(chart, 2));
+    chart.dispose();
+    expect(clicks).toEqual([[{ source: "click", layer: 0, rows: [1] }], [{ source: "click", layer: 0, rows: [2] }]]);
+  });
+
+  it("a click on any other mark's point selects nothing: those are brushed", async () => {
+    const doc = { ...base, mark: "scatter", encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } } };
+    const built = toOption(doc, answer(layer("scatter", 2, { x: f64([1, 2]), y: f64([1, 2]) })));
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 600, height: 400 });
+    const clicks: Selection[][] = [];
+    chart.on("click", (p) => {
+      clicks.push(selectionFromClick(p as ClickParams, built));
+    });
+    chart.setOption(built.option, true);
+    clickAt(chart, chart.convertToPixel({ gridIndex: 0 }, [2, 2]) as number[]);
+    chart.dispose();
+    // the click reached the point, and selected nothing
+    expect(clicks).toEqual([[]]);
+  });
+
+  it("a pie on its own offers no brush: there is nothing on it to brush", () => {
+    const { option } = toOption(PIE, slices);
+    expect(option.brush).toBeUndefined();
+    expect(option.toolbox).toBeUndefined();
   });
 });
 

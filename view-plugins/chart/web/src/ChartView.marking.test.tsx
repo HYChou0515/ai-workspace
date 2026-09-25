@@ -44,6 +44,8 @@ vi.mock("./echarts", () => ({
       resize: vi.fn(),
       dispose: vi.fn(),
       on: vi.fn((name: string, fn: Handler) => handlers.set(name, fn)),
+      // the canvas's own clicks (a click on empty space, P30): not driven here
+      getZr: () => ({ on: vi.fn() }),
     };
     charts.made.push(inst);
     return inst;

@@ -18,7 +18,15 @@ import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, toOption } from "./option";
 import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
 import { type Cells, type RasterImage, upscale } from "./raster";
-import { type BrushSelected, gridSelectionLit, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
+import {
+  type BrushSelected,
+  type ClickParams,
+  ownSelectionLit,
+  type Selection,
+  selectionFromBrush,
+  selectionFromClick,
+  selectionFromLegend,
+} from "./selection";
 import { specErrors } from "./spec";
 import { viewCall } from "./viewCall";
 
@@ -94,16 +102,17 @@ function Plot({
   // rule, over the columns each layer carries); otherwise the spec's highlight.
   // On an EMPTY marking nothing is lit: every view on it draws undimmed, rather
   // than each falling back to its own `highlight:` and disagreeing.
-  // With no marking, the view's own selection lights a GRID it took cells of:
-  // a grid is one raster image, which ECharts' brush styling cannot dim, so
-  // without this a lasso there showed only a count (#847/#848 P18).
+  // With no marking, the view's own selection lights a GRID it took cells of
+  // or a PIE slice it clicked: a grid is one raster image, which ECharts' brush
+  // styling cannot dim, and a click ECharts does not style, so without this
+  // either showed only a count (#847/#848 P18, PR 5 P30).
   const lit = useMemo(
     () =>
       marking
         ? entry
           ? markingLit(answer, entry.marking, isLit)
           : answer.layers.map(() => null)
-        : gridSelectionLit(answer, selection),
+        : ownSelectionLit(answer, selection),
     [marking, entry, answer, selection],
   );
   const built: Built = useMemo(
@@ -119,13 +128,14 @@ function Plot({
   // values, and the brushed chart showed 16 lit where the tables showed 27.
   // A selection that writes nothing (no marking, no `keys:`) keeps it.
   const [toMarking, setToMarking] = useState(false);
-  const option = useMemo(
-    () => ({
+  const option = useMemo(() => {
+    // a pie alone has no brush to style (#847/#848 PR 5 P30)
+    if (!built.option.brush) return built.option;
+    return {
       ...built.option,
       brush: { ...(built.option.brush as object), outOfBrush: marking && toMarking ? { colorAlpha: 1 } : OUT_OF_BRUSH },
-    }),
-    [built, marking, toMarking],
-  );
+    };
+  }, [built, marking, toMarking]);
 
   // What a gesture writes. Read through a ref: the ECharts handlers are bound once.
   const writeRef = useRef<(sel: Selection[]) => void>(() => {});
@@ -134,6 +144,8 @@ function Plot({
   // every setOption does — and taking that as "cleared" would erase the marking
   // this view just wrote, re-render, rebuild the brush, and fire again.
   const brushed = useRef(false);
+  // The pie slice ("seriesIndex:dataIndex") a click picked and still holds.
+  const clicked = useRef<string | null>(null);
   writeRef.current = (sel) => {
     // ECharts re-reports the areas it holds: the same rows keep the same state,
     // or a grid lit by its own selection would redraw on every report
@@ -179,11 +191,29 @@ function Plot({
       if ((p as { command?: string }).command !== "clear") return;
       writeRef.current([]);
     });
-    chart.on("legendselectchanged", (p) =>
+    chart.on("legendselectchanged", (p) => {
+      // the legend's choice replaces a clicked slice's: empty space is not to clear it
+      clicked.current = null;
       writeRef.current(
         selectionFromLegend((p as { selected: Record<string, boolean> }).selected, builtRef.current),
-      ),
-    );
+      );
+    });
+    // A pie's slice is picked by clicking it (#847/#848 PR 5 P30); the same
+    // slice again, or empty space, clears what the click picked -- and only
+    // that: a selection another view wrote is not this click's to clear.
+    chart.on("click", (p) => {
+      const params = p as ClickParams;
+      const sel = selectionFromClick(params, builtRef.current);
+      if (sel.length === 0) return;
+      const key = `${params.seriesIndex}:${params.dataIndex}`;
+      clicked.current = clicked.current === key ? null : key;
+      writeRef.current(clicked.current ? sel : []);
+    });
+    chart.getZr().on("click", (e) => {
+      if (e.target || !clicked.current) return;
+      clicked.current = null;
+      writeRef.current([]);
+    });
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => chart.resize());
     resize?.observe(el.current);
     return () => {

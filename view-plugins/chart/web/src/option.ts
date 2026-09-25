@@ -920,14 +920,16 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     color: CATEGORY_COLOURS,
     tooltip,
     series,
-    brush: { toolbox: ["rect", "polygon", "clear"], xAxisIndex: cartesian ? 0 : undefined, throttleType: "debounce", throttleDelay: 250 },
+  };
+  if (cartesian) {
+    option.brush = { toolbox: ["rect", "polygon", "clear"], xAxisIndex: 0, throttleType: "debounce", throttleDelay: 250 };
     // The top row is the toolbox's: the chart draws no title of its own (#847/#848
     // PR 5 P13) — the view header right above it shows the spec's `title:`, and
     // a second copy in the canvas cost a row of a narrow pane and sat under
-    // these icons. A legend takes the row below.
-    toolbox: { top: 4, right: 8, feature: { brush: { type: ["rect", "polygon", "clear"] } } },
-  };
-  if (cartesian) {
+    // these icons. A legend takes the row below. A pie alone has no brush
+    // (#847/#848 PR 5 P30): a box has nothing to cover on it -- a slice is
+    // picked by clicking it (`selectionFromClick`).
+    option.toolbox = { top: 4, right: 8, feature: { brush: { type: ["rect", "polygon", "clear"] } } };
     const lengthIsValue = specs.some((s) => ["bar", "area"].includes(markOf(s).type));
     option.xAxis = [axisOption(xAxis, gridCells, "x", lengthIsValue)];
     option.yAxis = [axisOption(yAxis, gridCells, "y", lengthIsValue)];

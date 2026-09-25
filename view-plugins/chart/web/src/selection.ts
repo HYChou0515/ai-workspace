@@ -18,7 +18,20 @@ import type { Answer, Built, WireLayer } from "./option";
 import { litRows } from "./highlight";
 import { canon, type Column, decodeColumn } from "./wire";
 
-export type Selection = { source: "brush" | "lasso" | "legend"; layer: number; rows: number[] };
+export type Selection = { source: "brush" | "lasso" | "legend" | "click"; layer: number; rows: number[] };
+
+/** What ECharts hands a `click` listener, as far as a selection reads it. */
+export type ClickParams = { seriesType?: string; seriesIndex?: number; dataIndex?: number };
+
+/** A click on a pie's slice selects that slice's rows (#847/#848 PR 5 P30):
+ * a brush has nothing to cover on a pie, so a slice is picked by clicking it.
+ * Any other click selects nothing here. */
+export function selectionFromClick(p: ClickParams, built: Built): Selection[] {
+  if (p.seriesType !== "pie") return [];
+  // a pie's slice j draws row j of its layer (a pie is never stacked)
+  const map = built.series[p.seriesIndex as number]!;
+  return [{ source: "click", layer: map.layer, rows: [map.rows[p.dataIndex as number] as number] }];
+}
 
 type BrushArea = { brushType: string; coordRange?: unknown };
 /** ECharts' `brushselected` payload. The areas sit INSIDE each batch entry,
@@ -28,14 +41,19 @@ export type BrushSelected = {
   batch: { areas?: BrushArea[]; selected?: { seriesIndex: number; dataIndex: number[] }[] }[];
 };
 
-/** A selection as the lit rows of each GRID layer it took rows of -- a layer
- * it took none of keeps the spec's highlight -- or undefined when it took no
- * grid's (#847/#848 P18: a grid is one raster, which ECharts' brush styling
- * cannot dim, so its selected cells are shown by lighting them). */
-export function gridSelectionLit(answer: Answer, selection: Selection[]): (boolean[] | null)[] | undefined {
+/** The marks whose selection ECharts shows nothing of, so the view lights it:
+ * a grid is one raster, which ECharts' brush styling cannot dim (#847/#848
+ * P18); a pie's slice is picked by a click, which ECharts does not style
+ * (PR 5 P30). */
+const LIT_BY_SELECTION = new Set(["grid", "pie"]);
+
+/** A selection as the lit rows of each layer of a `LIT_BY_SELECTION` mark it
+ * took rows of -- a layer it took none of keeps the spec's highlight -- or
+ * undefined when it took none of theirs. */
+export function ownSelectionLit(answer: Answer, selection: Selection[]): (boolean[] | null)[] | undefined {
   const taken = new Map<number, Set<number>>();
   for (const s of selection) {
-    if (answer.layers[s.layer]?.mark !== "grid") continue;
+    if (!LIT_BY_SELECTION.has(answer.layers[s.layer]?.mark as string)) continue;
     const rows = taken.get(s.layer) ?? new Set<number>();
     for (const r of s.rows) rows.add(r);
     taken.set(s.layer, rows);
