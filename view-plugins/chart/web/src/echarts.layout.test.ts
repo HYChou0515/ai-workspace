@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import "./echarts"; // registers the chart's series + components
 import { toOption } from "./option";
-import { answer, base, f64, layer, q8 } from "./testAnswer";
+import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
 
 echarts.use([SVGRenderer]);
 
@@ -41,6 +41,38 @@ describe("a rule's label", () => {
     // anchored at its END, at or left of the plot's right edge (the grid's right margin is 16)
     expect(attrs).toContain('text-anchor="end"');
     expect(x).toBeLessThanOrEqual(W - 16);
+  });
+});
+
+describe("a chart with a colour bar, in a short narrow pane (#847/#848 PR 5 P30)", () => {
+  // found live at 390 wide: the brush tools sat over the colour bar's top label
+  it("keeps its brush tools over the plot, clear of the colour bar", () => {
+    const doc = {
+      ...base,
+      mark: "heatmap",
+      encoding: {
+        x: { field: "x", type: "nominal" },
+        y: { field: "y", type: "nominal" },
+        color: { field: "v", type: "quantitative" },
+      },
+    };
+    const a = answer(layer("heatmap", 4, { x: cat(["a", "b", "a", "b"]), y: cat(["p", "p", "q", "q"]), v: f64([0.05, 0.1, 0.2, 0.34]) }));
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 340, height: 200 });
+    chart.setOption(toOption(doc, a).option, true);
+    type Rect = { x: number; y: number; width: number; height: number };
+    type View = { type: string; group: { getBoundingRect(): Rect; x: number; y: number } };
+    const views = (chart as unknown as { _componentsViews: View[] })._componentsViews;
+    const rectOf = (type: string) => {
+      const v = views.find((w) => w.type === type)!;
+      const r = v.group.getBoundingRect();
+      return { left: v.group.x + r.x, right: v.group.x + r.x + r.width, top: v.group.y + r.y, bottom: v.group.y + r.y + r.height };
+    };
+    const tools = rectOf("toolbox");
+    const bar = rectOf("visualMap.continuous");
+    chart.dispose();
+    // side by side or one above the other: they share no pixel
+    const apart = tools.right <= bar.left || bar.right <= tools.left || tools.bottom <= bar.top || bar.bottom <= tools.top;
+    expect({ tools, bar, apart }).toMatchObject({ apart: true });
   });
 });
 

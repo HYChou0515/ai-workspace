@@ -932,7 +932,6 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     // these icons. A legend takes the row below. A pie alone has no brush
     // (#847/#848 PR 5 P30): a box has nothing to cover on it -- a slice is
     // picked by clicking it (`selectionFromClick`).
-    option.toolbox = { top: 4, right: 8, feature: { brush: { type: ["rect", "polygon", "clear"] } } };
     const lengthIsValue = specs.some((s) => ["bar", "area"].includes(markOf(s).type));
     option.xAxis = [axisOption(xAxis, gridCells, "x", lengthIsValue)];
     option.yAxis = [axisOption(yAxis, gridCells, "y", lengthIsValue)];
@@ -950,6 +949,14 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       right: visualMaps.length ? Math.max(80, legendRoom) : 16,
       top: legend.length ? 48 : 32,
       bottom: 32,
+    };
+    // Over the plot's right edge: a colour bar takes the margin beside the
+    // plot, top to bottom in a short pane, and at the chart's own edge the
+    // tools sat over its top label (#847/#848 PR 5 P30, found at 390 wide).
+    option.toolbox = {
+      top: 4,
+      right: visualMaps.length ? (option.grid as { right: number }).right : 8,
+      feature: { brush: { type: ["rect", "polygon", "clear"] } },
     };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
