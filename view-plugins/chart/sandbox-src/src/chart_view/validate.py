@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from chart_view.datums import datum_errors
+from chart_view.facet import CacheUnusable
 from chart_view.query import LayerRows, answer, binned, layer_rows
 from chart_view.sources import SourceError
 from chart_view.spec import SpecError, parse_spec, spec_errors
@@ -40,10 +41,13 @@ class Result:
 
 
 def _span(values: pd.Series) -> str:
+    return _range(float(values.min()), float(values.max()))
+
+
+def _range(lo: float, hi: float) -> str:
     def short(v: float) -> str:
         return js_number(float(f"{v:.3g}"))
 
-    lo, hi = float(values.min()), float(values.max())
     return short(lo) if lo == hi else f"{short(lo)}–{short(hi)}"
 
 
@@ -72,7 +76,38 @@ def _highlight(spec: Mapping[str, Any], layers: list[LayerRows]) -> str:
     return f"highlight matches {lit}/{rows} rows"
 
 
-def check(text: str, read_source: ReadSource) -> Result:
+BuildFacet = Callable[[str], Mapping[str, Any]]
+
+
+def _build_facet(text: str) -> Mapping[str, Any]:
+    # pandas-heavy, and only a facet spec needs it
+    from chart_view.facet.build_command import build
+
+    return build(text, echo=False)
+
+
+def _facet(spec: Mapping[str, Any], text: str, build: BuildFacet) -> Result:
+    """A gallery is checked by building it (#848 P20): the build's own checks
+    -- a table-file source, the facet / sort / x / y / colour columns, one row
+    per cell, one sort value per group, a statistic that fits -- so the gate
+    and the gallery cannot disagree, and the gallery then opens on the cache
+    this built."""
+    try:
+        built = build(text)
+    except (ValueError, CacheUnusable) as e:
+        return Result(errors=str(e).splitlines())
+    parts = [f"{built['groups']} groups over {built['cells']} cells"]
+    colour = spec["encoding"]["color"]["field"]
+    scale = built["scale"]
+    if scale["kind"] == "category":
+        n = len(scale["labels"])
+        parts.append(f"{colour}: {n} categor{'y' if n == 1 else 'ies'}")
+    else:
+        parts.append(f"{colour} {_range(scale['lo'], scale['hi'])}")
+    return Result(summary="; ".join(parts))
+
+
+def check(text: str, read_source: ReadSource, build_facet: BuildFacet = _build_facet) -> Result:
     """Refusal lines, or the one-line summary, for a chart file's text."""
     try:
         spec = parse_spec(text)
@@ -81,6 +116,8 @@ def check(text: str, read_source: ReadSource) -> Result:
     errors = spec_errors(spec)
     if errors:
         return Result(errors=errors)
+    if "facet" in spec:
+        return _facet(spec, text, build_facet)
     try:
         layers = layer_rows(spec, read_source(spec["source"]))
     except (SourceError, TransformError) as e:

@@ -104,12 +104,14 @@ class _Progress:
     build runs (the runner does not stream). The file is started afresh by
     the first line and removed when the build ends, however it ends."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, echo: bool) -> None:
         self.path = path
+        self.echo = echo
         self.started = False
 
     def __call__(self, line: str) -> None:
-        print(line, file=sys.stderr)
+        if self.echo:
+            print(line, file=sys.stderr)
         with self.path.open("a" if self.started else "w") as f:
             f.write(line + "\n")
         self.started = True
@@ -125,6 +127,7 @@ def _answer(path: Path, key: CacheKey, built: bool) -> dict[str, Any]:
         "build": index.build_id.decode("ascii"),
         "groups": len(index.groups),
         "cells": index.cells,
+        "scale": index.scale.to_json(),
         "built": built,
     }
 
@@ -143,7 +146,14 @@ def _with_sort(spec: dict[str, Any], sort: Mapping[str, str] | None) -> dict[str
     return {**spec, "facet": facet}
 
 
-def _build(text: str, sort: Any = _KEEP, ident: str | None = None) -> dict[str, Any]:
+def build(
+    text: str, sort: Any = _KEEP, *, ident: str | None = None, echo: bool = True
+) -> dict[str, Any]:
+    """Build (or reuse) the cache ``text`` opens as; refuse as ``run`` says.
+    ``validate`` checks a facet spec by calling this (#848 P20), with
+    ``echo=False``: its stderr is the refusal lines alone. ``sort`` is the
+    gallery's choice in place of the spec's; ``ident`` names the build for
+    its progress file (the call's arguments; the text when not given)."""
     spec = parse_spec(text)
     if sort is not _KEEP and "facet" in spec:
         spec = _with_sort(spec, sort)
@@ -169,7 +179,7 @@ def _build(text: str, sort: Any = _KEEP, ident: str | None = None) -> dict[str, 
 
     facet = spec["facet"]
     fields = facet["field"] if isinstance(facet["field"], list) else [facet["field"]]
-    progress = _Progress(progress_file(views, text if ident is None else ident))
+    progress = _Progress(progress_file(views, text if ident is None else ident), echo)
     try:
         # read the path the key was made from: folding `..` as text and letting
         # the OS walk a symlink first can name two different files
@@ -209,5 +219,5 @@ def run(text: str, sort: Any = _KEEP, ident: str | None = None) -> int:
     """Every refusal here (SpecError, SourceError, TransformError, BuildError,
     _Refused) is a ValueError, which ``facet.cli.run`` answers as exit 2.
     ``sort``, when given, is the gallery's choice in place of the spec's."""
-    json.dump(_build(text, sort, ident), sys.stdout, separators=(",", ":"))
+    json.dump(build(text, sort, ident=ident), sys.stdout, separators=(",", ":"))
     return 0
