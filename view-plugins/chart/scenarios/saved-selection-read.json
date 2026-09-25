@@ -1,0 +1,23 @@
+{
+  "name": "saved-selection-read",
+  "note": "The person saved a marking's rows as a table (Save as table); the answer reads it like any table file.",
+  "data": [
+    "fail-20260925-1430.csv"
+  ],
+  "prompt": "I saved the batches I selected to fail-20260925-1430.csv. Which batches are they, and what is their average fail rate?",
+  "expect": {
+    "must_call": [
+      "read_file"
+    ],
+    "must_mention": [
+      "B07",
+      "B13",
+      "B21",
+      [
+        "0.347",
+        "0.35",
+        "34.7"
+      ]
+    ]
+  }
+}

@@ -54,3 +54,36 @@ def test_it_provides_the_marking_rows_capability_through_a_command_it_has():
     assert m.provides is not None and m.provides.marking_rows == "lit_rows"
     cli = (CHART / "sandbox-src" / "src" / "chart_view" / "cli.py").read_text()
     assert '"lit_rows": LIT_ROWS' in cli
+
+
+def test_the_views_index_names_the_gallery_and_the_stack():
+    # #848's AI side (plan Q2, pr5 P8): "## Available views" gets a line for the
+    # gallery and one for a stacked map, or the model never reaches for them.
+    whens = " ".join(v.when for v in _manifest().views)
+    assert "`facet:`" in whens
+    assert "`aggregate`" in whens and "`diff`" in whens
+
+
+def test_the_csv_table_says_it_follows_a_marking():
+    # pr5 P1/P8: a table joins a linked selection, and the model has to know.
+    table = msgspec.json.decode(
+        (CHART.parent / "csv-table" / "plugin.json").read_bytes(), type=PluginManifest
+    )
+    assert [v.kind for v in table.views] == ["csv-table"]
+    assert "`marking:`" in table.views[0].when
+
+
+def test_every_scenario_loads_and_ships_its_data():
+    # The operator's retuning kit (plan Q19): a scenario whose data file is
+    # missing fails at stage time on the operator's machine, not here.
+    from workspace_app.skill_eval.scenario import load_scenarios
+
+    folder = CHART / "scenarios"
+    scenarios = load_scenarios(folder)
+    for s in scenarios:
+        for name in s.data:
+            assert (folder / name).is_file(), (s.name, name)
+    # pr5 P8: one per feature the model can show or read.
+    names = {s.name for s in scenarios}
+    assert {"gallery-alike-shown", "stack-shared-shown", "linked-table-shown"} <= names
+    assert "saved-selection-read" in names

@@ -1,0 +1,14 @@
+{
+  "name": "linked-table-shown",
+  "note": "A chart and a table on one marking, shown together (show_file with a layout). The expect can only see that files were shown.",
+  "data": [
+    "batches.csv"
+  ],
+  "prompt": "Plot fail rate against size from batches.csv, and next to it the batches as a table that narrows to whatever I select in the plot.",
+  "expect": {
+    "must_call": [
+      "write_file",
+      "show_file"
+    ]
+  }
+}

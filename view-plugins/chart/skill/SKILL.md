@@ -91,15 +91,20 @@ they fit the data; `zero:` overrides either.
 Types: `quantitative` (numbers), `temporal` (dates and times; a number is
 epoch milliseconds), `nominal` (categories), `ordinal` (ordered categories).
 On a temporal axis a `datum` is a number (epoch milliseconds) or a date
-written `2024-03-01`, `2024-03-01T12:00` (read as UTC) or
+written `2024-03-01`, `2024-03-01T12:00` (read on the axis's clock: the zone
+the field's data carries, UTC when it carries none; a time that zone had twice
+or never is refused, so write it with its offset) or
 `2024-03-01T12:00:00+08:00` (`/` for `-` and a space for `T` work too); on a
 number axis it is a finite number (above 0 on a log scale), never text; on a
 category axis, a value the axis shows; on a grid, a cell, or a number or date
 between two cells. validate refuses any other datum, and a datum on a chart
-where no layer draws a field on that axis. A filter or `diff` value on a date
+where no layer draws a field on that axis. A filter, `diff` or
+`highlight: values` value on a date
 field (a CSV column of such dates too) takes the same date forms, a marked
 value's text, or a number; a time without a zone is read in the field's zone,
-and as UTC when the field has none.
+and as UTC when the field has none. In a pandas query (`filter: "…"`,
+`where:`) a time compared with a zoned field carries its zone
+(`'2024-03-01T12:00+08:00'`).
 
 `aggregate` on a channel (`count`, `sum`, `mean`, `min`, `max`, `rate`) groups
 by every other field channel, as in Vega-Lite. Unlike Vega-Lite, a channel's
@@ -136,14 +141,19 @@ facet: {field: [batch, unit], sort: {field: fail_rate, order: descending}}
 hundreds or thousands of groups, because only what is on screen is loaded.
 
 - `field` names the column or columns that identify a group.
-- `sort` orders the gallery by a per-group column. The person can flip the order
-  without anything being recomputed.
+- `sort` orders the gallery by a column: its one value per group, or, with
+  `stat` (`count`, `distinct`, `min`, `max`, `mean`, `median`), a statistic of
+  a column with several values per group. The person can re-sort by any
+  column in the gallery.
+- The source is a table file (CSV, TSV, parquet); an entity source is refused.
 - It needs `mark: grid`, with `x`, `y` and a `color` field and no `aggregate` on
   them. To reduce rows first, aggregate in `transform:` with the facet columns in
   its `groupby`.
 - The person can select a run of groups (ranks 1–30, say). The selection goes to
   the gallery's `marking:` under the facet columns, so other views on that marking
-  light the same groups.
+  light the same groups. The person can also stack the selected groups into one
+  map, and subtract a second set; to show a stack yourself, use `grid` with an
+  `aggregate` over the groups (and `diff` for A − B).
 
 ## Shapes that carry a claim
 
@@ -161,4 +171,7 @@ hundreds or thousands of groups, because only what is on screen is loaded.
   that identify a member.
 - **One set of rows seen several ways**: give each chart the same `marking:`
   and `keys:`, then show them together with `show_file(layout=…)`, one chart
-  per pane. What the person brushes in one lights the rest.
+  per pane. What the person brushes in one lights the rest. A `csv-table` view
+  (`view: csv-table`, `source:`) on the same `marking:` shows the lit rows, and
+  selecting rows there lights the charts. The person can save a marking's rows
+  as `markings/<name>-<yyyymmdd-hhmm>.csv`; read it like any table file.
