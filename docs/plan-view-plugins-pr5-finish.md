@@ -95,7 +95,8 @@ words are examples, not spec keys.
     series' x counts as 0 there (plotly's `stackgaps: "infer zero"`), drawn clear and
     mapped to no row (a90969cf); on a log y it is left empty instead, since 0 has no
     place on a log axis (f86df895). A category axis is left to ECharts, which already
-    stacks by value.
+    stacks by value. (Superseded: P36 row 11 lines up category axes too, and P40 row 18
+    sums a stack's rows in the sandbox; the 0 filler and the log rule stand.)
   - (P8) "A scenario per feature" means one per feature **the model can show or read**:
     the gallery, the stack, a linked table, a saved selection (four scenarios). Box select
     (P3) is a gesture only a person makes, and a card thumbnail (P6) is drawn by the card
@@ -131,6 +132,16 @@ words are examples, not spec keys.
     measurement already did, for every consumer (the workspace shell, the editor tab
     strip, the header actions, the skills modal's footer, a view panel), not only the view panel whose
     narrow padding made the content box flip it (dd3b7fef).
+  - (P35) Another view's write drops a chart's own selection, and also brings back the
+    legend entries that chart had hidden (1aaa0b0f): what the chart shows is the marking.
+  - (P37) Whether a selection went to the marking compares the source it was written as
+    with the marking's entry, not with the view's current path, so renaming the view
+    file does not flip "· by" off while the marking still holds that write (2bee96ab).
+  - (P37 → P40) The rows of one colour at one stack slot draw as one segment, their
+    sum: P37 did it in the browser (10cc4d93), P40 row 18 moves it to the sandbox as an
+    implicit `aggregate: sum`, and refuses a stack coloured by a value (which rows form
+    a segment is not defined). The "palette colour for a mixed sum" P38 left is gone
+    with it.
 
 ## Phases
 
@@ -369,7 +380,8 @@ words are examples, not spec keys.
   regression lens's probe, before → after (toOption / render): 10,000 rows in one
   category 10,000 series, 69–80 / 8,054–8,631 ms → 1 series, 9–10 / 6–7 ms; 500 rows in
   one of 200 categories 100,000 points, 39–55 / 1,746–1,894 ms → 200 points, 1 / 7 ms;
-  3,000 rows at one time x on a log y 2,716–3,634 ms (not rendered) → 3–4 / 25 ms.
+  3,000 rows at one time x plus 1,000 single-row x values, on a log y, 2,716–3,634 ms
+  (not rendered) → 3–4 / 25 ms.
   Demo (1440 and 390, seen): G01's tooltip "value: 31.987 (sum of 1,066 rows)" (one
   row's 0.042 before); after reattaching, "50 selected" without "· by kind".
 - **P38 — What P37's builder found.** On a log axis a mark's own point at or below 0
@@ -407,7 +419,9 @@ words are examples, not spec keys.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
-  differs only in docs).
+  differs only in docs). And ed3164f3's "red before … (3)" and "`v <= 0` counted as
+  `v < 0` -> 1 red" were counted before the rule test was added; on the committed test
+  file they are 4 and 2 (round 19 veracity F2).
 
 ## Verification
 
