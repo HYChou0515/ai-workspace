@@ -29,6 +29,7 @@ from .context import AgentToolContext
 from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
 from .shown_files import (
+    PATH_OR_LAYOUT,
     LayoutError,
     PaneLayout,
     declare_shown_files,
@@ -430,14 +431,13 @@ async def show_file_impl(
     """
     if (denied := authorize_tool(ctx.context, "read_content")) is not None:
         return denied
-    both_or_neither = "error: give either path (one file) or layout (several files) — exactly one."
     fs, inv = _workspace(ctx)
     if layout is not None:
         if path is not None:
-            return both_or_neither
+            return PATH_OR_LAYOUT
         return await _show_layout(ctx.context, fs, inv, layout, caption)
     if path is None:
-        return both_or_neither
+        return PATH_OR_LAYOUT
     shown = await describe_for_display(fs, inv, path)
     if not shown:
         # Declare nothing on failure: the FE renders whatever is declared, so an

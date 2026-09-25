@@ -99,6 +99,11 @@ class PaneLayout(_Pane1):
     b: _Pane2 | None
 
 
+#: `show_file`'s answer to both `path` and `layout`, or neither — shared with the
+#: skill_eval double so a scored refusal reads as the app's.
+PATH_OR_LAYOUT = "error: give either path (one file) or layout (several files) — exactly one."
+
+
 class LayoutError(ValueError):
     """A layout the FE could not draw — the message says which node and why."""
 
