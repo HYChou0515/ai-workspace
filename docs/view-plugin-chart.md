@@ -34,7 +34,12 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   畫成座標，不帶 marking 用的字串，所以時間欄位不會被比對（整張不變暗）——要在時間欄位上連動，就把它寫進 `keys:`。
 - 有 `keys:` 的圖打開時，如果它的 marking 還是空的，檔案裡的 `highlight:` 會當作起始選取寫進去（每次打開只寫一次）；
   已經有人選了就不覆蓋。marking 被清空後，接在上面的圖全部不變暗，不會各自退回自己的 `highlight:`。
-- 機制本身不懂任何領域：marking 只是「欄位名 → 一組值」，都是字串。
+- 機制本身不懂任何領域：marking 只是「欄位名 → 一組值」，都是字串。所以 marking 有兩個以上的欄位時，
+  點亮的是**各欄位值的所有組合**：勾 (L1, 1) 與 (L2, 2)，(L1, 2) 與 (L2, 1) 也會亮，計數可能比勾選的多。
+  為了讓這件事看得見，每個顯示計數的地方都寫出 marking 的欄位：縮圖牆「12 of 48 marked · by lot, wafer」、
+  接了 marking 的圖表「16 selected · by lot, wafer」、表格「filtered by … · 4 of 48 rows · by lot, wafer」、
+  標頭的「by lot, wafer」，以及訊息上的 chip「by lot (2), wafer (2)」。
+- 框選與套索對每一種 mark 都有效，包括 line 與 area（以畫出來的位置判定，所以疊起來的 area 以它疊上去的高度算）。
 - view 標頭的 marking 選單（標籤圖示＋`<名字> ▾`）可以把這張圖改接到別的 marking、新開一個，或斷開。這是**你自己的畫面狀態**，
   存在瀏覽器裡、不會改寫檔案；要永久改就改 YAML 的 `marking:`。
 - 連動的範圍是一個 item。同一個 item 開在好幾個分頁（例如聊天模式開出來的純編輯區頁面）也是同一組 marking。
@@ -134,4 +139,4 @@ renderer 呼叫沙盒時傳的是 view 檔的**路徑**（加上內容摘要當�
     `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文（去掉 frontmatter）約 8.9k 字元，只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文（去掉 frontmatter）約 9.1k 字元，只在 AI `read_skill('chart')` 時才載入。
