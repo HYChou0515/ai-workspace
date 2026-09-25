@@ -192,9 +192,14 @@ const Tile = memo(function Tile({
         </span>
         <button
           type="button"
+          className="btn"
+          data-variant="ghost"
+          data-size="sm"
           aria-label="enlarge"
           onClick={() => onEnlarge(position)}
-          style={{ padding: 0, border: 0, background: "none", font: "inherit", lineHeight: 1, cursor: "pointer" }}
+          // the house ghost button, at the label row's height: a 28px one
+          // would push the label under the next row of thumbnails
+          style={{ height: LABEL, padding: "0 3px", fontSize: 11, lineHeight: 1 }}
         >
           ⤢
         </button>
@@ -310,7 +315,7 @@ function Enlarged({
     >
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <strong>{label}</strong>
-        <button type="button" onClick={onClose}>
+        <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={onClose}>
           Close
         </button>
       </div>
@@ -443,11 +448,19 @@ function StackPanel({
       </div>
       <div>{a ? `A: ${tiles(a.length)}` : `A: all ${tiles(index.groups.length)}`}</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        <button type="button" disabled={!a} onClick={() => setB(a)} title="Keep the tiles A stacks now as B">
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          disabled={!a}
+          onClick={() => setB(a)}
+          title="Keep the tiles A stacks now as B"
+        >
           Set as B
         </button>
         {b && (
-          <button type="button" onClick={() => setB(null)}>
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setB(null)}>
             {`Clear B (${tiles(b.length)})`}
           </button>
         )}
@@ -716,8 +729,8 @@ export function FacetGallery({
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "4px 12px", fontSize: 12 }}>
         <span>{`${sorted.length} groups`}</span>
         {lit && <span>{`${marked} of ${sorted.length} marked`}</span>}
-        <label>
-          {"sort by "}
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          sort by
           <select
             className="input"
             aria-label="sort by"
@@ -750,18 +763,29 @@ export function FacetGallery({
           </select>
         )}
         {choice && (
-          <button type="button" onClick={() => setOrder(order === "ascending" ? "descending" : "ascending")}>
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            onClick={() => setOrder(order === "ascending" ? "descending" : "ascending")}
+          >
             {order}
           </button>
         )}
-        <label>
-          from rank <input value={from} onChange={(e) => setFrom(e.target.value)} size={4} />
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          from rank
+          <input className="input" value={from} onChange={(e) => setFrom(e.target.value)} style={{ flex: "none", width: 64 }} />
         </label>
-        <label>
-          to rank <input value={to} onChange={(e) => setTo(e.target.value)} size={4} />
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          to rank
+          <input className="input" value={to} onChange={(e) => setTo(e.target.value)} style={{ flex: "none", width: 64 }} />
         </label>
         <button
           type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
           onClick={() => {
             const a = Math.max(1, Number.parseInt(from, 10) || 1);
             const b = Math.min(sorted.length, Number.parseInt(to, 10) || a);
@@ -770,7 +794,7 @@ export function FacetGallery({
         >
           Select ranks
         </button>
-        <button type="button" onClick={() => writeRange.current([])}>
+        <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => writeRange.current([])}>
           Clear selection
         </button>
       </div>

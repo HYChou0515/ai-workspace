@@ -133,7 +133,9 @@ export function MarkingControl({
             autoFocus
             onChange={(e) => setDraft(e.target.value)}
           />
-          <button type="submit">Link</button>
+          <button type="submit" className="btn" data-variant="primary" data-size="sm">
+            Link
+          </button>
         </form>
       )}
       {note && (

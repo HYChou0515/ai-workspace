@@ -258,7 +258,14 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 }}>
       <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px" }}>
-        <button type="button" onClick={run.refetch} title="Recompute from the current data">
+        <button
+          type="button"
+          className="btn"
+          data-variant="ghost"
+          data-size="sm"
+          onClick={run.refetch}
+          title="Recompute from the current data"
+        >
           Refresh
         </button>
       </div>

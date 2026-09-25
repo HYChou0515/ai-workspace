@@ -806,6 +806,28 @@ describe("FacetGallery", () => {
     });
   });
 
+  it("dresses every control it draws in the house classes: fields .input, buttons .btn", () => {
+    // In a real browser the toolbar's rank fields were bare native boxes and
+    // its buttons read as plain words (base.css resets <button> to text).
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]);
+    fireEvent.click(within(screen.getByRole("region", { name: /stack/i })).getByRole("button", { name: /set as b/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]); // its Close too
+    const fields = [...document.querySelectorAll("input, select, textarea")].filter(
+      (el) => !["checkbox", "radio"].includes((el as HTMLInputElement).type),
+    );
+    const buttons = [...document.querySelectorAll("button")];
+    expect(fields.length).toBe(5); // sort by, the two rank fields, the stack's column and statistic
+    expect(buttons.length).toBeGreaterThanOrEqual(8);
+    const bare = [
+      ...fields.filter((el) => !el.classList.contains("input")).map((el) => `field ${el.outerHTML.slice(0, 80)}`),
+      ...buttons
+        .filter((el) => !el.classList.contains("btn") || !el.dataset.variant || !el.dataset.size)
+        .map((el) => `button ${el.textContent}`),
+    ];
+    expect(bare).toEqual([]);
+  });
+
   it("enlarges one group with its exact values", () => {
     view();
     fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
