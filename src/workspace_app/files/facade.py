@@ -329,7 +329,7 @@ class WorkspaceFiles:
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await self._read_with(workspace_id, path, await self._warm(workspace_id))
 
-    # NOTE: the module-level `read_all` below is how callers reach this — it
+    # NOTE: `read_all` (filestore/batch.py, re-exported here) is how callers reach this — it
     # degrades for stores that do not have it. Do not duck-type it a second
     # time at a call site; two spellings of one rule drift.
 

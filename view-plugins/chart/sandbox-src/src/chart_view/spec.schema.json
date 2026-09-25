@@ -60,6 +60,9 @@
   "allOf": [
     {
       "$ref": "#/$defs/drawing"
+    },
+    {
+      "$ref": "#/$defs/markChannels"
     }
   ],
   "$defs": {
@@ -596,7 +599,12 @@
         "transform": {
           "$ref": "#/$defs/transforms"
         }
-      }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/markChannels"
+        }
+      ]
     },
     "drawing": {
       "oneOf": [
@@ -636,6 +644,401 @@
       "errorMessage": {
         "oneOf": "draw with either mark + encoding, or layer \u2014 not both, and not neither"
       }
+    },
+    "markChannels": {
+      "description": "Which channels each mark needs to draw anything.",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "scatter"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "scatter"
+                      }
+                    }
+                  },
+                  {
+                    "const": "line"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "line"
+                      }
+                    }
+                  },
+                  {
+                    "const": "area"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "area"
+                      }
+                    }
+                  },
+                  {
+                    "const": "bar"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "bar"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "scatter"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "scatter"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "properties": {
+                  "x": {
+                    "required": [
+                      "field"
+                    ]
+                  },
+                  "y": {
+                    "required": [
+                      "field"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "text"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "text"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y",
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "required": [
+                      "field"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "heatmap"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "heatmap"
+                      }
+                    }
+                  },
+                  {
+                    "const": "grid"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "grid"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y",
+                  "color"
+                ],
+                "properties": {
+                  "x": {
+                    "required": [
+                      "field"
+                    ]
+                  },
+                  "y": {
+                    "required": [
+                      "field"
+                    ]
+                  },
+                  "color": {
+                    "required": [
+                      "field"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "pie"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "pie"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "theta"
+                ],
+                "properties": {
+                  "theta": {
+                    "required": [
+                      "field"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "boxplot"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "boxplot"
+                      }
+                    }
+                  },
+                  {
+                    "const": "errorbar"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "errorbar"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "y"
+                ],
+                "properties": {
+                  "y": {
+                    "required": [
+                      "field"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "rule"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "rule"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "x"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "y"
+                    ]
+                  }
+                ],
+                "errorMessage": {
+                  "anyOf": "a rule needs an x or a y (a field or a datum)"
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

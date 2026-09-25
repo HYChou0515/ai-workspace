@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from chart_view.query import LayerRows, binned, layer_rows
@@ -49,7 +50,8 @@ def _measure(layer: LayerRows) -> str | None:
     field_ = layer.encoding.get(_MEASURE.get(layer.mark, "y"), {}).get("field")
     if field_ is None or field_ not in layer.rows.columns:
         return None
-    numbers = pd.to_numeric(layer.rows[field_], errors="coerce").dropna()
+    numbers = pd.to_numeric(layer.rows[field_], errors="coerce")
+    numbers = numbers[np.isfinite(numbers)]  # ±inf has no place on an axis either
     return None if numbers.empty else f"{field_} {_span(numbers)}"
 
 

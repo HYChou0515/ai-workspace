@@ -42,7 +42,7 @@ from chart_view.transforms import (
     need_columns,
     row_mask,
 )
-from chart_view.wire import bitset, canon, encode_column
+from chart_view.wire import bitset, canon, encode_column, epoch_ms
 
 FORMAT = 1
 DEFAULT_BIN_THRESHOLD = 10_000
@@ -122,7 +122,10 @@ def _boxplot(df: pd.DataFrame, channels, encoding) -> tuple[pd.DataFrame, pd.Dat
             {**keys, "$lo": inside.min(), "$q1": q1, "$mid": mid, "$q3": q3, "$hi": inside.max()}
         )
         outliers += [{**keys, value: float(o)} for o in v[~v.index.isin(inside.index)]]
-    return pd.DataFrame(rows), (pd.DataFrame(outliers) if outliers else None)
+    columns = [*groups, "$lo", "$q1", "$mid", "$q3", "$hi"]  # an empty group set keeps them
+    return pd.DataFrame.from_records(rows, columns=columns), (
+        pd.DataFrame(outliers) if outliers else None
+    )
 
 
 def _errorbar(df: pd.DataFrame, channels, encoding, extent: str) -> pd.DataFrame:
@@ -159,9 +162,8 @@ def _bin(
         field = encoding[axis]["field"]
         raw = frame[field]
         if encoding[axis]["type"] == "temporal":
-            stamps = pd.to_datetime(raw, errors="coerce", utc=True, format="mixed")
-            numbers = pd.Series(pd.DatetimeIndex(stamps).asi8 / 1e6, index=frame.index)
-            numbers = numbers.where(stamps.notna())
+            # The same reading the wire's `time` column uses.
+            numbers = pd.Series(epoch_ms(raw), index=frame.index)
         else:
             numbers = pd.to_numeric(raw, errors="coerce")
         low, high = numbers.min(), numbers.max()
@@ -252,8 +254,16 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
     else:
         df = _implicit_aggregate(df, channels)
 
-    keys = [k for k in spec.get("keys", []) if k in df.columns and k not in kinds]
-    kinds.update({k: "cat" for k in keys})
+    for k in spec.get("keys", []):
+        if k not in df.columns:
+            continue
+        if k not in kinds:
+            kinds[k] = "cat"
+        elif kinds[k] != "cat":
+            # A key a channel sends as numbers / time / q8 ALSO goes as marking
+            # strings, so a selection names the key the way `canon` writes it.
+            df = df.assign(**{f"$key.{k}": df[k]})
+            kinds[f"$key.{k}"] = "cat"
     lit = _highlight(df, spec.get("highlight"))
     return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds)
 

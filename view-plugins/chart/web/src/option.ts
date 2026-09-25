@@ -4,9 +4,10 @@
  * the renderer (P6) only mounts it and wires events.
  *
  * Besides the option it returns `series`: for series i, `rows[j]` is the layer
- * row that data point j draws. A brush, a lasso, a legend click and a
- * highlight bitset all speak in layer rows, so this table is how each one maps
- * to and from what ECharts reports (dataIndex per seriesIndex).
+ * row that data point j draws. A brush, a lasso and a legend click all speak
+ * in layer rows, so this table is how each maps from what ECharts reports
+ * (dataIndex per seriesIndex). A highlight is drawn per layer row too: an unlit
+ * row's data item is dimmed where it is built (`item()`).
  *
  * Category axes carry INDICES in the data, never the labels: ECharts reads a
  * number on a category axis as an index, so a category whose labels are
@@ -69,6 +70,8 @@ export type Built = {
   series: SeriesRows[];
   /** Series i's legend name, when it has one (a nominal colour's level). */
   names: (string | undefined)[];
+  /** A pie's legend names its SLICES: slice j of series i is `slices[i][j]`. */
+  slices: (string[] | undefined)[];
   grids: GridLayer[];
   notes: string[];
 };
@@ -142,12 +145,14 @@ type Axis = {
   labels: Scalar[];
   /** The axis position of layer row `row` of a column. */
   at(col: Column, row: number): number | null;
+  /** The axis position of one value (a rule's datum). */
+  pos(v: Scalar | null): number | null;
 };
 
 function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[], grid: Cells | null, which: "x" | "y"): Axis | null {
   if (grid) {
     const labels = which === "x" ? grid.xs : grid.ys;
-    return { channel: channel ?? {}, kind: "index", labels, at: () => null };
+    return { channel: channel ?? {}, kind: "index", labels, at: () => null, pos: () => null };
   }
   if (!channel?.field) return null;
   if (channel.type === "nominal" || channel.type === "ordinal") {
@@ -161,10 +166,13 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
         const v = col.value(row);
         return v === null ? null : (index.get(String(v)) ?? null);
       },
+      pos: (v) => (v === null ? null : (index.get(String(v)) ?? null)),
     };
   }
   const kind = channel.type === "temporal" ? "time" : channel.scale?.type === "log" ? "log" : "value";
-  return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null };
+  const pos = (v: Scalar | null) =>
+    v === null ? null : kind === "time" && typeof v === "string" ? Date.parse(v) : (v as number);
+  return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null, pos };
 }
 
 /** Where an axis name goes: centred beside its axis. At ECharts' default (the
@@ -245,6 +253,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   const series: Record<string, unknown>[] = [];
   const rows: SeriesRows[] = [];
   const names: (string | undefined)[] = [];
+  const slices: (string[] | undefined)[] = [];
   const grids: GridLayer[] = [];
   const notes: string[] = [];
   const visualMaps: Record<string, unknown>[] = [];
@@ -306,6 +315,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       series.push(s);
       rows.push({ layer: li, rows: r });
       names.push(typeof s.name === "string" ? s.name : undefined);
+      slices.push(s.type === "pie" ? (s.data as { name: string }[]).map((d) => d.name) : undefined);
     };
 
     if (mark.type === "grid") {
@@ -343,10 +353,16 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     if (mark.type === "rule") {
       const line = { lineStyle: { color: mark.color ?? "#888", type: "dashed" }, symbol: "none", label: { show: true } };
       let data: unknown[];
-      if (enc.y?.datum !== undefined) data = [{ yAxis: enc.y.datum, name: enc.y.title }];
-      else if (enc.x?.datum !== undefined) data = [{ xAxis: enc.x.datum, name: enc.x.title }];
-      else if (enc.y?.field && !enc.x?.field) data = all.map((r) => ({ yAxis: cols[enc.y!.field!].value(r) }));
-      else if (enc.x?.field && !enc.y?.field) data = all.map((r) => ({ xAxis: cols[enc.x!.field!].value(r) }));
+      // Positions go through the axis: a category axis reads a number as an
+      // INDEX, so a rule at the category 2022 must be sent as its index.
+      const onY = (v: Scalar | null) => (yAxis ? yAxis.pos(v) : v);
+      const onX = (v: Scalar | null) => (xAxis ? xAxis.pos(v) : v);
+      if (enc.y?.datum !== undefined) data = [{ yAxis: onY(enc.y.datum), name: enc.y.title }];
+      else if (enc.x?.datum !== undefined) data = [{ xAxis: onX(enc.x.datum), name: enc.x.title }];
+      else if (enc.y?.field && !enc.x?.field)
+        data = all.map((r) => ({ yAxis: yAxis ? yAxis.at(cols[enc.y!.field!], r) : cols[enc.y!.field!].value(r) }));
+      else if (enc.x?.field && !enc.y?.field)
+        data = all.map((r) => ({ xAxis: xAxis ? xAxis.at(cols[enc.x!.field!], r) : cols[enc.x!.field!].value(r) }));
       else
         data = all.map((r) => {
           const [x, y] = point(li, r);
@@ -413,12 +429,16 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           type: "custom",
           data,
           encode: { x: 0, y: [1, 2] },
-          renderItem: (_p: unknown, api: { value: (d: number) => number; coord: (p: number[]) => number[]; style: () => unknown }) => {
+          renderItem: (
+            params: { dataIndex: number },
+            api: { value: (d: number) => number; coord: (p: number[]) => number[]; style: () => unknown },
+          ) => {
             const x = api.value(0);
             const a = api.coord([x, api.value(1)]);
             const b = api.coord([x, api.value(2)]);
             const cap = 4;
-            const style = { stroke: mark.color ?? "#555", lineWidth: 1.5 };
+            const opacity = lit && !lit[params.dataIndex] ? DIM_OPACITY : 1;
+            const style = { stroke: mark.color ?? "#555", lineWidth: 1.5, opacity };
             return {
               type: "group",
               children: [
@@ -498,8 +518,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       if (symbolSize !== undefined) s.symbolSize = symbolSize;
       if (mark.type === "area") s.areaStyle = { opacity: mark.opacity ?? 0.7 };
       else if (mark.opacity !== undefined) s.itemStyle = { ...(s.itemStyle as object), opacity: mark.opacity };
-      if (mark.type === "line") {
-        s.showSymbol = mark.point ?? false;
+      if (mark.type === "line" || mark.type === "area") {
+        // A highlight dims POINTS, so a highlighted line shows them.
+        s.showSymbol = mark.point ?? lit !== null;
         if (mark.smooth) s.smooth = true;
       }
       if ((mark.type === "area" || mark.type === "bar") && mark.stack) s.stack = "stack";
@@ -548,5 +569,5 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
   if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));
-  return { option, series: rows, names, grids, notes };
+  return { option, series: rows, names, slices, grids, notes };
 }

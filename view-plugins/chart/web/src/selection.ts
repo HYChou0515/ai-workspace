@@ -85,6 +85,12 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
   if (Object.values(selected).every(Boolean)) return [];
   const pairs: [number, number][] = [];
   built.series.forEach((s, i) => {
+    const slices = built.slices[i];
+    if (slices) {
+      // A pie's legend entries are its slices, one per row.
+      s.rows.forEach((r, j) => selected[slices[j]] !== false && pairs.push([s.layer, r]));
+      return;
+    }
     const name = built.names[i];
     if (name !== undefined && selected[name] !== false) for (const r of s.rows) pairs.push([s.layer, r]);
   });
@@ -96,7 +102,9 @@ export function selectionValues(sel: Selection, answer: Answer, keys: string[]):
   const columns = answer.layers[sel.layer]?.columns ?? {};
   const out: Record<string, string[]> = {};
   for (const key of keys) {
-    const wire = columns[key];
+    // A key a channel sends as numbers / time / q8 comes as marking strings
+    // under `$key.<name>` too (query.py) — those are what a marking holds.
+    const wire = columns[`$key.${key}`] ?? columns[key];
     if (!wire) continue;
     const col = decodeColumn(wire);
     const seen = new Set<string>();

@@ -73,14 +73,21 @@ def _construct_bool(loader: _Loader, node: yaml.ScalarNode) -> bool:
     return loader.construct_scalar(node).lower() == "true"
 
 
-def _construct_int(loader: _Loader, node: yaml.ScalarNode) -> int:
+def _construct_int(loader: _Loader, node: yaml.ScalarNode) -> int | float:
     text = str(loader.construct_scalar(node))
     if text.startswith("0o"):
-        return int(text[2:], 8)
+        return _as_js_number(int(text[2:], 8))
     if text.startswith("0x"):
-        return int(text[2:], 16)
+        return _as_js_number(int(text[2:], 16))
     # Leading zeros are decimal under 1.2 (`017` is 17), and int() agrees.
-    return int(text)
+    return _as_js_number(int(text))
+
+
+def _as_js_number(n: int) -> int | float:
+    """An integer the way the host holds it: js-yaml reads every number into a
+    JavaScript Number, so past 2**53 it is the nearest double — and the renderer
+    sends THAT back. Keeping the exact int here lit rows the chart did not."""
+    return float(n) if abs(n) > 2**53 else n
 
 
 def _construct_float(loader: _Loader, node: yaml.ScalarNode) -> float:

@@ -63,7 +63,9 @@ def canon(value: Any) -> str | None:
     if isinstance(value, bool | np.bool_):
         return "true" if value else "false"
     if isinstance(value, int | np.integer):
-        return str(int(value))
+        n = int(value)
+        # Past 2**53 the browser holds the nearest double, and prints that.
+        return str(n) if abs(n) <= 2**53 else js_number(float(n))
     if isinstance(value, float | np.floating):
         f = float(value)
         return js_number(f) if math.isfinite(f) else None
@@ -84,18 +86,30 @@ def encode_column(s: pd.Series, kind: str) -> dict[str, Any]:
     if kind == "f64":
         return {"kind": "f64", "data": _f64(pd.to_numeric(s, errors="coerce").to_numpy(float))}
     if kind == "time":
-        # format="mixed": pandas otherwise infers ONE format from the first
-        # value, and with errors="coerce" a second value written with more
-        # precision (`…:56.789Z` after `…:00Z`) became a silent gap.
-        stamps = pd.to_datetime(s, errors="coerce", utc=True, format="mixed")
-        ms = pd.DatetimeIndex(stamps).asi8 / 1e6  # ns since the epoch → ms
-        return {"kind": "time", "data": _f64(np.where(stamps.isna(), np.nan, ms))}
+        return {"kind": "time", "data": _f64(epoch_ms(s))}
     if kind == "q8":
         return _q8(pd.to_numeric(s, errors="coerce").to_numpy(float))
     return _cat(s)
 
 
+def epoch_ms(s: pd.Series) -> np.ndarray:
+    """A temporal column as epoch milliseconds (NaN = missing).
+
+    Numbers ARE epoch milliseconds, as in Vega-Lite (pandas would read them as
+    nanoseconds: 1700000000000 became 1970-01-01T00:28). Text is parsed with
+    format="mixed": pandas otherwise infers ONE format from the first value,
+    and with errors="coerce" a later, more precise one became a silent gap."""
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        return pd.to_numeric(s, errors="coerce").to_numpy(float)
+    stamps = pd.to_datetime(s, errors="coerce", utc=True, format="mixed")
+    ms = pd.DatetimeIndex(stamps).asi8 / 1e6  # ns since the epoch → ms
+    return np.where(stamps.isna(), np.nan, ms)
+
+
 def _cat(s: pd.Series) -> dict[str, Any]:
+    # A list or a mapping (an entity field can hold one) has no hash to group
+    # by; it becomes its marking string.
+    s = s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple) else v)
     try:
         codes, uniques = pd.factorize(s, sort=True, use_na_sentinel=True)
     except TypeError:  # values with no order between them (a date among numbers)

@@ -29,9 +29,20 @@ def read_source(root: Path, source: str | dict[str, str]) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+def inside_workspace(root: Path, name: str) -> Path:
+    """`name` as a path under `root`, refused when it resolves outside it.
+
+    The file is named by a view file anyone who can read the item can open,
+    and on a shared-dir backend a sibling item's workspace is one `../` away."""
+    path = (root / name.lstrip("/")).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise SourceError(f"{name!r} is outside the workspace")
+    return path
+
+
 def read_table(root: Path, source: str) -> pd.DataFrame:
     """The table at `source` (.csv / .tsv / .parquet) under `root`."""
-    path = root / source.lstrip("/")
+    path = inside_workspace(root, source)
     if not path.is_file():
         raise SourceError(f"source {source!r} is not a file in the workspace")
     try:

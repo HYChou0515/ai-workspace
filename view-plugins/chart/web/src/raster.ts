@@ -5,7 +5,7 @@
  *   colourTable(scheme, min, max)         256 RGBA entries, indexed by code
  *   paintCells(cells, table) → RasterImage one pixel per cell
  *
- * The full chart embeds the image as an ECharts `graphic` (it supplies the axes,
+ * The full chart draws the image from a `custom` series (ECharts supplies the axes,
  * tooltip and brush; lasso hit-testing on cells uses `rowAt`). PR 4's
  * thumbnails put the same image on a plain canvas. Nothing here imports a host,
  * so "same cells → same pixels" holds by construction; `RasterImage` has
