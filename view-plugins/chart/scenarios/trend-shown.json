@@ -4,7 +4,7 @@
   "data": [
     "daily.csv"
   ],
-  "prompt": "Is thickness drifting upward over the month in daily.csv? I need to convince the process owner.",
+  "prompt": "Is temperature drifting upward over the month in daily.csv? I need to convince the owner.",
   "expect": {
     "must_call": [
       "write_file",

@@ -915,10 +915,10 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有 views，
     所以這段是因為 chart 才出現；
   - skill 索引的 `chart` 一行，約 230 字元；
-  - SKILL.md 本文約 5.0k 字元，只在 AI `read_skill('chart')` 時才載入。
+  - SKILL.md 本文約 5.2k 字元，只在 AI `read_skill('chart')` 時才載入。
 - AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
-- **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。只對某個 item 關掉，就在該 item 的
-  skill 偏好把 `chart` 關掉。
+- **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。在某個 item 的 skill 偏好把 `chart`
+  關掉，只拿掉那份 skill，`## Available views` 那兩行仍在。
 - **為你們的模型重調**：`uv run python -m workspace_app.view_plugin tune chart`，改
   `<plugin 目錄>/chart/skill/SKILL.md` 再重跑。下一輪對話就生效。
 
@@ -932,6 +932,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 做什麼：它的 tools stage 現在會把 `view-plugins/*/sandbox-src` 建進 `builtin/chart`。圖表的聚合，
     以及 `show_file` 的 `validate`，都在沙盒裡跑這個 bundle。
   - 順序：sandbox-host 先上、API 後上。
+  - 映像會變大：`builtin/chart` 自帶一份 Python 與 pandas、pyarrow（isolated launcher 的前提，
+    使用者 `pip install` 的套件碰不到它）。
   - 漏做的症狀：
     - 打開任何 chart 檔，面板顯示 `view plugin "chart" could not run "query"`（502，沒有 `.tools/chart/launch`）；
     - AI 的 `show_file` 對 chart 檔的回覆多一句 `(view plugin 'chart' could not check this view: …)`：
