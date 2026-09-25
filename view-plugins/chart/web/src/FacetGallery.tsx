@@ -34,8 +34,13 @@ import { decodeColumn, type WireColumn } from "./wire";
 const PLUGIN = "chart";
 const UNUSABLE = 3;
 const STALE = 4;
-const TILE = 112; // px, a thumbnail and its label
 const THUMB = 96;
+const LABEL = 18; // px, the label row under a thumbnail: its name and ⤢
+// the pitch between tiles: across, a thumbnail and a gap; down, the thumbnail,
+// its label row and a gap -- a row shorter than that put the label (and its
+// ⤢) under the next row's thumbnails
+const TILE_W = THUMB + 16;
+const TILE_H = THUMB + LABEL + 8;
 const FALLBACK_VIEWPORT = { width: 800, height: 600 };
 const MAX_RECOVERIES = 2;
 
@@ -80,7 +85,7 @@ function Canvas({
   return (
     <canvas
       ref={ref}
-      style={{ width: size, height: size, imageRendering: "pixelated", background: "var(--bg-sunken, #0000)" }}
+      style={{ display: "block", width: size, height: size, imageRendering: "pixelated", background: "var(--bg-sunken, #0000)" }}
       onMouseMove={
         onHover &&
         ((e) => {
@@ -145,9 +150,10 @@ const Tile = memo(function Tile({
     <div
       style={{
         position: "absolute",
-        left: (rank % columns) * TILE,
-        top: Math.floor(rank / columns) * TILE,
-        width: TILE - 8,
+        left: (rank % columns) * TILE_W,
+        top: Math.floor(rank / columns) * TILE_H,
+        width: THUMB,
+        height: THUMB + LABEL,
         outline: selected ? "2px solid var(--accent, #4a8)" : undefined,
       }}
     >
@@ -160,11 +166,16 @@ const Tile = memo(function Tile({
         onKeyDown={(e) => e.key === "Enter" && onPick(position, e.shiftKey)}
         style={{ cursor: "pointer" }}
       >
-        {image ? <Canvas image={image} size={THUMB} /> : <div style={{ width: THUMB, height: THUMB }} />}
+        {image ? <Canvas image={image} size={THUMB} /> : <div style={{ display: "block", width: THUMB, height: THUMB }} />}
       </div>
-      <div style={{ display: "flex", fontSize: 11, gap: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", height: LABEL, overflow: "hidden", fontSize: 11, gap: 4 }}>
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        <button type="button" aria-label="enlarge" onClick={() => onEnlarge(position)}>
+        <button
+          type="button"
+          aria-label="enlarge"
+          onClick={() => onEnlarge(position)}
+          style={{ padding: 0, border: 0, background: "none", font: "inherit", lineHeight: 1, cursor: "pointer" }}
+        >
           ⤢
         </button>
       </div>
@@ -192,7 +203,7 @@ function Page({
   const page = useMemo(() => parse<{ groups: WireColumn[] }>(run.data), [run.data]);
   if (run.error)
     return (
-      <div role="alert" style={{ position: "absolute", left: 0, top: Math.floor(first / shared.columns) * TILE, padding: 8, color: "var(--err)" }}>
+      <div role="alert" style={{ position: "absolute", left: 0, top: Math.floor(first / shared.columns) * TILE_H, padding: 8, color: "var(--err)" }}>
         {run.error.message}
       </div>
     );
@@ -248,10 +259,17 @@ function Enlarged({
   const cell = at ? cellAt(index, at.col, at.row) : -1;
   const hovered = cell >= 0 && values ? values[cell] : null;
   const label = index.groups[position].key.join(" · ");
+  // it covers the gallery, so it takes focus: Escape is then heard here, as
+  // any dialog is expected to close on it
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => box.current?.focus(), []);
   return (
     <div
+      ref={box}
       role="dialog"
       aria-label={`group ${label}`}
+      tabIndex={-1}
+      onKeyDown={(e) => e.key === "Escape" && onClose()}
       style={{ position: "absolute", inset: 0, background: "var(--bg, #fff)", padding: 12, zIndex: 1 }}
     >
       <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -409,7 +427,7 @@ export function FacetGallery({
     cacheKey: built.key,
     epoch,
     scheme,
-    columns: Math.max(1, Math.floor(viewport.width / TILE)),
+    columns: Math.max(1, Math.floor(viewport.width / TILE_W)),
     lit,
     selected,
     onPick,
@@ -419,8 +437,8 @@ export function FacetGallery({
   const perPage = groupsPerPage(idx.cells);
   const rows = Math.ceil(sorted.length / shared.columns);
   // a screen of lookahead each way: the next page is fetched before it shows
-  const firstRank = Math.max(0, Math.floor((viewport.top - viewport.height) / TILE)) * shared.columns;
-  const lastRank = Math.ceil((viewport.top + 2 * viewport.height) / TILE) * shared.columns;
+  const firstRank = Math.max(0, Math.floor((viewport.top - viewport.height) / TILE_H)) * shared.columns;
+  const lastRank = Math.ceil((viewport.top + 2 * viewport.height) / TILE_H) * shared.columns;
   const firstPage = Math.max(0, Math.floor(firstRank / perPage));
   const lastPage = Math.min(Math.ceil(sorted.length / perPage) - 1, Math.floor(lastRank / perPage));
   const pages = [];
@@ -457,8 +475,14 @@ export function FacetGallery({
           Clear selection
         </button>
       </div>
-      <div ref={scroller} data-gallery-scroll style={{ flex: 1, overflow: "auto", position: "relative" }}>
-        <div style={{ position: "relative", height: rows * TILE }}>
+      {/* bounded by the window, not the pane: a host pane is height:auto, and a
+          scroller that grows to its content mounts every tile and asks every page */}
+      <div
+        ref={scroller}
+        data-gallery-scroll
+        style={{ flex: 1, overflow: "auto", position: "relative", maxHeight: "80vh", minHeight: 240 }}
+      >
+        <div style={{ position: "relative", height: rows * TILE_H }}>
           {pages.map((n) => (
             <Page
               key={n}
