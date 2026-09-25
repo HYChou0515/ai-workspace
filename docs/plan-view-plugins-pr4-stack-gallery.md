@@ -248,7 +248,7 @@ fixtures.
     sandbox dir.
 - **Built:**
   - `SKILL.md` gains a Facet section and a "many groups that share a shape" line.
-    Its example is test-checked like the others; the body grows from 5105 to 6128
+    Its example is test-checked like the others; the body grows from 5945 (#856's) to 6968
     characters, measured.
   - `docs/view-plugin-chart.md` gains a 縮圖牆 section on how the gallery works,
     linking to SKILL.md for the syntax, as that page's no-third-copy rule asks.
@@ -262,13 +262,15 @@ fixtures.
 **P9 — what the live check found.**
 
 The Verification live check, run after P8, found four defects that happy-dom could
-not show. Each fix started with a test that reddened on the unfixed code and was
-mutation-probed.
+not show. Each UI fix started with a test that reddened on the unfixed code and was
+mutation-probed. The builder's fix is a second implementation, so it is pinned the
+other way: the parity test holds it to the row path, every guard in it is
+mutation-probed, and its speed is the live measurement in P8.
 
 - The builder read the frame a row at a time: 29.9 s, 28.8 s and 68.7 s on the
-  three fixture shapes (an earlier generation of the random fixtures, with the same
-  rows and cells; the files differed). The third was killed at the 60 s per-command
-  cap on every open, so that gallery could never be built.
+  three fixture shapes (measured on fixtures of the same rows and cells, generated
+  before the ones P8's table used). The third was killed at the 60 s per-command cap
+  on every open, so that gallery could never be built.
 - Tile layout: the next row's thumbnails covered each tile's label and ⤢.
 - Virtualization: the scroller grew to its content inside the host's height:auto
   pane, so every tile mounted and every page was asked.

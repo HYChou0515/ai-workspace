@@ -1051,8 +1051,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     是依指令的輸出方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
   畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
-- chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 5105 變成
-  6128 字元；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
+- chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 5945（[#856](#pr-856) 的版本）變成
+  6968 字元；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
 
 **k8s · CI 側**
 
