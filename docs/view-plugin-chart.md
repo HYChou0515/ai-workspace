@@ -158,4 +158,4 @@ renderer 呼叫沙盒時傳的是 view 檔的**路徑**（加上內容摘要當�
     `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文約 9k 字元，只在 AI `read_skill('chart')` 時才載入，不是每輪的成本。
+  SKILL.md 本文只在 AI `read_skill('chart')` 時才載入，不是每輪的成本。

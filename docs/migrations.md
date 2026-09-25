@@ -915,7 +915,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - `## Available views` 整段，約 610 字元（實測 606）：標題、一句說明，加上 chart 的四行（圖表、grid、
     `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引的 `chart` 一行，約 230 字元；
-  - SKILL.md 本文約 9k 字元，**不是每輪的成本**：只在 AI `read_skill('chart')` 時才載入。
+  - chart 的 SKILL.md 本文**不是每輪的成本**：和其他 skill 一樣，只在 AI `read_skill('chart')` 時才載入。
 - AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
 - **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。在某個 item 的 skill 偏好把 `chart`
   關掉，只拿掉那份 skill，`## Available views` 裡 chart 的那幾行仍在。
@@ -1031,9 +1031,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   （只有編輯區的頁面），不再是原始檔案的下載網址——`.ai.yaml` 從此顯示成 view 而不是 YAML 原文。
   圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
 
-- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文（去掉 frontmatter）
-  多了約 0.4k 字元（實測 +398；本文現在約 6.9k）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
-  固定成本不變。
+- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段；只在 AI
+  `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變。
 
 - 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條，另外 agent 一條、
   聊天一條——工作區頁面 3 條、純編輯區頁面（沒有聊天）2 條，不再隨開著的 view 增加。以前一個版面開 4 張圖要 7 條，
@@ -1108,8 +1107,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     這兩個症狀沒有實際觀察過，是依指令的輸出方式與 `show_file` 處理非 0 結束的方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
   畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
-- chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 6853（[#856](#pr-856) 合入後的版本）變成
-  7876 字元；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
+- chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法；只在 AI `read_skill('chart')` 時載入，
+  每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
 
 **資料** — 不用 migrate，沒有 `Schema` 升版。
 
