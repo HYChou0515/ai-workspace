@@ -3,7 +3,8 @@
  * and must get the HOST's own hook — a copy would read a different context and
  * link to nothing.
  */
-import * as sdk from "@aiws/view-sdk";
+// The module the import map (and vitest's alias) points `@aiws/view-sdk` at.
+import * as sdk from "../renderers/entity/public";
 import { describe, expect, it } from "vitest";
 
 import { useMarking } from "../hooks/useMarking";
