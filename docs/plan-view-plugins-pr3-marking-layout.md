@@ -65,7 +65,7 @@ pane, and the linked views in other panes light up.
 
 **P6 — the chat-mode page.**
 
-- A new route `/a/{slug}/items/{id}/view?layout=…` (or `?path=`) renders only the
+- A new route `/a/{slug}/{itemId}/view?layout=…` (or `?path=`) renders only the
   editor area:
   - panes, views and markings;
   - no file tree, no chat.
@@ -82,10 +82,14 @@ pane, and the linked views in other panes light up.
   - recorded on the persisted user message, so they survive a reload;
   - summarised as one prompt line each (name, count per key, path).
 - A selection that is never sent writes nothing.
-- The write goes through `WorkspaceFiles`, so it respects the quota. On a full
-  workspace it fails the send's chip with the 507 reason, not the whole send.
+- The write goes through `WorkspaceFiles`, so it respects the quota. A marking
+  file that does not fit fails its chip with the reason, not the whole send. (As
+  built: a workspace that is ALREADY full still refuses the whole send first —
+  #538's `admit_turn` runs before any write. [found while building, mine])
+- The write also asks the sender's content verb — `add_content` for a new file,
+  `edit_content` to replace one — since sending asks only `converse`. [review]
 
-**P8 — docs and runbook.**
+**P8 — docs and runbook.** (P9 below was added when the live check found it.)
 
 - `show_file` doc for `layout`.
 - The marking concept in the chart reference.
@@ -95,6 +99,23 @@ pane, and the linked views in other panes light up.
   - what appears in users' trees;
   - that it counts toward the quota;
   - the check that confirms it: send with a marking and see the file.
+
+**P9 — one connection to an item's stream per page** [found by the live check].
+
+- Every open `.ai.yaml` view held its own connection to the item's `/stream`. A
+  layout of four charts, plus the agent's and presence's, asked for 7; the browser
+  opens 6 per host, so sending a message queued forever.
+- `subscribeItemEvents` shares one per item per page (views, sheets, presence);
+  `useAgent` keeps its own (it resumes with `since`). The last presence roster is
+  handed to a listener that joins an open connection.
+
+As built, two reading rules the plan did not state [mine, open to override]:
+
+- A view links on the columns it shares with a marking through #855's
+  `keyColumn`. Without `keys:`, a `time` / `q8` channel column holds epoch ms /
+  quantized codes, not marking strings, so it is not compared (the view draws
+  undimmed); a view links on a time column by naming it in `keys:`.
+- On an empty marking every view on it draws undimmed, so linked views agree.
 
 ## Verification
 

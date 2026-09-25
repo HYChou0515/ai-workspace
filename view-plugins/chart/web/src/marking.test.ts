@@ -65,6 +65,33 @@ describe("markingLit reads keys the way selections write them (#855 keyColumn)",
   });
 });
 
+describe("a view without keys: reading what another view wrote (Q6)", () => {
+  // The writer names `day` in keys:, so the sandbox sends `$key.day`; a reader
+  // without keys: gets only its channel's own column.
+  const writer = answer(
+    layer("line", 3, {
+      day: time(["2024-01-01", "2024-01-02", "2024-01-03"]),
+      "$key.day": cat(["2024-01-01", "2024-01-02", "2024-01-03"]),
+      lot: cat(["L1", "L2", "L1"]),
+      wafer: f64([1, 2, 3]),
+    }),
+  );
+  const written = selectionMarking([{ source: "brush", layer: 0, rows: [1] }], writer, ["day", "lot", "wafer"])!;
+
+  it("is lit on a same-named text or number column", () => {
+    const reader = answer(layer("bar", 3, { lot: cat(["L2", "L1", "L2"]), wafer: f64([2, 2, 5]), v: f64([1, 2, 3]) }));
+    const onlyLotWafer = { lot: written.lot!, wafer: written.wafer! };
+    expect(markingLit(reader, onlyLotWafer, isLit)[0]).toEqual([true, false, false]);
+  });
+
+  it("a time column it only carries as a channel is not compared — drawn undimmed, never all-dim", () => {
+    // Its column holds epoch ms, not the marking's strings: comparing them lit
+    // nothing, which drew the whole chart as "no match".
+    const reader = answer(layer("line", 3, { day: time(["2024-01-01", "2024-01-02", "2024-01-03"]), v: f64([1, 2, 3]) }));
+    expect(markingLit(reader, { day: written.day! }, isLit)[0]).toBeNull();
+  });
+});
+
 describe("selectionMarking", () => {
   it("projects the selected rows onto keys, as the canon strings", () => {
     const m = selectionMarking([{ source: "brush", layer: 0, rows: [0, 2] }], A, ["lot", "wafer"]);
