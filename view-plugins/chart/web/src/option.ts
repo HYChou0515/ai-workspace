@@ -365,10 +365,12 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     return kind === "time" ? wall(n) : n;
   };
   // A mark's points go as the layer holds them, for ECharts to read (text
-  // from a layer that typed the field otherwise included); only a rule's
-  // own values are held to `pos`.
+  // from a layer that typed the field otherwise included) -- except 0 and
+  // below on a log axis, which has no place for them (as `pos`): ECharts drew
+  // them at Infinity (#847/#848 PR 5 P38). `toOption` counts them in a note.
   const at = (col: Column, row: number): number | null => {
     const v = col.value(row) as number | null;
+    if (kind === "log" && typeof v === "number" && v <= 0) return null;
     return kind === "time" && col.kind === "time" && v !== null ? wall(v) : v;
   };
   return { channel, kind, labels: [], at, pos, clock };
@@ -633,6 +635,20 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   // A stack's slot is on its base axis, the one ECharts stacks by: y when y is
   // a category (a horizontal bar), else x.
   const baseAt = yAxis?.kind === "category" ? 1 : 0;
+  // What a log axis leaves out (`at` gives it no place), said once per axis;
+  // a rule's own values are noted by the rule.
+  for (const [axis, key] of [[xAxis, "x"], [yAxis, "y"]] as const) {
+    if (axis?.kind !== "log") continue;
+    let off = 0;
+    specs.forEach((s, li) => {
+      const col = markOf(s).type === "rule" ? undefined : decoded[li][s.encoding[key]?.field as string];
+      for (let r = 0; col && r < answer.layers[li].rows; r++) {
+        const v = col.value(r);
+        if (typeof v === "number" && v <= 0) off++;
+      }
+    });
+    if (off > 0) notes.push(`${off} ${off === 1 ? "value" : "values"} at or below 0 not drawn on the log ${key} axis`);
+  }
 
   const point = (li: number, row: number, extra: (number | null)[] = []): (number | null)[] => {
     const enc = specs[li].encoding;

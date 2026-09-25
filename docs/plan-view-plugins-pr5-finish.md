@@ -360,6 +360,14 @@ words are examples, not spec keys.
   Rows 12 and 13 replace mechanisms, so round 19 follows. Performance is measured before
   and after on the regression lens's inputs; the demo (1440 and 390, seen) covers rows
   12 and 13, plus the 390 frames P34 row 2 and the horizontal stack lacked.
+- **P38 — What P37's builder found.** On a log axis a mark's own point at or below 0
+  went to ECharts as the layer held it, and ECharts drew an Infinity vertex (a line, a
+  stacked area; a scatter and a bar were skipped by ECharts itself). Rule: 0 and below
+  have no place on a log axis for any mark, as a rule's datum already had none
+  (`pos`); the note line counts them per axis ("N values at or below 0 not drawn on
+  the log y axis"), a rule's own values staying with the rule's note. Pre-existing
+  since PR 2's review round 7 (dfa5ca6f, "points sent as held"). Known and left: a summed stack point whose rows differ in a colour-by-
+  value takes the series' palette colour [mine, open to override].
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
