@@ -296,8 +296,9 @@ type Axis = {
   channel: Channel;
   kind: "value" | "log" | "time" | "category" | "index";
   labels: Scalar[];
-  /** The axis position of layer row `row` of a column. */
-  at(col: Column, row: number): number | null;
+  /** The axis position of layer row `row` of a column. `keepZero`: a stack's
+   * value keeps its 0 on a log axis, for `lineUpStacks` to place (P39). */
+  at(col: Column, row: number, keepZero?: boolean): number | null;
   /** The axis position of one value (a rule's datum). */
   pos(v: Scalar | null): number | null;
   /** A temporal axis's clock (#847/#848 P14): its column's zone, if any. */
@@ -368,9 +369,10 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
   // from a layer that typed the field otherwise included) -- except 0 and
   // below on a log axis, which has no place for them (as `pos`): ECharts drew
   // them at Infinity (#847/#848 PR 5 P38). `toOption` counts them in a note.
-  const at = (col: Column, row: number): number | null => {
+  const at = (col: Column, row: number, keepZero = false): number | null => {
     const v = col.value(row) as number | null;
-    if (kind === "log" && typeof v === "number" && v <= 0) return null;
+    // (a stack's 0 adds nothing: `lineUpStacks` keeps it where something lies beneath)
+    if (kind === "log" && typeof v === "number" && (v < 0 || (v === 0 && !keepZero))) return null;
     return kind === "time" && col.kind === "time" && v !== null ? wall(v) : v;
   };
   return { channel, kind, labels: [], at, pos, clock };
@@ -521,7 +523,9 @@ function lineUpStacks(
   rows: SeriesRows[],
   log: boolean,
   { category, at }: { category: boolean; at: 0 | 1 },
-): void {
+): number {
+  // a stack's own 0s left empty on a log axis (nothing beneath them)
+  let emptied = 0;
   const stacks = new Map<unknown, number[]>();
   series.forEach((s, i) => {
     if (s.stack) stacks.set(s.stack, [...(stacks.get(s.stack) ?? []), i]);
@@ -556,7 +560,18 @@ function lineUpStacks(
           data.push({ value, itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
           drawn.push(null);
         } else {
-          data.push(category ? old[j] : yFirst(old[j]));
+          // a series' own 0 adds nothing, as a filler does: 0 where something
+          // lies beneath, empty on a log axis where nothing does (P39; `at`
+          // kept it -- P38 had dropped it, and its band broke over two slots)
+          let d = old[j];
+          const own = valueOf(d)[1 - at];
+          if (log && own === 0 && !beneath.has(x)) {
+            const value = [...valueOf(d)];
+            value[1 - at] = null;
+            d = Array.isArray(d) ? value : { ...d, value };
+            emptied++;
+          }
+          data.push(category ? d : yFirst(d));
           drawn.push(was[j]);
         }
       }
@@ -569,6 +584,7 @@ function lineUpStacks(
       rows[i].rows = drawn;
     });
   }
+  return emptied;
 }
 
 /** #847/#848 PR 5 P37 row 12: a stacked series' points, one per slot. ECharts
@@ -635,26 +651,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   // A stack's slot is on its base axis, the one ECharts stacks by: y when y is
   // a category (a horizontal bar), else x.
   const baseAt = yAxis?.kind === "category" ? 1 : 0;
-  // What a log axis leaves out (`at` gives it no place), said once per axis;
-  // a rule's own values are noted by the rule.
-  for (const [axis, key] of [[xAxis, "x"], [yAxis, "y"]] as const) {
-    if (axis?.kind !== "log") continue;
-    let off = 0;
-    specs.forEach((s, li) => {
-      const col = markOf(s).type === "rule" ? undefined : decoded[li][s.encoding[key]?.field as string];
-      for (let r = 0; col && r < answer.layers[li].rows; r++) {
-        const v = col.value(r);
-        if (typeof v === "number" && v <= 0) off++;
-      }
-    });
-    if (off > 0) notes.push(`${off} ${off === 1 ? "value" : "values"} at or below 0 not drawn on the log ${key} axis`);
-  }
-
   const point = (li: number, row: number, extra: (number | null)[] = []): (number | null)[] => {
     const enc = specs[li].encoding;
     const cols = decoded[li];
-    const px = xAxis && enc.x?.field ? xAxis.at(cols[enc.x.field], row) : null;
-    const py = yAxis && enc.y?.field ? yAxis.at(cols[enc.y.field], row) : null;
+    // a stacked layer's value keeps its 0 (P39); its slot does not
+    const stacked = !!markOf(specs[li]).stack;
+    const px = xAxis && enc.x?.field ? xAxis.at(cols[enc.x.field], row, stacked && baseAt === 1) : null;
+    const py = yAxis && enc.y?.field ? yAxis.at(cols[enc.y.field], row, stacked && baseAt === 0) : null;
     return [px, py, ...extra];
   };
   // Boxplot / errorbar rows carry `$` summaries instead of the y field.
@@ -1044,10 +1047,43 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   // axis is a log one is read from the axis the chart built, whatever the
   // spec's shape: a `layer:` spec has no top-level encoding to read it from
   // (PR 5 P34).
-  lineUpStacks(series, rows, (baseAt === 1 ? xAxis : yAxis)?.kind === "log", {
+  const emptied = lineUpStacks(series, rows, (baseAt === 1 ? xAxis : yAxis)?.kind === "log", {
     category: (baseAt === 1 ? yAxis : xAxis)?.kind === "category",
     at: baseAt,
   });
+  // What a log axis leaves out (`at` gives it no place), said once per axis;
+  // a rule's own values are noted by the rule. A stack's value keeps its 0s
+  // (they add nothing), so only those `lineUpStacks` left empty count (P39).
+  const valueKey = baseAt === 0 ? "y" : "x";
+  for (const [axis, key] of [[xAxis, "x"], [yAxis, "y"]] as const) {
+    if (axis?.kind !== "log") continue;
+    let off = key === valueKey ? emptied : 0;
+    specs.forEach((s, li) => {
+      const col = markOf(s).type === "rule" ? undefined : decoded[li][s.encoding[key]?.field as string];
+      const keepsZero = !!markOf(s).stack && key === valueKey;
+      for (let r = 0; col && r < answer.layers[li].rows; r++) {
+        const v = col.value(r);
+        if (typeof v === "number" && (v < 0 || (v === 0 && !keepsZero))) off++;
+      }
+    });
+    if (off > 0) notes.push(`${off} ${off === 1 ? "value" : "values"} at or below 0 not drawn on the log ${key} axis`);
+  }
+  // A line draws no point of its own, so a value between two empty ones --
+  // left out on a log axis, or missing -- was drawn nowhere, and nothing said
+  // so. Such a point is shown (P39): every value the note does not count can
+  // be seen.
+  for (const s of series) {
+    // (only a line that hides its points: drawn ones -- `point`, a highlight's dim -- stay)
+    if (s.type !== "line" || (s.itemStyle as { opacity?: number } | undefined)?.opacity !== 0) continue;
+    const data = s.data as Item[];
+    const vi = s.encode ? 0 : 1; // lined up y-first by `lineUpStacks`, else [x, y]
+    const empty = (d: Item | undefined) => d === undefined || (Array.isArray(d) ? d : d.value)[vi] === null;
+    s.data = data.map((d, j) => {
+      if (empty(d) || !empty(data[j - 1]) || !empty(data[j + 1])) return d;
+      const item = Array.isArray(d) ? { value: d } : d;
+      return { ...item, itemStyle: { ...(item.itemStyle as object), opacity: 1 } };
+    });
+  }
 
   // A stack's point that draws the sum of several rows (P37 row 12): its
   // value is the sum -- read from the point drawn, so the tooltip says what

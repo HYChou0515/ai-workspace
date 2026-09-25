@@ -380,6 +380,16 @@ words are examples, not spec keys.
   the log y axis"), a rule's own values staying with the rule's note. Pre-existing
   since PR 2's review round 7 (dfa5ca6f, "points sent as held"). Known and left: a summed stack point whose rows differ in a colour-by-
   value takes the series' palette colour [mine, open to override].
+- **P39 — What P38's demo found** (frames `tmp/demo/p38/`, seen: on the app's canvas a
+  stacked series' band vanished over two intervals; a line's value between two left-out
+  ones showed nowhere). Rules: in a stack a series' own 0 adds nothing, as a filler
+  does — 0 where something positive lies beneath, empty only where nothing does; a
+  negative still has no place; the note counts only what is left out. A line that hides
+  its points shows a point whose neighbours are both empty, so every value the note does
+  not count can be seen (a drawn or dimmed point is left as it is). P38's "not drawn on a
+  log x" test used a scatter, which ECharts skips by itself; it uses a line now (round 19
+  conformance N3). With a stack's 0 reaching `lineUpStacks` again, row 14's `> 0` is
+  pinned again (the loggaps "…has 0" test reddens without it; rounds 19 N2 / F3).
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third

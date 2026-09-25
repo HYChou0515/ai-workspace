@@ -44,8 +44,13 @@ describe("instants as the sandbox reads them (UTC unless the text says otherwise
       ],
     };
     const a = answer(layer("line", 1, { t: time(["2024-03-01T12:00:00Z"]), v: f64([1]) }), layer("rule", 0, {}));
-    const series = toOption(spec, a).option.series as { data: number[][]; markLine?: { data: { xAxis: number }[] } }[];
-    expect(series[1].markLine?.data[0].xAxis).toBe(series[0].data[0][0]);
+    const series = toOption(spec, a).option.series as {
+      data: (number[] | { value: number[] })[];
+      markLine?: { data: { xAxis: number }[] };
+    }[];
+    // (a one-point line's point is shown, so it is an item -- P39; the x is the same)
+    const d = series[0].data[0];
+    expect(series[1].markLine?.data[0].xAxis).toBe((Array.isArray(d) ? d : d.value)[0]);
   });
 });
 
