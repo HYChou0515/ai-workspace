@@ -15,7 +15,7 @@ import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } 
 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
-import { type Answer, type Built, compactAt, toOption } from "./option";
+import { type Answer, type Built, compactAt, measuredFields, toOption } from "./option";
 import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
 import { type Cells, type RasterImage, upscale } from "./raster";
 import {
@@ -96,6 +96,8 @@ function Plot({
   const chartRef = useRef<Chart | null>(null);
   const [selection, setSelection] = useState<Selection[]>([]);
   const keys = useMemo(() => (Array.isArray(doc.keys) ? (doc.keys as string[]) : []), [doc]);
+  // Per layer, the fields a channel aggregates: never a key (PR 5 P32).
+  const measured = useMemo(() => measuredFields(doc), [doc]);
   // Subscribed by NAME: a write to another marking does not re-render this view.
   const [entry, write] = useMarking(marking);
   // On a marking that holds something, IT decides what is lit (the platform's
@@ -110,10 +112,10 @@ function Plot({
     () =>
       marking
         ? entry
-          ? markingLit(answer, entry.marking, isLit)
+          ? markingLit(answer, entry.marking, isLit, measured)
           : answer.layers.map(() => null)
         : ownSelectionLit(answer, selection),
-    [marking, entry, answer, selection],
+    [marking, entry, answer, selection, measured],
   );
   // Whether the chart is laid out compact (#847/#848 PR 5 P31): read from the
   // width its host is given, by the observer that resizes it. A boolean, so the
@@ -155,7 +157,7 @@ function Plot({
     // or a grid lit by its own selection would redraw on every report
     setSelection((prev) => (JSON.stringify(prev) === JSON.stringify(sel) ? prev : sel));
     if (!marking) return;
-    const values = selectionMarking(sel, answer, keys);
+    const values = selectionMarking(sel, answer, keys, measured);
     setToMarking(values !== null);
     if (values) write(values, source);
   };
@@ -169,9 +171,9 @@ function Plot({
   useEffect(() => {
     if (!marking || seeded.current) return;
     seeded.current = true;
-    const values = highlightMarking(answer, keys);
+    const values = highlightMarking(answer, keys, measured);
     if (values && Object.keys(values).length > 0) write(values, source, { ifEmpty: true });
-  }, [marking, answer, keys, write, source]);
+  }, [marking, answer, keys, measured, write, source]);
 
   useEffect(() => {
     if (!el.current) return;

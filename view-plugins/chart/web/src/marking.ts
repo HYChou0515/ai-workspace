@@ -8,21 +8,25 @@
  * selection, or the spec's `highlight:` on open, is projected onto `keys:`.
  */
 import { litRows } from "./highlight";
-import type { Answer } from "./option";
+import type { Answer, Measured } from "./option";
 import { keyColumn, type Selection, selectionValues } from "./selection";
 import { canon } from "./wire";
 
 /** `column → values`, as the SDK's `Marking`. Declared structurally so this
  * pure module needs no runtime SDK import. */
 export type MarkingValues = { readonly [column: string]: ReadonlySet<string> };
+const NONE_MEASURED: ReadonlySet<string> = new Set();
+
 export type IsLit = (row: Readonly<Record<string, string>>, marking: MarkingValues) => boolean;
 
 /** Per layer, which rows the marking lights; null for a layer that carries none
  * of the marking's columns (drawn undimmed). The columns compared are the
  * marking's own that the layer carries — so a view with no `keys:` is still
- * lit on a same-named column (Q6); `keys:` decides only what a view WRITES. */
-export function markingLit(answer: Answer, marking: MarkingValues, lit: IsLit): (boolean[] | null)[] {
-  return answer.layers.map((layer) => {
+ * lit on a same-named column (Q6); `keys:` decides only what a view WRITES.
+ * A column a channel aggregates (`measured`, PR 5 P32) is not carried: it
+ * holds the aggregate, not the field's values. */
+export function markingLit(answer: Answer, marking: MarkingValues, lit: IsLit, measured: Measured): (boolean[] | null)[] {
+  return answer.layers.map((layer, i) => {
     // Through `keyColumn`, the ONE place a key's marking strings are read — the
     // lookup `selectionValues` writes with. A key a channel sends as time or
     // numbers carries its strings in `$key.<name>`; decoding the channel's own
@@ -38,7 +42,7 @@ export function markingLit(answer: Answer, marking: MarkingValues, lit: IsLit): 
       if (!layer.columns[`$key.${k}`] && plain && (plain.kind === "time" || plain.kind === "q8")) {
         return [];
       }
-      const col = keyColumn(layer, k);
+      const col = keyColumn(layer, k, measured[i] ?? NONE_MEASURED);
       return col ? [[k, col] as const] : [];
     });
     if (cols.length === 0) return null;
@@ -79,17 +83,18 @@ export function selectionMarking(
   selections: readonly Selection[],
   answer: Answer,
   keys: string[],
+  measured: Measured,
 ): MarkingValues | null {
   if (keys.length === 0) return null;
   const onRows = selections.filter((s) => !answer.layers[s.layer]?.binned);
   if (selections.length > 0 && onRows.length === 0) return null;
-  return toMarking(onRows.map((s) => selectionValues(s, answer, keys)));
+  return toMarking(onRows.map((s) => selectionValues(s, answer, keys, measured)));
 }
 
 /** The spec's `highlight:` as a marking — what seeds an empty marking on open,
  * resolved by the sandbox exactly as PR 2 draws it. null when no layer carries
  * a highlight, or the view has no `keys:`. */
-export function highlightMarking(answer: Answer, keys: string[]): MarkingValues | null {
+export function highlightMarking(answer: Answer, keys: string[], measured: Measured): MarkingValues | null {
   if (keys.length === 0) return null;
   const selections: Selection[] = [];
   answer.layers.forEach((layer, i) => {
@@ -97,5 +102,5 @@ export function highlightMarking(answer: Answer, keys: string[]): MarkingValues 
     if (lit) selections.push({ source: "brush", layer: i, rows: lit.flatMap((on, r) => (on ? [r] : [])) });
   });
   if (selections.length === 0) return null;
-  return toMarking(selections.map((s) => selectionValues(s, answer, keys)));
+  return toMarking(selections.map((s) => selectionValues(s, answer, keys, measured)));
 }

@@ -117,7 +117,7 @@ describe("legend", () => {
 
 describe("selectionValues", () => {
   it("gives each key's values over the selected rows, as marking strings, once each", () => {
-    const values = selectionValues({ source: "brush", layer: 0, rows: [0, 2, 1] }, scatterAnswer, ["wafer", "lot", "gone"]);
+    const values = selectionValues({ source: "brush", layer: 0, rows: [0, 2, 1] }, scatterAnswer, ["wafer", "lot", "gone"], []);
     expect(values).toEqual({ wafer: ["7", "9", "8"], lot: ["A", "B"] });
   });
 });

@@ -46,7 +46,9 @@ The keys to use:
 - `keys`: column names.
 - `marking`: a name. Charts with the same `marking` are linked: rows the person
   brushes in one light up in the others, matched on the columns named in the
-  brushing chart's `keys`.
+  brushing chart's `keys`. A field a channel aggregates holds the aggregate,
+  not the field's values, so it is never matched: a pie of
+  `theta: {field: id, aggregate: count}` links by its `color` field.
 - `highlight`: `{where: "<pandas query>"}`, or `{values: {<column>: [v, …]}}`
   for rows whose column holds one of the values. It runs over each layer's
   rows after its transforms, so it can name an aggregate's `as`.

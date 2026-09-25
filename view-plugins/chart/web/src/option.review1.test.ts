@@ -106,7 +106,7 @@ describe("selectionValues for a key a channel sends as numbers or time", () => {
         "$key.day": cat(["2024-01-01", "2024-01-02"]),
       }),
     );
-    expect(selectionValues({ source: "brush", layer: 0, rows: [1] }, a, ["day"])).toEqual({ day: ["2024-01-02"] });
+    expect(selectionValues({ source: "brush", layer: 0, rows: [1] }, a, ["day"], [])).toEqual({ day: ["2024-01-02"] });
   });
 });
 

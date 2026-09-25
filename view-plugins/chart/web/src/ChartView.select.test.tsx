@@ -275,6 +275,38 @@ describe("a click on a pie's slice writes the marking", () => {
     expect(marked(store)).toEqual({ lot: ["L2"] });
   });
 
+  // #847/#848 PR 5 P32: a pie counting items holds COUNTS under `item`, and
+  // `$key.item` repeats them: its item column is not a key.
+  const COUNTING = {
+    view: "chart",
+    source: "data/a.csv",
+    keys: ["group", "item"],
+    mark: "pie",
+    encoding: { theta: { field: "item", type: "quantitative", aggregate: "count" }, color: { field: "group", type: "nominal" } },
+  };
+  const COUNTS = answer(layer("pie", 4, { group: cat(["A", "B", "C", "D"]), item: f64([6, 4, 3, 5]), "$key.item": cat([6, 4, 3, 5]) }));
+  const opacities = (chart: echarts.ECharts) => {
+    type Data = { count(): number; getItemVisual(i: number, k: "style"): { opacity?: number } };
+    type Model = { getSeriesByIndex(i: number): { getData(): Data } };
+    const data = (chart as unknown as { getModel(): Model }).getModel().getSeriesByIndex(0).getData();
+    return Array.from({ length: data.count() }, (_, i) => data.getItemVisual(i, "style").opacity ?? 1);
+  };
+
+  it("a pie counting items lights the groups a marking holds, not the slices whose count is a marked item (P32)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, COUNTING, COUNTS);
+    // rows (A, 4), (A, 5) and (B, 3) picked in another view
+    act(() => store.set("m", { group: new Set(["A", "B"]), item: new Set(["3", "4", "5"]) }, "/v/other.ai.yaml"));
+    expect(opacities(chart)).toEqual([1, 1, DIM_OPACITY, DIM_OPACITY]);
+  });
+
+  it("a click on a counting pie's slice writes its group, not its count (P32)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, COUNTING, COUNTS);
+    click(chart, sliceAt(chart, 0));
+    expect(marked(store)).toEqual({ group: ["A"] });
+  });
+
   it("on no marking, the slice it picked is lit and the rest dimmed", () => {
     const chart = mount(new MarkingStore(), PIE, SLICES, null);
     click(chart, sliceAt(chart, 1));

@@ -118,6 +118,22 @@ function layersOf(spec: ChartSpec): LayerSpec[] {
   return [{ mark: spec.mark as string | MarkDef, encoding: spec.encoding as Encoding }];
 }
 
+/** Per layer, the fields a channel `aggregate`s (#847/#848 PR 5 P32). The
+ * sandbox sends an aggregate under its field's own name (and as
+ * `$key.<field>` when the field is in `keys:`), holding counts or means, not
+ * the field's values -- so such a column is never a marking key: a layer
+ * neither lights by it nor writes it (`keyColumn`). */
+export type Measured = readonly ReadonlySet<string>[];
+
+export function measuredFields(doc: object): Measured {
+  return layersOf(doc as ChartSpec).map((ly) => {
+    const enc = ly.encoding ?? {};
+    const tips = enc.tooltip === undefined ? [] : Array.isArray(enc.tooltip) ? enc.tooltip : [enc.tooltip];
+    const channels = [enc.x, enc.y, enc.x2, enc.y2, enc.color, enc.size, enc.theta, enc.text, ...tips];
+    return new Set(channels.flatMap((c) => (c?.aggregate && c.field ? [c.field] : [])));
+  });
+}
+
 function markOf(layer: LayerSpec): MarkDef {
   return typeof layer.mark === "string" ? { type: layer.mark } : layer.mark;
 }

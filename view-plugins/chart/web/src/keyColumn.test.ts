@@ -16,16 +16,16 @@ describe("keyColumn", () => {
       day: time(["2024-01-01", "2024-01-02"]),
       "$key.day": cat(["2024-01-01", "2024-01-02"]),
     });
-    const col = keyColumn(ly, "day");
+    const col = keyColumn(ly, "day", new Set());
     expect(col && canon(col.value(1))).toBe("2024-01-02");
   });
 
   it("reads a key sent as a category directly", () => {
-    const col = keyColumn(layer("bar", 1, { lot: cat(["A"]), v: f64([1]) }), "lot");
+    const col = keyColumn(layer("bar", 1, { lot: cat(["A"]), v: f64([1]) }), "lot", new Set());
     expect(col?.value(0)).toBe("A");
   });
 
   it("has nothing for a key the layer does not carry", () => {
-    expect(keyColumn(layer("bar", 1, { v: f64([1]) }), "lot")).toBeNull();
+    expect(keyColumn(layer("bar", 1, { v: f64([1]) }), "lot", new Set())).toBeNull();
   });
 });

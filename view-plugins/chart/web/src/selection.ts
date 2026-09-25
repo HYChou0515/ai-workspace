@@ -14,7 +14,7 @@
  * - legend: ECharts' own show / hide stays; with a category hidden, the rows
  *   still shown are the selection; with all shown, nothing is.
  */
-import type { Answer, Built, WireLayer } from "./option";
+import type { Answer, Built, Measured, WireLayer } from "./option";
 import { litRows } from "./highlight";
 import { canon, type Column, decodeColumn } from "./wire";
 
@@ -145,18 +145,23 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
  * column. The one lookup for everything that compares a layer with a marking —
  * writing one (`selectionValues`) and lighting by one — so the two never read
  * different columns. Null when the layer does not carry the key — nor does a
- * binned layer: its rows are bins, its columns bin centres, never a row's value. */
-export function keyColumn(layer: WireLayer | undefined, key: string): Column | null {
-  if (layer?.binned) return null;
+ * binned layer: its rows are bins, its columns bin centres, never a row's value
+ * — nor a column a channel aggregates (`measured`, the layer's
+ * `measuredFields`; #847/#848 PR 5 P32): it holds counts or means under the
+ * field's name, never the field's values. */
+export function keyColumn(layer: WireLayer | undefined, key: string, measured: ReadonlySet<string>): Column | null {
+  if (layer?.binned || measured.has(key)) return null;
   const wire = layer?.columns[`$key.${key}`] ?? layer?.columns[key];
   return wire ? decodeColumn(wire) : null;
 }
 
+const NONE_MEASURED: ReadonlySet<string> = new Set();
+
 /** The `keys:` columns' values over the selected rows — what a marking holds. */
-export function selectionValues(sel: Selection, answer: Answer, keys: string[]): Record<string, string[]> {
+export function selectionValues(sel: Selection, answer: Answer, keys: string[], measured: Measured): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const key of keys) {
-    const col = keyColumn(answer.layers[sel.layer], key);
+    const col = keyColumn(answer.layers[sel.layer], key, measured[sel.layer] ?? NONE_MEASURED);
     if (!col) continue;
     const seen = new Set<string>();
     for (const r of sel.rows) {
