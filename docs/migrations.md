@@ -915,8 +915,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - `## Available views` 整段，約 610 字元（實測 606）：標題、一句說明，加上 chart 的四行（圖表、grid、
     `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引的 `chart` 一行，約 230 字元；
-  - SKILL.md 本文約 6.5k 字元（本 PR 最初的版本；連同下兩條與收尾的 pr5，合入 master 時實測 9,435，約 9.4k），
-    只在 AI `read_skill('chart')` 時才載入。
+  - SKILL.md 本文約 9k 字元，**不是每輪的成本**：只在 AI `read_skill('chart')` 時才載入。
 - AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
 - **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。在某個 item 的 skill 偏好把 `chart`
   關掉，只拿掉那份 skill，`## Available views` 裡 chart 的那幾行仍在。
