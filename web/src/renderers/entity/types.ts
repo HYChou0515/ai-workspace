@@ -172,6 +172,10 @@ export type EntityViewProps = {
    * detaches it (`null`) — view state, never written back to the file.
    * `undefined` when the view names neither `marking:` nor `keys:`. */
   marking?: string | null;
+  /** #847/#848 PR 5 — tell the header's marking control why selecting in this
+   * view marks nothing (null: it does, or there is nothing to say). Present
+   * whenever `marking` is. A table passes it to `useTableMarking`. */
+  onMarkingNote?: (note: string | null) => void;
   /** #690 P4 — identifies this view for per-user, per-view UI state kept in the
    * browser (which groups are collapsed). Not in the view FILE: where somebody
    * is looking is not a decision to make for the rest of the project. */

@@ -125,12 +125,17 @@ describe("the csv-table example kind", () => {
 const LOTS_CSV = "lot,yield,day\nA1,0.97,2024-01-01\nB2,0.90,2024-01-02\nC3,0.5,2024-01-02\n";
 const ON_FAIL = "view: csv-table\nsource: /data/lots.csv\nmarking: fail\n";
 
-/** The first cell of each body row the grid shows, in order. */
+/** A body row's first data cell (past a selection checkbox, when there is one). */
+function lotOf(tr: HTMLElement): string {
+  return within(tr).getAllByRole("cell").find((td) => !td.querySelector("input"))!.textContent ?? "";
+}
+
+/** The first data cell of each body row the grid shows, in order. */
 function shownLots(): string[] {
   return screen
     .getAllByRole("row")
     .filter((tr) => tr.closest("tbody"))
-    .map((tr) => within(tr).getAllByRole("cell")[0]!.textContent ?? "");
+    .map(lotOf);
 }
 
 function renderLots(markings: MarkingStore, view = ON_FAIL) {
@@ -176,7 +181,7 @@ describe("a csv-table on a marking", () => {
     fireEvent.click(await screen.findByRole("button", { name: "show all" }));
     expect(shownLots()).toEqual(["A1", "B2", "C3"]);
     const marked = screen.getAllByRole("row").filter((tr) => tr.hasAttribute("data-marked"));
-    expect(marked.map((tr) => within(tr).getAllByRole("cell")[0]!.textContent)).toEqual(["B2"]);
+    expect(marked.map(lotOf)).toEqual(["B2"]);
   });
 
   it("shows every row and says so when it shares no column with the marking", async () => {
@@ -195,5 +200,68 @@ describe("a csv-table on a marking", () => {
     expect(await screen.findByText("B2")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /marking/i }), { target: { value: "fail" } });
     expect(shownLots()).toEqual(["A1"]);
+  });
+});
+
+// ── P2: selecting rows in a csv-table writes its marking ────────────────────
+
+function held(markings: MarkingStore): Record<string, string[]> | undefined {
+  const entry = markings.get("fail");
+  if (!entry) return undefined;
+  return Object.fromEntries(Object.entries(entry.marking).map(([k, v]) => [k, [...v].sort()]));
+}
+
+describe("selecting rows in a csv-table on a marking", () => {
+  it("writes the selected rows' `keys:` values, with this view as the source", async () => {
+    const markings = new MarkingStore();
+    renderLots(markings, `${ON_FAIL}keys: [lot]\n`);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "select row 2" }));
+    expect(held(markings)).toEqual({ lot: ["B2"] });
+    expect(markings.get("fail")!.source).toBe("/views/lots.ai.yaml");
+    // the table it was made in keeps every row, the selected one checked
+    expect(shownLots()).toEqual(["A1", "B2", "C3"]);
+    expect(screen.getByRole("checkbox", { name: "select row 2" })).toBeChecked();
+  });
+
+  it("writes a number cell as the chart writes it: 0.90 goes in as 0.9", async () => {
+    const markings = new MarkingStore();
+    renderLots(markings, `${ON_FAIL}keys: [yield]\n`);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "select row 2" }));
+    expect(held(markings)).toEqual({ yield: ["0.9"] });
+  });
+
+  it("without `keys:`, writes the columns the marking already holds", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { lot: new Set(["A1"]) }, "/views/chart.ai.yaml");
+    renderLots(markings);
+    fireEvent.click(await screen.findByRole("button", { name: "show all" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "select row 3" }));
+    expect(held(markings)).toEqual({ lot: ["A1", "C3"] });
+  });
+
+  it("select all marks every row shown, and again clears the marking", async () => {
+    const markings = new MarkingStore();
+    renderLots(markings, `${ON_FAIL}keys: [lot]\n`);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "select all rows" }));
+    expect(held(markings)).toEqual({ lot: ["A1", "B2", "C3"] });
+    fireEvent.click(screen.getByRole("checkbox", { name: "select all rows" }));
+    expect(markings.get("fail")).toBeUndefined();
+  });
+
+  it("writes nothing, and says why in the header, with no keys and an empty marking", async () => {
+    const markings = new MarkingStore();
+    renderLots(markings);
+    const box = await screen.findByRole("checkbox", { name: "select row 1" });
+    expect(box).toBeDisabled();
+    expect(screen.getByRole("note")).toHaveTextContent(/selecting rows marks nothing/i);
+    fireEvent.click(box);
+    expect(markings.get("fail")).toBeUndefined();
+  });
+
+  it("offers no selection at all on no marking — the grid is as it was", async () => {
+    const markings = new MarkingStore();
+    renderLots(markings, "view: csv-table\nsource: /data/lots.csv\n");
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 });

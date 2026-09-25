@@ -57,9 +57,12 @@ function load(storageKey: string | null): { name: string | null } | null {
 export function MarkingControl({
   value,
   onChange,
+  note = null,
 }: {
   value: string | null;
   onChange: (next: string | null) => void;
+  /** Why selecting in this view marks nothing (#847/#848 PR 5), or null. */
+  note?: string | null;
 }) {
   const names = useMarkingNames();
   const [naming, setNaming] = useState(false);
@@ -111,6 +114,11 @@ export function MarkingControl({
           />
           <button type="submit">Link</button>
         </form>
+      )}
+      {note && (
+        <span role="note" className="ev-marking__note">
+          {note}
+        </span>
       )}
     </span>
   );

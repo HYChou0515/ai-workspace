@@ -32,6 +32,7 @@ import {
   parseCsv,
   useFileBuffer,
   useTableMarking,
+  viewParam,
   viewParamString,
 } from "@aiws/view-sdk";
 
@@ -46,28 +47,44 @@ function Notice({ children }: { children: ReactNode }) {
 /** Reads the file. Split out so the `source`-missing case can return early in
  * the PARENT without a conditional hook — `useFileBuffer` must run on every
  * render of the component that owns it. */
-function CsvFromFile({ path, marking, viewKey }: { path: string; marking: string | null; viewKey?: string }) {
+function CsvFromFile({
+  path,
+  marking,
+  viewKey,
+  keys,
+  source,
+  onMarkingNote,
+}: {
+  path: string;
+  marking: string | null;
+  viewKey?: string;
+  keys: string[];
+  source: string | null;
+  onMarkingNote?: (note: string | null) => void;
+}) {
   const { entry } = useFileBuffer(path);
   const text = entry.status === "ready" ? entry.text : "";
   // Tab-separated files are as common as comma ones in exported lab data.
   const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
   const rows = useMemo(() => parseCsv(text, delimiter), [text, delimiter]);
   // On a marking (#847/#848 PR 5): the rows as the marking text a chart over
-  // the same file writes, lit by the platform's rule, under its bar.
+  // the same file writes, lit by the platform's rule, under its bar; and a
+  // checkbox per row, which writes the marking (`keys:`, else the marking's
+  // own columns). On no marking the grid has no checkboxes at all.
   const markingRows = useMemo(() => csvMarkingRows(rows), [rows]);
   const columns = useMemo(() => rows[0] ?? [], [rows]);
-  const table = useTableMarking({ marking, viewKey, rows: markingRows, columns });
+  const table = useTableMarking({ marking, viewKey, rows: markingRows, columns, keys, source, onNote: onMarkingNote });
   if (entry.status === "loading") return <Notice>Loading {path}…</Notice>;
   if (entry.status === "error") return <Notice>{entry.error ?? `could not read ${path}`}</Notice>;
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {table.bar}
-      <DataGrid rows={rows} show={table.shown} highlighted={table.highlighted} />
+      <DataGrid rows={rows} show={table.shown} highlighted={table.highlighted} select={table.select} />
     </div>
   );
 }
 
-export function CsvTableView({ spec, marking, viewKey }: EntityViewProps) {
+export function CsvTableView({ spec, path, marking, viewKey, onMarkingNote }: EntityViewProps) {
   // `source` is this kind's own key, so it isn't on `ViewSpec` — read it with
   // `viewParamString`, which hands back a string or nothing.
   const source = viewParamString(spec, "source")?.trim() ?? "";
@@ -76,5 +93,15 @@ export function CsvTableView({ spec, marking, viewKey }: EntityViewProps) {
   }
   // The header's marking control decides: the kind is registered `linkable`,
   // so the view header always hands it the marking the view is on.
-  return <CsvFromFile path={source} marking={marking ?? null} viewKey={viewKey} />;
+  const keys = viewParam(spec, "keys");
+  return (
+    <CsvFromFile
+      path={source}
+      marking={marking ?? null}
+      viewKey={viewKey}
+      keys={Array.isArray(keys) ? keys.filter((k): k is string => typeof k === "string") : []}
+      source={path ?? null}
+      onMarkingNote={onMarkingNote}
+    />
+  );
 }

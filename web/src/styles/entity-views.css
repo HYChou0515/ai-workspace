@@ -501,6 +501,13 @@ tr[data-marked] td {
 tr[data-marked] td:first-child {
   box-shadow: inset 3px 0 0 var(--accent);
 }
+/* the marking control's "why selecting here marks nothing" (#847/#848 PR 5) */
+.ev-marking__note {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  white-space: normal;
+  max-width: 36ch;
+}
 /* the bar above a table on a marking: "filtered by <name> · 3 of 25 rows · show all" */
 .ev-marking-bar {
   display: flex;

@@ -25,7 +25,7 @@ import { entityMarkingRow } from "../../lib/markingRows";
 import { refOptions, type RefIndex, type RefOption, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { selectColor } from "./selectColor";
-import { fieldText, roleOf } from "./shared";
+import { fieldText, roleOf, viewParam } from "./shared";
 import { sortRows } from "./sortRows";
 import { useTableMarking } from "./tableMarking";
 import { filterEntities, sortEntities, type SortDir, tableDragResult } from "./tableOps";
@@ -57,6 +57,8 @@ export function TableView({
   busy,
   marking,
   viewKey,
+  path,
+  onMarkingNote,
 }: EntityViewProps) {
   const allColumns = columnsFor(spec, type, entities);
   const readOnly = canWrite === false; // §E — disable inline edits for non-writers
@@ -84,9 +86,24 @@ export function TableView({
     for (const e of entities) for (const k of Object.keys(e.fields)) seen.add(k);
     return [...seen];
   }, [entities, type]);
-  const tableMarking = useTableMarking({ marking, viewKey, rows: markingRows, columns: recordColumns });
+  const keys = viewParam(spec, "keys");
+  const tableMarking = useTableMarking({
+    marking,
+    viewKey,
+    rows: markingRows,
+    columns: recordColumns,
+    keys: Array.isArray(keys) ? keys.filter((k): k is string => typeof k === "string") : [],
+    source: path ?? null,
+    onNote: onMarkingNote,
+  });
   const rows = tableMarking.shown.map((i) => ordered[i]!);
   const markedNumbers = new Set([...tableMarking.highlighted].map((i) => ordered[i]!.number));
+  // P2 — on a marking, a row's checkbox is "this row is marked": it reads and
+  // writes the marking (`useTableMarking`: the rows checked decide the values
+  // this table holds), never the batch selection below. Marking writes no
+  // record, so a member who cannot edit may still mark.
+  const markSelect = tableMarking.select;
+  const indexOf = new Map(ordered.map((e, i) => [e.number, i]));
 
   // click a header: none → asc → desc → none
   const cycleSort = (c: string) =>
@@ -108,16 +125,44 @@ export function TableView({
 
   // ── multi-select + batch (§A1) ─────────────────────────────────────────────
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
+  // On a marking the checkboxes are the marking's: a batch selection made
+  // before the view was put on one is dropped, so no batch toolbar or block
+  // drag acts on rows the checkboxes no longer show as selected.
+  if (markSelect && selected.size > 0) setSelected(new Set());
   const visibleNumbers = rows.map((r) => r.number);
-  const allSelected = visibleNumbers.length > 0 && visibleNumbers.every((n) => selected.has(n));
-  const toggleRow = (n: number) =>
+  const isChecked = (n: number) => (markSelect ? markSelect.checked.has(indexOf.get(n)!) : selected.has(n));
+  const allSelected = visibleNumbers.length > 0 && visibleNumbers.every(isChecked);
+  const toggleRow = (n: number) => {
+    if (markSelect) {
+      const next = new Set(markSelect.checked);
+      const i = indexOf.get(n)!;
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      markSelect.set(next);
+      return;
+    }
     setSelected((s) => {
       const next = new Set(s);
       if (next.has(n)) next.delete(n);
       else next.add(n);
       return next;
     });
-  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(visibleNumbers));
+  };
+  const toggleAll = () => {
+    if (markSelect) {
+      const next = new Set(markSelect.checked);
+      for (const n of visibleNumbers) {
+        if (allSelected) next.delete(indexOf.get(n)!);
+        else next.add(indexOf.get(n)!);
+      }
+      markSelect.set(next);
+      return;
+    }
+    setSelected(allSelected ? new Set() : new Set(visibleNumbers));
+  };
+  // §E — a read-only member gets no batch select; marking is open to them.
+  const showChecks = markSelect !== null || !readOnly;
+  const checksDisabled = markSelect !== null && !markSelect.enabled;
 
   // The closed-domain roles the issue calls out for batch edits (§A1).
   const batchFields = (type?.fields ?? []).filter((f) => f.role === "status" || f.role === "actor");
@@ -172,11 +217,12 @@ export function TableView({
         marked={markedNumbers.has(e.number)}
       >
         <td className="ev-table__check">
-          {!readOnly && (
+          {showChecks && (
             <input
               type="checkbox"
               aria-label={`select ${e.number}`}
-              checked={selected.has(e.number)}
+              checked={isChecked(e.number)}
+              disabled={checksDisabled}
               onChange={() => toggleRow(e.number)}
             />
           )}
@@ -276,9 +322,15 @@ export function TableView({
             <tr>
               {manualMode && <th className="ev-table__reorder" aria-hidden />}
               <th className="ev-table__check">
-                {/* §E — no multi-select / batch for a read-only member. */}
-                {!readOnly && (
-                  <input type="checkbox" aria-label="select all" checked={allSelected} onChange={toggleAll} />
+                {/* §E — no multi-select / batch for a read-only member (marking is open to them). */}
+                {showChecks && (
+                  <input
+                    type="checkbox"
+                    aria-label="select all"
+                    checked={allSelected}
+                    disabled={checksDisabled}
+                    onChange={toggleAll}
+                  />
                 )}
               </th>
               <th className="ev-table__num">#</th>

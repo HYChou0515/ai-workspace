@@ -224,6 +224,10 @@ export function EntityViewBody(props: EntityViewBodyProps) {
     props.viewKey,
     typeof fileMarking === "string" && fileMarking ? fileMarking : null,
   );
+  // #847/#848 PR 5 — the kind says why selecting in it marks nothing, and the
+  // marking control (where the person looks for "what is this view linked
+  // to") shows it.
+  const [markingNote, setMarkingNote] = useState<string | null>(null);
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
@@ -232,7 +236,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
-          {linkable && <MarkingControl value={marking} onChange={setMarking} />}
+          {linkable && <MarkingControl value={marking} onChange={setMarking} note={marking ? markingNote : null} />}
           {viewConfig && <ViewSettingsPanel config={viewConfig} />}
           {type && !renderer.suppressQuickCreate && canWrite && (
             <QuickCreate
@@ -288,7 +292,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           <div>No {spec.entity} records yet.</div>
         </div>
       ) : (
-        <Component {...props} {...(linkable ? { marking } : {})} />
+        <Component {...props} {...(linkable ? { marking, onMarkingNote: setMarkingNote } : {})} />
       )}
     </div>
   );
