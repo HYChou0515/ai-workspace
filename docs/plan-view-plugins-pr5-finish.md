@@ -189,6 +189,14 @@ words are examples, not spec keys.
     canvas overflows it at 1440 and is clipped at 390.
   - In a narrow pane "Save as table" ends past the pane's edge.
   - A 40-cell grid's first label read "1001", not "1000" (unverified).
+- **P29 — What P27/P28's demo showed.**
+  - A `grid`'s cells blur into each other at their edges (the raster is scaled with
+    smoothing); a cell is one flat colour with a sharp edge.
+  - A `stack: true` area on a quantitative x does not stack (two layers of 1s span
+    0–1); it stacks on a time or category x.
+  - The chart a selection is made in shows only its own brush box (16 lit) while every
+    other view shows what the marking lights (27): after a selection writes the marking,
+    that chart lights by the marking too.
 - **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
