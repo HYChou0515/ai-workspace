@@ -710,7 +710,10 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         ...(lit && !lit[r] ? { itemStyle: { opacity: DIM_OPACITY } } : {}),
       }));
       legend.push(...data.map((d) => d.name));
-      push({ type: "pie", data, radius: ["0%", "70%"], ...common(mark) }, all);
+      // laid out under the legend's row (as the cartesian grid's top is): in
+      // the whole chart, a short pane's pie reached up under the legend
+      // (#847/#848 PR 5 P30)
+      push({ type: "pie", data, radius: ["0%", "70%"], top: 48, ...common(mark) }, all);
       return;
     }
 
