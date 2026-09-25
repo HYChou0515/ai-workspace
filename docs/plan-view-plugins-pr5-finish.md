@@ -55,7 +55,10 @@ words are examples, not spec keys.
   box touches it.
 - **Where the gallery's sort and stack are computed.** They run in the sandbox half, as
   the gallery build does. The build cache key gains the sort column and statistic. A
-  stack is a query over the same cache, not a new build.
+  stack is a query against the built cache, not a new build.
+  *As built (951e69cf):* the cache holds only the colour column, so a stack reads the
+  source the cache names (checked against the version the cache recorded) once per
+  query; the browser keeps each answer per argument set.
 - **A − B.** "Set as B" takes the current selection. The panel shows A, B and A − B.
 - **Thumbnails** load lazily (IntersectionObserver). They are not cached across page
   loads. A layout card's panes each draw their own thumbnail.
@@ -77,6 +80,22 @@ words are examples, not spec keys.
   - (P7) Saving a marking's rows is a capability a plugin declares
     (`"provides": {"marking_rows": "<command>"}`); two plugins declaring it refuse boot.
     A chip saves exactly what it sent (a digest recorded at send), or refuses by name.
+  - (P10) First-open progress is polled from a progress file inside the plugin, not
+    streamed: a streamed run would need a platform streaming route and a new SDK hook,
+    and the sandbox already runs a second command beside a running one (a685ea8f).
+  - (P24) An entity table keeps each data column at least 6rem wide, which holds a
+    date or a status chip; a narrow pane scrolls sideways instead (26bfacaa).
+  - (P25) A line's points are hidden until hovered, rather than an axis-trigger
+    tooltip, which would change what a scatter layer in the same chart shows
+    (686b3533).
+  - (P26) A zone-less datum on a zoned axis is a wall time in the axis's zone; a wall
+    time the zone had twice or never is refused by name rather than guessed
+    (083369e0).
+  - (P29) In a stack on a quantitative or time axis, a series with no row at another
+    series' x counts as 0 there (plotly's `stackgaps: "infer zero"`), drawn clear and
+    mapped to no row (a90969cf); on a log y it is left empty instead, since 0 has no
+    place on a log axis (f86df895). A category axis is left to ECharts, which already
+    stacks by value.
   - (P8) "A scenario per feature" means one per feature **the model can show or read**:
     the gallery, the stack, a linked table, a saved selection (four scenarios). Box select
     (P3) is a gesture only a person makes, and a card thumbnail (P6) is drawn by the card
@@ -195,7 +214,8 @@ words are examples, not spec keys.
   - The enlarged gallery view's box is only as tall as the gallery: with few tiles the
     canvas overflows it at 1440 and is clipped at 390.
   - In a narrow pane "Save as table" ends past the pane's edge.
-  - A 40-cell grid's first label read "1001", not "1000" (unverified).
+  - A 40-cell grid's first label read "1001", not "1000" (unverified when written;
+    verified in Chromium and fixed in b85c8c03).
 - **P29 — What P27/P28's demo showed.**
   - A `grid`'s cells blur into each other at their edges (the raster is scaled with
     smoothing); a cell is one flat colour with a sharp edge.
