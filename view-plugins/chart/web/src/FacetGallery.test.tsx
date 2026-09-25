@@ -528,6 +528,42 @@ describe("FacetGallery", () => {
     expect(within(inDialog).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["ok", "off"]);
   });
 
+  it("fits the enlarged map to the width it has: at 390 px a fixed 384 px canvas ran off the right", () => {
+    // happy-dom lays nothing out: the dialog's width is stubbed to a phone's
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute("role") === "dialog" ? 342 : 0;
+    });
+    try {
+      view();
+      fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+      const canvas = screen.getByRole("dialog").querySelector("canvas") as HTMLCanvasElement;
+      // the dialog's width less its 12 px padding each side
+      expect(canvas.style.width).toBe("318px");
+      expect(canvas.style.height).toBe("318px");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("keeps the enlarged map at 384 px where there is room", () => {
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute("role") === "dialog" ? 1200 : 0;
+    });
+    try {
+      view();
+      fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+      expect((screen.getByRole("dialog").querySelector("canvas") as HTMLCanvasElement).style.width).toBe("384px");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("keeps the enlarged map at 384 px before anything is laid out (no width is not no room)", () => {
+    view(); // happy-dom: every clientWidth is 0
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    expect((screen.getByRole("dialog").querySelector("canvas") as HTMLCanvasElement).style.width).toBe("384px");
+  });
+
   it("draws no legend for a continuous gallery", () => {
     view();
     expect(screen.queryByRole("list", { name: "legend" })).toBeNull();

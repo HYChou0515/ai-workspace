@@ -60,6 +60,8 @@ const TILE_H = THUMB + LABEL + 8;
 const FALLBACK_VIEWPORT = { width: 800, height: 600 };
 const MAX_RECOVERIES = 2;
 const PROGRESS_POLL_MS = 1000;
+const ENLARGED_PX = 384; // an enlarged map's size, where the view has room
+const ENLARGED_PAD = 12;
 
 type RunData = { stdout: string; stderr: string; exit_code: number } | undefined;
 
@@ -311,6 +313,22 @@ function Enlarged({
   // any dialog is expected to close on it; closing gives focus back to what
   // opened it (the ⤢) rather than dropping it to the page
   const box = useRef<HTMLDivElement>(null);
+  // P21: as wide as the view allows, up to ENLARGED_PX -- a fixed 384 px ran
+  // off the right at 390 wide, and the cells there could not be hovered. The
+  // hover math reads the canvas's drawn box, so it follows the scale.
+  const [fit, setFit] = useState(ENLARGED_PX);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => {
+      const room = el.clientWidth - 2 * ENLARGED_PAD;
+      setFit(room > 0 ? Math.min(ENLARGED_PX, room) : ENLARGED_PX);
+    };
+    measure();
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    resize?.observe(el);
+    return () => resize?.disconnect();
+  }, []);
   useEffect(() => {
     const opener = document.activeElement;
     box.current?.focus({ preventScroll: true });
@@ -330,7 +348,7 @@ function Enlarged({
         e.stopPropagation();
         onClose();
       }}
-      style={{ position: "absolute", inset: 0, background: "var(--bg, #fff)", padding: 12, zIndex: 1 }}
+      style={{ position: "absolute", inset: 0, background: "var(--bg, #fff)", padding: ENLARGED_PAD, zIndex: 1 }}
     >
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <strong>{label}</strong>
@@ -341,7 +359,7 @@ function Enlarged({
       {httpError ? (
         <Notice role="alert">{httpError.message}</Notice>
       ) : image ? (
-        <Canvas image={image} size={384} onHover={setAt} />
+        <Canvas image={image} size={fit} onHover={setAt} />
       ) : (
         <Notice>Loading…</Notice>
       )}
