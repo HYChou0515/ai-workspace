@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # the chart skill's own guard (view-plugins/chart/sandbox-src/tests/
 # test_skill_examples.py) plus the Chinese words the guides are written in
-DOMAIN = re.compile(r"\b(lots?|wafers?|dies?|die_[xy]|yield|defects?|fab)\b|晶圓|良率|批號|機台", re.I)
+DOMAIN = re.compile(
+    r"\b(lots?|wafers?|dies?|die_[xy]|yield|defects?|fab)\b|晶圓|良率|批號|機台", re.I
+)
 
 COPIED = [
     "docs/view-plugin-chart.md",
