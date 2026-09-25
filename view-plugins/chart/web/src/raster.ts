@@ -172,3 +172,19 @@ export function paintCells(cells: Cells, table: Uint8ClampedArray, lit?: readonl
   }
   return { width: cells.width, height: cells.height, data };
 }
+
+/** `image` at `width` x `height` pixels, each pixel the cell its centre falls
+ * in (#847/#848 PR 5 P29): a cell is whole pixels of one colour with a sharp
+ * edge, at any size -- never a blend of two cells, as a smoothed scale makes. */
+export function upscale(image: RasterImage, width: number, height: number): RasterImage {
+  // a pixel is 4 bytes: copied as one 32-bit word
+  const src = new Uint32Array(image.data.buffer, image.data.byteOffset, image.width * image.height);
+  const data = new Uint8ClampedArray(width * height * 4);
+  const out = new Uint32Array(data.buffer);
+  const column = Array.from({ length: width }, (_, x) => Math.floor(((x + 0.5) * image.width) / width));
+  for (let y = 0; y < height; y++) {
+    const row = Math.floor(((y + 0.5) * image.height) / height);
+    for (let x = 0; x < width; x++) out[y * width + x] = src[row * image.width + column[x]];
+  }
+  return { width, height, data };
+}

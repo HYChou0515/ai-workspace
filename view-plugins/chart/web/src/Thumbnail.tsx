@@ -91,13 +91,16 @@ function StaticChart({ option }: { option: Record<string, unknown> }) {
     el.current.style.width = `${width / scale}px`;
     el.current.style.height = `${height / scale}px`;
     if (scale < 1) el.current.style.transform = `scale(${scale})`;
-    const chart = createChart(el.current);
+    // Its pixels are the screen's (#847/#848 PR 5 P29): at the screen's ratio
+    // the transform resampled the canvas smoothly and a grid's cells blurred.
+    // What is left (a fraction of a pixel) is composited nearest-neighbour.
+    const chart = createChart(el.current, { devicePixelRatio: window.devicePixelRatio * scale });
     chart.setOption(option, true);
     return () => chart.dispose();
   }, [option]);
   return (
     <div ref={box} style={{ width: "100%", height: "100%", overflow: "hidden" }}>
-      <div ref={el} style={{ transformOrigin: "0 0" }} />
+      <div ref={el} style={{ transformOrigin: "0 0", imageRendering: "pixelated" }} />
     </div>
   );
 }

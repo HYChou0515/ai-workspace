@@ -33,7 +33,8 @@ const chart = vi.hoisted(() => {
 });
 vi.mock("./echarts", () => ({ createChart: chart.createChart }));
 
-import { ChartView } from "./ChartView";
+import { ChartView, gridCanvas } from "./ChartView";
+import { lattice, upscale } from "./raster";
 
 const DOC = {
   view: "chart",
@@ -250,5 +251,65 @@ describe("ChartView", () => {
     }
     // every box from the panel down to the chart grows into the free height
     for (const el of chain) expect(el.style.flexGrow || el.style.flex.split(" ")[0]).toBe("1");
+  });
+});
+
+describe("the chart's canvas (#847/#848 PR 5 P29)", () => {
+  it("is composited nearest-neighbour: at a fractional pixel ratio the browser scales it by a fraction of a pixel", () => {
+    // measured in Chromium at 1.25 and 1.5: smoothed, that left one blended
+    // pixel at every cell edge of a grid drawn 1:1 inside it
+    run({ data: ok() });
+    view();
+    const drawnIn = (chart.createChart.mock.calls as unknown as [HTMLElement][])[0][0];
+    expect(drawnIn.style.imageRendering).toBe("pixelated");
+  });
+});
+
+describe("gridCanvas (#847/#848 PR 5 P29)", () => {
+  // happy-dom draws nothing: record what the canvas is handed instead
+  const put = vi.fn();
+  beforeEach(() => {
+    put.mockClear();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ putImageData: put } as never);
+    vi.stubGlobal(
+      "ImageData",
+      class {
+        constructor(
+          readonly data: Uint8ClampedArray,
+          readonly width: number,
+          readonly height: number,
+        ) {}
+      },
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const cells = lattice([0, 1, 2], [0, 0, 0], [0, 1, 2]);
+  const data = new Uint8ClampedArray(12);
+  for (let i = 0; i < 3; i++) data.set([i * 80, 0, 0, 255], i * 4);
+  const image = { width: 3, height: 1, data };
+
+  it("is the size it is asked for, each cell whole pixels of its colour", () => {
+    const canvas = gridCanvas({ cells, image }, { width: 7, height: 2 });
+    expect([canvas.width, canvas.height]).toEqual([7, 2]);
+    expect(put).toHaveBeenCalledTimes(1);
+    const [drawn, x, y] = put.mock.calls[0] as [ImageData, number, number];
+    expect([drawn.width, drawn.height, x, y]).toEqual([7, 2, 0, 0]);
+    expect(Array.from(drawn.data)).toEqual(Array.from(upscale(image, 7, 2).data));
+  });
+
+  it("paints once per image and size: a redraw at the same size reuses it", () => {
+    const a = gridCanvas({ cells, image }, { width: 9, height: 3 });
+    expect(gridCanvas({ cells, image }, { width: 9, height: 3 })).toBe(a);
+    expect(put).toHaveBeenCalledTimes(1);
+    const b = gridCanvas({ cells, image }, { width: 10, height: 3 });
+    expect(b).not.toBe(a);
+    expect([b.width, b.height]).toEqual([10, 3]);
+    const c = gridCanvas({ cells, image }, { width: 10, height: 4 });
+    expect(c).not.toBe(b);
+    expect([c.width, c.height]).toEqual([10, 4]);
   });
 });

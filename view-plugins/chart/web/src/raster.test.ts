@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { colourTable, lattice, MISSING, paintCells } from "./raster";
+import { colourTable, lattice, MISSING, paintCells, upscale } from "./raster";
 
 describe("lattice", () => {
   it("places each row's code at its (x, y) cell, row-major, top row = highest y", () => {
@@ -91,5 +91,28 @@ describe("paintCells", () => {
     const t = colourTable("sequential", 0, 1);
     expect(Array.from(img.data.slice(0, 4))).toEqual(Array.from(t.slice(0, 4)));
     expect(img.data[7]).toBe(0);
+  });
+});
+
+describe("upscale (#847/#848 PR 5 P29)", () => {
+  it("draws each cell as whole pixels of its own colour, at a size no multiple of the cells", () => {
+    // 3 x 2 cells, each its own colour (r = the cell's index)
+    const data = new Uint8ClampedArray(3 * 2 * 4);
+    for (let i = 0; i < 6; i++) data.set([i, 0, 0, 255], i * 4);
+    const big = upscale({ width: 3, height: 2, data }, 7, 5);
+    expect([big.width, big.height]).toEqual([7, 5]);
+    const cellAt = (x: number, y: number) => big.data[(y * 7 + x) * 4];
+    // each pixel is the cell its centre falls in: columns 0,0,1,1,1,2,2; rows 0,0,1,1,1
+    const expected = [0, 0, 1, 1, 1].map((r) => [0, 0, 1, 1, 1, 2, 2].map((c) => r * 3 + c));
+    expect(Array.from({ length: 5 }, (_, y) => Array.from({ length: 7 }, (_, x) => cellAt(x, y)))).toEqual(expected);
+    // nothing between two cells' colours: every pixel is opaque, green and blue 0
+    for (let i = 0; i < 35; i++) expect([big.data[i * 4 + 1], big.data[i * 4 + 2], big.data[i * 4 + 3]]).toEqual([0, 0, 255]);
+  });
+
+  it("keeps a clear cell clear and a dimmed one dimmed", () => {
+    const data = Uint8ClampedArray.from([10, 20, 30, 0, 40, 50, 60, 64]);
+    const big = upscale({ width: 2, height: 1, data }, 4, 2);
+    expect(Array.from(big.data.slice(0, 16))).toEqual([10, 20, 30, 0, 10, 20, 30, 0, 40, 50, 60, 64, 40, 50, 60, 64]);
+    expect(Array.from(big.data.slice(16))).toEqual(Array.from(big.data.slice(0, 16)));
   });
 });

@@ -155,6 +155,27 @@ describe("ChartThumbnail — a plot", () => {
     }
   });
 
+  it("draws a scaled-down chart at the pixels it shows, and composites it nearest-neighbour (P29)", async () => {
+    // Scaled down by a CSS transform, the canvas was resampled smoothly: a
+    // grid's cells blurred into each other. At the device pixel ratio times
+    // the scale its pixels are the screen's, and what is left is not smoothed.
+    const size = { clientWidth: 160, clientHeight: 80 };
+    const spies = Object.entries(size).map(([k, v]) => vi.spyOn(HTMLElement.prototype, k as never, "get").mockReturnValue(v as never));
+    vi.stubGlobal("devicePixelRatio", 2);
+    try {
+      draw(PLOT);
+      await waitFor(() => expect(chart.createChart).toHaveBeenCalled());
+      const [drawnIn, opts] = chart.createChart.mock.calls[0] as unknown as [HTMLElement, { devicePixelRatio: number }];
+      const scale = Number(/scale\(([\d.]+)\)/.exec(drawnIn.style.transform)?.[1]);
+      expect(scale).toBeLessThan(1);
+      expect(opts.devicePixelRatio).toBeCloseTo(2 * scale, 10);
+      expect(drawnIn.style.imageRendering).toBe("pixelated");
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("a box big enough is drawn at its own size, unscaled", async () => {
     const size = { clientWidth: 400, clientHeight: 250 };
     const spies = Object.entries(size).map(([k, v]) => vi.spyOn(HTMLElement.prototype, k as never, "get").mockReturnValue(v as never));

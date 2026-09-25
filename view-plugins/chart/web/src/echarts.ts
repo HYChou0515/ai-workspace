@@ -61,6 +61,8 @@ LineSeries.prototype.brushSelector = (i, data, selectors) => {
 
 export type Chart = echarts.ECharts;
 
-export function createChart(el: HTMLElement): Chart {
-  return echarts.init(el);
+/** `devicePixelRatio`: the canvas's pixels per CSS pixel, when not the
+ * screen's (a thumbnail drawn scaled down). */
+export function createChart(el: HTMLElement, opts: { devicePixelRatio?: number } = {}): Chart {
+  return echarts.init(el, null, opts);
 }

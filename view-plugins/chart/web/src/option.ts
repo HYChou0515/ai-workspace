@@ -84,8 +84,9 @@ export type Built = {
 
 export type Options = {
   /** Turn a grid's pixels into something ECharts can draw (a canvas, in the
-   * browser). Omitted in a host-free test, where the series draws nothing. */
-  gridImage?: (grid: { cells: Cells; image: RasterImage }) => unknown;
+   * browser), `size` DEVICE pixels across: ECharts draws it 1:1 (#847/#848
+   * PR 5 P29). Omitted in a host-free test, where the series draws nothing. */
+  gridImage?: (grid: { cells: Cells; image: RasterImage }, size: { width: number; height: number }) => unknown;
   /** #847 PR 3: per layer, the rows a NAMED MARKING lights, replacing the
    * spec's own `highlight:` bitset (`null` = this layer is not linked, drawn
    * undimmed). Omitted: the spec's highlight, as before. */
@@ -588,7 +589,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const levels = c?.kind === "cat" ? (c.levels ?? []) : null;
       const table = levels ? categoryTable(levels.length) : colourTable(scheme, c?.min ?? 0, c?.max ?? 0);
       const image = paintCells(cells, table, lit ?? undefined);
-      const source = opts.gridImage?.({ cells, image });
+      const paint = opts.gridImage;
       grids.push({ layer: li, seriesIndex: series.length, cells, image });
       visualMaps.push(
         levels
@@ -614,11 +615,21 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           type: "custom",
           silent: true,
           data: [[0, 0]],
-          renderItem: (_params: unknown, api: { coord: (p: number[]) => number[] }) => {
-            if (!source) return null;
+          renderItem: (_params: unknown, api: { coord: (p: number[]) => number[]; getDevicePixelRatio?: () => number }) => {
+            if (!paint) return null;
             const tl = api.coord([-0.5, cells.height - 0.5]);
             const br = api.coord([cells.width - 0.5, -0.5]);
-            return { type: "image", style: { image: source, x: tl[0], y: tl[1], width: br[0] - tl[0], height: br[1] - tl[1] } };
+            // ECharts draws an image smoothed, so a raster scaled to its box
+            // blurred every cell's edge into the next (#847/#848 PR 5 P29).
+            // On whole device pixels, and as many pixels as it covers, it is
+            // drawn 1:1: nothing is resampled at any pane size or pixel ratio.
+            const dpr = api.getDevicePixelRatio?.() ?? 1;
+            const [x0, y0, x1, y1] = [tl[0], tl[1], br[0], br[1]].map((v) => Math.round(v * dpr));
+            const size = { width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) };
+            return {
+              type: "image",
+              style: { image: paint({ cells, image }, size), x: x0 / dpr, y: y0 / dpr, width: size.width / dpr, height: size.height / dpr },
+            };
           },
         },
         [],

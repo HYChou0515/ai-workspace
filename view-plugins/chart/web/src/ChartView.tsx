@@ -17,16 +17,13 @@ import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, toOption } from "./option";
 import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
-import type { Cells, RasterImage } from "./raster";
+import { type Cells, type RasterImage, upscale } from "./raster";
 import { type BrushSelected, gridSelectionLit, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
 import { specErrors } from "./spec";
 import { viewCall } from "./viewCall";
 
 export const PLUGIN = "chart";
 const FORMAT = 1;
-/** A lattice is drawn at least this many pixels across before ECharts scales
- * it, nearest-neighbour, so its cells stay sharp-edged instead of smeared. */
-const RASTER_MIN_PX = 512;
 /** What ECharts paints a point outside the brush with, by default (echarts
  * component/brush/BrushModel.js DEFAULT_OUT_OF_BRUSH_COLOR): stated, so a
  * chart that stops lighting by its marking gets it back. */
@@ -41,23 +38,25 @@ function Notice({ role = "status", children }: { role?: "status" | "alert"; chil
   );
 }
 
-/** The grid's pixels as a canvas ECharts can draw, upscaled without smoothing. */
-export function gridCanvas({ image }: { cells: Cells; image: RasterImage }): HTMLCanvasElement {
-  const scale = Math.max(1, Math.ceil(RASTER_MIN_PX / Math.max(image.width, image.height, 1)));
-  const small = document.createElement("canvas");
-  small.width = image.width;
-  small.height = image.height;
-  const pixels = new Uint8ClampedArray(image.data); // an ArrayBuffer-backed copy, as ImageData requires
-  small.getContext("2d")?.putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
-  const big = document.createElement("canvas");
-  big.width = image.width * scale;
-  big.height = image.height * scale;
-  const ctx = big.getContext("2d");
-  if (ctx) {
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(small, 0, 0, big.width, big.height);
-  }
-  return big;
+/** The last canvas painted for each image: renderItem asks on every redraw. */
+const painted = new WeakMap<RasterImage, HTMLCanvasElement>();
+
+/** The grid's pixels as a canvas ECharts can draw, `size` device pixels
+ * across -- the box it is drawn in, so it is drawn 1:1 -- each cell whole
+ * pixels of its colour (#847/#848 PR 5 P29). */
+export function gridCanvas(
+  { image }: { cells: Cells; image: RasterImage },
+  size: { width: number; height: number },
+): HTMLCanvasElement {
+  const last = painted.get(image);
+  if (last && last.width === size.width && last.height === size.height) return last;
+  const big = upscale(image, size.width, size.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  canvas.getContext("2d")?.putImageData(new ImageData(big.data as Uint8ClampedArray<ArrayBuffer>, big.width, big.height), 0, 0);
+  painted.set(image, canvas);
+  return canvas;
 }
 
 export function readAnswer(stdout: string): Answer | string {
@@ -247,7 +246,10 @@ function Plot({
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{selected}</span>
         )}
       </div>
-      <div ref={el} style={{ flex: 1, minHeight: 0 }} />
+      {/* composited nearest-neighbour (P29): at a fractional pixel ratio
+          the browser scales the canvas by a fraction of a pixel, which,
+          smoothed, blended a grid's cells at every edge */}
+      <div ref={el} style={{ flex: 1, minHeight: 0, imageRendering: "pixelated" }} />
     </div>
   );
 }

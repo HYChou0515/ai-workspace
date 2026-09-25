@@ -85,6 +85,43 @@ describe("drawing callbacks", () => {
     expect([label(0), label(1), label(0.5), label(2)]).toEqual(["0", "1", "", ""]);
   });
 
+  it("puts the grid image on whole device pixels and asks for it that many pixels across (P29)", () => {
+    // ECharts draws an image smoothed: a raster scaled to its box blurred
+    // every cell edge into the next. Drawn 1:1, nothing is resampled.
+    const spec = {
+      ...base,
+      mark: "grid",
+      encoding: {
+        x: { field: "x", type: "ordinal" },
+        y: { field: "y", type: "ordinal" },
+        color: { field: "v", type: "quantitative" },
+      },
+    };
+    const a = answer(layer("grid", 2, { x: f64([0, 1]), y: f64([0, 0]), v: q8([0, 254], 0, 1) }));
+    const asked: unknown[] = [];
+    const gridImage = (_grid: unknown, size: unknown) => {
+      asked.push(size);
+      return { canvas: size };
+    };
+    const drawn = (toOption(spec, a, { gridImage }).option.series as { renderItem: Fn }[])[0];
+    // cells span (-4.95, 94.85) .. (15.65, 105.15) px; at 1.5 device px a px:
+    // (-7.425, 142.275) .. (23.475, 157.725), on whole pixels (-7, 142) .. (23, 158)
+    const odd = (p: number[]) => [p[0] * 10.3 + 0.2, 100 - p[1] * 10.3];
+    const got = (drawn.renderItem as (p: unknown, api: unknown) => { style: Record<string, number> })({}, {
+      coord: odd,
+      getDevicePixelRatio: () => 1.5,
+    });
+    expect(asked).toEqual([{ width: 30, height: 16 }]);
+    expect(got.style.image).toEqual({ canvas: { width: 30, height: 16 } });
+    const { x, y, width, height } = got.style;
+    expect([x, y, width, height].map((v) => v * 1.5)).toEqual([-7, 142, 30, 16]);
+    // a chart with no room (a collapsed pane) still asks for a pixel: a canvas
+    // of none cannot be painted (ImageData refuses a zero size)
+    asked.length = 0;
+    (drawn.renderItem as (p: unknown, api: unknown) => unknown)({}, { coord: () => [3, 3], getDevicePixelRatio: () => 2 });
+    expect(asked).toEqual([{ width: 1, height: 1 }]);
+  });
+
   it("draws an errorbar as a stem with two caps", () => {
     const spec = {
       ...base,
