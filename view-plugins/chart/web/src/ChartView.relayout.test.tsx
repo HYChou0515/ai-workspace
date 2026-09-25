@@ -25,10 +25,16 @@ const sdk = vi.hoisted(() => ({
   viewDocument: vi.fn((s: { __doc: unknown }) => s.__doc),
   registerViewKind: vi.fn(),
 }));
+// Every render of a Plot calls useMarking once: counting the calls counts renders.
+const renders = vi.hoisted(() => ({ n: 0 }));
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  const useMarking = (name: string | null) => {
+    renders.n += 1;
+    return hooks.useMarking(name);
+  };
+  return { ...sdk, useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
 });
 
 // The chart's own module, with each instance kept for the test: SSR at a fixed
@@ -331,5 +337,24 @@ describe("a pane reporting 0 px", () => {
     resize(0, 0);
     expect(layoutState(chart)).toEqual(compact);
     expect((chart.getOption() as { grid: { left: unknown }[] }).grid[0]!.left).toBe(8); // compact's
+  });
+});
+
+describe("a pane's height (P37, conformance N2)", () => {
+  it("is no new layout for a wide chart: a pane growing taller does not re-render it", () => {
+    mount(SCATTER, POINTS);
+    resize(600, 400);
+    const before = renders.n;
+    resize(600, 401);
+    resize(600, 437);
+    expect(renders.n).toBe(before);
+  });
+
+  it("(control) is a new layout for a compact one, whose plot keeps half of it", () => {
+    mount(SCATTER, POINTS);
+    resize(300, 400);
+    const before = renders.n;
+    resize(300, 437);
+    expect(renders.n).toBeGreaterThan(before);
   });
 });
