@@ -991,7 +991,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
 
 - chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文（去掉 frontmatter）
-  從約 5.5k（[#855](#pr-855) 的版本，實測 5547）變成約 5.9k 字元（5945）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
+  多了約 0.4k 字元（實測 +398；本文現在約 6.7k）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
   固定成本不變。
 
 - 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條，另外 agent 一條、
