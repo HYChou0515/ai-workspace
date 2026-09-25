@@ -1,10 +1,11 @@
 /**
- * #847/#848 PR 5 P35 row 7: every row is one piece of its stack, on any axis.
- * Rows of one series at one slot (a category, an x) stack in order, so a
- * stack of raw rows (no aggregate) reaches the per-slot SUM. Before, ECharts
- * stacked one series on another but drew a series' own rows at one category
- * over each other from 0: a horizontal bar of rows ended at 31.3 where the sum
- * was 79.38 (P34's demo).
+ * #847/#848 PR 5 P35 row 7: a stack of raw rows (no aggregate) reaches the
+ * per-slot SUM, on any axis. Before, ECharts stacked one series on another
+ * but drew a series' own rows at one category over each other from 0: a
+ * horizontal bar of rows ended at 31.3 where the sum was 79.38 (P34's demo).
+ * P35 made every row a piece of its stack (a series per row-rank); P37 row 12
+ * draws the rows of one series at one slot as ONE point, their sum, which
+ * stands for every one of them (echarts.stacksum.test.ts).
  *
  * Against REAL ECharts (SSR). The oracle is pandas: the per-category sums
  * below are `pd.DataFrame({"c": list("ppqpqqqr"), "g": list("aaabbbab"),
@@ -15,7 +16,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { describe, expect, it } from "vitest";
 
 import "./echarts"; // registers the chart's series + components
-import { type Answer, toOption } from "./option";
+import { type Answer, rowsAt, toOption } from "./option";
 import { type BrushSelected, selectionFromBrush, selectionFromLegend } from "./selection";
 import { answer, base, cat, f64, layer } from "./testAnswer";
 
@@ -46,16 +47,17 @@ const V = [3, 4, 7, 5, 1, 2, 6, 8];
 const SUMS = new Map([["p", 12], ["q", 16], ["r", 8]]); // pandas, above
 const rowsOf = () => answer(layer("bar", 8, { c: cat(C), g: cat(G), v: f64(V) }));
 
-/** Per category, the highest stacked top any of its rows reaches: how far the
- * stack is drawn there. Every value is positive, so that is the stack's end. */
+/** Per category, the highest stacked top any of its points reaches: how far
+ * the stack is drawn there. Every value is positive, so that is the stack's
+ * end. (A point's rows share its category: it is read from the first.) */
 function extents(model: Model, built: ReturnType<typeof toOption>, category: (row: number) => string): Map<string, number> {
   const out = new Map<string, number>();
   built.series.forEach((s, i) => {
     const data = model.getSeriesByIndex(i).getData();
     const top = data.getCalculationInfo("stackResultDimension");
     for (let j = 0; j < data.count(); j++) {
-      const row = s.rows[j];
-      if (row === null) continue;
+      const [row] = rowsAt(s.rows[j]);
+      if (row === undefined) continue;
       const c = category(row);
       out.set(c, Math.max(out.get(c) ?? 0, data.get(top, j)));
     }
@@ -71,7 +73,7 @@ const doc = (mark: object, x: object, y: object) => ({
 const horizontal = doc({ type: "bar", stack: true }, { field: "v", type: "quantitative" }, { field: "c", type: "nominal" });
 const upright = doc({ type: "bar", stack: true }, { field: "c", type: "nominal" }, { field: "v", type: "quantitative" });
 
-describe("rows stacked on a category axis reach their category's sum (P35 row 7)", () => {
+describe("rows stacked on a category axis reach their category's sum (P35 row 7, P37 row 12)", () => {
   it("a horizontal bar of rows ends at each category's sum (red before: rows of a series overlapped)", () => {
     const { chart, built, model } = draw(horizontal, rowsOf());
     expect(extents(model, built, (r) => C[r])).toEqual(SUMS);
@@ -95,22 +97,26 @@ describe("rows stacked on a category axis reach their category's sum (P35 row 7)
     chart.dispose();
   });
 
-  it("stacks the rows in order: a series' rows sit on each other, the next series on all of them", () => {
+  // P37 row 12 [supersedes P35's "stacks the rows in order: a series' rows
+  // sit on each other"]: a series' rows at one category are one point, their
+  // sum; the next series sits on all of them.
+  it("draws a series' rows at a category as their sum, and the next series on all of them", () => {
     const { chart, built, model } = draw(horizontal, rowsOf());
-    // row -> its stacked top: at p, a's rows 0 (3) and 1 (4), then b's row 3 (5)
-    const top = new Map<number, number>();
+    // a point's rows -> its stacked top
+    const top = new Map<string, number>();
     built.series.forEach((s, i) => {
       const data = model.getSeriesByIndex(i).getData();
       const dim = data.getCalculationInfo("stackResultDimension");
-      s.rows.forEach((r, j) => r !== null && top.set(r, data.get(dim, j)));
+      s.rows.forEach((r, j) => r !== null && top.set(String(r), data.get(dim, j)));
     });
-    expect([0, 1, 3].map((r) => top.get(r))).toEqual([3, 7, 12]);
+    // at p: a's rows 0 (3) and 1 (4), then b's row 3 (5)
+    expect([top.get("0,1"), top.get("3")]).toEqual([7, 12]);
     // at q: a's rows 2 (7) and 6 (6), then b's 4 (1) and 5 (2)
-    expect([2, 6, 4, 5].map((r) => top.get(r))).toEqual([7, 13, 14, 16]);
+    expect([top.get("2,6"), top.get("4,5")]).toEqual([13, 16]);
     chart.dispose();
   });
 
-  it("draws every piece of a series in that series' colour, and names it for the legend", () => {
+  it("draws each series in its own colour, and names it for the legend", () => {
     const { chart, built, model } = draw(horizontal, rowsOf());
     const fill = (i: number) => model.getSeriesByIndex(i).getData().getVisual("style").fill;
     const byName = new Map<string, Set<string>>();
@@ -121,41 +127,35 @@ describe("rows stacked on a category axis reach their category's sum (P35 row 7)
     chart.dispose();
   });
 
-  it("draws the pieces of a series with no colour channel in one colour", () => {
+  // P37 row 12 [supersedes P35's "draws the pieces of a series with no
+  // colour channel in one colour", which drew q's four rows as four series]
+  it("draws a stack with no colour channel as one series, nameless in the legend, ending at the sums", () => {
     const one = { ...base, mark: { type: "bar", stack: true }, encoding: { x: { field: "v", type: "quantitative" }, y: { field: "c", type: "nominal" } } };
     const { chart, built, model } = draw(one, rowsOf());
-    expect(built.series.length).toBe(4); // q has four rows: four pieces
-    const fills = new Set(built.series.map((_, i) => model.getSeriesByIndex(i).getData().getVisual("style").fill));
-    expect(fills.size).toBe(1);
+    expect(built.series.length).toBe(1);
     expect(built.names.every((n) => n === undefined)).toBe(true);
     expect(extents(model, built, (r) => C[r])).toEqual(SUMS);
     chart.dispose();
   });
 
-  it("paints every piece by a colour by value, not the first piece alone", () => {
+  // P37 row 12 [supersedes P35's "paints every piece by a colour by value"]:
+  // a sum of rows whose colour values differ has no one colour value (none,
+  // `stacksum`); a point of one row keeps its own, on the ramp.
+  it("paints a point of one row by its colour value, from the ramp", () => {
     const byValue = {
       ...base,
       mark: { type: "bar", stack: true },
       encoding: { x: { field: "v", type: "quantitative" }, y: { field: "c", type: "nominal" }, color: { field: "v", type: "quantitative" } },
     };
     const { chart, built, model } = draw(byValue, rowsOf());
-    expect(built.series.length).toBe(4); // q has four rows: four pieces
-    // every item's colour comes from the ramp: one value, one colour, whichever piece draws it
-    const colourOf = new Map<number, Set<string>>();
-    built.series.forEach((s, i) => {
-      const data = model.getSeriesByIndex(i).getData() as Data & { getItemVisual(j: number, k: string): { fill: string } };
-      s.rows.forEach((r, j) => r !== null && colourOf.set(V[r], (colourOf.get(V[r]) ?? new Set()).add(data.getItemVisual(j, "style").fill)));
-    });
-    const lowest = [...colourOf.get(1)!][0];
-    const highest = [...colourOf.get(8)!][0];
-    expect(lowest).not.toBe(highest);
-    // 4 (row 1) is drawn by a's second piece at p: coloured between the ends, not the palette's first colour
-    const piece = built.series.findIndex((s) => s.rows.includes(1));
-    expect(piece).toBeGreaterThan(0);
-    const fills = new Set(built.series.map((_, i) => model.getSeriesByIndex(i).getData().getVisual("style").fill));
-    const mid = [...colourOf.get(4)!][0];
-    expect([lowest, highest]).not.toContain(mid);
-    expect(fills).not.toContain(mid);
+    expect(built.series.length).toBe(1);
+    const data = model.getSeriesByIndex(0).getData() as Data & { getItemVisual(j: number, k: string): { fill: string } };
+    // r's one row (8, the highest value) against the ramp's top colour
+    const r = built.series[0].rows.indexOf(7);
+    const palette = (built.option.visualMap as { inRange: { color: string[] } }[])[0].inRange.color;
+    const top = palette.at(-1)!;
+    const rgba = `rgba(${[1, 3, 5].map((k) => parseInt(top.slice(k, k + 2), 16)).join(",")},1)`;
+    expect(data.getItemVisual(r, "style").fill).toBe(rgba);
     chart.dispose();
   });
 
@@ -166,20 +166,21 @@ describe("rows stacked on a category axis reach their category's sum (P35 row 7)
     }
   });
 
-  it("maps a gesture on any piece to its own row: a brush, the legend, the tooltip", () => {
+  // P37 row 12 [supersedes P35's "maps a gesture on any piece to its own
+  // row"]: a gesture on a sum maps to every row it stands for
+  it("maps a gesture on a summed point to its rows: a brush, the legend, the tooltip", () => {
     const { chart, built } = draw(horizontal, rowsOf());
-    // the piece that draws row 1 (a's second row at p)
-    const i = built.series.findIndex((s) => s.rows.includes(1));
-    const j = built.series[i].rows.indexOf(1);
-    expect(i).toBeGreaterThan(0); // not a's first piece
+    // the point that draws rows 0 and 1 (a at p)
+    const j = built.series[0].rows.findIndex((r) => Array.isArray(r) && r.includes(1));
+    expect(built.series[0].rows[j]).toEqual([0, 1]);
     const brushed: BrushSelected = {
-      batch: [{ areas: [{ brushType: "rect", coordRange: [[0, 99], [0, 9]] }], selected: [{ seriesIndex: i, dataIndex: [j] }] }],
+      batch: [{ areas: [{ brushType: "rect", coordRange: [[0, 99], [0, 9]] }], selected: [{ seriesIndex: 0, dataIndex: [j] }] }],
     };
-    expect(selectionFromBrush(brushed, built)).toEqual([{ source: "brush", layer: 0, rows: [1] }]);
-    // hiding b leaves every row of a, from all of a's pieces
+    expect(selectionFromBrush(brushed, built)).toEqual([{ source: "brush", layer: 0, rows: [0, 1] }]);
+    // hiding b leaves every row of a
     expect(selectionFromLegend({ a: true, b: false }, built)).toEqual([{ source: "legend", layer: 0, rows: [0, 1, 2, 6] }]);
     const tip = (built.option.tooltip as { formatter: (p: object) => string }).formatter;
-    expect(tip({ seriesIndex: i, dataIndex: j })).toContain("<b>4</b>");
+    expect(tip({ seriesIndex: 0, dataIndex: j })).toContain("<b>7</b> (sum of 2 rows)");
     chart.dispose();
   });
 });

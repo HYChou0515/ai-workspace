@@ -14,7 +14,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { describe, expect, it } from "vitest";
 
 import "./echarts"; // registers the chart's series + components
-import { type Answer, toOption } from "./option";
+import { type Answer, rowsAt, toOption } from "./option";
 import { answer, base, cat, f64, layer } from "./testAnswer";
 
 echarts.use([SVGRenderer]);
@@ -85,7 +85,7 @@ function tops(model: Model, built: ReturnType<typeof toOption>): Map<number, num
   built.series.forEach((s, i) => {
     const data = model.getSeriesByIndex(i).getData();
     const dim = data.getCalculationInfo("stackResultDimension");
-    s.rows.forEach((r, j) => r !== null && out.set(r, data.get(dim, j)));
+    s.rows.forEach((r, j) => rowsAt(r).forEach((row) => out.set(row, data.get(dim, j))));
   });
   return out;
 }

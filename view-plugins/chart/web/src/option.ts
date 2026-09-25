@@ -65,9 +65,16 @@ export type ChartSpec = Record<string, unknown> & {
   layer?: LayerSpec[];
 };
 
-/** `rows[j]` is the layer row data point j draws; null for a point a stack
- * adds to line its series up (`lineUpStacks`), which draws none. */
-export type SeriesRows = { layer: number; rows: (number | null)[] };
+/** `rows[j]` is the layer row data point j draws; a list of rows for a
+ * stack's point that draws their SUM and stands for every one of them (PR 5
+ * P37 row 12, `stackPoints`); null for a point a stack adds to line its
+ * series up (`lineUpStacks`), which draws none. */
+export type SeriesRows = { layer: number; rows: (number | number[] | null)[] };
+
+/** The layer rows a series' point `entry` stands for (none for a filler). */
+export function rowsAt(entry: number | number[] | null | undefined): number[] {
+  return entry === null || entry === undefined ? [] : Array.isArray(entry) ? entry : [entry];
+}
 
 export type GridLayer = { layer: number; seriesIndex: number; cells: Cells; image: RasterImage };
 
@@ -488,7 +495,8 @@ type Point = (number | null)[];
 type Item = Point | { value: Point; [style: string]: unknown };
 
 /** #847/#848 PR 5 P29: a stack on a number, log or time x, as ECharts draws
- * one on a category x. ECharts matches a stack's points by x VALUE only on a
+ * one on a category x. A series of a stack has one point per slot at most
+ * (`stackPoints`). ECharts matches a stack's points by x VALUE only on a
  * category axis; on any other it adds point j to point j of the series under
  * it, and on a number x it stacks the first number dimension it finds -- x
  * itself (echarts data/helper/dataStackHelper.js). So here every series of a
@@ -496,9 +504,9 @@ type Item = Point | { value: Point; [style: string]: unknown };
  * saying which is which. On a category axis (`category`: the base axis is
  * one, `at` its place in a point) ECharts matches by category and stacks the
  * value, so the points keep their order of dimensions; they get the same
- * slots all the same (PR 5 P36 row 11): a piece (`pieces`) with no row at a
- * category drew its line, and an area's fill, straight across it, where it
- * has no data. A series with no row at a slot gets a point of 0
+ * slots all the same (PR 5 P36 row 11): a series with no row at a category
+ * drew its line, and an area's fill, straight across it, where it has no
+ * data. A series with no row at a slot gets a point of 0
  * there (plotly's `stackgaps: "infer zero"`): clear, never highlighted, no
  * tooltip, and no row -- a gesture over it selects nothing. On a `log` y a 0
  * has no place, so a filler with nothing beneath it (no row of a series below
@@ -523,8 +531,8 @@ function lineUpStacks(
     return Array.isArray(d) ? value : { ...d, value };
   };
   for (const members of stacks.values()) {
-    // per series: x → the index of its point there -- one at most: a series of
-    // a stack is one of its pieces (`pieces`)
+    // per series: x → the index of its point there -- one at most: a stacked
+    // series draws the sum of its rows at a slot as one point (`stackPoints`)
     const where = members.map((i) => new Map((series[i].data as Item[]).map((d, j) => [valueOf(d)[at], j])));
     const slots = [...new Set(where.flatMap((m) => [...m.keys()]))].sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
     // the slots where a series below has a value a log axis can place:
@@ -535,7 +543,7 @@ function lineUpStacks(
       const old = series[i].data as Item[];
       const was = rows[i].rows;
       const data: Item[] = [];
-      const drawn: (number | null)[] = [];
+      const drawn: SeriesRows["rows"] = [];
       for (const x of slots) {
         const j = where[k].get(x);
         if (j === undefined) {
@@ -561,23 +569,23 @@ function lineUpStacks(
   }
 }
 
-/** #847/#848 PR 5 P35 row 7: every row is one piece of its stack, on any
- * axis. ECharts stacks one SERIES on another, never a series' own points, so
- * two rows of one series at one slot (a category, an x) were drawn from the
- * same base, over each other. Here a series' rows become pieces: piece k holds
- * its k-th row at each slot, in row order, and the pieces follow each other in
- * the stack. With `slotOf` null (no stack) the rows stay one series. */
-function pieces(members: number[], slotOf: ((r: number) => number | null) | null): number[][] {
-  if (!slotOf) return [members];
-  const seen = new Map<number | null, number>();
-  const out: number[][] = [];
+/** #847/#848 PR 5 P37 row 12: a stacked series' points, one per slot. ECharts
+ * stacks one SERIES on another, never a series' own points, so two rows of
+ * one series at one slot (a category, an x) were drawn from the same base,
+ * over each other (P35 row 7). Here the rows of a series at one slot are one
+ * point, which draws their SUM and stands for all of them: a list of rows
+ * (one row stays a number). P35 split the rows into one series per row-rank
+ * instead: a slot with 10,000 rows was 10,000 series, each lined up at every
+ * slot. This is one pass over the rows, and one point per slot. */
+function stackPoints(members: number[], slotOf: (r: number) => number | null): (number | number[])[] {
+  const at = new Map<number | null, number[]>();
   for (const r of members) {
     const slot = slotOf(r);
-    const k = seen.get(slot) ?? 0;
-    seen.set(slot, k + 1);
-    (out[k] ??= []).push(r);
+    const list = at.get(slot);
+    if (list) list.push(r);
+    else at.set(slot, [r]);
   }
-  return out;
+  return [...at.values()].map((rows) => (rows.length === 1 ? rows[0] : rows));
 }
 
 /** `doc` is a chart document that already passed `specErrors`. */
@@ -654,11 +662,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const all = Array.from({ length: n }, (_, i) => i);
     // `highlight:` — an unlit row is drawn dimmed in its own data item.
     const lit = opts.lit ? (opts.lit[li] ?? null) : litRows(wire);
-    const item = <T,>(value: T, row: number): T | { value: T; itemStyle: { opacity: number } } =>
-      lit && !lit[row] ? { value, itemStyle: { opacity: DIM_OPACITY } } : value;
+    // a stack's summed point is lit if any of the rows it stands for is
+    // (P37 row 12)
+    const item = <T,>(value: T, row: number | number[]): T | { value: T; itemStyle: { opacity: number } } =>
+      lit && !rowsAt(row).some((r) => lit[r]) ? { value, itemStyle: { opacity: DIM_OPACITY } } : value;
     // `as`: the series' legend name when its ECharts name is not one (a
-    // stack's piece named for its palette colour alone)
-    const push = (s: Record<string, unknown>, r: number[], as?: { legend: string | undefined }) => {
+    // layer with no colour split, named for its palette colour alone)
+    const push = (s: Record<string, unknown>, r: (number | number[])[], as?: { legend: string | undefined }) => {
       series.push(s);
       rows.push({ layer: li, rows: r });
       names.push(as ? as.legend : typeof s.name === "string" ? s.name : undefined);
@@ -929,70 +939,92 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const textCol = enc.text?.field ? cols[enc.text.field] : undefined;
     const stacked = (mark.type === "area" || mark.type === "bar") && mark.stack === true;
     const first = series.length;
-    const slotOf = stacked ? (r: number) => point(li, r)[baseAt] : null;
-    for (const key of order) {
-      for (const members of pieces(groups.get(key) ?? [], slotOf)) {
-        const type = mark.type === "area" ? "line" : mark.type === "text" ? "scatter" : mark.type;
-        const s: Record<string, unknown> = {
-          type,
-          data: members.map((r) => item(point(li, r, extras.map((c) => c.value(r) as number | null)), r)),
-          ...common(mark),
-        };
-        if (splitCol) {
-          s.name = key;
-          legend.push(key); // one entry per name: the legend reads a set
-        } else {
-          // No legend name, but one name for all a stack's pieces: ECharts gives
-          // a series its palette colour by name (a nameless one by its index).
-          s.name = `\u0000layer ${li}`;
-        }
-        if (symbolSize !== undefined) s.symbolSize = symbolSize;
-        if (mark.type === "area") s.areaStyle = { opacity: mark.opacity ?? 0.7 };
-        else if (mark.opacity !== undefined) s.itemStyle = { ...(s.itemStyle as object), opacity: mark.opacity };
-        // A line is its stroke: itemStyle alone faded only the (hidden) points.
-        if (mark.type === "line" && mark.opacity !== undefined) s.lineStyle = { opacity: mark.opacity };
-        if (mark.type === "line" || mark.type === "area") {
-          // A highlight dims POINTS, so a highlighted line shows them.
-          const drawn = mark.point ?? lit !== null;
-          // A line's points are always there to hover (#847/#848 PR 5 P25): the
-          // tooltip is an item tooltip, a point is the item, and with no points
-          // hovering a line showed nothing. Undrawn ones are clear until hovered.
-          s.showSymbol = true;
-          if (!drawn) {
-            s.itemStyle = { ...(s.itemStyle as object), opacity: 0 };
-            s.emphasis = { ...(s.emphasis as object), itemStyle: { opacity: 1 } };
-            // hovering one blurs the rest, which must stay clear (at the blur's
-            // 0.15 each showed as a faint ring)
-            s.blur = { ...(s.blur as object), itemStyle: { opacity: 0 } };
-            // a dimmed point's own opacity would draw it (`point: false` with a
-            // highlight): here the points stay clear
-            s.data = members.map((r) => point(li, r, extras.map((c) => c.value(r) as number | null)));
-          }
-          if (mark.smooth) s.smooth = true;
-        }
-        if (stacked) s.stack = "stack";
-        // Large mode drops per-point styles, so a highlighted layer keeps it off.
-        if (mark.type === "scatter" && n > 2000 && !lit) s.large = true;
-        if (textCol) {
-          // By the series' drawn rows, not `members`: a stack lined up below re-orders
-          // its points and adds fillers, which carry no row (round 16 defect D2).
-          s.label = {
-            show: true,
-            formatter: (p: { seriesIndex: number; dataIndex: number }) => {
-              const row = rows[p.seriesIndex]?.rows[p.dataIndex];
-              return row === undefined || row === null ? "" : show(textCol, row);
-            },
-          };
-        }
-        push(s, members, { legend: splitCol ? key : undefined });
+    const valueAt = baseAt === 1 ? 0 : 1;
+    // A point's position and extras: a row's own, or a stack's sum of rows
+    // (`stackPoints`) -- its slot, the sum of their values (none when no row
+    // has one), and each extra (a colour or size by value) where the rows
+    // share one value, else none: a sum has no one colour value.
+    const pointOf = (entry: number | number[]): (number | null)[] => {
+      if (!Array.isArray(entry)) return point(li, entry, extras.map((c) => c.value(entry) as number | null));
+      const [r0] = entry;
+      const out = point(li, r0);
+      let sum: number | null = null;
+      for (const r of entry) {
+        const v = point(li, r)[valueAt];
+        // (a row with no value adds nothing, as pandas' sum skips it)
+        if (typeof v === "number") sum = (sum ?? 0) + v;
       }
+      out[valueAt] = sum;
+      for (const c of extras) {
+        const v = c.value(r0) as number | null;
+        out.push(entry.every((r) => c.value(r) === v) ? v : null);
+      }
+      return out;
+    };
+    for (const key of order) {
+      const rowsOfKey = groups.get(key) ?? [];
+      const members: (number | number[])[] = stacked ? stackPoints(rowsOfKey, (r) => point(li, r)[baseAt]) : rowsOfKey;
+      const type = mark.type === "area" ? "line" : mark.type === "text" ? "scatter" : mark.type;
+      const s: Record<string, unknown> = {
+        type,
+        data: members.map((r) => item(pointOf(r), r)),
+        ...common(mark),
+      };
+      if (splitCol) {
+        s.name = key;
+        legend.push(key); // one entry per name: the legend reads a set
+      } else {
+        // No legend name, but a name: ECharts gives a series its palette
+        // colour by name (a nameless one by its index).
+        s.name = `\u0000layer ${li}`;
+      }
+      if (symbolSize !== undefined) s.symbolSize = symbolSize;
+      if (mark.type === "area") s.areaStyle = { opacity: mark.opacity ?? 0.7 };
+      else if (mark.opacity !== undefined) s.itemStyle = { ...(s.itemStyle as object), opacity: mark.opacity };
+      // A line is its stroke: itemStyle alone faded only the (hidden) points.
+      if (mark.type === "line" && mark.opacity !== undefined) s.lineStyle = { opacity: mark.opacity };
+      if (mark.type === "line" || mark.type === "area") {
+        // A highlight dims POINTS, so a highlighted line shows them.
+        const drawn = mark.point ?? lit !== null;
+        // A line's points are always there to hover (#847/#848 PR 5 P25): the
+        // tooltip is an item tooltip, a point is the item, and with no points
+        // hovering a line showed nothing. Undrawn ones are clear until hovered.
+        s.showSymbol = true;
+        if (!drawn) {
+          s.itemStyle = { ...(s.itemStyle as object), opacity: 0 };
+          s.emphasis = { ...(s.emphasis as object), itemStyle: { opacity: 1 } };
+          // hovering one blurs the rest, which must stay clear (at the blur's
+          // 0.15 each showed as a faint ring)
+          s.blur = { ...(s.blur as object), itemStyle: { opacity: 0 } };
+          // a dimmed point's own opacity would draw it (`point: false` with a
+          // highlight): here the points stay clear
+          s.data = members.map(pointOf);
+        }
+        if (mark.smooth) s.smooth = true;
+      }
+      if (stacked) s.stack = "stack";
+      // Large mode drops per-point styles, so a highlighted layer keeps it off.
+      if (mark.type === "scatter" && n > 2000 && !lit) s.large = true;
+      if (textCol) {
+        // By the series' drawn rows, not `members`: a stack lined up below re-orders
+        // its points and adds fillers, which carry no row (round 16 defect D2).
+        s.label = {
+          show: true,
+          formatter: (p: { seriesIndex: number; dataIndex: number }) => {
+            // (a stack's sum of rows is no one row's text)
+            const row = rows[p.seriesIndex]?.rows[p.dataIndex];
+            return typeof row === "number" ? show(textCol, row) : "";
+          },
+        };
+      }
+      push(s, members, { legend: splitCol ? key : undefined });
     }
-    // a colour by value paints every piece of the layer, not the first alone
+    // a colour by value paints every series of the layer, not the first alone
     if (colourVisual) colourVisual.seriesIndex = Array.from({ length: series.length - first }, (_, k) => first + k);
   });
   // On any axis (PR 5 P36 row 11): on a category one ECharts stacks by
-  // category itself (round 16 defect D1), but a piece (`pieces`) with no row
-  // at a category needs its 0 there all the same. Whether the stacked value's
+  // category itself (round 16 defect D1), but a series with no row at a
+  // category needs its 0 there all the same. Whether the stacked value's
   // axis is a log one is read from the axis the chart built, whatever the
   // spec's shape: a `layer:` spec has no top-level encoding to read it from
   // (PR 5 P34).
@@ -1000,6 +1032,30 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     category: (baseAt === 1 ? yAxis : xAxis)?.kind === "category",
     at: baseAt,
   });
+
+  // A stack's point that draws the sum of several rows (P37 row 12): its
+  // value is the sum -- read from the point drawn, so the tooltip says what
+  // the bar shows -- and it says so and of how many rows; of the other
+  // fields, what every one of those rows shares -- its slot, its colour -- is
+  // said, and what differs between them is not: it is no one row.
+  const sumTip = (enc: Encoding, cols: Record<string, Column>, sum: number[], drawn: Item): string => {
+    const valueField = (baseAt === 1 ? enc.x : enc.y)?.field;
+    // off a category axis a stack's points list the value first (`lineUpStacks`)
+    const onCategory = (baseAt === 1 ? yAxis : xAxis)?.kind === "category";
+    const total = (Array.isArray(drawn) ? drawn : drawn.value)[onCategory ? (baseAt === 1 ? 0 : 1) : 0];
+    const lines = tooltipChannels(enc).flatMap((c) => {
+      const col = cols[c.field!];
+      if (!col) return [];
+      const title = escape(c.title ?? c.field!);
+      if (c.field === valueField) {
+        const shown = total === null ? "—" : Number.isInteger(total) ? String(total) : String(Number(total.toPrecision(6)));
+        return [`${title}: <b>${escape(shown)}</b> (sum of ${sum.length.toLocaleString("en-US")} rows)`];
+      }
+      const text = show(col, sum[0]);
+      return sum.every((r) => show(col, r) === text) ? [`${title}: <b>${escape(text)}</b>`] : [];
+    });
+    return lines.join("<br/>");
+  };
 
   const tooltip = {
     trigger: "item",
@@ -1011,6 +1067,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       if (row === undefined || row === null) return "";
       const enc = specs[where.layer].encoding;
       const cols = decoded[where.layer];
+      if (Array.isArray(row)) return sumTip(enc, cols, row, (series[p.seriesIndex].data as Item[])[p.dataIndex]);
       const lines = tooltipChannels(enc)
         .filter((c) => cols[c.field!])
         .map((c) => `${escape(c.title ?? c.field!)}: <b>${escape(show(cols[c.field!], row))}</b>`);
