@@ -84,7 +84,11 @@ export function selectionFromBrush(event: BrushSelected, built: Built): Selectio
   for (const s of event.batch[0]?.selected ?? []) {
     const map = built.series[s.seriesIndex];
     if (!map) continue;
-    for (const i of s.dataIndex) if (map.rows[i] !== undefined) pairs.push([map.layer, map.rows[i]]);
+    for (const i of s.dataIndex) {
+      const row = map.rows[i];
+      // (null: a point a stack added, which draws no row)
+      if (row !== undefined && row !== null) pairs.push([map.layer, row]);
+    }
   }
   for (const g of built.grids) {
     const cells = g.cells;
@@ -107,12 +111,13 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
   built.series.forEach((s, i) => {
     const slices = built.slices[i];
     if (slices) {
-      // A pie's legend entries are its slices, one per row.
-      s.rows.forEach((r, j) => selected[slices[j]] !== false && pairs.push([s.layer, r]));
+      // A pie's legend entries are its slices, one per row (a pie is never
+      // stacked, so every slice draws one).
+      s.rows.forEach((r, j) => selected[slices[j]] !== false && pairs.push([s.layer, r as number]));
       return;
     }
     const name = built.names[i];
-    if (name !== undefined && selected[name] !== false) for (const r of s.rows) pairs.push([s.layer, r]);
+    if (name !== undefined && selected[name] !== false) for (const r of s.rows) if (r !== null) pairs.push([s.layer, r]);
   });
   return group("legend", pairs);
 }

@@ -65,7 +65,9 @@ export type ChartSpec = Record<string, unknown> & {
   layer?: LayerSpec[];
 };
 
-export type SeriesRows = { layer: number; rows: number[] };
+/** `rows[j]` is the layer row data point j draws; null for a point a stack
+ * adds to line its series up (`lineUpStacks`), which draws none. */
+export type SeriesRows = { layer: number; rows: (number | null)[] };
 
 export type GridLayer = { layer: number; seriesIndex: number; cells: Cells; image: RasterImage };
 
@@ -432,6 +434,68 @@ function range(col: Column): [number, number] {
     }
   }
   return lo <= hi ? [lo, hi] : [0, 0];
+}
+
+type Point = (number | null)[];
+type Item = Point | { value: Point; [style: string]: unknown };
+
+/** #847/#848 PR 5 P29: a stack on a number, log or time x, as ECharts draws
+ * one on a category x. ECharts matches a stack's points by x VALUE only on a
+ * category axis; on any other it adds point j to point j of the series under
+ * it, and on a number x it stacks the first number dimension it finds -- x
+ * itself (echarts data/helper/dataStackHelper.js). So here every series of a
+ * stack gets the same x slots, in x order, and lists y first with `encode`
+ * saying which is which. A series with no row at a slot gets a point of 0
+ * there (plotly's `stackgaps: "infer zero"`): clear, never highlighted, no
+ * tooltip, and no row -- a gesture over it selects nothing. */
+function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[]): void {
+  const stacks = new Map<unknown, number[]>();
+  series.forEach((s, i) => {
+    if (s.stack) stacks.set(s.stack, [...(stacks.get(s.stack) ?? []), i]);
+  });
+  const valueOf = (d: Item): Point => (Array.isArray(d) ? d : d.value);
+  const yFirst = (d: Item): Item => {
+    const [x, y, ...rest] = valueOf(d);
+    const value = [y, x, ...rest];
+    return Array.isArray(d) ? value : { ...d, value };
+  };
+  for (const members of stacks.values()) {
+    // per series: x → the indices of its points there, in order
+    const at = members.map((i) => {
+      const m = new Map<number | null, number[]>();
+      (series[i].data as Item[]).forEach((d, j) => {
+        const x = valueOf(d)[0];
+        m.set(x, [...(m.get(x) ?? []), j]);
+      });
+      return m;
+    });
+    // a slot per x and per point there: two rows of one series at one x stack by order
+    const width = new Map<number | null, number>();
+    for (const m of at) for (const [x, js] of m) width.set(x, Math.max(width.get(x) ?? 0, js.length));
+    const slots = [...width.keys()].sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
+    members.forEach((i, k) => {
+      const old = series[i].data as Item[];
+      const was = rows[i].rows;
+      const data: Item[] = [];
+      const drawn: (number | null)[] = [];
+      for (const x of slots) {
+        const js = at[k].get(x) ?? [];
+        for (let n = 0; n < (width.get(x) as number); n++) {
+          const j = js[n];
+          if (j === undefined) {
+            data.push({ value: [0, x], itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
+            drawn.push(null);
+          } else {
+            data.push(yFirst(old[j]));
+            drawn.push(was[j]);
+          }
+        }
+      }
+      series[i].data = data;
+      series[i].encode = { x: 1, y: 0 };
+      rows[i].rows = drawn;
+    });
+  }
 }
 
 /** `doc` is a chart document that already passed `specErrors`. */
@@ -802,6 +866,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       push(s, members);
     }
   });
+  if (xAxis?.kind !== "category") lineUpStacks(series, rows);
 
   const tooltip = {
     trigger: "item",
@@ -810,7 +875,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const where = rows[p.seriesIndex];
       if (!where) return "";
       const row = where.rows[p.dataIndex];
-      if (row === undefined) return "";
+      if (row === undefined || row === null) return "";
       const enc = specs[where.layer].encoding;
       const cols = decoded[where.layer];
       const lines = tooltipChannels(enc)
