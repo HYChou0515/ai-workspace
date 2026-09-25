@@ -720,16 +720,19 @@ export function FacetGallery({
   if (build.error) return <Notice role="alert">{build.error.message}</Notice>;
   if (build.data && build.data.exit_code !== 0 && build.data.exit_code !== UNUSABLE)
     return <Notice role="alert">{build.data.stderr.trim() || `exit ${build.data.exit_code}`}</Notice>;
+  // P22: "Building" only once a build is running -- it writes its first
+  // progress line before it reads anything. A reopen on a kept cache answers
+  // without building and writes none: that is just opening.
   if (!built)
-    return (
+    return progressLines.length > 0 ? (
       <Notice>
         {"Building the gallery in the sandbox…"}
-        {progressLines.length > 0 && (
-          <span style={{ display: "block", marginTop: 6, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>
-            {progressLines.join("\n")}
-          </span>
-        )}
+        <span style={{ display: "block", marginTop: 6, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>
+          {progressLines.join("\n")}
+        </span>
       </Notice>
+    ) : (
+      <Notice>Opening the gallery…</Notice>
     );
   if (index.error) return <Notice role="alert">{index.error.message}</Notice>;
   if (index.data && index.data.exit_code !== 0 && index.data.exit_code !== UNUSABLE)

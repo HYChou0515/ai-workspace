@@ -841,6 +841,17 @@ describe("FacetGallery", () => {
       expect(notice.textContent).toContain("read 50000 rows");
     });
 
+    it("says 'Building' only once a build is running: a reopen on a kept cache says it is opening", () => {
+      // facet_build that finds its cache answers without building, and writes
+      // no progress line; for that second the gallery was "Building…"
+      loadingBuildAt = 0;
+      progressLines = [];
+      view();
+      const notice = screen.getByRole("status");
+      expect(notice.textContent).not.toContain("Building");
+      expect(notice.textContent).toContain("Opening the gallery");
+    });
+
     it("asks again every second while the build runs", () => {
       vi.useFakeTimers();
       loadingBuildAt = 0;
