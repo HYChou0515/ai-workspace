@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +95,7 @@ def build_facet_cache(
     value: str,
     sort: Sequence[str] = (),
     stat: str | None = None,
+    origin: Mapping[str, Any] | None = None,
     path: Path,
     x_type: str = "ordinal",
     y_type: str = "ordinal",
@@ -156,7 +157,15 @@ def build_facet_cache(
     for c in frame.columns:
         kind = column_kind(frame[c])
         single = _single(frame[c], pos, placed)
-        columns.append({"name": c, "kind": kind, "single": single, "stats": list(STATS[kind])})
+        columns.append(
+            {
+                "name": c,
+                "kind": kind,
+                "single": single,
+                "stats": list(STATS[kind]),
+                "stack": list(STACK_STATS[kind]),
+            }
+        )
     # a zoned facet column's keys are wall times there; the index names the
     # zone for the gallery's labels (#847/#848 P14)
     zones = {
@@ -173,6 +182,7 @@ def build_facet_cache(
         groups=groups,
         zones=zones,
         columns=columns,
+        origin=origin,
     )
     progress(f"wrote {path.stat().st_size} bytes")
 
@@ -492,6 +502,15 @@ STATS: dict[str, tuple[str, ...]] = {
     "number": ("mean", "median", "min", "max", "count"),
     "text": ("distinct", "count"),
     "date": ("min", "max", "count"),
+}
+
+
+# What a stack panel summarises a column's values at one cell by (P5), in the
+# order it offers them: a date's values stack only as a count.
+STACK_STATS: dict[str, tuple[str, ...]] = {
+    "number": ("mean", "median", "min", "max", "sum", "count"),
+    "text": ("count", "distinct"),
+    "date": ("count",),
 }
 
 

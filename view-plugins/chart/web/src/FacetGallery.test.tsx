@@ -3,11 +3,11 @@
  * #848 P6/P7: a `facet:` spec opens as a gallery. The SDK is a double; what the
  * gallery asks the sandbox for, and what it writes to the marking, is asserted.
  */
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FacetIndex } from "./gallery";
-import { q8 } from "./testAnswer";
+import { f64, q8 } from "./testAnswer";
 
 type Run = { data?: { stdout: string; stderr: string; exit_code: number }; error: Error | null; isLoading: boolean; refetch: () => void };
 
@@ -28,12 +28,15 @@ const sdk = vi.hoisted(() => ({
 }));
 vi.mock("@aiws/view-sdk", () => sdk);
 vi.mock("./echarts", () => ({ createChart: vi.fn() }));
-// thumbnail() itself, recorded: which groups were painted dimmed
+// thumbnail() and stackImage() themselves, recorded: which groups (and
+// stack cells) were painted dimmed
 const thumbnailSpy = vi.hoisted(() => vi.fn());
+const stackImageSpy = vi.hoisted(() => vi.fn());
 vi.mock("./gallery", async (original) => {
   const real = await original<typeof import("./gallery")>();
   thumbnailSpy.mockImplementation(real.thumbnail);
-  return { ...real, thumbnail: thumbnailSpy };
+  stackImageSpy.mockImplementation(real.stackImage);
+  return { ...real, thumbnail: thumbnailSpy, stackImage: stackImageSpy };
 });
 
 import { ChartView } from "./ChartView";
@@ -63,12 +66,12 @@ const INDEX: FacetIndex = {
   groups: Array.from({ length: N }, (_, i) => ({ key: ["L1", String(i)], sort: { rate: i } })),
   columns: [
     // the statistics come from the sandbox, per column: the gallery keeps no list of its own
-    { name: "lot", kind: "text", single: true, stats: ["distinct", "count"] },
-    { name: "wafer", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"] },
-    { name: "rate", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"] },
-    { name: "v", kind: "number", single: false, stats: ["mean", "median", "min", "max", "count"] },
-    { name: "tool", kind: "text", single: false, stats: ["distinct", "count"] },
-    { name: "when", kind: "date", single: false, stats: ["min", "max", "count"] },
+    { name: "lot", kind: "text", single: true, stats: ["distinct", "count"], stack: ["count", "distinct"] },
+    { name: "wafer", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
+    { name: "rate", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
+    { name: "v", kind: "number", single: false, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
+    { name: "tool", kind: "text", single: false, stats: ["distinct", "count"], stack: ["count", "distinct"] },
+    { name: "when", kind: "date", single: false, stats: ["min", "max", "count"], stack: ["count"] },
   ],
 };
 const KEY = "k".repeat(64);
@@ -79,14 +82,25 @@ const fail = (code: number) => ({ stdout: "", stderr: `exit ${code}`, exit_code:
 let answers: { build?: Run["data"]; index?: Run["data"]; page?: (positions: number[]) => Run["data"] };
 const write = vi.fn();
 let INDEX_OVER: Partial<FacetIndex> = {};
-let failUntil = { build: 0, index: 0, page: 0, exact: 0 };
-let failCode = { build: 3, index: 3, page: 3, exact: 3 };
+let failUntil = { build: 0, index: 0, page: 0, exact: 0, stack: 0 };
+let failCode = { build: 3, index: 3, page: 3, exact: 3, stack: 3 };
 /** The epoch whose build is still loading (no answer yet); -1 for none. */
 let loadingBuildAt = -1;
+/** A build whose arguments (its spec, or its sort beside the file) hold this is still loading. */
+let loadingSpec: string | null = null;
 const answerCache = new Map<string, Run["data"]>();
 const epochsSeen: number[] = [];
 let exactValues: number[] = [1.5];
 let exactAnswer: (() => Run["data"]) | null = null;
+type StackArgs = { key: string; build: string; a: string[][] | null; b: string[][] | null; column: string; stat: string };
+const stackOk = (args: StackArgs) =>
+  ok({
+    a: f64([3]),
+    b: args.b ? f64([1]) : null,
+    diff: args.b ? f64([2]) : null,
+    groups: { a: args.a ? args.a.length : N, b: args.b ? args.b.length : null },
+  });
+let stackAnswer: (args: StackArgs) => Run["data"] = stackOk;
 const f64b64 = (values: number[]) =>
   btoa(String.fromCharCode(...new Uint8Array(new Float64Array(values).buffer)));
 
@@ -95,6 +109,7 @@ beforeEach(() => {
   INDEX_OVER = {};
   exactValues = [1.5];
   exactAnswer = null;
+  stackAnswer = stackOk;
   sdk.viewDocument.mockReturnValue(DOC);
   sdk.useMarking.mockReturnValue([undefined, write]);
   answers = {
@@ -102,9 +117,10 @@ beforeEach(() => {
     index: ok(INDEX),
     page: (positions) => ok({ build: INDEX.build, groups: positions.map(() => q8([10], 0, 254)) }),
   };
-  failUntil = { build: 0, index: 0, page: 0, exact: 0 };
-  failCode = { build: 3, index: 3, page: 3, exact: 3 };
+  failUntil = { build: 0, index: 0, page: 0, exact: 0, stack: 0 };
+  failCode = { build: 3, index: 3, page: 3, exact: 3, stack: 3 };
   loadingBuildAt = -1;
+  loadingSpec = null;
   answerCache.clear();
   epochsSeen.length = 0;
   sdk.useSandboxRun.mockImplementation((_plugin: string, cmd: string, args: Record<string, unknown>, opts?: { enabled?: boolean }): Run => {
@@ -117,6 +133,7 @@ beforeEach(() => {
     // query cache does -- so a double that made a new one each render would
     // hide an effect keyed on it
     if (cmd === "facet_build" && epoch === loadingBuildAt) return { ...base, data: undefined };
+    if (cmd === "facet_build" && loadingSpec && JSON.stringify(args).includes(loadingSpec)) return { ...base, data: undefined };
     const cacheKey = `${cmd} ${JSON.stringify(args)}`;
     if (!answerCache.has(cacheKey)) {
       let data: Run["data"];
@@ -124,6 +141,8 @@ beforeEach(() => {
       else if (cmd === "facet_index") data = epoch < failUntil.index ? fail(failCode.index) : answers.index;
       else if (cmd === "facet_page")
         data = epoch < failUntil.page ? fail(failCode.page) : answers.page?.(args.positions as number[]);
+      else if (cmd === "facet_stack")
+        data = epoch < failUntil.stack ? fail(failCode.stack) : stackAnswer(args as StackArgs);
       else if (cmd === "facet_exact")
         data = epoch < failUntil.exact ? fail(failCode.exact) : (exactAnswer?.() ?? ok({ kind: "f64", data: f64b64(exactValues) }));
       answerCache.set(cacheKey, data);
@@ -569,7 +588,7 @@ describe("FacetGallery", () => {
 
   describe("sort by any column (P4)", () => {
     const sortBy = () => screen.getByRole("combobox", { name: /sort by/i }) as HTMLSelectElement;
-    const statistic = () => screen.queryByRole("combobox", { name: /statistic/i }) as HTMLSelectElement | null;
+    const statistic = () => screen.queryByRole("combobox", { name: /^sort statistic$/i }) as HTMLSelectElement | null;
     // the file is the view (P9): a choice other than the spec's own rides beside it
     const lastBuiltSort = () => (calls("facet_build").at(-1)![2] as { sort?: unknown }).sort;
     const options = (el: HTMLSelectElement) => [...el.options].map((o) => o.textContent);
@@ -631,6 +650,108 @@ describe("FacetGallery", () => {
       fireEvent.change(sortBy(), { target: { value: "rate" } });
       expect(calls("facet_build").at(-1)![2]).toEqual(calls("facet_build")[0][2]);
       expect(calls("facet_build").at(-1)![2]).not.toHaveProperty("sort");
+    });
+  });
+
+  describe("stack panel (P5)", () => {
+    const panel = () => screen.getByRole("region", { name: /stack/i });
+    const lastStack = () => calls("facet_stack").at(-1)![2] as StackArgs & { epoch: number };
+    const inPanel = (name: RegExp) => within(panel()).getByRole("combobox", { name }) as HTMLSelectElement;
+
+    it("stacks every tile when none is selected: the colour column, its first statistic", () => {
+      view();
+      expect(lastStack()).toEqual({ key: KEY, build: INDEX.build, a: null, b: null, column: "v", stat: "mean", epoch: 0 });
+      expect(panel().textContent).toContain("all 1000 tiles");
+      expect(inPanel(/stack column/i).className).toContain("input");
+    });
+
+    it("stacks the selected tiles, by key", () => {
+      view();
+      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]); // wafer 999
+      expect(lastStack().a).toEqual([["L1", "999"]]);
+      expect(panel().textContent).toContain("1 tile");
+    });
+
+    it("stacks the tiles the marking lights when this view selected none", () => {
+      sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+      view();
+      expect(lastStack().a).toEqual([["L1", "5"], ["L1", "6"]]);
+    });
+
+    it("stacks the picked column by the picked statistic, offering the column's own", () => {
+      view();
+      fireEvent.change(inPanel(/stack column/i), { target: { value: "tool" } });
+      expect([...inPanel(/stack statistic/i).options].map((o) => o.textContent)).toEqual(["count", "distinct count"]);
+      expect([lastStack().column, lastStack().stat]).toEqual(["tool", "count"]);
+      fireEvent.change(inPanel(/stack statistic/i), { target: { value: "distinct" } });
+      expect(lastStack().stat).toBe("distinct");
+    });
+
+    it("sets B from the selection, then shows A, B and A − B", () => {
+      view();
+      const tiles = screen.getAllByRole("button", { name: /^group / });
+      const setB = within(panel()).getByRole("button", { name: /set as b/i });
+      expect((setB as HTMLButtonElement).disabled).toBe(true); // nothing selected yet
+      fireEvent.click(tiles[0]); // wafer 999
+      fireEvent.click(within(panel()).getByRole("button", { name: /set as b/i }));
+      fireEvent.click(tiles[1]); // wafer 998: A moves on, B stays
+      expect(lastStack()).toMatchObject({ a: [["L1", "998"]], b: [["L1", "999"]] });
+      const maps = within(panel()).getAllByRole("figure").map((f) => f.getAttribute("aria-label"));
+      expect(maps).toEqual(["A", "B", "A − B"]);
+      fireEvent.click(within(panel()).getByRole("button", { name: /clear b/i }));
+      expect(lastStack().b).toBeNull();
+      expect(within(panel()).getAllByRole("figure")).toHaveLength(1);
+    });
+
+    it("goes to the new column's first statistic when the column changes", () => {
+      view();
+      fireEvent.change(inPanel(/stack statistic/i), { target: { value: "sum" } });
+      expect(lastStack().stat).toBe("sum");
+      fireEvent.change(inPanel(/stack column/i), { target: { value: "tool" } });
+      // "sum" is not a statistic of text: the column's own first one
+      expect([lastStack().column, lastStack().stat]).toEqual(["tool", "count"]);
+    });
+
+    it("keeps B, the column and the statistic through a re-sort's rebuild", () => {
+      const { rerender } = view();
+      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]); // wafer 999
+      fireEvent.click(within(panel()).getByRole("button", { name: /set as b/i }));
+      fireEvent.change(inPanel(/stack column/i), { target: { value: "tool" } });
+      fireEvent.change(inPanel(/stack statistic/i), { target: { value: "distinct" } });
+      // a new sort is a new build: while it runs, the gallery (and the panel) go
+      loadingSpec = '"field":"lot"';
+      fireEvent.change(screen.getByRole("combobox", { name: /sort by/i }), { target: { value: "lot" } });
+      expect(screen.queryByRole("region", { name: /stack/i })).toBeNull();
+      loadingSpec = null;
+      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+      expect(lastStack()).toMatchObject({ b: [["L1", "999"]], column: "tool", stat: "distinct" });
+    });
+
+    it("paints A − B on a diverging scale, A and B on the gallery's", () => {
+      view();
+      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]);
+      fireEvent.click(within(panel()).getByRole("button", { name: /set as b/i }));
+      const schemes = stackImageSpy.mock.calls.slice(-3).map((c) => c[2]);
+      expect(schemes).toEqual(["sequential", "sequential", "diverging"]);
+    });
+
+    it("dims the panel's cells the marking leaves unlit, by x / y", () => {
+      sdk.useMarking.mockReturnValue([{ marking: { x: new Set(["1"]) }, source: "x" }, write]);
+      view();
+      // the one cell sits at x = 0: unlit
+      expect(stackImageSpy.mock.calls.at(-1)![3]).toEqual([false]);
+    });
+
+    it("says why when the stack is refused (exit 2), inside the panel", () => {
+      stackAnswer = () => ({ stdout: "", stderr: "no column 'v'", exit_code: 2 });
+      view();
+      expect(within(panel()).getByRole("alert").textContent).toContain("no column 'v'");
+    });
+
+    it("recovers a stack that finds no usable cache (exit 3) at the next epoch", () => {
+      failUntil.stack = 1;
+      view();
+      expect(calls("facet_stack").some((c) => c[2].epoch === 1)).toBe(true);
     });
   });
 

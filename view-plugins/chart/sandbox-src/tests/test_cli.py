@@ -50,6 +50,7 @@ def test_bare_launch_lists_the_commands(capsys):
         "facet_index",
         "facet_page",
         "facet_exact",
+        "facet_stack",
     ]
 
 

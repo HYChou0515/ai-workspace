@@ -154,47 +154,83 @@ def test_the_index_lists_every_column_with_its_kind_and_whether_it_is_one_per_gr
     path = _build(tmp_path, _frame(), None, None)
     columns = read_index(path).columns
     assert columns == [
-        {"name": "lot", "kind": "text", "single": True, "stats": ["distinct", "count"]},
+        {
+            "name": "lot",
+            "kind": "text",
+            "single": True,
+            "stats": ["distinct", "count"],
+            "stack": ["count", "distinct"],
+        },
         {
             "name": "wafer",
             "kind": "number",
             "single": True,
             "stats": ["mean", "median", "min", "max", "count"],
+            "stack": ["mean", "median", "min", "max", "sum", "count"],
         },
         {
             "name": "x",
             "kind": "number",
             "single": False,
             "stats": ["mean", "median", "min", "max", "count"],
+            "stack": ["mean", "median", "min", "max", "sum", "count"],
         },
         {
             "name": "y",
             "kind": "number",
             "single": False,
             "stats": ["mean", "median", "min", "max", "count"],
+            "stack": ["mean", "median", "min", "max", "sum", "count"],
         },
         {
             "name": "v",
             "kind": "number",
             "single": False,
             "stats": ["mean", "median", "min", "max", "count"],
+            "stack": ["mean", "median", "min", "max", "sum", "count"],
         },
         {
             "name": "n",
             "kind": "number",
             "single": False,
             "stats": ["mean", "median", "min", "max", "count"],
+            "stack": ["mean", "median", "min", "max", "sum", "count"],
         },
-        {"name": "tool", "kind": "text", "single": False, "stats": ["distinct", "count"]},
-        {"name": "label", "kind": "text", "single": True, "stats": ["distinct", "count"]},
+        {
+            "name": "tool",
+            "kind": "text",
+            "single": False,
+            "stats": ["distinct", "count"],
+            "stack": ["count", "distinct"],
+        },
+        {
+            "name": "label",
+            "kind": "text",
+            "single": True,
+            "stats": ["distinct", "count"],
+            "stack": ["count", "distinct"],
+        },
         {
             "name": "score",
             "kind": "number",
             "single": True,
             "stats": ["mean", "median", "min", "max", "count"],
+            "stack": ["mean", "median", "min", "max", "sum", "count"],
         },
-        {"name": "when", "kind": "date", "single": True, "stats": ["min", "max", "count"]},
-        {"name": "stamp", "kind": "date", "single": False, "stats": ["min", "max", "count"]},
+        {
+            "name": "when",
+            "kind": "date",
+            "single": True,
+            "stats": ["min", "max", "count"],
+            "stack": ["count"],
+        },
+        {
+            "name": "stamp",
+            "kind": "date",
+            "single": False,
+            "stats": ["min", "max", "count"],
+            "stack": ["count"],
+        },
     ]
 
 

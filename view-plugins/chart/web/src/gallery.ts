@@ -13,7 +13,7 @@ import { clockFor } from "./clock";
 import type { MarkingValues, IsLit } from "./marking";
 import { parseInstant } from "./option";
 import { colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
-import { decodeColumn, type WireColumn } from "./wire";
+import { canon, decodeColumn, type WireColumn } from "./wire";
 
 export type FacetScale =
   | { kind: "continuous"; lo: number; hi: number }
@@ -36,7 +36,14 @@ export type FacetIndex = {
   columns: FacetColumn[];
 };
 
-export type FacetColumn = { name: string; kind: "number" | "text" | "date"; single: boolean; stats: string[] };
+export type FacetColumn = {
+  name: string;
+  kind: "number" | "text" | "date";
+  single: boolean;
+  stats: string[];
+  /** P5: what the stack panel summarises the column's values at a cell by. */
+  stack: string[];
+};
 
 /** What the gallery sorts by: a column, and for one with several values per
  * tile the statistic; null for the written order. */
@@ -137,6 +144,65 @@ export function tilesInBox(box: { x0: number; y0: number; x1: number; y1: number
   const out: number[] = [];
   for (const r of rows) for (const c of cols) if (r * grid.columns + c < grid.count) out.push(r * grid.columns + c);
   return out;
+}
+
+// ─── the stack panel (P5) ──────────────────────────────────────────────────
+
+/** round half to even, as numpy's rint the sandbox's q8 codes with */
+function rint(x: number): number {
+  const r = Math.round(x);
+  return Math.abs(x - Math.trunc(x)) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
+/** A stack (`facet_stack`'s f64 column, one value per cache cell) painted as
+ * a thumbnail is: quantized to q8 codes over its own range as the sandbox's
+ * q8 is, then the same lattice, colour table and paint. `lit`, per cell, dims
+ * the unlit ones. null when no cell has a value. */
+export function stackImage(
+  index: FacetIndex,
+  column: WireColumn,
+  scheme: "sequential" | "diverging",
+  lit?: readonly boolean[] | null,
+): { image: RasterImage; min: number; max: number } | null {
+  const col = decodeColumn(column);
+  const values = Array.from({ length: index.cells }, (_, i) => (i < col.length ? col.value(i) : null));
+  const finite = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  if (finite.length === 0) return null;
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
+  const span = max - min;
+  const codes = values.map((v) =>
+    typeof v === "number" && Number.isFinite(v) ? (span === 0 ? 0 : rint(((v - min) / span) * 254)) : 255,
+  );
+  const cells = lattice(index.layout.x, index.layout.y, codes);
+  return { image: paintCells(cells, colourTable(scheme, min, max), lit ?? undefined), min, max };
+}
+
+/** Per cache cell, whether the marking lights it by its x / y values (as
+ * the full grid's rows are lit); null when the marking names neither axis --
+ * then nothing is dimmed. */
+export function cellsLit(
+  index: FacetIndex,
+  xField: string,
+  yField: string,
+  marking: MarkingValues,
+  isLit: IsLit,
+): boolean[] | null {
+  if (!(xField in marking) && !(yField in marking)) return null;
+  return index.layout.x.map((x, i) => {
+    const row: Record<string, string> = {};
+    const [cx, cy] = [canon(x), canon(index.layout.y[i])];
+    if (cx !== null) row[xField] = cx;
+    if (cy !== null) row[yField] = cy;
+    return isLit(row, marking);
+  });
+}
+
+/** The groups a stack's A takes, by key: the selection when there is one,
+ * else the tiles the marking lights, else null -- every tile. */
+export function stackSet(index: FacetIndex, selected: ReadonlySet<number>, lit: readonly boolean[] | null): string[][] | null {
+  const positions = selected.size > 0 ? [...selected].sort((a, b) => a - b) : lit ? lit.flatMap((on, p) => (on ? [p] : [])) : [];
+  return positions.length > 0 ? positions.map((p) => index.groups[p].key) : null;
 }
 
 const placements = new WeakMap<FacetIndex, Cells>();

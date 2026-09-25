@@ -153,6 +153,15 @@ def _build(text: str, sort: Any = _KEEP) -> dict[str, Any]:
         value=color["field"],
         sort=[facet["sort"]["field"]] if "sort" in facet else [],
         stat=facet.get("sort", {}).get("stat"),
+        # what a stack reads its rows from: this source, as it is now, transformed
+        origin={
+            "source": relative,
+            "size": key.size,
+            "mtime_ns": key.mtime_ns,
+            "transform": spec.get("transform", []),
+            "x": {"field": x["field"], "type": x["type"]},
+            "y": {"field": y["field"], "type": y["type"]},
+        },
         path=path,
         x_type=x["type"],
         y_type=y["type"],

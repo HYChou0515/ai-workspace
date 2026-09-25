@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cellAt,
+  cellsLit,
   type FacetIndex,
   groupLabel,
   groupsLit,
@@ -14,12 +15,25 @@ import {
   rangeMarking,
   sortArgs,
   sortedPositions,
+  stackImage,
+  stackSet,
   thumbnail,
   tilesInBox,
 } from "./gallery";
 import { toOption } from "./option";
 import { lattice } from "./raster";
-import { answer, base, layer, q8 } from "./testAnswer";
+import { answer, base, f64, layer, q8 } from "./testAnswer";
+
+// the platform's rule, as the SDK double in FacetGallery.test.tsx has it
+const isLitDouble = (row: Readonly<Record<string, string>>, marking: Record<string, ReadonlySet<string>>) => {
+  let shared = false;
+  for (const [c, v] of Object.entries(marking)) {
+    if (!(c in row)) continue;
+    shared = true;
+    if (!v.has(row[c])) return false;
+  }
+  return shared;
+};
 
 function index(over: Partial<FacetIndex> = {}): FacetIndex {
   return {
@@ -214,6 +228,59 @@ describe("sortArgs (P4)", () => {
   it("says null for the written order when the spec sorts, and nothing when it does not", () => {
     expect(sortArgs(doc, null)).toEqual({ sort: null });
     expect(sortArgs({ view: "chart", facet: { field: "g" } }, null)).toEqual({});
+  });
+});
+
+describe("the stack panel's pure half (P5)", () => {
+  it("paints a stack as the thumbnail paints the same values, over the gallery's lattice", () => {
+    // values that are their own q8 codes over [0, 254]: the thumbnail of those
+    // codes is the oracle (the same lattice, table and paint)
+    const values = [0, 254, 127, null];
+    const got = stackImage(index(), f64(values), "sequential")!;
+    const want = thumbnail(index(), q8([0, 254, 127, 255], 0, 254), "sequential");
+    expect(got.min).toBe(0);
+    expect(got.max).toBe(254);
+    expect(Array.from(got.image.data)).toEqual(Array.from(want.data));
+  });
+
+  it("rounds a half-way value to even, as the sandbox's q8 (numpy rint) does", () => {
+    const got = stackImage(index(), f64([0, 254, 0.5, 1.5]), "sequential")!;
+    const want = thumbnail(index(), q8([0, 254, 0, 2], 0, 254), "sequential");
+    expect(Array.from(got.image.data)).toEqual(Array.from(want.data));
+  });
+
+  it("dims the cells the marking leaves unlit", () => {
+    const got = stackImage(index(), f64([1, 2, 3, 4]), "sequential", [true, false, true, false])!;
+    const alphas = [0, 1, 2, 3].map((i) => got.image.data[i * 4 + 3]);
+    // lattice rows run top first: cells 2, 3 (y = 1) are the top row
+    expect(alphas).toEqual([255, 64, 255, 64]);
+  });
+
+  it("is nothing to paint when no cell has a value", () => {
+    expect(stackImage(index(), f64([null, null, null, null]), "sequential")).toBeNull();
+  });
+
+  it("paints a flat stack (one value everywhere) without dividing by zero", () => {
+    const got = stackImage(index(), f64([5, 5, 5, 5]), "diverging")!;
+    expect([got.min, got.max]).toEqual([5, 5]);
+    expect(got.image.data.every((v) => Number.isFinite(v))).toBe(true);
+  });
+
+  it("lights a cell by the marking's x / y values, as the full grid does", () => {
+    const lit = cellsLit(index(), "x", "y", { x: new Set(["1"]) }, isLitDouble);
+    expect(lit).toEqual([false, true, false, true]); // layout x: [0, 1, 0, 1]
+  });
+
+  it("dims nothing when the marking names neither axis", () => {
+    expect(cellsLit(index(), "x", "y", { wafer: new Set(["1"]) }, isLitDouble)).toBeNull();
+  });
+
+  it("stacks the selection, else the tiles the marking lights, else every tile", () => {
+    const idx = index();
+    expect(stackSet(idx, new Set([2, 0]), [false, true, false, false])).toEqual([["L1", "1"], ["L2", "3"]]);
+    expect(stackSet(idx, new Set(), [false, true, false, true])).toEqual([["L1", "2"], ["L2", "4"]]);
+    expect(stackSet(idx, new Set(), [false, false, false, false])).toBeNull();
+    expect(stackSet(idx, new Set(), null)).toBeNull();
   });
 });
 

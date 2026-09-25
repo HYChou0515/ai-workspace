@@ -221,6 +221,10 @@ class CacheIndex:
     # (number / text / date) and whether it holds one value per group -- what
     # a gallery offers to sort by (plan-view-plugins-pr5-finish P4)
     columns: list[dict[str, Any]] = field(default_factory=list)
+    # what the cache was built from -- the source (path, size, mtime), the
+    # transform and the x / y channels -- so a stack can read the same rows
+    # (P5); never sent to the browser
+    origin: dict[str, Any] = field(default_factory=dict)
 
     @property
     def exact_offset(self) -> int:
@@ -265,6 +269,7 @@ def write_cache(
     groups: Sequence[Group],
     zones: Mapping[str, str] = MappingProxyType({}),
     columns: Sequence[Mapping[str, Any]] = (),
+    origin: Mapping[str, Any] | None = None,
 ) -> None:
     """Write the whole cache or nothing. The file appears at ``path`` only when
     complete (a temp file in the same dir, then ``os.replace``); a failed write
@@ -300,6 +305,7 @@ def write_cache(
             "cells": cells,
             "layout": dict(layout),
             "columns": [dict(c) for c in columns],
+            "origin": dict(origin or {}),
             "groups": [
                 {"key": list(g.key), "sort": {k: _sort_value(k, v) for k, v in g.sort.items()}}
                 for g in groups
@@ -346,6 +352,7 @@ def _parse_index(raw: Any, data_offset: int, build_id: bytes) -> CacheIndex:
         build_id=build_id,
         zones=raw.get("zones", {}),
         columns=raw["columns"],
+        origin=raw["origin"],
     )
 
 

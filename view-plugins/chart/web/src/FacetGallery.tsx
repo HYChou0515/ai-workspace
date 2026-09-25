@@ -29,12 +29,15 @@ import { isLit, useMarking, useSandboxRun } from "@aiws/view-sdk";
 
 import {
   cellAt,
+  cellsLit,
   groupLabel,
   groupsLit,
   groupsPerPage,
   rangeMarking,
   sortArgs,
   sortedPositions,
+  stackImage,
+  stackSet,
   thumbnail,
   tilesInBox,
   type FacetIndex,
@@ -324,6 +327,147 @@ function Enlarged({
   );
 }
 
+const STACK_PX = 240; // one map alone
+const STACK_SMALL_PX = 150; // each of A, B and A - B
+
+/** A number short enough for a caption. */
+function short(v: number): string {
+  return String(Number(v.toPrecision(4)));
+}
+
+function StackMap({
+  label,
+  wire,
+  index,
+  scheme,
+  lit,
+  size,
+}: {
+  label: string;
+  wire: WireColumn | null;
+  index: FacetIndex;
+  scheme: "sequential" | "diverging";
+  lit: boolean[] | null;
+  size: number;
+}) {
+  const painted = useMemo(() => (wire ? stackImage(index, wire, scheme, lit) : null), [index, wire, scheme, lit]);
+  return (
+    <figure aria-label={label} style={{ margin: 0 }}>
+      <figcaption style={{ fontSize: 11, marginBottom: 2 }}>
+        {painted ? `${label} · ${short(painted.min)} – ${short(painted.max)}` : `${label} · no values`}
+      </figcaption>
+      {painted ? <Canvas image={painted.image} size={size} /> : <div style={{ width: size, height: size }} />}
+    </figure>
+  );
+}
+
+/** The stack panel's picks; null column / stat: the default. */
+type StackChoice = { column: string | null; stat: string | null; b: string[][] | null };
+
+type StackAnswer = { a: WireColumn; b: WireColumn | null; diff: WireColumn | null; groups: { a: number; b: number | null } };
+
+/**
+ * P5: one map stacking the chosen tiles -- the selection, else the tiles the
+ * marking lights, else every tile -- at each cell the picked column by the
+ * picked statistic, computed in the sandbox over the gallery's cache
+ * (`facet_stack`). "Set as B" keeps the current tiles as B; the panel then
+ * shows A, B and A - B. Its cells light by the marking's x / y, as a grid's do.
+ */
+function StackPanel({
+  shared,
+  failedAt,
+  a,
+  colorField,
+  cellLit,
+  choice,
+  onChoice,
+}: {
+  shared: Shared;
+  failedAt: { current: FailedAt };
+  a: string[][] | null;
+  colorField: string | undefined;
+  cellLit: boolean[] | null;
+  /** Held by the gallery, not here: a re-sort rebuilds, and the panel goes
+   * while it runs; what the person picked, B above all, must outlive that. */
+  choice: StackChoice;
+  onChoice: (next: StackChoice) => void;
+}) {
+  const { index, cacheKey, epoch, scheme } = shared;
+  const columns = index.columns;
+  // the colour column until one is picked
+  const column = choice.column ?? (columns.find((c) => c.name === colorField) ?? columns[0])?.name ?? "";
+  const picked = columns.find((c) => c.name === column);
+  const stat = choice.stat ?? picked?.stack[0] ?? "count";
+  const b = choice.b;
+  const setColumn = (next: string) => onChoice({ ...choice, column: next, stat: null });
+  const setStat = (next: string) => onChoice({ ...choice, column, stat: next });
+  const setB = (next: string[][] | null) => onChoice({ ...choice, b: next });
+  const run = useSandboxRun(PLUGIN, "facet_stack", { key: cacheKey, build: index.build, a, b, column, stat, epoch });
+  const code = run.data?.exit_code;
+  useEffect(() => {
+    if (code === STALE || code === UNUSABLE) failedAt.current(epoch, run.data?.stderr || `exit ${code}`);
+  }, [code, epoch, failedAt, run.data]);
+  const answer = useMemo(() => parse<StackAnswer>(run.data), [run.data]);
+  const refused =
+    run.error?.message ??
+    (run.data && code !== 0 && code !== STALE && code !== UNUSABLE ? run.data.stderr.trim() || `exit ${code}` : null);
+  const tiles = (n: number) => `${n} tile${n === 1 ? "" : "s"}`;
+  const size = b ? STACK_SMALL_PX : STACK_PX;
+  return (
+    <section
+      aria-label="stack"
+      style={{ flex: "0 1 320px", minWidth: 0, display: "flex", flexDirection: "column", gap: 6, padding: "4px 12px", fontSize: 12 }}
+    >
+      <strong>Stack</strong>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <select
+          className="input"
+          aria-label="stack column"
+          value={column}
+          onChange={(e) => setColumn(e.target.value)}
+        >
+          {columns.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select className="input" aria-label="stack statistic" value={stat} onChange={(e) => setStat(e.target.value)}>
+          {(picked?.stack ?? []).map((s) => (
+            <option key={s} value={s}>
+              {s === "distinct" ? "distinct count" : s}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>{a ? `A: ${tiles(a.length)}` : `A: all ${tiles(index.groups.length)}`}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <button type="button" disabled={!a} onClick={() => setB(a)} title="Keep the tiles A stacks now as B">
+          Set as B
+        </button>
+        {b && (
+          <button type="button" onClick={() => setB(null)}>
+            {`Clear B (${tiles(b.length)})`}
+          </button>
+        )}
+      </div>
+      {refused ? (
+        <Notice role="alert">{refused}</Notice>
+      ) : !answer ? (
+        <Notice>Stacking…</Notice>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <StackMap label="A" wire={answer.a} index={index} scheme={scheme} lit={cellLit} size={size} />
+          {answer.b && <StackMap label="B" wire={answer.b} index={index} scheme={scheme} lit={cellLit} size={size} />}
+          {answer.diff && (
+            <StackMap label="A − B" wire={answer.diff} index={index} scheme="diverging" lit={cellLit} size={size} />
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function FacetGallery({
   doc,
   text,
@@ -338,7 +482,11 @@ export function FacetGallery({
   source: string | null;
 }) {
   const facet = doc.facet as { sort?: { field: string; stat?: string; order?: "ascending" | "descending" } };
-  const encoding = doc.encoding as { color?: { scale?: { scheme?: "sequential" | "diverging" } } };
+  const encoding = doc.encoding as {
+    x?: { field?: string };
+    y?: { field?: string };
+    color?: { field?: string; scale?: { scheme?: "sequential" | "diverging" } };
+  };
   const scheme = encoding.color?.scale?.scheme ?? "sequential";
 
   const [epoch, setEpoch] = useState(0);
@@ -385,6 +533,10 @@ export function FacetGallery({
 
   const [entry, write] = useMarking(marking);
   const lit = useMemo(() => (idx && entry ? groupsLit(idx, entry.marking, isLit) : null), [idx, entry]);
+  const cellLit = useMemo(
+    () => (idx && entry ? cellsLit(idx, encoding.x?.field ?? "", encoding.y?.field ?? "", entry.marking, isLit) : null),
+    [idx, entry, encoding.x?.field, encoding.y?.field],
+  );
   const [anchor, setAnchor] = useState<number | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   // The outlines show THIS view's selection; once the marking holds something
@@ -395,6 +547,7 @@ export function FacetGallery({
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [enlarged, setEnlarged] = useState<number | null>(null);
+  const [stackChoice, setStackChoice] = useState<StackChoice>({ column: null, stat: null, b: null });
 
   const scroller = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, ...FALLBACK_VIEWPORT });
@@ -530,6 +683,7 @@ export function FacetGallery({
   for (let n = firstPage; n <= lastPage; n++) pages.push(n);
   const marked = lit ? lit.filter(Boolean).length : 0;
   const sortColumn = choice ? idx.columns.find((c) => c.name === choice.field) : undefined;
+  const stackA = stackSet(idx, selected, lit);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
@@ -558,7 +712,7 @@ export function FacetGallery({
         {sortColumn && choice && (!sortColumn.single || choice.stat) && (
           <select
             className="input"
-            aria-label="statistic"
+            aria-label="sort statistic"
             value={choice.stat ?? ""}
             onChange={(e) => setChoice({ field: choice.field, stat: e.target.value })}
           >
@@ -596,39 +750,52 @@ export function FacetGallery({
       </div>
       {/* bounded by the window, not the pane: a host pane is height:auto, and a
           scroller that grows to its content mounts every tile and asks every page */}
-      <div
-        ref={scroller}
-        data-gallery-scroll
-        style={{ flex: 1, overflow: "auto", position: "relative", maxHeight: "80vh" }}
-      >
-        <div data-gallery-wall onMouseDown={startBox} style={{ position: "relative", height: rows * TILE_H }}>
-          {band && (
-            <div
-              data-gallery-band
-              aria-hidden
-              style={{
-                position: "absolute",
-                left: Math.min(band.x0, band.x1),
-                top: Math.min(band.y0, band.y1),
-                width: Math.abs(band.x1 - band.x0),
-                height: Math.abs(band.y1 - band.y0),
-                border: "1px dashed var(--accent, #4a8)",
-                background: "color-mix(in srgb, var(--accent, #4a8) 12%, transparent)",
-                pointerEvents: "none",
-                zIndex: 1,
-              }}
-            />
-          )}
-          {pages.map((n) => (
-            <Page
-              key={n}
-              positions={sorted.slice(n * perPage, (n + 1) * perPage)}
-              first={n * perPage}
-              shared={shared}
-              failedAt={failedAt}
-            />
-          ))}
+      {/* the wall and the stack panel side by side; on a narrow screen the
+          panel wraps under the wall */}
+      <div style={{ display: "flex", flexWrap: "wrap", flex: 1, minHeight: 0, gap: 8 }}>
+        <div
+          ref={scroller}
+          data-gallery-scroll
+          style={{ flex: "1 1 360px", minWidth: 0, overflow: "auto", position: "relative", maxHeight: "80vh" }}
+        >
+          <div data-gallery-wall onMouseDown={startBox} style={{ position: "relative", height: rows * TILE_H }}>
+            {band && (
+              <div
+                data-gallery-band
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  left: Math.min(band.x0, band.x1),
+                  top: Math.min(band.y0, band.y1),
+                  width: Math.abs(band.x1 - band.x0),
+                  height: Math.abs(band.y1 - band.y0),
+                  border: "1px dashed var(--accent, #4a8)",
+                  background: "color-mix(in srgb, var(--accent, #4a8) 12%, transparent)",
+                  pointerEvents: "none",
+                  zIndex: 1,
+                }}
+              />
+            )}
+            {pages.map((n) => (
+              <Page
+                key={n}
+                positions={sorted.slice(n * perPage, (n + 1) * perPage)}
+                first={n * perPage}
+                shared={shared}
+                failedAt={failedAt}
+              />
+            ))}
+          </div>
         </div>
+        <StackPanel
+          shared={shared}
+          failedAt={failedAt}
+          a={stackA}
+          colorField={encoding.color?.field}
+          cellLit={cellLit}
+          choice={stackChoice}
+          onChoice={setStackChoice}
+        />
       </div>
       {enlarged !== null && (
         <Enlarged shared={shared} position={enlarged} onClose={() => setEnlarged(null)} failedAt={failedAt} />

@@ -7,7 +7,10 @@
   instead, for a view with no file;
 - ``facet_index {"key"}`` -- the index a gallery sorts and marks from;
 - ``facet_page {"key", "build", "positions"}`` -- records at sorted positions;
-- ``facet_exact {"key", "build", "position"}`` -- one group's exact values.
+- ``facet_exact {"key", "build", "position"}`` -- one group's exact values;
+- ``facet_stack {"key", "build", "a", "b", "column", "stat"}`` -- groups
+  stacked into one map, and A - B (``stack``; it reads the source, so it
+  loads pandas as the build does).
 
 The cache lives in ``~/.cache/views``: the isolated launcher sets HOME to the
 sandbox's ``.home``, the per-sandbox infra area (Q12).
@@ -32,6 +35,11 @@ STALE = 4
 
 _KEY = {"type": "string", "description": "The cache digest the build returned."}
 _BUILD = {"type": "string", "description": "The build id of the index the call sorted from."}
+_GROUPS = {
+    "type": ["array", "null"],
+    "items": {"type": "array", "items": {"type": "string"}},
+    "description": "Groups by key (one text per facet column); null for every group.",
+}
 
 #: How ``query`` and ``facet_build`` are handed a view (#847/#848 P9): its file
 #: (with the renderer's ``rev``, a digest of the text it holds, ignored here --
@@ -98,6 +106,20 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "description": "One group's exact values from a facet cache, as an f64 wire column.",
         "properties": {"key": _KEY, "build": _BUILD, "position": {"type": "integer"}},
     },
+    "facet_stack": {
+        "description": (
+            "Stack groups of a facet cache into one map (and a second set, for A - B): at each"
+            " cell, a column's values over those groups, summarised by a statistic."
+        ),
+        "properties": {
+            "key": _KEY,
+            "build": _BUILD,
+            "a": _GROUPS,
+            "b": _GROUPS,
+            "column": {"type": "string", "description": "The column to stack."},
+            "stat": {"type": "string", "description": "The statistic at each cell."},
+        },
+    },
 }
 
 
@@ -140,7 +162,11 @@ def _args(name: str, raw: str) -> dict[str, Any]:
         raise ValueError("sort must be null or an object, as a spec's facet.sort")
     if "position" in args and type(args["position"]) is not int:
         raise ValueError("position must be an integer group position")
-    for text in ("key", "build", "spec", "path", "rev"):
+    for keys in ("a", "b"):
+        value = args.get(keys)
+        if keys in args and value is not None and not _is_keys(value):
+            raise ValueError(f"{keys} must be null or a list of group keys (lists of text)")
+    for text in ("key", "build", "spec", "path", "rev", "column", "stat"):
         # a build that is not text would read as "rebuilt since" (exit 4) and
         # send the gallery round a refetch loop instead of naming the bad call
         if text in args and not isinstance(args[text], str):
@@ -152,6 +178,12 @@ def _is_sort(value: Any) -> bool:
     # the shape only: what a sort may say is the spec schema's to judge, once
     # it is in the spec (build_command._with_sort)
     return value is None or isinstance(value, dict)
+
+
+def _is_keys(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(k, list) and all(isinstance(t, str) for t in k) for k in value
+    )
 
 
 def run(name: str, raw: str) -> int:
@@ -168,6 +200,20 @@ def run(name: str, raw: str) -> int:
             return build(text, args["sort"]) if "sort" in args else build(text)
         if name == "facet_index":
             answer = index_payload(_root(), args["key"])
+        elif name == "facet_stack":
+            # pandas lives behind this import too: only a stack pays for it
+            from chart_view.facet.stack import stack_payload
+
+            answer = stack_payload(
+                _root(),
+                Path.cwd(),
+                args["key"],
+                args["build"],
+                args["a"],
+                args["b"],
+                args["column"],
+                args["stat"],
+            )
         elif name == "facet_page":
             answer = page_payload(_root(), args["key"], args["build"], args["positions"])
         else:
