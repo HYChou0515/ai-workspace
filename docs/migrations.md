@@ -1044,8 +1044,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     為什麼在 rollout 前：換版後第一個打開大縮圖牆的人就會撞到。沒做的症狀：那面縮圖牆的面板顯示建置已印出的進度行，
     最後一行是 `timed out after 60s (total) and was killed`（數字是你們設的上限），重開也一樣，因為沒建完就不會留下快取。
     另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
-    建置在讀檔、分組、寫檔各印一行進度，上表最長的一段不到 5 秒；調低它的症狀是最後一行變成
-    `no output for 60s; assumed hung and killed`。
+    建置在讀檔、分組、寫檔各印一行進度，上表最長的一段不到 5 秒；**若你們把它調低到接近這個秒數，rollout 前調回來**，
+    沒做的症狀是最後一行變成 `no output for 60s; assumed hung and killed`（數字是你們設的上限）。
   - **記憶體上限**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉：
     面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
     是依指令的輸出方式推的。
@@ -1056,6 +1056,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **k8s · CI 側**
 
+- **rollout 前：scratch 容量估算與沙盒指令時間上限的檢查**，做法、為什麼與沒做的症狀見上面「行為」的
+  「scratch 容量要這樣估」與「時間上限」兩條。
 - **sandbox-host 要和 API 一起換版（rollout 時，同一批）。** 縮圖牆的四個沙盒指令（`facet_build` / `facet_index` / `facet_page` /
   `facet_exact`）在 chart 的沙盒 bundle 裡，而那個 bundle 由 sandbox-host image 的 tools stage 建進
   `builtin/chart`（[#855](#pr-855) 那條的同一個機制）。只換 API、沒換 sandbox-host 的症狀：打開任何 `facet:` 的
