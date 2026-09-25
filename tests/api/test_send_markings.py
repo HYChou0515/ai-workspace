@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tests.api._client import TestClient
 from tests.api.conftest import register_rca_item
 from workspace_app.api import RunDone, create_app
@@ -18,6 +20,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 from workspace_app.resources.conversation import Conversation
 from workspace_app.sandbox.mock import MockSandbox
+from workspace_app.sandbox.protocol import SandboxBusy, SandboxNotFound
 
 
 class _Capture:
@@ -261,7 +264,7 @@ def test_a_name_that_is_not_a_file_name_fails_its_chip():
     iid = register_rca_item(spec)
     bad = [
         {"name": n, "source": None, "columns": {"k": ["v"]}}
-        for n in ("../escape", "a/b", ".hidden", "", "x" * 101)
+        for n in ("../escape", "a/b", ".hidden", "", "x" * 251)
     ]
 
     r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": bad})
@@ -323,3 +326,62 @@ async def test_live_viewers_see_the_chips_the_reload_shows():
         ("fail", "/.markings/fail.json", True),
         ("a/b", "", False),
     ]
+
+
+def test_a_name_is_measured_in_bytes_as_a_file_name_is():
+    # Round 15 defect lens: 100 emoji passed a 100-character cap as 400 bytes,
+    # past a file name's 255, and the write crashed the send.
+    cap = _Capture()
+    app, spec = _app(cap)
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+    long_bytes = {"name": "😀" * 100, "source": None, "columns": {"k": ["v"]}}
+    cjk = {"name": "批" * 80, "source": None, "columns": {"k": ["v"]}}  # 240 bytes: fits
+
+    r = client.post(
+        f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [long_bytes, cjk]}
+    )
+
+    assert r.status_code == 202
+    [msg] = _user_messages(spec, iid)
+    by_name = {m.name: m for m in msg.markings}
+    assert by_name[long_bytes["name"]].error is not None
+    assert by_name[cjk["name"]].error is None and by_name[cjk["name"]].path
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OSError(36, "File name too long", "/srv/sandbox/abc/root/.markings/x.json"),
+        IsADirectoryError(21, "Is a directory", "/srv/sandbox/abc/root/.markings/x.json"),
+        SandboxNotFound("sandbox gone"),
+        SandboxBusy("draining"),
+    ],
+    ids=["name-too-long", "a-directory", "sandbox-gone", "sandbox-busy"],
+)
+def test_a_write_the_workspace_refuses_fails_that_chip_not_the_send(monkeypatch, exc):
+    # Round 15 defect lens: only a full workspace failed the chip; any other
+    # refused write was a 500 and the typed question was lost.
+    from workspace_app.files import WorkspaceFiles
+
+    real = WorkspaceFiles.write
+
+    async def refuse(self, workspace_id, path, data, *a, **k):
+        if path.startswith("/.markings/"):
+            raise exc
+        return await real(self, workspace_id, path, data, *a, **k)
+
+    monkeypatch.setattr(WorkspaceFiles, "write", refuse)
+    cap = _Capture()
+    app, spec = _app(cap)
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+
+    r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "why?", "markings": [FAIL]})
+
+    assert r.status_code == 202
+    assert cap.prompt is not None and cap.prompt.rstrip().endswith("why?")
+    [msg] = _user_messages(spec, iid)
+    [m] = msg.markings
+    assert m.error and m.path == ""
+    assert "/srv/sandbox" not in m.error  # no sandbox internals on the chip

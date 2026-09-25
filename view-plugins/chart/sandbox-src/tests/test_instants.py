@@ -75,18 +75,24 @@ def _utc(*a: int) -> dt.datetime:
         (dt.datetime(2024, 11, 3, 1, 30), [_utc(2024, 11, 3, 5, 30), _utc(2024, 11, 3, 6, 30)]),
         (dt.datetime(2024, 3, 10, 2, 30), []),  # they sprang ahead
         (dt.datetime(2024, 1, 1), [_utc(2024, 1, 1, 5)]),  # once: one instant, not two
-        # before any zone table: New York's local mean time, -4:56:02
-        (dt.datetime(1600, 1, 1), [_utc(1600, 1, 1, 4, 56, 2)]),
+        # before any zone table: New York's local mean time
+        (dt.datetime(1600, 1, 1), None),
     ],
     ids=["overlap", "gap", "ordinary", "before-the-tables"],
 )
 def test_a_wall_time_names_the_instants_the_zone_gave_it(zone, wall, expect):
+    # Read in the zone the column carries, as the column shows its own times:
+    # pytz writes New York's local mean time as -4:56, zoneinfo as -4:56:02.
     ny = pd.Series(pd.to_datetime(["2024-01-01"])).dt.tz_localize("America/New_York").dt.tz
+    lmt = _utc(1600, 1, 1, 4, 56, 0)
     if zone == "zoneinfo":
         import zoneinfo
 
         ny = zoneinfo.ZoneInfo("America/New_York")
-    assert local_instants(wall, ny) == expect
+        lmt = _utc(1600, 1, 1, 4, 56, 2)
+    assert local_instants(wall, ny) == ([lmt] if expect is None else expect)
+    for at in local_instants(wall, ny):  # and the zone shows each as `wall`
+        assert at.astimezone(ny).replace(tzinfo=None) == wall
 
 
 def test_a_fixed_offset_zone_names_one_instant():

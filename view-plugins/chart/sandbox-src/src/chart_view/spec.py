@@ -81,14 +81,23 @@ def _construct_int(loader: _Loader, node: yaml.ScalarNode) -> int | float:
     if text.startswith("0x"):
         return _as_js_number(int(text[2:], 16))
     # Leading zeros are decimal under 1.2 (`017` is 17), and int() agrees.
-    return _as_js_number(int(text))
+    try:
+        return _as_js_number(int(text))
+    except ValueError:  # past int()'s digit limit: far past a double, ±inf
+        return float(text)
 
 
 def _as_js_number(n: int) -> int | float:
     """An integer the way the host holds it: js-yaml reads every number into a
     JavaScript Number, so past 2**53 it is the nearest double — and the renderer
-    sends THAT back. Keeping the exact int here lit rows the chart did not."""
-    return float(n) if abs(n) > 2**53 else n
+    sends THAT back. Keeping the exact int here lit rows the chart did not.
+    Past the largest double it is ±Infinity, as js-yaml's parseInt gives."""
+    if abs(n) <= 2**53:
+        return n
+    try:
+        return float(n)
+    except OverflowError:
+        return math.inf if n > 0 else -math.inf
 
 
 def _construct_float(loader: _Loader, node: yaml.ScalarNode) -> float | str:

@@ -97,8 +97,9 @@ number axis it is a finite number (above 0 on a log scale), never text; on a
 category axis, a value the axis shows; on a grid, a cell, or a number or date
 between two cells. validate refuses any other datum, and a datum on a chart
 where no layer draws a field on that axis. A filter or `diff` value on a date
-field takes the same date forms or a number; a time without a zone is that
-field's own clock.
+field (a CSV column of such dates too) takes the same date forms, a marked
+value's text, or a number; a time without a zone is read in the field's zone,
+and as UTC when the field has none.
 
 `aggregate` on a channel (`count`, `sum`, `mean`, `min`, `max`, `rate`) groups
 by every other field channel, as in Vega-Lite. Unlike Vega-Lite, a channel's

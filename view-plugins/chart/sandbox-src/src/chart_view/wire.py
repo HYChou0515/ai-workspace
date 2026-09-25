@@ -160,7 +160,7 @@ def epoch_ms(s: pd.Series) -> np.ndarray:
         arr = s.to_numpy()
         return np.where(np.isnat(arr), np.nan, arr.astype("datetime64[us]").astype("int64") / 1_000)
     number = s.map(_as_number).to_numpy(float)
-    dates = s.map(lambda v: None if _is_number(v) or _NUMBER.match(str(v)) else v)
+    dates = s.map(lambda v: None if _is_number(v) or _NUMBER.match(str(v)) or _clock(v) else v)
     stamps = pd.to_datetime(dates, errors="coerce", utc=True, format="mixed")
     # ns → µs as integers first: ns / 1e6 in floats read .250 s as .2499998.
     ms = np.where(stamps.isna(), np.nan, (pd.DatetimeIndex(stamps).asi8 // 1_000) / 1_000)
@@ -173,6 +173,13 @@ def epoch_ms(s: pd.Series) -> np.ndarray:
 
 # A number written as text: digits, a sign, a decimal point — no `inf`, no `1_000`.
 _NUMBER = re.compile(r"\s*[+-]?(?:\d+\.?\d*|\.\d+)\s*$")
+
+
+def _clock(v: Any) -> bool:
+    """Text pandas reads off the wall clock ("now", "today"): no time the data holds."""
+    return isinstance(v, str) and v in ("now", "today")
+
+
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 

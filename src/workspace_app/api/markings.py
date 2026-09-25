@@ -23,10 +23,13 @@ from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..perm import Verb
 from ..quota.disk_ledger import UserDiskFull
 from ..resources.conversation import SentMarking
+from ..sandbox.protocol import SandboxBusy, SandboxNotFound
 from .schemas import MarkingInput
 
 MARKINGS_DIR = "/.markings"
-MAX_NAME = 100
+# A file name holds 255 bytes, `.json` takes five: measured as the disk does,
+# since 100 emoji are 400 bytes.
+MAX_NAME_BYTES = 250
 
 
 def _name_problem(name: str) -> str | None:
@@ -36,8 +39,8 @@ def _name_problem(name: str) -> str | None:
     file name can hold is fine — except what would leave the directory or hide."""
     if not name:
         return "a marking needs a name"
-    if len(name) > MAX_NAME:
-        return f"the name is longer than {MAX_NAME} characters"
+    if len(name.encode()) > MAX_NAME_BYTES:
+        return "the name is too long for a file name"
     if "/" in name or "\\" in name or "\0" in name or name.startswith("."):
         return "the name cannot be used as a file name"
     return None
@@ -85,6 +88,10 @@ async def write_markings(
             )
         except (WorkspaceFull, UserDiskFull) as exc:
             sent.error = str(exc)
+        except OSError as exc:  # the name, or `.markings` a file: the disk said no
+            sent.error = f"the marking could not be saved: {exc.strerror or 'the disk refused it'}"
+        except (SandboxNotFound, SandboxBusy):
+            sent.error = "the workspace could not be reached — send the marking again"
         else:
             sent.path = path
         out.append(sent)

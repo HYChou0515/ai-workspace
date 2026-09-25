@@ -120,3 +120,21 @@ describe("highlightMarking", () => {
     expect(highlightMarking(answer(layer("bar", 2, { y: f64([5, 6]) })), ["lot"])).toBeNull();
   });
 });
+
+describe("a binned layer carries no key (round 15 defect lens D2)", () => {
+  // Above the bin threshold a scatter's rows are bins: `a` holds bin centres
+  // (1.0078125 …), never a row's value, and the sandbox sends no `$key.a`.
+  const B = answer(
+    layer("scatter", 3, { a: f64([1.0078125, 2.0078125, 3.0078125]), $count: f64([4, 5, 6]) }, {
+      binned: { points: 15, bins: 3 },
+    }),
+  );
+
+  it("is drawn undimmed rather than lit by bin centres", () => {
+    expect(markingLit(B, { a: new Set(["3"]) }, isLit)).toEqual([null]);
+  });
+
+  it("writes nothing — not the `{}` that would clear every linked view", () => {
+    expect(selectionMarking([{ source: "brush", layer: 0, rows: [2] }], B, ["a"])).toBeNull();
+  });
+});

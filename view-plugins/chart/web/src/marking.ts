@@ -66,14 +66,17 @@ function toMarking(values: Record<string, string[]>[]): MarkingValues {
 }
 
 /** What a selection writes. null for a view without `keys:` (it cannot be a
- * source); `{}` for an empty selection — the write that clears. */
+ * source), and for a selection made only on binned layers (their rows are
+ * bins, which name no row); `{}` for an empty selection — the write that clears. */
 export function selectionMarking(
   selections: readonly Selection[],
   answer: Answer,
   keys: string[],
 ): MarkingValues | null {
   if (keys.length === 0) return null;
-  return toMarking(selections.map((s) => selectionValues(s, answer, keys)));
+  const onRows = selections.filter((s) => !answer.layers[s.layer]?.binned);
+  if (selections.length > 0 && onRows.length === 0) return null;
+  return toMarking(onRows.map((s) => selectionValues(s, answer, keys)));
 }
 
 /** The spec's `highlight:` as a marking — what seeds an empty marking on open,

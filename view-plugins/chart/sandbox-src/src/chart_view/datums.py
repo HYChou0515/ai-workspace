@@ -23,18 +23,15 @@ when it has one, else its `x` datum. On the axis a datum is:
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from chart_view.instants import INSTANT as _INSTANT
 from chart_view.query import mark_of, spec_layers
-from chart_view.spec import spec_schema
 from chart_view.wire import canon, decode_column, decode_distinct, epoch_ms
-
-_INSTANT = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
 
 # The renderer's lattice fills an integer axis's gaps unless the span is this
 # many times wider than its values (web/src/raster.ts FILL_LIMIT).

@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from pandas.errors import OutOfBoundsDatetime
 
-from chart_view.instants import instant_of_number, local_instants, parse_instant
+from chart_view.instants import DATE_TEXT, instant_of_number, local_instants, parse_date_text
 from chart_view.wire import holds_containers, unhashable_as_text
 
 
@@ -51,20 +51,27 @@ _COMPARE = {
 
 
 # Object columns that may hold dates: `infer_dtype` is one C pass, so a column
-# of text or numbers is never read cell by cell.
+# of numbers, or of text that is not all date text, is never read cell by cell.
 _MAY_HOLD_DATES = ("date", "datetime", "datetime64", "mixed")
 
 
 def _comparable(s: pd.Series, field: str) -> pd.Series:
     """`s` as a predicate compares it: a list cell as its marking text (what a
     highlight or a marking holds), and a column of date / datetime objects (a
-    parquet date32 column, an entity's dates — some left as date text by YAML)
+    parquet date32 column, an entity's dates — some left as date text by YAML —
+    or a CSV column whose every cell is date text, as the chart draws it)
     as datetimes, so "2024-01-01" names a day there as it does in a datetime
     column: a date object is never equal to text. It is a date column only when
     every cell is a date (`_date_cell`); zoned cells are read at UTC, as the
     chart reads zone-less text (a typed zoned column keeps its zone)."""
     s = unhashable_as_text(s)
-    if s.dtype != object or pd.api.types.infer_dtype(s, skipna=True) not in _MAY_HOLD_DATES:
+    if s.dtype != object:
+        return s
+    kind = pd.api.types.infer_dtype(s, skipna=True)
+    if kind == "string":  # a CSV date column: dates only if every cell is date text
+        if not s.dropna().str.fullmatch(DATE_TEXT).all():
+            return s
+    elif kind not in _MAY_HOLD_DATES:
         return s
     off: list[Any] = []
 
@@ -89,7 +96,7 @@ def _date_cell(v: Any) -> Any:
     """A date column's cell as a date, None when missing; TypeError for any
     other cell — text only in the spec's date forms (`parse_instant`)."""
     if isinstance(v, str):
-        at = parse_instant(v)
+        at = parse_date_text(v)
         if at is None:
             raise TypeError(f"{v!r} is no date")
         return at
@@ -113,7 +120,7 @@ def _instants(value: Any, dtype: Any, where: str) -> list[Any]:
     `chart_view.instants`; anything else is refused by name. A zone-less time
     in a zoned column is a wall time there: one the clocks passed twice names
     both instants, one they skipped names none."""
-    at = parse_instant(value) if isinstance(value, str) else instant_of_number(value)
+    at = parse_date_text(value) if isinstance(value, str) else instant_of_number(value)
     if at is None:
         raise TransformError(f"{where} {value!r} is not a date")
     zone = getattr(dtype, "tz", None)
@@ -132,13 +139,17 @@ def _instants(value: Any, dtype: Any, where: str) -> list[Any]:
 def _isin(s: pd.Series, instants: Sequence[Any]) -> pd.Series:
     """The rows of datetime column `s` holding one of `instants`. Each is cast to
     the column's own dtype first: one its unit cannot hold exactly, or at all,
-    names no row (pandas' `isin` rounded it to the unit, or fell back to
-    objects)."""
+    names no row (pandas' `isin` truncated it to the unit, or fell back to
+    objects), and so does one past the calendar in the column's zone (pandas
+    printed the OverflowError it swallowed there)."""
+    zone = getattr(s.dtype, "tz", None)
     held = []
     for at in instants:
         try:
             cast = at.as_unit(s.dt.unit)
-        except OutOfBoundsDatetime:
+            if zone is not None:
+                dt.datetime.astimezone(at.to_pydatetime(warn=False), zone)
+        except (OutOfBoundsDatetime, OverflowError):
             continue
         if cast == at:
             held.append(cast)

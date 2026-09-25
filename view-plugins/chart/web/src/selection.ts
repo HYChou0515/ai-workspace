@@ -101,8 +101,10 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
  * sends the key as numbers / time / q8 (query.py adds it), else the key's own
  * column. The one lookup for everything that compares a layer with a marking —
  * writing one (`selectionValues`) and lighting by one — so the two never read
- * different columns. Null when the layer does not carry the key. */
+ * different columns. Null when the layer does not carry the key — nor does a
+ * binned layer: its rows are bins, its columns bin centres, never a row's value. */
 export function keyColumn(layer: WireLayer | undefined, key: string): Column | null {
+  if (layer?.binned) return null;
   const wire = layer?.columns[`$key.${key}`] ?? layer?.columns[key];
   return wire ? decodeColumn(wire) : null;
 }
