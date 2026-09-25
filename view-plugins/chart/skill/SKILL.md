@@ -45,7 +45,8 @@ The keys to use:
 - `title`, `description`: text.
 - `keys`: column names.
 - `marking`: a name. Charts with the same `marking` are linked: rows the person
-  brushes in one light up in the others, matched on same-named `keys` columns.
+  brushes in one light up in the others, matched on the columns named in the
+  brushing chart's `keys`.
 - `highlight`: `{where: "<pandas query>"}`, or `{values: {<column>: [v, …]}}`
   for rows whose column holds one of the values. It runs over each layer's
   rows after its transforms, so it can name an aggregate's `as`.
