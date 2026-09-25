@@ -1025,19 +1025,25 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - **scratch 容量要這樣估（rollout 前）**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
     再加上原本 workspace 與 `.home` 的用量。為什麼在 rollout 前：換版之後第一個打開縮圖牆的人就開始寫快取；
     沒估的症狀是 scratch 卷寫滿，連帶所有沙盒的寫檔一起失敗，不只縮圖牆。
-- **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核）用 bundle 的 `facet_build` 指令端到端實測，不是 CI 數字：
+- **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核）用 bundle 的 `facet_build` 指令端到端實測
+  （`launch` 照 runner 的方式呼叫、`SANDBOX_HOME` 指向全新的 `.home`），不是 CI 數字：
 
   | 來源 | 列數 | 第一次開啟 | 峰值記憶體 | 快取大小 |
   |---|---|---|---|---|
-  | 1000 組 × 5041 格，CSV（263 MB） | 5.04M | 29.9 秒 | 1.62 GB | 45.5 MB |
-  | 同上，parquet（42 MB） | 5.04M | 28.8 秒 | 1.77 GB | 45.5 MB |
-  | 200 組 × 50,176 格，parquet（84 MB） | 10.0M | 68.7 秒 | 3.28 GB | 90.7 MB |
+  | 1000 組 × 5041 格，CSV（134 MB） | 5.04M | 3.6 秒 | 0.95 GB | 45.4 MB |
+  | 同上，parquet（13.5 MB） | 5.04M | 3.0 秒 | 1.27 GB | 45.4 MB |
+  | 200 組 × 50,176 格，parquet（26.6 MB） | 10.0M | 5.4 秒 | 2.29 GB | 90.7 MB |
 
-  之後再打開（重用快取）約 0.4 秒；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05 秒、
-  約 22 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.33 GB）。
-  沙盒的記憶體上限低於這個量級時，大來源的第一次打開會被 OOM 殺掉：
-  面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
-  是依指令的輸出方式推的。
+  之後再打開（重用快取）約 0.3–0.4 秒、0.12 GB；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05 秒、
+  約 22 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.2–0.25 GB）。
+  - **時間上限**：建快取是一個沙盒指令，受每個指令的總時間上限管（`kind: http` 是 sandbox-host 的
+    `SANDBOX_HOST_EXEC_TIMEOUT`，`kind: local` 是 `sandbox.exec_timeout`，預設都是 60 秒）。
+    上面的數字離上限很遠；來源大到超過上限時，第一次打開會停在面板顯示
+    `timed out after 60s (total) and was killed`，重開也一樣（沒建完就不會留下快取）。
+    要開更大的來源，就在 transform 裡先 aggregate 把列數降下來，或調高那個上限。
+  - **記憶體上限**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉：
+    面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
+    是依指令的輸出方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
   畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
 - chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 5105 變成

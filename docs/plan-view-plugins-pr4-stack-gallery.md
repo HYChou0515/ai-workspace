@@ -254,16 +254,20 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     exact), so 200 × 50 000 cells is about 90 MB, against a 500 MB default cap;
   - build cost, measured end to end through the bundle's `facet_build` on the dev
     box (32 cores), not a CI number:
-    - 1000 × 5041 cells as CSV: 29.9 s at a 1.62 GB peak RSS;
-    - the same as parquet: 28.8 s at 1.77 GB;
-    - 200 × 50 176 as parquet: 68.7 s at 3.28 GB.
+    - 1000 × 5041 cells as CSV: 3.6 s at a 0.95 GB peak RSS;
+    - the same as parquet: 3.0 s at 1.27 GB;
+    - 200 × 50 176 as parquet: 5.4 s at 2.29 GB.
 
-    A reopen reuses the cache in about 0.4 s. `facet_index`, `facet_page` and
-    `facet_exact` each take about 0.05 s at 22 MB. The peak grows with rows (about
-    0.33 GB per million) and sits inside the sandbox's own cgroup limit, so a large
-    source needs a sandbox sized for it. The builder's per-row Python loops are the
-    cost: vectorising them is a follow-up, since the plan sized this phase by rule of
-    thumb (Q11) and asks its test for correctness, not speed;
+    A reopen reuses the cache in about 0.3–0.4 s at 0.12 GB. `facet_index`,
+    `facet_page` and `facet_exact` each take about 0.05 s at 22 MB. The peak grows with
+    rows (about 0.2–0.25 GB per million) and sits inside the sandbox's own cgroup
+    limit, so a large source needs a sandbox sized for it. The build is one sandbox
+    command, so it also runs under the per-command time cap (60 s by default).
+    - The builder first read the frame a row at a time: 29.9 s, 28.8 s and 68.7 s on
+      the same three shapes. The live check found the third killed at the 60 s cap on
+      every open, so it could never be built. `_by_arrays` now does the same work on
+      whole columns; the row path stays for the dtypes the column path cannot vouch
+      for, and is the oracle of a parity test on every dtype it takes;
   - the knob;
   - the check that confirms it: open a gallery and see `.home/.cache/views/` in the
     sandbox dir.
@@ -292,3 +296,31 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   rebuild; a rank-range selection lights the linked scatter from PR 3; a reap followed
   by a reopen rebuilds.
 - Base differential on PR 3's tip, where a `facet:` spec is rejected by `validate`.
+- **Done** (Chromium, `kind: local`, the app on the branch; fixtures 1000 × 5041 as CSV
+  and as parquet, 200 × 50 176 as parquet):
+  - First open shows "Building the gallery…" then "N groups", from cold in 6.7 s,
+    4.4 s and 12.8 s.
+  - Scrolling asks further pages (`facet_page` 1 → 5 on the 1000-group gallery).
+  - Flipping the sort reorders with no new `facet_build` or `facet_index`, and no
+    "Building…".
+  - Ranks 1–30 in a gallery beside the summary scatter, both on `marking: wafers`:
+    the gallery reads "30 of 1000 marked" (sorted by fail_rate descending), and the
+    scatter keeps the points at the top of its fail_rate axis solid and dims the rest,
+    as seen in a screenshot of each end (the points were not counted).
+  - Removing `.home/.cache/views` (what a reap does to it) and reopening rebuilds. Removing
+    it while the gallery is open: the next page answers exit 3, the gallery rebuilds, and
+    every tile paints.
+  - Base differential: the same spec through PR 3's schema is refused with
+    `'facet' was unexpected`.
+  - Found and fixed on the way, each with a test that reddened on the unfixed code and
+    mutation-probed:
+    - the next row's thumbnails covered each tile's label and ⤢ (0 of 44 reachable at
+      1400 px, 0 of 8 at 390 px; 44 and 8 after);
+    - the gallery's scroller grew to its content inside the host's height:auto pane,
+      so every tile mounted and every page was asked at once (bounded to 80vh: one page,
+      200 tiles);
+    - the 200 × 50 176 build was killed at the 60 s cap on every open (see P8);
+    - the enlarged view did not close on Escape, and covered the toolbar.
+  - Seen, not in this PR: under `kind: local`'s jail, two commands in one sandbox at once
+    can fail with `mount: …/dev/zero: mount point does not exist` (one exec removes the
+    `/dev` bind targets another is mounting). A retry opened normally.

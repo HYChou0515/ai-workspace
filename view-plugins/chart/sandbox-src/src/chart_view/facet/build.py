@@ -17,6 +17,14 @@ place they are made plain (the format refuses anything else, by name):
   offsets), and the Python value of a numpy scalar. A ``datetime.time`` or a
   ``Timedelta`` is not converted, and the format refuses it by name.
 
+Two paths build the same cache. ``_by_rows`` reads the frame a row at a time
+and is the definition; ``_by_arrays`` does the same work on whole columns, and
+takes a frame only when every column it groups, keys or compares is of a dtype
+where pandas' equality is the definition's equality (``_labels``,
+``_sort_ident``). The row path cost 69 s on the plan's 200 groups x 50 000
+cells, past the 60 s a sandbox command gets by default, so a gallery that size
+never opened. The parity test runs both on the same frames.
+
 Within ``chart_view.facet`` only this module imports pandas: the pager and the
 cap never load it.
 """
@@ -37,6 +45,9 @@ from chart_view.query import _kinds
 from chart_view.wire import canon, encode_column
 
 _AXIS_TYPES = ("quantitative", "temporal", "ordinal", "nominal")
+
+Scale = ContinuousScale | CategoryScale
+Plan = tuple[Scale, int, dict[str, list[Any]], list[Group]]
 
 
 class BuildError(ValueError):
@@ -101,22 +112,6 @@ def build_facet_cache(
     kinds = _kinds(
         "grid", [("x", {"field": x, "type": x_type}), ("y", {"field": y, "type": y_type})]
     )
-    xs, ys = _axis(frame[x], kinds[x]), _axis(frame[y], kinds[y])
-    placed = [i for i in range(len(frame)) if xs[i] is not None and ys[i] is not None]
-    if len(placed) < len(frame):
-        left_out = len(frame) - len(placed)
-        progress(f"left out {left_out} row{'s' if left_out > 1 else ''} with no x or y")
-    if not placed:
-        raise BuildError(f"no row has both a {x!r} and a {y!r} value")
-
-    keys = {c: _texts(frame[c]) for c in facet}
-    for c in facet:
-        gaps = sum(k is None for k in keys[c])
-        if gaps:
-            raise BuildError(
-                f"{gaps} rows have no {c!r} value (missing, or a number that is not finite)"
-            )
-
     # ``continuous`` is the chart's own decision when a spec is at hand (a grid
     # colour that is not quantitative is categories whatever its dtype, as
     # query sends it); without one, the column's dtype decides
@@ -125,15 +120,76 @@ def build_facet_cache(
         if continuous is None
         else continuous
     )
+    args: dict[str, Any] = {
+        "facet": facet,
+        "x": x,
+        "y": y,
+        "value": value,
+        "sort": sort,
+        "kinds": kinds,
+        "numeric": numeric,
+        "progress": progress,
+    }
+    plan = _by_arrays(frame, **args) or _by_rows(frame, **args)
+    scale, cells, layout, groups = plan
+    progress(f"{len(groups)} groups over {cells} cells")
+
+    write_cache(path, scale=scale, facet=list(facet), cells=cells, layout=layout, groups=groups)
+    progress(f"wrote {path.stat().st_size} bytes")
+
+
+def _left_out(total: int, placed: int, x: str, y: str, progress: Callable[[str], None]) -> None:
+    if placed < total:
+        left_out = total - placed
+        progress(f"left out {left_out} row{'s' if left_out > 1 else ''} with no x or y")
+    if not placed:
+        raise BuildError(f"no row has both a {x!r} and a {y!r} value")
+
+
+def _no_key(gaps: int, column: str) -> BuildError:
+    return BuildError(
+        f"{gaps} rows have no {column!r} value (missing, or a number that is not finite)"
+    )
+
+
+def _continuous(frame: pd.DataFrame, value: str) -> tuple[ContinuousScale, np.ndarray]:
+    values = pd.to_numeric(frame[value], errors="coerce").astype(float).to_numpy()
+    finite = values[np.isfinite(values)]
+    lo = float(finite.min()) if len(finite) else 0.0
+    hi = float(finite.max()) if len(finite) else 0.0
+    # the format codes NaN (a missing cell) and +/-inf as missing, as the
+    # chart's q8 does; the exact section keeps inf and reads NaN back as None
+    return ContinuousScale(lo, hi), values
+
+
+def _by_rows(
+    frame: pd.DataFrame,
+    *,
+    facet: Sequence[str],
+    x: str,
+    y: str,
+    value: str,
+    sort: Sequence[str],
+    kinds: dict[str, str],
+    numeric: bool,
+    progress: Callable[[str], None],
+) -> Plan:
+    """The cache's contents, a row at a time: the definition ``_by_arrays`` is
+    held to."""
+    xs, ys = _axis(frame[x], kinds[x]), _axis(frame[y], kinds[y])
+    placed = [i for i in range(len(frame)) if xs[i] is not None and ys[i] is not None]
+    _left_out(len(frame), len(placed), x, y, progress)
+
+    keys = {c: _texts(frame[c]) for c in facet}
+    for c in facet:
+        gaps = sum(k is None for k in keys[c])
+        if gaps:
+            raise _no_key(gaps, c)
+
+    scale: Scale
     if numeric:
-        values = pd.to_numeric(frame[value], errors="coerce").astype(float)
-        finite = values[np.isfinite(values)]
-        lo = float(finite.min()) if len(finite) else 0.0
-        hi = float(finite.max()) if len(finite) else 0.0
-        scale: ContinuousScale | CategoryScale = ContinuousScale(lo, hi)
-        # the format codes NaN (a missing cell) and +/-inf as missing, as the
-        # chart's q8 does; the exact section keeps inf and reads NaN back as None
-        cell_values: list[Any] = [float(v) for v in values]
+        scale, floats = _continuous(frame, value)
+        cell_values: list[Any] = [float(v) for v in floats]
     else:
         cell_values = _texts(frame[value])
         scale = CategoryScale(sorted({t for t in cell_values if t is not None}))
@@ -170,14 +226,202 @@ def build_facet_cache(
                 raise BuildError(f"group {k!r} has more than one {c!r}; a sort value is per group")
             sort_values[c] = _plain_sort(frame[c].iat[rows[0]]) if rows else None
         groups.append(Group(key=k, sort=sort_values, values=record))
-    progress(f"{len(groups)} groups over {cells} cells")
+    layout = {"x": [c[0] for c in cell_of], "y": [c[1] for c in cell_of]}
+    return scale, cells, layout, groups
 
-    write_cache(
-        path,
-        scale=scale,
-        facet=list(facet),
-        cells=cells,
-        layout={"x": [c[0] for c in cell_of], "y": [c[1] for c in cell_of]},
-        groups=groups,
-    )
-    progress(f"wrote {path.stat().st_size} bytes")
+
+# ─── whole columns ──────────────────────────────────────────────────────────
+
+
+_NUMBERS = ("b", "i", "u", "f")  # dtype kinds: bool, int, unsigned, float
+
+
+def _labels(column: pd.Series) -> tuple[np.ndarray, list[str]] | None:
+    """``_texts(column)`` as one code per row into a list of distinct texts
+    (-1 where ``_texts`` gives None), or None for a dtype where two values
+    pandas holds equal could have different texts (an object column of mixed
+    types: 1 and True hash alike), so only the row path can read it."""
+    dtype = column.dtype
+    if isinstance(dtype, pd.StringDtype):
+        pass
+    elif pd.api.types.is_object_dtype(dtype):
+        if pd.api.types.infer_dtype(column, skipna=True) not in ("string", "empty"):
+            return None
+    elif isinstance(dtype, pd.CategoricalDtype) or getattr(dtype, "kind", None) not in _NUMBERS:
+        return None
+    codes, uniques = pd.factorize(column, use_na_sentinel=True)
+    texts = [canon(u) for u in uniques]
+    # distinct values can share a text (-0.0 and 0.0 are both "0"): one code per
+    # text; the extra slot maps pandas' missing code (-1) to ours
+    first: dict[str, int] = {}
+    remap = [-1 if t is None else first.setdefault(t, len(first)) for t in texts]
+    return np.asarray([*remap, -1], dtype=np.int64)[codes], list(first)
+
+
+_NAN_BITS = np.int64(0x7FF8000000000000)  # no finite float has these bits
+
+
+def _float_bits(values: np.ndarray) -> np.ndarray:
+    bits = values.astype(np.float64).view(np.int64).copy()
+    bits[np.isnan(values)] = _NAN_BITS
+    return bits
+
+
+def _sort_ident(column: pd.Series) -> np.ndarray | None:
+    """One integer per row, equal exactly where ``repr(_plain_sort(value))`` is
+    equal -- the row path's test for one sort value per group -- or None for a
+    dtype this cannot vouch for. Floats compare by their bits, which is what
+    repr tells apart (-0.0 is not 0.0); every missing value is one ident, as it
+    is one None."""
+    dtype = column.dtype
+    if isinstance(dtype, pd.DatetimeTZDtype) or (isinstance(dtype, np.dtype) and dtype.kind == "M"):
+        try:
+            ns = column.dt.as_unit("ns").array.asi8
+        except (pd.errors.OutOfBoundsDatetime, OverflowError):
+            return None
+        ms = ns / 1e6  # as _plain_sort divides Timestamp.value
+        ms[column.isna().to_numpy()] = np.nan
+        return _float_bits(ms)
+    if pd.api.types.is_object_dtype(dtype):
+        if pd.api.types.infer_dtype(column, skipna=True) not in ("string", "empty"):
+            return None
+        return pd.factorize(column, use_na_sentinel=True)[0].astype(np.int64)
+    if not isinstance(dtype, np.dtype):
+        return None
+    values = column.to_numpy()
+    if dtype.kind == "f":
+        return _float_bits(values)
+    if dtype.kind == "u" and dtype.itemsize == 8:
+        return values.view(np.int64)
+    if dtype.kind in ("b", "i", "u"):
+        return values.astype(np.int64)
+    return None
+
+
+def _axis_codes(column: pd.Series, kind: str) -> tuple[np.ndarray, Callable[[int], Any]]:
+    """``_axis(column, kind)`` as one code per row (-1: no value; equal codes
+    where the values are equal as dict keys) and the value at a row."""
+    wire = encode_column(column, kind)
+    if kind != "cat":
+        floats = np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8")
+        # + 0.0 folds -0.0 into 0.0, as a dict key does; NaN is pandas' missing
+        codes = pd.factorize(floats + 0.0, use_na_sentinel=True)[0]
+        return codes.astype(np.int64), lambda i: float(floats[i])
+    width = wire["width"]
+    raw = np.frombuffer(base64.b64decode(wire["codes"]), dtype=f"<u{width}").astype(np.int64)
+    raw[raw == 2 ** (8 * width) - 1] = -1
+    levels = wire["levels"]
+    return raw, lambda i: levels[raw[i]]
+
+
+def _first_bad(pairs: pd.DataFrame) -> int | None:
+    """The lowest group with more than one distinct ident, if any."""
+    counts = pairs.drop_duplicates()["g"].value_counts()
+    bad = counts.index[counts.to_numpy() > 1]
+    return int(bad.min()) if len(bad) else None
+
+
+def _by_arrays(
+    frame: pd.DataFrame,
+    *,
+    facet: Sequence[str],
+    x: str,
+    y: str,
+    value: str,
+    sort: Sequence[str],
+    kinds: dict[str, str],
+    numeric: bool,
+    progress: Callable[[str], None],
+) -> Plan | None:
+    """``_by_rows``' contents, errors and progress, on whole columns; None
+    (before any progress line) for a frame only the row path can read."""
+    labels: dict[str, tuple[np.ndarray, list[str]]] = {}
+    for c in facet:
+        read = _labels(frame[c])
+        if read is None:
+            return None
+        labels[c] = read
+    idents: dict[str, np.ndarray] = {}
+    for c in sort:
+        ident = _sort_ident(frame[c])
+        if ident is None:
+            return None
+        idents[c] = ident
+    value_labels = None if numeric else _labels(frame[value])
+    if not numeric and value_labels is None:
+        return None
+
+    xc, x_at = _axis_codes(frame[x], kinds[x])
+    yc, y_at = _axis_codes(frame[y], kinds[y])
+    placed = np.flatnonzero((xc >= 0) & (yc >= 0))
+    _left_out(len(frame), len(placed), x, y, progress)
+
+    for c in facet:
+        gaps = int((labels[c][0] < 0).sum())
+        if gaps:
+            raise _no_key(gaps, c)
+
+    # one of the two is used, as ``numeric`` says; both are bound for ty
+    scale: Scale
+    floats = np.empty(0)
+    value_codes, value_texts = np.empty(0, dtype=np.int64), list[str]()
+    if value_labels is None:
+        scale, floats = _continuous(frame, value)
+    else:
+        value_codes, value_texts = value_labels
+        scale = CategoryScale(sorted(value_texts))
+
+    # cells in the order their first placed row comes, as the row path's dict
+    pair = xc[placed] * (int(yc.max()) + 1) + yc[placed]
+    cid = pd.factorize(pair)[0].astype(np.int64)
+    cells = int(cid.max()) + 1
+    first_rows = placed[np.unique(cid, return_index=True)[1]]
+    layout = {"x": [x_at(i) for i in first_rows], "y": [y_at(i) for i in first_rows]}
+
+    # groups over every row, in the order their first row comes
+    # every step factorizes in row order, so the ids are 0.. in first-row order
+    gid = np.zeros(len(frame), dtype=np.int64)
+    for c in facet:
+        codes, texts = labels[c]
+        gid = pd.factorize(gid * len(texts) + codes)[0].astype(np.int64)
+    first_of_group = np.unique(gid, return_index=True)[1]
+    keys = [tuple(labels[c][1][labels[c][0][i]] for c in facet) for i in first_of_group]
+
+    # the row path raises for the first group, in order, with a repeated cell
+    # or a sort column that varies -- the cell before the sort columns
+    pg = gid[placed]
+    dup = pd.Series(pg * cells + cid).duplicated().to_numpy()
+    dup_group = int(pg[dup].min()) if dup.any() else None
+    sort_bad = [(_first_bad(pd.DataFrame({"g": pg, "i": idents[c][placed]})), c) for c in sort]
+    bad = [g for g in [dup_group, *(g for g, _ in sort_bad)] if g is not None]
+    if bad:
+        worst = min(bad)
+        if worst == dup_group:
+            i = int(placed[dup & (pg == worst)][0])
+            raise BuildError(
+                f"group {keys[worst]!r} has more than one row at ({x_at(i)!r}, {y_at(i)!r}); "
+                "aggregate first"
+            )
+        c = next(c for g, c in sort_bad if g == worst)
+        raise BuildError(
+            f"group {keys[worst]!r} has more than one {c!r}; a sort value is per group"
+        )
+
+    order = np.argsort(pg, kind="stable")
+    bounds = np.searchsorted(pg[order], np.arange(len(keys) + 1))
+    groups: list[Group] = []
+    for g, k in enumerate(keys):
+        at = order[bounds[g] : bounds[g + 1]]
+        rows, where = placed[at], cid[at]
+        if value_labels is None:
+            record = np.full(cells, np.nan)
+            record[where] = floats[rows]
+            values: list[Any] = record.tolist()  # NaN: the format's missing, as None is
+        else:
+            codes = np.full(cells, -1, dtype=np.int64)
+            codes[where] = value_codes[rows]
+            values = [value_texts[v] if v >= 0 else None for v in codes.tolist()]
+        first = int(rows[0]) if len(rows) else None
+        sort_values = {c: None if first is None else _plain_sort(frame[c].iat[first]) for c in sort}
+        groups.append(Group(key=k, sort=sort_values, values=values))
+    return scale, cells, layout, groups
