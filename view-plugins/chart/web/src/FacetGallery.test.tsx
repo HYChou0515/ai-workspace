@@ -487,6 +487,77 @@ describe("FacetGallery", () => {
     expect(alert?.textContent).toContain("position must be an integer");
   });
 
+  describe("box select (P3)", () => {
+    // happy-dom lays nothing out: the wall's box is pinned at the page origin,
+    // so a client point is a content point. 800 px wide -> 7 tiles a row on a
+    // 112 x 122 pitch (a 96 px thumbnail + its label row)
+    const wall = () => {
+      const el = document.querySelector("[data-gallery-wall]") as HTMLElement;
+      el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 99_999, right: 800, bottom: 99_999, x: 0, y: 0, toJSON: () => ({}) });
+      return el;
+    };
+    const drag = (from: [number, number], to: [number, number], shiftKey = false, on?: Element) => {
+      fireEvent.mouseDown(on ?? wall(), { clientX: from[0], clientY: from[1], button: 0, shiftKey });
+      fireEvent.mouseMove(window, { clientX: to[0], clientY: to[1], shiftKey });
+      fireEvent.mouseUp(window, { clientX: to[0], clientY: to[1], shiftKey });
+    };
+    const wafers = () => [...(write.mock.calls.at(-1)![0] as Record<string, Set<string>>).wafer].sort();
+
+    it("selects every tile the box touches and writes them to the marking", () => {
+      view();
+      // from the empty strip right of the last column (7 x 112 = 784) back
+      // into row 1 of column 5: columns 5-6 of rows 0-1
+      drag([790, 5], [600, 130]);
+      // ranks 5, 6, 12, 13 of a descending sort over 1000
+      expect(wafers()).toEqual(["986", "987", "993", "994"]);
+      const tiles = screen.getAllByRole("button", { name: /^group / });
+      expect([5, 6, 12, 13].every((r) => tiles[r].getAttribute("aria-pressed") === "true")).toBe(true);
+      expect(tiles[4].getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("replaces the selection on a plain drag, and adds to it on a Shift-drag", () => {
+      view();
+      drag([90, 0], [120, 10]); // tiles 0 and 1
+      expect(wafers()).toEqual(["998", "999"]);
+      drag([230, 0], [240, 10]); // tile 2 alone: replaces
+      expect(wafers()).toEqual(["997"]);
+      drag([340, 0], [350, 10], true); // tile 3, Shift: adds
+      expect(wafers()).toEqual(["996", "997"]);
+    });
+
+    it("selects a tile far below the drawn pages, by position not by the DOM", () => {
+      view();
+      // row 50 (ranks 350..356): page 1, never mounted at the top of the wall
+      drag([0, 50 * 122 + 1], [1, 50 * 122 + 2]);
+      expect(wafers()).toEqual([String(N - 1 - 350)]);
+    });
+
+    it("does not start a box on a tile: a press there is the tile's click", () => {
+      view();
+      const tile = screen.getAllByRole("button", { name: /^group / })[3];
+      drag([340, 10], [700, 300], false, tile);
+      // no box was drawn, so nothing was written by one
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it("starts no box on a right-button press (that is the context menu's)", () => {
+      view();
+      fireEvent.mouseDown(wall(), { clientX: 790, clientY: 5, button: 2 });
+      fireEvent.mouseUp(window, { clientX: 600, clientY: 130, button: 2 });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it("draws the band while dragging, and takes it away on release", () => {
+      view();
+      fireEvent.mouseDown(wall(), { clientX: 100, clientY: 116, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 150, clientY: 200 });
+      const band = document.querySelector("[data-gallery-band]") as HTMLElement;
+      expect([band.style.left, band.style.top, band.style.width, band.style.height]).toEqual(["100px", "116px", "50px", "84px"]);
+      fireEvent.mouseUp(window, { clientX: 150, clientY: 200 });
+      expect(document.querySelector("[data-gallery-band]")).toBeNull();
+    });
+  });
+
   it("enlarges one group with its exact values", () => {
     view();
     fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);

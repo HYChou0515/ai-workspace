@@ -89,6 +89,34 @@ export function groupsLit(index: FacetIndex, marking: MarkingValues, isLit: IsLi
   return index.groups.map((g) => isLit(Object.fromEntries(index.facet.map((c, k) => [c, g.key[k]])), marking));
 }
 
+/** Where tiles sit: `count` of them, `columns` per row, each `width` x `height`
+ * at a pitch of `pitchX` x `pitchY` from the content's top left. */
+export type TileGrid = { count: number; columns: number; pitchX: number; pitchY: number; width: number; height: number };
+
+/** The ranks (sorted order) of every tile a box touches, edges included, in
+ * rank order. The box is in the gallery's content coordinates, any corner
+ * first. Worked out from the layout arithmetic alone, so a tile the
+ * virtualised wall has not drawn is hit exactly as a drawn one is. */
+export function tilesInBox(box: { x0: number; y0: number; x1: number; y1: number }, grid: TileGrid): number[] {
+  const left = Math.min(box.x0, box.x1);
+  const right = Math.max(box.x0, box.x1);
+  const top = Math.min(box.y0, box.y1);
+  const bottom = Math.max(box.y0, box.y1);
+  // an axis's slots (rows or columns) whose [start, start + size] meets [lo, hi]
+  const slots = (lo: number, hi: number, pitch: number, size: number, n: number) => {
+    const out: number[] = [];
+    for (let s = Math.max(0, Math.floor(lo / pitch)); s < n && s * pitch <= hi; s++) {
+      if (s * pitch + size >= lo) out.push(s);
+    }
+    return out;
+  };
+  const rows = slots(top, bottom, grid.pitchY, grid.height, Math.ceil(grid.count / grid.columns));
+  const cols = slots(left, right, grid.pitchX, grid.width, grid.columns);
+  const out: number[] = [];
+  for (const r of rows) for (const c of cols) if (r * grid.columns + c < grid.count) out.push(r * grid.columns + c);
+  return out;
+}
+
 const placements = new WeakMap<FacetIndex, Cells>();
 
 /** The cache cell drawn at (col, row) of a group's lattice, or -1 for none.

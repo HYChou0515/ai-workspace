@@ -27,7 +27,17 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 
 import { isLit, useMarking, useSandboxRun } from "@aiws/view-sdk";
 
-import { cellAt, groupLabel, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail, type FacetIndex } from "./gallery";
+import {
+  cellAt,
+  groupLabel,
+  groupsLit,
+  groupsPerPage,
+  rangeMarking,
+  sortedPositions,
+  thumbnail,
+  tilesInBox,
+  type FacetIndex,
+} from "./gallery";
 import type { RasterImage } from "./raster";
 import { viewCall } from "./viewCall";
 import { decodeColumn, type WireColumn } from "./wire";
@@ -149,6 +159,7 @@ const Tile = memo(function Tile({
   const label = groupLabel(index, position);
   return (
     <div
+      data-tile
       style={{
         position: "absolute",
         left: (rank % columns) * TILE_W,
@@ -434,6 +445,51 @@ export function FacetGallery({
     [],
   );
 
+  // P3 box select, as a file manager: a drag from empty space replaces the
+  // selection with every tile the box touches; Shift-drag adds them. The hit
+  // test is the layout arithmetic (tilesInBox), so tiles the wall has not
+  // drawn are hit too.
+  const [band, setBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const columnsRef = useRef(1);
+  const endDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => endDrag.current?.(), []);
+  const startBox = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || (e.target as Element).closest("[data-tile]")) return;
+    const wall = e.currentTarget;
+    const at = (ev: { clientX: number; clientY: number }) => {
+      const r = wall.getBoundingClientRect();
+      return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+    };
+    const { x: x0, y: y0 } = at(e);
+    const add = e.shiftKey;
+    e.preventDefault(); // no text selection under the band
+    setBand({ x0, y0, x1: x0, y1: y0 });
+    const move = (ev: MouseEvent) => {
+      const { x, y } = at(ev);
+      setBand({ x0, y0, x1: x, y1: y });
+    };
+    const up = (ev: MouseEvent) => {
+      endDrag.current?.();
+      const { x, y } = at(ev);
+      const ranks = tilesInBox(
+        { x0, y0, x1: x, y1: y },
+        { count: sortedRef.current.length, columns: columnsRef.current, pitchX: TILE_W, pitchY: TILE_H, width: THUMB, height: THUMB + LABEL },
+      );
+      const hits = ranks.map((r) => sortedRef.current[r]);
+      writeRange.current(add ? [...new Set([...selectedRef.current, ...hits])] : hits);
+    };
+    endDrag.current = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      endDrag.current = null;
+      setBand(null);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
   if (gaveUp) return <Notice role="alert">{`The gallery could not be opened: ${gaveUp}`}</Notice>;
   if (build.error) return <Notice role="alert">{build.error.message}</Notice>;
   if (build.data && build.data.exit_code !== 0 && build.data.exit_code !== UNUSABLE)
@@ -455,6 +511,7 @@ export function FacetGallery({
     onPick,
     onEnlarge: setEnlarged,
   };
+  columnsRef.current = shared.columns;
 
   const perPage = groupsPerPage(idx.cells);
   const rows = Math.ceil(sorted.length / shared.columns);
@@ -504,7 +561,24 @@ export function FacetGallery({
         data-gallery-scroll
         style={{ flex: 1, overflow: "auto", position: "relative", maxHeight: "80vh" }}
       >
-        <div style={{ position: "relative", height: rows * TILE_H }}>
+        <div data-gallery-wall onMouseDown={startBox} style={{ position: "relative", height: rows * TILE_H }}>
+          {band && (
+            <div
+              data-gallery-band
+              aria-hidden
+              style={{
+                position: "absolute",
+                left: Math.min(band.x0, band.x1),
+                top: Math.min(band.y0, band.y1),
+                width: Math.abs(band.x1 - band.x0),
+                height: Math.abs(band.y1 - band.y0),
+                border: "1px dashed var(--accent, #4a8)",
+                background: "color-mix(in srgb, var(--accent, #4a8) 12%, transparent)",
+                pointerEvents: "none",
+                zIndex: 1,
+              }}
+            />
+          )}
           {pages.map((n) => (
             <Page
               key={n}

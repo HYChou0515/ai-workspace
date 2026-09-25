@@ -14,6 +14,7 @@ import {
   rangeMarking,
   sortedPositions,
   thumbnail,
+  tilesInBox,
 } from "./gallery";
 import { toOption } from "./option";
 import { lattice } from "./raster";
@@ -187,5 +188,43 @@ describe("groupLabel (#847/#848 P14)", () => {
   it("shows every key as it is when the index names no zone", () => {
     expect(groupLabel(two(), 0)).toBe("L1 · 2026-03-01 00:00:00+08:00");
     expect(groupLabel(index(), 0)).toBe(index().groups[0].key.join(" · "));
+  });
+});
+
+describe("tilesInBox (P3 box select)", () => {
+  // tiles 10 wide on a 15 px pitch, 20 tall on a 25 px pitch, 3 per row
+  const grid = { count: 8, columns: 3, pitchX: 15, pitchY: 25, width: 10, height: 20 };
+
+  it("hits every tile the box touches, by rank, from the layout alone", () => {
+    // from inside tile 0 to inside tile 4 (row 1, column 1)
+    expect(tilesInBox({ x0: 5, y0: 5, x1: 20, y1: 30 }, grid)).toEqual([0, 1, 3, 4]);
+  });
+
+  it("is the same box whichever corner the drag started from", () => {
+    expect(tilesInBox({ x0: 20, y0: 30, x1: 5, y1: 5 }, grid)).toEqual([0, 1, 3, 4]);
+  });
+
+  it("hits nothing in the gaps between tiles", () => {
+    expect(tilesInBox({ x0: 11, y0: 0, x1: 14, y1: 70 }, grid)).toEqual([]);
+    expect(tilesInBox({ x0: 0, y0: 21, x1: 40, y1: 24 }, grid)).toEqual([]);
+  });
+
+  it("counts a tile the box's edge only touches", () => {
+    expect(tilesInBox({ x0: 10, y0: 20, x1: 14, y1: 24 }, grid)).toEqual([0]);
+  });
+
+  it("stops at the last tile: an empty slot in the last row is no rank", () => {
+    // row 2 holds ranks 6, 7; column 2 of it is empty
+    expect(tilesInBox({ x0: 0, y0: 50, x1: 60, y1: 60 }, grid)).toEqual([6, 7]);
+  });
+
+  it("reaches tiles far past any that are drawn (rows are arithmetic, not DOM)", () => {
+    const big = { ...grid, count: 3000 };
+    expect(tilesInBox({ x0: 0, y0: 25 * 900, x1: 1, y1: 25 * 900 + 1 }, big)).toEqual([2700]);
+  });
+
+  it("hits nothing right of the last column, nor above the first row", () => {
+    expect(tilesInBox({ x0: 41, y0: 0, x1: 90, y1: 90 }, grid)).toEqual([]);
+    expect(tilesInBox({ x0: 0, y0: -30, x1: 90, y1: -1 }, grid)).toEqual([]);
   });
 });
