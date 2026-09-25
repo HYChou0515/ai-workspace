@@ -233,7 +233,9 @@ def register_view_plugin_runner(
                 detail=(
                     f"view plugin {plugin!r}: its sandbox half is not installed in this "
                     "sandbox. Under sandbox.kind http a `bundle` plugin must be built into "
-                    "sandbox-host's builtin/ tools. "
+                    "sandbox-host's builtin/ tools; under sandbox.kind local the plugin dir "
+                    "must hold its sandbox/ (install it with `python -m "
+                    "workspace_app.view_plugin build` — the app image ships web halves only). "
                     f"({stderr.strip()})"
                 ),
             )

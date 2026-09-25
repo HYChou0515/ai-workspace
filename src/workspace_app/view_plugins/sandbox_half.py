@@ -97,9 +97,13 @@ def merge_tools_root(
     so a second process booting on the same filesystem never tears down the
     tree the first one's live sandboxes are using.
 
+    A bundle plugin whose bundle folder is ABSENT (the API image ships web
+    halves only) is skipped with a boot line naming it, not refused.
+
     Raises ``ViewPluginError`` naming both sides when a plugin and a tool
-    package share a name (both would be ``/.tools/<name>``), and naming the
-    plugin when its bundle has no ``launch``."""
+    package share a name (both would be ``/.tools/<name>``) — absent bundle or
+    not — and naming the plugin when a PRESENT bundle has no executable
+    ``launch``."""
     bundles = bundle_plugins(plugins)
     if not bundles:
         return prebuilt if packages else None
@@ -111,6 +115,23 @@ def merge_tools_root(
                 f"view plugin {p.name!r} and tool package {p.name!r} would both be "
                 f"/.tools/{p.name} — rename the plugin (its folder and plugin.json `name`)"
             )
+    present = []
+    for p in bundles:
+        assert p.manifest.sandbox is not None and p.manifest.sandbox.bundle is not None
+        if not (p.dir / p.manifest.sandbox.bundle).is_dir():
+            # The API image's plugin stage builds WEB halves only (under
+            # `kind: http` the sandbox half lives in sandbox-host). Refusing boot
+            # here took every pod of a default `kind: local` deploy down; instead
+            # the plugin's commands fail per call, naming it (the runner's 502,
+            # show_file's "could not check" note). `print`: a boot line an
+            # operator reads in `kubectl logs`.
+            print(
+                f"  ⚠ view plugin {p.name}: sandbox.bundle {p.manifest.sandbox.bundle!r} is not "
+                "in this plugin dir, so its sandbox commands are unavailable here — install it "
+                "with `python -m workspace_app.view_plugin build`"
+            )
+            continue
+        present.append(p)
         launch = p.dir / p.manifest.sandbox.bundle / "launch"
         if not launch.is_file() or not os.access(launch, os.X_OK):
             raise ViewPluginError(
@@ -118,6 +139,9 @@ def merge_tools_root(
                 f"{p.manifest.sandbox.bundle!r} has no executable `launch` — it must be a "
                 "prebuilt tool bundle"
             )
+    bundles = present
+    if not bundles:
+        return prebuilt if packages else None
     sources = [prebuilt / name for name in packages if prebuilt is not None] + [
         p.dir / p.manifest.sandbox.bundle
         for p in bundles

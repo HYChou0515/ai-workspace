@@ -34,8 +34,9 @@ RUN VITE_BASE_PATH="$BASE_PATH" pnpm run build   # → /web/dist
 # the SPA bundle, so an image built around this stage loses that view kind.
 # Web halves only: under `sandbox.kind: http` (production) a plugin's sandbox
 # half lives in sandbox-host, not here. Running THIS image with
-# `sandbox.kind: local`, a plugin with a `bundle` sandbox half refuses boot (no
-# `sandbox/`) — mount a plugin dir installed by `view_plugin build` instead.
+# `sandbox.kind: local`, a plugin with a `bundle` sandbox half has no `sandbox/`:
+# boot prints one line naming it and its commands fail per call — mount a plugin
+# dir installed by `view_plugin build` for them to run.
 FROM node:22-bookworm-slim AS view-plugins
 WORKDIR /src
 RUN npm install -g pnpm@9

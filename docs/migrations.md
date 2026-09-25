@@ -888,6 +888,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   **不要**另外設規則把它們長期快取——重 build 之後舊的 `shared/*.js` 會配到新的雜湊 chunk，
   plugin 面板顯示 `view plugin "<名字>" is unavailable: …`。
 - sandbox-host 這版**不用動**：本 PR 沒有任何 plugin 帶沙盒半邊。
+- 這個 PR **無需動作**，只先講好規則（本 PR 的 plugin 都沒有沙盒半邊；#855 的 chart 會有）：`sandbox.kind: local`
+  跑這個映像時，帶 `bundle` 沙盒半邊的 plugin **不會**擋開機——映像只裝 web 半邊，開機印
+  `⚠ view plugin <名字>: sandbox.bundle … is not in this plugin dir…`，那個 plugin 需要沙盒的畫面逐次顯示錯誤
+  （runner 502 說明兩種後端各自的修法）。為什麼不擋：預設部署就是 `kind: local`，擋了每個 API pod 都起不來。
+  要它能算，在裝那種 plugin 的版本 `rollout 前` 掛一個用 `view_plugin build` 裝好的 plugin 目錄。
 - **本機 / VM 的 `.workspace-tools` 快取會全部重建一次**（`uv run python scripts/prebuild_tools.py`，下次跑時自動發生）：
   工具包的建置標記納入了新的隔離 launcher 樣板。正式映像在 build 時就重建，沒有執行期成本；
   本機第一次會比平常久。

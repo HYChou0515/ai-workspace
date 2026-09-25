@@ -259,3 +259,14 @@ def test_a_command_name_with_a_trailing_newline_is_refused(tmp_path):
     resp = client.post("/a/pm/items/i1/view-plugins/chart/summary%0A", json={"args": {}})
     assert resp.status_code == 404
     assert sb.calls == []
+
+
+def test_a_missing_launcher_names_the_fix_for_both_backends(tmp_path):
+    """Under the default `sandbox.kind: local` the API image ships web halves
+    only, so this is also the ordinary answer there — the message must say what
+    fixes it on that backend too, not only on `http`."""
+    missing = ExecResult(exit_code=127, stderr=b"sh: ../.tools/chart/launch: not found")
+    client, *_ = _client(tmp_path, sandbox=_Sandbox(missing))
+    detail = client.post(URL, json={"args": {}}).json()["detail"]
+    assert "sandbox.kind http" in detail and "sandbox.kind local" in detail
+    assert "view_plugin build" in detail

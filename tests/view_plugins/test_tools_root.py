@@ -217,3 +217,60 @@ def test_leftovers_of_any_crashed_merge_are_cleared(tmp_path: Path):
     merge_tools_root(None, [], plugins, tmp_path / "merged")
     assert not (tmp_path / "merged.staging-99999").exists()
     assert not (tmp_path / "merged.retired-88888").exists()
+
+
+def test_a_bundle_not_shipped_in_this_image_is_skipped_loudly_not_fatal(tmp_path: Path, capsys):
+    """The API image's plugin stage builds WEB halves only; under the default
+    `sandbox.kind: local` a plugin whose `sandbox/` is absent must not take the
+    pod down (every API pod and the blob-gc worker boot this). Its commands
+    then fail per call, naming the plugin — the runner's 502, show_file's note."""
+    _plugin(tmp_path / "plugins", "chart")
+    _plugin(tmp_path / "plugins", "webonly")
+    import shutil
+
+    shutil.rmtree(tmp_path / "plugins" / "webonly" / "sandbox")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    merged = merge_tools_root(None, [], plugins, tmp_path / "merged")
+    assert merged is not None
+    assert (merged / "chart" / "launch").is_file()
+    assert not (merged / "webonly").exists()
+    out = capsys.readouterr().out
+    assert "webonly" in out and "not in this plugin dir" in out
+
+
+def test_only_absent_bundles_means_no_merge(tmp_path: Path, capsys):
+    _plugin(tmp_path / "plugins", "webonly")
+    import shutil
+
+    shutil.rmtree(tmp_path / "plugins" / "webonly" / "sandbox")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    assert merge_tools_root(None, [], plugins, tmp_path / "merged") is None
+    assert "webonly" in capsys.readouterr().out
+
+
+def test_a_clash_with_a_tool_package_refuses_boot_even_with_the_bundle_absent(tmp_path: Path):
+    """Absent or not, `/.tools/<name>` would be the TOOL's — the runner would
+    run somebody else's command under the plugin's name."""
+    import shutil
+
+    prebuilt = tmp_path / "prebuilt"
+    _package(prebuilt, "chart")
+    _plugin(tmp_path / "plugins", "chart")
+    shutil.rmtree(tmp_path / "plugins" / "chart" / "sandbox")
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    with pytest.raises(ViewPluginError, match=r"tool package 'chart'"):
+        merge_tools_root(prebuilt, ["chart"], plugins, tmp_path / "merged")
+
+
+def test_installing_the_bundle_later_is_picked_up_at_the_next_boot(tmp_path: Path):
+    import shutil
+
+    _plugin(tmp_path / "plugins", "chart")
+    bundle = tmp_path / "plugins" / "chart" / "sandbox"
+    shutil.copytree(bundle, tmp_path / "kept")
+    shutil.rmtree(bundle)
+    plugins = discover_view_plugins(tmp_path / "plugins")
+    assert merge_tools_root(None, [], plugins, tmp_path / "merged") is None
+    shutil.copytree(tmp_path / "kept", bundle)
+    merged = merge_tools_root(None, [], plugins, tmp_path / "merged")
+    assert merged is not None and (merged / "chart" / "launch").is_file()

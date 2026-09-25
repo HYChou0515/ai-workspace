@@ -81,7 +81,8 @@ def _check_sandbox(p: ViewPlugin, report: Report) -> None:
     if not bundle.is_dir():
         report.notes.append(
             f"{half.bundle}/ is not in this dir — fine under sandbox.kind http, where the "
-            "bundle lives in sandbox-host's builtin/; sandbox.kind local refuses to boot"
+            "bundle lives in sandbox-host's builtin/; under sandbox.kind local its commands "
+            "fail per call"
         )
         return
     launch = bundle / "launch"

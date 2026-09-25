@@ -261,7 +261,7 @@ site-packages，使用者的 user site 與 `PYTHONPATH` 都進不來。
 
 | `sandbox.kind` | `{"bundle": …}` | `{"artifact": url}` |
 |---|---|---|
-| `local` | 開機時複製進一個合併的工具根目錄（jail 只 bind-mount 一個根目錄，所以是複製不是連結）；和工具套件撞名 ⇒ 拒絕開機 | 不支援（呼叫時明確報錯） |
+| `local` | 開機時複製進一個合併的工具根目錄（jail 只 bind-mount 一個根目錄，所以是複製不是連結）；和工具套件撞名 ⇒ 拒絕開機；bundle 資料夾不在 ⇒ 開機印一行、指令逐次報錯；在但沒有可執行的 `launch` ⇒ 拒絕開機 | 不支援（呼叫時明確報錯） |
 | `http`（正式環境） | 必須已經在 sandbox-host 的 `builtin/` 裡；不在 ⇒ 呼叫時報錯並點名 plugin | 跟 app 的 `external_tools`（#674）同一條路解析、快取、掛載 |
 | `docker` | 不支援（呼叫時明確報錯） | 不支援 |
 
@@ -331,8 +331,9 @@ CI 與映像建完 plugin 都會跑它。
 `build` 裝成 `sandbox/`，所以有 `sandbox-src/` 的 plugin，`plugin.json` 要寫 `"sandbox": {"bundle": "sandbox"}`。
 app 映像的 `view-plugins` stage 用**同一支** `build-web.mjs` 建每個 plugin 的 web 半邊，裝到
 `/app/.view-plugins`——**只有 web 半邊**：正式環境（`sandbox.kind: http`）的沙盒半邊在 sandbox-host；
-用這個映像跑 `sandbox.kind: local` 時，帶 `bundle` 的 plugin 會因為沒有 `sandbox/` 而拒絕開機，
-要自己掛一個用 `view_plugin build` 裝好的 plugin 目錄。
+用這個映像跑 `sandbox.kind: local` 時，帶 `bundle` 的 plugin 沒有 `sandbox/`：開機印一行
+`⚠ view plugin <名字>: sandbox.bundle … is not in this plugin dir…` 後照常開機，它的沙盒指令逐次呼叫時
+明確報錯（runner 502、`show_file` 附註）。要它能算，自己掛一個用 `view_plugin build` 裝好的 plugin 目錄。
 
 **開發時**：`make view-plugins` 裝到 `<repo>/.view-plugins`（`view_plugins.dir` 沒設時的預設），重啟 app；
 `pnpm run dev` 的 dev server 也會輸出 import map（指向 Vite 自己 serve 的 React facade 與 SDK 原始碼；
