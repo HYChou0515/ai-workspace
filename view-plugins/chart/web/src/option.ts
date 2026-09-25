@@ -224,7 +224,10 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     if (typeof n !== "number" || !Number.isFinite(n) || (kind === "log" && n <= 0)) return null;
     return n;
   };
-  return { channel, kind, labels: [], at: (col, row) => pos(col.value(row)), pos };
+  // A mark's points go as the layer holds them, for ECharts to read (text
+  // from a layer that typed the field otherwise included); only a rule's
+  // own values are held to `pos`.
+  return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null, pos };
 }
 
 /** Where an axis name goes: centred beside its axis. At ECharts' default (the
@@ -412,7 +415,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       // Positions go through the axis: a category axis reads a number as an
       // INDEX, so a rule at the category 2022 must be sent as its index.
       // A datum or value with no position is left out — never sent as null,
-      // on which ECharts throws and the whole chart breaks — and a datum says so.
+      // on which ECharts throws and the whole chart breaks — and a note says so.
       const datumLine = (c: "x" | "y", axis: Axis | null, datum: Scalar, title?: string) => {
         const at = axis ? axis.pos(datum) : null;
         if (at === null) {
@@ -427,22 +430,29 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           return v === null ? [] : [{ [key]: v }];
         });
         const off = all.length - lines.length;
-        if (off > 0) notes.push(`${off} rule ${off === 1 ? "value" : "values"} off the ${key[0]} axis — not drawn`);
+        if (off > 0) notes.push(`${off} rule ${off === 1 ? "value" : "values"} with no place on the ${key[0]} axis — not drawn`);
         return lines;
       };
       if (enc.y?.datum !== undefined) data = datumLine("y", yAxis, enc.y.datum, enc.y.title);
       else if (enc.x?.datum !== undefined) data = datumLine("x", xAxis, enc.x.datum, enc.x.title);
       else if (enc.y?.field && !enc.x?.field)
-        data = placed("yAxis", (r) => (yAxis ? yAxis.at(cols[enc.y!.field!], r) : (cols[enc.y!.field!].value(r) as number | null)));
+        data = placed("yAxis", (r) => (yAxis ? yAxis.pos(cols[enc.y!.field!].value(r)) : null));
       else if (enc.x?.field && !enc.y?.field)
-        data = placed("xAxis", (r) => (xAxis ? xAxis.at(cols[enc.x!.field!], r) : (cols[enc.x!.field!].value(r) as number | null)));
-      else
-        data = all.map((r) => {
+        data = placed("xAxis", (r) => (xAxis ? xAxis.pos(cols[enc.x!.field!].value(r)) : null));
+      else {
+        // A segment needs both ends: one missing (or an x2 / y2 with no place,
+        // which used to fall back to x / y) leaves the row out.
+        const end = (axis: Axis | null, c: Channel | undefined, r: number, start: number | null) =>
+          c?.field ? (axis?.at(cols[c.field], r) ?? null) : start;
+        data = all.flatMap((r) => {
           const [x, y] = point(li, r);
-          const x2 = enc.x2?.field ? (xAxis?.at(cols[enc.x2.field], r) ?? x) : x;
-          const y2 = enc.y2?.field ? (yAxis?.at(cols[enc.y2.field], r) ?? y) : y;
-          return [{ coord: [x, y] }, { coord: [x2, y2] }];
+          const x2 = end(xAxis, enc.x2, r, x);
+          const y2 = end(yAxis, enc.y2, r, y);
+          return [x, y, x2, y2].some((v) => v === null) ? [] : [[{ coord: [x, y] }, { coord: [x2, y2] }]];
         });
+        const off = all.length - data.length;
+        if (off > 0) notes.push(`${off} rule ${off === 1 ? "segment" : "segments"} with no place on the axes — not drawn`);
+      }
       push({ type: "line", data: [], markLine: { ...line, data } }, []);
       return;
     }

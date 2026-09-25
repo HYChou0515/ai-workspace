@@ -75,7 +75,7 @@ def drawn_datums(spec: Mapping[str, Any]) -> list[tuple[str, Any]]:
 
 class _Wire:
     """The answer's columns, built and decoded only when a datum needs them:
-    a datum on a time or number axis needs no data at all."""
+    a datum on a time or number axis of a chart with no grid needs no data."""
 
     def __init__(self, build: Callable[[], Mapping[str, Any]]) -> None:
         self._build = build
@@ -154,7 +154,9 @@ def _unplaced(
             return None
         listed = sorted(s for s in shown if s is not None)[:5]
         return f"is not a value the axis shows ({', '.join(listed)})"
-    if channel.get("scale", {}).get("type") == "log" and datum <= 0:
+    # A temporal channel is a time axis whatever its scale says.
+    log = kind == "quantitative" and channel.get("scale", {}).get("type") == "log"
+    if log and datum <= 0:
         return "is not above 0, and a log axis holds nothing else"
     return None
 
@@ -166,7 +168,10 @@ def _key(v: Any) -> tuple[str, Any]:
 
 def _lattice_labels(values: list[Any]) -> list[Any]:
     """web/src/raster.ts `axis()`: a lattice axis's cells, in order."""
-    unique = list({_key(v): v for v in reversed(values)}.values())[::-1]
+    first: dict[tuple[str, Any], Any] = {}
+    for v in values:  # a Set keeps each value's first place
+        first.setdefault(_key(v), v)
+    unique = list(first.values())
     if unique and all(_number(v) for v in unique):
         if all(float(v).is_integer() for v in unique):
             lo, hi = int(min(unique)), int(max(unique))
