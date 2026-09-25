@@ -419,8 +419,9 @@ def test_only_the_columns_a_group_needs_are_made_text(monkeypatch):
 
 def _arrays() -> pd.DataFrame:
     # What pyarrow gives for a parquet list column: numpy array cells. The
-    # last row's longer arrays are the ones `==` raised on; one-element arrays
-    # silently matched nothing.
+    # last row's longer arrays are the ones `==` raised on; a one-element array
+    # compared as its only item (`equal: a` matched it) and never as its
+    # marking text.
     return pd.DataFrame(
         {
             "tags": pd.Series(
@@ -453,7 +454,7 @@ def test_a_predicate_on_a_list_column_compares_its_marking(pred):
 def test_an_order_on_a_list_column_is_refused_by_name(pred, field):
     # Round 11: against text, a list's marking text was ordered alphabetically
     # ("[" sorts after "2", so every list was "after" 2024) — refuse it.
-    with pytest.raises(TransformError, match=f"'{field}' holds lists"):
+    with pytest.raises(TransformError, match=f"'{field}' holds lists or mappings"):
         apply_transforms(_arrays(), [{"filter": {"field": field, **pred}}])
 
 
@@ -622,11 +623,154 @@ def test_a_refused_range_names_the_range():
         apply_transforms(df, [{"filter": {"field": "t", "range": [0, 1]}}])
 
 
-def test_the_skills_list_membership_filter_tests_an_item():
-    # SKILL.md tells a model to test membership this way (a query filter takes
-    # no lambda): it must match an item equal to "a", not one containing it.
-    df = pd.DataFrame({"tags": [["a", "b"], ["ab"], ["c"]], "v": [1.0, 2.0, 3.0]})
-    kept = apply_transforms(df, [{"filter": "tags.str.contains('a', regex=False)"}])
-    assert kept["v"].tolist() == [1.0]
+def _skill_list_filters() -> list[str]:
+    # Every query filter the skill's list-field paragraph quotes, read from the
+    # skill itself (round 12: the test ran its own copy of the text).
+    import re
+
     skill = (Path(__file__).resolve().parents[2] / "skill" / "SKILL.md").read_text()
-    assert "tags.str.contains('a', regex=False)" in skill
+    paragraph = skill[skill.index("A field holding a list") :].split("\n\n")[0]
+    return re.findall(r'"(tags\.[^"]+)"', paragraph)
+
+
+# What each quoted filter keeps of: an item "a" with another, an item that only
+# contains "a", no "a", a record without the field.
+_SKILL_FILTER_KEEPS = {
+    "tags.str.contains('a', regex=False, na=False)": [1.0],
+    "tags.str.len() > 1": [1.0],
+}
+
+
+def test_the_skill_quotes_the_list_filters_this_test_runs():
+    assert sorted(_skill_list_filters()) == sorted(_SKILL_FILTER_KEEPS)
+
+
+@pytest.mark.parametrize("query", sorted(_SKILL_FILTER_KEEPS))
+@pytest.mark.parametrize("cells", ["lists", "arrays"])
+def test_the_skills_list_filters_keep_what_they_say(query, cells):
+    tags = [["a", "b"], ["ab"], ["c"], None]
+    if cells == "arrays":  # a parquet list column, with a null
+        tags = [None if t is None else np.array(t) for t in tags]
+    df = pd.DataFrame({"tags": pd.Series(tags, dtype=object), "v": [1.0, 2.0, 3.0, 4.0]})
+    kept = apply_transforms(df, [{"filter": query}])
+    assert kept["v"].tolist() == _SKILL_FILTER_KEEPS[query]
+
+
+@pytest.mark.parametrize("value", ["soon", "10000-01-01"])
+def test_a_one_of_value_that_is_no_date_is_refused_on_a_date_column(value):
+    # Round 12: P33 cast the whole list to the column's dtype, and one value
+    # that is no date raised DateParseError out of the CLI.
+    with pytest.raises(TransformError, match=f"oneOf {value!r} is not a date"):
+        apply_transforms(_days(), [{"filter": {"field": "day", "oneOf": ["2024-01-01", value]}}])
+
+
+def test_a_one_of_null_on_a_date_column_names_the_missing_rows():
+    days = _days()
+    days.loc[1, "day"] = None
+    kept = apply_transforms(days, [{"filter": {"field": "day", "oneOf": [None, "2024-01-01"]}}])
+    assert kept["v"].tolist() == [1.0, 2.0]
+
+
+@pytest.mark.parametrize(
+    ("column", "values"),
+    [
+        # a nanosecond column cannot hold year 1 or 9999
+        (pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])), ["0001-01-01", "9999-12-31"]),
+        # 0001-01-01 in Asia/Taipei (LMT) is no time the zone had
+        (
+            pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])).dt.tz_localize("Asia/Taipei"),
+            ["0001-01-01"],
+        ),
+    ],
+    ids=["past-nanoseconds", "no-such-local-time"],
+)
+def test_a_one_of_date_the_column_cannot_hold_matches_nothing(column, values):
+    # Round 12 regression lens: these raised out of the CLI (OutOfBounds,
+    # NonExistentTime) where 4e467420 matched nothing. A date the column cannot
+    # hold names none of its rows.
+    df = pd.DataFrame({"at": column, "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "at", "oneOf": [*values, "2024-01-02"]}}])
+    assert kept["v"].tolist() == [2.0]
+
+
+def test_a_zoned_one_of_value_on_a_zoned_column_is_the_same_instant():
+    at = pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])).dt.tz_localize("Asia/Taipei")
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "at", "oneOf": ["2024-01-01T16:00:00Z"]}}])
+    assert kept["v"].tolist() == [2.0]  # 16:00 UTC is midnight in Taipei
+
+
+def test_a_one_of_value_that_is_no_date_is_refused_on_a_datetime_column():
+    at = pd.Series(pd.to_datetime(["2024-01-01"]))
+    df = pd.DataFrame({"at": at, "v": [1.0]})
+    with pytest.raises(TransformError, match="oneOf 'abc' is not a date"):
+        apply_transforms(df, [{"filter": {"field": "at", "oneOf": ["abc"]}}])
+    with pytest.raises(TransformError, match="oneOf True is not a date"):
+        apply_transforms(_days(), [{"filter": {"field": "day", "oneOf": [True]}}])
+
+
+def test_a_one_of_date_on_a_zoned_column_is_read_in_its_zone():
+    # A typed zoned column compares text in its own zone, as `equal` does there.
+    at = pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])).dt.tz_localize("Asia/Taipei")
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "at", "oneOf": ["2024-01-02"]}}])
+    assert kept["v"].tolist() == [2.0]
+
+
+def test_a_one_of_value_with_a_zone_names_its_instant_on_a_date_column():
+    kept = apply_transforms(
+        _days(), [{"filter": {"field": "day", "oneOf": ["2024-01-02T08:00:00+08:00"]}}]
+    )
+    assert kept["v"].tolist() == [2.0]
+
+
+def test_a_datetime_keeps_its_fraction_of_a_second():
+    # Round 12: datetime64[s] dropped it — all three matched midnight.
+    import datetime as dt
+
+    times = [dt.datetime(2024, 1, 1, 0, 0, 0, us) for us in (1, 2, 900000)]
+    df = pd.DataFrame({"at": pd.Series(times, dtype=object), "v": [1.0, 2.0, 3.0]})
+    assert apply_transforms(df, [{"filter": {"field": "at", "equal": "2024-01-01"}}]).empty
+    early = apply_transforms(df, [{"filter": {"field": "at", "lt": "2024-01-01T00:00:00.5"}}])
+    assert early["v"].tolist() == [1.0, 2.0]
+
+
+def test_an_instant_past_the_calendar_at_utc_is_refused_by_name():
+    # Round 12: 0001-01-01 at +08:00 is before year 1 at UTC; OverflowError.
+    import datetime as dt
+
+    zone = dt.timezone(dt.timedelta(hours=8))
+    df = pd.DataFrame(
+        {"at": pd.Series([dt.datetime(1, 1, 1, tzinfo=zone)], dtype=object), "v": [1.0]}
+    )
+    with pytest.raises(TransformError, match="'at'"):
+        apply_transforms(df, [{"filter": {"field": "at", "lt": "2024-01-01"}}])
+
+
+def test_an_object_column_of_numpy_instants_reads_text_as_a_date():
+    # Round 12: `infer_dtype` calls it "datetime64", which the date branch
+    # left out — `equal: "2024-01-01"` matched nothing.
+    at = pd.Series([np.datetime64("2024-01-01"), np.datetime64("2024-01-02")], dtype=object)
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "at", "equal": "2024-01-01"}}])
+    assert kept["v"].tolist() == [1.0]
+
+
+@pytest.mark.parametrize(
+    ("cells", "text"),
+    [
+        ([[1], 2, 3], "[1]"),  # infer_dtype: "mixed-integer"
+        ([{"a": 1}, {"a": 2}, {"a": 3}], "{'a': 1}"),
+        ([(1,), (2,), (3,)], "[1]"),
+        ([{1}, {2}, {3}], "[1]"),
+    ],
+    ids=["mixed-integer", "mappings", "tuples", "sets"],
+)
+def test_every_kind_of_container_is_compared_as_its_text(cells, text):
+    # Round 12: only lists and arrays had a test; each member of the
+    # container test, and the "mixed-integer" column, are pinned here.
+    df = pd.DataFrame({"k": pd.Series(cells, dtype=object), "v": [1.0, 2.0, 3.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "k", "equal": text}}])
+    assert kept["v"].tolist() == [1.0]
+    with pytest.raises(TransformError, match="holds lists or mappings"):
+        apply_transforms(df, [{"filter": {"field": "k", "lt": "z"}}])

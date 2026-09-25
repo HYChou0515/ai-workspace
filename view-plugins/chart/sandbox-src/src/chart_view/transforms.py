@@ -47,16 +47,47 @@ _COMPARE = {
 }
 
 
-def _comparable(s: pd.Series) -> pd.Series:
+def _comparable(s: pd.Series, field: str) -> pd.Series:
     """`s` as a predicate compares it: a list cell as its marking text (what a
     highlight or a marking holds), and a column of date / datetime objects (a
-    parquet date32 column) as datetimes, so "2024-01-01" names a day there as
-    it does in a datetime column — a date object is never equal to text."""
+    parquet date32 column, an entity's dates) as datetimes, so "2024-01-01"
+    names a day there as it does in a datetime column — a date object is never
+    equal to text. Zoned objects are read at UTC, as the chart reads zone-less
+    text (a typed zoned column keeps its own zone, as pandas compares it)."""
     s = unhashable_as_text(s)
-    if s.dtype == object and pd.api.types.infer_dtype(s, skipna=True) in ("date", "datetime"):
-        # Zoned ones at UTC, as zone-less text is read; seconds keep 0001-9999.
-        return s.map(_at_utc).astype("datetime64[s]")
+    instants = ("date", "datetime", "datetime64")  # datetime64: numpy instants as objects
+    if s.dtype == object and pd.api.types.infer_dtype(s, skipna=True) in instants:
+        try:  # microseconds: 0001 to 9999, and a fraction of a second, fit
+            return s.map(_at_utc).astype("datetime64[us]")
+        except OverflowError as e:  # 0001-01-01 at +08:00 is before year 1 at UTC
+            raise TransformError(f"{field!r}: an instant out of range at UTC ({e})") from e
     return s
+
+
+def _instants(values: Sequence[Any], dtype: Any, field: str) -> list[Any]:
+    """`oneOf` values on a datetime column, as that column holds instants: a
+    null stays (it names the missing rows), text that is no date is refused,
+    and a date the column cannot hold — no such local time in its zone — is
+    left out, since it names none of the rows."""
+    out = []
+    for value in values:
+        if value is None:
+            out.append(None)
+            continue
+        try:
+            stamp = pd.Timestamp(value)
+        except (TypeError, ValueError, OverflowError) as e:
+            raise TransformError(f"filter on {field!r}: oneOf {value!r} is not a date") from e
+        zone = getattr(dtype, "tz", None)
+        if zone is None:
+            out.append(_at_utc(stamp))
+        elif stamp.tzinfo is not None:
+            out.append(stamp.tz_convert(zone))
+        else:  # a typed zoned column: text in its zone
+            local = stamp.tz_localize(zone, nonexistent="NaT", ambiguous="NaT")
+            if isinstance(local, pd.Timestamp):
+                out.append(local)
+    return out
 
 
 def _at_utc(v: Any) -> Any:
@@ -68,28 +99,28 @@ def _at_utc(v: Any) -> Any:
 def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
     field = pred["field"]
     need_columns(df, field)
-    # A list cell compared as a numpy array matched nothing (one element) or
-    # raised on `==` (more); see _comparable.
-    s = _comparable(df[field])
+    # (what the author wrote, the comparison, the value)
+    orders = [(op, op, v) for op, v in pred.items() if op in _COMPARE]
+    if "range" in pred:
+        low, high = pred["range"]
+        orders += [("range", "gte", low), ("range", "lte", high)]
+    if orders and holds_containers(df[field]):  # before the column is made text
+        # Against text, a list's marking text would be ordered alphabetically.
+        raise TransformError(
+            f"filter on {field!r}: {field!r} holds lists or mappings, which have no order —"
+            " compare them with equal or oneOf"
+        )
+    # A list cell compared as a numpy array compared as its only item (one
+    # element) or raised on `==` (more), never as its text; see _comparable.
+    s = _comparable(df[field], field)
     mask = pd.Series(True, index=df.index)
     if "equal" in pred:
         mask &= s == pred["equal"]
     if "oneOf" in pred:
         values = pred["oneOf"]
         if pd.api.types.is_datetime64_any_dtype(s):  # text names a day there too
-            values = pd.Series(values, dtype=object).astype(s.dtype)
+            values = _instants(values, s.dtype, field)
         mask &= s.isin(values)
-    # (what the author wrote, the comparison, the value)
-    orders = [(op, op, v) for op, v in pred.items() if op in _COMPARE]
-    if "range" in pred:
-        low, high = pred["range"]
-        orders += [("range", "gte", low), ("range", "lte", high)]
-    if orders and holds_containers(df[field]):
-        # Against text, a list's marking text would be ordered alphabetically.
-        raise TransformError(
-            f"filter on {field!r}: {field!r} holds lists, which have no order —"
-            " compare them with equal or oneOf"
-        )
     for name, op, value in orders:
         try:
             mask &= _COMPARE[op](s, value)
@@ -161,7 +192,7 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
 def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
     by, items, groupby = t["diff"]["by"], t["aggregate"], list(t.get("groupby", []))
     need_columns(df, by)
-    side = _comparable(df[by])  # a list side by its marking, a date by its day
+    side = _comparable(df[by], by)  # a list side by its marking, a date by its day
     of = aggregate(df[side == t["diff"]["of"]], items, groupby)
     minus = aggregate(df[side == t["diff"]["minus"]], items, groupby)
     names = [i["as"] for i in items]
