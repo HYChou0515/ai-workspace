@@ -100,8 +100,8 @@ by every other field channel, as in Vega-Lite. Unlike Vega-Lite, a channel's
 `count` names a `field` and counts the rows where that field has a value. `rate` is the share of rows
 where the field is true; its field holds true/false or 0/1.
 
-A field holding a list (an entity list, a parquet list column) is one text
-per row, written as Python prints it — `['a', 'b']`: `equal`, `oneOf`,
+A cell holding a list (an entity list, a parquet list column) is one text,
+written as Python prints it — `['a', 'b']`: `equal`, `oneOf`,
 `diff` and `highlight: values` compare that text; to test membership use a
 query filter, `filter: "tags.str.contains('a', regex=False, na=False)"` (an item equal to
 `a`), or `"tags.str.len() > 1"`.
