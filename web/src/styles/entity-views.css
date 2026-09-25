@@ -405,12 +405,24 @@
  * whole panel past the pane (which clipped DUE / PROGRESS — #3 "text cut"). */
 .ev-tableview {
   min-width: 0;
+  /* #847/#848 PR 5 P24 — the pane's free height, grown from nothing: grown
+   * from its own height, a table made the panel as tall as every row (775 px
+   * in a 356 px pane at 390 wide), so its sideways scrollbar sat below the
+   * pane. At least a few rows in a very short pane (the pane scrolls then). */
+  flex: 1 1 0;
+  min-height: 6rem;
+  display: flex;
+  flex-direction: column;
 }
 .ev-table-wrap {
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   overflow: auto;
   background: var(--white);
+  /* as tall as its rows; shrinks to the view's height, and scrolls, when they
+   * are taller (P24) */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 .ev-table {
   border-collapse: separate;

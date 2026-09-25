@@ -44,6 +44,17 @@ function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityIns
 
 type FilterOption = { value: string; label: string };
 
+/** The least a data column narrows to (#847/#848 PR 5 P24). The table fills
+ * its pane and shares the width among its columns (fixed layout), but in a
+ * 137 px pane that left LOT as "L" with no way to read the rest; below this
+ * the table scrolls sideways inside its wrap instead. */
+export const TABLE_COLUMN_MIN_REM = 6;
+/** The fixed columns' widths (entity-views.css): the checkbox, the number,
+ * and the drag grip of a table with no sort. */
+const CHECK_PX = 36;
+const NUM_PX = 44;
+const GRIP_PX = 24;
+
 export function TableView({
   spec,
   type,
@@ -317,7 +328,12 @@ export function TableView({
 
       <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
         <div className="ev-table-wrap scrollable">
-          <table className="ev-table">
+          <table
+            className="ev-table"
+            style={{
+              minWidth: `calc(${CHECK_PX + NUM_PX + (manualMode ? GRIP_PX : 0)}px + ${columns.length * TABLE_COLUMN_MIN_REM}rem)`,
+            }}
+          >
             <thead>
             <tr>
               {manualMode && <th className="ev-table__reorder" aria-hidden />}

@@ -92,6 +92,27 @@ describe("the csv-table example kind", () => {
     expect(screen.queryByText(/no schema for/i)).not.toBeInTheDocument();
   });
 
+  it("takes the pane's free height, so its grid scrolls inside the pane (#847/#848 PR 5 P24)", async () => {
+    // At 390 wide the grid grew to all its rows (775 px in a 356 px pane):
+    // its sideways scrollbar sat below the pane, and the columns past the
+    // pane's edge read as cut off. The view grows into the panel from nothing
+    // (at least a few rows), and the grid, its flex child, scrolls both ways.
+    mock.catalog.mockResolvedValue({ types: [], diagnostics: [] });
+    renderView("/views/yield.ai.yaml", {
+      "/views/yield.ai.yaml": VIEW,
+      "/data/wafer.csv": "lot,yield\nA1,0.97\nB2,0.91\n",
+    });
+    const grid = (await screen.findByText("A1")).closest("table")!.parentElement!;
+    expect(grid.style.overflow).toBe("auto");
+    expect(grid.style.minHeight).toBe("0");
+    const view = grid.parentElement!;
+    expect(view.parentElement).toHaveClass("ev-panel");
+    expect(view.style.flex).toBe("1 1 0px");
+    expect(view.style.minHeight).toBe("6rem");
+    expect(view.style.display).toBe("flex");
+    expect(view.style.flexDirection).toBe("column");
+  });
+
   it("reads a .tsv with tab delimiters, not commas", async () => {
     mock.catalog.mockResolvedValue({ types: [], diagnostics: [] });
 

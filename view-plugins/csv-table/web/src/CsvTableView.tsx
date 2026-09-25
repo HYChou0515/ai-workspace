@@ -77,7 +77,11 @@ function CsvFromFile({
   if (entry.status === "loading") return <Notice>Loading {path}…</Notice>;
   if (entry.status === "error") return <Notice>{entry.error ?? `could not read ${path}`}</Notice>;
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    // The panel's free height, grown from nothing (#847/#848 PR 5 P24): grown
+    // from its rows, the grid made the panel as tall as all of them, and its
+    // sideways scrollbar sat below the pane. The grid (a flex child that
+    // scrolls) then scrolls both ways inside the pane; a few rows at least.
+    <div style={{ display: "flex", flexDirection: "column", flex: "1 1 0", minHeight: "6rem" }}>
       {table.bar}
       <DataGrid rows={rows} show={table.shown} highlighted={table.highlighted} select={table.select} />
     </div>
