@@ -30,7 +30,7 @@ from typing import Protocol
 
 # Re-exported (`x as x`): these lived here before `filestore.batch`, and every
 # existing `from ..files.facade import …` keeps working.
-from ..filestore.batch import abs_path
+from ..filestore.batch import abs_path as abs_path
 from ..filestore.batch import read_all as read_all
 from ..filestore.batch import read_all_existing as read_all_existing
 from ..filestore.batch import rel_path as rel_path

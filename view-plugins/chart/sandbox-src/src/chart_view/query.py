@@ -18,7 +18,9 @@ A layer sends the fields its channels name (under those names; an encoding
 `aggregate` replaces a field's values with the aggregate) plus the spec's
 `keys:` it still has, so a selection can say which keys it covers. Summaries
 a mark computes travel under `$`-names no data column can have: `$lo $q1 $mid
-$q3 $hi` (boxplot), `$lo $mid $hi` (errorbar), `$count` (a binned scatter).
+$q3 $hi` (boxplot), `$lo $mid $hi` (errorbar), `$count` (a binned scatter);
+and `$key.<name>` repeats a key a channel sends as numbers / time / q8, as
+the marking strings a selection names it by (`selection.ts:keyColumn`).
 
 `highlight:` resolves on each layer's own rows. A layer whose rows cannot see
 the columns it names is not lit (a rule has no rows at all); an expression that

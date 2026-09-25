@@ -14,8 +14,8 @@
  * - legend: ECharts' own show / hide stays; with a category hidden, the rows
  *   still shown are the selection; with all shown, nothing is.
  */
-import type { Answer, Built } from "./option";
-import { canon, decodeColumn } from "./wire";
+import type { Answer, Built, WireLayer } from "./option";
+import { canon, type Column, decodeColumn } from "./wire";
 
 export type Selection = { source: "brush" | "lasso" | "legend"; layer: number; rows: number[] };
 
@@ -98,15 +98,21 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
 }
 
 /** The `keys:` columns' values over the selected rows — what a marking holds. */
+/** Where a key's MARKING strings live in a layer: `$key.<name>` when a channel
+ * sends the key as numbers / time / q8 (query.py adds it), else the key's own
+ * column. The one lookup for everything that compares a layer with a marking —
+ * writing one (`selectionValues`) and lighting by one — so the two never read
+ * different columns. Null when the layer does not carry the key. */
+export function keyColumn(layer: WireLayer | undefined, key: string): Column | null {
+  const wire = layer?.columns[`$key.${key}`] ?? layer?.columns[key];
+  return wire ? decodeColumn(wire) : null;
+}
+
 export function selectionValues(sel: Selection, answer: Answer, keys: string[]): Record<string, string[]> {
-  const columns = answer.layers[sel.layer]?.columns ?? {};
   const out: Record<string, string[]> = {};
   for (const key of keys) {
-    // A key a channel sends as numbers / time / q8 comes as marking strings
-    // under `$key.<name>` too (query.py) — those are what a marking holds.
-    const wire = columns[`$key.${key}`] ?? columns[key];
-    if (!wire) continue;
-    const col = decodeColumn(wire);
+    const col = keyColumn(answer.layers[sel.layer], key);
+    if (!col) continue;
     const seen = new Set<string>();
     for (const r of sel.rows) {
       const text = canon(col.value(r));

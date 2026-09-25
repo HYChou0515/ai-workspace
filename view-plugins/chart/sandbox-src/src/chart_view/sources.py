@@ -34,7 +34,10 @@ def inside_workspace(root: Path, name: str) -> Path:
 
     The file is named by a view file anyone who can read the item can open,
     and on a shared-dir backend a sibling item's workspace is one `../` away."""
-    path = (root / name.lstrip("/")).resolve()
+    try:
+        path = (root / name.lstrip("/")).resolve()
+    except (ValueError, OSError) as e:  # a NUL byte, a loop of links
+        raise SourceError(f"{name!r} is not a usable path ({e})") from e
     if not path.is_relative_to(root.resolve()):
         raise SourceError(f"{name!r} is outside the workspace")
     return path

@@ -722,43 +722,6 @@
                 "required": [
                   "x",
                   "y"
-                ]
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "mark"
-            ],
-            "properties": {
-              "mark": {
-                "anyOf": [
-                  {
-                    "const": "scatter"
-                  },
-                  {
-                    "type": "object",
-                    "required": [
-                      "type"
-                    ],
-                    "properties": {
-                      "type": {
-                        "const": "scatter"
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "encoding": {
-                "required": [
-                  "x",
-                  "y"
                 ],
                 "properties": {
                   "x": {
