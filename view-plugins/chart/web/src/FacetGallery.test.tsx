@@ -395,12 +395,36 @@ describe("FacetGallery", () => {
   it("takes focus when a group is enlarged, and Escape puts it away", () => {
     // It covered the gallery's toolbar with no way out but its Close button:
     // Escape did nothing, since focus stayed on the ⤢ underneath.
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
     view();
     fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
     const dialog = screen.getByRole("dialog");
     expect(dialog.contains(document.activeElement)).toBe(true);
+    // taking focus must not scroll the host page to the gallery
+    expect(focus.mock.contexts.includes(dialog)).toBe(true);
+    expect(focus.mock.calls[focus.mock.contexts.indexOf(dialog)][0]).toEqual({ preventScroll: true });
+    focus.mockRestore();
     fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps its Escape to itself, and gives focus back to the ⤢ that opened it", () => {
+    // The host's ModalShell listens for Escape on document: one press must not
+    // close the enlarged view AND whatever the chart sits in.
+    const heard = vi.fn();
+    document.addEventListener("keydown", heard);
+    try {
+      view();
+      const opener = screen.getAllByRole("button", { name: /enlarge/i })[0];
+      opener.focus();
+      fireEvent.click(opener);
+      fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(heard).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    } finally {
+      document.removeEventListener("keydown", heard);
+    }
   });
 
   it("enlarges one group with its exact values", () => {
