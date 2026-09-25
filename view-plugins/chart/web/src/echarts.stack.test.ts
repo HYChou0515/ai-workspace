@@ -167,3 +167,74 @@ describe("stack: true on a quantitative, temporal and nominal x", () => {
     chart.dispose();
   });
 });
+
+describe("stacks P29 must not break (round 16 defect lens)", () => {
+  it("stacks a horizontal bar by its category y, as before P29 (D1: red — filled by length)", () => {
+    const doc = {
+      ...base,
+      mark: { type: "bar", stack: true },
+      encoding: {
+        x: { field: "v", type: "quantitative" },
+        y: { field: "c", type: "nominal" },
+        color: { field: "g", type: "nominal" },
+      },
+    };
+    const { chart, built, model } = draw(
+      doc,
+      answer(layer("bar", 4, { v: f64([1, 5, 2, 7]), c: cat(["p", "q", "p", "q"]), g: cat(["a", "a", "b", "b"]) })),
+    );
+    // b's p bar ends at 1 + 2, its q bar at 5 + 7; no point is added to line it up
+    expect(tops(model, built)[1]).toEqual(new Map([["2", 3], ["3", 12]]));
+    expect(built.series.map((s) => s.rows)).toEqual([[0, 1], [2, 3]]);
+    chart.dispose();
+  });
+
+  it("labels each stacked point with its own row's text, and a filler with none (D2: red — by old index)", () => {
+    const doc = {
+      ...base,
+      mark: { type: "bar", stack: true },
+      encoding: {
+        x: { field: "x", type: "quantitative" },
+        y: { field: "y", type: "quantitative" },
+        color: { field: "g", type: "nominal" },
+        text: { field: "t", type: "nominal" },
+      },
+    };
+    const built = toOption(
+      doc,
+      answer(layer("bar", 3, { x: f64([3, 1, 2]), y: f64([1, 1, 1]), g: cat(["a", "a", "b"]), t: cat(["A3", "A1", "B2"]) })),
+    );
+    const series = built.option.series as { label: { formatter: (p: object) => string } }[];
+    const labels = series.map((s, i) =>
+      built.series[i].rows.map((_, j) => s.label.formatter({ seriesIndex: i, dataIndex: j })),
+    );
+    // slots x = 1, 2, 3: a has rows at 1 and 3, b at 2
+    expect(labels).toEqual([
+      ["A1", "", "A3"],
+      ["", "B2", ""],
+    ]);
+  });
+
+  it("keeps a log y's range on the data when groups sit at different x (D3: red — a filler 0 on a log axis)", () => {
+    const doc = {
+      ...base,
+      mark: { type: "area", stack: true },
+      encoding: {
+        x: { field: "x", type: "quantitative" },
+        y: { field: "y", type: "quantitative", scale: { type: "log" } },
+        color: { field: "g", type: "nominal" },
+      },
+    };
+    const { chart, built, model } = draw(
+      doc,
+      answer(layer("area", 4, { x: f64([1, 2, 3, 4]), y: f64([10, 100, 10, 100]), g: cat(["a", "a", "b", "b"]) })),
+    );
+    // b sits where a has no row: its tops are its own values
+    expect(tops(model, built)[1]).toEqual(new Map([["2", 10], ["3", 100]]));
+    const [lo, hi] = model.getComponent("yAxis", 0).axis.scale.getExtent();
+    expect(Number.isFinite(lo) && Number.isFinite(hi)).toBe(true);
+    expect(hi).toBeGreaterThanOrEqual(2); // log10(100): the axis reaches the data
+    expect(chart.renderToSVGString()).not.toContain("Infinity");
+    chart.dispose();
+  });
+});

@@ -154,7 +154,8 @@ describe("drawing callbacks", () => {
     };
     const a = answer(layer("text", 2, { a: f64([1, 2]), b: f64([1, 2]), t: cat(["p", "q"]) }));
     const s = (toOption(spec, a).option.series as { label: { formatter: (p: unknown) => string } }[])[0];
-    expect(s.label.formatter({ dataIndex: 1 })).toBe("q");
+    // ECharts hands a label's formatter the series' index with the point's
+    expect(s.label.formatter({ seriesIndex: 0, dataIndex: 1 })).toBe("q");
   });
 
   it("sizes a point by its size field, and evenly when every size is the same", () => {

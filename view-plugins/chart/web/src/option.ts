@@ -449,7 +449,7 @@ type Item = Point | { value: Point; [style: string]: unknown };
  * saying which is which. A series with no row at a slot gets a point of 0
  * there (plotly's `stackgaps: "infer zero"`): clear, never highlighted, no
  * tooltip, and no row -- a gesture over it selects nothing. */
-function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[]): void {
+function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[], fill: 0 | null): void {
   const stacks = new Map<unknown, number[]>();
   series.forEach((s, i) => {
     if (s.stack) stacks.set(s.stack, [...(stacks.get(s.stack) ?? []), i]);
@@ -484,7 +484,7 @@ function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[]): vo
         for (let n = 0; n < (width.get(x) as number); n++) {
           const j = js[n];
           if (j === undefined) {
-            data.push({ value: [0, x], itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
+            data.push({ value: [fill, x], itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
             drawn.push(null);
           } else {
             data.push(yFirst(old[j]));
@@ -872,12 +872,25 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       // Large mode drops per-point styles, so a highlighted layer keeps it off.
       if (mark.type === "scatter" && n > 2000 && !lit) s.large = true;
       if (textCol) {
-        s.label = { show: true, formatter: (p: { dataIndex: number }) => show(textCol, members[p.dataIndex]) };
+        // By the series' drawn rows, not `members`: a stack lined up below re-orders
+        // its points and adds fillers, which carry no row (round 16 defect D2).
+        s.label = {
+          show: true,
+          formatter: (p: { seriesIndex: number; dataIndex: number }) => {
+            const row = rows[p.seriesIndex]?.rows[p.dataIndex];
+            return row === undefined || row === null ? "" : show(textCol, row);
+          },
+        };
       }
       push(s, members);
     }
   });
-  if (xAxis?.kind !== "category") lineUpStacks(series, rows);
+  // Only a stack whose base is x: a horizontal bar (a category y) ECharts already
+  // stacks by category (round 16 defect D1). On a log y a filler is no value at all,
+  // which a stack adds as nothing, where a 0 has no place on the axis (D3).
+  if (xAxis?.kind !== "category" && yAxis?.kind !== "category") {
+    lineUpStacks(series, rows, spec.encoding?.y?.scale?.type === "log" ? null : 0);
+  }
 
   const tooltip = {
     trigger: "item",
