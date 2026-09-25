@@ -109,15 +109,25 @@ function Plot({
   // clicked itself: a grid is one raster image, which ECharts' brush styling
   // cannot dim, and a click ECharts does not style, so without this either
   // showed only a count (#847/#848 P18, PR 5 P30, P34).
+  // What this view's latest selection wrote, to which marking and as which
+  // source; null when it wrote nothing (no marking -- detached --, no
+  // `keys:`). State, not a ref: whether the selection went to the marking is
+  // read from it on render (below).
+  const [wrote, setWrote] = useState<{ on: string; source: string | null; values: MarkingValues } | null>(null);
   // Whether the person's selection here went to the marking (#847/#848 PR 5
   // P29). Then the marking lights this chart as it lights every other view,
   // and ECharts' own brush visual -- every point outside the box greyed -- is
   // off: over two columns the marking lights every combination of their
   // values, and the brushed chart showed 16 lit where the tables showed 27.
   // A selection that writes nothing (no marking, no `keys:`) keeps it.
-  const [toMarking, setToMarking] = useState(false);
+  // Read from what the selection WROTE (P37 row 13): the marking it wrote to
+  // is the one the chart is on now. One made detached wrote nothing, and one
+  // written to another marking is that marking's -- a flag set at the write
+  // and tied to no marking said "· by <columns>" of the marking the chart
+  // moved to, and kept the brush visual off.
+  const toMarking = wrote !== null && wrote.on === marking;
   const lit = useMemo(() => {
-    const own = marking && toMarking ? undefined : ownSelectionLit(answer, selection);
+    const own = toMarking ? undefined : ownSelectionLit(answer, selection);
     if (own || !marking) return own;
     return entry ? markingLit(answer, entry.marking, isLit, measured) : answer.layers.map(() => null);
   }, [marking, toMarking, entry, answer, selection, measured]);
@@ -135,7 +145,7 @@ function Plot({
   builtRef.current = built;
   const laid = useMemo(() => built.layout(layout), [built, layout]);
   // Whether ECharts' own brush visual is off (see `toMarking`).
-  const brushOff = !!marking && toMarking;
+  const brushOff = toMarking;
   // (every chart has a brush: a pie alone has only its ✕, PR 5 P31)
   const option = useMemo(() => {
     const full = withLayout(built, layout);
@@ -159,20 +169,16 @@ function Plot({
   // nothing, and the slice is picked afresh. A pick that wrote nothing is
   // this view's alone and stays its to clear.
   const clicked = useRef<string | null>(null);
-  // What this view's latest selection wrote, and to which marking; null when
-  // it wrote nothing (no marking, no `keys:`).
-  const wrote = useRef<{ on: string; values: MarkingValues } | null>(null);
   writeRef.current = (sel) => {
     // ECharts re-reports the areas it holds: the same rows keep the same state,
     // or a grid lit by its own selection would redraw on every report
     setSelection((prev) => (JSON.stringify(prev) === JSON.stringify(sel) ? prev : sel));
     if (!marking) {
-      wrote.current = null;
+      setWrote(null);
       return null;
     }
     const values = selectionMarking(sel, answer, keys, measured);
-    setToMarking(values !== null);
-    wrote.current = values && { on: marking, values };
+    setWrote(values && { on: marking, source, values });
     if (values) write(values, source);
     return values;
   };
@@ -185,11 +191,13 @@ function Plot({
   // written (`stillWritten`), so it drops nothing; a selection that wrote
   // nothing is this view's alone, and stays; and a view detached from the
   // marking, or moved to another, shows its own again (P29) -- what it wrote
-  // is the old marking's. A layout effect: the drop is done before the next
-  // click can find the pick it drops.
+  // is the old marking's. Its write is compared as the source it was made as
+  // (P37 row 15): the view file renamed under the chart is not another view.
+  // A layout effect: the drop is done before the next click can find the pick
+  // it drops.
   useLayoutEffect(() => {
-    const mine = wrote.current;
-    if (mine === null || mine.on !== marking || stillWritten(entry, mine.values, source)) return;
+    const mine = wrote;
+    if (mine === null || mine.on !== marking || stillWritten(entry, mine.values, mine.source)) return;
     clicked.current = null;
     // first, so the empty `brushselected` the clear fires is not taken for
     // the person clearing
@@ -202,7 +210,7 @@ function Plot({
       chart.dispatchAction({ type: "legendAllSelect" });
     }
     setSelection([]);
-  }, [entry, source, marking]);
+  }, [entry, wrote, marking]);
 
   // The spec's `highlight:` seeds its marking on open — only an EMPTY one: a
   // marking another view already holds is the person's, not this file's.
