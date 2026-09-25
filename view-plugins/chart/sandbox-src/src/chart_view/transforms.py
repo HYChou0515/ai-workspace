@@ -11,7 +11,7 @@ from __future__ import annotations
 import ast
 import datetime as dt
 import itertools
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -41,11 +41,15 @@ def need_columns(df: pd.DataFrame, *columns: str) -> None:
 
 def _query(df: pd.DataFrame, expr: str, what: str) -> pd.Series:
     """The rows `expr` selects, as a boolean mask aligned with `df`."""
+    # Before pandas answers: `<` raises there, but `==` / `in` / `isin` match
+    # no row and `!=` every row, with only a FutureWarning.
+    named = _zone_less(df, expr, what)
+    if named is not None:
+        raise TransformError(named)
     try:
         mask = df.eval(expr)
     except Exception as e:  # pandas raises many types for a bad expression
-        named = _zone_less(df, expr, what) if isinstance(e, TypeError) else None
-        raise TransformError(named or f"{what} {expr!r} does not evaluate: {e}") from e
+        raise TransformError(f"{what} {expr!r} does not evaluate: {e}") from e
     if not isinstance(mask, pd.Series) or not pd.api.types.is_bool_dtype(mask):
         raise TransformError(f"{what} {expr!r} must be a true/false test on each row")
     return mask
@@ -53,37 +57,59 @@ def _query(df: pd.DataFrame, expr: str, what: str) -> pd.Series:
 
 def _zone_less(df: pd.DataFrame, expr: str, what: str) -> str | None:
     """The refusal for a query that compares a zoned column with a time written
-    without a zone — pandas says only "Invalid comparison between
-    dtype=datetime64[ns, <zone>] and Timestamp" — naming both; None when `expr`
-    holds no such comparison. The expression is only read, never rewritten."""
+    without a zone, by any operator or `isin`, naming both; None when `expr`
+    holds no such comparison. pandas raised "Invalid comparison between
+    dtype=datetime64[ns, <zone>] and Timestamp" for an order, and answered an
+    equality or a membership as if no time matched. The expression is only
+    read, never rewritten."""
     try:
         tree = ast.parse(expr, mode="eval")
-    except SyntaxError:  # pandas' own syntax (`backticks`): its words stand
+    except SyntaxError:  # pandas' own syntax (`backticks`): pandas judges it
         return None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
+    for name, value in _compared(tree):
+        if name not in df.columns:
             continue
-        for a, b in itertools.pairwise([node.left, *node.comparators]):
-            for name, text in ((a, b), (b, a)):
-                if not (isinstance(name, ast.Name) and name.id in df.columns):
-                    continue
-                zone = getattr(df[name.id].dtype, "tz", None)
-                value = text.value if isinstance(text, ast.Constant) else None
-                at = parse_date_text(value) if isinstance(value, str) else None
-                if zone is None or at is None or at.tzinfo is not None:
-                    continue
-                example = at.replace(tzinfo=with_folds(zone)).isoformat()
-                also = (
-                    f", or use a field predicate on {name.id!r}, which reads a time"
-                    " without a zone in the column's zone"
-                    if what == "filter"
-                    else ""
-                )
-                return (
-                    f"{what} {expr!r}: {name.id!r} holds times in {zone} and {value!r} has"
-                    f" no zone — write the time with its zone, as {example!r}{also}"
-                )
+        zone = getattr(df[name].dtype, "tz", None)
+        at = parse_date_text(value)
+        if zone is None or at is None or at.tzinfo is not None:
+            continue
+        example = at.replace(tzinfo=with_folds(zone)).isoformat()
+        also = (
+            f", or use a field predicate on {name!r}, which reads a time"
+            " without a zone in the column's zone"
+            if what == "filter"
+            else ""
+        )
+        return (
+            f"{what} {expr!r}: {name!r} holds times in {zone} and {value!r} has"
+            f" no zone — write the time with its zone, as {example!r}{also}"
+        )
     return None
+
+
+def _compared(tree: ast.AST) -> Iterator[tuple[str, str]]:
+    """(a name, a text it is compared with) for each comparison in `tree` — by an
+    operator (`ts == 'a'`, `'a' < ts`, `ts in ['a', 'b']`) or `ts.isin([...])`."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            pairs = itertools.pairwise([node.left, *node.comparators])
+            sides = [side for a, b in pairs for side in ((a, b), (b, a))]
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "isin"
+        ):
+            given = [*node.args[:1], *(k.value for k in node.keywords if k.arg == "values")]
+            sides = [(node.func.value, v) for v in given]
+        else:
+            continue
+        for name, other in sides:
+            if not isinstance(name, ast.Name):
+                continue
+            many = isinstance(other, ast.List | ast.Tuple)  # pandas has no sets
+            for item in other.elts if many else [other]:
+                if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                    yield name.id, item.value
 
 
 _COMPARE = {

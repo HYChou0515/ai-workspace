@@ -1386,7 +1386,6 @@ def test_a_where_comparing_a_zoned_column_with_a_zone_less_time_names_both(
     assert said.startswith(f"filter {expr!r}: 'ts' holds times in Asia/Taipei")
     assert f"{value!r} has no zone" in said and f"as {example!r}" in said
     assert "field predicate" in said
-    assert isinstance(filtered.value.__cause__, TypeError)
     lit = {"view": "chart", "source": "data/a.csv", "mark": "scatter", "highlight": {"where": expr}}
     lit["encoding"] = {
         "x": {"field": "v", "type": "quantitative"},
@@ -1435,12 +1434,16 @@ def test_a_where_with_a_zone_less_time_on_a_naive_column_keeps_pandas_words():
         apply_transforms(naive, [{"filter": "n < 'a' and ts < '2026-03-01T12:00'"}])
 
 
-def test_a_where_naming_no_column_says_so_beside_a_zone_less_time():
-    # Only a failed comparison is read for a zone: here pandas stops at `nope`.
-    with pytest.raises(TransformError, match="does not evaluate: .*'nope'"):
+def test_a_zone_less_time_is_refused_before_pandas_reads_the_query():
+    # The comparison is judged before pandas runs, so it is named even where
+    # pandas would stop first at a name no column has.
+    with pytest.raises(TransformError, match="'ts' holds times in Asia/Taipei") as refused:
         apply_transforms(
             _taipei_ts("Asia/Taipei"), [{"filter": "nope > 0 and ts < '2026-03-01T12:00'"}]
         )
+    assert refused.value.__cause__ is None
+    with pytest.raises(TransformError, match="does not evaluate: .*'nope'"):
+        apply_transforms(_taipei_ts("Asia/Taipei"), [{"filter": "nope > 0"}])
 
 
 def test_a_zone_less_time_in_a_where_that_fails_otherwise_keeps_pandas_words():
@@ -1451,3 +1454,78 @@ def test_a_zone_less_time_in_a_where_that_fails_otherwise_keeps_pandas_words():
     naive = df.assign(ts=df["ts"].dt.tz_localize(None))
     kept = apply_transforms(naive, [{"filter": "ts < '2026-03-01T12:00'"}])
     assert kept["v"].tolist() == [1.0]
+
+
+def _highlight_where(expr: str) -> dict:
+    return {
+        "view": "chart",
+        "source": "data/a.csv",
+        "mark": "scatter",
+        "encoding": {
+            "x": {"field": "v", "type": "quantitative"},
+            "y": {"field": "v", "type": "quantitative"},
+        },
+        "highlight": {"where": expr},
+    }
+
+
+# pandas only warns (FutureWarning) here, as it does in the sandbox; the
+# suite's `filterwarnings = error` would turn that warning into the refusal.
+@pytest.mark.filterwarnings("ignore::FutureWarning")
+@pytest.mark.parametrize("zone", ["Asia/Taipei", zoneinfo.ZoneInfo("Asia/Taipei")])
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "ts == '2026-03-01T12:00'",
+        "ts != '2026-03-01T12:00'",
+        "v > 0 and '2026-03-01T12:00' == ts",
+        "ts in ['2026-03-01T12:00', '2026-03-01T13:00']",
+        "ts not in ('2026-03-01T12:00',)",
+        "ts.isin(['2026-03-01T12:00'])",
+        "ts.isin(values=['2026-03-01T12:00'])",
+    ],
+)
+def test_a_where_that_would_answer_silently_on_a_zone_less_time_is_refused(zone, expr):
+    # Lead, round P15: pandas answered these without an error — `==` / `in` /
+    # `isin` matched no row and `!=` / `not in` every row, since a zone-less
+    # text never equals a zoned time. Refused as `<` is, whatever the operator.
+    df = _taipei_ts(zone)
+    with pytest.raises(TransformError, match=r"^filter .*: 'ts' holds times in Asia/Taipei"):
+        apply_transforms(df, [{"filter": expr}])
+    with pytest.raises(TransformError, match=r"^highlight .*: 'ts' holds times in Asia/Taipei"):
+        layer_rows(_highlight_where(expr), df)
+
+
+@pytest.mark.filterwarnings("ignore::FutureWarning")
+@pytest.mark.parametrize(
+    ("expr", "keeps"),
+    [
+        ("ts == '2026-03-01T14:00+08:00'", [2.0]),  # a time with its zone (pin)
+        ("ts.isin(['2026-03-01T06:00Z'])", [2.0]),
+        ("ts.dt.hour == 14", [2.0]),  # not the column itself
+        ("v.isin([1.0])", [1.0]),  # no date column
+    ],
+)
+def test_a_where_equality_that_names_its_zone_runs(expr, keeps):
+    assert apply_transforms(_taipei_ts("Asia/Taipei"), [{"filter": expr}])["v"].tolist() == keeps
+
+
+@pytest.mark.parametrize(
+    ("expr", "said"),
+    [
+        ("ts.isin()", "missing 1 required positional argument"),
+        ("ts.isin(x=['2026-03-01T12:00'])", "unexpected keyword argument 'x'"),
+        ("isin(['2026-03-01T12:00'])", '"isin" is not a supported function'),
+    ],
+)
+def test_an_isin_pandas_cannot_call_keeps_pandas_words(expr, said):
+    with pytest.raises(TransformError, match=f"does not evaluate: .*{said}"):
+        apply_transforms(_taipei_ts("Asia/Taipei"), [{"filter": expr}])
+
+
+def test_a_highlight_where_on_a_layer_without_the_zoned_column_leaves_it_unlit():
+    # The refusal reads only the columns the layer has; the others' rows are
+    # pandas' "undefined" (unlit), as before.
+    df = _taipei_ts("Asia/Taipei").drop(columns="ts")
+    [layer] = layer_rows(_highlight_where("ts == '2026-03-01T12:00'"), df)
+    assert layer.lit is None
