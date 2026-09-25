@@ -235,6 +235,24 @@ words are examples, not spec keys.
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
   Update the docs (`view-plugin-chart.md`) and the #855 runbook entry if the operator
   must act.
+  *Done 2026-09-25 at 1d7422c4* (`kind: local`, jail on, real Chromium, a scripted
+  model that only picks the tool; every tool ran for real). Passed: the full scene at
+  1440 and 390 (lasso 72 lit → table 72 of 432 and records 13 of 40, the unrelated bar
+  unchanged, save 4 rows, chip save 90 rows, the AI reading both), the 1000-group
+  gallery (sorts equal to pandas' top 8, box / Shift-box / replace, ranks 1–30 = 494,
+  stack and A − B ranges equal to pandas, category colours, enlarged fits at 390,
+  recovery keeps scroll), P22's reopen ("Opening…" only; the wall in 1.4–1.7 s), the
+  cards, the zoned axis in two browser zones, all 13 mark specs, five charts × 7 loads
+  × 2 widths with 0 failures, and the base differential on master and on 14405a12.
+  Found: P31. Evidence: `$CLAUDE_JOB_DIR/tmp/live16-shots/` (seen by me).
+- **P31 — What P11 found.**
+  - At 390, in a five-pane layout, a `grid` pane 139 px wide has a plot about 2 px
+    wide: axes and a colour bar, no cells, and the lasso cannot be used.
+  - A `grid`'s colour-bar top label is drawn over the toolbox's clear icon.
+  - A scatter's last x tick is cut at the canvas edge ("0.8" reads "0.").
+  - A point that sits under a rule cannot be hovered: the rule takes the hover.
+  - At 390 the gallery's first selection adds "N of M marked", which wraps the toolbar
+    and moves the wall down 26 px (P18 fixed the same thing on a chart).
 
 ## Verification
 
