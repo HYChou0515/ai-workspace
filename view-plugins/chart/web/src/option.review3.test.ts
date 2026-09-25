@@ -115,6 +115,72 @@ describe("a rule drawn from a field", () => {
     expect(built.notes).toContain("2 rule values with no place on the y axis — not drawn");
   });
 
+  it("places a number sent as text, as ECharts reads it", () => {
+    // Review round 8: a rule whose field another layer types as text (it
+    // arrives as `cat`) refused "1.5", which ECharts draws at 1.5.
+    const spec = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative" } } },
+        { mark: "rule", encoding: { y: { field: "b", type: "nominal" } } },
+      ],
+    };
+    const a = answer(layer("scatter", 1, { a: f64([1]), b: f64([1]) }), layer("rule", 2, { b: cat(["1.5", "2"]) }));
+    const built = toOption(spec, a);
+    const series = built.option.series as Series[];
+    expect(series[1].markLine?.data).toEqual([{ yAxis: 1.5 }, { yAxis: 2 }]);
+    expect(built.notes).toEqual([]);
+  });
+
+  it("places an x field's values the same way", () => {
+    // Round 8 conformance: the x twin of the y path had no test of its own.
+    const spec = {
+      ...base,
+      layer: [
+        {
+          mark: "scatter",
+          encoding: { x: { field: "a", type: "quantitative", scale: { type: "log" } }, y: { field: "b", type: "quantitative" } },
+        },
+        { mark: "rule", encoding: { x: { field: "a", type: "quantitative" } } },
+      ],
+    };
+    const a = answer(layer("scatter", 1, { a: f64([1]), b: f64([1]) }), layer("rule", 3, { a: f64([2, 0, null]) }));
+    const built = toOption(spec, a);
+    const series = built.option.series as Series[];
+    expect(series[1].markLine?.data).toEqual([{ xAxis: 2 }]);
+    expect(built.notes).toContain("2 rule values with no place on the x axis — not drawn");
+  });
+
+  it("holds a segment's ends to the same placing as a rule's values", () => {
+    // Review round 8: ends went through the raw `at`, so a 0 on a log axis
+    // or text on a number axis was sent, and the note did not count it.
+    const spec = {
+      ...base,
+      layer: [
+        {
+          mark: "scatter",
+          encoding: { x: { field: "a", type: "quantitative", scale: { type: "log" } }, y: { field: "b", type: "quantitative" } },
+        },
+        {
+          mark: "rule",
+          encoding: {
+            x: { field: "a", type: "quantitative" },
+            y: { field: "b", type: "quantitative" },
+            x2: { field: "c", type: "quantitative" },
+          },
+        },
+      ],
+    };
+    const a = answer(
+      layer("scatter", 1, { a: f64([1]), b: f64([1]) }),
+      layer("rule", 3, { a: f64([1, 1, 1]), b: f64([1, 1, 1]), c: f64([2, 0, -1]) }),
+    );
+    const built = toOption(spec, a);
+    const series = built.option.series as { markLine?: { data: unknown[] } }[];
+    expect(series[1].markLine?.data).toEqual([[{ coord: [1, 1] }, { coord: [2, 1] }]]);
+    expect(built.notes).toContain("2 rule segments with no place on the axes — not drawn");
+  });
+
   it("leaves out a segment with an end it cannot place, and says so", () => {
     // Review round 7: such a segment went as {coord: [null, y]} with no note,
     // and an x2 with no place fell back to x — a segment of no length.

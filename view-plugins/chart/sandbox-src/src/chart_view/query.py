@@ -44,7 +44,7 @@ from chart_view.transforms import (
     need_columns,
     row_mask,
 )
-from chart_view.wire import bitset, canon, encode_column, epoch_ms
+from chart_view.wire import bitset, canon, encode_column, epoch_ms, unhashable_as_text
 
 FORMAT = 1
 DEFAULT_BIN_THRESHOLD = 10_000
@@ -273,6 +273,9 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
 
 def layer_rows(spec: Mapping[str, Any], frame: pd.DataFrame) -> list[LayerRows]:
     """Each layer's rows over `frame` (its source, already read)."""
+    # Lists and arrays are their marking text from the start: grouping one
+    # (an aggregate, a boxplot's groups) raised TypeError.
+    frame = frame.apply(unhashable_as_text)
     base = apply_transforms(frame, spec.get("transform", []))
     return [_layer_rows(spec, base, ly) for ly in spec_layers(spec)]
 
