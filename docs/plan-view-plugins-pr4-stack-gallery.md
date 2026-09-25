@@ -241,12 +241,8 @@ fixtures.
     `facet_page` and `facet_exact` each take about 0.05 s at 22 MB. The peak grows with
     rows (about 0.2–0.25 GB per million) and sits inside the sandbox's own cgroup
     limit, so a large source needs a sandbox sized for it. The build is one sandbox
-    command, so it also runs under the per-command time cap (60 s by default).
-    - The builder first read the frame a row at a time: 29.9 s, 28.8 s and 68.7 s on
-      the same three shapes. The live check found the third killed at the 60 s cap on
-      every open, so it could never be built. `_by_arrays` now does the same work on
-      whole columns; the row path stays for the dtypes the column path cannot vouch
-      for, and is the oracle of a parity test on every dtype it takes;
+    command, so it also runs under the per-command time cap (60 s by default). These
+    figures are after P9's column path; the row path's are in P9;
   - the knob;
   - the check that confirms it: open a gallery and see `.home/.cache/views/` in the
     sandbox dir.
@@ -262,6 +258,26 @@ fixtures.
     - the entity refusal;
     - sandbox-host shipping with the API, and what an API-only rollout looks like;
     - the checks.
+
+**P9 — what the live check found.**
+
+The Verification live check, run after P8, found four defects that happy-dom could
+not show. Each fix started with a test that reddened on the unfixed code and was
+mutation-probed.
+
+- The builder read the frame a row at a time: 29.9 s, 28.8 s and 68.7 s on the
+  three fixture shapes (an earlier generation of the random fixtures, same rows and cells; the files differed). The third was killed at the 60 s per-command cap on every
+  open, so that gallery could never be built. `_by_arrays` now does the same work
+  on whole columns. The row path (`_by_rows`) stays for dtypes the column path
+  cannot vouch for (such as mixed-type object, categorical, timedelta, nullable sort
+  columns), and is the oracle of `tests/facet/test_build_parity.py`: same written
+  bytes bar the build id, same progress, same refusal, on every dtype the column
+  path takes.
+- Tile layout: the next row's thumbnails covered each tile's label and ⤢. Rows are
+  now a thumbnail, a fixed label row and a gap apart.
+- Virtualization: the scroller grew to its content inside the host's height:auto
+  pane, so every tile mounted and every page was asked. It is bounded to 80vh.
+- The enlarged view takes focus and closes on Escape.
 
 ## Verification
 
@@ -289,8 +305,10 @@ fixtures.
   - Removing `.home/.cache/views` (what a reap does to it) and reopening rebuilds. Removing
     it while the gallery is open: the next page answers exit 3, the gallery rebuilds, and
     every tile paints.
-  - Base differential: the same spec through PR 3's schema is refused with
-    `'facet' was unexpected`.
+  - Base differential: `spec_errors` on the same spec with PR 3's
+    `spec.schema.json` (from `2a4b897f`) swapped in refuses it with
+    `'facet' was unexpected`; with this PR's it is accepted. That is the schema
+    `validate` reads, not a run of PR 3's app.
   - Found and fixed on the way, each with a test that reddened on the unfixed code and
     mutation-probed:
     - the next row's thumbnails covered each tile's label and ⤢ (0 of 44 reachable at
@@ -298,7 +316,7 @@ fixtures.
     - the gallery's scroller grew to its content inside the host's height:auto pane,
       so every tile mounted and every page was asked at once (bounded to 80vh: one page,
       200 tiles);
-    - the 200 × 50 176 build was killed at the 60 s cap on every open (see P8);
+    - the 200 × 50 176 build was killed at the 60 s cap on every open (see P9);
     - the enlarged view did not close on Escape, and covered the toolbar.
   - Seen, not in this PR: under `kind: local`'s jail, two commands in one sandbox at once
     can fail with `mount: …/dev/zero: mount point does not exist` (one exec removes the
