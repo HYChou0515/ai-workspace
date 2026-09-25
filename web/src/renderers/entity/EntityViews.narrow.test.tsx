@@ -67,26 +67,44 @@ describe("a view panel in a narrow pane", () => {
     expect(el).not.toHaveAttribute("data-narrow");
   });
 
-  it("keeps its title to one truncated line and its controls on the title's row", () => {
+  it("keeps its title to one truncated line", () => {
     const title = ".ev-panel[data-narrow] .ev-panel__title";
     expect(effective(ENTITY_VIEWS_CSS, title, "white-space")).toBe("nowrap");
     expect(effective(ENTITY_VIEWS_CSS, title, "overflow")).toBe("hidden");
     expect(effective(ENTITY_VIEWS_CSS, title, "text-overflow")).toBe("ellipsis");
     expect(effective(ENTITY_VIEWS_CSS, title, "min-width")).toBe("0");
-    expect(effective(ENTITY_VIEWS_CSS, ".ev-panel[data-narrow] .ev-panel__head", "flex-wrap")).toBe("nowrap");
-    // the marking select gives up width before the title does
+    // the marking select gives up width before the controls wrap
     expect(effective(ENTITY_VIEWS_CSS, ".ev-panel[data-narrow] .ev-marking select", "max-width")).toBeDefined();
+  });
+
+  it("gives its title a full-width line of its own, the controls wrapping below it (P28)", () => {
+    // measured in Chromium at 390 wide (185 px panes): beside the marking
+    // select and "Save as table", a title was cut to 25-38 px ("W…", "Fail …")
+    const head = ".ev-panel[data-narrow] .ev-panel__head";
+    const title = ".ev-panel[data-narrow] .ev-panel__title";
+    expect(effective(ENTITY_VIEWS_CSS, head, "flex-wrap")).toBe("wrap");
+    expect(effective(ENTITY_VIEWS_CSS, title, "flex-basis")).toBe("100%");
+    // below the title, the controls start at its left edge
+    expect(effective(ENTITY_VIEWS_CSS, ".ev-panel[data-narrow] .ev-panel__actions", "justify-content")).toBe(
+      "flex-start",
+    );
+  });
+
+  it("a wide panel keeps its one-row header: the title's own line is the narrow rule's only", () => {
+    // "\n" anchors the base rule: `ruleBody` finds a selector by its text, and
+    // ".ev-panel__head {" is also the tail of the narrow rule's selector
+    expect(effective(ENTITY_VIEWS_CSS, "\n.ev-panel__title", "flex-basis")).toBeUndefined();
+    expect(effective(ENTITY_VIEWS_CSS, "\n.ev-panel__head", "justify-content")).toBe("space-between");
   });
 });
 
 describe("a narrow view panel's controls (#847/#848 PR 5 P24)", () => {
-  it("wrap onto rows of their own beside the title, rather than past the pane's edge", () => {
+  it("wrap onto rows of their own, rather than past the pane's edge", () => {
     // measured at 390 wide: an entity table's marking select, view settings
     // and New button made a 246 px row in a 106 px box, so New was drawn at
     // 442-501 in a pane that ends at 390
     const actions = ".ev-panel[data-narrow] .ev-panel__actions";
     expect(effective(ENTITY_VIEWS_CSS, actions, "flex-wrap")).toBe("wrap");
-    expect(effective(ENTITY_VIEWS_CSS, actions, "justify-content")).toBe("flex-end");
     expect(effective(ENTITY_VIEWS_CSS, actions, "min-width")).toBe("0");
   });
 });

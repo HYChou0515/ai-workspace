@@ -28,18 +28,21 @@
   min-height: 100%;
 }
 /* #847/#848 PR 5 P13 — a panel narrower than NARROW_PANEL (EntityViews.tsx,
- * measured on the panel itself): the title is one truncated line and the
- * controls stay beside it, so the header is one row, not a quarter of a pane. */
+ * measured on the panel itself): the title is one truncated line, not a
+ * quarter of a pane. P28: that line is the title's own, the whole panel wide,
+ * and the controls wrap below it — beside the marking select and "Save as
+ * table" a title was cut to 25-38 px ("W…", "Fail …") at 390 wide. */
 .ev-panel[data-narrow] {
   padding: var(--space-8);
   gap: var(--space-8);
 }
 .ev-panel[data-narrow] .ev-panel__head {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: var(--space-8);
 }
 .ev-panel[data-narrow] .ev-panel__title {
   flex: 1 1 auto;
+  flex-basis: 100%;
   min-width: 0;
   font-size: var(--text-body);
   line-height: 1.4;
@@ -49,11 +52,12 @@
 }
 .ev-panel[data-narrow] .ev-panel__actions {
   flex: 0 1 auto;
-  /* P24 — rows of their own beside the title when they do not fit: kept on
-   * one row, an entity table's select, settings and New made 246 px in a
-   * 106 px box at 390 wide, and New was drawn past the pane's edge. */
+  /* P24 — rows of their own when they do not fit: kept on one row, an entity
+   * table's select, settings and New made 246 px in a 106 px box at 390
+   * wide, and New was drawn past the pane's edge. P28: below the title,
+   * starting at its left edge. */
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   min-width: 0;
 }
 .ev-panel[data-narrow] .ev-marking select {
