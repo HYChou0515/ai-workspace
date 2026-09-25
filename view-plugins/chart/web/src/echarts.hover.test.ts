@@ -92,3 +92,33 @@ describe("hovering a line, against real ECharts", () => {
     expect(hovered({ type: "line", point: false })).toEqual([0, 1, 2, 3, 4]);
   });
 });
+
+describe("hovering a point under a rule, against real ECharts (#847/#848 PR 5 P31)", () => {
+  // found live: a point drawn exactly under a vertical rule showed no tooltip --
+  // the rule's line (a mark line) took the hover
+  const xy = { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } };
+  function underRule(): { hovered: { seriesIndex?: number; dataIndex?: number } | null; svg: string } {
+    const doc = { ...base, layer: [{ mark: "scatter", encoding: xy }, { mark: "rule", encoding: { x: { datum: 3 } } }] };
+    const built = toOption(doc, answer(layer("scatter", XS.length, { x: f64(XS), y: f64(YS) }), layer("rule", 0, {})));
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 600, height: 400 });
+    chart.setOption(built.option, true);
+    const [px, py] = chart.convertToPixel({ seriesIndex: 0 }, [3, 4]) as number[];
+    let hovered: { seriesIndex?: number; dataIndex?: number } | null = null;
+    chart.on("mouseover", (p) => {
+      const at = p as { seriesIndex?: number; dataIndex?: number };
+      hovered = { seriesIndex: at.seriesIndex, dataIndex: at.dataIndex };
+    });
+    chart.getZr().handler.dispatch("mousemove", { zrX: px, zrY: py } as never);
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    return { hovered, svg };
+  }
+
+  it("finds the point, not the rule", () => {
+    expect(underRule().hovered).toEqual({ seriesIndex: 0, dataIndex: 2 });
+  });
+
+  it("still labels the rule", () => {
+    expect(underRule().svg).toMatch(/<text[^>]*>3<\/text>/);
+  });
+});

@@ -641,7 +641,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       // The label inside the plot, above the line's end: at ECharts' default
       // (past the end) it ran into the 16 px margin and was cut -- "102" drew
       // as "10" (#847/#848 P18).
+      // Silent: it takes no hover (#847/#848 PR 5 P31) -- a point drawn under
+      // the line could not be hovered, and the line itself has nothing to show
+      // (its tooltip is empty: it draws no row) beyond the label it always has.
       const line = {
+        silent: true,
         lineStyle: { color: mark.color ?? "#888", type: "dashed" },
         symbol: "none",
         label: { show: true, position: "insideEndTop" },
