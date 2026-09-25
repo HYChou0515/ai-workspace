@@ -110,7 +110,9 @@ words are examples, not spec keys.
     clears only what the click picked — other views' selections and the legend stay
     (1b3ecc6b; P34 row 1 makes "what the click picked" exact).
   - (P34) In compact layout a category legend that would take more than half the
-    chart's height is not drawn; the colours stay and the tooltip names the category.
+    chart's height is not drawn (a colour bar too); the colours stay and the chart's note
+    line says the key is hidden. In a tall narrow pane this hides a long legend that
+    used to fit beside a plot a third of the chart's height: the plot comes first.
   - (P34) On an unmarked pie a legend toggle replaces the spec's `highlight:` dimming,
     as on a grid: what is lit is the person's latest gesture.
   - (P31) A pie with no axes draws a toolbox with only the clear tool (✕), which clears
@@ -304,7 +306,7 @@ words are examples, not spec keys.
   |---|---|---|
   | 1 | A pie remembers its clicked slice after another view rewrote the marking; its next click on empty space or on that slice clears the other view's selection | A click toggles only what it wrote: the pie keeps the marking it wrote, and "clear" / "toggle off" act only while the entry is still exactly that write; any other write forgets it |
   | 2 | Crossing 320 px (or a pane reporting 0 px) rebuilds the chart in full and drops its brush, count, legend state and a pie's pick; the pie's `clicked` survives the rebuild and swallows the next click | Only a change of doc or answer is a full rebuild; a layout switch replaces the layout components alone (grid, colour bar, legend, toolbox, axis names) and keeps selection, brush and legend state; a 0 px width is no width (keep the last); every full rebuild forgets what a click wrote |
-  | 3 | In compact layout a category colour with many levels stacks its legend under the plot until the plot has negative height | The plot keeps at least half the chart's height; a category legend that would take more is not drawn (the tooltip still names the category) |
+  | 3 | In compact layout a category colour with many levels stacks its legend under the plot until the plot has negative height | The plot keeps at least half the chart's height; a colour key (category legend or colour bar) that would take more is not drawn, and the chart's note line says "colour key hidden (too short)" (a `grid` has no tooltip, so the note is what says it) |
   | 4 | The log-y stack filler reads the top-level encoding, so a `layer:` spec fills with 0 on a log axis | The filler follows the axis the chart built, not the spec's shape |
   | 5 | On a marking the view cannot write (no key column), a clicked pie slice or a lassoed grid shows a count and no highlight | What a selection that writes nothing picked is lit by the chart itself, as with no marking |
   | 6 | On an unmarked pie a legend toggle now replaces the spec's `highlight:` dimming | Kept, as the grid already does: the person's latest gesture is what is lit. Pinned by a test |
@@ -312,6 +314,17 @@ words are examples, not spec keys.
   Each row starts from a test that is red at 0c12465a. Row 2 replaces a mechanism, so
   round 18 follows. Demo at 1440 and 390, seen: rows 1, 2, 3, 5; errorbar selection
   (P30) and the horizontal and log-y stacks (P29), which had no frame.
+- **P35 — What P34's demo found.** Three wrong drawings that predate P34 (frames in
+  `tmp/demo/p34/look-after-*`, `after-1440-row1-A-04`, seen):
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 7 | Raw rows stacked on a category axis overlap: rows of one series at one category are drawn over each other, so a horizontal bar of rows ends at 31.3 where the sum is 79.38 | Every row is one piece of its stack, on any axis: rows that share a slot and a series stack in order, as `lineUpStacks` already does off a category axis |
+  | 8 | A log-y stack with gaps draws nothing for a series whose rows never sit on neighbouring slots (the null filler breaks the area at every gap) | A missing slot adds nothing to the stack (0); it is empty only where nothing lies beneath it on a log axis |
+  | 9 | After another view rewrites the marking, a chart that wrote it still shows its own count, brush box or pick | The marking is what a linked chart shows: another view's write drops this chart's own selection (count, box, pick); a chart whose selection writes nothing keeps its own |
+
+  Rows 7 and 9 change mechanisms, so round 18 covers them. Demo before/after at 1440 and
+  390, seen.
 
 ## Verification
 
