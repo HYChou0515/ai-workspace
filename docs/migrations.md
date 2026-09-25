@@ -967,9 +967,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-25 · e15e8ba0 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
+### 2026-09-25 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
 
-隨 [#855](#pr-855) 進 master：#856 合進 #855 的分支（`e15e8ba0`），沒有自己的 master merge。
+隨 [#855](#pr-855) 進 master：#856 合進 #855 的分支，分支再 rebase 到 master，所以沒有自己的 merge commit。
 
 **設定** — 沒有新 key。以下是**行為改變，沒有開關**（運營方不用做事，但要知道）：
 
@@ -990,7 +990,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
 
 - chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文（去掉 frontmatter）
-  多了約 0.4k 字元（實測 +398；本文現在約 6.7k）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
+  多了約 0.4k 字元（實測 +398；本文現在約 6.9k）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
   固定成本不變。
 
 - 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條，另外 agent 一條、
@@ -1011,9 +1011,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-25 · 83ad6363 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
+### 2026-09-25 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
 
-隨 [#855](#pr-855) 進 master：#857 合進 #855 的分支（`83ad6363`），沒有自己的 master merge。
+隨 [#855](#pr-855) 進 master：#857 合進 #855 的分支，分支再 rebase 到 master，所以沒有自己的 merge commit。
 
 **設定** — 沒有新 config key。`facet.cache_mb` 是 **spec 裡**的旋鈕（寫在 `.ai.yaml`），不是部署設定。
 以下是**行為改變，沒有開關**（運營方要知道的是沙盒的 scratch 磁碟，以及建快取在沙盒指令的時間與記憶體上限之內）：

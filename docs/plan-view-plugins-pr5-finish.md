@@ -99,7 +99,7 @@ words are examples, not spec keys.
   a streamed sandbox run, or polling the build's state, whichever the platform's
   runner supports.
 - **P12 — Concurrent commands in one jailed sandbox.** The 2026-09-25 live check
-  (a7bac209) broke 5 of 30 queries of a five-chart layout under `kind: local`'s jail
+  (on #855's branch with #856 merged) broke 5 of 30 queries of a five-chart layout under `kind: local`'s jail
   (the k8s base default): `mount: …/dev/urandom: mount point does not exist`, or
   `NotImplementedError: /dev/urandom … not found`. Every exec bind-mounts and then removes
   the shared `$ROOT/dev/*` targets (`sandbox/local_process.py` `_JAIL_BOOTSTRAP`), so
@@ -130,7 +130,7 @@ words are examples, not spec keys.
   - A grid's axis line sits on the lattice's edge, not mid first cell.
   - "N selected" does not push the chart down.
   - A lasso on a grid with no marking shows which cells it took.
-- **P11 — Live check at 390 and 1440 wide, with a base differential on 83ad6363.** Run
+- **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
   Update the docs (`view-plugin-chart.md`) and the #855 runbook entry if the operator

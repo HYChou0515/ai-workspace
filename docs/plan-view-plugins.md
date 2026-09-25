@@ -58,10 +58,9 @@ The outcome is four things:
   - card thumbnails drawn live by the same renderer;
   - save a selection's rows as a CSV, the future #843 row source.
   - **How Q21 was delivered (2026-09-25) [user]:** #856 and #857 were merged into
-    #855's branch (merges `e15e8ba0` and `83ad6363`), so they reach master inside
-    #855's merge, with this work. #855's branch also took one pull-merge (`a7bac209`),
-    against the hand-off sections' "rebase, never merge"; undoing it would need a
-    force-push.
+    #855's branch, and the branch was then rebased onto master (after #854's merge),
+    so the three reach master in #855's merge, with this work, and the branch holds
+    no merge commit.
 - **Q23.** A wafer map is a generic map **[user]**. No option, default or label gives a
   value a meaning ("bigger is redder is worse", "yield", "defect"). The domain words in
   #847/#848 are examples.
