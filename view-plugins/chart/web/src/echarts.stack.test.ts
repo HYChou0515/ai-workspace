@@ -152,18 +152,23 @@ describe("stack: true on a quantitative, temporal and nominal x", () => {
     ]);
   });
 
+  // P35 row 7: every row is one piece of its stack. a's second row at x=1 is
+  // a piece of its own, stacked on a's first; before P35 it was a second slot
+  // of a, drawn from 0 over its first, and b sat on a's first alone (11).
   it("stacks two rows of one group at one x in order, and puts a row with no x last", () => {
     const { chart, built, model } = draw(
       area({ field: "x", type: "quantitative" }),
       answer(layer("area", 5, { x: f64([1, null, 1, 1, 2]), y: f64([1, 5, 2, 10, 3]), g: cat(["a", "a", "a", "b", "a"]) })),
     );
-    // slots: x=1 twice (a has two rows there), x=2, then the row with no x
+    // slots: x=1, x=2, then the row with no x; a's second row at x=1 is its second piece
     expect(built.series.map((s) => s.rows)).toEqual([
-      [0, 2, 4, 1],
-      [3, null, null, null],
+      [0, 4, 1],
+      [2, null, null],
+      [3, null, null],
     ]);
-    // b's one row at x=1 sits on a's first there
-    expect(tops(model, built)[1].get("3")).toBe(11);
+    // a's rows at x=1 sit on each other (1, then 1 + 2), b's on both
+    const t = tops(model, built);
+    expect([t[0].get("0"), t[1].get("2"), t[2].get("3")]).toEqual([1, 3, 13]);
     chart.dispose();
   });
 });
