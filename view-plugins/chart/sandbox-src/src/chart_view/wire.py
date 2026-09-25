@@ -203,9 +203,9 @@ def _stdlib_ms(v: Any) -> float:
 
 def _cat(s: pd.Series) -> dict[str, Any]:
     integral = pd.api.types.is_integer_dtype(s.dtype)  # before the map below makes it object
-    # A list or a mapping (an entity field can hold one) has no hash to group
-    # by; it becomes its marking string.
-    s = s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple) else v)
+    # A list or a mapping (an entity field, or a parquet list column read as
+    # numpy arrays) has no hash to group by; it becomes its marking string.
+    s = s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v)
     try:
         codes, uniques = pd.factorize(s, sort=True, use_na_sentinel=True)
     except TypeError:  # values with no order between them (a date among numbers)

@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toOption } from "./option";
-import { answer, base, f64, layer, q8 } from "./testAnswer";
+import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
 
 const grid = {
   mark: "grid",
@@ -72,10 +72,34 @@ describe("a line's opacity", () => {
   });
 });
 
+describe("a layer's points on a number axis", () => {
+  it("are sent as the layer holds them, for ECharts to read", () => {
+    // Review round 7: P24 sent every mark's points through the rule's `pos`,
+    // so a layer typing the same field as text (it arrives as `cat`) lost
+    // all its points, with no note. Only a rule's own rows are held to `pos`.
+    const spec = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "v", type: "quantitative" } } },
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "v", type: "ordinal" } } },
+      ],
+    };
+    const a = answer(
+      layer("scatter", 2, { a: f64([1, 2]), v: f64([1.5, 2.5]) }),
+      layer("scatter", 2, { a: f64([1, 2]), v: cat(["1.5", "2.5"]) }),
+    );
+    const series = toOption(spec, a).option.series as { data: unknown[] }[];
+    expect(series[1].data).toEqual([
+      [1, "1.5"],
+      [2, "2.5"],
+    ]);
+  });
+});
+
 describe("a rule drawn from a field", () => {
   it("leaves out the rows with no position on its axis", () => {
-    // Review round 6: a missing value went to ECharts as {yAxis: null}, and a
-    // 0 on a log axis as {yAxis: 0}, which the axis cannot hold.
+    // Review round 6: a 0 on a log axis went to ECharts as {yAxis: 0}, which
+    // the axis cannot hold (a missing value was already left out).
     const spec = {
       ...base,
       layer: [
@@ -88,6 +112,33 @@ describe("a rule drawn from a field", () => {
     const series = built.option.series as Series[];
     expect(series[1].markLine?.data).toEqual([{ yAxis: 1 }]);
     // Round 6 regression lens: left out in silence, nobody knew the rule was short.
-    expect(built.notes).toContain("2 rule values off the y axis — not drawn");
+    expect(built.notes).toContain("2 rule values with no place on the y axis — not drawn");
+  });
+
+  it("leaves out a segment with an end it cannot place, and says so", () => {
+    // Review round 7: such a segment went as {coord: [null, y]} with no note,
+    // and an x2 with no place fell back to x — a segment of no length.
+    const spec = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative" } } },
+        {
+          mark: "rule",
+          encoding: {
+            x: { field: "a", type: "quantitative" },
+            y: { field: "b", type: "quantitative" },
+            x2: { field: "c", type: "quantitative" },
+          },
+        },
+      ],
+    };
+    const a = answer(
+      layer("scatter", 1, { a: f64([1]), b: f64([1]) }),
+      layer("rule", 3, { a: f64([1, null, 1]), b: f64([1, 1, 1]), c: f64([2, 2, null]) }),
+    );
+    const built = toOption(spec, a);
+    const series = built.option.series as { markLine?: { data: unknown[] } }[];
+    expect(series[1].markLine?.data).toEqual([[{ coord: [1, 1] }, { coord: [2, 1] }]]);
+    expect(built.notes).toContain("2 rule segments with no place on the axes — not drawn");
   });
 });

@@ -27,9 +27,10 @@ from chart_view.validate import check
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus" / "datum-axes.json"
 
-# One frame every case reads: `t` holds dates, `v` numbers, `g` labels, `n`
-# year-like integers used as labels, `p` positive numbers for a log axis, `k`
-# integer labels with a gap the grid's lattice fills.
+# The frame the CASES below read (the OWN cases carry their own): `t` holds
+# dates, `v` numbers, `g` labels, `n` year-like integers used as labels, `p`
+# positive numbers for a log axis, `k` integer labels with a gap the grid's
+# lattice fills.
 DATA = {
     "t": ["2024-03-01", "2024-03-02"],
     "v": [1.0, 2.0],
@@ -191,6 +192,80 @@ OWN: list[tuple[str, list[dict[str, Any]], dict[str, list[Any]], dict[str, Any]]
         ],
         {"w": list(range(30)), "v": [float(i) for i in range(30)]},
         {"bin_threshold": 5},
+    ),
+    (
+        "a value only binning moved away",
+        [
+            {
+                "mark": "bar",
+                "encoding": {"x": f("w", "nominal"), "y": V},
+                "transform": [{"filter": "w != 5"}],
+            },
+            {"mark": "scatter", "encoding": {"x": f("w", "quantitative"), "y": V}},
+            rule("x", 5),
+        ],
+        {"w": list(range(30)), "v": [float(i) for i in range(30)]},
+        {"bin_threshold": 5},
+    ),
+    # Review round 7: a JavaScript Set keeps each value's FIRST place; the
+    # string sort ties 1 and "1", so that order decides which cells are next
+    # to each other, and so whether 1.5 falls between two numbers.
+    (
+        "a number between cells, 1 first",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", 1.5)],
+        {"k": [1, "1", 1, 2], "g": ["a", "b", "c", "d"], "v": [1.0, 2.0, 3.0, 4.0]},
+        {},
+    ),
+    (
+        "a number between cells, text 1 first",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", 1.5)],
+        {"k": ["1", 1, "1", 2], "g": ["a", "b", "c", "d"], "v": [1.0, 2.0, 3.0, 4.0]},
+        {},
+    ),
+    (
+        "a date before 1970 on a time axis asking for log",
+        [
+            {
+                "mark": "line",
+                "encoding": {"x": {**T, "scale": {"type": "log"}}, "y": V},
+            },
+            rule("x", "1969-06-01"),
+        ],
+        {"t": ["2024-03-01", "2024-03-02"], "v": [1.0, 2.0]},
+        {},
+    ),
+    # Review round 7 (conformance): pins for choices each side makes alone.
+    (
+        "a rule's y datum is the one drawn",
+        [
+            LINE_T,
+            {"mark": "rule", "encoding": {"x": {"datum": "2024-03-01"}, "y": {"datum": "zzz"}}},
+        ],
+        DATA,
+        {},
+    ),
+    (
+        "a rule's x datum is not drawn when it has a y",
+        [LINE_T, {"mark": "rule", "encoding": {"x": {"datum": "zzz"}, "y": {"datum": 1.5}}}],
+        DATA,
+        {},
+    ),
+    ("a whole float on integer labels", [BAR_N, rule("x", 2022.0)], DATA, {}),
+    (
+        "a bin's centre on the axis binning made",
+        [
+            {"mark": "bar", "encoding": {"x": f("w", "nominal"), "y": V}},
+            {"mark": "scatter", "encoding": {"x": f("w", "quantitative"), "y": V}},
+            rule("x", 0.056640625),
+        ],
+        {"w": list(range(30)), "v": [float(i) for i in range(30)]},
+        {"bin_threshold": 5},
+    ),
+    (
+        "numbers a text label sorts apart",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", 9.5)],
+        {"k": [10, "5", 9], "g": ["a", "b", "c"], "v": [1.0, 2.0, 3.0]},
+        {},
     ),
     (
         "between number cells whose text had a stray value",

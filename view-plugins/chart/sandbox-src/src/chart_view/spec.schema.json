@@ -63,6 +63,9 @@
     },
     {
       "$ref": "#/$defs/markChannels"
+    },
+    {
+      "$ref": "#/$defs/datumChannels"
     }
   ],
   "$defs": {
@@ -608,6 +611,9 @@
       "allOf": [
         {
           "$ref": "#/$defs/markChannels"
+        },
+        {
+          "$ref": "#/$defs/datumChannels"
         }
       ]
     },
@@ -1007,6 +1013,80 @@
           }
         }
       ]
+    },
+    "datumChannels": {
+      "description": "A datum is drawn only as a rule's x or y: every other position channel names a field.",
+      "if": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "anyOf": [
+              {
+                "const": "rule"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "rule"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "encoding": {
+            "properties": {
+              "x2": {
+                "required": [
+                  "field"
+                ]
+              },
+              "y2": {
+                "required": [
+                  "field"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "encoding": {
+            "properties": {
+              "x": {
+                "required": [
+                  "field"
+                ]
+              },
+              "y": {
+                "required": [
+                  "field"
+                ]
+              },
+              "x2": {
+                "required": [
+                  "field"
+                ]
+              },
+              "y2": {
+                "required": [
+                  "field"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

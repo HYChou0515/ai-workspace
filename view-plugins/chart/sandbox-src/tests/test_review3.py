@@ -313,3 +313,22 @@ def test_validate_builds_no_answer_a_datum_does_not_need(rule, monkeypatch):
         "      y: {field: v, type: quantitative}\n" + rule
     )
     assert validate.check(text, lambda _s: _DAYS).errors == []
+
+
+def test_a_parquet_list_column_is_marking_text_not_a_traceback(tmp_path: Path, monkeypatch, capsys):
+    # Review round 7: pyarrow reads a list column as numpy arrays, which
+    # `_cat` did not turn into marking text; validate and query both crashed.
+    pd.DataFrame({"k": [["a"], ["b"]], "v": [1.0, 2.0]}).to_parquet(tmp_path / "a.parquet")
+    monkeypatch.chdir(tmp_path)
+    bar = (
+        "view: chart\nsource: a.parquet\nlayer:\n"
+        "  - mark: bar\n    encoding:\n"
+        "      x: {field: k, type: nominal}\n      y: {field: v, type: quantitative}\n"
+    )
+    assert main(["query", json.dumps({"spec": bar})]) == 0
+    capsys.readouterr()
+    (tmp_path / "v.chart.yaml").write_text(
+        bar + "  - mark: rule\n    encoding:\n      x: {datum: a}\n"
+    )
+    assert main(["validate", json.dumps({"path": "v.chart.yaml"})]) == 2
+    assert "x: datum 'a' is not a value the axis shows" in capsys.readouterr().err
