@@ -15,7 +15,7 @@ import { MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer } from "./testAnswer";
-import { clickAt, sliceAt } from "./testGesture";
+import { clickAt, sliceAt, toolAt } from "./testGesture";
 
 const sdk = vi.hoisted(() => ({
   useSandboxRun: vi.fn(),
@@ -239,11 +239,40 @@ describe("a click on a pie's slice writes the marking", () => {
     expect(marked(store)).toEqual({ lot: ["L1"] });
   });
 
-  it("a pie on its own has no brush tool, in the chart as drawn", () => {
+  // #847/#848 PR 5 P31 [mine, open to override]: a pie on its own has nothing
+  // to brush (P30), but a marking its `highlight:` seeded -- or a slice picked
+  // before -- must be clearable from the pie itself, as from every other chart
+  // (P17). So it draws the ✕ alone.
+  it("a pie on its own offers only the ✕, in the chart as drawn", () => {
     const chart = mount(new MarkingStore(), PIE, SLICES);
-    const model = (chart as unknown as { getModel(): { getComponent(main: string): unknown } }).getModel();
-    expect(model.getComponent("brush")).toBeUndefined();
-    expect(model.getComponent("toolbox")).toBeUndefined();
+    expect(toolAt(chart, "clear")).not.toBeNull();
+    expect(toolAt(chart, "rect")).toBeNull();
+    expect(toolAt(chart, "polygon")).toBeNull();
+    // (control: a chart with axes draws all three, where toolAt finds them)
+    const doc = { ...byGroup("scatter"), encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } } };
+    const scatter = mount(new MarkingStore(), doc, answer(layer("scatter", 2, { x: f64([1, 2]), y: f64([1, 2]), lot: cat(["L1", "L2"]) })));
+    expect(["rect", "polygon", "clear"].map((t) => toolAt(scatter, t) !== null)).toEqual([true, true, true]);
+  });
+
+  it("the pie's ✕ clears a marking its highlight seeded", () => {
+    const seeded = answer(
+      layer("pie", 3, { n: f64([5, 3, 2]), lot: cat(["L1", "L2", "L3"]) }, { highlight: btoa(String.fromCharCode(0b010)), lit: 1 }),
+    );
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, seeded);
+    expect(marked(store)).toEqual({ lot: ["L2"] }); // seeded on open
+    click(chart, toolAt(chart, "clear")!);
+    expect(store.get("m")).toBeUndefined();
+  });
+
+  it("the pie's ✕ clears a slice it picked, and a click on that slice picks it again", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    click(chart, toolAt(chart, "clear")!);
+    expect(store.get("m")).toBeUndefined();
+    click(chart, sliceAt(chart, 1));
+    expect(marked(store)).toEqual({ lot: ["L2"] });
   });
 
   it("on no marking, the slice it picked is lit and the rest dimmed", () => {

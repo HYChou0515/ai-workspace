@@ -962,6 +962,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       right: visualMaps.length ? (option.grid as { right: number }).right : 8,
       feature: { brush: { type: ["rect", "polygon", "clear"] } },
     };
+  } else {
+    // A pie alone still has the ✕ (#847/#848 PR 5 P31) [mine, open to
+    // override]: there is nothing on it to box or lasso (P30), but a marking
+    // its `highlight:` seeded, or a slice picked, is cleared from the pie as
+    // from any chart (P17) -- the ✕ dispatches the brush's clear.
+    option.brush = { toolbox: ["clear"], throttleType: "debounce", throttleDelay: 250 };
+    option.toolbox = { top: 4, right: 8, feature: { brush: { type: ["clear"] } } };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
   if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));

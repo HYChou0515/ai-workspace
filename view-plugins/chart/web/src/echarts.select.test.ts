@@ -200,10 +200,10 @@ describe("clicking a pie, against real ECharts", () => {
     expect(clicks).toEqual([[]]);
   });
 
-  it("a pie on its own offers no brush: there is nothing on it to brush", () => {
+  it("a pie on its own offers no box and no lasso: there is nothing on it to brush -- only the ✕ (P31)", () => {
     const { option } = toOption(PIE, slices);
-    expect(option.brush).toBeUndefined();
-    expect(option.toolbox).toBeUndefined();
+    expect(option.brush).toMatchObject({ toolbox: ["clear"] });
+    expect(option.toolbox).toMatchObject({ feature: { brush: { type: ["clear"] } } });
   });
 });
 

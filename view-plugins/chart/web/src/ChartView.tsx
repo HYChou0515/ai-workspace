@@ -128,14 +128,14 @@ function Plot({
   // values, and the brushed chart showed 16 lit where the tables showed 27.
   // A selection that writes nothing (no marking, no `keys:`) keeps it.
   const [toMarking, setToMarking] = useState(false);
-  const option = useMemo(() => {
-    // a pie alone has no brush to style (#847/#848 PR 5 P30)
-    if (!built.option.brush) return built.option;
-    return {
+  // (every chart has a brush: a pie alone has only its ✕, PR 5 P31)
+  const option = useMemo(
+    () => ({
       ...built.option,
       brush: { ...(built.option.brush as object), outOfBrush: marking && toMarking ? { colorAlpha: 1 } : OUT_OF_BRUSH },
-    };
-  }, [built, marking, toMarking]);
+    }),
+    [built, marking, toMarking],
+  );
 
   // What a gesture writes. Read through a ref: the ECharts handlers are bound once.
   const writeRef = useRef<(sel: Selection[]) => void>(() => {});
@@ -189,6 +189,9 @@ function Plot({
     // brushed here) (#847/#848 P17).
     chart.on("brush", (p) => {
       if ((p as { command?: string }).command !== "clear") return;
+      // a slice a click picked is cleared too: the next click on it picks it
+      // again, rather than taking it for a second click (PR 5 P31)
+      clicked.current = null;
       writeRef.current([]);
     });
     chart.on("legendselectchanged", (p) => {
