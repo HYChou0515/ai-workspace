@@ -934,7 +934,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 順序：sandbox-host 先上、API 後上。
   - 漏做的症狀：
     - 打開任何 chart 檔，面板顯示 `view plugin "chart" could not run "query"`（502，沒有 `.tools/chart/launch`）；
-    - AI 的 `show_file` 對 chart 檔一律回 `error: view plugin 'chart' refused …`，對話裡不出現卡片。
+    - AI 的 `show_file` 對 chart 檔的回覆多一句 `(view plugin 'chart' could not check this view: …)`：
+      卡片照樣出現，但檔案沒經過檢查，打開後就是上一條的錯誤。
 - API 映像的 plugin stage（`view_plugin build`，前端 `index.js` + skill）見 #854 的條目。這個 PR 只是在
   `view-plugins/` 多放一個 plugin。
 
