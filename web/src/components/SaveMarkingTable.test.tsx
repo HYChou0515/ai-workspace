@@ -262,6 +262,23 @@ describe("save as table — the header control", () => {
     expect(picker).toHaveStyle({ flexShrink: "0" });
   });
 
+  it("fits a box narrower than its one-line label, its label wrapping (P28)", () => {
+    // measured at 390 wide, three panes side by side: the button is 115 px on
+    // one line, the marking box 72-77 px, and the button ended past the
+    // panel's edge (143 in a panel ending at 113)
+    render(
+      <Shell>
+        <MarkingControl value="fail" onChange={() => {}} path="/views/c.ai.yaml" />
+      </Shell>,
+    );
+    const save = screen.getByRole("button", { name: "Save as table" });
+    expect(save).toHaveStyle({ maxWidth: "100%", whiteSpace: "normal" });
+    // and grows to its wrapped lines: at the small size's fixed 28 px the
+    // lines spilled over the text above and below it (seen in Chromium)
+    expect(save).toHaveStyle({ height: "auto", minHeight: "28px", padding: "2px 10px" });
+    expect(save.parentElement).toHaveStyle({ maxWidth: "100%" });
+  });
+
   it("is disabled while nothing is marked", () => {
     render(
       <Shell>

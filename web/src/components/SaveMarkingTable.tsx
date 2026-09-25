@@ -72,13 +72,18 @@ export function SaveMarkingTable(props: SaveMarkingTableProps & { scope: { slug:
   return (
     <span
       className="save-marking-table"
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0 }}
+      // P28: never wider than the box it sits in, and the label wraps inside
+      // it — at 390 wide, three panes side by side gave a 72-77 px box and
+      // the 115 px one-line button ended past the panel's edge
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0, maxWidth: "100%" }}
     >
       <button
         type="button"
         className="btn"
         data-size="sm"
         data-variant="secondary"
+        // grows to its wrapped lines (the small size's 28 px is its least)
+        style={{ maxWidth: "100%", whiteSpace: "normal", height: "auto", minHeight: 28, padding: "2px 10px" }}
         disabled={!!blocked || save.isPending}
         title={blocked ?? undefined}
         onClick={() =>
