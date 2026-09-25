@@ -56,7 +56,7 @@ The keys to use:
 ### Marks
 
 `mark: <name>`, or `mark: {type: <name>, …}` with `color`, `opacity` (0–1;
-scatter, line, area, bar, text), `point` and `smooth` (line, area), `stack`
+scatter, line, bar, text; an area's fill), `point` and `smooth` (line, area), `stack`
 (bar, area), `extent` (errorbar: `stderr` / `stdev` / `iqr`).
 
 | mark | shows | needs |
@@ -86,9 +86,12 @@ they fit the data; `zero:` overrides either.
 
 Types: `quantitative` (numbers), `temporal` (dates and times; a number is
 epoch milliseconds), `nominal` (categories), `ordinal` (ordered categories).
+A date `datum` is written `2024-03-01`, `2024-03-01T12:00` (UTC) or
+`2024-03-01T12:00:00+08:00`, or as epoch milliseconds; validate refuses other forms.
 
 `aggregate` on a channel (`count`, `sum`, `mean`, `min`, `max`, `rate`) groups
-by every other field channel, as in Vega-Lite. `rate` is the share of rows
+by every other field channel, as in Vega-Lite. Unlike Vega-Lite, a channel's
+`count` names a `field` and counts the rows where that field has a value. `rate` is the share of rows
 where the field is true; its field holds true/false or 0/1.
 
 ### Transforms

@@ -3,7 +3,7 @@
  *
  *   lattice(x, y, codes) → Cells          a q8 code per (x, y) cell
  *   colourTable(scheme, min, max)         256 RGBA entries, indexed by code
- *   paintCells(cells, table) → RasterImage one pixel per cell
+ *   paintCells(cells, table, lit?) → RasterImage one pixel per cell (unlit ones dimmed)
  *
  * The full chart draws the image from a `custom` series (ECharts supplies the axes,
  * tooltip and brush; lasso hit-testing on cells uses `rowAt`). PR 4's

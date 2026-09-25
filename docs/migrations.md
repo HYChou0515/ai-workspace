@@ -915,7 +915,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有 views，
     所以這段是因為 chart 才出現；
   - skill 索引的 `chart` 一行，約 230 字元；
-  - SKILL.md 本文約 5.2k 字元，只在 AI `read_skill('chart')` 時才載入。
+  - SKILL.md 本文約 5.5k 字元，只在 AI `read_skill('chart')` 時才載入。
 - AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
 - **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。在某個 item 的 skill 偏好把 `chart`
   關掉，只拿掉那份 skill，`## Available views` 那兩行仍在。
@@ -943,6 +943,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 做什麼：用 `uv run python -m workspace_app.view_plugin build view-plugins/chart <目錄>` 把 chart 完整裝進
     一個 plugin 目錄（含 `sandbox/`），掛進 pod，並讓 `view_plugins.dir` 或 `WORKSPACE_VIEW_PLUGINS_DIR`
     指到它。記得連 `csv-table` 一起裝，見 #854 的條目。
+  - 前提：在 **Linux、和 pod 相同的 CPU 架構**上 build。bundle 裡帶的是 build 機器上的那份 CPython，
+    `launch` 經由 Linux 的動態載入器執行它；在 Mac 上 build 的目錄掛進去，開機不會警告（`sandbox/` 在），
+    但每次呼叫都會失敗，面板顯示的是那個執行錯誤。
   - 為什麼：API 映像只裝 plugin 的 web 半邊。`kind: local` 的沙盒要從 plugin 目錄拿 chart 的 bundle，而映像裡
     沒有這份 bundle。
   - 漏做的症狀：開機照常，但 log 有一行
@@ -953,7 +956,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **確認做完**
 
-- 在 sandbox-host pod 裡：`/opt/tools/builtin/chart/launch` 沒帶參數，印出含 `validate` 與 `query` 的 JSON 清單。
+- `kind: http`：在 sandbox-host pod 裡，`/opt/tools/builtin/chart/launch` 沒帶參數，印出含 `validate` 與 `query` 的 JSON 清單。
+- `kind: local`：API pod 的開機 log **沒有** `⚠ view plugin chart:` 那一行，而且在 pod 裡執行
+  `<plugin 目錄>/chart/sandbox/launch` 沒帶參數，也印出同一份清單（這一步才證明 bundle 能在這台機器上跑）。
 - `GET /api/view-plugins` 列出 `chart`。
 - 在一個 workspace 放一份 CSV，叫 AI「用圖表說明 X 和 Y 的關係」：
   - 回覆出現一行 `… rows; <欄位> <最小>–<最大>` 摘要與一張卡片；

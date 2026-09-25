@@ -36,7 +36,9 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - `source: {entity: <type>}` 跑的是平台自己的 `EntityStore.query`，透過 `view-plugins/sdk-python`
   打包進 bundle，所以圖表看到的紀錄和 table view 完全一致。
 - `kind: http`（正式環境）：bundle 已經烤進 sandbox-host 映像的 `builtin/chart`。
-  `kind: local`：開機時從 plugin 目錄複製到合併後的 tools root。
+  `kind: local`：開機時從 plugin 目錄複製到合併後的 tools root——前提是那個目錄裡有 `sandbox/`。
+  API 映像只帶 web 半邊，所以要掛一個用 `view_plugin build` 裝好的目錄，做法見
+  [升級手冊 #855](migrations.md#pr-855)。
 - `kind: docker`：不支援 tools，所以也不支援 chart 的沙盒端。
 
 ## 運營方要知道的事
@@ -56,4 +58,4 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
     views，所以這整段是因為 chart 才出現；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文約 5.2k 字元，只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文約 5.5k 字元，只在 AI `read_skill('chart')` 時才載入。

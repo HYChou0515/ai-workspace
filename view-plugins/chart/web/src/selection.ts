@@ -97,7 +97,6 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
   return group("legend", pairs);
 }
 
-/** The `keys:` columns' values over the selected rows — what a marking holds. */
 /** Where a key's MARKING strings live in a layer: `$key.<name>` when a channel
  * sends the key as numbers / time / q8 (query.py adds it), else the key's own
  * column. The one lookup for everything that compares a layer with a marking —
@@ -108,6 +107,7 @@ export function keyColumn(layer: WireLayer | undefined, key: string): Column | n
   return wire ? decodeColumn(wire) : null;
 }
 
+/** The `keys:` columns' values over the selected rows — what a marking holds. */
 export function selectionValues(sel: Selection, answer: Answer, keys: string[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const key of keys) {
