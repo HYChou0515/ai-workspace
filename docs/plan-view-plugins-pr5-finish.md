@@ -416,6 +416,24 @@ words are examples, not spec keys.
 
   Row 18 replaces a mechanism (round 20 follows). Demo at 1440 and 390, seen: rows 18–19,
   and P39's two scenes (a stacked 0 on a log y; a lone point on a line).
+  *P40 as built:* row 19 b06456cf (`WriteMarking` returns whether a store took the write;
+  ChartView records `wrote` only then — the SDK's write type goes `void` → `boolean`); row 18
+  ec115af6 (`query._stack_sum`: one row per slot and colour; other fields kept where the
+  group shares one value, else empty; an all-missing group sums to 0, as `aggregate: sum`
+  does; a stack with its own `aggregate` is also grouped by slot and colour only
+  [mine, open to override]; each answer layer carries `measured`, which the browser reads,
+  so there is no second copy of the rule; schema `stackColour` refuses a stack coloured by
+  a value; corpus `wire-corpus/stack-sums.json` feeds both halves; the chart's own
+  "N selected" now counts segments [mine, open to override]); row 20 8ce066d0
+  (`Axis.leftOut()`; errorbar ends and boxplot summaries go through `at`; an errorbar
+  end with no place runs its stem to the plot's foot, uncapped; a box with a summary left
+  out is not drawn and has its own note [mine, open to override]; a `line` with
+  `stack: true` keeps its 0 as a stack does). Measured end to end on 1,000,000 rows: the
+  sandbox query 902–950 → 123–132 ms, the answer 13,023 → 4 KiB, toOption 312–335 → 0 ms.
+  Demo (1440 and 390, seen): a box over one summed segment lights its 40 rows in the
+  table ("40 of 135 rows"); a stack coloured by value shows the refusal; P39's joined
+  band and lone dots. Known and left: a field the summed rows do not share shows "—" in
+  the tooltip, which reads like a missing value.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third

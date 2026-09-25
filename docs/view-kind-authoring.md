@@ -231,7 +231,8 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 
 - 註冊時 `registerViewKind({ …, linkable: true })`：這個 kind 的每個 view 標頭都有 marking 選單，
   並從 props 拿到 `marking`（見上表）。沒宣告的 kind，只有 view 檔寫了 `marking:` 或 `keys:` 才有。
-- `useMarking(name)` → `[entry, write]`：讀 `entry.marking`，用 `write(marking, source)` 寫；
+- `useMarking(name)` → `[entry, write]`：讀 `entry.marking`，用 `write(marking, source)` 寫；`write` 回傳 store 有沒有
+  收下（沒有 marking provider 的預覽、或 view 斷開 marking 時是 `false`），沒收下的就不是寫進 marking 的選取；
   `useMarkingNames()` 列出這個 item 現有的名字。
 - **比對一律用 `isLit(row, marking)`**，不要自己寫：規則是「和 marking 至少有一個共同欄位，而且每個共同欄位的值都在集合裡」，
   兩個 view 各寫一套就會各亮各的。`projectOntoKeys(rows, keys)` 把選到的列投影成要寫的 marking。

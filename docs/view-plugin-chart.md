@@ -55,11 +55,18 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   依顏色分組的圖例（例如分組的 scatter、line、bar）仍在圖上方，不受影響。
 - 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
   （沒接 marking、或沒有 `keys:`）才把框外的點變灰。
-- `stack: true` 在任何軸上都照值疊，不用先 `aggregate: sum`：同一個顏色在同一個位置有好幾列，就畫成**一段**，
-  高度是這些列的總和；tooltip 寫「(sum of N rows)」，框選、套索或點到這一段就選到全部 N 列，其中有一列被 marking
-  點亮，這一段就亮。某個顏色在某個位置沒有資料時，那裡算 0（收窄到沒有）；對數軸上，底下沒有正值的位置則留空。
-  想看一列一列的值，就不要疊。
-- 對數軸上 0 與負值沒有位置，那些點不畫，圖上方的說明列寫「N values at or below 0 not drawn on the log y axis」。
+- `stack: true`（bar、area）在任何軸上都照值疊，不用先 `aggregate: sum`：沙盒把同一個位置、同一個顏色的列
+  加總成**一列**，等同在數值通道寫 `aggregate: sum`（數值通道有自己的 `aggregate` 就用它，而且只依位置與顏色分組）。
+  空值不算，整組都是空值時總和是 0。其他欄位（tooltip、text、size…）只在這些列的值都相同時保留，不同就留空，
+  tooltip 顯示「—」。圖上一段就是一列：框選、套索或圖例寫進 marking 的是它的位置和顏色，其他 view 會點亮這一段
+  加總的每一列原始資料；圖上的「N selected」數的是段數。依數值上色（quantitative color）的疊圖會被拒絕並說明原因：
+  分不出哪些列是同一段。某個顏色在某個位置沒有資料時那裡算 0；對數軸上，底下沒有正值的位置留空。想看一列一列的
+  值，就不要疊。
+- 對數軸上 0 與負值沒有位置，那些點不畫，圖上方的說明列寫「N values at or below 0 not drawn on the log y axis」，
+  數的就是沒畫的值，包括 errorbar 的兩端與 boxplot 的五個摘要和離群點。errorbar 某一端沒有位置時，線畫到圖底、
+  那一端不畫橫線；boxplot 任一摘要沒有位置時整個箱子不畫，說明列另寫「N boxes with a part at or below 0 not drawn
+  on the log y axis」。疊圖裡某一層自己的 0 是「不加東西」，底下有正值時照常畫；折線上前後都沒畫的單獨一個值，
+  畫成一個點。
 - 圖上的「N selected」只有在選取寫進**這張圖現在接的** marking 時才接「· by <欄位>」；沒有 `keys:` 的圖、斷開 marking
   時做的選取，或寫進的是另一個 marking，都只寫「N selected」。view 檔改名不算別的 view 寫的。
 - view 標頭的 marking 選單（標籤圖示＋`<名字> ▾`）可以把這張圖改接到別的 marking、新開一個，或斷開。這是**你自己的畫面狀態**，

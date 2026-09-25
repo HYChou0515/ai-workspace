@@ -984,7 +984,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 漏做的症狀：從 master 升上來、沒換 sandbox-host，症狀就是上面第一條的（沒有 `launch`，502）。
     **只有部署過這個分支較早的 build** 的環境，才會看到舊 bundle 的訊息：打開 chart，面板顯示
     `argument must be {'spec': <string>}`；打開縮圖牆顯示 `facet_build takes exactly ['spec'] (and an optional epoch)`；
-    按「Save as table」得到 `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯。
+    按「Save as table」得到 `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯；`stack: true` 的圖把同一個位置的
+    多列原始資料畫在同一個起點上互相蓋住（加總改在沙盒做了，舊 bundle 不加）。
 - **`sandbox.kind: local` 掛自己 plugin 目錄的部署**，`rollout 前`把 `chart` **與 `csv-table`** 用這一版重新
   `view_plugin build` 進那個目錄（做法同上）。
   - 為什麼：chart 的 `plugin.json` 多了 `provides` 與兩行 views，沙盒 bundle 多了指令；csv-table 的前端改成會接 marking，
