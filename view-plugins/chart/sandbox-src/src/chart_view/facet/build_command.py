@@ -1,4 +1,5 @@
-"""``facet_build {"spec"}`` (plan-view-plugins-pr4 P3/P6): a ``facet:`` spec
+"""``facet_build {"path", "rev"}`` / ``{"spec"}`` (plan-view-plugins-pr4 P3/P6;
+the path form #847/#848 P9, read by ``facet.cli``): a ``facet:`` spec's text
 in, the cache a gallery opens out.
 
 Built once per (normalised source path, its size and mtime, and only what

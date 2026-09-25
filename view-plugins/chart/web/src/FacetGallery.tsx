@@ -29,6 +29,7 @@ import { isLit, useMarking, useSandboxRun } from "@aiws/view-sdk";
 
 import { cellAt, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail, type FacetIndex } from "./gallery";
 import type { RasterImage } from "./raster";
+import { viewCall } from "./viewCall";
 import { decodeColumn, type WireColumn } from "./wire";
 
 const PLUGIN = "chart";
@@ -311,7 +312,8 @@ export function FacetGallery({
   source,
 }: {
   doc: Record<string, unknown>;
-  /** The spec's text, as `facet_build` takes it. */
+  /** The spec's text: `facet_build` is keyed on its digest (`viewCall`), and
+   * takes the text itself only for a view with no file. */
   text: string;
   marking: string | null;
   source: string | null;
@@ -322,7 +324,9 @@ export function FacetGallery({
 
   const [epoch, setEpoch] = useState(0);
   const [gaveUp, setGaveUp] = useState<string | null>(null);
-  const build = useSandboxRun(PLUGIN, "facet_build", { spec: text, epoch });
+  // the view file, not its text (#847/#848 P9): see viewCall
+  const call = useMemo(() => viewCall(text, source), [text, source]);
+  const build = useSandboxRun(PLUGIN, "facet_build", { ...call, epoch });
   // parsed once per answer: a fresh object every render would re-run every
   // effect and memo keyed on it
   const built = useMemo(() => parse<{ key: string; build: string; groups: number }>(build.data), [build.data]);

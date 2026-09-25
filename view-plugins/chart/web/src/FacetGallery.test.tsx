@@ -130,12 +130,28 @@ function calls(cmd: string) {
 }
 
 describe("FacetGallery", () => {
-  it("builds the cache from the spec text, then opens its index by key — never runs query", () => {
+  it("builds the cache from the view file, then opens its index by key — never runs query", () => {
     view();
-    expect(calls("facet_build")[0][2]).toEqual({ spec: JSON.stringify(DOC), epoch: 0 });
+    // #847/#848 P9: the file, not its text (the args are one argv string, capped at 128 KiB)
+    expect(calls("facet_build")[0][2]).toEqual({ path: "views/w.ai.yaml", rev: expect.any(String), epoch: 0 });
     expect(calls("facet_index")[0][2]).toEqual({ key: KEY, epoch: 0 });
     expect(calls("query")).toHaveLength(0);
     expect(screen.getByText(/1000 groups/)).toBeTruthy();
+  });
+
+  it("asks for a spec over the argv cap with a call the size of any other (#847/#848 P9)", () => {
+    const big = { ...DOC, transform: [{ filter: { field: "lot", oneOf: Array.from({ length: 30_000 }, (_, i) => `L${i}`) } }] };
+    expect(JSON.stringify(big).length).toBeGreaterThan(128 * 1024);
+    sdk.viewDocument.mockReturnValue(big);
+    view();
+    const args = calls("facet_build")[0][2] as Record<string, unknown>;
+    expect(args.path).toBe("views/w.ai.yaml");
+    expect(JSON.stringify({ args }).length).toBeLessThan(200);
+    // and an edited file is a new build
+    cleanup();
+    sdk.viewDocument.mockReturnValue(DOC);
+    view();
+    expect((calls("facet_build").at(-1)![2] as Record<string, unknown>).rev).not.toEqual(args.rev);
   });
 
   it("asks only for the pages near the viewport, positions in sorted order", () => {

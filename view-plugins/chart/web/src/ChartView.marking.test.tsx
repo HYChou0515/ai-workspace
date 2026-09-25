@@ -169,8 +169,9 @@ describe("ChartView on a named marking", () => {
           lit: 1,
         }),
       );
-    sdk.useSandboxRun.mockImplementation((_p: string, _c: string, args: { spec: string }) =>
-      ok(args.spec.includes('"title":"B"') ? litAt(0b100) : litAt(0b010)),
+    // each view names its own file (mount: /v/<i>.ai.yaml); B is the second
+    sdk.useSandboxRun.mockImplementation((_p: string, _c: string, args: { path: string }) =>
+      ok(args.path === "/v/1.ai.yaml" ? litAt(0b100) : litAt(0b010)),
     );
     const store = new MarkingStore();
     mount(store, [docOn("fail", { title: "A" }), docOn("fail", { title: "B" })]);

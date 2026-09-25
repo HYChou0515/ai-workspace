@@ -1,7 +1,10 @@
 """The pager's launch commands (plan-view-plugins-pr4 P4), dispatched by
 ``chart_view.cli``. Standard library only: they run on every scroll.
 
-- ``facet_build {"spec"}`` -- build or reuse the cache (``build_command``);
+- ``facet_build {"path", "rev"}`` -- build or reuse the cache (``build_command``)
+  for the view file at ``path``, as ``query`` reads it (``rev`` is the
+  gallery's digest of the text, ignored here); ``{"spec"}`` carries the text
+  instead, for a view with no file;
 - ``facet_index {"key"}`` -- the index a gallery sorts and marks from;
 - ``facet_page {"key", "build", "positions"}`` -- records at sorted positions;
 - ``facet_exact {"key", "build", "position"}`` -- one group's exact values.
@@ -30,12 +33,38 @@ STALE = 4
 _KEY = {"type": "string", "description": "The cache digest the build returned."}
 _BUILD = {"type": "string", "description": "The build id of the index the call sorted from."}
 
+#: How ``query`` and ``facet_build`` are handed a view (#847/#848 P9): its file
+#: (with the renderer's ``rev``, a digest of the text it holds, ignored here --
+#: it makes an edited file a new call), or its text, for a view with no file.
+VIEW_ARGUMENTS: dict[str, Any] = {
+    "path": {"type": "string", "description": "The .ai.yaml file, relative to the workspace."},
+    "rev": {"type": "string", "description": "The renderer's digest of the text; ignored."},
+    "spec": {"type": "string", "description": "The chart file's YAML text, if there is no file."},
+}
+VIEW_FORMS = (frozenset({"path"}), frozenset({"path", "rev"}), frozenset({"spec"}))
+
+
+def forms_schema(
+    props: dict[str, Any], forms: tuple[frozenset[str], ...], optional: frozenset[str]
+) -> dict[str, Any]:
+    """The JSON schema of a call that takes exactly one of `forms` (plus any of
+    `optional`): what the command's own check accepts, and nothing else."""
+    return {
+        "type": "object",
+        "properties": props,
+        "oneOf": [
+            {"required": sorted(f), "propertyNames": {"enum": sorted(f | optional)}} for f in forms
+        ],
+    }
+
+
 COMMANDS: dict[str, dict[str, Any]] = {
     "facet_build": {
         "description": (
             "Build (or reuse) the cache a facet: spec opens as a gallery; answer its key and build."
         ),
-        "properties": {"spec": {"type": "string", "description": "The chart file's YAML text."}},
+        "properties": VIEW_ARGUMENTS,
+        "forms": VIEW_FORMS,
     },
     "facet_index": {
         "description": (
@@ -68,12 +97,8 @@ _EPOCH = {"type": "integer", "description": "The gallery's retry epoch; ignored 
 
 def schema(name: str) -> dict[str, Any]:
     props = COMMANDS[name]["properties"]
-    return {
-        "type": "object",
-        "properties": {**props, "epoch": _EPOCH},
-        "required": list(props),
-        "additionalProperties": False,
-    }
+    forms = COMMANDS[name].get("forms", (frozenset(props),))
+    return forms_schema({**props, "epoch": _EPOCH}, forms, frozenset({"epoch"}))
 
 
 def _root() -> Path:
@@ -85,9 +110,10 @@ def _args(name: str, raw: str) -> dict[str, Any]:
         args = json.loads(raw)
     except (json.JSONDecodeError, RecursionError) as e:  # nested past the decoder
         raise ValueError(f"argument is not JSON this command can read: {e}") from None
-    want = set(COMMANDS[name]["properties"])
-    if not isinstance(args, dict) or set(args) - {"epoch"} != want:
-        raise ValueError(f"{name} takes exactly {sorted(want)} (and an optional epoch)")
+    forms = COMMANDS[name].get("forms", (frozenset(COMMANDS[name]["properties"]),))
+    if not isinstance(args, dict) or set(args) - {"epoch"} not in forms:
+        takes = " or ".join(str(sorted(f)) for f in forms)
+        raise ValueError(f"{name} takes exactly {takes} (and an optional epoch)")
     if "epoch" in args and type(args.pop("epoch")) is not int:
         raise ValueError("epoch must be an integer")
     # Checked here, before the cache is looked for: a wrong call must be 2 even
@@ -98,7 +124,7 @@ def _args(name: str, raw: str) -> dict[str, Any]:
         raise ValueError("positions must be a list of integer group positions")
     if "position" in args and type(args["position"]) is not int:
         raise ValueError("position must be an integer group position")
-    for text in ("key", "build", "spec"):
+    for text in ("key", "build", "spec", "path", "rev"):
         # a build that is not text would read as "rebuilt since" (exit 4) and
         # send the gallery round a refetch loop instead of naming the bad call
         if text in args and not isinstance(args[text], str):
@@ -111,9 +137,11 @@ def run(name: str, raw: str) -> int:
         args = _args(name, raw)
         if name == "facet_build":
             # pandas lives behind this import, so only a build pays for it
+            from chart_view.cli import read_view
             from chart_view.facet.build_command import run as build
 
-            return build(args["spec"])
+            text = args["spec"] if "spec" in args else read_view(args["path"])
+            return 2 if text is None else build(text)
         if name == "facet_index":
             answer = index_payload(_root(), args["key"])
         elif name == "facet_page":

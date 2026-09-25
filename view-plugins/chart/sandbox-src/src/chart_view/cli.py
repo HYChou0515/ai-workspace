@@ -7,13 +7,16 @@
 - ``validate {"path"}`` — what show_file's hook runs before it shows a view
   file (#854 P9): exit 0 with ONE summary line on stdout, or exit 2 with the
   refusal lines on stderr.
-- ``query {"spec"}`` — what the renderer runs (`useSandboxRun("chart",
-  "query", …)`): the spec's text in, the per-layer answer (`chart_view.query`)
-  out as JSON. The TEXT, not a path: the renderer holds the file's current
-  text, and a new text is a new cache key.
+- ``query {"path", "rev"}`` — what the renderer runs (`useSandboxRun("chart",
+  "query", …)`): the view file in, the per-layer answer (`chart_view.query`)
+  out as JSON. The PATH, as ``validate`` takes it (#847/#848 P9): every
+  argument travels as one argv string, which the kernel caps at 128 KiB, so a
+  spec's text in argv let a big spec pass ``show_file`` and fail every render.
+  ``rev`` is the renderer's digest of the text it holds, ignored here: it only
+  makes an edited file a new call (the args are the renderer's cache key).
+  ``query {"spec"}`` still takes the text, for a view with no file.
 
-Hand-written (no pydantic): two commands with one string argument each, and a
-bundle that stays small.
+Hand-written (no pydantic): two small commands, and a bundle that stays small.
 
 The facet pager's commands (``facet_index`` / ``facet_page`` / ``facet_exact``,
 #848, PR #857) live in ``chart_view.facet.cli``. They run on every scroll, so nothing
@@ -38,13 +41,14 @@ COMMANDS: dict[str, dict[str, Any]] = {
     },
     "query": {
         "description": "Compute what a view: chart spec draws, as the renderer's JSON answer.",
-        "argument": "spec",
-        "about": "The chart file's YAML text.",
+        # its arguments are facet_cli.VIEW_ARGUMENTS (see _schema)
     },
 }
 
 
 def _schema(name: str) -> dict[str, Any]:
+    if name == "query":  # its file or its text, as facet_build takes a view
+        return facet_cli.forms_schema(facet_cli.VIEW_ARGUMENTS, facet_cli.VIEW_FORMS, frozenset())
     c = COMMANDS[name]
     return {
         "type": "object",
@@ -54,29 +58,53 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
-def _argument(name: str, raw: str) -> str:
-    key = COMMANDS[name]["argument"]
+def _json(raw: str) -> Any:
     try:
-        args = json.loads(raw)
+        return json.loads(raw)
     except (json.JSONDecodeError, RecursionError) as e:  # nested past the decoder
         raise ValueError(f"argument is not JSON this command can read: {e}") from None
+
+
+def _argument(name: str, raw: str) -> str:
+    key = COMMANDS[name]["argument"]
+    args = _json(raw)
     if not isinstance(args, dict) or not isinstance(args.get(key), str):
         raise ValueError(f"argument must be {{{key!r}: <string>}}")
     return args[key]
 
 
+def _query_argument(raw: str) -> tuple[str, str]:
+    """``("path", <file>)`` or ``("spec", <text>)``: what ``query`` was given."""
+    args = _json(raw)
+    shape = "argument must be {'path': <string>, 'rev': <string>} or {'spec': <string>}"
+    if not isinstance(args, dict) or set(args) not in facet_cli.VIEW_FORMS:
+        raise ValueError(shape)
+    if not all(isinstance(v, str) for v in args.values()):
+        raise ValueError(shape)
+    return ("path", args["path"]) if "path" in args else ("spec", args["spec"])
+
+
+def read_view(path: str) -> str | None:
+    """The view file at `path` in the workspace (the cwd), or None with the
+    reason on stderr. What ``validate``, ``query`` and ``facet_build`` read."""
+    from chart_view.sources import SourceError, inside_workspace
+
+    try:
+        return inside_workspace(Path.cwd(), path).read_text(encoding="utf-8")
+    except SourceError as e:
+        print(str(e), file=sys.stderr)
+    except (OSError, UnicodeDecodeError):
+        print(f"{path} is not a readable text file in the workspace", file=sys.stderr)
+    return None
+
+
 def _validate(path: str) -> int:
-    from chart_view.sources import SourceError, inside_workspace, read_source
+    from chart_view.sources import read_source
     from chart_view.validate import check
 
     root = Path.cwd()
-    try:
-        text = inside_workspace(root, path).read_text(encoding="utf-8")
-    except SourceError as e:
-        print(str(e), file=sys.stderr)
-        return 2
-    except (OSError, UnicodeDecodeError):
-        print(f"{path} is not a readable text file in the workspace", file=sys.stderr)
+    text = read_view(path)
+    if text is None:
         return 2
     result = check(text, lambda source: read_source(root, source))
     if result.summary is None:
@@ -139,11 +167,19 @@ def main(argv: list[str] | None = None) -> int:
     if name in facet_cli.COMMANDS:
         return facet_cli.run(name, a[1])
     try:
-        value = _argument(name, a[1])
+        if name == "validate":
+            form, value = "validate", _argument(name, a[1])
+        else:
+            form, value = _query_argument(a[1])
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
-    return _validate(value) if name == "validate" else _query(value)
+    if form == "validate":
+        return _validate(value)
+    if form == "spec":
+        return _query(value)
+    text = read_view(value)
+    return 2 if text is None else _query(text)
 
 
 if __name__ == "__main__":  # pragma: no cover

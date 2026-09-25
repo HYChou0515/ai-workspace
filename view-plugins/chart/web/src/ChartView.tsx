@@ -20,6 +20,7 @@ import { highlightMarking, markingLit, selectionMarking } from "./marking";
 import type { Cells, RasterImage } from "./raster";
 import { type BrushSelected, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
 import { specErrors } from "./spec";
+import { viewCall } from "./viewCall";
 
 export const PLUGIN = "chart";
 const FORMAT = 1;
@@ -202,7 +203,8 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   const errors = useMemo(() => specErrors(doc), [doc]);
   // A `facet:` spec is a gallery (#848): it builds a cache instead of a query.
   const faceted = doc.facet !== undefined;
-  const run = useSandboxRun(PLUGIN, "query", { spec: text }, { enabled: errors.length === 0 && !faceted });
+  const call = useMemo(() => viewCall(text, path), [text, path]);
+  const run = useSandboxRun(PLUGIN, "query", call, { enabled: errors.length === 0 && !faceted });
   const answer = useMemo(
     () => (run.data && run.data.exit_code === 0 ? readAnswer(run.data.stdout) : null),
     [run.data],

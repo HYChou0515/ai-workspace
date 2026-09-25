@@ -80,6 +80,42 @@ describe("ChartView", () => {
     expect(screen.getByRole("status").textContent).toContain("Computing");
   });
 
+  // #847/#848 P9: the args travel as ONE argv string, capped at 128 KiB by the
+  // kernel; a spec over that passed show_file (which sends only its path) and
+  // got a 413 on every render. A view in a file names the file, as show_file does.
+  describe("a view in a file names the file, whatever its size", () => {
+    const ARGV_CAP = 128 * 1024;
+    // a legitimate spec over the cap: a long filter
+    const BIG = { ...DOC, transform: [{ filter: { field: "lot", oneOf: Array.from({ length: 30_000 }, (_, i) => `L${i}`) } }] };
+    const inFile = () =>
+      render(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/c.ai.yaml" />);
+    const queryArgs = () => sdk.useSandboxRun.mock.calls.filter((c) => c[1] === "query").at(-1)![2] as Record<string, unknown>;
+
+    it("sends the path, and a call the same size for a spec over the argv cap", () => {
+      expect(JSON.stringify(BIG).length).toBeGreaterThan(ARGV_CAP);
+      sdk.viewDocument.mockReturnValue(BIG);
+      run({ isLoading: true });
+      inFile();
+      const args = queryArgs();
+      expect(Object.keys(args).sort()).toEqual(["path", "rev"]);
+      expect(args.path).toBe("views/c.ai.yaml");
+      expect(JSON.stringify({ args }).length).toBeLessThan(200);
+    });
+
+    it("makes an edited file a new call, and the same text the same call", () => {
+      run({ isLoading: true });
+      inFile();
+      const first = queryArgs();
+      cleanup();
+      inFile();
+      expect(queryArgs()).toEqual(first);
+      cleanup();
+      sdk.viewDocument.mockReturnValue({ ...DOC, title: "edited" });
+      inFile();
+      expect(queryArgs().rev).not.toEqual(first.rev);
+    });
+  });
+
   it("shows a spec the schema refuses, and runs nothing", () => {
     sdk.viewDocument.mockReturnValue({ ...DOC, colour: "red" });
     run();

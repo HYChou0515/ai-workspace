@@ -246,3 +246,65 @@ def test_a_spec_that_is_not_text_exits_2(
 ) -> None:
     code, _, err = _call(capsys, "facet_build", {"spec": 5})
     assert code == 2 and "spec" in err
+
+
+# #847/#848 P9: the gallery names its view FILE, as `validate` does. Its text in
+# argv (one string, capped at 128 KiB by the kernel) let a big spec pass
+# show_file and fail every render with a 413.
+def _big_view(workspace: Path) -> str:
+    keep = ", ".join(f"L{i}" for i in range(30_000))
+    text = SPEC + f"transform:\n  - filter: {{field: lot, oneOf: [{keep}]}}\n"
+    assert len(text.encode()) > 128 * 1024
+    (workspace / "ws" / "views").mkdir()
+    (workspace / "ws" / "views" / "g.ai.yaml").write_text(text)
+    return "/views/g.ai.yaml"
+
+
+def test_the_build_reads_the_view_file_it_is_named(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _big_view(workspace)
+    args = {"path": path, "rev": "0" * 11, "epoch": 0}
+    assert len(json.dumps(args)) < 200  # the call's size is not the spec's
+    code, by_path, err = _call(capsys, "facet_build", args)
+    assert code == 0, err
+    # the oracle is the text form: the same file, named the other way, is the
+    # same cache (reused, not rebuilt)
+    text = (workspace / "ws" / path[1:]).read_text()
+    code, by_text, _ = _call(capsys, "facet_build", {"spec": text})
+    assert code == 0 and isinstance(by_path, dict) and isinstance(by_text, dict)
+    assert by_path["built"] is True and by_text["built"] is False
+    assert (by_text["key"], by_text["build"]) == (by_path["key"], by_path["build"])
+    assert by_path["groups"] == 3
+
+
+def test_the_build_names_a_view_file_that_is_not_there(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err = _call(capsys, "facet_build", {"path": "views/nope.ai.yaml", "rev": "r"})
+    # that reason alone: nothing is built from a file that was not read
+    assert (code, out, err) == (
+        2,
+        "",
+        "views/nope.ai.yaml is not a readable text file in the workspace\n",
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"spec": SPEC, "path": "views/g.ai.yaml"},
+        {"rev": "r"},
+        {"path": 3},
+        {"path": "views/g.ai.yaml", "rev": 3},
+        {"spec": SPEC, "rev": "r"},
+    ],
+    ids=["both", "neither", "path-not-text", "rev-not-text", "rev-without-path"],
+)
+def test_the_build_takes_a_spec_or_a_path(
+    workspace: Path, capsys: pytest.CaptureFixture[str], args: dict
+) -> None:
+    (workspace / "ws" / "views").mkdir()
+    (workspace / "ws" / "views" / "g.ai.yaml").write_text(SPEC)
+    code, out, err = _call(capsys, "facet_build", args)
+    assert (code, out) == (2, "") and err.strip()
