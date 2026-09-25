@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from chart_view.datums import datum_errors
-from chart_view.query import LayerRows, binned, layer_rows
+from chart_view.query import LayerRows, answer, binned, layer_rows
 from chart_view.sources import SourceError
 from chart_view.spec import SpecError, parse_spec, spec_errors
 from chart_view.transforms import TransformError
@@ -85,7 +85,8 @@ def check(text: str, read_source: ReadSource) -> Result:
         layers = layer_rows(spec, read_source(spec["source"]))
     except (SourceError, TransformError) as e:
         return Result(errors=[str(e)])
-    errors = datum_errors(layers)
+    # Judged on the answer the chart receives, not on the rows pandas holds.
+    errors = datum_errors(spec, answer(spec, layers))
     if errors:
         return Result(errors=errors)
 

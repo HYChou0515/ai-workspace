@@ -71,3 +71,20 @@ describe("a line's opacity", () => {
     expect(s.lineStyle?.opacity).toBe(0.3);
   });
 });
+
+describe("a rule drawn from a field", () => {
+  it("leaves out the rows with no position on its axis", () => {
+    // Review round 6: a missing value went to ECharts as {yAxis: null}, and a
+    // 0 on a log axis as {yAxis: 0}, which the axis cannot hold.
+    const spec = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative", scale: { type: "log" } } } },
+        { mark: "rule", encoding: { y: { field: "b", type: "quantitative" } } },
+      ],
+    };
+    const a = answer(layer("scatter", 1, { a: f64([1]), b: f64([1]) }), layer("rule", 3, { b: f64([1, null, 0]) }));
+    const series = toOption(spec, a).option.series as Series[];
+    expect(series[1].markLine?.data).toEqual([{ yAxis: 1 }]);
+  });
+});

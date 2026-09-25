@@ -224,7 +224,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     if (typeof n !== "number" || !Number.isFinite(n) || (kind === "log" && n <= 0)) return null;
     return n;
   };
-  return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null, pos };
+  return { channel, kind, labels: [], at: (col, row) => pos(col.value(row)), pos };
 }
 
 /** Where an axis name goes: centred beside its axis. At ECharts' default (the
@@ -311,7 +311,8 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   const visualMaps: Record<string, unknown>[] = [];
   const legend: string[] = [];
 
-  // One pair of axes for the whole chart, from the first layer that names each.
+  // One pair of axes for the whole chart: a grid's when a layer is a grid
+  // (below), otherwise from the first layer that names each.
   const gridIndex = specs.findIndex((s) => markOf(s).type === "grid");
   let gridCells: Cells | null = null;
   if (gridIndex >= 0) {

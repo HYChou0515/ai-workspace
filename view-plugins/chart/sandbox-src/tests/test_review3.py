@@ -255,3 +255,39 @@ def test_a_temporal_measure_is_not_summarised_as_raw_numbers(unit):
         "  x: {field: v, type: quantitative}\n  y: {field: t, type: temporal}\n"
     )
     assert check(text, lambda _s: df).summary == "2 rows"
+
+
+@pytest.mark.parametrize("datum", [".inf", "-.inf", ".nan"])
+@pytest.mark.parametrize("scale", ["", ", scale: {type: log}"])
+def test_a_datum_that_is_no_finite_number_is_refused(datum, scale):
+    # Review round 6: YAML reads .inf / .nan as floats; the renderer's schema
+    # check refuses them and JSON sends them as null. NaN <= 0 is False, so a
+    # log axis let .nan through.
+    from chart_view.validate import check
+
+    text = (
+        "view: chart\nsource: a.csv\nlayer:\n"
+        f"  - mark: scatter\n    encoding:\n      x: {{field: v, type: quantitative{scale}}}\n"
+        "      y: {field: v, type: quantitative}\n"
+        f"  - mark: rule\n    encoding:\n      x: {{datum: {datum}}}\n"
+    )
+    errors = check(text, lambda _s: _DAYS).errors
+    assert errors and errors[0].startswith("x: datum"), errors
+
+
+def test_a_number_in_other_digits_in_a_time_column_is_milliseconds():
+    # The data reader is the sandbox's own (the renderer never parses data):
+    # "١٢٣" is 123, as float() reads it. Only a datum is held to [0-9].
+    assert epoch_ms(pd.Series(["١٢٣"], dtype=object)).tolist() == [123.0]
+
+
+def test_a_rule_drawn_from_a_field_has_no_datum_to_place():
+    from chart_view.validate import check
+
+    text = (
+        "view: chart\nsource: a.csv\nlayer:\n"
+        "  - mark: line\n    encoding:\n"
+        "      x: {field: t, type: temporal}\n      y: {field: v, type: quantitative}\n"
+        "  - mark: rule\n    encoding:\n      y: {field: v, type: quantitative}\n"
+    )
+    assert check(text, lambda _s: _DAYS).errors == []

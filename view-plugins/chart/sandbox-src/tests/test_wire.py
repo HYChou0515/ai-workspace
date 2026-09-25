@@ -36,6 +36,29 @@ def test_the_corpus_covers_every_kind():
     assert kinds == {"f64", "time", "cat", "q8", "bits"}
 
 
+@pytest.mark.parametrize(
+    "path", [f for f in FILES if f.name != "bits-nine-rows.json"], ids=lambda p: p.stem
+)
+def test_the_decoder_reads_the_corpus_as_the_renderer_does(path: Path):
+    # The renderer's decodeColumn is held to the same files (wire.test.ts):
+    # datums.py places a rule on what the renderer READS, not on raw rows.
+    from chart_view.wire import decode_column, epoch_ms
+
+    case = json.loads(path.read_text())
+    got = decode_column(case["wire"])
+    assert len(got) == len(case["values"])
+    for v, g in zip(case["values"], got, strict=True):
+        if v is None:
+            assert g is None
+        elif case["kind"] == "time":
+            assert g == epoch_ms(pd.Series([v], dtype=object))[0]
+        elif case["kind"] == "q8":
+            w = case["wire"]
+            assert abs(g - v) <= (w["max"] - w["min"]) / 254 / 2 + 1e-12
+        else:
+            assert g == v and type(g) is type(v)
+
+
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.stem)
 def test_the_encoder_writes_the_corpus(path: Path):
     case = json.loads(path.read_text())
@@ -57,20 +80,19 @@ def test_the_instant_corpus_is_how_a_datum_is_read():
     assert [instant_ms(c["text"]) for c in INSTANTS] == [c["ms"] for c in INSTANTS]
 
 
-def test_the_datum_axes_corpus_is_what_validate_says():
-    # The renderer's datum-axes.test.ts reads this file as validate's verdict.
+def test_the_datum_axes_corpus_is_what_validate_and_query_say():
+    # The renderer's datum-axes.test.ts reads each case's stored answer and
+    # verdict: both must be what the sandbox gives now.
+    from chart_view.query import build
+    from chart_view.spec import parse_spec
     from chart_view.validate import check
 
     doc = json.loads((CORPUS / "datum-axes.json").read_text())
-    frame = pd.DataFrame(doc["data"])
-    got = [
-        not check(
-            json.dumps({"view": "chart", "source": "a.csv", "layer": c["layer"]}),
-            lambda _s: frame,
-        ).errors
-        for c in doc["cases"]
-    ]
-    assert got == [c["placed"] for c in doc["cases"]]
+    for c in doc["cases"]:
+        frame = pd.DataFrame(c["data"])
+        text = json.dumps(c["spec"])
+        assert (not check(text, lambda _s, f=frame: f).errors) == c["placed"], c["name"]
+        assert build(parse_spec(text), frame) == c["answer"], c["name"]
 
 
 def test_a_placed_datum_is_where_the_same_text_in_the_data_is():

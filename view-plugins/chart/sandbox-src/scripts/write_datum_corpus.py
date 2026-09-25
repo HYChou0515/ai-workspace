@@ -1,11 +1,14 @@
-"""Write `wire-corpus/datum-axes.json`: rule datums over layered charts, and
-whether validate lets each one through (`validate.check`, the oracle).
+"""Write `wire-corpus/datum-axes.json`: rule datums over layered charts — each
+case's data, spec, the query's real answer (`query.build`), and whether
+validate lets the datum through (`validate.check`, the oracle).
 
-Which axis a datum lands on — the first layer's channel with a field, a
-grid's cells, a category's labels — is decided once in the sandbox and once
-in the renderer. `datum-axes.test.ts` holds the renderer to this file: a datum
-validate accepts gets a numeric position, one it refuses none;
-`test_wire.py` checks the file is current. Rerun after changing either:
+Which axis a datum lands on — a grid's channels when any layer is a grid,
+otherwise the first layer's channel with a field — and what that axis holds
+are decided once in the sandbox and once in the renderer.
+`datum-axes.test.ts` feeds each stored answer to the renderer and holds it
+to this file: a datum validate accepts gets a numeric position, one it
+refuses none; `test_wire.py` checks the file is current
+(verdicts and answers). Rerun after changing either:
 
     uv run python scripts/write_datum_corpus.py
 """
@@ -18,6 +21,8 @@ from typing import Any
 
 import pandas as pd
 
+from chart_view.query import build
+from chart_view.spec import parse_spec
 from chart_view.validate import check
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus" / "datum-axes.json"
@@ -107,16 +112,145 @@ CASES: list[tuple[str, list[dict[str, Any]]]] = [
 ]
 
 
+def grid(x: dict[str, Any], y: dict[str, Any], color: str = "v") -> dict[str, Any]:
+    return {
+        "mark": "grid",
+        "encoding": {"x": x, "y": y, "color": {"field": color, "type": "quantitative"}},
+    }
+
+
+def f(name: str, kind: str) -> dict[str, str]:
+    return {"field": name, "type": kind}
+
+
+# Review round 6: cases with their own data, where the rows pandas holds and
+# the wire the renderer reads differ — binned, coerced, dropped by the lattice.
+OWN: list[tuple[str, list[dict[str, Any]], dict[str, list[Any]], dict[str, Any]]] = [
+    (
+        "a cell whose other coordinate is missing",
+        [grid(f("k", "ordinal"), f("g", "nominal")), rule("x", 9)],
+        {"k": [1, 2, 9], "g": ["a", "b", None], "v": [1.0, 2.0, 3.0]},
+        {},
+    ),
+    (
+        "a cell whose other coordinate is there",
+        [grid(f("k", "ordinal"), f("g", "nominal")), rule("x", 2)],
+        {"k": [1, 2, 9], "g": ["a", "b", None], "v": [1.0, 2.0, 3.0]},
+        {},
+    ),
+    # The lattice fills an integer axis's gaps while its span is at most
+    # FILL_LIMIT (4) times its values: 1..8 over two values fills, 1..9 not.
+    (
+        "a gap the lattice fills at its limit",
+        [grid(f("k", "ordinal"), f("g", "nominal")), rule("x", "4")],
+        {"k": [1, 8], "g": ["a", "b"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "a gap one past the lattice's limit",
+        [grid(f("k", "ordinal"), f("g", "nominal")), rule("x", "4")],
+        {"k": [1, 9], "g": ["a", "b"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "between two fractional cells",
+        [grid(f("k", "quantitative"), f("g", "nominal")), rule("x", 1.0)],
+        {"k": [0.5, 1.5], "g": ["a", "b"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "a label another layer reads as a number",
+        [
+            {"mark": "bar", "encoding": {"x": f("g", "nominal"), "y": V}},
+            {"mark": "scatter", "encoding": {"x": f("g", "quantitative"), "y": V}},
+            rule("x", "1"),
+        ],
+        {"g": ["01", "a"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "a label only another layer's dates send",
+        [
+            {
+                "mark": "bar",
+                "encoding": {"x": f("t", "nominal"), "y": V},
+                "transform": [{"filter": "t == '2024-03-01'"}],
+            },
+            LINE_T,
+            rule("x", "2024-03-02"),
+        ],
+        {"t": ["2024-03-01", "2024-03-02"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "a value binning moved",
+        [
+            {"mark": "bar", "encoding": {"x": f("w", "nominal"), "y": V}},
+            {"mark": "scatter", "encoding": {"x": f("w", "quantitative"), "y": V}},
+            rule("x", 5),
+        ],
+        {"w": list(range(30)), "v": [float(i) for i in range(30)]},
+        {"bin_threshold": 5},
+    ),
+    (
+        "between number cells whose text had a stray value",
+        [grid(f("k", "quantitative"), f("g", "nominal")), rule("x", 1.5)],
+        {"k": ["1", "2", "x"], "g": ["a", "b", "c"], "v": [1.0, 2.0, 3.0]},
+        {},
+    ),
+    (
+        "a number cell written with a leading zero",
+        [grid(f("k", "quantitative"), f("g", "nominal")), rule("x", 1)],
+        {"k": ["01", "02"], "g": ["a", "b"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "a number on a true/false grid",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", 1)],
+        {"k": [True, False, None], "g": ["a", "b", "c"], "v": [1.0, 2.0, 3.0]},
+        {},
+    ),
+    (
+        "true on a true/false grid",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", "true")],
+        {"k": [True, False, None], "g": ["a", "b", "c"], "v": [1.0, 2.0, 3.0]},
+        {},
+    ),
+    (
+        "a list's item on a grid of lists",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", "a")],
+        {"k": [["a"], ["b"]], "g": ["a", "b"], "v": [1.0, 2.0]},
+        {},
+    ),
+    (
+        "a list's marking on a grid of lists",
+        [grid(f("k", "nominal"), f("g", "nominal")), rule("x", "['a']")],
+        {"k": [["a"], ["b"]], "g": ["a", "b"], "v": [1.0, 2.0]},
+        {},
+    ),
+]
+
+
+def case(
+    name: str, layers: list[dict[str, Any]], data: dict[str, list[Any]], extra: dict[str, Any]
+) -> dict[str, Any]:
+    """One corpus case: its verdict from validate, its answer from query."""
+    spec = {"view": "chart", "source": "a.csv", **extra, "layer": layers}
+    frame = pd.DataFrame(data)
+    text = json.dumps(spec)
+    placed = not check(text, lambda _s: frame).errors
+    answer = build(parse_spec(text), frame)
+    return {"name": name, "data": data, "spec": spec, "answer": answer, "placed": placed}
+
+
+def cases() -> list[dict[str, Any]]:
+    return [case(n, layers, DATA, {}) for n, layers in CASES] + [case(*c) for c in OWN]
+
+
 def main() -> None:
-    frame = pd.DataFrame(DATA)
-    cases = []
-    for name, layers in CASES:
-        spec = {"view": "chart", "source": "a.csv", "layer": layers}
-        errors = check(json.dumps(spec), lambda _s: frame).errors
-        cases.append({"name": name, "layer": layers, "placed": not errors})
-    doc = {"kind": "datum-axes", "data": DATA, "cases": cases}
-    CORPUS.write_text(json.dumps(doc, indent=2) + "\n")
-    print(len(cases), sum(c["placed"] for c in cases))
+    doc = {"kind": "datum-axes", "cases": cases()}
+    CORPUS.write_text(json.dumps(doc, indent=1) + "\n")
+    print(len(doc["cases"]), sum(c["placed"] for c in doc["cases"]))
 
 
 if __name__ == "__main__":
