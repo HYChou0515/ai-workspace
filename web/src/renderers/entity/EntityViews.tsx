@@ -16,6 +16,7 @@ import { useCallback, useState } from "react";
 import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
+import { useContainerWidth } from "../../hooks/useContainerWidth";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
@@ -183,6 +184,9 @@ function DiagnosticBanner({ diagnostics }: { diagnostics: EntityDiagnostic[] }) 
 
 // ── dispatcher ─────────────────────────────────────────────────────────────
 
+/** Below this width (px) a view panel compacts its header (#847/#848 PR 5 P13). */
+export const NARROW_PANEL = 480;
+
 export type EntityViewBodyProps = EntityViewProps & {
   /** Record numbers whose write hit a 409 (§B2), shown as a dismissable banner. */
   conflicts?: number[];
@@ -228,8 +232,13 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   // marking control (where the person looks for "what is this view linked
   // to") shows it.
   const [markingNote, setMarkingNote] = useState<string | null>(null);
+  // #847/#848 PR 5 P13 — a layout pane can be a fifth of the screen: measured
+  // on the panel itself (not the viewport), and the stylesheet compacts the
+  // header below `NARROW_PANEL` (one truncated title line, controls beside it).
+  const [panelRef, panelWidth] = useContainerWidth<HTMLDivElement>();
+  const narrow = panelWidth > 0 && panelWidth < NARROW_PANEL;
   return (
-    <div className="ev-panel">
+    <div className="ev-panel" ref={panelRef} data-narrow={narrow ? "" : undefined}>
       <div className="ev-panel__head">
         <h3 className="ev-panel__title">
           {spec.title || spec.entity || spec.view}

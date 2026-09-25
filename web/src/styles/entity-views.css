@@ -23,6 +23,38 @@
   flex-direction: column;
   gap: var(--space-12);
   min-width: 0;
+  /* at least as tall as its pane, so a kind that fills the free height (a
+   * chart, #847/#848 PR 5 P13) has a height to fill */
+  min-height: 100%;
+}
+/* #847/#848 PR 5 P13 — a panel narrower than NARROW_PANEL (EntityViews.tsx,
+ * measured on the panel itself): the title is one truncated line and the
+ * controls stay beside it, so the header is one row, not a quarter of a pane. */
+.ev-panel[data-narrow] {
+  padding: var(--space-8);
+  gap: var(--space-8);
+}
+.ev-panel[data-narrow] .ev-panel__head {
+  flex-wrap: nowrap;
+  gap: var(--space-8);
+}
+.ev-panel[data-narrow] .ev-panel__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-body);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ev-panel[data-narrow] .ev-panel__actions {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.ev-panel[data-narrow] .ev-marking select {
+  max-width: 7rem;
+  min-width: 3.5rem;
 }
 .ev-panel__head {
   display: flex;
@@ -503,6 +535,9 @@ tr[data-marked] td:first-child {
 }
 /* the marking control's "why selecting here marks nothing" (#847/#848 PR 5) */
 .ev-marking__note {
+  /* its own line under the select: beside it, it squeezed the select to its
+   * arrow in a narrow pane (390 px live check) */
+  flex-basis: 100%;
   font-size: var(--text-body-sm);
   color: var(--text-paper-d);
   white-space: normal;

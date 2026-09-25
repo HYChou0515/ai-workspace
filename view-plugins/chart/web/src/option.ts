@@ -757,9 +757,12 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     tooltip,
     series,
     brush: { toolbox: ["rect", "polygon", "clear"], xAxisIndex: cartesian ? 0 : undefined, throttleType: "debounce", throttleDelay: 250 },
-    toolbox: { feature: { brush: { type: ["rect", "polygon", "clear"] } } },
+    // The top row is the toolbox's: the chart draws no title of its own (#847/#848
+    // PR 5 P13) — the view header right above it shows the spec's `title:`, and
+    // a second copy in the canvas cost a row of a narrow pane and sat under
+    // these icons. A legend takes the row below.
+    toolbox: { top: 4, right: 8, feature: { brush: { type: ["rect", "polygon", "clear"] } } },
   };
-  if (typeof spec.title === "string") option.title = { text: spec.title, left: "center", textStyle: { fontSize: 14 } };
   if (cartesian) {
     const lengthIsValue = specs.some((s) => ["bar", "area"].includes(markOf(s).type));
     option.xAxis = [axisOption(xAxis, gridCells, "x", lengthIsValue)];
@@ -772,7 +775,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     // plus the swatch, its gap and the edge.
     const names = visualMaps.flatMap((v) => (v.type === "piecewise" ? (v.categories as string[]) : []));
     const legendRoom = names.length ? 56 + 8 * Math.max(...names.map((n) => n.length)) : 0;
-    option.grid = { containLabel: true, left: 48, right: visualMaps.length ? Math.max(80, legendRoom) : 16, top: 48, bottom: 32 };
+    option.grid = {
+      containLabel: true,
+      left: 48,
+      right: visualMaps.length ? Math.max(80, legendRoom) : 16,
+      top: legend.length ? 48 : 32,
+      bottom: 32,
+    };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
   if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));

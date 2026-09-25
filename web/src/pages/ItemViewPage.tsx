@@ -77,7 +77,9 @@ function Panes({
         <WorkspaceVisibleProvider value>
           <div
             data-testid="page-item-view"
-            style={{ height: "100vh", display: "flex", background: "var(--white)" }}
+            // P13 — never wider than the window: at 390 px five panes' tab
+            // strips pushed the page to 445 px and it scrolled sideways.
+            style={{ height: "100vh", maxWidth: "100vw", overflow: "hidden", display: "flex", background: "var(--white)" }}
           >
             <EditorPanes
               groups={groups}

@@ -69,7 +69,7 @@ export function MarkingControl({
   const [draft, setDraft] = useState("");
   const options = [...new Set([...(value ? [value] : []), ...names])].sort();
   return (
-    <span className="ev-marking" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+    <span className="ev-marking" style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
       <Icon name="tag" size={12} color="var(--text-paper-d)" />
       <select
         aria-label="Marking"

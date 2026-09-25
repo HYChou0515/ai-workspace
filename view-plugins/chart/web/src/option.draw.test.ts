@@ -190,10 +190,28 @@ describe("options that pass through", () => {
     expect(toOption(spec, one).option.xAxis).toMatchObject([{ min: 0, max: 10 }]);
   });
 
-  it("shows line points, smooths, and titles the chart", () => {
+  it("shows line points and smooths", () => {
     const l = toOption({ ...base, title: "T", mark: { type: "line", point: true, smooth: true }, encoding: enc }, one);
     expect(l.option.series).toMatchObject([{ type: "line", showSymbol: true, smooth: true }]);
-    expect(l.option.title).toMatchObject({ text: "T" });
+  });
+
+  // #847/#848 PR 5 P13 — the view header right above the chart already shows
+  // the spec's `title:`. Drawn again inside the canvas it cost a row of every
+  // pane's height and, in a narrow pane, sat under the brush toolbox.
+  it("draws no title of its own, so the toolbox has the top row to itself", () => {
+    const l = toOption({ ...base, title: "T", mark: "scatter", encoding: enc }, one);
+    expect(l.option.title).toBeUndefined();
+    expect(l.option.toolbox).toMatchObject({ top: 4, right: 8 });
+    // the plot starts below the toolbox's row
+    expect((l.option.grid as { top: number }).top).toBeGreaterThanOrEqual(32);
+  });
+
+  it("starts the plot below the legend's row when there is a legend", () => {
+    const two = answer(layer("scatter", 2, { a: f64([1, 2]), b: f64([2, 3]), g: cat(["p", "q"]) }));
+    const color = { ...enc, color: { field: "g", type: "nominal" } };
+    const o = toOption({ ...base, mark: "scatter", encoding: color }, two).option;
+    const legendTop = (o.legend as { top: number }).top;
+    expect((o.grid as { top: number }).top).toBeGreaterThanOrEqual(legendTop + 24);
   });
 
   it("stacks bars and fades them by opacity, in the mark's colour", () => {

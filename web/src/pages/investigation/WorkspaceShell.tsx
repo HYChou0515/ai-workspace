@@ -2326,6 +2326,10 @@ function GroupPane({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
+        // #847/#848 PR 5 P13 — a pane clips what it cannot fit: in an 88 px
+        // pane the tab strip painted into the chat column, and at 390 px the
+        // view page scrolled sideways.
+        overflow: "hidden",
       }}
     >
       <GroupTabStrip group={group} groups={groups} />
@@ -2676,6 +2680,9 @@ function DirBrowser({
 
 /** A single editor group's tab strip — drives only its own group. Tabs
  * carry their group id so a drag onto another group moves/copies. */
+/** Below this width (px) a pane's tab strip compacts its buttons (#847/#848 PR 5 P13). */
+export const NARROW_TAB_STRIP = 260;
+
 function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }) {
   const active = group.activePath;
   // In a split, only the focused group's active tab gets full emphasis;
@@ -2691,9 +2698,15 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
   const gid = group.id;
+  // #847/#848 PR 5 P13 — measured on the strip (a pane of a layout is not the
+  // viewport): below NARROW_TAB_STRIP the Edit toggle is its icon and the split
+  // button goes (the tab's menu still splits), so the tab keeps some room.
+  const [stripRef, stripWidth] = useContainerWidth<HTMLDivElement>();
+  const compact = stripWidth > 0 && stripWidth < NARROW_TAB_STRIP;
 
   return (
     <div
+      ref={stripRef}
       style={{
         height: 38,
         background: "var(--paper)",
@@ -2773,10 +2786,24 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                 whiteSpace: "nowrap",
                 opacity: dragFrom === i ? 0.4 : 1,
                 fontStyle: t.preview ? "italic" : "normal",
+                // P13 — a tab shrinks with its pane and its title truncates
+                // inside it, rather than the strip overflowing the pane.
+                flex: "0 1 auto",
+                minWidth: 0,
+                overflow: "hidden",
               }}
             >
               <Icon name={t.pinned ? "pin" : "file"} size={12} />
-              <span style={{ fontSize: pxToRem(12) }}>{basename(t.path)}</span>
+              <span
+                style={{
+                  fontSize: pxToRem(12),
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {basename(t.path)}
+              </span>
               <TabClose
                 path={t.path}
                 onClose={() => requestClose(gid, t.path)}
@@ -2822,17 +2849,19 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
               size={12}
               color={editMode.isEditing(active) ? "var(--accent)" : "var(--text-paper-d)"}
             />
-            {editMode.isEditing(active) ? "Preview" : "Edit"}
+            {!compact && (editMode.isEditing(active) ? "Preview" : "Edit")}
           </button>
         )}
-        <button
-          type="button"
-          title="Split right"
-          onClick={() => groups.splitGroup(gid, "right", active)}
-          style={{ ...iconBtn, color: "var(--text-paper-d)" }}
-        >
-          <Icon name="split" size={14} />
-        </button>
+        {!compact && (
+          <button
+            type="button"
+            title="Split right"
+            onClick={() => groups.splitGroup(gid, "right", active)}
+            style={{ ...iconBtn, color: "var(--text-paper-d)" }}
+          >
+            <Icon name="split" size={14} />
+          </button>
+        )}
         {/* Run-all only exists for notebooks */}
         {activeIsNotebook && active && (
           <button

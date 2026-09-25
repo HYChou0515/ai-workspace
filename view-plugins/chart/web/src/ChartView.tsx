@@ -196,7 +196,9 @@ function Plot({
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 360 }}>
+    // Takes the height its pane gives it (#847/#848 PR 5 P13); a fixed 360 px
+    // made every shorter pane scroll. 160 px is the least a plot reads at.
+    <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 160 }}>
       {/* Always there, one line high: added only once something was selected,
           it pushed the chart down under the pointer (#847/#848 P18). */}
       <div
@@ -218,7 +220,7 @@ function Plot({
         ))}
         {count > 0 && <span>{count} selected</span>}
       </div>
-      <div ref={el} style={{ flex: 1, minHeight: 320 }} />
+      <div ref={el} style={{ flex: 1, minHeight: 0 }} />
     </div>
   );
 }
@@ -254,13 +256,13 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   else body = <Notice>Computing the chart in the sandbox…</Notice>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 }}>
       <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px" }}>
         <button type="button" onClick={run.refetch} title="Recompute from the current data">
           Refresh
         </button>
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
+      <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 }}>{body}</div>
     </div>
   );
 }

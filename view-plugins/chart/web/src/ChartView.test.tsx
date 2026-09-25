@@ -216,4 +216,21 @@ describe("ChartView", () => {
     view();
     expect(screen.getByRole("alert").textContent).toContain("format 9");
   });
+
+  // #847/#848 PR 5 P13 — in a layout pane the chart takes the height the pane
+  // gives it. A fixed 360 px made every pane shorter than that scroll. The DOM
+  // test can only hold the styles; the pane sizes are measured in a browser.
+  it("grows to the height its pane gives it, with no fixed height of its own", () => {
+    run({ data: ok() });
+    const { container } = view();
+    const host = (chart.createChart.mock.calls[0] as unknown as [HTMLElement])[0];
+    const chain: HTMLElement[] = [];
+    for (let el: HTMLElement | null = host; el && el !== container; el = el.parentElement) chain.push(el);
+    for (const el of chain) {
+      expect(el.style.minHeight === "" || parseInt(el.style.minHeight, 10) <= 160).toBe(true);
+      expect(el.style.height).not.toMatch(/px$/);
+    }
+    // every box from the panel down to the chart grows into the free height
+    for (const el of chain) expect(el.style.flexGrow || el.style.flex.split(" ")[0]).toBe("1");
+  });
 });
