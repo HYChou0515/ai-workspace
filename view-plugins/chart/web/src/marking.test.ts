@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { isLit } from "../../../../web/src/lib/markings";
 import { highlightMarking, markingLit, selectionMarking } from "./marking";
-import { answer, cat, f64, layer } from "./testAnswer";
+import { answer, cat, f64, layer, time } from "./testAnswer";
 
 const A = answer(
   layer(
@@ -39,6 +39,29 @@ describe("markingLit", () => {
     // columns are what it shares with the marking.
     const lit = markingLit(A, { lot: new Set(["L2"]) }, isLit);
     expect(lit[0]).toEqual([false, false, true, false]);
+  });
+});
+
+describe("markingLit reads keys the way selections write them (#855 keyColumn)", () => {
+  const T = answer(
+    layer("line", 3, {
+      day: time(["2024-01-01", "2024-01-02", "2024-01-03"]),
+      "$key.day": cat(["2024-01-01", "2024-01-02", "2024-01-03"]),
+      v: f64([1, 2, 3]),
+    }),
+  );
+
+  it("a key a channel sends as time is lit by its marking strings", () => {
+    expect(markingLit(T, { day: new Set(["2024-01-02"]) }, isLit)[0]).toEqual([false, true, false]);
+  });
+
+  it("round trip: what a selection writes lights exactly the selected rows", () => {
+    // selectionValues is the oracle for what a marking holds; reading must agree.
+    for (const rows of [[0], [1, 2], [0, 2]]) {
+      const written = selectionMarking([{ source: "brush", layer: 0, rows }], T, ["day"])!;
+      const lit = markingLit(T, written, isLit)[0]!;
+      expect(lit.flatMap((on, r) => (on ? [r] : []))).toEqual(rows);
+    }
   });
 });
 
