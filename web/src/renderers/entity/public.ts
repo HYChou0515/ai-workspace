@@ -58,7 +58,7 @@ export type { Marking, MarkingEntry } from "../../lib/markings";
 // it here would make the duplicate-name check opt-out for exactly the code it
 // exists to guard.
 export { registerViewKind } from "./viewKindRegistry";
-export type { ViewRenderer } from "./viewKindRegistry";
+export type { ViewRenderer, ViewThumbnailProps } from "./viewKindRegistry";
 
 // ── the view file ──────────────────────────────────────────────────────────
 // `ViewSpec` carries the parsed `.ai.yaml`. Fields the platform knows are typed

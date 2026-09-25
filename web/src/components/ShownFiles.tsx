@@ -5,15 +5,22 @@
  * Not inside the collapsed tool card ordinary results use — a chart behind a
  * `<details>` is the same failure as a path in prose.
  */
+import type { ReactNode, Ref } from "react";
+
+import { useOptionalFileService } from "../api/fileService";
 import { useOpenFile, useViewPageHref, useWorkspaceVisible } from "../hooks/openFile";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { isInlineImage, type ShownFile } from "../renderers/shownFiles";
 import { Icon } from "./Icon";
+import { isViewFile, useSeenOnce, useViewThumbnail } from "./ViewThumbnail";
 
 /** Thumbnail edge, px. Recognisable at a glance without taking over the thread. */
 const THUMB = 260;
+/** A drawn view's thumbnail box (#847/#848 P6): the image's width, and a
+ * chart's usual proportions rather than a square. */
+const VIEW_THUMB_H = 170;
 
 export function ShownFiles({
   files,
@@ -51,15 +58,33 @@ export function ShownFiles({
   );
 }
 
-function ShownFileView({
-  file,
-  fileUrl,
-  openFile,
-}: {
+type CardProps = {
   file: ShownFile;
   fileUrl?: (path: string) => string;
   openFile: ((path: string, opts?: { preview?: boolean }) => void) | null;
-}) {
+};
+
+function ShownFileView(props: CardProps) {
+  // A view file in an item's workspace may be drawn small (P6); anything else,
+  // or a surface with no workspace to read it from, is today's card.
+  const svc = useOptionalFileService();
+  if (svc && isViewFile(props.file.path)) return <ViewFileCard {...props} />;
+  return <FileCard {...props} />;
+}
+
+function ViewFileCard(props: CardProps) {
+  const [ref, seen] = useSeenOnce<HTMLElement>();
+  const thumb = useViewThumbnail(props.file.path, seen);
+  return <FileCard {...props} frameRef={ref} thumb={thumb} />;
+}
+
+function FileCard({
+  file,
+  fileUrl,
+  openFile,
+  frameRef,
+  thumb,
+}: CardProps & { frameRef?: Ref<HTMLElement>; thumb?: ReactNode }) {
   const t = useT();
   const name = basename(file.path);
   const url = fileUrl?.(file.path);
@@ -72,6 +97,7 @@ function ShownFileView({
 
   const body = (
     <>
+      {thumb && <div style={{ width: THUMB, maxWidth: "100%", height: VIEW_THUMB_H }}>{thumb}</div>}
       {inline && (
         // A THUMBNAIL, not the picture at full size: the chat is a conversation,
         // and a chart that fills the pane pushes the words that explain it off
@@ -101,7 +127,7 @@ function ShownFileView({
           color: "var(--text-paper-d)",
         }}
       >
-        {!inline && <Icon name="file" size={12} color="var(--text-paper-d)" />}
+        {!inline && !thumb && <Icon name="file" size={12} color="var(--text-paper-d)" />}
         <span>{name}</span>
         <span>·</span>
         <span>{formatBytes(file.size)}</span>
@@ -122,19 +148,28 @@ function ShownFileView({
   // than one that leads nowhere.
   if (openFile) {
     return (
-      <button type="button" onClick={() => openFile(file.path)} style={frame({ button: true })}>
+      <button
+        ref={frameRef as Ref<HTMLButtonElement>}
+        type="button"
+        onClick={() => openFile(file.path)}
+        style={frame({ button: true })}
+      >
         {body}
       </button>
     );
   }
   if (linkHref) {
     return (
-      <a href={linkHref} target="_blank" rel="noreferrer" style={frame({})}>
+      <a ref={frameRef as Ref<HTMLAnchorElement>} href={linkHref} target="_blank" rel="noreferrer" style={frame({})}>
         {body}
       </a>
     );
   }
-  return <div style={frame({})}>{body}</div>;
+  return (
+    <div ref={frameRef as Ref<HTMLDivElement>} style={frame({})}>
+      {body}
+    </div>
+  );
 }
 
 function frame({ button }: { button?: boolean }): React.CSSProperties {

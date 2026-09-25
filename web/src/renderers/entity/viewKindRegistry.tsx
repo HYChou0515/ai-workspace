@@ -19,7 +19,19 @@ import type { ComponentType } from "react";
 import { BoardView } from "./BoardView";
 import { GanttView } from "./GanttView";
 import { TableView } from "./TableView";
-import { VIEW_KIND, type EntityViewProps } from "./types";
+import { VIEW_KIND, type EntityViewProps, type ViewSpec } from "./types";
+
+/** What a kind's `Thumbnail` is handed (#847/#848 P6). */
+export type ViewThumbnailProps = {
+  /** The parsed view file, as the live view gets it. */
+  spec: ViewSpec;
+  /** The view file's workspace path. */
+  path: string;
+  /** Call when there is nothing to draw (a spec that does not fit, a sandbox
+   * that said no): the host then shows its plain file card instead. Throwing
+   * while rendering does the same. */
+  onFail: (reason: string) => void;
+};
 
 export type ViewRenderer = {
   kind: string;
@@ -41,6 +53,13 @@ export type ViewRenderer = {
    * entity is a property OF THE KIND, so it lives here and nowhere else — the
    * parser used to hardcode `health` as the lone exception. */
   needsEntity?: boolean;
+  /** #847/#848 P6 — a small, static drawing of a view of this kind, for the
+   * chat card of a file the agent showed. It fills the box it is given, draws
+   * once, and takes no input: the host puts it inside the card's own click
+   * target (which opens the live view) with pointer events off, and mounts it
+   * only once the card has scrolled into view. Omitted: the card stays a plain
+   * file card. Additive to SDK 1. */
+  Thumbnail?: ComponentType<ViewThumbnailProps>;
 };
 
 /** Mutable so a second-party module can register on import (#698). Keyed by

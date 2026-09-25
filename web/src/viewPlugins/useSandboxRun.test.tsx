@@ -81,6 +81,22 @@ describe("useSandboxRun", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("a call nobody is waiting for any more is cancelled: unmounting aborts the request (#847/#848 P6)", async () => {
+    // A chat card scrolled past, a gallery page scrolled away: its answer
+    // would be drawn by nothing.
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { unmount } = renderHook(() => useSandboxRun("chart", "query", { spec: "{}" }), { wrapper: wrap() });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
   it("does not run while disabled", async () => {
     const fetchMock = answer({ stdout: "", stderr: "", exit_code: 0 });
     vi.stubGlobal("fetch", fetchMock);

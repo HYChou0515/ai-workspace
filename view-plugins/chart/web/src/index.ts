@@ -7,10 +7,13 @@
 import { registerViewKind } from "@aiws/view-sdk";
 
 import { ChartView } from "./ChartView";
+import { ChartThumbnail } from "./Thumbnail";
 
 registerViewKind({
   kind: "chart",
   Component: ChartView,
+  // A shown chart, gallery or layout pane is drawn small in its chat card (P6).
+  Thumbnail: ChartThumbnail,
   ownsEmptyState: true,
   suppressQuickCreate: true,
   // Every chart can be put on a named marking from its header (#847 PR 3).

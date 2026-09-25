@@ -64,7 +64,7 @@ function Notice({ role = "status", children }: { role?: "status" | "alert"; chil
   );
 }
 
-function Canvas({
+export function Canvas({
   image,
   size,
   onHover,

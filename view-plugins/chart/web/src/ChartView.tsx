@@ -37,7 +37,7 @@ function Notice({ role = "status", children }: { role?: "status" | "alert"; chil
 }
 
 /** The grid's pixels as a canvas ECharts can draw, upscaled without smoothing. */
-function gridCanvas({ image }: { cells: Cells; image: RasterImage }): HTMLCanvasElement {
+export function gridCanvas({ image }: { cells: Cells; image: RasterImage }): HTMLCanvasElement {
   const scale = Math.max(1, Math.ceil(RASTER_MIN_PX / Math.max(image.width, image.height, 1)));
   const small = document.createElement("canvas");
   small.width = image.width;
@@ -55,7 +55,7 @@ function gridCanvas({ image }: { cells: Cells; image: RasterImage }): HTMLCanvas
   return big;
 }
 
-function readAnswer(stdout: string): Answer | string {
+export function readAnswer(stdout: string): Answer | string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
