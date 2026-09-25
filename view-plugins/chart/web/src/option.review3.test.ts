@@ -116,8 +116,9 @@ describe("a rule drawn from a field", () => {
   });
 
   it("places a number sent as text, as ECharts reads it", () => {
-    // Review round 8: a rule whose field another layer types as text (it
-    // arrives as `cat`) refused "1.5", which ECharts draws at 1.5.
+    // Review round 8: a rule that types its field as text (it arrives as
+    // `cat`), on the number axis another layer made, refused "1.5", which
+    // ECharts draws at 1.5.
     const spec = {
       ...base,
       layer: [
@@ -130,6 +131,75 @@ describe("a rule drawn from a field", () => {
     const series = built.option.series as Series[];
     expect(series[1].markLine?.data).toEqual([{ yAxis: 1.5 }, { yAxis: 2 }]);
     expect(built.notes).toEqual([]);
+  });
+
+  it("reads a number sent as text on a number grid too", () => {
+    // Review round 9: the numeric read covered value and log axes only; a
+    // grid's axis (kind "index") refused "10" on its quantitative cells.
+    const spec = {
+      ...base,
+      layer: [
+        {
+          mark: "grid",
+          encoding: {
+            x: { field: "x", type: "quantitative" },
+            y: { field: "y", type: "ordinal" },
+            color: { field: "v", type: "quantitative" },
+          },
+        },
+        { mark: "rule", encoding: { x: { field: "t", type: "nominal" } } },
+      ],
+    };
+    const a = answer(
+      layer("grid", 2, { x: f64([10, 11]), y: f64([0, 0]), v: q8([0, 1], 0, 1) }),
+      layer("rule", 2, { t: cat(["10", "10.5"]) }),
+    );
+    const built = toOption(spec, a);
+    const series = built.option.series as Series[];
+    expect(series[1].markLine?.data).toEqual([{ xAxis: 0 }, { xAxis: 0.5 }]);
+  });
+
+  it("holds every end of a segment, x and y2 too, to the axis", () => {
+    // Round 9 conformance: the x end and the y2 end had no test of their own.
+    const log = { type: "quantitative", scale: { type: "log" } };
+    const spec = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", ...log }, y: { field: "b", ...log } } },
+        {
+          mark: "rule",
+          encoding: {
+            x: { field: "a", type: "quantitative" },
+            y: { field: "b", type: "quantitative" },
+            y2: { field: "d", type: "quantitative" },
+          },
+        },
+      ],
+    };
+    const a = answer(
+      layer("scatter", 1, { a: f64([1]), b: f64([1]) }),
+      layer("rule", 3, { a: f64([1, 0, 1]), b: f64([1, 1, 1]), d: f64([2, 2, 0]) }),
+    );
+    const built = toOption(spec, a);
+    const series = built.option.series as { markLine?: { data: unknown[] } }[];
+    expect(series[1].markLine?.data).toEqual([[{ coord: [1, 1] }, { coord: [1, 2] }]]);
+    expect(built.notes).toContain("2 rule segments with no place on the axes — not drawn");
+  });
+
+  it.each([
+    ["a log axis reads text as a number", { type: "log" }, ["2"], [{ yAxis: 2 }]],
+    // Number(" ") is 0: blank text must not become a line at zero.
+    ["a number axis reads blank text as nothing", undefined, ["2", " "], [{ yAxis: 2 }]],
+  ])("%s", (_name, scale, values, placed) => {
+    const spec = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative", scale } } },
+        { mark: "rule", encoding: { y: { field: "t", type: "nominal" } } },
+      ],
+    };
+    const a = answer(layer("scatter", 1, { a: f64([1]), b: f64([1]) }), layer("rule", values.length, { t: cat(values) }));
+    expect((toOption(spec, a).option.series as Series[])[1].markLine?.data).toEqual(placed);
   });
 
   it("places an x field's values the same way", () => {

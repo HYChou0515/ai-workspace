@@ -13,6 +13,8 @@ from typing import Any
 
 import pandas as pd
 
+from chart_view.wire import unhashable_as_text
+
 
 class TransformError(ValueError):
     """A transform cannot run against this data."""
@@ -96,7 +98,9 @@ def aggregate(
             f"aggregate `as: {clash[0]!r}` is also a groupby column — name it apart"
         )
     keys = list(groupby) or [_ALL]
-    frame = df if groupby else df.assign(**{_ALL: 0})
+    # A list key (an entity or parquet list field) has no hash to group by.
+    frame = df.assign(**{k: unhashable_as_text(df[k]) for k in groupby})
+    frame = frame if groupby else frame.assign(**{_ALL: 0})
     grouped = frame.groupby(keys, dropna=False, sort=True)
     out = pd.DataFrame({i["as"]: _grouped(frame, grouped, keys, i) for i in items})
     out = out.reset_index()

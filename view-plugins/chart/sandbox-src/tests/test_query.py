@@ -325,10 +325,16 @@ def test_a_field_in_two_channels_is_sent_once_as_its_first_channel_says(wafers):
     assert layer["columns"]["thickness"]["kind"] == "f64"
 
 
-def test_a_tooltip_datum_sends_no_column(wafers):
+def test_a_tooltip_datum_is_refused_before_a_query(wafers):
+    # A datum is drawn only as a rule's x or y ($defs.datumChannels): the
+    # renderer read no tooltip datum, so the schema no longer lets one reach
+    # query (it used to be sent as nothing).
+    from chart_view.spec import spec_errors
+
     enc = {**SCATTER, "tooltip": {"datum": "wafer map"}}
-    [layer] = build(_spec(mark="scatter", encoding=enc), wafers)["layers"]
-    assert set(layer["columns"]) == {"thickness", "fail_rate", "lot"}
+    assert spec_errors(_spec(mark="scatter", encoding=enc)) == [
+        "encoding.tooltip: a datum is drawn only as a rule's x or y — name a field here"
+    ]
 
 
 def test_a_temporal_scatter_is_binned_on_time_and_sent_as_time():

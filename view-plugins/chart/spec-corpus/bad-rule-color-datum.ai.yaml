@@ -1,0 +1,11 @@
+view: chart
+source: data/batches.csv
+layer:
+  - mark: scatter
+    encoding:
+      x: {field: thickness, type: quantitative}
+      y: {field: fail_rate, type: quantitative}
+  - mark: rule
+    encoding:
+      y: {datum: 0.3}
+      color: {datum: red}
