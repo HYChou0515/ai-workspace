@@ -12,6 +12,18 @@
     "g": [
       "a",
       "b"
+    ],
+    "n": [
+      2022,
+      2023
+    ],
+    "p": [
+      1.0,
+      10.0
+    ],
+    "k": [
+      1,
+      3
     ]
   },
   "cases": [
@@ -498,6 +510,755 @@
         }
       ],
       "placed": true
+    },
+    {
+      "name": "a label the category axis lacks",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "zzz"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a number on a text category axis",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 1
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a number label on a number-label axis",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "n",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 2022
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "its text on a number-label axis",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "n",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2022"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a label written otherwise",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "n",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2022.0"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a number the labels lack",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "n",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 1999
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a cell's label as text on a number grid",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "1"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "between two number cells",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 1.5
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "text that is no cell of a number grid",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "abc"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a cell written otherwise",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "1.0"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a number past the cells",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 99
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a date past a temporal grid's cells",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "g",
+              "type": "ordinal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2030-01-01"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a label a grid's row axis lacks",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "y": {
+              "datum": "zzz"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a label on a grid's row axis",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "y": {
+              "datum": "b"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a date whose field comes later",
+      "layer": [
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-3-1"
+            }
+          }
+        },
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a grid second: its cells decide",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "g",
+              "type": "ordinal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-03-02"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a label of a grid that comes second",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "a"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a positive number on a log axis",
+      "layer": [
+        {
+          "mark": "scatter",
+          "encoding": {
+            "x": {
+              "field": "p",
+              "type": "quantitative",
+              "scale": {
+                "type": "log"
+              }
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 5
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "zero on a log axis",
+      "layer": [
+        {
+          "mark": "scatter",
+          "encoding": {
+            "x": {
+              "field": "p",
+              "type": "quantitative",
+              "scale": {
+                "type": "log"
+              }
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 0
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a negative number on a log axis",
+      "layer": [
+        {
+          "mark": "scatter",
+          "encoding": {
+            "x": {
+              "field": "p",
+              "type": "quantitative",
+              "scale": {
+                "type": "log"
+              }
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": -1
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a cell the lattice fills",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "k",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a label past a filled lattice",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "k",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "5"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "text on a number grid",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "1.5"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "text with no axis",
+      "layer": [
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "abc"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a date with no axis",
+      "layer": [
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-03-01"
+            }
+          }
+        }
+      ],
+      "placed": false
     }
   ]
 }

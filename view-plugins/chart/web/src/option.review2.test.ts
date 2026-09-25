@@ -24,11 +24,12 @@ describe("instants as the sandbox reads them (UTC unless the text says otherwise
     process.env.TZ = tz;
   });
 
-  // The sandbox's reading (wire.epoch_ms) is the oracle, written to a file.
+  // The sandbox's reading (datums.instant_ms) is the oracle, written to a file.
   const corpus = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire-corpus", "instants.json");
   const cases = (JSON.parse(readFileSync(corpus, "utf8")) as { cases: { text: string; ms: number | null }[] }).cases;
 
-  // A null is a form the schema's `$defs.instant` refuses: validate names it,
+  // A null is a form the schema's `$defs.instant` refuses, or a day the
+  // calendar lacks (2024-02-30): validate names it,
   // and the renderer places nothing rather than a date of its own reading.
   it.each(cases)("$text", ({ text, ms }) => {
     expect(parseInstant(text)).toBe(ms ?? Number.NaN);

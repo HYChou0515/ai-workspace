@@ -15,7 +15,8 @@ const settle = () => new Promise((r) => setTimeout(r, 400));
 import "./echarts"; // registers the chart's series + components
 import { toOption } from "./option";
 import { type BrushSelected, selectionFromBrush } from "./selection";
-import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
+import { answer, base, cat, f64, layer, q8, time } from "./testAnswer";
+import type { WireColumn } from "./wire";
 
 echarts.use([SVGRenderer, BrushComponent]);
 
@@ -113,6 +114,36 @@ describe("against real ECharts", () => {
     // Lit keep the series default (a scatter is 0.8 in ECharts); unlit are dimmed.
     expect([opacity(0, 0), opacity(0, 1)]).toEqual([0.8, 0.8]);
     expect([opacity(1, 0), opacity(1, 1)]).toEqual([0.15, 0.15]);
+    chart.dispose();
+  });
+});
+
+describe("a rule the axis cannot place", () => {
+  // Review round 5: a datum the axis does not show became `{xAxis: null}`, and
+  // ECharts threw on it ("reading 'coord'") — the whole chart broke, not the rule.
+  it.each([
+    ["a label the axis lacks", "nominal", "zzz"],
+    ["a date past a temporal grid", "temporal", "2030-01-01"],
+  ])("%s: the chart draws, without the rule, and says so", (_name, type, datum) => {
+    const grid = type === "temporal";
+    const doc = {
+      ...base,
+      layer: [
+        grid
+          ? {
+              mark: "grid",
+              encoding: { x: { field: "t", type }, y: { field: "g", type: "ordinal" }, color: { field: "v", type: "quantitative" } },
+            }
+          : { mark: "bar", encoding: { x: { field: "g", type }, y: { field: "v", type: "quantitative" } } },
+        { mark: "rule", encoding: { x: { datum } } },
+      ],
+    };
+    const columns: Record<string, WireColumn> = grid
+      ? { t: time(["2024-03-01", "2024-03-02"]), g: cat(["a", "b"]), v: q8([0, 255], 1, 2) }
+      : { g: cat(["a", "b"]), v: f64([1, 2]) };
+    const { chart, built } = chartFor(doc, answer(layer(grid ? "grid" : "bar", 2, columns), layer("rule", 0, {})));
+    expect(chart.renderToSVGString()).toContain("<svg");
+    expect(built.notes).toContain(`rule at ${JSON.stringify(datum)} is off the x axis — not drawn`);
     chart.dispose();
   });
 });
