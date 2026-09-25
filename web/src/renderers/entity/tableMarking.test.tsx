@@ -37,6 +37,27 @@ describe("useTableMarking's writer", () => {
   });
 });
 
+describe("the note, when selecting here marks nothing", () => {
+  it("names the missing columns when the view's keys: are not in the table, before anything is marked", () => {
+    // `keys:` decides what a selection writes, marked or not — so the reason
+    // is the table, not a missing `keys:`.
+    const { result } = hook(new MarkingStore(), { keys: ["wafer"] });
+    expect(result.current.note).toBe("Selecting rows marks nothing: this table has none of fail's columns.");
+  });
+
+  it("asks for keys: when the view has none and nothing is marked yet", () => {
+    const { result } = hook(new MarkingStore(), { keys: [] });
+    expect(result.current.note).toBe(
+      "Selecting rows marks nothing: add keys: to this view, or mark fail elsewhere first.",
+    );
+  });
+
+  it("is quiet when a selection can write", () => {
+    const { result } = hook(new MarkingStore(), { keys: ["lot"] });
+    expect(result.current.note).toBeNull();
+  });
+});
+
 describe("the table a selection was made in", () => {
   it("is known by its view file: a view with none is filtered like any other", () => {
     // A marking whose writer named no file (a preview) must not read as

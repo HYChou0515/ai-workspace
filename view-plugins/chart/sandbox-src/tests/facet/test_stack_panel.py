@@ -300,3 +300,40 @@ def test_a_stack_never_writes_the_cache(
     args = {"key": key, "build": index["build"], "a": None, "b": None, "column": "n", "stat": "sum"}
     assert _call(capsys, "facet_stack", args)[0] == 0
     assert {p.name: p.stat().st_size for p in views.iterdir()} == before
+
+
+def test_a_row_off_the_map_lands_in_no_cell_not_the_last_one(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every group has a row with no x (``_frame``'s "off the map"). It has no
+    cell, so it is stacked into none -- in particular not into the layout's
+    LAST cell, where an index of -1 would put it. That only shows for a set
+    whose rows leave the last cell empty (a placed row there overwrites it),
+    so each such group is stacked alone, and the fixture must hold one."""
+    key, index = _built(capsys)
+    last = (float(index["layout"]["x"][-1]), float(index["layout"]["y"][-1]))
+    frame = pd.read_csv("data/w.csv")
+    placed = frame[frame["keep"]].dropna(subset=["x", "y"])
+    at_last = {
+        (canon(lot), canon(w))
+        for lot, w, x, y in zip(
+            placed["lot"], placed["wafer"], placed["x"], placed["y"], strict=True
+        )
+        if (float(x), float(y)) == last
+    }
+    empty_there = [g["key"] for g in index["groups"] if tuple(g["key"]) not in at_last]
+    assert empty_there  # the case this test is for exists in the fixture
+    for k in empty_there:
+        args = {
+            "key": key,
+            "build": index["build"],
+            "a": [k],
+            "b": None,
+            "column": "v",
+            "stat": "max",
+        }
+        code, got, err = _call(capsys, "facet_stack", args)
+        assert code == 0, err
+        stacked = _f64(got["a"])
+        assert stacked is not None and stacked[-1] is None, k
+        _approx(stacked, _oracle(index, [k], "v", "max"))
