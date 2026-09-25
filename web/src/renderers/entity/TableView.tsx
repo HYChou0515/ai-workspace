@@ -17,15 +17,17 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
+import { entityMarkingRow } from "../../lib/markingRows";
 import { refOptions, type RefIndex, type RefOption, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { selectColor } from "./selectColor";
 import { fieldText, roleOf } from "./shared";
 import { sortRows } from "./sortRows";
+import { useTableMarking } from "./tableMarking";
 import { filterEntities, sortEntities, type SortDir, tableDragResult } from "./tableOps";
 import type { EntityViewProps, ViewSpec } from "./types";
 
@@ -42,7 +44,20 @@ function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityIns
 
 type FilterOption = { value: string; label: string };
 
-export function TableView({ spec, type, entities, invalid, users, refIndex, canWrite, onPatch, onOpenRecord, busy }: EntityViewProps) {
+export function TableView({
+  spec,
+  type,
+  entities,
+  invalid,
+  users,
+  refIndex,
+  canWrite,
+  onPatch,
+  onOpenRecord,
+  busy,
+  marking,
+  viewKey,
+}: EntityViewProps) {
   const allColumns = columnsFor(spec, type, entities);
   const readOnly = canWrite === false; // §E — disable inline edits for non-writers
   const [sort, setSort] = useState<{ column: string; dir: SortDir } | null>(null);
@@ -54,9 +69,24 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
   const filtered = filterEntities(entities, filters, type ?? null, refIndex);
   // A live header-click sort (single column) overrides; otherwise the view's own
   // multi-level `spec.sort`, or — with neither — the manual `rank` order (#GH-projects).
-  const rows = sort
+  const ordered = sort
     ? sortEntities(filtered, sort.column, sort.dir, type ?? null, refIndex)
     : sortRows(filtered, spec.sort, type ?? null, refIndex, users);
+
+  // #847/#848 PR 5 — on a marking that holds a set, only the rows it lights
+  // (or every row, the lit ones highlighted, after "show all"). Compared on
+  // EVERY field a record carries plus its number, shown or not: a chart keyed
+  // on a column this view hides still names these records. `marking` is the
+  // header control's (the kind is `linkable`, so the dispatcher always says).
+  const markingRows = useMemo(() => ordered.map(entityMarkingRow), [ordered]);
+  const recordColumns = useMemo(() => {
+    const seen = new Set<string>(["number", ...(type?.fields ?? []).map((f) => f.name)]);
+    for (const e of entities) for (const k of Object.keys(e.fields)) seen.add(k);
+    return [...seen];
+  }, [entities, type]);
+  const tableMarking = useTableMarking({ marking, viewKey, rows: markingRows, columns: recordColumns });
+  const rows = tableMarking.shown.map((i) => ordered[i]!);
+  const markedNumbers = new Set([...tableMarking.highlighted].map((i) => ordered[i]!.number));
 
   // click a header: none → asc → desc → none
   const cycleSort = (c: string) =>
@@ -134,7 +164,13 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
     // A lint warning marks its field's cell yellow, still editable (§D).
     const warn = warningsByField(e.diagnostics);
     return (
-      <DraggableRow key={e.number} number={e.number} manualMode={manualMode} selected={selected.has(e.number)}>
+      <DraggableRow
+        key={e.number}
+        number={e.number}
+        manualMode={manualMode}
+        selected={selected.has(e.number)}
+        marked={markedNumbers.has(e.number)}
+      >
         <td className="ev-table__check">
           {!readOnly && (
             <input
@@ -203,6 +239,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
     <div className="ev-tableview">
       {/* Columns show/hide now lives in the "View" gear panel (#GH-projects P3),
           driven by spec.hidden_fields — no standalone Columns menu here. */}
+      {tableMarking.bar}
       {selected.size > 0 && (
         <div role="toolbar" aria-label="batch actions" className="ev-toolbar" style={{ marginBottom: 8 }}>
           <span className="ev-toolbar__meta">{selected.size} selected</span>
@@ -348,11 +385,14 @@ function DraggableRow({
   number,
   manualMode,
   selected,
+  marked,
   children,
 }: {
   number: number;
   manualMode: boolean;
   selected: boolean;
+  /** Lit by the view's marking — drawn so while every row is shown. */
+  marked: boolean;
   children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef: setDrag } = useDraggable({ id: `row-${number}`, disabled: !manualMode });
@@ -361,6 +401,7 @@ function DraggableRow({
     <tr
       ref={setDrop}
       className={selected ? "ev-table__row--selected" : undefined}
+      data-marked={marked ? "" : undefined}
       data-over={manualMode && isOver ? "" : undefined}
     >
       {manualMode && (

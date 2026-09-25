@@ -129,7 +129,9 @@ export function resolveViewRenderer(kind: string): ViewRenderer {
 // cross-type and rendered by the container ahead of the dispatcher, so it isn't
 // a registry entry.
 
-registerViewKind({ kind: VIEW_KIND.table, Component: TableView, needsEntity: true });
+// #847/#848 PR 5 — a table follows a named marking (and writes it), so every
+// table view carries the header's marking control.
+registerViewKind({ kind: VIEW_KIND.table, Component: TableView, needsEntity: true, linkable: true });
 registerViewKind({ kind: VIEW_KIND.board, Component: BoardView, needsEntity: true });
 registerViewKind({
   kind: VIEW_KIND.gantt,

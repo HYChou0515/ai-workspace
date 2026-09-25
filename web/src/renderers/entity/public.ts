@@ -52,6 +52,15 @@ export { useMarking, useMarkingNames } from "../../hooks/useMarking";
 export type { WriteMarking } from "../../hooks/useMarking";
 export { isLit, projectOntoKeys } from "../../lib/markings";
 export type { Marking, MarkingEntry } from "../../lib/markings";
+// A TABLE on a marking (#847/#848 PR 5): its rows as the marking text a chart
+// writes (`csvMarkingRows` for a parsed CSV/TSV, `entityMarkingRow` for a
+// record as the API sends it), and `useTableMarking`, which filters them to
+// the lit ones under the platform's "filtered by <name>" bar — so every table
+// on a marking reads and says it the same way. Additive to SDK 1.
+export { csvMarkingRows, entityMarkingRow, litRows, markingText } from "../../lib/markingRows";
+export type { MarkingRow } from "../../lib/markingRows";
+export { useTableMarking } from "./tableMarking";
+export type { TableMarking } from "./tableMarking";
 
 // ── registration ───────────────────────────────────────────────────────────
 // `unregisterViewKind` is deliberately absent: it is a test seam, and exporting

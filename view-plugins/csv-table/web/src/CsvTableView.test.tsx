@@ -10,13 +10,15 @@
  * `.entity/` must still be able to use a plug-in view.
  */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, investigationFileService } from "../../../../web/src/api/fileService";
 import { EditModeProvider } from "../../../../web/src/hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../../../../web/src/hooks/fileBuffer";
+import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
 import { WorkspaceSlugProvider } from "../../../../web/src/hooks/useWorkspaceSlug";
+import { MarkingStore } from "../../../../web/src/lib/markings";
 import { QueryWrap } from "../../../../web/src/test/queryWrapper";
 
 const mock = vi.hoisted(() => ({
@@ -34,7 +36,7 @@ import { AiYamlRenderer } from "../../../../web/src/renderers/entity/AiYamlRende
 // host's barrel in the host's vitest config) the built plugin resolves.
 import "./index";
 
-function renderView(path: string, files: Record<string, string>) {
+function renderView(path: string, files: Record<string, string>, markings = new MarkingStore()) {
   const store = new FileBufferStore({
     readFile: vi.fn(async (p: string) => {
       const text = files[p];
@@ -50,7 +52,9 @@ function renderView(path: string, files: Record<string, string>) {
         <FileServiceProvider value={investigationFileService("rca", "item1")}>
           <EditModeProvider>
             <FileBufferProvider store={store}>
-              <AiYamlRenderer path={path} />
+              <MarkingProvider store={markings}>
+                <AiYamlRenderer path={path} />
+              </MarkingProvider>
             </FileBufferProvider>
           </EditModeProvider>
         </FileServiceProvider>
@@ -62,6 +66,7 @@ function renderView(path: string, files: Record<string, string>) {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 const VIEW = "view: csv-table\ntitle: Wafer yield\nsource: /data/wafer.csv\n";
@@ -112,5 +117,83 @@ describe("the csv-table example kind", () => {
     renderView("/views/gone.ai.yaml", { "/views/gone.ai.yaml": "view: csv-table\nsource: /data/missing.csv\n" });
 
     expect(await screen.findByRole("status")).toHaveTextContent(/missing\.csv/);
+  });
+});
+
+// ── #847/#848 PR 5 P1: a csv-table follows a named marking, as a chart does ──
+
+const LOTS_CSV = "lot,yield,day\nA1,0.97,2024-01-01\nB2,0.90,2024-01-02\nC3,0.5,2024-01-02\n";
+const ON_FAIL = "view: csv-table\nsource: /data/lots.csv\nmarking: fail\n";
+
+/** The first cell of each body row the grid shows, in order. */
+function shownLots(): string[] {
+  return screen
+    .getAllByRole("row")
+    .filter((tr) => tr.closest("tbody"))
+    .map((tr) => within(tr).getAllByRole("cell")[0]!.textContent ?? "");
+}
+
+function renderLots(markings: MarkingStore, view = ON_FAIL) {
+  mock.catalog.mockResolvedValue({ types: [], diagnostics: [] });
+  return renderView("/views/lots.ai.yaml", { "/views/lots.ai.yaml": view, "/data/lots.csv": LOTS_CSV }, markings);
+}
+
+describe("a csv-table on a marking", () => {
+  it("shows only the rows the marking lights, under a bar that says so", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { lot: new Set(["B2", "C3"]) }, "/views/chart.ai.yaml");
+    renderLots(markings);
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    expect(shownLots()).toEqual(["B2", "C3"]);
+    const bar = screen.getByRole("status", { name: /marking filter/i });
+    expect(bar).toHaveTextContent("filtered by fail · 2 of 3 rows");
+  });
+
+  it("reads a number cell as pandas and the chart do: 0.90 is the chart's 0.9", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { yield: new Set(["0.9"]) }, "/views/chart.ai.yaml");
+    renderLots(markings);
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    expect(shownLots()).toEqual(["B2"]);
+  });
+
+  it("answers a later write, and shows every row again when it is cleared", async () => {
+    const markings = new MarkingStore();
+    renderLots(markings);
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    expect(shownLots()).toEqual(["A1", "B2", "C3"]);
+    expect(screen.queryByRole("status", { name: /marking filter/i })).not.toBeInTheDocument();
+    act(() => markings.set("fail", { day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml"));
+    expect(shownLots()).toEqual(["B2", "C3"]);
+    act(() => markings.set("fail", null, "/views/chart.ai.yaml"));
+    expect(shownLots()).toEqual(["A1", "B2", "C3"]);
+  });
+
+  it("'show all' keeps every row and highlights the lit ones", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { lot: new Set(["B2"]) }, "/views/chart.ai.yaml");
+    renderLots(markings);
+    fireEvent.click(await screen.findByRole("button", { name: "show all" }));
+    expect(shownLots()).toEqual(["A1", "B2", "C3"]);
+    const marked = screen.getAllByRole("row").filter((tr) => tr.hasAttribute("data-marked"));
+    expect(marked.map((tr) => within(tr).getAllByRole("cell")[0]!.textContent)).toEqual(["B2"]);
+  });
+
+  it("shows every row and says so when it shares no column with the marking", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { wafer: new Set(["W1"]) }, "/views/chart.ai.yaml");
+    renderLots(markings);
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    expect(shownLots()).toEqual(["A1", "B2", "C3"]);
+    expect(screen.getByRole("status", { name: /marking filter/i })).toHaveTextContent("no column in common with fail");
+  });
+
+  it("carries the header's marking control on a view whose file names no marking", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { lot: new Set(["A1"]) }, "/views/chart.ai.yaml");
+    renderLots(markings, "view: csv-table\nsource: /data/lots.csv\n");
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: /marking/i }), { target: { value: "fail" } });
+    expect(shownLots()).toEqual(["A1"]);
   });
 });

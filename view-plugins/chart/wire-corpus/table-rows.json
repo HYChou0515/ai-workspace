@@ -1,0 +1,415 @@
+{
+ "kind": "table-rows",
+ "about": "A table's cells, and per column the marking string a chart keyed on that column writes for each row (null: none). Written by scripts/write_table_corpus.py.",
+ "tables": [
+  {
+   "name": "numbers",
+   "delimiter": ",",
+   "text": "int,float,int_gap,exp,signed,lead_zero,inf,big,uint\n1,3.0,1,1e3,+5,007,inf,9007199254740993,9223372036854775808\n2,0.1,,2E-7,-0,010,-Infinity,2,1\n3,-2.5,3,1.5e+300,-3,0,1,3,2\n 4 , .5 ,NA,1e05,-4.,00,2,4,3\n",
+   "columns": {
+    "int": [
+     "1",
+     "2",
+     "3",
+     "4"
+    ],
+    "float": [
+     "3",
+     "0.1",
+     "-2.5",
+     "0.5"
+    ],
+    "int_gap": [
+     "1",
+     null,
+     "3",
+     null
+    ],
+    "exp": [
+     "1000",
+     "2e-7",
+     "1.5e+300",
+     "100000"
+    ],
+    "signed": [
+     "5",
+     "0",
+     "-3",
+     "-4"
+    ],
+    "lead_zero": [
+     "7",
+     "10",
+     "0",
+     "0"
+    ],
+    "inf": [
+     null,
+     null,
+     "1",
+     "2"
+    ],
+    "big": [
+     "9007199254740992",
+     "2",
+     "3",
+     "4"
+    ],
+    "uint": [
+     "9223372036854776000",
+     "1",
+     "2",
+     "3"
+    ]
+   }
+  },
+  {
+   "name": "booleans",
+   "delimiter": ",",
+   "text": "bool,bool_gap,mixed_case,bool_and_number\nTrue,True,tRUE,True\nFalse,,FALSE,1\nTRUE,false,true,False\n",
+   "columns": {
+    "bool": [
+     "true",
+     "false",
+     "true"
+    ],
+    "bool_gap": [
+     "true",
+     null,
+     "false"
+    ],
+    "mixed_case": [
+     "true",
+     "false",
+     "true"
+    ],
+    "bool_and_number": [
+     "True",
+     "1",
+     "False"
+    ]
+   }
+  },
+  {
+   "name": "text",
+   "delimiter": ",",
+   "text": "text,missing,spaced,mixed,date,datetime,overflow,wide_int\nA1,NA,  x ,1,2024-01-02,2024-01-02 10:00:00,1e400,18446744073709551616\nB 2,x,x ,True,2024-01-03,2024-01-03T10:00:00Z,1,1\n\"c,3\",null, inf,a,2024-01-04,2024-01-04,2,2\n\"say \"\"hi\"\"\",#N/A,3 ,,1999-12-31,,3,3\n",
+   "columns": {
+    "text": [
+     "A1",
+     "B 2",
+     "c,3",
+     "say \"hi\""
+    ],
+    "missing": [
+     null,
+     "x",
+     null,
+     null
+    ],
+    "spaced": [
+     "  x ",
+     "x ",
+     " inf",
+     "3 "
+    ],
+    "mixed": [
+     "1",
+     "True",
+     "a",
+     null
+    ],
+    "date": [
+     "2024-01-02",
+     "2024-01-03",
+     "2024-01-04",
+     "1999-12-31"
+    ],
+    "datetime": [
+     "2024-01-02 10:00:00",
+     "2024-01-03T10:00:00Z",
+     "2024-01-04",
+     null
+    ],
+    "overflow": [
+     "1e400",
+     "1",
+     "2",
+     "3"
+    ],
+    "wide_int": [
+     "18446744073709551616",
+     "1",
+     "2",
+     "3"
+    ]
+   }
+  },
+  {
+   "name": "empty_column",
+   "delimiter": ",",
+   "text": "id,blank\n1,\n2,\n",
+   "columns": {
+    "id": [
+     "1",
+     "2"
+    ],
+    "blank": [
+     null,
+     null
+    ]
+   }
+  },
+  {
+   "name": "tabs",
+   "delimiter": "\t",
+   "text": "lot\tvalue\tflag\nA\t1.50\tTrue\nB\t2\tFalse\n",
+   "columns": {
+    "lot": [
+     "A",
+     "B"
+    ],
+    "value": [
+     "1.5",
+     "2"
+    ],
+    "flag": [
+     "true",
+     "false"
+    ]
+   }
+  }
+ ],
+ "entities": [
+  {
+   "name": "entity",
+   "files": {
+    "/.entity/rec/schema.yaml": "path: recs\nfields:\n  title: { role: text }\n  count: { role: text }\n  ratio: { role: text }\n  done: { role: text }\n  due: { role: date }\n  at: { role: text }\n  tags: { role: text }\n  mixed_list: { role: text }\n  nested: { role: text }\n  meta: { role: text }\n  anything: { role: text }\n",
+    "/recs/1.md": "---\ntitle: a\ncount: 3\nratio: 1.0\ndone: true\ndue: 2024-01-02\nat: 2024-01-02T10:00:00\ntags: [a, b]\nmixed_list: [1, 2.5, true, null]\nnested: [2024-01-02, x]\nmeta: {b: 1, a: x}\nanything: 3\n---\n",
+    "/recs/2.md": "---\ntitle: \"it's\"\ncount: 1152921504606846976\nratio: 0.1\ndone: false\ndue: 2024-03-01\nat: 2024-01-02 10:00:00.5\ntags: [\"it's\", 'x\"y']\nmixed_list: [1e+21, 0.00001, 1.5e-7]\nnested: [{k: 1, a: [x]}]\nmeta: {}\nanything: x\n---\n",
+    "/recs/3.md": "---\ntitle: 'say \"hi\"'\ncount: -1\nratio: 2.5\ndone: true\ndue: 2024-01-02\nat: 2024-01-02T10:00:00Z\ntags: []\nmixed_list: [100000000000000000.5, -0.0001, 10000000000000000.0, 1234567890123456.8, -0.0]\nnested: [2024-01-02T10:00:00Z, 2024-01-02T10:00:00.25+08:00]\nmeta: {k: [1, 2]}\nanything: true\n---\n",
+    "/recs/4.md": "---\ntitle: '3'\ncount: 0\nratio: 1e+21\ndone: false\ndue: 1999-12-31\nat: 2024-01-02T10:00:00+08:00\ntags: [a\\b, \"tab\\there\", \"\\u00e9\\u00a0\"]\nmixed_list: [[1, [2]], {x: null}]\nnested: []\nmeta: {z: {y: 1}}\nanything: 2024-01-02\n---\n",
+    "/recs/5.md": "---\ntitle: no fields but a title\n---\n"
+   },
+   "type": "rec",
+   "records": [
+    {
+     "number": 1,
+     "fields": {
+      "title": "a",
+      "count": 3,
+      "ratio": 1.0,
+      "done": true,
+      "due": "2024-01-02",
+      "at": "2024-01-02T10:00:00",
+      "tags": [
+       "a",
+       "b"
+      ],
+      "mixed_list": [
+       1,
+       2.5,
+       true,
+       null
+      ],
+      "nested": [
+       "2024-01-02",
+       "x"
+      ],
+      "meta": {
+       "b": 1,
+       "a": "x"
+      },
+      "anything": 3
+     }
+    },
+    {
+     "number": 2,
+     "fields": {
+      "title": "it's",
+      "count": 1152921504606846976,
+      "ratio": 0.1,
+      "done": false,
+      "due": "2024-03-01",
+      "at": "2024-01-02T10:00:00.500000",
+      "tags": [
+       "it's",
+       "x\"y"
+      ],
+      "mixed_list": [
+       "1e+21",
+       1e-05,
+       1.5e-07
+      ],
+      "nested": [
+       {
+        "k": 1,
+        "a": [
+         "x"
+        ]
+       }
+      ],
+      "meta": {},
+      "anything": "x"
+     }
+    },
+    {
+     "number": 3,
+     "fields": {
+      "title": "say \"hi\"",
+      "count": -1,
+      "ratio": 2.5,
+      "done": true,
+      "due": "2024-01-02",
+      "at": "2024-01-02T10:00:00Z",
+      "tags": [],
+      "mixed_list": [
+       1e+17,
+       -0.0001,
+       1e+16,
+       1234567890123456.8,
+       -0.0
+      ],
+      "nested": [
+       "2024-01-02T10:00:00Z",
+       "2024-01-02T10:00:00.250000+08:00"
+      ],
+      "meta": {
+       "k": [
+        1,
+        2
+       ]
+      },
+      "anything": true
+     }
+    },
+    {
+     "number": 4,
+     "fields": {
+      "title": "3",
+      "count": 0,
+      "ratio": "1e+21",
+      "done": false,
+      "due": "1999-12-31",
+      "at": "2024-01-02T10:00:00+08:00",
+      "tags": [
+       "a\\b",
+       "tab\there",
+       "é "
+      ],
+      "mixed_list": [
+       [
+        1,
+        [
+         2
+        ]
+       ],
+       {
+        "x": null
+       }
+      ],
+      "nested": [],
+      "meta": {
+       "z": {
+        "y": 1
+       }
+      },
+      "anything": "2024-01-02"
+     }
+    },
+    {
+     "number": 5,
+     "fields": {
+      "title": "no fields but a title"
+     }
+    }
+   ],
+   "columns": {
+    "number": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5"
+    ],
+    "title": [
+     "a",
+     "it's",
+     "say \"hi\"",
+     "3",
+     "no fields but a title"
+    ],
+    "count": [
+     "3",
+     "1152921504606847000",
+     "-1",
+     "0",
+     null
+    ],
+    "ratio": [
+     "1",
+     "0.1",
+     "2.5",
+     "1e+21",
+     null
+    ],
+    "done": [
+     "true",
+     "false",
+     "true",
+     "false",
+     null
+    ],
+    "due": [
+     "2024-01-02",
+     "2024-03-01",
+     "2024-01-02",
+     "1999-12-31",
+     null
+    ],
+    "at": [
+     "2024-01-02 10:00:00",
+     "2024-01-02 10:00:00.500000",
+     "2024-01-02 10:00:00+00:00",
+     "2024-01-02 10:00:00+08:00",
+     null
+    ],
+    "tags": [
+     "['a', 'b']",
+     "[\"it's\", 'x\"y']",
+     "[]",
+     "['a\\\\b', 'tab\\there', 'é\\xa0']",
+     null
+    ],
+    "mixed_list": [
+     "[1, 2.5, True, None]",
+     "['1e+21', 1e-05, 1.5e-07]",
+     "[1e+17, -0.0001, 1e+16, 1234567890123456.8, -0.0]",
+     "[[1, [2]], {'x': None}]",
+     null
+    ],
+    "nested": [
+     "['2024-01-02', 'x']",
+     "[{'a': ['x'], 'k': 1}]",
+     "['2024-01-02T10:00:00+00:00', '2024-01-02T10:00:00.250000+08:00']",
+     "[]",
+     null
+    ],
+    "meta": [
+     "{'a': 'x', 'b': 1}",
+     "{}",
+     "{'k': [1, 2]}",
+     "{'z': {'y': 1}}",
+     null
+    ],
+    "anything": [
+     "3",
+     "x",
+     "true",
+     "2024-01-02",
+     null
+    ]
+   }
+  }
+ ]
+}

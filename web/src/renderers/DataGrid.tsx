@@ -10,12 +10,27 @@ import { pxToRem } from "../lib/pxToRem";
 
 const DEFAULT_MAX_ROWS = 500; // preview cap — the byte editor (Edit) shows all
 
-export function DataGrid({ rows, maxRows = DEFAULT_MAX_ROWS }: { rows: string[][]; maxRows?: number }) {
+export function DataGrid({
+  rows,
+  maxRows = DEFAULT_MAX_ROWS,
+  show,
+  highlighted,
+}: {
+  rows: string[][];
+  maxRows?: number;
+  /** #847/#848 PR 5 — which body rows to draw (indices into `rows` after the
+   * header), in order; all of them when omitted. A table on a marking passes
+   * `useTableMarking`'s `shown`. */
+  show?: readonly number[];
+  /** Body rows drawn as marked (`data-marked`), by the same index. */
+  highlighted?: ReadonlySet<number>;
+}) {
   if (rows.length === 0) return <div style={{ color: "var(--text-paper-d)" }}>Empty file.</div>;
 
   const [header, ...body] = rows;
-  const shown = body.slice(0, maxRows);
-  const capped = body.length - shown.length;
+  const order = show ?? body.map((_, i) => i);
+  const shown = order.slice(0, maxRows);
+  const capped = order.length - shown.length;
 
   return (
     <div style={{ height: "100%", minHeight: 0, overflow: "auto" }}>
@@ -30,11 +45,11 @@ export function DataGrid({ rows, maxRows = DEFAULT_MAX_ROWS }: { rows: string[][
           </tr>
         </thead>
         <tbody>
-          {shown.map((r, ri) => (
-            <tr key={ri}>
+          {shown.map((ri) => (
+            <tr key={ri} data-marked={highlighted?.has(ri) ? "" : undefined}>
               {header.map((_, ci) => (
                 <td key={ci} style={cell(false)}>
-                  {r[ci] ?? ""}
+                  {body[ri]![ci] ?? ""}
                 </td>
               ))}
             </tr>
