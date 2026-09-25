@@ -58,4 +58,4 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
     views，所以這整段是因為 chart 才出現；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文約 6.3k 字元，只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文約 6.5k 字元，只在 AI `read_skill('chart')` 時才載入。

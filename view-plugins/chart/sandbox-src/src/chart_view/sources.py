@@ -12,6 +12,8 @@ from pathlib import Path
 import pandas as pd
 from workspace_app.entity.local import read_entity_records
 
+from chart_view.instants import with_folds
+
 
 class SourceError(ValueError):
     """The source cannot be read."""
@@ -21,12 +23,22 @@ def read_source(root: Path, source: str | dict[str, str]) -> pd.DataFrame:
     """A spec's `source:` as a frame: a table file, or `{entity: <type>}`'s
     records as the entity views project them (`number` plus each field)."""
     if isinstance(source, str):
-        return read_table(root, source)
+        return _zones_with_folds(read_table(root, source))
     try:
         records = read_entity_records(root, source["entity"])
     except LookupError as e:
         raise SourceError(str(e)) from e
-    return pd.DataFrame.from_records(records)
+    return pd.DataFrame.from_records(records)  # YAML zones are fixed offsets, never pytz
+
+
+def _zones_with_folds(df: pd.DataFrame) -> pd.DataFrame:
+    """Each zoned column in a zone that reads every year (`with_folds`): pandas
+    hands a parquet zone over as pytz."""
+    for i, dtype in enumerate(df.dtypes):
+        zone = getattr(dtype, "tz", None)
+        if zone is not None:
+            df.isetitem(i, df.iloc[:, i].dt.tz_convert(with_folds(zone)))
+    return df
 
 
 def inside_workspace(root: Path, name: str) -> Path:
