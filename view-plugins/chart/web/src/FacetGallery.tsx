@@ -170,7 +170,9 @@ const Tile = memo(function Tile({
         {image ? <Canvas image={image} size={THUMB} /> : <div style={{ display: "block", width: THUMB, height: THUMB }} />}
       </div>
       <div style={{ display: "flex", alignItems: "center", height: LABEL, overflow: "hidden", fontSize: 11, gap: 4 }}>
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        <span title={label} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {label}
+        </span>
         <button
           type="button"
           aria-label="enlarge"

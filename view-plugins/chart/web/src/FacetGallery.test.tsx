@@ -375,6 +375,14 @@ describe("FacetGallery", () => {
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toMatch(/^group L1 · 2026-03-\d\d Asia\/Taipei$/);
   });
 
+  it("gives a tile's cut-short label whole on hover", () => {
+    // a tile is a thumbnail wide: a zoned key with its zone is cut short there
+    const groups = INDEX.groups.map((g) => ({ ...g, key: ["L1", "2026-03-01 00:00:00+08:00"] }));
+    answers.index = ok({ ...INDEX, facet: ["lot", "day"], zones: { day: "Asia/Taipei" }, groups });
+    view();
+    expect(screen.getAllByTitle("L1 · 2026-03-01 Asia/Taipei").length).toBeGreaterThan(0);
+  });
+
   it("paints an unlit group's thumbnail dimmed", () => {
     sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["999"]) }, source: "x" }, write]);
     view();
