@@ -390,6 +390,20 @@ words are examples, not spec keys.
   log x" test used a scatter, which ECharts skips by itself; it uses a line now (round 19
   conformance N3). With a stack's 0 reaching `lineUpStacks` again, row 14's `> 0` is
   pinned again (the loggaps "…has 0" test reddens without it; rounds 19 N2 / F3).
+- **P40 — Review round 19's findings.** Round 19 (four lenses at f3164e88) found the
+  web-side sum of P37 row 12 leaking into every channel it did not plan for: a stack
+  coloured by value drew its mixed sums with `fill="none"` (invisible), the sum's tooltip
+  re-read every row on each mousemove (1M rows: ~0.25 s per move), "(sum of N rows)"
+  counted rows the sum left out; plus two it did not cause.
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 18 | P37's sum is a second aggregation in the browser, beside the sandbox's `aggregate` (Vega-Lite's), and every channel needs its own rule for it | A stacked layer with no `aggregate` is summed **in the sandbox**, by its slot and colour: exactly an `aggregate: sum` on its value channel. The browser draws one row per slot and colour, as for any aggregated layer; P32's rule (a summed field is no key) makes a brush over a sum write its slot and colour, which the marking lights row by row. Other field channels (tooltip, text, size) are kept where a group shares one value, else empty. `stackPoints` and a point standing for a list of rows are removed. A stack coloured by a value (quantitative colour) is refused by `validate`, naming why: which rows form one segment is not defined. Replaces P37 row 12 [mine, open to override] |
+  | 19 | With no marking store (a standalone preview), a brush was cleared the moment it was drawn: the store kept nothing, so the drop read the chart's own write as gone | Only a write the store took can be dropped: with no store, the chart's selection is its own |
+  | 20 | The log note counted an errorbar's `y`/`y2` at or below 0, which were still sent to ECharts (Infinity); boxplot/errorbar summaries bypass `at` | Every value a log axis draws goes through `at`, summaries and `y2` included, and the note counts exactly what `at` left out |
+
+  Row 18 replaces a mechanism (round 20 follows). Demo at 1440 and 390, seen: rows 18–19,
+  and P39's two scenes (a stacked 0 on a log y; a lone point on a line).
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
