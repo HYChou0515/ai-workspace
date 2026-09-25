@@ -7,6 +7,7 @@ import base64
 import datetime as dt
 import json
 import math
+import zoneinfo
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,7 @@ import pandas as pd
 import pytest
 
 from chart_view.cli import main
-from chart_view.query import build
+from chart_view.query import build, layer_rows
 from chart_view.spec import parse_spec
 from chart_view.transforms import TransformError, apply_transforms
 from chart_view.wire import canon, encode_column, epoch_ms
@@ -1249,3 +1250,204 @@ def test_a_number_with_half_a_millisecond_at_todays_epoch_names_its_row():
     df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
     kept = apply_transforms(df, [{"filter": {"field": "at", "equal": 1704240000000.5}}])
     assert kept["v"].tolist() == [2.0]
+
+
+# P15: `highlight: values` reads a date column's values as a filter does, and
+# a `where:` that compares a zoned column with a zone-less time says so.
+
+
+def _lit(df: pd.DataFrame, values: dict) -> list[float]:
+    """The `v` of the rows `highlight: {values: …}` lights, through the query."""
+    spec = {
+        "view": "chart",
+        "source": "data/a.csv",
+        "mark": "scatter",
+        "encoding": {
+            "x": {"field": "v", "type": "quantitative"},
+            "y": {"field": "v", "type": "quantitative"},
+        },
+        "highlight": {"values": values},
+    }
+    [layer] = layer_rows(spec, df)
+    assert layer.lit is not None
+    return layer.rows.loc[layer.lit, "v"].tolist()
+
+
+def _as_k(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    return df.rename(columns={column: "k"})[["k", "v"]]
+
+
+def _zoneinfo_new_york() -> pd.DataFrame:
+    at = _new_york()["at"].dt.tz_convert(zoneinfo.ZoneInfo("America/New_York"))
+    return pd.DataFrame({"k": at, "v": [1.0, 2.0, 3.0]})
+
+
+def _zoned_objects() -> pd.DataFrame:
+    zoned = [
+        dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+        dt.datetime(2024, 1, 1, 8, tzinfo=dt.timezone(dt.timedelta(hours=8))),
+        dt.datetime(2024, 1, 2, tzinfo=dt.UTC),
+    ]
+    return pd.DataFrame({"k": pd.Series(zoned, dtype=object), "v": [1.0, 2.0, 3.0]})
+
+
+# Every column kind a predicate reads: the frame (column `k`), and values a
+# spec may write for it beyond each row's own marking text.
+_KINDS = {
+    "naive-ns": (
+        lambda _p: _as_k(_stamped("ns", None), "at"),
+        ["2024-01-01T12:00", "2024-01-01T12:00:00.5Z", 1704110400000, "2024-01-01 12:00:00.1"],
+    ),
+    "naive-s": (lambda _p: _as_k(_stamped("s", None), "at"), ["2024-01-01T12:00", 1704110400000]),
+    "zoned-pytz": (
+        lambda _p: _as_k(_stamped("ns", "Asia/Taipei"), "at"),
+        ["2024-01-01T20:00", "2024-01-01T12:00Z", 1704110400000, "2024-01-01T12:00"],
+    ),
+    # Past nanoseconds a source zone is zoneinfo (pandas crashes iterating pytz there).
+    "zoned-far": (
+        lambda _p: _as_k(_far_taipei(), "at").assign(
+            k=lambda f: f["k"].dt.tz_convert(zoneinfo.ZoneInfo("Asia/Taipei"))
+        ),
+        ["2300-01-01T08:00", 10413792000000, "1500-01-01"],
+    ),
+    "zoned-zoneinfo": (
+        lambda _p: _zoneinfo_new_york(),
+        ["2024-11-03 01:30", "2024-03-10T02:30", 1733054400000],
+    ),
+    "object-dates": (
+        lambda _p: _as_k(_days(), "day"),
+        ["2024-01-01", "2024/01/02", "2024-01-01T08:00+08:00", "9999-12-31T00:00"],
+    ),
+    "object-zoned": (lambda _p: _zoned_objects(), ["2024-01-01", "2024-01-02T08:00+08:00"]),
+    "csv-date-text": (
+        lambda p: _as_k(_csv_days(p, ["2024-01-01", "2024-01-02", "2024-01-03"]), "day"),
+        ["2024/01/02", "2024-01-02T00:00", 1704153600000],
+    ),
+    "lists": (lambda _p: _as_k(_arrays(), "tags"), ["a", "['b']"]),
+    "numbers": (lambda _p: pd.DataFrame({"k": [1, 2, 3], "v": [1.0, 2.0, 3.0]}), [2.0, 7]),
+    "text": (lambda _p: pd.DataFrame({"k": ["a", "b", "a"], "v": [1.0, 2.0, 3.0]}), ["b", "z"]),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_KINDS))
+def test_highlight_values_light_the_rows_one_of_keeps(kind, tmp_path):
+    # Parity, the filter being the oracle: on a zoned column the zone-less
+    # "2024-01-01T20:00" lit no row (only pandas' "2024-01-01 20:00:00+08:00"
+    # did) while `oneOf` kept it.
+    build_frame, extra = _KINDS[kind]
+    df = build_frame(tmp_path)
+    # A number column's own values as numbers: `oneOf: ["2"]` is text there.
+    own = list(df["k"]) if kind == "numbers" else [canon(c) for c in df["k"]]
+    for values in [*([v] for v in own + extra), own + extra]:
+        kept = apply_transforms(df, [{"filter": {"field": "k", "oneOf": values}}])
+        assert _lit(df, {"k": values}) == kept["v"].tolist(), (kind, values)
+    for row, value in enumerate(own):  # the parity is not an empty one
+        assert df.loc[row, "v"] in _lit(df, {"k": [value]}), (kind, value)
+
+
+@pytest.mark.parametrize("kind", ["naive-ns", "zoned-pytz", "object-dates", "csv-date-text"])
+@pytest.mark.parametrize("value", ["soon", True])
+def test_a_highlight_value_that_is_no_date_is_refused_on_a_date_column(kind, value, tmp_path):
+    # As `oneOf` refuses it; it lit nothing, and validate said only "lights nothing".
+    df = _KINDS[kind][0](tmp_path)
+    with pytest.raises(TransformError, match=rf"highlight values on 'k': {value!r} is not a date"):
+        _lit(df, {"k": ["2024-01-01", value]})
+
+
+def test_highlight_values_on_a_text_column_mark_its_text():
+    # A column with one cell that is no date stays text: a value matches its
+    # own text only, and any value is taken (pin).
+    df = pd.DataFrame({"k": ["2024-01-01", "soon", "2024-01-02"], "v": [1.0, 2.0, 3.0]})
+    assert _lit(df, {"k": ["2024-01-01", "soon"]}) == [1.0, 2.0]
+    assert _lit(df, {"k": ["2024/01/02", 1704153600000]}) == []
+
+
+def _taipei_ts(zone: object) -> pd.DataFrame:
+    utc = pd.Series(pd.to_datetime(["2026-02-28T19:00Z", "2026-03-01T06:00Z"]))
+    return pd.DataFrame({"ts": utc.dt.tz_convert(zone), "v": [1.0, 2.0], "n": [1, 2]})
+
+
+@pytest.mark.parametrize("zone", ["Asia/Taipei", zoneinfo.ZoneInfo("Asia/Taipei")])
+@pytest.mark.parametrize(
+    ("expr", "value", "example"),
+    [
+        ("ts < '2026-03-01T12:00'", "2026-03-01T12:00", "2026-03-01T12:00:00+08:00"),
+        ("v > 0 and '2026/03/01' <= ts", "2026/03/01", "2026-03-01T00:00:00+08:00"),
+    ],
+)
+def test_a_where_comparing_a_zoned_column_with_a_zone_less_time_names_both(
+    zone, expr, value, example
+):
+    # pandas said only "Invalid comparison between dtype=datetime64[ns,
+    # Asia/Taipei] and Timestamp", naming neither the column nor the value.
+    with pytest.raises(TransformError) as filtered:
+        apply_transforms(_taipei_ts(zone), [{"filter": expr}])
+    said = str(filtered.value)
+    assert said.startswith(f"filter {expr!r}: 'ts' holds times in Asia/Taipei")
+    assert f"{value!r} has no zone" in said and f"as {example!r}" in said
+    assert "field predicate" in said
+    assert isinstance(filtered.value.__cause__, TypeError)
+    lit = {"view": "chart", "source": "data/a.csv", "mark": "scatter", "highlight": {"where": expr}}
+    lit["encoding"] = {
+        "x": {"field": "v", "type": "quantitative"},
+        "y": {"field": "v", "type": "quantitative"},
+    }
+    with pytest.raises(TransformError) as highlighted:
+        layer_rows(lit, _taipei_ts(zone))
+    said = str(highlighted.value)
+    assert said.startswith(f"highlight {expr!r}: 'ts' holds times in Asia/Taipei")
+    assert "predicate" not in said  # a highlight takes no predicate
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "ts < '2026-03-01T12:00+08:00'",  # a time with its zone compares (pin)
+        "ts < '2026-03-01T04:00Z'",
+    ],
+)
+def test_a_where_with_a_zoned_time_on_a_zoned_column_runs(expr):
+    assert apply_transforms(_taipei_ts("Asia/Taipei"), [{"filter": expr}])["v"].tolist() == [1.0]
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "n < 'a'",  # no date column in it
+        "ts < '2026-03-01T12:00+08:00' and n < 'a'",  # the time has its zone
+        "ts > n",  # a zoned column against no text
+        "ts.dt.hour > 'x'",  # not the column itself
+        "`ts` < '2026-03-01T12:00'",  # Python cannot read the backticks
+        "n < 'a' and index < '2026-03-01T12:00'",  # a name that is no column
+        "n < 'a' and ts < 'soon'",  # text that is no date
+        "n < 'a' and ts > 5",  # a number
+    ],
+)
+def test_a_where_that_fails_for_another_reason_keeps_pandas_words(expr):
+    with pytest.raises(TransformError, match="does not evaluate: Invalid comparison"):
+        apply_transforms(_taipei_ts("Asia/Taipei"), [{"filter": expr}])
+
+
+def test_a_where_with_a_zone_less_time_on_a_naive_column_keeps_pandas_words():
+    df = _taipei_ts("Asia/Taipei")
+    naive = df.assign(ts=df["ts"].dt.tz_localize(None))
+    with pytest.raises(TransformError, match="does not evaluate: Invalid comparison"):
+        apply_transforms(naive, [{"filter": "n < 'a' and ts < '2026-03-01T12:00'"}])
+
+
+def test_a_where_naming_no_column_says_so_beside_a_zone_less_time():
+    # Only a failed comparison is read for a zone: here pandas stops at `nope`.
+    with pytest.raises(TransformError, match="does not evaluate: .*'nope'"):
+        apply_transforms(
+            _taipei_ts("Asia/Taipei"), [{"filter": "nope > 0 and ts < '2026-03-01T12:00'"}]
+        )
+
+
+def test_a_zone_less_time_in_a_where_that_fails_otherwise_keeps_pandas_words():
+    # `ts < 'soon'` is no date; a naive column compares with zone-less text.
+    df = _taipei_ts("Asia/Taipei")
+    with pytest.raises(TransformError, match="does not evaluate: Unknown datetime string"):
+        apply_transforms(df, [{"filter": "ts < 'soon'"}])
+    naive = df.assign(ts=df["ts"].dt.tz_localize(None))
+    kept = apply_transforms(naive, [{"filter": "ts < '2026-03-01T12:00'"}])
+    assert kept["v"].tolist() == [1.0]

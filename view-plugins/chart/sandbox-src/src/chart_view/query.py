@@ -41,6 +41,7 @@ from chart_view.transforms import (
     TransformError,
     aggregate,
     apply_transforms,
+    dates_one_of,
     need_columns,
     row_mask,
 )
@@ -218,7 +219,11 @@ def _highlight(df: pd.DataFrame, highlight: Mapping[str, Any] | None) -> pd.Seri
         return None
     mask = pd.Series(True, index=df.index)
     for column, wanted in values.items():
-        mask &= _canon_values(df[column]).isin({canon(v) for v in wanted})
+        # A date column reads its values as `oneOf` does; any other is marked by its text.
+        hit = dates_one_of(df[column], column, wanted, f"highlight values on {column!r}:")
+        if hit is None:
+            hit = _canon_values(df[column]).isin({canon(v) for v in wanted})
+        mask &= hit
     return mask
 
 

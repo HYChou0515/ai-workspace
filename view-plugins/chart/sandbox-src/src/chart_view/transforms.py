@@ -8,7 +8,9 @@ expression, because `validate` hands that line to the AI that wrote the spec.
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
+import itertools
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,7 +18,13 @@ import numpy as np
 import pandas as pd
 from pandas.errors import OutOfBoundsDatetime
 
-from chart_view.instants import DATE_TEXT, instant_of_number, local_instants, parse_date_text
+from chart_view.instants import (
+    DATE_TEXT,
+    instant_of_number,
+    local_instants,
+    parse_date_text,
+    with_folds,
+)
 from chart_view.wire import holds_containers, unhashable_as_text
 
 
@@ -36,10 +44,46 @@ def _query(df: pd.DataFrame, expr: str, what: str) -> pd.Series:
     try:
         mask = df.eval(expr)
     except Exception as e:  # pandas raises many types for a bad expression
-        raise TransformError(f"{what} {expr!r} does not evaluate: {e}") from e
+        named = _zone_less(df, expr, what) if isinstance(e, TypeError) else None
+        raise TransformError(named or f"{what} {expr!r} does not evaluate: {e}") from e
     if not isinstance(mask, pd.Series) or not pd.api.types.is_bool_dtype(mask):
         raise TransformError(f"{what} {expr!r} must be a true/false test on each row")
     return mask
+
+
+def _zone_less(df: pd.DataFrame, expr: str, what: str) -> str | None:
+    """The refusal for a query that compares a zoned column with a time written
+    without a zone — pandas says only "Invalid comparison between
+    dtype=datetime64[ns, <zone>] and Timestamp" — naming both; None when `expr`
+    holds no such comparison. The expression is only read, never rewritten."""
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:  # pandas' own syntax (`backticks`): its words stand
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        for a, b in itertools.pairwise([node.left, *node.comparators]):
+            for name, text in ((a, b), (b, a)):
+                if not (isinstance(name, ast.Name) and name.id in df.columns):
+                    continue
+                zone = getattr(df[name.id].dtype, "tz", None)
+                value = text.value if isinstance(text, ast.Constant) else None
+                at = parse_date_text(value) if isinstance(value, str) else None
+                if zone is None or at is None or at.tzinfo is not None:
+                    continue
+                example = at.replace(tzinfo=with_folds(zone)).isoformat()
+                also = (
+                    f", or use a field predicate on {name.id!r}, which reads a time"
+                    " without a zone in the column's zone"
+                    if what == "filter"
+                    else ""
+                )
+                return (
+                    f"{what} {expr!r}: {name.id!r} holds times in {zone} and {value!r} has"
+                    f" no zone — write the time with its zone, as {example!r}{also}"
+                )
+    return None
 
 
 _COMPARE = {
@@ -163,6 +207,26 @@ def _equals(s: pd.Series, value: Any, where: str) -> pd.Series:
     return s == value
 
 
+def _one_of(s: pd.Series, values: Sequence[Any], where: str) -> pd.Series:
+    """The rows of `s` (made `_comparable`) holding one of a spec's `values`."""
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return _isin(s, [i for v in values for i in _instants(v, s.dtype, where)])
+    return s.isin(values)
+
+
+def dates_one_of(
+    column: pd.Series, field: str, values: Sequence[Any], where: str
+) -> pd.Series | None:
+    """The rows of `column` holding one of `values`, read as `oneOf` reads
+    them, when `column` is a date column (`_comparable`); None for any other
+    column, which a highlight marks by its text. A value that names no date is
+    refused by name (`_instants`)."""
+    s = _comparable(column, field)
+    if not pd.api.types.is_datetime64_any_dtype(s):
+        return None
+    return _one_of(s, values, where)
+
+
 def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
     field = pred["field"]
     need_columns(df, field)
@@ -186,11 +250,8 @@ def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
     if "equal" in pred:
         mask &= _equals(s, pred["equal"], f"{where} equal")
     if "oneOf" in pred:
-        values = pred["oneOf"]  # the schema has no null here: `valid: false` names missing rows
-        if dates:
-            mask &= _isin(s, [i for v in values for i in _instants(v, s.dtype, f"{where} oneOf")])
-        else:
-            mask &= s.isin(values)
+        # the schema has no null here: `valid: false` names missing rows
+        mask &= _one_of(s, pred["oneOf"], f"{where} oneOf")
     for name, op, value in orders:
         shown = pred["range"] if name == "range" else value
         if dates:
