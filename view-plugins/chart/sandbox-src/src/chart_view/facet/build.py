@@ -140,11 +140,14 @@ def build_facet_cache(
     # with it, and a tile's rows (for a statistic, and the column list) are
     # the rows it places
     axes = (_axis_codes(frame[x], kinds[x]), _axis_codes(frame[y], kinds[y]))
-    plan = _by_arrays(frame, axes=axes, **args) or _by_rows(frame, **args)
+    # each facet column's labels, once: the whole-column path keys the groups
+    # with them, and every row is placed in its group with them
+    labels = {c: _labels(frame[c]) for c in facet}
+    plan = _by_arrays(frame, axes=axes, labels=labels, **args) or _by_rows(frame, **args)
     scale, cells, layout, groups = plan
     progress(f"{len(groups)} groups over {cells} cells")
 
-    pos = _row_positions(frame, facet, groups)
+    pos = _row_positions(frame, facet, groups, labels=labels)
     placed = (axes[0][0] >= 0) & (axes[1][0] >= 0)
     if stat is not None:
         field = sort[0]
@@ -154,9 +157,16 @@ def build_facet_cache(
             for g, v in zip(groups, values, strict=True)
         ]
     columns = []
+    tiles = _tiles(pos, placed)  # the same for every column
+    # a group is one text of each facet column, and a text column's text is
+    # its value (a number's is not: "0" keys 0.0 and -0.0), so a text facet
+    # column holds one value per group without being read again
+    text_facets = {
+        c for c in facet if labels[c] is not None and frame[c].dtype.kind not in _NUMBERS
+    }
     for c in frame.columns:
         kind = column_kind(frame[c])
-        single = _single(frame[c], pos, placed)
+        single = c in text_facets or _single(frame[c], tiles)
         columns.append(
             {
                 "name": c,
@@ -385,6 +395,7 @@ def _by_arrays(
     frame: pd.DataFrame,
     *,
     axes: tuple[_Axis, _Axis] | None = None,
+    labels: Mapping[str, tuple[np.ndarray, list[str]] | None] | None = None,
     facet: Sequence[str],
     x: str,
     y: str,
@@ -396,12 +407,11 @@ def _by_arrays(
 ) -> Plan | None:
     """``_by_rows``' contents, errors and progress, on whole columns; None
     (before any progress line) for a frame only the row path can read."""
-    labels: dict[str, tuple[np.ndarray, list[str]]] = {}
-    for c in facet:
-        read = _labels(frame[c])
-        if read is None:
-            return None
-        labels[c] = read
+    # the caller's, when it has them (build_facet_cache reuses them)
+    reads = labels if labels is not None else {c: _labels(frame[c]) for c in facet}
+    if any(reads[c] is None for c in facet):
+        return None
+    labels = {c: read for c in facet if (read := reads[c]) is not None}
     idents: dict[str, np.ndarray] = {}
     for c in sort:
         ident = _sort_ident(frame[c])
@@ -538,14 +548,18 @@ def _check_stat(frame: pd.DataFrame, sort: Sequence[str], stat: str) -> None:
 
 
 def _row_positions(
-    frame: pd.DataFrame, facet: Sequence[str], groups: Sequence[Group]
+    frame: pd.DataFrame,
+    facet: Sequence[str],
+    groups: Sequence[Group],
+    labels: Mapping[str, tuple[np.ndarray, list[str]] | None] | None = None,
 ) -> np.ndarray:
     """Each row's group, as its position in ``groups`` (the cache's order),
-    matched by the key the builder wrote (canon of each facet column)."""
+    matched by the key the builder wrote (canon of each facet column).
+    ``labels``: each facet column's ``_labels``, when the caller has them."""
     gid = np.zeros(len(frame), dtype=np.int64)
     reads = []
     for c in facet:
-        read = _labels(frame[c])
+        read = labels[c] if labels is not None else _labels(frame[c])
         if read is None:  # a dtype only the row path reads: its texts, a row at a time
             texts = _texts(frame[c])
             codes, uniques = pd.factorize(np.asarray(texts, dtype=object))
@@ -573,7 +587,18 @@ def _stat_values(
     return out
 
 
-def _single(column: pd.Series, pos: np.ndarray, placed: np.ndarray) -> bool:
+def _tiles(pos: np.ndarray, placed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The placed rows in group order, and where each group's run of them
+    starts: what ``_single`` reads every column over. One stable sort per
+    build, not one per column (P33)."""
+    rows = np.flatnonzero(placed)
+    groups = pos[rows]
+    order = np.argsort(groups, kind="stable")
+    starts = np.flatnonzero(np.r_[True, np.diff(groups[order]) != 0])
+    return rows[order], starts
+
+
+def _single(column: pd.Series, tiles: tuple[np.ndarray, np.ndarray]) -> bool:
     """Whether every group's tile holds at most one value of ``column`` -- the
     builder's own test for a sort value (one ``repr(_plain_sort(v))`` per
     group), so a column offered as single never fails the build."""
@@ -582,8 +607,7 @@ def _single(column: pd.Series, pos: np.ndarray, placed: np.ndarray) -> bool:
         ident = pd.factorize(column.map(lambda v: repr(_plain_sort(v))))[0]
     # a group is single where its lowest ident is its highest: one pass over
     # the rows in group order (a pandas nunique per column cost ~1 s per 10M)
-    groups, order = pos[placed], np.argsort(pos[placed], kind="stable")
-    starts = np.flatnonzero(np.r_[True, np.diff(groups[order]) != 0])
-    ident = ident[placed][order]
+    rows, starts = tiles
+    ident = ident[rows]
     lo, hi = np.minimum.reduceat(ident, starts), np.maximum.reduceat(ident, starts)
     return bool((lo == hi).all())
