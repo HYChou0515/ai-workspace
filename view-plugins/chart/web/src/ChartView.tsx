@@ -221,7 +221,12 @@ function Plot({
         {built.notes.map((n) => (
           <span key={n}>{n}</span>
         ))}
-        {selected && <span>{selected}</span>}
+        {/* shrinks to an ellipsis in a narrow chart: at 390 wide a 155 px
+            panel cut "· by lot, wafer" off with nothing to say so (P27); the
+            line's title holds all of it */}
+        {selected && (
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{selected}</span>
+        )}
       </div>
       <div ref={el} style={{ flex: 1, minHeight: 0 }} />
     </div>

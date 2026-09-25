@@ -191,6 +191,24 @@ describe("ChartView", () => {
     expect(before!.textContent).toBe("2 selected");
   });
 
+  it("ends a count too long for a narrow chart in an ellipsis, the whole line on hover (P27)", () => {
+    // at 390 wide a 155 px panel cut "16 selected · by lot, wafer" to
+    // "16 selected · by lot, wa" with nothing to say it was cut
+    run({ data: ok() });
+    view();
+    act(() =>
+      chart.handlers.get("brushselected")?.({
+        batch: [{ areas: [{ brushType: "rect" }], selected: [{ seriesIndex: 0, dataIndex: [0, 1] }] }],
+      }),
+    );
+    const count = screen.getByText("2 selected");
+    // (one line: its line is `white-space: nowrap`, which it inherits)
+    const { overflow, textOverflow, minWidth } = count.style;
+    expect({ overflow, textOverflow, minWidth }).toEqual({ overflow: "hidden", textOverflow: "ellipsis", minWidth: "0" });
+    expect(count.parentElement!.style.whiteSpace).toBe("nowrap");
+    expect(count.parentElement!.title).toBe("2 selected");
+  });
+
   it("counts what a legend click leaves shown", () => {
     run({ data: ok() });
     view();
