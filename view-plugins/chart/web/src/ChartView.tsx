@@ -15,7 +15,7 @@ import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } 
 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
-import { type Answer, type Built, toOption } from "./option";
+import { type Answer, type Built, compactAt, toOption } from "./option";
 import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
 import { type Cells, type RasterImage, upscale } from "./raster";
 import {
@@ -115,9 +115,13 @@ function Plot({
         : ownSelectionLit(answer, selection),
     [marking, entry, answer, selection],
   );
+  // Whether the chart is laid out compact (#847/#848 PR 5 P31): read from the
+  // width its host is given, by the observer that resizes it. A boolean, so the
+  // option is rebuilt only when the width crosses `COMPACT_BELOW`.
+  const [compact, setCompact] = useState(false);
   const built: Built = useMemo(
-    () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}) }),
-    [doc, answer, lit],
+    () => toOption(doc, answer, { gridImage: gridCanvas, compact, ...(lit ? { lit } : {}) }),
+    [doc, answer, lit, compact],
   );
   const builtRef = useRef(built);
   builtRef.current = built;
@@ -217,7 +221,14 @@ function Plot({
       clicked.current = null;
       writeRef.current([]);
     });
-    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => chart.resize());
+    const resize =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver((entries) => {
+            chart.resize();
+            const width = entries[0]?.contentRect.width;
+            if (width !== undefined) setCompact(compactAt(width));
+          });
     resize?.observe(el.current);
     return () => {
       resize?.disconnect();
@@ -229,21 +240,23 @@ function Plot({
   // What the chart was last fully built from. When only the marking's lit rows
   // changed, the series are replaced and everything else — the brush the person
   // drew above all — stays, so they can still see and clear their selection.
-  const drawnFrom = useRef<{ doc: unknown; answer: unknown } | null>(null);
+  // A switch to or from the compact layout is built in full too: merged, a
+  // colour bar laid under the plot kept its orientation when the pane widened.
+  const drawnFrom = useRef<{ doc: unknown; answer: unknown; compact: boolean } | null>(null);
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const same = drawnFrom.current?.doc === doc && drawnFrom.current?.answer === answer;
+    const same = drawnFrom.current?.doc === doc && drawnFrom.current?.answer === answer && drawnFrom.current?.compact === compact;
     if (same) {
       chart.setOption(option, { replaceMerge: ["series"] });
       return;
     }
-    drawnFrom.current = { doc, answer };
+    drawnFrom.current = { doc, answer, compact };
     chart.setOption(option, true);
     // A full setOption drops the drawn brush, and with it anything to clear.
     brushed.current = false;
     setSelection([]);
-  }, [option, doc, answer]);
+  }, [option, doc, answer, compact]);
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   // On a marking, which columns it marks by (P27): over two columns it lights

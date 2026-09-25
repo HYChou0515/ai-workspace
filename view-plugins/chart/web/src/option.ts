@@ -91,7 +91,24 @@ export type Options = {
    * spec's own `highlight:` bitset (`null` = this layer is not linked, drawn
    * undimmed). Omitted: the spec's highlight, as before. */
   lit?: (boolean[] | null)[];
+  /** The chart is narrower than `COMPACT_BELOW` (`compactAt`). */
+  compact?: boolean;
 };
+
+/** Below this width (px) a chart is laid out compact (#847/#848 PR 5 P31). */
+export const COMPACT_BELOW = 320;
+
+/** Compact, the height a colour bar under the plot takes (a 40 px ramp, a
+ * value above and below it), and a category legend's row per category. Both
+ * stand upright at the left, so they need little width: a colour bar its
+ * labels, a legend its swatch and longest name (both fit 69 px, measured). */
+const BAR_ROW = 76;
+const PIECE_ROW = 20;
+
+/** Whether a chart `width` px wide is laid out compact; 0 is unmeasured. */
+export function compactAt(width: number): boolean {
+  return width > 0 && width < COMPACT_BELOW;
+}
 
 const NONE = "(none)";
 const PALETTE_STOPS = 9;
@@ -947,19 +964,50 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     // plus the swatch, its gap and the edge.
     const names = visualMaps.flatMap((v) => (v.type === "piecewise" ? (v.categories as string[]) : []));
     const legendRoom = names.length ? 56 + 8 * Math.max(...names.map((n) => n.length)) : 0;
-    option.grid = {
-      containLabel: true,
-      left: 48,
-      right: visualMaps.length ? Math.max(80, legendRoom) : 16,
-      top: legend.length ? 48 : 32,
-      bottom: 32,
-    };
+    if (opts.compact) {
+      // #847/#848 PR 5 P31: in a narrow pane the margins beside the plot took
+      // it all (a 139 px grid kept a 2 px plot). The y axis's name goes above
+      // the plot, and the colour bar or category legend under it: a narrow
+      // pane is short of width, not of height.
+      const under = visualMaps.reduce(
+        (room, v) => room + (v.type === "piecewise" ? (v.categories as string[]).length * PIECE_ROW : BAR_ROW),
+        0,
+      );
+      (option.yAxis as Record<string, unknown>[])[0] = {
+        ...(option.yAxis as Record<string, unknown>[])[0],
+        nameLocation: "end",
+        nameGap: 8,
+        nameTextStyle: { align: "left" },
+      };
+      option.grid = { containLabel: true, left: 8, right: 8, top: legend.length ? 72 : 56, bottom: 40 + under };
+      let below = 4;
+      for (const v of [...visualMaps].reverse()) {
+        Object.assign(
+          v,
+          v.type === "piecewise"
+            ? { orient: "vertical", left: 4, bottom: below, padding: [5, 0], itemWidth: 12, itemGap: PIECE_ROW - 14, textGap: 4 }
+            : { orient: "vertical", left: 8, bottom: below, itemWidth: 10, itemHeight: 40, textGap: 4 },
+        );
+        below += v.type === "piecewise" ? (v.categories as string[]).length * PIECE_ROW : BAR_ROW;
+      }
+    } else {
+      option.grid = {
+        containLabel: true,
+        left: 48,
+        right: visualMaps.length ? Math.max(80, legendRoom) : 16,
+        top: legend.length ? 48 : 32,
+        bottom: 32,
+      };
+    }
     // Over the plot's right edge: a colour bar takes the margin beside the
     // plot, top to bottom in a short pane, and at the chart's own edge the
     // tools sat over its top label (#847/#848 PR 5 P30, found at 390 wide).
     option.toolbox = {
       top: 4,
       right: visualMaps.length ? (option.grid as { right: number }).right : 8,
+      // compact, the three icons fit one row of a 69 px chart (at ECharts'
+      // 15 px, 8 apart, they wrapped over the y axis's name)
+      ...(opts.compact ? { itemSize: 12, itemGap: 2, padding: [5, 2] } : {}),
       feature: { brush: { type: ["rect", "polygon", "clear"] } },
     };
   } else {
@@ -971,6 +1019,6 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     option.toolbox = { top: 4, right: 8, feature: { brush: { type: ["clear"] } } };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
-  if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));
+  if (visualMaps.length) option.visualMap = visualMaps.map((v) => (v.orient ? v : { right: 8, top: "middle", ...v }));
   return { option, series: rows, names, slices, grids, notes };
 }
