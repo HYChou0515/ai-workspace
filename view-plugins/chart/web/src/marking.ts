@@ -27,7 +27,17 @@ export function markingLit(answer: Answer, marking: MarkingValues, lit: IsLit): 
     // lookup `selectionValues` writes with. A key a channel sends as time or
     // numbers carries its strings in `$key.<name>`; decoding the channel's own
     // column compared "1704153600000" against a written "2024-01-02".
+    //
+    // Without `$key.<name>` (the sandbox sends it only for THIS view's `keys:`),
+    // a `time` or `q8` channel column holds epoch ms / quantized codes, never a
+    // marking's strings — so it is not compared at all, and the layer draws
+    // undimmed rather than all-dim as "no match". A view links on a time column
+    // by naming it in `keys:` [#856 review, mine — open to override].
     const cols = Object.keys(marking).flatMap((k) => {
+      const plain = layer.columns[k];
+      if (!layer.columns[`$key.${k}`] && plain && (plain.kind === "time" || plain.kind === "q8")) {
+        return [];
+      }
       const col = keyColumn(layer, k);
       return col ? [[k, col] as const] : [];
     });

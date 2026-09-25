@@ -16,7 +16,10 @@ import type { AgentEvent } from "../events";
 import { api } from "./index";
 
 type Listener = (ev: AgentEvent) => void;
-type Hub = { listeners: Set<Listener>; controller: AbortController };
+// `presence` is kept: the backend sends a roster only when a viewer joins or
+// leaves, so a listener that attaches to an already-open connection would wait
+// for the next join/leave to learn who is here. It is handed the last one.
+type Hub = { listeners: Set<Listener>; controller: AbortController; presence?: AgentEvent };
 
 const hubs = new Map<string, Hub>();
 
@@ -30,6 +33,7 @@ export function subscribeItemEvents(slug: string, itemId: string, listener: List
     void (async () => {
       try {
         for await (const ev of api.subscribeInvestigation(slug, itemId, opened.controller.signal)) {
+          if (ev.type === "presence") opened.presence = ev;
           for (const l of [...opened.listeners]) l(ev);
         }
       } catch {
@@ -42,6 +46,13 @@ export function subscribeItemEvents(slug: string, itemId: string, listener: List
   }
   const current = hub;
   current.listeners.add(listener);
+  const roster = current.presence;
+  if (roster) {
+    // After the caller's effect returns, and only if it is still subscribed.
+    queueMicrotask(() => {
+      if (current.listeners.has(listener)) listener(roster);
+    });
+  }
   return () => {
     current.listeners.delete(listener);
     if (current.listeners.size === 0) {
