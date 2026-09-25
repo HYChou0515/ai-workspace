@@ -12,6 +12,7 @@ import datetime as dt
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from chart_view.wire import holds_containers, unhashable_as_text
@@ -50,44 +51,64 @@ _COMPARE = {
 def _comparable(s: pd.Series, field: str) -> pd.Series:
     """`s` as a predicate compares it: a list cell as its marking text (what a
     highlight or a marking holds), and a column of date / datetime objects (a
-    parquet date32 column, an entity's dates) as datetimes, so "2024-01-01"
-    names a day there as it does in a datetime column — a date object is never
-    equal to text. Zoned objects are read at UTC, as the chart reads zone-less
-    text (a typed zoned column keeps its own zone, as pandas compares it)."""
+    parquet date32 column, an entity's dates — some left as date text by YAML)
+    as datetimes, so "2024-01-01" names a day there as it does in a datetime
+    column: a date object is never equal to text. Zoned objects are read at
+    UTC, as the chart reads zone-less text (a typed zoned column keeps its
+    zone)."""
     s = unhashable_as_text(s)
-    instants = ("date", "datetime", "datetime64")  # datetime64: numpy instants as objects
-    if s.dtype == object and pd.api.types.infer_dtype(s, skipna=True) in instants:
-        try:  # microseconds: 0001 to 9999, and a fraction of a second, fit
-            return s.map(_at_utc).astype("datetime64[us]")
-        except OverflowError as e:  # 0001-01-01 at +08:00 is before year 1 at UTC
-            raise TransformError(f"{field!r}: an instant out of range at UTC ({e})") from e
-    return s
+    if s.dtype != object:
+        return s
+    kind = pd.api.types.infer_dtype(s, skipna=True)
+    if kind in ("date", "datetime", "datetime64"):  # datetime64: numpy instants as objects
+        read = _at_utc
+    elif kind == "mixed" and s.map(_is_instant).any():
+        read = _instant_cell  # dates with some left as text
+    else:
+        return s
+    try:  # microseconds: 0001 to 9999, and a fraction of a second, fit
+        return s.map(read).astype("datetime64[us]")
+    except OverflowError as e:  # 0001-01-01 at +08:00 is before year 1 at UTC
+        raise TransformError(f"{field!r}: an instant out of range at UTC ({e})") from e
+    except (TypeError, ValueError):  # a cell that is no date: not a date column
+        return s
 
 
-def _instants(values: Sequence[Any], dtype: Any, field: str) -> list[Any]:
-    """`oneOf` values on a datetime column, as that column holds instants: a
-    null stays (it names the missing rows), text that is no date is refused,
-    and a date the column cannot hold — no such local time in its zone — is
-    left out, since it names none of the rows."""
-    out = []
-    for value in values:
-        if value is None:
-            out.append(None)
-            continue
-        try:
-            stamp = pd.Timestamp(value)
-        except (TypeError, ValueError, OverflowError) as e:
-            raise TransformError(f"filter on {field!r}: oneOf {value!r} is not a date") from e
-        zone = getattr(dtype, "tz", None)
-        if zone is None:
-            out.append(_at_utc(stamp))
-        elif stamp.tzinfo is not None:
-            out.append(stamp.tz_convert(zone))
-        else:  # a typed zoned column: text in its zone
-            local = stamp.tz_localize(zone, nonexistent="NaT", ambiguous="NaT")
-            if isinstance(local, pd.Timestamp):
-                out.append(local)
-    return out
+def _is_instant(v: Any) -> bool:
+    return isinstance(v, dt.date | np.datetime64)
+
+
+def _instant_cell(v: Any) -> Any:
+    """A cell of a date column that YAML left partly as text."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    if _is_instant(v):
+        return _at_utc(v)
+    if isinstance(v, str):
+        return _at_utc(pd.Timestamp(v))
+    raise TypeError(f"{v!r} is no date")
+
+
+def _read_instant(value: Any, dtype: Any, field: str, op: str) -> list[Any]:
+    """A predicate's value on a datetime column: the instants it names there.
+
+    Text is a date, read as the column holds instants (a zone-less time in a
+    zoned column's zone; one the zone had twice names both, one it never had
+    names none); a number is epoch ms, as a temporal datum is. Anything else —
+    a bool, text that is no date, an empty text — is refused by name."""
+    try:  # a bool is a TypeError here: pandas reads no bool as a time
+        stamp = pd.Timestamp(value) if isinstance(value, str) else pd.Timestamp(value, unit="ms")
+    except (TypeError, ValueError, OverflowError):
+        stamp = pd.NaT
+    if not isinstance(stamp, pd.Timestamp):  # NaT: "", "NaT", or no date at all
+        raise TransformError(f"filter on {field!r}: {op} {value!r} is not a date")
+    zone = getattr(dtype, "tz", None)
+    if zone is None:
+        return [_at_utc(stamp)]
+    if stamp.tzinfo is not None:  # an instant: a zoned column compares instants
+        return [stamp]
+    both = [stamp.tz_localize(zone, nonexistent="NaT", ambiguous=a) for a in (True, False)]
+    return list(dict.fromkeys(b for b in both if isinstance(b, pd.Timestamp)))
 
 
 def _at_utc(v: Any) -> Any:
@@ -113,19 +134,29 @@ def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
     # A list cell compared as a numpy array compared as its only item (one
     # element) or raised on `==` (more), never as its text; see _comparable.
     s = _comparable(df[field], field)
+    dates = pd.api.types.is_datetime64_any_dtype(s)
     mask = pd.Series(True, index=df.index)
     if "equal" in pred:
-        mask &= s == pred["equal"]
+        value = pred["equal"]
+        mask &= s.isin(_read_instant(value, s.dtype, field, "equal")) if dates else s == value
     if "oneOf" in pred:
         values = pred["oneOf"]
-        if pd.api.types.is_datetime64_any_dtype(s):  # text names a day there too
-            values = _instants(values, s.dtype, field)
+        if dates:  # the schema has no null here: `valid: false` names the missing rows
+            values = [i for v in values for i in _read_instant(v, s.dtype, field, "oneOf")]
         mask &= s.isin(values)
     for name, op, value in orders:
+        shown = pred["range"] if name == "range" else value
+        if dates:
+            instants = _read_instant(value, s.dtype, field, name)
+            if len(instants) != 1:  # a local time the zone had twice, or never
+                raise TransformError(
+                    f"filter on {field!r}: {name} {shown!r} is no single time in"
+                    f" {getattr(s.dtype, 'tz', 'UTC')}"
+                )
+            value = instants[0]
         try:
             mask &= _COMPARE[op](s, value)
         except TypeError as e:  # text, a list or a date against a number
-            shown = pred["range"] if name == "range" else value
             raise TransformError(f"filter on {field!r}: {name} {shown!r} — {e}") from e
     if "valid" in pred:
         mask &= s.notna() if pred["valid"] else s.isna()

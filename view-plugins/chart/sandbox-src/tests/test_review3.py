@@ -629,8 +629,8 @@ def _skill_list_filters() -> list[str]:
     import re
 
     skill = (Path(__file__).resolve().parents[2] / "skill" / "SKILL.md").read_text()
-    paragraph = skill[skill.index("A field holding a list") :].split("\n\n")[0]
-    return re.findall(r'"(tags\.[^"]+)"', paragraph)
+    paragraph = skill[skill.index("A cell holding a list") :].split("\n\n")[0]
+    return re.findall(r'`[^`"]*"([^"`]+)"`', paragraph)  # every `"…"` and `key: "…"`
 
 
 # What each quoted filter keeps of: an item "a" with another, an item that only
@@ -664,11 +664,19 @@ def test_a_one_of_value_that_is_no_date_is_refused_on_a_date_column(value):
         apply_transforms(_days(), [{"filter": {"field": "day", "oneOf": ["2024-01-01", value]}}])
 
 
-def test_a_one_of_null_on_a_date_column_names_the_missing_rows():
-    days = _days()
-    days.loc[1, "day"] = None
-    kept = apply_transforms(days, [{"filter": {"field": "day", "oneOf": [None, "2024-01-01"]}}])
-    assert kept["v"].tolist() == [1.0, 2.0]
+@pytest.mark.parametrize("op", ["equal", "oneOf"])
+def test_a_predicate_holds_no_null(op):
+    # Round 13 regression lens: so a predicate's value is never None, and
+    # `valid: false` is how a spec names the missing rows.
+    from chart_view.spec import spec_errors
+
+    value = "null" if op == "equal" else "[null]"
+    spec = (
+        "view: chart\nsource: data/a.csv\nmark: point\n"
+        f"transform:\n  - filter: {{field: a, {op}: {value}}}\n"
+        "encoding:\n  x: {field: a, type: temporal}\n  y: {field: b, type: quantitative}\n"
+    )
+    assert any("None is not of type" in e for e in spec_errors(parse_spec(spec)))
 
 
 @pytest.mark.parametrize(
@@ -676,10 +684,12 @@ def test_a_one_of_null_on_a_date_column_names_the_missing_rows():
     [
         # a nanosecond column cannot hold year 1 or 9999
         (pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])), ["0001-01-01", "9999-12-31"]),
-        # 0001-01-01 in Asia/Taipei (LMT) is no time the zone had
+        # 2024-03-10 02:30 never happened in New York (the clocks sprang ahead)
         (
-            pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])).dt.tz_localize("Asia/Taipei"),
-            ["0001-01-01"],
+            pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"])).dt.tz_localize(
+                "America/New_York"
+            ),
+            ["2024-03-10T02:30"],
         ),
     ],
     ids=["past-nanoseconds", "no-such-local-time"],
@@ -774,3 +784,81 @@ def test_every_kind_of_container_is_compared_as_its_text(cells, text):
     assert kept["v"].tolist() == [1.0]
     with pytest.raises(TransformError, match="holds lists or mappings"):
         apply_transforms(df, [{"filter": {"field": "k", "lt": "z"}}])
+
+
+def _new_york() -> pd.DataFrame:
+    # 2024-11-03 01:30 happened twice in New York (EDT, then EST); 2024-03-10
+    # 02:30 never did. Rows: the two 01:30s, and a later day.
+    at = pd.Series(
+        pd.to_datetime(["2024-11-03T05:30Z", "2024-11-03T06:30Z", "2024-12-01T12:00Z"])
+    ).dt.tz_convert("America/New_York")
+    return pd.DataFrame({"at": at, "v": [1.0, 2.0, 3.0]})
+
+
+@pytest.mark.parametrize("op", ["equal", "oneOf"])
+def test_an_ambiguous_local_time_names_both_of_its_instants(op):
+    # Round 13: `equal` raised AmbiguousTimeError out of the CLI, and `oneOf`
+    # dropped it — the chart shows both rows at 01:30.
+    value = "2024-11-03T01:30" if op == "equal" else ["2024-11-03T01:30"]
+    kept = apply_transforms(_new_york(), [{"filter": {"field": "at", op: value}}])
+    assert kept["v"].tolist() == [1.0, 2.0]
+
+
+@pytest.mark.parametrize("op", ["equal", "oneOf"])
+def test_a_local_time_a_zone_never_had_names_no_row(op):
+    # Round 13: nor the missing rows — the NaT a zone gives it is left out.
+    at = pd.Series(pd.to_datetime(["2024-03-11", None])).dt.tz_localize("America/New_York")
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    value = "2024-03-10T02:30" if op == "equal" else ["2024-03-10T02:30"]
+    assert apply_transforms(df, [{"filter": {"field": "at", op: value}}]).empty
+
+
+@pytest.mark.parametrize(
+    "pred", [{"lt": "2024-11-03T01:30"}, {"range": ["2024-03-10T02:30", "2024-12-01"]}]
+)
+def test_an_order_against_no_single_local_time_is_refused_by_name(pred):
+    with pytest.raises(TransformError, match="no single time in America/New_York"):
+        apply_transforms(_new_york(), [{"filter": {"field": "at", **pred}}])
+
+
+@pytest.mark.parametrize("op", ["equal", "oneOf"])
+def test_a_number_on_a_datetime_column_is_epoch_milliseconds(op):
+    # As a temporal datum and a number in a time column are: 1704153600000 is
+    # 2024-01-02. `oneOf` read it as nanoseconds; `equal` matched nothing.
+    at = pd.Series(pd.to_datetime(["2024-01-01", "2024-01-02"]))
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    value = 1704153600000 if op == "equal" else [1704153600000]
+    assert apply_transforms(df, [{"filter": {"field": "at", op: value}}])["v"].tolist() == [2.0]
+
+
+@pytest.mark.parametrize("value", ["", "NaT"])
+def test_text_that_names_no_instant_is_refused_on_a_datetime_column(value):
+    # pd.Timestamp("") is NaT, which matched the missing rows.
+    with pytest.raises(TransformError, match="is not a date"):
+        apply_transforms(_days(), [{"filter": {"field": "day", "oneOf": [value]}}])
+
+
+def test_a_date_column_with_a_date_left_as_text_is_still_a_date_column():
+    # Round 13: an entity date field where YAML left one value as text
+    # ("2024-01-03 08:00") was "mixed", so no text matched its dates.
+    import datetime as dt
+
+    day = pd.Series([dt.date(2024, 1, 1), dt.date(2024, 1, 2), "2024-01-03 08:00", None])
+    df = pd.DataFrame({"day": day.astype(object), "v": [1.0, 2.0, 3.0, 4.0]})
+    assert apply_transforms(df, [{"filter": {"field": "day", "equal": "2024-01-02"}}])[
+        "v"
+    ].tolist() == [2.0]
+    later = apply_transforms(df, [{"filter": {"field": "day", "gte": "2024-01-02"}}])
+    assert later["v"].tolist() == [2.0, 3.0]
+
+
+@pytest.mark.parametrize("other", ["soon", 5.5], ids=["text-no-date", "number"])
+def test_a_column_of_dates_and_other_values_is_left_as_it_is(other):
+    # All of them dates, or none: a cell that is no date keeps the column as
+    # its values are, and that cell still matches itself.
+    import datetime as dt
+
+    day = pd.Series([dt.date(2024, 1, 1), other], dtype=object)
+    df = pd.DataFrame({"day": day, "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "day", "equal": other}}])
+    assert kept["v"].tolist() == [2.0]
