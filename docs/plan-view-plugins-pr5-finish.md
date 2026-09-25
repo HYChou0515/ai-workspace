@@ -333,6 +333,16 @@ words are examples, not spec keys.
   at the other view's write — and also restores legend entries the chart had hidden
   (1aaa0b0f) [mine, open to override]. Measured in the demo: stack ends equal pandas'
   group sums to within 0.32 at 1440 and 390, a pixel being 0.08–0.41 (before: 31.4 for 79.38).
+- **P36 — What P35's demo found.**
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 10 | A chart whose selection writes nothing (no key column) said "1 selected · by group" once another view had written the marking: the columns are the marking's, not its selection's | "by <columns>" is said only of a selection that went to the marking; one that wrote nothing says "N selected". The gallery's and the table's counts are the marking's own, so they keep it (83c3f004) |
+  | 11 | An area of raw rows stacked on a category axis had pieces with no fillers (a piece ran straight across categories where it had no row), and its points were drawn in row order, so an unsorted series zig-zagged | A piece is 0 at a category where it has no row, on any axis; on a log value axis it is empty where nothing lies beneath; points follow the axis's order (3f6bcc72) |
+
+  Row 11 runs the line-up on category axes too (a mechanism change) — round 18 covers it.
+  Demo before/after at 1440 and 390, seen: after, a's tops 5 4 8 2 7 and b's 7 6 10 4 9
+  equal pandas' cumulative sums; bars byte-identical before and after.
 
 ## Verification
 

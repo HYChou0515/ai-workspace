@@ -54,7 +54,10 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   圖上方的說明列寫「colour key hidden (too short)」，顏色照舊。
 - 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
   （沒接 marking、或沒有 `keys:`）才把框外的點變灰。
-- `stack: true` 在任何 x 軸型別上都照 x 的值疊；某一組在某個 x 沒有資料時，那裡算 0（那一層在那個 x 收窄到沒有）。
+- `stack: true` 在任何軸上都照值疊，而且**一列就是一段**：同一組在同一個位置有好幾列，就照列的順序一段段疊上去，
+  不用先 `aggregate: sum`。某一段在某個位置沒有資料時，那裡算 0（那一段在那裡收窄到沒有）；對數軸上，底下什麼都沒有的
+  位置則留空（0 在對數軸上沒有位置）。
+- 圖上的「N selected」只有在選取寫進 marking 時才接「· by <欄位>」；沒有 `keys:` 的圖選了什麼只寫「N selected」。
 - view 標頭的 marking 選單（標籤圖示＋`<名字> ▾`）可以把這張圖改接到別的 marking、新開一個，或斷開。這是**你自己的畫面狀態**，
   存在瀏覽器裡、不會改寫檔案；要永久改就改 YAML 的 `marking:`。
 - 連動的範圍是一個 item。同一個 item 開在好幾個分頁（例如聊天模式開出來的純編輯區頁面）也是同一組 marking。
@@ -154,4 +157,4 @@ renderer 呼叫沙盒時傳的是 view 檔的**路徑**（加上內容摘要當�
     `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文（去掉 frontmatter）約 9.4k 字元（9,350），只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文（去掉 frontmatter）約 9.4k 字元（9,435），只在 AI `read_skill('chart')` 時才載入。
