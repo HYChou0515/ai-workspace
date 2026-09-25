@@ -998,8 +998,17 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - **scratch 容量要這樣估（rollout 前）**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
     再加上原本 workspace 與 `.home` 的用量。為什麼在 rollout 前：換版之後第一個打開縮圖牆的人就開始寫快取；
     沒估的症狀是 scratch 卷寫滿，連帶所有沙盒的寫檔一起失敗，不只縮圖牆。
-- **建快取的成本在沙盒的 cgroup 裡。** review 時在開發機實測（不是 CI 數字）：500k 列約 1.8 秒；1000 組 × 5000 格
-  （5M 列）約 17.5 秒、峰值記憶體約 1.27 GB。沙盒的記憶體上限低於這個量級時，大來源的第一次打開會被 OOM 殺掉：
+- **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核）用 bundle 的 `facet_build` 指令端到端實測，不是 CI 數字：
+
+  | 來源 | 列數 | 第一次開啟 | 峰值記憶體 | 快取大小 |
+  |---|---|---|---|---|
+  | 1000 組 × 5041 格，CSV（263 MB） | 5.04M | 29.9 秒 | 1.62 GB | 45.5 MB |
+  | 同上，parquet（42 MB） | 5.04M | 28.8 秒 | 1.77 GB | 45.5 MB |
+  | 200 組 × 50,176 格，parquet（84 MB） | 10.0M | 68.7 秒 | 3.28 GB | 90.7 MB |
+
+  之後再打開（重用快取）約 0.4 秒；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05 秒、
+  約 22 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.33 GB）。
+  沙盒的記憶體上限低於這個量級時，大來源的第一次打開會被 OOM 殺掉：
   面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
   是依指令的輸出方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
