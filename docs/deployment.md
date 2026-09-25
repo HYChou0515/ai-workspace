@@ -464,7 +464,9 @@ RCA 的 system prompt 是純 markdown，存在
   consumer 起起來（本地開發 / 單 pod 最省事）。要讓 job runner 獨立 scale：
 
   - **API 設 `server.run_consumers: false`** ⇒ API 變**純 producer**：照常服務 HTTP
-    + `enqueue`，但不消費任何 queue。
+    + `enqueue`，但不消費任何 queue。（第三種形狀：`run_consumers: [index, card-gen]` 只消費列出的
+    JobType——單機想跳過 `chat-video` 這種有額外依賴的就這樣寫；沒列的開機 stdout 會有一行 `⚠ consumers:` 點名。見
+    [configuration.md §8](configuration.md#8-訊息佇列message-queue)。）
   - 每個 JobType 各跑一個 **worker 進程**，block-consume 自己那一種:
 
     ```bash
@@ -507,14 +509,35 @@ RCA 的 system prompt 是純 markdown，存在
     `WorkspaceFiles`(額度、路徑 jail、鏡像),而那個 facade 只有 `create_app` 會組,所以
     worker 直接拿 API 組好的 coordinator(`worker.API_REGISTRY_JOBTYPES` 兩個成員各有各的理由)。
     它跑的是**另一個 image** `rca-app-chat-video`(`docker/Dockerfile` 的 `chat-video` stage:
-    同一個 app + headless Chromium + ffmpeg,估多 0.5–1 GB——**沒量**,本機 build 卡在 LibreOffice 的 apt;API pod 用不到所以不放進 `rca-app`):
+    同一個 app + headless Chromium + ffmpeg,那一層量到 **+1.63 GB**(API 1.81 GB → worker 3.44 GB,#834 量的;API pod 用不到所以不放進 `rca-app`):
     `docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .`。
+    **`--target` 不能省**:不帶 target 的 `docker build` 做的是 API image(Dockerfile 最後一個 stage `api`);
+    #823 到 #834 之間那個 stage 是最後一個,所以那段時間照文件 build 的 `rca-app` 其實是 worker image——用它起的 API pod 跑的是 worker,不 serve HTTP。
     記憶體照 `workers.yaml` 上量到的數字給(錄影時 Chromium 154–172 MB + 錄影 ffmpeg 147 MB,編碼
     mp4 273–320 MB / gif 230–640 MB,兩段不重疊);OOM 只壞一支影片的進度檔,不影響 request。
     all-in-one(`run_consumers: true`)的 API 也會消費這種 job——但 `rca-app` image 沒有
     Chromium 和 ffmpeg,每支影片都會失敗、進度檔寫上缺哪個工具的那句話(`encoding needs ffmpeg on PATH …` /
     `recording needs Playwright …`);要在單 pod 出影片,
     API 本身就要跑 `rca-app-chat-video`(它是 `rca-app` 的超集,serve 一樣)。
+
+    **斷網的 build(抓不到 Playwright 的 CDN)**:`playwright install chromium` 其實抓三個 zip——瀏覽器、
+    headless shell、還有它**錄影用的 ffmpeg**——都在 `playwright.azureedge.net`。抓不到就改用 Debian mirror 上的
+    Chromium,三步(在你們 fork 的 `chat-video` stage 裡取代 `playwright install --with-deps chromium`):
+    ```dockerfile
+    RUN apt-get update && apt-get install -y --no-install-recommends chromium ffmpeg fonts-noto-cjk \
+        && mkdir -p /ms-playwright/ffmpeg-1010 && ln -s /usr/bin/ffmpeg /ms-playwright/ffmpeg-1010/ffmpeg-linux
+    ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    ```
+    再在 configmap 設 `chat_video.chromium_path: /usr/bin/chromium`。symlink 是給 Playwright 的錄影器:它到
+    `$PLAYWRIGHT_BROWSERS_PATH/ffmpeg-<rev>/ffmpeg-linux` 找自己那顆 ffmpeg,只查檔案在不在,系統的 ffmpeg 有 libvpx、
+    錄 webm 的參數吃得下(`<rev>` 是 `playwright` 套件 `browsers.json` 裡 ffmpeg 的 revision,1.49 是 1010)。
+    驗:`docker run --rm <image> python -m workspace_app.chat_video x.chat.json -o x.mp4 --chromium /usr/bin/chromium`
+    出得了檔就通(2026-09-21 在 python:3.12-slim = Debian 13 上驗過:`uv sync --extra chat-video` + apt 的 Chromium 153,
+    這條指令出 h264 1280×720 的 mp4、中文有字)。
+    另外兩件在 Debian 13(trixie;`python:3.12-slim` 這種會漂的 tag 現在就是它)上要知道的:`--with-deps` 在 Playwright 1.49
+    只認 Debian 11 / 12,trixie 會落到 Ubuntu 的套件名而死在 `ttf-unifont` / `ttf-ubuntu-font-family`——相依自己用 apt 裝
+    (`playwright install-deps chromium --dry-run` 印的清單,`ttf-unifont` → `fonts-unifont`、`ttf-ubuntu-font-family` 拿掉),
+    或 base 釘 `-bookworm`。
 
     一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
     worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。

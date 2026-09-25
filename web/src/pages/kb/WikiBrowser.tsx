@@ -84,19 +84,6 @@ export function WikiGuidanceEditor({
   });
   const dirty = writing !== maintainerGuidance || answering !== readerGuidance;
 
-  const ta = {
-    width: "100%",
-    minHeight: 64,
-    resize: "vertical" as const,
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: "1px solid var(--paper-3)",
-    background: "var(--paper)",
-    font: "inherit",
-    fontSize: pxToRem(13),
-    lineHeight: 1.5,
-    boxSizing: "border-box" as const,
-  };
   const hint = { fontSize: pxToRem(11.5), color: "var(--text-paper-d)", margin: "2px 0 6px", lineHeight: 1.45 };
 
   return (
@@ -151,7 +138,8 @@ export function WikiGuidanceEditor({
             value={writing}
             placeholder="e.g. Group pages by reflow zone; keep an index of defect codes."
             onChange={(e) => setWriting(e.target.value)}
-            style={ta}
+            className="input input--block"
+            style={{ minHeight: 64 }}
           />
 
           <label htmlFor="wiki-answering-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
@@ -163,7 +151,8 @@ export function WikiGuidanceEditor({
             value={answering}
             placeholder="e.g. Lead with a one-line summary, then the detail."
             onChange={(e) => setAnswering(e.target.value)}
-            style={ta}
+            className="input input--block"
+            style={{ minHeight: 64 }}
           />
 
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>

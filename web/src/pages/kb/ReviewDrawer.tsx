@@ -117,6 +117,7 @@ function CardDetail({
       <label className="rvw-drawer__field">
         <span>{t("review.drawer.title")}</span>
         <input
+          className="input input--block"
           value={title}
           disabled={!canAct}
           onChange={(e) => setTitle(e.target.value)}
@@ -124,7 +125,7 @@ function CardDetail({
       </label>
       <label className="rvw-drawer__field">
         <span>{t("review.drawer.body")}</span>
-        <textarea rows={6} value={body} disabled={!canAct} onChange={(e) => setBody(e.target.value)} />
+        <textarea className="input input--block" rows={6} value={body} disabled={!canAct} onChange={(e) => setBody(e.target.value)} />
       </label>
 
       <div className="rvw-drawer__keys">
@@ -146,7 +147,7 @@ function CardDetail({
         ))}
         {canAct && (
           <input
-            className="rvw-drawer__addkey"
+            className="input rvw-drawer__addkey"
             aria-label={t("review.drawer.addKey")}
             placeholder={t("review.drawer.addKey")}
             value={term}
@@ -261,7 +262,7 @@ function QuestionDetail({
       {canAct ? (
         <>
           <textarea
-            className="rvw-drawer__answer"
+            className="input input--block"
             aria-label={t("docq.answer")}
             placeholder={t("docq.answerPlaceholder")}
             value={answer}

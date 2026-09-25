@@ -47,6 +47,19 @@ describe("ItemForm", () => {
     expect(screen.getByText(/title is required/i)).toBeInTheDocument();
   });
 
+  it("says the empty title on the field itself with aria-invalid, and clears it on the first keystroke (#829 D8)", () => {
+    // The red border is `.input[aria-invalid="true"]`'s (base.css); the
+    // attribute is what carries the state to it and to AT. Before #829 the
+    // border was drawn by hand and nothing said it to a screen reader.
+    render(<ItemForm manifest={manifest} submitLabel="Create" onSubmit={vi.fn()} />);
+    const title = screen.getByLabelText("Title");
+    expect(title).not.toHaveAttribute("aria-invalid");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(title, { target: { value: "O" } });
+    expect(title).not.toHaveAttribute("aria-invalid");
+  });
+
   it("marks the tag-remove control as destructive so it reads as more than a close x (#466)", () => {
     render(<ItemForm manifest={manifest} submitLabel="Create" onSubmit={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("Topics"), { target: { value: "Reflow" } });

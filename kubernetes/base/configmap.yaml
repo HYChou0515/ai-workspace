@@ -13,9 +13,15 @@ data:
   # #312: pod-split deploy — the API is a pure PRODUCER (it enqueues but does
   # not drain the job queues); dedicated worker Deployments (workers.yaml)
   # consume each JobType under their own HPA. Map this in your config.yaml as
-  #   server: { run_consumers: ${RUN_CONSUMERS} }
-  # (the env-interpolation convention every setting here uses). Set "true" for a
-  # single all-in-one Deployment with no separate workers.
+  #   server:
+  #     run_consumers: ${RUN_CONSUMERS}
+  # (the env-interpolation convention every setting here uses; block form — the
+  # flow form `server: { run_consumers: ${RUN_CONSUMERS} }` is a YAML parse
+  # error, `{` inside a flow mapping must be quoted). Set "true" for a
+  # single all-in-one Deployment with no separate workers, or a comma-separated
+  # list of JobTypes ("index,wiki,card-gen") for an all-in-one that leaves some
+  # kinds to a worker. Before PR #840 the string "false" was read as TRUE (no
+  # coercion), so an API pod mapped this way consumed everything after all.
   RUN_CONSUMERS: "false"
 
   # Sandbox: in-pod subprocess. #345 — the working files live on the SHARED

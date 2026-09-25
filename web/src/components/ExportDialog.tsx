@@ -79,6 +79,8 @@ const realClient: ExportDialogClient = {
 type Kind = "json" | "md" | "video";
 type Fmt = "mp4" | "gif" | "webm";
 const FORMATS: Fmt[] = ["mp4", "gif", "webm"];
+type Theme = "dark" | "light";
+const THEMES: Theme[] = ["dark", "light"];
 
 /** The tempo knobs of decision 9 — speed, typing, the composer push-in and
  * the length; with the size and the format that is the six, and every other
@@ -112,6 +114,7 @@ type Form = {
   kind: Kind;
   range: RangeChoice;
   fmt: Fmt;
+  theme: Theme;
   size: SizeChoice;
   tempo: Tempo;
 };
@@ -120,6 +123,7 @@ const INITIAL: Form = {
   kind: "json",
   range: { kind: "all" },
   fmt: "mp4",
+  theme: "dark",
   size: { mode: "resolution", aspect: "16:9", p: 720 },
   tempo: TEMPO_DEFAULTS,
 };
@@ -237,6 +241,7 @@ export function ExportDialog({
             // 0 = the player's automatic rule; a text-size choice pins it.
             scale: size.scaleIsAuto ? 0 : size.scale,
             fmt: [form.fmt],
+            theme: form.theme,
             ...tempo,
           },
           output_path: null,
@@ -357,7 +362,7 @@ export function ExportDialog({
                       <select
                         id={`export-${end}`}
                         data-testid={`export-${end}`}
-                        className="input"
+                        className="input input--block"
                         value={custom[end]}
                         onChange={(e) => {
                           const next = { ...custom, [end]: Number(e.target.value) };
@@ -435,7 +440,7 @@ export function ExportDialog({
                   <select
                     id="export-fmt"
                     data-testid="export-fmt"
-                    className="input"
+                    className="input input--block"
                     value={form.fmt}
                     onChange={(e) => patch({ fmt: e.target.value as Fmt })}
                   >
@@ -446,13 +451,29 @@ export function ExportDialog({
                     ))}
                   </select>
                 </div>
+                <div className="export-dialog__field">
+                  <label htmlFor="export-theme">{t("export.video.theme")}</label>
+                  <select
+                    id="export-theme"
+                    data-testid="export-theme"
+                    className="input"
+                    value={form.theme}
+                    onChange={(e) => patch({ theme: e.target.value as Theme })}
+                  >
+                    {THEMES.map((th) => (
+                      <option key={th} value={th}>
+                        {t(`export.video.theme.${th}`)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {form.size.mode !== "custom" && (
                   <div className="export-dialog__field">
                     <label htmlFor="export-aspect">{t("export.video.aspect")}</label>
                     <select
                       id="export-aspect"
                       data-testid="export-aspect"
-                      className="input"
+                      className="input input--block"
                       value={form.size.aspect}
                       onChange={(e) => {
                         // The stop / text size follows through `fitChoice`.
@@ -500,7 +521,7 @@ export function ExportDialog({
                     <select
                       id="export-text-size"
                       data-testid="export-text-size"
-                      className="input"
+                      className="input input--block"
                       value={choice.textScale}
                       onChange={(e) =>
                         choice.mode === "text" &&
@@ -523,7 +544,7 @@ export function ExportDialog({
                         id="export-width"
                         type="number"
                         data-testid="export-width"
-                        className="input"
+                        className="input input--block"
                         min={16}
                         max={7680}
                         step={2}
@@ -540,7 +561,7 @@ export function ExportDialog({
                         id="export-height"
                         type="number"
                         data-testid="export-height"
-                        className="input"
+                        className="input input--block"
                         min={16}
                         max={4320}
                         step={2}
@@ -556,7 +577,7 @@ export function ExportDialog({
                       <select
                         id="export-custom-text"
                         data-testid="export-custom-text"
-                        className="input"
+                        className="input input--block"
                         value={form.size.textScale ?? ""}
                         onChange={(e) => {
                           if (form.size.mode !== "custom") return;
@@ -608,7 +629,7 @@ export function ExportDialog({
                       id={`export-${key}`}
                       type="number"
                       data-testid={`export-${key.replace(/_/g, "-")}`}
-                      className="input"
+                      className="input input--block"
                       min={TEMPO_BOUNDS[key].min}
                       max={key === "max_seconds" ? ceiling.max_seconds : TEMPO_BOUNDS[key].max}
                       step={TEMPO_BOUNDS[key].step}

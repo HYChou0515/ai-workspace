@@ -28,15 +28,6 @@ const EMPTY: CustomQuestionBody = {
   enabled: true,
 };
 
-const field = {
-  width: "100%",
-  padding: "6px 8px",
-  borderRadius: 6,
-  border: "1px solid var(--paper-3)",
-  background: "var(--paper-2)",
-  fontSize: "var(--text-body-sm)",
-};
-
 export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -100,7 +91,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
           placeholder={t("sanity.q.ph.category")}
           value={form.category}
           onChange={(e) => setForm({ ...form, category: e.target.value })}
-          style={field}
+          className="input input--block"
         />
         <textarea
           data-testid="q-prompt"
@@ -108,7 +99,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
           value={form.prompt}
           onChange={(e) => setForm({ ...form, prompt: e.target.value })}
           rows={2}
-          style={field}
+          className="input input--block"
         />
         <textarea
           data-testid="q-expected"
@@ -116,7 +107,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
           value={form.expected}
           onChange={(e) => setForm({ ...form, expected: e.target.value })}
           rows={2}
-          style={field}
+          className="input input--block"
         />
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("sanity.q.levels")}</span>

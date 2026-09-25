@@ -129,6 +129,7 @@ export function AutoGenerateCards({
             <p>挑選要產生卡片的來源（文件與 wiki 頁）。系統會讀取內容、草擬卡片讓你審核。</p>
             <div className="kb-cardgen__pickbar">
               <input
+                className="input"
                 aria-label="Search sources"
                 placeholder="搜尋來源…"
                 value={term}

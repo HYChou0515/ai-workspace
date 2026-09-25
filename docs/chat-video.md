@@ -32,6 +32,8 @@ uv run python -m workspace_app.chat_video my.chat.json -o demo.gif
 | `--fmt gif\|mp4\|webm` | — | 多寫一種格式(可重複);檔名跟 `-o` 同名換副檔名 |
 | `--html preview.html` | — | 只吐播放器頁面、不錄影;用瀏覽器開來看,改 JSON 再錄 |
 | `--files DIR` | — | workspace 資料夾:`show_file` / 畫圖工具秀出的檔案、回答裡 `![](路徑)` 的圖,從這裡讀進頁面(見下) |
+| `--theme dark\|light` | `dark` | 整支影片的配色:深色(播放器自己的)或淺色(app 的 light 色票) |
+| `--chromium PATH` | — | 用這個 Chromium 錄影(例如 apt 裝的 `/usr/bin/chromium`),不用 `playwright install chromium` 抓的那顆;worker 的 `chat_video.chromium_path` 是同一個開關 |
 | `--width / --height` | 1280 / 720 | 輸出像素。**錄影就是 viewport**,不縮放 |
 | `--chat-width` | 760 | 聊天欄寬度(CSS px,放大前) |
 | `--scale` | 0 = 自動 | 整個 UI 的放大倍率;自動 = 畫面相對 1280×720、不小於 1(1080p 是 1.5、4K 是 3) |
@@ -155,6 +157,7 @@ chat header 的 **匯出** 開一個對話框,三種格式一組 radio:**文字 
 - **尺寸**三種輸入法,結果列永遠顯示 `W×H・文字 s×・約 N MB`(估的,不是上限——量過一支比估的多六成):比例(16:9 / 1:1 / 9:16)
   + 解析度滑桿(停點 480p…2160p,只列這個部署允許的)、比例 + 文字大小(小 / 中 / 大 / 特大 = 0.8×…1.6×,畫面跟著放大)、
   直接打寬高(+ 可選文字大小;奇數邊錄影器會取成偶數,表單先取好,所以顯示的就是做出來的)。
+- **主題**:深色(預設)或淺色——整支影片一種,淺色用的是 app 自己 light mode 的色票。
 - **節奏**:整體速度、打字(毫秒/字)、輸入框推近倍率、最長秒數——其餘旗標用指令列的預設;打超過範圍的值送出時夾到範圍內。
 - 送出後 header 的綠點右邊多一顆進度膠囊(排隊中 / 錄影中 / 編碼中,`已用秒數 / 約 預估秒數`),完成後顯示影片路徑、可開啟或下載;
   影片寫進這個 item 的 workspace `/exports/chat-video/<標題>-<時間>.<格式>`(算 workspace 額度),旁邊留著

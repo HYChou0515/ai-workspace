@@ -430,6 +430,7 @@ class ChatVideoCoordinator:
                 assets=assets,
                 should_stop=stop.is_set,
                 on_stage=on_stage,
+                chromium_path=self._limits.chromium_path,
             )
         except Cancelled:
             return  # the file is gone; nothing to write, nothing to say

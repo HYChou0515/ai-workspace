@@ -354,7 +354,7 @@ export function KbChatPanel({
             </div>
           )}
           <textarea
-            className="kb-composer__input"
+            className="input-group__field kb-composer__input"
             // The seam handle owns this height. It replaces `rows`, which only
             // ever set the INITIAL box — and it sits on the TEXTAREA, not the
             // composer block, so the attachment chip and the button row below

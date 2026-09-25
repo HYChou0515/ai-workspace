@@ -192,7 +192,7 @@ export function TuneParsingModal({
             value={question}
             placeholder={t("kb.tuneParsing.questionPlaceholder")}
             onChange={(e) => setQuestion(e.target.value)}
-            style={inputStyle}
+            className="input input--block"
           />
         </label>
 
@@ -249,7 +249,8 @@ export function TuneParsingModal({
             value={guidance}
             placeholder={t("kb.tuneParsing.guidancePlaceholder")}
             onChange={(e) => setGuidance(e.target.value)}
-            style={{ ...inputStyle, minHeight: 88, resize: "vertical" }}
+            className="input input--block"
+            style={{ minHeight: 88 }}
           />
         </label>
 
@@ -457,14 +458,3 @@ function ProbeBox({
   );
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "8px 10px",
-  borderRadius: 8,
-  border: "1px solid var(--paper-3)",
-  background: "var(--paper)",
-  font: "inherit",
-  fontSize: pxToRem(13),
-  lineHeight: 1.5,
-  boxSizing: "border-box",
-};

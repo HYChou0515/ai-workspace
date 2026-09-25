@@ -740,27 +740,6 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   「更新為出貨版本」，按了才換新。
 
 ---
-### 2026-09-20 · a61886bb · #828 工具 modal 按套件折疊；整包授權在 picker 變成逐指令列 {#pr-828}
-
-**行為**（沒有新設定；運營方不用做事，但要知道以下幾件事）
-
-- item 的「助理可用的工具」modal 改成按套件折疊，而且 **app 授整包的套件（`tools[]` 寫 `rca-tools` 這種）現在一個指令
-  一列**，每列可各自預設／開啟／關閉；agent 拿到的工具集也改成逐指令算——config 在「packages 齊了」的那一點定案
-  （`apps/catalog.py:finalize_tool_grants`），chat／workflow／排程 turn、WUI 頁面的 `callTool`、picker、replay 讀的是同一份答案。
-  `app.json` 不用改。
-- 既有 item 存的整包鍵（`attached_tool_prefs` 裡的 `"rca-tools": false`）**繼續有效**：讀的時候當成該套件每個指令都釘成那個值
-  （指令鍵優先）。使用者在 modal 第一次（有改動的）儲存時，那把整包鍵會被拆成逐指令鍵寫回——資料在 item 列上，沒有 migrate 要跑。
-  漏知道的症狀：無。沒有指令的套件（`python-stack`，它是 sandbox 的 Python 載體）仍是一列。
-- 隨之而來、沒有開關的幾個語意（都是「picker 關掉的指令就是關掉」）：workflow step 的 `tools:` 寫 `rca-tools` 時拿到的是
-  **這個 item 持有的那幾個指令**（被釘掉的不在），寫 `rca-tools:spc` 這種指令名也可以（驗證器認得部署有的套件指令：拼錯的指令名會被拒；解不出的套件或沒有指令的套件寫 `pkg:x` 驗證器擋不了，執行時丟掉並在 log 留一行 `workflow node: tools not held by this item, dropped`）；sub-agent 定義的 `tools`
-  可以寫整包名或指令名（`save_subagent` 接受、載入與委派時縮成持有的指令；它拒絕時的「Available」清單從此列的是指令名）；
-  WUI 頁面叫一個被釘掉的指令會 403（訊息指向 tool picker）。一個整包鍵現在也管到 app 只授部分指令的套件（以前那種鍵是 no-op）。
-
-**確認做完**：開任一 rca item 的工具 modal，`Rca Tools` 是一個可展開的組（10 列）；`GET /api/a/rca/items/<id>/tools`
-的 `rca-tools:*` 列 `group` 都是 `rca-tools`。
-
----
-
 ### 2026-09-19 · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
 
 **行為**（不動設定也會多出來的東西）
@@ -787,8 +766,8 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 - **rollout 前**：多一種 JobType `chat-video` → `rca-worker-chat-video` Deployment（`python -m workspace_app.worker chat-video`），
   **用自己的映像 `rca-app-chat-video`**（`docker/Dockerfile` 的 `chat-video` stage：app + `chat-video` extra + Chromium + ffmpeg +
-  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，估 +0.5–1 GB——**沒量**，本機的 image build 卡在
-  LibreOffice 的 apt 下載；CI 第一次 build 完把數字記回這裡。不塞進 `rca-app`，每顆 API pod 沒理由多這些）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
+  `fonts-noto-cjk`；多出來的是 Chromium 與它的共用函式庫 + ffmpeg，那一層 **+1.63 GB**（#834 量的）。不塞進 `rca-app`，每顆 API pod 沒理由多這些；
+  **build 一定帶 `--target chat-video`**，不帶 target 做出來的是 API image——見 [#834](#pr-834)）。這個 worker 和 blob-gc 一樣是**從 API 自己那整套組的**
   （`build_app`，只組不 serve）——它要寫 workspace，所以要掛 `data` 與 `scratch` 兩個磁碟區、用同一個 configMap，能連到
   sandbox-host（`kind: http`）。記憶體照量到的給：request 1 Gi / limit 2 Gi（轉檔峰值 gif 640 MB、mp4 320 MB；
   `workers.yaml` 的註解有數字）。`terminationGracePeriodSeconds: 900`：SIGTERM 進來時在做的那支會做完才退，最壞是它自己的三個期限相加
@@ -804,6 +783,84 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - `kubectl get deploy rca-worker-chat-video` 有 1 顆 ready；從任一 item 的 chat header 匯出 → 影片 → 開始做影片，
   進度列每 10 秒前進、幾十秒後 `/exports/chat-video/` 出現 `.mp4`。用 curl 送一份三則的手寫 transcript 也應出檔
   （[chat-video.md 從 API 出固定字句的影片](chat-video.md#從-api-出固定字句的影片)）。
+
+---
+
+### 2026-09-20 · a61886bb · #828 工具 modal 按套件折疊；整包授權在 picker 變成逐指令列 {#pr-828}
+
+**行為**（沒有新設定；運營方不用做事，但要知道以下幾件事）
+
+- item 的「助理可用的工具」modal 改成按套件折疊，而且 **app 授整包的套件（`tools[]` 寫 `rca-tools` 這種）現在一個指令
+  一列**，每列可各自預設／開啟／關閉；agent 拿到的工具集也改成逐指令算——config 在「packages 齊了」的那一點定案
+  （`apps/catalog.py:finalize_tool_grants`），chat／workflow／排程 turn、WUI 頁面的 `callTool`、picker、replay 讀的是同一份答案。
+  `app.json` 不用改。
+- 既有 item 存的整包鍵（`attached_tool_prefs` 裡的 `"rca-tools": false`）**繼續有效**：讀的時候當成該套件每個指令都釘成那個值
+  （指令鍵優先）。使用者在 modal 第一次（有改動的）儲存時，那把整包鍵會被拆成逐指令鍵寫回——資料在 item 列上，沒有 migrate 要跑。
+  漏知道的症狀：無。沒有指令的套件（`python-stack`，它是 sandbox 的 Python 載體）仍是一列。
+- 隨之而來、沒有開關的幾個語意（都是「picker 關掉的指令就是關掉」）：workflow step 的 `tools:` 寫 `rca-tools` 時拿到的是
+  **這個 item 持有的那幾個指令**（被釘掉的不在），寫 `rca-tools:spc` 這種指令名也可以（驗證器認得部署有的套件指令：拼錯的指令名會被拒；解不出的套件或沒有指令的套件寫 `pkg:x` 驗證器擋不了，執行時丟掉並在 log 留一行 `workflow node: tools not held by this item, dropped`）；sub-agent 定義的 `tools`
+  可以寫整包名或指令名（`save_subagent` 接受、載入與委派時縮成持有的指令；它拒絕時的「Available」清單從此列的是指令名）；
+  WUI 頁面叫一個被釘掉的指令會 403（訊息指向 tool picker）。一個整包鍵現在也管到 app 只授部分指令的套件（以前那種鍵是 no-op）。
+
+**確認做完**：開任一 rca item 的工具 modal，`Rca Tools` 是一個可展開的組（10 列）；`GET /api/a/rca/items/<id>/tools`
+的 `rca-tools:*` 列 `group` 都是 `rca-tools`。
+
+---
+
+### 2026-09-21 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
+
+**設定** — 不動。**資料** — 不動。
+
+**k8s · CI 側**
+
+- Docker 不帶 `--target` 就 build 檔案裡**最後一個** stage。#823 把 `chat-video` stage 放在最後，所以 #823 之後照文件的
+  `docker build -t rca-app … -f docker/Dockerfile .` 做出來的 `rca-app` 其實是 worker image：多 Chromium + ffmpeg（+1.63 GB）、
+  `CMD` 是 `python -m workspace_app.worker chat-video`——而 `kubernetes/base/deployment.yaml` 的 API 容器**沒有**自己的 `command`，
+  所以用那顆 image 起的「API pod」跑的是 worker 進程，不 serve HTTP：`/api/readyz` 永遠不 ready、rollout 卡住、舊 pod 繼續撐著。
+  這版在最後補一個 `api` stage 把預設拉回 API。**`rollout 前`**：如果你們 CI 在 #823 之後 build 過 `rca-app`，用這版**重 build 一次**
+  就瘦回去；worker image 一律 `--target chat-video`（`docs/deployment.md` §11 兩條指令）。
+  漏做的症狀：新的 API pod 永遠不 ready，`kubectl logs` 裡是 worker 在消費 job、沒有 uvicorn；image 3 GB 級；
+  `docker image inspect rca-app --format '{{.Config.Cmd}}'` 印的是 worker。
+
+**確認做完**
+
+- `docker image inspect rca-app:<tag> --format '{{.Config.Cmd}}'` 是 `[python -m workspace_app]`（不是 `workspace_app.worker chat-video`）；
+  `docker run --rm rca-app:<tag> sh -c 'which ffmpeg; ls /ms-playwright'` 兩個都空。
+- `docker run --rm rca-app-chat-video:<tag> sh -c 'which ffmpeg; ls /ms-playwright'` 有 `/usr/bin/ffmpeg` 與 `chromium-*`。
+
+---
+
+### 2026-09-22 · 86890da3 · #840 `server.run_consumers` 可以填清單；`${RUN_CONSUMERS}` 給的字串從此會被正確解析 {#pr-840}
+
+**設定**（純 opt-in 的部分不用動；但要知道一個**行為改變**）
+
+- 新形狀：`server.run_consumers: [index, card-gen, …]` = 只消費列出的 JobType（單機全包但跳過 `chat-video` 這種）。
+  `true` / `false` 照舊。名字對 worker CLI 那張表驗證，拼錯**開機就拒絕**。不改設定的部署，行為不變——**除了下面兩條**。
+- **行為改變、沒有開關**：以前 loader 不做型別轉換，`run_consumers: ${RUN_CONSUMERS}` 配 configmap 的 `RUN_CONSUMERS: "false"`
+  到手的是**字串** `'false'`（truthy），所以用 `${RUN_CONSUMERS}` 接線的 API pod **一直在消費所有 JobType**，
+  不是文件說的純 producer。這版起 `"false"` 就是 `false`。**`rollout 前`確認 worker Deployment 真的在跑**
+  （base 的 `workers.yaml` 每種 JobType 一個；`kubectl get deploy | grep rca-worker-`）：worker 是冪等的 durable-queue 消費者，
+  和舊 API pod 並存是安全的，先起再滾。如果你們的 `config.yaml` 寫的是字面 `false`，這條對你們沒有影響。
+  漏做的症狀（哪種 job 沒 worker 就出哪種）：help 文件停在 `indexing`（`index`）、wiki 不再更新（`wiki`）、
+  上傳的封存包一直 `pending`（`kb-import`）、blob GC 不再跑（`blob-gc`）、聊天影片匯出停在排隊（`chat-video`）。
+  新版 API 的 stdout 會有一行 `⚠ consumers: NOT consumed on this process: …` 點名沒人消費的 JobType。
+- **從「靜默接受」變「拒絕開機」**：YAML 的 `run_consumers:`（空值 / `null`）、`0` / `1`、`""`、mapping，和 `${RUN_CONSUMERS}`
+  給的 `no` / `0` / `1` / `,` 以前都被吞掉（`null`、`0`、`""` 是 falsy → 純 producer；`1` 和 mapping → 全消費；env 給的
+  `no` / `0` / `1` / `,` 是非空字串 → truthy → 全消費），這版起開機拒絕。`rollout 前` 看一眼你們的 `config.yaml` 這個 key
+  是不是上面三種形狀之一（YAML 的 `yes` / `no` / `on` / `off` 是 PyYAML 布林，照常算 true / false）；漏做的症狀：新 pod
+  CrashLoop，log 裡沒有 `config:` 那行也沒有 config dump（load 在它們之前跑；前面只有 nltk / LiteLLM 的 import 雜訊），
+  最後一行是 `ValueError: server.run_consumers: …`。
+
+**資料** — 不動。**k8s · CI 側** — manifest 沒改；configmap 的註解補了清單寫法，並把示範改成 block form
+（原本的 `server: { run_consumers: ${RUN_CONSUMERS} }` 是 YAML parse error，照抄的 pod 從來起不來）。
+
+**確認做完**
+
+- 純 producer：`kubectl logs deploy/rca-app | grep 'run_consumers:'` 印的是 `run_consumers: false  # ← env`（舊版是帶引號的
+  `run_consumers: "false"  # ← env`——引號就是字串沒被解析的證據），且 log 裡沒有任何 `→ start … consumer …` 這種 boot step。
+  worker 那邊：`kubectl get deploy | grep rca-worker-` 列出你要的每一種（base 的 `workers.yaml` 九種都有）。
+- 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
+  （你沒列的那幾種，排序）。
 
 ---
 

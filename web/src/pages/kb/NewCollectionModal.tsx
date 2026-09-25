@@ -196,7 +196,7 @@ export function NewCollectionModal({
                 Git URL<span className="kb-field__req"> *</span>
               </span>
               <input
-                className="input"
+                className="input input--block"
                 placeholder="https://github.com/owner/repo.git"
                 value={gitUrl}
                 onChange={(e) => onGitUrlChange(e.target.value)}
@@ -214,7 +214,7 @@ export function NewCollectionModal({
               Name<span className="kb-field__req"> *</span>
             </span>
             <input
-              className="input"
+              className="input input--block"
               // biome-ignore lint/a11y/noAutofocus: the primary input for Documents mode
               autoFocus={!isCode}
               placeholder="New collection name…"
@@ -225,7 +225,7 @@ export function NewCollectionModal({
           <label className="kb-field">
             <span className="kb-field__label">Description</span>
             <textarea
-              className="input kb-textarea"
+              className="input input--block"
               placeholder="What lives in this collection?"
               rows={3}
               value={description}
@@ -248,7 +248,7 @@ export function NewCollectionModal({
                   <label className="kb-field">
                     <span className="kb-field__label">Branch</span>
                     <input
-                      className="input"
+                      className="input input--block"
                       placeholder="(default branch)"
                       value={gitBranch}
                       onChange={(e) => setGitBranch(e.target.value)}
@@ -257,7 +257,7 @@ export function NewCollectionModal({
                   <label className="kb-field">
                     <span className="kb-field__label">Access token</span>
                     <input
-                      className="input"
+                      className="input input--block"
                       type="password"
                       placeholder="for a private repo"
                       autoComplete="off"

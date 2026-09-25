@@ -5,6 +5,13 @@
 #   docker build -t rca-app:latest -f docker/Dockerfile .
 # Build for a sub-path deploy (e.g. https://company.com/my-svc/rca):
 #   docker build -t rca-app:rca --build-arg BASE_PATH=/my-svc/rca/ -f docker/Dockerfile .
+# Build the chat-video WORKER image (the app + Chromium + ffmpeg, +1.63 GB):
+#   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
+#
+# Docker builds the LAST stage when no --target is given, so the last stage
+# here is `api` — the app image as is. The worker stage sits before it and is
+# reached only by name; while it was the last stage (#823), a bare build
+# handed every API pod the worker image.
 #
 # (This is the APP image. docker/Dockerfile.workspace is the agent SANDBOX image.)
 
@@ -85,14 +92,18 @@ CMD ["python", "-m", "workspace_app"]
 # ---- stage 3: the chat-video worker (plan-chat-video-export) ----
 # The same app, plus a headless Chromium and ffmpeg — the two tools a chat
 # video needs and nothing else in the platform does. Its own image so the
-# API pod (and every other worker) does not carry the ~0.7–1 GB they add;
+# API pod (and every other worker) does not carry the 1.63 GB they add;
 # `kubernetes/base/workers.yaml` runs it as `rca-worker-chat-video`.
 #
 #   docker build --target chat-video -t rca-app-chat-video:latest -f docker/Dockerfile .
 #
+# NOT the last stage: see `api` below.
+#
 # `--with-deps` installs Chromium's shared libraries through apt; the
 # browser itself lands under PLAYWRIGHT_BROWSERS_PATH, outside the venv, so
-# a later `uv sync` cannot remove it. The worker boots the API's own
+# a later `uv sync` cannot remove it. A build with no reach to Playwright's
+# CDN uses apt's chromium instead — `chat_video.chromium_path` + a symlink
+# for the recorder's ffmpeg; the recipe is in docs/deployment.md §11 (斷網). The worker boots the API's own
 # composition (`build_app`, never served — see workers.yaml), so it needs
 # what the API needs at boot: the same configmap and mounts.
 FROM app AS chat-video
@@ -103,3 +114,8 @@ RUN uv sync --frozen --no-dev --extra chat-video \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 CMD ["python", "-m", "workspace_app.worker", "chat-video"]
+
+# ---- stage 4: the API image, the default target ----
+# Nothing but a name: a `docker build` with no --target builds the last stage,
+# and the app image is what that must be (tests/chat_video/test_image.py).
+FROM app AS api

@@ -179,7 +179,7 @@ export function WikiCorrectionDialog({
                 <label className="kb-field" key={i}>
                   <span className="kb-field__label">{q}</span>
                   <input
-                    className="input"
+                    className="input input--block"
                     value={pendingAnswers[i] ?? ""}
                     onChange={(e) =>
                       setPendingAnswers((prev) => {
@@ -197,7 +197,7 @@ export function WikiCorrectionDialog({
           <label className="kb-field">
             <span className="kb-field__label">{t("wikiCorrection.instructionLabel")}</span>
             <textarea
-              className="input kb-textarea"
+              className="input input--block"
               rows={4}
               placeholder={t("wikiCorrection.instructionPlaceholder")}
               value={instruction}
@@ -208,7 +208,7 @@ export function WikiCorrectionDialog({
           <label className="kb-field">
             <span className="kb-field__label">{t("wikiCorrection.targetLabel")}</span>
             <input
-              className="input"
+              className="input input--block"
               placeholder={t("wikiCorrection.targetPlaceholder")}
               value={targetPage}
               onChange={(e) => setTargetPage(e.target.value)}

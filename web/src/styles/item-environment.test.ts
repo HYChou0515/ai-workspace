@@ -12,6 +12,9 @@ import { describe, expect, it } from "vitest";
 const here = new URL(".", import.meta.url).pathname;
 const css = readFileSync(join(here, "item-environment.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const wide = css.replace(/@media[^{]*\{[\s\S]*?\n\}/g, "");
+// The invalid-field look is the house input's (base.css), not this panel's
+// (#829 D8); the fields wear `input input--block` rather than a scoped copy.
+const base = readFileSync(join(here, "base.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 function rule(sheet: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -47,17 +50,24 @@ describe("item-environment.css: the size fields", () => {
   });
 
   it("fill their column — the house input's `flex: 1` is for rows", () => {
-    const field = rule(wide, ".item-environment .env-field > .input");
-    expect(field).toMatch(/width:\s*100%/);
-    expect(field).toMatch(/flex:\s*none/);
+    // `.input--block` (base.css) is the one spelling of "fill the width in a
+    // column"; both fields wear it, and this sheet keeps no copy.
+    const panel = readFileSync(join(here, "../components/ItemEnvironmentPanel.tsx"), "utf8");
+    expect(panel.match(/className="input input--block"/g)?.length).toBe(2);
+    expect(wide).not.toMatch(/\.input(?![\w-])/);
   });
 
   it("show an invalid value in the error colour, on the field and on the note", () => {
-    expect(rule(wide, '.item-environment .input[aria-invalid="true"]')).toMatch(/border-color:\s*var\(--err\)/);
+    expect(rule(base, '.input[aria-invalid="true"]')).toMatch(/border-color:\s*var\(--err\)/);
     expect(rule(wide, ".item-environment .env-field__note--invalid")).toMatch(/color:\s*var\(--err\)/);
+    expect(wide).not.toMatch(/aria-invalid/);
   });
 
-  it("still show focus on an invalid field — the red border hides the accent one, so a ring", () => {
-    expect(rule(wide, '.item-environment .input[aria-invalid="true"]:focus')).toMatch(/box-shadow:/);
+  it("still show focus on an invalid field — the red border hides the accent one, so the ring", () => {
+    // The ring is the global `:focus-visible` one: `.input` sets no outline
+    // (pinned in input-class.test.ts), so no second ring is needed here and
+    // none is declared.
+    expect(rule(base, ".input")).not.toMatch(/outline/);
+    expect(base).not.toMatch(/aria-invalid="true"\]:focus/);
   });
 });

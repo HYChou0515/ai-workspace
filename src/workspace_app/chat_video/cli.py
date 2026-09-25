@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 from ..kb.chat_export import parse_chat_export
-from .options import FORMATS, VideoOptions
+from .options import FORMATS, THEMES, VideoOptions
 from .player import NOT_HANDED, decide_assets, render_player_html
 from .render import RendererUnavailable
 from .service import render_chat_video
@@ -35,6 +35,8 @@ class Args(argparse.Namespace):
     html: Path | None
     files: Path | None
     options: VideoOptions
+    chromium: str
+    theme: str
 
 
 def load_assets(files_dir: Path, paths: list[str], *, max_bytes: int) -> dict[str, bytes]:
@@ -94,6 +96,12 @@ def parse_args(argv: list[str]) -> Args:
         default=[],
         help="an extra format to write beside --out",
     )
+    p.add_argument(
+        "--theme",
+        choices=THEMES,
+        default=d.theme,
+        help="the page's palette for the whole video: dark (default) or light (the app's)",
+    )
     p.add_argument("--html", type=Path, help="write the player page here and record nothing")
     p.add_argument(
         "--files",
@@ -138,6 +146,13 @@ def parse_args(argv: list[str]) -> Args:
         default=d.max_assets_total_bytes,
         help="the page's whole budget for inlined images, first-fit in reading order",
     )
+    p.add_argument(
+        "--chromium",
+        default="",
+        metavar="PATH",
+        help="a Chromium binary to record with (e.g. /usr/bin/chromium from apt) instead of "
+        "the one `playwright install chromium` downloads; the worker's `chat_video.chromium_path`",
+    )
 
     ns = p.parse_args(argv, namespace=Args())
     ns.out = ns.out or ns.source.with_suffix(".gif")
@@ -159,7 +174,7 @@ def _options(ns: Args, fmt: tuple[str, ...]) -> VideoOptions:
         type_ms=ns.type_speed, stream_ms=ns.stream_speed, tool_pause_ms=ns.tool_pause,
         speed=ns.speed, max_seconds=ns.max_seconds, tool_output_chars=ns.tool_output_chars,
         max_asset_bytes=ns.max_asset_bytes, max_assets_total_bytes=ns.max_assets_total_bytes,
-        fmt=fmt,
+        fmt=fmt, theme=ns.theme,
     )  # fmt: skip
 
 
@@ -214,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
                 options=ns.options,
                 workdir=Path(tmp),
                 assets=assets,
+                chromium_path=ns.chromium,
             )
     except RendererUnavailable as exc:
         print(str(exc), file=sys.stderr)

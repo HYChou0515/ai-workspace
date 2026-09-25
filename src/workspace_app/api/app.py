@@ -444,7 +444,7 @@ def create_app(
     # producer (it still enqueues), and dedicated worker pods consume each
     # JobType under their own HPA. Sweepers (idle/mirror/index/blob-gc/code-sync)
     # are NOT gated — they always run on the API (the always-on control plane).
-    run_consumers: bool = True,
+    run_consumers: bool | list[str] = True,
     # #349: how often a running turn polls the shared (cross-pod) cancel epoch.
     # The cancel latency under degraded sticky routing equals this interval; the
     # in-pod fast-path is unaffected. Threaded from
@@ -1721,7 +1721,10 @@ def create_app(
     app.state.card_gen_coordinator = card_gen_coordinator
     # #715: the archive-import consumer. On app.state because the lifespan's
     # consumer gate reaches every coordinator through it.
-    app.state.import_coordinator = coordinators.kb_import
+    # `kb_import_coordinator`, not `import_coordinator`: the lifespan finds every
+    # consumer by `f"{_JOBTYPE_ATTR[jobtype]}_coordinator"`, so the state
+    # attribute is spelled from the worker's table rather than by hand.
+    app.state.kb_import_coordinator = coordinators.kb_import
     # #245: the blob-GC reconcile consumer; the sweeper's ask goes through it.
     app.state.blob_gc_coordinator = coordinators.blob_gc
     # plan-chat-video-export: the video job reads its transcript and writes its

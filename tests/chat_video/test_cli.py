@@ -26,7 +26,7 @@ def test_every_field_has_a_flag_and_the_output_name_picks_the_format():
             "--zoom", "1.4", "--zoom-ms", "700",
             "--type-speed", "40", "--stream-speed", "15", "--tool-pause", "900",
             "--speed", "1.5", "--max-seconds", "45", "--tool-output-chars", "300",
-            "--max-asset-bytes", "1000",
+            "--max-asset-bytes", "1000", "--theme", "light",
         ]
     )  # fmt: skip
 
@@ -35,7 +35,7 @@ def test_every_field_has_a_flag_and_the_output_name_picks_the_format():
         zoom=1.4, zoom_ms=700,
         type_ms=40, stream_ms=15, tool_pause_ms=900,
         speed=1.5, max_seconds=45, tool_output_chars=300, max_asset_bytes=1000,
-        fmt=("mp4",),
+        fmt=("mp4",), theme="light",
     )  # fmt: skip
 
 
@@ -326,6 +326,25 @@ def test_recording_writes_every_format_and_says_how_long_it_will_play(
     assert (tmp_path / "demo.gif").read_bytes() == b"gif-bytes"
     out = capsys.readouterr().out
     assert "will play" in out and "s" in out and "wrote" in out
+
+
+def test_chromium_names_the_binary_to_record_with_and_is_playwrights_own_by_default(
+    tmp_path, monkeypatch
+):
+    """`--chromium /usr/bin/chromium`: an image whose Debian mirror has
+    Chromium but no reach to Playwright's CDN records with that binary —
+    the same knob the worker reads as `chat_video.chromium_path`."""
+    src = _source(tmp_path, {"title": "t", "messages": [{"role": "user", "content": "hi"}]})
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "workspace_app.chat_video.cli.render_chat_video",
+        lambda **k: (seen.append(k), {"gif": b"g"})[1],
+    )
+
+    main([str(src), "-o", str(tmp_path / "a.gif")])
+    main([str(src), "-o", str(tmp_path / "b.gif"), "--chromium", "/usr/bin/chromium"])
+
+    assert [k["chromium_path"] for k in seen] == ["", "/usr/bin/chromium"]
 
 
 @pytest.mark.parametrize(

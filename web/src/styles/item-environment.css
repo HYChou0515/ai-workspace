@@ -4,8 +4,9 @@
  * `/my-resources`' live row (`.live-card` + `.live-dot`, gauge.css), the totals
  * are its stat tiles (gauge.css), the fields wear the house `.input` (base.css)
  * under a label, and the frame is the Tools modal's. This sheet lays those
- * parts out and dresses only what has no home elsewhere: the helper lines,
- * the "Back to default" link, the disabled look.
+ * parts out and dresses only what has no home elsewhere: the helper lines
+ * and the "Back to default" link (the disabled and invalid looks are
+ * `.input`'s own since #829).
  *
  * The earlier sheet gave the CPU input `width: 6rem` and tabular figures and
  * the memory input nothing, so both drew with the browser's inset grey — the
@@ -85,19 +86,11 @@
   color: var(--text-paper-d);
 }
 
-/* The class sets `flex: 1` for row layouts; in a column it must fill. */
-.item-environment .env-field > .input {
-  width: 100%;
-  flex: none;
+/* The fields wear `input input--block` (a column fills, #829 D6); the figures
+   are tabular so a value does not shift as it is typed. The disabled and
+   invalid looks are `.input`'s own (base.css). */
+.item-environment .env-field > input {
   font-variant-numeric: tabular-nums;
-}
-
-/* A disabled field here means "not now" (something is running) or "not you"
-   (you may look, not spend) — never "broken". It stays readable, and the
-   sentence beside it says which of the two it is. */
-.item-environment .input:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
 }
 
 .item-environment .detail {
@@ -108,17 +101,8 @@
 }
 
 /* A field holding what the server would refuse: the note under it says the
-   grammar, in the error colour, and `aria-invalid` says it to AT. The red
-   border outranks `.input:focus`'s accent one, so focus is shown as a ring —
-   `.input` has no outline of its own. */
-.item-environment .input[aria-invalid="true"] {
-  border-color: var(--err);
-}
-
-.item-environment .input[aria-invalid="true"]:focus {
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
+   grammar, in the error colour; the field itself is `.input[aria-invalid]`
+   (base.css). */
 .item-environment .env-field__note--invalid {
   color: var(--err);
 }

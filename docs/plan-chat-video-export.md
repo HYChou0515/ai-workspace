@@ -27,7 +27,7 @@
   都壓不掉雙峰,time-box 到此,規格照量到的邊界寫:integration 測試釘 gif ≤ 1024 MB、mp4 ≤ 512 MB(舊碼 2,119 / 1,260 紅)。
 - 檔案大小:720p 41 s mp4 **1.8 MB**、gif **18.2 MB**。
 - 依賴大小:Chromium 380–550 MB、`fonts-noto-cjk` 87 MB、ffmpeg + libav 約 20 MB(apt 完整閉包更多)、`playwright` wheel 幾十 MB
-  ⇒ image 約 **+0.7–1 GB**。
+  ⇒ image 約 **+0.7–1 GB**(量到是 +1.63 GB,見 P14)。
 - 現有碼:`ImportCoordinator`(`kb/import_jobs.py`)是 job 的形狀範本;`WorkspaceFiles.write` 走 `_warm` → `resolve_io_handle`
   **不開 session** 的全域解析(暖的寫活目錄、冷的寫 durable);worker 的精簡組成 `build_bundle` **沒有** `files`,但 blob-gc worker
   走 `build_app`(永遠不 serve)拿 API 的整個組成(`worker.API_REGISTRY_JOBTYPES`);blob-gc 的 k8s 已掛 `/data` + `/scratch` +
@@ -47,7 +47,7 @@
 | 6b | **job 的輸入是一份完整的 `.chat.json` + 設定 + 輸出位置,不綁 chat_id**:`POST …/items/{item_id}/chat-video {transcript, options, output_path?}`;API 先把 transcript 寫成 workspace 裡的 **source 檔** `<output>.chat.json`(留著,改了再 POST 就重生),job row 只帶路徑(#723 的 job row 沒圍籬,對話內容不能放上去);worker 用 `parse_chat_export` 讀 source,和 CLI 同一條 | 需求 8 |
 | 7 | **前端從新往舊數**:全部 / 最近 N 則 / 自訂(從–到兩個選單,最新在最上),用**開窗當下的快照**換算成絕對位置 | 需求 2 |
 | 8 | **尺寸:三種輸入法、一個結果**——比例+解析度滑桿 / 比例+文字大小 / 直接寬×高;永遠顯示「寬 × 高 ・ 文字倍率 ・ 約 N MB」;送出的是 `width` / `height` / `scale`(0 = 自動) | 需求 4 |
-| 9 | 露出六個影片選項:尺寸、格式(mp4 / gif / webm 單選)、速度、打字、推進輸入框、最長秒數;其餘 `VideoOptions` 預設 | 第 5 題 |
+| 9 | 露出六個影片選項:尺寸、格式(mp4 / gif / webm 單選)、速度、打字、推進輸入框、最長秒數;其餘 `VideoOptions` 預設(合併後 user 要求加第七個:**主題** 深/淺,PR #838) | 第 5 題 |
 | 10 | **上限在伺服端**(`config.yaml` `chat_video:` 段、有預設、`config.example.yaml` 附範例、`docs/migrations.md` 記一筆):總像素 ≤ 1920×1080、`max_seconds` ≤ 180、輸出檔 ≤ 100 MB(超過 → 失敗一句話、不寫檔)、既有 workspace 額度、每 item + 每 user 各一支 in-flight(409) | 需求 3 |
 | 11 | **進度就是 workspace 裡的一個檔** `<輸出檔>.progress.json`,不做 run 模型、不做狀態 route;完成刪掉、失敗留著 | 需求 5 |
 | 12 | **取消 = 刪掉進度檔**;worker **每 10 秒心跳**:讀進度檔(不在 → 取消:錄影關瀏覽器、編碼 kill ffmpeg、都 10 秒內)、在就寫回 `stage / elapsed_seconds / heartbeat_at`;`heartbeat_at` 超過 60 秒沒動 = worker 死了,殘檔可覆蓋 | 需求 5 |
@@ -270,6 +270,10 @@ web/src/…                              ExportMenu + ExportDialog(格式 / 範�
 - 修法驗證鏡頭補的洞:**生產端「在錄影中、心跳新鮮」那格沒有測試**——`_alive_jobs` 丟掉所有 running 的突變 48 條全綠(一條新測試三個 409 全釘);同路徑一秒內第二支 job 會先畫到第一支的快取讀數(query key 加 token);模式切回「比例＋解析度」改回 720p 讓 fit 決定;64 字元的 cap 補一條 ASCII 標題(中文標題先被 128 bytes 切到);`check_limits` 的 `max_output_bytes` 參數已經沒人讀 → 拿掉。
 - **P13(CI 抓到的)**:`_check_chat_video` 把「沒有 `chat_video` 這個 key」當成 null 段落拒絕——production 的 merged 一定有這段(預設值疊上去),但 `_validate` 也被既有測試拿部分 dict 直接呼叫(`test_cov_fill_config`),`rest` 分片紅;改成 key 不在就不查、在但是 null 才拒。教訓:改 loader 要跑整個 `tests/config`,不是只跑 `test_loader.py`。
 - 文件三句改掉:「最多 70 秒回到錄影中」是公式不是接手順序(broker 要等 stale sweep 把自己那列標掉;最多重送 3 次);「all-in-one 沒有重送」是假的(`start_consume` 先 `recover_stale_jobs`);「後面有排隊就被 SIGKILL」只在排隊比 grace 長時成立。P11 的 commit message 寫「十二個突變」,`r2_mutants.py` 數起來是 8 + 3 = 11。
+
+### P14 — image 終於 build 過(PR #834,合併後才做)
+- 本機用「`app` stage 去掉 LibreOffice + `chat-video` 那四行一字不差」的探針 Dockerfile build 過:那一層 +1.69 GB(整顆 3.06 GB);之後真 Dockerfile 也 build 過了(LibreOffice 的 apt 這次過了):API 1.81 GB、worker 3.44 GB,那一層 **+1.63 GB**(LibreOffice 的相依已經帶了一些共用函式庫),文件用這個數。容器裡 `python -m workspace_app.chat_video` 17 秒出 mp4(h264 1280×720 yuv420p 11.5 s)+ gif,中文有字型;Chromium 在 `/ms-playwright`。之前寫的「估 +0.5–1 GB」低估了,三處文件改成量到的。
+- **user 讀 Dockerfile 抓到的缺陷**:`chat-video` stage 放在最後,Docker 不帶 `--target` 就 build 最後一個 stage,所以 #823 之後照文件的指令 build 出來的 `rca-app` 是 worker image(+1.63 GB、CMD 是 worker;API Deployment 沒有自己的 `command`,所以用它起的 API pod 跑的是 worker、不 serve HTTP,rollout 會卡在 readiness)。修法:最後補一個空的 `FROM app AS api` 把預設拉回 API;`tests/chat_video/test_image.py` 釘住「最後一個 stage 是 api」(對 #823 的檔案會紅)。這是 image 從沒 build 過的直接後果——review 三輪都在讀那四行,沒有人 build。
 
 ## 驗收
 

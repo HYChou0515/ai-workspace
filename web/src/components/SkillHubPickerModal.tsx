@@ -106,14 +106,7 @@ export function SkillHubPickerModal({
         onChange={(e) => setQuery(e.target.value)}
         placeholder={t("skillHub.search")}
         aria-label={t("skillHub.search")}
-        style={{
-          height: 32,
-          padding: "0 10px",
-          border: "1px solid var(--paper-3)",
-          borderRadius: "var(--radius-btn)",
-          font: "inherit",
-          fontSize: "var(--text-small)",
-        }}
+        className="input input--block"
       />
       {failure ? (
         <p className="error" role="alert" style={{ margin: 0, fontSize: "var(--text-body-sm)" }}>

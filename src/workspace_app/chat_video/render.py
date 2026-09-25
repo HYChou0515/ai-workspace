@@ -69,9 +69,19 @@ def record(
     *,
     expected_ms: int = 0,
     should_stop: StopCheck | None = None,
+    chromium_path: str = "",
 ) -> Path:
     """Play ``html`` in a headless Chromium sized to the frame and return the
-    ``.webm`` it recorded. The page marks ``document.body.dataset.done`` when
+    ``.webm`` it recorded. ``chromium_path`` is a Chromium binary to launch
+    instead of the one ``playwright install chromium`` downloads
+    (``chat_video.chromium_path``): an air-gapped build cannot reach
+    Playwright's CDN but its Debian mirror has ``chromium``, and Playwright
+    drives any Chromium through ``executable_path``. Its recorder still
+    wants an ffmpeg at ``$PLAYWRIGHT_BROWSERS_PATH/ffmpeg-<rev>/ffmpeg-linux``
+    — a symlink to the system one satisfies it (it only checks the file is
+    there); ``docs/deployment.md`` §11 has the recipe.
+
+    The page marks ``document.body.dataset.done`` when
     its script is finished; the deadline (``expected_ms`` × 1.5 + 30 s of
     slack) fails it instead, as :class:`RecordingTimedOut`. The wait is in
     ``RECORD_SLICE_MS`` slices with ``should_stop`` asked between them: a
@@ -96,12 +106,24 @@ def record(
 
     with sync_playwright() as pw:
         try:
-            browser = pw.chromium.launch()
+            browser = (
+                pw.chromium.launch(executable_path=chromium_path)
+                if chromium_path
+                else pw.chromium.launch()
+            )
         except Error as exc:
-            # The Python package is here but `playwright install chromium`
-            # was never run — Playwright's own message is a traceback with a
-            # boxed hint. One sentence, the same install step.
-            if "Executable doesn't exist" in str(exc):
+            # Playwright's own message is a traceback with a boxed hint. One
+            # sentence naming the step that fixes it: the download nobody
+            # ran, or the path the config points at. The two texts differ in
+            # case ("Executable doesn't exist at …" for its own browser,
+            # "Failed to launch chromium because executable doesn't exist
+            # at …" for a given path) — matched without it.
+            if "executable doesn't exist" in str(exc).lower():
+                if chromium_path:
+                    raise RendererUnavailable(
+                        f"recording needs Chromium: chat_video.chromium_path {chromium_path} "
+                        "does not exist in this image"
+                    ) from exc
                 raise RendererUnavailable(
                     "recording needs Chromium: run `playwright install chromium` once"
                 ) from exc

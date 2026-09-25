@@ -240,7 +240,7 @@ export function PermissionDialog({
                         data-testid={`role-${g.userId}`}
                         value={g.role}
                         onChange={(e) => setRole(g.userId, e.target.value as RoleId)}
-                        className="inline-edit"
+                        className="input inline-edit"
                         style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                       >
                         {roles.map((r) => (
@@ -307,7 +307,7 @@ export function PermissionDialog({
                             data-testid={`group-role-${g.groupId}`}
                             value={g.role}
                             onChange={(e) => setGroupRole(g.groupId, e.target.value as RoleId)}
-                            className="inline-edit"
+                            className="input inline-edit"
                             style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                           >
                             {roles.map((r) => (

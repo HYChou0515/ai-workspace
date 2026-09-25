@@ -144,6 +144,16 @@ def load_with_provenance(
     # 5 — strict validation
     _validate(merged, source=str(path) if path else "<bundled defaults>")
 
+    # 5b — `server.run_consumers` is one key with three shapes (bool / list /
+    # the `${VAR}` string of either), parsed HERE because `_build` is
+    # `cls(**sub)` and coerces nothing: the documented `${RUN_CONSUMERS}`
+    # mapping used to hand the dataclass the string `'false'`, and a pure
+    # producer consumed every JobType.
+    merged["server"]["run_consumers"] = consumer_selection(
+        merged["server"].get("run_consumers", True),
+        source=str(path) if path else "<bundled defaults>",
+    )
+
     _pack_merged_sub_agents(merged)
 
     # 6 — construct typed Settings
@@ -195,6 +205,11 @@ def _collect_operator_sources(raw: Any, prefix: str, out: dict[str, Source]) -> 
         for k, v in raw.items():
             _collect_operator_sources(v, _join(prefix, str(k)), out)
     elif isinstance(raw, list):
+        # An empty list is a leaf the operator wrote (`superusers: []`,
+        # `run_consumers: []`); with nothing to walk it recorded no source
+        # and the dump labelled it `default`.
+        if not raw:
+            out[prefix] = Source(SOURCE_CONFIG)
         for i, v in enumerate(raw):
             _collect_operator_sources(v, f"{prefix}[{i}]", out)
     elif isinstance(raw, str) and has_env_reference(raw):
@@ -220,7 +235,20 @@ def _assign_settings_sources(
         for i, v in enumerate(node):
             _assign_settings_sources(v, f"{prefix}[{i}]", op_sources, out)
     else:
-        out[prefix] = op_sources.get(prefix, Source(SOURCE_DEFAULT))
+        out[prefix] = op_sources.get(prefix) or _parent_list_source(prefix, op_sources)
+
+
+def _parent_list_source(prefix: str, op_sources: dict[str, Source]) -> Source:
+    """The source for a list element the operator did not write as an
+    element: `server.run_consumers: ${RUN_CONSUMERS}` is ONE env scalar that
+    `consumer_selection` turns into a list, so `server.run_consumers[0]` has
+    no operator path of its own — it takes the scalar's. Anything else is a
+    bundled default."""
+    if prefix.endswith("]"):
+        parent = prefix[: prefix.rfind("[")]
+        if parent in op_sources:
+            return op_sources[parent]
+    return Source(SOURCE_DEFAULT)
 
 
 def _flatten_bundled_sub_agents(bundled: dict[str, Any]) -> None:
@@ -312,6 +340,59 @@ def _walk_strings(node: Any, fn) -> Any:
 # ─── validation ─────────────────────────────────────────────────────────
 
 
+def consumer_selection(raw: object, *, source: str = "config") -> bool | list[str]:
+    """`server.run_consumers` as the loader hands it on: `True` (every
+    JobType), `False` (none), or the JobType names to consume.
+
+    Accepts what YAML gives (a bool or a list) and what a `${VAR}` marker gives
+    (a string): `"true"` / `"false"` case-insensitively, anything else as a
+    comma-separated list. Every name must be one `python -m workspace_app.worker`
+    accepts — `worker._JOBTYPE_ATTR`, the one table — so a typo refuses to
+    boot, naming the field, the name and the valid ones, instead of becoming a
+    queue that never moves."""
+    from ..worker import _JOBTYPE_ATTR  # module-level imports are asyncio/threading only
+
+    valid = ", ".join(_JOBTYPE_ATTR)
+    field = "server.run_consumers"
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.lower() == "true":
+            return True
+        if text.lower() == "false":
+            return False
+        if not text:
+            raise ValueError(
+                f"{field}: empty string ({source}) — write true, false, or JobType names "
+                f"separated by commas (valid: {valid})"
+            )
+        names: list[object] = [part.strip() for part in text.split(",") if part.strip()]
+        if not names:  # `","` — separators and nothing between them
+            raise ValueError(
+                f"{field}: no JobType names in {raw!r} ({source}) — write true, false, "
+                f"or names separated by commas (valid: {valid})"
+            )
+    elif isinstance(raw, list):
+        names = list(raw)
+    else:
+        raise ValueError(
+            f"{field}: expected true, false or a list of JobType names, got "
+            f"{type(raw).__name__} ({source}); valid names: {valid}"
+        )
+    for name in names:
+        if not isinstance(name, str):
+            raise ValueError(
+                f"{field}: JobType names are strings, got {name!r} ({source}); valid: {valid}"
+            )
+        if name not in _JOBTYPE_ATTR:
+            raise ValueError(
+                f"{field}: unknown JobType {name!r} ({source}) — valid: {valid}; "
+                f"or true / false for all / none"
+            )
+    return [n for n in names if isinstance(n, str)]
+
+
 def _validate(merged: dict[str, Any], *, source: str) -> None:
     """Strict structural checks. Raises ValueError on the first
     problem; the message names the field path + the source file."""
@@ -351,6 +432,13 @@ def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
         )
     for field in dataclasses.fields(ChatVideoSettings):
         value = node.get(field.name, field.default)
+        if field.type in ("str", str):
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"config {source}: chat_video.{field.name} must be a string (a path, or "
+                    f"empty for Playwright's own Chromium), got {value!r}"
+                )
+            continue
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(
                 f"config {source}: chat_video.{field.name} must be a positive integer, "

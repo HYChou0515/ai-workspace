@@ -133,12 +133,13 @@ export function SearchPanel({
           <Icon name={showReplace ? "chev_d" : "chev_r"} size={12} />
         </button>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={fieldWrap} data-testid="search-field">
+          <div className="input input-group" style={fieldWrap} data-testid="search-field">
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search"
+              className="input-group__field"
               style={input}
             />
             <div style={{ display: "flex", gap: 2, flexShrink: 0 }} data-testid="search-toggles">
@@ -155,11 +156,12 @@ export function SearchPanel({
           </div>
 
           {showReplace && (
-            <div style={fieldWrap}>
+            <div className="input input-group" style={fieldWrap}>
               <input
                 value={replacement}
                 onChange={(e) => setReplacement(e.target.value)}
                 placeholder="Replace"
+                className="input-group__field"
                 style={input}
               />
               <button
@@ -175,19 +177,21 @@ export function SearchPanel({
             </div>
           )}
 
-          <div style={fieldWrap}>
+          <div className="input input-group" style={fieldWrap}>
             <input
               value={include}
               onChange={(e) => setInclude(e.target.value)}
               placeholder="files to include — e.g. *.md, src/**"
+              className="input-group__field"
               style={input}
             />
           </div>
-          <div style={fieldWrap}>
+          <div className="input input-group" style={fieldWrap}>
             <input
               value={exclude}
               onChange={(e) => setExclude(e.target.value)}
               placeholder="files to exclude"
+              className="input-group__field"
               style={input}
             />
           </div>
@@ -334,29 +338,19 @@ const header: React.CSSProperties = {
   borderBottom: "1px solid var(--paper-3)",
 };
 
+/* Each row is an `.input.input-group`: the box draws the chrome (and shrinks
+   below its content width — `.input` has `min-width: 0` — so the slot yields
+   first instead of shoving the fixed-width toggles out, #460 P2). This is the
+   pane's size: 28px rows of 12px type. */
 const fieldWrap: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
   gap: 4,
-  // Allow the row to shrink below its content width so the input yields first
-  // (it has minWidth:0) instead of shoving the fixed-width toggles out (#460 P2).
-  minWidth: 0,
-  border: "1px solid var(--paper-3)",
-  borderRadius: "var(--radius-btn)",
-  background: "var(--white)",
-  padding: "0 4px 0 0",
+  minHeight: 28,
+  padding: "0 4px 0 8px",
 };
 
 const input: React.CSSProperties = {
-  flex: 1,
   height: 26,
-  padding: "0 8px",
-  border: "none",
-  outline: "none",
-  background: "transparent",
   fontSize: pxToRem(12),
-  color: "var(--text-paper)",
-  minWidth: 0,
 };
 
 const iconToggle: React.CSSProperties = {
