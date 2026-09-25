@@ -58,6 +58,7 @@ describe("a gallery's group labels", () => {
       cells: 1,
       layout: { x: [], y: [] },
       zones: { at: "Asia/Taipei" },
+      columns: [],
       groups: [0, 6, 12].map((h) => ({ key: [`2026-03-01 ${String(h).padStart(2, "0")}:00:00+08:00`], sort: {} })),
     };
     const before = reads.n;
