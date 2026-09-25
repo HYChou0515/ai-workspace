@@ -132,6 +132,24 @@ function hex(table: Uint8ClampedArray, code: number): string {
   return `#${[table[c], table[c + 1], table[c + 2]].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** #847/#848 P16: the decimals a colour scale's labels need -- its width to two
+ * significant digits (0.056–0.346 → 2, 12–480 → 0), or a constant's own
+ * value to three. ECharts' default of 0 labelled 0.056–0.346 "0" at both ends. */
+export function scalePrecision(lo: number, hi: number): number {
+  const span = Math.abs(hi - lo);
+  const [size, digits] = span > 0 ? [span, 1] : [Math.abs(lo), 2];
+  if (!(size > 0) || !Number.isFinite(size)) return 0;
+  return Math.min(20, Math.max(0, digits - Math.floor(Math.log10(size))));
+}
+
+/** A continuous visualMap's labels: readable ends (see `scalePrecision`). One
+ * the person cannot drag (a grid's) draws no handle values, so it is given
+ * its ends as text. */
+function scaleLabels(lo: number, hi: number, calculable: boolean): Record<string, unknown> {
+  const precision = scalePrecision(lo, hi);
+  return calculable ? { precision } : { precision, text: [hi.toFixed(precision), lo.toFixed(precision)] };
+}
+
 function palette(scheme: "sequential" | "diverging", min: number, max: number): string[] {
   const table = colourTable(scheme, min, max);
   return Array.from({ length: PALETTE_STOPS }, (_, i) => hex(table, Math.round((i / (PALETTE_STOPS - 1)) * 254)));
@@ -438,6 +456,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         min: c?.min ?? 0,
         max: c?.max ?? 0,
         calculable: false,
+        ...scaleLabels(c?.min ?? 0, c?.max ?? 0, false),
         seriesIndex: series.length,
         inRange: { color: palette(scheme, c?.min ?? 0, c?.max ?? 0) },
       });
@@ -541,6 +560,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         dimension: 2,
         seriesIndex: series.length,
         calculable: true,
+        ...scaleLabels(vmin, vmax, true),
         inRange: { color: palette(scheme, vmin, vmax) },
       });
       push({ type: "heatmap", data: all.map((r) => item(point(li, r, [c.value(r) as number | null]), r)), ...common(mark) }, all);
@@ -611,6 +631,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         dimension: 2,
         seriesIndex: series.length,
         calculable: true,
+        ...scaleLabels(lo, hi, true),
         inRange: { color: palette(scheme, lo, hi) },
       });
       extras.push(c);
