@@ -59,6 +59,28 @@ LineSeries.prototype.brushSelector = (i, data, selectors) => {
   return selectors.point([points[2 * i]!, points[2 * i + 1]!]);
 };
 
+/** What a selector reads of a series' data and its grid (the series model is
+ * `this`: ECharts calls `seriesModel.brushSelector(...)`). */
+type Data = {
+  get(dim: string, i: number): number;
+  mapDimension(coord: string): string;
+  mapDimensionsAll(coord: string): string[];
+  getItemLayout(i: number): unknown;
+};
+type Selectors = { point: (xy: number[]) => boolean; rect: (r: { x: number; y: number; width: number; height: number }) => boolean };
+type Selector = (this: { coordinateSystem: { dataToPoint(p: number[]): number[] } }, i: number, data: Data, selectors: Selectors) => boolean;
+const seriesClass = (sub: string) => registry.getClass("series", sub) as { prototype: { brushSelector?: Selector } };
+
+/** A heatmap's cells (#847/#848 PR 5 P30): a cell is selected when its CENTRE
+ * is in the area, as a grid's is (`selectionFromBrush`). ECharts' heatmap has
+ * no selector, so a brush over one selected nothing. A cell with no value is
+ * not drawn (echarts HeatmapView skips it), so it is not selected either. */
+seriesClass("heatmap").prototype.brushSelector = function (i, data, selectors) {
+  if (Number.isNaN(data.get(data.mapDimension("value"), i))) return false;
+  const at = [data.get(data.mapDimension("x"), i), data.get(data.mapDimension("y"), i)];
+  return selectors.point(this.coordinateSystem.dataToPoint(at));
+};
+
 export type Chart = echarts.ECharts;
 
 /** `devicePixelRatio`: the canvas's pixels per CSS pixel, when not the
