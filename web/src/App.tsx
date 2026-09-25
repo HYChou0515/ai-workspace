@@ -18,6 +18,7 @@ import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
 import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
+import { ItemViewPage } from "./pages/ItemViewPage";
 import { WuiPage } from "./pages/WuiPage";
 import { ReleasesPage } from "./pages/ReleasesPage";
 
@@ -47,6 +48,10 @@ export function AppRoutes() {
           address is a shortcut, not a grant, and the API refuses exactly what it
           would have refused inside the workspace. */}
       <Route path="/w/:slug/:itemId/*" element={<WuiPage />} />
+      {/* An item's editor area alone (#847 Q5.3): where chat mode opens a shown
+          file or layout. Outside the shell for the same reason as a WUI — it is
+          one thing to look at, not a workspace to navigate. */}
+      <Route path="/a/:slug/:itemId/view" element={<ItemViewPage />} />
       <Route element={<GlobalLayout />}>
         <Route path="/" element={<Launcher />} />
         {/* `new` is a CHILD of the dashboard so the create form renders as a modal

@@ -29,8 +29,12 @@ from .context import AgentToolContext
 from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
 from .shown_files import (
+    LayoutError,
+    PaneLayout,
     declare_shown_files,
     describe_for_display,
+    layout_paths,
+    layout_tree,
 )
 from .tool_authz import LEGACY_TOOL_RENAMES, TOOL_VERBS, authorize_tool
 
@@ -401,8 +405,9 @@ async def read_image_impl(
 
 async def show_file_impl(
     ctx: RunContextWrapper[AgentToolContext],
-    path: str,
+    path: str | None = None,
     caption: str | None = None,
+    layout: PaneLayout | None = None,
 ) -> str:
     """Show a file from the workspace to the user, in the chat.
 
@@ -414,11 +419,25 @@ async def show_file_impl(
     what the user is looking at ("monthly revenue trend") — include it whenever
     the filename alone would not tell them.
 
-    Call it once per file, as soon as the file exists, then carry on.
+    To show several files together as one arrangement, give `layout`
+    instead of `path`: a `split` pane divides into `a` and `b` (`dir` `row` =
+    side by side, `col` = stacked; `ratio` is `a`'s share), and each `leaf`
+    pane shows one file by `path`. The user gets one card that opens them all
+    in split panes.
+
+    Call it once per file — or once per layout — as soon as the files exist,
+    then carry on.
     """
     if (denied := authorize_tool(ctx.context, "read_content")) is not None:
         return denied
+    both_or_neither = "error: give either path (one file) or layout (several files) — exactly one."
     fs, inv = _workspace(ctx)
+    if layout is not None:
+        if path is not None:
+            return both_or_neither
+        return await _show_layout(ctx.context, fs, inv, layout, caption)
+    if path is None:
+        return both_or_neither
     shown = await describe_for_display(fs, inv, path)
     if not shown:
         # Declare nothing on failure: the FE renders whatever is declared, so an
@@ -522,6 +541,52 @@ async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: st
             f"{why}\nFix the file and call show_file again."
         )
     return out.splitlines()[0] if out else None
+
+
+async def _show_layout(
+    actx: AgentToolContext,
+    fs: WorkspaceFiles,
+    workspace_id: str,
+    layout: PaneLayout,
+    caption: str | None,
+) -> str:
+    """`show_file(layout=…)`: every leaf resolved — and every plugin view
+    validated (#854 P9) — the way a single `path` is, and one failure declares
+    nothing: a card with an empty or broken pane is the card the single-path
+    rule already refuses to draw."""
+    try:
+        tree = layout_tree(layout)
+    except LayoutError as e:
+        return f"error: layout {e} — nothing was shown."
+    paths = layout_paths(tree)
+    shown: list[dict[str, Any]] = []
+    verdicts: list[str] = []
+    for p in paths:
+        entry = await describe_for_display(fs, workspace_id, p)
+        if not entry:
+            return (
+                f"error: file not found: {rel_path(p)} — nothing was shown. "
+                f"Check the path (list_files) and call show_file again."
+            )
+        verdict = await _check_plugin_view(actx, fs, workspace_id, p)
+        if verdict is not None and verdict.startswith("error:"):
+            return verdict
+        if verdict:
+            verdicts.append(f"{rel_path(p)}: {verdict}")
+        shown.append(entry)
+    listed = ", ".join(rel_path(p) for p in paths)
+    said = (
+        f"A layout of {len(paths)} files ({listed}) is now displayed in the chat as one "
+        f"card — the user can open it."
+    )
+    if verdicts:
+        said += " " + "; ".join(verdicts)
+    return declare_shown_files(
+        said,
+        shown,
+        layout=tree,
+        caption=caption,
+    )
 
 
 async def make_deck_impl(
@@ -4002,21 +4067,29 @@ def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     identical schema — but local chat templates (Ollama qwen3, #613 live probe)
     render a ``$ref`` tool so poorly the model either declares it "not
     available" or mangles the nested args (``status: {"title": ...}``).
-    Depth-capped so a (hypothetical) recursive schema degrades instead of
-    looping — none of our tools are recursive."""
+
+    A recursive schema has no finite inlining, so it is REFUSED (``ValueError``)
+    rather than cut off: the ``$defs`` block is dropped here, and a depth cap
+    left whatever ``$ref`` it stopped at pointing at nothing — a schema the
+    provider rejects or the model misreads. That cap also cut off deep but
+    finite nesting (``show_file``'s layout, #847), so it is a cycle check along
+    the chain of refs being expanded, not a depth."""
     defs = schema.get("$defs", {})
 
-    def walk(node: Any, depth: int = 0) -> Any:
-        if depth > 12 or not isinstance(node, (dict, list)):
+    def walk(node: Any, expanding: tuple[str, ...] = ()) -> Any:
+        if not isinstance(node, (dict, list)):
             return node
         if isinstance(node, list):
-            return [walk(v, depth + 1) for v in node]
+            return [walk(v, expanding) for v in node]
         ref = node.get("$ref", "")
         if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            target = defs.get(ref.rsplit("/", 1)[-1], {})
+            name = ref.rsplit("/", 1)[-1]
+            if name in expanding:
+                raise ValueError(f"recursive tool schema ({' → '.join((*expanding, name))})")
+            target = defs.get(name, {})
             rest = {k: v for k, v in node.items() if k != "$ref"}
-            return walk({**target, **rest}, depth + 1)
-        return {k: walk(v, depth + 1) for k, v in node.items() if k != "title"}
+            return walk({**target, **rest}, (*expanding, name))
+        return {k: walk(v, expanding) for k, v in node.items() if k != "title"}
 
     return walk({k: v for k, v in schema.items() if k != "$defs"})
 

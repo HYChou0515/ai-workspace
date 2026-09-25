@@ -6,6 +6,7 @@
 // They are listed in docs/contract.md §3.1 / §3.2 with their status.
 
 import type { ChatGoal } from "./api/itemGoal";
+import type { SentMarking } from "./api/types";
 
 /* ------------------------------------------------------------------ */
 /* AgentEvent — POST /investigations/{id}/messages                     */
@@ -132,6 +133,8 @@ export type UserMessage = {
   author: string;
   content: string;
   created_at: number;
+  /** #847 P7: the markings sent with it, as persisted (a refused one too). */
+  markings?: SentMarking[];
 };
 
 /** #43: a workspace file changed (a human wrote/moved/deleted it), broadcast so

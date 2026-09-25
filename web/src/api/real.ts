@@ -689,6 +689,7 @@ export const realApi: ApiClient = {
           disclosure: args.disclosure,
           apply_skills: args.applySkills,
           image_paths: args.imagePaths,
+          markings: args.markings,
           answers: args.answers,
         }),
         signal: args.signal,

@@ -967,6 +967,48 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
+### 2026-09-25 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
+
+**設定** — 沒有新 key。**資料** — 不用 migrate：`Message` 多了一個有預設值的 `markings` 欄位（舊訊息讀出來是空清單），
+沒有 `Schema` 升版。
+
+**行為**（沒有開關；運營方不用做事，但要知道）
+
+- **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在 `chart` view（#855）上框選、寫進有名字的 marking
+  （同一個 `marking:` 的圖彼此連動，見 [chart 說明](view-plugin-chart.md)）之後送訊息，composer 上方會列出
+  這些 marking 的 chip；留著的那幾個隨訊息寫成 `.markings/<name>.json`（marking 的值），AI 讀這個檔案。
+  為什麼寫檔而不是塞進 prompt：值可以上千個，每輪都塞進 prompt 太大；prompt 只放一行摘要（名稱、每欄幾個值、路徑），值留在檔案裡。
+  沒送出的選取什麼都不寫。檔案出現在檔案樹、會被備份、**算進 workspace 額度**，和使用者自己寫的檔一樣；刪掉沒有副作用
+  （下次送同一個 marking 會再寫一次）。
+- workspace 還有空間、但放不下某個 marking 檔時，那個 chip 會標成「未送出」並附原因（檔案層拒絕寫入的那句，例如
+  `workspace is full: … bytes used, and this write does not fit`），**訊息本身照送**。workspace **已經滿了**的話，
+  和以前一樣整則訊息在送出時就被 507 擋下（#538 的 `admit_turn`），不會走到寫 marking 這一步。
+- 寫 marking 檔要的權限和其他寫檔路徑一樣：新檔要 `add_content`、覆寫要 `edit_content`。只有 `converse`（能聊天、不能寫檔）
+  的成員送 marking，那個 chip 會標成「未送出」，訊息照送。
+  漏知道的症狀：使用者回報「我框的東西 AI 說沒看到」——看那則訊息上的 chip 是不是紅的。
+- 聊天模式（workspace 收起來）點 `show_file` 秀出的檔案卡，改成在新分頁開 `/a/<app>/<item>/view?path=…`
+  （只有編輯區的頁面），不再是原始檔案的下載網址——`.ai.yaml` 從此顯示成 view 而不是 YAML 原文。
+  圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
+
+- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段，本文（去掉 frontmatter）
+  多了約 0.4k 字元（實測 +398；本文現在約 6.7k）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
+  固定成本不變。
+
+- 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條，另外 agent 一條、
+  聊天一條——工作區頁面 3 條、純編輯區頁面（沒有聊天）2 條，不再隨開著的 view 增加。以前一個版面開 4 張圖要 7 條，
+  瀏覽器對同一 host 只開 6 條，第 7 條和之後送訊息的請求就永遠排隊（live check 實測）。
+  運營方不用做事；ingress 看到的長連線數會變少。
+
+**k8s · CI 側** — 不動（新頁面是 SPA 路由，同一個 image）。
+
+**確認做完**
+
+- 在一個有兩個 `chart` view 共用 `marking:` 的 item 裡框選、送一則訊息：composer 上方出現 chip；送出後那則訊息下面有同樣的 chip，
+  重新整理還在；檔案樹多了 `.markings/<name>.json`，內容是 `{"name", "sources", "columns"}`。
+- 聊天模式點一張 `show_file` 卡：新分頁的網址是 `…/view?path=…`，畫面只有編輯區（沒有檔案樹、沒有聊天）。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

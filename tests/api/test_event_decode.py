@@ -38,6 +38,11 @@ _SAMPLES = [
     FailoverSwitch(from_model="m1", reason="TimeoutError"),
     RestoreProgress(done=2, total=7),
     UserMessage(content="hi", author="alice"),
+    UserMessage(
+        content="why?",
+        author="alice",
+        markings=[{"name": "fail", "path": "/.markings/fail.json", "counts": {"lot": 2}}],
+    ),
     FileChanged(path="/a.py", by="alice", kind="modified"),
     StepOutput(phase="commit", name="ingest", text="line\n", key="f.pdf"),
     # #613: the live todo-checklist update (list-of-dicts payload, JSON-native
