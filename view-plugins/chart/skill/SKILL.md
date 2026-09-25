@@ -86,8 +86,11 @@ they fit the data; `zero:` overrides either.
 
 Types: `quantitative` (numbers), `temporal` (dates and times; a number is
 epoch milliseconds), `nominal` (categories), `ordinal` (ordered categories).
-A date `datum` is written `2024-03-01`, `2024-03-01T12:00` (UTC) or
-`2024-03-01T12:00:00+08:00`, or as epoch milliseconds; validate refuses other forms.
+On a temporal axis a `datum` is a number (epoch milliseconds) or a date
+written `2024-03-01`, `2024-03-01T12:00` (read as UTC) or
+`2024-03-01T12:00:00+08:00` (`/` for `-` and a space for `T` work too); on a
+number axis it is a number; on a category axis or a grid, a value the axis
+shows. validate refuses text a time or number axis cannot place.
 
 `aggregate` on a channel (`count`, `sum`, `mean`, `min`, `max`, `rate`) groups
 by every other field channel, as in Vega-Lite. Unlike Vega-Lite, a channel's
