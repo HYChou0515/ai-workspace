@@ -120,6 +120,32 @@ export function colourTable(scheme: "sequential" | "diverging", min: number, max
   return table;
 }
 
+/** The chart's category palette (#847/#848 P19): ECharts' own default series
+ * colours (echarts lib/model/globalDefault.js), which a nominal colour gets
+ * everywhere else in the chart -- `toOption` sets it as the option's `color`,
+ * so both read this one constant. A colour names a level, nothing more (Q23). */
+export const CATEGORY_COLOURS: readonly string[] = [
+  "#5470c6",
+  "#91cc75",
+  "#fac858",
+  "#ee6666",
+  "#73c0de",
+  "#3ba272",
+  "#fc8452",
+  "#9a60b4",
+  "#ea7ccc",
+];
+
+/** A category column's codes → the palette, cycling past its end; MISSING clear. */
+export function categoryTable(levels: number): Uint8ClampedArray {
+  const table = new Uint8ClampedArray(256 * 4);
+  for (let code = 0; code < Math.min(levels, MISSING); code++) {
+    const h = CATEGORY_COLOURS[code % CATEGORY_COLOURS.length];
+    table.set([1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16)).concat(255), code * 4);
+  }
+  return table;
+}
+
 /** Alpha of a cell a highlight leaves unlit (a lit or unhighlighted cell is opaque). */
 export const DIM_ALPHA = 64;
 

@@ -15,7 +15,9 @@
  */
 import { clockFor, type Clock } from "./clock";
 import { DIM_OPACITY, litRows } from "./highlight";
-import { colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
+import { CATEGORY_COLOURS, categoryTable, colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
+
+export { CATEGORY_COLOURS };
 import { decodeColumn, type Column, type Scalar, type WireColumn } from "./wire";
 import schema from "../../sandbox-src/src/chart_view/spec.schema.json";
 
@@ -451,18 +453,33 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const cells = gridCells as Cells;
       const c = cols[enc.color?.field as string];
       const scheme = enc.color?.scale?.scheme ?? "sequential";
-      const image = paintCells(cells, colourTable(scheme, c?.min ?? 0, c?.max ?? 0), lit ?? undefined);
+      // Categories are levels, not a range: each its own palette colour and a
+      // legend naming them. Through the continuous ramp (a min and max they do
+      // not have) every level came out one colour (#847/#848 P19).
+      const levels = c?.kind === "cat" ? (c.levels ?? []) : null;
+      const table = levels ? categoryTable(levels.length) : colourTable(scheme, c?.min ?? 0, c?.max ?? 0);
+      const image = paintCells(cells, table, lit ?? undefined);
       const source = opts.gridImage?.({ cells, image });
       grids.push({ layer: li, seriesIndex: series.length, cells, image });
-      visualMaps.push({
-        type: "continuous",
-        min: c?.min ?? 0,
-        max: c?.max ?? 0,
-        calculable: false,
-        ...scaleLabels(c?.min ?? 0, c?.max ?? 0, false),
-        seriesIndex: series.length,
-        inRange: { color: palette(scheme, c?.min ?? 0, c?.max ?? 0) },
-      });
+      visualMaps.push(
+        levels
+          ? {
+              type: "piecewise",
+              categories: levels.map(String),
+              inRange: { color: levels.map((_, i) => CATEGORY_COLOURS[i % CATEGORY_COLOURS.length]) },
+              selectedMode: false,
+              seriesIndex: series.length,
+            }
+          : {
+              type: "continuous",
+              min: c?.min ?? 0,
+              max: c?.max ?? 0,
+              calculable: false,
+              ...scaleLabels(c?.min ?? 0, c?.max ?? 0, false),
+              seriesIndex: series.length,
+              inRange: { color: palette(scheme, c?.min ?? 0, c?.max ?? 0) },
+            },
+      );
       push(
         {
           type: "custom",
@@ -730,6 +747,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     // #847/#848 P14: time axes read the column's clock (see clock.ts), never
     // the viewer's zone
     useUTC: true,
+    // the category palette, set rather than left to ECharts' default so a
+    // category grid's raster reads the same constant (#847/#848 P19)
+    color: CATEGORY_COLOURS,
     tooltip,
     series,
     brush: { toolbox: ["rect", "polygon", "clear"], xAxisIndex: cartesian ? 0 : undefined, throttleType: "debounce", throttleDelay: 250 },
