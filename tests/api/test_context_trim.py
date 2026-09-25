@@ -424,25 +424,36 @@ async def test_the_catalog_rung_does_not_block_the_event_loop():
     on EVERY turn, from inside `async def build_chat_turn`, and the bundled
     default model is `ollama/*` — so a dev deploy whose Ollama host stops
     answering freezes the whole pod for over two minutes.
-    """
-    import time
 
+    Asserted by WHERE the lookup runs, not by how long `_budget_for` took: a
+    wall-clock bound also timed the lazy imports inside `_budget_for`, and on a
+    slow CI runner a first import alone crossed it (0.70s, twice) — a verdict on
+    the machine, not on the loop.
+    """
+    import asyncio
+    import threading
+
+    from workspace_app.context_budget import _INFLIGHT
     from workspace_app.context_probe import EndpointLimits
     from workspace_app.resources import AgentConfig
 
+    loop_thread = threading.get_ident()
+    calls: list[int] = []
+
+    def catalog(model):  # a daemon that would hang, recording where it ran
+        calls.append(threading.get_ident())
+        return EndpointLimits(max_input_tokens=40_960, max_tokens=None)
+
     cfg = AgentConfig(name="t", model="ollama/qwen3:14b", system_prompt="s")
     builder = _bare_builder()
-    builder._catalog_fn = lambda model: (  # a hanging daemon
-        time.sleep(0.5),
-        EndpointLimits(max_input_tokens=40_960, max_tokens=None),
-    )[1]
+    builder._catalog_fn = catalog
 
-    started = time.perf_counter()
     got = builder._budget_for(cfg)
-    elapsed = time.perf_counter() - started
 
-    assert elapsed < 0.2, f"the catalog rung blocked the event loop for {elapsed:.2f}s"
+    assert calls == [], "the lookup ran before _budget_for returned — on the event loop"
     assert got is None, "not back yet ⇒ unknown, which already means 'send it all'"
+    await asyncio.gather(*list(_INFLIGHT))
+    assert len(calls) == 1 and calls[0] != loop_thread, "the lookup must run off the loop's thread"
 
 
 def test_the_turn_overhead_is_measured_once(monkeypatch):
