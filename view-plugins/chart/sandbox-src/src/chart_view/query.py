@@ -95,17 +95,86 @@ def _kinds(mark: str, channels: list[tuple[str, Mapping[str, Any]]]) -> dict[str
     return kinds
 
 
+def _measures(channels: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    """An aggregate item per field a channel aggregates (the first channel naming it)."""
+    items: dict[str, dict[str, Any]] = {}
+    for _, d in channels:
+        if d.get("aggregate") and d["field"] not in items:
+            items[d["field"]] = {"op": d["aggregate"], "field": d["field"], "as": d["field"]}
+    return list(items.values())
+
+
 def _implicit_aggregate(
     df: pd.DataFrame, channels: list[tuple[str, Mapping[str, Any]]]
-) -> pd.DataFrame:
-    """Vega-Lite's encoding `aggregate`: group by every other field channel."""
-    measured = [d for _, d in channels if d.get("aggregate")]
-    if not measured:
-        return df
-    items = [{"op": d["aggregate"], "field": d["field"], "as": d["field"]} for d in measured]
-    names = {d["field"] for d in measured}
+) -> tuple[pd.DataFrame, list[str]]:
+    """Vega-Lite's encoding `aggregate`: group by every other field channel.
+    Also the fields it aggregated (what the answer calls `measured`)."""
+    items = _measures(channels)
+    if not items:
+        return df, []
+    names = {i["field"] for i in items}
     groupby = list(dict.fromkeys(d["field"] for _, d in channels if d["field"] not in names))
-    return aggregate(df, items, groupby)
+    return aggregate(df, items, groupby), sorted(names)
+
+
+def stacked(mark: str, props: Mapping[str, Any]) -> bool:
+    """Whether a layer is a stack: a bar or an area with `stack: true` (the
+    marks the renderer stacks)."""
+    return mark in ("bar", "area") and props.get("stack") is True
+
+
+def _stack_sum(
+    df: pd.DataFrame, channels: list[tuple[str, Mapping[str, Any]]], encoding: Mapping[str, Any]
+) -> tuple[pd.DataFrame, list[str]]:
+    """A stack's rows, one per slot and colour (#847/#848 PR 5 P40 row 18).
+
+    Exactly an `aggregate: sum` on the value channel (its own `aggregate` op
+    if it has one), grouped by the slot -- y when y is a category (a
+    horizontal bar), else x, as the renderer stacks -- and the colour, unless
+    that is by value (`validate` refuses a stack coloured so: which rows form
+    one segment would not be defined). A missing value adds nothing, and a
+    slot of nothing but missing values sums to 0, as `aggregate: sum` does. A
+    field another channel aggregates is aggregated the same way; any other
+    field keeps the value the group's rows share, and is empty where they
+    differ. Also the fields it summed or kept (what the answer calls
+    `measured`): neither is a key, so a selection writes the slot and colour.
+    """
+    horizontal = encoding["y"]["type"] in ("nominal", "ordinal")
+    value = encoding["x" if horizontal else "y"]
+    groups = [encoding["y" if horizontal else "x"]["field"]]
+    colour = encoding.get("color")
+    if colour and "field" in colour and colour["type"] != "quantitative":
+        groups.append(colour["field"])
+    groups = list(dict.fromkeys(g for g in groups if g != value["field"]))
+    items = [{"op": value.get("aggregate", "sum"), "field": value["field"], "as": value["field"]}]
+    items += [i for i in _measures(channels) if i["field"] != value["field"]]
+    summed = {i["field"] for i in items}
+    kept = list(
+        dict.fromkeys(d["field"] for _, d in channels if d["field"] not in {*groups, *summed})
+    )
+    out = aggregate(df, items, groups)
+    if kept:
+        out = out.assign(**_shared(df, kept, groups))
+    return out, sorted({*summed, *kept})
+
+
+def _shared(df: pd.DataFrame, fields: list[str], groups: list[str]) -> dict[str, pd.Series]:
+    """Per group of `groups` (in `aggregate`'s order), each field's value where
+    every row of the group has that one value, else missing. A list or
+    mapping is compared as its marking text; the value kept is the row's own."""
+    frame = df.assign(**{k: unhashable_as_text(df[k]) for k in groups})
+    codes = frame.groupby(groups, dropna=False, sort=True).ngroup().to_numpy()
+    first = pd.Series(np.arange(len(df))).groupby(codes).first().to_numpy()
+    out: dict[str, pd.Series] = {}
+    for f in fields:
+        one = (unhashable_as_text(df[f]).groupby(codes).nunique(dropna=False) == 1).to_numpy()
+        picked = df[f].iloc[first].reset_index(drop=True)
+        if picked.dtype.kind in "iub":
+            # a missing value would turn integers into floats (1 -> 1.0, a
+            # label "1.0") and true / false into numbers: nullable, they stay
+            picked = picked.astype("boolean" if picked.dtype.kind == "b" else "Int64")
+        out[f] = picked.where(one)
+    return out
 
 
 def _group_fields(channels: list[tuple[str, Mapping[str, Any]]], value: str) -> list[str]:
@@ -242,6 +311,9 @@ class LayerRows:
     lit: pd.Series | None
     outliers: pd.DataFrame | None = None
     outlier_kinds: dict[str, str] = field(default_factory=dict)
+    # the fields sent holding an aggregate (a sum, a mean...) or, in a stack,
+    # the value its rows share: never a key (see the module doc)
+    measured: list[str] = field(default_factory=list)
 
 
 def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str, Any]) -> LayerRows:
@@ -252,6 +324,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
     need_columns(df, *(d["field"] for _, d in channels))
     kinds = _kinds(mark, channels)
     outliers, outlier_kinds = None, {}
+    measured: list[str] = []
 
     if not channels:  # a rule drawn only from `datum`s
         df = df.iloc[0:0][[]]
@@ -264,8 +337,12 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
         df = _errorbar(df, channels, encoding, props.get("extent", "stderr"))
         kinds = {f: kinds[f] for f in _group_fields(channels, encoding["y"]["field"])}
         kinds.update({k: "f64" for k in ("$lo", "$mid", "$hi")})
+    elif stacked(mark, props):
+        df, measured = _stack_sum(df, channels, encoding)
+        value = encoding["x" if encoding["y"]["type"] in ("nominal", "ordinal") else "y"]
+        kinds[value["field"]] = "f64"
     else:
-        df = _implicit_aggregate(df, channels)
+        df, measured = _implicit_aggregate(df, channels)
 
     for k in spec.get("keys", []):
         if k not in df.columns:
@@ -278,7 +355,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
             df = df.assign(**{f"$key.{k}": df[k]})
             kinds[f"$key.{k}"] = "cat"
     lit = _highlight(df, spec.get("highlight"))
-    return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds)
+    return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds, measured)
 
 
 def layer_rows(spec: Mapping[str, Any], frame: pd.DataFrame) -> list[LayerRows]:
@@ -298,7 +375,12 @@ def binned(spec: Mapping[str, Any], layer: LayerRows) -> bool:
 
 def _answer(spec: Mapping[str, Any], layer: LayerRows) -> dict[str, Any]:
     df, kinds, lit = layer.rows, layer.kinds, layer.lit
-    out: dict[str, Any] = {"mark": layer.mark, "binned": None, "outliers": None}
+    out: dict[str, Any] = {
+        "mark": layer.mark,
+        "binned": None,
+        "outliers": None,
+        "measured": layer.measured,
+    }
     if layer.outliers is not None:
         columns = _encode(layer.outliers, layer.outlier_kinds)
         out["outliers"] = {"rows": len(layer.outliers), "columns": columns}

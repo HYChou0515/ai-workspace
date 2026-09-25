@@ -29,6 +29,10 @@ export type WireLayer = {
   lit: number | null;
   binned: { points: number; bins: number } | null;
   outliers: { rows: number; columns: Record<string, WireColumn> } | null;
+  /** The fields sent holding an aggregate -- a channel's `aggregate`, or a
+   * stack's sum (#847/#848 PR 5 P40 row 18) and the values its rows share --
+   * not the field's values: never a marking key (`measuredFields`). */
+  measured: string[];
 };
 
 export type Answer = { format: 1; layers: WireLayer[] };
@@ -65,16 +69,11 @@ export type ChartSpec = Record<string, unknown> & {
   layer?: LayerSpec[];
 };
 
-/** `rows[j]` is the layer row data point j draws; a list of rows for a
- * stack's point that draws their SUM and stands for every one of them (PR 5
- * P37 row 12, `stackPoints`); null for a point a stack adds to line its
- * series up (`lineUpStacks`), which draws none. */
-export type SeriesRows = { layer: number; rows: (number | number[] | null)[] };
-
-/** The layer rows a series' point `entry` stands for (none for a filler). */
-export function rowsAt(entry: number | number[] | null | undefined): number[] {
-  return entry === null || entry === undefined ? [] : Array.isArray(entry) ? entry : [entry];
-}
+/** `rows[j]` is the layer row data point j draws; null for a point a stack
+ * adds to line its series up (`lineUpStacks`), which draws none. (A stack's
+ * rows reach here summed, one per slot and colour: the sandbox sums them,
+ * PR 5 P40 row 18.) */
+export type SeriesRows = { layer: number; rows: (number | null)[] };
 
 export type GridLayer = { layer: number; seriesIndex: number; cells: Cells; image: RasterImage };
 
@@ -139,20 +138,17 @@ function layersOf(spec: ChartSpec): LayerSpec[] {
   return [{ mark: spec.mark as string | MarkDef, encoding: spec.encoding as Encoding }];
 }
 
-/** Per layer, the fields a channel `aggregate`s (#847/#848 PR 5 P32). The
- * sandbox sends an aggregate under its field's own name (and as
- * `$key.<field>` when the field is in `keys:`), holding counts or means, not
- * the field's values -- so such a column is never a marking key: a layer
- * neither lights by it nor writes it (`keyColumn`). */
+/** Per layer, the fields sent holding an aggregate (#847/#848 PR 5 P32): a
+ * channel's `aggregate`, and a stack's sum and the values its rows share (PR
+ * 5 P40 row 18). The sandbox sends one under its field's own name (and as
+ * `$key.<field>` when the field is in `keys:`), holding counts, means or
+ * sums, not the field's values -- so such a column is never a marking key: a
+ * layer neither lights by it nor writes it (`keyColumn`). Read from the
+ * answer, which says which: the sandbox decides it, once. */
 export type Measured = readonly ReadonlySet<string>[];
 
-export function measuredFields(doc: object): Measured {
-  return layersOf(doc as ChartSpec).map((ly) => {
-    const enc = ly.encoding ?? {};
-    const tips = enc.tooltip === undefined ? [] : Array.isArray(enc.tooltip) ? enc.tooltip : [enc.tooltip];
-    const channels = [enc.x, enc.y, enc.x2, enc.y2, enc.color, enc.size, enc.theta, enc.text, ...tips];
-    return new Set(channels.flatMap((c) => (c?.aggregate && c.field ? [c.field] : [])));
-  });
+export function measuredFields(answer: Answer): Measured {
+  return answer.layers.map((ly) => new Set(ly.measured ?? []));
 }
 
 function markOf(layer: LayerSpec): MarkDef {
@@ -499,8 +495,8 @@ type Point = (number | null)[];
 type Item = Point | { value: Point; [style: string]: unknown };
 
 /** #847/#848 PR 5 P29: a stack on a number, log or time x, as ECharts draws
- * one on a category x. A series of a stack has one point per slot at most
- * (`stackPoints`). ECharts matches a stack's points by x VALUE only on a
+ * one on a category x. A series of a stack has one point per slot at most:
+ * the sandbox sends a stack one row per slot and colour (PR 5 P40 row 18). ECharts matches a stack's points by x VALUE only on a
  * category axis; on any other it adds point j to point j of the series under
  * it, and on a number x it stacks the first number dimension it finds -- x
  * itself (echarts data/helper/dataStackHelper.js). So here every series of a
@@ -537,8 +533,8 @@ function lineUpStacks(
     return Array.isArray(d) ? value : { ...d, value };
   };
   for (const members of stacks.values()) {
-    // per series: x → the index of its point there -- one at most: a stacked
-    // series draws the sum of its rows at a slot as one point (`stackPoints`)
+    // per series: x → the index of its point there -- one at most: the
+    // sandbox sums a stack's rows per slot and colour (P40 row 18)
     const where = members.map((i) => new Map((series[i].data as Item[]).map((d, j) => [valueOf(d)[at], j])));
     const slots = [...new Set(where.flatMap((m) => [...m.keys()]))].sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
     // the slots where a series below has a value a log axis can place:
@@ -585,25 +581,6 @@ function lineUpStacks(
     });
   }
   return emptied;
-}
-
-/** #847/#848 PR 5 P37 row 12: a stacked series' points, one per slot. ECharts
- * stacks one SERIES on another, never a series' own points, so two rows of
- * one series at one slot (a category, an x) were drawn from the same base,
- * over each other (P35 row 7). Here the rows of a series at one slot are one
- * point, which draws their SUM and stands for all of them: a list of rows
- * (one row stays a number). P35 split the rows into one series per row-rank
- * instead: a slot with 10,000 rows was 10,000 series, each lined up at every
- * slot. This is one pass over the rows, and one point per slot. */
-function stackPoints(members: number[], slotOf: (r: number) => number | null): (number | number[])[] {
-  const at = new Map<number | null, number[]>();
-  for (const r of members) {
-    const slot = slotOf(r);
-    const list = at.get(slot);
-    if (list) list.push(r);
-    else at.set(slot, [r]);
-  }
-  return [...at.values()].map((rows) => (rows.length === 1 ? rows[0] : rows));
 }
 
 /** `doc` is a chart document that already passed `specErrors`. */
@@ -681,13 +658,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const all = Array.from({ length: n }, (_, i) => i);
     // `highlight:` — an unlit row is drawn dimmed in its own data item.
     const lit = opts.lit ? (opts.lit[li] ?? null) : litRows(wire);
-    // a stack's summed point is lit if any of the rows it stands for is
-    // (P37 row 12)
-    const item = <T,>(value: T, row: number | number[]): T | { value: T; itemStyle: { opacity: number } } =>
-      lit && !rowsAt(row).some((r) => lit[r]) ? { value, itemStyle: { opacity: DIM_OPACITY } } : value;
+    const item = <T,>(value: T, row: number): T | { value: T; itemStyle: { opacity: number } } =>
+      lit && !lit[row] ? { value, itemStyle: { opacity: DIM_OPACITY } } : value;
     // `as`: the series' legend name when its ECharts name is not one (a
     // layer with no colour split, named for its palette colour alone)
-    const push = (s: Record<string, unknown>, r: (number | number[])[], as?: { legend: string | undefined }) => {
+    const push = (s: Record<string, unknown>, r: number[], as?: { legend: string | undefined }) => {
       series.push(s);
       rows.push({ layer: li, rows: r });
       names.push(as ? as.legend : typeof s.name === "string" ? s.name : undefined);
@@ -958,35 +933,14 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const textCol = enc.text?.field ? cols[enc.text.field] : undefined;
     const stacked = (mark.type === "area" || mark.type === "bar") && mark.stack === true;
     const first = series.length;
-    const valueAt = baseAt === 1 ? 0 : 1;
-    // A point's position and extras: a row's own, or a stack's sum of rows
-    // (`stackPoints`) -- its slot, the sum of their values (none when no row
-    // has one), and each extra (a colour or size by value) where the rows
-    // share one value, else none: a sum has no one colour value.
-    const pointOf = (entry: number | number[]): (number | null)[] => {
-      if (!Array.isArray(entry)) return point(li, entry, extras.map((c) => c.value(entry) as number | null));
-      const [r0] = entry;
-      const out = point(li, r0);
-      let sum: number | null = null;
-      for (const r of entry) {
-        const v = point(li, r)[valueAt];
-        // (a row with no value adds nothing, as pandas' sum skips it)
-        if (typeof v === "number") sum = (sum ?? 0) + v;
-      }
-      out[valueAt] = sum;
-      for (const c of extras) {
-        const v = c.value(r0) as number | null;
-        out.push(entry.every((r) => c.value(r) === v) ? v : null);
-      }
-      return out;
-    };
     for (const key of order) {
-      const rowsOfKey = groups.get(key) ?? [];
-      const members: (number | number[])[] = stacked ? stackPoints(rowsOfKey, (r) => point(li, r)[baseAt]) : rowsOfKey;
+      // (a stack's rows are one per slot here: the sandbox summed them, P40 row 18)
+      const members = groups.get(key) ?? [];
+      const points = members.map((r) => point(li, r, extras.map((c) => c.value(r) as number | null)));
       const type = mark.type === "area" ? "line" : mark.type === "text" ? "scatter" : mark.type;
       const s: Record<string, unknown> = {
         type,
-        data: members.map((r) => item(pointOf(r), r)),
+        data: points.map((p, j) => item(p, members[j])),
         ...common(mark),
       };
       if (splitCol) {
@@ -1017,7 +971,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           s.blur = { ...(s.blur as object), itemStyle: { opacity: 0 } };
           // a dimmed point's own opacity would draw it (`point: false` with a
           // highlight): here the points stay clear
-          s.data = members.map(pointOf);
+          s.data = points;
         }
         if (mark.smooth) s.smooth = true;
       }
@@ -1030,7 +984,6 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         s.label = {
           show: true,
           formatter: (p: { seriesIndex: number; dataIndex: number }) => {
-            // (a stack's sum of rows is no one row's text)
             const row = rows[p.seriesIndex]?.rows[p.dataIndex];
             return typeof row === "number" ? show(textCol, row) : "";
           },
@@ -1085,30 +1038,6 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     });
   }
 
-  // A stack's point that draws the sum of several rows (P37 row 12): its
-  // value is the sum -- read from the point drawn, so the tooltip says what
-  // the bar shows -- and it says so and of how many rows; of the other
-  // fields, what every one of those rows shares -- its slot, its colour -- is
-  // said, and what differs between them is not: it is no one row.
-  const sumTip = (enc: Encoding, cols: Record<string, Column>, sum: number[], drawn: Item): string => {
-    const valueField = (baseAt === 1 ? enc.x : enc.y)?.field;
-    // off a category axis a stack's points list the value first (`lineUpStacks`)
-    const onCategory = (baseAt === 1 ? yAxis : xAxis)?.kind === "category";
-    const total = (Array.isArray(drawn) ? drawn : drawn.value)[onCategory ? (baseAt === 1 ? 0 : 1) : 0];
-    const lines = tooltipChannels(enc).flatMap((c) => {
-      const col = cols[c.field!];
-      if (!col) return [];
-      const title = escape(c.title ?? c.field!);
-      if (c.field === valueField) {
-        const shown = total === null ? "—" : Number.isInteger(total) ? String(total) : String(Number(total.toPrecision(6)));
-        return [`${title}: <b>${escape(shown)}</b> (sum of ${sum.length.toLocaleString("en-US")} rows)`];
-      }
-      const text = show(col, sum[0]);
-      return sum.every((r) => show(col, r) === text) ? [`${title}: <b>${escape(text)}</b>`] : [];
-    });
-    return lines.join("<br/>");
-  };
-
   const tooltip = {
     trigger: "item",
     confine: true,
@@ -1119,7 +1048,6 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       if (row === undefined || row === null) return "";
       const enc = specs[where.layer].encoding;
       const cols = decoded[where.layer];
-      if (Array.isArray(row)) return sumTip(enc, cols, row, (series[p.seriesIndex].data as Item[])[p.dataIndex]);
       const lines = tooltipChannels(enc)
         .filter((c) => cols[c.field!])
         .map((c) => `${escape(c.title ?? c.field!)}: <b>${escape(show(cols[c.field!], row))}</b>`);

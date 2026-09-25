@@ -4,17 +4,18 @@
  * (P29); on a log y it is empty only where nothing lies beneath it (P35 row 8).
  * (Found when P35 row 7 split a series' raw rows into pieces: an AREA stacked
  * from rows on a category x ran straight across the categories where a piece
- * had no row. P37 row 12 draws a series' rows at a category as one point,
- * their sum, so here a series is one area, and the rule is kept for the
- * category a series has no row at.)
+ * had no row. The sandbox sums a series' rows at a category into one row,
+ * P40 row 18 -- P37 row 12 summed them here -- so a series is one area, and
+ * the rule is kept for the category a series has no row at.)
  *
  * Against REAL ECharts (SSR): the drawn area outlines are read from the SVG
- * and mapped back to data through the grid. The oracle is pandas:
+ * and mapped back to data through the grid. The answers are the sandbox's
+ * own (`stackCorpus.ts`); the oracle is pandas:
  *
- *   df = pd.DataFrame({"c": list("prspspqrs"), "g": list("aaaaabbbb"),
- *                      "v": [1, 3, 4, 5, 6, 1, 1, 1, 1]})
- *   df.pivot_table(index="g", columns="c", values="v", aggfunc="sum",
- *                  fill_value=0).cumsum()
+ *   df = pd.DataFrame({"item": list("prspspqrs"), "group": list("aaaaabbbb"),
+ *                      "value": [1, 3, 4, 5, 6, 1, 1, 1, 1]})
+ *   df.pivot_table(index="group", columns="item", values="value",
+ *                  aggfunc="sum", fill_value=0).cumsum()
  *
  *        p  q  r   s
  *   a    6  0  3  10     <- a has no row at q; two rows at p and at s
@@ -26,7 +27,9 @@ import { describe, expect, it } from "vitest";
 
 import "./echarts"; // registers the chart's series + components
 import { type Answer, toOption } from "./option";
+import { stackCase } from "./stackCorpus";
 import { answer, base, cat, f64, layer } from "./testAnswer";
+import { decodeColumn } from "./wire";
 
 echarts.use([SVGRenderer]);
 
@@ -51,20 +54,14 @@ function draw(doc: object, a: Answer) {
 }
 
 const CATS = ["p", "q", "r", "s"];
-const C = ["p", "r", "s", "p", "s", "p", "q", "r", "s"];
-const G = ["a", "a", "a", "a", "a", "b", "b", "b", "b"];
-const V = [1, 3, 4, 5, 6, 1, 1, 1, 1];
 // pandas, above: each series' stacked top per category, in stack order
 const TOPS = [
   [6, 0, 3, 10],
   [7, 1, 4, 11],
 ];
-const rowsOf = (mark: string) => answer(layer(mark, C.length, { c: cat(C), g: cat(G), v: f64(V) }));
-const doc = (mark: object, y: object = { field: "v", type: "quantitative" }) => ({
-  ...base,
-  mark,
-  encoding: { x: { field: "c", type: "nominal" }, y, color: { field: "g", type: "nominal" } },
-});
+const AREA = stackCase("an area with a gap at a category");
+const UPRIGHT = stackCase("a bar with a gap at a category");
+const HORIZONTAL = stackCase("a horizontal bar with a gap at a category");
 
 /** The vertices of every filled area in the SVG, in data coordinates
  * ([category index, y], rounded), one list per area path, in drawing order. */
@@ -91,7 +88,7 @@ const expected = (tops: number[], under: number[] | null) =>
 
 describe("an area of rows stacked on a category x (P36 row 11)", () => {
   it("draws each series' outline at the cumulative sums, every category, 0 where it has no row", () => {
-    const { chart, svg } = draw(doc({ type: "area", stack: true }), rowsOf("area"));
+    const { chart, svg } = draw(AREA.spec, AREA.answer);
     const drawn = outlines(chart, svg);
     expect(drawn).toHaveLength(2);
     expect(drawn.map(pointsOf)).toEqual(TOPS.map((t, k) => expected(t, k === 0 ? null : TOPS[k - 1])));
@@ -99,9 +96,11 @@ describe("an area of rows stacked on a category x (P36 row 11)", () => {
   });
 
   it("puts every row's stacked top where pandas puts it, and adds a point that draws no row", () => {
-    const { chart, built, model } = draw(doc({ type: "area", stack: true }), rowsOf("area"));
-    // a: rows 0 and 3 at p (summed), nothing at q, row 1 at r, 2 and 4 at s
-    expect(built.series[0].rows).toEqual([[0, 3], null, 1, [2, 4]]);
+    const { chart, built, model } = draw(AREA.spec, AREA.answer);
+    // a: its summed rows at p, r and s, and nothing at q (P40 row 18
+    // [supersedes P37's "rows 0 and 3 at p, 2 and 4 at s": two lists of rows])
+    const item = decodeColumn(AREA.answer.layers[0].columns.item);
+    expect(built.series[0].rows.map((r) => (r === null ? null : item.value(r)))).toEqual(["p", null, "r", "s"]);
     const top = (i: number, j: number) => {
       const data = model.getSeriesByIndex(i).getData();
       return data.get(data.getCalculationInfo("stackResultDimension"), j);
@@ -113,14 +112,8 @@ describe("an area of rows stacked on a category x (P36 row 11)", () => {
   it("on a log y, leaves a series empty where nothing lies beneath it", () => {
     // a has no row at q: nothing beneath it there (empty). b sits on whatever
     // is there: a's sums at p (2 + 5), r, s (4 + 6), nothing at q.
-    const LC = ["p", "r", "s", "p", "s", "p", "q", "r", "s"];
-    const LG = ["a", "a", "a", "a", "a", "b", "b", "b", "b"];
-    const LV = [2, 3, 4, 5, 6, 1, 1, 1, 1];
-    const a = answer(layer("area", LC.length, { c: cat(LC), g: cat(LG), v: f64(LV) }));
-    const { chart, built, model, svg } = draw(
-      doc({ type: "area", stack: true }, { field: "v", type: "quantitative", scale: { type: "log" } }),
-      a,
-    );
+    const log = stackCase("an area with a gap at a category, on a log y");
+    const { chart, built, model, svg } = draw(log.spec, log.answer);
     const series = built.option.series as { data: ({ value?: unknown[] } | unknown[])[] }[];
     const valueAt = (i: number, j: number) => {
       const d = series[i].data[j];
@@ -170,12 +163,7 @@ describe("a bar of rows stacked on a category axis (P36 row 11)", () => {
   }
 
   it("draws nothing for a horizontal bar's series where it has no row, and the next series sits on what is beneath", () => {
-    const horizontal = {
-      ...base,
-      mark: { type: "bar", stack: true },
-      encoding: { x: { field: "v", type: "quantitative" }, y: { field: "c", type: "nominal" }, color: { field: "g", type: "nominal" } },
-    };
-    const { chart, built, model } = draw(horizontal, rowsOf("bar"));
+    const { chart, built, model } = draw(HORIZONTAL.spec, HORIZONTAL.answer);
     expect(bars(chart, model, 2, true)).toEqual([
       [[0, 6], null, [0, 3], [0, 10]],
       [[6, 7], [0, 1], [3, 4], [10, 11]],
@@ -207,7 +195,7 @@ describe("a bar of rows stacked on a category axis (P36 row 11)", () => {
   });
 
   it("draws nothing for a series where it has no row, and the next series sits on what is beneath", () => {
-    const { chart, model } = draw(doc({ type: "bar", stack: true }), rowsOf("bar"));
+    const { chart, model } = draw(UPRIGHT.spec, UPRIGHT.answer);
     expect(bars(chart, model, 2)).toEqual([
       [[0, 6], null, [0, 3], [0, 10]],
       [[6, 7], [0, 1], [3, 4], [10, 11]],

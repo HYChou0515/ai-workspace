@@ -14,7 +14,7 @@
  * - legend: ECharts' own show / hide stays; with a category hidden, the rows
  *   still shown are the selection; with all shown, nothing is.
  */
-import { type Answer, type Built, type Measured, rowsAt, type WireLayer } from "./option";
+import { type Answer, type Built, type Measured, type WireLayer } from "./option";
 import { litRows } from "./highlight";
 import { canon, type Column, decodeColumn } from "./wire";
 
@@ -102,9 +102,11 @@ export function selectionFromBrush(event: BrushSelected, built: Built): Selectio
   for (const s of event.batch[0]?.selected ?? []) {
     const map = built.series[s.seriesIndex];
     if (!map) continue;
-    // every row a point stands for: a stack's sum stands for all of its rows
-    // (P37 row 12), a point a stack added to line it up for none
-    for (const i of s.dataIndex) for (const row of rowsAt(map.rows[i])) pairs.push([map.layer, row]);
+    for (const i of s.dataIndex) {
+      // (a point a stack added to line it up draws no row)
+      const row = map.rows[i];
+      if (typeof row === "number") pairs.push([map.layer, row]);
+    }
   }
   for (const g of built.grids) {
     const cells = g.cells;
@@ -133,7 +135,7 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
       return;
     }
     const name = built.names[i];
-    if (name !== undefined && selected[name] !== false) for (const entry of s.rows) for (const r of rowsAt(entry)) pairs.push([s.layer, r]);
+    if (name !== undefined && selected[name] !== false) for (const r of s.rows) if (r !== null) pairs.push([s.layer, r]);
   });
   return group("legend", pairs);
 }

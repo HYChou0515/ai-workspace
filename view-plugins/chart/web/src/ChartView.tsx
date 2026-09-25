@@ -96,8 +96,9 @@ function Plot({
   const chartRef = useRef<Chart | null>(null);
   const [selection, setSelection] = useState<Selection[]>([]);
   const keys = useMemo(() => (Array.isArray(doc.keys) ? (doc.keys as string[]) : []), [doc]);
-  // Per layer, the fields a channel aggregates: never a key (PR 5 P32).
-  const measured = useMemo(() => measuredFields(doc), [doc]);
+  // Per layer, the fields sent holding an aggregate: never a key (PR 5 P32),
+  // as the answer says (a stack's sum too, P40 row 18).
+  const measured = useMemo(() => measuredFields(answer), [answer]);
   // Subscribed by NAME: a write to another marking does not re-render this view.
   const [entry, write] = useMarking(marking);
   // On a marking that holds something, IT decides what is lit (the platform's

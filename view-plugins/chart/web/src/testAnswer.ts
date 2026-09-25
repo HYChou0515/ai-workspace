@@ -44,7 +44,7 @@ export function layer(
   columns: Record<string, WireColumn>,
   extra: Partial<WireLayer> = {},
 ): WireLayer {
-  return { mark, rows, columns, highlight: null, lit: null, binned: null, outliers: null, ...extra };
+  return { mark, rows, columns, highlight: null, lit: null, binned: null, outliers: null, measured: [], ...extra };
 }
 
 export function answer(...layers: WireLayer[]): Answer {

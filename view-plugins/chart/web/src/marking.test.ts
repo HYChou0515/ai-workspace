@@ -189,31 +189,19 @@ describe("an aggregated channel's column is not a key (#847/#848 PR 5 P32)", () 
   });
 });
 
-describe("measuredFields (P32)", () => {
-  it("names, per layer, the fields a channel aggregates", () => {
-    const doc = {
-      view: "chart",
-      source: "a.csv",
-      layer: [
-        { mark: "bar", encoding: { x: { field: "group", type: "nominal" }, y: { field: "item", type: "quantitative", aggregate: "mean" } } },
-        { mark: "scatter", encoding: { x: { field: "group", type: "nominal" }, y: { field: "item", type: "quantitative" } } },
-      ],
-    };
-    expect(measuredFields(doc).map((s) => [...s])).toEqual([["item"], []]);
+describe("measuredFields (P32, P40 row 18)", () => {
+  // The answer says which fields each layer sends holding an aggregate --
+  // or, in a stack the sandbox summed, the value its rows share -- so the
+  // renderer never restates the sandbox's rule for it (a stack's value
+  // channel is summed with no `aggregate` in the spec).
+  it("reads, per layer, the fields the answer says it measured", () => {
+    const a = answer(layer("bar", 1, {}, { measured: ["item"] }), layer("scatter", 1, {}));
+    expect(measuredFields(a).map((s) => [...s])).toEqual([["item"], []]);
   });
 
-  it("reads a single-layer spec, and a tooltip list", () => {
-    const doc = {
-      view: "chart",
-      source: "a.csv",
-      mark: "pie",
-      encoding: {
-        theta: { field: "item", type: "quantitative", aggregate: "count" },
-        color: { field: "group", type: "nominal" },
-        tooltip: [{ field: "value", type: "quantitative", aggregate: "sum" }],
-      },
-    };
-    expect(measuredFields(doc).map((s) => [...s].sort())).toEqual([["item", "value"]]);
+  it("reads a stack's summed value and the fields it kept where shared", () => {
+    const a = answer(layer("bar", 1, {}, { measured: ["region", "value"] }));
+    expect(measuredFields(a).map((s) => [...s].sort())).toEqual([["region", "value"]]);
   });
 });
 

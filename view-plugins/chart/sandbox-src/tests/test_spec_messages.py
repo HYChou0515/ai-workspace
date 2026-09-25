@@ -139,3 +139,41 @@ def test_a_tooltip_item_that_is_no_channel_is_not_told_about_a_datum():
     text = BASE + "mark: scatter\n" + ENC + "  tooltip: [a]\n"
     lines = _errors(text)
     assert lines and not any("datum is drawn" in line for line in lines), lines
+
+
+STACK_BY_VALUE = (
+    "a stack cannot be coloured by value (quantitative): which rows form one segment of it "
+    "is not defined — colour it by a category (nominal or ordinal), or drop stack"
+)
+STACK = (
+    "mark: {type: bar, stack: true}\nencoding:\n  x: {field: a, type: nominal}\n"
+    "  y: {field: b, type: quantitative}\n  color: {field: c, type: quantitative}\n"
+)
+
+
+def test_a_stack_coloured_by_value_says_why():
+    # #847/#848 PR 5 P40 row 18: a stack is summed per slot and colour, and a
+    # colour by value makes no segments. The renderer's spec.test.ts reads the same.
+    assert _errors(BASE + STACK) == [f"encoding.color: {STACK_BY_VALUE}"]
+
+
+def test_a_layer_stack_coloured_by_value_says_why():
+    layered = "layer:\n  - mark: {type: area, stack: true}\n    encoding:\n" + "".join(
+        f"      {line}\n" for line in STACK.splitlines()[2:]
+    )
+    assert _errors(BASE + layered) == [f"layer[0].encoding.color: {STACK_BY_VALUE}"]
+
+
+def test_a_stack_coloured_by_a_category_or_no_stack_is_not_refused():
+    enc = "encoding:\n  x: {field: a, type: nominal}\n  y: {field: b, type: quantitative}\n"
+    for mark, colour in [
+        ("{type: bar, stack: true}", "nominal"),
+        ("{type: area, stack: true}", "ordinal"),
+        ("{type: area, stack: true}", "temporal"),
+        ("{type: bar, stack: false}", "quantitative"),
+        ("{type: bar}", "quantitative"),
+        ("{type: line, stack: true}", "quantitative"),
+        ("bar", "quantitative"),
+    ]:
+        text = BASE + f"mark: {mark}\n" + enc + f"  color: {{field: c, type: {colour}}}\n"
+        assert _errors(text) == [], (mark, colour)

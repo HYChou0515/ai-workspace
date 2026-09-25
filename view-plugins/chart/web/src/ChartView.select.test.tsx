@@ -284,7 +284,10 @@ describe("a click on a pie's slice writes the marking", () => {
     mark: "pie",
     encoding: { theta: { field: "item", type: "quantitative", aggregate: "count" }, color: { field: "group", type: "nominal" } },
   };
-  const COUNTS = answer(layer("pie", 4, { group: cat(["A", "B", "C", "D"]), item: f64([6, 4, 3, 5]), "$key.item": cat([6, 4, 3, 5]) }));
+  // (the sandbox's answer says which field holds the count: P40 row 18)
+  const COUNTS = answer(
+    layer("pie", 4, { group: cat(["A", "B", "C", "D"]), item: f64([6, 4, 3, 5]), "$key.item": cat([6, 4, 3, 5]) }, { measured: ["item"] }),
+  );
   const opacities = (chart: echarts.ECharts) => {
     type Data = { count(): number; getItemVisual(i: number, k: "style"): { opacity?: number } };
     type Model = { getSeriesByIndex(i: number): { getData(): Data } };

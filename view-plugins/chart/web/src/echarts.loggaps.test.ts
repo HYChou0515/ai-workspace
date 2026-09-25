@@ -14,7 +14,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { describe, expect, it } from "vitest";
 
 import "./echarts"; // registers the chart's series + components
-import { type Answer, rowsAt, toOption } from "./option";
+import { type Answer, toOption } from "./option";
 import { answer, base, cat, f64, layer } from "./testAnswer";
 
 echarts.use([SVGRenderer]);
@@ -85,7 +85,7 @@ function tops(model: Model, built: ReturnType<typeof toOption>): Map<number, num
   built.series.forEach((s, i) => {
     const data = model.getSeriesByIndex(i).getData();
     const dim = data.getCalculationInfo("stackResultDimension");
-    s.rows.forEach((r, j) => rowsAt(r).forEach((row) => out.set(row, data.get(dim, j))));
+    s.rows.forEach((r, j) => r !== null && out.set(r, data.get(dim, j)));
   });
   return out;
 }
@@ -178,8 +178,9 @@ describe("'beneath' on a log y is a row below with a positive, finite value ther
     const series = built.option.series as { data: { value?: unknown[] }[] }[];
     // b at t=2 is a filler, y first: empty, as with nothing beneath at all
     expect(series[1].data[1]).toMatchObject({ value: [null, 2] });
-    // b's own paths, by its palette colour (a's row of 0 or less is a's own
-    // point, drawn as the layer holds it -- not this rule's)
+    // b's own paths, by its palette colour (a's own point at t=2 is not
+    // this rule's: a value at or below 0 has no place on a log axis (P38),
+    // and a's own 0 with nothing beneath it is empty (P39) -- both null)
     const fill = (model.getSeriesByIndex(1).getData() as unknown as { getVisual(k: string): { fill: string } }).getVisual("style").fill;
     const bPaths = svg.split("\n").filter((l) => l.includes(`"${fill}"`));
     expect(bPaths.length).toBeGreaterThan(0);

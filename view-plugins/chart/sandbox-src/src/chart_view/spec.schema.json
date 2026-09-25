@@ -123,6 +123,9 @@
       "$ref": "#/$defs/markChannels"
     },
     {
+      "$ref": "#/$defs/stackColour"
+    },
+    {
       "$ref": "#/$defs/datumChannels"
     },
     {
@@ -707,6 +710,9 @@
       "allOf": [
         {
           "$ref": "#/$defs/markChannels"
+        },
+        {
+          "$ref": "#/$defs/stackColour"
         },
         {
           "$ref": "#/$defs/datumChannels"
@@ -1295,6 +1301,58 @@
                   "errorMessage": {
                     "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stackColour": {
+      "description": "A stack (a bar or an area with stack: true) is summed per slot and colour; a colour by value makes no segments.",
+      "if": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "type": "object",
+            "required": [
+              "type",
+              "stack"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "bar",
+                  "area"
+                ]
+              },
+              "stack": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "encoding": {
+            "properties": {
+              "color": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "quantitative"
+                    }
+                  }
+                },
+                "errorMessage": {
+                  "not": "a stack cannot be coloured by value (quantitative): which rows form one segment of it is not defined \u2014 colour it by a category (nominal or ordinal), or drop stack"
                 }
               }
             }

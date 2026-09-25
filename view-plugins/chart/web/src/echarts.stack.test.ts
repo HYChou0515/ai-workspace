@@ -14,6 +14,7 @@ import "./echarts"; // registers the chart's series + components
 import { DIM_OPACITY } from "./highlight";
 import { type Answer, toOption } from "./option";
 import { type BrushSelected, selectionFromBrush, selectionFromLegend } from "./selection";
+import { stackCase } from "./stackCorpus";
 import { answer, base, cat, f64, layer, time } from "./testAnswer";
 import type { WireColumn } from "./wire";
 
@@ -158,24 +159,23 @@ describe("stack: true on a quantitative, temporal and nominal x", () => {
     ]);
   });
 
-  // P35 row 7, as P37 row 12 draws it: two rows of one group at one x add
+  // P35 row 7, as P40 row 18 draws it: two rows of one group at one x add
   // up. Before P35 a's second row at x=1 was a second slot of a, drawn from 0
-  // over its first, and b sat on a's first alone (11); P35 made it a piece of
-  // its own, stacked on a's first; P37 draws a's rows at x=1 as ONE point,
-  // their sum, which stands for both.
+  // over its first, and b sat on a's first alone (11); P37 summed a's rows at
+  // x=1 here, into ONE point; the sandbox sums them now, into one row.
   it("stacks two rows of one group at one x as their sum, and puts a row with no x last", () => {
-    const { chart, built, model } = draw(
-      area({ field: "x", type: "quantitative" }),
-      answer(layer("area", 5, { x: f64([1, null, 1, 1, 2]), y: f64([1, 5, 2, 10, 3]), g: cat(["a", "a", "a", "b", "a"]) })),
-    );
-    // slots: x=1, x=2, then the row with no x; a's rows at x=1 are one point
+    const c = stackCase("an area with two rows of one group at one x, and a row with no x");
+    const { chart, built, model } = draw(c.spec, c.answer);
+    // slots: x=1, x=2, then the row with no x -- the sandbox's rows, sorted
+    // by x then group: (1, a) (1, b) (2, a) (none, a) [supersedes P37's
+    // [[0, 2], 4, 1] / [3, null, null]: a list of rows at x=1]
     expect(built.series.map((s) => s.rows)).toEqual([
-      [[0, 2], 4, 1],
-      [3, null, null],
+      [0, 2, 3],
+      [1, null, null],
     ]);
     // a at x=1 ends at 1 + 2, b on it at 1 + 2 + 10
     const t = tops(model, built);
-    expect([t[0].get("0,2"), t[1].get("3")]).toEqual([3, 13]);
+    expect([t[0].get("0"), t[1].get("1")]).toEqual([3, 13]);
     chart.dispose();
   });
 });

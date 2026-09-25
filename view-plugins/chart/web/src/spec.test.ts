@@ -96,4 +96,37 @@ describe("messages", () => {
     const lines = verdict(base + grid).filter((l) => l.startsWith("encoding.x:"));
     expect(lines).toEqual(["encoding.x: a datum is drawn only as a rule's x or y — drop it and name a field here"]);
   });
+
+  // #847/#848 PR 5 P40 row 18: a stack is summed per slot and colour, and a
+  // colour by value makes no segments. test_spec_messages.py reads the same.
+  const byValue =
+    "a stack cannot be coloured by value (quantitative): which rows form one segment of it " +
+    "is not defined — colour it by a category (nominal or ordinal), or drop stack";
+  const stackEnc = [
+    "encoding:",
+    "  x: {field: a, type: nominal}",
+    "  y: {field: b, type: quantitative}",
+    "  color: {field: c, type: quantitative}",
+  ];
+  it("says why a stack coloured by value is refused", () => {
+    expect(verdict(`${base}mark: {type: bar, stack: true}\n${stackEnc.join("\n")}\n`)).toEqual([`encoding.color: ${byValue}`]);
+  });
+
+  it("says it of a layer's stack too", () => {
+    const layered = `layer:\n  - mark: {type: area, stack: true}\n${stackEnc.map((l) => `    ${l}\n`).join("")}`;
+    expect(verdict(base + layered)).toEqual([`layer[0].encoding.color: ${byValue}`]);
+  });
+
+  it.each([
+    ["{type: bar, stack: true}", "nominal"],
+    ["{type: area, stack: true}", "ordinal"],
+    ["{type: area, stack: true}", "temporal"],
+    ["{type: bar, stack: false}", "quantitative"],
+    ["{type: bar}", "quantitative"],
+    ["{type: line, stack: true}", "quantitative"],
+    ["bar", "quantitative"],
+  ])("does not refuse %s coloured by a field of type %s", (mark, colour) => {
+    const enc = "encoding:\n  x: {field: a, type: nominal}\n  y: {field: b, type: quantitative}\n";
+    expect(verdict(`${base}mark: ${mark}\n${enc}  color: {field: c, type: ${colour}}\n`)).toEqual([]);
+  });
 });
