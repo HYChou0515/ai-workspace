@@ -965,7 +965,7 @@
       ]
     },
     "datumChannels": {
-      "description": "A datum is drawn only as a rule's x or y: every other channel names a field.",
+      "description": "A datum is drawn only as a rule's x or y: every other channel (each item of a tooltip list too) names a field.",
       "if": {
         "required": [
           "mark"
@@ -996,59 +996,91 @@
           "encoding": {
             "properties": {
               "x2": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "y2": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "color": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "size": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "theta": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "text": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "tooltip": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                },
+                "items": {
+                  "not": {
+                    "type": "object",
+                    "required": [
+                      "datum"
+                    ]
+                  },
+                  "errorMessage": {
+                    "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  }
                 }
               }
             }
@@ -1060,75 +1092,113 @@
           "encoding": {
             "properties": {
               "x": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "y": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "x2": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "y2": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "color": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "size": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "theta": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "text": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
                 }
               },
               "tooltip": {
-                "required": [
-                  "field"
-                ],
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
                 "errorMessage": {
-                  "required": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                },
+                "items": {
+                  "not": {
+                    "type": "object",
+                    "required": [
+                      "datum"
+                    ]
+                  },
+                  "errorMessage": {
+                    "not": "a datum is drawn only as a rule's x or y \u2014 name a field here"
+                  }
                 }
               }
             }

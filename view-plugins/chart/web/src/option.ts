@@ -431,7 +431,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const place = (axis: Axis | null, c: Channel | undefined, r: number): number | null => {
         if (!axis || !c?.field) return null;
         const v = cols[c.field].value(r);
-        const numeric = (axis.kind === "value" || axis.kind === "log") && typeof v === "string" && v.trim() !== "";
+        const onNumbers =
+          axis.kind === "value" || axis.kind === "log" || (axis.kind === "index" && axis.channel.type === "quantitative");
+        const numeric = onNumbers && typeof v === "string" && v.trim() !== "";
         return axis.pos(numeric ? Number(v) : v);
       };
       const placed = (key: "xAxis" | "yAxis", axis: Axis | null, c: Channel | undefined) => {

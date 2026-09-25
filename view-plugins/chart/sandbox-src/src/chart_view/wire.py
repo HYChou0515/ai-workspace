@@ -60,8 +60,11 @@ def js_number(x: float) -> str:
 
 def canon(value: Any) -> str | None:
     """The marking string for `value`, or None when it has none (missing, ±inf)."""
-    if isinstance(value, np.ndarray):  # a parquet list cell: the list it holds
-        value = value.tolist()
+    if isinstance(value, np.ndarray | list | tuple | dict | set):
+        # A container reads as the plain values it holds, at every depth: a
+        # parquet list cell (numpy arrays, numpy datetimes in any unit) and an
+        # entity list are one marking.
+        return str(_plain(value))
     if value is None or value is pd.NaT:
         return None
     if isinstance(value, bool | np.bool_):
@@ -203,21 +206,44 @@ def _stdlib_ms(v: Any) -> float:
     return (v - _EPOCH) / dt.timedelta(milliseconds=1)
 
 
+def _plain(value: Any) -> Any:
+    """`value` with numpy's containers, scalars and instants as Python's."""
+    if isinstance(value, np.ndarray | list | tuple):
+        return [_plain(v) for v in value]
+    if isinstance(value, set):
+        return {_plain(v) for v in value}
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, np.datetime64 | pd.Timestamp):
+        stamp = pd.Timestamp(value)
+        return stamp.isoformat() if isinstance(stamp, pd.Timestamp) else None  # NaT
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 def unhashable_as_text(s: pd.Series) -> pd.Series:
-    """`s` with each list / mapping / array cell as its marking string — the
-    one form every reader of the rows (grouping, highlight, the wire) can hash
-    and compare. An entity field can hold a list; pyarrow reads a parquet list
-    column as numpy arrays."""
-    if s.dtype != object:
+    """`s` with each list / mapping / array cell as its marking string, so it
+    can be grouped by. An entity field can hold a list; pyarrow reads a
+    parquet list column as numpy arrays. Only group keys are passed through
+    this — a filter or `where:` still sees the lists — and a text column is
+    left as it is without visiting its cells."""
+    if s.dtype != object or pd.api.types.infer_dtype(s, skipna=True) == "string":
         return s
-    return s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v)
+    return s.map(_as_marking)
+
+
+def _as_marking(v: Any) -> Any:
+    """A cell with no hash (a list, mapping or array) as its marking string."""
+    return canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v
 
 
 def _cat(s: pd.Series) -> dict[str, Any]:
-    integral = pd.api.types.is_integer_dtype(s.dtype)  # before the map below makes it object
-    # A list or a mapping has no hash to group by; it becomes its marking
-    # string (the map also makes a nullable integer column object, below).
-    s = s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v)
+    # Taken before the map: it turns a nullable integer column with a null
+    # into floats, and `integral` restores integer levels below.
+    integral = pd.api.types.is_integer_dtype(s.dtype)
+    # A list or a mapping has no hash to group by; it becomes its marking string.
+    s = s.map(_as_marking)
     try:
         codes, uniques = pd.factorize(s, sort=True, use_na_sentinel=True)
     except TypeError:  # values with no order between them (a date among numbers)

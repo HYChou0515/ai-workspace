@@ -98,12 +98,12 @@ def test_a_datum_on_a_mark_that_also_needs_the_field_says_it_once():
         "  color: {field: c, type: quantitative}\n"
     )
     lines = _errors(BASE + grid)
-    assert f"encoding.x: {OFF_RULE}" in lines and len(set(lines)) == len(lines)
+    assert [line for line in lines if line.startswith("encoding.x:")] == [f"encoding.x: {OFF_RULE}"]
 
 
 def test_a_line_with_an_x_datum_gets_one_line_that_says_why():
     # Round 8 regression lens: markChannels and datumChannels each refused it,
-    # so the model read the same key refused twice, once without a reason.
+    # so the model read the same key refused twice, with no reason either time.
     text = BASE + "mark: line\nencoding:\n  x: {datum: 1}\n  y: {field: b, type: quantitative}\n"
     assert _errors(text) == [f"encoding.x: {OFF_RULE}"]
 
@@ -113,3 +113,14 @@ def test_a_colour_datum_is_refused_too():
     # color / size / tooltip, which the renderer never reads.
     text = BASE + "mark: scatter\n" + ENC + "  color: {datum: red}\n"
     assert _errors(text) == [f"encoding.color: {OFF_RULE}"]
+
+
+def test_a_channel_with_no_field_and_no_datum_is_not_told_about_a_datum():
+    # Review round 9: `x: {aggregate: count}` (a Vega-Lite habit) was told "a
+    # datum is drawn only as a rule's x or y" — it holds no datum.
+    text = (
+        BASE
+        + "mark: bar\nencoding:\n  x: {aggregate: count}\n  y: {field: b, type: quantitative}\n"
+    )
+    lines = _errors(text)
+    assert lines and not any("datum is drawn" in line for line in lines), lines

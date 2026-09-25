@@ -14,6 +14,8 @@ import pandas as pd
 import pytest
 
 from chart_view.cli import main
+from chart_view.query import build
+from chart_view.spec import parse_spec
 from chart_view.transforms import TransformError, apply_transforms
 from chart_view.wire import canon, encode_column, epoch_ms
 
@@ -352,6 +354,64 @@ def test_a_parquet_list_column_can_be_grouped(tmp_path: Path, monkeypatch, capsy
 
 
 def test_an_array_reads_as_the_list_it_holds():
-    # A parquet list and an entity list are one marking, whatever their length.
+    # A parquet list and an entity list without nulls are one marking, at any
+    # length (a parquet list with a null reads as floats with nan).
     assert canon(np.array(["a", "b"])) == canon(["a", "b"]) == "['a', 'b']"
     assert canon(np.array([1, 2])) == canon([1, 2]) == "[1, 2]"
+
+
+def test_a_nested_or_timed_array_reads_as_plain_values():
+    # Review round 9: numpy's own repr leaked into markings — nested arrays
+    # printed "[array([1, 2]), array([3])]", and one instant printed apart for
+    # ns and us columns.
+    nested = np.array([np.array([1, 2]), np.array([3])], dtype=object)
+    assert canon(nested) == canon([[1, 2], [3]]) == "[[1, 2], [3]]"
+    # A parquet struct holding a list reads as a dict of arrays.
+    assert canon({"a": np.array([1, 2])}) == canon({"a": [1, 2]}) == "{'a': [1, 2]}"
+    assert canon({np.int64(1)}) == canon({1}) == "{1}"
+    ns = np.array(["2024-01-01"], dtype="datetime64[ns]")
+    us = np.array(["2024-01-01"], dtype="datetime64[us]")
+    assert canon(ns) == canon(us) == "['2024-01-01T00:00:00']"
+
+
+def test_a_filter_sees_a_list_as_a_list():
+    # Review round 9: lists turned to text before the transforms, so a filter
+    # on their length measured the text and kept every row.
+    df = pd.DataFrame({"tags": [["x", "y"], ["x"], []], "v": [1.0, 2.0, 3.0]})
+    spec = parse_spec(
+        "view: chart\nsource: a.csv\nmark: bar\n"
+        "transform:\n  - filter: 'tags.str.len() > 1'\n"
+        "encoding:\n  x: {field: tags, type: nominal}\n  y: {field: v, type: quantitative}\n"
+    )
+    [layer] = build(spec, df)["layers"]
+    assert layer["rows"] == 1
+
+
+def test_an_entity_list_column_can_be_grouped():
+    # Round 9 conformance: only numpy arrays had a test; an entity field holds
+    # Python lists, and grouping by one raised TypeError before P27.
+    df = pd.DataFrame({"k": [["a", "b"], ["b"], ["b"]], "v": [1.0, 2.0, 3.0]})
+    spec = parse_spec(
+        "view: chart\nsource: a.csv\nmark: bar\nencoding:\n"
+        "  x: {field: k, type: nominal}\n  y: {field: v, type: quantitative, aggregate: sum}\n"
+    )
+    [layer] = build(spec, df)["layers"]
+    assert layer["columns"]["k"]["levels"] == ["['a', 'b']", "['b']"]
+
+
+def test_only_the_columns_a_group_needs_are_made_text(monkeypatch):
+    # Review round 9: every object column of the source was mapped cell by
+    # cell — 8.6 s on a million rows of 20 text columns the chart never read.
+    df = pd.DataFrame({"g": ["a", "b"], "v": [1.0, 2.0], "unused": [["x"], ["y"]]})
+    real = pd.Series.map
+
+    def watch(self, *a, **k):
+        assert self.name != "unused", "a column the chart does not read was mapped"
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(pd.Series, "map", watch)
+    spec = parse_spec(
+        "view: chart\nsource: a.csv\nmark: bar\nencoding:\n"
+        "  x: {field: g, type: nominal}\n  y: {field: v, type: quantitative, aggregate: sum}\n"
+    )
+    assert build(spec, df)["layers"][0]["rows"] == 2

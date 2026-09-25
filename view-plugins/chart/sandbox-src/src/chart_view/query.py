@@ -69,9 +69,10 @@ def _field_channels(encoding: Mapping[str, Any]) -> list[tuple[str, Mapping[str,
     """(channel, definition) for every channel that names a field, tooltips too."""
     out = [(c, encoding[c]) for c in _CHANNELS if c in encoding and "field" in encoding[c]]
     tips = encoding.get("tooltip")
+    # Every tooltip names a field: the schema refuses a datum there
+    # ($defs.datumChannels), and query checks the schema first.
     for tip in tips if isinstance(tips, list) else [tips] if tips else []:
-        if "field" in tip:
-            out.append(("tooltip", tip))
+        out.append(("tooltip", tip))
     return out
 
 
@@ -113,6 +114,7 @@ def _group_fields(channels: list[tuple[str, Mapping[str, Any]]], value: str) -> 
 def _boxplot(df: pd.DataFrame, channels, encoding) -> tuple[pd.DataFrame, pd.DataFrame | None]:
     value = encoding["y"]["field"]
     groups = _group_fields(channels, value)
+    df = df.assign(**{g: unhashable_as_text(df[g]) for g in groups})
     rows, outliers = [], []
     for key, part in df.groupby(groups, dropna=False, sort=True) if groups else [((), df)]:
         v = pd.to_numeric(part[value], errors="coerce").dropna()
@@ -133,6 +135,7 @@ def _boxplot(df: pd.DataFrame, channels, encoding) -> tuple[pd.DataFrame, pd.Dat
 def _errorbar(df: pd.DataFrame, channels, encoding, extent: str) -> pd.DataFrame:
     value = encoding["y"]["field"]
     groups = _group_fields(channels, value)
+    df = df.assign(**{g: unhashable_as_text(df[g]) for g in groups})
     v = pd.to_numeric(df[value], errors="coerce")
     grouped = v.groupby([df[g] for g in groups], dropna=False, sort=True) if groups else None
 
@@ -179,6 +182,7 @@ def _bin(
     if "color" in encoding and "field" in encoding["color"]:
         keys.append(encoding["color"]["field"])
     keys = list(dict.fromkeys(keys))
+    frame = frame.assign(**{k: unhashable_as_text(frame[k]) for k in keys})
     frame["$lit"] = lit if lit is not None else False
     grouped = frame.groupby(keys, dropna=False, sort=True)
     sizes = grouped.size()
@@ -243,7 +247,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
     kinds = _kinds(mark, channels)
     outliers, outlier_kinds = None, {}
 
-    if not channels:  # a rule / text drawn only from `datum`s
+    if not channels:  # a rule drawn only from `datum`s
         df = df.iloc[0:0][[]]
     elif mark == "boxplot":
         df, outliers = _boxplot(df, channels, encoding)
@@ -273,9 +277,6 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
 
 def layer_rows(spec: Mapping[str, Any], frame: pd.DataFrame) -> list[LayerRows]:
     """Each layer's rows over `frame` (its source, already read)."""
-    # Lists and arrays are their marking text from the start: grouping one
-    # (an aggregate, a boxplot's groups) raised TypeError.
-    frame = frame.apply(unhashable_as_text)
     base = apply_transforms(frame, spec.get("transform", []))
     return [_layer_rows(spec, base, ly) for ly in spec_layers(spec)]
 

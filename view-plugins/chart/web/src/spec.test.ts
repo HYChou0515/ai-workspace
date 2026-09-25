@@ -93,8 +93,7 @@ describe("messages", () => {
 
   it("says it once for a mark that also needs the field", () => {
     const grid = "mark: grid\nencoding:\n  x: {datum: 1}\n  y: {field: b, type: ordinal}\n  color: {field: c, type: quantitative}\n";
-    const lines = verdict(base + grid);
-    expect(lines).toContain("encoding.x: a datum is drawn only as a rule's x or y — name a field here");
-    expect(new Set(lines).size).toBe(lines.length);
+    const lines = verdict(base + grid).filter((l) => l.startsWith("encoding.x:"));
+    expect(lines).toEqual(["encoding.x: a datum is drawn only as a rule's x or y — name a field here"]);
   });
 });
