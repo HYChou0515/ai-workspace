@@ -96,14 +96,14 @@ registerViewKind({ kind: "csv-table", Component: CsvTableView });
 使用者那邊放一個 view 檔就會生效：
 
 ```yaml
-# /views/yield.ai.yaml
+# /views/sales.ai.yaml
 view: csv-table          # 對應你註冊的 kind
-title: Wafer yield       # 面板標題（可省略）
-source: /data/wafer.csv  # 這是「你自己的」key，見第 4 節
+title: Monthly sales     # 面板標題（可省略）
+source: /data/sales.csv  # 這是「你自己的」key，見第 4 節
 ```
 
 `kind` 撞名會**直接丟例外**——兩個元件搶同一個 `view:` 沒有正確答案。取名建議加自己的前綴，
-例如 `acme-wafermap`。
+例如 `acme-heatmap`。
 
 **你的元件 throw 不會弄垮整個 app。** 面板外面包了一層 error boundary，壞掉時只有那個面板
 變成一則錯誤訊息，其餘畫面照常；完整的 stack 會進 console。錯誤訊息附一顆 **Retry**——因為
@@ -275,7 +275,7 @@ return (
 ```tsx
 import { useSandboxRun } from "@aiws/view-sdk";
 
-const run = useSandboxRun("chart", "query", { source: "data/yield.csv", group_by: "lot" });
+const run = useSandboxRun("chart", "query", { source: "data/sales.csv", group_by: "region" });
 // run: { data?: {stdout, stderr, exit_code}, error: Error | null, isLoading, refetch() }
 ```
 

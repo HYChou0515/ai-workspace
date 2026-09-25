@@ -10,8 +10,8 @@
  * The view file that drives it:
  *
  *     view: csv-table
- *     title: Wafer yield
- *     source: /data/wafer.csv
+ *     title: Monthly sales
+ *     source: /data/sales.csv
  *
  * `source` is not a key the platform knows, so it is NOT on the `ViewSpec` type
  * — `spec.source` doesn't compile. Read your own keys with `viewParam` /

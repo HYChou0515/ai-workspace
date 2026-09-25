@@ -46,7 +46,7 @@ type FilterOption = { value: string; label: string };
 
 /** The least a data column narrows to (#847/#848 PR 5 P24). The table fills
  * its pane and shares the width among its columns (fixed layout), but in a
- * 137 px pane that left LOT as "L" with no way to read the rest; below this
+ * 137 px pane that cut a column's name to one letter with no way to read the rest; below this
  * the table scrolls sideways inside its wrap instead. */
 export const TABLE_COLUMN_MIN_REM = 6;
 /** The fixed columns' widths (entity-views.css): the checkbox, the number,

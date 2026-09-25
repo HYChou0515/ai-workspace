@@ -240,7 +240,7 @@ function Plot({
           <span key={n}>{n}</span>
         ))}
         {/* shrinks to an ellipsis in a narrow chart: at 390 wide a 155 px
-            panel cut "· by lot, wafer" off with nothing to say so (P27); the
+            panel cut "· by group, item" off with nothing to say so (P27); the
             line's title holds all of it */}
         {selected && (
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{selected}</span>

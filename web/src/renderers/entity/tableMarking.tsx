@@ -4,7 +4,7 @@
  *
  * Reading (P1):
  * - The marking holds a set and shares a column with the table: only the rows
- *   it lights are shown, under "filtered by <name> · 3 of 25 rows · by lot ·
+ *   it lights are shown, under "filtered by <name> · 3 of 25 rows · by group ·
  *   show all" (P27: the columns it marks by — over two columns a marking
  *   lights every combination of their values).
  *   "show all" keeps every row and highlights the lit ones. The toggle is this
@@ -142,7 +142,7 @@ export function useTableMarking({
     if (writeKeys.length === 0) return;
     const next = projectOntoKeys([...chosen].map((i) => rows[i]!), writeKeys)! as Record<string, Set<string>>;
     // A table decides only about the values it holds: a key value no row of
-    // it carries (a lot only a wider chart has, or a row its own value filter
+    // it carries (a value only a wider chart has, or a row its own value filter
     // hides) keeps the mark it had, or ticking one box would silently unmark
     // points elsewhere.
     for (const c of writeKeys) {

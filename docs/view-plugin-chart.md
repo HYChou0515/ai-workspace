@@ -35,10 +35,11 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - 有 `keys:` 的圖打開時，如果它的 marking 還是空的，檔案裡的 `highlight:` 會當作起始選取寫進去（每次打開只寫一次）；
   已經有人選了就不覆蓋。marking 被清空後，接在上面的圖全部不變暗，不會各自退回自己的 `highlight:`。
 - 機制本身不懂任何領域：marking 只是「欄位名 → 一組值」，都是字串。所以 marking 有兩個以上的欄位時，
-  點亮的是**各欄位值的所有組合**：勾 (L1, 1) 與 (L2, 2)，(L1, 2) 與 (L2, 1) 也會亮，計數可能比勾選的多。
-  為了讓這件事看得見，每個顯示計數的地方都寫出 marking 的欄位：縮圖牆「12 of 48 marked · by lot, wafer」、
-  接了 marking 的圖表「16 selected · by lot, wafer」、表格「filtered by … · 4 of 48 rows · by lot, wafer」、
-  標頭的「by lot, wafer」，以及訊息上的 chip「by lot (2), wafer (2)」。
+  點亮的是**各欄位值的所有組合**：勾 (A, 1) 與 (B, 2)，(A, 2) 與 (B, 1) 也會亮，計數可能比勾選的多。
+  為了讓這件事看得見，每個顯示計數的地方都寫出 marking 的欄位（以 `keys: [group, item]` 為例）：
+  縮圖牆「12 of 48 marked · by group, item」、接了 marking 的圖表「16 selected · by group, item」、
+  表格「filtered by … · 4 of 48 rows · by group, item」、標頭的「by group, item」，
+  以及訊息上的 chip「by group (2), item (2)」。
 - 框選與套索對每一種 mark 都有效，包括 line 與 area（以畫出來的位置判定，所以疊起來的 area 以它疊上去的高度算）。
 - 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
   （沒接 marking、或沒有 `keys:`）才把框外的點變灰。
