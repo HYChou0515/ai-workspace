@@ -44,10 +44,9 @@ class _Refused(ValueError):
 
 
 def _channel(spec: dict[str, Any], name: str) -> dict[str, Any]:
-    # the schema makes every channel present a {field, type}; only absence is left
-    channel = spec["encoding"].get(name)
-    if channel is None:
-        raise _Refused(f"a facet gallery draws each grid by encoding.{name}: the spec has none")
+    # the schema requires a grid's x, y and colour fields (#855's markChannels),
+    # and a spec is checked against it before this runs
+    channel = spec["encoding"][name]
     if "aggregate" in channel:
         raise _Refused(
             f"encoding.{name} aggregates, which a facet gallery cannot do per group: aggregate"

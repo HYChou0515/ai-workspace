@@ -200,6 +200,21 @@ def test_a_row_with_no_x_on_a_quantitative_axis_is_left_out_too(tmp_path: Path) 
     assert read_index(path).layout == {"x": [0.5], "y": [0]}
 
 
+@pytest.mark.parametrize(
+    "column",
+    [[0.5, math.inf], pd.Series([0.5, -math.inf], dtype=object)],
+    ids=["float64", "object"],
+)
+def test_an_infinite_quantitative_axis_value_is_no_value(tmp_path: Path, column: Any) -> None:
+    """The chart's wire sends +/-inf on an f64 axis as missing (#855), so the
+    full view leaves the row out; the thumbnail must too -- and the cache's
+    JSON header cannot hold an inf anyway."""
+    frame = pd.DataFrame({"g": ["a", "a"], "x": column, "y": [0, 0], "v": [1.0, 2.0]})
+    path = tmp_path / "c.vcache"
+    build_facet_cache(frame, facet=["g"], x="x", y="y", value="v", path=path, x_type="quantitative")
+    assert read_index(path).layout == {"x": [0.5], "y": [0]}
+
+
 def test_a_frame_with_no_placeable_row_is_refused(tmp_path: Path) -> None:
     with pytest.raises(BuildError, match="no row has both"):
         _one(tmp_path, [{"g": "a", "x": None, "y": 0, "v": 1.0}])
