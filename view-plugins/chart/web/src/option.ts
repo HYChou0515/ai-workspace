@@ -495,8 +495,13 @@ type Item = Point | { value: Point; [style: string]: unknown };
  * stack gets the same x slots, in x order, and lists y first with `encode`
  * saying which is which. A series with no row at a slot gets a point of 0
  * there (plotly's `stackgaps: "infer zero"`): clear, never highlighted, no
- * tooltip, and no row -- a gesture over it selects nothing. */
-function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[], fill: 0 | null): void {
+ * tooltip, and no row -- a gesture over it selects nothing. On a `log` y a 0
+ * has no place, so a filler with nothing beneath it (no row of a series below
+ * at that slot) is empty (null) instead; one with something beneath is still
+ * 0, which adds nothing and keeps its area joined across the gap (PR 5 P35
+ * row 8: with every filler null, a series whose rows never sat on neighbouring
+ * slots drew no area at all). */
+function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[], log: boolean): void {
   const stacks = new Map<unknown, number[]>();
   series.forEach((s, i) => {
     if (s.stack) stacks.set(s.stack, [...(stacks.get(s.stack) ?? []), i]);
@@ -520,6 +525,9 @@ function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[], fil
       for (const x of slots) {
         const j = at[k].get(x);
         if (j === undefined) {
+          // adds nothing (0); on a log y, where nothing lies beneath, empty:
+          // 0 has no place there (round 16 D3, PR 5 P35 row 8)
+          const fill = log && !at.slice(0, k).some((m) => m.has(x)) ? null : 0;
           data.push({ value: [fill, x], itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
           drawn.push(null);
         } else {
@@ -965,12 +973,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   });
   // Only off a category axis: on one ECharts stacks by category itself (round 16
   // defect D1), and each piece (`pieces`) has at most one row per category.
-  // On a log y a filler is no value at all, which a stack adds as nothing,
-  // where a 0 has no place on the axis (D3) --
-  // read from the axis the chart built, whatever the spec's shape: a `layer:`
-  // spec has no top-level encoding to read it from (PR 5 P34).
+  // Whether y is a log axis is read from the axis the chart built, whatever the
+  // spec's shape: a `layer:` spec has no top-level encoding to read it from
+  // (PR 5 P34).
   if (xAxis?.kind !== "category" && yAxis?.kind !== "category") {
-    lineUpStacks(series, rows, yAxis?.kind === "log" ? null : 0);
+    lineUpStacks(series, rows, yAxis?.kind === "log");
   }
 
   const tooltip = {
