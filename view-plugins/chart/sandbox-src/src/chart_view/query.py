@@ -54,13 +54,13 @@ _CHANNELS = ("x", "y", "x2", "y2", "color", "size", "theta", "text")
 _CONTINUOUS = ("quantitative", "temporal")
 
 
-def _layers(spec: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def spec_layers(spec: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if "layer" in spec:
         return list(spec["layer"])
     return [{"mark": spec["mark"], "encoding": spec["encoding"]}]
 
 
-def _mark(layer: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
+def mark_of(layer: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
     mark = layer["mark"]
     return (mark, {}) if isinstance(mark, str) else (mark["type"], mark)
 
@@ -234,7 +234,7 @@ class LayerRows:
 
 
 def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str, Any]) -> LayerRows:
-    mark, props = _mark(layer)
+    mark, props = mark_of(layer)
     encoding = layer["encoding"]
     channels = _field_channels(encoding)
     df = apply_transforms(base, layer.get("transform", []))
@@ -273,7 +273,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
 def layer_rows(spec: Mapping[str, Any], frame: pd.DataFrame) -> list[LayerRows]:
     """Each layer's rows over `frame` (its source, already read)."""
     base = apply_transforms(frame, spec.get("transform", []))
-    return [_layer_rows(spec, base, ly) for ly in _layers(spec)]
+    return [_layer_rows(spec, base, ly) for ly in spec_layers(spec)]
 
 
 def binned(spec: Mapping[str, Any], layer: LayerRows) -> bool:

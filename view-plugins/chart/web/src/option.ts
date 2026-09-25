@@ -16,6 +16,7 @@
 import { DIM_OPACITY, litRows } from "./highlight";
 import { colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
 import { decodeColumn, type Column, type Scalar, type WireColumn } from "./wire";
+import schema from "../../sandbox-src/src/chart_view/spec.schema.json";
 
 export type WireLayer = {
   mark: string;
@@ -139,14 +140,20 @@ function categories(field: string, channel: Channel, decoded: Record<string, Col
   return seen;
 }
 
-const ZONED = /(?:[zZ]|[+-]\d\d:?\d\d)$/;
+const ZONED = /(?:Z|[+-]\d\d:?\d\d)$/;
+/** The forms a temporal datum may take — the schema's, which validate reads too. */
+const INSTANT = new RegExp(schema.$defs.instant.pattern);
 
-/** Epoch ms for an instant written as text, read as the sandbox reads it
+/** Epoch ms for an instant written as text in one of the schema's
+ * `$defs.instant` forms, read as the sandbox reads it
  * (`chart_view/wire.py:epoch_ms`): UTC unless the text names a zone, digits
- * as milliseconds. `Date.parse` alone reads a zone-less date-time in the
- * VIEWER's zone, which put a rule hours away from the same timestamp's point. */
+ * as milliseconds; NaN for any other text, which validate refuses. `Date.parse`
+ * alone reads a zone-less date-time in the VIEWER's zone, which put a rule
+ * hours away from the same timestamp's point, and reads forms the sandbox
+ * reads otherwise or not at all. */
 export function parseInstant(text: string): number {
   const s = text.trim();
+  if (!INSTANT.test(s)) return Number.NaN;
   if (/^\d+$/.test(s)) return Number(s);
   if (ZONED.test(s)) return Date.parse(s);
   const iso = s.replace(/\//g, "-").replace(" ", "T");
@@ -166,15 +173,22 @@ type Axis = {
 function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[], grid: Cells | null, which: "x" | "y"): Axis | null {
   if (grid) {
     const labels = which === "x" ? grid.xs : grid.ys;
-    // A cell's position is its index; a value finds its cell by label.
+    // A cell's position is its index; a value finds its cell by label, and a
+    // number between two numeric cells sits between their centres. Any layer
+    // over the lattice (points marking cells, a threshold) is placed this way.
     const cell = new Map(labels.map((v, i) => [String(v), i]));
-    return {
-      channel: channel ?? {},
-      kind: "index",
-      labels,
-      at: () => null,
-      pos: (v) => (v === null ? null : (cell.get(String(v)) ?? null)),
+    const pos = (v: Scalar | null): number | null => {
+      if (v === null) return null;
+      const exact = cell.get(String(v));
+      if (exact !== undefined || typeof v !== "number") return exact ?? null;
+      for (let i = 0; i + 1 < labels.length; i++) {
+        const a = labels[i];
+        const b = labels[i + 1];
+        if (typeof a === "number" && typeof b === "number" && (a - v) * (b - v) < 0) return i + (v - a) / (b - a);
+      }
+      return null;
     };
+    return { channel: channel ?? {}, kind: "index", labels, at: (col, row) => pos(col.value(row)), pos };
   }
   if (!channel?.field) return null;
   if (channel.type === "nominal" || channel.type === "ordinal") {
@@ -540,6 +554,8 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       if (symbolSize !== undefined) s.symbolSize = symbolSize;
       if (mark.type === "area") s.areaStyle = { opacity: mark.opacity ?? 0.7 };
       else if (mark.opacity !== undefined) s.itemStyle = { ...(s.itemStyle as object), opacity: mark.opacity };
+      // A line is its stroke: itemStyle alone faded only the (hidden) points.
+      if (mark.type === "line" && mark.opacity !== undefined) s.lineStyle = { opacity: mark.opacity };
       if (mark.type === "line" || mark.type === "area") {
         // A highlight dims POINTS, so a highlighted line shows them.
         s.showSymbol = mark.point ?? lit !== null;

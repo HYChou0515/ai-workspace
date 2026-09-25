@@ -66,6 +66,11 @@
     }
   ],
   "$defs": {
+    "instant": {
+      "$comment": "A date a `temporal` datum may be written as. validate (chart_view/validate.py) and the renderer (web/src/option.ts:parseInstant) both read THIS pattern; wire-corpus/instants.json holds what each form means.",
+      "type": "string",
+      "pattern": "^(?:\\d+|\\d{4}([-/])(0[1-9]|1[0-2])\\1(0[1-9]|[12]\\d|3[01])([T ]([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d(\\.\\d{1,3})?)?(Z|[+-]([01]\\d|2[0-3]):?[0-5]\\d)?)?)$"
+    },
     "name": {
       "type": "string",
       "minLength": 1
