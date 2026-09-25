@@ -27,6 +27,10 @@ const FORMAT = 1;
 /** A lattice is drawn at least this many pixels across before ECharts scales
  * it, nearest-neighbour, so its cells stay sharp-edged instead of smeared. */
 const RASTER_MIN_PX = 512;
+/** What ECharts paints a point outside the brush with, by default (echarts
+ * component/brush/BrushModel.js DEFAULT_OUT_OF_BRUSH_COLOR): stated, so a
+ * chart that stops lighting by its marking gets it back. */
+const OUT_OF_BRUSH = { color: "#ddd" };
 
 function Notice({ role = "status", children }: { role?: "status" | "alert"; children: ReactNode }) {
   const color = role === "alert" ? "var(--err)" : "var(--text-paper-d)";
@@ -109,6 +113,20 @@ function Plot({
   );
   const builtRef = useRef(built);
   builtRef.current = built;
+  // Whether the person's selection here went to the marking (#847/#848 PR 5
+  // P29). Then the marking lights this chart as it lights every other view,
+  // and ECharts' own brush visual -- every point outside the box greyed -- is
+  // off: over two columns the marking lights every combination of their
+  // values, and the brushed chart showed 16 lit where the tables showed 27.
+  // A selection that writes nothing (no marking, no `keys:`) keeps it.
+  const [toMarking, setToMarking] = useState(false);
+  const option = useMemo(
+    () => ({
+      ...built.option,
+      brush: { ...(built.option.brush as object), outOfBrush: marking && toMarking ? { colorAlpha: 1 } : OUT_OF_BRUSH },
+    }),
+    [built, marking, toMarking],
+  );
 
   // What a gesture writes. Read through a ref: the ECharts handlers are bound once.
   const writeRef = useRef<(sel: Selection[]) => void>(() => {});
@@ -123,6 +141,7 @@ function Plot({
     setSelection((prev) => (JSON.stringify(prev) === JSON.stringify(sel) ? prev : sel));
     if (!marking) return;
     const values = selectionMarking(sel, answer, keys);
+    setToMarking(values !== null);
     if (values) write(values, source);
   };
 
@@ -184,15 +203,15 @@ function Plot({
     if (!chart) return;
     const same = drawnFrom.current?.doc === doc && drawnFrom.current?.answer === answer;
     if (same) {
-      chart.setOption(built.option, { replaceMerge: ["series"] });
+      chart.setOption(option, { replaceMerge: ["series"] });
       return;
     }
     drawnFrom.current = { doc, answer };
-    chart.setOption(built.option, true);
+    chart.setOption(option, true);
     // A full setOption drops the drawn brush, and with it anything to clear.
     brushed.current = false;
     setSelection([]);
-  }, [built, doc, answer]);
+  }, [option, doc, answer]);
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   // On a marking, which columns it marks by (P27): over two columns it lights
