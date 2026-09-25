@@ -89,6 +89,15 @@ describe("the view header's marking control", () => {
     expect(screen.getByRole("combobox", { name: /marking/i })).toHaveValue("fail");
   });
 
+  it("marks itself with the app's icon, not an emoji a font may lack", async () => {
+    // Live check (Chromium, the app's fonts): "🔗" drew as an empty box.
+    renderView(ON_FAIL);
+    const select = await screen.findByRole("combobox", { name: /marking/i });
+    const control = select.closest(".ev-marking")!;
+    expect(control.querySelector("svg")).not.toBeNull();
+    expect(control.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+
   it("detaches without rewriting the file", async () => {
     renderView(ON_FAIL);
     fireEvent.change(await screen.findByRole("combobox", { name: /marking/i }), { target: { value: "" } });
