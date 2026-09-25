@@ -390,6 +390,34 @@ describe("a click on a pie's slice writes the marking", () => {
     expect(marked(store)).toEqual({ lot: ["L1"] });
   });
 
+  // #847/#848 PR 5 P36 row 10: "by <columns>" names the MARKING's columns, so
+  // it is said only of a selection that went to the marking. A pick that wrote
+  // nothing is counted, and no more.
+  it("a pick that wrote nothing is counted without the marking's columns once another view wrote it (P36)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, KEYLESS, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    expect(screen.queryByText(/· by/)).toBeNull();
+  });
+
+  it("a pick that wrote nothing, made on a marking another view holds, is counted without its columns (P36)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, KEYLESS, SLICES);
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    click(chart, sliceAt(chart, 1));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    expect(screen.queryByText(/· by/)).toBeNull();
+  });
+
+  it("(control) a pick that went to the marking says which columns it marks by (P36)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    expect(screen.getByText("1 selected · by lot")).toBeTruthy();
+  });
+
   it("(control) on a marking it can write, the slice is lit by the marking (P34)", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);

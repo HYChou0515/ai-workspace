@@ -327,8 +327,11 @@ function Plot({
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   // On a marking, which columns it marks by (P27): over two columns it lights
-  // every combination of their values, more than the rows picked here.
-  const selected = count > 0 ? `${count} selected${entry ? ` · ${markedBy(entry.marking)}` : ""}` : null;
+  // every combination of their values, more than the rows picked here. Said
+  // only of a selection that went to the marking: one that wrote nothing (no
+  // `keys:`) picked just its own rows, which the marking's columns -- another
+  // view's write -- have nothing to do with (PR 5 P36 row 10).
+  const selected = count > 0 ? `${count} selected${entry && toMarking ? ` · ${markedBy(entry.marking)}` : ""}` : null;
   return (
     // Takes the height its pane gives it (#847/#848 PR 5 P13); a fixed 360 px
     // made every shorter pane scroll. 160 px is the least a plot reads at.
