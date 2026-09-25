@@ -250,3 +250,14 @@ async def test_a_layout_with_one_refused_view_shows_nothing():
     assert _declared(out) == []
     assert out.startswith("error:")
     assert "no column fail_rate" in out
+
+
+async def test_a_layout_whose_check_cannot_run_is_shown_with_the_note_like_one_file():
+    """#854: a check that cannot run (no launcher) is the deployment's fault, not
+    the view's — the single-path branch shows the view with a note, and a layout
+    must do the same for each of its views, not refuse the whole card."""
+    gone = ExecResult(exit_code=127, stderr=b"sh: 1: ../.tools/chart/launch: not found\n")
+    out, _ = await _show_layout(gone)
+    assert not out.startswith("error:")
+    assert len(_declared(out)) == 3
+    assert out.split(SHOWN_FILES_MARKER)[0].count("could not check") == 2
