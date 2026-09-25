@@ -9,8 +9,8 @@
  */
 import { litRows } from "./highlight";
 import type { Answer } from "./option";
-import { type Selection, selectionValues } from "./selection";
-import { canon, decodeColumn } from "./wire";
+import { keyColumn, type Selection, selectionValues } from "./selection";
+import { canon } from "./wire";
 
 /** `column → values`, as the SDK's `Marking`. Declared structurally so this
  * pure module needs no runtime SDK import. */
@@ -23,9 +23,15 @@ export type IsLit = (row: Readonly<Record<string, string>>, marking: MarkingValu
  * lit on a same-named column (Q6); `keys:` decides only what a view WRITES. */
 export function markingLit(answer: Answer, marking: MarkingValues, lit: IsLit): (boolean[] | null)[] {
   return answer.layers.map((layer) => {
-    const present = Object.keys(marking).filter((k) => layer.columns[k] !== undefined);
-    if (present.length === 0) return null;
-    const cols = present.map((k) => [k, decodeColumn(layer.columns[k]!)] as const);
+    // Through `keyColumn`, the ONE place a key's marking strings are read — the
+    // lookup `selectionValues` writes with. A key a channel sends as time or
+    // numbers carries its strings in `$key.<name>`; decoding the channel's own
+    // column compared "1704153600000" against a written "2024-01-02".
+    const cols = Object.keys(marking).flatMap((k) => {
+      const col = keyColumn(layer, k);
+      return col ? [[k, col] as const] : [];
+    });
+    if (cols.length === 0) return null;
     return Array.from({ length: layer.rows }, (_, r) => {
       const row: Record<string, string> = {};
       for (const [k, col] of cols) {
