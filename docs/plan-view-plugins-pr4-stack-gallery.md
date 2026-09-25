@@ -269,7 +269,7 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     sandbox dir.
 - **Built:**
   - `SKILL.md` gains a Facet section and a "many groups that share a shape" line.
-    Its example is test-checked like the others; the body grows from 5945 (#856's) to 6968
+    Its example is test-checked like the others; the body grows from 6853 (with #856 merged) to 7876
     characters, measured.
   - `docs/view-plugin-chart.md` gains a 縮圖牆 section on how the gallery works,
     linking to SKILL.md for the syntax, as that page's no-third-copy rule asks.
