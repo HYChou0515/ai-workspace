@@ -48,9 +48,10 @@ function hovered(mark: string | object): (number | undefined)[] {
 }
 
 describe("brushing a chart with a line, against real ECharts", () => {
-  it("still selects the points in the box (a pin)", async () => {
-    // (ECharts' line series has no brush selector of its own, before this
-    // change or after: a brush selects a scatter's points, not a line's)
+  it("selects the scatter's points and the line's in the box (a pin)", async () => {
+    // (ECharts' line series has no brush selector of its own; since P28 the
+    // chart gives it one, so the line's rows are selected too —
+    // echarts.brush.test.ts)
     const xy = { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } };
     const doc = { ...base, layer: [{ mark: "scatter", encoding: xy }, { mark: "line", encoding: xy }] };
     const built = toOption(
@@ -68,7 +69,10 @@ describe("brushing a chart with a line, against real ECharts", () => {
     chart.setOption(built.option, true);
     chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", xAxisIndex: 0, coordRange: [[1.5, 3.5], [0, 5]] }] });
     await new Promise((r) => setTimeout(r, 400)); // the option debounces brush events 250 ms
-    expect(selectionFromBrush(events.at(-1) as BrushSelected, built)).toEqual([{ source: "brush", layer: 0, rows: [1, 2] }]);
+    expect(selectionFromBrush(events.at(-1) as BrushSelected, built)).toEqual([
+      { source: "brush", layer: 0, rows: [1, 2] },
+      { source: "brush", layer: 1, rows: [1, 2] },
+    ]);
     chart.dispose();
   });
 });
