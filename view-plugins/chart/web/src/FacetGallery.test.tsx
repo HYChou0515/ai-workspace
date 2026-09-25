@@ -86,6 +86,9 @@ let failUntil = { build: 0, index: 0, page: 0, exact: 0, stack: 0 };
 let failCode = { build: 3, index: 3, page: 3, exact: 3, stack: 3 };
 /** The epoch whose build is still loading (no answer yet); -1 for none. */
 let loadingBuildAt = -1;
+/** What facet_progress answers, and its refetch (the gallery's poll). */
+let progressLines: string[] = [];
+const progressRefetch = vi.fn();
 /** A build whose arguments (its spec, or its sort beside the file) hold this is still loading. */
 let loadingSpec: string | null = null;
 const answerCache = new Map<string, Run["data"]>();
@@ -121,11 +124,12 @@ beforeEach(() => {
   failCode = { build: 3, index: 3, page: 3, exact: 3, stack: 3 };
   loadingBuildAt = -1;
   loadingSpec = null;
+  progressLines = [];
   answerCache.clear();
   epochsSeen.length = 0;
   sdk.useSandboxRun.mockImplementation((_plugin: string, cmd: string, args: Record<string, unknown>, opts?: { enabled?: boolean }): Run => {
     const enabled = opts?.enabled ?? true;
-    const base = { error: null, isLoading: false, refetch: vi.fn() };
+    const base = { error: null, isLoading: false, refetch: cmd === "facet_progress" ? progressRefetch : vi.fn() };
     if (!enabled) return { ...base, data: undefined };
     const epoch = typeof args.epoch === "number" ? args.epoch : 0;
     epochsSeen.push(epoch);
@@ -141,6 +145,7 @@ beforeEach(() => {
       else if (cmd === "facet_index") data = epoch < failUntil.index ? fail(failCode.index) : answers.index;
       else if (cmd === "facet_page")
         data = epoch < failUntil.page ? fail(failCode.page) : answers.page?.(args.positions as number[]);
+      else if (cmd === "facet_progress") data = ok({ lines: progressLines });
       else if (cmd === "facet_stack")
         data = epoch < failUntil.stack ? fail(failCode.stack) : stackAnswer(args as StackArgs);
       else if (cmd === "facet_exact")
@@ -752,6 +757,52 @@ describe("FacetGallery", () => {
       failUntil.stack = 1;
       view();
       expect(calls("facet_stack").some((c) => c[2].epoch === 1)).toBe(true);
+    });
+  });
+
+  describe("a first open shows the build's progress (P10)", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("asks the running build how far it is, and shows its lines", () => {
+      loadingBuildAt = 0;
+      progressLines = ["reading data/w.csv", "read 50000 rows"];
+      view();
+      // the same arguments as the build, epoch aside: they name the build
+      const { epoch: _e, ...buildArgs } = calls("facet_build").at(-1)![2] as Record<string, unknown>;
+      expect(calls("facet_progress").at(-1)![2]).toEqual(buildArgs);
+      const notice = screen.getByRole("status");
+      expect(notice.textContent).toContain("Building the gallery");
+      expect(notice.textContent).toContain("reading data/w.csv");
+      expect(notice.textContent).toContain("read 50000 rows");
+    });
+
+    it("asks again every second while the build runs", () => {
+      vi.useFakeTimers();
+      loadingBuildAt = 0;
+      view();
+      const before = progressRefetch.mock.calls.length;
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(progressRefetch.mock.calls.length - before).toBe(3);
+    });
+
+    it("asks nothing once the build has answered", () => {
+      vi.useFakeTimers();
+      view();
+      expect(calls("facet_progress")).toHaveLength(0);
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(progressRefetch).not.toHaveBeenCalled();
+    });
+
+    it("asks about the build it is waiting for: the sort's, not the file's", () => {
+      const { rerender } = view();
+      loadingSpec = '"field":"lot"';
+      fireEvent.change(screen.getByRole("combobox", { name: /sort by/i }), { target: { value: "lot" } });
+      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+      expect(calls("facet_progress").at(-1)![2]).toMatchObject({ path: "views/w.ai.yaml", sort: { field: "lot" } });
     });
   });
 

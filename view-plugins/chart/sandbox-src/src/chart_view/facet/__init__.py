@@ -104,6 +104,27 @@ def cache_file(root: Path, key: CacheKey) -> Path:
     return root / f"{key.digest()}.vcache"
 
 
+def view_ident(args: Mapping[str, Any]) -> str:
+    """What names a build for its progress file: the call's own arguments
+    (facet_build's and facet_progress's are the same), epoch aside -- no file
+    is read, so a poll stays quick. A call that is only a spec's text is
+    named by that text."""
+    call = {k: v for k, v in args.items() if k != "epoch"}
+    if set(call) == {"spec"}:
+        return call["spec"]
+    return json.dumps(call, sort_keys=True, separators=(",", ":"))
+
+
+def progress_file(root: Path, spec_text: str) -> Path:
+    """Where a build of ``spec_text`` writes its progress lines while it runs,
+    for ``facet_progress`` to read back (plan-view-plugins-pr5-finish P10).
+    Named by the spec text the gallery sent, which it can ask with before the
+    build has answered a key; named as a temp file, so one a SIGKILL leaves
+    behind is the cache cap's to sweep."""
+    digest = hashlib.sha256(spec_text.encode()).hexdigest()
+    return root / f"progress-{digest}{TMP_SUFFIX}"
+
+
 @dataclass(frozen=True)
 class ContinuousScale:
     lo: float

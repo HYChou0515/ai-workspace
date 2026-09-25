@@ -27,7 +27,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from chart_view.facet import CacheKey, CacheUnusable, cache_file, read_index, transform_hash
+from chart_view.facet import (
+    CacheKey,
+    CacheUnusable,
+    cache_file,
+    progress_file,
+    read_index,
+    transform_hash,
+)
 from chart_view.facet.build import build_facet_cache
 from chart_view.facet.cap import enforce_cap
 from chart_view.facet.pager import _used
@@ -91,6 +98,26 @@ def _key(root: Path, spec: dict[str, Any]) -> tuple[CacheKey, str]:
     return key, relative
 
 
+class _Progress:
+    """A build's progress lines: to stderr, which the runner hands back with
+    the answer, and to the progress file ``facet_progress`` reads WHILE the
+    build runs (the runner does not stream). The file is started afresh by
+    the first line and removed when the build ends, however it ends."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.started = False
+
+    def __call__(self, line: str) -> None:
+        print(line, file=sys.stderr)
+        with self.path.open("a" if self.started else "w") as f:
+            f.write(line + "\n")
+        self.started = True
+
+    def done(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+
 def _answer(path: Path, key: CacheKey, built: bool) -> dict[str, Any]:
     index = read_index(path)
     return {
@@ -116,7 +143,7 @@ def _with_sort(spec: dict[str, Any], sort: Mapping[str, str] | None) -> dict[str
     return {**spec, "facet": facet}
 
 
-def _build(text: str, sort: Any = _KEEP) -> dict[str, Any]:
+def _build(text: str, sort: Any = _KEEP, ident: str | None = None) -> dict[str, Any]:
     spec = parse_spec(text)
     if sort is not _KEEP and "facet" in spec:
         spec = _with_sort(spec, sort)
@@ -142,40 +169,45 @@ def _build(text: str, sort: Any = _KEEP) -> dict[str, Any]:
 
     facet = spec["facet"]
     fields = facet["field"] if isinstance(facet["field"], list) else [facet["field"]]
-    # read the path the key was made from: folding `..` as text and letting the
-    # OS walk a symlink first can name two different files
-    frame = apply_transforms(read_source(workspace, relative), spec.get("transform", []))
-    build_facet_cache(
-        frame,
-        facet=fields,
-        x=x["field"],
-        y=y["field"],
-        value=color["field"],
-        sort=[facet["sort"]["field"]] if "sort" in facet else [],
-        stat=facet.get("sort", {}).get("stat"),
-        # what a stack reads its rows from: this source, as it is now, transformed
-        origin={
-            "source": relative,
-            "size": key.size,
-            "mtime_ns": key.mtime_ns,
-            "transform": spec.get("transform", []),
-            "x": {"field": x["field"], "type": x["type"]},
-            "y": {"field": y["field"], "type": y["type"]},
-        },
-        path=path,
-        x_type=x["type"],
-        y_type=y["type"],
-        # the colour's kind as query sends a grid's (q8 = a ramp, else categories)
-        continuous=_kinds("grid", channels)[color["field"]] == "q8",
-        progress=lambda line: print(line, file=sys.stderr),
-    )
-    enforce_cap(views, cap_bytes=facet.get("cache_mb", DEFAULT_CAP_MB) * _MB, keep=path)
+    progress = _Progress(progress_file(views, text if ident is None else ident))
+    try:
+        # read the path the key was made from: folding `..` as text and letting
+        # the OS walk a symlink first can name two different files
+        progress(f"reading {relative}")
+        frame = apply_transforms(read_source(workspace, relative), spec.get("transform", []))
+        build_facet_cache(
+            frame,
+            facet=fields,
+            x=x["field"],
+            y=y["field"],
+            value=color["field"],
+            sort=[facet["sort"]["field"]] if "sort" in facet else [],
+            stat=facet.get("sort", {}).get("stat"),
+            # what a stack reads its rows from: this source, as it is now, transformed
+            origin={
+                "source": relative,
+                "size": key.size,
+                "mtime_ns": key.mtime_ns,
+                "transform": spec.get("transform", []),
+                "x": {"field": x["field"], "type": x["type"]},
+                "y": {"field": y["field"], "type": y["type"]},
+            },
+            path=path,
+            x_type=x["type"],
+            y_type=y["type"],
+            # the colour's kind as query sends a grid's (q8 = a ramp, else categories)
+            continuous=_kinds("grid", channels)[color["field"]] == "q8",
+            progress=progress,
+        )
+        enforce_cap(views, cap_bytes=facet.get("cache_mb", DEFAULT_CAP_MB) * _MB, keep=path)
+    finally:
+        progress.done()
     return _answer(path, key, built=True)
 
 
-def run(text: str, sort: Any = _KEEP) -> int:
+def run(text: str, sort: Any = _KEEP, ident: str | None = None) -> int:
     """Every refusal here (SpecError, SourceError, TransformError, BuildError,
     _Refused) is a ValueError, which ``facet.cli.run`` answers as exit 2.
     ``sort``, when given, is the gallery's choice in place of the spec's."""
-    json.dump(_build(text, sort), sys.stdout, separators=(",", ":"))
+    json.dump(_build(text, sort, ident), sys.stdout, separators=(",", ":"))
     return 0

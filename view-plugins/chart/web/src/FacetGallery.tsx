@@ -59,6 +59,7 @@ const TILE_W = THUMB + 16;
 const TILE_H = THUMB + LABEL + 8;
 const FALLBACK_VIEWPORT = { width: 800, height: 600 };
 const MAX_RECOVERIES = 2;
+const PROGRESS_POLL_MS = 1000;
 
 type RunData = { stdout: string; stderr: string; exit_code: number } | undefined;
 
@@ -497,7 +498,22 @@ export function FacetGallery({
   // another. A column (and statistic) is part of the cache, so a new choice is
   // a new build; the order is not, and flips over the index in hand.
   const [choice, setChoice] = useState<SortChoice>(facet.sort ? { field: facet.sort.field, stat: facet.sort.stat } : null);
-  const build = useSandboxRun(PLUGIN, "facet_build", { ...call, ...sortArgs(doc, choice), epoch });
+  const buildArgs = { ...call, ...sortArgs(doc, choice) };
+  const build = useSandboxRun(PLUGIN, "facet_build", { ...buildArgs, epoch });
+  // P10: the runner answers a command only when it ends, so while the build
+  // runs the gallery asks it how far it is (`facet_progress`, a quick command
+  // that reads the lines the build writes as it goes, named by the same
+  // arguments), once a second.
+  const building = !build.data && !build.error;
+  const progress = useSandboxRun(PLUGIN, "facet_progress", buildArgs, { enabled: building });
+  const pollProgress = useRef(progress.refetch);
+  pollProgress.current = progress.refetch;
+  useEffect(() => {
+    if (!building) return;
+    const timer = setInterval(() => pollProgress.current(), PROGRESS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [building]);
+  const progressLines = useMemo(() => parse<{ lines: string[] }>(progress.data)?.lines ?? [], [progress.data]);
   // parsed once per answer: a fresh object every render would re-run every
   // effect and memo keyed on it
   const built = useMemo(() => parse<{ key: string; build: string; groups: number }>(build.data), [build.data]);
@@ -653,7 +669,17 @@ export function FacetGallery({
   if (build.error) return <Notice role="alert">{build.error.message}</Notice>;
   if (build.data && build.data.exit_code !== 0 && build.data.exit_code !== UNUSABLE)
     return <Notice role="alert">{build.data.stderr.trim() || `exit ${build.data.exit_code}`}</Notice>;
-  if (!built) return <Notice>Building the gallery in the sandbox…</Notice>;
+  if (!built)
+    return (
+      <Notice>
+        {"Building the gallery in the sandbox…"}
+        {progressLines.length > 0 && (
+          <span style={{ display: "block", marginTop: 6, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>
+            {progressLines.join("\n")}
+          </span>
+        )}
+      </Notice>
+    );
   if (index.error) return <Notice role="alert">{index.error.message}</Notice>;
   if (index.data && index.data.exit_code !== 0 && index.data.exit_code !== UNUSABLE)
     return <Notice role="alert">{index.data.stderr.trim() || `exit ${index.data.exit_code}`}</Notice>;

@@ -29,6 +29,7 @@ from chart_view.facet import (
     CacheRebuilt,
     CategoryScale,
     ContinuousScale,
+    progress_file,
     read_exact,
     read_groups,
     read_index,
@@ -66,6 +67,16 @@ def _current(root: Path, digest: str, build: str) -> tuple[Path, CacheIndex]:
 
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
+
+
+def progress_payload(root: Path, spec_text: str) -> dict[str, Any]:
+    """The lines a running build of ``spec_text`` has written; none when no
+    build of it is running (not started, or ended)."""
+    try:
+        text = progress_file(root, spec_text).read_text()
+    except OSError:  # no build running: nothing to say
+        return {"lines": []}
+    return {"lines": text.splitlines()}
 
 
 def index_payload(root: Path, digest: str) -> dict[str, Any]:

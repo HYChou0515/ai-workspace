@@ -5,6 +5,8 @@
   for the view file at ``path``, as ``query`` reads it (``rev`` is the
   gallery's digest of the text, ignored here); ``{"spec"}`` carries the text
   instead, for a view with no file;
+- ``facet_progress`` (the same arguments as ``facet_build``) -- that build's
+  progress lines while it runs, polled by the gallery while it waits (P10);
 - ``facet_index {"key"}`` -- the index a gallery sorts and marks from;
 - ``facet_page {"key", "build", "positions"}`` -- records at sorted positions;
 - ``facet_exact {"key", "build", "position"}`` -- one group's exact values;
@@ -27,8 +29,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from chart_view.facet import CacheUnusable
-from chart_view.facet.pager import StaleIndex, exact_payload, index_payload, page_payload
+from chart_view.facet import CacheUnusable, view_ident
+from chart_view.facet.pager import (
+    StaleIndex,
+    exact_payload,
+    index_payload,
+    page_payload,
+    progress_payload,
+)
 
 UNUSABLE = 3
 STALE = 4
@@ -84,6 +92,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "properties": {**VIEW_ARGUMENTS, "sort": _SORT},
         "forms": VIEW_FORMS,
         # P4: a sort the person picked in the gallery, beside the view's file
+        "optional": frozenset({"sort"}),
+    },
+    "facet_progress": {
+        "description": (
+            "The progress lines of the facet_build with these same arguments, while it runs"
+            " (none once it has ended)."
+        ),
+        "properties": {**VIEW_ARGUMENTS, "sort": _SORT},
+        "forms": VIEW_FORMS,
         "optional": frozenset({"sort"}),
     },
     "facet_index": {
@@ -197,8 +214,11 @@ def run(name: str, raw: str) -> int:
             text = args["spec"] if "spec" in args else read_view(args["path"])
             if text is None:
                 return 2
-            return build(text, args["sort"]) if "sort" in args else build(text)
-        if name == "facet_index":
+            sort = {"sort": args["sort"]} if "sort" in args else {}
+            return build(text, ident=view_ident(args), **sort)
+        if name == "facet_progress":
+            answer = progress_payload(_root(), view_ident(args))
+        elif name == "facet_index":
             answer = index_payload(_root(), args["key"])
         elif name == "facet_stack":
             # pandas lives behind this import too: only a stack pays for it
