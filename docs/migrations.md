@@ -1067,19 +1067,24 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - **scratch 容量要這樣估（rollout 前）**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
     再加上原本 workspace 與 `.home` 的用量。為什麼在 rollout 前：換版之後第一個打開縮圖牆的人就開始寫快取；
     沒估的症狀是 scratch 卷寫滿，連帶所有沙盒的寫檔一起失敗，不只縮圖牆。
-- **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核）用 bundle 的 `facet_build` 指令端到端實測
-  （`launch` 照 runner 的方式呼叫、`SANDBOX_HOME` 指向全新的 `.home`），不是 CI 數字。
-  來源是隨機產生的測試資料（每列一個 group 字串、兩個整數座標、兩個 float），所以檔案大小只是這組資料的；
-  成本跟著列數與格數走，不跟檔案大小：
+- **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核，量測時 load average 1.4–3.5）用 bundle 的 `facet_build`
+  指令端到端實測（`launch` 照 runner 的方式呼叫、`SANDBOX_HOME` 指向全新的 `.home`），不是 CI 數字。
+  時間是從啟動 `launch` 到它結束的 wall clock，峰值記憶體是那個程序的 `ru_maxrss`，每格跑三次取中位數。
+  來源是隨機產生的測試資料（每列一個 group 字串、兩個整數座標 x / y、兩個 float），所以檔案大小只是這組資料的；
+  spec 是 `mark: grid`、`color` 為 quantitative 的 float、依每組一個值的 float 欄位排序，x / y 分別宣告成
+  `quantitative` 與 `ordinal` 各量一次。成本跟著列數與格數走，不跟檔案大小：
 
-  | 來源 | 列數 | 第一次開啟 | 峰值記憶體 | 快取大小 |
-  |---|---|---|---|---|
-  | 1000 組 × 5041 格，CSV（134 MB） | 5.04M | 3.6 秒 | 0.95 GB | 45.4 MB |
-  | 同上，parquet（13.5 MB） | 5.04M | 3.0 秒 | 1.27 GB | 45.4 MB |
-  | 200 組 × 50,176 格，parquet（26.6 MB） | 10.0M | 5.4 秒 | 2.29 GB | 90.7 MB |
+  | 來源 | 列數 | x / y | 第一次開啟 | 峰值記憶體 | 快取大小 |
+  |---|---|---|---|---|---|
+  | 1000 組 × 5041 格，CSV（128.6 MB） | 5.04M | quantitative | 4.0 秒 | 1.02 GB | 45.5 MB |
+  | 同上 | 5.04M | ordinal | 3.7 秒 | 1.02 GB | 45.4 MB |
+  | 同上，parquet（9.7 MB） | 5.04M | quantitative | 3.4 秒 | 1.33 GB | 45.5 MB |
+  | 同上 | 5.04M | ordinal | 3.1 秒 | 1.35 GB | 45.4 MB |
+  | 200 組 × 50,176 格，parquet（19.0 MB） | 10.0M | quantitative | 6.2 秒 | 2.43 GB | 90.9 MB |
+  | 同上 | 10.0M | ordinal | 5.8 秒 | 2.44 GB | 90.7 MB |
 
-  之後再打開（重用快取）約 0.3–0.4 秒、0.12 GB；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05 秒、
-  約 22 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.2–0.25 GB）。
+  之後再打開（重用快取）約 0.3–0.4 秒、0.12 GB；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05–0.07 秒、
+  約 25 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.2–0.27 GB）。
   - **時間上限（rollout 前檢查）**：建快取是一個沙盒指令，受每個指令的總時間上限管（`kind: http` 是
     sandbox-host 的 `SANDBOX_HOST_EXEC_TIMEOUT`，`kind: local` 是 `sandbox.exec_timeout`，預設都是 60 秒）。
     預設值離上表很遠，不用動；**你們若把它調低到接近上表的秒數（依你們機器與預期最大來源估），rollout 前調回來**。
@@ -1089,7 +1094,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     AI 那邊則是 `show_file` 回 `error: view plugin 'chart' refused <檔案> — nothing was shown:`，下一行是同一句
     timed out，**卡片不出現**。
     另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
-    建置在讀檔、分組、寫檔各印一行進度，上表最長的一段不到 5 秒；**若你們把它調低到接近這個秒數，rollout 前調回來**，
+    建置在讀檔、分組、寫檔各印一行進度；上表每一列都量過相鄰兩行進度之間的空檔，最長的是 200 組那兩列的寫快取
+    （quantitative 與 ordinal 都約 3.2–3.4 秒）；**若你們把它調低到接近這個秒數，rollout 前調回來**，
     沒做的症狀是最後一行變成 `no output for 60s; assumed hung and killed`（數字是你們設的上限）。
   - **記憶體上限（rollout 前檢查）**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉；
     為什麼在 rollout 前：和時間上限一樣，換版後第一個打開大縮圖牆的人、或第一次 `show_file` 一份大 `facet:` 檔的 AI
