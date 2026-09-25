@@ -260,6 +260,22 @@ The outcome is four things:
     **Start gate and hand-off** section that says when it may start, which of its
     phases can start early, and the freeze point where it posts a notice on the PR above
     it.
+  - **As delivered (2026-09-25) [user]:** #856 and #857 were merged into #855's branch
+    (merges `e15e8ba0` and `83ad6363`), so they reach master inside #855's merge.
+    #855's branch also took one pull-merge (`a7bac209`), against the hand-off section's
+    "rebase, never merge"; undoing it would need a force-push.
+- **Q22.** Every ask in #847 and #848 is built before #855 reaches master **[user]**.
+  The 2026-09-25 audit found six that no PR built. They are
+  [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md):
+  - tables follow a marking, filtered with a "show all" toggle, and write it too;
+  - box select on the gallery;
+  - sort the gallery by any column, with a picked statistic;
+  - a stack panel beside the gallery, with any column and statistic, and A − B;
+  - card thumbnails drawn live by the same renderer;
+  - save a selection's rows as a CSV, the future #843 row source.
+- **Q23.** A wafer map is a generic map **[user]**. No option, default or label gives a
+  value a meaning ("bigger is redder is worse", "yield", "defect"). The domain words in
+  #847/#848 are examples.
 
 ## Checks done while planning (2026-09-25, on `a967877c`)
 
