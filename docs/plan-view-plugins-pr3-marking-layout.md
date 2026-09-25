@@ -9,7 +9,9 @@ pane, and the linked views in other panes light up.
 - Two `chart` views on the same `marking:` sit in different panes of the workspace's
   own split layout. A lasso in one lights the matched rows in the other. A third view on
   a different marking, or none, does not react.
-- The view header shows `🔗 <name> ▾`, which can re-attach or detach the view.
+- The view header shows the marking control (`<name> ▾`), which can re-attach or detach
+  the view. As built it draws the app's `tag` icon, not the `🔗` emoji (icons come from
+  the app's icon set).
 - The AI's `show_file(layout=…)` shows one card that opens the arrangement:
   - in the workspace by the Q17 rule;
   - in chat mode as an editor-area-only page.
@@ -46,6 +48,9 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 
 - Workspace-level state per item, living beside `useEditorGroups` in `WorkspaceShell`.
   It holds `name → {column → set of values}`.
+- As built, it is also kept in step across the item's browser tabs
+  (`web/src/lib/markingsSync.ts`), so a view in a second tab lights too [mine, open to
+  override].
 - Exposed through the SDK as `useMarking(name)`, which reads and writes.
 - It is knowledge-free: columns and values are opaque strings (Q6).
 - Matching rule: a row is lit when it shares **at least one** column with the marking
@@ -65,7 +70,8 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 
 **P3 — the header control.**
 
-- `🔗 <name> ▾` offers: attach to an existing marking, attach to a new one, or detach.
+- The control (`tag` icon + `<name> ▾`) offers: attach to an existing marking, attach to
+  a new one, or detach.
 - The choice lives in view state. The spec file is **not** rewritten; a user edits the
   YAML to make it permanent.
 
@@ -75,8 +81,8 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   as leaves. The existing single `path` form is unchanged.
 - Every leaf path is resolved, and every `*.ai.yaml` leaf is validated as in PR 1 P9.
   One failure declares nothing.
-- The `[shown-files]` marker carries the tree, and `ShownFiles.tsx` renders one card
-  for it.
+- The `[shown-files]` marker carries the tree, and one card renders it (as built:
+  `ShownLayoutCard.tsx`, beside `ShownFiles.tsx`).
 
 **P5 — opening a layout in the workspace.**
 

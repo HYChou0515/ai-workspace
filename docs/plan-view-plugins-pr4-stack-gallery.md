@@ -101,9 +101,9 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     - Two rows in one group's cell, or a sort value that varies inside a group, is
       refused by name; aggregating belongs to the transforms.
     - A bool value is a `true` / `false` category.
-    - Still to wire: reading the frame through `read_source` and the spec's
-      transforms, and the `facet_build` launch command with the cap on every build.
-      That waits for P6, where `facet:` joins the spec schema.
+    - Wired in P6 (where `facet:` joined the spec schema): reading the frame through
+      `read_source` and the spec's transforms, and the `facet_build` launch command
+      with the cap on every build.
 - Converts what the format refuses, in one place, with a test per rule:
   - key values to text, the same way PR 2's `query` stringifies the values a linked
     view compares against;
@@ -193,8 +193,9 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
     - answers `{key, build, groups, cells, built}`;
     - refuses an entity source, since there is no file version to key a cache on.
   - The progress lines go to stderr. `useSandboxRun` hands them back with the answer
-    rather than streaming them, so "first open shows progress" still needs a
-    streaming path, or a build long enough to warrant polling.
+    rather than streaming them, so as delivered a first open shows only a fixed
+    "Building the gallery in the sandbox…" notice. Streaming the progress is
+    [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) P10.
 - **Built, web side:**
   - `gallery.ts` (pure): `sortedPositions`, `groupsPerPage`, `thumbnail`,
     `rangeMarking`, `groupsLit`.
@@ -322,7 +323,8 @@ mutation-probed, and its speed is the live measurement in P8.
   - the same as parquet;
   - 200 groups × 50 000 cells.
 
-  The checks: first open shows progress; scrolling fetches pages; sort changes cost no
+  The checks: first open shows progress (as delivered, a fixed notice; streamed in pr5
+  P10); scrolling fetches pages; sort changes cost no
   rebuild; a rank-range selection lights the linked scatter from PR 3; a reap followed
   by a reopen rebuilds.
 - Base differential on PR 3's tip, where a `facet:` spec is rejected by `validate`.

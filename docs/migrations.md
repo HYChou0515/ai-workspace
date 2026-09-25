@@ -862,7 +862,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
   （你沒列的那幾種，排序）。
 
-### 2026-09-25 · #854 runtime view plugin 平台；`csv-table` 搬出 SPA、改由 plugin 目錄提供 {#pr-854}
+### 2026-09-25 · e2758724 · #854 runtime view plugin 平台；`csv-table` 搬出 SPA、改由 plugin 目錄提供 {#pr-854}
 
 **設定** — 不用動。新增選用的 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ `<repo>/.view-plugins`，
 映像裡是 `/app/.view-plugins`）。目錄不存在 = 沒有 plugin；**目錄裡任何一個 plugin 壞掉就拒絕開機**，
@@ -909,7 +909,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ### 2026-09-25 · #855 chart view plugin：AI 用 `show_file` 秀出可互動圖表（`view: chart`） {#pr-855}
 
-**設定**：沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
+**設定** — 沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
 
 - 凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多這些：
   - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有 views，
@@ -924,7 +924,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 細節見 [chart：互動圖表 view plugin](view-plugin-chart.md)。
 
-**資料**：不動。沒有 `Schema` 升版。
+**資料** — 不動。沒有 `Schema` 升版。
 
 **k8s · CI 側**
 
@@ -967,12 +967,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-25 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
+### 2026-09-25 · e15e8ba0 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
 
-**設定** — 沒有新 key。**資料** — 不用 migrate：`Message` 多了一個有預設值的 `markings` 欄位（舊訊息讀出來是空清單），
-沒有 `Schema` 升版。
+隨 [#855](#pr-855) 進 master：#856 合進 #855 的分支（`e15e8ba0`），沒有自己的 master merge。
 
-**行為**（沒有開關；運營方不用做事，但要知道）
+**設定** — 沒有新 key。以下是**行為改變，沒有開關**（運營方不用做事，但要知道）：
 
 - **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在 `chart` view（#855）上框選、寫進有名字的 marking
   （同一個 `marking:` 的圖彼此連動，見 [chart 說明](view-plugin-chart.md)）之後送訊息，composer 上方會列出
@@ -999,6 +998,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   瀏覽器對同一 host 只開 6 條，第 7 條和之後送訊息的請求就永遠排隊（live check 實測）。
   運營方不用做事；ingress 看到的長連線數會變少。
 
+**資料** — 不用 migrate：`Message` 多了一個有預設值的 `markings` 欄位（舊訊息讀出來是空清單），
+沒有 `Schema` 升版。
+
 **k8s · CI 側** — 不動（新頁面是 SPA 路由，同一個 image）。
 
 **確認做完**
@@ -1007,12 +1009,14 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   重新整理還在；檔案樹多了 `.markings/<name>.json`，內容是 `{"name", "sources", "columns"}`。
 - 聊天模式點一張 `show_file` 卡：新分頁的網址是 `…/view?path=…`，畫面只有編輯區（沒有檔案樹、沒有聊天）。
 
-### 2026-09-25 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
+---
+
+### 2026-09-25 · 83ad6363 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
+
+隨 [#855](#pr-855) 進 master：#857 合進 #855 的分支（`83ad6363`），沒有自己的 master merge。
 
 **設定** — 沒有新 config key。`facet.cache_mb` 是 **spec 裡**的旋鈕（寫在 `.ai.yaml`），不是部署設定。
-**資料** — 不用 migrate，沒有 `Schema` 升版。
-
-**行為**（沒有開關；運營方要知道的是沙盒的 scratch 磁碟，以及建快取在沙盒指令的時間與記憶體上限之內）
+以下是**行為改變，沒有開關**（運營方要知道的是沙盒的 scratch 磁碟，以及建快取在沙盒指令的時間與記憶體上限之內）：
 
 - **每個沙盒的 `.home/.cache/views/` 會出現縮圖牆的快取檔（`*.vcache`）。** `facet:` 的 chart 第一次打開時，
   沙盒讀一次來源檔、建一份快取，之後捲動、換排序、放大都從快取取，不再讀來源。
@@ -1046,13 +1050,16 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
     建置在讀檔、分組、寫檔各印一行進度，上表最長的一段不到 5 秒；**若你們把它調低到接近這個秒數，rollout 前調回來**，
     沒做的症狀是最後一行變成 `no output for 60s; assumed hung and killed`（數字是你們設的上限）。
-  - **記憶體上限**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉：
+  - **記憶體上限（rollout 前檢查）**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉；
+    為什麼在 rollout 前：和時間上限一樣，換版後第一個打開大縮圖牆的人就會撞到。沒做的症狀：
     面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
     是依指令的輸出方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
   畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
 - chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 6853（[#856](#pr-856) 合入後的版本）變成
   7876 字元；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
+
+**資料** — 不用 migrate，沒有 `Schema` 升版。
 
 **k8s · CI 側**
 

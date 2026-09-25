@@ -94,7 +94,11 @@ words are examples, not spec keys.
   - Guard tests: ECharts stays out of the SPA bundle; sandbox-host's Dockerfile bakes
     the plugins; the CSP has no `script-src`.
   - Component tests: a lasso and a legend click write the marking.
-- **P10 — Live check at 390 and 1440 wide, with a base differential on 83ad6363.** Run
+- **P10 — The gallery's first open shows its progress.** PR 4 planned it and
+  delivered a fixed notice. The build's progress lines reach the view while it runs:
+  a streamed sandbox run, or polling the build's state, whichever the platform's
+  runner supports.
+- **P11 — Live check at 390 and 1440 wide, with a base differential on 83ad6363.** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
   Update the docs (`view-plugin-chart.md`) and the #855 runbook entry if the operator
