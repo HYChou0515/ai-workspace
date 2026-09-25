@@ -160,6 +160,23 @@ def test_the_plans_shape_writes_the_same_cache_both_ways(tmp_path: Path) -> None
         # a nullable-integer facet, and a uint8 one
         ({"g": pd.array([1, 2], dtype="Int64"), "x": [0, 0], "y": [0, 0], "v": [1.0, 2.0]}, {}),
         ({"g": np.array([1, 2], dtype=np.uint8), "x": [0, 0], "y": [0, 0], "v": [1.0, 2.0]}, {}),
+        # a row with an x and no y is left out too
+        (
+            {"g": ["a", "a", "a"], "x": [0, 1, 2], "y": [0.0, math.nan, 0.0], "v": [1.0, 2.0, 3.0]},
+            {"y_type": "quantitative"},
+        ),
+        # two keys whose first-seen order is not their sorted order: (b, x) then
+        # (a, y) then (b, y) -- groups keep the order their first row comes in
+        (
+            {
+                "lot": ["b", "a", "b"],
+                "w": ["x", "y", "y"],
+                "x": [0, 0, 1],
+                "y": [0, 0, 0],
+                "v": [1.0, 2.0, 3.0],
+            },
+            {"facet": ["lot", "w"]},
+        ),
     ],
     ids=[
         "two-keys-negative-zero",
@@ -173,6 +190,8 @@ def test_the_plans_shape_writes_the_same_cache_both_ways(tmp_path: Path) -> None
         "numeric-as-categories",
         "Int64-key",
         "uint8-key",
+        "no-y",
+        "keys-first-seen-not-sorted",
     ],
 )
 def test_frames_of_every_dtype_the_column_path_takes_write_the_same_cache(
@@ -289,6 +308,12 @@ def test_sort_values_are_the_same_both_ways(tmp_path: Path, column: Any) -> None
             ),
             {},
         ),
+        # -0.0 then 0.0 on a quantitative x: one cell, and the refusal names the
+        # row that repeated it (0.0), not the one it repeated (-0.0)
+        (
+            pd.DataFrame({"g": ["a", "a"], "x": [-0.0, 0.0], "y": [0, 0], "v": [1.0, 2.0]}),
+            {"x_type": "quantitative"},
+        ),
         # a key that is missing, and one that is not finite
         (pd.DataFrame({"g": ["a", None, None], "x": [0, 1, 2], "y": [0] * 3, "v": [1.0] * 3}), {}),
         (pd.DataFrame({"g": [1.0, math.inf], "x": [0, 1], "y": [0, 0], "v": [1.0, 2.0]}), {}),
@@ -305,6 +330,7 @@ def test_sort_values_are_the_same_both_ways(tmp_path: Path, column: Any) -> None
         "cell-before-sort",
         "first-sort-column",
         "repeat-in-later-group",
+        "repeat-names-the-repeating-row",
         "missing-key",
         "infinite-key",
         "nothing-placed",
