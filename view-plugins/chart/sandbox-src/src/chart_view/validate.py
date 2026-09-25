@@ -86,7 +86,7 @@ def check(text: str, read_source: ReadSource) -> Result:
     except (SourceError, TransformError) as e:
         return Result(errors=[str(e)])
     # Judged on the answer the chart receives, not on the rows pandas holds.
-    errors = datum_errors(spec, answer(spec, layers))
+    errors = datum_errors(spec, lambda: answer(spec, layers))
     if errors:
         return Result(errors=errors)
 

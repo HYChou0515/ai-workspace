@@ -59,6 +59,20 @@ def test_the_decoder_reads_the_corpus_as_the_renderer_does(path: Path):
             assert g == v and type(g) is type(v)
 
 
+@pytest.mark.parametrize(
+    "path", [f for f in FILES if f.name != "bits-nine-rows.json"], ids=lambda p: p.stem
+)
+def test_the_distinct_values_are_the_decoded_ones(path: Path):
+    # decode_distinct skips the list per row decode_column builds; it must
+    # read the same values, or a category datum is judged on other labels.
+    from chart_view.wire import decode_column, decode_distinct
+
+    wire = json.loads(path.read_text())["wire"]
+    whole = {v for v in decode_column(wire) if v is not None}
+    distinct = decode_distinct(wire)
+    assert len(distinct) == len(set(distinct)) and set(distinct) == whole
+
+
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.stem)
 def test_the_encoder_writes_the_corpus(path: Path):
     case = json.loads(path.read_text())
