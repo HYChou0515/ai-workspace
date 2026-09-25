@@ -239,6 +239,27 @@ describe("FacetGallery", () => {
     expect(screen.getByText("2 of 1000 marked · by wafer")).toBeTruthy();
   });
 
+  // #847/#848 PR 5 P31, found at 390 wide: the first selection added "N of M
+  // marked" to the wrapping toolbar, which took a second line and moved the
+  // wall down 26 px under the pointer (P18 fixed the same on a chart). The
+  // count has a line of its own, one line high, there before anything is
+  // marked, so marking and clearing move nothing.
+  it("keeps the count on a line of its own, one line high, there before anything is marked", () => {
+    view();
+    const line = document.querySelector("[data-gallery-status]") as HTMLElement | null;
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toBe("1000 groups");
+    expect(line!.style.height).toBe("20px");
+    expect(line!.style.whiteSpace).toBe("nowrap");
+    expect(line!.style.overflow).toBe("hidden");
+    cleanup();
+    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+    view();
+    const marked = document.querySelector("[data-gallery-status]") as HTMLElement;
+    expect(within(marked).getByText("2 of 1000 marked · by wafer")).toBeTruthy();
+    expect(marked.style.height).toBe("20px");
+  });
+
   it("names the columns the marking marks by beside the count (P27)", () => {
     // two columns light every combination of their values: the count can
     // exceed the tiles picked, and the line says why

@@ -785,8 +785,6 @@ export function FacetGallery({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "4px 12px", fontSize: 12 }}>
-        <span>{`${sorted.length} groups`}</span>
-        {lit && entry && <span>{`${marked} of ${sorted.length} marked · ${markedBy(entry.marking)}`}</span>}
         <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           sort by
           <select
@@ -857,6 +855,32 @@ export function FacetGallery({
         <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => writeRange.current([])}>
           Clear selection
         </button>
+      </div>
+      {/* The counts, on a line of their own that is always there, one line
+          high (#847/#848 PR 5 P31): in the wrapping toolbar, the first
+          selection's "N of M marked" took a second line at 390 wide and moved
+          the wall down 26 px under the pointer (a chart's P18). In a narrow
+          pane it shrinks to an ellipsis; its title holds all of it. */}
+      <div
+        data-gallery-status
+        title={lit && entry ? `${sorted.length} groups · ${marked} of ${sorted.length} marked · ${markedBy(entry.marking)}` : undefined}
+        style={{
+          display: "flex",
+          gap: 12,
+          height: 20,
+          lineHeight: "20px",
+          padding: "0 12px",
+          overflow: "hidden",
+          whiteSpace: "nowrap",
+          fontSize: 12,
+        }}
+      >
+        <span>{`${sorted.length} groups`}</span>
+        {lit && entry && (
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+            {`${marked} of ${sorted.length} marked · ${markedBy(entry.marking)}`}
+          </span>
+        )}
       </div>
       {/* bounded by the window, not the pane: a host pane is height:auto, and a
           scroller that grows to its content mounts every tile and asks every page */}
