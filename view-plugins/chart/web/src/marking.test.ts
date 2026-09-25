@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { isLit, markedBy as hostMarkedBy } from "../../../../web/src/lib/markings";
-import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
+import { isLit, markedBy as hostMarkedBy, MarkingStore } from "../../../../web/src/lib/markings";
+import { highlightMarking, markedBy, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
 import { measuredFields } from "./option";
 import { answer, cat, f64, layer, time } from "./testAnswer";
 
@@ -230,5 +230,43 @@ describe("markedBy (P27)", () => {
 
   it("names the columns in the order the marking was written", () => {
     expect(markedBy({ wafer: new Set(["1"]), lot: new Set(["L1"]) })).toBe("by wafer, lot");
+  });
+});
+
+describe("stillWritten (P34)", () => {
+  // Whether the marking still holds exactly what a view wrote. The oracle is
+  // the host's store: it takes a write as "the same again" -- and tells no
+  // one -- exactly when the entry already holds it from the same source.
+  const same = (held: MarkingValues, heldFrom: string, wrote: MarkingValues, from: string): boolean => {
+    const store = new MarkingStore();
+    store.set("m", held, heldFrom);
+    let told = false;
+    store.subscribe("m", () => (told = true));
+    store.set("m", wrote, from);
+    return !told;
+  };
+  const S = (...v: string[]) => new Set(v);
+  it.each<[MarkingValues, string, MarkingValues, string]>([
+    [{ group: S("A") }, "/v/a", { group: S("A") }, "/v/a"],
+    [{ group: S("A") }, "/v/b", { group: S("A") }, "/v/a"],
+    [{ group: S("A", "B") }, "/v/a", { group: S("B", "A") }, "/v/a"],
+    [{ group: S("A", "B") }, "/v/a", { group: S("A") }, "/v/a"],
+    [{ group: S("A") }, "/v/a", { group: S("A", "B") }, "/v/a"],
+    [{ group: S("A") }, "/v/a", { item: S("A") }, "/v/a"],
+    [{ group: S("A"), item: S("1") }, "/v/a", { item: S("1"), group: S("A") }, "/v/a"],
+    [{ group: S("A"), item: S("1") }, "/v/a", { group: S("A") }, "/v/a"],
+    [{ group: S("A") }, "/v/a", { group: S("A"), item: S("1") }, "/v/a"],
+    [{ group: S("A") }, "/v/a", { group: S("A"), item: S() }, "/v/a"],
+  ])("agrees with the store: held %o from %s, wrote %o from %s", (held, heldFrom, wrote, from) => {
+    const store = new MarkingStore();
+    store.set("m", held, heldFrom);
+    expect(stillWritten(store.get("m"), wrote, from)).toBe(same(held, heldFrom, wrote, from));
+  });
+
+  it("an empty write is still what the marking holds while it holds nothing", () => {
+    expect(stillWritten(undefined, {}, "/v/a")).toBe(true);
+    expect(stillWritten(undefined, { group: S() }, "/v/a")).toBe(true);
+    expect(stillWritten({ marking: { group: S("A") }, source: "/v/a" }, {}, "/v/a")).toBe(false);
+    expect(stillWritten(undefined, { group: S("A") }, "/v/a")).toBe(false);
   });
 });

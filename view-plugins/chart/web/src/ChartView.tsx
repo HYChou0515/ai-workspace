@@ -16,7 +16,7 @@ import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, compactAt, measuredFields, toOption } from "./option";
-import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
+import { highlightMarking, markedBy, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
 import { type Cells, type RasterImage, upscale } from "./raster";
 import {
   type BrushSelected,
@@ -104,19 +104,23 @@ function Plot({
   // rule, over the columns each layer carries); otherwise the spec's highlight.
   // On an EMPTY marking nothing is lit: every view on it draws undimmed, rather
   // than each falling back to its own `highlight:` and disagreeing.
-  // With no marking, the view's own selection lights a GRID it took cells of
-  // or a PIE slice it clicked: a grid is one raster image, which ECharts' brush
-  // styling cannot dim, and a click ECharts does not style, so without this
-  // either showed only a count (#847/#848 P18, PR 5 P30).
-  const lit = useMemo(
-    () =>
-      marking
-        ? entry
-          ? markingLit(answer, entry.marking, isLit, measured)
-          : answer.layers.map(() => null)
-        : ownSelectionLit(answer, selection),
-    [marking, entry, answer, selection, measured],
-  );
+  // A selection that writes nothing -- no marking, or one this view cannot
+  // write (no `keys:`) -- lights a GRID it took cells of or a PIE slice it
+  // clicked itself: a grid is one raster image, which ECharts' brush styling
+  // cannot dim, and a click ECharts does not style, so without this either
+  // showed only a count (#847/#848 P18, PR 5 P30, P34).
+  // Whether the person's selection here went to the marking (#847/#848 PR 5
+  // P29). Then the marking lights this chart as it lights every other view,
+  // and ECharts' own brush visual -- every point outside the box greyed -- is
+  // off: over two columns the marking lights every combination of their
+  // values, and the brushed chart showed 16 lit where the tables showed 27.
+  // A selection that writes nothing (no marking, no `keys:`) keeps it.
+  const [toMarking, setToMarking] = useState(false);
+  const lit = useMemo(() => {
+    const own = marking && toMarking ? undefined : ownSelectionLit(answer, selection);
+    if (own || !marking) return own;
+    return entry ? markingLit(answer, entry.marking, isLit, measured) : answer.layers.map(() => null);
+  }, [marking, toMarking, entry, answer, selection, measured]);
   // Whether the chart is laid out compact (#847/#848 PR 5 P31): read from the
   // width its host is given, by the observer that resizes it. A boolean, so the
   // option is rebuilt only when the width crosses `COMPACT_BELOW`.
@@ -127,13 +131,6 @@ function Plot({
   );
   const builtRef = useRef(built);
   builtRef.current = built;
-  // Whether the person's selection here went to the marking (#847/#848 PR 5
-  // P29). Then the marking lights this chart as it lights every other view,
-  // and ECharts' own brush visual -- every point outside the box greyed -- is
-  // off: over two columns the marking lights every combination of their
-  // values, and the brushed chart showed 16 lit where the tables showed 27.
-  // A selection that writes nothing (no marking, no `keys:`) keeps it.
-  const [toMarking, setToMarking] = useState(false);
   // (every chart has a brush: a pie alone has only its ✕, PR 5 P31)
   const option = useMemo(
     () => ({
@@ -143,23 +140,41 @@ function Plot({
     [built, marking, toMarking],
   );
 
-  // What a gesture writes. Read through a ref: the ECharts handlers are bound once.
-  const writeRef = useRef<(sel: Selection[]) => void>(() => {});
+  // What a gesture writes, and what it wrote to the marking (null: nothing --
+  // no marking, or one this view cannot write). Read through a ref: the
+  // ECharts handlers are bound once.
+  const writeRef = useRef<(sel: Selection[]) => MarkingValues | null>(() => null);
   // Whether this view's brush holds a selection the PERSON made. ECharts fires
   // `brushselected` with no areas whenever a brush component is (re)built —
   // every setOption does — and taking that as "cleared" would erase the marking
   // this view just wrote, re-render, rebuild the brush, and fire again.
   const brushed = useRef(false);
-  // The pie slice ("seriesIndex:dataIndex") a click picked and still holds.
-  const clicked = useRef<string | null>(null);
+  // The pie slice ("seriesIndex:dataIndex") a click picked, and what that
+  // click wrote to the marking (#847/#848 PR 5 P34): a click toggles only
+  // what it wrote. Its second click, or a click on empty space, clears it
+  // only while the marking still holds exactly that write (`stillWritten`);
+  // once any other write replaced it, the pick is forgotten -- empty space
+  // clears nothing, and the slice is picked afresh. A pick that wrote
+  // nothing (null) is this view's alone and stays its to clear.
+  const clicked = useRef<{ key: string; wrote: MarkingValues | null } | null>(null);
+  const entryRef = useRef(entry);
+  entryRef.current = entry;
+  const held = (): { key: string; wrote: MarkingValues | null } | null => {
+    const pick = clicked.current;
+    if (!pick || pick.wrote === null || stillWritten(entryRef.current, pick.wrote, source)) return pick;
+    return (clicked.current = null);
+  };
+  const heldRef = useRef(held);
+  heldRef.current = held;
   writeRef.current = (sel) => {
     // ECharts re-reports the areas it holds: the same rows keep the same state,
     // or a grid lit by its own selection would redraw on every report
     setSelection((prev) => (JSON.stringify(prev) === JSON.stringify(sel) ? prev : sel));
-    if (!marking) return;
+    if (!marking) return null;
     const values = selectionMarking(sel, answer, keys, measured);
     setToMarking(values !== null);
     if (values) write(values, source);
+    return values;
   };
 
   // The spec's `highlight:` seeds its marking on open — only an EMPTY one: a
@@ -209,17 +224,22 @@ function Plot({
     });
     // A pie's slice is picked by clicking it (#847/#848 PR 5 P30); the same
     // slice again, or empty space, clears what the click picked -- and only
-    // that: a selection another view wrote is not this click's to clear.
+    // while the marking still holds it (`held`, P34): a selection another
+    // view wrote is not this click's to clear.
     chart.on("click", (p) => {
       const params = p as ClickParams;
       const sel = selectionFromClick(params, builtRef.current);
       if (sel.length === 0) return;
       const key = `${params.seriesIndex}:${params.dataIndex}`;
-      clicked.current = clicked.current === key ? null : key;
-      writeRef.current(clicked.current ? sel : []);
+      if (heldRef.current()?.key === key) {
+        clicked.current = null;
+        writeRef.current([]);
+        return;
+      }
+      clicked.current = { key, wrote: writeRef.current(sel) };
     });
     chart.getZr().on("click", (e) => {
-      if (e.target || !clicked.current) return;
+      if (e.target || !heldRef.current()) return;
       clicked.current = null;
       writeRef.current([]);
     });

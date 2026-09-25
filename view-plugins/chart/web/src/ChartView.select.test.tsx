@@ -318,6 +318,98 @@ describe("a click on a pie's slice writes the marking", () => {
     expect(screen.getByText("1 selected")).toBeTruthy();
   });
 
+  // #847/#848 PR 5 P34 row 1: a click toggles only what it wrote. Once another
+  // view rewrote the marking, the pie's pick is forgotten: empty space clears
+  // nothing, and its slice is picked afresh rather than taken for a second click.
+  it("a click on empty space after another view rewrote the marking clears nothing (P34)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    click(chart, [5, 395]);
+    expect(marked(store)).toEqual({ lot: ["L1"] });
+  });
+
+  it("a click on the same slice after another view rewrote the marking picks it again (P34)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    click(chart, sliceAt(chart, 1));
+    expect(marked(store)).toEqual({ lot: ["L2"] });
+  });
+
+  it("another view writing the same values is still another view's write (P34)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => store.set("m", { lot: new Set(["L2"]) }, "/v/other.ai.yaml"));
+    click(chart, [5, 395]);
+    expect(marked(store)).toEqual({ lot: ["L2"] });
+    expect(store.get("m")!.source).toBe("/v/other.ai.yaml");
+  });
+
+  it("a pick whose write the marking holds again is still the pick's to clear (P34)", () => {
+    // what counts is what the marking holds when the click comes
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", { lot: new Set(["L2"]) }, "/v/a.ai.yaml"));
+    click(chart, [5, 395]);
+    expect(store.get("m")).toBeUndefined();
+  });
+
+  // #847/#848 PR 5 P34 row 5: on a marking this pie cannot write (no `keys:`),
+  // its pick writes nothing, so the pie lights it itself, as with no marking.
+  const KEYLESS = { ...PIE, keys: undefined };
+  it("on a marking it cannot write, the slice it picked is lit and the rest dimmed (P34)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, KEYLESS, SLICES);
+    click(chart, sliceAt(chart, 1));
+    expect(store.get("m")).toBeUndefined(); // nothing written
+    expect(opacities(chart)).toEqual([DIM_OPACITY, 1, DIM_OPACITY]);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    // and empty space clears it, as it would with no marking
+    click(chart, [5, 395]);
+    expect(opacities(chart)).toEqual([1, 1, 1]);
+  });
+
+  it("on a marking another view wrote, a pick that wrote nothing is still its own to clear (P34)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, KEYLESS, SLICES);
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    expect(opacities(chart)).toEqual([1, DIM_OPACITY, DIM_OPACITY]); // the marking's
+    click(chart, sliceAt(chart, 1));
+    expect(opacities(chart)).toEqual([DIM_OPACITY, 1, DIM_OPACITY]); // its own pick
+    click(chart, [5, 395]);
+    expect(opacities(chart)).toEqual([1, DIM_OPACITY, DIM_OPACITY]); // the marking's again
+    expect(marked(store)).toEqual({ lot: ["L1"] });
+  });
+
+  it("(control) on a marking it can write, the slice is lit by the marking (P34)", () => {
+    const store = new MarkingStore();
+    const chart = mount(store, PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    expect(opacities(chart)).toEqual([1, DIM_OPACITY, DIM_OPACITY]);
+  });
+
+  // #847/#848 PR 5 P34 row 6 [decided]: on no marking, a legend toggle is the
+  // person's latest gesture, and it is what is lit -- it replaces the spec's
+  // own `highlight:` dimming, as a grid's selection already does.
+  it("on no marking, a legend toggle replaces the spec's highlight: what the legend left shown is lit (P34)", () => {
+    const seeded = answer(
+      layer("pie", 3, { n: f64([5, 3, 2]), lot: cat(["L1", "L2", "L3"]) }, { highlight: btoa(String.fromCharCode(0b010)), lit: 1 }),
+    );
+    const chart = mount(new MarkingStore(), PIE, seeded, null);
+    expect(opacities(chart)).toEqual([DIM_OPACITY, 1, DIM_OPACITY]); // the spec's highlight
+    act(() => chart.dispatchAction({ type: "legendToggleSelect", name: "L1" }));
+    // L1 hidden (ECharts drops it from the drawn data); L2 and L3, the slices
+    // left shown, both lit -- by the spec's highlight L3 would read dimmed
+    expect(opacities(chart)).toEqual([1, 1]);
+  });
+
   it("the legend still selects the slices left shown", async () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);

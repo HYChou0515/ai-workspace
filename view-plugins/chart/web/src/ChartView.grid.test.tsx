@@ -93,6 +93,24 @@ describe("a grid's own selection, on no marking", () => {
     expect(painted.lits.at(-1)).toBeUndefined();
   });
 
+  // #847/#848 PR 5 P34 row 5: a grid with no `keys:` on a marking writes
+  // nothing, so what its lasso took is lit by the grid itself, as with no
+  // marking -- it showed a count over a plain raster.
+  it("on a marking it cannot write, paints the cells a lasso took lit (P34)", () => {
+    const { keys: _, ...keyless } = GRID;
+    sdk.viewDocument.mockReturnValue(keyless);
+    render(<ChartView spec={{} as never} marking="m" path="views/g.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />);
+    lasso([[0.6, -0.4], [2.9, -0.4], [2.9, 0.4], [0.6, 0.4]]); // cells 1 and 2
+    expect(painted.lits.at(-1)).toEqual([false, true, true]);
+  });
+
+  it("(control) on a marking it writes, the lasso's cells are left to the marking (P34)", () => {
+    // the double's marking holds nothing: every view on it draws undimmed
+    render(<ChartView spec={{} as never} marking="m" path="views/g.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />);
+    lasso([[0.6, -0.4], [2.9, -0.4], [2.9, 0.4], [0.6, 0.4]]);
+    expect(painted.lits.at(-1)).toBeUndefined();
+  });
+
   it("re-reports of the same selection draw nothing new", () => {
     // ECharts re-reports the areas it holds; the same cells are the same draw
     view();

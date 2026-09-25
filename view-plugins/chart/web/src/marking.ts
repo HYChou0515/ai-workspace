@@ -64,6 +64,26 @@ export function markedBy(marking: MarkingValues): string {
   return `by ${Object.keys(marking).join(", ")}`;
 }
 
+/** Whether a marking `entry` still holds exactly what a view wrote (`wrote`,
+ * written as `source`) -- by the host store's own test for "the same write
+ * again" (same source, same columns, same values; `marking.test.ts` holds
+ * this to it). An empty write is still held while the marking holds nothing
+ * (#847/#848 PR 5 P34). */
+export function stillWritten(
+  entry: { readonly marking: MarkingValues; readonly source: string | null } | undefined,
+  wrote: MarkingValues,
+  source: string | null,
+): boolean {
+  const cols = Object.keys(wrote).filter((c) => (wrote[c] as ReadonlySet<string>).size > 0);
+  if (!entry) return cols.length === 0;
+  if (entry.source !== source || cols.length !== Object.keys(entry.marking).length) return false;
+  return cols.every((c) => {
+    const held = entry.marking[c];
+    const want = wrote[c] as ReadonlySet<string>;
+    return held !== undefined && held.size === want.size && [...want].every((v) => held.has(v));
+  });
+}
+
 function toMarking(values: Record<string, string[]>[]): MarkingValues {
   const out: Record<string, Set<string>> = {};
   for (const v of values) {
