@@ -80,7 +80,7 @@ describe("messages", () => {
 
   // Review round 8: a datum off a rule's x / y said only "must have required
   // property 'field'", and a model tried another datum.
-  const offRule = "encoding.y2: a datum is drawn only as a rule's x or y — name a field here";
+  const offRule = "encoding.y2: a datum is drawn only as a rule's x or y — drop it and name a field here";
   it("says why a datum is refused where it is not drawn", () => {
     const area = "mark: area\nencoding:\n  x: {field: a, type: quantitative}\n  y: {field: b, type: quantitative}\n  y2: {datum: 0}\n";
     expect(verdict(base + area)).toEqual([offRule]);
@@ -88,12 +88,12 @@ describe("messages", () => {
 
   it("gives one line, with the reason, for a line's x datum", () => {
     const line = "mark: line\nencoding:\n  x: {datum: 1}\n  y: {field: b, type: quantitative}\n";
-    expect(verdict(base + line)).toEqual(["encoding.x: a datum is drawn only as a rule's x or y — name a field here"]);
+    expect(verdict(base + line)).toEqual(["encoding.x: a datum is drawn only as a rule's x or y — drop it and name a field here"]);
   });
 
   it("says it once for a mark that also needs the field", () => {
     const grid = "mark: grid\nencoding:\n  x: {datum: 1}\n  y: {field: b, type: ordinal}\n  color: {field: c, type: quantitative}\n";
     const lines = verdict(base + grid).filter((l) => l.startsWith("encoding.x:"));
-    expect(lines).toEqual(["encoding.x: a datum is drawn only as a rule's x or y — name a field here"]);
+    expect(lines).toEqual(["encoding.x: a datum is drawn only as a rule's x or y — drop it and name a field here"]);
   });
 });

@@ -49,21 +49,23 @@ _COMPARE = {
 def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
     field = pred["field"]
     need_columns(df, field)
-    s = df[field]
+    # A list cell is compared as its marking text (what a highlight or a
+    # marking holds): compared as a numpy array, `==` raised.
+    s = unhashable_as_text(df[field])
     mask = pd.Series(True, index=df.index)
     if "equal" in pred:
         mask &= s == pred["equal"]
     if "oneOf" in pred:
         mask &= s.isin(pred["oneOf"])
+    orders = [(op, v) for op, v in pred.items() if op in _COMPARE]
     if "range" in pred:
         low, high = pred["range"]
-        mask &= (s >= low) & (s <= high)
-    for op, compare in _COMPARE.items():
-        if op in pred:
-            try:
-                mask &= compare(s, pred[op])
-            except TypeError as e:
-                raise TransformError(f"filter on {field!r}: {op} {pred[op]!r} — {e}") from e
+        orders += [("gte", low), ("lte", high)]
+    for op, value in orders:
+        try:
+            mask &= _COMPARE[op](s, value)
+        except (TypeError, ValueError) as e:  # text or a list against a number
+            raise TransformError(f"filter on {field!r}: {op} {value!r} — {e}") from e
     if "valid" in pred:
         mask &= s.notna() if pred["valid"] else s.isna()
     return mask
@@ -129,8 +131,9 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
 def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
     by, items, groupby = t["diff"]["by"], t["aggregate"], list(t.get("groupby", []))
     need_columns(df, by)
-    of = aggregate(df[df[by] == t["diff"]["of"]], items, groupby)
-    minus = aggregate(df[df[by] == t["diff"]["minus"]], items, groupby)
+    side = unhashable_as_text(df[by])  # a list side is named by its marking
+    of = aggregate(df[side == t["diff"]["of"]], items, groupby)
+    minus = aggregate(df[side == t["diff"]["minus"]], items, groupby)
     names = [i["as"] for i in items]
     if not groupby:
         return of[names] - minus[names]

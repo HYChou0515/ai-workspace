@@ -333,7 +333,7 @@ def test_a_tooltip_datum_is_refused_before_a_query(wafers):
 
     enc = {**SCATTER, "tooltip": {"datum": "wafer map"}}
     assert spec_errors(_spec(mark="scatter", encoding=enc)) == [
-        "encoding.tooltip: a datum is drawn only as a rule's x or y — name a field here"
+        "encoding.tooltip: a datum is drawn only as a rule's x or y — drop it and name a field here"
     ]
 
 

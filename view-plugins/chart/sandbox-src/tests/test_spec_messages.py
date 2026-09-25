@@ -79,7 +79,7 @@ def test_nothing_to_draw_says_what_is_missing():
     assert "either mark + encoding, or layer" in line
 
 
-OFF_RULE = "a datum is drawn only as a rule's x or y — name a field here"
+OFF_RULE = "a datum is drawn only as a rule's x or y — drop it and name a field here"
 
 
 def test_a_datum_where_none_is_drawn_says_why():
@@ -122,5 +122,20 @@ def test_a_channel_with_no_field_and_no_datum_is_not_told_about_a_datum():
         BASE
         + "mark: bar\nencoding:\n  x: {aggregate: count}\n  y: {field: b, type: quantitative}\n"
     )
+    lines = _errors(text)
+    assert lines and not any("datum is drawn" in line for line in lines), lines
+
+
+def test_a_channel_with_a_field_and_a_datum_is_told_to_drop_the_datum():
+    # Round 10: the line said "name a field here" to a channel that named one.
+    text = BASE + "mark: scatter\n" + ENC + "  color: {datum: 1, field: a, type: nominal}\n"
+    assert f"encoding.color: {OFF_RULE}" in _errors(text)
+    assert "drop it" in OFF_RULE
+
+
+def test_a_tooltip_item_that_is_no_channel_is_not_told_about_a_datum():
+    # The datum rule is scoped to objects: a string item is refused for what
+    # it is, not as a datum it does not hold.
+    text = BASE + "mark: scatter\n" + ENC + "  tooltip: [a]\n"
     lines = _errors(text)
     assert lines and not any("datum is drawn" in line for line in lines), lines

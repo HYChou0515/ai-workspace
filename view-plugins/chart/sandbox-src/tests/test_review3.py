@@ -368,7 +368,7 @@ def test_a_nested_or_timed_array_reads_as_plain_values():
     assert canon(nested) == canon([[1, 2], [3]]) == "[[1, 2], [3]]"
     # A parquet struct holding a list reads as a dict of arrays.
     assert canon({"a": np.array([1, 2])}) == canon({"a": [1, 2]}) == "{'a': [1, 2]}"
-    assert canon({np.int64(1)}) == canon({1}) == "{1}"
+    assert canon({np.int64(1)}) == canon({1}) == "[1]"  # a set, in sorted order
     ns = np.array(["2024-01-01"], dtype="datetime64[ns]")
     us = np.array(["2024-01-01"], dtype="datetime64[us]")
     assert canon(ns) == canon(us) == "['2024-01-01T00:00:00']"
@@ -389,7 +389,7 @@ def test_a_filter_sees_a_list_as_a_list():
 
 def test_an_entity_list_column_can_be_grouped():
     # Round 9 conformance: only numpy arrays had a test; an entity field holds
-    # Python lists, and grouping by one raised TypeError before P27.
+    # Python lists, and grouping by one raised TypeError before P29.
     df = pd.DataFrame({"k": [["a", "b"], ["b"], ["b"]], "v": [1.0, 2.0, 3.0]})
     spec = parse_spec(
         "view: chart\nsource: a.csv\nmark: bar\nencoding:\n"
@@ -415,3 +415,115 @@ def test_only_the_columns_a_group_needs_are_made_text(monkeypatch):
         "  x: {field: g, type: nominal}\n  y: {field: v, type: quantitative, aggregate: sum}\n"
     )
     assert build(spec, df)["layers"][0]["rows"] == 2
+
+
+def _arrays() -> pd.DataFrame:
+    # What pyarrow gives for a parquet list column: numpy array cells.
+    return pd.DataFrame(
+        {
+            "tags": pd.Series([np.array(["a"]), np.array(["b"]), np.array(["a"])], dtype=object),
+            "n": pd.Series([np.array([1]), np.array([2]), np.array([3])], dtype=object),
+            "v": [1.0, 2.0, 3.0],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [{"equal": "['a']"}, {"oneOf": ["['a']"]}],
+)
+def test_a_predicate_on_a_list_column_compares_its_marking(pred):
+    # Review round 10: P31 left the arrays as arrays here, and `==` on one
+    # raised "The truth value of an array … is ambiguous" — a traceback.
+    out = apply_transforms(_arrays(), [{"filter": {"field": "tags", **pred}}])
+    assert out["v"].tolist() == [1.0, 3.0]
+
+
+@pytest.mark.parametrize("pred", [{"lt": 1}, {"gte": 1}, {"range": [0, 1]}])
+def test_an_order_on_a_list_column_is_refused_by_name(pred):
+    with pytest.raises(TransformError, match="'n'"):
+        apply_transforms(_arrays(), [{"filter": {"field": "n", **pred}}])
+
+
+def test_a_range_on_text_is_refused_by_name():
+    # `range` compared outside the wrapper `lt` / `gt` had: a bare TypeError.
+    df = pd.DataFrame({"t": ["a", "b"], "v": [1.0, 2.0]})
+    with pytest.raises(TransformError, match="'t'"):
+        apply_transforms(df, [{"filter": {"field": "t", "range": [0, 1]}}])
+
+
+def test_a_diff_by_a_list_column_splits_on_its_marking():
+    t = {
+        "diff": {"by": "tags", "of": "['a']", "minus": "['b']"},
+        "aggregate": [{"op": "sum", "field": "v", "as": "s"}],
+    }
+    assert apply_transforms(_arrays(), [t])["s"].tolist() == [2.0]
+
+
+def test_a_mapping_reads_the_same_in_any_key_order():
+    # Round 10: two records holding one mapping in two orders were two groups;
+    # a set printed in hash order, which changes from process to process.
+    assert canon({"b": 2, "a": 1}) == canon({"a": 1, "b": 2}) == "{'a': 1, 'b': 2}"
+    assert canon({"d", "a", "c"}) == "['a', 'c', 'd']"
+    assert canon({("a", 1)}) == "[['a', 1]]"
+
+
+def test_a_missing_instant_in_a_list_is_none():
+    got = canon(np.array(["NaT", "2024-01-01"], dtype="datetime64[ns]"))
+    assert got == "[None, '2024-01-01T00:00:00']"
+
+
+def test_every_kind_of_instant_in_a_list_is_iso_text():
+    # Round 10 regression lens: a Python datetime or date (an entity list, a
+    # parquet list<date32> or struct) kept its repr, and pd.NaT printed "NaT".
+    import datetime as dt
+
+    iso = "['2024-01-01T00:00:00']"
+    assert canon([dt.datetime(2024, 1, 1)]) == canon([pd.Timestamp("2024-01-01")]) == iso
+    assert canon([dt.date(2024, 1, 1)]) == "['2024-01-01']"
+    assert canon([pd.NaT]) == "[None]"
+    assert canon({np.int64(1): 2}) == "{1: 2}"
+
+
+def test_a_text_column_is_not_visited_cell_by_cell(monkeypatch):
+    # Round 10 conformance: the fast path P31 claimed had no test.
+    from chart_view.wire import unhashable_as_text
+
+    def no_map(*_a, **_k):
+        raise AssertionError("a text column was mapped cell by cell")
+
+    s = pd.Series(["a", "b", None], dtype=object)
+    monkeypatch.setattr(pd.Series, "map", no_map)
+    assert unhashable_as_text(s) is s
+
+
+LIST_KEY = pd.DataFrame(
+    {
+        "k": pd.Series([["a"], ["b"], ["a"], ["b"]], dtype=object),
+        "arr": pd.Series([np.array(["a"]), np.array(["b"])] * 2, dtype=object),
+        "v": [1.0, 2.0, 3.0, 4.0],
+    }
+)
+
+
+@pytest.mark.parametrize("mark", ["boxplot", "errorbar"])
+@pytest.mark.parametrize("key", ["k", "arr"])
+def test_a_list_key_groups_a_statistic(mark, key):
+    # Round 10 conformance: only the aggregate's conversion had a test; the
+    # boxplot's, errorbar's and binning's were applied but unpinned.
+    spec = parse_spec(
+        f"view: chart\nsource: a.csv\nmark: {mark}\nencoding:\n"
+        f"  x: {{field: {key}, type: nominal}}\n  y: {{field: v, type: quantitative}}\n"
+    )
+    [layer] = build(spec, LIST_KEY)["layers"]
+    assert layer["columns"][key]["levels"] == ["['a']", "['b']"]
+
+
+def test_a_list_colour_groups_the_bins():
+    spec = parse_spec(
+        "view: chart\nsource: a.csv\nbin_threshold: 2\nmark: scatter\nencoding:\n"
+        "  x: {field: v, type: quantitative}\n  y: {field: v, type: quantitative}\n"
+        "  color: {field: k, type: nominal}\n"
+    )
+    [layer] = build(spec, LIST_KEY)["layers"]
+    assert layer["binned"] is not None and layer["columns"]["k"]["levels"] == ["['a']", "['b']"]

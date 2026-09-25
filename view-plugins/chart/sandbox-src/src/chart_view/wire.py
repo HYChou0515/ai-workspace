@@ -62,8 +62,8 @@ def canon(value: Any) -> str | None:
     """The marking string for `value`, or None when it has none (missing, ±inf)."""
     if isinstance(value, np.ndarray | list | tuple | dict | set):
         # A container reads as the plain values it holds, at every depth: a
-        # parquet list cell (numpy arrays, numpy datetimes in any unit) and an
-        # entity list are one marking.
+        # parquet list cell (numpy arrays; instants of any kind or unit, as
+        # ISO text) and an entity list without nulls are one marking.
         return str(_plain(value))
     if value is None or value is pd.NaT:
         return None
@@ -207,16 +207,21 @@ def _stdlib_ms(v: Any) -> float:
 
 
 def _plain(value: Any) -> Any:
-    """`value` with numpy's containers, scalars and instants as Python's."""
+    """`value` with numpy's containers and scalars as Python's (mapping keys
+    too), and any instant — numpy, pandas or Python, a date too — as ISO text."""
     if isinstance(value, np.ndarray | list | tuple):
         return [_plain(v) for v in value]
-    if isinstance(value, set):
-        return {_plain(v) for v in value}
-    if isinstance(value, dict):
-        return {k: _plain(v) for k, v in value.items()}
-    if isinstance(value, np.datetime64 | pd.Timestamp):
+    if isinstance(value, set):  # in a stable order: hash order changes by process
+        return sorted((_plain(v) for v in value), key=repr)
+    if isinstance(value, dict):  # keys in order: one mapping, one marking
+        return {_plain(k): _plain(value[k]) for k in sorted(value, key=repr)}
+    if value is pd.NaT:
+        return None
+    if isinstance(value, np.datetime64 | dt.datetime):  # a Timestamp is a datetime
         stamp = pd.Timestamp(value)
         return stamp.isoformat() if isinstance(stamp, pd.Timestamp) else None  # NaT
+    if isinstance(value, dt.date):
+        return value.isoformat()
     if isinstance(value, np.generic):
         return value.item()
     return value
@@ -227,7 +232,7 @@ def unhashable_as_text(s: pd.Series) -> pd.Series:
     can be grouped by. An entity field can hold a list; pyarrow reads a
     parquet list column as numpy arrays. Only group keys are passed through
     this — a filter or `where:` still sees the lists — and a text column is
-    left as it is without visiting its cells."""
+    left as it is, with no Python call per cell (`infer_dtype` scans it in C)."""
     if s.dtype != object or pd.api.types.infer_dtype(s, skipna=True) == "string":
         return s
     return s.map(_as_marking)
