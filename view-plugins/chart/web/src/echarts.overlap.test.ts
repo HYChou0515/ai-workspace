@@ -167,6 +167,36 @@ describe("an axis in a narrow chart, against real ECharts", () => {
     expectApart(row, "x");
   });
 
+  it.each([300, 600, 1200])("keeps a grid's FIRST cell labelled when it leaves labels out (%i px, P28)", (width) => {
+    // In Chromium (canvas) as in SSR, a 40-cell grid's x axis began at "1001":
+    // ECharts drops the first label when it overlaps the second (its
+    // showMinLabel "auto"), so the lattice's first cell had no label and the
+    // axis read as if it began one cell later. Measured in Chromium before:
+    // 300 px "1001 1010 …", 600 px "1001 1004 …", 1200 px "1001 1003 …".
+    const xs = Array.from({ length: N }, (_, i) => 1000 + i);
+    const labels = draw(
+      {
+        ...base,
+        mark: "grid",
+        encoding: {
+          x: { field: "x", type: "ordinal" },
+          y: { field: "y", type: "ordinal" },
+          color: { field: "v", type: "quantitative" },
+        },
+      },
+      { x: f64(xs), y: f64(xs.map(() => 0)), v: q8(xs.map((_, i) => i), 0, 1) },
+      N,
+      width,
+      300,
+      undefined,
+      "grid",
+    );
+    const row = axisLabels(labels, "x", "x", /^10\d\d$/).sort((a, b) => a.x - b.x);
+    expect(row[0].text).toBe("1000");
+    expect(row.length).toBeGreaterThan(1);
+    expectApart(row, "x");
+  });
+
   it("leaves out a y axis's labels that would overlap in a short chart", () => {
     const labels = draw(
       doc({ type: "quantitative" }, { field: "v", type: "quantitative" }),

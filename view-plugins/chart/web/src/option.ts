@@ -381,6 +381,10 @@ function axisOption(
       axisTick: { customValues: centres },
       axisLabel: {
         ...LABELS,
+        // the first cell keeps its label when labels are left out (#847/#848
+        // P28): ECharts' "auto" dropped it when it overlapped the second, and
+        // the axis read as if the lattice began one cell later ("1001")
+        showMinLabel: true,
         customValues: centres,
         // a temporal cell is epoch ms: shown on its column's clock
         formatter: (i: number) => {
