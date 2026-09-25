@@ -89,9 +89,10 @@ epoch milliseconds), `nominal` (categories), `ordinal` (ordered categories).
 On a temporal axis a `datum` is a number (epoch milliseconds) or a date
 written `2024-03-01`, `2024-03-01T12:00` (read as UTC) or
 `2024-03-01T12:00:00+08:00` (`/` for `-` and a space for `T` work too); on a
-number axis it is a number (above 0 on a log scale), never text; on a category
-axis or a grid, a value the axis shows. validate refuses any other datum, and
-a datum on a chart where no layer draws a field on that axis.
+number axis it is a finite number (above 0 on a log scale), never text; on a
+category axis, a value the axis shows; on a grid, a cell, or a number or date
+between two cells. validate refuses any other datum, and a datum on a chart
+where no layer draws a field on that axis.
 
 `aggregate` on a channel (`count`, `sum`, `mean`, `min`, `max`, `rate`) groups
 by every other field channel, as in Vega-Lite. Unlike Vega-Lite, a channel's
