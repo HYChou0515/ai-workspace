@@ -107,6 +107,9 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
     op, field = item["op"], item.get("field")
     if op == "count":
         return grouped.size() if field is None else grouped[field].count()
+    if op == "rate" and df[field].map(lambda v: isinstance(v, str)).any():
+        # bool("no") is True: over text, a rate would count every answer as yes.
+        raise TransformError(f"rate over {field!r} needs true/false or 0/1 values, not text")
     if op == "rate":
         return grouped[field].agg(_rate)
     numbers = pd.to_numeric(df[field], errors="coerce")

@@ -116,6 +116,53 @@ def test_keys_a_layer_lost_or_already_sends_as_categories_add_nothing():
     assert set(layer["columns"]) == {"lot", "v"}
 
 
+def _f64s(wire: dict) -> list[float]:
+    import base64
+
+    return np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8").tolist()
+
+
+@pytest.mark.parametrize("kind", ["f64", "time"])
+def test_an_infinity_travels_as_missing(kind):
+    # Round 2: validate summarised the finite values, but the wire still sent
+    # inf and the renderer's colour scale became 0.1–Infinity.
+    got = _f64s(encode_column(pd.Series([0.1, math.inf, -math.inf]), kind))
+    assert got[0] == 0.1 and math.isnan(got[1]) and math.isnan(got[2])
+
+
+def test_a_temporal_column_mixing_numbers_and_text_reads_each_its_own_way():
+    ms = 1709294400000
+    s = pd.Series([ms, "2024-03-02", str(ms), None], dtype=object)
+    got = _f64s(encode_column(s, "time"))
+    day = pd.Timestamp("2024-03-02", tz="UTC").value / 1e6
+    assert got[:3] == [float(ms), day, float(ms)] and math.isnan(got[3])
+
+
+def test_a_nul_byte_in_a_path_is_a_refusal(tmp_path: Path):
+    from chart_view.sources import SourceError, inside_workspace
+
+    with pytest.raises(SourceError, match="not a usable path"):
+        inside_workspace(tmp_path, "a\0.csv")
+
+
+def test_rate_over_text_is_refused_by_name():
+    # `bool("no")` is True: a text column of yes / no rated 1.0.
+    df = pd.DataFrame({"g": ["a", "a"], "ok": ["yes", "no"]})
+    with pytest.raises(TransformError, match="'ok'"):
+        apply_transforms(
+            df, [{"aggregate": [{"op": "rate", "field": "ok", "as": "r"}], "groupby": ["g"]}]
+        )
+
+
+@pytest.mark.parametrize("dtype", ["Int64", "UInt8"])
+def test_a_nullable_integer_category_keeps_integer_levels(dtype):
+    # A parquet integer column with a null reads as Int64; its levels are the
+    # integers, not 9.0 / 10.0 (review round 2, from #857's report).
+    wire = encode_column(pd.Series([10, 9, None], dtype=dtype), "cat")
+    assert wire["levels"] == [9, 10]
+    assert all(type(v) is int for v in wire["levels"])
+
+
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch) -> Path:
     root = tmp_path / "ws"

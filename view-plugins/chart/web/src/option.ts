@@ -139,6 +139,20 @@ function categories(field: string, channel: Channel, decoded: Record<string, Col
   return seen;
 }
 
+const ZONED = /(?:[zZ]|[+-]\d\d:?\d\d)$/;
+
+/** Epoch ms for an instant written as text, read as the sandbox reads it
+ * (`chart_view/wire.py:epoch_ms`): UTC unless the text names a zone, digits
+ * as milliseconds. `Date.parse` alone reads a zone-less date-time in the
+ * VIEWER's zone, which put a rule hours away from the same timestamp's point. */
+export function parseInstant(text: string): number {
+  const s = text.trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  if (ZONED.test(s)) return Date.parse(s);
+  const iso = s.replace(/\//g, "-").replace(" ", "T");
+  return Date.parse(/T/.test(iso) ? `${iso}Z` : `${iso}T00:00:00Z`);
+}
+
 type Axis = {
   channel: Channel;
   kind: "value" | "log" | "time" | "category" | "index";
@@ -152,7 +166,15 @@ type Axis = {
 function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[], grid: Cells | null, which: "x" | "y"): Axis | null {
   if (grid) {
     const labels = which === "x" ? grid.xs : grid.ys;
-    return { channel: channel ?? {}, kind: "index", labels, at: () => null, pos: () => null };
+    // A cell's position is its index; a value finds its cell by label.
+    const cell = new Map(labels.map((v, i) => [String(v), i]));
+    return {
+      channel: channel ?? {},
+      kind: "index",
+      labels,
+      at: () => null,
+      pos: (v) => (v === null ? null : (cell.get(String(v)) ?? null)),
+    };
   }
   if (!channel?.field) return null;
   if (channel.type === "nominal" || channel.type === "ordinal") {
@@ -171,7 +193,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
   }
   const kind = channel.type === "temporal" ? "time" : channel.scale?.type === "log" ? "log" : "value";
   const pos = (v: Scalar | null) =>
-    v === null ? null : kind === "time" && typeof v === "string" ? Date.parse(v) : (v as number);
+    v === null ? null : kind === "time" && typeof v === "string" ? parseInstant(v) : (v as number);
   return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null, pos };
 }
 

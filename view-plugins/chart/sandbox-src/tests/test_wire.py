@@ -18,7 +18,7 @@ import pytest
 from chart_view.wire import bitset, canon, encode_column
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus"
-FILES = sorted(f for f in CORPUS.glob("*.json") if f.name != "canon.json")
+FILES = sorted(f for f in CORPUS.glob("*.json") if f.name not in ("canon.json", "instants.json"))
 
 
 def _series(case: dict) -> pd.Series:
@@ -42,6 +42,18 @@ def test_the_encoder_writes_the_corpus(path: Path):
         assert bitset(pd.Series(case["values"], dtype=bool)) == case["wire"]
     else:
         assert encode_column(_series(case), case["kind"]) == case["wire"]
+
+
+INSTANTS = json.loads((CORPUS / "instants.json").read_text())["cases"]
+
+
+def test_epoch_ms_reads_the_instant_corpus():
+    # The oracle file the renderer's parseInstant is held to (a rule's datum
+    # never visits the sandbox, so the two parsers must agree on the file).
+    from chart_view.wire import epoch_ms
+
+    got = epoch_ms(pd.Series([c["text"] for c in INSTANTS], dtype=object)).tolist()
+    assert got == [c["ms"] for c in INSTANTS]
 
 
 CANON = json.loads((CORPUS / "canon.json").read_text())["cases"]

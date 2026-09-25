@@ -78,7 +78,11 @@ def bitset(mask: pd.Series) -> str:
 
 
 def _f64(values: np.ndarray) -> str:
-    return _b64(np.ascontiguousarray(values, dtype="<f8"))
+    out = np.array(values, dtype="<f8")  # a copy: the caller's array stays as it was
+    # ±inf is missing on the wire, as NaN is: no axis or colour scale can hold
+    # it, and validate's summary already leaves it out.
+    out[~np.isfinite(out)] = np.nan
+    return _b64(out)
 
 
 def encode_column(s: pd.Series, kind: str) -> dict[str, Any]:
@@ -101,12 +105,29 @@ def epoch_ms(s: pd.Series) -> np.ndarray:
     and with errors="coerce" a later, more precise one became a silent gap."""
     if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
         return pd.to_numeric(s, errors="coerce").to_numpy(float)
-    stamps = pd.to_datetime(s, errors="coerce", utc=True, format="mixed")
-    ms = pd.DatetimeIndex(stamps).asi8 / 1e6  # ns since the epoch → ms
-    return np.where(stamps.isna(), np.nan, ms)
+    # Text (or a mix, as an entity field or a hand-made CSV can hold): each
+    # value its own way — a number is ms, a date is parsed, and digits that do
+    # not parse as a date are ms too (a CSV holds numbers as text).
+    stamps = pd.to_datetime(
+        s.map(lambda v: None if _is_number(v) else v), errors="coerce", utc=True, format="mixed"
+    )
+    # ns → µs as integers first: ns / 1e6 in floats read .250 s as .2499998.
+    ms = np.where(stamps.isna(), np.nan, (pd.DatetimeIndex(stamps).asi8 // 1_000) / 1_000)
+    as_number = pd.to_numeric(
+        s.map(
+            lambda v: v if _is_number(v) or (isinstance(v, str) and v.strip().isdigit()) else None
+        ),
+        errors="coerce",
+    ).to_numpy(float)
+    return np.where(np.isnan(ms), as_number, ms)
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, int | float | np.integer | np.floating) and not isinstance(v, bool)
 
 
 def _cat(s: pd.Series) -> dict[str, Any]:
+    integral = pd.api.types.is_integer_dtype(s.dtype)  # before the map below makes it object
     # A list or a mapping (an entity field can hold one) has no hash to group
     # by; it becomes its marking string.
     s = s.map(lambda v: canon(v) if isinstance(v, list | dict | set | tuple) else v)
@@ -115,6 +136,10 @@ def _cat(s: pd.Series) -> dict[str, Any]:
     except TypeError:  # values with no order between them (a date among numbers)
         codes, uniques = pd.factorize(s, sort=False, use_na_sentinel=True)
     levels = [_json_scalar(v) for v in uniques]
+    if integral:
+        # A nullable integer column (Int64 — a parquet int with a null) hands
+        # factorize its values as floats; they are integers, and travel so.
+        levels = [int(v) if isinstance(v, float) else v for v in levels]
     width, dtype = next((w, d) for w, d in _WIDTHS if len(levels) < 2 ** (8 * w) - 1)
     missing = 2 ** (8 * width) - 1
     out = np.where(codes < 0, missing, codes).astype(dtype)

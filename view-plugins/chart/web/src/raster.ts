@@ -34,8 +34,8 @@ export type Cells = {
 
 export type RasterImage = { width: number; height: number; data: Uint8ClampedArray };
 
-/** Integer axes fill their gaps (a die map with a missing die still has the
- * slot) unless the span is far wider than the values — then it is a label set. */
+/** Integer axes fill their gaps (a lattice with a missing cell still has
+ * its slot) unless the span is far wider than the values — then it is a label set. */
 const FILL_LIMIT = 4;
 
 function axis(values: Cell[]): Cell[] {
