@@ -16,8 +16,8 @@ Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部�
 
 第四個擴充面是 **view kind**（#698）。它跟上面三個不同——不是讓 agent 變強,而是讓**畫面**變多:
 一種新的資料呈現方式,由 workspace 裡的 `*.ai.yaml` 檔案指名使用。它同樣有「dev 可以不是我們」
-的性質,但走的是另一條路:程式碼放進**我們 repo** 的 `web/src/ext/`,跟平台一起編譯。細節見
-[寫一個 View Kind（維運方）](view-kind-authoring.md)。
+的性質,但走的是另一條路:一個 **runtime view plugin** 資料夾,維運方放進 plugin 目錄、重啟就上線,
+不用改我們的程式碼也不用重 build SPA(#847/#848)。細節見 [寫一個 View Kind](view-kind-authoring.md)。
 
 這篇是把上面幾個面向 × 兩種作者排成同一張表的**總覽**;每個面向的細節文件在各段末尾連出去。
 
@@ -28,7 +28,7 @@ Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部�
 | **Tool** | ✅ Python tool-package——**vendor 進 repo**（`sample-tools/`）**或外部作者自己的 repo + CI**（#674） | ❌ **無**——安全考量,見下 |
 | **Skill** | ✅ `sample-skills/` + `SHARED_SKILLS` 註冊 | ✅ `author-skill` + `save_skill` → `.skill/`（#298）；**發布到 skill hub 給全站用**（`publish_skill`，見下） |
 | **Workflow** | ✅ Python `run.py`（圖靈完備） | ✅ `workflow.json` **降階 DSL**（#323）——**最難的一塊** |
-| **View Kind** | ✅ React 元件 + `web/src/ext/` 一行註冊（#698）——**dev 可以是維運方** | ❌ **無**——會執行任意前端程式碼 |
+| **View Kind** | ✅ runtime view plugin（#847/#848）：React 元件 + 選配的沙盒指令與 skill，維運方裝進 plugin 目錄——**dev 可以是維運方** | ❌ **無**——會執行任意前端程式碼 |
 | **WUI** | ✅ 就是一個 workspace 資料夾——沒有 dev 專屬路徑 | ✅ **和 AI 共創**——`view: wui` + `index.html`（見 [`wui.md`](wui.md)） |
 
 三個 user 自建路徑刻意共用同一套模型（照搬 #298 的 skill 流程）:**跟 AI 共創 → 存進
@@ -822,25 +822,27 @@ title: Wafer yield
 source: /data/wafer.csv     # 這個 key 是那個 kind 自己的
 ```
 
-平台內建 `table` / `board` / `gantt` / `health`;維運方自建的放 `web/src/ext/`,寫一個吃
-`EntityViewProps` 的 React 元件 + 一行 `registerViewKind({ kind, Component })`。
-`web/src/main.tsx` 有一行 `import "./ext";` 把它們掛上去,**不需要動 `ext/` 以外的檔案**。
+平台內建 `table` / `board` / `gantt` / `health` / `wui`;維運方自建的是一個 **runtime view plugin**:
+一個資料夾(`plugin.json` + 建好的 `web/index.js`,選配沙盒指令與 skill),放進 `view_plugins.dir`
+重啟就上線,SPA 在第一次 render 前 `import()` 它。元件吃 `EntityViewProps`,
+從 `@aiws/view-sdk` 呼叫 `registerViewKind({ kind, Component })`。
 
 三件跟其他擴充面不同、值得記住的事:
 
 - **不綁 entity。** 一個 kind 可以完全不碰 entity,只讀 workspace 檔案（`useFileBuffer` /
   `useFileService`）——這是主要用法。要畫 entity 紀錄才宣告 `needsEntity: true`,那時 view 檔
   就必須寫 `entity:`。所以一個**完全沒有 `.entity/` 的 app**（rca）照樣用得上。
-- **`ext/` 只能從 `renderers/entity/public` import**,由 `web/src/ext/imports.test.ts` 守著。
-  這不是潔癖:它讓「動了這個介面會影響誰」在改的當下就看得見。
-- **沒有版號、不承諾介面不變。** 因為程式碼在同一個 repo、同一次 CI 編譯,改壞了會在編譯期
-  就紅,而不是等使用者打開畫面。這是同 repo 換來的保護。
+- **只從 `@aiws/view-sdk` 進平台**(app 的 `renderers/entity/public` 經 import map 提供),
+  由 `web/src/ext/imports.test.ts` 守著。
+- **SDK 有版號。** 已建好的 plugin 是對 SDK 的快照編的,改壞介面要升 `SDK_VERSION` 主版號,
+  舊 plugin 會在自己的面板上被明確拒絕;這個 repo 裡的 plugin 仍由 `web/` 的 `tsc` 在編譯期檢查。
 
 註冊撞名會直接丟例外(開機就爆),不會靜默覆蓋——兩個元件搶同一個 `view:` 沒有正確答案,
 而靜默的勝負取決於 import 順序。
 
-作法見 [寫一個 View Kind（維運方）](view-kind-authoring.md)。範例 kind 與其測試在
-`web/src/ext/CsvTableView.tsx`。
+作法見 [寫一個 View Kind](view-kind-authoring.md)。範例 plugin 與其測試在
+`view-plugins/csv-table/`;`python -m workspace_app.view_plugin new/build/check/tune` 是作者與維運方的工具。
+編進 SPA 的 `web/src/ext/` 通道仍在,給帶自己 build 的發行版用。
 
 **尚未開放**:檔案預覽層（`web/src/renderers/registry.ts`,決定 `.csv` / `.md` 這類副檔名用哪個
 renderer）還不能第二方註冊,#698 刻意只開 view kind 這一層。

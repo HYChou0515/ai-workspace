@@ -35,7 +35,7 @@ async def _files_with(**path_bodies: bytes) -> WorkspaceFiles:
 def test_effective_item_skills_marks_a_profile_opted_in_shared_skill_default_on():
     """A shared skill the default profile opts into (`author-skill`) is source
     'shared', default_on, and effective with no per-item override."""
-    states = _by_name(effective_item_skills("_template", "default", {}, []))
+    states = _by_name(effective_item_skills("_template", "default", {}, [], tools=None))
     s = states["author-skill"]
     assert s.source == "shared"
     assert s.default_on is True
@@ -46,7 +46,7 @@ def test_effective_item_skills_marks_a_declared_but_unopted_skill_default_off():
     """A shared skill the App declares but the profile leaves out of `skills`
     (`author-workflow`) is available-but-default-OFF: default_on False, effective
     False (still listed so the picker can offer to turn it on)."""
-    states = _by_name(effective_item_skills("_template", "default", {}, []))
+    states = _by_name(effective_item_skills("_template", "default", {}, [], tools=None))
     s = states["author-workflow"]
     assert s.source == "shared"
     assert s.default_on is False
@@ -56,7 +56,9 @@ def test_effective_item_skills_marks_a_declared_but_unopted_skill_default_off():
 def test_effective_item_skills_force_on_makes_a_default_off_skill_effective():
     """A per-item `skill_prefs` True flips a default-off skill effective (its
     default_on stays False — the pref is the override, not the default)."""
-    states = _by_name(effective_item_skills("_template", "default", {"author-workflow": True}, []))
+    states = _by_name(
+        effective_item_skills("_template", "default", {"author-workflow": True}, [], tools=None)
+    )
     s = states["author-workflow"]
     assert s.default_on is False
     assert s.effective is True
@@ -66,7 +68,7 @@ def test_effective_item_skills_includes_workspace_skills_as_default_on():
     """A co-created workspace skill is listed source 'workspace', default_on +
     effective — the picker surfaces it alongside the built-ins."""
     ws = [SkillMeta(name="my-skill", description="do X")]
-    states = _by_name(effective_item_skills("_template", "default", {}, ws))
+    states = _by_name(effective_item_skills("_template", "default", {}, ws, tools=None))
     s = states["my-skill"]
     assert s.source == "workspace"
     assert s.default_on is True
@@ -152,7 +154,9 @@ async def test_a_copied_baked_in_skill_keeps_its_source_and_default():
     await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
 
     metas = await workspace_skill_metas(files, "inv")
-    s = _by_name(effective_item_skills("_template", "default", {}, metas))["author-workflow"]
+    s = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))[
+        "author-workflow"
+    ]
 
     assert s.source == "shared"
     assert s.default_on is False
@@ -166,7 +170,7 @@ async def test_a_hand_written_workspace_skill_is_unaffected():
 
     files = await _files_with(mine=b"my own")
     metas = await workspace_skill_metas(files, "inv")
-    s = _by_name(effective_item_skills("_template", "default", {}, metas))["mine"]
+    s = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))["mine"]
 
     assert s.source == "workspace"
     assert s.default_on is True
@@ -184,7 +188,7 @@ async def test_a_copy_is_reported_as_a_local_copy_alongside_its_source():
     await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
 
     metas = await workspace_skill_metas(files, "inv")
-    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+    states = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))
 
     assert states["author-workflow"].is_copy is True
     assert states["author-skill"].is_copy is False
@@ -213,7 +217,7 @@ async def test_a_hub_copy_named_like_a_shared_skill_stays_a_workspace_skill():
     )
 
     metas = await workspace_skill_metas(files, "inv")
-    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+    states = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))
 
     assert metas[0].is_copy is True and metas[0].copy_of == "hub"
     assert states["author-workflow"].source == "workspace"
@@ -233,7 +237,7 @@ async def test_a_copy_of_an_undeclared_package_skill_is_a_workspace_copy_of_the_
     from workspace_app.apps.skills import workspace_skill_metas
 
     metas = await workspace_skill_metas(files, "inv")
-    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+    states = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))
 
     assert (states["verify-number"].source, states["verify-number"].is_copy) == ("workspace", True)
     assert states["verify-number"].copy_of == "shared"
@@ -252,14 +256,14 @@ async def test_a_package_copy_still_answers_as_the_package(monkeypatch, tmp_path
     await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
     metas = await workspace_skill_metas(files, "inv")
     assert metas[0].copy_of == "shared"
-    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+    states = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))
     assert states["author-workflow"].source == "shared"
 
     for manifest in (b"{}", b"not json at all"):
         await files.write("inv", "/.skill/author-workflow/.origin", manifest)
         metas = await workspace_skill_metas(files, "inv")
         assert (metas[0].is_copy, metas[0].copy_of) == (True, ""), manifest
-        states = _by_name(effective_item_skills("_template", "default", {}, metas))
+        states = _by_name(effective_item_skills("_template", "default", {}, metas, tools=None))
         assert states["author-workflow"].source == "shared"
 
 

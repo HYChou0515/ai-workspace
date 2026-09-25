@@ -37,28 +37,36 @@ import "./styles/export-dialog.css";
 // before the first render below, which it must: the registry is a plain map, so
 // a kind added after a view has painted would not appear in it.
 import "./ext";
+import { loadViewPlugins } from "./viewPlugins/loader";
 
 initTheme();
 initFontScale();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
-createRoot(root).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <LocaleProvider>
-        <FontScaleProvider>
-          <ToolCatalogProvider>
-            {/* #779: the confirm dialog belongs at the root, not per-surface.
-                It used to be mounted in five places, so a modal under
-                components/ could not reach useDialog() and had to hand-roll
-                its own "discard unsaved changes?" row instead. */}
-            <DialogProvider>
-              <App />
-            </DialogProvider>
-          </ToolCatalogProvider>
-        </FontScaleProvider>
-      </LocaleProvider>
-    </QueryClientProvider>
-  </StrictMode>,
-);
+// #847/#848 — runtime view plugins register their kinds as they are imported,
+// and must do so before the first render for the same reason `./ext` must.
+// `loadViewPlugins` never rejects; a broken plugin shows up in its own panels.
+void loadViewPlugins().finally(() => mount(root));
+
+function mount(root: HTMLElement): void {
+  createRoot(root).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <LocaleProvider>
+          <FontScaleProvider>
+            <ToolCatalogProvider>
+              {/* #779: the confirm dialog belongs at the root, not per-surface.
+                  It used to be mounted in five places, so a modal under
+                  components/ could not reach useDialog() and had to hand-roll
+                  its own "discard unsaved changes?" row instead. */}
+              <DialogProvider>
+                <App />
+              </DialogProvider>
+            </ToolCatalogProvider>
+          </FontScaleProvider>
+        </LocaleProvider>
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+}

@@ -354,7 +354,7 @@ def test_the_picker_door_finalizes_a_third_party_package_it_resolved(monkeypatch
 
     _grant_wafer_history(monkeypatch)
 
-    async def _fake(sandbox, locator, item_id):
+    async def _fake(sandbox, locator, item_id, *, plugin_artifacts):
         return _resolved()
 
     monkeypatch.setattr(tools_routes, "resolve_item_tools", _fake)
@@ -381,7 +381,7 @@ async def test_the_turn_door_finalizes_a_third_party_package_it_resolved(monkeyp
 
     _grant_wafer_history(monkeypatch)
 
-    async def _fake(sandbox, locator, item_id):
+    async def _fake(sandbox, locator, item_id, *, plugin_artifacts):
         return _resolved()
 
     monkeypatch.setattr(turn_context, "resolve_item_tools", _fake)

@@ -4,7 +4,8 @@
  * user meets it: a `.ai.yaml` file in a workspace (#698 P5).
  *
  * This is what stops the guide rotting — the doc's snippet IS `CsvTableView`,
- * and `./index` is the same registration the doc tells a maintainer to write.
+ * and `./index` is the same registration the doc tells a plugin author to write.
+ * Runs in the HOST's vitest (it mounts the host's container and providers).
  * The item here has NO entity types, which is rca's situation: an app with no
  * `.entity/` must still be able to use a plug-in view.
  */
@@ -12,11 +13,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FileServiceProvider, investigationFileService } from "../api/fileService";
-import { EditModeProvider } from "../hooks/editMode";
-import { FileBufferProvider, FileBufferStore } from "../hooks/fileBuffer";
-import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
-import { QueryWrap } from "../test/queryWrapper";
+import { FileServiceProvider, investigationFileService } from "../../../../web/src/api/fileService";
+import { EditModeProvider } from "../../../../web/src/hooks/editMode";
+import { FileBufferProvider, FileBufferStore } from "../../../../web/src/hooks/fileBuffer";
+import { WorkspaceSlugProvider } from "../../../../web/src/hooks/useWorkspaceSlug";
+import { QueryWrap } from "../../../../web/src/test/queryWrapper";
 
 const mock = vi.hoisted(() => ({
   catalog: vi.fn(),
@@ -25,11 +26,12 @@ const mock = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
 }));
-vi.mock("../api/entities", () => ({ entitiesApi: mock }));
+vi.mock("../../../../web/src/api/entities", () => ({ entitiesApi: mock }));
 
-import { AiYamlRenderer } from "../renderers/entity/AiYamlRenderer";
-// The side-effect import the main program makes — this is what registers
-// `csv-table`. Importing it here means the test covers the real wiring.
+import { AiYamlRenderer } from "../../../../web/src/renderers/entity/AiYamlRenderer";
+// The plugin's entry — the module the SPA `import()`s at runtime. Importing it
+// here registers `csv-table` through the SAME `@aiws/view-sdk` (aliased to the
+// host's barrel in the host's vitest config) the built plugin resolves.
 import "./index";
 
 function renderView(path: string, files: Record<string, string>) {

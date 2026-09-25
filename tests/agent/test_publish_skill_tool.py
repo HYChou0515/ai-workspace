@@ -747,7 +747,9 @@ async def test_publishing_leaves_the_folders_source_and_default_on_unchanged(ori
     async def state() -> tuple[str, bool]:
         metas = await workspace_skill_metas(files, "inv-1")
         (row,) = [
-            r for r in effective_item_skills("_template", "default", {}, metas) if r.name == name
+            r
+            for r in effective_item_skills("_template", "default", {}, metas, tools=None)
+            if r.name == name
         ]
         return row.source, row.default_on
 

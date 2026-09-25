@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -341,6 +341,8 @@ def effective_item_skills(
     profile: str,
     prefs: Mapping[str, bool],
     workspace_metas: list[SkillMeta],
+    *,
+    tools: Collection[str] | None,
 ) -> list[SkillState]:
     """The item's full skills picker state (#380), one row per available skill
     across all three sources — the App's declared shared skills, the profile's
@@ -358,7 +360,7 @@ def effective_item_skills(
 
     from .manifest import load_app_manifest
     from .profiles import load_profile
-    from .shared_skills import shared_skill_metas
+    from .shared_skills import plugin_skills_for, shared_skill_metas
 
     declared = list(load_app_manifest(app_slug).agent.skills)
     prof_skills = load_profile(app_slug, profile).skills
@@ -367,6 +369,12 @@ def effective_item_skills(
     rows: dict[str, tuple[SkillMeta, str, bool]] = {}
     for m in shared_skill_metas(declared):
         rows[m.name] = (m, "shared", m.name in default_shared)
+    # #847/#848: a view plugin's skill, for an item that can draw a view — by the
+    # RESOLVED `tools` (required, so no caller can forget it and quietly show a
+    # picker that disagrees with the prompt). On by default: the operator
+    # installed the plugin for the items that can use it.
+    for m in plugin_skills_for(tools):
+        rows[m.name] = (m, "shared", True)
     for m in list_skills(app_slug, profile):
         rows[m.name] = (m, "profile", True)
     for m in workspace_metas:
@@ -468,9 +476,9 @@ def _skill_source(
             candidate = root / name
             if (candidate / "SKILL.md").is_file():
                 return ("profile", candidate)
-    from .shared_skills import SHARED_SKILLS
+    from .shared_skills import shared_skill_source
 
-    src = SHARED_SKILLS.get(name)
+    src = shared_skill_source(name)
     return ("shared", src) if src is not None else None
 
 
@@ -812,11 +820,11 @@ async def resolve_skill_body(
     skill, then the profile package skill. ``None`` when no source has it. Raises
     ``SkillError`` only on a body over the cap. #380: the apply-this-turn preload
     resolves the body IGNORING the enable/disable toggle (apply overrides off)."""
-    from .shared_skills import SHARED_SKILLS, load_shared_skill
+    from .shared_skills import load_shared_skill, shared_skill_source
 
     await materialize_skill(files, workspace_id, app_slug, profile, name)
     body = await load_workspace_skill(files, workspace_id, name)
-    if body is None and name in SHARED_SKILLS:
+    if body is None and shared_skill_source(name) is not None:
         body = load_shared_skill(name)
     if body is None and app_slug is not None and profile is not None:
         try:

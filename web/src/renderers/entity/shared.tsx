@@ -191,6 +191,16 @@ export function viewParam(spec: ViewSpec, key: string): unknown {
   return (spec as unknown as Record<string, unknown>)[key];
 }
 
+/** The whole document the view file parsed to — every key, as written, and a
+ * COPY, so a plugin cannot change what the platform holds (#847/#848). For a
+ * plugin that checks its own spec: `viewParam` can only read keys it already
+ * knows about, so it cannot find the one somebody misspelt. `{}` for a spec not
+ * built from a file. */
+export function viewDocument(spec: ViewSpec): Record<string, unknown> {
+  const raw = spec[RAW_DOC];
+  return raw ? structuredClone(raw) : {};
+}
+
 /** Same, for the common case: a string value, or undefined if it isn't one. */
 export function viewParamString(spec: ViewSpec, key: string): string | undefined {
   return str(viewParam(spec, key));

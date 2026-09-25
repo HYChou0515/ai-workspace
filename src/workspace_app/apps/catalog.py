@@ -26,6 +26,7 @@ from msgspec import UNSET, structs
 from ..resources import AgentConfig
 from .manifest import AppManifest, load_app_manifest
 from .profiles import load_profile, load_profile_appendix
+from .shared_skills import plugin_views_for
 from .skills import SkillMeta, effective_item_skills
 
 if TYPE_CHECKING:
@@ -245,6 +246,7 @@ def _compose_prompt(
     *,
     preamble: str = "",
     sandbox_preamble: str = "",
+    views: Sequence[tuple[str, str]] = (),
 ) -> str:
     parts = [base.rstrip()] if base else []
     # #241: the shared workspace preamble sits after the App's identity (base)
@@ -267,6 +269,18 @@ def _compose_prompt(
             "",
         ]
         lines += [f"- `{m.name}`: {m.description}" for m in skills]
+        parts.append("\n".join(lines))
+    # #847/#848: the view kinds the installed view plugins draw. Beside the
+    # skill index, and only for an item that can write a file and show it.
+    if views:
+        lines = [
+            "## Available views",
+            "",
+            "Write a `*.ai.yaml` file whose `view:` is one of these kinds, then call "
+            "`show_file` on it to show it as a live view.",
+            "",
+        ]
+        lines += [f"- `{kind}`: {when}" for kind, when in views]
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -337,7 +351,7 @@ class AppCatalog:
             )
         skill_metas = [
             SkillMeta(name=s.name, description=s.description)
-            for s in effective_item_skills(app_slug, profile, skill_prefs or {}, [])
+            for s in effective_item_skills(app_slug, profile, skill_prefs or {}, [], tools=tools)
             if s.effective
         ]
 
@@ -356,6 +370,7 @@ class AppCatalog:
             # told them `exec` was off and available on request — two halves of
             # one prompt disagreeing, with nothing to raise.
             sandbox_preamble=_read_sandbox_preamble() if _SANDBOX_TOOLS & set(tools) else "",
+            views=plugin_views_for(tools),
         )
         suggestions = list(prof.suggestions or manifest.agent.suggestions)
         name = next((p.name for p in manifest.agent.picker if p.preset == chosen), chosen)

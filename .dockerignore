@@ -9,6 +9,9 @@
 htmlcov
 node_modules
 web/node_modules
+# #847/#848: a view plugin's own install (view-plugins/*/web/node_modules) too —
+# a bare pattern matches the context root only.
+**/node_modules
 web/dist
 docs
 design_handoff_rca_3.0

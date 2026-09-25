@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-shared-build.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.plugins.json",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"

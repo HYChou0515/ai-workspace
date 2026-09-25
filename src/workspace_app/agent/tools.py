@@ -15,6 +15,7 @@ from collections.abc import Callable, Collection, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
+import yaml
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, ToolOutputText, function_tool
 from specstar.types import ResourceIDNotFoundError
 
@@ -426,13 +427,101 @@ async def show_file_impl(
             f"error: file not found: {rel_path(path)} — nothing was shown. "
             f"Check the path (list_files) and call show_file again."
         )
+    # #847/#848 P9: a view plugin checks its own view before it is shown.
+    verdict = await _check_plugin_view(ctx.context, fs, inv, path)
+    if verdict is not None and verdict.startswith("error:"):
+        return verdict  # declares nothing, like an unresolvable path
     if caption:
         shown["caption"] = caption
     # A sentence, not JSON: this is what the model reads back, and being told the
     # file is visible is what stops it narrating the contents next.
-    return declare_shown_files(
-        f"{rel_path(path)} is now displayed in the chat — the user can see it.", [shown]
-    )
+    said = f"{rel_path(path)} is now displayed in the chat — the user can see it."
+    if verdict:
+        said += f" {verdict}"
+    return declare_shown_files(said, [shown])
+
+
+def _backend_has_no_tools(sandbox: object) -> bool:
+    """`sandbox.kind: docker` mounts no `/.tools`, so no plugin command can run."""
+    from ..sandbox.docker import DockerSandbox
+
+    return isinstance(sandbox, DockerSandbox)
+
+
+def _parse_view_kind(text: str) -> tuple[str | None, str | None]:
+    """`(kind, parse error)` of a `*.ai.yaml` — the kind from the document when it
+    parses, else from its top-level `view:` line (quotes and a trailing comment
+    stripped), so an unparseable file still says whose view it claims to be."""
+    try:
+        doc = yaml.safe_load(text)
+    except Exception as e:  # noqa: BLE001 — YAMLError, and RecursionError on deep nesting
+        line = next((ln for ln in text.splitlines() if ln.startswith("view:")), "")
+        kind = line.partition(":")[2].split(" #")[0].strip().strip("'\"")
+        return (kind or None), str(e) or type(e).__name__
+    kind = doc.get("view") if isinstance(doc, dict) else None
+    return (kind if isinstance(kind, str) else None), None
+
+
+async def _check_plugin_view(actx: AgentToolContext, fs: Any, inv: str, path: str) -> str | None:
+    """#847/#848 P9: `None` to show as-is, an `error: …` line to refuse, or a
+    sentence to append (the plugin's one-line summary, or why it could not check).
+
+    Only a `*.ai.yaml` whose `view:` is an installed plugin's kind is touched —
+    built-in kinds and every other file are unchanged. Such a file must parse;
+    if the plugin declares `validate`, its command runs in the item's sandbox
+    first, and a non-zero exit is the refusal. When the check cannot RUN — no
+    tools on this backend, an app tool owns the name, the launcher is not in
+    this sandbox — the view is shown and the reply says so: that fault is the
+    deployment's, and refusing would send the agent to "fix" a correct file."""
+    from ..apps.shared_skills import PLUGIN_KINDS
+
+    if not PLUGIN_KINDS or not rel_path(path).endswith(".ai.yaml"):
+        return None
+    try:
+        text = (await fs.read(inv, path)).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — the file was just described; showing beats a new failure
+        _LOGGER.warning("show_file: could not re-read %s for its plugin check", path, exc_info=True)
+        return None
+    kind, parse_error = await asyncio.to_thread(_parse_view_kind, text)
+    if kind is None or kind not in PLUGIN_KINDS:
+        return None
+    if parse_error is not None:
+        return (
+            f"error: {rel_path(path)} does not parse as YAML ({parse_error}) — nothing was "
+            "shown. Fix the file and call show_file again."
+        )
+    plugin, validates = PLUGIN_KINDS[kind]
+    if not validates or actx.sandbox is None:
+        return None
+
+    def cannot(why: str) -> str:
+        return f"(view plugin {plugin!r} could not check this view: {why})"
+
+    if _backend_has_no_tools(actx.sandbox):
+        return cannot("this sandbox backend runs no plugin commands")
+    if any(p.name == plugin for p in actx.packages or ()):
+        return cannot(f"an app tool is also called {plugin!r}")
+    from ..tooling.registry import PackageInfo, exec_package_command
+
+    pkg = PackageInfo(name=plugin, install_dir=f"../.tools/{plugin}", commands=())
+    args = json.dumps({"path": rel_path(path)})
+    try:
+        handle = await actx.ensure_sandbox(prepare_env=False)
+        result = await exec_package_command(actx, handle, pkg, "validate", args)
+    except Exception as e:  # noqa: BLE001 — a check that cannot RUN is not a verdict on the file
+        _LOGGER.warning("show_file: plugin %s validate could not run", plugin, exc_info=True)
+        return cannot(f"its sandbox could not run the check ({e})")
+    out = result.stdout.decode("utf-8", "replace").strip()
+    err = result.stderr.decode("utf-8", "replace").strip()
+    if result.exit_code == 127 and f".tools/{plugin}/launch" in err:
+        return cannot("its sandbox commands are not installed in this sandbox")
+    if result.exit_code != 0:
+        why = err or out or f"exit {result.exit_code}"
+        return (
+            f"error: view plugin {plugin!r} refused {rel_path(path)} — nothing was shown:\n"
+            f"{why}\nFix the file and call show_file again."
+        )
+    return out.splitlines()[0] if out else None
 
 
 async def make_deck_impl(
@@ -2318,9 +2407,9 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             )
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
-    from ..apps.shared_skills import SHARED_SKILLS, load_shared_skill
+    from ..apps.shared_skills import load_shared_skill, shared_skill_source
 
-    if name in SHARED_SKILLS:
+    if shared_skill_source(name) is not None:
         try:
             # plan §3.2: author-workflow's static body is purpose-only; append the
             # machine-derived DSL grammar + this app's capability/tool boundaries.

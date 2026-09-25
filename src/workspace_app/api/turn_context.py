@@ -25,7 +25,7 @@ into two call sites that can drift.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -89,7 +89,13 @@ logger = logging.getLogger(__name__)
 _CEILING_SAID: set[tuple[str, str, int | None]] = set()
 
 
-async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: str) -> ExternalTools:
+async def resolve_item_tools(
+    sandbox: Sandbox,
+    locator: ItemLocator,
+    item_id: str,
+    *,
+    plugin_artifacts: Mapping[str, str],
+) -> ExternalTools:
     """#674: what this item's App declares as third-party tools, resolved.
 
     A module function rather than a builder method because TWO callers need the
@@ -101,9 +107,40 @@ async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: st
     and not others depending on who opened them."""
     slug = locator.slug_of(item_id)
     declared = load_app_manifest(slug).agent.external_tools if slug else {}
-    external = await resolve_external_tools(sandbox, declared)
+    # #847/#848: a view plugin's `{artifact: url}` sandbox half is MOUNTED like
+    # a third-party tool — so it resolves here, with the app's, and its sha goes
+    # into the sandbox this item is created with — but it is never an agent
+    # tool. Required rather than defaulted: a caller that forgot it would create
+    # sandboxes the plugin's commands then cannot find, with nothing saying so.
+    plugins = {n: u for n, u in plugin_artifacts.items() if n not in declared}
+    for name in plugin_artifacts.keys() & declared.keys():
+        logger.warning(
+            "item %s: app tool %r shadows the view plugin of the same name; the plugin's "
+            "sandbox commands will not be mounted",
+            item_id,
+            name,
+        )
+    external = await resolve_external_tools(sandbox, {**plugins, **declared})
+    external = _mount_plugins_only(external, set(plugins))
     _record_what_this_item_got(item_id, external)
     return external
+
+
+def _mount_plugins_only(external: ExternalTools, plugins: set[str]) -> ExternalTools:
+    """Keep the view plugins' shas (so the sandbox mounts them) and drop them
+    from everything an agent or the tool picker reads: the packages and the
+    refusals. A plugin that could not be resolved is logged here, and its
+    runner call says so when a view asks for it."""
+    if not plugins:
+        return external
+    for name in plugins & external.refused.keys():
+        logger.warning("view plugin %s: sandbox half unavailable: %s", name, external.refused[name])
+    return ExternalTools(
+        packages=tuple(p for p in external.packages if p.name not in plugins),
+        shas=external.shas,
+        refused={n: r for n, r in external.refused.items() if n not in plugins},
+        provenance=external.provenance,
+    )
 
 
 def _record_what_this_item_got(item_id: str, external: ExternalTools) -> None:
@@ -155,6 +192,7 @@ class TurnContextBuilder:
         spec: SpecStar,
         packages: list[PackageInfo] | None,
         prebuilt_dir: Path | None,
+        view_plugin_artifacts: Mapping[str, str],
         read_file_max_lines: int,
         read_file_max_chars: int,
         tool_output_max_chars: int,
@@ -184,6 +222,7 @@ class TurnContextBuilder:
         self._spec = spec
         self._packages = packages
         self._prebuilt_dir = prebuilt_dir
+        self._view_plugin_artifacts = dict(view_plugin_artifacts)
         self._read_file_max_lines = read_file_max_lines
         self._read_file_max_chars = read_file_max_chars
         self._tool_output_max_chars = tool_output_max_chars
@@ -607,7 +646,9 @@ class TurnContextBuilder:
             return ()
         return tuple(defs)
 
-    async def _skills_reachable(self, item_id: str, facts: TurnFacts) -> bool | None:
+    async def _skills_reachable(
+        self, item_id: str, facts: TurnFacts, agent_config: AgentConfig | None
+    ) -> bool | None:
         """Whether this turn can load ANY skill — what `read_skill` is granted on.
 
         Asked of the two producers that actually render this turn's indexes, not
@@ -634,7 +675,10 @@ class TurnContextBuilder:
         if slug is None or profile is None:
             return None
         try:
-            if any(s.effective for s in effective_item_skills(slug, profile, prefs, [])):
+            tools = agent_config.allowed_tools if agent_config is not None else ()
+            if any(
+                s.effective for s in effective_item_skills(slug, profile, prefs, [], tools=tools)
+            ):
                 return True
             return bool(await advertised_workspace_skills(self._files, item_id, prefs))
         except Exception:  # noqa: BLE001 — never break a turn over a skill index
@@ -655,8 +699,15 @@ class TurnContextBuilder:
         the ceiling: a tool registered since, or released since, is reported as
         unavailable with a reason rather than handed over as a launcher that
         isn't there."""
-        external = await resolve_item_tools(self._sandbox, self._locator, item_id)
-        return confine_to_mounted(external, live=session.handle is not None, mounted=session.tools)
+        external = await resolve_item_tools(
+            self._sandbox, self._locator, item_id, plugin_artifacts=self._view_plugin_artifacts
+        )
+        confined = confine_to_mounted(
+            external, live=session.handle is not None, mounted=session.tools
+        )
+        # Confining refuses what the live sandbox lacks — for a view plugin that
+        # is the runner's to say, never the agent's to read.
+        return _mount_plugins_only(confined, set(self._view_plugin_artifacts))
 
     def _common(
         self,
@@ -862,7 +913,7 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts),
+                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,
@@ -965,7 +1016,7 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts),
+                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,

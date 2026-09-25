@@ -62,10 +62,13 @@ from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
-from ..tooling.external import prewarm_external_tools
+from ..tooling.external import ExternalTools, prewarm_external_tools
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
+from ..view_plugins import ViewPlugin
+from ..view_plugins.sandbox_half import artifact_plugins
+from ..view_plugins.skills import register_for_agents
 from ..workcalendar import OffHoursCalendar
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
@@ -142,6 +145,7 @@ from .turn_gate import TurnRefused, quota_body
 from .turn_reclaim import RECLAIM_TICK_S
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
+from .view_plugin_routes import register_view_plugin_routes, register_view_plugin_runner
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
@@ -628,6 +632,9 @@ def create_app(
     # the caller's identity is the shared session cookie, which needs
     # `allow_credentials`, and browsers refuse to pair that with a `*` wildcard.
     cors_allowed_origins: Sequence[str] = (),
+    # #847/#848: the operator's runtime view plugins, discovered (strictly) by
+    # the composition root. Empty ⇒ no plugins, which is every test's default.
+    view_plugins: Sequence[ViewPlugin] = (),
 ) -> FastAPI:
     logger.info(
         "boot: composing app (run_consumers=%s, host_managed_durable=%s)",
@@ -1592,6 +1599,11 @@ def create_app(
     # closure, so without a seam the only way to assert "this is a cache, not a
     # map" is not to. `app.state` is where this file already puts such handles.
     app.state.item_facts = _item_facts
+    app.state.view_plugins = tuple(view_plugins)
+    # #847/#848 P7: each plugin's skill joins the shared skills, for the items
+    # whose resolved tools can draw a view. Wholesale, so this composition's
+    # plugins replace any earlier one's in the same process.
+    register_for_agents(view_plugins)
     app.state.ingestor = ingestor
     # #312: the background job coordinators are built by the shared
     # `build_coordinators` composition root — the SAME one the standalone worker
@@ -2070,7 +2082,11 @@ def create_app(
     # mounted nothing would silently cost the item its tools until that sandbox
     # is recycled.
     async def _item_tool_shas(item_id: str) -> dict[str, str]:
-        return (await resolve_item_tools(sandbox, locator, item_id)).shas
+        return (
+            await resolve_item_tools(
+                sandbox, locator, item_id, plugin_artifacts=artifact_plugins(view_plugins)
+            )
+        ).shas
 
     registry.tools_for = _item_tool_shas
 
@@ -2089,6 +2105,7 @@ def create_app(
         sweep_enabled=trigger_check_interval is not None,
     )
     turn_ctx = TurnContextBuilder(
+        view_plugin_artifacts=artifact_plugins(view_plugins),
         sandbox=sandbox,
         filestore=filestore,
         files=files,
@@ -2404,6 +2421,27 @@ def create_app(
         superusers=superusers,
     )
 
+    # #847/#848: runtime view plugins — the list + each plugin's web/ files.
+    register_view_plugin_routes(
+        api,
+        get_plugins=lambda: app.state.view_plugins,
+        get_user_id=get_user_id,
+    )
+
+    async def _item_tools_with_plugins(item_id: str) -> ExternalTools:
+        return await resolve_item_tools(
+            sandbox, locator, item_id, plugin_artifacts=artifact_plugins(view_plugins)
+        )
+
+    register_view_plugin_runner(
+        api,
+        get_plugins=lambda: app.state.view_plugins,
+        locator=locator,
+        sandbox=sandbox,
+        registry=registry,
+        resolve_tools=_item_tools_with_plugins,
+    )
+
     register_tools_routes(
         api,
         spec=spec,
@@ -2462,6 +2500,7 @@ def create_app(
 
     register_wui_routes(
         api,
+        view_plugin_artifacts=artifact_plugins(view_plugins),
         locator=locator,
         sandbox=sandbox,
         registry=registry,

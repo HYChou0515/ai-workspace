@@ -27,7 +27,7 @@
  * including the Vite-only glob, and the file's `fileName` is passed so a `.tsx`
  * is parsed as TSX rather than TS.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -176,17 +176,30 @@ describe("violates() resolves the path instead of matching a prefix", () => {
   });
 });
 
-// The whole seam hangs off one side-effect import in the app's entry point.
-// Nothing else can cover it: `CsvTableView.test.tsx` imports `./index` itself,
-// so it stays green with the wiring deleted — and so does every other test,
-// while in production every plug-in kind silently degrades to "Unsupported view
-// kind". One line, no compiler help (it has no bindings to go unused), and the
-// failure only shows in a browser.
+// The build-time seam hangs off one side-effect import in the app's entry point,
+// and the runtime one off the loader call before the first render. Nothing else
+// can cover either: a kind's own test registers it itself, so it stays green
+// with the wiring deleted — and so does every other test, while in production
+// every plug-in kind silently degrades to "Unsupported view kind". No compiler
+// help (a side-effect import has no bindings to go unused), and the failure only
+// shows in a browser.
 describe("the entry point still loads ext/", () => {
   const MAIN = fileURLToPath(new URL("../main.tsx", import.meta.url));
 
   it("main.tsx imports ./ext", () => {
     expect(scanImports(readFileSync(MAIN, "utf-8"), "main.tsx")).toContain("./ext");
+  });
+
+  it("renders only once the runtime view plugins have loaded (#847/#848)", () => {
+    // The same reason as `./ext`: a plugin registers its kinds on import, and
+    // the registry is a plain map. The render is the loader's continuation.
+    const text = readFileSync(MAIN, "utf-8");
+    expect(scanImports(text, "main.tsx")).toContain("./viewPlugins/loader");
+    expect(text).toMatch(/loadViewPlugins\(\)\.finally\(\(\) => mount\(root\)\)/);
+    const mountDef = text.indexOf("function mount(");
+    const render = text.indexOf("createRoot(");
+    expect(mountDef).toBeGreaterThan(-1);
+    expect(render).toBeGreaterThan(mountDef); // createRoot lives inside mount()
   });
 
   it("imports it BEFORE the first render, since the registry is a plain map", () => {
@@ -212,5 +225,64 @@ describe("src/ext import boundary", () => {
       }
     }
     expect(offenders, "ext/ may only import the public barrel or its own siblings").toEqual([]);
+  });
+});
+
+// ── runtime plugins (#847/#848) ────────────────────────────────────────────
+// A runtime plugin's source lives in `view-plugins/<name>/web/src/` at the repo
+// root and is built SEPARATELY, against `@aiws/view-sdk` — the import map's
+// name for this app's public barrel. So its rule is stricter than `ext/`'s: no
+// relative path may leave the PLUGIN's own folder (reaching into the host would
+// compile a second copy of a host module into the plugin — a second registry,
+// a second set of React contexts), and a bare `@aiws/view-sdk` is the only door
+// in. Inside its own folder it may reach across halves — e.g. one spec schema
+// kept in `sandbox-src/` and read by both the sandbox command and the web half.
+
+const PLUGINS_DIR = fileURLToPath(new URL("../../../view-plugins/", import.meta.url));
+
+/** Does a specifier in a plugin's `web/src/<fileRel>` reach outside the
+ * plugin's own folder (`view-plugins/<name>/`)? */
+export function pluginViolates(fileRel: string, spec: string): boolean {
+  if (spec.startsWith("/")) return true;
+  if (!spec.startsWith(".")) return false; // bare package: react, @aiws/view-sdk, echarts…
+  // Resolved from the plugin root, where this file sits at `web/src/<fileRel>`.
+  return posix.normalize(posix.join("web/src", posix.dirname(fileRel), spec)).startsWith("../");
+}
+
+describe("pluginViolates()", () => {
+  it("accepts the SDK, other packages and its own siblings", () => {
+    expect(pluginViolates("index.tsx", "@aiws/view-sdk")).toBe(false);
+    expect(pluginViolates("index.tsx", "react")).toBe(false);
+    expect(pluginViolates("deep/View.tsx", "../index")).toBe(false);
+  });
+  it("accepts a file elsewhere in its OWN folder — a spec schema shared with its sandbox half", () => {
+    expect(pluginViolates("spec.ts", "../../sandbox-src/src/chart_view/spec.schema.json")).toBe(false);
+    expect(pluginViolates("deep/View.tsx", "../../../plugin.json")).toBe(false);
+  });
+  it("rejects any relative path out of its own folder, even to the barrel", () => {
+    expect(pluginViolates("index.tsx", "../../../web/src/renderers/entity/public")).toBe(true);
+    expect(pluginViolates("index.tsx", "../../../other-plugin/web/src/x")).toBe(true);
+    expect(pluginViolates("deep/View.tsx", "../../../../web/src/x")).toBe(true);
+    expect(pluginViolates("index.tsx", "./../../../x")).toBe(true);
+    expect(pluginViolates("index.tsx", "/src/api/entities")).toBe(true);
+  });
+});
+
+describe("view-plugins/*/web/src import boundary", () => {
+  const plugins = existsSync(PLUGINS_DIR)
+    ? readdirSync(PLUGINS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory() && existsSync(`${PLUGINS_DIR}${e.name}/web/src`))
+    : [];
+
+  it("reaches the platform only through @aiws/view-sdk", () => {
+    const offenders: string[] = [];
+    for (const p of plugins) {
+      const src = `${PLUGINS_DIR}${p.name}/web/src/`;
+      for (const rel of sourceFiles(src)) {
+        for (const spec of scanImports(readFileSync(src + rel, "utf-8"), rel)) {
+          if (pluginViolates(rel, spec)) offenders.push(`${p.name}/web/src/${rel} → ${spec}`);
+        }
+      }
+    }
+    expect(offenders, "a runtime plugin may only import @aiws/view-sdk, packages, or its own folder's files").toEqual([]);
   });
 });

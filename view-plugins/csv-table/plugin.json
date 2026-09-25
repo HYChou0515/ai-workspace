@@ -1,0 +1,5 @@
+{
+  "name": "csv-table",
+  "sdk": "1",
+  "kinds": ["csv-table"]
+}

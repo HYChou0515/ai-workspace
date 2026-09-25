@@ -49,7 +49,7 @@ def test_verify_number_is_on_by_default_in_every_rca_profile(profile: str):
     """None of the RCA profiles declares ``skills``, so all declared shared
     skills are on by default — which is what makes the A/B comparison a toggle
     rather than a deployment."""
-    states = {s.name: s for s in effective_item_skills("rca", profile, {}, [])}
+    states = {s.name: s for s in effective_item_skills("rca", profile, {}, [], tools=None)}
     assert states[SKILL].default_on is True
     assert states[SKILL].effective is True
 
@@ -58,6 +58,8 @@ def test_an_item_can_turn_verify_number_off():
     manifest = load_app_manifest("rca")
     states = {
         s.name: s
-        for s in effective_item_skills("rca", manifest.default_profile, {SKILL: False}, [])
+        for s in effective_item_skills(
+            "rca", manifest.default_profile, {SKILL: False}, [], tools=None
+        )
     }
     assert states[SKILL].effective is False

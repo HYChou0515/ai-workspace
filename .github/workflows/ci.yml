@@ -279,6 +279,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # #847/#848: web/'s tsc + vitest also cover view-plugins/*/web/src, and a
+      # plugin's own runtime deps (a chart library) come from its own install.
+      - name: Install view-plugin dependencies
+        working-directory: .
+        run: |
+          for d in view-plugins/*/web; do
+            if [ -f "$d/pnpm-lock.yaml" ]; then (cd "$d" && pnpm install --frozen-lockfile) || exit 1; fi
+          done
+
       - name: Type check
         run: pnpm run typecheck
 
@@ -287,6 +296,30 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      # The same script the image's `view-plugins` stage runs.
+      - name: Build view plugins
+        working-directory: .
+        run: |
+          for d in view-plugins/*/; do
+            if [ -f "$d/plugin.json" ]; then node view-plugins/build-web.mjs "$d" "$RUNNER_TEMP/view-plugins" || exit 1; fi
+          done
+
+      # ...and what it built must pass `view_plugin check` (a web half carrying
+      # its own React, a dev build, a leftover `process.env`) — the image runs
+      # the same check, so a plugin that would break in the browser is red here.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.9"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Check view plugins
+        working-directory: .
+        run: |
+          printf 'view_plugins:\n  dir: %s\n' "$RUNNER_TEMP/view-plugins" > "$RUNNER_TEMP/vp.yaml"
+          uv run --frozen python -m workspace_app.view_plugin check --config "$RUNNER_TEMP/vp.yaml"
 
       - name: Upload frontend coverage to Codecov
         uses: codecov/codecov-action@v5

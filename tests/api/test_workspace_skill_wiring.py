@@ -191,7 +191,9 @@ async def test_a_workspace_copy_of_a_default_off_skill_still_reaches_one(monkeyp
     # The premise: with those off, the App side of the question is already
     # "nothing". If pm/default's opt-in list ever changes shape, this fails
     # here rather than passing through the App branch and testing nothing.
-    assert not any(s.effective for s in effective_item_skills("pm", "default", prefs, []))
+    assert not any(
+        s.effective for s in effective_item_skills("pm", "default", prefs, [], tools=None)
+    )
     await filestore.write(
         item_id,
         "/.skill/grill-me/SKILL.md",
