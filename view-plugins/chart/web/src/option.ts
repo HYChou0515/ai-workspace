@@ -927,9 +927,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   });
   // Only a stack whose base is x: a horizontal bar (a category y) ECharts already
   // stacks by category (round 16 defect D1). On a log y a filler is no value at all,
-  // which a stack adds as nothing, where a 0 has no place on the axis (D3).
+  // which a stack adds as nothing, where a 0 has no place on the axis (D3) --
+  // read from the axis the chart built, whatever the spec's shape: a `layer:`
+  // spec has no top-level encoding to read it from (PR 5 P34).
   if (xAxis?.kind !== "category" && yAxis?.kind !== "category") {
-    lineUpStacks(series, rows, spec.encoding?.y?.scale?.type === "log" ? null : 0);
+    lineUpStacks(series, rows, yAxis?.kind === "log" ? null : 0);
   }
 
   const tooltip = {

@@ -237,4 +237,33 @@ describe("stacks P29 must not break (round 16 defect lens)", () => {
     expect(chart.renderToSVGString()).not.toContain("Infinity");
     chart.dispose();
   });
+
+  // #847/#848 PR 5 P34 row 4: the filler follows the axis the chart BUILT, not
+  // the spec's shape -- a `layer:` spec has no top-level encoding, and read
+  // from there its log y was filled with 0.
+  it("keeps a log y's range on the data when the stack is one layer of a `layer:` spec (P34)", () => {
+    const doc = {
+      ...base,
+      layer: [
+        {
+          mark: { type: "area", stack: true },
+          encoding: {
+            x: { field: "x", type: "quantitative" },
+            y: { field: "y", type: "quantitative", scale: { type: "log" } },
+            color: { field: "g", type: "nominal" },
+          },
+        },
+      ],
+    };
+    const { chart, built, model } = draw(
+      doc,
+      answer(layer("area", 4, { x: f64([1, 2, 3, 4]), y: f64([10, 100, 10, 100]), g: cat(["a", "a", "b", "b"]) })),
+    );
+    expect(tops(model, built)[1]).toEqual(new Map([["2", 10], ["3", 100]]));
+    const [lo, hi] = model.getComponent("yAxis", 0).axis.scale.getExtent();
+    expect(Number.isFinite(lo) && Number.isFinite(hi)).toBe(true);
+    expect(hi).toBeGreaterThanOrEqual(2);
+    expect(chart.renderToSVGString()).not.toContain("Infinity");
+    chart.dispose();
+  });
 });
