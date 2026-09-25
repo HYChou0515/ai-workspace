@@ -103,6 +103,20 @@ words are examples, not spec keys.
     them would pass with the skill and without it, which `skill_eval --control` names as
     measuring nothing. Recorded here after round 16's conformance lens found the rule
     narrowed in commit 07a6b591 without a line in the plan.
+  - (P31) A pie with no axes draws a toolbox with only the clear tool (✕), which clears
+    as ✕ does on every chart (P17: a marking its `highlight:` seeded too) and forgets
+    the slice a click picked (eac1146d). P30 had taken the whole toolbox off, so a
+    seeded marking could not be cleared from the pie.
+  - (P31) A chart narrower than 320 px is laid out compact: ChartView's ResizeObserver
+    sets a boolean (`compactAt`), so the option is rebuilt only when the width crosses
+    320, and a switch is set in full. The colour bar or category legend stands under
+    the plot at the left, the y axis's name above the plot, the tools shrink to fit
+    one row. ECharts' `media` queries were not used: they change the option's shape
+    for every consumer of it (cb1b4d7f).
+  - (P31) `useContainerWidth` reports the border box from its observer, as its first
+    measurement already did, for every consumer (the workspace shell, the header
+    actions, the skills modal's footer, a view panel), not only the view panel whose
+    narrow padding made the content box flip it (0ecd6666).
 
 ## Phases
 
@@ -249,10 +263,20 @@ words are examples, not spec keys.
   - At 390, in a five-pane layout, a `grid` pane 139 px wide has a plot about 2 px
     wide: axes and a colour bar, no cells, and the lasso cannot be used.
   - A `grid`'s colour-bar top label is drawn over the toolbox's clear icon.
-  - A scatter's last x tick is cut at the canvas edge ("0.8" reads "0.").
+  - A scatter's last x tick is cut at the canvas edge ("0.8" reads "0."). The cause
+    was not a margin: its view panel's narrow switch, read from the content box that
+    the switch's own padding changes, flipped it narrow and wide every frame, and the
+    chart resized with it.
   - A point that sits under a rule cannot be hovered: the rule takes the hover.
   - At 390 the gallery's first selection adds "N of M marked", which wraps the toolbar
     and moves the wall down 26 px (P18 fixed the same thing on a chart).
+  - A pie with no axes has no ✕ since P30, so a marking seeded from its `highlight:`
+    cannot be cleared from that pie.
+- **P32 — An aggregated channel's column is not a key.** Found in P30's demo: a pie of
+  `theta: {field: <col>, aggregate: count}` on a marking keyed by that column lit the
+  slices whose count equalled a marked value, and a click wrote the count. The answer
+  names an aggregate after its field, so a field a channel aggregates neither lights a
+  chart nor is written by it; the chart links by its other fields.
 
 ## Verification
 
