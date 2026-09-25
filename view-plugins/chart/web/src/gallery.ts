@@ -9,7 +9,9 @@
  * - A selection is a range of sorted positions; it names every group in it,
  *   loaded or not, and lights groups by the platform's own `isLit`.
  */
+import { clockFor } from "./clock";
 import type { MarkingValues, IsLit } from "./marking";
+import { parseInstant } from "./option";
 import { colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
 import { decodeColumn, type WireColumn } from "./wire";
 
@@ -25,7 +27,25 @@ export type FacetIndex = {
   cells: number;
   layout: { x: (Cell | null)[]; y: (Cell | null)[] };
   groups: { key: string[]; sort: Record<string, string | number | boolean | null> }[];
+  /** #847/#848 P14: a zoned facet column's zone. Absent from an older sandbox
+   * or cache, which leaves every key shown as it is. */
+  zones?: Record<string, string>;
 };
+
+/** A group's label: its keys, a zoned column's on that zone's clock and named
+ * (the key itself -- the marking string -- is pandas' wall time and offset,
+ * e.g. `2026-03-01 00:00:00+08:00`). A key that reads as no time shows as is. */
+export function groupLabel(index: FacetIndex, position: number): string {
+  return index.groups[position].key
+    .map((key, i) => {
+      const zone = index.zones?.[index.facet[i]];
+      if (!zone) return key;
+      // pandas writes up to nanoseconds; an instant is read to the millisecond
+      const ms = parseInstant(key.replace(/(\.\d{3})\d+/, "$1"));
+      return Number.isNaN(ms) ? key : `${clockFor(zone).text(ms)} ${zone}`;
+    })
+    .join(" · ");
+}
 
 export type FacetSort = { field: string; order?: "ascending" | "descending" } | null;
 

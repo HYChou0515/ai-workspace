@@ -76,6 +76,7 @@ def index_payload(root: Path, digest: str) -> dict[str, Any]:
         "build": index.build_id.decode("ascii"),
         "scale": index.scale.to_json(),
         "facet": list(index.facet),
+        "zones": dict(index.zones),
         "cells": index.cells,
         "layout": index.layout,
         "groups": [{"key": list(g.key), "sort": g.sort} for g in index.groups],

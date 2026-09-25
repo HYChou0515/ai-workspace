@@ -45,7 +45,7 @@ from chart_view.transforms import (
     need_columns,
     row_mask,
 )
-from chart_view.wire import bitset, canon, encode_column, epoch_ms, unhashable_as_text
+from chart_view.wire import bitset, canon, encode_column, epoch_ms, unhashable_as_text, zone_name
 
 FORMAT = 1
 DEFAULT_BIN_THRESHOLD = 10_000
@@ -302,6 +302,9 @@ def _answer(spec: Mapping[str, Any], layer: LayerRows) -> dict[str, Any]:
     if layer.outliers is not None:
         columns = _encode(layer.outliers, layer.outlier_kinds)
         out["outliers"] = {"rows": len(layer.outliers), "columns": columns}
+    # a zoned time column's zone (#847/#848 P14), read before binning redraws
+    # its points as the epoch-ms centres of their cells
+    zones = {f: df[f].dtype.tz for f in kinds if isinstance(df[f].dtype, pd.DatetimeTZDtype)}
     if binned(spec, layer):
         points = len(df)
         df, lit = _bin(df, layer.encoding, lit)
@@ -310,6 +313,9 @@ def _answer(spec: Mapping[str, Any], layer: LayerRows) -> dict[str, Any]:
         out["binned"] = {"points": points, "bins": len(df)}
     out["rows"] = len(df)
     out["columns"] = _encode(df, kinds)
+    for f, zone in zones.items():
+        if kinds.get(f) == "time":
+            out["columns"][f]["zone"] = zone_name(zone)
     out["highlight"] = bitset(lit) if lit is not None else None
     out["lit"] = int(lit.sum()) if lit is not None else None
     return out

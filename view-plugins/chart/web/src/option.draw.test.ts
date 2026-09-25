@@ -27,12 +27,14 @@ describe("tooltip text", () => {
     expect(text).toContain("&#60;img");
   });
 
-  it("writes times as ISO, trims float noise and marks a missing value", () => {
+  it("writes a zone-less time as written, trims float noise and marks a missing value", () => {
     const a = answer(
       layer("scatter", 2, { t: time(["2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z"]), v: f64([0.1 + 0.2, null]) }),
     );
     const f = fmt(toOption(spec(undefined), a).option);
-    expect(f({ seriesIndex: 0, dataIndex: 0 })).toContain("2024-01-01T00:00:00.000Z");
+    // #847/#848 P14: as written (the sandbox reads it as UTC), no zone named --
+    // was the ISO instant "2024-01-01T00:00:00.000Z"
+    expect(f({ seriesIndex: 0, dataIndex: 0 })).toContain("<b>2024-01-01</b>");
     expect(f({ seriesIndex: 0, dataIndex: 0 })).toContain("<b>0.3</b>");
     expect(f({ seriesIndex: 0, dataIndex: 1 })).toContain("<b>—</b>");
   });

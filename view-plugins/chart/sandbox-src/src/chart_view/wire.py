@@ -97,10 +97,28 @@ def encode_column(s: pd.Series, kind: str) -> dict[str, Any]:
     if kind == "f64":
         return {"kind": "f64", "data": _f64(pd.to_numeric(s, errors="coerce").to_numpy(float))}
     if kind == "time":
-        return {"kind": "time", "data": _f64(epoch_ms(s))}
+        wire = {"kind": "time", "data": _f64(epoch_ms(s))}
+        if isinstance(s.dtype, pd.DatetimeTZDtype):
+            wire["zone"] = zone_name(s.dtype.tz)
+        return wire
     if kind == "q8":
         return _q8(pd.to_numeric(s, errors="coerce").to_numpy(float))
     return _cat(s)
+
+
+def zone_name(zone: dt.tzinfo) -> str:
+    """The zone a time column is shown in (#847/#848 P14): its IANA name, which
+    the browser's Intl reads (zoneinfo's `key`, pytz's `zone`), or a fixed
+    offset as ``+HH:MM`` (``UTC`` at zero), which the renderer formats itself."""
+    name = getattr(zone, "key", None) or getattr(zone, "zone", None)
+    if isinstance(name, str):
+        return name
+    offset = zone.utcoffset(None)
+    if not offset:  # a fixed zone always has one; zero is UTC
+        return "UTC"
+    minutes = int(offset.total_seconds()) // 60
+    sign = "-" if minutes < 0 else "+"
+    return f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
 
 
 def decode_column(wire: dict[str, Any]) -> list[Any]:

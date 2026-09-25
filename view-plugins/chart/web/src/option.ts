@@ -13,6 +13,7 @@
  * number on a category axis as an index, so a category whose labels are
  * numbers would otherwise land on the wrong tick.
  */
+import { clockFor, type Clock } from "./clock";
 import { DIM_OPACITY, litRows } from "./highlight";
 import { colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
 import { decodeColumn, type Column, type Scalar, type WireColumn } from "./wire";
@@ -103,10 +104,25 @@ function escape(text: string): string {
   return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
+/** One clock per zone: building an Intl formatter per tooltip is slow. */
+const clocks = new Map<string, Clock>();
+function clockOf(zone: string | undefined): Clock {
+  const key = zone ?? "";
+  let clock = clocks.get(key);
+  if (!clock) clocks.set(key, (clock = clockFor(zone)));
+  return clock;
+}
+
+/** A time as its column shows it (#847/#848 P14): the wall time in its zone,
+ * named, or as written for a zone-less one. */
+function showTime(clock: Clock, ms: number): string {
+  return clock.zone ? `${clock.text(ms)} ${clock.zone}` : clock.text(ms);
+}
+
 function show(col: Column, row: number): string {
   const v = col.value(row);
   if (v === null) return "—";
-  if (col.kind === "time") return new Date(v as number).toISOString();
+  if (col.kind === "time") return showTime(clockOf(col.zone), v as number);
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(6)));
   return String(v);
 }
@@ -179,9 +195,20 @@ type Axis = {
   at(col: Column, row: number): number | null;
   /** The axis position of one value (a rule's datum). */
   pos(v: Scalar | null): number | null;
+  /** A temporal axis's clock (#847/#848 P14): its column's zone, if any. */
+  clock: Clock | null;
 };
 
+/** The clock a temporal channel's times show in: the zone its column names,
+ * in the first layer that sends it as time. */
+function channelClock(channel: Channel | undefined, decoded: Record<string, Column>[]): Clock | null {
+  if (channel?.type !== "temporal" || !channel.field) return null;
+  const col = decoded.map((cols) => cols[channel.field as string]).find((c) => c?.kind === "time");
+  return clockOf(col?.zone);
+}
+
 function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[], grid: Cells | null, which: "x" | "y"): Axis | null {
+  const clock = channelClock(channel, decoded);
   if (grid) {
     const labels = which === "x" ? grid.xs : grid.ys;
     // A cell's position is its index; a value finds its cell by label, and a
@@ -204,7 +231,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
       }
       return null;
     };
-    return { channel: channel ?? {}, kind: "index", labels, at: (col, row) => pos(col.value(row)), pos };
+    return { channel: channel ?? {}, kind: "index", labels, at: (col, row) => pos(col.value(row)), pos, clock };
   }
   if (!channel?.field) return null;
   if (channel.type === "nominal" || channel.type === "ordinal") {
@@ -219,19 +246,27 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
         return v === null ? null : (index.get(String(v)) ?? null);
       },
       pos: (v) => (v === null ? null : (index.get(String(v)) ?? null)),
+      clock: null,
     };
   }
   const kind = channel.type === "temporal" ? "time" : channel.scale?.type === "log" ? "log" : "value";
+  // A time axis runs under `useUTC` with each instant at its WALL time, so
+  // ECharts' ticks and labels read the column's clock, not the viewer's.
+  const wall = (v: number) => (clock ? clock.wall(v) : v);
   const pos = (v: Scalar | null): number | null => {
     const n = kind === "time" && typeof v === "string" ? parseInstant(v) : v;
     // Text on a number axis, or 0 and below on a log one, has no position.
     if (typeof n !== "number" || !Number.isFinite(n) || (kind === "log" && n <= 0)) return null;
-    return n;
+    return kind === "time" ? wall(n) : n;
   };
   // A mark's points go as the layer holds them, for ECharts to read (text
   // from a layer that typed the field otherwise included); only a rule's
   // own values are held to `pos`.
-  return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null, pos };
+  const at = (col: Column, row: number): number | null => {
+    const v = col.value(row) as number | null;
+    return kind === "time" && col.kind === "time" && v !== null ? wall(v) : v;
+  };
+  return { channel, kind, labels: [], at, pos, clock };
 }
 
 /** Where an axis name goes: centred beside its axis. At ECharts' default (the
@@ -245,7 +280,10 @@ function axisOption(
   zeroByDefault: boolean,
 ): Record<string, unknown> {
   if (!axis) return { type: "value" };
-  const name = axis.channel.title ?? axis.channel.field;
+  const field = axis.channel.title ?? axis.channel.field;
+  // a zoned time axis names its zone (#847/#848 P14)
+  const name = axis.clock?.zone && field !== undefined ? `${field} (${axis.clock.zone})` : field;
+  const clock = axis.clock;
   if (axis.kind === "index" && grid) {
     const n = which === "x" ? grid.width : grid.height;
     // Ticks and labels at the cell CENTRES: left to itself the axis ticks at
@@ -260,7 +298,14 @@ function axisOption(
       max: n - 0.5,
       splitLine: { show: false },
       axisTick: { customValues: centres },
-      axisLabel: { customValues: centres, formatter: (i: number) => String(axis.labels[i] ?? "") },
+      axisLabel: {
+        customValues: centres,
+        // a temporal cell is epoch ms: shown on its column's clock
+        formatter: (i: number) => {
+          const label = axis.labels[i];
+          return clock && typeof label === "number" ? clock.text(label) : String(label ?? "");
+        },
+      },
     };
   }
   if (axis.kind === "category") return { type: "category", name, ...NAME_AT[which], data: axis.labels.map(String) };
@@ -651,6 +696,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
 
   const option: Record<string, unknown> = {
     animation: false,
+    // #847/#848 P14: time axes read the column's clock (see clock.ts), never
+    // the viewer's zone
+    useUTC: true,
     tooltip,
     series,
     brush: { toolbox: ["rect", "polygon", "clear"], xAxisIndex: cartesian ? 0 : undefined, throttleType: "debounce", throttleDelay: 250 },

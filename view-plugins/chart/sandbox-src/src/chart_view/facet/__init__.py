@@ -48,6 +48,7 @@ from array import array
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, BinaryIO
 
 MAGIC = b"AIWSVC01"
@@ -213,6 +214,9 @@ class CacheIndex:
     groups: list[IndexEntry]
     data_offset: int
     build_id: bytes  # which write this index describes; see the module docstring
+    # a zoned facet column's zone, for the gallery's labels (#847/#848 P14);
+    # a cache written before it has none, which only leaves the zone unnamed
+    zones: Mapping[str, str] = MappingProxyType({})
 
     @property
     def exact_offset(self) -> int:
@@ -255,6 +259,7 @@ def write_cache(
     cells: int,
     layout: Mapping[str, Any],
     groups: Sequence[Group],
+    zones: Mapping[str, str] = MappingProxyType({}),
 ) -> None:
     """Write the whole cache or nothing. The file appears at ``path`` only when
     complete (a temp file in the same dir, then ``os.replace``); a failed write
@@ -264,6 +269,8 @@ def write_cache(
         raise ValueError(f"a group needs at least one cell, not cells={cells}")
     if not all(type(c) is str for c in facet):
         raise ValueError(f"facet columns {tuple(facet)!r} are not all text")
+    if not all(c in facet and type(z) is str for c, z in zones.items()):
+        raise ValueError(f"zones {dict(zones)!r} must name facet columns, each with a text zone")
     records = []
     exact = array("d")
     for g in groups:
@@ -284,6 +291,7 @@ def write_cache(
         {
             "scale": scale.to_json(),
             "facet": list(facet),
+            "zones": dict(zones),
             "cells": cells,
             "layout": dict(layout),
             "groups": [
@@ -330,6 +338,7 @@ def _parse_index(raw: Any, data_offset: int, build_id: bytes) -> CacheIndex:
         groups=[IndexEntry(key=tuple(g["key"]), sort=g["sort"]) for g in raw["groups"]],
         data_offset=data_offset,
         build_id=build_id,
+        zones=raw.get("zones", {}),
     )
 
 

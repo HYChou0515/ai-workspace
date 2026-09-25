@@ -81,6 +81,40 @@ def test_a_temporal_channel_is_sent_as_epoch_ms(wafers):
     assert _f64(layer["columns"]["day"])[0] == pd.Timestamp("2024-01-01", tz="UTC").value / 1e6
 
 
+def test_a_zoned_temporal_channel_names_its_zone(wafers):
+    """#847/#848 P14: the renderer shows a zoned column in its own zone, so the
+    wire says which; a zone-less one says nothing and reads as written (UTC)."""
+    wafers["at"] = pd.to_datetime(wafers["day"]).dt.tz_localize("Asia/Taipei")
+    enc = {"x": {"field": "at", "type": "temporal"}, "y": {"field": "day", "type": "temporal"}}
+    [layer] = build(_spec(mark="line", encoding=enc), wafers)["layers"]
+    at, day = layer["columns"]["at"], layer["columns"]["day"]
+    assert at["kind"] == "time" and at["zone"] == "Asia/Taipei"
+    # the instants are unchanged: Taipei midnight is 16:00 UTC the day before
+    assert _f64(at)[0] == pd.Timestamp("2023-12-31T16:00", tz="UTC").value / 1e6
+    assert "zone" not in day
+
+
+def test_a_zoned_column_sent_as_categories_names_no_zone(wafers):
+    # a nominal channel sends its levels as text, already written in the zone
+    wafers["at"] = pd.to_datetime(wafers["day"]).dt.tz_localize("Asia/Taipei")
+    enc = {**SCATTER, "color": {"field": "at", "type": "nominal"}}
+    [layer] = build(_spec(mark="scatter", encoding=enc), wafers)["layers"]
+    assert layer["columns"]["at"]["kind"] == "cat" and "zone" not in layer["columns"]["at"]
+    assert layer["columns"]["at"]["levels"][0] == "2024-01-01 00:00:00+08:00"
+
+
+def test_a_binned_scatter_keeps_its_time_zone():
+    # binning redraws each point at its cell's centre, as epoch ms: the zone
+    # the column had is still the one to show those centres in
+    at = pd.date_range("2026-03-01", periods=50, freq="h", tz="Asia/Taipei")
+    frame = pd.DataFrame({"at": at, "v": np.arange(50.0)})
+    enc = {"x": {"field": "at", "type": "temporal"}, "y": {"field": "v", "type": "quantitative"}}
+    [layer] = build(_spec(mark="scatter", encoding=enc, bin_threshold=10), frame)["layers"]
+    assert layer["binned"] is not None
+    assert layer["columns"]["at"]["zone"] == "Asia/Taipei"
+    assert "zone" not in layer["columns"]["v"]
+
+
 def test_a_tooltip_list_sends_each_field(wafers):
     enc = {**SCATTER, "tooltip": [{"field": "wafer", "type": "nominal"}]}
     [layer] = build(_spec(mark="scatter", encoding=enc), wafers)["layers"]

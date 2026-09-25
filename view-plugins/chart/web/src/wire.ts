@@ -5,7 +5,9 @@
 
 export type WireColumn =
   | { kind: "f64"; data: string }
-  | { kind: "time"; data: string }
+  /** `zone` (#847/#848 P14, additive): a zoned column's zone, which it is
+   * shown in; absent for a zone-less one, which shows as written (UTC). */
+  | { kind: "time"; data: string; zone?: string }
   | { kind: "cat"; levels: (string | number | boolean)[]; width: 1 | 2 | 4; codes: string }
   | { kind: "q8"; min: number; max: number; codes: string };
 
@@ -21,6 +23,8 @@ export type Column = {
   levels?: Scalar[];
   min?: number;
   max?: number;
+  /** time: the zone the column is shown in (the wire's `zone`), if any. */
+  zone?: string;
 };
 
 function bytes(b64: string): DataView {
@@ -39,6 +43,7 @@ export function decodeColumn(w: WireColumn): Column {
       return {
         kind: w.kind,
         length,
+        ...(w.kind === "time" && w.zone !== undefined ? { zone: w.zone } : {}),
         value: (i) => {
           const v = view.getFloat64(i * 8, true);
           return Number.isNaN(v) ? null : v;

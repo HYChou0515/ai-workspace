@@ -27,7 +27,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 
 import { isLit, useMarking, useSandboxRun } from "@aiws/view-sdk";
 
-import { cellAt, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail, type FacetIndex } from "./gallery";
+import { cellAt, groupLabel, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail, type FacetIndex } from "./gallery";
 import type { RasterImage } from "./raster";
 import { viewCall } from "./viewCall";
 import { decodeColumn, type WireColumn } from "./wire";
@@ -146,7 +146,7 @@ const Tile = memo(function Tile({
     () => (column ? thumbnail(index, column, scheme, lit) : null),
     [index, column, scheme, lit],
   );
-  const label = index.groups[position].key.join(" · ");
+  const label = groupLabel(index, position);
   return (
     <div
       style={{
@@ -259,7 +259,7 @@ function Enlarged({
   const image = useMemo(() => (column ? thumbnail(index, column, shared.scheme) : null), [index, column, shared.scheme]);
   const cell = at ? cellAt(index, at.col, at.row) : -1;
   const hovered = cell >= 0 && values ? values[cell] : null;
-  const label = index.groups[position].key.join(" · ");
+  const label = groupLabel(index, position);
   // it covers the gallery, so it takes focus: Escape is then heard here, as
   // any dialog is expected to close on it; closing gives focus back to what
   // opened it (the ⤢) rather than dropping it to the page

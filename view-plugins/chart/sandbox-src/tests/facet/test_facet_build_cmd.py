@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from chart_view.cli import main
@@ -246,6 +247,30 @@ def test_a_spec_that_is_not_text_exits_2(
 ) -> None:
     code, _, err = _call(capsys, "facet_build", {"spec": 5})
     assert code == 2 and "spec" in err
+
+
+def test_a_zoned_facet_column_names_its_zone_in_the_index(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#847/#848 P14: a group's key is its value's marking string -- for a
+    zoned time, the wall time there with its offset -- and the index names the
+    zone so the gallery can label it; a zone-less facet column names none."""
+    frame = pd.read_csv(workspace / "ws" / "data" / "w.csv")
+    frame["day"] = pd.to_datetime(frame["wafer"].map(lambda w: f"2026-03-0{w}")).dt.tz_localize(
+        "Asia/Taipei"
+    )
+    frame.to_parquet(workspace / "ws" / "data" / "w.parquet")
+    spec = SPEC.replace("data/w.csv", "data/w.parquet").replace("[lot, wafer]", "[lot, day]")
+    code, built, err = _call(capsys, "facet_build", {"spec": spec})
+    assert code == 0 and isinstance(built, dict), err
+    code, index, _ = _call(capsys, "facet_index", {"key": built["key"]})
+    assert code == 0 and isinstance(index, dict)
+    assert index["zones"] == {"day": "Asia/Taipei"}
+    assert index["groups"][0]["key"] == ["L1", "2026-03-01 00:00:00+08:00"]
+    code, plain, _ = _call(capsys, "facet_build", {"spec": SPEC})
+    assert code == 0 and isinstance(plain, dict)
+    code, index, _ = _call(capsys, "facet_index", {"key": plain["key"]})
+    assert code == 0 and isinstance(index, dict) and index["zones"] == {}
 
 
 # #847/#848 P9: the gallery names its view FILE, as `validate` does. Its text in

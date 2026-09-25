@@ -33,6 +33,8 @@ describe("wire corpus", () => {
     }
     const col = decodeColumn(c.wire as WireColumn);
     expect(col.length).toBe(c.values.length);
+    // #847/#848 P14: a zoned time column names its zone; every other column, none
+    expect(col.zone).toBe((c.wire as { zone?: string }).zone);
     c.values.forEach((v, i) => {
       const got = col.value(i);
       if (v === null) expect(got).toBeNull();

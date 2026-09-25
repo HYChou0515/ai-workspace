@@ -5,7 +5,16 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { cellAt, type FacetIndex, groupsLit, groupsPerPage, rangeMarking, sortedPositions, thumbnail } from "./gallery";
+import {
+  cellAt,
+  type FacetIndex,
+  groupLabel,
+  groupsLit,
+  groupsPerPage,
+  rangeMarking,
+  sortedPositions,
+  thumbnail,
+} from "./gallery";
 import { toOption } from "./option";
 import { lattice } from "./raster";
 import { answer, base, layer, q8 } from "./testAnswer";
@@ -151,5 +160,32 @@ describe("thumbnail", () => {
     const thumb = thumbnail(index(), q8([0, 1, 2, 3], 0, 254), "sequential", false);
     const alphas = Array.from({ length: 4 }, (_, i) => thumb.data[i * 4 + 3]);
     expect(alphas.every((a) => a === 64)).toBe(true);
+  });
+});
+
+describe("groupLabel (#847/#848 P14)", () => {
+  const two = (zones?: Record<string, string>) =>
+    index({
+      facet: ["lot", "day"],
+      ...(zones ? { zones } : {}),
+      groups: [
+        { key: ["L1", "2026-03-01 00:00:00+08:00"], sort: {} },
+        { key: ["L1", "2026-03-01 12:30:00.500000+08:00"], sort: {} },
+        { key: ["L2", "not a date"], sort: {} },
+      ],
+    });
+
+  it("shows a zoned column's key on its clock, and names the zone", () => {
+    const idx = two({ day: "Asia/Taipei" });
+    expect(groupLabel(idx, 0)).toBe("L1 · 2026-03-01 Asia/Taipei");
+    // pandas writes microseconds; the label reads them to the millisecond
+    expect(groupLabel(idx, 1)).toBe("L1 · 2026-03-01 12:30:00.500 Asia/Taipei");
+    // a key that is no time is shown as it is
+    expect(groupLabel(idx, 2)).toBe("L2 · not a date");
+  });
+
+  it("shows every key as it is when the index names no zone", () => {
+    expect(groupLabel(two(), 0)).toBe("L1 · 2026-03-01 00:00:00+08:00");
+    expect(groupLabel(index(), 0)).toBe(index().groups[0].key.join(" · "));
   });
 });

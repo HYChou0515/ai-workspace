@@ -7,13 +7,16 @@ Each corpus file is `{"kind", "values", "wire"}`: this test holds the encoder to
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
+import zoneinfo
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+import pytz
 
 from chart_view.wire import bitset, canon, encode_column
 
@@ -28,6 +31,8 @@ def _series(case: dict) -> pd.Series:
     values = case["values"]
     if case["kind"] in ("f64", "q8"):
         return pd.Series([np.nan if v is None else v for v in values], dtype=float)
+    if "zone" in case:  # a typed zoned column (a parquet one): the instants, in that zone
+        return pd.Series(pd.to_datetime(values, utc=True)).dt.tz_convert(case["zone"])
     return pd.Series(values, dtype=object)
 
 
@@ -171,6 +176,33 @@ def test_a_level_json_cannot_carry_is_sent_as_its_marking_string():
     s = pd.Series([pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-01")], dtype=object)
     assert encode_column(s, "cat")["levels"] == ["2024-01-01 00:00:00", "2024-01-02 00:00:00"]
     assert encode_column(pd.Series([math.inf, 1.0], dtype=object), "cat")["levels"] == [1.0, None]
+
+
+@pytest.mark.parametrize(
+    ("zone", "name"),
+    [
+        ("Asia/Taipei", "Asia/Taipei"),
+        (zoneinfo.ZoneInfo("America/New_York"), "America/New_York"),
+        (pytz.timezone("Europe/Berlin"), "Europe/Berlin"),
+        ("UTC", "UTC"),
+        (dt.timezone(dt.timedelta(hours=8)), "+08:00"),
+        (dt.timezone(-dt.timedelta(hours=5, minutes=30)), "-05:30"),
+        (pytz.FixedOffset(345), "+05:45"),
+    ],
+    ids=["str", "zoneinfo", "pytz", "utc", "fixed-east", "fixed-west", "pytz-fixed"],
+)
+def test_a_zoned_time_column_names_its_zone(zone, name):
+    """#847/#848 P14: what the renderer shows a zoned column in -- an IANA name
+    the browser's Intl knows, or a fixed offset as +HH:MM (which it formats by
+    hand)."""
+    utc = pd.Series(pd.to_datetime(["2026-02-28T16:00Z", None, "2026-03-01T04:30Z"], utc=True))
+    wire = encode_column(utc.dt.tz_convert(zone), "time")
+    assert wire == {**encode_column(utc.dt.tz_localize(None), "time"), "zone": name}
+
+
+def test_a_zone_less_time_column_names_none():
+    assert "zone" not in encode_column(pd.Series(pd.to_datetime(["2026-03-01"])), "time")
+    assert "zone" not in encode_column(pd.Series(["2026-03-01T00:00+08:00"], dtype=object), "time")
 
 
 def test_q8_of_a_constant_column_is_level_zero():

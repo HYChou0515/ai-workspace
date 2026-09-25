@@ -365,6 +365,16 @@ describe("FacetGallery", () => {
     expect(screen.getByRole("dialog").textContent).toContain("value: 222");
   });
 
+  it("labels a zoned facet column's groups on its clock, naming the zone (#847/#848 P14)", () => {
+    const groups = INDEX.groups.map((g, i) => ({ ...g, key: ["L1", `2026-03-${String((i % 28) + 1).padStart(2, "0")} 00:00:00+08:00`] }));
+    answers.index = ok({ ...INDEX, facet: ["lot", "day"], zones: { day: "Asia/Taipei" }, groups });
+    view();
+    const labels = screen.getAllByRole("button", { name: /^group / }).map((b) => b.getAttribute("aria-label"));
+    expect(labels).toContain("group L1 · 2026-03-01 Asia/Taipei");
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    expect(screen.getByRole("dialog").getAttribute("aria-label")).toMatch(/^group L1 · 2026-03-\d\d Asia\/Taipei$/);
+  });
+
   it("paints an unlit group's thumbnail dimmed", () => {
     sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["999"]) }, source: "x" }, write]);
     view();

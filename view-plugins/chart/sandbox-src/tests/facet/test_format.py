@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from chart_view.facet import (
+    MAGIC,
     CategoryScale,
     ContinuousScale,
     Group,
@@ -56,6 +57,53 @@ def test_a_group_key_splits_back_into_one_value_per_facet_column(tmp_path: Path)
     index = read_index(path)
     assert index.facet == ("lot", "wafer")
     assert [g.key for g in index.groups] == [("L1", "W03"), ("L1", "W04")]
+
+
+def _two_columns(path: Path, **zones: str) -> None:
+    write_cache(
+        path,
+        scale=ContinuousScale(0.0, 1.0),
+        facet=("lot", "day"),
+        cells=1,
+        layout={},
+        groups=[Group(key=("L1", "2026-03-01 00:00:00+08:00"), sort={}, values=[1.0])],
+        **({"zones": zones} if zones else {}),
+    )
+
+
+def test_a_zoned_facet_column_keeps_its_zone(tmp_path: Path) -> None:
+    """#847/#848 P14: the gallery labels a zoned column's keys with its zone."""
+    _two_columns(tmp_path / "z.vcache", day="Asia/Taipei")
+    assert read_index(tmp_path / "z.vcache").zones == {"day": "Asia/Taipei"}
+    _two_columns(tmp_path / "n.vcache")
+    assert read_index(tmp_path / "n.vcache").zones == {}
+
+
+@pytest.mark.parametrize(
+    "zones", [{"wafer": "UTC"}, {"day": 8}], ids=["not-a-facet-column", "not-text"]
+)
+def test_a_zone_the_index_cannot_carry_is_refused(tmp_path: Path, zones: dict) -> None:
+    with pytest.raises(ValueError, match="zones"):
+        _two_columns(tmp_path / "c.vcache", **zones)
+
+
+def test_a_cache_written_before_zones_reads_as_naming_none(tmp_path: Path) -> None:
+    import json
+    import struct
+
+    path = tmp_path / "old.vcache"
+    _two_columns(path, day="Asia/Taipei")
+    raw = path.read_bytes()
+    head = len(MAGIC) + 32
+    (n,) = struct.unpack("<I", raw[head : head + 4])
+    header = json.loads(raw[head + 4 : head + 4 + n])
+    del header["zones"]
+    old = json.dumps(header, separators=(",", ":")).encode()
+    path.write_bytes(raw[:head] + struct.pack("<I", len(old)) + old + raw[head + 4 + n :])
+    index = read_index(path)
+    assert index.zones == {} and [g.key for g in index.groups] == [
+        ("L1", "2026-03-01 00:00:00+08:00")
+    ]
 
 
 def test_a_key_that_does_not_match_the_facet_columns_is_refused(tmp_path: Path) -> None:

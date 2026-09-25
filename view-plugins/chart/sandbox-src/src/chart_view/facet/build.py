@@ -43,7 +43,7 @@ import pandas as pd
 
 from chart_view.facet import CategoryScale, ContinuousScale, Group, write_cache
 from chart_view.query import _kinds
-from chart_view.wire import canon, encode_column
+from chart_view.wire import canon, encode_column, zone_name
 
 _AXIS_TYPES = ("quantitative", "temporal", "ordinal", "nominal")
 
@@ -135,7 +135,16 @@ def build_facet_cache(
     scale, cells, layout, groups = plan
     progress(f"{len(groups)} groups over {cells} cells")
 
-    write_cache(path, scale=scale, facet=list(facet), cells=cells, layout=layout, groups=groups)
+    # a zoned facet column's keys are wall times there; the index names the
+    # zone for the gallery's labels (#847/#848 P14)
+    zones = {
+        c: zone_name(frame[c].dtype.tz)
+        for c in facet
+        if isinstance(frame[c].dtype, pd.DatetimeTZDtype)
+    }
+    write_cache(
+        path, scale=scale, facet=list(facet), cells=cells, layout=layout, groups=groups, zones=zones
+    )
     progress(f"wrote {path.stat().st_size} bytes")
 
 
