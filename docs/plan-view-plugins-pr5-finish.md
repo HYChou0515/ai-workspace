@@ -325,6 +325,14 @@ words are examples, not spec keys.
 
   Rows 7 and 9 change mechanisms, so round 18 covers them. Demo before/after at 1440 and
   390, seen.
+  *As built:* row 7's premise was wrong — `lineUpStacks` did not stack a series' own
+  rows off a category axis either (a second row at one x drew from 0; P29's "two rows
+  at one x" test pinned that overlap, and now expects the sum). Each stacked series is
+  split into pieces, the k-th row per slot, which stack in order on every axis
+  (14b81f9f). Row 8: 802adbb2. Row 9 subsumes P34 row 1's `held()` — a pick is forgotten
+  at the other view's write — and also restores legend entries the chart had hidden
+  (1aaa0b0f) [mine, open to override]. Measured in the demo: stack ends equal pandas'
+  group sums to within 0.32 at 1440 and 390, a pixel being 0.08–0.41 (before: 31.4 for 79.38).
 
 ## Verification
 
