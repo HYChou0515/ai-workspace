@@ -291,10 +291,8 @@ def _sort_ident(column: pd.Series) -> np.ndarray | None:
     values = column.to_numpy()
     if dtype.kind == "f":
         return _float_bits(values)
-    if dtype.kind == "u" and dtype.itemsize == 8:
-        return values.view(np.int64)
     if dtype.kind in ("b", "i", "u"):
-        return values.astype(np.int64)
+        return values.astype(np.int64)  # a uint64 past 2**63 wraps, one to one
     return None
 
 
@@ -304,8 +302,8 @@ def _axis_codes(column: pd.Series, kind: str) -> tuple[np.ndarray, Callable[[int
     wire = encode_column(column, kind)
     if kind != "cat":
         floats = np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8")
-        # + 0.0 folds -0.0 into 0.0, as a dict key does; NaN is pandas' missing
-        codes = pd.factorize(floats + 0.0, use_na_sentinel=True)[0]
+        # factorize puts -0.0 with 0.0, as a dict key does; NaN is its missing
+        codes = pd.factorize(floats, use_na_sentinel=True)[0]
         return codes.astype(np.int64), lambda i: float(floats[i])
     width = wire["width"]
     raw = np.frombuffer(base64.b64decode(wire["codes"]), dtype=f"<u{width}").astype(np.int64)
