@@ -343,6 +343,51 @@ describe("FacetGallery", () => {
     expect(after.scrollTop).toBe(2400);
   });
 
+  it("keeps the scroll position when the browser reports the removed scroller's size on its way out", () => {
+    // A real browser tells a ResizeObserver that an element it watches has
+    // gone to 0x0 when it leaves the page -- and a detached element's
+    // scrollTop is 0. Read then, the saved position became 0: live, a reaped
+    // cache's recovery reopened the gallery at the top (7320 -> 0).
+    const observed: { cb: () => void; el: Element }[] = [];
+    const Real = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      cb: () => void;
+      constructor(cb: () => void) {
+        this.cb = cb;
+      }
+      observe(el: Element) {
+        observed.push({ cb: this.cb, el });
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const { rerender } = view();
+      const before = document.querySelector("[data-gallery-scroll]") as HTMLElement;
+      before.scrollTop = 2400;
+      act(() => {
+        fireEvent.scroll(before);
+      });
+      failUntil.page = 1;
+      loadingBuildAt = 1;
+      answerCache.clear();
+      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+      expect(document.querySelector("[data-gallery-scroll]")).toBeNull();
+      // the browser's last word on the removed scroller: out of the page it
+      // has no box, and its scrollTop reads 0 (happy-dom keeps the old one)
+      Object.defineProperty(before, "scrollTop", { configurable: true, get: () => 0, set: () => {} });
+      act(() => {
+        for (const o of observed) if (o.el === before) o.cb();
+      });
+      loadingBuildAt = -1;
+      rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+      const after = document.querySelector("[data-gallery-scroll]") as HTMLElement;
+      expect(after.scrollTop).toBe(2400);
+    } finally {
+      globalThis.ResizeObserver = Real;
+    }
+  });
+
   it("recovers an enlarged group whose exact values come back exit 3", () => {
     failUntil.exact = 1;
     view();

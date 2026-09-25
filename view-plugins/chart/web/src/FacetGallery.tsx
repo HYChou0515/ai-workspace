@@ -626,6 +626,9 @@ export function FacetGallery({
     if (!el) return;
     if (el.scrollTop === 0 && savedTop.current > 0) el.scrollTop = savedTop.current;
     const measure = () => {
+      // a scroller leaving the page is reported once more, at 0x0 and
+      // scrollTop 0: that is not where the person was (P23)
+      if (!el.isConnected) return;
       savedTop.current = el.scrollTop;
       const next = {
         top: el.scrollTop,
