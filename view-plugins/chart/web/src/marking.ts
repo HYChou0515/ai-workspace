@@ -53,6 +53,13 @@ export function markingLit(answer: Answer, marking: MarkingValues, lit: IsLit): 
   });
 }
 
+/** "by lot, wafer": the columns a marking marks by, said beside a count
+ * (#847/#848 PR 5 P27) — the words the host's tables say (`markedBy` in the
+ * host's markings module; `marking.test.ts` holds this to it). */
+export function markedBy(marking: MarkingValues): string {
+  return `by ${Object.keys(marking).join(", ")}`;
+}
+
 function toMarking(values: Record<string, string[]>[]): MarkingValues {
   const out: Record<string, Set<string>> = {};
   for (const v of values) {

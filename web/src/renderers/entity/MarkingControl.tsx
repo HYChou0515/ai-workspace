@@ -114,6 +114,13 @@ export function MarkingControl({
         ))}
         <option value={NEW}>New marking…</option>
       </select>
+      {/* P27: which columns the marking marks by — over two it lights every
+          combination of their values, so its counts can exceed what was picked */}
+      {entry && (
+        <span data-testid="marking-by" className="ev-marking__by">
+          {t("markings.by", { columns: Object.keys(entry.marking).join(t("markings.listSep")) })}
+        </span>
+      )}
       {naming && (
         <form
           onSubmit={(e) => {

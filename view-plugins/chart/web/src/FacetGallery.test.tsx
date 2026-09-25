@@ -236,7 +236,15 @@ describe("FacetGallery", () => {
   it("lights the groups the marking holds and says how many", () => {
     sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["5", "6"]) }, source: "x" }, write]);
     view();
-    expect(screen.getByText(/2 of 1000 marked/)).toBeTruthy();
+    expect(screen.getByText("2 of 1000 marked · by wafer")).toBeTruthy();
+  });
+
+  it("names the columns the marking marks by beside the count (P27)", () => {
+    // two columns light every combination of their values: the count can
+    // exceed the tiles picked, and the line says why
+    sdk.useMarking.mockReturnValue([{ marking: { lot: new Set(["L1"]), wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+    view();
+    expect(screen.getByText("2 of 1000 marked · by lot, wafer")).toBeTruthy();
   });
 
   it("recovers from an index with no cache (exit 3) by asking the whole chain again at the next epoch", () => {

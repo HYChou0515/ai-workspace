@@ -9,9 +9,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SentMarking } from "../api/types";
 import { OpenFileProvider, WorkspaceVisibleProvider } from "../hooks/openFile";
+import { LocaleProvider, setStoredLocale } from "../lib/i18n";
 import { MarkingChips } from "./MarkingChips";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 const written: SentMarking = {
   name: "fail",
@@ -31,7 +35,27 @@ describe("MarkingChips", () => {
     render(<MarkingChips markings={[written]} />);
     const chip = screen.getByTestId("marking-chip");
     expect(chip).toHaveTextContent("fail");
-    expect(chip).toHaveTextContent("lot 2 · wafer 12");
+    expect(chip).toHaveTextContent("依 lot (2)、wafer (12)"); // P27: was "lot 2 · wafer 12"
+  });
+
+  it("names the columns it marks by, each with how many values (P27)", () => {
+    setStoredLocale("en");
+    render(
+      <LocaleProvider>
+        <MarkingChips markings={[written]} />
+      </LocaleProvider>,
+    );
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*by lot \(2\), wafer \(12\)$/);
+  });
+
+  it("names them in Chinese too", () => {
+    setStoredLocale("zh-TW");
+    render(
+      <LocaleProvider>
+        <MarkingChips markings={[written]} />
+      </LocaleProvider>,
+    );
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*依 lot \(2\)、wafer \(12\)$/);
   });
 
   it("says why a refused one was not sent", () => {

@@ -119,6 +119,28 @@ describe("an entity table on a marking that holds a set", () => {
   });
 });
 
+describe("the bar names the columns the marking marks by (P27)", () => {
+  // A marking is column -> values, so over two columns it lights every
+  // combination; the bar says which columns, so a count larger than the
+  // picked rows reads as what it is.
+  it("filtering: '· by lot, day' after the count", () => {
+    const store = new MarkingStore();
+    store.set("fail", { lot: new Set(["L2", "L3"]), day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml");
+    view(ON_FAIL, store);
+    const bar = screen.getByRole("status", { name: /marking filter/i });
+    expect(bar).toHaveTextContent("filtered by fail · 2 of 4 rows · by lot, day · show all");
+  });
+
+  it("showing all: '· by lot' for a one-column marking", () => {
+    const store = new MarkingStore();
+    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    view(ON_FAIL, store);
+    fireEvent.click(screen.getByRole("button", { name: "show all" }));
+    const bar = screen.getByRole("status", { name: /marking filter/i });
+    expect(bar).toHaveTextContent("fail marks 1 of 4 rows · by lot · show marked only");
+  });
+});
+
 describe("show all", () => {
   it("keeps every row and highlights the lit ones, and can go back to filtering", () => {
     const store = new MarkingStore();

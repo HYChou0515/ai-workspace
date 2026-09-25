@@ -30,9 +30,13 @@ export function MarkingChips({
     >
       {markings.map((m) => {
         const refused = Boolean(m.error);
-        const counts = Object.entries(m.counts)
-          .map(([c, n]) => `${c} ${n}`)
-          .join(" · ");
+        // P27: the columns it marks by, each with how many values it holds —
+        // over two columns a marking lights every combination of their values.
+        const counts = t("markings.by", {
+          columns: Object.entries(m.counts)
+            .map(([c, n]) => `${c} (${n})`)
+            .join(t("markings.listSep")),
+        });
         const label = (
           <>
             <Icon name="tag" size={11} color={refused ? "var(--err)" : "var(--text-paper-d)"} />

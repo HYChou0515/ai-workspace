@@ -5,7 +5,7 @@
  * The SDK double hands out the HOST's real marking hook and matching rule, over
  * a real store; ECharts is a double whose event handlers the test fires.
  */
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
@@ -117,6 +117,18 @@ describe("ChartView on a named marking", () => {
     expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
     expect(store.get("fail")!.source).toBe("/v/grid.ai.yaml");
     expect(lastData(b!)).toEqual([dim([1, 4]), [2, 5], dim([3, 6])]);
+  });
+
+  it("says which columns its selection marks by beside the count (P27)", () => {
+    const store = new MarkingStore();
+    const two = answer(
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]), wafer: cat(["1", "2", "3"]) }),
+    );
+    sdk.useSandboxRun.mockReturnValue(ok(two));
+    mount(store, [docOn("fail", { keys: ["lot", "wafer"] })]);
+    brush(charts.made[0]!, [0, 1]);
+    // 2 rows picked; over lot x wafer the marking lights every combination
+    expect(screen.getByText("2 selected · by lot, wafer")).toBeTruthy();
   });
 
   it("a chart on another marking, or none, does not react — not even a re-render", () => {

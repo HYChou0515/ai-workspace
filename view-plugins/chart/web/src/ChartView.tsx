@@ -16,7 +16,7 @@ import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, toOption } from "./option";
-import { highlightMarking, markingLit, selectionMarking } from "./marking";
+import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
 import type { Cells, RasterImage } from "./raster";
 import { type BrushSelected, gridSelectionLit, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
 import { specErrors } from "./spec";
@@ -195,6 +195,9 @@ function Plot({
   }, [built, doc, answer]);
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
+  // On a marking, which columns it marks by (P27): over two columns it lights
+  // every combination of their values, more than the rows picked here.
+  const selected = count > 0 ? `${count} selected${entry ? ` · ${markedBy(entry.marking)}` : ""}` : null;
   return (
     // Takes the height its pane gives it (#847/#848 PR 5 P13); a fixed 360 px
     // made every shorter pane scroll. 160 px is the least a plot reads at.
@@ -202,7 +205,7 @@ function Plot({
       {/* Always there, one line high: added only once something was selected,
           it pushed the chart down under the pointer (#847/#848 P18). */}
       <div
-        title={[...built.notes, ...(count > 0 ? [`${count} selected`] : [])].join(" · ")}
+        title={[...built.notes, ...(selected ? [selected] : [])].join(" · ")}
         style={{
           display: "flex",
           gap: 12,
@@ -218,7 +221,7 @@ function Plot({
         {built.notes.map((n) => (
           <span key={n}>{n}</span>
         ))}
-        {count > 0 && <span>{count} selected</span>}
+        {selected && <span>{selected}</span>}
       </div>
       <div ref={el} style={{ flex: 1, minHeight: 0 }} />
     </div>

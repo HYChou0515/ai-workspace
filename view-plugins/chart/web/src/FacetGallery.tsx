@@ -43,6 +43,7 @@ import {
   type FacetIndex,
   type SortChoice,
 } from "./gallery";
+import { markedBy } from "./marking";
 import { categoryColour, type RasterImage } from "./raster";
 import { viewCall } from "./viewCall";
 import { decodeColumn, type WireColumn } from "./wire";
@@ -772,7 +773,7 @@ export function FacetGallery({
     <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "4px 12px", fontSize: 12 }}>
         <span>{`${sorted.length} groups`}</span>
-        {lit && <span>{`${marked} of ${sorted.length} marked`}</span>}
+        {lit && entry && <span>{`${marked} of ${sorted.length} marked · ${markedBy(entry.marking)}`}</span>}
         <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           sort by
           <select

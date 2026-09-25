@@ -559,7 +559,14 @@ tr[data-marked] td:first-child {
   white-space: normal;
   max-width: 36ch;
 }
-/* the bar above a table on a marking: "filtered by <name> · 3 of 25 rows · show all" */
+/* the marking control's "by lot, wafer" (P27): the columns it marks by */
+.ev-marking__by {
+  min-width: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  overflow-wrap: anywhere;
+}
+/* the bar above a table on a marking: "filtered by <name> · 3 of 25 rows · by lot · show all" */
 .ev-marking-bar {
   display: flex;
   align-items: center;

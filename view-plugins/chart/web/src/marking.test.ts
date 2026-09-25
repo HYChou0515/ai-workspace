@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { isLit } from "../../../../web/src/lib/markings";
-import { highlightMarking, markingLit, selectionMarking } from "./marking";
+import { isLit, markedBy as hostMarkedBy } from "../../../../web/src/lib/markings";
+import { highlightMarking, markedBy, markingLit, selectionMarking } from "./marking";
 import { answer, cat, f64, layer, time } from "./testAnswer";
 
 const A = answer(
@@ -136,5 +136,21 @@ describe("a binned layer carries no key (round 15 defect lens D2)", () => {
 
   it("writes nothing — not the `{}` that would clear every linked view", () => {
     expect(selectionMarking([{ source: "brush", layer: 0, rows: [2] }], B, ["a"])).toBeNull();
+  });
+});
+
+describe("markedBy (P27)", () => {
+  // The host's tables say the same words beside their counts: the host's
+  // `markedBy` is the oracle, so a chart and a table on one marking agree.
+  it.each([
+    [{ lot: new Set(["L1"]) }],
+    [{ lot: new Set(["L1"]), wafer: new Set(["1", "2"]) }],
+    [{ wafer: new Set(["1"]), lot: new Set(["L1"]), "a column": new Set(["x"]) }],
+  ])("says what the host says for %o", (m) => {
+    expect(markedBy(m)).toBe(hostMarkedBy(m));
+  });
+
+  it("names the columns in the order the marking was written", () => {
+    expect(markedBy({ wafer: new Set(["1"]), lot: new Set(["L1"]) })).toBe("by wafer, lot");
   });
 });

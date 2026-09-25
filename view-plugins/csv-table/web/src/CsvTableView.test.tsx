@@ -175,6 +175,15 @@ describe("a csv-table on a marking", () => {
     expect(bar).toHaveTextContent("filtered by fail · 2 of 3 rows");
   });
 
+  it("names the columns the marking marks by after its count (P27)", async () => {
+    const markings = new MarkingStore();
+    markings.set("fail", { lot: new Set(["B2", "C3"]), day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml");
+    renderLots(markings);
+    expect(await screen.findByText("B2")).toBeInTheDocument();
+    const bar = screen.getByRole("status", { name: /marking filter/i });
+    expect(bar).toHaveTextContent("filtered by fail · 2 of 3 rows · by lot, day · show all");
+  });
+
   it("reads a number cell as pandas and the chart do: 0.90 is the chart's 0.9", async () => {
     const markings = new MarkingStore();
     markings.set("fail", { yield: new Set(["0.9"]) }, "/views/chart.ai.yaml");

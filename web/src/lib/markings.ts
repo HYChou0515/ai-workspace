@@ -31,6 +31,15 @@ export function isLit(row: Readonly<Record<string, string>>, marking: Marking): 
   return shared;
 }
 
+/** The columns a marking marks by, as a view says them next to its count:
+ * "by lot, wafer" (#847/#848 PR 5 P27). A marking over two columns lights
+ * every combination of their values, so a count can exceed what was picked;
+ * naming the columns is what makes that count read as what it is. In the
+ * order the marking was written (a view writes its `keys:` in order). */
+export function markedBy(marking: Marking): string {
+  return `by ${Object.keys(marking).join(", ")}`;
+}
+
 /** What a selection writes: each key's distinct values over the selected rows.
  * `null` for a view without `keys:` — it can be lit, but cannot be a source. An
  * empty selection projects to `{}`, the write that clears the marking. */

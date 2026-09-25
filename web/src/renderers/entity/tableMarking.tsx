@@ -4,7 +4,9 @@
  *
  * Reading (P1):
  * - The marking holds a set and shares a column with the table: only the rows
- *   it lights are shown, under "filtered by <name> · 3 of 25 rows · show all".
+ *   it lights are shown, under "filtered by <name> · 3 of 25 rows · by lot ·
+ *   show all" (P27: the columns it marks by — over two columns a marking
+ *   lights every combination of their values).
  *   "show all" keeps every row and highlights the lit ones. The toggle is this
  *   person's, per view, kept in this browser like the header's marking choice
  *   (`useViewMarking`) — never written to the file.
@@ -31,7 +33,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useMarking } from "../../hooks/useMarking";
 import { litRows, type MarkingRow } from "../../lib/markingRows";
-import { projectOntoKeys } from "../../lib/markings";
+import { markedBy, projectOntoKeys } from "../../lib/markings";
 
 export type TableMarking = {
   /** Indices (into the rows given) to show, in order. */
@@ -161,7 +163,7 @@ export function useTableMarking({
       note,
     };
   }
-  const count = `${litIdx.length} of ${rows.length} rows`;
+  const count = `${litIdx.length} of ${rows.length} rows · ${markedBy(held)}`;
   // The selection was made here: every row stays, the marked ones highlighted.
   const madeHere = source !== null && entry.source === source;
   if (madeHere || showAll) {

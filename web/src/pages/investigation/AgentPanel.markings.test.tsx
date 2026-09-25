@@ -70,7 +70,7 @@ describe("AgentPanel — markings go with a message (#847 P7)", () => {
     renderPanel(store);
     expect(screen.queryByTestId("marking-chip")).not.toBeInTheDocument();
     act(() => store.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/grid.ai.yaml"));
-    expect(screen.getByTestId("marking-chip")).toHaveTextContent("lot 2");
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent("lot (2)");
   });
 
   it("sends the chips' markings with the message", async () => {
