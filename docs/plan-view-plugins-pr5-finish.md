@@ -77,6 +77,13 @@ words are examples, not spec keys.
   - (P7) Saving a marking's rows is a capability a plugin declares
     (`"provides": {"marking_rows": "<command>"}`); two plugins declaring it refuse boot.
     A chip saves exactly what it sent (a digest recorded at send), or refuses by name.
+  - (P8) "A scenario per feature" means one per feature **the model can show or read**:
+    the gallery, the stack, a linked table, a saved selection (four scenarios). Box select
+    (P3) is a gesture only a person makes, and a card thumbnail (P6) is drawn by the card
+    whatever the model does, so neither has a model behaviour to score; a scenario for
+    them would pass with the skill and without it, which `skill_eval --control` names as
+    measuring nothing. Recorded here after round 16's conformance lens found the rule
+    narrowed in commit 07a6b591 without a line in the plan.
 
 ## Phases
 

@@ -977,9 +977,10 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     `facet_stack`，而且 `query` / `facet_build` 收 view 檔的路徑。
   - 為什麼：新的 renderer 傳給沙盒的是 view 檔路徑（spec 超過 128 KB 也畫得出來），舊的沙盒只收 spec 全文。
     新沙盒兩種都收，所以先上沙盒不會壞舊的前端。
-  - 漏做的症狀：打開 chart，面板顯示 `argument must be {'spec': <string>}`；打開縮圖牆顯示
-    `facet_build takes exactly ['spec'] (and an optional epoch)`；按「Save as table」得到
-    `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯。
+  - 漏做的症狀：從 master 升上來、沒換 sandbox-host，症狀就是上面第一條的（沒有 `launch`，502）。
+    **只有部署過這個分支較早的 build** 的環境，才會看到舊 bundle 的訊息：打開 chart，面板顯示
+    `argument must be {'spec': <string>}`；打開縮圖牆顯示 `facet_build takes exactly ['spec'] (and an optional epoch)`；
+    按「Save as table」得到 `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯。
 - **`sandbox.kind: local` 掛自己 plugin 目錄的部署**，`rollout 前`把 `chart` **與 `csv-table`** 用這一版重新
   `view_plugin build` 進那個目錄（做法同上）。
   - 為什麼：chart 的 `plugin.json` 多了 `provides` 與兩行 views，沙盒 bundle 多了指令；csv-table 的前端改成會接 marking，
@@ -1082,15 +1083,19 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - **時間上限（rollout 前檢查）**：建快取是一個沙盒指令，受每個指令的總時間上限管（`kind: http` 是
     sandbox-host 的 `SANDBOX_HOST_EXEC_TIMEOUT`，`kind: local` 是 `sandbox.exec_timeout`，預設都是 60 秒）。
     預設值離上表很遠，不用動；**你們若把它調低到接近上表的秒數（依你們機器與預期最大來源估），rollout 前調回來**。
-    為什麼在 rollout 前：換版後第一個打開大縮圖牆的人就會撞到。沒做的症狀：那面縮圖牆的面板顯示建置已印出的進度行，
-    最後一行是 `timed out after 60s (total) and was killed`（數字是你們設的上限），重開也一樣，因為沒建完就不會留下快取。
+    為什麼在 rollout 前：換版後第一個打開大縮圖牆的人就會撞到；AI 用 `show_file` 秀一份 `facet:` 檔也會，因為
+    `show_file` 的 `validate` 就是建一次快取，受同一個上限管。沒做的症狀：那面縮圖牆的面板顯示建置已印出的進度行，
+    最後一行是 `timed out after 60s (total) and was killed`（數字是你們設的上限），重開也一樣，因為沒建完就不會留下快取；
+    AI 那邊則是 `show_file` 回 `error: view plugin 'chart' refused <檔案> — nothing was shown:`，下一行是同一句
+    timed out，**卡片不出現**。
     另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
     建置在讀檔、分組、寫檔各印一行進度，上表最長的一段不到 5 秒；**若你們把它調低到接近這個秒數，rollout 前調回來**，
     沒做的症狀是最後一行變成 `no output for 60s; assumed hung and killed`（數字是你們設的上限）。
   - **記憶體上限（rollout 前檢查）**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉；
-    為什麼在 rollout 前：和時間上限一樣，換版後第一個打開大縮圖牆的人就會撞到。沒做的症狀：
-    面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
-    是依指令的輸出方式推的。
+    為什麼在 rollout 前：和時間上限一樣，換版後第一個打開大縮圖牆的人、或第一次 `show_file` 一份大 `facet:` 檔的 AI
+    就會撞到。沒做的症狀：面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；
+    AI 的 `show_file` 回 `error: view plugin 'chart' refused <檔案> — nothing was shown:` 加上 exit code，卡片不出現。
+    這兩個症狀沒有實際觀察過，是依指令的輸出方式與 `show_file` 處理非 0 結束的方式推的。
 - `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
   畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
 - chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法，本文（去掉 frontmatter）從 6853（[#856](#pr-856) 合入後的版本）變成
@@ -1102,17 +1107,19 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 - **rollout 前：scratch 容量估算與沙盒指令時間上限的檢查**，做法、為什麼與沒做的症狀見上面「行為」的
   「scratch 容量要這樣估」與「時間上限」兩條。
-- **sandbox-host 要和 API 一起換版（rollout 時，同一批）。** 縮圖牆的四個沙盒指令（`facet_build` / `facet_index` / `facet_page` /
-  `facet_exact`）在 chart 的沙盒 bundle 裡，而那個 bundle 由 sandbox-host image 的 tools stage 建進
-  `builtin/chart`（[#855](#pr-855) 那條的同一個機制）。只換 API、沒換 sandbox-host 的症狀：打開任何 `facet:` 的
-  chart，面板顯示 `unknown command: facet_build. available: validate, query`。
+- **sandbox-host 用這一版重 build，順序照 [#855](#pr-855) 那條：sandbox-host 先上、API 後上。** 縮圖牆的沙盒指令
+  （`facet_build` / `facet_progress` / `facet_index` / `facet_page` / `facet_exact` / `facet_stack`）在 chart 的沙盒
+  bundle 裡，而那個 bundle 由 sandbox-host image 的 tools stage 建進 `builtin/chart`（同一個機制，做一次就夠）。
+  從 master 升上來、沒換 sandbox-host 的症狀是 #855 那條的（沒有 `launch`，502）；只有部署過這個分支較早、
+  還沒有縮圖牆的 build 的環境，才會看到 `unknown command: facet_build. available: validate, query`。
 
 **確認做完**
 
 - 在 sandbox-host pod 裡：`/opt/tools/builtin/chart/launch` 不帶參數，印出的清單含 `facet_build`、`facet_index`、
   `facet_page`、`facet_exact`。
-- 打開一份 `facet:` 的 chart（寫法見 chart 的 `SKILL.md` 的 Facet 段落）：先出現「Building the gallery…」，
-  接著是縮圖牆與「N groups」；捲動會載入後面的縮圖；按排序按鈕立刻重排、不再出現「Building…」。
+- 打開一份 `facet:` 的 chart（寫法見 chart 的 `SKILL.md` 的 Facet 段落）：先出現「Opening the gallery…」；
+  建置跑超過約一秒時，會換成「Building the gallery in the sandbox…」加上建置印出的進度行。接著是縮圖牆與「N groups」；
+  捲動會載入後面的縮圖；只換排序方向立刻重排、不重建；換排序的欄位或統計會重建一次快取（小來源一閃而過）。
 - 在那個 item 的沙盒目錄裡看得到 `.home/.cache/views/<64 個 hex>.vcache`。
 
 ---
