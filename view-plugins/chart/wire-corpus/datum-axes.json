@@ -1,0 +1,503 @@
+{
+  "kind": "datum-axes",
+  "data": {
+    "t": [
+      "2024-03-01",
+      "2024-03-02"
+    ],
+    "v": [
+      1.0,
+      2.0
+    ],
+    "g": [
+      "a",
+      "b"
+    ]
+  },
+  "cases": [
+    {
+      "name": "date on a time axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-03-01T12:00"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "zoned date on a time axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024/03/01T12:00+08:00"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "ms on a time axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 1709294400000
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "loose date on a time axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-3-1"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "digits as text on a time axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "no such day on a time axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-02-30"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "the rule layer first",
+      "layer": [
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-3-1"
+            }
+          }
+        },
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "the rule layer first, a good date",
+      "layer": [
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-03-02"
+            }
+          }
+        },
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a time y axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "t",
+              "type": "temporal"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "y": {
+              "datum": "2024-03-02"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a loose date on a time y axis",
+      "layer": [
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "t",
+              "type": "temporal"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "y": {
+              "datum": "2024/3/2"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "the first layer with a field decides",
+      "layer": [
+        {
+          "mark": "scatter",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "line",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-03-01"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a number on a number axis",
+      "layer": [
+        {
+          "mark": "scatter",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": 1.5
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "text on a number axis",
+      "layer": [
+        {
+          "mark": "scatter",
+          "encoding": {
+            "x": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "1.5"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a label on a category axis",
+      "layer": [
+        {
+          "mark": "bar",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "nominal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "b"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a date on a temporal grid",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "g",
+              "type": "ordinal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-03-02"
+            }
+          }
+        }
+      ],
+      "placed": true
+    },
+    {
+      "name": "a loose date on a temporal grid",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "t",
+              "type": "temporal"
+            },
+            "y": {
+              "field": "g",
+              "type": "ordinal"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "2024-3-2"
+            }
+          }
+        }
+      ],
+      "placed": false
+    },
+    {
+      "name": "a label on an ordinal grid",
+      "layer": [
+        {
+          "mark": "grid",
+          "encoding": {
+            "x": {
+              "field": "g",
+              "type": "ordinal"
+            },
+            "y": {
+              "field": "v",
+              "type": "quantitative"
+            },
+            "color": {
+              "field": "v",
+              "type": "quantitative"
+            }
+          }
+        },
+        {
+          "mark": "rule",
+          "encoding": {
+            "x": {
+              "datum": "b"
+            }
+          }
+        }
+      ],
+      "placed": true
+    }
+  ]
+}

@@ -101,16 +101,14 @@ def encode_column(s: pd.Series, kind: str) -> dict[str, Any]:
 def epoch_ms(s: pd.Series) -> np.ndarray:
     """A temporal column as epoch milliseconds (NaN = missing).
 
-    A number — or text that is one — IS epoch milliseconds, as in Vega-Lite and
-    as the renderer's `parseInstant` reads it (pandas would read a number as
-    nanoseconds: 1700000000000 became 1970-01-01T00:28). Other text is a date,
+    A number — or text that is one — IS epoch milliseconds, as in Vega-Lite
+    (pandas would read a number as nanoseconds: 1700000000000 became
+    1970-01-01T00:28). Other text is a date,
     parsed with format="mixed": pandas otherwise infers ONE format from the
     first value, and with errors="coerce" a later, more precise one became a
     silent gap. Text with no zone is UTC."""
     if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
         return pd.to_numeric(s, errors="coerce").to_numpy(float)
-    if isinstance(s.dtype, pd.DatetimeTZDtype):
-        s = s.dt.tz_convert("UTC").dt.tz_localize(None)
     if pd.api.types.is_datetime64_dtype(s.dtype):
         # Straight from the column's own unit: a `datetime64[s]` column holds
         # 9999-12-31, which a detour through nanoseconds loses.
@@ -129,12 +127,15 @@ def epoch_ms(s: pd.Series) -> np.ndarray:
 
 
 # A number written as text: digits, a sign, a decimal point — no `inf`, no `1_000`.
-_NUMBER = re.compile(r"\s*[+-]?(?:\d+\.?\d*|\.\d+)\s*$")
+_NUMBER = re.compile(r"\s*[+-]?(?:\d+\.?\d*|\.\d+)\s*$", re.ASCII)
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 
 def _is_number(v: Any) -> bool:
-    return isinstance(v, int | float | np.integer | np.floating) and not isinstance(v, bool)
+    # Decimal: a parquet decimal column reads as object Decimals.
+    return isinstance(v, int | float | Decimal | np.integer | np.floating) and not isinstance(
+        v, bool
+    )
 
 
 def _as_number(v: Any) -> float:
@@ -144,9 +145,11 @@ def _as_number(v: Any) -> float:
 
 
 def _stdlib_ms(v: Any) -> float:
+    if isinstance(v, np.datetime64):
+        return math.nan if np.isnat(v) else int(v.astype("datetime64[us]").astype("int64")) / 1_000
     if isinstance(v, str):
-        try:
-            v = dt.datetime.fromisoformat(v.strip())
+        try:  # fromisoformat takes no slashes; pandas read 2024/03/01 as a date
+            v = dt.datetime.fromisoformat(v.strip().replace("/", "-"))
         except ValueError:  # not a date at all ("soon", "2024-02-30")
             return math.nan
     if isinstance(v, dt.date) and not isinstance(v, dt.datetime):

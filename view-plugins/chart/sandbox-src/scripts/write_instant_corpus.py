@@ -1,23 +1,25 @@
-"""Write `wire-corpus/instants.json`: text instants and the epoch ms the sandbox
-reads them as (`wire.epoch_ms`, the oracle — it is what parses the data).
+"""Write `wire-corpus/instants.json`: text datums and the epoch ms the chart
+places them at — `validate.instant_ms`, the oracle (a datum read the way the
+data is, in the schema's `$defs.instant` forms), or null where it places none.
 
-The renderer's `parseInstant` (a rule's datum, which never visits the sandbox)
-is held to this file by `option.review2.test.ts`; `test_wire.py` holds
-`epoch_ms` and the schema's `$defs.instant` to it. A `null` ms is a text the
-pattern refuses — validate names it, the renderer draws nothing for it. Rerun
-after changing how instants are read:
+The renderer's `parseInstant` (a rule's datum never visits the sandbox) is
+held to this file by `option.review2.test.ts` — NaN exactly where it says
+null — and `test_wire.py` holds `instant_ms` to it. Besides the hand-picked
+cases, every combination of the pattern's parts is written out: years at the
+edges (0001, two-digit years an engine may read as 19xx, pandas' nanosecond
+range), leap days and days a month lacks, both separators, fractions of 1–3
+digits, and every zone form. Rerun after changing how instants are read:
 
     uv run python scripts/write_instant_corpus.py
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 
-import pandas as pd
-
-from chart_view.wire import epoch_ms
+from chart_view.validate import instant_ms
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus" / "instants.json"
 
@@ -41,11 +43,7 @@ TEXTS = [
     "1709294400000",
     "2024",
     "20240301",
-]
-
-# Texts the schema's pattern refuses, each a form one reader placed and the
-# other did not (review round 3).
-REFUSED = [
+    # Forms one reader placed and the other did not (review rounds 3 and 4).
     "2024-3-1",
     "2024-03-01t12:00:00",
     "2024-03-01T12:00:00+08",
@@ -58,15 +56,40 @@ REFUSED = [
     "2024-03/01",
     "2024-03-01Z",
     "2024-03-01T12:00:00.123456",
+    " 2024-03-01",
+    "2024-03-01\n",
+    "0000-01-01",
+    "2024/03/01T12:00Z",
+    "2024/03/01T12:00:00+08:00",
+    "0050-06-01 12:00Z",
+    "0001-02-28 12:34Z",
+    "9999/12/31",
+    "１７０９２９４４００００",
+    "٢٠٢٤-03-01",
+    "２０２４-03-01",
 ]
+
+YEARS = [1, 50, 99, 1677, 1678, 1900, 1970, 2024, 2262, 2263, 9999]
+DAYS = [(1, 1), (2, 29), (4, 31), (12, 31)]
+TIMES = ["T12:34", " 12:34:56", "T23:59:59.9", " 00:00:00.12", "T01:02:03.123"]
+ZONES = ["", "Z", "+08:00", "-0530"]
+
+
+def generated() -> list[str]:
+    dates = [
+        f"{y:04d}{sep}{m:02d}{sep}{d:02d}"
+        for y, (m, d), sep in itertools.product(YEARS, DAYS, ["-", "/"])
+    ]
+    stamps = ["", *(t + z for t, z in itertools.product(TIMES, ZONES))]
+    return [d + s for d, s in itertools.product(dates, stamps)]
 
 
 def main() -> None:
-    ms = epoch_ms(pd.Series(TEXTS, dtype=object)).tolist()
-    cases = [{"text": t, "ms": m} for t, m in zip(TEXTS, ms, strict=True)]
-    cases += [{"text": t, "ms": None} for t in REFUSED]
-    CORPUS.write_text(json.dumps({"kind": "instants", "cases": cases}, indent=2) + "\n")
-    print(len(cases))
+    texts = list(dict.fromkeys([*TEXTS, *generated()]))
+    cases = [{"text": t, "ms": instant_ms(t)} for t in texts]
+    lines = ",\n".join("    " + json.dumps(c, ensure_ascii=False) for c in cases)
+    CORPUS.write_text(f'{{\n  "kind": "instants",\n  "cases": [\n{lines}\n  ]\n}}\n')
+    print(len(cases), sum(c["ms"] is None for c in cases))
 
 
 if __name__ == "__main__":

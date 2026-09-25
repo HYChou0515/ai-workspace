@@ -27,7 +27,7 @@ from chart_view.query import build
 from chart_view.sources import SourceError, inside_workspace, read_source
 from chart_view.spec import SpecError, parse_spec, spec_errors
 from chart_view.transforms import TransformError
-from chart_view.validate import check
+from chart_view.validate import check, datum_errors
 
 COMMANDS: dict[str, dict[str, Any]] = {
     "validate": {
@@ -85,7 +85,9 @@ def _validate(path: str) -> int:
 def _query(text: str) -> int:
     try:
         spec = parse_spec(text)
-        errors = spec_errors(spec)
+        # What validate refuses, query refuses too: a hand-edited file
+        # would otherwise draw with the rule silently missing.
+        errors = spec_errors(spec) or datum_errors(spec)
         if errors:
             print("\n".join(errors), file=sys.stderr)
             return 2

@@ -74,35 +74,50 @@ def _highlight(spec: Mapping[str, Any], layers: list[LayerRows]) -> str:
 _INSTANT = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
 
 
-def _datum_errors(spec: Mapping[str, Any]) -> list[str]:
-    """A text datum on a temporal axis the renderer could not place.
+def instant_ms(text: str) -> float | None:
+    """Epoch ms for a date `datum`, or None when the chart cannot place it.
 
-    The renderer reads it with `parseInstant`, which takes only the schema's
-    `$defs.instant` forms; anything else drew no rule and said nothing. The
-    axis is the one the renderer draws: the first layer's channel with a field
-    (a grid's axes are its cells, not dates)."""
+    THE reading of a datum: validate refuses what this returns None for, and
+    the renderer's `parseInstant` is held to it (wire-corpus/instants.json is
+    written from it). A datum takes only the schema's `$defs.instant` forms,
+    read the way the data is (`epoch_ms`); a date the calendar lacks
+    ("2024-02-30") is None."""
+    if not _INSTANT.fullmatch(text):
+        return None
+    ms = float(epoch_ms(pd.Series([text], dtype=object))[0])
+    return None if np.isnan(ms) else ms
+
+
+def datum_errors(spec: Mapping[str, Any]) -> list[str]:
+    """A text datum the renderer could not place on its axis.
+
+    Without this the rule drew nowhere and said nothing. The axis is the one
+    the renderer draws: the first layer's channel with a field. On a temporal
+    axis — a grid's too, whose cells are found by date — the text must be a
+    date `instant_ms` reads; on a number axis it must be a number, not text
+    (a grid finds a number's cell by its label, so text is fine there). Which
+    datum is placed and which refused is held to the renderer by
+    wire-corpus/datum-axes.json."""
     layers = spec_layers(spec)
-    if any(mark_of(ly)[0] == "grid" for ly in layers):
-        return []
+    grid = any(mark_of(ly)[0] == "grid" for ly in layers)
     errors = []
     for c in ("x", "y"):
         axis = next(
             (ly["encoding"][c] for ly in layers if "field" in ly["encoding"].get(c, {})), None
         )
-        if axis is None or axis.get("type") != "temporal":
-            continue
+        kind = None if axis is None else axis.get("type")
         for ly in layers:
             datum = ly["encoding"].get(c, {}).get("datum")
             if not isinstance(datum, str):
                 continue
-            if not _INSTANT.search(datum) or np.isnan(
-                epoch_ms(pd.Series([datum], dtype=object))[0]
-            ):
+            if kind == "temporal" and instant_ms(datum) is None:
                 errors.append(
                     f"{c}: datum {datum!r} is not a date the chart can place — "
                     "write it as 2024-03-01, 2024-03-01T12:00, or with a zone as "
                     "2024-03-01T12:00:00+08:00"
                 )
+            elif kind == "quantitative" and not grid:
+                errors.append(f"{c}: datum {datum!r} is text on a number axis — write a number")
     return errors
 
 
@@ -112,7 +127,7 @@ def check(text: str, read_source: ReadSource) -> Result:
         spec = parse_spec(text)
     except SpecError as e:
         return Result(errors=[str(e)])
-    errors = spec_errors(spec) or _datum_errors(spec)
+    errors = spec_errors(spec) or datum_errors(spec)
     if errors:
         return Result(errors=errors)
     try:
