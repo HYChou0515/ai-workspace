@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toOption } from "./option";
-import { selectionFromBrush, selectionFromLegend, selectionValues } from "./selection";
+import { gridSelectionLit, selectionFromBrush, selectionFromLegend, selectionValues } from "./selection";
 import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
 
 const scatter = {
@@ -119,5 +119,25 @@ describe("selectionValues", () => {
   it("gives each key's values over the selected rows, as marking strings, once each", () => {
     const values = selectionValues({ source: "brush", layer: 0, rows: [0, 2, 1] }, scatterAnswer, ["wafer", "lot", "gone"]);
     expect(values).toEqual({ wafer: ["7", "9", "8"], lot: ["A", "B"] });
+  });
+});
+
+describe("gridSelectionLit (#847/#848 P18)", () => {
+  const grid = layer("grid", 3, { x: f64([0, 1, 2]), y: f64([0, 0, 0]), v: q8([0, 1, 2], 0, 2) });
+  const scatter = layer("scatter", 2, { a: f64([1, 2]), b: f64([1, 2]) }, { highlight: btoa(String.fromCharCode(0b10)), lit: 1 });
+
+  it("lights the grid rows taken, and leaves another layer its own highlight", () => {
+    const a = answer(grid, scatter);
+    expect(gridSelectionLit(a, [{ source: "lasso", layer: 0, rows: [2] }, { source: "lasso", layer: 0, rows: [0] }])).toEqual([
+      [true, false, true],
+      [false, true],
+    ]);
+  });
+
+  it("lights nothing when no grid rows were taken", () => {
+    const a = answer(grid, scatter);
+    expect(gridSelectionLit(a, [])).toBeUndefined();
+    // a scatter's own points are styled by ECharts' brush already
+    expect(gridSelectionLit(a, [{ source: "brush", layer: 1, rows: [0] }])).toBeUndefined();
   });
 });

@@ -18,7 +18,7 @@ import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, toOption } from "./option";
 import { highlightMarking, markingLit, selectionMarking } from "./marking";
 import type { Cells, RasterImage } from "./raster";
-import { type BrushSelected, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
+import { type BrushSelected, gridSelectionLit, type Selection, selectionFromBrush, selectionFromLegend } from "./selection";
 import { specErrors } from "./spec";
 import { viewCall } from "./viewCall";
 
@@ -91,14 +91,17 @@ function Plot({
   // rule, over the columns each layer carries); otherwise the spec's highlight.
   // On an EMPTY marking nothing is lit: every view on it draws undimmed, rather
   // than each falling back to its own `highlight:` and disagreeing.
+  // With no marking, the view's own selection lights a GRID it took cells of:
+  // a grid is one raster image, which ECharts' brush styling cannot dim, so
+  // without this a lasso there showed only a count (#847/#848 P18).
   const lit = useMemo(
     () =>
       marking
         ? entry
           ? markingLit(answer, entry.marking, isLit)
           : answer.layers.map(() => null)
-        : undefined,
-    [marking, entry, answer],
+        : gridSelectionLit(answer, selection),
+    [marking, entry, answer, selection],
   );
   const built: Built = useMemo(
     () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}) }),
@@ -115,7 +118,9 @@ function Plot({
   // this view just wrote, re-render, rebuild the brush, and fire again.
   const brushed = useRef(false);
   writeRef.current = (sel) => {
-    setSelection(sel);
+    // ECharts re-reports the areas it holds: the same rows keep the same state,
+    // or a grid lit by its own selection would redraw on every report
+    setSelection((prev) => (JSON.stringify(prev) === JSON.stringify(sel) ? prev : sel));
     if (!marking) return;
     const values = selectionMarking(sel, answer, keys);
     if (values) write(values, source);
@@ -192,14 +197,27 @@ function Plot({
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 360 }}>
-      {(built.notes.length > 0 || count > 0) && (
-        <div style={{ display: "flex", gap: 12, padding: "4px 12px", fontSize: 12, color: "var(--text-paper-d)" }}>
-          {built.notes.map((n) => (
-            <span key={n}>{n}</span>
-          ))}
-          {count > 0 && <span>{count} selected</span>}
-        </div>
-      )}
+      {/* Always there, one line high: added only once something was selected,
+          it pushed the chart down under the pointer (#847/#848 P18). */}
+      <div
+        title={[...built.notes, ...(count > 0 ? [`${count} selected`] : [])].join(" · ")}
+        style={{
+          display: "flex",
+          gap: 12,
+          height: 20,
+          lineHeight: "20px",
+          padding: "0 12px",
+          overflow: "hidden",
+          whiteSpace: "nowrap",
+          fontSize: 12,
+          color: "var(--text-paper-d)",
+        }}
+      >
+        {built.notes.map((n) => (
+          <span key={n}>{n}</span>
+        ))}
+        {count > 0 && <span>{count} selected</span>}
+      </div>
       <div ref={el} style={{ flex: 1, minHeight: 320 }} />
     </div>
   );

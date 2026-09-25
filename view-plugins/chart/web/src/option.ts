@@ -314,6 +314,9 @@ function axisOption(
       ...NAME_AT[which],
       min: -0.5,
       max: n - 0.5,
+      // on the lattice's edge: by default an axis crosses the other at its 0,
+      // which on an index axis is the first cell's CENTRE (#847/#848 P18)
+      axisLine: { onZero: false },
       splitLine: { show: false },
       axisTick: { customValues: centres },
       axisLabel: {
@@ -478,7 +481,14 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     }
 
     if (mark.type === "rule") {
-      const line = { lineStyle: { color: mark.color ?? "#888", type: "dashed" }, symbol: "none", label: { show: true } };
+      // The label inside the plot, above the line's end: at ECharts' default
+      // (past the end) it ran into the 16 px margin and was cut -- "102" drew
+      // as "10" (#847/#848 P18).
+      const line = {
+        lineStyle: { color: mark.color ?? "#888", type: "dashed" },
+        symbol: "none",
+        label: { show: true, position: "insideEndTop" },
+      };
       let data: unknown[];
       // Positions go through the axis: a category axis reads a number as an
       // INDEX, so a rule at the category 2022 must be sent as its index.

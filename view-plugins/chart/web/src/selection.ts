@@ -15,6 +15,7 @@
  *   still shown are the selection; with all shown, nothing is.
  */
 import type { Answer, Built, WireLayer } from "./option";
+import { litRows } from "./highlight";
 import { canon, type Column, decodeColumn } from "./wire";
 
 export type Selection = { source: "brush" | "lasso" | "legend"; layer: number; rows: number[] };
@@ -26,6 +27,25 @@ type BrushArea = { brushType: string; coordRange?: unknown };
 export type BrushSelected = {
   batch: { areas?: BrushArea[]; selected?: { seriesIndex: number; dataIndex: number[] }[] }[];
 };
+
+/** A selection as the lit rows of each GRID layer it took rows of -- a layer
+ * it took none of keeps the spec's highlight -- or undefined when it took no
+ * grid's (#847/#848 P18: a grid is one raster, which ECharts' brush styling
+ * cannot dim, so its selected cells are shown by lighting them). */
+export function gridSelectionLit(answer: Answer, selection: Selection[]): (boolean[] | null)[] | undefined {
+  const taken = new Map<number, Set<number>>();
+  for (const s of selection) {
+    if (answer.layers[s.layer]?.mark !== "grid") continue;
+    const rows = taken.get(s.layer) ?? new Set<number>();
+    for (const r of s.rows) rows.add(r);
+    taken.set(s.layer, rows);
+  }
+  if (taken.size === 0) return undefined;
+  return answer.layers.map((ly, i) => {
+    const rows = taken.get(i);
+    return rows ? Array.from({ length: ly.rows }, (_, r) => rows.has(r)) : litRows(ly);
+  });
+}
 
 function group(source: Selection["source"], pairs: [number, number][]): Selection[] {
   const byLayer = new Map<number, Set<number>>();

@@ -172,6 +172,25 @@ describe("ChartView", () => {
     expect(screen.queryByText(/selected/)).toBeNull();
   });
 
+  it("keeps the chart where it is when a selection is counted (#847/#848 P18)", () => {
+    // the count's line was added only once something was selected, which
+    // pushed the chart down under the pointer mid-gesture
+    run({ data: ok() });
+    view();
+    const host = () => (chart.createChart.mock.calls[0] as unknown[])[0] as HTMLElement;
+    const before = host().previousElementSibling as HTMLElement | null;
+    expect(before).not.toBeNull();
+    expect(before!.style.height).toBe("20px");
+    act(() =>
+      chart.handlers.get("brushselected")?.({
+        batch: [{ areas: [{ brushType: "rect" }], selected: [{ seriesIndex: 0, dataIndex: [0, 1] }] }],
+      }),
+    );
+    expect(host().previousElementSibling).toBe(before);
+    expect(before!.style.height).toBe("20px");
+    expect(before!.textContent).toBe("2 selected");
+  });
+
   it("counts what a legend click leaves shown", () => {
     run({ data: ok() });
     view();
