@@ -52,8 +52,20 @@ from .walk import scandir_lister, walk_tree
 # dirs read-only onto the sandbox root, wire up a usable /dev + ephemeral
 # /tmp, then chroot in and exec the user command. $1 is the jail root; the
 # remaining args are the command. Device nodes are bind-mounted onto plain
-# files (an unprivileged tmpfs is `nodev`, so nodes there can't be opened);
-# the resulting /dev files are cleaned up by `exec` afterwards.
+# files (an unprivileged tmpfs is `nodev`, so nodes CREATED there can't be
+# opened — a bind mount of the host's node carries its own mount flags).
+#
+# #859: several execs run in ONE sandbox at once (five chart panes querying the
+# same item), so nothing here may create-then-remove shared state on the
+# sandbox root. The /dev targets live on a tmpfs private to this exec's mount
+# namespace, and nothing deletes them afterwards: they used to be files on the
+# shared root that `exec` rmtree'd after each run, which unlinked the targets
+# an overlapping exec was about to mount on ("mount point does not exist") or
+# had mounted on — the kernel answers the latter by detaching that mount in
+# the other exec's namespace ("/dev/urandom … not found"). Should the tmpfs
+# ever fail to mount, the targets fall back to plain files on the shared root —
+# still safe, because nothing removes them. What does live on the shared root
+# (`mkdir -p`, the system symlinks) is created idempotently.
 logger = logging.getLogger(__name__)
 
 _JAIL_BOOTSTRAP = r"""
@@ -83,11 +95,17 @@ if [ -d "$SANDBOX_TOOLS_VIEW" ]; then
   # "mount point not mounted or bad option".
   mount -o remount,ro -t tmpfs tmpfs "$ROOT/.tools"
 fi
+# Attempt, then accept what is there — not check-then-create, which two
+# overlapping execs can both pass. `-T` matters: without it a loser's `ln`
+# follows the winner's `bin -> usr/bin` and tries to plant `usr/bin/bin` in the
+# read-only host /usr. With it the loser fails "exists", and an entry that
+# already exists is exactly what it wanted.
 for l in bin sbin lib lib64; do
-  [ -L "$ROOT/$l" ] || [ -e "$ROOT/$l" ] || ln -s "usr/$l" "$ROOT/$l"
+  ln -sT "usr/$l" "$ROOT/$l" 2>/dev/null || [ -L "$ROOT/$l" ] || [ -e "$ROOT/$l" ]
 done
 mount -t proc proc "$ROOT/proc" 2>/dev/null || true
 mount -t tmpfs tmpfs "$ROOT/tmp" 2>/dev/null || true
+mount -t tmpfs -o mode=755 tmpfs "$ROOT/dev" 2>/dev/null || true
 for d in null zero full random urandom tty; do
   if [ -e "/dev/$d" ]; then : > "$ROOT/dev/$d"; mount --bind "/dev/$d" "$ROOT/dev/$d"; fi
 done
@@ -1139,12 +1157,6 @@ class LocalProcessSandbox:
             watchdog.cancel()
             with contextlib.suppress(BaseException):
                 await watchdog
-            # The jail leaves /dev device-node files behind (bind targets) at
-            # the sandbox root; drop them. (They're outside the workspace now,
-            # so they wouldn't reverse-sync anyway — belt and suspenders.) In the
-            # isolate path `sub_cwd` IS the sandbox root.
-            if self._isolate:
-                await asyncio.to_thread(shutil.rmtree, sub_cwd / "dev", ignore_errors=True)
 
         stdout = b"".join(out_buf)
         if timed_out is not None:

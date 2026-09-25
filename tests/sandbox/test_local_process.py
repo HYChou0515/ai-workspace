@@ -1,3 +1,5 @@
+import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -696,13 +698,118 @@ async def test_unjailed_tools_dir_is_symlinked_outside_workspace(tmp_path):
 @_needs_userns
 async def test_isolated_exec_cleans_up_dev_scaffolding(tmp_path):
     """The jail's /dev device-node files must not leak back into the
-    workspace listing (they're scaffolding, removed after each exec)."""
+    workspace listing — nor onto the shared sandbox root at all: since #859
+    they live on a tmpfs private to the exec, so nothing is left to remove
+    (and nothing another exec is using ever gets removed)."""
     sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"x", "/note.md")
-    await sb.exec(h, ["echo", "hi"])
+    r = await sb.exec(h, ["sh", "-c", "head -c 4 /dev/urandom | wc -c"])
+    assert r.stdout.decode().strip() == "4"  # the jail's /dev works
     files = {e.path for e in (await sb.walk(h, "/")).files}
     assert files == {"/note.md"}  # no /dev/null etc.
+    assert list((tmp_path / h.id / "dev").iterdir()) == []  # nothing on the shared root
+
+
+def _run_bootstrap_with_fake_mount(root: Path, tmp_path: Path) -> list[str]:
+    """Run the jail bootstrap WITHOUT privileges: `mount` is a stub on PATH that
+    records its argv, so the script's own file operations run for real against
+    `root` and its mounts come back as a log. It stops at the `chroot` (or at the
+    first command that needs privileges), which is past everything asserted."""
+    import subprocess
+
+    from workspace_app.sandbox.local_process import _JAIL_BOOTSTRAP
+
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    log = tmp_path / "mount.log"
+    (fake / "mount").write_text(f'#!/bin/sh\necho "$*" >> {log}\n')
+    (fake / "mount").chmod(0o755)
+    env = {"PATH": f"{fake}:/usr/bin:/bin"}
+    subprocess.run(
+        ["/bin/sh", "-ec", _JAIL_BOOTSTRAP, "sh", str(root), "true"],
+        env=env,
+        capture_output=True,
+        timeout=30,
+    )
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_jail_dev_targets_live_on_a_per_exec_tmpfs(tmp_path):
+    """#859: the /dev bind targets are made on a tmpfs mounted over the jail's
+    /dev inside the exec's OWN mount namespace — never as files on the shared
+    sandbox root, where an overlapping exec could unlink them."""
+    root = tmp_path / "sb"
+    root.mkdir()
+    mounts = _run_bootstrap_with_fake_mount(root, tmp_path)
+    dev_tmpfs = [i for i, m in enumerate(mounts) if m.split()[-1] == f"{root}/dev" and "tmpfs" in m]
+    dev_binds = [i for i, m in enumerate(mounts) if m.startswith("--bind /dev/")]
+    assert dev_binds, mounts  # the bootstrap reached the device binds
+    assert dev_tmpfs and dev_tmpfs[0] < dev_binds[0], mounts
+
+
+def test_jail_system_symlinks_never_nest_into_an_existing_link(tmp_path):
+    """#859: `bin -> usr/bin` is created on the SHARED sandbox root, so two
+    overlapping execs can both find it missing and both run `ln`. The loser must
+    not follow the winner's link and plant `usr/bin/bin` — inside the jail that
+    is the read-only host /usr, so the exec died with `Read-only file system`.
+    Simulated here by the link already existing when `ln` runs."""
+    root = tmp_path / "sb"
+    (root / "usr" / "bin").mkdir(parents=True)
+    (root / "bin").symlink_to("usr/bin")
+    mounts = _run_bootstrap_with_fake_mount(root, tmp_path)
+    assert any(m.startswith("-t proc") for m in mounts), mounts  # got past the loop
+    assert not os.path.lexists(root / "usr" / "bin" / "bin")  # (a dangling link)
+    assert os.readlink(root / "bin") == "usr/bin"
+
+
+async def test_jailed_exec_never_deletes_what_a_concurrent_exec_mounted_on(tmp_path, monkeypatch):
+    """#859: an exec's teardown must not remove anything under the shared
+    sandbox root's /dev — another exec in the same sandbox may be mounted on it
+    (unlinking a mount point detaches it in THAT exec's namespace). Runs the
+    isolate path with the jail wrapper swapped for a plain command, so no
+    privileges are needed; a file another exec left there must survive."""
+    import workspace_app.sandbox.local_process as lp
+
+    monkeypatch.setattr(lp, "_jail_argv", lambda root, cmd: ["true"])
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
+    h = await sb.create(SandboxSpec())
+    other = tmp_path / h.id / "dev" / "urandom"
+    other.parent.mkdir()
+    other.write_bytes(b"")
+    r = await sb.exec(h, ["echo", "hi"])
+    assert r.exit_code == 0
+    assert other.exists()
+
+
+@_needs_userns
+async def test_overlapping_jailed_execs_in_one_sandbox_all_see_dev(tmp_path):
+    """#859: execs that overlap in ONE jailed sandbox must not tread on each
+    other's /dev. Five chart panes query one sandbox at once; the jail used to
+    create its /dev bind targets on the SHARED sandbox root and rmtree them
+    after every exec — so one exec's teardown unlinked the targets another was
+    about to mount on (`mount: …/dev/urandom: mount point does not exist`) or
+    had already mounted on, which the kernel answers by detaching that mount in
+    the other namespace (`NotImplementedError: /dev/urandom … not found`).
+
+    A long exec reads /dev/urandom throughout while short execs start and end
+    around it, staggered so their setups and teardowns interleave."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
+    h = await sb.create(SandboxSpec())
+    reader = [
+        "sh",
+        "-c",
+        "for i in $(seq 1 40); do head -c 8 /dev/urandom > /dev/null || exit 7; sleep 0.05; done",
+    ]
+    short = ["sh", "-c", "head -c 8 /dev/urandom > /dev/null && echo ok"]
+
+    async def staggered(i: int):
+        await asyncio.sleep(0.07 * i)
+        return await sb.exec(h, short)
+
+    results = await asyncio.gather(sb.exec(h, reader), *(staggered(i) for i in range(16)))
+    failed = [(r.exit_code, r.stderr.decode()[-200:]) for r in results if r.exit_code != 0]
+    assert failed == []
 
 
 @_needs_userns
