@@ -63,7 +63,7 @@ The keys to use:
 
 `mark: <name>`, or `mark: {type: <name>, …}` with `color`, `opacity` (0–1;
 scatter, line, bar, text; an area's fill), `point` and `smooth` (line, area), `stack`
-(bar, area; raw rows add up per slot, no `aggregate: sum` needed), `extent` (errorbar: `stderr` / `stdev` / `iqr`).
+(bar, area; raw rows add up per slot, no `aggregate: sum` needed: each colour's rows at a slot draw as one segment, their sum — to show single rows, don't stack), `extent` (errorbar: `stderr` / `stdev` / `iqr`).
 
 | mark | shows | needs |
 |---|---|---|

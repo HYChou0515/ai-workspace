@@ -360,6 +360,18 @@ words are examples, not spec keys.
   Rows 12 and 13 replace mechanisms, so round 19 follows. Performance is measured before
   and after on the regression lens's inputs; the demo (1440 and 390, seen) covers rows
   12 and 13, plus the 390 frames P34 row 2 and the horizontal stack lacked.
+  *P37 as built:* row 12 10cc4d93 (`stackPoints`: one point per slot per colour key, the
+  sum of its rows; tooltip "(sum of N rows)"; lit if any of its rows is lit), rows
+  13/15/16 2bee96ab (`wrote` = {on, source, values}; `toMarking` derived; the source is
+  compared with the marking's entry, not the view's current path, so a rename does not
+  flip "· by" — [mine, open to override]), row 14 256276f5, row 17 d89c757d, N2 3d96261c
+  (a wide chart's height change is pinned by a render count). Measured with the
+  regression lens's probe, before → after (toOption / render): 10,000 rows in one
+  category 10,000 series, 69–80 / 8,054–8,631 ms → 1 series, 9–10 / 6–7 ms; 500 rows in
+  one of 200 categories 100,000 points, 39–55 / 1,746–1,894 ms → 200 points, 1 / 7 ms;
+  3,000 rows at one time x on a log y 2,716–3,634 ms (not rendered) → 3–4 / 25 ms.
+  Demo (1440 and 390, seen): G01's tooltip "value: 31.987 (sum of 1,066 rows)" (one
+  row's 0.042 before); after reattaching, "50 selected" without "· by kind".
 - **P38 — What P37's builder found.** On a log axis a mark's own point at or below 0
   went to ECharts as the layer held it, and ECharts drew an Infinity vertex (a line, a
   stacked area; a scatter and a bar were skipped by ECharts itself). Rule: 0 and below
