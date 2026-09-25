@@ -291,3 +291,25 @@ def test_a_rule_drawn_from_a_field_has_no_datum_to_place():
         "  - mark: rule\n    encoding:\n      y: {field: v, type: quantitative}\n"
     )
     assert check(text, lambda _s: _DAYS).errors == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    ["", "  - mark: rule\n    encoding:\n      y: {datum: 0.5}\n"],
+    ids=["no rule", "a number-axis datum"],
+)
+def test_validate_builds_no_answer_a_datum_does_not_need(rule, monkeypatch):
+    # Review round 6: encoding and decoding the whole answer cost 0.5 s on a
+    # million rows for every chart; only a category or grid datum reads it.
+    import chart_view.validate as validate
+
+    def build(*_a, **_k):
+        raise AssertionError("the answer was built")
+
+    monkeypatch.setattr(validate, "answer", build)
+    text = (
+        "view: chart\nsource: a.csv\nlayer:\n"
+        "  - mark: scatter\n    encoding:\n      x: {field: v, type: quantitative}\n"
+        "      y: {field: v, type: quantitative}\n" + rule
+    )
+    assert validate.check(text, lambda _s: _DAYS).errors == []

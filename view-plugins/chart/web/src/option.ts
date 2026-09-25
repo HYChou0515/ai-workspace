@@ -421,11 +421,15 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         }
         return [{ [`${c}Axis`]: at, name: title }];
       };
-      const placed = (key: "xAxis" | "yAxis", at: (r: number) => number | null) =>
-        all.flatMap((r) => {
+      const placed = (key: "xAxis" | "yAxis", at: (r: number) => number | null) => {
+        const lines = all.flatMap((r) => {
           const v = at(r);
           return v === null ? [] : [{ [key]: v }];
         });
+        const off = all.length - lines.length;
+        if (off > 0) notes.push(`${off} rule ${off === 1 ? "value" : "values"} off the ${key[0]} axis — not drawn`);
+        return lines;
+      };
       if (enc.y?.datum !== undefined) data = datumLine("y", yAxis, enc.y.datum, enc.y.title);
       else if (enc.x?.datum !== undefined) data = datumLine("x", xAxis, enc.x.datum, enc.x.title);
       else if (enc.y?.field && !enc.x?.field)

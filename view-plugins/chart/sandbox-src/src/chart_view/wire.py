@@ -117,6 +117,23 @@ def decode_column(wire: dict[str, Any]) -> list[Any]:
     return [None if c == 255 else wire["min"] + (c / 254) * span for c in codes.tolist()]
 
 
+def decode_distinct(wire: dict[str, Any]) -> list[Any]:
+    """The distinct non-missing values `decode_column` reads, without a list
+    per row: what a category axis's labels are made of."""
+    kind = wire["kind"]
+    if kind in ("f64", "time"):
+        data = np.frombuffer(base64.b64decode(wire["data"]), dtype="<f8")
+        return np.unique(data[~np.isnan(data)]).tolist()
+    width = wire.get("width", 1)
+    codes = np.frombuffer(base64.b64decode(wire["codes"]), dtype=dict(_WIDTHS)[width])
+    present = np.unique(codes)
+    if kind == "cat":
+        missing = 2 ** (8 * width) - 1
+        return [wire["levels"][c] for c in present.tolist() if c != missing]
+    span = wire["max"] - wire["min"]
+    return [wire["min"] + (c / 254) * span for c in present.tolist() if c != 255]
+
+
 def epoch_ms(s: pd.Series) -> np.ndarray:
     """A temporal column as epoch milliseconds (NaN = missing).
 

@@ -94,7 +94,7 @@ def _query(text: str) -> int:
         # What validate refuses, query refuses too: a hand-edited file
         # would otherwise draw with the rule silently missing.
         reply = answer(spec, layers)
-        errors = datum_errors(spec, reply)
+        errors = datum_errors(spec, lambda: reply)
         if errors:
             print("\n".join(errors), file=sys.stderr)
             return 2

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -32,7 +32,7 @@ import pandas as pd
 
 from chart_view.query import mark_of, spec_layers
 from chart_view.spec import spec_schema
-from chart_view.wire import canon, decode_column, epoch_ms
+from chart_view.wire import canon, decode_column, decode_distinct, epoch_ms
 
 _INSTANT = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
 
@@ -59,24 +59,58 @@ def _number(v: Any) -> bool:
     return isinstance(v, int | float) and not isinstance(v, bool)
 
 
-def datum_errors(spec: Mapping[str, Any], answer: Mapping[str, Any]) -> list[str]:
-    """One line per rule `datum` the chart could not place, naming why."""
+def drawn_datums(spec: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """(channel, datum) for each rule datum the renderer draws: a rule's `y`
+    datum when it has one, else its `x` datum (the renderer ignores the other)."""
+    out = []
+    for s in spec_layers(spec):
+        enc = s["encoding"]
+        if mark_of(s)[0] == "rule":
+            for c in ("y", "x"):
+                if "datum" in enc.get(c, {}):
+                    out.append((c, enc[c]["datum"]))
+                    break
+    return out
+
+
+class _Wire:
+    """The answer's columns, built and decoded only when a datum needs them:
+    a datum on a time or number axis needs no data at all."""
+
+    def __init__(self, build: Callable[[], Mapping[str, Any]]) -> None:
+        self._build = build
+        self._cols: list[Mapping[str, Any]] | None = None
+
+    def _layers(self) -> list[Mapping[str, Any]]:
+        if self._cols is None:
+            self._cols = [layer["columns"] for layer in self._build()["layers"]]
+        return self._cols
+
+    def column(self, layer: int, field: str) -> list[Any]:
+        return decode_column(self._layers()[layer][field])
+
+    def distinct(self, field: str) -> set[str]:
+        """The field's values over every layer that sends it, as marking text."""
+        seen: dict[tuple[str, Any], Any] = {}
+        for cols in self._layers():
+            if field in cols:
+                for v in decode_distinct(cols[field]):
+                    seen[_key(v)] = v
+        return {s for s in (canon(v) for v in seen.values()) if s is not None}
+
+
+def datum_errors(spec: Mapping[str, Any], answer: Callable[[], Mapping[str, Any]]) -> list[str]:
+    """One line per rule `datum` the chart could not place, naming why.
+    `answer` builds the query's answer; it is called only when a datum needs it."""
+    drawn = drawn_datums(spec)
+    if not drawn:
+        return []
     specs = spec_layers(spec)
-    decoded = [
-        {name: decode_column(wire) for name, wire in layer["columns"].items()}
-        for layer in answer["layers"]
-    ]
+    wire = _Wire(answer)
     grid = next((i for i, s in enumerate(specs) if mark_of(s)[0] == "grid"), None)
     errors = []
-    for s in specs:
-        if mark_of(s)[0] != "rule":
-            continue
-        enc = s["encoding"]
-        c = "y" if "datum" in enc.get("y", {}) else "x" if "datum" in enc.get("x", {}) else None
-        if c is None:
-            continue
-        datum = enc[c]["datum"]
-        why = _unplaced(datum, c, specs, decoded, grid)
+    for c, datum in drawn:
+        why = _unplaced(datum, c, specs, wire, grid)
         if why:
             errors.append(f"{c}: datum {datum!r} {why}")
     return errors
@@ -86,7 +120,7 @@ def _unplaced(
     datum: Any,
     c: str,
     specs: list[Mapping[str, Any]],
-    decoded: list[dict[str, list[Any]]],
+    wire: _Wire,
     grid: int | None,
 ) -> str | None:
     if grid is not None:
@@ -110,10 +144,12 @@ def _unplaced(
     if _number(datum) and not math.isfinite(datum):
         return "is not a finite number"
     if grid is not None:
-        return _off_lattice(datum, decoded[grid], specs[grid]["encoding"], c)
+        encoding = specs[grid]["encoding"]
+        x = wire.column(grid, encoding["x"]["field"])
+        y = wire.column(grid, encoding["y"]["field"])
+        return _off_lattice(datum, x, y, c)
     if kind in ("nominal", "ordinal"):
-        field = channel["field"]
-        shown = {canon(v) for cols in decoded for v in cols.get(field, []) if v is not None}
+        shown = wire.distinct(channel["field"])
         if canon(datum) in shown:
             return None
         listed = sorted(s for s in shown if s is not None)[:5]
@@ -140,11 +176,8 @@ def _lattice_labels(values: list[Any]) -> list[Any]:
     return sorted(unique, key=lambda v: canon(v) or "")
 
 
-def _off_lattice(
-    datum: Any, cols: dict[str, list[Any]], encoding: Mapping[str, Any], c: str
-) -> str | None:
+def _off_lattice(datum: Any, x: list[Any], y: list[Any], c: str) -> str | None:
     """Why the renderer's grid axis finds no position for `datum`, or None."""
-    x, y = cols[encoding["x"]["field"]], cols[encoding["y"]["field"]]
     keep = [i for i in range(len(x)) if x[i] is not None and y[i] is not None]
     labels = _lattice_labels([(x if c == "x" else y)[i] for i in keep])
     cell = {canon(v): i for i, v in enumerate(labels)}

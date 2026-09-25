@@ -84,7 +84,10 @@ describe("a rule drawn from a field", () => {
       ],
     };
     const a = answer(layer("scatter", 1, { a: f64([1]), b: f64([1]) }), layer("rule", 3, { b: f64([1, null, 0]) }));
-    const series = toOption(spec, a).option.series as Series[];
+    const built = toOption(spec, a);
+    const series = built.option.series as Series[];
     expect(series[1].markLine?.data).toEqual([{ yAxis: 1 }]);
+    // Round 6 regression lens: left out in silence, nobody knew the rule was short.
+    expect(built.notes).toContain("2 rule values off the y axis — not drawn");
   });
 });
