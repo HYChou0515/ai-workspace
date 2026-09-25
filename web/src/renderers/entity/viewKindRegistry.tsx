@@ -29,6 +29,11 @@ export type ViewRenderer = {
   ownsEmptyState?: boolean;
   /** The renderer has no header quick-create affordance. */
   suppressQuickCreate?: boolean;
+  /** #847 PR 3 — the kind takes part in named markings (reads `marking` from
+   * its props), so every view of it gets the header's marking control, even one
+   * whose file names neither `marking:` nor `keys:`. Omitted: only such a
+   * view that names one of them gets it. Additive to SDK 1. */
+  linkable?: boolean;
   /** #698 — the kind draws entity records, so its view file MUST name an
    * `entity:`; the dispatcher says so visibly when it doesn't. Omitted ≡ false,
    * which is what a plug-in reading workspace files wants: it has no entity, and

@@ -5,7 +5,7 @@
  * Not inside the collapsed tool card ordinary results use — a chart behind a
  * `<details>` is the same failure as a path in prose.
  */
-import { useOpenFile, useWorkspaceVisible } from "../hooks/openFile";
+import { useOpenFile, useViewPageHref, useWorkspaceVisible } from "../hooks/openFile";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -64,6 +64,11 @@ function ShownFileView({
   const name = basename(file.path);
   const url = fileUrl?.(file.path);
   const inline = isInlineImage(file) && url;
+  // Where the fallback link leads: the item's editor-area page renders the file
+  // the way the workspace does (a `.ai.yaml` as its view, #847 Q5.3); the raw
+  // bytes are the fallback for a surface with no item page (KB chat).
+  const viewHref = useViewPageHref();
+  const linkHref = (url && viewHref?.({ path: file.path })) || url;
 
   const body = (
     <>
@@ -122,9 +127,9 @@ function ShownFileView({
       </button>
     );
   }
-  if (url) {
+  if (linkHref) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" style={frame({})}>
+      <a href={linkHref} target="_blank" rel="noreferrer" style={frame({})}>
         {body}
       </a>
     );

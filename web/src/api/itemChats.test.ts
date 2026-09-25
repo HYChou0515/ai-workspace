@@ -27,6 +27,22 @@ function respondWith(status: number, body = "") {
  * fire, and a WorkItem chat shows a hard red "send failed: 504" while the answer
  * streams in underneath it.
  */
+describe("itemChatApi.sendMessage body", () => {
+  it("carries the markings kept as chips (#847 P7)", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_i: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(String(init?.body ?? ""));
+        return new Response(null, { status: 202 });
+      }),
+    );
+    const markings = [{ name: "fail", source: null, columns: { lot: ["L1"] } }];
+    await itemChatApi.sendMessage({ slug: "rca", itemId: "I", chatId: "c1", content: "q", markings });
+    expect(JSON.parse(bodies[0]!).markings).toEqual(markings);
+  });
+});
+
 describe("itemChatApi error contract", () => {
   /**
    * The claim `httpErrorFrom` was introduced to make is "every throw in this

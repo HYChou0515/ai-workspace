@@ -44,6 +44,9 @@ The keys to use:
 - `view`, `source` and either `mark` + `encoding` or `layer` are required.
 - `title`, `description`: text.
 - `keys`: column names.
+- `marking`: a name. Charts with the same `marking` are linked: rows the person
+  brushes in one light up in the others, matched on the columns named in the
+  brushing chart's `keys`.
 - `highlight`: `{where: "<pandas query>"}`, or `{values: {<column>: [v, …]}}`
   for rows whose column holds one of the values. It runs over each layer's
   rows after its transforms, so it can name an aggregate's `as`.
@@ -133,3 +136,6 @@ transform:
 - **A trend**: `line` on a `temporal` x, `color` per series.
 - **Which members stand out**: `highlight` them, with `keys:` naming the columns
   that identify a member.
+- **One set of rows seen several ways**: give each chart the same `marking:`
+  and `keys:`, then show them together with `show_file(layout=…)`, one chart
+  per pane. What the person brushes in one lights the rest.

@@ -21,11 +21,13 @@ import {
   renderCitedText,
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
-import { parseShownFiles, stripShownFiles } from "../renderers/shownFiles";
+import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
 import { ShownFiles } from "./ShownFiles";
+import { MarkingChips } from "./MarkingChips";
+import { ShownLayoutCard } from "./ShownLayoutCard";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
@@ -298,6 +300,10 @@ export function EntryView({
     // unresolvable path) still falls through to the ordinary card, so the failure
     // stays visible in the log.
     const shown = parseShownFiles(entry.call.output);
+    // A layout (#847) is one arrangement, so it is one card — its files are
+    // listed in the declaration too, for consumers that only know the flat list.
+    const layout = entry.call.name === "show_file" ? parseShownLayout(entry.call.output) : null;
+    if (layout) return <ShownLayoutCard shown={layout} />;
     if (entry.call.name === "show_file" && shown.length > 0) {
       return <ShownFiles files={shown} fileUrl={fileUrl} />;
     }
@@ -797,6 +803,12 @@ function MessageBlock({
         >
           {message.content}
         </div>
+        {message.markings && message.markings.length > 0 && (
+          // #847 P7: what was sent with it — the thread's record of the chips.
+          <div style={{ marginLeft: mine ? 0 : 28 }}>
+            <MarkingChips markings={message.markings} />
+          </div>
+        )}
       </div>
     );
   }

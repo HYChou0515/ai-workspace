@@ -19,7 +19,8 @@ import { ModalShell } from "../../components/ModalShell";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
-import { ConflictBanner, fieldText, parseSpan, parseViewSpec } from "./shared";
+import { MarkingControl, useViewMarking } from "./MarkingControl";
+import { ConflictBanner, fieldText, parseSpan, parseViewSpec, viewParam } from "./shared";
 import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
 import { ViewSettingsPanel } from "./ViewSettingsPanel";
 import { resolveViewRenderer } from "./viewKindRegistry";
@@ -214,6 +215,15 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   // its entity props were empty when they were not.
   const hasEntity = !!spec.entity;
   const showEmpty = hasEntity && entities.length === 0 && !renderer.ownsEmptyState;
+  // #847 P3: a view that names a marking or keys can be linked; its header
+  // carries the control, and the kind is told which marking it is on.
+  const fileMarking = viewParam(spec, "marking");
+  const linkable =
+    !!renderer.linkable || fileMarking !== undefined || viewParam(spec, "keys") !== undefined;
+  const [marking, setMarking] = useViewMarking(
+    props.viewKey,
+    typeof fileMarking === "string" && fileMarking ? fileMarking : null,
+  );
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
@@ -222,6 +232,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
+          {linkable && <MarkingControl value={marking} onChange={setMarking} />}
           {viewConfig && <ViewSettingsPanel config={viewConfig} />}
           {type && !renderer.suppressQuickCreate && canWrite && (
             <QuickCreate
@@ -277,7 +288,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           <div>No {spec.entity} records yet.</div>
         </div>
       ) : (
-        <Component {...props} />
+        <Component {...props} {...(linkable ? { marking } : {})} />
       )}
     </div>
   );
