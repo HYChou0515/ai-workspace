@@ -69,8 +69,9 @@ def _field_channels(encoding: Mapping[str, Any]) -> list[tuple[str, Mapping[str,
     """(channel, definition) for every channel that names a field, tooltips too."""
     out = [(c, encoding[c]) for c in _CHANNELS if c in encoding and "field" in encoding[c]]
     tips = encoding.get("tooltip")
-    # Every tooltip names a field: the schema refuses a datum there
-    # ($defs.datumChannels), and query checks the schema first.
+    # Every tooltip names a field: the schema requires one on each channel
+    # (a tooltip list's items too) and refuses a datum there; the cli's
+    # `query` and `validate` run `spec_errors` before `layer_rows`.
     for tip in tips if isinstance(tips, list) else [tips] if tips else []:
         out.append(("tooltip", tip))
     return out

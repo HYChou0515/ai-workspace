@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toOption } from "./option";
-import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
+import { answer, base, cat, f64, layer, q8, time } from "./testAnswer";
 
 const grid = {
   mark: "grid",
@@ -161,6 +161,8 @@ describe("a rule drawn from a field", () => {
 
   it("holds every end of a segment, x and y2 too, to the axis", () => {
     // Round 9 conformance: the x end and the y2 end had no test of their own.
+    // Each end has a field of its own here (an x2 too), so a 0 at x is caught
+    // at x, not through an x2 that fell back to it.
     const log = { type: "quantitative", scale: { type: "log" } };
     const spec = {
       ...base,
@@ -171,6 +173,7 @@ describe("a rule drawn from a field", () => {
           encoding: {
             x: { field: "a", type: "quantitative" },
             y: { field: "b", type: "quantitative" },
+            x2: { field: "c", type: "quantitative" },
             y2: { field: "d", type: "quantitative" },
           },
         },
@@ -178,11 +181,11 @@ describe("a rule drawn from a field", () => {
     };
     const a = answer(
       layer("scatter", 1, { a: f64([1]), b: f64([1]) }),
-      layer("rule", 3, { a: f64([1, 0, 1]), b: f64([1, 1, 1]), d: f64([2, 2, 0]) }),
+      layer("rule", 3, { a: f64([1, 0, 1]), b: f64([1, 1, 1]), c: f64([2, 2, 2]), d: f64([2, 2, 0]) }),
     );
     const built = toOption(spec, a);
     const series = built.option.series as { markLine?: { data: unknown[] } }[];
-    expect(series[1].markLine?.data).toEqual([[{ coord: [1, 1] }, { coord: [1, 2] }]]);
+    expect(series[1].markLine?.data).toEqual([[{ coord: [1, 1] }, { coord: [2, 2] }]]);
     expect(built.notes).toContain("2 rule segments with no place on the axes — not drawn");
   });
 
@@ -200,6 +203,30 @@ describe("a rule drawn from a field", () => {
     };
     const a = answer(layer("scatter", 1, { a: f64([1]), b: f64([1]) }), layer("rule", values.length, { t: cat(values) }));
     expect((toOption(spec, a).option.series as Series[])[1].markLine?.data).toEqual(placed);
+  });
+
+  it("reads a date sent as text on a date grid as a date, not a number", () => {
+    // Round 10 conformance: only a quantitative grid reads text as a number;
+    // on a temporal grid Number("2024-03-02") is NaN and the rule was lost.
+    const spec = {
+      ...base,
+      layer: [
+        {
+          mark: "grid",
+          encoding: {
+            x: { field: "t", type: "temporal" },
+            y: { field: "y", type: "ordinal" },
+            color: { field: "v", type: "quantitative" },
+          },
+        },
+        { mark: "rule", encoding: { x: { field: "d", type: "nominal" } } },
+      ],
+    };
+    const a = answer(
+      layer("grid", 2, { t: time(["2024-03-01", "2024-03-02"]), y: f64([0, 0]), v: q8([0, 1], 0, 1) }),
+      layer("rule", 1, { d: cat(["2024-03-02"]) }),
+    );
+    expect((toOption(spec, a).option.series as Series[])[1].markLine?.data).toEqual([{ xAxis: 1 }]);
   });
 
   it("places an x field's values the same way", () => {
