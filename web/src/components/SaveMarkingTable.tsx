@@ -33,6 +33,8 @@ export type SaveMarkingTableProps = {
   view: string | null;
   /** The marking's values, or `null` for the route to read the sent file. */
   columns: Record<string, string[]> | null;
+  /** With `columns: null`: the digest of what the chip's message sent. */
+  digest?: string | null;
   /** Why the save cannot run now; the button is disabled and says so. */
   why?: string | null;
 };
@@ -46,7 +48,7 @@ export function useSaveScope(): { slug: string; itemId: string } | null {
 }
 
 export function SaveMarkingTable(props: SaveMarkingTableProps & { scope: { slug: string; itemId: string } }) {
-  const { name, view, columns, why, scope } = props;
+  const { name, view, columns, digest = null, why, scope } = props;
   const t = useT();
   const qc = useQueryClient();
   const opener = useOpenFile();
@@ -54,6 +56,9 @@ export function SaveMarkingTable(props: SaveMarkingTableProps & { scope: { slug:
   const save = useMutation<SavedMarkingTable, Error, SaveMarkingTableBody>({
     mutationFn: (body) => saveMarkingTable(scope.slug, scope.itemId, body),
     onSuccess: () => void invalidateTree(qc, scope.itemId),
+    // The refusal is shown on this control (role=alert); the global
+    // write-failure toast would say it a second time, less precisely.
+    meta: { silentError: true },
   });
   const blocked = why ?? (view ? null : t("markings.noView"));
   const refusal =
@@ -78,7 +83,7 @@ export function SaveMarkingTable(props: SaveMarkingTableProps & { scope: { slug:
         title={blocked ?? undefined}
         onClick={() =>
           view &&
-          save.mutate({ name, view, columns, stamp: tableStamp(new Date()) })
+          save.mutate({ name, view, columns, stamp: tableStamp(new Date()), digest })
         }
       >
         <Icon name="download" size={11} />

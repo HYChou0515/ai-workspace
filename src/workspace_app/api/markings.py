@@ -16,8 +16,9 @@ still a question, and the reason travels on the chip.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..perm import Verb
@@ -30,6 +31,16 @@ MARKINGS_DIR = "/.markings"
 # A file name holds 255 bytes, `.json` takes five: measured as the disk does,
 # since 100 emoji are 400 bytes.
 MAX_NAME_BYTES = 250
+
+
+def marking_digest(columns: Mapping[str, Iterable[str]]) -> str:
+    """One marking's values as a stable hash: each non-empty column's distinct
+    values, sorted, in column order. The send records it on the chip (P7), and
+    "save as table" from that chip compares it with the marking the rows were
+    actually lit by — a later send under the same name rewrites the file."""
+    canon = {c: sorted(set(v)) for c, v in sorted(columns.items()) if v}
+    text = json.dumps(canon, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _name_problem(name: str) -> str | None:
@@ -94,6 +105,7 @@ async def write_markings(
             sent.error = "the workspace could not be reached — send the marking again"
         else:
             sent.path = path
+            sent.digest = marking_digest(columns)
         out.append(sent)
     return out
 

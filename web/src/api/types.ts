@@ -54,6 +54,9 @@ export type SentMarking = {
   counts: Record<string, number>;
   source?: string | null;
   error?: string | null;
+  /** P7: a hash of the values written — "save as table" from this chip sends
+   * it, and the route refuses when a later send has rewritten the file. */
+  digest?: string | null;
 };
 
 export type Message = {

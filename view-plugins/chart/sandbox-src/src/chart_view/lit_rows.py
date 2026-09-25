@@ -11,7 +11,8 @@ one rule, the SPA's ``isLit``: a row shares at least one column with the
 marking, and on every shared column its value, as marking text (``canon``), is
 in that column's set.
 
-Exit 0 with ``{"rows": n, "csv": text}`` on stdout; exit 2 with one sentence
+Exit 0 with ``{"rows": n, "csv": text, "columns": <the marking it lit by>}``
+on stdout; exit 2 with one sentence
 on stderr — a wrong call, a view with nothing to read, no column in common, or
 no row lit. The CSV is not written here: the platform writes it through its
 file facade, so the workspace quota and the user's permission apply.
@@ -124,5 +125,8 @@ def run(raw: str) -> int:
     except (_Refused, SpecError, SourceError, TransformError) as e:
         print(str(e), file=sys.stderr)
         return 2
-    json.dump({"rows": len(rows), "csv": rows.to_csv(index=False)}, sys.stdout)
+    # `columns`: the marking it lit by, as read — the platform checks a chip's
+    # save against the values that chip sent.
+    answer = {"rows": len(rows), "csv": rows.to_csv(index=False), "columns": columns}
+    json.dump(answer, sys.stdout)
     return 0

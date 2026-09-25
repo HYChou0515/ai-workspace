@@ -4,11 +4,13 @@
 writes the rows the marking lights — every column — as a new CSV in the
 workspace, at ``/markings/<name>-<yyyymmdd-hhmm>.csv``:
 
-1. the rows are selected in the item's sandbox by the chart plugin's
-   ``lit_rows`` command, over the view the action was taken in (its source,
-   its transforms, then the platform's one lighting rule — the SPA's
-   ``isLit``). It runs through the same runner the chart's ``query`` takes
-   (`view_plugin_routes.RunPluginCommand`);
+1. the rows are selected in the item's sandbox by the command of the one
+   installed plugin that declares ``provides.marking_rows`` (see
+   ``view_plugins.manifest.Provides`` for its contract) — the platform knows
+   the capability, never a plugin's name. It runs over the view the action
+   was taken in (its source, its transforms, then the platform's one lighting
+   rule — the SPA's ``isLit``), through the same runner a view's own sandbox
+   calls take (`view_plugin_routes.RunPluginCommand`);
 2. the CSV is written through the file facade, so the workspace quota applies
    exactly as to any other write, and the caller must hold ``add_content``.
 
@@ -24,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -32,14 +35,12 @@ from pydantic import BaseModel
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import SandboxBusy, SandboxNotFound
-from .markings import MARKINGS_DIR, _name_problem
+from ..view_plugins import ViewPlugin, marking_rows_provider
+from .markings import MARKINGS_DIR, _name_problem, marking_digest
 from .view_plugin_routes import RunPluginCommand
 
 logger = logging.getLogger(__name__)
 
-#: The plugin whose sandbox half selects the rows: it is the one that reads a
-#: view's `source:` and applies its `transform:`.
-PLUGIN, COMMAND = "chart", "lit_rows"
 TABLES_DIR = "/markings"
 _STAMP = re.compile(r"^\d{8}-\d{4}$")
 #: A file name holds 255 bytes.
@@ -60,6 +61,10 @@ class SaveTableBody(BaseModel):
     columns: dict[str, list[str]] | None = None
     #: `yyyymmdd-hhmm` in the saver's own clock: the name they will look for.
     stamp: str
+    #: The chip's `SentMarking.digest` — the values that message sent. The file
+    #: is rewritten by every later send under the same name, so a chip's save is
+    #: checked against the marking its rows were actually lit by.
+    digest: str | None = None
 
 
 class SaveTableOut(BaseModel):
@@ -67,16 +72,22 @@ class SaveTableOut(BaseModel):
     rows: int
 
 
-def _answer(stdout: str) -> tuple[int, str] | None:
-    """`lit_rows`'s `{"rows", "csv"}`, or None when it is not that."""
+def _is_marking(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(v, list) and all(isinstance(x, str) for x in v) for v in value.values()
+    )
+
+
+def _answer(stdout: str) -> tuple[int, str, dict[str, list[str]]] | None:
+    """The provider's `{"rows", "csv", "columns"}`, or None when it is not that."""
     try:
         answer = json.loads(stdout)
-        rows, csv = answer["rows"], answer["csv"]
+        rows, csv, columns = answer["rows"], answer["csv"], answer["columns"]
     except (ValueError, TypeError, KeyError):
         return None
-    if type(rows) is not int or not isinstance(csv, str):
+    if type(rows) is not int or not isinstance(csv, str) or not _is_marking(columns):
         return None
-    return rows, csv
+    return rows, csv, columns
 
 
 async def _free_path(files: WorkspaceFiles, item_id: str, base: str) -> str:
@@ -95,6 +106,7 @@ def register_marking_table_route(
     locator: Any,
     files: WorkspaceFiles,
     run_plugin: RunPluginCommand,
+    get_plugins: Callable[[], Sequence[ViewPlugin]],
 ) -> None:
     @app.post("/a/{slug}/items/{item_id}/markings/table")
     async def save_marking_table(slug: str, item_id: str, body: SaveTableBody) -> SaveTableOut:
@@ -122,11 +134,26 @@ def register_marking_table_route(
             )
         args: dict[str, Any] = {"view": body.view}
         if body.columns is None:
+            if body.digest is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"this message's marking can no longer be matched — send {body.name} "
+                        "again and save it from that message"
+                    ),
+                )
             args["marking"] = f"{MARKINGS_DIR}/{body.name}.json"
         else:
             args["columns"] = body.columns
+        provider = marking_rows_provider(get_plugins())
+        if provider is None:
+            raise HTTPException(
+                status_code=501,
+                detail="saving a marking as a table is not available in this deployment",
+            )
+        plugin, command = provider
         try:
-            result = await run_plugin(iid, PLUGIN, COMMAND, args)
+            result = await run_plugin(iid, plugin, command, args)
         except HTTPException as exc:
             if exc.status_code == 413:
                 raise HTTPException(
@@ -136,11 +163,6 @@ def register_marking_table_route(
                         "send it in the chat and save it from its chip"
                     ),
                 ) from None
-            if exc.status_code == 404:
-                raise HTTPException(
-                    status_code=501,
-                    detail="saving a marking as a table is not available in this deployment",
-                ) from None
             raise
         except (SandboxNotFound, SandboxBusy):
             raise HTTPException(status_code=503, detail=UNREACHABLE) from None
@@ -149,14 +171,25 @@ def register_marking_table_route(
         answer = _answer(result.stdout) if result.exit_code == 0 else None
         if answer is None:
             logger.warning(
-                "save marking table: item %s, %s exited %s: %s",
+                "save marking table: item %s, %s:%s exited %s: %s",
                 iid,
-                COMMAND,
+                plugin,
+                command,
                 result.exit_code,
                 result.stderr.strip()[:2000],
             )
             raise HTTPException(status_code=502, detail="the rows could not be selected")
-        rows, csv = answer
+        rows, csv, lit_by = answer
+        # A chip saves what ITS message sent, or nothing: checked against what
+        # the rows were lit by, so there is no window between check and read.
+        if body.columns is None and marking_digest(lit_by) != body.digest:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{body.name} has changed since this message was sent — save it from the "
+                    "latest message"
+                ),
+            )
         try:
             path = await _free_path(files, iid, base)
             await files.write(iid, path, csv.encode())

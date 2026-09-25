@@ -50,7 +50,13 @@ export function MarkingChips({
         // view it recorded; the composer's chips are not sent yet. The control
         // sits BESIDE the pill, so a saved note never squeezes its label.
         const save = scope && !onRemove && m.path ? (
-          <SaveMarkingTable scope={scope} name={m.name} view={m.source ?? null} columns={null} />
+          <SaveMarkingTable
+            scope={scope}
+            name={m.name}
+            view={m.source ?? null}
+            columns={null}
+            digest={m.digest ?? null}
+          />
         ) : null;
         const pill = (
           <span

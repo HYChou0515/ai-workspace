@@ -148,6 +148,10 @@ class SentMarking(Struct):
     source: str | None = None
     """The view file that last wrote the marking, when known."""
     error: str | None = None
+    digest: str | None = None
+    """``api.markings.marking_digest`` of the values written — what "save as
+    table" from this chip checks the file against, since a later send under the
+    same name rewrites it. None when not written (or sent before P7's fix)."""
 
 
 class Message(Struct):

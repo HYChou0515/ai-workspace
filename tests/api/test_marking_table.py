@@ -12,21 +12,24 @@ sandbox answers what the test says it does.
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import cast
 
+import msgspec
 import pytest
 from fastapi import HTTPException
 
 from tests.api._client import TestClient
 from tests.api.conftest import register_rca_item
-from workspace_app.api import create_app
+from workspace_app.api import RunDone, create_app
 from workspace_app.api.runner import ScriptedAgentRunner
 from workspace_app.api.view_plugin_routes import ARGV_MAX
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.quota.disk_ledger import UserDiskFull
 from workspace_app.resources import make_spec
+from workspace_app.resources.conversation import Conversation
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import ExecResult, SandboxBusy, SandboxNotFound
 from workspace_app.view_plugins import discover_view_plugins
@@ -35,45 +38,69 @@ CSV = "lot,wafer,value\nA,1,0.5\nC,3,7.0\n"
 
 
 class _LitSandbox(MockSandbox):
-    """A MockSandbox whose chart bundle answers `lit_rows` as told."""
+    """A MockSandbox whose `maps` bundle answers `rows` (its marking_rows) as told."""
 
     def __init__(self, answer: ExecResult | Exception | None = None) -> None:
         super().__init__()
-        self.answer = answer or ExecResult(
-            exit_code=0, stdout=json.dumps({"rows": 2, "csv": CSV}).encode(), stderr=b""
-        )
+        self.answer = answer
         self.lit_calls: list[list[str]] = []
 
     async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
-        if cmd[:2] == ["../.tools/chart/launch", "lit_rows"]:
+        if cmd[:2] == ["../.tools/maps/launch", "rows"]:
             self.lit_calls.append(list(cmd))
             if isinstance(self.answer, Exception):
                 raise self.answer
-            return self.answer
+            if self.answer is not None:
+                return self.answer
+            # As the contract says: lit by the values given, or by the marking
+            # file as it is NOW — and the answer names which.
+            args = json.loads(cmd[2])
+            if "columns" in args:
+                columns = args["columns"]
+            else:
+                try:
+                    columns = json.loads(await self.download(handle, args["marking"]))["columns"]
+                except FileNotFoundError:
+                    return ExecResult(exit_code=2, stdout=b"", stderr=b"the marking is gone")
+            out = {"rows": 2, "csv": CSV, "columns": columns}
+            return ExecResult(exit_code=0, stdout=json.dumps(out).encode(), stderr=b"")
         return await super().exec(handle, cmd, on_output, env, exec_timeout)
 
 
-def _plugins(tmp_path: Path, *, chart: bool = True):
+class _Reply:
+    """A turn that ends at once: the tests send messages only for their chips."""
+
+    async def run(self, prompt, ctx):
+        yield RunDone()
+
+
+def _plugins(tmp_path: Path, *, provider: bool = True):
+    """A plugin named `chart` that provides nothing, and — unless told not to —
+    one named `maps` that provides `marking_rows` through its command `rows`: the
+    route must find the provider by what it declares, never by a name."""
     root = tmp_path / "plugins"
     root.mkdir()
-    if chart:
-        d = root / "chart"
+    installed = {"chart": None, **({"maps": {"marking_rows": "rows"}} if provider else {})}
+    for name, provides in installed.items():
+        d = root / name
         (d / "web").mkdir(parents=True)
         (d / "web" / "index.js").write_text("export {};\n")
-        manifest = {"name": "chart", "sdk": "1", "kinds": ["chart"], "sandbox": {"bundle": "x"}}
+        manifest: dict = {"name": name, "sdk": "1", "kinds": [name], "sandbox": {"bundle": "x"}}
+        if provides is not None:
+            manifest["provides"] = provides
         (d / "plugin.json").write_text(json.dumps(manifest))
     return discover_view_plugins(root)
 
 
-def _app(tmp_path: Path, sandbox: MockSandbox | None = None, *, chart: bool = True, **kw):
+def _app(tmp_path: Path, sandbox: MockSandbox | None = None, *, provider: bool = True, **kw):
     spec = make_spec(default_user=kw.pop("default_user", "u"))
     sb = sandbox or _LitSandbox()
     app = create_app(
         spec=spec,
         sandbox=sb,
         filestore=MemoryFileStore(),
-        runner=ScriptedAgentRunner([]),
-        view_plugins=_plugins(tmp_path, chart=chart),
+        runner=_Reply(),
+        view_plugins=_plugins(tmp_path, provider=provider),
         **kw,
     )
     return TestClient(app), spec, sb
@@ -105,15 +132,89 @@ def test_the_lit_rows_land_as_a_new_csv_in_the_workspace(tmp_path):
     assert json.loads(call[2]) == {"view": "/views/c.ai.yaml", "columns": {"lot": ["A", "C"]}}
 
 
+def _send(client, spec, iid: str, lots: list[str]) -> dict:
+    """Send one message carrying marking `fail`; its persisted chip, as the FE gets it."""
+    marking = {"name": "fail", "source": "/views/c.ai.yaml", "columns": {"lot": lots}}
+    r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [marking]})
+    assert r.status_code == 202, r.text
+    rm = spec.get_resource_manager(Conversation)
+    [meta] = rm.search_resources(query=None)
+    users = [m for m in rm.get(meta.resource_id).data.messages if m.role == "user"]
+    return msgspec.to_builtins(users[-1].markings[0])
+
+
+def _chip_body(chip: dict) -> dict:
+    return {**BODY, "view": chip["source"], "columns": None, "digest": chip["digest"]}
+
+
 def test_the_chip_sends_no_values_and_the_sandbox_reads_the_sent_marking(tmp_path):
     client, spec, sb = _app(tmp_path)
     iid = register_rca_item(spec)
+    chip = _send(client, spec, iid, ["A", "C"])
 
-    r = client.post(_url(iid), json={**BODY, "columns": None})
+    r = client.post(_url(iid), json=_chip_body(chip))
 
     assert r.status_code == 200, r.text
     [call] = sb.lit_calls
     assert json.loads(call[2]) == {"view": "/views/c.ai.yaml", "marking": "/.markings/fail.json"}
+
+
+def test_an_older_chip_refuses_to_save_a_later_sends_values(tmp_path):
+    """Send A, then B under the same name: `.markings/fail.json` now holds B, so
+    A's chip saving "its" marking would silently save B's rows. It refuses, by
+    name; B's chip saves."""
+    client, spec, sb = _app(tmp_path)
+    iid = register_rca_item(spec)
+    older = _send(client, spec, iid, ["A"])
+    newer = _send(client, spec, iid, ["B", "C"])
+
+    r = client.post(_url(iid), json=_chip_body(older))
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "fail has changed since this message was sent — save it from the latest message"
+    )
+    got = client.get(f"/a/rca/items/{iid}/files/markings/fail-20260925-1412.csv")
+    assert got.status_code == 404
+    assert client.post(_url(iid), json=_chip_body(newer)).status_code == 200
+
+
+def test_the_digest_is_of_the_set_not_its_spelling():
+    """A provider answers the marking it lit by in whatever order it holds it
+    (the header's values arrive unsorted); only the set may count."""
+    from workspace_app.api.markings import marking_digest
+
+    assert marking_digest({"b": ["y", "x", "x"], "a": ["1"], "c": []}) == marking_digest(
+        {"a": ["1"], "b": ["x", "y"]}
+    )
+    assert marking_digest({"a": ["1"]}) != marking_digest({"a": ["2"]})
+    assert marking_digest({"a": ["1"]}) != marking_digest({"b": ["1"]})
+
+
+def test_the_send_records_what_it_wrote_as_a_digest(tmp_path):
+    client, spec, _ = _app(tmp_path)
+    iid = register_rca_item(spec)
+    a = _send(client, spec, iid, ["A", "C"])
+    again = _send(client, spec, iid, ["C", "A", "A"])  # the same set, as the file holds it
+    b = _send(client, spec, iid, ["B"])
+
+    assert a["digest"] and a["digest"] == again["digest"] != b["digest"]
+
+
+def test_a_chip_without_a_digest_is_refused_not_guessed(tmp_path):
+    """A chip sent before the digest was recorded cannot be matched to its values."""
+    client, spec, sb = _app(tmp_path)
+    iid = register_rca_item(spec)
+    _send(client, spec, iid, ["A"])
+
+    r = client.post(_url(iid), json={**BODY, "columns": None})
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "this message's marking can no longer be matched — send fail again and save it "
+        "from that message"
+    )
+    assert sb.lit_calls == []
 
 
 def test_a_second_save_in_the_same_minute_gets_its_own_file(tmp_path):
@@ -168,6 +269,11 @@ def test_the_sandboxs_refusal_is_the_controls_sentence_and_nothing_is_written(tm
         ExecResult(exit_code=0, stdout=b'{"rows": "2", "csv": "a"}', stderr=b""),
         ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": 5}', stderr=b""),
         ExecResult(exit_code=0, stdout=b'{"rows": 2}', stderr=b""),
+        ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": "a"}', stderr=b""),
+        ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": "a", "columns": 5}', stderr=b""),
+        ExecResult(
+            exit_code=0, stdout=b'{"rows": 2, "csv": "a", "columns": {"lot": [1]}}', stderr=b""
+        ),
     ],
 )
 def test_a_crash_or_a_garbled_answer_says_so_without_its_internals(tmp_path, result):
@@ -214,14 +320,15 @@ def test_a_marking_too_big_for_one_call_says_to_send_it_from_the_chat(tmp_path):
     assert sb.lit_calls == []
 
 
-def test_without_the_chart_plugin_the_save_is_unavailable(tmp_path):
-    client, spec, _ = _app(tmp_path, chart=False)
+def test_without_a_plugin_providing_marking_rows_the_save_is_unavailable(tmp_path):
+    client, spec, sb = _app(tmp_path, provider=False)
     iid = register_rca_item(spec)
 
     r = client.post(_url(iid), json=BODY)
 
     assert r.status_code == 501
     assert r.json()["detail"] == "saving a marking as a table is not available in this deployment"
+    assert sb.lit_calls == []
 
 
 @pytest.mark.parametrize(
@@ -271,7 +378,7 @@ class _Locator:
         return item_id
 
 
-def _bare(files=None, locator=None, run=None):
+def _bare(tmp, files=None, locator=None, run=None):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient as Plain
 
@@ -281,14 +388,20 @@ def _bare(files=None, locator=None, run=None):
     async def answer(item_id, plugin, cmd, args):
         if isinstance(run, Exception):
             raise run
-        return RunOut(stdout=json.dumps({"rows": 2, "csv": CSV}), stderr="", exit_code=0)
+        return RunOut(
+            stdout=json.dumps({"rows": 2, "csv": CSV, "columns": args["columns"]}),
+            stderr="",
+            exit_code=0,
+        )
 
+    found = _plugins(Path(tempfile.mkdtemp(dir=tmp)))
     app = FastAPI()
     register_marking_table_route(
         app,
         locator=locator or _Locator(),
         files=cast("WorkspaceFiles", files or _Files()),
         run_plugin=answer,
+        get_plugins=lambda: found,
     )
     return Plain(app)
 
@@ -306,8 +419,8 @@ def _bare(files=None, locator=None, run=None):
         (UserDiskFull("u", 10, 20, 5), 507, None),
     ],
 )
-def test_a_write_the_workspace_refuses_is_a_sentence(raises, status, said):
-    client = _bare(files=_Files(raises))
+def test_a_write_the_workspace_refuses_is_a_sentence(tmp_path, raises, status, said):
+    client = _bare(tmp_path, files=_Files(raises))
 
     r = client.post(_url("i1"), json=BODY)
 
@@ -315,16 +428,16 @@ def test_a_write_the_workspace_refuses_is_a_sentence(raises, status, said):
     assert r.json()["detail"] == (said if said is not None else str(raises))
 
 
-def test_an_item_the_caller_cannot_see_stays_not_found():
+def test_an_item_the_caller_cannot_see_stays_not_found(tmp_path):
     missing = HTTPException(status_code=404, detail="item not found")
-    client = _bare(locator=_Locator({"read_content": missing}))
+    client = _bare(tmp_path, locator=_Locator({"read_content": missing}))
     assert client.post(_url("i1"), json=BODY).status_code == 404
-    client = _bare(locator=_Locator({"add_content": missing}))
+    client = _bare(tmp_path, locator=_Locator({"add_content": missing}))
     assert client.post(_url("i1"), json=BODY).status_code == 404
 
 
-def test_the_runners_other_refusals_pass_through_as_they_are():
-    client = _bare(run=HTTPException(status_code=409, detail="rename the plugin"))
+def test_the_runners_other_refusals_pass_through_as_they_are(tmp_path):
+    client = _bare(tmp_path, run=HTTPException(status_code=409, detail="rename the plugin"))
 
     r = client.post(_url("i1"), json=BODY)
 

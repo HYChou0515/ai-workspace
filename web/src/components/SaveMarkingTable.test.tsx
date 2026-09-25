@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, investigationFileService } from "../api/fileService";
 import { API_PREFIX } from "../api/http";
+import { makeQueryClient } from "../api/queryClient";
 import { qk } from "../api/queryKeys";
 import type { SentMarking } from "../api/types";
 import { OpenFileProvider, WorkspaceVisibleProvider } from "../hooks/openFile";
@@ -20,6 +21,7 @@ import { MarkingProvider } from "../hooks/useMarking";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { LocaleProvider, setStoredLocale } from "../lib/i18n";
 import { MarkingStore } from "../lib/markings";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { MarkingControl } from "../renderers/entity/MarkingControl";
 import { makeTestQueryClient, QueryWrap } from "../test/queryWrapper";
 import { MarkingChips } from "./MarkingChips";
@@ -43,7 +45,7 @@ function Shell({
   children: ReactNode;
   store?: MarkingStore;
   openFile?: (path: string) => void;
-  client?: ReturnType<typeof makeTestQueryClient>;
+  client?: import("@tanstack/react-query").QueryClient;
 }) {
   return (
     <QueryWrap client={client}>
@@ -68,6 +70,7 @@ const sent: SentMarking = {
   counts: { lot: 3 },
   source: "/views/c.ai.yaml",
   error: null,
+  digest: "d1g3st",
 };
 
 beforeEach(() => {
@@ -110,6 +113,8 @@ describe("save as table — the sent chip", () => {
       view: "/views/c.ai.yaml",
       columns: null,
       stamp: "20260925-1407",
+      // What THIS message sent: the route refuses when the file has changed since.
+      digest: "d1g3st",
     });
     fireEvent.click(link);
     expect(openFile).toHaveBeenCalledWith("/markings/fail-20260925-1407.csv");
@@ -171,6 +176,24 @@ describe("save as table — the sent chip", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("workspace is full: 100 of 100 bytes used");
   });
 
+  it("reports a refusal ONCE — on the control, not also as the global write-failure toast", async () => {
+    // The live check (two sends, save from the older chip): the app's real
+    // query client toasted "Couldn't save — the change was not applied" under
+    // the chip's own sentence. The control shows its refusal itself.
+    resetWriteFailures();
+    vi.stubGlobal("fetch", reply({ detail: "fail has changed since this message was sent" }, 409));
+    render(
+      <Shell client={makeQueryClient()}>
+        <MarkingChips markings={[sent]} />
+      </Shell>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save as table" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("fail has changed");
+    expect(currentWriteFailure()).toBeNull();
+  });
+
   it("a refusal with no sentence still says it failed", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 502 })));
     render(
@@ -222,6 +245,7 @@ describe("save as table — the header control", () => {
       view: "/views/c.ai.yaml",
       columns: { lot: ["A", "C"] },
       stamp: "20260925-1407",
+      digest: null,
     });
   });
 

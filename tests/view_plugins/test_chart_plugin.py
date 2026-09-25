@@ -44,3 +44,13 @@ def test_the_sandbox_half_is_built_from_sandbox_src_under_the_isolated_launcher(
     assert set(project["project"]["scripts"]) == {m.name}
     assert project["tool"]["workspace-tool"]["launch"] == "isolated"
     assert (CHART / "sandbox-src" / "uv.lock").is_file()
+
+
+def test_it_provides_the_marking_rows_capability_through_a_command_it_has():
+    """P7: "save as table" finds the plugin that declares `provides.marking_rows`;
+    the platform never names the chart plugin. The command it names is the
+    sandbox half's `lit_rows` (listed by the bundle's CLI)."""
+    m = _manifest()
+    assert m.provides is not None and m.provides.marking_rows == "lit_rows"
+    cli = (CHART / "sandbox-src" / "src" / "chart_view" / "cli.py").read_text()
+    assert '"lit_rows": LIT_ROWS' in cli

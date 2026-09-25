@@ -2442,9 +2442,15 @@ def create_app(
         registry=registry,
         resolve_tools=_item_tools_with_plugins,
     )
-    # P7: "save as table" selects the rows through that same runner and writes
-    # them through the file facade.
-    register_marking_table_route(api, locator=locator, files=files, run_plugin=run_view_plugin)
+    # P7: "save as table" selects the rows through that same runner — with the
+    # plugin that provides `marking_rows` — and writes them through the facade.
+    register_marking_table_route(
+        api,
+        locator=locator,
+        files=files,
+        run_plugin=run_view_plugin,
+        get_plugins=lambda: app.state.view_plugins,
+    )
 
     register_tools_routes(
         api,

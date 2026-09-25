@@ -17,6 +17,9 @@ export type SaveMarkingTableBody = {
   columns: Record<string, string[]> | null;
   /** `yyyymmdd-hhmm` in the saver's own clock — the name they will look for. */
   stamp: string;
+  /** The chip's `SentMarking.digest` (what its message sent); `null` from the
+   * header, which sends the values themselves. */
+  digest: string | null;
 };
 
 export type SavedMarkingTable = { path: string; rows: number };

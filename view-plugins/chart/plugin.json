@@ -7,5 +7,6 @@
     { "kind": "chart", "when": "with `mark: grid`, a value's pattern over a 2-D lattice" }
   ],
   "skill": "skill",
-  "sandbox": { "bundle": "sandbox", "validate": true }
+  "sandbox": { "bundle": "sandbox", "validate": true },
+  "provides": { "marking_rows": "lit_rows" }
 }

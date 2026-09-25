@@ -15,6 +15,7 @@ from workspace_app.view_plugins import (
     BUILTIN_VIEW_KINDS,
     ViewPluginError,
     discover_view_plugins,
+    marking_rows_provider,
 )
 
 
@@ -208,3 +209,48 @@ def test_filesystem_furniture_is_not_a_plugin(tmp_path: Path, stray: str):
     _plugin(tmp_path, "a")
     (tmp_path / stray).mkdir()
     assert [p.name for p in discover_view_plugins(tmp_path)] == ["a"]
+
+
+def _provider(root: Path, name: str, provides: dict, sandbox: dict | None = None) -> Path:
+    body: dict = {"name": name, "sdk": "1", "kinds": [f"{name}-kind"], "provides": provides}
+    if sandbox is not None:
+        body["sandbox"] = sandbox
+    return _plugin(root, name, body)
+
+
+def test_a_plugin_may_provide_marking_rows_through_a_sandbox_command(tmp_path: Path):
+    _provider(tmp_path, "a", {"marking_rows": "lit_rows"}, {"bundle": "sandbox"})
+    [p] = discover_view_plugins(tmp_path)
+    assert p.manifest.provides is not None and p.manifest.provides.marking_rows == "lit_rows"
+    assert marking_rows_provider([p]) == ("a", "lit_rows")
+
+
+def test_no_plugin_providing_marking_rows_is_none(tmp_path: Path):
+    _plugin(tmp_path, "a")
+    _provider(tmp_path, "b", {}, {"bundle": "sandbox"})
+    assert marking_rows_provider(discover_view_plugins(tmp_path)) is None
+
+
+def test_marking_rows_needs_a_sandbox_half(tmp_path: Path):
+    _provider(tmp_path, "a", {"marking_rows": "lit_rows"})
+    assert "provides.marking_rows" in _refusal(tmp_path)
+
+
+@pytest.mark.parametrize("cmd", ["", "--help", "Lit", "a b"])
+def test_marking_rows_names_a_plain_command(tmp_path: Path, cmd: str):
+    _provider(tmp_path, "a", {"marking_rows": cmd}, {"bundle": "sandbox"})
+    assert "provides.marking_rows" in _refusal(tmp_path)
+
+
+def test_an_unknown_capability_refuses_boot(tmp_path: Path):
+    _provider(tmp_path, "a", {"marking_colums": "x"}, {"bundle": "sandbox"})
+    assert "marking_colums" in _refusal(tmp_path)
+
+
+def test_marking_rows_provided_by_two_plugins_names_both(tmp_path: Path):
+    """Which plugin selects a marking's rows is not a choice the platform can
+    make for the operator: two providers refuse boot, as two owners of a kind do."""
+    _provider(tmp_path, "a", {"marking_rows": "lit_rows"}, {"bundle": "sandbox"})
+    _provider(tmp_path, "b", {"marking_rows": "rows"}, {"bundle": "sandbox"})
+    msg = _refusal(tmp_path)
+    assert "marking_rows" in msg and "'a'" in msg and "'b'" in msg

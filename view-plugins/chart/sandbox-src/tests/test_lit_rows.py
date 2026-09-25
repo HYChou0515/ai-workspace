@@ -105,6 +105,16 @@ def test_a_sent_marking_is_read_from_its_file(workspace, capsys):
     assert code == 0, err
     assert out is not None and out["rows"] == 2
     _assert_parity(read_source(workspace, "data/runs.csv"), doc["columns"], out["csv"])
+    # The answer says which marking it lit by — exactly the file's — so the
+    # platform can check it is the one the chip sent, not a later send's.
+    assert out["columns"] == doc["columns"]
+
+
+def test_the_answer_names_the_values_it_lit_by(workspace, capsys):
+    columns = {"lot": ["C", "A"], "wafer": ["1", "3"]}
+    code, out, err = _run(capsys, {"view": "views/c.ai.yaml", "columns": columns})
+    assert code == 0, err
+    assert out is not None and out["columns"] == columns
 
 
 def test_the_views_transforms_apply_before_the_marking_lights(workspace, capsys):
