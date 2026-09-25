@@ -9,7 +9,7 @@
  * legend click becomes a `Selection` in layer rows, local to the view until
  * markings (PR 3) link views.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } from "@aiws/view-sdk";
 
@@ -152,33 +152,57 @@ function Plot({
   // every setOption does — and taking that as "cleared" would erase the marking
   // this view just wrote, re-render, rebuild the brush, and fire again.
   const brushed = useRef(false);
-  // The pie slice ("seriesIndex:dataIndex") a click picked, and what that
-  // click wrote to the marking (#847/#848 PR 5 P34): a click toggles only
-  // what it wrote. Its second click, or a click on empty space, clears it
-  // only while the marking still holds exactly that write (`stillWritten`);
-  // once any other write replaced it, the pick is forgotten -- empty space
-  // clears nothing, and the slice is picked afresh. A pick that wrote
-  // nothing (null) is this view's alone and stays its to clear.
-  const clicked = useRef<{ key: string; wrote: MarkingValues | null } | null>(null);
-  const entryRef = useRef(entry);
-  entryRef.current = entry;
-  const held = (): { key: string; wrote: MarkingValues | null } | null => {
-    const pick = clicked.current;
-    if (!pick || pick.wrote === null || stillWritten(entryRef.current, pick.wrote, source)) return pick;
-    return (clicked.current = null);
-  };
-  const heldRef = useRef(held);
-  heldRef.current = held;
+  // The pie slice ("seriesIndex:dataIndex") a click picked (#847/#848 PR 5
+  // P34): a click toggles only what it wrote. Its second click, or a click on
+  // empty space, clears it; once any other write replaced what it wrote to
+  // the marking, the pick is gone (P35 row 9, below) -- empty space clears
+  // nothing, and the slice is picked afresh. A pick that wrote nothing is
+  // this view's alone and stays its to clear.
+  const clicked = useRef<string | null>(null);
+  // What this view's latest selection wrote, and to which marking; null when
+  // it wrote nothing (no marking, no `keys:`).
+  const wrote = useRef<{ on: string; values: MarkingValues } | null>(null);
   writeRef.current = (sel) => {
     // ECharts re-reports the areas it holds: the same rows keep the same state,
     // or a grid lit by its own selection would redraw on every report
     setSelection((prev) => (JSON.stringify(prev) === JSON.stringify(sel) ? prev : sel));
-    if (!marking) return null;
+    if (!marking) {
+      wrote.current = null;
+      return null;
+    }
     const values = selectionMarking(sel, answer, keys, measured);
     setToMarking(values !== null);
+    wrote.current = values && { on: marking, values };
     if (values) write(values, source);
     return values;
   };
+
+  // The marking is what a linked chart shows (#847/#848 PR 5 P35 row 9). Once
+  // another write replaced what this view's selection wrote -- another view's,
+  // the same values from another view, a clear -- its own selection goes: the
+  // count, the brush's box, the pie's pick, the legend's hidden entries. They
+  // said what the marking no longer holds. This view's own write is still
+  // written (`stillWritten`), so it drops nothing; a selection that wrote
+  // nothing is this view's alone, and stays; and a view detached from the
+  // marking, or moved to another, shows its own again (P29) -- what it wrote
+  // is the old marking's. A layout effect: the drop is done before the next
+  // click can find the pick it drops.
+  useLayoutEffect(() => {
+    const mine = wrote.current;
+    if (mine === null || mine.on !== marking || stillWritten(entry, mine.values, source)) return;
+    clicked.current = null;
+    // first, so the empty `brushselected` the clear fires is not taken for
+    // the person clearing
+    brushed.current = false;
+    const chart = chartRef.current;
+    if (chart) {
+      chart.dispatchAction({ type: "brush", areas: [] });
+      // (fires no `legendselectchanged`: bringing them back writes nothing;
+      // with none hidden, or no legend, it changes nothing)
+      chart.dispatchAction({ type: "legendAllSelect" });
+    }
+    setSelection([]);
+  }, [entry, source, marking]);
 
   // The spec's `highlight:` seeds its marking on open — only an EMPTY one: a
   // marking another view already holds is the person's, not this file's.
@@ -226,23 +250,24 @@ function Plot({
       );
     });
     // A pie's slice is picked by clicking it (#847/#848 PR 5 P30); the same
-    // slice again, or empty space, clears what the click picked -- and only
-    // while the marking still holds it (`held`, P34): a selection another
-    // view wrote is not this click's to clear.
+    // slice again, or empty space, clears what the click picked -- while it is
+    // still picked: another view's write drops the pick (P34, P35 row 9), and
+    // a selection another view wrote is not this click's to clear.
     chart.on("click", (p) => {
       const params = p as ClickParams;
       const sel = selectionFromClick(params, builtRef.current);
       if (sel.length === 0) return;
       const key = `${params.seriesIndex}:${params.dataIndex}`;
-      if (heldRef.current()?.key === key) {
+      if (clicked.current === key) {
         clicked.current = null;
         writeRef.current([]);
         return;
       }
-      clicked.current = { key, wrote: writeRef.current(sel) };
+      writeRef.current(sel);
+      clicked.current = key;
     });
     chart.getZr().on("click", (e) => {
-      if (e.target || !heldRef.current()) return;
+      if (e.target || clicked.current === null) return;
       clicked.current = null;
       writeRef.current([]);
     });

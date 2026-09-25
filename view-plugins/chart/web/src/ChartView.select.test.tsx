@@ -349,15 +349,18 @@ describe("a click on a pie's slice writes the marking", () => {
     expect(store.get("m")!.source).toBe("/v/other.ai.yaml");
   });
 
-  it("a pick whose write the marking holds again is still the pick's to clear (P34)", () => {
-    // what counts is what the marking holds when the click comes
+  // P35 row 9 [supersedes P34's "what the marking holds when the click comes"]:
+  // another view's write drops the pick there and then, so a later write of
+  // the same values (the same file open elsewhere) brings no pick back.
+  it("a pick another view's write dropped stays dropped when the marking holds its values again (P35)", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
     click(chart, sliceAt(chart, 1));
     act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
     act(() => store.set("m", { lot: new Set(["L2"]) }, "/v/a.ai.yaml"));
     click(chart, [5, 395]);
-    expect(store.get("m")).toBeUndefined();
+    expect(marked(store)).toEqual({ lot: ["L2"] });
+    expect(screen.queryByText(/selected/)).toBeNull();
   });
 
   // #847/#848 PR 5 P34 row 5: on a marking this pie cannot write (no `keys:`),
