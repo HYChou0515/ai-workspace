@@ -194,11 +194,27 @@ describe("groupLabel (#847/#848 P14)", () => {
 
   it("shows a zoned column's key on its clock, and names the zone", () => {
     const idx = two({ day: "Asia/Taipei" });
-    expect(groupLabel(idx, 0)).toBe("L1 · 2026-03-01 Asia/Taipei");
+    // P24: to the finest part the column has — here milliseconds, so
+    // midnight shows them too (P14 showed it as the date alone)
+    expect(groupLabel(idx, 0)).toBe("L1 · 2026-03-01 00:00:00.000 Asia/Taipei");
     // pandas writes microseconds; the label reads them to the millisecond
     expect(groupLabel(idx, 1)).toBe("L1 · 2026-03-01 12:30:00.500 Asia/Taipei");
     // a key that is no time is shown as it is
     expect(groupLabel(idx, 2)).toBe("L2 · not a date");
+  });
+
+  it("shows the time of day at midnight when the column has one, and a date column as dates (P24)", () => {
+    // seen live: an hourly facet's midnight group read "2026-03-01 Asia/Taipei"
+    const hourly = index({
+      facet: ["lot", "at", "day"],
+      zones: { at: "Asia/Taipei", day: "Asia/Taipei" },
+      groups: [
+        { key: ["L1", "2026-03-01 00:00:00+08:00", "2026-03-01 00:00:00+08:00"], sort: {} },
+        { key: ["L1", "2026-03-01 06:00:00+08:00", "2026-03-02 00:00:00+08:00"], sort: {} },
+      ],
+    });
+    expect(groupLabel(hourly, 0)).toBe("L1 · 2026-03-01 00:00 Asia/Taipei · 2026-03-01 Asia/Taipei");
+    expect(groupLabel(hourly, 1)).toBe("L1 · 2026-03-01 06:00 Asia/Taipei · 2026-03-02 Asia/Taipei");
   });
 
   it("shows every key as it is when the index names no zone", () => {

@@ -9,7 +9,7 @@
  * - A selection is a range of sorted positions; it names every group in it,
  *   loaded or not, and lights groups by the platform's own `isLit`.
  */
-import { clockFor } from "./clock";
+import { clockFor, type Precision } from "./clock";
 import type { MarkingValues, IsLit } from "./marking";
 import { parseInstant } from "./option";
 import { categoryTable, colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
@@ -69,11 +69,28 @@ export function groupLabel(index: FacetIndex, position: number): string {
     .map((key, i) => {
       const zone = index.zones?.[index.facet[i]];
       if (!zone) return key;
-      // pandas writes up to nanoseconds; an instant is read to the millisecond
-      const ms = parseInstant(key.replace(/(\.\d{3})\d+/, "$1"));
-      return Number.isNaN(ms) ? key : `${clockFor(zone).text(ms)} ${zone}`;
+      const ms = keyInstant(key);
+      return Number.isNaN(ms) ? key : `${clockFor(zone).text(ms, keyPrecision(index, i, zone))} ${zone}`;
     })
     .join(" · ");
+}
+
+/** pandas writes up to nanoseconds; an instant is read to the millisecond. */
+const keyInstant = (key: string) => parseInstant(key.replace(/(\.\d{3})\d+/, "$1"));
+
+/** A zoned facet column's keys are all written to the finest part any of them
+ * has (#847/#848 PR 5 P24), so an hourly facet's midnight reads 00:00; read
+ * once per index and column. */
+const keyPrecisions = new WeakMap<FacetIndex, Map<number, Precision>>();
+function keyPrecision(index: FacetIndex, column: number, zone: string): Precision {
+  let byColumn = keyPrecisions.get(index);
+  if (!byColumn) keyPrecisions.set(index, (byColumn = new Map()));
+  let at = byColumn.get(column);
+  if (at === undefined) {
+    const instants = index.groups.map((g) => keyInstant(g.key[column])).filter((ms) => !Number.isNaN(ms));
+    byColumn.set(column, (at = clockFor(zone).precision(instants)));
+  }
+  return at;
 }
 
 export type FacetSort = { field: string; order?: "ascending" | "descending" } | null;

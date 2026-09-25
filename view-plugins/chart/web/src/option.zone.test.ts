@@ -77,6 +77,50 @@ describe("a zoned time column", () => {
   });
 });
 
+describe("a time column whose values have a time of day (#847/#848 PR 5 P24)", () => {
+  // Seen live: an hourly zoned column's tooltip read "2026-03-01 Asia/Taipei"
+  // at Taipei midnight, while 01:00 read "2026-03-01 01:00 Asia/Taipei"
+  const HOURLY = ["2026-02-28T16:00:00Z", "2026-02-28T17:00:00Z"];
+
+  it("shows the time of day in the tooltip at midnight too", () => {
+    const { doc, a } = scatter(zoned(HOURLY, "Asia/Taipei"));
+    const tip = toOption(doc, a).option.tooltip as Tip;
+    expect(tip.formatter({ seriesIndex: 0, dataIndex: 0 })).toContain("at: <b>2026-03-01 00:00 Asia/Taipei</b>");
+    expect(tip.formatter({ seriesIndex: 0, dataIndex: 1 })).toContain("at: <b>2026-03-01 01:00 Asia/Taipei</b>");
+  });
+
+  it("keeps a date column's dates when a value is missing", () => {
+    // a missing time is no instant: read as 0 it would be 08:00 in Taipei
+    const col: WireColumn = { ...(f64([at(TAIPEI[0]), null]) as { data: string }), kind: "time", zone: "Asia/Taipei" };
+    const { doc } = scatter(col);
+    const a = answer(layer("scatter", 2, { at: col, v: f64([1, 2]) }));
+    const tip = toOption(doc, a).option.tooltip as Tip;
+    expect(tip.formatter({ seriesIndex: 0, dataIndex: 0 })).toContain("at: <b>2026-03-01 Asia/Taipei</b>");
+  });
+
+  it("does so for a zone-less column too", () => {
+    const { doc, a } = scatter(plain(["2026-03-01T00:00:00Z", "2026-03-01T00:00:30Z"]));
+    const tip = toOption(doc, a).option.tooltip as Tip;
+    expect(tip.formatter({ seriesIndex: 0, dataIndex: 0 })).toContain("at: <b>2026-03-01 00:00:00</b>");
+  });
+
+  it("labels a temporal grid's cells with the time of day", () => {
+    const doc = {
+      ...base,
+      mark: "grid",
+      encoding: {
+        x: { field: "at", type: "temporal" },
+        y: { field: "y", type: "ordinal" },
+        color: { field: "v", type: "quantitative" },
+      },
+    };
+    const a = answer(layer("grid", 2, { at: zoned(HOURLY, "Asia/Taipei"), y: f64([0, 0]), v: q8([0, 254], 0, 1) }));
+    const { option } = toOption(doc, a, { gridImage: () => ({}) });
+    const x = (option.xAxis as { axisLabel: { formatter: (i: number) => string } }[])[0];
+    expect([x.axisLabel.formatter(0), x.axisLabel.formatter(1)]).toEqual(["2026-03-01 00:00", "2026-03-01 01:00"]);
+  });
+});
+
 describe("a zone-less time column", () => {
   it("is placed as written and names no zone", () => {
     const { doc, a } = scatter(plain(["2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z"]));

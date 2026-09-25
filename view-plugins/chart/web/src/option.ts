@@ -13,7 +13,7 @@
  * number on a category axis as an index, so a category whose labels are
  * numbers would otherwise land on the wrong tick.
  */
-import { clockFor, type Clock } from "./clock";
+import { clockFor, type Clock, type Precision } from "./clock";
 import { DIM_OPACITY, litRows } from "./highlight";
 import { CATEGORY_COLOURS, categoryTable, colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
 
@@ -116,15 +116,30 @@ function clockOf(zone: string | undefined): Clock {
 }
 
 /** A time as its column shows it (#847/#848 P14): the wall time in its zone,
- * named, or as written for a zone-less one. */
-function showTime(clock: Clock, ms: number): string {
-  return clock.zone ? `${clock.text(ms)} ${clock.zone}` : clock.text(ms);
+ * named, or as written for a zone-less one; to the finest part the column
+ * has (P24), so an hourly column's midnight reads 00:00. */
+function showTime(clock: Clock, ms: number, at: Precision): string {
+  return clock.zone ? `${clock.text(ms, at)} ${clock.zone}` : clock.text(ms, at);
+}
+
+/** A time column's precision, read once per decoded column. */
+const precisions = new WeakMap<Column, Precision>();
+function columnPrecision(col: Column, clock: Clock): Precision {
+  let at = precisions.get(col);
+  if (at === undefined) {
+    const instants = Array.from({ length: col.length }, (_, i) => col.value(i)).filter((v) => typeof v === "number");
+    precisions.set(col, (at = clock.precision(instants)));
+  }
+  return at;
 }
 
 function show(col: Column, row: number): string {
   const v = col.value(row);
   if (v === null) return "—";
-  if (col.kind === "time") return showTime(clockOf(col.zone), v as number);
+  if (col.kind === "time") {
+    const clock = clockOf(col.zone);
+    return showTime(clock, v as number, columnPrecision(col, clock));
+  }
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(6)));
   return String(v);
 }
@@ -315,6 +330,9 @@ function axisOption(
     // -0.5, 0.5, … (its min plus the interval), the cell edges, where no label
     // belongs — every label came out blank.
     const centres = Array.from({ length: n }, (_, i) => i);
+    // every cell to the finest part any has (P24): 00:00 on an hourly lattice
+    // (a temporal lattice's cells are all epoch ms; the filter types them)
+    const at = clock ? clock.precision(axis.labels.filter((v): v is number => typeof v === "number")) : "day";
     return {
       type: "value",
       name,
@@ -332,7 +350,7 @@ function axisOption(
         // a temporal cell is epoch ms: shown on its column's clock
         formatter: (i: number) => {
           const label = axis.labels[i];
-          return clock && typeof label === "number" ? clock.text(label) : String(label ?? "");
+          return clock && typeof label === "number" ? clock.text(label, at) : String(label ?? "");
         },
       },
     };

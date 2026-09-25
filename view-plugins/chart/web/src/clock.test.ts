@@ -43,6 +43,32 @@ describe("clockFor", () => {
     expect(everywhere(() => taipei.text(at("2026-03-01T04:30:05.250Z")))).toBe("2026-03-01 12:30:05.250");
   });
 
+  it("shows a time to the finest part its column has (#847/#848 PR 5 P24)", () => {
+    // Seen live: an hourly column's tooltip read "2026-03-01 Asia/Taipei" at
+    // midnight — the time of day dropped for the one point where it is 00:00
+    const taipei = clockFor("Asia/Taipei");
+    const midnight = at("2026-02-28T16:00:00Z");
+    const hourly = [midnight, at("2026-02-28T17:00:00Z")];
+    expect(everywhere(() => taipei.precision(hourly))).toBe("minute");
+    expect(everywhere(() => taipei.text(midnight, taipei.precision(hourly)))).toBe("2026-03-01 00:00");
+    expect(everywhere(() => taipei.text(midnight, "second"))).toBe("2026-03-01 00:00:00");
+    expect(everywhere(() => taipei.text(midnight, "ms"))).toBe("2026-03-01 00:00:00.000");
+    // a pure date column keeps the date alone
+    expect(everywhere(() => taipei.precision([midnight, at("2026-03-01T16:00:00Z")]))).toBe("day");
+    expect(everywhere(() => taipei.text(midnight, "day"))).toBe("2026-03-01");
+    // the finest part any time has decides; none of a time's own parts is cut
+    expect(taipei.precision([midnight, at("2026-03-01T04:30:05Z"), at("2026-03-01T04:30:00Z")])).toBe("second");
+    expect(taipei.precision([midnight, at("2026-03-01T04:30:05.250Z")])).toBe("ms");
+    expect(taipei.text(at("2026-03-01T04:30:05.250Z"), "minute")).toBe("2026-03-01 12:30:05.250");
+    // read on the column's clock: UTC midnight is 08:00 in Taipei
+    expect(taipei.precision([at("2026-03-01T00:00:00Z")])).toBe("minute");
+    expect(clockFor(undefined).precision([at("2026-03-01T00:00:00Z")])).toBe("day");
+    // before 1970 as well (a negative epoch)
+    expect(clockFor(undefined).precision([at("1960-03-01T00:00:00Z")])).toBe("day");
+    expect(clockFor(undefined).precision([at("1960-03-01T06:00:00Z")])).toBe("minute");
+    expect(clockFor(undefined).precision([])).toBe("day");
+  });
+
   it("follows a zone's own clock change", () => {
     const ny = clockFor("America/New_York");
     // 2026-03-08: New York springs from -05:00 to -04:00 at 02:00 local (07:00 UTC)

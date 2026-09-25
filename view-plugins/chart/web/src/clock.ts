@@ -17,6 +17,12 @@ const MINUTE = 60_000;
 const QUARTER = 15 * MINUTE;
 const FIXED = /^([+-])(\d{2}):(\d{2})$/;
 
+/** How finely a time is written: the date alone, or to the minute, second or
+ * millisecond. */
+export type Precision = "day" | "minute" | "second" | "ms";
+const PRECISIONS: Precision[] = ["day", "minute", "second", "ms"];
+const DAY = 24 * 60 * MINUTE;
+
 export type Clock = {
   /** The zone named beside a time, or null for a zone-less column. */
   zone: string | null;
@@ -24,21 +30,35 @@ export type Clock = {
   offset(ms: number): number;
   /** The wall time at `ms`, as epoch ms read as UTC. */
   wall(ms: number): number;
-  /** The wall time at `ms` as text: the date, then only the finer parts it has. */
-  text(ms: number): string;
+  /** The wall time at `ms` as text: the date, then the finer parts it has,
+   * and at least those `at` names. */
+  text(ms: number, at?: Precision): string;
+  /** The finest part any of these instants has on this clock (#847/#848 PR 5
+   * P24): a column's times are all written to it, so an hourly column's
+   * midnight shows 00:00 rather than the date alone. */
+  precision(instants: Iterable<number>): Precision;
 };
 
 const pad = (n: number, width = 2) => String(n).padStart(width, "0");
 
+/** The finest part a wall time (epoch ms read as UTC) has. */
+export function precisionOf(wall: number): Precision {
+  // before 1970 the remainder is negative, but zero exactly when it is here
+  const within = wall % DAY;
+  if (within % 1000) return "ms";
+  if (within % MINUTE) return "second";
+  return within ? "minute" : "day";
+}
+
 /** A wall time (epoch ms read as UTC) as text: `2026-03-01`, `… 12:30`,
- * `… 12:30:05`, `… 12:30:05.250`. */
-export function wallText(wall: number): string {
+ * `… 12:30:05`, `… 12:30:05.250` — the parts it has, and at least `at`'s. */
+export function wallText(wall: number, at: Precision = "day"): string {
   const d = new Date(wall);
   let out = `${pad(d.getUTCFullYear(), 4)}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-  const [h, m, s, ms] = [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()];
-  if (h || m || s || ms) out += ` ${pad(h)}:${pad(m)}`;
-  if (s || ms) out += `:${pad(s)}`;
-  if (ms) out += `.${pad(ms, 3)}`;
+  const level = Math.max(PRECISIONS.indexOf(precisionOf(wall)), PRECISIONS.indexOf(at));
+  if (level >= 1) out += ` ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  if (level >= 2) out += `:${pad(d.getUTCSeconds())}`;
+  if (level >= 3) out += `.${pad(d.getUTCMilliseconds(), 3)}`;
   return out;
 }
 
@@ -93,6 +113,11 @@ export function clockFor(zone: string | undefined): Clock {
     zone: name,
     offset,
     wall: (ms) => ms + offset(ms),
-    text: (ms) => wallText(ms + offset(ms)),
+    text: (ms, at) => wallText(ms + offset(ms), at),
+    precision: (instants) => {
+      let level = 0;
+      for (const ms of instants) level = Math.max(level, PRECISIONS.indexOf(precisionOf(ms + offset(ms))));
+      return PRECISIONS[level];
+    },
   };
 }
