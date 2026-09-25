@@ -40,6 +40,9 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   接了 marking 的圖表「16 selected · by lot, wafer」、表格「filtered by … · 4 of 48 rows · by lot, wafer」、
   標頭的「by lot, wafer」，以及訊息上的 chip「by lot (2), wafer (2)」。
 - 框選與套索對每一種 mark 都有效，包括 line 與 area（以畫出來的位置判定，所以疊起來的 area 以它疊上去的高度算）。
+- 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
+  （沒接 marking、或沒有 `keys:`）才把框外的點變灰。
+- `stack: true` 在任何 x 軸型別上都照 x 的值疊；某一組在某個 x 沒有資料時，那裡算 0（那一層在那個 x 收窄到沒有）。
 - view 標頭的 marking 選單（標籤圖示＋`<名字> ▾`）可以把這張圖改接到別的 marking、新開一個，或斷開。這是**你自己的畫面狀態**，
   存在瀏覽器裡、不會改寫檔案；要永久改就改 YAML 的 `marking:`。
 - 連動的範圍是一個 item。同一個 item 開在好幾個分頁（例如聊天模式開出來的純編輯區頁面）也是同一組 marking。
