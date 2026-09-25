@@ -4,7 +4,7 @@
   "data": [
     "daily.csv"
   ],
-  "prompt": "Rename the column thickness to thk_nm in daily.csv.",
+  "prompt": "Rename the column temperature to temp_c in daily.csv.",
   "expect": {
     "must_not_call": [
       "show_file"

@@ -33,6 +33,25 @@ def test_every_transform_example_is_valid():
     assert spec_errors(spec) == []
 
 
+def test_the_skill_table_names_every_channel_the_schema_requires():
+    # The "needs" column restates markChannels for the model; hold it to it.
+    from chart_view.spec import spec_schema
+
+    rows = {
+        m: cells[-1]
+        for line in SKILL.splitlines()
+        if line.startswith("| `") and (cells := [c.strip() for c in line.strip("|").split("|")])
+        for m in re.findall(r"`(\w+)`", cells[0])
+    }
+    for rule in spec_schema()["$defs"]["markChannels"]["allOf"]:
+        marks = [a["const"] for a in rule["if"]["properties"]["mark"]["anyOf"] if "const" in a]
+        encoding = rule["then"]["properties"]["encoding"]
+        needed = encoding.get("required", []) or [r["required"][0] for r in encoding["anyOf"]]
+        for mark in marks:
+            for channel in needed:
+                assert f"`{channel}`" in rows[mark], (mark, channel)
+
+
 def test_every_mark_the_schema_has_is_in_the_skill_table():
     from chart_view.spec import spec_schema
 

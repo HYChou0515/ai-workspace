@@ -42,18 +42,19 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 
 ## 運營方要知道的事
 
-- **關掉它**：把 `chart` 從 plugin 目錄（`view_plugins.dir`）移除。只想對某個 item 關掉 AI 使用它，
-  就在該 item 的 skill 偏好把 `chart` skill 關掉。
+- **關掉它**：把 `chart` 從 plugin 目錄（`view_plugins.dir`）移除。
+  在某個 item 的 skill 偏好把 `chart` 關掉，只會拿掉那份 skill（AI 不再讀得到規格說明）；
+  `## Available views` 那兩行仍在，因為它看的是 app 有沒有 `write_file` 與 `show_file`。
 - **為自己的模型重調 skill**：
   1. 執行 `uv run python -m workspace_app.view_plugin tune chart`，它會用
      `<plugin 目錄>/chart/scenarios/` 的情境，外加一組不給 skill 的對照組來評分。
   2. 直接改 `<plugin 目錄>/chart/skill/SKILL.md`，重跑一次。
 
   這份 skill 只有一個檔案，改完**下一輪對話就生效**，不需要 Refresh 或重 build。
-  情境不計分，只是讓你在自己的模型上比較改前改後。
+  `tune` 會替情境評分，但這些分數不是 CI 的關卡，只是讓你在自己的模型上比較改前改後。
 - **prompt 成本**：凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多兩樣東西：
   - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有宣告
     views，所以這整段是因為 chart 才出現；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文約 5.0k 字元，只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文約 5.2k 字元，只在 AI `read_skill('chart')` 時才載入。
