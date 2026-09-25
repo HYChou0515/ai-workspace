@@ -130,6 +130,23 @@ words are examples, not spec keys.
   - A grid's axis line sits on the lattice's edge, not mid first cell.
   - "N selected" does not push the chart down.
   - A lasso on a grid with no marking shows which cells it took.
+- **P19 — A category colour draws its categories.** The 2026-09-25 live check of #857
+  on this branch: a gallery with `color: {type: nominal}` paints every tile and the
+  enlarged view one colour — `gallery.ts` `thumbnail()` sends `cat` codes through a
+  continuous ramp over 0..0. Category columns get a category palette and a legend, in
+  the gallery, its enlarged view, and a plain `grid` with a nominal colour.
+- **P20 — `show_file`'s check refuses what the gallery refuses.** `validate` passes a
+  `facet:` spec with an entity source, a missing facet or sort column, or an `aggregate`
+  on a channel; `facet_build` then refuses it, so the AI gets a card and the person a red
+  panel. `validate` runs the same checks `facet_build` does, and SKILL.md says the source
+  must be a table file.
+- **P21 — The enlarged tile fits a narrow screen.** At 390 wide the fixed 384 px canvas
+  is clipped on the right, and the clipped cells cannot be hovered.
+- **P22 — A cached gallery opens without "Building…".** A reopen whose cache is reused
+  (`built: false`) still flashes the building notice for about a second.
+- **P23 — A recovery rebuild keeps the scroll position.** After the cache is reaped
+  while the gallery is open, the rebuild opens at the top, not where the view was, as
+  `FacetGallery.tsx` says it does.
 - **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
