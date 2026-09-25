@@ -177,6 +177,18 @@ words are examples, not spec keys.
   rule `datum: "2026-03-01T12:00"` is still placed at 12:00 UTC (20:00 on a Taipei axis).
   The renderer and `validate`'s placement (`datums.py`, held together by
   `wire-corpus/datum-axes.json`) read it in the axis column's zone, UTC when it has none.
+- **P27 — Say which columns a marking marks by [user].** A marking is `column → set of
+  values`, so a selection over a two-column key (lot + wafer) lights every combination:
+  6 tiles picked, 15 marked. The user kept that model ("this is normal") and asked for it
+  to be stated where it shows: the gallery's count, the chart's "N selected", a table's
+  bar, and the marking chip name the key columns (e.g. "15 of 48 marked · by lot, wafer").
+- **P28 — What P24's demo left.**
+  - A line or area chart's brush selects nothing (ECharts' line series has no brush
+    selector); PR 2's Done-means lists box brush for every mark.
+  - The enlarged gallery view's box is only as tall as the gallery: with few tiles the
+    canvas overflows it at 1440 and is clipped at 390.
+  - In a narrow pane "Save as table" ends past the pane's edge.
+  - A 40-cell grid's first label read "1001", not "1000" (unverified).
 - **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
