@@ -343,6 +343,20 @@ words are examples, not spec keys.
   Row 11 runs the line-up on category axes too (a mechanism change) — round 18 covers it.
   Demo before/after at 1440 and 390, seen: after, a's tops 5 4 8 2 7 and b's 7 6 10 4 9
   equal pandas' cumulative sums; bars byte-identical before and after.
+- **P37 — Review round 18's findings.**
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 12 | P35 row 7 split a stack into one series per row-rank ("pieces"); a slot with 10,000 rows made 10,000 series (render 245 ms → 8,787 ms), a skewed category 500 series × 200 slots = 100,000 points (56 → 1,744 ms), and every brush rebuilds the option | A stacked series draws, per slot, the SUM of its rows as one point, which stands for all of them (a brush over it selects every one); one series per colour key, O(rows). Replaces P35's pieces [mine, open to override: the rows of one series at one slot are no longer separate segments] |
+  | 13 | `toMarking` is one boolean, not tied to the marking: after detaching, a brush made detached, or a move to another marking, the chart still says "· by <cols>" (the other marking's columns), keeps its brush visual off and lights by the marking | Whether a selection went to the marking is read from what it wrote: the marking it wrote to (and the source it wrote as) must be the one the chart is on now; a detached selection wrote nothing |
+  | 14 | On a log axis a row with no value beneath counted as "something beneath", so the filler above became 0 over nothing → Infinity | "Beneath" is a row below with a positive, finite value at that slot |
+  | 15 | The chart's own write read as another view's when its view file's path changed under it | The write records the source it was made as, and is compared with that |
+  | 16 | A second click on the same slice resets `clicked` with no test pinning it (a third click would clear again) | Pinned: click, click, click selects again |
+  | 17 | The wide layout restates `NAME_AT.y`'s gap by hand | One constant, read by both |
+
+  Rows 12 and 13 replace mechanisms, so round 19 follows. Performance is measured before
+  and after on the regression lens's inputs; the demo (1440 and 390, seen) covers rows
+  12 and 13, plus the 390 frames P34 row 2 and the horizontal stack lacked.
 
 ## Verification
 
