@@ -98,6 +98,38 @@ words are examples, not spec keys.
   delivered a fixed notice. The build's progress lines reach the view while it runs:
   a streamed sandbox run, or polling the build's state, whichever the platform's
   runner supports.
+- **P12 — Concurrent commands in one jailed sandbox.** The 2026-09-25 live check
+  (a7bac209) broke 5 of 30 queries of a five-chart layout under `kind: local`'s jail
+  (the k8s base default): `mount: …/dev/urandom: mount point does not exist`, or
+  `NotImplementedError: /dev/urandom … not found`. Every exec bind-mounts and then removes
+  the shared `$ROOT/dev/*` targets (`sandbox/local_process.py` `_JAIL_BOOTSTRAP`), so
+  execs that overlap tread on each other. Before #855, an agent's execs ran one at a
+  time; side-by-side charts and layouts make overlap routine. Issue #859.
+- **P13 — A layout is usable in narrow panes.** At 1440 wide, with the tree and chat
+  open, a five-pane layout gives panes 255 / 128 / 64 px. The view header takes most of
+  the height, a chart's fixed 360 px does not fit, tab titles spill into the chat
+  column, the toolbox overlaps the title, and 390 wide scrolls sideways. A chart fills
+  its pane, the header compacts, titles truncate inside their tab, and nothing scrolls
+  the page sideways.
+- **P14 — A zoned time shows in its column's zone.** The tooltip shows UTC ISO and the
+  axis the browser's zone, while a filter reads a zone-less time in the column's zone.
+  The axis, the tooltip and the gallery's labels show a zoned column in its own zone and
+  name it. A zone-less column shows as written (UTC), in every browser.
+- **P15 — `highlight: values` on a date column reads its values as a filter does.**
+  Today it compares `canon` text, so `"2026-03-01T03:00"` matches nothing where
+  `oneOf` matches. It uses the same reader as `equal` / `oneOf` (`chart_view/instants.py`).
+  A `where:` whose pandas comparison fails names the column and the value, instead of
+  pandas' raw message.
+- **P16 — A colour scale shows readable values.** A heatmap's legend labelled both ends
+  "0" (precision 0 over 0.056–0.346), and a grid's colour bar has no numbers. Both show
+  the range with enough digits to tell the ends apart.
+- **P17 — Clearing a chart's selection clears a seeded marking.** A marking seeded by
+  `highlight:` survives the chart's ✕; the ✕ clears whatever the marking holds.
+- **P18 — Small chart fixes from the live check.**
+  - A rule's label is not clipped ("102" drew as "10").
+  - A grid's axis line sits on the lattice's edge, not mid first cell.
+  - "N selected" does not push the chart down.
+  - A lasso on a grid with no marking shows which cells it took.
 - **P11 — Live check at 390 and 1440 wide, with a base differential on 83ad6363.** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
