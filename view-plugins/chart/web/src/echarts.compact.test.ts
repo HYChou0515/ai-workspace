@@ -164,6 +164,95 @@ describe("a chart in a narrow pane keeps a plot, against real ECharts", () => {
     expect(compactAt(0)).toBe(false);
   });
 
+  // #847/#848 PR 5 P34 row 3: compact, a category legend stacks a row per
+  // level under the plot, and 16 levels took more than the chart's height --
+  // the plot's height went negative. The plot keeps at least half the chart's
+  // height; a legend that would take more is not drawn, and the chart says so.
+  const levels = (n: number) =>
+    lattice(cat(xs.map((x) => `level ${String(x % n).padStart(2, "0")}`)), "nominal");
+  function short(n: number, w: number, h: number) {
+    const { doc, a } = levels(n);
+    const built = toOption(doc, a, { gridImage: () => ({}) as unknown as HTMLCanvasElement, compact: compactAt(w), height: h });
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: w, height: h });
+    chart.setOption(built.option, true);
+    type Rect = { x: number; y: number; width: number; height: number };
+    const model = (chart as unknown as { getModel(): { getComponent(m: string): { coordinateSystem: { getRect(): Rect } } } }).getModel();
+    const plot = model.getComponent("grid").coordinateSystem.getRect();
+    const shown = (chart.getOption() as { visualMap: { show?: boolean }[] }).visualMap.map((v) => v.show !== false);
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    const notes = [...built.notes, ...built.layout({ compact: compactAt(w), height: h }).notes];
+    return { plot, shown, notes, drawsLevel: svg.includes(">level 00<") };
+  }
+
+  it.each([
+    [16, 300, 400],
+    [16, 139, 400],
+    [16, 139, 300],
+    [8, 139, 300],
+    [6, 300, 400],
+  ])("%i levels at %i x %i: the plot keeps half the chart's height, the legend is not drawn and a note says so", (n, w, h) => {
+    const { plot, shown, notes, drawsLevel } = short(n, w, h);
+    expect(plot.height).toBeGreaterThanOrEqual(h / 2 - 1);
+    expect({ shown, drawsLevel }).toEqual({ shown: [false], drawsLevel: false });
+    expect(notes).toContain("colour key hidden (too short)");
+  });
+
+  it.each([
+    [3, 139, 400],
+    [16, 139, 1200],
+    [4, 300, 420],
+  ])("(control) %i levels at %i x %i: the legend fits and is drawn", (n, w, h) => {
+    const { plot, shown, notes, drawsLevel } = short(n, w, h);
+    expect(plot.height).toBeGreaterThanOrEqual(h / 2 - 1);
+    expect({ shown, drawsLevel }).toEqual({ shown: [true], drawsLevel: true });
+    expect(notes).not.toContain("colour key hidden (too short)");
+  });
+
+  it("a colour bar that would take more than half is not drawn either: the rule is the plot's, not the legend's", () => {
+    const built = toOption(GRID.doc, GRID.a, { gridImage: () => ({}) as unknown as HTMLCanvasElement, compact: true, height: 150 });
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 139, height: 150 });
+    chart.setOption(built.option, true);
+    type Rect = { x: number; y: number; width: number; height: number };
+    const model = (chart as unknown as { getModel(): { getComponent(m: string): { coordinateSystem: { getRect(): Rect } } } }).getModel();
+    const plot = model.getComponent("grid").coordinateSystem.getRect();
+    const shown = (chart.getOption() as { visualMap: { show?: boolean }[] }).visualMap.map((v) => v.show !== false);
+    chart.dispose();
+    expect(plot.height).toBeGreaterThan(0);
+    expect(shown).toEqual([false]);
+  });
+
+  it("a key not drawn leaves no room under the plot: the one drawn sits at the bottom", () => {
+    // points coloured by value over a category lattice: a colour bar, then a
+    // 16-level legend -- which has no room at 139 x 400
+    const { doc: grid, a: cells } = levels(16);
+    const doc = {
+      ...base,
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "cx", type: "ordinal" }, y: { field: "cy", type: "ordinal" }, color: { field: "value", type: "quantitative" } } },
+        { mark: "grid", encoding: (grid as { encoding: object }).encoding },
+      ],
+    };
+    const points = layer("scatter", 3, { cx: f64([0, 1, 2]), cy: f64([0, 1, 2]), value: f64([1, 2, 3]) });
+    const a = answer(points, cells.layers[0]!);
+    const built = toOption(doc, a, { gridImage: () => ({}) as unknown as HTMLCanvasElement, compact: true, height: 400 });
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 139, height: 400 });
+    chart.setOption(built.option, true);
+    const shown = (chart.getOption() as { visualMap: { show?: boolean; bottom?: number }[] }).visualMap.map((v) => [v.show, v.bottom]);
+    chart.dispose();
+    expect(shown).toEqual([
+      [true, 4],
+      [false, 4],
+    ]);
+  });
+
+  it("with its height unknown, a compact chart draws every legend (as before a size is measured)", () => {
+    const { doc, a } = levels(16);
+    const built = toOption(doc, a, { gridImage: () => ({}) as unknown as HTMLCanvasElement, compact: true });
+    const vm = (built.option.visualMap as { show?: boolean }[]).map((v) => v.show !== false);
+    expect(vm).toEqual([true]);
+  });
+
   it("(control) a wide chart keeps its colour bar beside the plot", () => {
     const { plot, bars } = laidOut(GRID.doc, GRID.a, 600, 400);
     expect(bars[0]!.left).toBeGreaterThanOrEqual(plot.right);

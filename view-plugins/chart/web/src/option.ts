@@ -79,8 +79,19 @@ export type Built = {
   /** A pie's legend names its SLICES: slice j of series i is `slices[i][j]`. */
   slices: (string[] | undefined)[];
   grids: GridLayer[];
+  /** What the chart says about its data (bins, rules not drawn). */
   notes: string[];
+  /** The layout part of the option for a size (`withLayout` puts it in): a
+   * switch of layout is merged into a drawn chart as this alone. */
+  layout: (l: Layout) => LaidOut;
 };
+
+/** How a chart is laid out: compact (`compactAt` its width) and, when
+ * measured, its height in px. */
+export type Layout = { compact: boolean; height?: number };
+
+/** A layout's part of the option, and what it says (a key it had no room for). */
+export type LaidOut = { option: Record<string, unknown>; notes: string[] };
 
 export type Options = {
   /** Turn a grid's pixels into something ECharts can draw (a canvas, in the
@@ -93,6 +104,9 @@ export type Options = {
   lit?: (boolean[] | null)[];
   /** The chart is narrower than `COMPACT_BELOW` (`compactAt`). */
   compact?: boolean;
+  /** The chart's height in px, when measured (a compact layout keeps half of
+   * it for the plot, PR 5 P34). */
+  height?: number;
 };
 
 /** Below this width (px) a chart is laid out compact (#847/#848 PR 5 P31). */
@@ -974,60 +988,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const lengthIsValue = specs.some((s) => ["bar", "area"].includes(markOf(s).type));
     option.xAxis = [axisOption(xAxis, gridCells, "x", lengthIsValue)];
     option.yAxis = [axisOption(yAxis, gridCells, "y", lengthIsValue)];
-    // containLabel reserves room for tick labels only; the axis names (centred
-    // beside their axis, NAME_AT) need their own margin or they are clipped.
-    // A category legend's names need their own room beside the plot: at the
-    // colour bar's fixed 80 px a long name ran over the plot (#847/#848 P19).
-    // Up to ~8 px a character at 12 px (a browser's "gamma" measured ~43 px),
-    // plus the swatch, its gap and the edge.
-    const names = visualMaps.flatMap((v) => (v.type === "piecewise" ? (v.categories as string[]) : []));
-    const legendRoom = names.length ? 56 + 8 * Math.max(...names.map((n) => n.length)) : 0;
-    if (opts.compact) {
-      // #847/#848 PR 5 P31: in a narrow pane the margins beside the plot took
-      // it all (a 139 px grid kept a 2 px plot). The y axis's name goes above
-      // the plot, and the colour bar or category legend under it: a narrow
-      // pane is short of width, not of height.
-      const under = visualMaps.reduce(
-        (room, v) => room + (v.type === "piecewise" ? (v.categories as string[]).length * PIECE_ROW : BAR_ROW),
-        0,
-      );
-      (option.yAxis as Record<string, unknown>[])[0] = {
-        ...(option.yAxis as Record<string, unknown>[])[0],
-        nameLocation: "end",
-        nameGap: 8,
-        nameTextStyle: { align: "left" },
-      };
-      option.grid = { containLabel: true, left: 8, right: 8, top: legend.length ? 72 : 56, bottom: 40 + under };
-      let below = 4;
-      for (const v of [...visualMaps].reverse()) {
-        Object.assign(
-          v,
-          v.type === "piecewise"
-            ? { orient: "vertical", left: 4, bottom: below, padding: [5, 0], itemWidth: 12, itemGap: PIECE_ROW - 14, textGap: 4 }
-            : { orient: "vertical", left: 8, bottom: below, itemWidth: 10, itemHeight: 40, textGap: 4 },
-        );
-        below += v.type === "piecewise" ? (v.categories as string[]).length * PIECE_ROW : BAR_ROW;
-      }
-    } else {
-      option.grid = {
-        containLabel: true,
-        left: 48,
-        right: visualMaps.length ? Math.max(80, legendRoom) : 16,
-        top: legend.length ? 48 : 32,
-        bottom: 32,
-      };
-    }
-    // Over the plot's right edge: a colour bar takes the margin beside the
-    // plot, top to bottom in a short pane, and at the chart's own edge the
-    // tools sat over its top label (#847/#848 PR 5 P30, found at 390 wide).
-    option.toolbox = {
-      top: 4,
-      right: visualMaps.length ? (option.grid as { right: number }).right : 8,
-      // compact, the three icons fit one row of a 69 px chart (at ECharts'
-      // 15 px, 8 apart, they wrapped over the y axis's name)
-      ...(opts.compact ? { itemSize: 12, itemGap: 2, padding: [5, 2] } : {}),
-      feature: { brush: { type: ["rect", "polygon", "clear"] } },
-    };
+    option.toolbox = { feature: { brush: { type: ["rect", "polygon", "clear"] } } };
   } else {
     // A pie alone still has the ✕ (#847/#848 PR 5 P31) [mine, open to
     // override]: there is nothing on it to box or lasso (P30), but a marking
@@ -1037,6 +998,122 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     option.toolbox = { top: 4, right: 8, feature: { brush: { type: ["clear"] } } };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
-  if (visualMaps.length) option.visualMap = visualMaps.map((v) => (v.orient ? v : { right: 8, top: "middle", ...v }));
-  return { option, series: rows, names, slices, grids, notes };
+  if (visualMaps.length) option.visualMap = visualMaps;
+  const layout = cartesian ? cartesianLayout(visualMaps, legend.length > 0) : () => ({ option: {}, notes: [] });
+  const built: Built = { option, series: rows, names, slices, grids, notes, layout };
+  return { ...built, option: withLayout(built, { compact: opts.compact ?? false, height: opts.height }) };
+}
+
+/** The chart's option with `l`'s layout in it -- the one place a layout is
+ * put into an option, for a chart drawn in full and for `toOption`'s own. */
+export function withLayout(built: Built, l: Layout): Record<string, unknown> {
+  const part = built.layout(l).option;
+  const out: Record<string, unknown> = { ...built.option };
+  for (const [k, v] of Object.entries(part)) {
+    const base = out[k];
+    // an axis or the toolbox: its layout keys over the rest of it
+    if (Array.isArray(v) && Array.isArray(base) && k.endsWith("Axis")) {
+      out[k] = base.map((b, i) => ({ ...(b as object), ...(v[i] as object) }));
+    } else if (k === "toolbox") out[k] = { ...(base as object), ...(v as object) };
+    else out[k] = v;
+  }
+  return out;
+}
+
+/** Compact, the room under the plot taken by the x axis's tick labels (12 px
+ * text and its margin; `containLabel` keeps them inside the plot's box). */
+const X_LABELS = 20;
+
+/** The layout of a chart with axes: where the plot, its colour bars and
+ * category legends, the tools and the y axis's name go. Every key either
+ * layout sets is set by both (`null` where one leaves it to ECharts), so a
+ * switch from one to the other can be MERGED into a drawn chart -- keeping
+ * its brush, legend and selection (#847/#848 PR 5 P34) -- with nothing of
+ * the other left over. */
+function cartesianLayout(visualMaps: Record<string, unknown>[], hasLegend: boolean): (l: Layout) => LaidOut {
+  // containLabel reserves room for tick labels only; the axis names (centred
+  // beside their axis, NAME_AT) need their own margin or they are clipped.
+  // A category legend's names need their own room beside the plot: at the
+  // colour bar's fixed 80 px a long name ran over the plot (#847/#848 P19).
+  // Up to ~8 px a character at 12 px (a browser's "gamma" measured ~43 px),
+  // plus the swatch, its gap and the edge.
+  const names = visualMaps.flatMap((v) => (v.type === "piecewise" ? (v.categories as string[]) : []));
+  const legendRoom = names.length ? 56 + 8 * Math.max(...names.map((n) => n.length)) : 0;
+  const rowsOf = (v: Record<string, unknown>) => (v.type === "piecewise" ? (v.categories as string[]).length * PIECE_ROW : BAR_ROW);
+  return ({ compact, height }) => {
+    if (compact) {
+      // #847/#848 PR 5 P31: in a narrow pane the margins beside the plot took
+      // it all (a 139 px grid kept a 2 px plot). The y axis's name goes above
+      // the plot, and the colour bar or category legend under it: a narrow
+      // pane is short of width, not of height.
+      // P34: but not of ALL its height -- a legend of 16 categories left the
+      // plot a negative height. The plot keeps at least half the chart's
+      // height; a bar or legend that would take more is not drawn (its
+      // colours still are), and the chart says so. Unmeasured, all are drawn.
+      const top = hasLegend ? 72 : 56;
+      let under = 0;
+      const shown = visualMaps.map((v) => {
+        const fits = !height || height - top - 40 - X_LABELS - (under + rowsOf(v)) >= height / 2;
+        if (fits) under += rowsOf(v);
+        return fits;
+      });
+      let below = 4;
+      const placed: Record<string, unknown>[] = [];
+      for (let i = visualMaps.length - 1; i >= 0; i--) {
+        const v = visualMaps[i];
+        placed[i] = {
+          ...v,
+          show: shown[i],
+          orient: "vertical",
+          // (a visualMap keeps one of left / right and one of top / bottom:
+          // ECharts drops the other side's when one is set -- `ignoreSize`)
+          left: v.type === "piecewise" ? 4 : 8,
+          bottom: below,
+          ...(v.type === "piecewise"
+            ? { padding: [5, 0], itemWidth: 12, itemGap: PIECE_ROW - 14, textGap: 4 }
+            : { padding: 5, itemWidth: 10, itemHeight: 40, textGap: 4 }),
+        };
+        if (shown[i]) below += rowsOf(v);
+      }
+      return {
+        option: {
+          grid: { containLabel: true, left: 8, right: 8, top, bottom: 40 + under },
+          yAxis: [{ nameLocation: "end", nameGap: 8, nameTextStyle: { align: "left" } }],
+          // compact, the three icons fit one row of a 69 px chart (at ECharts'
+          // 15 px, 8 apart, they wrapped over the y axis's name)
+          toolbox: { top: 4, right: 8, itemSize: 12, itemGap: 2, padding: [5, 2] },
+          ...(visualMaps.length ? { visualMap: placed } : {}),
+        },
+        notes: shown.every(Boolean) ? [] : ["colour key hidden (too short)"],
+      };
+    }
+    const right = visualMaps.length ? Math.max(80, legendRoom) : 16;
+    return {
+      option: {
+        grid: { containLabel: true, left: 48, right, top: hasLegend ? 48 : 32, bottom: 32 },
+        yAxis: [{ nameLocation: "middle", nameGap: 44, nameTextStyle: { align: null } }],
+        // Over the plot's right edge: a colour bar takes the margin beside the
+        // plot, top to bottom in a short pane, and at the chart's own edge the
+        // tools sat over its top label (#847/#848 PR 5 P30, found at 390 wide).
+        // (ECharts' own size, gap and padding, stated for the switch back)
+        toolbox: { top: 4, right: visualMaps.length ? right : 8, itemSize: 15, itemGap: 8, padding: 5 },
+        ...(visualMaps.length
+          ? {
+              visualMap: visualMaps.map((v) => ({
+                ...v,
+                show: true,
+                orient: "vertical",
+                top: "middle",
+                right: 8,
+                // ECharts' defaults: a bar's size is its own when null
+                ...(v.type === "piecewise"
+                  ? { padding: 5, itemWidth: 20, itemGap: 10, textGap: 10 }
+                  : { padding: 5, itemWidth: null, itemHeight: null, textGap: 10 }),
+              })),
+            }
+          : {}),
+      },
+      notes: [],
+    };
+  };
 }

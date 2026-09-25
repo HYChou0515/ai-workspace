@@ -15,7 +15,7 @@ import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } 
 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
-import { type Answer, type Built, compactAt, measuredFields, toOption } from "./option";
+import { type Answer, type Built, compactAt, type Layout, measuredFields, toOption, withLayout } from "./option";
 import { highlightMarking, markedBy, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
 import { type Cells, type RasterImage, upscale } from "./raster";
 import {
@@ -121,24 +121,27 @@ function Plot({
     if (own || !marking) return own;
     return entry ? markingLit(answer, entry.marking, isLit, measured) : answer.layers.map(() => null);
   }, [marking, toMarking, entry, answer, selection, measured]);
-  // Whether the chart is laid out compact (#847/#848 PR 5 P31): read from the
-  // width its host is given, by the observer that resizes it. A boolean, so the
-  // option is rebuilt only when the width crosses `COMPACT_BELOW`.
-  const [compact, setCompact] = useState(false);
+  // How the chart is laid out (#847/#848 PR 5 P31, P34): compact or not, read
+  // from the width its host is given by the observer that resizes it, and --
+  // compact -- its height, of which the plot keeps half. It is not part of
+  // what the option is built from: a switch of layout is merged into the
+  // drawn chart as the layout alone (`Built.layout`), never a rebuild.
+  const [layout, setLayout] = useState<Layout>({ compact: false });
   const built: Built = useMemo(
-    () => toOption(doc, answer, { gridImage: gridCanvas, compact, ...(lit ? { lit } : {}) }),
-    [doc, answer, lit, compact],
+    () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}) }),
+    [doc, answer, lit],
   );
   const builtRef = useRef(built);
   builtRef.current = built;
+  const laid = useMemo(() => built.layout(layout), [built, layout]);
+  // Whether ECharts' own brush visual is off (see `toMarking`).
+  const brushOff = !!marking && toMarking;
   // (every chart has a brush: a pie alone has only its ✕, PR 5 P31)
-  const option = useMemo(
-    () => ({
-      ...built.option,
-      brush: { ...(built.option.brush as object), outOfBrush: marking && toMarking ? { colorAlpha: 1 } : OUT_OF_BRUSH },
-    }),
-    [built, marking, toMarking],
-  );
+  const option = useMemo(() => {
+    const full = withLayout(built, layout);
+    return { ...full, brush: { ...(full.brush as object), outOfBrush: brushOff ? { colorAlpha: 1 } : OUT_OF_BRUSH } };
+  }, [built, layout, brushOff]);
+  const notes = [...built.notes, ...laid.notes];
 
   // What a gesture writes, and what it wrote to the marking (null: nothing --
   // no marking, or one this view cannot write). Read through a ref: the
@@ -248,8 +251,15 @@ function Plot({
         ? null
         : new ResizeObserver((entries) => {
             chart.resize();
-            const width = entries[0]?.contentRect.width;
-            if (width !== undefined) setCompact(compactAt(width));
+            const box = entries[0]?.contentRect;
+            // 0 px is no width -- a pane hidden (display: none) -- not a
+            // narrow one: the layout stays as it was (P34)
+            if (!box || box.width <= 0) return;
+            const compact = compactAt(box.width);
+            // the height matters only compact; a wide chart's is not kept, so
+            // its every pixel of height is no new layout
+            const height = compact && box.height > 0 ? Math.round(box.height) : undefined;
+            setLayout((prev) => (prev.compact === compact && prev.height === height ? prev : { compact, height }));
           });
     resize?.observe(el.current);
     return () => {
@@ -259,26 +269,36 @@ function Plot({
     };
   }, []);
 
-  // What the chart was last fully built from. When only the marking's lit rows
-  // changed, the series are replaced and everything else — the brush the person
-  // drew above all — stays, so they can still see and clear their selection.
-  // A switch to or from the compact layout is built in full too: merged, a
-  // colour bar laid under the plot kept its orientation when the pane widened.
-  const drawnFrom = useRef<{ doc: unknown; answer: unknown; compact: boolean } | null>(null);
+  // What the chart was last drawn from. Only a change of doc or answer is a
+  // full rebuild (#847/#848 PR 5 P34). When only the marking's lit rows
+  // changed, the series are replaced and everything else — the brush the
+  // person drew above all — stays, so they can still see and clear their
+  // selection. When only the layout changed, the layout alone is merged in:
+  // every key either layout sets is set by both (`Built.layout`), so nothing
+  // of the other is left over, and the brush, the count, the legend's hidden
+  // entries and a pie's or grid's own pick all stay.
+  // (`brushOff` changes only with `toMarking`, which `lit` -- and so `built`
+  // -- is recomputed from: a new `built` covers it.)
+  const drawn = useRef<{ doc: unknown; answer: unknown; built: Built; laid: string } | null>(null);
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const same = drawnFrom.current?.doc === doc && drawnFrom.current?.answer === answer && drawnFrom.current?.compact === compact;
-    if (same) {
-      chart.setOption(option, { replaceMerge: ["series"] });
+    const was = drawn.current;
+    const laidText = JSON.stringify(laid.option);
+    drawn.current = { doc, answer, built, laid: laidText };
+    if (was?.doc === doc && was.answer === answer) {
+      if (was.built !== built) chart.setOption(option, { replaceMerge: ["series"] });
+      else if (was.laid !== laidText) chart.setOption(laid.option);
       return;
     }
-    drawnFrom.current = { doc, answer, compact };
     chart.setOption(option, true);
-    // A full setOption drops the drawn brush, and with it anything to clear.
+    // A full setOption drops the drawn brush, and with it anything to clear;
+    // and what a click wrote is forgotten, or the next click on its slice
+    // would be taken for a second one and clear it.
     brushed.current = false;
+    clicked.current = null;
     setSelection([]);
-  }, [option, doc, answer, compact]);
+  }, [option, laid, doc, answer, built]);
 
   const count = selection.reduce((n, s) => n + s.rows.length, 0);
   // On a marking, which columns it marks by (P27): over two columns it lights
@@ -291,7 +311,7 @@ function Plot({
       {/* Always there, one line high: added only once something was selected,
           it pushed the chart down under the pointer (#847/#848 P18). */}
       <div
-        title={[...built.notes, ...(selected ? [selected] : [])].join(" · ")}
+        title={[...notes, ...(selected ? [selected] : [])].join(" · ")}
         style={{
           display: "flex",
           gap: 12,
@@ -304,7 +324,7 @@ function Plot({
           color: "var(--text-paper-d)",
         }}
       >
-        {built.notes.map((n) => (
+        {notes.map((n) => (
           <span key={n}>{n}</span>
         ))}
         {/* shrinks to an ellipsis in a narrow chart: at 390 wide a 155 px
