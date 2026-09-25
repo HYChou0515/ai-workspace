@@ -169,8 +169,10 @@ export type EntityViewProps = {
   path?: string;
   /** #847 PR 3 P3 — the named marking this view is on, as the header's marking
    * control has it: the file's `marking:` until this person re-attaches or
-   * detaches it (`null`) — view state, never written back to the file.
-   * `undefined` when the view names neither `marking:` nor `keys:`. */
+   * detaches it — view state, never written back to the file. `null`: on no
+   * marking (the file names none, or this person detached it). `undefined` only
+   * for a kind not registered `linkable` whose file names neither `marking:`
+   * nor `keys:`. */
   marking?: string | null;
   /** #847/#848 PR 5 — tell the header's marking control why selecting in this
    * view marks nothing (null: it does, or there is nothing to say). Present

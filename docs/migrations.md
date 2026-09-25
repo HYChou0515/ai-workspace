@@ -932,7 +932,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     會備份、**算進 workspace 額度**，需要新增檔案的權限；刪掉沒有副作用。
   - 帶時區的時間欄位照**欄位自己的時區**顯示並寫出時區名稱，不再隨看的人的瀏覽器時區改變。
   - `sandbox.kind: local` 開 jail 時，同一個沙盒同時跑的指令不再互相拆掉 `/dev`（[#859](https://github.com/HYChou0515/ai-workspace/issues/859)）：
-    以前一個多圖的版面約每 30–50 次查詢就有一次在面板上顯示 traceback。沙盒根目錄下的 `dev/` 不再在每個指令後刪除
+    以前在 live check 裡，一個五圖版面 30 次查詢壞 5 次（壓測 300 次壞 9 次），壞的那格面板顯示 traceback。沙盒根目錄下的 `dev/` 不再在每個指令後刪除
     （留下一個空目錄），運營方不用做事。
 
 細節見 [chart：互動圖表 view plugin](view-plugin-chart.md)。
@@ -977,7 +977,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     `facet_stack`，而且 `query` / `facet_build` 收 view 檔的路徑。
   - 為什麼：新的 renderer 傳給沙盒的是 view 檔路徑（spec 超過 128 KB 也畫得出來），舊的沙盒只收 spec 全文。
     新沙盒兩種都收，所以先上沙盒不會壞舊的前端。
-  - 漏做的症狀：打開 chart 或縮圖牆，面板顯示 `argument must be {'spec': <string>}`；按「Save as table」得到
+  - 漏做的症狀：打開 chart，面板顯示 `argument must be {'spec': <string>}`；打開縮圖牆顯示
+    `facet_build takes exactly ['spec'] (and an optional epoch)`；按「Save as table」得到
     `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯。
 - **`sandbox.kind: local` 掛自己 plugin 目錄的部署**，`rollout 前`把 `chart` **與 `csv-table`** 用這一版重新
   `view_plugin build` 進那個目錄（做法同上）。

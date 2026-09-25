@@ -49,7 +49,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - AI 可以用 `show_file(layout=…)` 把幾張連動的圖一次放進分割窗格；送訊息時，composer 上方的 marking chip
   會把選取寫成 `.markings/<名字>.json` 給 AI 讀（見升級手冊 [#856](migrations.md#pr-856)）。
 - **表格也接 marking**：內建的 entity `table` 與 `csv-table` 寫 `marking:` 就加入連動。marking 裡有值時，表格只剩
-  被點亮的列，表頭上方一條「filtered by <名字> · 3 of 25 rows · show all」；按 show all 顯示全部列、被點亮的反白
+  被點亮的列，表頭上方一條「filtered by <名字> · 3 of 25 rows · by <欄位> · show all」；按 show all 顯示全部列、被點亮的反白
   （這個選擇記在你自己的瀏覽器）。比對規則和圖表相同：每個共同欄位的值（用圖表寫 marking 的同一種文字）都在集合裡。
   表格和 marking 沒有共同欄位時，顯示全部列並說明「no column in common」。
 - **在表格上勾選也會寫 marking**：寫進 `keys:` 的欄位，沒有 `keys:` 就用 marking 本身的欄位；兩者都沒有就不寫，

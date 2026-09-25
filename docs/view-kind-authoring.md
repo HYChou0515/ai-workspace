@@ -219,7 +219,7 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 | `onOpenRecordFile(number)` | 另開分頁到該紀錄的 `.md` 原始檔。同樣可能 `undefined` |
 | `viewKey` | 這個 view 的穩定識別（含 item 與檔案路徑）。存「這個人在這個 view 的摺疊狀態」這類 UI 偏好時當 key 用 |
 | `path` | 這份 view 檔的 workspace 路徑；你寫進 marking 時當 `source`。不在檔案裡（預覽）時沒有 |
-| `marking` | 這個 view 接著的 marking 名稱（見 4.4）；`null` 是這個人斷開了；view 檔沒寫 `marking:` 也沒寫 `keys:` 時是 `undefined` |
+| `marking` | 這個 view 接著的 marking 名稱（見 4.4）；`null`：沒接任何 marking（檔案沒寫、或這個人斷開了）；只有沒宣告 `linkable` 的 kind、檔案又沒寫 `marking:` / `keys:` 時才是 `undefined` |
 | `onMarkingNote(note)` | 告訴標頭的 marking 選單「在這裡選取為什麼不會寫進 marking」，沒話說就傳 `null` |
 
 ⚠️ 凡是標「沒接就是 `undefined`」的，**要先判斷再畫**——畫一個按了沒反應的按鈕比不畫更糟。

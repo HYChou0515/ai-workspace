@@ -193,10 +193,16 @@ words are examples, not spec keys.
   - A `grid`'s cells blur into each other at their edges (the raster is scaled with
     smoothing); a cell is one flat colour with a sharp edge.
   - A `stack: true` area on a quantitative x does not stack (two layers of 1s span
-    0–1); it stacks on a time or category x.
+    0–1); on a category x it stacks by value, and on a time x it only looked stacked
+    (it stacked by index).
   - The chart a selection is made in shows only its own brush box (16 lit) while every
     other view shows what the marking lights (27): after a selection writes the marking,
     that chart lights by the marking too.
+- **P30 — Every mark a person can select from.** Round 16 (veracity): only bar,
+  scatter, line/area (P28) and grid select; `heatmap`, `boxplot`, `errorbar` and `pie`
+  select nothing, yet the skill tells the AI to draw a `diff` as a heatmap on a
+  marking. A brush or lasso selects heatmap cells by their centre and boxplot /
+  errorbar groups by their drawn element; a click selects a pie slice.
 - **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
