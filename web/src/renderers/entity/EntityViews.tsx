@@ -245,7 +245,14 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
-          {linkable && <MarkingControl value={marking} onChange={setMarking} note={marking ? markingNote : null} />}
+          {linkable && (
+            <MarkingControl
+              value={marking}
+              onChange={setMarking}
+              note={marking ? markingNote : null}
+              path={props.path}
+            />
+          )}
           {viewConfig && <ViewSettingsPanel config={viewConfig} />}
           {type && !renderer.suppressQuickCreate && canWrite && (
             <QuickCreate

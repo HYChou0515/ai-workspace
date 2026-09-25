@@ -110,6 +110,7 @@ from .kb_chat_routes import (
 from .kb_routes import register_kb_routes
 from .lifecycle import build_lifespan
 from .locator import ItemLocator
+from .marking_table import register_marking_table_route
 from .mention import MentionService
 from .meta_routes import register_meta_routes
 from .notification_delivery import INotificationChannel
@@ -2433,7 +2434,7 @@ def create_app(
             sandbox, locator, item_id, plugin_artifacts=artifact_plugins(view_plugins)
         )
 
-    register_view_plugin_runner(
+    run_view_plugin = register_view_plugin_runner(
         api,
         get_plugins=lambda: app.state.view_plugins,
         locator=locator,
@@ -2441,6 +2442,9 @@ def create_app(
         registry=registry,
         resolve_tools=_item_tools_with_plugins,
     )
+    # P7: "save as table" selects the rows through that same runner and writes
+    # them through the file facade.
+    register_marking_table_route(api, locator=locator, files=files, run_plugin=run_view_plugin)
 
     register_tools_routes(
         api,

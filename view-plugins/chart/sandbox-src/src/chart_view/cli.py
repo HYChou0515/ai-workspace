@@ -15,6 +15,9 @@
   ``rev`` is the renderer's digest of the text it holds, ignored here: it only
   makes an edited file a new call (the args are the renderer's cache key).
   ``query {"spec"}`` still takes the text, for a view with no file.
+- ``lit_rows {"view", "columns" | "marking"}`` — "save as table" (P7): the rows
+  a marking lights in the view's source, every column, as CSV
+  (`chart_view.lit_rows`).
 
 Hand-written (no pydantic): two small commands, and a bundle that stays small.
 
@@ -42,6 +45,36 @@ COMMANDS: dict[str, dict[str, Any]] = {
     "query": {
         "description": "Compute what a view: chart spec draws, as the renderer's JSON answer.",
         # its arguments are facet_cli.VIEW_ARGUMENTS (see _schema)
+    },
+}
+
+#: ``lit_rows`` (P7, "save as table") takes an object, not one string, so it
+#: keeps its own schema; its body lives in ``chart_view.lit_rows`` (pandas).
+LIT_ROWS: dict[str, Any] = {
+    "description": (
+        "The rows a marking lights in a view's source (its transforms applied), "
+        "with every column, as CSV."
+    ),
+    "schema": {
+        "type": "object",
+        "properties": {
+            "view": {
+                "type": "string",
+                "description": "The view file (or table file) the rows come from.",
+            },
+            "columns": {
+                "type": "object",
+                "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                "description": "The marking: column -> values, as marking text.",
+            },
+            "marking": {
+                "type": "string",
+                "description": "A .markings/<name>.json file to read the marking from.",
+            },
+        },
+        "required": ["view"],
+        "oneOf": [{"required": ["columns"]}, {"required": ["marking"]}],
+        "additionalProperties": False,
     },
 }
 
@@ -144,7 +177,7 @@ def _query(text: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     a = sys.argv[1:] if argv is None else argv
-    every = {**COMMANDS, **facet_cli.COMMANDS}
+    every = {**COMMANDS, "lit_rows": LIT_ROWS, **facet_cli.COMMANDS}
     if not a:
         print(json.dumps([{"name": n, "description": c["description"]} for n, c in every.items()]))
         return 0
@@ -153,7 +186,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"unknown command: {name}. available: {', '.join(every)}", file=sys.stderr)
         return 2
     if len(a) == 1:
-        params = facet_cli.schema(name) if name in facet_cli.COMMANDS else _schema(name)
+        if name in facet_cli.COMMANDS:
+            params = facet_cli.schema(name)
+        elif name == "lit_rows":
+            params = LIT_ROWS["schema"]
+        else:
+            params = _schema(name)
         print(
             json.dumps(
                 {
@@ -166,6 +204,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if name in facet_cli.COMMANDS:
         return facet_cli.run(name, a[1])
+    if name == "lit_rows":
+        from chart_view.lit_rows import run as lit_rows
+
+        return lit_rows(a[1])
     try:
         if name == "validate":
             form, value = "validate", _argument(name, a[1])

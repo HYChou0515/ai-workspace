@@ -8,6 +8,7 @@ import { useOpenFile, useWorkspaceVisible } from "../hooks/openFile";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { SaveMarkingTable, useSaveScope } from "./SaveMarkingTable";
 
 export function MarkingChips({
   markings,
@@ -20,6 +21,7 @@ export function MarkingChips({
   const t = useT();
   const opener = useOpenFile();
   const openFile = useWorkspaceVisible() ? opener : null;
+  const scope = useSaveScope();
   if (markings.length === 0) return null;
   return (
     <div
@@ -44,7 +46,13 @@ export function MarkingChips({
           </>
         );
         const canOpen = Boolean(openFile && m.path && !onRemove);
-        return (
+        // P7: a sent chip can save its marking's lit rows as a table, from the
+        // view it recorded; the composer's chips are not sent yet. The control
+        // sits BESIDE the pill, so a saved note never squeezes its label.
+        const save = scope && !onRemove && m.path ? (
+          <SaveMarkingTable scope={scope} name={m.name} view={m.source ?? null} columns={null} />
+        ) : null;
+        const pill = (
           <span
             key={m.name}
             data-testid="marking-chip"
@@ -101,6 +109,16 @@ export function MarkingChips({
                 <Icon name="x" size={11} />
               </button>
             )}
+          </span>
+        );
+        if (!save) return pill;
+        return (
+          <span
+            key={m.name}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", maxWidth: "100%" }}
+          >
+            {pill}
+            {save}
           </span>
         );
       })}

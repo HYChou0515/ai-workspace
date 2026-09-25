@@ -10,7 +10,15 @@
 import { useCallback, useState } from "react";
 
 import { Icon } from "../../components/Icon";
-import { useMarkingNames } from "../../hooks/useMarking";
+import { SaveMarkingTable, useSaveScope } from "../../components/SaveMarkingTable";
+import { useMarking, useMarkingNames } from "../../hooks/useMarking";
+import { useT } from "../../lib/i18n";
+import type { Marking } from "../../lib/markings";
+
+/** A marking as the save route takes it: each column's values, sorted. */
+function columnsOf(marking: Marking): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(marking).map(([c, v]) => [c, [...v].sort()]));
+}
 
 /** The select's value that opens the new-name box — never a marking name
  * (names are file names, and cannot hold NUL). */
@@ -58,22 +66,35 @@ export function MarkingControl({
   value,
   onChange,
   note = null,
+  path,
 }: {
   value: string | null;
   onChange: (next: string | null) => void;
   /** Why selecting in this view marks nothing (#847/#848 PR 5), or null. */
   note?: string | null;
+  /** The view file this header sits on — where "save as table" takes its
+   * rows from (P7). Absent outside a file. */
+  path?: string;
 }) {
+  const t = useT();
   const names = useMarkingNames();
+  const scope = useSaveScope();
+  const [entry] = useMarking(value);
   const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState("");
   const options = [...new Set([...(value ? [value] : []), ...names])].sort();
   return (
-    <span className="ev-marking" style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+    // Wraps: at 390 px the save control goes below the picker rather than
+    // squeezing it to its arrow (P7 demo frame).
+    <span
+      className="ev-marking"
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap", maxWidth: "100%" }}
+    >
       <Icon name="tag" size={12} color="var(--text-paper-d)" />
       <select
         aria-label="Marking"
         className="input"
+        style={{ flexShrink: 0 }}
         value={naming ? NEW : (value ?? "")}
         onChange={(e) => {
           const v = e.target.value;
@@ -119,6 +140,15 @@ export function MarkingControl({
         <span role="note" className="ev-marking__note">
           {note}
         </span>
+      )}
+      {scope && value && (
+        <SaveMarkingTable
+          scope={scope}
+          name={value}
+          view={path ?? null}
+          columns={entry ? columnsOf(entry.marking) : null}
+          why={!entry ? t("markings.nothingMarked") : !path ? t("markings.notAFile") : null}
+        />
       )}
     </span>
   );

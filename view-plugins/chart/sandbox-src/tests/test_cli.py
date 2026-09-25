@@ -45,6 +45,7 @@ def test_bare_launch_lists_the_commands(capsys):
     assert names == [
         "validate",
         "query",
+        "lit_rows",  # "save as table" (P7); tests/test_lit_rows.py pins it
         "facet_build",
         "facet_index",
         "facet_page",
