@@ -393,7 +393,7 @@ function ruleLabel(axis: Axis, at: number): { label?: { formatter: () => string 
 
 /** Where an axis name goes: centred beside its axis. At ECharts' default (the
  * axis end) a long field name ran past the plot and was cut off. */
-const NAME_AT = { x: { nameLocation: "middle", nameGap: 28 }, y: { nameLocation: "middle", nameGap: 44 } };
+export const NAME_AT = { x: { nameLocation: "middle", nameGap: 28 }, y: { nameLocation: "middle", nameGap: 44 } };
 
 /** A number, log, time or grid axis leaves out a label that would overlap its
  * neighbour: on a narrow chart a time axis read "Mar06:0012:00…" (#847/#848
@@ -1136,7 +1136,8 @@ function cartesianLayout(visualMaps: Record<string, unknown>[], hasLegend: boole
     return {
       option: {
         grid: { containLabel: true, left: 48, right, top: hasLegend ? 48 : 32, bottom: 32 },
-        yAxis: [{ nameLocation: "middle", nameGap: 44, nameTextStyle: { align: null } }],
+        // where every axis's name goes (NAME_AT), for the switch back from compact
+        yAxis: [{ ...NAME_AT.y, nameTextStyle: { align: null } }],
         // Over the plot's right edge: a colour bar takes the margin beside the
         // plot, top to bottom in a short pane, and at the chart's own edge the
         // tools sat over its top label (#847/#848 PR 5 P30, found at 390 wide).
