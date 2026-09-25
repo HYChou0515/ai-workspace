@@ -49,7 +49,11 @@
 }
 .ev-panel[data-narrow] .ev-panel__actions {
   flex: 0 1 auto;
-  flex-wrap: nowrap;
+  /* P24 — rows of their own beside the title when they do not fit: kept on
+   * one row, an entity table's select, settings and New made 246 px in a
+   * 106 px box at 390 wide, and New was drawn past the pane's edge. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
   min-width: 0;
 }
 .ev-panel[data-narrow] .ev-marking select {

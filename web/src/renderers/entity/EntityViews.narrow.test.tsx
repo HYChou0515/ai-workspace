@@ -79,6 +79,18 @@ describe("a view panel in a narrow pane", () => {
   });
 });
 
+describe("a narrow view panel's controls (#847/#848 PR 5 P24)", () => {
+  it("wrap onto rows of their own beside the title, rather than past the pane's edge", () => {
+    // measured at 390 wide: an entity table's marking select, view settings
+    // and New button made a 246 px row in a 106 px box, so New was drawn at
+    // 442-501 in a pane that ends at 390
+    const actions = ".ev-panel[data-narrow] .ev-panel__actions";
+    expect(effective(ENTITY_VIEWS_CSS, actions, "flex-wrap")).toBe("wrap");
+    expect(effective(ENTITY_VIEWS_CSS, actions, "justify-content")).toBe("flex-end");
+    expect(effective(ENTITY_VIEWS_CSS, actions, "min-width")).toBe("0");
+  });
+});
+
 describe("a view panel in any pane", () => {
   it("is at least as tall as its pane, so a chart in it can grow to the pane's height", () => {
     expect(effective(ENTITY_VIEWS_CSS, ".ev-panel", "min-height")).toBe("100%");
