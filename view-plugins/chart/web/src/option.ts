@@ -737,7 +737,21 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       if (mark.type === "line" && mark.opacity !== undefined) s.lineStyle = { opacity: mark.opacity };
       if (mark.type === "line" || mark.type === "area") {
         // A highlight dims POINTS, so a highlighted line shows them.
-        s.showSymbol = mark.point ?? lit !== null;
+        const drawn = mark.point ?? lit !== null;
+        // A line's points are always there to hover (#847/#848 PR 5 P25): the
+        // tooltip is an item tooltip, a point is the item, and with no points
+        // hovering a line showed nothing. Undrawn ones are clear until hovered.
+        s.showSymbol = true;
+        if (!drawn) {
+          s.itemStyle = { ...(s.itemStyle as object), opacity: 0 };
+          s.emphasis = { ...(s.emphasis as object), itemStyle: { opacity: 1 } };
+          // hovering one blurs the rest, which must stay clear (at the blur's
+          // 0.15 each showed as a faint ring)
+          s.blur = { ...(s.blur as object), itemStyle: { opacity: 0 } };
+          // a dimmed point's own opacity would draw it (`point: false` with a
+          // highlight): here the points stay clear
+          s.data = members.map((r) => point(li, r, extras.map((c) => c.value(r) as number | null)));
+        }
         if (mark.smooth) s.smooth = true;
       }
       if ((mark.type === "area" || mark.type === "bar") && mark.stack) s.stack = "stack";

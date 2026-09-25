@@ -23,10 +23,35 @@ describe("highlight on a line or area", () => {
     expect(s.data[0]).toMatchObject({ itemStyle: { opacity: 0.15 } });
   });
 
-  it("leaves a plain line's points hidden", () => {
+  it("leaves a plain line's points hidden until hovered", () => {
+    // #847/#848 PR 5 P25: they are there (to be hovered; see
+    // echarts.hover.test.ts) but clear, and drawn only while hovered
     const a = answer(layer("line", 2, { a: f64([1, 2]), b: f64([1, 2]) }));
-    const [s] = toOption({ ...base, mark: "line", encoding: xy }, a).option.series as { showSymbol: boolean }[];
-    expect(s.showSymbol).toBe(false);
+    type S = { showSymbol: boolean; itemStyle: { opacity: number }; emphasis: object; blur: object };
+    const [s] = toOption({ ...base, mark: "line", encoding: xy }, a).option.series as S[];
+    expect(s.itemStyle.opacity).toBe(0);
+    // drawn while hovered, and hovering still brings this series forward
+    expect(s.emphasis).toEqual({ focus: "self", itemStyle: { opacity: 1 } });
+    // while one is hovered the others are blurred, not drawn: at the blur's
+    // 0.15 every other point showed as a faint ring (seen in Chromium)
+    expect(s.blur).toEqual({ itemStyle: { opacity: 0 }, lineStyle: { opacity: 0.15 } });
+  });
+
+  it("keeps a highlighted line's points hidden when it asks for none (P25)", () => {
+    const a = answer(layer("line", 4, { a: f64([1, 2, 3, 4]), b: f64([1, 2, 3, 4]) }, LIT));
+    const [s] = toOption({ ...base, mark: { type: "line", point: false }, encoding: xy }, a).option.series as {
+      itemStyle: { opacity: number };
+      data: unknown[];
+    }[];
+    expect(s.itemStyle.opacity).toBe(0);
+    // no point carries an opacity of its own that would draw it
+    expect(s.data.every((d) => !(d && typeof d === "object" && "itemStyle" in d))).toBe(true);
+  });
+
+  it("draws a highlighted line's points, lit and dimmed (P25 leaves them drawn)", () => {
+    const a = answer(layer("line", 4, { a: f64([1, 2, 3, 4]), b: f64([1, 2, 3, 4]) }, LIT));
+    const [s] = toOption({ ...base, mark: "line", encoding: xy }, a).option.series as { itemStyle?: { opacity?: number } }[];
+    expect(s.itemStyle?.opacity).toBeUndefined();
   });
 });
 
