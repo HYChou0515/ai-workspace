@@ -261,3 +261,31 @@ describe("what is not another view's write keeps the chart's own selection (P35 
     expect(marked(store)).toEqual({ lot: ["L1"] });
   });
 });
+
+describe("with no marking store, the chart's selection is its own (P40 row 19)", () => {
+  // A standalone preview renders a chart outside any MarkingProvider: a write
+  // goes nowhere and the marking reads as empty. Only a write the store took
+  // can be dropped by another view's; before, the chart's own brush read as
+  // replaced the moment it was drawn, and its count and box went.
+  function mountBare(doc: object, a: Answer) {
+    const stdout = JSON.stringify(a);
+    sdk.useSandboxRun.mockReturnValue({ data: { stdout, stderr: "", exit_code: 0 }, error: null, isLoading: false, refetch: vi.fn() });
+    render(<ChartView spec={{ __doc: doc } as never} marking="m" path={SELF} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />);
+    return made.charts.at(-1)!;
+  }
+
+  it("a brush keeps its count and its box (red before: both went at once)", async () => {
+    const chart = mountBare(SCATTER, POINTS);
+    await brushTwo(chart);
+    await settle();
+    // "2 selected" alone: nothing went to a marking, so no "· by lot"
+    expect({ text: selectedText(), areas: brushAreas(chart) }).toEqual({ text: "2 selected", areas: 1 });
+  });
+
+  it("a pie's pick keeps its count and its lit slice", () => {
+    const chart = mountBare(PIE, SLICES);
+    click(chart, sliceAt(chart, 1));
+    expect(selectedText()).toBe("1 selected");
+    expect(opacities(chart)).toEqual([DIM_OPACITY, 1, DIM_OPACITY]);
+  });
+});

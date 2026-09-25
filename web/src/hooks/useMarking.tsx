@@ -17,12 +17,15 @@ const noop = () => () => {};
 const EMPTY: readonly string[] = [];
 
 /** `opts.ifEmpty`: write only if the marking holds nothing at that moment — for
- * a view seeding its own default, which must never overwrite a selection. */
+ * a view seeding its own default, which must never overwrite a selection.
+ * Returns whether a store took the write: false for a detached view and
+ * outside a provider, where it goes nowhere (a view whose write went nowhere
+ * holds its own selection -- nothing else can replace it). */
 export type WriteMarking = (
   marking: Marking | null,
   source: string | null,
   opts?: { ifEmpty?: boolean },
-) => void;
+) => boolean;
 
 /** `[entry, write]` for marking `name`. `null` is a detached view: it reads
  * nothing and its writes go nowhere. Outside a provider (a standalone preview)
@@ -38,7 +41,9 @@ export function useMarking(name: string | null): [MarkingEntry | undefined, Writ
   );
   const write = useCallback<WriteMarking>(
     (marking, source, opts) => {
-      if (store && name) store.set(name, marking, source, { ifEmpty: opts?.ifEmpty });
+      if (!store || !name) return false;
+      store.set(name, marking, source, { ifEmpty: opts?.ifEmpty });
+      return true;
     },
     [store, name],
   );

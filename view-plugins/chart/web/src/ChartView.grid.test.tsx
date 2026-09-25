@@ -15,7 +15,9 @@ const sdk = vi.hoisted(() => ({
   useSandboxRun: vi.fn(),
   viewDocument: vi.fn(),
   registerViewKind: vi.fn(),
-  useMarking: vi.fn(() => [undefined, vi.fn()]),
+  // a store that takes every write, as the host's does (P40 row 19: a write
+  // no store took is the chart's own)
+  useMarking: vi.fn(() => [undefined, vi.fn(() => true)]),
   isLit: vi.fn(() => false),
 }));
 vi.mock("@aiws/view-sdk", () => sdk);

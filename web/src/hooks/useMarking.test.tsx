@@ -77,4 +77,28 @@ describe("useMarking", () => {
     render(<View name="fail" />);
     expect(screen.getByTestId("view-fail")).toHaveTextContent("-");
   });
+
+  it("a write says whether a store took it: only a view on a marking in a provider's (#847/#848 PR 5 P40 row 19)", () => {
+    const store = new MarkingStore();
+    const took: Record<string, boolean> = {};
+    function Probe({ id, name }: { id: string; name: string | null }) {
+      const [, write] = useMarking(name);
+      return (
+        <button type="button" onClick={() => (took[id] = write({ lot: new Set(["L1"]) }, null))}>
+          {id}
+        </button>
+      );
+    }
+    render(
+      <>
+        <MarkingProvider store={store}>
+          <Probe id="on" name="m" />
+          <Probe id="detached" name={null} />
+        </MarkingProvider>
+        <Probe id="bare" name="m" />
+      </>,
+    );
+    for (const id of ["on", "detached", "bare"]) act(() => screen.getByRole("button", { name: id }).click());
+    expect(took).toEqual({ on: true, detached: false, bare: false });
+  });
 });

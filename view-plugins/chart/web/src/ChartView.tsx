@@ -178,9 +178,12 @@ function Plot({
       return null;
     }
     const values = selectionMarking(sel, answer, keys, measured);
-    setWrote(values && { on: marking, source, values });
-    if (values) write(values, source);
-    return values;
+    // Only a write the store took is one another view's can replace (PR 5
+    // P40 row 19): with no store (a standalone preview) it went nowhere, and
+    // the selection is this chart's own -- as a detached chart's is.
+    const took = values !== null && write(values, source);
+    setWrote(took && values ? { on: marking, source, values } : null);
+    return took ? values : null;
   };
 
   // The marking is what a linked chart shows (#847/#848 PR 5 P35 row 9). Once
