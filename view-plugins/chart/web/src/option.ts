@@ -493,7 +493,12 @@ type Item = Point | { value: Point; [style: string]: unknown };
  * it, and on a number x it stacks the first number dimension it finds -- x
  * itself (echarts data/helper/dataStackHelper.js). So here every series of a
  * stack gets the same x slots, in x order, and lists y first with `encode`
- * saying which is which. A series with no row at a slot gets a point of 0
+ * saying which is which. On a category axis (`category`: the base axis is
+ * one, `at` its place in a point) ECharts matches by category and stacks the
+ * value, so the points keep their order of dimensions; they get the same
+ * slots all the same (PR 5 P36 row 11): a piece (`pieces`) with no row at a
+ * category drew its line, and an area's fill, straight across it, where it
+ * has no data. A series with no row at a slot gets a point of 0
  * there (plotly's `stackgaps: "infer zero"`): clear, never highlighted, no
  * tooltip, and no row -- a gesture over it selects nothing. On a `log` y a 0
  * has no place, so a filler with nothing beneath it (no row of a series below
@@ -501,7 +506,12 @@ type Item = Point | { value: Point; [style: string]: unknown };
  * 0, which adds nothing and keeps its area joined across the gap (PR 5 P35
  * row 8: with every filler null, a series whose rows never sat on neighbouring
  * slots drew no area at all). */
-function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[], log: boolean): void {
+function lineUpStacks(
+  series: Record<string, unknown>[],
+  rows: SeriesRows[],
+  log: boolean,
+  { category, at }: { category: boolean; at: 0 | 1 },
+): void {
   const stacks = new Map<unknown, number[]>();
   series.forEach((s, i) => {
     if (s.stack) stacks.set(s.stack, [...(stacks.get(s.stack) ?? []), i]);
@@ -515,28 +525,29 @@ function lineUpStacks(series: Record<string, unknown>[], rows: SeriesRows[], log
   for (const members of stacks.values()) {
     // per series: x → the index of its point there -- one at most: a series of
     // a stack is one of its pieces (`pieces`)
-    const at = members.map((i) => new Map((series[i].data as Item[]).map((d, j) => [valueOf(d)[0], j])));
-    const slots = [...new Set(at.flatMap((m) => [...m.keys()]))].sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
+    const where = members.map((i) => new Map((series[i].data as Item[]).map((d, j) => [valueOf(d)[at], j])));
+    const slots = [...new Set(where.flatMap((m) => [...m.keys()]))].sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
     members.forEach((i, k) => {
       const old = series[i].data as Item[];
       const was = rows[i].rows;
       const data: Item[] = [];
       const drawn: (number | null)[] = [];
       for (const x of slots) {
-        const j = at[k].get(x);
+        const j = where[k].get(x);
         if (j === undefined) {
           // adds nothing (0); on a log y, where nothing lies beneath, empty:
           // 0 has no place there (round 16 D3, PR 5 P35 row 8)
-          const fill = log && !at.slice(0, k).some((m) => m.has(x)) ? null : 0;
-          data.push({ value: [fill, x], itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
+          const fill = log && !where.slice(0, k).some((m) => m.has(x)) ? null : 0;
+          const value = category && at === 0 ? [x, fill] : [fill, x];
+          data.push({ value, itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
           drawn.push(null);
         } else {
-          data.push(yFirst(old[j]));
+          data.push(category ? old[j] : yFirst(old[j]));
           drawn.push(was[j]);
         }
       }
       series[i].data = data;
-      series[i].encode = { x: 1, y: 0 };
+      if (!category) series[i].encode = { x: 1, y: 0 };
       rows[i].rows = drawn;
     });
   }
@@ -971,14 +982,16 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     // a colour by value paints every piece of the layer, not the first alone
     if (colourVisual) colourVisual.seriesIndex = Array.from({ length: series.length - first }, (_, k) => first + k);
   });
-  // Only off a category axis: on one ECharts stacks by category itself (round 16
-  // defect D1), and each piece (`pieces`) has at most one row per category.
-  // Whether y is a log axis is read from the axis the chart built, whatever the
+  // On any axis (PR 5 P36 row 11): on a category one ECharts stacks by
+  // category itself (round 16 defect D1), but a piece (`pieces`) with no row
+  // at a category needs its 0 there all the same. Whether the stacked value's
+  // axis is a log one is read from the axis the chart built, whatever the
   // spec's shape: a `layer:` spec has no top-level encoding to read it from
   // (PR 5 P34).
-  if (xAxis?.kind !== "category" && yAxis?.kind !== "category") {
-    lineUpStacks(series, rows, yAxis?.kind === "log");
-  }
+  lineUpStacks(series, rows, (baseAt === 1 ? xAxis : yAxis)?.kind === "log", {
+    category: (baseAt === 1 ? yAxis : xAxis)?.kind === "category",
+    at: baseAt,
+  });
 
   const tooltip = {
     trigger: "item",

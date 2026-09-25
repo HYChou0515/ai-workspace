@@ -100,10 +100,16 @@ describe("stack: true on a quantitative, temporal and nominal x", () => {
   // row → stacked top, by ECharts' own matching on a category x
   const oracle = stacked(cat(xs), "nominal");
 
-  it("leaves a category x's stack to ECharts, which matches by value: its series keep their rows", () => {
+  // P36 row 11 [supersedes P29's "leaves a category x's stack to ECharts: its
+  // series keep their rows"]: ECharts still matches by category, but a series
+  // with no row at a category gets its 0 there, as off a category axis, and
+  // its points run in the axis's order -- or an area ran straight across the
+  // category it has no row at.
+  it("lines a category x's stack up too: a filler where a series has no row, points in the axis's order", () => {
     expect(oracle[1]).toEqual(new Map([["3", 14], ["4", 22]]));
     const { chart, built } = draw(area({ field: "x", type: "nominal" }), answer(layer("area", 5, { x: cat(xs), y: f64(ys), g: cat(gs) })));
-    expect(built.series.map((s) => s.rows)).toEqual([[0, 1, 2], [3, 4]]);
+    // x 1, 2, 3: a's rows 2, 0, 1; b has no row at x=1
+    expect(built.series.map((s) => s.rows)).toEqual([[2, 0, 1], [null, 4, 3]]);
     chart.dispose();
   });
 
