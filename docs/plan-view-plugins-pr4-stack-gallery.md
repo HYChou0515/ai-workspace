@@ -287,18 +287,30 @@ not show. Each fix started with a test that reddened on the unfixed code and was
 mutation-probed.
 
 - The builder read the frame a row at a time: 29.9 s, 28.8 s and 68.7 s on the
-  three fixture shapes (an earlier generation of the random fixtures, same rows and cells; the files differed). The third was killed at the 60 s per-command cap on every
-  open, so that gallery could never be built. `_by_arrays` now does the same work
-  on whole columns. The row path (`_by_rows`) stays for dtypes the column path
-  cannot vouch for (such as mixed-type object, categorical, timedelta, nullable sort
-  columns), and is the oracle of `tests/facet/test_build_parity.py`: same written
-  bytes bar the build id, same progress, same refusal, on every dtype the column
-  path takes.
-- Tile layout: the next row's thumbnails covered each tile's label and ⤢. Rows are
-  now a thumbnail, a fixed label row and a gap apart.
+  three fixture shapes (an earlier generation of the random fixtures, with the same
+  rows and cells; the files differed). The third was killed at the 60 s per-command
+  cap on every open, so that gallery could never be built.
+- Tile layout: the next row's thumbnails covered each tile's label and ⤢.
 - Virtualization: the scroller grew to its content inside the host's height:auto
-  pane, so every tile mounted and every page was asked. It is bounded to 80vh.
-- The enlarged view takes focus and closes on Escape.
+  pane, so every tile mounted and every page was asked.
+- The enlarged view did not close on Escape, and it covered the toolbar.
+- **Built:**
+  - `_by_arrays` does the builder's work on whole columns. The row path
+    (`_by_rows`) stays for dtypes the column path cannot vouch for (such as
+    mixed-type object, categorical, timedelta, nullable sort columns), and is the
+    oracle of `tests/facet/test_build_parity.py`: same written bytes bar the build
+    id, same progress, same refusal, on every dtype the column path takes.
+  - Rows of tiles are a thumbnail, a fixed label row and a gap apart.
+  - The scroller is bounded to 80vh, with no minimum (a one-row gallery drew a
+    240 px box with one).
+  - The enlarged view takes focus without scrolling the host, closes on Escape
+    without the Escape reaching the host's document-level modal listener, and
+    gives focus back to the ⤢ that opened it.
+  - Review round 1 found the column path placing a cat-axis level with no text (an
+    inf x on an ordinal axis) as a cell, and keeping two codes with the same level
+    text apart; cells are now the levels as dict keys, as `_axis` reads them. It
+    also found a time sort value identified by nanoseconds, where the definition
+    compares milliseconds; a parity case near 2251 pins it.
 
 ## Verification
 
