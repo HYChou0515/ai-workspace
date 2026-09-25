@@ -418,12 +418,19 @@ def test_only_the_columns_a_group_needs_are_made_text(monkeypatch):
 
 
 def _arrays() -> pd.DataFrame:
-    # What pyarrow gives for a parquet list column: numpy array cells.
+    # What pyarrow gives for a parquet list column: numpy array cells. The
+    # last row's longer arrays are the ones `==` raised on; one-element arrays
+    # silently matched nothing.
     return pd.DataFrame(
         {
-            "tags": pd.Series([np.array(["a"]), np.array(["b"]), np.array(["a"])], dtype=object),
-            "n": pd.Series([np.array([1]), np.array([2]), np.array([3])], dtype=object),
-            "v": [1.0, 2.0, 3.0],
+            "tags": pd.Series(
+                [np.array(["a"]), np.array(["b"]), np.array(["a"]), np.array(["a", "b"])],
+                dtype=object,
+            ),
+            "n": pd.Series(
+                [np.array([1]), np.array([2]), np.array([3]), np.array([1, 2])], dtype=object
+            ),
+            "v": [1.0, 2.0, 3.0, 4.0],
         }
     )
 
@@ -439,10 +446,35 @@ def test_a_predicate_on_a_list_column_compares_its_marking(pred):
     assert out["v"].tolist() == [1.0, 3.0]
 
 
-@pytest.mark.parametrize("pred", [{"lt": 1}, {"gte": 1}, {"range": [0, 1]}])
-def test_an_order_on_a_list_column_is_refused_by_name(pred):
-    with pytest.raises(TransformError, match="'n'"):
-        apply_transforms(_arrays(), [{"filter": {"field": "n", **pred}}])
+@pytest.mark.parametrize(
+    "pred", [{"lt": 1}, {"gte": 1}, {"range": [0, 1]}, {"gt": "2024-01-01"}, {"lt": "a"}]
+)
+@pytest.mark.parametrize("field", ["n", "tags"])
+def test_an_order_on_a_list_column_is_refused_by_name(pred, field):
+    # Round 11: against text, a list's marking text was ordered alphabetically
+    # ("[" sorts after "2", so every list was "after" 2024) — refuse it.
+    with pytest.raises(TransformError, match=f"'{field}' holds lists"):
+        apply_transforms(_arrays(), [{"filter": {"field": field, **pred}}])
+
+
+def test_a_column_of_plain_values_is_not_mapped_for_a_predicate(monkeypatch):
+    # Round 11: object ints and entity dates were mapped cell by cell (33 ms ->
+    # 510 ms per million rows, and their dtype changed): only a column that
+    # can hold a list is.
+    import datetime as dt
+
+    from chart_view.wire import unhashable_as_text
+
+    def no_map(*_a, **_k):
+        raise AssertionError("a column with no list was mapped cell by cell")
+
+    monkeypatch.setattr(pd.Series, "map", no_map)
+    for s in [
+        pd.Series([1, 2, None], dtype=object),
+        pd.Series([dt.date(2024, 1, 1)], dtype=object),
+        pd.Series([True, False], dtype=object),
+    ]:
+        assert unhashable_as_text(s) is s
 
 
 def test_a_range_on_text_is_refused_by_name():
@@ -464,7 +496,12 @@ def test_a_mapping_reads_the_same_in_any_key_order():
     # Round 10: two records holding one mapping in two orders were two groups;
     # a set printed in hash order, which changes from process to process.
     assert canon({"b": 2, "a": 1}) == canon({"a": 1, "b": 2}) == "{'a': 1, 'b': 2}"
-    assert canon({"d", "a", "c"}) == "['a', 'c', 'd']"
+    # Ten letters: a few came out sorted by chance under some hash seeds.
+    assert canon(set("jihgfedcba")) == str(list("abcdefghij"))
+    # Keys sorted as they print, whatever numpy type holds them.
+    assert (
+        canon({np.int64(1): "a", 2: "b"}) == canon({1: "a", np.int64(2): "b"}) == "{1: 'a', 2: 'b'}"
+    )
     assert canon({("a", 1)}) == "[['a', 1]]"
 
 
@@ -527,3 +564,69 @@ def test_a_list_colour_groups_the_bins():
     )
     [layer] = build(spec, LIST_KEY)["layers"]
     assert layer["binned"] is not None and layer["columns"]["k"]["levels"] == ["['a']", "['b']"]
+
+
+def _days() -> pd.DataFrame:
+    # A parquet date32 column reads as an object column of datetime.date.
+    import datetime as dt
+
+    days = [dt.date(2024, 1, 1), dt.date(2024, 1, 2), dt.date(9999, 12, 31)]
+    return pd.DataFrame({"day": pd.Series(days, dtype=object), "v": [1.0, 2.0, 3.0]})
+
+
+@pytest.mark.parametrize(
+    ("pred", "kept"),
+    [
+        ({"equal": "2024-01-01"}, [1.0]),
+        ({"oneOf": ["2024-01-02", "9999-12-31"]}, [2.0, 3.0]),
+        ({"gte": "2024-01-02"}, [2.0, 3.0]),
+        ({"range": ["2024-01-01", "2024-01-02"]}, [1.0, 2.0]),
+    ],
+)
+def test_a_predicate_on_a_date_column_reads_its_text_as_a_date(pred, kept):
+    # Round 11: the same "2024-01-01" lit a highlight and matched nothing in a
+    # filter (a date object is never equal to text), and an order was refused.
+    out = apply_transforms(_days(), [{"filter": {"field": "day", **pred}}])
+    assert out["v"].tolist() == kept
+
+
+def test_a_predicate_on_zoned_datetimes_reads_them_at_utc():
+    # Datetime objects with zones (mixed offsets) cannot be one datetime64
+    # column as they are: read at UTC, as zone-less text is, far ones kept.
+    import datetime as dt
+
+    zoned = [
+        dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+        dt.datetime(2024, 1, 1, 8, tzinfo=dt.timezone(dt.timedelta(hours=8))),
+        dt.datetime(9999, 1, 1, tzinfo=dt.UTC),
+    ]
+    df = pd.DataFrame({"at": pd.Series(zoned, dtype=object), "v": [1.0, 2.0, 3.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "at", "equal": "2024-01-01"}}])
+    assert kept["v"].tolist() == [1.0, 2.0]
+    late = apply_transforms(df, [{"filter": {"field": "at", "gt": "2025-01-01"}}])
+    assert late["v"].tolist() == [3.0]
+
+
+def test_a_diff_by_a_date_column_reads_its_sides_as_dates():
+    t = {
+        "diff": {"by": "day", "of": "2024-01-02", "minus": "2024-01-01"},
+        "aggregate": [{"op": "sum", "field": "v", "as": "s"}],
+    }
+    assert apply_transforms(_days(), [t])["s"].tolist() == [1.0]
+
+
+def test_a_refused_range_names_the_range():
+    # Round 11: the refusal named `gte`, an op the author never wrote.
+    df = pd.DataFrame({"t": ["a", "b"], "v": [1.0, 2.0]})
+    with pytest.raises(TransformError, match=r"range \[0, 1\]"):
+        apply_transforms(df, [{"filter": {"field": "t", "range": [0, 1]}}])
+
+
+def test_the_skills_list_membership_filter_tests_an_item():
+    # SKILL.md tells a model to test membership this way (a query filter takes
+    # no lambda): it must match an item equal to "a", not one containing it.
+    df = pd.DataFrame({"tags": [["a", "b"], ["ab"], ["c"]], "v": [1.0, 2.0, 3.0]})
+    kept = apply_transforms(df, [{"filter": "tags.str.contains('a', regex=False)"}])
+    assert kept["v"].tolist() == [1.0]
+    skill = (Path(__file__).resolve().parents[2] / "skill" / "SKILL.md").read_text()
+    assert "tags.str.contains('a', regex=False)" in skill
