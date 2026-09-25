@@ -1,25 +1,86 @@
 {
   "kind": "canon",
-  "about": "value → the marking string for it. The sandbox's canon() and the browser's String() must both give `text`.",
+  "about": "value \u2192 the marking string for it. The sandbox's canon() and the browser's String() must both give `text`.",
   "cases": [
-    { "value": true, "text": "true" },
-    { "value": false, "text": "false" },
-    { "value": 3, "text": "3" },
-    { "value": 3.0, "text": "3" },
-    { "value": 0.1, "text": "0.1" },
-    { "value": -0.0, "text": "0" },
-    { "value": 1e21, "text": "1e+21" },
-    { "value": 1.5e-7, "text": "1.5e-7" },
-    { "value": 0.00001, "text": "0.00001" },
-    { "value": 1e-7, "text": "1e-7" },
-    { "value": 1.2345678901234568e20, "text": "123456789012345680000" },
-    { "value": 1e16, "text": "10000000000000000" },
-    { "value": -2.5e-8, "text": "-2.5e-8" },
-    { "value": 123.456, "text": "123.456" },
-    { "value": 5e-324, "text": "5e-324" },
-    { "value": 1.7976931348623157e308, "text": "1.7976931348623157e+308" },
-    { "value": 0.000001, "text": "0.000001" },
-    { "value": 100, "text": "100" },
-    { "value": "W 7", "text": "W 7" }
+    {
+      "value": true,
+      "text": "true"
+    },
+    {
+      "value": false,
+      "text": "false"
+    },
+    {
+      "value": 3,
+      "text": "3"
+    },
+    {
+      "value": 3.0,
+      "text": "3"
+    },
+    {
+      "value": 0.1,
+      "text": "0.1"
+    },
+    {
+      "value": -0.0,
+      "text": "0"
+    },
+    {
+      "value": 1e+21,
+      "text": "1e+21"
+    },
+    {
+      "value": 1.5e-07,
+      "text": "1.5e-7"
+    },
+    {
+      "value": 1e-05,
+      "text": "0.00001"
+    },
+    {
+      "value": 1e-07,
+      "text": "1e-7"
+    },
+    {
+      "value": 1.2345678901234568e+20,
+      "text": "123456789012345680000"
+    },
+    {
+      "value": 1e+16,
+      "text": "10000000000000000"
+    },
+    {
+      "value": -2.5e-08,
+      "text": "-2.5e-8"
+    },
+    {
+      "value": 123.456,
+      "text": "123.456"
+    },
+    {
+      "value": 5e-324,
+      "text": "5e-324"
+    },
+    {
+      "value": 1.7976931348623157e+308,
+      "text": "1.7976931348623157e+308"
+    },
+    {
+      "value": 1e-06,
+      "text": "0.000001"
+    },
+    {
+      "value": 100,
+      "text": "100"
+    },
+    {
+      "value": "W 7",
+      "text": "W 7"
+    },
+    {
+      "value": 1152921504606846976,
+      "text": "1152921504606847000"
+    }
   ]
 }

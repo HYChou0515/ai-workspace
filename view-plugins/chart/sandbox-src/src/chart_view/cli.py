@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from chart_view.query import build
-from chart_view.sources import SourceError, read_source
+from chart_view.sources import SourceError, inside_workspace, read_source
 from chart_view.spec import SpecError, parse_spec, spec_errors
 from chart_view.transforms import TransformError
 from chart_view.validate import check
@@ -67,9 +67,12 @@ def _argument(name: str, raw: str) -> str:
 def _validate(path: str) -> int:
     root = Path.cwd()
     try:
-        text = (root / path.lstrip("/")).read_text(encoding="utf-8")
-    except OSError:
-        print(f"{path} is not a file in the workspace", file=sys.stderr)
+        text = inside_workspace(root, path).read_text(encoding="utf-8")
+    except SourceError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except (OSError, UnicodeDecodeError):
+        print(f"{path} is not a readable text file in the workspace", file=sys.stderr)
         return 2
     result = check(text, lambda source: read_source(root, source))
     if result.summary is None:

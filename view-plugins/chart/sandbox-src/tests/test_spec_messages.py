@@ -48,7 +48,7 @@ def test_an_unsupported_aggregate_names_the_op():
 
 def test_a_missing_diff_side_is_named():
     [line] = _errors(
-        BASE + "mark: heatmap\n" + ENC + "transform:\n  - diff: {by: phase, of: after}\n"
+        BASE + "mark: line\n" + ENC + "transform:\n  - diff: {by: phase, of: after}\n"
         "    aggregate: [{op: mean, field: t, as: d}]\n"
     )
     assert "'minus' is a required property" in line

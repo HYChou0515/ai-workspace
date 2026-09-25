@@ -1,6 +1,6 @@
 /**
  * ECharts, tree-shaken to what the chart spec can ask for (plan Q2): seven
- * series types (`line` also draws `area` and a datum `rule`, `scatter` also
+ * series types (`line` also draws `area` and every `rule`, as a mark line; `scatter` also
  * draws `text`, `custom` draws `grid` and `errorbar`), the components the
  * option uses, and the canvas renderer. Bundled into the plugin, never the SPA.
  */

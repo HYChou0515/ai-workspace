@@ -58,7 +58,10 @@ def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
         mask &= (s >= low) & (s <= high)
     for op, compare in _COMPARE.items():
         if op in pred:
-            mask &= compare(s, pred[op])
+            try:
+                mask &= compare(s, pred[op])
+            except TypeError as e:
+                raise TransformError(f"filter on {field!r}: {op} {pred[op]!r} — {e}") from e
     if "valid" in pred:
         mask &= s.notna() if pred["valid"] else s.isna()
     return mask
@@ -87,6 +90,11 @@ def aggregate(
     """One row per group — without `groupby`, one row for the frame (none for an
     empty one); a column per item."""
     need_columns(df, *groupby, *(i["field"] for i in items if i.get("field")))
+    clash = [i["as"] for i in items if i["as"] in groupby]
+    if clash:
+        raise TransformError(
+            f"aggregate `as: {clash[0]!r}` is also a groupby column — name it apart"
+        )
     keys = list(groupby) or [_ALL]
     frame = df if groupby else df.assign(**{_ALL: 0})
     grouped = frame.groupby(keys, dropna=False, sort=True)

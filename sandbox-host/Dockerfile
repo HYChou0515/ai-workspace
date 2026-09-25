@@ -47,6 +47,7 @@ RUN uv sync --frozen --no-dev --no-editable \
 # path dependency (the platform's entity reader, vendored from src/).
 COPY view-plugins/ ./view-plugins/
 RUN for src in view-plugins/*/sandbox-src; do \
+      [ -d "$src" ] || continue; \
       name=$(basename "$(dirname "$src")"); \
       uv run --no-dev python -c "import sys; from pathlib import Path; \
 from workspace_app.tooling.prebuild import build_package; \
