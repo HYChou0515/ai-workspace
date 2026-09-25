@@ -1,5 +1,5 @@
 /**
- * #847 PR 3 P3: `🔗 <name> ▾` in a view's header — attach the view to an
+ * #847 PR 3 P3: the marking control (a tag icon + `<name> ▾`) in a view's header — attach the view to an
  * existing marking, to a new one, or detach it.
  *
  * The choice is VIEW STATE, kept per view in this browser (like a gantt's
@@ -9,6 +9,7 @@
  */
 import { useCallback, useState } from "react";
 
+import { Icon } from "../../components/Icon";
 import { useMarkingNames } from "../../hooks/useMarking";
 
 /** The select's value that opens the new-name box — never a marking name
@@ -66,7 +67,7 @@ export function MarkingControl({
   const options = [...new Set([...(value ? [value] : []), ...names])].sort();
   return (
     <span className="ev-marking" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-      <span aria-hidden>🔗</span>
+      <Icon name="tag" size={12} color="var(--text-paper-d)" />
       <select
         aria-label="Marking"
         className="input"

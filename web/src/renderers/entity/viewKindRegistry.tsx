@@ -30,7 +30,7 @@ export type ViewRenderer = {
   /** The renderer has no header quick-create affordance. */
   suppressQuickCreate?: boolean;
   /** #847 PR 3 — the kind takes part in named markings (reads `marking` from
-   * its props), so every view of it gets the header's 🔗 control, even one
+   * its props), so every view of it gets the header's marking control, even one
    * whose file names neither `marking:` nor `keys:`. Omitted: only such a
    * view that names one of them gets it. Additive to SDK 1. */
   linkable?: boolean;
