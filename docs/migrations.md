@@ -935,8 +935,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     以前在 live check 裡，一個五圖版面 30 次查詢壞 5 次（壓測 300 次壞 9 次），壞的那格面板顯示 traceback。沙盒根目錄下的 `dev/` 不再在每個指令後刪除
     （留下一個空目錄），運營方不用做事。
   - 前端量元素寬度的共用 hook（`useContainerWidth`）改成一律回報含 padding 與邊框的寬度（第一次量本來就是）。
-    原本只有 view 面板會受影響：寬度剛好在 480 px 上下時，面板在寬、窄兩種 padding 之間來回切換不停
-    （實測 10 秒 777 次），面板標頭跟著上下跳。workspace 版面、分頁列、skills 視窗底列量的元素沒有
+    原本只有 view 面板會受影響：內容寬度剛好在 480 px 上下時，面板在寬、窄兩種 padding 之間來回切換不停
+    （實測約 10 秒 777 次 resize 回呼），面板標頭跟著上下跳。workspace 版面、分頁列、skills 視窗底列量的元素沒有
     左右 padding 或邊框，數值不變；對話面板標頭（決定標頭按鈕收進「⋯」的那個）左右各有 14 px padding，讀數大 28 px，
     但它只拿自己前後的讀數互相比，行為不變。運營方不用做事。
 

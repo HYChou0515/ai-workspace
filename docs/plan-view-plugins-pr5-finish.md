@@ -109,10 +109,11 @@ words are examples, not spec keys.
   - (P30) A pie selects by a click on a slice; the same slice again, or empty space,
     clears only what the click picked — other views' selections and the legend stay
     (1b3ecc6b; P34 row 1 makes "what the click picked" exact).
-  - (P34) In compact layout a category legend that would take more than half the
-    chart's height is not drawn (a colour bar too); the colours stay and the chart's note
-    line says the key is hidden. In a tall narrow pane this hides a long legend that
-    used to fit beside a plot a third of the chart's height: the plot comes first.
+  - (P34) In compact layout a colour key (a colour bar, or a grid's category key) that
+    would leave the plot less than half the chart's height is not drawn; the colours
+    stay and the chart's note line says the key is hidden. In a tall narrow pane this
+    hides a long key that used to fit under a plot a third of the chart's height: the
+    plot comes first. A colour-split chart's series legend stays on top, untouched.
   - (P34) On an unmarked pie a legend toggle replaces the spec's `highlight:` dimming,
     as on a grid: what is lit is the person's latest gesture.
   - (P31) A pie with no axes draws a toolbox with only the clear tool (✕), which clears
@@ -121,13 +122,14 @@ words are examples, not spec keys.
     seeded marking could not be cleared from the pie.
   - (P31) A chart narrower than 320 px is laid out compact: ChartView's ResizeObserver
     sets a boolean (`compactAt`), so the option is rebuilt only when the width crosses
-    320, and a switch is set in full. The colour bar or category legend stands under
+    320, and a switch is set in full (superseded by P34 row 2: a switch merges the layout
+    alone, and in compact the layout also follows the height). The colour key stands under
     the plot at the left, the y axis's name above the plot, the tools shrink to fit
     one row. ECharts' `media` queries were not used: they change the option's shape
     for every consumer of it (ba036393).
   - (P31) `useContainerWidth` reports the border box from its observer, as its first
-    measurement already did, for every consumer (the workspace shell, the header
-    actions, the skills modal's footer, a view panel), not only the view panel whose
+    measurement already did, for every consumer (the workspace shell, the editor tab
+    strip, the header actions, the skills modal's footer, a view panel), not only the view panel whose
     narrow padding made the content box flip it (dd3b7fef).
 
 ## Phases
@@ -311,15 +313,16 @@ words are examples, not spec keys.
   | 5 | On a marking the view cannot write (no key column), a clicked pie slice or a lassoed grid shows a count and no highlight | What a selection that writes nothing picked is lit by the chart itself, as with no marking |
   | 6 | On an unmarked pie a legend toggle now replaces the spec's `highlight:` dimming | Kept, as the grid already does: the person's latest gesture is what is lit. Pinned by a test |
 
-  Each row starts from a test that is red at 0c12465a. Row 2 replaces a mechanism, so
+  Rows 1–5 each start from a test red at 0c12465a; row 6 is a pin, green there. Row 2 replaces a mechanism, so
   round 18 follows. Demo at 1440 and 390, seen: rows 1, 2, 3, 5; errorbar selection
   (P30) and the horizontal and log-y stacks (P29), which had no frame.
-- **P35 — What P34's demo found.** Three wrong drawings that predate P34 (frames in
+- **P35 — What P34's demo found.** Two wrong drawings and one stale selection that
+  predate P34 (frames in
   `tmp/demo/p34/look-after-*`, `after-1440-row1-A-04`, seen):
 
   | # | Found | Rule installed |
   |---|---|---|
-  | 7 | Raw rows stacked on a category axis overlap: rows of one series at one category are drawn over each other, so a horizontal bar of rows ends at 31.3 where the sum is 79.38 | Every row is one piece of its stack, on any axis: rows that share a slot and a series stack in order, as `lineUpStacks` already does off a category axis |
+  | 7 | Raw rows stacked on a category axis overlap: rows of one series at one category are drawn over each other, so a horizontal bar of rows ends at 31.4 where the sum is 79.38 | Every row is one piece of its stack, on any axis: rows that share a slot and a series stack in order, as `lineUpStacks` already does off a category axis |
   | 8 | A log-y stack with gaps draws nothing for a series whose rows never sit on neighbouring slots (the null filler breaks the area at every gap) | A missing slot adds nothing to the stack (0); it is empty only where nothing lies beneath it on a log axis |
   | 9 | After another view rewrites the marking, a chart that wrote it still shows its own count, brush box or pick | The marking is what a linked chart shows: another view's write drops this chart's own selection (count, box, pick); a chart whose selection writes nothing keeps its own |
 
@@ -357,6 +360,10 @@ words are examples, not spec keys.
   Rows 12 and 13 replace mechanisms, so round 19 follows. Performance is measured before
   and after on the regression lens's inputs; the demo (1440 and 390, seen) covers rows
   12 and 13, plus the 390 frames P34 row 2 and the horizontal stack lacked.
+- *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
+  red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
+  not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
+  differs only in docs).
 
 ## Verification
 
