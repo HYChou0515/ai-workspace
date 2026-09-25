@@ -20,8 +20,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - **給人和 AI 讀的參考**：`view-plugins/chart/skill/SKILL.md`。這份就是 AI 用的 skill，
   範例由測試保證能通過 schema。
 - **機器驗證用**：`view-plugins/chart/sandbox-src/src/chart_view/spec.schema.json`，只有這一份。
-  沙盒端的 `validate` 和瀏覽器端的 renderer 讀的都是它，`view-plugins/chart/spec-corpus/` 的 47 個
-  範例檔同時餵給兩邊，判定必須一致。
+  沙盒端的 `validate` 和瀏覽器端的 renderer 讀的都是它，`view-plugins/chart/spec-corpus/` 的每一個範例檔同時餵給兩邊，判定必須一致。
 
 一句話摘要：Vega-Lite 子集寫成 YAML（`mark` / `encoding` / `transform` / `layer`），
 再加上我們自己的 `source`（CSV、TSV、parquet 或 `{entity: <type>}`）、`keys`、`highlight`、`bin_threshold`。

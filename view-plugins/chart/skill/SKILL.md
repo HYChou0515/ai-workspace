@@ -13,8 +13,8 @@ chart file, show it, and point at what is lit.
 2. **Show it** with `show_file` on that path. The file is checked first:
    - a checked file is shown, and the reply ends with one summary line, such
      as `highlight matches 3/25 rows; error_rate 0.02–0.41`;
-   - a reply starting `error: view plugin 'chart' refused` names the key or
-     column to fix — fix it and show the file again;
+   - a reply starting `error:` says what to fix (a key, a column, the YAML)
+     — fix it and show the file again;
    - a reply noting `could not check this view` has shown the file as it is.
 3. **Answer** with the claim, what the lit marks are, and the summary's
    numbers when there is a summary.
@@ -48,22 +48,22 @@ The keys to use:
   for rows whose column holds one of the values. It runs over each layer's
   rows after its transforms, so it can name an aggregate's `as`.
 - `transform`: a list, applied in order (below).
-- `bin_threshold`: scatters with more points than this (default 10000) are
-  drawn as counted bins.
+- `bin_threshold`: a scatter of two number / time axes with more points than
+  this (default 10000) is drawn as counted bins.
 - `layer`: a list of `{mark, encoding, transform?}` drawn on the same axes,
   after the top-level `transform`.
 
 ### Marks
 
-`mark: <name>`, or `mark: {type: <name>, …}` with `color`, `opacity` (0–1),
-`point` and `smooth` (line), `stack` (bar, area), `extent` (errorbar:
-`stderr` / `stdev` / `iqr`).
+`mark: <name>`, or `mark: {type: <name>, …}` with `color`, `opacity` (0–1;
+scatter, line, area, bar, text), `point` and `smooth` (line, area), `stack`
+(bar, area), `extent` (errorbar: `stderr` / `stdev` / `iqr`).
 
 | mark | shows | needs |
 |---|---|---|
 | `scatter` | how two measures move together | `x`, `y` fields |
-| `line`, `area` | a measure over an ordered axis, usually time | `x`, `y` |
-| `bar` | a measure per category | `x`, `y` |
+| `line`, `area` | a measure over an ordered axis, usually time | `x`, `y` fields |
+| `bar` | a measure per category | `x`, `y` fields |
 | `pie` | shares of a whole | a `theta` field; `color` names the slices |
 | `heatmap` | a measure over two categories | `x`, `y`, `color` fields |
 | `grid` | a measure's spatial pattern over a 2-D integer lattice | `x`, `y`, `color` fields |
@@ -89,7 +89,7 @@ epoch milliseconds), `nominal` (categories), `ordinal` (ordered categories).
 
 `aggregate` on a channel (`count`, `sum`, `mean`, `min`, `max`, `rate`) groups
 by every other field channel, as in Vega-Lite. `rate` is the share of rows
-where the field is true.
+where the field is true; its field holds true/false or 0/1.
 
 ### Transforms
 
