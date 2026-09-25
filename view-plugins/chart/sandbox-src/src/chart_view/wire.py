@@ -307,7 +307,10 @@ def _cat(s: pd.Series) -> dict[str, Any]:
     # into floats, and `integral` restores integer levels below.
     integral = pd.api.types.is_integer_dtype(s.dtype)
     # A list or a mapping has no hash to group by; it becomes its marking string.
-    s = s.map(_as_marking)
+    # A number, bool, instant or duration column holds none, and there the map
+    # was ~2 Python calls per row that changed no level (P33, test_cat_parity).
+    if not _holds_scalars_only(s.dtype):
+        s = s.map(_as_marking)
     try:
         codes, uniques = pd.factorize(s, sort=True, use_na_sentinel=True)
     except TypeError:  # values with no order between them (a date among numbers)
@@ -321,6 +324,17 @@ def _cat(s: pd.Series) -> dict[str, Any]:
     missing = 2 ** (8 * width) - 1
     out = np.where(codes < 0, missing, codes).astype(dtype)
     return {"kind": "cat", "levels": levels, "width": width, "codes": _b64(out)}
+
+
+def _holds_scalars_only(dtype: Any) -> bool:
+    """A numpy number / bool / instant / duration dtype, or a zoned instant:
+    no cell of it can be a list, mapping or array. An extension dtype (a
+    nullable Int64, a string, a category, an arrow list) is read a cell at a
+    time, as it always was: the map turns a nullable int into floats, which
+    `_cat` depends on."""
+    return isinstance(dtype, pd.DatetimeTZDtype) or (
+        isinstance(dtype, np.dtype) and dtype.kind in "biufcmM"
+    )
 
 
 def _json_scalar(v: Any) -> Any:
