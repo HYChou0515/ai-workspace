@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import "./echarts"; // registers the chart's series + components (and their brush selectors)
 import { toOption } from "./option";
 import { type BrushSelected, type Selection, selectionFromBrush } from "./selection";
-import { answer, base, cat, f64, layer } from "./testAnswer";
+import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
 
 echarts.use([SVGRenderer, BrushComponent]);
 
@@ -84,5 +84,109 @@ describe("brushing a heatmap, against real ECharts", () => {
   it("a cell with no value is not drawn, and so not selected", async () => {
     const sel = await brushed(HEAT, heat([1, null, 3, 4, 5, 6]), { brushType: "rect", coordRange: [[-0.5, 2.5], [-0.5, 0.5]] });
     expect(sel).toEqual([{ source: "brush", layer: 0, rows: [0, 2] }]);
+  });
+});
+
+// Three groups a, b, c: boxes q1..q3 = 3..7, 13..17, 23..27; whiskers 1 below, 1 above.
+const BOX = {
+  ...base,
+  mark: "boxplot",
+  encoding: { x: { field: "g", type: "nominal" }, y: { field: "v", type: "quantitative" } },
+};
+const boxes = answer(
+  layer(
+    "boxplot",
+    3,
+    {
+      g: cat(["a", "b", "c"]),
+      $lo: f64([2, 12, 22]),
+      $q1: f64([3, 13, 23]),
+      $mid: f64([5, 15, 25]),
+      $q3: f64([7, 17, 27]),
+      $hi: f64([8, 18, 28]),
+    },
+    { outliers: { rows: 1, columns: { g: cat(["a"]), v: f64([15]) } } },
+  ),
+);
+
+describe("brushing a boxplot, against real ECharts", () => {
+  it("a box over part of a group's box selects that group", async () => {
+    // y 14..16 crosses b's box only; x spans every group
+    const sel = await brushed(BOX, boxes, { brushType: "rect", coordRange: [[-0.5, 2.5], [14, 16]] });
+    expect(sel).toEqual([{ source: "brush", layer: 0, rows: [1] }]);
+  });
+
+  it("a box over a group's whisker only, or beside its box, selects nothing", async () => {
+    // y 7.5..7.9 is a's whisker, above its box; x 1.4..1.6 is between b and c
+    expect(await brushed(BOX, boxes, { brushType: "rect", coordRange: [[-0.5, 2.5], [7.5, 7.9]] })).toEqual([]);
+    expect(await brushed(BOX, boxes, { brushType: "rect", coordRange: [[1.4, 1.6], [0, 30]] })).toEqual([]);
+  });
+
+  it("a lasso over two boxes selects both groups", async () => {
+    const sel = await brushed(BOX, boxes, {
+      brushType: "polygon",
+      coordRange: [[-0.2, 4], [1.2, 14], [1.2, 16], [-0.2, 6]],
+    });
+    expect(sel).toEqual([{ source: "lasso", layer: 0, rows: [0, 1] }]);
+  });
+});
+
+// Three errorbars at a, b, c: 1..3, 11..13, 21..23.
+const BAR = {
+  ...base,
+  mark: "errorbar",
+  encoding: { x: { field: "g", type: "nominal" }, y: { field: "v", type: "quantitative" } },
+};
+const bars = answer(
+  layer("errorbar", 3, { g: cat(["a", "b", "c"]), $lo: f64([1, 11, 21]), $mid: f64([2, 12, 22]), $hi: f64([3, 13, 23]) }),
+);
+
+describe("brushing an errorbar, against real ECharts", () => {
+  it("a box across a bar's centre line selects that group", async () => {
+    // y 12..30 crosses b's and c's lines; x 0.9..2.1 holds b and c, not a
+    const sel = await brushed(BAR, bars, { brushType: "rect", coordRange: [[0.9, 2.1], [12, 30]] });
+    expect(sel).toEqual([{ source: "brush", layer: 0, rows: [1, 2] }]);
+  });
+
+  it("a box beside every line, or past its ends, selects nothing", async () => {
+    expect(await brushed(BAR, bars, { brushType: "rect", coordRange: [[0.2, 0.8], [0, 30]] })).toEqual([]);
+    expect(await brushed(BAR, bars, { brushType: "rect", coordRange: [[-0.5, 2.5], [4, 10]] })).toEqual([]);
+  });
+
+  it("a lasso across a line selects that group", async () => {
+    const sel = await brushed(BAR, bars, {
+      brushType: "polygon",
+      coordRange: [[-0.3, 2], [0.3, 2], [0.3, 2.5], [-0.3, 2.5]],
+    });
+    expect(sel).toEqual([{ source: "lasso", layer: 0, rows: [0] }]);
+  });
+});
+
+describe("a grid beside the errorbar's selector, against real ECharts", () => {
+  // A grid is drawn by a custom series too (its image). The errorbar's
+  // selector must leave it be: its cells are still found by their centre.
+  it("a box over a grid still selects the cells whose centre it holds", async () => {
+    const grid = {
+      ...base,
+      mark: "grid",
+      encoding: {
+        x: { field: "x", type: "ordinal" },
+        y: { field: "y", type: "ordinal" },
+        color: { field: "v", type: "quantitative" },
+      },
+    };
+    const a = answer(layer("grid", 6, { x: f64([0, 1, 2, 0, 1, 2]), y: f64([0, 0, 0, 1, 1, 1]), v: q8([1, 2, 3, 4, 5, 6], 0, 1) }));
+    const built = toOption(grid, a);
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 600, height: 400 });
+    const events: BrushSelected[] = [];
+    chart.on("brushselected", (e) => {
+      events.push(e as BrushSelected);
+    });
+    chart.setOption(built.option, true);
+    // bound to the grid's axes, as the toolbox's brush is: the grid path reads coordRange
+    chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", xAxisIndex: 0, coordRange: [[0.5, 2.5], [-0.5, 0.5]] }] });
+    await new Promise((r) => setTimeout(r, 400));
+    chart.dispose();
+    expect(selectionFromBrush(events.at(-1) as BrushSelected, built)).toEqual([{ source: "brush", layer: 0, rows: [1, 2] }]);
   });
 });

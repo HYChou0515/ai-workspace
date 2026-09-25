@@ -81,6 +81,35 @@ seriesClass("heatmap").prototype.brushSelector = function (i, data, selectors) {
   return selectors.point(this.coordinateSystem.dataToPoint(at));
 };
 
+/** The smallest rect holding `points` (pixels). */
+function bounds(points: number[][]): { x: number; y: number; width: number; height: number } {
+  const xs = points.map((p) => p[0]!);
+  const ys = points.map((p) => p[1]!);
+  const [x, y] = [Math.min(...xs), Math.min(...ys)];
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+/** A boxplot's groups (#847/#848 PR 5 P30): a group is selected when the area
+ * meets its BOX (q1..q3, the box's width) -- ECharts' own rect test, as a
+ * bar's. Its first four layout ends are the box's corners (echarts
+ * boxplotLayout `ends`). ECharts' boxplot has no selector. */
+seriesClass("boxplot").prototype.brushSelector = (i, data, selectors) => {
+  // (every item has one: option.ts always encodes x and the five y values)
+  const layout = data.getItemLayout(i) as { ends: number[][] };
+  return selectors.rect(bounds(layout.ends.slice(0, 4)));
+};
+
+/** An errorbar's groups (#847/#848 PR 5 P30): an errorbar is a custom series
+ * (option.ts) drawn as a line from its first y value to its second at its x;
+ * a group is selected when the area meets that centre line. (The other
+ * custom series, a grid's image, draws no row: `Built.series` maps its one
+ * datum to none, and its cells are found by `selectionFromBrush`.) */
+seriesClass("custom").prototype.brushSelector = function (i, data, selectors) {
+  const x = data.get(data.mapDimension("x"), i);
+  const ends = data.mapDimensionsAll("y").map((d) => this.coordinateSystem.dataToPoint([x, data.get(d, i)]));
+  return selectors.rect(bounds(ends));
+};
+
 export type Chart = echarts.ECharts;
 
 /** `devicePixelRatio`: the canvas's pixels per CSS pixel, when not the

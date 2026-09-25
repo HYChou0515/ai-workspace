@@ -64,10 +64,14 @@ function mount(store: MarkingStore, doc: object, a: Answer) {
 
 /** A person's drag over the data rectangle x0..x1, y0..y1 (category indices
  * allowed as fractions): dispatched in PIXELS, as a drag is. */
-async function drag(chart: echarts.ECharts, [[x0, x1], [y0, y1]]: [[number, number], [number, number]]) {
+function pixels(chart: echarts.ECharts) {
   const at = (p: number[]) => chart.convertToPixel({ gridIndex: 0 }, p) as number[];
   const [o, ex, ey] = [at([0, 0]), at([1, 0]), at([0, 1])];
-  const px = (x: number, y: number) => [o[0]! + x * (ex[0]! - o[0]!), o[1]! + y * (ey[1]! - o[1]!)];
+  return (x: number, y: number) => [o[0]! + x * (ex[0]! - o[0]!), o[1]! + y * (ey[1]! - o[1]!)];
+}
+
+async function drag(chart: echarts.ECharts, [[x0, x1], [y0, y1]]: [[number, number], [number, number]]) {
+  const px = pixels(chart);
   const [p, q] = [px(x0, y0), px(x1, y1)];
   const range = [
     [Math.min(p[0]!, q[0]!), Math.max(p[0]!, q[0]!)],
@@ -76,6 +80,23 @@ async function drag(chart: echarts.ECharts, [[x0, x1], [y0, y1]]: [[number, numb
   act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range }] }));
   await settle();
 }
+
+/** A lasso through the data points `poly`, dispatched in pixels. */
+async function lasso(chart: echarts.ECharts, poly: [number, number][]) {
+  const px = pixels(chart);
+  act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "polygon", range: poly.map(([x, y]) => px(x, y)) }] }));
+  await settle();
+}
+
+// Three groups a, b, c, one lot each.
+const groups = { g: cat(["a", "b", "c"]), lot: cat(["L1", "L2", "L3"]) };
+const byGroup = (mark: string) => ({
+  view: "chart",
+  source: "data/a.csv",
+  keys: ["lot"],
+  mark,
+  encoding: { x: { field: "g", type: "nominal" }, y: { field: "v", type: "quantitative" } },
+});
 
 const marked = (store: MarkingStore) =>
   Object.fromEntries(Object.entries(store.get("m")?.marking ?? {}).map(([k, v]) => [k, [...v].sort()]));
@@ -114,5 +135,34 @@ describe("a selection on every mark writes the marking", () => {
     // x 0.6..1.4 holds b's centre only; y -0.4..1.4 both rows: cells (b, p) and (b, q)
     await drag(chart, [[0.6, 1.4], [-0.4, 1.4]]);
     expect(marked(store)).toEqual({ lot: ["L2", "L4"] });
+  });
+
+  it("a brush over a boxplot writes the lots of the groups whose box it meets", async () => {
+    // boxes q1..q3 = 3..7, 13..17, 23..27
+    const a = answer(
+      layer("boxplot", 3, {
+        ...groups,
+        $lo: f64([2, 12, 22]),
+        $q1: f64([3, 13, 23]),
+        $mid: f64([5, 15, 25]),
+        $q3: f64([7, 17, 27]),
+        $hi: f64([8, 18, 28]),
+      }),
+    );
+    const store = new MarkingStore();
+    const chart = mount(store, byGroup("boxplot"), a);
+    // y 6..14 meets a's box (to 7) and b's (from 13), not c's
+    await drag(chart, [[-0.5, 2.5], [6, 14]]);
+    expect(marked(store)).toEqual({ lot: ["L1", "L2"] });
+  });
+
+  it("a lasso over an errorbar writes the lots of the groups whose line it crosses", async () => {
+    // lines 1..3, 11..13, 21..23
+    const a = answer(layer("errorbar", 3, { ...groups, $lo: f64([1, 11, 21]), $mid: f64([2, 12, 22]), $hi: f64([3, 13, 23]) }));
+    const store = new MarkingStore();
+    const chart = mount(store, byGroup("errorbar"), a);
+    // a band around c's line at y 22, clear of a and b
+    await lasso(chart, [[1.7, 21.5], [2.3, 21.5], [2.3, 22.5], [1.7, 22.5]]);
+    expect(marked(store)).toEqual({ lot: ["L3"] });
   });
 });
