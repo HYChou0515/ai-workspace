@@ -78,7 +78,7 @@ Channels: `x`, `y`, `x2`, `y2`, `color`, `size`, `theta`, `text`, and
 `tooltip` (one channel or a list). Each is `{field: <column>, type: <type>}`
 with optional `aggregate`, `title`, `sort` (`ascending`, `descending` or a list
 of values) and `scale` — or, on a `rule`'s `x` or `y` only, `{datum: <value>, title}`
-for a constant.
+for a constant (a rule given both draws its `y`).
 
 `scale` on `x` / `y`: `type: log`, `zero: true` / `false`, `domain: [lo, hi]`.
 `scale` on `color`: `scheme: sequential` or `diverging`. When any layer is a
