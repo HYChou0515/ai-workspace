@@ -13,7 +13,9 @@ answer) holds `datum-axes.test.ts` to.
 The axis is the grid's when a layer is a grid (its cells are the axis),
 otherwise the first layer's channel with a field. A rule draws its `y` datum
 when it has one, else its `x` datum. On the axis a datum is:
-- temporal: a number (epoch ms) or a date `instant_ms` reads;
+- temporal: a number (epoch ms) or a date `instant_ms` reads; a date written
+  without a zone is a wall time on the axis's clock, when its column shows a
+  zone (`datum_instant`), and one the zone had twice or never is refused;
 - quantitative: a finite number (never text), above 0 on a log scale;
 - nominal / ordinal: a value some layer sends for that field, compared as text;
 - a grid's: a cell — its label compared as text (a date first, on a temporal
@@ -22,6 +24,7 @@ when it has one, else its `x` datum. On the axis a datum is:
 
 from __future__ import annotations
 
+import datetime as dt
 import math
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -30,8 +33,11 @@ import numpy as np
 import pandas as pd
 
 from chart_view.instants import INSTANT as _INSTANT
+from chart_view.instants import local_instants, parse_instant
 from chart_view.query import mark_of, spec_layers
-from chart_view.wire import canon, decode_column, decode_distinct, epoch_ms
+from chart_view.wire import canon, decode_column, decode_distinct, epoch_ms, zone_of
+
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 # The renderer's lattice fills an integer axis's gaps unless the span is this
 # many times wider than its values (web/src/raster.ts FILL_LIMIT).
@@ -49,6 +55,60 @@ def instant_ms(text: str) -> float | None:
         return None
     ms = float(epoch_ms(pd.Series([text], dtype=object))[0])
     return None if np.isnan(ms) else ms
+
+
+_NOT_A_DATE = (
+    "is not a date the chart can place — write it as 2024-03-01, "
+    "2024-03-01T12:00, or with a zone as 2024-03-01T12:00:00+08:00"
+)
+
+
+def _written(at: dt.datetime) -> str:
+    """`at` (aware) as a datum names it: to the second, or the millisecond."""
+    return at.isoformat(timespec="milliseconds" if at.microsecond else "seconds")
+
+
+def datum_instant(datum: Any, zone: str | None) -> Any:
+    """Where a temporal `datum` sits on an axis whose column shows `zone` (a
+    wire zone name; None for a zone-less column), as epoch ms — or why it has
+    no one place (#847/#848 PR 5 P26).
+
+    A number, and a date written with a zone, are that instant. A date written
+    without one is a wall time in the axis's zone, as a filter reads it — UTC
+    on a zone-less axis — and a rule needs ONE place, so a wall time the zone
+    had twice or never is refused, naming the offsets that would place it."""
+    if not isinstance(datum, str):
+        return datum
+    ms = instant_ms(datum)
+    if ms is None:
+        return _NOT_A_DATE
+    wall = parse_instant(datum)
+    if zone is None or wall is None or wall.tzinfo is not None:
+        return ms
+    tz = zone_of(zone)
+    try:
+        named = local_instants(wall, tz)
+    except OverflowError:
+        # within a day of the calendar's ends the instant falls off it at UTC;
+        # the renderer's clock still places it (as `instant_ms` places a
+        # zoned "0001-01-01T00:00+08:00"): the wall time less its offset there
+        offset = tz.utcoffset(wall)
+        assert offset is not None  # a real zone always has one
+        return ms - offset / dt.timedelta(milliseconds=1)
+    if len(named) == 1:
+        return (named[0] - _EPOCH) / dt.timedelta(milliseconds=1)
+    if named:
+        both = " or ".join(_written(at.astimezone(tz)) for at in named)
+        return (
+            f"is a time {zone} had twice (its clocks went back) — "
+            f"write it with its offset, as {both}"
+        )
+    before = wall.replace(tzinfo=tz, fold=0).utcoffset()
+    assert before is not None  # an aware wall time in a real zone has one
+    return (
+        f"is a time {zone} never had (its clocks went forward past it) — write it with its "
+        f"offset, as {_written(wall.replace(tzinfo=dt.timezone(before)))}"
+    )
 
 
 def _number(v: Any) -> bool:
@@ -85,6 +145,13 @@ class _Wire:
 
     def column(self, layer: int, field: str) -> list[Any]:
         return decode_column(self._layers()[layer][field])
+
+    def zone(self, field: str) -> str | None:
+        """The zone a time axis over `field` shows: the first layer's that sends
+        it as time, as the renderer's `channelClock` takes it (#847/#848 P26)."""
+        sent = (cols[field] for cols in self._layers() if field in cols)
+        first = next((w for w in sent if w["kind"] == "time"), None)
+        return None if first is None else first.get("zone")
 
     def distinct(self, field: str) -> set[str]:
         """The field's values over every layer that sends it, as marking text."""
@@ -129,13 +196,14 @@ def _unplaced(
         return "has no axis to sit on — no layer draws a field there"
     kind = channel.get("type")
     if kind == "temporal" and isinstance(datum, str):
-        ms = instant_ms(datum)
-        if ms is None:
-            return (
-                "is not a date the chart can place — write it as 2024-03-01, "
-                "2024-03-01T12:00, or with a zone as 2024-03-01T12:00:00+08:00"
-            )
-        datum = ms
+        # a zone-less date is a wall time on the axis's clock (P26): only it
+        # needs the answer, for the zone the axis's column shows
+        wall = parse_instant(datum)
+        zone = wire.zone(channel["field"]) if wall is not None and wall.tzinfo is None else None
+        placed = datum_instant(datum, zone)
+        if isinstance(placed, str):
+            return placed
+        datum = placed
     if kind == "quantitative" and isinstance(datum, str):
         return "is text on a number axis — write a number"
     if _number(datum) and not math.isfinite(datum):

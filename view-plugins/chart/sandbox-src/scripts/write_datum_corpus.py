@@ -15,17 +15,21 @@ refuses none; `test_wire.py` checks the file is current
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from chart_view.datums import datum_instant, instant_ms
 from chart_view.query import build
 from chart_view.spec import parse_spec
 from chart_view.validate import check
+from chart_view.wire import zone_of
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus" / "datum-axes.json"
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 # The frame the CASES below read (the OWN cases carry their own): `t` holds
 # dates, `v` numbers, `g` labels, `n` year-like integers used as labels, `p`
@@ -306,20 +310,147 @@ OWN: list[tuple[str, list[dict[str, Any]], dict[str, list[Any]], dict[str, Any]]
 ]
 
 
+# #847/#848 PR 5 P26: a zoned time axis (its column carries a zone). A
+# zone-less date is a wall time on the axis's clock; one the zone had twice or
+# never is refused. `data` holds instants (UTC), `zones` each zoned column's
+# zone; a placed datum on the time axis stores `at`, where it sits on that
+# axis: its wall time there, as epoch ms read as UTC.
+NY = {"t": ["2026-03-07T05:00:00Z", "2026-11-02T05:00:00Z"], "v": [1.0, 2.0]}
+TAIPEI_DAYS = {
+    "t": ["2026-02-28T16:00:00Z", "2026-03-01T16:00:00Z"],
+    "g": ["a", "a"],
+    "v": [1.0, 2.0],
+}
+ZONED: list[tuple[str, list[dict[str, Any]], dict[str, list[Any]], dict[str, str]]] = [
+    (
+        "a zone-less date on a zoned axis",
+        [LINE_T, rule("x", "2026-03-07T12:00")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    (
+        "a zone-less date the zone skipped",
+        [LINE_T, rule("x", "2026-03-08T02:30")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    (
+        "a zone-less date just past the skip",
+        [LINE_T, rule("x", "2026-03-08T03:00")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    (
+        "a zone-less date the zone had twice",
+        [LINE_T, rule("x", "2026-11-01T01:30")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    (
+        "a zone-less date just past the repeat",
+        [LINE_T, rule("x", "2026-11-01T02:00")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    (
+        "a date with its offset on a zoned axis",
+        [LINE_T, rule("x", "2026-11-01T01:30-05:00")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    ("epoch ms on a zoned axis", [LINE_T, rule("x", 1772884800000)], NY, {"t": "America/New_York"}),
+    (
+        "a zone-less date on a zoned y axis",
+        [LINE_YT, rule("y", "2026-03-07T12:00")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    (
+        "a zone-less date on a fixed-offset axis",
+        [LINE_T, rule("x", "2026-03-07T12:00")],
+        NY,
+        {"t": "+05:45"},
+    ),
+    (
+        "a zone-less date at the calendar's start, ahead of UTC",
+        [LINE_T, rule("x", "0001-01-01")],
+        NY,
+        {"t": "+05:00"},
+    ),
+    (
+        "a zone-less day on a zoned temporal grid",
+        [GRID_T, rule("x", "2026-03-02")],
+        TAIPEI_DAYS,
+        {"t": "Asia/Taipei"},
+    ),
+    (
+        "that day read as UTC is no cell",
+        [GRID_T, rule("x", "2026-03-02T00:00Z")],
+        TAIPEI_DAYS,
+        {"t": "Asia/Taipei"},
+    ),
+    (
+        "no such day on a zoned axis",
+        [LINE_T, rule("x", "2026-02-30")],
+        NY,
+        {"t": "America/New_York"},
+    ),
+    ("a zone-less date on a UTC axis", [LINE_T, rule("x", "2026-03-07T12:00")], NY, {"t": "UTC"}),
+]
+
+
+def frame_of(data: dict[str, list[Any]], zones: dict[str, str]) -> pd.DataFrame:
+    """A case's frame: each zoned column's instants shown in its zone."""
+    frame = pd.DataFrame(data)
+    for column, zone in zones.items():
+        frame[column] = pd.to_datetime(frame[column], utc=True).dt.tz_convert(zone_of(zone))
+    return frame
+
+
+def wall_at(datum: Any, zone: str) -> float | None:
+    """Where the sandbox reads a datum on a time axis showing `zone`, as the
+    renderer draws it there: the instant's wall time, as epoch ms read as UTC."""
+    ms = datum_instant(datum, zone)
+    if isinstance(ms, str):
+        return None
+    try:
+        at = _EPOCH + dt.timedelta(milliseconds=ms)
+    except OverflowError:  # off the calendar at UTC: the text is the wall time
+        return instant_ms(datum)
+    offset = at.astimezone(zone_of(zone)).utcoffset()
+    assert offset is not None
+    return ms + offset / dt.timedelta(milliseconds=1)
+
+
 def case(
-    name: str, layers: list[dict[str, Any]], data: dict[str, list[Any]], extra: dict[str, Any]
+    name: str,
+    layers: list[dict[str, Any]],
+    data: dict[str, list[Any]],
+    extra: dict[str, Any],
+    zones: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """One corpus case: its verdict from validate, its answer from query."""
     spec = {"view": "chart", "source": "a.csv", **extra, "layer": layers}
-    frame = pd.DataFrame(data)
+    frame = frame_of(data, zones or {})
     text = json.dumps(spec)
     placed = not check(text, lambda _s: frame).errors
     answer = build(parse_spec(text), frame)
-    return {"name": name, "data": data, "spec": spec, "answer": answer, "placed": placed}
+    out = {"name": name, "data": data, "spec": spec, "answer": answer, "placed": placed}
+    if zones:
+        out["zones"] = zones
+        rule_layer = layers[-1]["encoding"]
+        axis = "y" if "y" in rule_layer else "x"
+        if placed and layers[0]["mark"] != "grid":
+            out["at"] = wall_at(rule_layer[axis]["datum"], zones["t"])
+    return out
 
 
 def cases() -> list[dict[str, Any]]:
-    return [case(n, layers, DATA, {}) for n, layers in CASES] + [case(*c) for c in OWN]
+    return (
+        [case(n, layers, DATA, {}) for n, layers in CASES]
+        + [case(*c) for c in OWN]
+        + [case(n, layers, data, {}, zones) for n, layers, data, zones in ZONED]
+    )
 
 
 def main() -> None:

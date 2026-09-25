@@ -25,6 +25,7 @@ import base64
 import datetime as dt
 import math
 import re
+import zoneinfo
 from decimal import Decimal
 from typing import Any
 
@@ -119,6 +120,20 @@ def zone_name(zone: dt.tzinfo) -> str:
     minutes = int(offset.total_seconds()) // 60
     sign = "-" if minutes < 0 else "+"
     return f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+_FIXED = re.compile(r"([+-])(\d{2}):(\d{2})")
+
+
+def zone_of(name: str) -> dt.tzinfo:
+    """The zone `zone_name` wrote (#847/#848 PR 5 P26): a fixed offset for
+    ``+HH:MM`` / ``UTC``, else the IANA zone of that name — read as the
+    renderer's clock reads the wire (`clock.ts`)."""
+    fixed = _FIXED.fullmatch(name)
+    if fixed:
+        minutes = int(fixed[2]) * 60 + int(fixed[3])
+        return dt.timezone(dt.timedelta(minutes=-minutes if fixed[1] == "-" else minutes))
+    return zoneinfo.ZoneInfo(name)
 
 
 def decode_column(wire: dict[str, Any]) -> list[Any]:

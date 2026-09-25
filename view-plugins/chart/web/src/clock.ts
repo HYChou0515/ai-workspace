@@ -37,6 +37,12 @@ export type Clock = {
    * P24): a column's times are all written to it, so an hourly column's
    * midnight shows 00:00 rather than the date alone. */
   precision(instants: Iterable<number>): Precision;
+  /** The one instant whose wall time on this clock is `wall` (epoch ms read
+   * as UTC), or null when the zone had that wall time twice (its clocks went
+   * back) or never (they went forward past it) (#847/#848 PR 5 P26): a rule
+   * needs one place. The sandbox's `datum_instant` is held to it by
+   * wire-corpus/datum-axes.json. */
+  instantAt(wall: number): number | null;
 };
 
 const pad = (n: number, width = 2) => String(n).padStart(width, "0");
@@ -118,6 +124,16 @@ export function clockFor(zone: string | undefined): Clock {
       let level = 0;
       for (const ms of instants) level = Math.max(level, PRECISIONS.indexOf(precisionOf(ms + offset(ms))));
       return PRECISIONS[level];
+    },
+    instantAt: (wall) => {
+      // an instant naming `wall` is `wall` less the offset in force then; the
+      // offsets a day either side are the two a change of clocks can mix
+      const named = new Set<number>();
+      for (const near of [wall - DAY, wall + DAY]) {
+        const at = wall - offset(near);
+        if (at + offset(at) === wall) named.add(at);
+      }
+      return named.size === 1 ? [...named][0] : null;
     },
   };
 }

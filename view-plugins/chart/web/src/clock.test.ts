@@ -69,6 +69,20 @@ describe("clockFor", () => {
     expect(clockFor(undefined).precision([])).toBe("day");
   });
 
+  it("finds the one instant a wall time names, or none when the zone had it twice or never (P26)", () => {
+    const wall = (iso: string) => at(`${iso}Z`); // a wall time: epoch ms read as UTC
+    const ny = clockFor("America/New_York");
+    expect(everywhere(() => ny.instantAt(wall("2026-03-07T12:00")))).toBe(at("2026-03-07T17:00:00Z"));
+    // 2026-03-08 02:00 -> 03:00: 02:30 never happened; 03:00 did, once
+    expect(everywhere(() => ny.instantAt(wall("2026-03-08T02:30")))).toBeNull();
+    expect(everywhere(() => ny.instantAt(wall("2026-03-08T03:00")))).toBe(at("2026-03-08T07:00:00Z"));
+    // 2026-11-01 02:00 -> 01:00: 01:30 happened twice; 02:00 once
+    expect(everywhere(() => ny.instantAt(wall("2026-11-01T01:30")))).toBeNull();
+    expect(everywhere(() => ny.instantAt(wall("2026-11-01T02:00")))).toBe(at("2026-11-01T07:00:00Z"));
+    expect(clockFor("+05:45").instantAt(wall("2026-03-07T12:00"))).toBe(at("2026-03-07T06:15:00Z"));
+    expect(clockFor(undefined).instantAt(wall("2026-03-07T12:00"))).toBe(at("2026-03-07T12:00:00Z"));
+  });
+
   it("follows a zone's own clock change", () => {
     const ny = clockFor("America/New_York");
     // 2026-03-08: New York springs from -05:00 to -04:00 at 02:00 local (07:00 UTC)

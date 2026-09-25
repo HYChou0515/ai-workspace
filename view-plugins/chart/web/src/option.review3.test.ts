@@ -156,7 +156,7 @@ describe("a rule drawn from a field", () => {
     );
     const built = toOption(spec, a);
     const series = built.option.series as Series[];
-    expect(series[1].markLine?.data).toEqual([{ xAxis: 0 }, { xAxis: 0.5 }]);
+    expect(series[1].markLine?.data).toMatchObject([{ xAxis: 0 }, { xAxis: 0.5 }]);
   });
 
   it("holds every end of a segment, x and y2 too, to the axis", () => {
@@ -226,7 +226,7 @@ describe("a rule drawn from a field", () => {
       layer("grid", 2, { t: time(["2024-03-01", "2024-03-02"]), y: f64([0, 0]), v: q8([0, 1], 0, 1) }),
       layer("rule", 1, { d: cat(["2024-03-02"]) }),
     );
-    expect((toOption(spec, a).option.series as Series[])[1].markLine?.data).toEqual([{ xAxis: 1 }]);
+    expect((toOption(spec, a).option.series as Series[])[1].markLine?.data).toMatchObject([{ xAxis: 1 }]);
   });
 
   it("places an x field's values the same way", () => {

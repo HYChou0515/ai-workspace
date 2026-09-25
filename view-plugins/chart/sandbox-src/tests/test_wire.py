@@ -8,6 +8,7 @@ Each corpus file is `{"kind", "values", "wire"}`: this test holds the encoder to
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
 import math
 import zoneinfo
@@ -21,6 +22,7 @@ import pytz
 from chart_view.wire import bitset, canon, encode_column
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus"
+DATUM_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "write_datum_corpus.py"
 # A column case is a file with a `wire` answer; the corpus holds other tables too.
 FILES = sorted(f for f in CORPUS.glob("*.json") if "wire" in json.loads(f.read_text()))
 
@@ -107,11 +109,20 @@ def test_the_datum_axes_corpus_is_what_validate_and_query_say():
     from chart_view.validate import check
 
     doc = json.loads((CORPUS / "datum-axes.json").read_text())
+    # the writer's own frames: a zoned column's instants in its zone (P26)
+    script = importlib.util.spec_from_file_location("write_datum_corpus", DATUM_SCRIPT)
+    assert script is not None and script.loader is not None
+    writer = importlib.util.module_from_spec(script)
+    script.loader.exec_module(writer)
     for c in doc["cases"]:
-        frame = pd.DataFrame(c["data"])
+        frame = writer.frame_of(c["data"], c.get("zones", {}))
         text = json.dumps(c["spec"])
         assert (not check(text, lambda _s, f=frame: f).errors) == c["placed"], c["name"]
         assert build(parse_spec(text), frame) == c["answer"], c["name"]
+        if "zones" in c and c["placed"] and c["spec"]["layer"][0]["mark"] != "grid":
+            rule = c["spec"]["layer"][-1]["encoding"]
+            datum = (rule.get("y") or rule["x"])["datum"]
+            assert writer.wall_at(datum, c["zones"]["t"]) == c["at"], c["name"]
 
 
 def test_a_placed_datum_is_where_the_same_text_in_the_data_is():

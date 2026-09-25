@@ -13,7 +13,7 @@
  * number on a category axis as an index, so a category whose labels are
  * numbers would otherwise land on the wrong tick.
  */
-import { clockFor, type Clock, type Precision } from "./clock";
+import { clockFor, type Clock, type Precision, wallText } from "./clock";
 import { DIM_OPACITY, litRows } from "./highlight";
 import { CATEGORY_COLOURS, categoryTable, colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
 
@@ -222,6 +222,19 @@ export function parseInstant(text: string): number {
   return ms;
 }
 
+/** A date datum's instant on a time axis showing `clock` (#847/#848 PR 5
+ * P26): written with a zone it is that instant; written without one it is a
+ * wall time on the axis's clock, as a filter reads it — NaN when the zone had
+ * that wall time twice or never. Held to the sandbox's `datum_instant` by
+ * wire-corpus/datum-axes.json. */
+function datumInstant(text: string, clock: Clock | null): number {
+  const ms = parseInstant(text);
+  // (a zone-less clock reads a wall time as UTC; `!clock` only narrows the type:
+  // a temporal channel always has one)
+  if (Number.isNaN(ms) || INSTANT.exec(text)?.[9] !== undefined || !clock) return ms;
+  return clock.instantAt(ms) ?? Number.NaN;
+}
+
 type Axis = {
   channel: Channel;
   kind: "value" | "log" | "time" | "category" | "index";
@@ -255,7 +268,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
       // A temporal grid's cells are epoch ms: a text datum is a date first.
       // On a number grid a datum is a number, as on any number axis.
       if (channel?.type === "quantitative" && typeof value === "string") return null;
-      const v = temporal && typeof value === "string" ? parseInstant(value) : value;
+      const v = temporal && typeof value === "string" ? datumInstant(value, clock) : value;
       if (v === null || Number.isNaN(v)) return null;
       const exact = cell.get(String(v));
       if (exact !== undefined || typeof v !== "number") return exact ?? null;
@@ -289,7 +302,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
   // ECharts' ticks and labels read the column's clock, not the viewer's.
   const wall = (v: number) => (clock ? clock.wall(v) : v);
   const pos = (v: Scalar | null): number | null => {
-    const n = kind === "time" && typeof v === "string" ? parseInstant(v) : v;
+    const n = kind === "time" && typeof v === "string" ? datumInstant(v, clock) : v;
     // Text on a number axis, or 0 and below on a log one, has no position.
     if (typeof n !== "number" || !Number.isFinite(n) || (kind === "log" && n <= 0)) return null;
     return kind === "time" ? wall(n) : n;
@@ -302,6 +315,30 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     return kind === "time" && col.kind === "time" && v !== null ? wall(v) : v;
   };
   return { channel, kind, labels: [], at, pos, clock };
+}
+
+/** A temporal grid's cells, each written to the finest part any has (P24):
+ * 00:00 on an hourly lattice. (A temporal lattice's cells are all epoch ms;
+ * the filter types them.) */
+function cellPrecision(axis: Axis): Precision {
+  return axis.clock ? axis.clock.precision(axis.labels.filter((v): v is number => typeof v === "number")) : "day";
+}
+
+/** A rule's label, as its axis reads the place it sits (#847/#848 PR 5
+ * P26): ECharts labels a line with its axis position, which on a time axis is
+ * the wall time as epoch ms ("1772366400000") and on a category or grid axis
+ * an index. A number axis keeps ECharts' own label. */
+function ruleLabel(axis: Axis, at: number): { label?: { formatter: () => string } } {
+  const text = (): string | null => {
+    if (axis.kind === "time") return wallText(at);
+    // a number axis has no labels, and a place between two numeric cells no
+    // label of its own: both keep ECharts' number
+    const label = axis.labels[at];
+    if (label === undefined) return null;
+    return axis.clock && typeof label === "number" ? axis.clock.text(label, cellPrecision(axis)) : String(label);
+  };
+  const shown = text();
+  return shown === null ? {} : { label: { formatter: () => shown } };
 }
 
 /** Where an axis name goes: centred beside its axis. At ECharts' default (the
@@ -330,9 +367,7 @@ function axisOption(
     // -0.5, 0.5, … (its min plus the interval), the cell edges, where no label
     // belongs — every label came out blank.
     const centres = Array.from({ length: n }, (_, i) => i);
-    // every cell to the finest part any has (P24): 00:00 on an hourly lattice
-    // (a temporal lattice's cells are all epoch ms; the filter types them)
-    const at = clock ? clock.precision(axis.labels.filter((v): v is number => typeof v === "number")) : "day";
+    const at = cellPrecision(axis);
     return {
       type: "value",
       name,
@@ -543,7 +578,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           notes.push(`rule at ${JSON.stringify(datum)} is off the ${c} axis — not drawn`);
           return [];
         }
-        return [{ [`${c}Axis`]: at, name: title }];
+        return [{ [`${c}Axis`]: at, name: title, ...ruleLabel(axis as Axis, at) }];
       };
       // A rule's own values — a single field's rows, a segment's four ends —
       // are placed one way: through the axis's `pos`, with a number sent as
@@ -560,7 +595,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       const placed = (key: "xAxis" | "yAxis", axis: Axis | null, c: Channel | undefined) => {
         const lines = all.flatMap((r) => {
           const v = place(axis, c, r);
-          return v === null ? [] : [{ [key]: v }];
+          return v === null ? [] : [{ [key]: v, ...ruleLabel(axis as Axis, v) }];
         });
         const off = all.length - lines.length;
         if (off > 0) notes.push(`${off} rule ${off === 1 ? "value" : "values"} with no place on the ${key[0]} axis — not drawn`);

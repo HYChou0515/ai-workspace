@@ -85,12 +85,15 @@ describe("a rule on a category axis", () => {
     )[1].markLine.data;
 
   it("places a datum at its category", () => {
-    expect(markLine({ mark: "rule", encoding: { x: { datum: 2022 } } }, {})).toEqual([{ xAxis: 1, name: undefined }]);
+    expect(markLine({ mark: "rule", encoding: { x: { datum: 2022 } } }, {})).toMatchObject([{ xAxis: 1, name: undefined }]);
   });
 
   it("places a field's values at their categories", () => {
     const rule = { mark: "rule", encoding: { x: { field: "year", type: "ordinal" } } };
-    expect(markLine(rule, { year: cat([2023]) }, 1)).toEqual([{ xAxis: 2 }]);
+    const data = markLine(rule, { year: cat([2023]) }, 1) as { xAxis: number; label: { formatter: () => string } }[];
+    expect(data).toMatchObject([{ xAxis: 2 }]);
+    // labelled with its category, not its index (P26)
+    expect(data[0].label.formatter()).toBe("2023");
   });
 });
 

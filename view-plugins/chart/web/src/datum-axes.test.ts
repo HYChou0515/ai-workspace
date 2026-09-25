@@ -16,7 +16,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { type Answer, toOption } from "./option";
 
-type Doc = { cases: { name: string; spec: object; answer: Answer; placed: boolean }[] };
+/** `at`: where a placed datum sits on a zoned time axis (#847/#848 PR 5 P26),
+ * as the sandbox reads it — a zone-less date is a wall time on the axis's
+ * clock — as epoch ms read as UTC. */
+type Doc = { cases: { name: string; spec: object; answer: Answer; placed: boolean; at?: number }[] };
 
 const file = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire-corpus", "datum-axes.json");
 const doc = JSON.parse(readFileSync(file, "utf8")) as Doc;
@@ -32,10 +35,18 @@ describe("a rule's datum is drawn exactly where validate lets it through", () =>
     process.env.TZ = tz;
   });
 
-  it.each(doc.cases)("$name", ({ spec, answer, placed }) => {
+  it.each(doc.cases)("$name", ({ spec, answer, placed, at: where }) => {
     const series = toOption(spec, answer).option.series as Series[];
     const line = series.find((s) => s.markLine)?.markLine?.data[0] ?? {};
     const at = line.xAxis ?? line.yAxis;
     expect(typeof at === "number" && Number.isFinite(at)).toBe(placed);
+    if (where !== undefined) expect(at).toBe(where);
+  });
+
+  it("holds zoned axes, placed and refused, and where each placed one sits (P26)", () => {
+    const zoned = doc.cases.filter((c) => "zones" in c);
+    expect(zoned.filter((c) => c.placed).length).toBeGreaterThan(0);
+    expect(zoned.filter((c) => !c.placed).length).toBeGreaterThan(0);
+    expect(zoned.filter((c) => c.at !== undefined).length).toBeGreaterThan(0);
   });
 });

@@ -6609,6 +6609,1129 @@
     ]
    },
    "placed": true
+  },
+  {
+   "name": "a zone-less date on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772884800000.0
+  },
+  {
+   "name": "a zone-less date the zone skipped",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-08T02:30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "America/New_York"
+   }
+  },
+  {
+   "name": "a zone-less date just past the skip",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-08T03:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772938800000.0
+  },
+  {
+   "name": "a zone-less date the zone had twice",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-11-01T01:30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "America/New_York"
+   }
+  },
+  {
+   "name": "a zone-less date just past the repeat",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-11-01T02:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1793498400000.0
+  },
+  {
+   "name": "a date with its offset on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-11-01T01:30-05:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1793496600000.0
+  },
+  {
+   "name": "epoch ms on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1772884800000
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772866800000.0
+  },
+  {
+   "name": "a zone-less date on a zoned y axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "t",
+        "type": "temporal"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "y": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772884800000.0
+  },
+  {
+   "name": "a zone-less date on a fixed-offset axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "+05:45"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "+05:45"
+   },
+   "at": 1772884800000.0
+  },
+  {
+   "name": "a zone-less date at the calendar's start, ahead of UTC",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "0001-01-01"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "+05:00"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "+05:00"
+   },
+   "at": -62135596800000.0
+  },
+  {
+   "name": "a zone-less day on a zoned temporal grid",
+   "data": {
+    "t": [
+     "2026-02-28T16:00:00Z",
+     "2026-03-01T16:00:00Z"
+    ],
+    "g": [
+     "a",
+     "a"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-02"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AACApk/KeUIAAEAMosp5Qg==",
+        "zone": "Asia/Taipei"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a"
+        ],
+        "width": 1,
+        "codes": "AAA="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "Asia/Taipei"
+   }
+  },
+  {
+   "name": "that day read as UTC is no cell",
+   "data": {
+    "t": [
+     "2026-02-28T16:00:00Z",
+     "2026-03-01T16:00:00Z"
+    ],
+    "g": [
+     "a",
+     "a"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-02T00:00Z"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AACApk/KeUIAAEAMosp5Qg==",
+        "zone": "Asia/Taipei"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a"
+        ],
+        "width": 1,
+        "codes": "AAA="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "Asia/Taipei"
+   }
+  },
+  {
+   "name": "no such day on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-02-30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "America/New_York"
+   }
+  },
+  {
+   "name": "a zone-less date on a UTC axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "UTC"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "UTC"
+   },
+   "at": 1772884800000.0
   }
  ]
 }
