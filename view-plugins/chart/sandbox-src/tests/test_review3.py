@@ -862,3 +862,234 @@ def test_a_column_of_dates_and_other_values_is_left_as_it_is(other):
     df = pd.DataFrame({"day": day, "v": [1.0, 2.0]})
     kept = apply_transforms(df, [{"filter": {"field": "day", "equal": other}}])
     assert kept["v"].tolist() == [2.0]
+
+
+# Round 14: one reading of a date (chart_view/instants.py).
+
+
+def test_an_epoch_number_on_a_zoned_column_is_that_instant():
+    # D1: read as a New York wall clock, row 0's own instant matched nothing
+    # and `gte` kept none of the two rows at or after it.
+    ms = 1730611800000  # 2024-11-03T05:30Z, _new_york()'s first row
+    ny = _new_york()
+    assert apply_transforms(ny, [{"filter": {"field": "at", "equal": ms}}])["v"].tolist() == [1.0]
+    later = apply_transforms(ny, [{"filter": {"field": "at", "gte": ms}}])
+    assert later["v"].tolist() == [1.0, 2.0, 3.0]
+
+
+def _far_taipei() -> pd.DataFrame:
+    # A parquet `timestamp[us, tz=Asia/Taipei]` read by pandas carries a pytz
+    # zone; outside the nanosecond range, its astype(object) crashed.
+    at = pd.Series(np.array(["1500-01-01", "2300-01-01"], dtype="datetime64[us]"))
+    at = at.dt.tz_localize("UTC").dt.tz_convert("Asia/Taipei")
+    return pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [{"equal": "2300-01-01T08:00"}, {"equal": 10413792000000}, {"oneOf": ["2300-01-01T08:00"]}],
+)
+def test_a_date_past_nanoseconds_in_a_zoned_column_is_matched(pred):
+    # D2: `isin` against a value the column's dtype was not given crashed
+    # with a KeyError out of pandas.
+    kept = apply_transforms(_far_taipei(), [{"filter": {"field": "at", **pred}}])
+    assert kept["v"].tolist() == [2.0]
+
+
+def test_a_source_zone_is_read_as_zoneinfo(tmp_path):
+    # D2, at the source: a pytz zone crashed `canon` (highlight values) too.
+    import zoneinfo
+
+    from chart_view.sources import read_source
+
+    (tmp_path / "data").mkdir()
+    _far_taipei().to_parquet(tmp_path / "data" / "far.parquet")
+    df = read_source(tmp_path, "data/far.parquet")
+    assert isinstance(df["at"].dtype.tz, zoneinfo.ZoneInfo)
+    spec = {
+        "view": "chart",
+        "source": "data/far.parquet",
+        "mark": "point",
+        "encoding": {
+            "x": {"field": "at", "type": "temporal"},
+            "y": {"field": "v", "type": "quantitative"},
+        },
+        "highlight": {"values": {"at": ["2300-01-01T08:00:00+08:00"]}},
+    }
+    build(spec, df)  # no KeyError out of pandas
+
+
+def test_a_parquet_wall_time_before_the_zone_tables_is_one_time(tmp_path):
+    # D4 as reported: a parquet New York column, read with a pytz zone, gave
+    # NaT for 1500-01-01 there, so `equal` matched nothing.
+    from chart_view.sources import read_source
+
+    (tmp_path / "data").mkdir()
+    utc = np.array(["1500-01-01T04:56:02", "2024-01-01T05:00"], dtype="datetime64[us]")
+    at = pd.Series(utc).dt.tz_localize("UTC").dt.tz_convert("America/New_York")
+    pd.DataFrame({"at": at, "v": [1.0, 2.0]}).to_parquet(tmp_path / "data" / "ny.parquet")
+    df = read_source(tmp_path, "data/ny.parquet")
+    kept = apply_transforms(df, [{"filter": {"field": "at", "equal": "1500-01-01"}}])
+    assert kept["v"].tolist() == [1.0]
+
+
+def test_a_source_with_a_fixed_offset_keeps_it(tmp_path):
+    from chart_view.sources import read_source
+
+    (tmp_path / "data").mkdir()
+    at = pd.Series(pd.to_datetime(["2024-01-01T00:00+08:00"]))
+    pd.DataFrame({"at": at}).to_parquet(tmp_path / "data" / "a.parquet")
+    zone = read_source(tmp_path, "data/a.parquet")["at"].dt.tz
+    assert zone.utcoffset(None) == dt.timedelta(hours=8)
+
+
+@pytest.mark.parametrize("text", ["now", "March", ""])
+def test_a_date_field_with_text_that_is_no_spec_date_is_left_as_it_is(text):
+    # D3: "now" was read as the wall clock and "March" as 0001-03-01; the
+    # column is a date column only when every cell is a date.
+    day = pd.Series([dt.date(2024, 1, 1), text], dtype=object)
+    df = pd.DataFrame({"day": day, "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "day", "equal": text}}])
+    assert kept["v"].tolist() == [2.0]
+
+
+@pytest.mark.parametrize(
+    ("pred", "keeps"),
+    [
+        ({"equal": "1500-01-01"}, [1.0]),
+        ({"gt": "1400-01-01"}, [1.0, 2.0]),
+        ({"range": ["1500-01-01", "2030-01-01"]}, [1.0, 2.0]),
+    ],
+)
+def test_a_wall_time_before_the_zone_tables_is_one_time(pred, keeps):
+    # D4: pytz gave NaT for any time before 1677 there, so these were refused
+    # as "no single time" or matched nothing. A source's zone is zoneinfo
+    # (`read_source`): pytz's New York LMT is -4:56, zoneinfo's -4:56:02.
+    import zoneinfo
+
+    utc = np.array(["1500-01-01T04:56:02", "2024-01-01T05:00"], dtype="datetime64[us]")
+    at = pd.Series(utc).dt.tz_localize("UTC").dt.tz_convert(zoneinfo.ZoneInfo("America/New_York"))
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    assert apply_transforms(df, [{"filter": {"field": "at", **pred}}])["v"].tolist() == keeps
+
+
+def _diff_by(of: object, minus: object) -> dict:
+    return {
+        "diff": {"by": "at", "of": of, "minus": minus},
+        "aggregate": [{"op": "sum", "field": "v", "as": "d"}],
+    }
+
+
+def test_a_diff_by_a_zoned_column_reads_its_sides_as_a_predicate_does():
+    # D5: `side == of` compared the raw text, and a time the clock passed
+    # twice raised AmbiguousTimeError out of the CLI.
+    out = apply_transforms(_new_york(), [_diff_by("2024-11-03 01:30", 1733054400000)])
+    assert out["d"].tolist() == [0.0]  # (1 + 2) - 3
+    with pytest.raises(TransformError, match=r"diff on 'at': of 'soon' is not a date"):
+        apply_transforms(_new_york(), [_diff_by("soon", "2024-01-01")])
+
+
+def test_an_order_on_a_zoned_column_reads_an_ordinary_time_once():
+    # Conformance M24: a wall time the zone had once is one instant, so an
+    # order against it runs.
+    kept = apply_transforms(_new_york(), [{"filter": {"field": "at", "lt": "2024-11-30"}}])
+    assert kept["v"].tolist() == [1.0, 2.0]
+
+
+@pytest.mark.parametrize("value", [1e20, True])
+def test_a_number_that_is_no_instant_is_refused(value):
+    with pytest.raises(TransformError, match="is not a date"):
+        apply_transforms(_new_york(), [{"filter": {"field": "at", "equal": value}}])
+
+
+@pytest.mark.parametrize("zoned_column", [False, True])
+def test_a_zoned_value_past_the_calendar_at_utc_is_refused_by_name(zoned_column):
+    if zoned_column:
+        with pytest.raises(TransformError, match="outside the calendar at UTC"):
+            value = "0001-01-01T00:00+08:00"
+            apply_transforms(_new_york(), [{"filter": {"field": "at", "equal": value}}])
+        return
+    with pytest.raises(TransformError, match="outside the calendar at UTC"):
+        apply_transforms(_days(), [{"filter": {"field": "day", "equal": "0001-01-01T00:00+08:00"}}])
+
+
+def test_a_wall_time_past_the_calendar_in_its_zone_is_refused_by_name():
+    # Taipei's 1901 offset (+08:06) puts year 1's first minute before year 1 at UTC.
+    at = pd.Series(pd.to_datetime(["2024-01-01"])).dt.tz_localize("Asia/Taipei")
+    df = pd.DataFrame({"at": at, "v": [1.0]})
+    with pytest.raises(TransformError, match="outside the calendar at UTC"):
+        apply_transforms(df, [{"filter": {"field": "at", "equal": "0001-01-01"}}])
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        [np.datetime64("2024-01-01T00:00"), "2024-01-02 08:00"],  # M9: numpy instants
+        [dt.date(2024, 1, 1), "2024-01-02T16:00+08:00"],  # M13b: text with an offset
+        # M12: a zoned object, read at UTC
+        [
+            dt.date(2024, 1, 1),
+            dt.datetime(2024, 1, 2, 16, tzinfo=dt.timezone(dt.timedelta(hours=8))),
+        ],
+    ],
+    ids=["numpy-instant", "text-with-offset", "zoned-object"],
+)
+def test_a_date_field_of_mixed_forms_reads_each_cell_as_its_instant(cells):
+    df = pd.DataFrame({"day": pd.Series(cells, dtype=object), "v": [1.0, 2.0]})
+    want = "2024-01-02T08:00"
+    assert apply_transforms(df, [{"filter": {"field": "day", "equal": want}}])["v"].tolist() == [
+        2.0
+    ]
+
+
+def test_a_date_field_a_record_leaves_out_is_missing_there():
+    # M10: a record without the field gives a float NaN in the column.
+    df = pd.DataFrame.from_records(
+        [{"day": dt.date(2024, 1, 1), "v": 1.0}, {"day": "2024-01-02", "v": 2.0}, {"v": 3.0}]
+    )
+    kept = apply_transforms(df, [{"filter": {"field": "day", "gte": "2024-01-02"}}])
+    assert kept["v"].tolist() == [2.0]
+    assert apply_transforms(df, [{"filter": {"field": "day", "valid": False}}])["v"].tolist() == [
+        3.0
+    ]
+
+
+def test_a_text_column_is_not_read_cell_by_cell_for_a_predicate(monkeypatch):
+    # Cost: `infer_dtype` is one C pass; only a column that may hold dates is mapped.
+    df = pd.DataFrame({"t": ["2024-01-01", "b"], "n": pd.Series([1, 2], dtype=object)})
+
+    def no_map(*_a, **_k):
+        raise AssertionError("a column that holds no date was mapped cell by cell")
+
+    monkeypatch.setattr(pd.Series, "map", no_map)
+    assert apply_transforms(df, [{"filter": {"field": "t", "equal": "b"}}])["n"].tolist() == [2]
+    assert apply_transforms(df, [{"filter": {"field": "n", "equal": 1}}])["t"].tolist() == [
+        "2024-01-01"
+    ]
+
+
+@pytest.mark.parametrize("op", ["equal", "oneOf"])
+def test_a_time_finer_than_the_columns_unit_names_no_row(op):
+    # Regression lens R2: `isin` truncated .123456 to the ms column's .123.
+    at = pd.Series(
+        np.array(["2024-01-03", "2024-01-03T00:00:00.123"], dtype="datetime64[ms]")
+    ).dt.as_unit("ms")
+    df = pd.DataFrame({"at": at, "v": [1.0, 2.0]})
+    value = "2024-01-03T00:00:00.123"
+    exact = apply_transforms(
+        df, [{"filter": {"field": "at", op: value if op == "equal" else [value]}}]
+    )
+    assert exact["v"].tolist() == [2.0]
+    finer = 1704240000000.5  # half a millisecond past midnight
+    kept = apply_transforms(
+        df, [{"filter": {"field": "at", op: finer if op == "equal" else [finer]}}]
+    )
+    assert kept.empty
+
+
+def test_a_date_field_past_the_calendar_with_text_that_is_no_date_is_left_as_it_is():
+    # All of them dates, or none — decided before any is read at UTC.
+    year1 = dt.datetime(1, 1, 1, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    df = pd.DataFrame({"day": pd.Series([year1, "soon"], dtype=object), "v": [1.0, 2.0]})
+    kept = apply_transforms(df, [{"filter": {"field": "day", "equal": "soon"}}])
+    assert kept["v"].tolist() == [2.0]
