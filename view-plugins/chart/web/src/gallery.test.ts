@@ -21,7 +21,7 @@ import {
   tilesInBox,
 } from "./gallery";
 import { toOption } from "./option";
-import { lattice } from "./raster";
+import { categoryTable, lattice } from "./raster";
 import { answer, base, f64, layer, q8 } from "./testAnswer";
 
 // the platform's rule, as the SDK double in FacetGallery.test.tsx has it
@@ -228,6 +228,21 @@ describe("sortArgs (P4)", () => {
   it("says null for the written order when the spec sorts, and nothing when it does not", () => {
     expect(sortArgs(doc, null)).toEqual({ sort: null });
     expect(sortArgs({ view: "chart", facet: { field: "g" } }, null)).toEqual({});
+  });
+});
+
+describe("a category thumbnail (P19)", () => {
+  it("paints each category its own colour from the category palette, not one ramp end", () => {
+    const idx = index({ scale: { kind: "category", labels: ["a", "b", "c"] } });
+    // cat codes: cell 0 -> a, 1 -> b, 2 -> c, 3 missing
+    const column = { kind: "cat" as const, levels: ["a", "b", "c"], width: 1 as const, codes: btoa(String.fromCharCode(0, 1, 2, 255)) };
+    const image = thumbnail(idx, column, "sequential");
+    const table = categoryTable(3);
+    // lattice rows run top first: cells 2, 3 are the top row, 0, 1 the bottom
+    const px = (i: number) => Array.from(image.data.slice(i * 4, i * 4 + 4));
+    const code = (c: number) => Array.from(table.slice(c * 4, c * 4 + 4));
+    expect([px(0), px(1), px(2), px(3)]).toEqual([code(2), [0, 0, 0, 0], code(0), code(1)]);
+    expect(new Set([px(0), px(2), px(3)].map(String)).size).toBe(3);
   });
 });
 

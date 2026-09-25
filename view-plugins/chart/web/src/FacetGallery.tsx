@@ -43,7 +43,7 @@ import {
   type FacetIndex,
   type SortChoice,
 } from "./gallery";
-import type { RasterImage } from "./raster";
+import { categoryColour, type RasterImage } from "./raster";
 import { viewCall } from "./viewCall";
 import { decodeColumn, type WireColumn } from "./wire";
 
@@ -116,6 +116,25 @@ export function Canvas({
       }
       onMouseLeave={onHover && (() => onHover(null))}
     />
+  );
+}
+
+/** A category gallery's levels, each with the colour its cells are painted
+ * (P19); nothing for a continuous one. */
+function Legend({ scale }: { scale: FacetIndex["scale"] }) {
+  if (scale.kind !== "category") return null;
+  return (
+    <ul
+      aria-label="legend"
+      style={{ display: "flex", flexWrap: "wrap", gap: 10, listStyle: "none", margin: 0, padding: "2px 12px 6px", fontSize: 11 }}
+    >
+      {scale.labels.map((label, i) => (
+        <li key={label} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <span aria-hidden style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: categoryColour(i) }} />
+          {label}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -326,6 +345,7 @@ function Enlarged({
       ) : (
         <Notice>Loading…</Notice>
       )}
+      <Legend scale={index.scale} />
       <div style={{ fontSize: 12 }}>
         {hovered === null || hovered === undefined ? "Hover a cell for its exact value" : `value: ${String(hovered)}`}
       </div>
@@ -802,6 +822,7 @@ export function FacetGallery({
       </div>
       {/* bounded by the window, not the pane: a host pane is height:auto, and a
           scroller that grows to its content mounts every tile and asks every page */}
+      <Legend scale={idx.scale} />
       {/* the wall and the stack panel side by side; on a narrow screen the
           panel wraps under the wall */}
       <div style={{ display: "flex", flexWrap: "wrap", flex: 1, minHeight: 0, gap: 8 }}>

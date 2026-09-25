@@ -146,6 +146,12 @@ export function categoryTable(levels: number): Uint8ClampedArray {
   return table;
 }
 
+/** Category `i`'s colour, for a legend's swatch: the palette's, cycling as
+ * `categoryTable` cycles. */
+export function categoryColour(i: number): string {
+  return CATEGORY_COLOURS[i % CATEGORY_COLOURS.length];
+}
+
 /** Alpha of a cell a highlight leaves unlit (a lit or unhighlighted cell is opaque). */
 export const DIM_ALPHA = 64;
 

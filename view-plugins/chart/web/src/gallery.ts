@@ -12,7 +12,7 @@
 import { clockFor } from "./clock";
 import type { MarkingValues, IsLit } from "./marking";
 import { parseInstant } from "./option";
-import { colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
+import { categoryTable, colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
 import { canon, decodeColumn, type WireColumn } from "./wire";
 
 export type FacetScale =
@@ -235,5 +235,8 @@ export function thumbnail(
   const codes = Array.from({ length: index.cells }, (_, i) => (col.code && i < col.length ? col.code(i) : 255));
   const cells = lattice(index.layout.x, index.layout.y, codes);
   const rows = lit === undefined ? undefined : new Array<boolean>(index.cells).fill(lit);
-  return paintCells(cells, colourTable(scheme, col.min ?? 0, col.max ?? 0), rows);
+  // a category column (`cat` codes) takes the category palette; a ramp over
+  // col.min..col.max -- 0..0 for a cat column -- painted every cell one colour
+  const table = col.kind === "cat" ? categoryTable(col.levels?.length ?? 0) : colourTable(scheme, col.min ?? 0, col.max ?? 0);
+  return paintCells(cells, table, rows);
 }

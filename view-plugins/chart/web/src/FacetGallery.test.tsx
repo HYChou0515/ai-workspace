@@ -512,6 +512,27 @@ describe("FacetGallery", () => {
     expect(screen.getByRole("dialog").textContent).toContain("value: off");
   });
 
+  it("names a category gallery's levels in a legend, with their colours, on the wall and in the enlarged view", () => {
+    INDEX_OVER = { scale: { kind: "category", labels: ["ok", "off"] }, cells: 2, layout: { x: [0, 1], y: [0, 0] } };
+    answers.index = ok({ ...INDEX, ...INDEX_OVER });
+    const cat = (codes: number[]) => ({ kind: "cat", levels: ["ok", "off"], width: 1, codes: btoa(String.fromCharCode(...codes)) });
+    answers.page = (positions) => ok({ build: INDEX.build, groups: positions.map(() => cat([0, 1])) });
+    view();
+    const legend = screen.getByRole("list", { name: "legend" });
+    const items = within(legend).getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toEqual(["ok", "off"]);
+    const swatch = (i: HTMLElement) => (i.firstElementChild as HTMLElement).style.background;
+    expect(swatch(items[0])).not.toBe(swatch(items[1]));
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    const inDialog = within(screen.getByRole("dialog")).getByRole("list", { name: "legend" });
+    expect(within(inDialog).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["ok", "off"]);
+  });
+
+  it("draws no legend for a continuous gallery", () => {
+    view();
+    expect(screen.queryByRole("list", { name: "legend" })).toBeNull();
+  });
+
   it("shows why when an enlarged tile's values are refused (exit 2), rather than waiting", () => {
     exactAnswer = () => ({ stdout: "", stderr: "position must be an integer group position", exit_code: 2 });
     view();
