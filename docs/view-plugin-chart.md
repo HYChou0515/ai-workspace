@@ -40,6 +40,18 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - 連動的範圍是一個 item。同一個 item 開在好幾個分頁（例如聊天模式開出來的純編輯區頁面）也是同一組 marking。
 - AI 可以用 `show_file(layout=…)` 把幾張連動的圖一次放進分割窗格；送訊息時，composer 上方的 marking chip
   會把選取寫成 `.markings/<名字>.json` 給 AI 讀（見升級手冊 [#856](migrations.md#pr-856)）。
+- **表格也接 marking**：內建的 entity `table` 與 `csv-table` 寫 `marking:` 就加入連動。marking 裡有值時，表格只剩
+  被點亮的列，表頭上方一條「filtered by <名字> · 3 of 25 rows · show all」；按 show all 顯示全部列、被點亮的反白
+  （這個選擇記在你自己的瀏覽器）。比對規則和圖表相同：每個共同欄位的值（用圖表寫 marking 的同一種文字）都在集合裡。
+  表格和 marking 沒有共同欄位時，顯示全部列並說明「no column in common」。
+- **在表格上勾選也會寫 marking**：寫進 `keys:` 的欄位，沒有 `keys:` 就用 marking 本身的欄位；兩者都沒有就不寫，
+  標頭會說原因。勾選的那張表自己不被過濾（只反白），免得一勾其他列就消失；表格只對自己有的值做決定，不會取消
+  別張圖才有的值。沒接 marking 的 entity 表格，勾選照舊是批次編輯。
+- 圖表工具列的 ✕ 會清空 marking，包括打開時由 `highlight:` 寫進去的起始選取。
+- **另存成表格**：marking 選單與訊息上的 chip 都有「Save as table」，把被點亮的列（來源的每一欄，套用該 view 的
+  `transform:`）寫成 workspace 裡的 `markings/<名字>-<yyyymmdd-hhmm>.csv`，檔案樹看得到、`csv-table` 打得開、AI 讀得到。
+  寫檔算進 workspace 額度，需要新增檔案的權限。chip 只存它當時送出的值：同名 marking 之後又送過一次，舊 chip 會拒絕並說明。
+  這個動作由宣告了 `"provides": {"marking_rows": …}` 的 plugin 提供（chart 宣告了），平台不寫死 plugin 名字。
 
 ## 縮圖牆：`facet:`（#857）
 
@@ -53,18 +65,47 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - **縮圖和大圖畫出來的像素完全一樣**：兩邊用同一份量化與配色（有測試逐像素比對）。點縮圖旁的 ⤢ 可以放大，
   滑鼠停在格子上會顯示該格的**精確值**（不是量化後的顏色值）。
 - **選取是依排名，不是依畫面上的元素**：點一張、shift 點另一張，會選取兩者之間的所有排名；也可以直接輸入
-  「第 a 到第 b 名」。選取會把範圍內**每一組**（包括還沒捲到、還沒載入的）的 facet 欄位值寫進這張圖的 marking，
+  「第 a 到第 b 名」，或在牆上拖出一個框（從空白處拖＝取代選取，按 Shift 拖＝加入；框碰到的格子都算）。選取會把範圍內**每一組**（包括還沒捲到、還沒載入的）的 facet 欄位值寫進這張圖的 marking，
   同一個 marking 上的其他圖會亮起對應的列。facet 有好幾個欄位時，marking 是**每個欄位各記一組值**，
   所以選了 (L1, 1) 和 (L2, 2)，(L1, 2) 和 (L2, 1) 也會一起亮——這是 marking 本身的比對規則。
+- **排序可以換成任何欄位**：牆上的選單列出每一欄。每組只有一個值的欄位直接用那個值排；每組有多個值的欄位，
+  選一個統計來排（數字：mean / median / min / max / count；文字：distinct / count；日期：min / max / count），
+  升冪降冪都可以，排的是全部群組。spec 裡對應的是 `facet.sort.stat`。換欄位或統計會重建快取，只換方向不會。
+- **牆旁的疊圖面板**：把選取的群組（沒選就是全部）在每個格子上疊成一張，欄位與統計自選；按 Set as B 把目前的選取
+  存成 B，面板同時畫 A、B 與 A − B（發散色階）。疊圖在沙盒裡、依快取的版面算。
+- **第一次打開會顯示建置進度**（讀檔、分組、寫快取各一行）；快取還在的話只顯示「Opening the gallery…」。
+- 顏色欄是類別時，每個類別一種顏色，牆與放大圖都有圖例列出類別名稱。
+- `show_file` 的 `validate` 對 `facet:` 檔案會直接建一次快取（和打開時同一個函式），所以打開時不會再被拒絕，
+  也會馬上打開；代價是 `show_file` 要付一次建置時間（在同一個沙盒指令時間上限內）。
 - **疊圖與相減不需要 `facet`**：`transform:` 裡對 lattice 欄位做 `aggregate`，就是把所有群組疊成一張；
   `diff` 則是兩組相減（見 `SKILL.md` 的 Transforms）。
 - 快取放在沙盒的 `.home/.cache/views/`，不算 workspace 額度、不備份、隨沙盒回收；上限與容量估算見升級手冊
   [#857](migrations.md#pr-857)。`facet:` 的來源必須是表格檔，`{entity: …}` 會被拒絕。
 
+## 時間與時區
+
+- 帶時區的時間欄位（例如 parquet 的 `timestamp[…, tz=Asia/Taipei]`）在軸、tooltip 與縮圖標籤上都用**它自己的時區**
+  顯示，並寫出時區名稱（軸名 `at (Asia/Taipei)`）；沒有時區的欄位照原樣（UTC）顯示，不隨看的人的瀏覽器時區改變。
+  時間顯示到欄位資料實際有的最細單位（有時分就到時分，有秒就到秒），只有日期的欄位只顯示日期。
+- 篩選（`equal` / `oneOf` / 大小比較 / `range`）、`diff` 的兩邊與 `highlight: values` 在日期欄位上用同一種讀法：
+  datum 的日期寫法、marking 寫出的文字（到奈秒）、或 epoch 毫秒；沒寫時區的時間用欄位自己的時區讀，
+  時鐘撥回而出現兩次的時間兩個都算，撥快而不存在的時間一個都不算，大小比較則會拒絕並說明。
+  CSV 的日期欄位（每格都是日期文字）也照日期比較，和圖上畫的一致。
+- 時間軸上沒寫時區的 `datum`（例如 rule）也放在軸欄位的時區；落在時鐘撥動時重複或不存在的時間會被 `validate` 拒絕，
+  並列出帶 offset 的寫法。rule 的標籤照軸的讀法顯示（時間、類別或格子）。
+- pandas query（`filter: "…"`、`where:`）裡和帶時區欄位比較的時間要寫上時區，沒寫的會被拒絕並說明。
+
+## 對話卡片的縮圖
+
+`show_file` 秀出的 chart、縮圖牆或 layout 卡片，捲進畫面時會用同一個渲染器畫一張小的靜態縮圖（layout 每格各畫各的），
+點開才是活的圖表；用的是和打開時同一組沙盒呼叫，所以點開會沿用。畫不出來就是原本的純檔案卡片。
+這是 view kind 的一個選用能力（`registerViewKind` 的 `Thumbnail`），沒提供的 kind 維持純檔案卡片。
+
 ## 計算在哪裡跑
 
 聚合、篩選、差異、分箱都在**這個 item 自己的沙盒**裡跑（`exec` 同一套 uid / cgroup 隔離），
 瀏覽器只收結果，數值與類別都用二進位 base64 傳。打開圖表時如果沙盒還沒醒，會先喚醒它。
+renderer 呼叫沙盒時傳的是 view 檔的**路徑**（加上內容摘要當快取鍵），不是 spec 全文，所以超過 128 KB 的 spec 也畫得出來。
 
 - 沙盒端是一個 tool bundle，用 isolated launcher 啟動：使用者自己 `pip install --user pandas`
   **碰不到**它用的 pandas / pyarrow。
@@ -80,7 +121,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 
 - **關掉它**：把 `chart` 從 plugin 目錄（`view_plugins.dir`）移除。
   在某個 item 的 skill 偏好把 `chart` 關掉，只會拿掉那份 skill（AI 不再讀得到規格說明）；
-  `## Available views` 那兩行仍在，因為它看的是 app 有沒有 `write_file` 與 `show_file`。
+  `## Available views` 裡 chart 的那幾行仍在，因為它看的是 app 有沒有 `write_file` 與 `show_file`。
 - **為自己的模型重調 skill**：
   1. 執行 `uv run python -m workspace_app.view_plugin tune chart`，它會用
      `<plugin 目錄>/chart/scenarios/` 的情境，外加一組不給 skill 的對照組來評分。
@@ -89,8 +130,8 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   這份 skill 只有一個檔案，改完**下一輪對話就生效**，不需要 Refresh 或重 build。
   `tune` 會替情境評分，但這些分數不是 CI 的關卡，只是讓你在自己的模型上比較改前改後。
 - **prompt 成本**：凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多兩樣東西：
-  - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有宣告
-    views，所以這整段是因為 chart 才出現；
+  - `## Available views` 整段，約 610 字元（實測 606）：標題、一句說明，加上 chart 的四行（圖表、grid、
+    `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
   SKILL.md 本文（去掉 frontmatter）約 8.9k 字元，只在 AI `read_skill('chart')` 時才載入。

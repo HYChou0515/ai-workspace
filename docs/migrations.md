@@ -912,19 +912,37 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 **設定** — 沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
 
 - 凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多這些：
-  - `## Available views` 整段，約 280 字元：標題、一句說明，加上 chart 的兩行。csv-table 沒有 views，
-    所以這段是因為 chart 才出現；
+  - `## Available views` 整段，約 610 字元（實測 606）：標題、一句說明，加上 chart 的四行（圖表、grid、
+    `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引的 `chart` 一行，約 230 字元；
-  - SKILL.md 本文約 6.5k 字元，只在 AI `read_skill('chart')` 時才載入。
+  - SKILL.md 本文約 6.5k 字元（本 PR 最初的版本；連同下兩條與收尾的 pr5，合入 master 時實測 8,921，約 8.9k），
+    只在 AI `read_skill('chart')` 時才載入。
 - AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
 - **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。在某個 item 的 skill 偏好把 `chart`
-  關掉，只拿掉那份 skill，`## Available views` 那兩行仍在。
+  關掉，只拿掉那份 skill，`## Available views` 裡 chart 的那幾行仍在。
 - **為你們的模型重調**：`uv run python -m workspace_app.view_plugin tune chart`，改
   `<plugin 目錄>/chart/skill/SKILL.md` 再重跑。下一輪對話就生效。
+
+- 以下是 [#856](#pr-856)、[#857](#pr-857) 合進本分支之後、隨本 PR 一起進 master 的收尾
+  （`docs/plan-view-plugins-pr5-finish.md`），同樣是**行為改變，沒有開關**：
+  - **表格會依 marking 過濾**：內建的 entity `table` 與 `csv-table` 寫了 `marking:` 的，只剩被點亮的列
+    （上方有「show all」可切換）；勾選列也會寫進 marking。沒寫 `marking:` 的表格和以前一樣。
+  - **圖表不再在畫布裡畫 `title:`**，由 view 標頭顯示（標頭本來就有同一個標題）。
+  - **使用者按「Save as table」會在 workspace 寫 `markings/<名字>-<yyyymmdd-hhmm>.csv`**：出現在檔案樹、
+    會備份、**算進 workspace 額度**，需要新增檔案的權限；刪掉沒有副作用。
+  - 帶時區的時間欄位照**欄位自己的時區**顯示並寫出時區名稱，不再隨看的人的瀏覽器時區改變。
+  - `sandbox.kind: local` 開 jail 時，同一個沙盒同時跑的指令不再互相拆掉 `/dev`（[#859](https://github.com/HYChou0515/ai-workspace/issues/859)）：
+    以前一個多圖的版面約每 30–50 次查詢就有一次在面板上顯示 traceback。沙盒根目錄下的 `dev/` 不再在每個指令後刪除
+    （留下一個空目錄），運營方不用做事。
 
 細節見 [chart：互動圖表 view plugin](view-plugin-chart.md)。
 
 **資料** — 不動。沒有 `Schema` 升版。
+
+- 縮圖牆的快取鍵與檔頭變了（加了排序統計、欄位清單與來源資訊），**每面縮圖牆在換版後第一次打開會重建一次快取**，
+  時間與記憶體見 [#857](#pr-857) 的表；舊快取之後照 `cache_mb` 的上限被清掉。不用手動刪。
+- 訊息上的 marking chip 多記一個內容摘要（`SentMarking.digest`，有預設值，舊訊息讀得出來）。換版**之前**送出的 chip
+  按「Save as table」會被拒絕並說明「再送一次」，因為沒有摘要就無法確認檔案還是當時送出的值。
 
 **k8s · CI 側**
 
@@ -953,6 +971,20 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     `view plugin "chart" could not run "query"`（502），AI 的 `show_file` 則附上 `could not check this view`。
   - 不走容器、直接跑 repo 的部署：`make view-plugins` 就會連 `sandbox/` 一起裝到 `<repo>/.view-plugins`。
 - API 映像的 plugin stage（前端 `index.js` + skill）見 #854 的條目。
+- **收尾（pr5）加了沙盒指令、改了 renderer 呼叫沙盒的方式，所以 sandbox-host 與 API 要照「sandbox-host 先上、API 後上」
+  這個順序，而且兩者都是這一版**（`rollout` 時）。
+  - 做什麼：用這一版重 build sandbox-host（上面第一條的同一件事），它的 chart bundle 會有 `lit_rows`、`facet_progress`、
+    `facet_stack`，而且 `query` / `facet_build` 收 view 檔的路徑。
+  - 為什麼：新的 renderer 傳給沙盒的是 view 檔路徑（spec 超過 128 KB 也畫得出來），舊的沙盒只收 spec 全文。
+    新沙盒兩種都收，所以先上沙盒不會壞舊的前端。
+  - 漏做的症狀：打開 chart 或縮圖牆，面板顯示 `argument must be {'spec': <string>}`；按「Save as table」得到
+    `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯。
+- **`sandbox.kind: local` 掛自己 plugin 目錄的部署**，`rollout 前`把 `chart` **與 `csv-table`** 用這一版重新
+  `view_plugin build` 進那個目錄（做法同上）。
+  - 為什麼：chart 的 `plugin.json` 多了 `provides` 與兩行 views，沙盒 bundle 多了指令；csv-table 的前端改成會接 marking，
+    `plugin.json` 也多了一行 views。
+  - 漏做的症狀：「Save as table」回 501「saving a marking as a table is not available in this deployment」；
+    `csv-table` 的表格不跟著 marking 過濾；chart 面板的症狀同上一條。
 
 **確認做完**
 
@@ -964,6 +996,10 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 回覆出現一行 `… rows; <欄位> <最小>–<最大>` 摘要與一張卡片；
   - 點開卡片是可以框選的圖表；
   - 有 `highlight:` 時，被點亮的點保持原色，其餘變淡。
+- 收尾（pr5）：`launch` 不帶參數印出的清單有 9 個指令：`validate`、`query`、`lit_rows`、`facet_build`、`facet_progress`、
+  `facet_index`、`facet_page`、`facet_exact`、`facet_stack`。在一張有 `keys:` 與 `marking:` 的圖上框選幾個點，
+  標頭的「Save as table」寫出 `markings/<名字>-<時間>.csv`，打開是被點亮的列；同一個 `marking:` 的 `csv-table`
+  只剩那幾列。
 
 ---
 
