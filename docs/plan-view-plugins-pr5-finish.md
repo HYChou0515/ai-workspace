@@ -277,6 +277,15 @@ words are examples, not spec keys.
   slices whose count equalled a marked value, and a click wrote the count. The answer
   names an aggregate after its field, so a field a channel aggregates neither lights a
   chart nor is written by it; the chart links by its other fields.
+- **P33 — The gallery's first open, measured.** A benchmark of the #857 cost table at
+  4c382ab4 found it no longer described the code: first open 15–23% slower than
+  before pr5 (the extra in P4's per-column work: the facet columns read twice, one
+  stable argsort per column), and 2.5–3× slower with `ordinal` x/y (a per-row
+  `_as_marking` map in the category wire, ~12 s with no progress line on 10M rows).
+  The category wire skips the map for number, bool, instant and duration dtypes
+  (parity with the old `_cat` as oracle); each facet column is read once and the
+  tiles ordered once; the cache stays byte-identical (golden digests from bec9ccae).
+  The runbook table is re-measured for both axis types (943bb39c, 1f9d2605, 6e385141).
 
 ## Verification
 

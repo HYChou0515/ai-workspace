@@ -45,7 +45,8 @@ The keys to use:
 - `title`, `description`: text.
 - `keys`: column names.
 - `marking`: a name. Charts with the same `marking` are linked: rows the person
-  brushes in one light up in the others, matched on the columns named in the
+  selects in one (a box or a lasso on any mark but a pie, a click on a pie's
+  slice, a legend click) light up in the others, matched on the columns named in the
   brushing chart's `keys`. A field a channel aggregates holds the aggregate,
   not the field's values, so it is never matched: a pie of
   `theta: {field: id, aggregate: count}` links by its `color` field.
@@ -173,7 +174,7 @@ hundreds or thousands of groups, because only what is on screen is loaded.
   that identify a member.
 - **One set of rows seen several ways**: give each chart the same `marking:`
   and `keys:`, then show them together with `show_file(layout=…)`, one chart
-  per pane. What the person brushes in one lights the rest. A marking over
+  per pane. What the person selects in one lights the rest. A marking over
   several `keys:` columns lights every combination of their values, so its count
   can exceed the rows picked; the views say "by <columns>" beside it. A `csv-table` view
   (`view: csv-table`, `source:`) on the same `marking:` shows the lit rows, and

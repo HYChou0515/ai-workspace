@@ -28,7 +28,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 
 ## 連動：有名字的 marking（#856）
 
-- 兩張以上的圖寫同一個 `marking: <名字>`，就連在一起：在其中一張框選、套索或點圖例，其他圖裡對得上的列會亮起、
+- 兩張以上的圖寫同一個 `marking: <名字>`，就連在一起：在其中一張框選、套索、點圖例或點圓餅圖的一片，其他圖裡對得上的列會亮起、
   其餘變暗。對不對得上看**同名欄位**：選取會投影到 `keys:` 列出的欄位，寫進那個 marking；每張圖用自己資料裡有的
   同名欄位比對。沒有 `keys:` 的圖可以被點亮（文字與數字欄位），但它的選取不會寫進 marking；它只把時間欄位
   畫成座標，不帶 marking 用的字串，所以時間欄位不會被比對（整張不變暗）——要在時間欄位上連動，就把它寫進 `keys:`。
@@ -43,7 +43,10 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   縮圖牆「12 of 48 marked · by group, item」、接了 marking 的圖表「16 selected · by group, item」、
   表格「filtered by … · 4 of 48 rows · by group, item」、標頭的「by group, item」，
   以及訊息上的 chip「by group (2), item (2)」。
-- 框選與套索對每一種 mark 都有效，包括 line 與 area（以畫出來的位置判定，所以疊起來的 area 以它疊上去的高度算）。
+- 框選與套索對圓餅圖以外的每一種 mark 都有效，都以畫出來的位置判定：line 與 area 看點（疊起來的 area 以它疊上去的高度算）、
+  heatmap 與 grid 看格子中心、boxplot 看箱子（q1–q3；只碰到鬚不算）、errorbar 看中間那條線。
+  圓餅圖用點的：點一片就選那一片的列，再點同一片或點空白處就清掉點選的那份（其他 view 寫的選取與圖例的選擇不動）；
+  只有圓餅圖的圖，工具列只有 ✕。
 - 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
   （沒接 marking、或沒有 `keys:`）才把框外的點變灰。
 - `stack: true` 在任何 x 軸型別上都照 x 的值疊；某一組在某個 x 沒有資料時，那裡算 0（那一層在那個 x 收窄到沒有）。
@@ -146,4 +149,4 @@ renderer 呼叫沙盒時傳的是 view 檔的**路徑**（加上內容摘要當�
     `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
   - skill 索引裡 `chart` 那一行，約 230 字元。
 
-  SKILL.md 本文（去掉 frontmatter）約 9.1k 字元，只在 AI `read_skill('chart')` 時才載入。
+  SKILL.md 本文（去掉 frontmatter）約 9.4k 字元（9,350），只在 AI `read_skill('chart')` 時才載入。
