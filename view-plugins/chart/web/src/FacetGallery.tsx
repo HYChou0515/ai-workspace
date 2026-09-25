@@ -33,10 +33,12 @@ import {
   groupsLit,
   groupsPerPage,
   rangeMarking,
+  sortArgs,
   sortedPositions,
   thumbnail,
   tilesInBox,
   type FacetIndex,
+  type SortChoice,
 } from "./gallery";
 import type { RasterImage } from "./raster";
 import { viewCall } from "./viewCall";
@@ -335,7 +337,7 @@ export function FacetGallery({
   marking: string | null;
   source: string | null;
 }) {
-  const facet = doc.facet as { sort?: { field: string; order?: "ascending" | "descending" } };
+  const facet = doc.facet as { sort?: { field: string; stat?: string; order?: "ascending" | "descending" } };
   const encoding = doc.encoding as { color?: { scale?: { scheme?: "sequential" | "diverging" } } };
   const scheme = encoding.color?.scale?.scheme ?? "sequential";
 
@@ -343,7 +345,11 @@ export function FacetGallery({
   const [gaveUp, setGaveUp] = useState<string | null>(null);
   // the view file, not its text (#847/#848 P9): see viewCall
   const call = useMemo(() => viewCall(text, source), [text, source]);
-  const build = useSandboxRun(PLUGIN, "facet_build", { ...call, epoch });
+  // P4: what the gallery sorts by -- the spec's own sort until the menu picks
+  // another. A column (and statistic) is part of the cache, so a new choice is
+  // a new build; the order is not, and flips over the index in hand.
+  const [choice, setChoice] = useState<SortChoice>(facet.sort ? { field: facet.sort.field, stat: facet.sort.stat } : null);
+  const build = useSandboxRun(PLUGIN, "facet_build", { ...call, ...sortArgs(doc, choice), epoch });
   // parsed once per answer: a fresh object every render would re-run every
   // effect and memo keyed on it
   const built = useMemo(() => parse<{ key: string; build: string; groups: number }>(build.data), [build.data]);
@@ -373,8 +379,8 @@ export function FacetGallery({
 
   const [order, setOrder] = useState(facet.sort?.order ?? "ascending");
   const sorted = useMemo(
-    () => (idx ? sortedPositions(idx, facet.sort ? { field: facet.sort.field, order } : null) : []),
-    [idx, facet.sort, order],
+    () => (idx ? sortedPositions(idx, choice ? { field: choice.field, order } : null) : []),
+    [idx, choice, order],
   );
 
   const [entry, write] = useMarking(marking);
@@ -523,15 +529,49 @@ export function FacetGallery({
   const pages = [];
   for (let n = firstPage; n <= lastPage; n++) pages.push(n);
   const marked = lit ? lit.filter(Boolean).length : 0;
+  const sortColumn = choice ? idx.columns.find((c) => c.name === choice.field) : undefined;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "4px 12px", fontSize: 12 }}>
         <span>{`${sorted.length} groups`}</span>
         {lit && <span>{`${marked} of ${sorted.length} marked`}</span>}
-        {facet.sort && (
+        <label>
+          {"sort by "}
+          <select
+            className="input"
+            aria-label="sort by"
+            value={choice?.field ?? ""}
+            onChange={(e) => {
+              const picked = idx.columns.find((c) => c.name === e.target.value);
+              setChoice(picked ? (picked.single ? { field: picked.name } : { field: picked.name, stat: picked.stats[0] }) : null);
+            }}
+          >
+            <option value="">written order</option>
+            {idx.columns.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {sortColumn && choice && (!sortColumn.single || choice.stat) && (
+          <select
+            className="input"
+            aria-label="statistic"
+            value={choice.stat ?? ""}
+            onChange={(e) => setChoice({ field: choice.field, stat: e.target.value })}
+          >
+            {sortColumn.stats.map((s) => (
+              <option key={s} value={s}>
+                {s === "distinct" ? "distinct count" : s}
+              </option>
+            ))}
+          </select>
+        )}
+        {choice && (
           <button type="button" onClick={() => setOrder(order === "ascending" ? "descending" : "ascending")}>
-            {`${facet.sort.field} ${order}`}
+            {order}
           </button>
         )}
         <label>

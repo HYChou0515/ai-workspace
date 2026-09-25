@@ -94,6 +94,7 @@ def build_facet_cache(
     y: str,
     value: str,
     sort: Sequence[str] = (),
+    stat: str | None = None,
     path: Path,
     x_type: str = "ordinal",
     y_type: str = "ordinal",
@@ -104,6 +105,8 @@ def build_facet_cache(
     if missing_columns:
         raise BuildError(f"the source has no column {', '.join(map(repr, missing_columns))}")
     progress(f"read {len(frame)} rows")
+    if stat is not None:
+        _check_stat(frame, sort, stat)
 
     for name, t in (("x_type", x_type), ("y_type", y_type)):
         if t not in _AXIS_TYPES:
@@ -126,15 +129,34 @@ def build_facet_cache(
         "x": x,
         "y": y,
         "value": value,
-        "sort": sort,
+        # a statistic is worked out over the groups below, not per row
+        "sort": () if stat else sort,
         "kinds": kinds,
         "numeric": numeric,
         "progress": progress,
     }
-    plan = _by_arrays(frame, **args) or _by_rows(frame, **args)
+    # each axis as one code per row, once: the whole-column path places cells
+    # with it, and a tile's rows (for a statistic, and the column list) are
+    # the rows it places
+    axes = (_axis_codes(frame[x], kinds[x]), _axis_codes(frame[y], kinds[y]))
+    plan = _by_arrays(frame, axes=axes, **args) or _by_rows(frame, **args)
     scale, cells, layout, groups = plan
     progress(f"{len(groups)} groups over {cells} cells")
 
+    pos = _row_positions(frame, facet, groups)
+    placed = (axes[0][0] >= 0) & (axes[1][0] >= 0)
+    if stat is not None:
+        field = sort[0]
+        values = _stat_values(frame[field], stat, pos, placed, len(groups))
+        groups = [
+            Group(key=g.key, sort={field: v}, values=g.values)
+            for g, v in zip(groups, values, strict=True)
+        ]
+    columns = []
+    for c in frame.columns:
+        kind = column_kind(frame[c])
+        single = _single(frame[c], pos, placed)
+        columns.append({"name": c, "kind": kind, "single": single, "stats": list(STATS[kind])})
     # a zoned facet column's keys are wall times there; the index names the
     # zone for the gallery's labels (#847/#848 P14)
     zones = {
@@ -143,7 +165,14 @@ def build_facet_cache(
         if isinstance(frame[c].dtype, pd.DatetimeTZDtype)
     }
     write_cache(
-        path, scale=scale, facet=list(facet), cells=cells, layout=layout, groups=groups, zones=zones
+        path,
+        scale=scale,
+        facet=list(facet),
+        cells=cells,
+        layout=layout,
+        groups=groups,
+        zones=zones,
+        columns=columns,
     )
     progress(f"wrote {path.stat().st_size} bytes")
 
@@ -233,7 +262,10 @@ def _by_rows(
         for c in sort:
             distinct = {repr(_plain_sort(frame[c].iat[i])) for i in rows}
             if len(distinct) > 1:
-                raise BuildError(f"group {k!r} has more than one {c!r}; a sort value is per group")
+                raise BuildError(
+                    f"group {k!r} has more than one {c!r}; a sort value is per group;"
+                    " sort by a statistic of it instead"
+                )
             sort_values[c] = _plain_sort(frame[c].iat[rows[0]]) if rows else None
         groups.append(Group(key=k, sort=sort_values, values=record))
     layout = {"x": [c[0] for c in cell_of], "y": [c[1] for c in cell_of]}
@@ -329,6 +361,9 @@ def _axis_codes(column: pd.Series, kind: str) -> tuple[np.ndarray, Callable[[int
     return codes, lambda i: levels[raw[i]]
 
 
+_Axis = tuple[np.ndarray, Callable[[int], Any]]
+
+
 def _first_bad(pairs: pd.DataFrame) -> int | None:
     """The lowest group with more than one distinct ident, if any."""
     counts = pairs.drop_duplicates()["g"].value_counts()
@@ -339,6 +374,7 @@ def _first_bad(pairs: pd.DataFrame) -> int | None:
 def _by_arrays(
     frame: pd.DataFrame,
     *,
+    axes: tuple[_Axis, _Axis] | None = None,
     facet: Sequence[str],
     x: str,
     y: str,
@@ -366,8 +402,11 @@ def _by_arrays(
     if not numeric and value_labels is None:
         return None
 
-    xc, x_at = _axis_codes(frame[x], kinds[x])
-    yc, y_at = _axis_codes(frame[y], kinds[y])
+    # the caller's, when it has them (build_facet_cache reuses them)
+    (xc, x_at), (yc, y_at) = axes or (
+        _axis_codes(frame[x], kinds[x]),
+        _axis_codes(frame[y], kinds[y]),
+    )
     placed = np.flatnonzero((xc >= 0) & (yc >= 0))
     _left_out(len(frame), len(placed), x, y, progress)
 
@@ -419,7 +458,8 @@ def _by_arrays(
             )
         c = next(c for g, c in sort_bad if g == worst)
         raise BuildError(
-            f"group {keys[worst]!r} has more than one {c!r}; a sort value is per group"
+            f"group {keys[worst]!r} has more than one {c!r}; a sort value is per group;"
+            " sort by a statistic of it instead"
         )
 
     order = np.argsort(pg, kind="stable")
@@ -440,3 +480,91 @@ def _by_arrays(
         sort_values = {c: None if first is None else _plain_sort(frame[c].iat[first]) for c in sort}
         groups.append(Group(key=k, sort=sort_values, values=values))
     return scale, cells, layout, groups
+
+
+# ─── sort by any column (plan-view-plugins-pr5-finish P4) ──────────────────
+
+# The statistics a group can be sorted by, per column kind, in the order a
+# gallery offers them (the first is its default). None gives a value a
+# meaning: each is a plain summary of the group's values. The index answers
+# them per column, so the gallery keeps no list of its own.
+STATS: dict[str, tuple[str, ...]] = {
+    "number": ("mean", "median", "min", "max", "count"),
+    "text": ("distinct", "count"),
+    "date": ("min", "max", "count"),
+}
+
+
+def column_kind(column: pd.Series) -> str:
+    """number, date or text: how a gallery sorts and summarises the column. A
+    bool column is text (two labels, not a quantity), as the colour is."""
+    dtype = column.dtype
+    if isinstance(dtype, pd.DatetimeTZDtype) or (isinstance(dtype, np.dtype) and dtype.kind == "M"):
+        return "date"
+    if pd.api.types.is_numeric_dtype(dtype) and not pd.api.types.is_bool_dtype(dtype):
+        return "number"
+    return "text"
+
+
+def _check_stat(frame: pd.DataFrame, sort: Sequence[str], stat: str) -> None:
+    if len(sort) != 1:
+        raise BuildError(f"a statistic ({stat!r}) sorts by one column, not {list(sort)!r}")
+    field = sort[0]
+    kind = column_kind(frame[field])
+    if stat not in STATS[kind]:
+        raise BuildError(
+            f"{stat!r} is not a statistic of {field!r}, a {kind} column:"
+            f" pick one of {', '.join(STATS[kind])}"
+        )
+
+
+def _row_positions(
+    frame: pd.DataFrame, facet: Sequence[str], groups: Sequence[Group]
+) -> np.ndarray:
+    """Each row's group, as its position in ``groups`` (the cache's order),
+    matched by the key the builder wrote (canon of each facet column)."""
+    gid = np.zeros(len(frame), dtype=np.int64)
+    reads = []
+    for c in facet:
+        read = _labels(frame[c])
+        if read is None:  # a dtype only the row path reads: its texts, a row at a time
+            texts = _texts(frame[c])
+            codes, uniques = pd.factorize(np.asarray(texts, dtype=object))
+            read = codes.astype(np.int64), [str(u) for u in uniques]
+        reads.append(read)
+        gid = pd.factorize(gid * len(read[1]) + read[0])[0].astype(np.int64)
+    first = np.unique(gid, return_index=True)[1]
+    position = {g.key: i for i, g in enumerate(groups)}
+    table = np.asarray(
+        [position[tuple(texts[codes[i]] for codes, texts in reads)] for i in first],
+        dtype=np.int64,
+    )
+    return table[gid]
+
+
+def _stat_values(
+    column: pd.Series, stat: str, pos: np.ndarray, placed: np.ndarray, n: int
+) -> list[Any]:
+    """Per group (cache order), ``stat`` over the values its tile draws; None
+    for a group with none (it sorts last)."""
+    agg = column[placed].groupby(pos[placed]).agg("nunique" if stat == "distinct" else stat)
+    out: list[Any] = [None] * n
+    for g, v in zip(agg.index.tolist(), agg.tolist(), strict=True):
+        out[g] = _plain_sort(v)
+    return out
+
+
+def _single(column: pd.Series, pos: np.ndarray, placed: np.ndarray) -> bool:
+    """Whether every group's tile holds at most one value of ``column`` -- the
+    builder's own test for a sort value (one ``repr(_plain_sort(v))`` per
+    group), so a column offered as single never fails the build."""
+    ident = _sort_ident(column)
+    if ident is None:
+        ident = pd.factorize(column.map(lambda v: repr(_plain_sort(v))))[0]
+    # a group is single where its lowest ident is its highest: one pass over
+    # the rows in group order (a pandas nunique per column cost ~1 s per 10M)
+    groups, order = pos[placed], np.argsort(pos[placed], kind="stable")
+    starts = np.flatnonzero(np.r_[True, np.diff(groups[order]) != 0])
+    ident = ident[placed][order]
+    lo, hi = np.minimum.reduceat(ident, starts), np.maximum.reduceat(ident, starts)
+    return bool((lo == hi).all())

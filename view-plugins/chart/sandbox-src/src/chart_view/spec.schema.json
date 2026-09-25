@@ -77,6 +77,17 @@
                 "ascending",
                 "descending"
               ]
+            },
+            "stat": {
+              "description": "For a column with several values per group: the statistic each group is sorted by (count, min, max, mean, median for numbers; count, distinct for text; count, min, max for dates).",
+              "enum": [
+                "count",
+                "distinct",
+                "min",
+                "max",
+                "mean",
+                "median"
+              ]
             }
           }
         },

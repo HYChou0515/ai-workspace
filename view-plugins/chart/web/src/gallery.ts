@@ -30,7 +30,29 @@ export type FacetIndex = {
   /** #847/#848 P14: a zoned facet column's zone. Absent from an older sandbox
    * or cache, which leaves every key shown as it is. */
   zones?: Record<string, string>;
+  /** Every column of the built frame (P4): what the sort menu lists. `single`:
+   * each tile holds one value of it; else it sorts by one of `stats`, which
+   * the sandbox lists in the order offered (the first is the default). */
+  columns: FacetColumn[];
 };
+
+export type FacetColumn = { name: string; kind: "number" | "text" | "date"; single: boolean; stats: string[] };
+
+/** What the gallery sorts by: a column, and for one with several values per
+ * tile the statistic; null for the written order. */
+export type SortChoice = { field: string; stat?: string } | null;
+
+/** What `facet_build` is told about a sort choice, beside the view (P4). The
+ * view is handed as its file (#847/#848 P9), so a choice other than the
+ * spec's own travels as `sort` -- the column and statistic, or null for the
+ * written order -- and the sandbox applies it to the spec it reads. The
+ * spec's own choice adds nothing, so its call is the one without a choice
+ * (no new build). The order is not sent: it is flipped over the index in hand. */
+export function sortArgs(doc: Record<string, unknown>, choice: SortChoice): { sort?: { field: string; stat?: string } | null } {
+  const own = (doc.facet as { sort?: { field: string; stat?: string } }).sort;
+  if (choice === null ? !own : own && own.field === choice.field && own.stat === choice.stat) return {};
+  return { sort: choice && { field: choice.field, ...(choice.stat ? { stat: choice.stat } : {}) } };
+}
 
 /** A group's label: its keys, a zoned column's on that zone's clock and named
  * (the key itself -- the marking string -- is pandas' wall time and offset,

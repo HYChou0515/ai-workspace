@@ -79,6 +79,7 @@ def index_payload(root: Path, digest: str) -> dict[str, Any]:
         "zones": dict(index.zones),
         "cells": index.cells,
         "layout": index.layout,
+        "columns": index.columns,
         "groups": [{"key": list(g.key), "sort": g.sort} for g in index.groups],
     }
 

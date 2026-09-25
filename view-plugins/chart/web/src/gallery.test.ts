@@ -12,6 +12,7 @@ import {
   groupsLit,
   groupsPerPage,
   rangeMarking,
+  sortArgs,
   sortedPositions,
   thumbnail,
   tilesInBox,
@@ -33,6 +34,7 @@ function index(over: Partial<FacetIndex> = {}): FacetIndex {
       { key: ["L2", "3"], sort: { rate: 0.9 } },
       { key: ["L2", "4"], sort: { rate: 0.3 } },
     ],
+    columns: [],
     ...over,
   };
 }
@@ -188,6 +190,30 @@ describe("groupLabel (#847/#848 P14)", () => {
   it("shows every key as it is when the index names no zone", () => {
     expect(groupLabel(two(), 0)).toBe("L1 · 2026-03-01 00:00:00+08:00");
     expect(groupLabel(index(), 0)).toBe(index().groups[0].key.join(" · "));
+  });
+});
+
+describe("sortArgs (P4)", () => {
+  const doc = { view: "chart", facet: { field: "g", sort: { field: "rate", order: "descending" } }, mark: "grid" };
+
+  it("adds nothing when the choice is the spec's own sort: the same call, no new build", () => {
+    expect(sortArgs(doc, { field: "rate" })).toEqual({});
+  });
+
+  it("names the column and statistic of any other choice (the order stays the spec's)", () => {
+    expect(sortArgs(doc, { field: "v", stat: "median" })).toEqual({ sort: { field: "v", stat: "median" } });
+    expect(sortArgs(doc, { field: "lot" })).toEqual({ sort: { field: "lot" } });
+  });
+
+  it("is a new choice when only the statistic changes", () => {
+    const withStat = { facet: { field: "g", sort: { field: "v", stat: "mean" } } };
+    expect(sortArgs(withStat, { field: "v", stat: "max" })).toEqual({ sort: { field: "v", stat: "max" } });
+    expect(sortArgs(withStat, { field: "v", stat: "mean" })).toEqual({});
+  });
+
+  it("says null for the written order when the spec sorts, and nothing when it does not", () => {
+    expect(sortArgs(doc, null)).toEqual({ sort: null });
+    expect(sortArgs({ view: "chart", facet: { field: "g" } }, null)).toEqual({});
   });
 });
 

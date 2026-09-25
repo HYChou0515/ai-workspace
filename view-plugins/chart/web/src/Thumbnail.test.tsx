@@ -66,6 +66,7 @@ const INDEX: FacetIndex = {
   cells: 1,
   layout: { x: [0], y: [0] },
   groups: Array.from({ length: GROUPS }, (_, i) => ({ key: ["L1", String(i)], sort: { rate: i } })),
+  columns: [], // P4's sort menu: not what a thumbnail draws
 };
 const KEY = "k".repeat(64);
 

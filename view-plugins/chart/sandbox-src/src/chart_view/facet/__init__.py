@@ -46,7 +46,7 @@ import sys
 import tempfile
 from array import array
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, BinaryIO
@@ -217,6 +217,10 @@ class CacheIndex:
     # a zoned facet column's zone, for the gallery's labels (#847/#848 P14);
     # a cache written before it has none, which only leaves the zone unnamed
     zones: Mapping[str, str] = MappingProxyType({})
+    # every column of the frame the cache was built from: its name, its kind
+    # (number / text / date) and whether it holds one value per group -- what
+    # a gallery offers to sort by (plan-view-plugins-pr5-finish P4)
+    columns: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def exact_offset(self) -> int:
@@ -260,6 +264,7 @@ def write_cache(
     layout: Mapping[str, Any],
     groups: Sequence[Group],
     zones: Mapping[str, str] = MappingProxyType({}),
+    columns: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     """Write the whole cache or nothing. The file appears at ``path`` only when
     complete (a temp file in the same dir, then ``os.replace``); a failed write
@@ -294,6 +299,7 @@ def write_cache(
             "zones": dict(zones),
             "cells": cells,
             "layout": dict(layout),
+            "columns": [dict(c) for c in columns],
             "groups": [
                 {"key": list(g.key), "sort": {k: _sort_value(k, v) for k, v in g.sort.items()}}
                 for g in groups
@@ -339,6 +345,7 @@ def _parse_index(raw: Any, data_offset: int, build_id: bytes) -> CacheIndex:
         data_offset=data_offset,
         build_id=build_id,
         zones=raw.get("zones", {}),
+        columns=raw["columns"],
     )
 
 

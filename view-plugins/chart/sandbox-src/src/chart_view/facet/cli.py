@@ -42,6 +42,16 @@ VIEW_ARGUMENTS: dict[str, Any] = {
     "spec": {"type": "string", "description": "The chart file's YAML text, if there is no file."},
 }
 VIEW_FORMS = (frozenset({"path"}), frozenset({"path", "rev"}), frozenset({"spec"}))
+_SORT = {
+    "type": ["object", "null"],
+    "properties": {"field": {"type": "string"}, "stat": {"type": "string"}},
+    "required": ["field"],
+    "additionalProperties": False,
+    "description": (
+        "A sort chosen in the gallery, in place of the spec's facet.sort (its order kept);"
+        " null for the written order."
+    ),
+}
 
 
 def forms_schema(
@@ -63,8 +73,10 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "description": (
             "Build (or reuse) the cache a facet: spec opens as a gallery; answer its key and build."
         ),
-        "properties": VIEW_ARGUMENTS,
+        "properties": {**VIEW_ARGUMENTS, "sort": _SORT},
         "forms": VIEW_FORMS,
+        # P4: a sort the person picked in the gallery, beside the view's file
+        "optional": frozenset({"sort"}),
     },
     "facet_index": {
         "description": (
@@ -98,7 +110,8 @@ _EPOCH = {"type": "integer", "description": "The gallery's retry epoch; ignored 
 def schema(name: str) -> dict[str, Any]:
     props = COMMANDS[name]["properties"]
     forms = COMMANDS[name].get("forms", (frozenset(props),))
-    return forms_schema({**props, "epoch": _EPOCH}, forms, frozenset({"epoch"}))
+    optional = COMMANDS[name].get("optional", frozenset())
+    return forms_schema({**props, "epoch": _EPOCH}, forms, frozenset({"epoch"}) | optional)
 
 
 def _root() -> Path:
@@ -111,7 +124,8 @@ def _args(name: str, raw: str) -> dict[str, Any]:
     except (json.JSONDecodeError, RecursionError) as e:  # nested past the decoder
         raise ValueError(f"argument is not JSON this command can read: {e}") from None
     forms = COMMANDS[name].get("forms", (frozenset(COMMANDS[name]["properties"]),))
-    if not isinstance(args, dict) or set(args) - {"epoch"} not in forms:
+    optional = COMMANDS[name].get("optional", frozenset()) | {"epoch"}
+    if not isinstance(args, dict) or set(args) - optional not in forms:
         takes = " or ".join(str(sorted(f)) for f in forms)
         raise ValueError(f"{name} takes exactly {takes} (and an optional epoch)")
     if "epoch" in args and type(args.pop("epoch")) is not int:
@@ -122,6 +136,8 @@ def _args(name: str, raw: str) -> dict[str, Any]:
         isinstance(args["positions"], list) and all(type(p) is int for p in args["positions"])
     ):
         raise ValueError("positions must be a list of integer group positions")
+    if "sort" in args and not _is_sort(args["sort"]):
+        raise ValueError("sort must be null or an object, as a spec's facet.sort")
     if "position" in args and type(args["position"]) is not int:
         raise ValueError("position must be an integer group position")
     for text in ("key", "build", "spec", "path", "rev"):
@@ -130,6 +146,12 @@ def _args(name: str, raw: str) -> dict[str, Any]:
         if text in args and not isinstance(args[text], str):
             raise ValueError(f"{text} must be a string")
     return args
+
+
+def _is_sort(value: Any) -> bool:
+    # the shape only: what a sort may say is the spec schema's to judge, once
+    # it is in the spec (build_command._with_sort)
+    return value is None or isinstance(value, dict)
 
 
 def run(name: str, raw: str) -> int:
@@ -141,7 +163,9 @@ def run(name: str, raw: str) -> int:
             from chart_view.facet.build_command import run as build
 
             text = args["spec"] if "spec" in args else read_view(args["path"])
-            return 2 if text is None else build(text)
+            if text is None:
+                return 2
+            return build(text, args["sort"]) if "sort" in args else build(text)
         if name == "facet_index":
             answer = index_payload(_root(), args["key"])
         elif name == "facet_page":

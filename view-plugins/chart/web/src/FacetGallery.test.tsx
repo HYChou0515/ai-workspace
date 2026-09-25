@@ -61,6 +61,15 @@ const INDEX: FacetIndex = {
   cells: 1,
   layout: { x: [0], y: [0] },
   groups: Array.from({ length: N }, (_, i) => ({ key: ["L1", String(i)], sort: { rate: i } })),
+  columns: [
+    // the statistics come from the sandbox, per column: the gallery keeps no list of its own
+    { name: "lot", kind: "text", single: true, stats: ["distinct", "count"] },
+    { name: "wafer", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"] },
+    { name: "rate", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"] },
+    { name: "v", kind: "number", single: false, stats: ["mean", "median", "min", "max", "count"] },
+    { name: "tool", kind: "text", single: false, stats: ["distinct", "count"] },
+    { name: "when", kind: "date", single: false, stats: ["min", "max", "count"] },
+  ],
 };
 const KEY = "k".repeat(64);
 
@@ -555,6 +564,73 @@ describe("FacetGallery", () => {
       expect([band.style.left, band.style.top, band.style.width, band.style.height]).toEqual(["100px", "116px", "50px", "84px"]);
       fireEvent.mouseUp(window, { clientX: 150, clientY: 200 });
       expect(document.querySelector("[data-gallery-band]")).toBeNull();
+    });
+  });
+
+  describe("sort by any column (P4)", () => {
+    const sortBy = () => screen.getByRole("combobox", { name: /sort by/i }) as HTMLSelectElement;
+    const statistic = () => screen.queryByRole("combobox", { name: /statistic/i }) as HTMLSelectElement | null;
+    // the file is the view (P9): a choice other than the spec's own rides beside it
+    const lastBuiltSort = () => (calls("facet_build").at(-1)![2] as { sort?: unknown }).sort;
+    const options = (el: HTMLSelectElement) => [...el.options].map((o) => o.textContent);
+
+    it("lists every column the index names, and the written order", () => {
+      view();
+      expect(options(sortBy())).toEqual(["written order", "lot", "wafer", "rate", "v", "tool", "when"]);
+      expect(sortBy().value).toBe("rate"); // the spec's own
+      expect(sortBy().className).toContain("input");
+    });
+
+    it("sorts by a one-value column's value: a new build keyed on it, the order kept", () => {
+      view();
+      fireEvent.change(sortBy(), { target: { value: "lot" } });
+      expect(lastBuiltSort()).toEqual({ field: "lot" });
+      expect(statistic()).toBeNull();
+    });
+
+    it("asks a several-value number column for its statistic, and builds with it", () => {
+      view();
+      fireEvent.change(sortBy(), { target: { value: "v" } });
+      expect(options(statistic()!)).toEqual(["mean", "median", "min", "max", "count"]);
+      expect(lastBuiltSort()).toEqual({ field: "v", stat: "mean" });
+      fireEvent.change(statistic()!, { target: { value: "max" } });
+      expect(lastBuiltSort()).toEqual({ field: "v", stat: "max" });
+    });
+
+    it("offers text only its counts, and a date its ends and count", () => {
+      view();
+      fireEvent.change(sortBy(), { target: { value: "tool" } });
+      expect(options(statistic()!)).toEqual(["distinct count", "count"]);
+      expect(lastBuiltSort()).toEqual({ field: "tool", stat: "distinct" });
+      fireEvent.change(sortBy(), { target: { value: "when" } });
+      expect(options(statistic()!)).toEqual(["min", "max", "count"]);
+    });
+
+    it("flips the order from the index in hand, whatever column it sorts by", () => {
+      view();
+      fireEvent.change(sortBy(), { target: { value: "v" } });
+      const builds = calls("facet_build").length;
+      const specs = new Set(calls("facet_build").slice(builds - 1).map((c) => JSON.stringify(c[2])));
+      fireEvent.click(screen.getByRole("button", { name: /descending/i }));
+      const after = new Set(calls("facet_build").slice(builds - 1).map((c) => JSON.stringify(c[2])));
+      expect(after).toEqual(specs);
+      expect(screen.getByRole("button", { name: /ascending/i })).toBeTruthy();
+    });
+
+    it("goes back to the written order with no sort at all", () => {
+      view();
+      fireEvent.change(sortBy(), { target: { value: "" } });
+      expect(calls("facet_build").at(-1)![2]).toMatchObject({ path: "views/w.ai.yaml", sort: null });
+      const last = calls("facet_page").at(-1)![2] as { positions: number[] };
+      expect(last.positions[0]).toBe(0);
+    });
+
+    it("asks nothing new when the spec's own sort is picked again", () => {
+      view();
+      fireEvent.change(sortBy(), { target: { value: "lot" } });
+      fireEvent.change(sortBy(), { target: { value: "rate" } });
+      expect(calls("facet_build").at(-1)![2]).toEqual(calls("facet_build")[0][2]);
+      expect(calls("facet_build").at(-1)![2]).not.toHaveProperty("sort");
     });
   });
 

@@ -71,7 +71,11 @@ def _key(root: Path, spec: dict[str, Any]) -> tuple[CacheKey, str]:
     # the index in hand), not titles or colour schemes, not the cap
     facet = spec["facet"]
     shape = {
-        "facet": {"field": facet["field"], "sort": facet.get("sort", {}).get("field")},
+        "facet": {
+            "field": facet["field"],
+            # the column and the statistic shape each group's sort key; the order does not
+            "sort": [facet.get("sort", {}).get("field"), facet.get("sort", {}).get("stat")],
+        },
         "encoding": {
             c: {"field": spec["encoding"][c]["field"], "type": spec["encoding"][c]["type"]}
             for c in ("x", "y", "color")
@@ -98,8 +102,24 @@ def _answer(path: Path, key: CacheKey, built: bool) -> dict[str, Any]:
     }
 
 
-def _build(text: str) -> dict[str, Any]:
+_KEEP: Any = object()  # no sort chosen in the gallery: the spec's own
+
+
+def _with_sort(spec: dict[str, Any], sort: Mapping[str, str] | None) -> dict[str, Any]:
+    """The spec with a sort the person picked in the gallery (P4) in place of
+    its own, or none, for the written order. (No order: the gallery flips it
+    over the index in hand, and it shapes nothing here.) It is then checked as
+    a spec would be."""
+    facet = {k: v for k, v in spec["facet"].items() if k != "sort"}
+    if sort is not None:
+        facet["sort"] = dict(sort)
+    return {**spec, "facet": facet}
+
+
+def _build(text: str, sort: Any = _KEEP) -> dict[str, Any]:
     spec = parse_spec(text)
+    if sort is not _KEEP and "facet" in spec:
+        spec = _with_sort(spec, sort)
     errors = spec_errors(spec)
     if errors:
         raise _Refused("\n".join(errors))
@@ -132,6 +152,7 @@ def _build(text: str) -> dict[str, Any]:
         y=y["field"],
         value=color["field"],
         sort=[facet["sort"]["field"]] if "sort" in facet else [],
+        stat=facet.get("sort", {}).get("stat"),
         path=path,
         x_type=x["type"],
         y_type=y["type"],
@@ -143,8 +164,9 @@ def _build(text: str) -> dict[str, Any]:
     return _answer(path, key, built=True)
 
 
-def run(text: str) -> int:
+def run(text: str, sort: Any = _KEEP) -> int:
     """Every refusal here (SpecError, SourceError, TransformError, BuildError,
-    _Refused) is a ValueError, which ``facet.cli.run`` answers as exit 2."""
-    json.dump(_build(text), sys.stdout, separators=(",", ":"))
+    _Refused) is a ValueError, which ``facet.cli.run`` answers as exit 2.
+    ``sort``, when given, is the gallery's choice in place of the spec's."""
+    json.dump(_build(text, sort), sys.stdout, separators=(",", ":"))
     return 0
