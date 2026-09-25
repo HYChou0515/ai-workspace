@@ -364,6 +364,45 @@ describe("FacetGallery", () => {
     expect(calls("facet_index")).toHaveLength(0);
   });
 
+  it("gives each tile a row tall enough for its thumbnail AND its label, so the next row never covers ⤢", () => {
+    // In a real browser the label row (and its ⤢) sat under the next row's
+    // thumbnails: 0 of 44 enlarge buttons reachable. happy-dom does no layout,
+    // so what is pinned is the box arithmetic the layout rests on.
+    view();
+    const px = (v: string) => Number.parseFloat(v);
+    const tiles = screen.getAllByRole("button", { name: /^group / }).map((b) => b.parentElement as HTMLElement);
+    const tile = tiles[0];
+    const [thumb, labelRow] = [...tile.children] as HTMLElement[];
+    const thumbBox = thumb.firstElementChild as HTMLElement;
+    expect(getComputedStyle(thumbBox).display).toBe("block"); // no inline baseline gap under a canvas
+    const nextRow = tiles.find((t) => px(t.style.top) > px(tile.style.top))!;
+    const pitch = px(nextRow.style.top) - px(tile.style.top);
+    expect(px(tile.style.height)).toBeGreaterThanOrEqual(px(thumbBox.style.height) + px(labelRow.style.height));
+    expect(pitch).toBeGreaterThanOrEqual(px(tile.style.height));
+    expect(labelRow.style.overflow).toBe("hidden");
+  });
+
+  it("bounds its own scroller by the window, not by whatever height the host pane gives it", () => {
+    // The host pane is height:auto, so a `height: 100%` scroller grew to its
+    // content (11 102 px for 1000 groups): the host scrolled instead, every
+    // tile mounted and every page was asked at once -- virtualization inert.
+    view();
+    const scroller = document.querySelector("[data-gallery-scroll]") as HTMLElement;
+    expect(scroller.style.overflow).toBe("auto");
+    expect(scroller.style.maxHeight).toMatch(/^\d+vh$/);
+  });
+
+  it("takes focus when a group is enlarged, and Escape puts it away", () => {
+    // It covered the gallery's toolbar with no way out but its Close button:
+    // Escape did nothing, since focus stayed on the ⤢ underneath.
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("enlarges one group with its exact values", () => {
     view();
     fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
