@@ -64,6 +64,20 @@ words are examples, not spec keys.
   from the view the action was taken in, with its transforms applied before the marking
   lights them.
 
+- **Made while building [mine, open to override]:**
+  - (P2) The table a selection is made in is not filtered by it: it keeps every row,
+    the marked ones highlighted ("fail marks N of M rows"), so the first click does not
+    make the other rows vanish. Every other view on the marking still filters.
+  - (P2) A table decides only about the values it holds: ticking L03 in a 15-lot table
+    does not un-mark L19, which only a 25-lot chart has.
+  - (P2) Members who cannot edit records still get the checkboxes on a marking; marking
+    writes no record.
+  - (P13) A chart no longer draws its `title:` inside the canvas; the view header right
+    above shows it.
+  - (P7) Saving a marking's rows is a capability a plugin declares
+    (`"provides": {"marking_rows": "<command>"}`); two plugins declaring it refuse boot.
+    A chip saves exactly what it sent (a digest recorded at send), or refuses by name.
+
 ## Phases
 
 - **P1 — Table reads a marking.** A pure function lights rows by shared columns
@@ -147,6 +161,22 @@ words are examples, not spec keys.
 - **P23 — A recovery rebuild keeps the scroll position.** After the cache is reaped
   while the gallery is open, the rebuild opens at the top, not where the view was, as
   `FacetGallery.tsx` says it does.
+- **P24 — What the lead saw in the phase demos.**
+  - A table in a narrow pane is clipped (P13 made panes `overflow: hidden`): at 390 the
+    entity table's LOT column showed "L" and the csv-table two of four columns. A pane
+    clips the page; a table inside it scrolls sideways.
+  - A numeric axis's tick labels run together in a narrow pane ("98100102104106");
+    P14 thinned only a time axis's labels.
+  - A zoned tooltip on hourly points read "2026-03-01 Asia/Taipei": the time of day must
+    show whenever the column has one.
+- **P25 — A line chart has a tooltip.** Found live (P14's check): an item tooltip needs
+  points, and a line hides them, so hovering a line shows nothing — PR 2's Done-means
+  lists tooltips for every mark.
+- **P26 — A zone-less temporal datum on a zoned axis reads in the column's zone.** Since
+  P14 the axis shows the column's zone, and filters read a zone-less time there, but a
+  rule `datum: "2026-03-01T12:00"` is still placed at 12:00 UTC (20:00 on a Taipei axis).
+  The renderer and `validate`'s placement (`datums.py`, held together by
+  `wire-corpus/datum-axes.json`) read it in the axis column's zone, UTC when it has none.
 - **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
