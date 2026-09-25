@@ -938,8 +938,18 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     - 打開任何 chart 檔，面板顯示 `view plugin "chart" could not run "query"`（502，沒有 `.tools/chart/launch`）；
     - AI 的 `show_file` 對 chart 檔的回覆多一句 `(view plugin 'chart' could not check this view: …)`：
       卡片照樣出現，但檔案沒經過檢查，打開後就是上一條的錯誤。
-- API 映像的 plugin stage（`view_plugin build`，前端 `index.js` + skill）見 #854 的條目。這個 PR 只是在
-  `view-plugins/` 多放一個 plugin。
+- **`sandbox.kind: local` 跑 API 映像的部署**（`kubernetes/base` 的預設 `SANDBOX_KIND: "local"` 就是），
+  時機是 `rollout 前`：
+  - 做什麼：用 `uv run python -m workspace_app.view_plugin build view-plugins/chart <目錄>` 把 chart 完整裝進
+    一個 plugin 目錄（含 `sandbox/`），掛進 pod，並讓 `view_plugins.dir` 或 `WORKSPACE_VIEW_PLUGINS_DIR`
+    指到它。記得連 `csv-table` 一起裝，見 #854 的條目。
+  - 為什麼：API 映像只裝 plugin 的 web 半邊。`kind: local` 的沙盒要從 plugin 目錄拿 chart 的 bundle，而映像裡
+    沒有這份 bundle。
+  - 漏做的症狀：開機照常，但 log 有一行
+    `⚠ view plugin chart: sandbox.bundle 'sandbox' is not in this plugin dir, …`。之後每個 chart 面板顯示
+    `view plugin "chart" could not run "query"`（502），AI 的 `show_file` 則附上 `could not check this view`。
+  - 不走容器、直接跑 repo 的部署：`make view-plugins` 就會連 `sandbox/` 一起裝到 `<repo>/.view-plugins`。
+- API 映像的 plugin stage（前端 `index.js` + skill）見 #854 的條目。
 
 **確認做完**
 
