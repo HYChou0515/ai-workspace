@@ -293,6 +293,11 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
  * axis end) a long field name ran past the plot and was cut off. */
 const NAME_AT = { x: { nameLocation: "middle", nameGap: 28 }, y: { nameLocation: "middle", nameGap: 44 } };
 
+/** A number, log, time or grid axis leaves out a label that would overlap its
+ * neighbour: on a narrow chart a time axis read "Mar06:0012:00…" (#847/#848
+ * P14) and a number axis "98100102104106" (P24, at 390 px). */
+const LABELS = { hideOverlap: true, padding: [0, 3], backgroundColor: "transparent" };
+
 function axisOption(
   axis: Axis | null,
   grid: Cells | null,
@@ -322,6 +327,7 @@ function axisOption(
       splitLine: { show: false },
       axisTick: { customValues: centres },
       axisLabel: {
+        ...LABELS,
         customValues: centres,
         // a temporal cell is epoch ms: shown on its column's clock
         formatter: (i: number) => {
@@ -331,12 +337,10 @@ function axisOption(
       },
     };
   }
+  // a category axis already leaves out labels by its own interval (pinned in
+  // echarts.overlap.test.ts)
   if (axis.kind === "category") return { type: "category", name, ...NAME_AT[which], data: axis.labels.map(String) };
-  const out: Record<string, unknown> = { type: axis.kind, name, ...NAME_AT[which] };
-  // a time axis's labels are wide ("06:00", "Mar 2"): on a narrow chart they
-  // ran into one another ("Mar06:0012:00…" at 390 px), so the overlapping
-  // ones are left out (#847/#848 P14)
-  if (axis.kind === "time") out.axisLabel = { hideOverlap: true };
+  const out: Record<string, unknown> = { type: axis.kind, name, ...NAME_AT[which], axisLabel: LABELS };
   // Zero is in the domain only where a mark's LENGTH is its value (bar, area)
   // or the spec asks for it: a scatter of values near 100 squeezed against a
   // zero it never reaches hides the very spread it was drawn to show.
