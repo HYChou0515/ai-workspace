@@ -96,6 +96,24 @@ describe("subscribeItemEvents", () => {
     b();
   });
 
+  it("a late subscriber is handed the current presence roster at once", async () => {
+    // The backend sends a roster only when a viewer joins or leaves. On a
+    // connection of its own a presence listener always got the join frame; on a
+    // shared one that is already open it would wait for the next join/leave.
+    const { opened } = fakeStreams();
+    const early = subscribeItemEvents("rca", "I1", () => {});
+    await tick();
+    opened[0]!.push({ type: "presence", users: ["alice", "bob"] } as AgentEvent);
+    opened[0]!.push(changed);
+    await tick();
+    const got: AgentEvent[] = [];
+    const late = subscribeItemEvents("rca", "I1", (ev) => got.push(ev));
+    await tick();
+    expect(got).toEqual([{ type: "presence", users: ["alice", "bob"] }]);
+    early();
+    late();
+  });
+
   it("subscribing again after everyone left opens a fresh connection", async () => {
     const { spy } = fakeStreams();
     subscribeItemEvents("rca", "I1", () => {})();

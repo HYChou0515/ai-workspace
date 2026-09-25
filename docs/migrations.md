@@ -994,8 +994,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   從約 5.3k（[#855](#pr-855) 的版本，實測 5280）變成約 5.7k 字元（5678）；只在 AI `read_skill('chart')` 時載入，每輪 prompt 的
   固定成本不變。
 
-- 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條（聊天與 agent 另計，
-  所以每頁固定 3 條）。以前一個版面開 4 張圖就湊滿瀏覽器對同一 host 的 6 條上限，之後送訊息的請求會永遠排隊（live check 實測）。
+- 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條，另外 agent 一條、
+  聊天一條——工作區頁面 3 條、純編輯區頁面（沒有聊天）2 條，不再隨開著的 view 增加。以前一個版面開 4 張圖要 7 條，
+  瀏覽器對同一 host 只開 6 條，第 7 條和之後送訊息的請求就永遠排隊（live check 實測）。
   運營方不用做事；ingress 看到的長連線數會變少。
 
 **k8s · CI 側** — 不動（新頁面是 SPA 路由，同一個 image）。
