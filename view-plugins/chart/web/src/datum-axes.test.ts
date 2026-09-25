@@ -1,7 +1,8 @@
 /**
  * Which axis a rule's datum lands on, held to the sandbox's verdict
- * (`wire-corpus/datum-axes.json`, written from `validate.check`): a datum
- * validate accepts is drawn at a finite position, one it refuses at none.
+ * (`wire-corpus/datum-axes.json`, written from `validate.check`): the
+ * renderer gives a datum a numeric position exactly when validate accepts it,
+ * and leaves out one it refuses (with a note, see echarts.real.test.ts).
  * The axis choice (the first layer's channel with a field, a grid's cells, a
  * category's labels) is decided once on each side; this file is the oracle
  * that keeps them one decision (review round 4).

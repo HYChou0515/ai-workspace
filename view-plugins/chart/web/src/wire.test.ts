@@ -14,10 +14,12 @@ import { canon, decodeBits, decodeColumn, type WireColumn } from "./wire";
 
 const corpus = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire-corpus");
 type Case = { kind: string; values: unknown[]; wire: WireColumn | string };
+// A column case is a file with a `wire` answer; the corpus holds other tables too.
 const cases = readdirSync(corpus)
-  .filter((n) => n.endsWith(".json") && !["canon.json", "instants.json", "datum-axes.json"].includes(n))
+  .filter((n) => n.endsWith(".json"))
   .sort()
-  .map((n) => [n, JSON.parse(readFileSync(join(corpus, n), "utf8")) as Case] as const);
+  .map((n) => [n, JSON.parse(readFileSync(join(corpus, n), "utf8")) as Case] as const)
+  .filter(([, c]) => "wire" in c);
 
 describe("wire corpus", () => {
   it("covers every kind", () => {

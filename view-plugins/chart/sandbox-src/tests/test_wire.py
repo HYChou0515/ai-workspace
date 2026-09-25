@@ -18,11 +18,8 @@ import pytest
 from chart_view.wire import bitset, canon, encode_column
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus"
-FILES = sorted(
-    f
-    for f in CORPUS.glob("*.json")
-    if f.name not in ("canon.json", "instants.json", "datum-axes.json")
-)
+# A column case is a file with a `wire` answer; the corpus holds other tables too.
+FILES = sorted(f for f in CORPUS.glob("*.json") if "wire" in json.loads(f.read_text()))
 
 
 def _series(case: dict) -> pd.Series:
@@ -55,7 +52,7 @@ def test_the_instant_corpus_is_how_a_datum_is_read():
     # The oracle file the renderer's parseInstant is held to (a rule's datum
     # never visits the sandbox): a stale file after a change to instant_ms
     # fails here, not in the renderer.
-    from chart_view.validate import instant_ms
+    from chart_view.datums import instant_ms
 
     assert [instant_ms(c["text"]) for c in INSTANTS] == [c["ms"] for c in INSTANTS]
 

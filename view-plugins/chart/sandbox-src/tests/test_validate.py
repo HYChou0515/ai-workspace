@@ -122,7 +122,9 @@ def test_a_highlight_that_does_not_evaluate_is_refused():
     assert line.startswith("highlight ")
 
 
-def test_a_chart_of_only_datum_rules_has_no_measure():
+def test_a_chart_of_only_datum_rules_is_refused():
+    # Review round 5: no layer draws a field, so there is no axis for the
+    # datum; the renderer handed ECharts the raw value with nothing to read it.
     text = """\
 view: chart
 source: data/wafers.csv
@@ -130,4 +132,6 @@ mark: rule
 encoding:
   y: {datum: 3}
 """
-    assert check(text, _read).summary == "0 rows"
+    assert check(text, _read).errors == [
+        "y: datum 3 has no axis to sit on — no layer draws a field there"
+    ]

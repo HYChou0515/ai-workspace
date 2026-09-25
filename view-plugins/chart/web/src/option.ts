@@ -144,7 +144,7 @@ function categories(field: string, channel: Channel, decoded: Record<string, Col
 const INSTANT = new RegExp(schema.$defs.instant.pattern);
 
 /** Epoch ms for a date datum, or NaN where the chart places none — exactly
- * where the sandbox's `validate.instant_ms` gives None, which validate
+ * where the sandbox's `datums.instant_ms` gives None, which validate
  * refuses (held to `wire-corpus/instants.json`, written from it). The text is
  * one of the schema's `$defs.instant` forms, UTC unless it names a zone, and
  * a day the calendar lacks (2024-02-30) is NaN. It is read from the pattern's
@@ -187,6 +187,8 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     const temporal = channel?.type === "temporal";
     const pos = (value: Scalar | null): number | null => {
       // A temporal grid's cells are epoch ms: a text datum is a date first.
+      // On a number grid a datum is a number, as on any number axis.
+      if (channel?.type === "quantitative" && typeof value === "string") return null;
       const v = temporal && typeof value === "string" ? parseInstant(value) : value;
       if (v === null || Number.isNaN(v)) return null;
       const exact = cell.get(String(v));
@@ -216,8 +218,12 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     };
   }
   const kind = channel.type === "temporal" ? "time" : channel.scale?.type === "log" ? "log" : "value";
-  const pos = (v: Scalar | null) =>
-    v === null ? null : kind === "time" && typeof v === "string" ? parseInstant(v) : (v as number);
+  const pos = (v: Scalar | null): number | null => {
+    const n = kind === "time" && typeof v === "string" ? parseInstant(v) : v;
+    // Text on a number axis, or 0 and below on a log one, has no position.
+    if (typeof n !== "number" || !Number.isFinite(n) || (kind === "log" && n <= 0)) return null;
+    return n;
+  };
   return { channel, kind, labels: [], at: (col, row) => col.value(row) as number | null, pos };
 }
 
@@ -321,8 +327,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       Array.from({ length: n }, (_, i) => (c?.code ? c.code(i) : 255)),
     );
   }
-  const xChannel = specs.map((s) => s.encoding.x).find((c) => c?.field);
-  const yChannel = specs.map((s) => s.encoding.y).find((c) => c?.field);
+  // A grid's cells ARE the axes; otherwise the first layer with a field.
+  const axisChannel = (c: "x" | "y") =>
+    gridIndex >= 0 ? specs[gridIndex].encoding[c] : specs.map((s) => s.encoding[c]).find((ch) => ch?.field);
+  const xChannel = axisChannel("x");
+  const yChannel = axisChannel("y");
   const xAxis = axisFor(xChannel, decoded, gridCells, "x");
   const yAxis = axisFor(yChannel, decoded, gridCells, "y");
   const cartesian = specs.some((s) => markOf(s).type !== "pie");
@@ -401,14 +410,27 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       let data: unknown[];
       // Positions go through the axis: a category axis reads a number as an
       // INDEX, so a rule at the category 2022 must be sent as its index.
-      const onY = (v: Scalar | null) => (yAxis ? yAxis.pos(v) : v);
-      const onX = (v: Scalar | null) => (xAxis ? xAxis.pos(v) : v);
-      if (enc.y?.datum !== undefined) data = [{ yAxis: onY(enc.y.datum), name: enc.y.title }];
-      else if (enc.x?.datum !== undefined) data = [{ xAxis: onX(enc.x.datum), name: enc.x.title }];
+      // A datum or value with no position is left out — never sent as null,
+      // on which ECharts throws and the whole chart breaks — and a datum says so.
+      const datumLine = (c: "x" | "y", axis: Axis | null, datum: Scalar, title?: string) => {
+        const at = axis ? axis.pos(datum) : null;
+        if (at === null) {
+          notes.push(`rule at ${JSON.stringify(datum)} is off the ${c} axis — not drawn`);
+          return [];
+        }
+        return [{ [`${c}Axis`]: at, name: title }];
+      };
+      const placed = (key: "xAxis" | "yAxis", at: (r: number) => number | null) =>
+        all.flatMap((r) => {
+          const v = at(r);
+          return v === null ? [] : [{ [key]: v }];
+        });
+      if (enc.y?.datum !== undefined) data = datumLine("y", yAxis, enc.y.datum, enc.y.title);
+      else if (enc.x?.datum !== undefined) data = datumLine("x", xAxis, enc.x.datum, enc.x.title);
       else if (enc.y?.field && !enc.x?.field)
-        data = all.map((r) => ({ yAxis: yAxis ? yAxis.at(cols[enc.y!.field!], r) : cols[enc.y!.field!].value(r) }));
+        data = placed("yAxis", (r) => (yAxis ? yAxis.at(cols[enc.y!.field!], r) : (cols[enc.y!.field!].value(r) as number | null)));
       else if (enc.x?.field && !enc.y?.field)
-        data = all.map((r) => ({ xAxis: xAxis ? xAxis.at(cols[enc.x!.field!], r) : cols[enc.x!.field!].value(r) }));
+        data = placed("xAxis", (r) => (xAxis ? xAxis.at(cols[enc.x!.field!], r) : (cols[enc.x!.field!].value(r) as number | null)));
       else
         data = all.map((r) => {
           const [x, y] = point(li, r);

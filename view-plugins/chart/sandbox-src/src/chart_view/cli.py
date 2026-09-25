@@ -23,11 +23,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from chart_view.query import build
+from chart_view.datums import datum_errors
+from chart_view.query import answer, layer_rows
 from chart_view.sources import SourceError, inside_workspace, read_source
 from chart_view.spec import SpecError, parse_spec, spec_errors
 from chart_view.transforms import TransformError
-from chart_view.validate import check, datum_errors
+from chart_view.validate import check
 
 COMMANDS: dict[str, dict[str, Any]] = {
     "validate": {
@@ -85,17 +86,22 @@ def _validate(path: str) -> int:
 def _query(text: str) -> int:
     try:
         spec = parse_spec(text)
-        # What validate refuses, query refuses too: a hand-edited file
-        # would otherwise draw with the rule silently missing.
-        errors = spec_errors(spec) or datum_errors(spec)
+        errors = spec_errors(spec)
         if errors:
             print("\n".join(errors), file=sys.stderr)
             return 2
-        answer = build(spec, read_source(Path.cwd(), spec["source"]))
+        layers = layer_rows(spec, read_source(Path.cwd(), spec["source"]))
+        # What validate refuses, query refuses too: a hand-edited file
+        # would otherwise draw with the rule silently missing.
+        errors = datum_errors(layers)
+        if errors:
+            print("\n".join(errors), file=sys.stderr)
+            return 2
+        reply = answer(spec, layers)
     except (SpecError, SourceError, TransformError) as e:
         print(str(e), file=sys.stderr)
         return 2
-    json.dump(answer, sys.stdout, separators=(",", ":"))
+    json.dump(reply, sys.stdout, separators=(",", ":"))
     return 0
 
 

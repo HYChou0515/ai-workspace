@@ -71,11 +71,23 @@ def test_a_zoned_column_past_the_nanosecond_range_keeps_its_zone():
     assert epoch_ms(s).tolist() == [_ms(2300, 1, 1), _ms(2024, 3, 1)]
 
 
-def test_a_zoned_datetime_column_is_read_at_its_instant():
-    # A parquet timestamp with a zone reads as datetime64[ns, <zone>].
-    s = pd.Series(pd.to_datetime(["2024-03-01T08:00:00", None])).dt.tz_localize("Asia/Taipei")
+@pytest.mark.parametrize("unit", ["ns", "s"])
+def test_a_zoned_datetime_column_is_read_at_its_instant_without_parsing(unit, monkeypatch):
+    # A parquet timestamp with a zone reads as datetime64[<unit>, <zone>]. It
+    # is converted as a column: read value by value as text (the path it took
+    # when the zone branch was dropped) it cost 6.8 s per million rows, not 0.01.
+    # Only a second-unit column holds 9999; a nanosecond one gets 2025 there.
+    far = "9999-12-31T08:00:00" if unit == "s" else "2025-01-01T08:00:00"
+    stamps = np.array(["2024-03-01T08:00:00", far, "NaT"], dtype=f"datetime64[{unit}]")
+    s = pd.Series(stamps).dt.tz_localize("Asia/Taipei")
+
+    def parse(*_a, **_k):
+        raise AssertionError("a zoned column was parsed value by value")
+
+    monkeypatch.setattr(pd, "to_datetime", parse)
     got = epoch_ms(s).tolist()
-    assert got[0] == _ms(2024, 3, 1) and math.isnan(got[1])
+    assert got[0] == _ms(2024, 3, 1) and math.isnan(got[2])
+    assert got[1] == (_ms(9999, 12, 31) if unit == "s" else _ms(2025, 1, 1))
 
 
 def test_a_far_date_with_slashes_is_a_date_as_a_near_one_is():
@@ -176,7 +188,8 @@ def _rule_on_grid(x_type: str, datum: str) -> str:
 
 def test_a_date_datum_on_a_temporal_grid_is_held_to_the_instant_forms():
     # Review round 4: a grid's temporal cells are dates too; the check skipped
-    # every grid, and the renderer placed no text datum on one.
+    # every grid, and the renderer could not read a text datum on one — it
+    # sent null, and ECharts threw on the whole chart.
     from chart_view.validate import check
 
     assert check(_rule_on_grid("temporal", "2024-03-01"), lambda _s: _DAYS).errors == []
@@ -184,9 +197,13 @@ def test_a_date_datum_on_a_temporal_grid_is_held_to_the_instant_forms():
 
 
 def test_a_text_datum_on_an_ordinal_grid_names_a_cell():
+    # Review round 5: a datum no cell holds was accepted, and the renderer
+    # sent it to ECharts as null, which broke the whole chart.
     from chart_view.validate import check
 
-    assert check(_rule_on_grid("ordinal", "2024-3-1"), lambda _s: _DAYS).errors == []
+    assert check(_rule_on_grid("ordinal", "2024-03-01"), lambda _s: _DAYS).errors == []
+    errors = check(_rule_on_grid("ordinal", "2024-3-1"), lambda _s: _DAYS).errors
+    assert errors == ["x: datum '2024-3-1' is not a cell of the grid, nor between two"]
 
 
 def test_query_refuses_the_datum_validate_refuses(tmp_path: Path, monkeypatch, capsys):
@@ -222,3 +239,19 @@ def test_digits_the_renderer_does_not_read_as_digits_are_refused(datum):
 
     result = check(_rule_on_time(datum), lambda _s: _DAYS)
     assert any(f"x: datum {datum!r}" in e for e in result.errors), result.errors
+
+
+@pytest.mark.parametrize("unit", ["ns", "s"])
+def test_a_temporal_measure_is_not_summarised_as_raw_numbers(unit):
+    # Review round 5: show_file's line read a date column's storage, so the
+    # summary said `t 1710000000000000000–…` for ns and `t 1710000000–…` for s.
+    from chart_view.validate import check
+
+    df = pd.DataFrame(
+        {"v": [1.0, 2.0], "t": np.array(["2024-03-01", "2024-03-05"], dtype=f"datetime64[{unit}]")}
+    )
+    text = (
+        "view: chart\nsource: a.csv\nmark: scatter\nencoding:\n"
+        "  x: {field: v, type: quantitative}\n  y: {field: t, type: temporal}\n"
+    )
+    assert check(text, lambda _s: df).summary == "2 rows"

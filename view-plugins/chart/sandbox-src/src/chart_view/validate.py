@@ -13,7 +13,6 @@ scatter is binned. The source reader is passed in: a table file reads with
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,11 +20,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from chart_view.query import LayerRows, binned, layer_rows, mark_of, spec_layers
+from chart_view.datums import datum_errors
+from chart_view.query import LayerRows, binned, layer_rows
 from chart_view.sources import SourceError
-from chart_view.spec import SpecError, parse_spec, spec_errors, spec_schema
+from chart_view.spec import SpecError, parse_spec, spec_errors
 from chart_view.transforms import TransformError
-from chart_view.wire import epoch_ms, js_number
+from chart_view.wire import js_number
 
 ReadSource = Callable[[Any], pd.DataFrame]
 
@@ -49,7 +49,8 @@ def _span(values: pd.Series) -> str:
 
 def _measure(layer: LayerRows) -> str | None:
     field_ = layer.encoding.get(_MEASURE.get(layer.mark, "y"), {}).get("field")
-    if field_ is None or field_ not in layer.rows.columns:
+    # A date's storage is no measure: read as numbers it came out as ns or s.
+    if field_ is None or field_ not in layer.rows.columns or layer.kinds.get(field_) == "time":
         return None
     numbers = pd.to_numeric(layer.rows[field_], errors="coerce")
     numbers = numbers[np.isfinite(numbers)]  # ±inf has no place on an axis either
@@ -71,69 +72,22 @@ def _highlight(spec: Mapping[str, Any], layers: list[LayerRows]) -> str:
     return f"highlight matches {lit}/{rows} rows"
 
 
-_INSTANT = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
-
-
-def instant_ms(text: str) -> float | None:
-    """Epoch ms for a date `datum`, or None when the chart cannot place it.
-
-    THE reading of a datum: validate refuses what this returns None for, and
-    the renderer's `parseInstant` is held to it (wire-corpus/instants.json is
-    written from it). A datum takes only the schema's `$defs.instant` forms,
-    read the way the data is (`epoch_ms`); a date the calendar lacks
-    ("2024-02-30") is None."""
-    if not _INSTANT.fullmatch(text):
-        return None
-    ms = float(epoch_ms(pd.Series([text], dtype=object))[0])
-    return None if np.isnan(ms) else ms
-
-
-def datum_errors(spec: Mapping[str, Any]) -> list[str]:
-    """A text datum the renderer could not place on its axis.
-
-    Without this the rule drew nowhere and said nothing. The axis is the one
-    the renderer draws: the first layer's channel with a field. On a temporal
-    axis — a grid's too, whose cells are found by date — the text must be a
-    date `instant_ms` reads; on a number axis it must be a number, not text
-    (a grid finds a number's cell by its label, so text is fine there). Which
-    datum is placed and which refused is held to the renderer by
-    wire-corpus/datum-axes.json."""
-    layers = spec_layers(spec)
-    grid = any(mark_of(ly)[0] == "grid" for ly in layers)
-    errors = []
-    for c in ("x", "y"):
-        axis = next(
-            (ly["encoding"][c] for ly in layers if "field" in ly["encoding"].get(c, {})), None
-        )
-        kind = None if axis is None else axis.get("type")
-        for ly in layers:
-            datum = ly["encoding"].get(c, {}).get("datum")
-            if not isinstance(datum, str):
-                continue
-            if kind == "temporal" and instant_ms(datum) is None:
-                errors.append(
-                    f"{c}: datum {datum!r} is not a date the chart can place — "
-                    "write it as 2024-03-01, 2024-03-01T12:00, or with a zone as "
-                    "2024-03-01T12:00:00+08:00"
-                )
-            elif kind == "quantitative" and not grid:
-                errors.append(f"{c}: datum {datum!r} is text on a number axis — write a number")
-    return errors
-
-
 def check(text: str, read_source: ReadSource) -> Result:
     """Refusal lines, or the one-line summary, for a chart file's text."""
     try:
         spec = parse_spec(text)
     except SpecError as e:
         return Result(errors=[str(e)])
-    errors = spec_errors(spec) or datum_errors(spec)
+    errors = spec_errors(spec)
     if errors:
         return Result(errors=errors)
     try:
         layers = layer_rows(spec, read_source(spec["source"]))
     except (SourceError, TransformError) as e:
         return Result(errors=[str(e)])
+    errors = datum_errors(layers)
+    if errors:
+        return Result(errors=errors)
 
     drawn = next((ly for ly in layers if len(ly.rows.columns)), layers[0])
     parts: list[str] = []

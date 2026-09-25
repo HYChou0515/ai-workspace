@@ -307,4 +307,9 @@ def _answer(spec: Mapping[str, Any], layer: LayerRows) -> dict[str, Any]:
 
 def build(spec: Mapping[str, Any], frame: pd.DataFrame) -> dict[str, Any]:
     """What `spec` draws over `frame` (its source, already read)."""
-    return {"format": FORMAT, "layers": [_answer(spec, ly) for ly in layer_rows(spec, frame)]}
+    return answer(spec, layer_rows(spec, frame))
+
+
+def answer(spec: Mapping[str, Any], layers: list[LayerRows]) -> dict[str, Any]:
+    """The query's reply for layers already computed."""
+    return {"format": FORMAT, "layers": [_answer(spec, ly) for ly in layers]}

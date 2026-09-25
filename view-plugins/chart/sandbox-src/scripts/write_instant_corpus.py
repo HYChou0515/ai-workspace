@@ -1,11 +1,11 @@
 """Write `wire-corpus/instants.json`: text datums and the epoch ms the chart
-places them at — `validate.instant_ms`, the oracle (a datum read the way the
+places them at — `datums.instant_ms`, the oracle (a datum read the way the
 data is, in the schema's `$defs.instant` forms), or null where it places none.
 
 The renderer's `parseInstant` (a rule's datum never visits the sandbox) is
 held to this file by `option.review2.test.ts` — NaN exactly where it says
 null — and `test_wire.py` holds `instant_ms` to it. Besides the hand-picked
-cases, every combination of the pattern's parts is written out: years at the
+cases, every combination of these parts is written out: years at the
 edges (0001, two-digit years an engine may read as 19xx, pandas' nanosecond
 range), leap days and days a month lacks, both separators, fractions of 1–3
 digits, and every zone form. Rerun after changing how instants are read:
@@ -19,7 +19,7 @@ import itertools
 import json
 from pathlib import Path
 
-from chart_view.validate import instant_ms
+from chart_view.datums import instant_ms
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus" / "instants.json"
 
