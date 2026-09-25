@@ -1012,7 +1012,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 **設定** — 沒有新 config key。`facet.cache_mb` 是 **spec 裡**的旋鈕（寫在 `.ai.yaml`），不是部署設定。
 **資料** — 不用 migrate，沒有 `Schema` 升版。
 
-**行為**（沒有開關；運營方要知道的是沙盒的 scratch 磁碟）
+**行為**（沒有開關；運營方要知道的是沙盒的 scratch 磁碟，以及建快取在沙盒指令的時間與記憶體上限之內）
 
 - **每個沙盒的 `.home/.cache/views/` 會出現縮圖牆的快取檔（`*.vcache`）。** `facet:` 的 chart 第一次打開時，
   沙盒讀一次來源檔、建一份快取，之後捲動、換排序、放大都從快取取，不再讀來源。
@@ -1026,7 +1026,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     再加上原本 workspace 與 `.home` 的用量。為什麼在 rollout 前：換版之後第一個打開縮圖牆的人就開始寫快取；
     沒估的症狀是 scratch 卷寫滿，連帶所有沙盒的寫檔一起失敗，不只縮圖牆。
 - **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核）用 bundle 的 `facet_build` 指令端到端實測
-  （`launch` 照 runner 的方式呼叫、`SANDBOX_HOME` 指向全新的 `.home`），不是 CI 數字：
+  （`launch` 照 runner 的方式呼叫、`SANDBOX_HOME` 指向全新的 `.home`），不是 CI 數字。
+  來源是隨機產生的測試資料（每列一個 group 字串、兩個整數座標、兩個 float），所以檔案大小只是這組資料的；
+  成本跟著列數與格數走，不跟檔案大小：
 
   | 來源 | 列數 | 第一次開啟 | 峰值記憶體 | 快取大小 |
   |---|---|---|---|---|
@@ -1036,11 +1038,14 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
   之後再打開（重用快取）約 0.3–0.4 秒、0.12 GB；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05 秒、
   約 22 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.2–0.25 GB）。
-  - **時間上限**：建快取是一個沙盒指令，受每個指令的總時間上限管（`kind: http` 是 sandbox-host 的
-    `SANDBOX_HOST_EXEC_TIMEOUT`，`kind: local` 是 `sandbox.exec_timeout`，預設都是 60 秒）。
-    上面的數字離上限很遠；來源大到超過上限時，第一次打開會停在面板顯示
-    `timed out after 60s (total) and was killed`，重開也一樣（沒建完就不會留下快取）。
-    要開更大的來源，就在 transform 裡先 aggregate 把列數降下來，或調高那個上限。
+  - **時間上限（rollout 前檢查）**：建快取是一個沙盒指令，受每個指令的總時間上限管（`kind: http` 是
+    sandbox-host 的 `SANDBOX_HOST_EXEC_TIMEOUT`，`kind: local` 是 `sandbox.exec_timeout`，預設都是 60 秒）。
+    預設值離上表很遠，不用動；**你們若把它調低到接近上表的秒數（依你們機器與預期最大來源估），rollout 前調回來**。
+    為什麼在 rollout 前：換版後第一個打開大縮圖牆的人就會撞到。沒做的症狀：那面縮圖牆的面板顯示建置已印出的進度行，
+    最後一行是 `timed out after 60s (total) and was killed`（數字是你們設的上限），重開也一樣，因為沒建完就不會留下快取。
+    另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
+    建置在讀檔、分組、寫檔各印一行進度，上表最長的一段不到 5 秒；調低它的症狀是最後一行變成
+    `no output for 60s; assumed hung and killed`。
   - **記憶體上限**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉：
     面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；這個症狀沒有實際觀察過，
     是依指令的輸出方式推的。

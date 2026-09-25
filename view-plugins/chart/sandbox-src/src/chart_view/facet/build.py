@@ -19,9 +19,10 @@ place they are made plain (the format refuses anything else, by name):
 
 Two paths build the same cache. ``_by_rows`` reads the frame a row at a time
 and is the definition; ``_by_arrays`` does the same work on whole columns, and
-takes a frame only when every column it groups, keys or compares is of a dtype
-where pandas' equality is the definition's equality (``_labels``,
-``_sort_ident``). The row path cost 69 s on the plan's 200 groups x 50 000
+takes a frame only when every facet, sort and categorical value column is of a
+dtype where pandas' equality is the definition's equality (``_labels``,
+``_sort_ident``); x and y need no such gate, since both paths compare cells on
+the same decoded ``encode_column`` wire. The row path cost 69 s on the plan's 200 groups x 50 000
 cells, past the 60 s a sandbox command gets by default, so a gallery that size
 never opened. The parity test runs both on the same frames.
 
@@ -307,9 +308,16 @@ def _axis_codes(column: pd.Series, kind: str) -> tuple[np.ndarray, Callable[[int
         return codes.astype(np.int64), lambda i: float(floats[i])
     width = wire["width"]
     raw = np.frombuffer(base64.b64decode(wire["codes"]), dtype=f"<u{width}").astype(np.int64)
-    raw[raw == 2 ** (8 * width) - 1] = -1
     levels = wire["levels"]
-    return raw, lambda i: levels[raw[i]]
+    # a cell is its level as a dict key, as ``_axis`` gives it: a level with no
+    # text (None: inf, say) is no x, and two codes whose levels are equal are one
+    # place; the extra slot maps the wire's missing code to ours
+    first: dict[Any, int] = {}
+    place = [-1 if v is None else first.setdefault(v, len(first)) for v in levels]
+    codes = np.asarray([*place, -1], dtype=np.int64)[
+        np.where(raw == 2 ** (8 * width) - 1, len(levels), raw)
+    ]
+    return codes, lambda i: levels[raw[i]]
 
 
 def _first_bad(pairs: pd.DataFrame) -> int | None:
