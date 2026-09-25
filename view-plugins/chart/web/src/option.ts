@@ -155,6 +155,13 @@ function markOf(layer: LayerSpec): MarkDef {
   return typeof layer.mark === "string" ? { type: layer.mark } : layer.mark;
 }
 
+/** Whether a layer is drawn as a stack: a bar or an area with `stack: true`
+ * (the sandbox's `query.stacked`, which sums it). A line's `stack` stacks
+ * nothing. */
+function isStacked(mark: MarkDef): boolean {
+  return (mark.type === "area" || mark.type === "bar") && mark.stack === true;
+}
+
 function escape(text: string): string {
   return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
@@ -293,8 +300,11 @@ type Axis = {
   kind: "value" | "log" | "time" | "category" | "index";
   labels: Scalar[];
   /** The axis position of layer row `row` of a column. `keepZero`: a stack's
-   * value keeps its 0 on a log axis, for `lineUpStacks` to place (P39). */
+   * value keeps its 0 on a log axis, for `lineUpStacks` to place (P39).
+   * Every value a mark draws on the axis goes through here (PR 5 P40 row 20). */
   at(col: Column, row: number, keepZero?: boolean): number | null;
+  /** How many values `at` left out so far: 0 and below on a log axis. */
+  leftOut(): number;
   /** The axis position of one value (a rule's datum). */
   pos(v: Scalar | null): number | null;
   /** A temporal axis's clock (#847/#848 P14): its column's zone, if any. */
@@ -333,7 +343,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
       }
       return null;
     };
-    return { channel: channel ?? {}, kind: "index", labels, at: (col, row) => pos(col.value(row)), pos, clock };
+    return { channel: channel ?? {}, kind: "index", labels, at: (col, row) => pos(col.value(row)), leftOut: () => 0, pos, clock };
   }
   if (!channel?.field) return null;
   if (channel.type === "nominal" || channel.type === "ordinal") {
@@ -348,6 +358,7 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
         return v === null ? null : (index.get(String(v)) ?? null);
       },
       pos: (v) => (v === null ? null : (index.get(String(v)) ?? null)),
+      leftOut: () => 0,
       clock: null,
     };
   }
@@ -364,14 +375,21 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
   // A mark's points go as the layer holds them, for ECharts to read (text
   // from a layer that typed the field otherwise included) -- except 0 and
   // below on a log axis, which has no place for them (as `pos`): ECharts drew
-  // them at Infinity (#847/#848 PR 5 P38). `toOption` counts them in a note.
+  // them at Infinity (#847/#848 PR 5 P38). Each one left out is counted
+  // HERE, where it is left out, and `toOption`'s note says that count (PR 5
+  // P40 row 20: a count taken apart from `at` counted an errorbar's ends it
+  // still sent, and missed a boxplot's summaries).
+  let left = 0;
   const at = (col: Column, row: number, keepZero = false): number | null => {
     const v = col.value(row) as number | null;
     // (a stack's 0 adds nothing: `lineUpStacks` keeps it where something lies beneath)
-    if (kind === "log" && typeof v === "number" && (v < 0 || (v === 0 && !keepZero))) return null;
+    if (kind === "log" && typeof v === "number" && (v < 0 || (v === 0 && !keepZero))) {
+      left++;
+      return null;
+    }
     return kind === "time" && col.kind === "time" && v !== null ? wall(v) : v;
   };
-  return { channel, kind, labels: [], at, pos, clock };
+  return { channel, kind, labels: [], at, leftOut: () => left, pos, clock };
 }
 
 /** A temporal grid's cells, each written to the finest part any has (P24):
@@ -632,7 +650,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const enc = specs[li].encoding;
     const cols = decoded[li];
     // a stacked layer's value keeps its 0 (P39); its slot does not
-    const stacked = !!markOf(specs[li]).stack;
+    const stacked = isStacked(markOf(specs[li]));
     const px = xAxis && enc.x?.field ? xAxis.at(cols[enc.x.field], row, stacked && baseAt === 1) : null;
     const py = yAxis && enc.y?.field ? yAxis.at(cols[enc.y.field], row, stacked && baseAt === 0) : null;
     return [px, py, ...extra];
@@ -642,6 +660,11 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const f = specs[li].encoding.x?.field;
     return xAxis && f ? xAxis.at(decoded[li][f], row) : null;
   };
+  // A summary or an errorbar's end on the y axis: through `at`, as every
+  // value the axis draws (PR 5 P40 row 20).
+  const yAt = (col: Column, row: number): number | null => (yAxis ? yAxis.at(col, row) : (col.value(row) as number | null));
+  // boxes ECharts draws nothing of: one with a summary left out
+  let boxesOut = 0;
 
   const common = (mark: MarkDef) => ({
     emphasis: { focus: "self" },
@@ -833,13 +856,18 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
 
     if (mark.type === "boxplot") {
       const five = ["$lo", "$q1", "$mid", "$q3", "$hi"].map((k) => cols[k]);
-      const data = all.map((r) => item([xAt(li, r), ...five.map((c) => c.value(r) as number)], r));
+      const data = all.map((r) => {
+        const summaries = five.map((c) => yAt(c, r));
+        // ECharts draws no box with a summary missing: said in the note
+        if (summaries.some((v, k) => v === null && five[k].value(r) !== null)) boxesOut++;
+        return item([xAt(li, r), ...summaries], r);
+      });
       push({ type: "boxplot", data, encode: { x: 0, y: [1, 2, 3, 4, 5] }, ...common(mark) }, all);
       if (wire.outliers) {
         const out = Object.fromEntries(Object.entries(wire.outliers.columns).map(([k, w]) => [k, decodeColumn(w)]));
         const data2 = Array.from({ length: wire.outliers.rows }, (_, r) => [
           xAxis && enc.x?.field ? xAxis.at(out[enc.x.field], r) : null,
-          out[enc.y?.field as string].value(r) as number,
+          yAt(out[enc.y?.field as string], r),
         ]);
         push({ type: "scatter", data: data2, symbolSize: 5, ...common(mark) }, []);
       }
@@ -848,29 +876,35 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
 
     if (mark.type === "errorbar") {
       const [lo, hi] = enc.y2?.field ? [cols[enc.y!.field!], cols[enc.y2.field]] : [cols.$lo, cols.$hi];
-      const data = all.map((r) => [xAt(li, r), lo.value(r) as number, hi.value(r) as number]);
+      const data = all.map((r) => [xAt(li, r), yAt(lo, r), yAt(hi, r)]);
       push(
         {
           type: "custom",
           data,
           encode: { x: 0, y: [1, 2] },
           renderItem: (
-            params: { dataIndex: number },
+            params: { dataIndex: number; coordSys?: { y: number; height: number } },
             api: { value: (d: number) => number; coord: (p: number[]) => number[]; style: () => unknown },
           ) => {
             const x = api.value(0);
-            const a = api.coord([x, api.value(1)]);
-            const b = api.coord([x, api.value(2)]);
+            const [v1, v2] = [api.value(1), api.value(2)];
+            // An end with no place (0 or below on a log y, left out by `at`
+            // and counted in the note) lies below the plot: the stem runs
+            // off its foot there, with no cap (PR 5 P40 row 20). With
+            // neither end in place there is nothing to draw.
+            const placed = [v1, v2].map((v) => typeof v === "number" && Number.isFinite(v));
+            if (!placed[0] && !placed[1]) return null;
+            const foot = (params.coordSys?.y ?? 0) + (params.coordSys?.height ?? 0);
+            const [a, b] = [v1, v2].map((v, k) => (placed[k] ? api.coord([x, v]) : [api.coord([x, placed[0] ? v1 : v2])[0], foot]));
             const cap = 4;
             const opacity = lit && !lit[params.dataIndex] ? DIM_OPACITY : 1;
             const style = { stroke: mark.color ?? "#555", lineWidth: 1.5, opacity };
+            const caps = [a, b].flatMap((p, k) =>
+              placed[k] ? [{ type: "line", shape: { x1: p[0] - cap, y1: p[1], x2: p[0] + cap, y2: p[1] }, style }] : [],
+            );
             return {
               type: "group",
-              children: [
-                { type: "line", shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, style },
-                { type: "line", shape: { x1: a[0] - cap, y1: a[1], x2: a[0] + cap, y2: a[1] }, style },
-                { type: "line", shape: { x1: b[0] - cap, y1: b[1], x2: b[0] + cap, y2: b[1] }, style },
-              ],
+              children: [{ type: "line", shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, style }, ...caps],
             };
           },
           ...common(mark),
@@ -931,7 +965,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         ]
       : [""];
     const textCol = enc.text?.field ? cols[enc.text.field] : undefined;
-    const stacked = (mark.type === "area" || mark.type === "bar") && mark.stack === true;
+    const stacked = isStacked(mark);
     const first = series.length;
     for (const key of order) {
       // (a stack's rows are one per slot here: the sandbox summed them, P40 row 18)
@@ -1004,22 +1038,19 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     category: (baseAt === 1 ? yAxis : xAxis)?.kind === "category",
     at: baseAt,
   });
-  // What a log axis leaves out (`at` gives it no place), said once per axis;
-  // a rule's own values are noted by the rule. A stack's value keeps its 0s
-  // (they add nothing), so only those `lineUpStacks` left empty count (P39).
+  // What a log axis leaves out, said once per axis: exactly what its `at`
+  // left out (PR 5 P40 row 20), and the stack 0s `lineUpStacks` left empty
+  // (a stack's value keeps its 0s, which add nothing, P39). A rule's own
+  // values are noted by the rule (`pos`, not `at`).
   const valueKey = baseAt === 0 ? "y" : "x";
   for (const [axis, key] of [[xAxis, "x"], [yAxis, "y"]] as const) {
-    if (axis?.kind !== "log") continue;
-    let off = key === valueKey ? emptied : 0;
-    specs.forEach((s, li) => {
-      const col = markOf(s).type === "rule" ? undefined : decoded[li][s.encoding[key]?.field as string];
-      const keepsZero = !!markOf(s).stack && key === valueKey;
-      for (let r = 0; col && r < answer.layers[li].rows; r++) {
-        const v = col.value(r);
-        if (typeof v === "number" && (v < 0 || (v === 0 && !keepsZero))) off++;
-      }
-    });
+    // (only a log axis leaves anything out, and only its stacks empty a slot)
+    if (!axis) continue;
+    const off = axis.leftOut() + (key === valueKey ? emptied : 0);
     if (off > 0) notes.push(`${off} ${off === 1 ? "value" : "values"} at or below 0 not drawn on the log ${key} axis`);
+    if (key === "y" && boxesOut > 0) {
+      notes.push(`${boxesOut} ${boxesOut === 1 ? "box" : "boxes"} with a part at or below 0 not drawn on the log y axis`);
+    }
   }
   // A line draws no point of its own, so a value between two empty ones --
   // left out on a log axis, or missing -- was drawn nowhere, and nothing said
