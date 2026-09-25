@@ -32,7 +32,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   其餘變暗。對不對得上看**同名欄位**：選取會投影到 `keys:` 列出的欄位，寫進那個 marking；每張圖用自己資料裡有的
   同名欄位比對。沒有 `keys:` 的圖可以被點亮（文字與數字欄位），但它的選取不會寫進 marking；它只把時間欄位
   畫成座標，不帶 marking 用的字串，所以時間欄位不會被比對（整張不變暗）——要在時間欄位上連動，就把它寫進 `keys:`。
-  channel 上有 `aggregate` 的欄位（例如圓餅圖的 `theta: {field: item, aggregate: count}`）裝的是聚合值
+  channel 上有 `aggregate` 的欄位（例如圓餅圖的 `theta: {field: item, type: quantitative, aggregate: count}`）裝的是聚合值
   （計數、平均），不是那個欄位原本的值，所以既不拿來比對、也不寫進 marking，即使它列在 `keys:` 裡；
   這張圖用它其他的同名欄位連動（上例是 `color` 的欄位）。
 - 有 `keys:` 的圖打開時，如果它的 marking 還是空的，檔案裡的 `highlight:` 會當作起始選取寫進去（每次打開只寫一次）；
@@ -43,7 +43,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   縮圖牆「12 of 48 marked · by group, item」、接了 marking 的圖表「16 selected · by group, item」、
   表格「filtered by … · 4 of 48 rows · by group, item」、標頭的「by group, item」，
   以及訊息上的 chip「by group (2), item (2)」。
-- 框選與套索對圓餅圖以外的每一種 mark 都有效，都以畫出來的位置判定：line 與 area 看點（疊起來的 area 以它疊上去的高度算）、
+- 框選與套索對圓餅圖與 rule 以外的每一種 mark 都有效（rule 是參考線，不對應任何列），都以畫出來的位置判定：line 與 area 看點（疊起來的 area 以它疊上去的高度算）、
   heatmap 與 grid 看格子中心、boxplot 看箱子（q1–q3；只碰到鬚不算）、errorbar 看中間那條線。
   圓餅圖用點的：點一片就選那一片的列，再點同一片或點空白處就清掉點選的那份（其他 view 寫的選取與圖例的選擇不動）；
   只有圓餅圖的圖，工具列只有 ✕。

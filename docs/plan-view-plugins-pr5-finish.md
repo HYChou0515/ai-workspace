@@ -103,20 +103,30 @@ words are examples, not spec keys.
     them would pass with the skill and without it, which `skill_eval --control` names as
     measuring nothing. Recorded here after round 16's conformance lens found the rule
     narrowed in commit 07a6b591 without a line in the plan.
+  - (P30) A boxplot group is selected by its box (q1–q3), not by a whisker alone: how
+    the builder read "by their drawn element" (1978b2dd, which states the rule and pins
+    it with a whisker-only test, but gives no reason beyond it).
+  - (P30) A pie selects by a click on a slice; the same slice again, or empty space,
+    clears only what the click picked — other views' selections and the legend stay
+    (1b3ecc6b; P34 row 1 makes "what the click picked" exact).
+  - (P34) In compact layout a category legend that would take more than half the
+    chart's height is not drawn; the colours stay and the tooltip names the category.
+  - (P34) On an unmarked pie a legend toggle replaces the spec's `highlight:` dimming,
+    as on a grid: what is lit is the person's latest gesture.
   - (P31) A pie with no axes draws a toolbox with only the clear tool (✕), which clears
     as ✕ does on every chart (P17: a marking its `highlight:` seeded too) and forgets
-    the slice a click picked (eac1146d). P30 had taken the whole toolbox off, so a
+    the slice a click picked (658c8f09). P30 had taken the whole toolbox off, so a
     seeded marking could not be cleared from the pie.
   - (P31) A chart narrower than 320 px is laid out compact: ChartView's ResizeObserver
     sets a boolean (`compactAt`), so the option is rebuilt only when the width crosses
     320, and a switch is set in full. The colour bar or category legend stands under
     the plot at the left, the y axis's name above the plot, the tools shrink to fit
     one row. ECharts' `media` queries were not used: they change the option's shape
-    for every consumer of it (cb1b4d7f).
+    for every consumer of it (ba036393).
   - (P31) `useContainerWidth` reports the border box from its observer, as its first
     measurement already did, for every consumer (the workspace shell, the header
     actions, the skills modal's footer, a view panel), not only the view panel whose
-    narrow padding made the content box flip it (0ecd6666).
+    narrow padding made the content box flip it (dd3b7fef).
 
 ## Phases
 
@@ -244,14 +254,15 @@ words are examples, not spec keys.
   select nothing, yet the skill tells the AI to draw a `diff` as a heatmap on a
   marking. A brush or lasso selects heatmap cells by their centre and boxplot /
   errorbar groups by their drawn element; a click selects a pie slice.
-- **P11 — Live check at 390 and 1440 wide, with a base differential on P42 (the branch before these phases).** Run
+- **P11 — Live check at 390 and 1440 wide, with a base differential on the branch before these phases (14405a12, P43, docs-only after P42).** Run
   #847's full scene (a grid, a scatter and a table on one marking, plus an unrelated
   view), the gallery (box select, sort, stack, A − B), the cards, and save-as-table.
   Update the docs (`view-plugin-chart.md`) and the #855 runbook entry if the operator
   must act.
   *Done 2026-09-25 at 1d7422c4* (`kind: local`, jail on, real Chromium, a scripted
   model that only picks the tool; every tool ran for real). Passed: the full scene at
-  1440 and 390 (lasso 72 lit → table 72 of 432 and records 13 of 40, the unrelated bar
+  1440, and at 390 all but the lasso on the grid, which selected nothing (that is
+  P31's first finding; picked rows, save and chip passed at 390) (lasso 72 lit at 1440 → table 72 of 432 and records 13 of 40, the unrelated bar
   unchanged, save 4 rows, chip save 90 rows, the AI reading both), the 1000-group
   gallery (sorts equal to pandas' top 8, box / Shift-box / replace, ranks 1–30 = 494,
   stack and A − B ranges equal to pandas, category colours, enlarged fits at 390,

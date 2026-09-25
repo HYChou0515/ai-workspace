@@ -934,6 +934,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - `sandbox.kind: local` 開 jail 時，同一個沙盒同時跑的指令不再互相拆掉 `/dev`（[#859](https://github.com/HYChou0515/ai-workspace/issues/859)）：
     以前在 live check 裡，一個五圖版面 30 次查詢壞 5 次（壓測 300 次壞 9 次），壞的那格面板顯示 traceback。沙盒根目錄下的 `dev/` 不再在每個指令後刪除
     （留下一個空目錄），運營方不用做事。
+  - 前端量元素寬度的共用 hook（`useContainerWidth`）改成一律回報含 padding 與邊框的寬度（第一次量本來就是）。
+    原本只有 view 面板會受影響：寬度剛好在 480 px 上下時，面板在寬、窄兩種 padding 之間來回切換不停
+    （實測 10 秒 777 次），面板標頭跟著上下跳。workspace 版面、分頁列、skills 視窗底列量的元素沒有
+    左右 padding 或邊框，數值不變；對話面板標頭（決定標頭按鈕收進「⋯」的那個）左右各有 14 px padding，讀數大 28 px，
+    但它只拿自己前後的讀數互相比，行為不變。運營方不用做事。
 
 細節見 [chart：互動圖表 view plugin](view-plugin-chart.md)。
 
@@ -1094,7 +1099,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     AI 那邊則是 `show_file` 回 `error: view plugin 'chart' refused <檔案> — nothing was shown:`，下一行是同一句
     timed out，**卡片不出現**。
     另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
-    建置在讀檔、分組、寫檔各印一行進度；上表每一列都量過相鄰兩行進度之間的空檔，最長的是 200 組那兩列的寫快取
+    建置在讀檔前、讀完（`read N rows`）、分組完、寫完快取各印一行進度；上表每一列都量過相鄰兩行進度之間的空檔，最長的是 200 組那兩列的寫快取
     （quantitative 與 ordinal 都約 3.2–3.4 秒）；**若你們把它調低到接近這個秒數，rollout 前調回來**，
     沒做的症狀是最後一行變成 `no output for 60s; assumed hung and killed`（數字是你們設的上限）。
   - **記憶體上限（rollout 前檢查）**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉；

@@ -343,7 +343,7 @@ mutation-probed, and its speed is the live measurement in P8.
     it while the gallery is open: the next page answers exit 3, the gallery rebuilds, and
     every tile paints.
   - Base differential: `spec_errors` on the same spec with PR 3's
-    `spec.schema.json` (from `2a4b897f`) swapped in refuses it with
+    `spec.schema.json` (from `ba90d0d5`) swapped in refuses it with
     `'facet' was unexpected`; with this PR's it is accepted. That is the schema
     `validate` reads, not a run of PR 3's app.
   - Found and fixed on the way, each with a test that reddened on the unfixed code and
