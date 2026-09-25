@@ -31,6 +31,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { load as parseYaml } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -284,5 +285,63 @@ describe("view-plugins/*/web/src import boundary", () => {
       }
     }
     expect(offenders, "a runtime plugin may only import @aiws/view-sdk, packages, or its own folder's files").toEqual([]);
+  });
+});
+
+// ── …and the other direction (#847/#848 P9) ────────────────────────────────
+// ECharts (~1 MB) is the chart plugin's own, bundled into ITS `index.js` and
+// loaded only when a chart opens. The SPA bundle is everything `web/src`
+// reaches, so ECharts stays out of it exactly when (1) no package in web/'s
+// dependency closure is ECharts, and (2) no SPA module imports a runtime
+// plugin's files (a relative path into `view-plugins/` would compile the plugin
+// — and ECharts with it, resolved from the plugin's node_modules — into the
+// SPA). Both are read without a build: the lockfile IS the closure, and the
+// imports come off the same AST scan as the rules above.
+
+const WEB_SRC = fileURLToPath(new URL("../", import.meta.url));
+const WEB_LOCK = fileURLToPath(new URL("../../pnpm-lock.yaml", import.meta.url));
+const CHART_PACKAGES = /^\/?(echarts|zrender)@/;
+
+/** Does a specifier in `web/src/<fileRel>` pull ECharts or a runtime plugin's
+ * files into the SPA bundle? */
+export function spaReachesAPlugin(fileRel: string, spec: string): boolean {
+  if (spec === "echarts" || spec.startsWith("echarts/") || spec === "zrender" || spec.startsWith("zrender/")) return true;
+  if (!spec.startsWith(".")) return false;
+  return posix.normalize(posix.join("web/src", posix.dirname(fileRel), spec)).startsWith("view-plugins/");
+}
+
+describe("spaReachesAPlugin()", () => {
+  it("flags ECharts itself and any path into view-plugins/", () => {
+    expect(spaReachesAPlugin("main.tsx", "echarts")).toBe(true);
+    expect(spaReachesAPlugin("a/b.tsx", "echarts/core")).toBe(true);
+    expect(spaReachesAPlugin("main.tsx", "../../view-plugins/chart/web/src/echarts")).toBe(true);
+    expect(spaReachesAPlugin("deep/x/y.ts", "../../../../view-plugins/chart/web/src/index")).toBe(true);
+  });
+  it("lets the SPA import its own files and its own packages", () => {
+    expect(spaReachesAPlugin("main.tsx", "./ext")).toBe(false);
+    expect(spaReachesAPlugin("renderers/entity/public.ts", "../../viewPlugins/useSandboxRun")).toBe(false);
+    expect(spaReachesAPlugin("main.tsx", "react")).toBe(false);
+    expect(spaReachesAPlugin("main.tsx", "echartsish")).toBe(false);
+  });
+});
+
+describe("the SPA bundle leaves ECharts to the chart plugin", () => {
+  it("has no ECharts in web/'s dependency closure", () => {
+    const lock = parseYaml(readFileSync(WEB_LOCK, "utf-8")) as { packages?: object; snapshots?: object };
+    const names = [...Object.keys(lock.packages ?? {}), ...Object.keys(lock.snapshots ?? {})];
+    expect(names.length).toBeGreaterThan(100); // the lockfile was read, not an empty shape
+    expect(names.filter((n) => CHART_PACKAGES.test(n))).toEqual([]);
+  });
+
+  it("imports no runtime plugin's files, and not ECharts, from any SPA module", () => {
+    const files = sourceFiles(WEB_SRC);
+    expect(files).toContain("main.tsx"); // the walk reached the entry
+    const offenders: string[] = [];
+    for (const rel of files) {
+      for (const spec of scanImports(readFileSync(WEB_SRC + rel, "utf-8"), rel)) {
+        if (spaReachesAPlugin(rel, spec)) offenders.push(`${rel} → ${spec}`);
+      }
+    }
+    expect(offenders, "the SPA may not bundle a runtime plugin (or ECharts): it loads them at run time").toEqual([]);
   });
 });
