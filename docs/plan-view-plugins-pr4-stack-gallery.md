@@ -252,10 +252,18 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   covers:
   - scratch sizing. A continuous cache is about 9 bytes per cell (1 quantized + 8
     exact), so 200 × 50 000 cells is about 90 MB, against a 500 MB default cap;
-  - build cost, measured by a reviewer on the dev box (not a CI number): 500k rows
-    took 1.8 s. 1000 groups × 5000 cells (5M rows) took 17.5 s at a 1.27 GB peak
-    RSS. That memory sits inside the sandbox's own cgroup limit, so a large source
-    needs a sandbox sized for it;
+  - build cost, measured end to end through the bundle's `facet_build` on the dev
+    box (32 cores), not a CI number:
+    - 1000 × 5041 cells as CSV: 29.9 s at a 1.62 GB peak RSS;
+    - the same as parquet: 28.8 s at 1.77 GB;
+    - 200 × 50 176 as parquet: 68.7 s at 3.28 GB.
+
+    A reopen reuses the cache in about 0.4 s. `facet_index`, `facet_page` and
+    `facet_exact` each take about 0.05 s at 22 MB. The peak grows with rows (about
+    0.33 GB per million) and sits inside the sandbox's own cgroup limit, so a large
+    source needs a sandbox sized for it. The builder's per-row Python loops are the
+    cost: vectorising them is a follow-up, since the plan sized this phase by rule of
+    thumb (Q11) and asks its test for correctness, not speed;
   - the knob;
   - the check that confirms it: open a gallery and see `.home/.cache/views/` in the
     sandbox dir.
