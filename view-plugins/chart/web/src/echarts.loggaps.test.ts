@@ -157,3 +157,53 @@ describe("a filler on a log y is empty only where nothing lies beneath it (P35 r
     chart.dispose();
   });
 });
+
+describe("'beneath' on a log y is a row below with a positive, finite value there (P37 row 14)", () => {
+  // a at t 1, 2, 3; b at t 1, 3: b's filler at t=2 lies over a's row at t=2,
+  // whose value has no place on a log axis -- so nothing lies beneath it
+  it.each([
+    ["no value (null)", null],
+    ["0", 0],
+    ["a negative value", -5],
+    ["an infinite value", Number.POSITIVE_INFINITY],
+  ])("draws b over it with no Infinity or NaN when the row beneath has %s (red before: a 0 filler over nothing)", (_, beneath) => {
+    const a = answer(
+      layer("area", 5, {
+        t: f64([1, 2, 3, 1, 3]),
+        y: f64([10, beneath, 10, 100, 100]),
+        g: cat(["a", "a", "a", "b", "b"]),
+      }),
+    );
+    const { chart, built, model, svg } = draw(topLevel, a);
+    const series = built.option.series as { data: { value?: unknown[] }[] }[];
+    // b at t=2 is a filler, y first: empty, as with nothing beneath at all
+    expect(series[1].data[1]).toMatchObject({ value: [null, 2] });
+    // b's own paths, by its palette colour (a's row of 0 or less is a's own
+    // point, drawn as the layer holds it -- not this rule's)
+    const fill = (model.getSeriesByIndex(1).getData() as unknown as { getVisual(k: string): { fill: string } }).getVisual("style").fill;
+    const bPaths = svg.split("\n").filter((l) => l.includes(`"${fill}"`));
+    expect(bPaths.length).toBeGreaterThan(0);
+    for (const p of bPaths) {
+      expect(p).not.toContain("Infinity");
+      expect(p).not.toContain("NaN");
+    }
+    chart.dispose();
+  });
+
+  it("draws no Infinity or NaN anywhere when the row beneath has no value", () => {
+    const a = answer(layer("area", 5, { t: f64([1, 2, 3, 1, 3]), y: f64([10, null, 10, 100, 100]), g: cat(["a", "a", "a", "b", "b"]) }));
+    const { chart, svg } = draw(topLevel, a);
+    expect(svg).not.toContain("Infinity");
+    expect(svg).not.toContain("NaN");
+    chart.dispose();
+  });
+
+  it("still fills with 0 where a row beneath has a positive value", () => {
+    const a = answer(layer("area", 5, { t: f64([1, 2, 3, 1, 3]), y: f64([10, 7, 10, 100, 100]), g: cat(["a", "a", "a", "b", "b"]) }));
+    const { chart, built, svg } = draw(topLevel, a);
+    const series = built.option.series as { data: { value?: unknown[] }[] }[];
+    expect(series[1].data[1]).toMatchObject({ value: [0, 2] });
+    expect(svg).not.toContain("Infinity");
+    chart.dispose();
+  });
+});

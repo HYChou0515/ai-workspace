@@ -527,6 +527,10 @@ function lineUpStacks(
     // a stack is one of its pieces (`pieces`)
     const where = members.map((i) => new Map((series[i].data as Item[]).map((d, j) => [valueOf(d)[at], j])));
     const slots = [...new Set(where.flatMap((m) => [...m.keys()]))].sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
+    // the slots where a series below has a value a log axis can place:
+    // positive and finite (P37 row 14 -- a row with no value, or 0 or less,
+    // lies beneath nothing)
+    const beneath = new Set<number | null>();
     members.forEach((i, k) => {
       const old = series[i].data as Item[];
       const was = rows[i].rows;
@@ -537,7 +541,7 @@ function lineUpStacks(
         if (j === undefined) {
           // adds nothing (0); on a log y, where nothing lies beneath, empty:
           // 0 has no place there (round 16 D3, PR 5 P35 row 8)
-          const fill = log && !where.slice(0, k).some((m) => m.has(x)) ? null : 0;
+          const fill = log && !beneath.has(x) ? null : 0;
           const value = category && at === 0 ? [x, fill] : [fill, x];
           data.push({ value, itemStyle: { opacity: 0 }, emphasis: { disabled: true }, tooltip: { show: false } });
           drawn.push(null);
@@ -545,6 +549,10 @@ function lineUpStacks(
           data.push(category ? old[j] : yFirst(old[j]));
           drawn.push(was[j]);
         }
+      }
+      for (const d of old) {
+        const v = valueOf(d)[1 - at];
+        if (Number.isFinite(v) && (v as number) > 0) beneath.add(valueOf(d)[at]);
       }
       series[i].data = data;
       if (!category) series[i].encode = { x: 1, y: 0 };
