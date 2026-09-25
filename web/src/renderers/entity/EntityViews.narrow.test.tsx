@@ -21,6 +21,8 @@ import { EntityViewBody, NARROW_PANEL, parseViewSpec } from "./EntityViews";
 
 const realRO = globalThis.ResizeObserver;
 let emit: (width: number) => void = () => {};
+/** An observation as a browser makes one: both boxes. */
+let emitBoxes: (content: number, border: number) => void = () => {};
 beforeEach(() => {
   const callbacks: ResizeObserverCallback[] = [];
   globalThis.ResizeObserver = class {
@@ -34,6 +36,11 @@ beforeEach(() => {
   emit = (width) =>
     act(() => {
       for (const cb of callbacks) cb([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+    });
+  emitBoxes = (content, border) =>
+    act(() => {
+      const entry = { contentRect: { width: content }, borderBoxSize: [{ inlineSize: border, blockSize: 400 }] };
+      for (const cb of callbacks) cb([entry as unknown as ResizeObserverEntry], {} as ResizeObserver);
     });
 });
 afterEach(() => {
@@ -65,6 +72,23 @@ describe("a view panel in a narrow pane", () => {
     expect(el).toHaveAttribute("data-narrow");
     emit(NARROW_PANEL);
     expect(el).not.toHaveAttribute("data-narrow");
+  });
+
+  // #847/#848 PR 5 P31, found at 1440 wide (a gallery at 0.62 beside a
+  // scatter): a 507 px panel's content box is 475 px with the wide padding and
+  // 491 px with the narrow one, so read from the content box the panel went
+  // narrow, lost padding, went wide, and so on every frame -- the chart in it
+  // resized every 10-20 ms and a screenshot caught its canvas 16 px
+  // wider than its box ("0.8" drawn as "0."). The border box is the same
+  // either way.
+  it("decides from its border box, which its own padding does not change", () => {
+    const el = panel();
+    emitBoxes(NARROW_PANEL - 5, NARROW_PANEL + 27);
+    expect(el).not.toHaveAttribute("data-narrow");
+    emitBoxes(NARROW_PANEL + 11, NARROW_PANEL + 27);
+    expect(el).not.toHaveAttribute("data-narrow");
+    emitBoxes(NARROW_PANEL + 11, NARROW_PANEL - 1);
+    expect(el).toHaveAttribute("data-narrow");
   });
 
   it("keeps its title to one truncated line", () => {
