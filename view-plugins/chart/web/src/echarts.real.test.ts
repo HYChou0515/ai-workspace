@@ -70,6 +70,20 @@ describe("against real ECharts", () => {
     chart.dispose();
   });
 
+  it("reports the ✕ as a `brush` clear, and a rebuild as none (#847/#848 P17)", () => {
+    const { chart } = chartFor(scatter, scatterAnswer);
+    const brushes: { command?: string }[] = [];
+    chart.on("brush", (e) => {
+      brushes.push(e as { command?: string });
+    });
+    chart.setOption(toOption(scatter, scatterAnswer).option, true); // a rebuild
+    expect(brushes).toEqual([]);
+    // what the toolbox's clear dispatches (echarts toolbox/feature/Brush.js)
+    chart.dispatchAction({ type: "brush", command: "clear", areas: [] });
+    expect(brushes.map((b) => b.command)).toEqual(["clear"]);
+    chart.dispose();
+  });
+
   it("maps a real polygon (lasso) back to layer rows", async () => {
     const { chart, built, events } = chartFor(scatter, scatterAnswer);
     chart.dispatchAction({

@@ -160,6 +160,42 @@ describe("ChartView on a named marking", () => {
     expect([...store.get("fail")!.marking.lot!]).toEqual(["L1"]);
   });
 
+  it("the chart's ✕ clears a marking its highlight seeded, with nothing brushed (#847/#848 P17)", () => {
+    const lit = answer(
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+        highlight: btoa(String.fromCharCode(0b010)),
+        lit: 1,
+      }),
+    );
+    sdk.useSandboxRun.mockReturnValue(ok(lit));
+    const store = new MarkingStore();
+    mount(store, [docOn("fail")]);
+    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]); // seeded on open
+    const [a] = charts.made;
+    // what the toolbox's clear dispatches (echarts toolbox/feature/Brush.js),
+    // then the empty brushselected the cleared component fires
+    act(() => a!.handlers.get("brush")!({ type: "brush", command: "clear", areas: [] }));
+    act(() => a!.handlers.get("brushselected")!({ batch: [{ areas: [], selected: [] }] }));
+    expect(store.get("fail")).toBeUndefined();
+  });
+
+  it("a brush component rebuilding clears nothing: only the ✕ does", () => {
+    const lit = answer(
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+        highlight: btoa(String.fromCharCode(0b010)),
+        lit: 1,
+      }),
+    );
+    sdk.useSandboxRun.mockReturnValue(ok(lit));
+    const store = new MarkingStore();
+    mount(store, [docOn("fail")]);
+    const [a] = charts.made;
+    // a person's drag reports `brush` with areas and no command; a rebuild fires only brushselected
+    act(() => a!.handlers.get("brush")!({ type: "brush", areas: [{ brushType: "rect", range: [0, 1] }] }));
+    act(() => a!.handlers.get("brushselected")!({ batch: [{ areas: [], selected: [] }] }));
+    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+  });
+
   it("two charts opened together on an empty marking: the first seed stands", () => {
     // Both effects run in one commit and both saw "empty" when they rendered.
     const litAt = (bit: number) =>

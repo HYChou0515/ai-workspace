@@ -147,6 +147,15 @@ function Plot({
       brushed.current = drawn;
       writeRef.current(selectionFromBrush(event, builtRef.current));
     });
+    // The toolbox's ✕ dispatches `brush` with `command: "clear"` (echarts
+    // toolbox/feature/Brush.js); a rebuild dispatches nothing. So the ✕ is the
+    // person clearing, whatever the marking holds -- a seed from `highlight:`
+    // too, which the empty brushselected after it cannot clear (nothing was
+    // brushed here) (#847/#848 P17).
+    chart.on("brush", (p) => {
+      if ((p as { command?: string }).command !== "clear") return;
+      writeRef.current([]);
+    });
     chart.on("legendselectchanged", (p) =>
       writeRef.current(
         selectionFromLegend((p as { selected: Record<string, boolean> }).selected, builtRef.current),
