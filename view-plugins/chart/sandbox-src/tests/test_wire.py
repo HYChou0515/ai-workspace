@@ -52,8 +52,22 @@ def test_epoch_ms_reads_the_instant_corpus():
     # never visits the sandbox, so the two parsers must agree on the file).
     from chart_view.wire import epoch_ms
 
-    got = epoch_ms(pd.Series([c["text"] for c in INSTANTS], dtype=object)).tolist()
-    assert got == [c["ms"] for c in INSTANTS]
+    placed = [c for c in INSTANTS if c["ms"] is not None]
+    got = epoch_ms(pd.Series([c["text"] for c in placed], dtype=object)).tolist()
+    assert got == [c["ms"] for c in placed]
+
+
+def test_the_instant_pattern_is_the_corpus_placeable_texts():
+    # The ONE grammar a temporal datum is held to (validate and parseInstant
+    # both read it): every placed text matches it, every refused one does not.
+    import re
+
+    from chart_view.spec import spec_schema
+
+    pattern = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
+    assert [c["text"] for c in INSTANTS if pattern.search(c["text"])] == [
+        c["text"] for c in INSTANTS if c["ms"] is not None
+    ]
 
 
 CANON = json.loads((CORPUS / "canon.json").read_text())["cases"]

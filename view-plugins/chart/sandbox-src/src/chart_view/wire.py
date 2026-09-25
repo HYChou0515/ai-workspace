@@ -22,7 +22,9 @@ JavaScript's ``String(v)``, because the other writer of markings is the browser.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import math
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -99,31 +101,61 @@ def encode_column(s: pd.Series, kind: str) -> dict[str, Any]:
 def epoch_ms(s: pd.Series) -> np.ndarray:
     """A temporal column as epoch milliseconds (NaN = missing).
 
-    Numbers ARE epoch milliseconds, as in Vega-Lite (pandas would read them as
-    nanoseconds: 1700000000000 became 1970-01-01T00:28). Text is parsed with
-    format="mixed": pandas otherwise infers ONE format from the first value,
-    and with errors="coerce" a later, more precise one became a silent gap."""
+    A number — or text that is one — IS epoch milliseconds, as in Vega-Lite and
+    as the renderer's `parseInstant` reads it (pandas would read a number as
+    nanoseconds: 1700000000000 became 1970-01-01T00:28). Other text is a date,
+    parsed with format="mixed": pandas otherwise infers ONE format from the
+    first value, and with errors="coerce" a later, more precise one became a
+    silent gap. Text with no zone is UTC."""
     if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
         return pd.to_numeric(s, errors="coerce").to_numpy(float)
-    # Text (or a mix, as an entity field or a hand-made CSV can hold): each
-    # value its own way — a number is ms, a date is parsed, and digits that do
-    # not parse as a date are ms too (a CSV holds numbers as text).
-    stamps = pd.to_datetime(
-        s.map(lambda v: None if _is_number(v) else v), errors="coerce", utc=True, format="mixed"
-    )
+    if isinstance(s.dtype, pd.DatetimeTZDtype):
+        s = s.dt.tz_convert("UTC").dt.tz_localize(None)
+    if pd.api.types.is_datetime64_dtype(s.dtype):
+        # Straight from the column's own unit: a `datetime64[s]` column holds
+        # 9999-12-31, which a detour through nanoseconds loses.
+        arr = s.to_numpy()
+        return np.where(np.isnat(arr), np.nan, arr.astype("datetime64[us]").astype("int64") / 1_000)
+    number = s.map(_as_number).to_numpy(float)
+    dates = s.map(lambda v: None if _is_number(v) or _NUMBER.match(str(v)) else v)
+    stamps = pd.to_datetime(dates, errors="coerce", utc=True, format="mixed")
     # ns → µs as integers first: ns / 1e6 in floats read .250 s as .2499998.
     ms = np.where(stamps.isna(), np.nan, (pd.DatetimeIndex(stamps).asi8 // 1_000) / 1_000)
-    as_number = pd.to_numeric(
-        s.map(
-            lambda v: v if _is_number(v) or (isinstance(v, str) and v.strip().isdigit()) else None
-        ),
-        errors="coerce",
-    ).to_numpy(float)
-    return np.where(np.isnan(ms), as_number, ms)
+    # pandas holds nanoseconds, so only 1677–2262: past that (an open-ended
+    # "valid to 9999-12-31"), the standard library reads the date.
+    far = np.isnan(ms) & dates.notna().to_numpy()
+    ms[far] = [_stdlib_ms(v) for v in dates[far]]
+    return np.where(np.isnan(number), ms, number)
+
+
+# A number written as text: digits, a sign, a decimal point — no `inf`, no `1_000`.
+_NUMBER = re.compile(r"\s*[+-]?(?:\d+\.?\d*|\.\d+)\s*$")
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 
 def _is_number(v: Any) -> bool:
     return isinstance(v, int | float | np.integer | np.floating) and not isinstance(v, bool)
+
+
+def _as_number(v: Any) -> float:
+    if _is_number(v):
+        return float(v)
+    return float(v) if isinstance(v, str) and _NUMBER.match(v) else math.nan
+
+
+def _stdlib_ms(v: Any) -> float:
+    if isinstance(v, str):
+        try:
+            v = dt.datetime.fromisoformat(v.strip())
+        except ValueError:  # not a date at all ("soon", "2024-02-30")
+            return math.nan
+    if isinstance(v, dt.date) and not isinstance(v, dt.datetime):
+        v = dt.datetime(v.year, v.month, v.day)
+    if not isinstance(v, dt.datetime):
+        return math.nan
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=dt.UTC)
+    return (v - _EPOCH) / dt.timedelta(milliseconds=1)
 
 
 def _cat(s: pd.Series) -> dict[str, Any]:

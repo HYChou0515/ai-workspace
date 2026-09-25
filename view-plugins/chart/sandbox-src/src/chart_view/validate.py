@@ -13,6 +13,7 @@ scatter is binned. The source reader is passed in: a table file reads with
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,11 +21,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from chart_view.query import LayerRows, binned, layer_rows
+from chart_view.query import LayerRows, binned, layer_rows, mark_of, spec_layers
 from chart_view.sources import SourceError
-from chart_view.spec import SpecError, parse_spec, spec_errors
+from chart_view.spec import SpecError, parse_spec, spec_errors, spec_schema
 from chart_view.transforms import TransformError
-from chart_view.wire import js_number
+from chart_view.wire import epoch_ms, js_number
 
 ReadSource = Callable[[Any], pd.DataFrame]
 
@@ -70,13 +71,48 @@ def _highlight(spec: Mapping[str, Any], layers: list[LayerRows]) -> str:
     return f"highlight matches {lit}/{rows} rows"
 
 
+_INSTANT = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
+
+
+def _datum_errors(spec: Mapping[str, Any]) -> list[str]:
+    """A text datum on a temporal axis the renderer could not place.
+
+    The renderer reads it with `parseInstant`, which takes only the schema's
+    `$defs.instant` forms; anything else drew no rule and said nothing. The
+    axis is the one the renderer draws: the first layer's channel with a field
+    (a grid's axes are its cells, not dates)."""
+    layers = spec_layers(spec)
+    if any(mark_of(ly)[0] == "grid" for ly in layers):
+        return []
+    errors = []
+    for c in ("x", "y"):
+        axis = next(
+            (ly["encoding"][c] for ly in layers if "field" in ly["encoding"].get(c, {})), None
+        )
+        if axis is None or axis.get("type") != "temporal":
+            continue
+        for ly in layers:
+            datum = ly["encoding"].get(c, {}).get("datum")
+            if not isinstance(datum, str):
+                continue
+            if not _INSTANT.search(datum) or np.isnan(
+                epoch_ms(pd.Series([datum], dtype=object))[0]
+            ):
+                errors.append(
+                    f"{c}: datum {datum!r} is not a date the chart can place — "
+                    "write it as 2024-03-01, 2024-03-01T12:00, or with a zone as "
+                    "2024-03-01T12:00:00+08:00"
+                )
+    return errors
+
+
 def check(text: str, read_source: ReadSource) -> Result:
     """Refusal lines, or the one-line summary, for a chart file's text."""
     try:
         spec = parse_spec(text)
     except SpecError as e:
         return Result(errors=[str(e)])
-    errors = spec_errors(spec)
+    errors = spec_errors(spec) or _datum_errors(spec)
     if errors:
         return Result(errors=errors)
     try:

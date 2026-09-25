@@ -36,7 +36,9 @@ def inside_workspace(root: Path, name: str) -> Path:
     and on a shared-dir backend a sibling item's workspace is one `../` away."""
     try:
         path = (root / name.lstrip("/")).resolve()
-    except (ValueError, OSError) as e:  # a NUL byte, a loop of links
+    # A NUL byte is ValueError; a loop of links is RuntimeError on 3.12 (the
+    # interpreter the bundle carries) and OSError from 3.13.
+    except (ValueError, OSError, RuntimeError) as e:
         raise SourceError(f"{name!r} is not a usable path ({e})") from e
     if not path.is_relative_to(root.resolve()):
         raise SourceError(f"{name!r} is outside the workspace")
