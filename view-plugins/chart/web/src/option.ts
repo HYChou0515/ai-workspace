@@ -140,24 +140,31 @@ function categories(field: string, channel: Channel, decoded: Record<string, Col
   return seen;
 }
 
-const ZONED = /(?:Z|[+-]\d\d:?\d\d)$/;
-/** The forms a temporal datum may take — the schema's, which validate reads too. */
+/** The forms a date datum may take — the schema's, which validate reads too. */
 const INSTANT = new RegExp(schema.$defs.instant.pattern);
 
-/** Epoch ms for an instant written as text in one of the schema's
- * `$defs.instant` forms, read as the sandbox reads it
- * (`chart_view/wire.py:epoch_ms`): UTC unless the text names a zone, digits
- * as milliseconds; NaN for any other text, which validate refuses. `Date.parse`
- * alone reads a zone-less date-time in the VIEWER's zone, which put a rule
- * hours away from the same timestamp's point, and reads forms the sandbox
- * reads otherwise or not at all. */
+/** Epoch ms for a date datum, or NaN where the chart places none — exactly
+ * where the sandbox's `validate.instant_ms` gives None, which validate
+ * refuses (held to `wire-corpus/instants.json`, written from it). The text is
+ * one of the schema's `$defs.instant` forms, UTC unless it names a zone, and
+ * a day the calendar lacks (2024-02-30) is NaN. It is read from the pattern's
+ * groups, not with `Date.parse`: that read a zone-less time in the VIEWER's
+ * zone, and each engine reads the rest its own way — V8 took a zoned
+ * "0050-06-01 12:00Z" as 1950 and refused "2024/03/01T12:00Z". */
 export function parseInstant(text: string): number {
-  const s = text.trim();
-  if (!INSTANT.test(s)) return Number.NaN;
-  if (/^\d+$/.test(s)) return Number(s);
-  if (ZONED.test(s)) return Date.parse(s);
-  const iso = s.replace(/\//g, "-").replace(" ", "T");
-  return Date.parse(/T/.test(iso) ? `${iso}Z` : `${iso}T00:00:00Z`);
+  const m = INSTANT.exec(text);
+  if (!m) return Number.NaN;
+  const [year, month, day] = [Number(m[1]), Number(m[3]), Number(m[4])];
+  // setUTCFullYear, not Date.UTC: that reads years 0-99 as 1900-1999.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return Number.NaN;
+  const [hour, minute, second] = [Number(m[5] ?? 0), Number(m[6] ?? 0), Number(m[7] ?? 0)];
+  const fraction = m[8] ? Number(m[8].padEnd(3, "0")) : 0;
+  let ms = date.getTime() + ((hour * 60 + minute) * 60 + second) * 1000 + fraction;
+  const zone = m[9];
+  if (zone && zone !== "Z") ms -= (zone[0] === "-" ? -1 : 1) * (Number(m[10]) * 60 + Number(m[11])) * 60_000;
+  return ms;
 }
 
 type Axis = {
@@ -177,8 +184,11 @@ function axisFor(channel: Channel | undefined, decoded: Record<string, Column>[]
     // number between two numeric cells sits between their centres. Any layer
     // over the lattice (points marking cells, a threshold) is placed this way.
     const cell = new Map(labels.map((v, i) => [String(v), i]));
-    const pos = (v: Scalar | null): number | null => {
-      if (v === null) return null;
+    const temporal = channel?.type === "temporal";
+    const pos = (value: Scalar | null): number | null => {
+      // A temporal grid's cells are epoch ms: a text datum is a date first.
+      const v = temporal && typeof value === "string" ? parseInstant(value) : value;
+      if (v === null || Number.isNaN(v)) return null;
       const exact = cell.get(String(v));
       if (exact !== undefined || typeof v !== "number") return exact ?? null;
       for (let i = 0; i + 1 < labels.length; i++) {

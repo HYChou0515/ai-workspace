@@ -18,7 +18,11 @@ import pytest
 from chart_view.wire import bitset, canon, encode_column
 
 CORPUS = Path(__file__).resolve().parents[2] / "wire-corpus"
-FILES = sorted(f for f in CORPUS.glob("*.json") if f.name not in ("canon.json", "instants.json"))
+FILES = sorted(
+    f
+    for f in CORPUS.glob("*.json")
+    if f.name not in ("canon.json", "instants.json", "datum-axes.json")
+)
 
 
 def _series(case: dict) -> pd.Series:
@@ -47,27 +51,39 @@ def test_the_encoder_writes_the_corpus(path: Path):
 INSTANTS = json.loads((CORPUS / "instants.json").read_text())["cases"]
 
 
-def test_epoch_ms_reads_the_instant_corpus():
+def test_the_instant_corpus_is_how_a_datum_is_read():
     # The oracle file the renderer's parseInstant is held to (a rule's datum
-    # never visits the sandbox, so the two parsers must agree on the file).
+    # never visits the sandbox): a stale file after a change to instant_ms
+    # fails here, not in the renderer.
+    from chart_view.validate import instant_ms
+
+    assert [instant_ms(c["text"]) for c in INSTANTS] == [c["ms"] for c in INSTANTS]
+
+
+def test_the_datum_axes_corpus_is_what_validate_says():
+    # The renderer's datum-axes.test.ts reads this file as validate's verdict.
+    from chart_view.validate import check
+
+    doc = json.loads((CORPUS / "datum-axes.json").read_text())
+    frame = pd.DataFrame(doc["data"])
+    got = [
+        not check(
+            json.dumps({"view": "chart", "source": "a.csv", "layer": c["layer"]}),
+            lambda _s: frame,
+        ).errors
+        for c in doc["cases"]
+    ]
+    assert got == [c["placed"] for c in doc["cases"]]
+
+
+def test_a_placed_datum_is_where_the_same_text_in_the_data_is():
+    # A rule at "2024-03-01T12:00" sits on the point whose column holds that
+    # text: a placed datum is read by the data's own reader.
     from chart_view.wire import epoch_ms
 
     placed = [c for c in INSTANTS if c["ms"] is not None]
     got = epoch_ms(pd.Series([c["text"] for c in placed], dtype=object)).tolist()
     assert got == [c["ms"] for c in placed]
-
-
-def test_the_instant_pattern_is_the_corpus_placeable_texts():
-    # The ONE grammar a temporal datum is held to (validate and parseInstant
-    # both read it): every placed text matches it, every refused one does not.
-    import re
-
-    from chart_view.spec import spec_schema
-
-    pattern = re.compile(spec_schema()["$defs"]["instant"]["pattern"])
-    assert [c["text"] for c in INSTANTS if pattern.search(c["text"])] == [
-        c["text"] for c in INSTANTS if c["ms"] is not None
-    ]
 
 
 CANON = json.loads((CORPUS / "canon.json").read_text())["cases"]

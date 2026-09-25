@@ -171,9 +171,10 @@ def _bin(
         low, high = numbers.min(), numbers.max()
         width = (high - low) / BINS_PER_AXIS or 1.0
         cell = np.floor((numbers - low) / width).clip(upper=BINS_PER_AXIS - 1)
+        # A temporal centre stays epoch ms, which the wire's `time` column
+        # reads as such: a datetime would go through nanoseconds, which cannot
+        # hold 9999-12-31.
         frame[field] = low + (cell + 0.5) * width
-        if encoding[axis]["type"] == "temporal":
-            frame[field] = pd.to_datetime(frame[field], unit="ms", utc=True)
         keys.append(field)
     if "color" in encoding and "field" in encoding["color"]:
         keys.append(encoding["color"]["field"])

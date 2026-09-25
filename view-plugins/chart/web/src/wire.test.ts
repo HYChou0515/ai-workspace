@@ -15,7 +15,7 @@ import { canon, decodeBits, decodeColumn, type WireColumn } from "./wire";
 const corpus = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire-corpus");
 type Case = { kind: string; values: unknown[]; wire: WireColumn | string };
 const cases = readdirSync(corpus)
-  .filter((n) => n.endsWith(".json") && n !== "canon.json" && n !== "instants.json")
+  .filter((n) => n.endsWith(".json") && !["canon.json", "instants.json", "datum-axes.json"].includes(n))
   .sort()
   .map((n) => [n, JSON.parse(readFileSync(join(corpus, n), "utf8")) as Case] as const);
 
