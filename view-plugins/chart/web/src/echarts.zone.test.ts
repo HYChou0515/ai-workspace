@@ -27,8 +27,9 @@ const timeCol = (ms: number[], zone?: string): WireColumn => ({
   ...(zone ? { zone } : {}),
 });
 
-/** The x axis's tick labels as ECharts draws them, for a viewer in `tz`. */
-function labels(tz: string, x: WireColumn, n: number): string[] {
+/** The x axis's tick labels as ECharts draws them, for a viewer in `tz`, with
+ * where each is centred. */
+function placed(tz: string, x: WireColumn, n: number, width = 900): { at: number; text: string }[] {
   process.env.TZ = tz;
   const doc = {
     ...base,
@@ -36,11 +37,10 @@ function labels(tz: string, x: WireColumn, n: number): string[] {
     encoding: { x: { field: "at", type: "temporal" }, y: { field: "v", type: "quantitative" } },
   };
   const built = toOption(doc, answer(layer("line", n, { at: x, v: f64(Array.from({ length: n }, (_, i) => i)) })));
-  const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 900, height: 300 });
+  const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width, height: 300 });
   chart.setOption(built.option, true);
   const svg = chart.renderToSVGString();
   chart.dispose();
-  // the x axis's labels sit on its line, below the plot: every text on that row
   // the x axis's labels share one row (the y axis's each have their own):
   // the most common row, in left-to-right order
   const texts = [...svg.matchAll(/<text[^>]*transform="translate\(([\d.]+) ([\d.]+)\)"[^>]*>([^<]*)<\/text>/g)];
@@ -50,8 +50,10 @@ function labels(tz: string, x: WireColumn, n: number): string[] {
   return texts
     .filter((t) => t[2] === row)
     .sort((a, b) => Number(a[1]) - Number(b[1]))
-    .map((t) => t[3]);
+    .map((t) => ({ at: Number(t[1]), text: t[3] }));
 }
+
+const labels = (tz: string, x: WireColumn, n: number) => placed(tz, x, n).map((l) => l.text);
 
 describe("a time axis against real ECharts", () => {
   it("(control) a viewer's zone moved the labels before useUTC", () => {
@@ -80,6 +82,18 @@ describe("a time axis against real ECharts", () => {
     // the axis starts at Taipei's midnight on 1 March and the day ticks are
     // Taipei's midnights ("Mar" is the month's first day, "2" the 2nd)
     expect(seen[0]).toEqual(["Mar", "06:00", "12:00", "18:00", "2", "06:00", "12:00", "18:00"]);
+  });
+
+  it("leaves out labels that would run into each other on a narrow chart", () => {
+    // seen at 390 px wide: "Mar06:0012:0018:00 2 06:00 …" in one run
+    const x = timeCol(hours(48, "2026-02-28T16:00:00Z"), "Asia/Taipei");
+    const row = placed("UTC", x, 48, 260);
+    expect(row.length).toBeGreaterThan(1);
+    // centred labels ~6.5 px a character at 12 px: neighbours must not touch
+    for (let i = 1; i < row.length; i++) {
+      const room = ((row[i - 1].text.length + row[i].text.length) / 2) * 6.5;
+      expect(row[i].at - row[i - 1].at, `${row[i - 1].text} | ${row[i].text}`).toBeGreaterThanOrEqual(room);
+    }
   });
 
   it("labels a zone-less column as written, whatever the viewer's zone", () => {

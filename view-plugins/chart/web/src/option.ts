@@ -333,6 +333,10 @@ function axisOption(
   }
   if (axis.kind === "category") return { type: "category", name, ...NAME_AT[which], data: axis.labels.map(String) };
   const out: Record<string, unknown> = { type: axis.kind, name, ...NAME_AT[which] };
+  // a time axis's labels are wide ("06:00", "Mar 2"): on a narrow chart they
+  // ran into one another ("Mar06:0012:00…" at 390 px), so the overlapping
+  // ones are left out (#847/#848 P14)
+  if (axis.kind === "time") out.axisLabel = { hideOverlap: true };
   // Zero is in the domain only where a mark's LENGTH is its value (bar, area)
   // or the spec asks for it: a scatter of values near 100 squeezed against a
   // zero it never reaches hides the very spread it was drawn to show.
