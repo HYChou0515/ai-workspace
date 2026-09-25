@@ -207,7 +207,7 @@ describe("a rule drawn from a field", () => {
 
   it("reads a date sent as text on a date grid as a date, not a number", () => {
     // Round 10 conformance: only a quantitative grid reads text as a number;
-    // on a temporal grid Number("2024-03-02") is NaN and the rule was lost.
+    // on a temporal grid Number("2024-03-02") is NaN and the rule would be lost.
     const spec = {
       ...base,
       layer: [

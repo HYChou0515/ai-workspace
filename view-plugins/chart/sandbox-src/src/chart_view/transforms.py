@@ -8,12 +8,13 @@ expression, because `validate` hands that line to the AI that wrote the spec.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
 
-from chart_view.wire import unhashable_as_text
+from chart_view.wire import holds_containers, unhashable_as_text
 
 
 class TransformError(ValueError):
@@ -46,26 +47,55 @@ _COMPARE = {
 }
 
 
+def _comparable(s: pd.Series) -> pd.Series:
+    """`s` as a predicate compares it: a list cell as its marking text (what a
+    highlight or a marking holds), and a column of date / datetime objects (a
+    parquet date32 column) as datetimes, so "2024-01-01" names a day there as
+    it does in a datetime column — a date object is never equal to text."""
+    s = unhashable_as_text(s)
+    if s.dtype == object and pd.api.types.infer_dtype(s, skipna=True) in ("date", "datetime"):
+        # Zoned ones at UTC, as zone-less text is read; seconds keep 0001-9999.
+        return s.map(_at_utc).astype("datetime64[s]")
+    return s
+
+
+def _at_utc(v: Any) -> Any:
+    if getattr(v, "tzinfo", None) is None:
+        return v
+    return v.astimezone(dt.UTC).replace(tzinfo=None)
+
+
 def _predicate(df: pd.DataFrame, pred: Mapping[str, Any]) -> pd.Series:
     field = pred["field"]
     need_columns(df, field)
-    # A list cell is compared as its marking text (what a highlight or a
-    # marking holds): compared as a numpy array, `==` raised.
-    s = unhashable_as_text(df[field])
+    # A list cell compared as a numpy array matched nothing (one element) or
+    # raised on `==` (more); see _comparable.
+    s = _comparable(df[field])
     mask = pd.Series(True, index=df.index)
     if "equal" in pred:
         mask &= s == pred["equal"]
     if "oneOf" in pred:
-        mask &= s.isin(pred["oneOf"])
-    orders = [(op, v) for op, v in pred.items() if op in _COMPARE]
+        values = pred["oneOf"]
+        if pd.api.types.is_datetime64_any_dtype(s):  # text names a day there too
+            values = pd.Series(values, dtype=object).astype(s.dtype)
+        mask &= s.isin(values)
+    # (what the author wrote, the comparison, the value)
+    orders = [(op, op, v) for op, v in pred.items() if op in _COMPARE]
     if "range" in pred:
         low, high = pred["range"]
-        orders += [("gte", low), ("lte", high)]
-    for op, value in orders:
+        orders += [("range", "gte", low), ("range", "lte", high)]
+    if orders and holds_containers(df[field]):
+        # Against text, a list's marking text would be ordered alphabetically.
+        raise TransformError(
+            f"filter on {field!r}: {field!r} holds lists, which have no order —"
+            " compare them with equal or oneOf"
+        )
+    for name, op, value in orders:
         try:
             mask &= _COMPARE[op](s, value)
-        except (TypeError, ValueError) as e:  # text or a list against a number
-            raise TransformError(f"filter on {field!r}: {op} {value!r} — {e}") from e
+        except TypeError as e:  # text, a list or a date against a number
+            shown = pred["range"] if name == "range" else value
+            raise TransformError(f"filter on {field!r}: {name} {shown!r} — {e}") from e
     if "valid" in pred:
         mask &= s.notna() if pred["valid"] else s.isna()
     return mask
@@ -131,7 +161,7 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
 def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
     by, items, groupby = t["diff"]["by"], t["aggregate"], list(t.get("groupby", []))
     need_columns(df, by)
-    side = unhashable_as_text(df[by])  # a list side is named by its marking
+    side = _comparable(df[by])  # a list side by its marking, a date by its day
     of = aggregate(df[side == t["diff"]["of"]], items, groupby)
     minus = aggregate(df[side == t["diff"]["minus"]], items, groupby)
     names = [i["as"] for i in items]

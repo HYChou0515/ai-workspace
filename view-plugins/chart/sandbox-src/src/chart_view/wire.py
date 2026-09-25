@@ -214,10 +214,10 @@ def _plain(value: Any) -> Any:
     if isinstance(value, set):  # in a stable order: hash order changes by process
         return sorted((_plain(v) for v in value), key=repr)
     if isinstance(value, dict):  # keys in order: one mapping, one marking
-        return {_plain(k): _plain(value[k]) for k in sorted(value, key=repr)}
-    if value is pd.NaT:
-        return None
-    if isinstance(value, np.datetime64 | dt.datetime):  # a Timestamp is a datetime
+        return {_plain(k): _plain(value[k]) for k in sorted(value, key=lambda k: repr(_plain(k)))}
+    if isinstance(
+        value, np.datetime64 | dt.datetime
+    ):  # pd.NaT is one too  # a Timestamp is a datetime
         stamp = pd.Timestamp(value)
         return stamp.isoformat() if isinstance(stamp, pd.Timestamp) else None  # NaT
     if isinstance(value, dt.date):
@@ -230,17 +230,38 @@ def _plain(value: Any) -> Any:
 def unhashable_as_text(s: pd.Series) -> pd.Series:
     """`s` with each list / mapping / array cell as its marking string, so it
     can be grouped by. An entity field can hold a list; pyarrow reads a
-    parquet list column as numpy arrays. Only group keys are passed through
-    this — a filter or `where:` still sees the lists — and a text column is
-    left as it is, with no Python call per cell (`infer_dtype` scans it in C)."""
-    if s.dtype != object or pd.api.types.infer_dtype(s, skipna=True) == "string":
+    parquet list column as numpy arrays. Group keys, a field predicate and a
+    diff's `by` pass through this; a pandas-query filter or `where:` still sees
+    the lists. A text column is
+    left as it is, with no Python call per cell (`infer_dtype` scans it in C),
+    as is any column that holds no list."""
+    if not _may_hold_containers(s):
         return s
     return s.map(_as_marking)
 
 
+def _may_hold_containers(s: pd.Series) -> bool:
+    # A list, mapping or array makes an object column "mixed": a column of
+    # text, numbers, dates or bools is left as it is, its dtype too (a map
+    # turned object ints into int64 and cost ~0.5 s per million rows).
+    return s.dtype == object and pd.api.types.infer_dtype(s, skipna=True) in (
+        "mixed",
+        "mixed-integer",
+    )
+
+
+def holds_containers(s: pd.Series) -> bool:
+    """Whether some cell of `s` is a list, mapping or array."""
+    return _may_hold_containers(s) and bool(s.map(_is_container).any())
+
+
+def _is_container(v: Any) -> bool:
+    return isinstance(v, list | dict | set | tuple | np.ndarray)
+
+
 def _as_marking(v: Any) -> Any:
     """A cell with no hash (a list, mapping or array) as its marking string."""
-    return canon(v) if isinstance(v, list | dict | set | tuple | np.ndarray) else v
+    return canon(v) if _is_container(v) else v
 
 
 def _cat(s: pd.Series) -> dict[str, Any]:
