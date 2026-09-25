@@ -160,6 +160,21 @@ def test_the_plans_shape_writes_the_same_cache_both_ways(tmp_path: Path) -> None
         # a nullable-integer facet, and a uint8 one
         ({"g": pd.array([1, 2], dtype="Int64"), "x": [0, 0], "y": [0, 0], "v": [1.0, 2.0]}, {}),
         ({"g": np.array([1, 2], dtype=np.uint8), "x": [0, 0], "y": [0, 0], "v": [1.0, 2.0]}, {}),
+        # inf on an ordinal (cat) axis has no level text, so the row is left out
+        (
+            {"g": ["a", "a", "a"], "x": [0.0, 1.0, math.inf], "y": [0, 0, 0], "v": [1.0, 2.0, 3.0]},
+            {},
+        ),
+        # two different values whose levels are the same text: one cell
+        (
+            {
+                "g": ["a", "b"],
+                "x": pd.Series([pd.Timestamp("2020-01-01"), "2020-01-01 00:00:00"], dtype=object),
+                "y": [0, 0],
+                "v": [1.0, 2.0],
+            },
+            {},
+        ),
         # a row with an x and no y is left out too
         (
             {"g": ["a", "a", "a"], "x": [0, 1, 2], "y": [0.0, math.nan, 0.0], "v": [1.0, 2.0, 3.0]},
@@ -190,6 +205,8 @@ def test_the_plans_shape_writes_the_same_cache_both_ways(tmp_path: Path) -> None
         "numeric-as-categories",
         "Int64-key",
         "uint8-key",
+        "inf-on-an-ordinal-axis",
+        "two-values-one-level-text",
         "no-y",
         "keys-first-seen-not-sorted",
     ],
@@ -240,6 +257,11 @@ def _sorted(**sort_columns: Any) -> pd.DataFrame:
                 "2026-09-26 00:00:00.000000000",
             ]
         ),
+        # near 2251, 628 ns apart: two floats of nanoseconds, ONE float of
+        # milliseconds -- one sort value, as the row path's ms says, not two
+        pd.to_datetime(
+            [8884710360060153924, 8884710360060154552, 8884710360060154552, 8884710360060154552]
+        ),
     ],
     ids=[
         "naive-time",
@@ -256,6 +278,7 @@ def _sorted(**sort_columns: Any) -> pd.DataFrame:
         "text-with-missing",
         "all-missing",
         "nanoseconds-one-millisecond",
+        "ns-floats-differ-ms-float-same",
     ],
 )
 def test_sort_values_are_the_same_both_ways(tmp_path: Path, column: Any) -> None:
@@ -308,6 +331,13 @@ def test_sort_values_are_the_same_both_ways(tmp_path: Path, column: Any) -> None
             ),
             {},
         ),
+        # only infinities on an ordinal axis: nothing can be placed
+        (
+            pd.DataFrame(
+                {"g": ["a", "a"], "x": [math.inf, -math.inf], "y": [0, 0], "v": [1.0, 2.0]}
+            ),
+            {},
+        ),
         # -0.0 then 0.0 on a quantitative x: one cell, and the refusal names the
         # row that repeated it (0.0), not the one it repeated (-0.0)
         (
@@ -330,6 +360,7 @@ def test_sort_values_are_the_same_both_ways(tmp_path: Path, column: Any) -> None
         "cell-before-sort",
         "first-sort-column",
         "repeat-in-later-group",
+        "only-infinities-on-an-ordinal-axis",
         "repeat-names-the-repeating-row",
         "missing-key",
         "infinite-key",

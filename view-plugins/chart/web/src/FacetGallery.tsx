@@ -260,16 +260,28 @@ function Enlarged({
   const hovered = cell >= 0 && values ? values[cell] : null;
   const label = index.groups[position].key.join(" · ");
   // it covers the gallery, so it takes focus: Escape is then heard here, as
-  // any dialog is expected to close on it
+  // any dialog is expected to close on it; closing gives focus back to what
+  // opened it (the ⤢) rather than dropping it to the page
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => box.current?.focus(), []);
+  useEffect(() => {
+    const opener = document.activeElement;
+    box.current?.focus({ preventScroll: true });
+    return () => {
+      if (opener instanceof HTMLElement) opener.focus();
+    };
+  }, []);
   return (
     <div
       ref={box}
       role="dialog"
       aria-label={`group ${label}`}
       tabIndex={-1}
-      onKeyDown={(e) => e.key === "Escape" && onClose()}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        // the host's modals hear Escape on document: this press is ours alone
+        e.stopPropagation();
+        onClose();
+      }}
       style={{ position: "absolute", inset: 0, background: "var(--bg, #fff)", padding: 12, zIndex: 1 }}
     >
       <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -480,7 +492,7 @@ export function FacetGallery({
       <div
         ref={scroller}
         data-gallery-scroll
-        style={{ flex: 1, overflow: "auto", position: "relative", maxHeight: "80vh", minHeight: 240 }}
+        style={{ flex: 1, overflow: "auto", position: "relative", maxHeight: "80vh" }}
       >
         <div style={{ position: "relative", height: rows * TILE_H }}>
           {pages.map((n) => (
