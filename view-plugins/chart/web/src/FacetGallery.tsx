@@ -349,7 +349,20 @@ function Enlarged({
         e.stopPropagation();
         onClose();
       }}
-      style={{ position: "absolute", inset: 0, background: "var(--bg, #fff)", padding: ENLARGED_PAD, zIndex: 1 }}
+      // P28: covers the gallery from its top, and is as tall as what it
+      // holds when that is taller: covering it exactly (inset 0), a gallery of
+      // a few tiles left the map, legend and value line running out of its
+      // bottom. The pane scrolls to what hangs below.
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        minHeight: "100%",
+        background: "var(--bg, #fff)",
+        padding: ENLARGED_PAD,
+        zIndex: 1,
+      }}
     >
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <strong>{label}</strong>

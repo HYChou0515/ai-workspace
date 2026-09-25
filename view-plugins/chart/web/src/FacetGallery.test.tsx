@@ -617,6 +617,26 @@ describe("FacetGallery", () => {
     expect((screen.getByRole("dialog").querySelector("canvas") as HTMLCanvasElement).style.width).toBe("384px");
   });
 
+  it("grows the enlarged view to its content, however short the gallery under it (P28)", () => {
+    // seen in Chromium at 1440 wide, a two-tile gallery: the view covered the
+    // gallery exactly (inset 0), 432 px tall, and its 443 px of map, legend
+    // and value line ran out of its bottom. It starts where the gallery does,
+    // is at least as tall, and otherwise as tall as what it holds.
+    view();
+    fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
+    const dialog = screen.getByRole("dialog");
+    const { position, top, left, right, bottom, height, minHeight } = dialog.style;
+    expect({ position, top, left, right, bottom, height, minHeight }).toEqual({
+      position: "absolute",
+      top: "0px",
+      left: "0px",
+      right: "0px",
+      bottom: "",
+      height: "",
+      minHeight: "100%",
+    });
+  });
+
   it("draws no legend for a continuous gallery", () => {
     view();
     expect(screen.queryByRole("list", { name: "legend" })).toBeNull();
