@@ -762,7 +762,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     option.yAxis = [axisOption(yAxis, gridCells, "y", lengthIsValue)];
     // containLabel reserves room for tick labels only; the axis names (centred
     // beside their axis, NAME_AT) need their own margin or they are clipped.
-    option.grid = { containLabel: true, left: 48, right: visualMaps.length ? 80 : 16, top: 48, bottom: 32 };
+    // A category legend's names need their own room beside the plot: at the
+    // colour bar's fixed 80 px a long name ran over the plot (#847/#848 P19).
+    // Up to ~8 px a character at 12 px (a browser's "gamma" measured ~43 px),
+    // plus the swatch, its gap and the edge.
+    const names = visualMaps.flatMap((v) => (v.type === "piecewise" ? (v.categories as string[]) : []));
+    const legendRoom = names.length ? 56 + 8 * Math.max(...names.map((n) => n.length)) : 0;
+    option.grid = { containLabel: true, left: 48, right: visualMaps.length ? Math.max(80, legendRoom) : 16, top: 48, bottom: 32 };
   }
   if (legend.length) option.legend = { data: [...new Set(legend)], top: 24, type: "scroll" };
   if (visualMaps.length) option.visualMap = visualMaps.map((v) => ({ right: 8, top: "middle", ...v }));

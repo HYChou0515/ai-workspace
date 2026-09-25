@@ -60,6 +60,26 @@ describe("a grid coloured by categories", () => {
   });
 });
 
+describe("the legend's room", () => {
+  it("starts every level's name right of the plot, however long the name", () => {
+    const long = answer(
+      layer("grid", 2, { x: f64([0, 1]), y: f64([0, 0]), kind: cat(["short", "a-rather-long-level-name"]) }),
+    );
+    const built = toOption(doc, long, { gridImage: () => ({}) as unknown as HTMLCanvasElement });
+    const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width: 700, height: 400 });
+    chart.setOption(built.option, true);
+    const [plotRight] = chart.convertToPixel({ gridIndex: 0 }, [1.5, 0]) as number[];
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    const label = /<text([^>]*)>a-rather-long-level-name<\/text>/.exec(svg)![1];
+    const x = Number(/translate\(([\d.]+) /.exec(label)![1]);
+    // the name ends at x (anchored at its end) and is up to ~8 px a character
+    // at 12 px in a browser's sans-serif
+    expect(label).toContain('text-anchor="end"');
+    expect(x - 8 * "a-rather-long-level-name".length).toBeGreaterThan(plotRight);
+  });
+});
+
 describe("categoryTable", () => {
   it("gives code i the palette's colour i, cycling, and leaves a missing cell clear", () => {
     const t = categoryTable(12);
