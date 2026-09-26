@@ -498,6 +498,20 @@ words are examples, not spec keys.
   | 33 | "each segment's sum" in the summary, the refusals, the doc and the SKILL was false for a stack with its own `aggregate` (a mean) | The words name the op the segment is: "each segment's mean", "… sum" |
 
   Row 29 changes what `validate` accepts and adds a chart note, so round 22 follows.
+  *P42 as built:* row 32 (`_diff` outer-merges; count and sum fill 0 on the missing side
+  in the sides' common type, other ops leave it empty; no-groupby too — CSV and parquet
+  diffs whose sides hold different groups now show the one-sided groups); row 31
+  (`StackParts` carry the value's channel and op into the one-op rule); row 33 (both
+  halves' words name the op); row 30 (XID + NFKC names, keyword arguments, `inf`/`Inf`,
+  triple quotes, numbers from ASCII digits only, index-based lookaround — 1 MB of names
+  10.20 s → 0.18 s); row 29 [user] with the builder's reading [mine, open to override]: an
+  unstacked layer may carry any field (only the data can tell), so the static rule refuses
+  only when every layer is a stack that does not link by it, and `validate` reads the data
+  ("keys: no layer can write '<field>'"); the note reads "the stack links by <slot>,
+  <colour> only (each a sum)", ellipsized at 390; `bad-layer-stack-highlight-values-other-
+  field` was made all-stacks so it stays bad. Demo (1440 and 390, seen): the layered chart
+  keyed by item draws, a box over group b's points marks r07–r12; a `case=False`
+  highlight lights the n segments; a mean stack's refusal says "the mean of its rows".
 - **P43 — What P42's demo showed.** A box over group b's six points and one stack
   segment, on a chart keyed by a field the stack does not link by, said "7 selected · by
   item" while the marking held six items: the segment wrote nothing. Rule: beside "by

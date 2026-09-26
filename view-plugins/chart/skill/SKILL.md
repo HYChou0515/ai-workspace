@@ -64,9 +64,10 @@ The keys to use:
 `mark: <name>`, or `mark: {type: <name>, …}` with `color`, `opacity` (0–1;
 scatter, line, bar, text; an area's fill), `point` and `smooth` (line, area), `stack`
 (bar, area; raw rows add up per slot, no `aggregate: sum` needed: each colour's rows at a slot are summed into one
-segment. A stack links by its slot and colour only: `keys:` may name only those two fields, and `highlight:` may
-read only them and the value, which there is each segment's sum — any other field is refused, since a segment has
-no single value of it; single rows link by any field when not stacked. The value channel is quantitative, and a
+segment. A stack links by its slot and colour only; `highlight:` may also test its value, which is each segment's
+sum (or its own aggregate). In a chart that is only stacks, any other field in `keys:` / `highlight:` is refused,
+since a segment has no single value of it; beside an unstacked layer (e.g. points) it is accepted and only that
+layer writes and lights by it. A tooltip may not aggregate the stack's value field by another op. The value channel is quantitative, and a
 stack is coloured by a category — a quantitative colour is refused), `extent` (errorbar: `stderr` / `stdev` / `iqr`).
 
 | mark | shows | needs |
@@ -135,7 +136,7 @@ transform:
     groupby: [cell_x, cell_y]
   - diff: {by: phase, of: after, minus: before}   # the aggregate where phase is after,
     aggregate: [{op: mean, field: t, as: delta}]  # minus where it is before,
-    groupby: [cell_x, cell_y]                     # per group both sides have
+    groupby: [cell_x, cell_y]                     # per group either side has (count, sum: the missing side is 0)
 ```
 
 ### Facet: one small grid per group

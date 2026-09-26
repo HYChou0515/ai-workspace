@@ -63,12 +63,19 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   加總的每一列原始資料；圖上的「N selected」數的是段數。依數值上色（quantitative color）的疊圖會被拒絕並說明原因：
   分不出哪些列是同一段。某個顏色在某個位置沒有資料時那裡算 0；對數軸上，底下沒有正值的位置留空。想看一列一列的
   值，就不要疊。
-- **疊圖只用位置和顏色連動**：`keys:` 只能寫它的位置欄位與顏色欄位；`highlight:` 只能讀位置、顏色與數值欄位
-  （`where:` 讀到的欄位、`values:` 的欄位都算）。寫了其他欄位（例如一列一列的編號）會被拒絕並說明原因：一段是
-  好幾列的總和，沒有單一的那個欄位值；想一列一列連動，就不要疊。`where:` 讀數值欄位時比的是每一段的總和，
-  `show_file` 的檢查摘要會寫「on a stack, <欄位> is each segment's sum」。疊圖的數值通道必須是 quantitative：
+- **疊圖那一層只用位置和顏色連動**：一段是好幾列的聚合（總和，或數值通道自己的 `aggregate`，例如平均），沒有單一的
+  其他欄位值。只有疊圖的圖，`keys:` 只能寫位置欄位與顏色欄位，`highlight:` 只能讀位置、顏色與數值欄位（`where:`
+  讀到的欄位、`values:` 的欄位都算），寫了其他欄位會被拒絕並說明原因；想一列一列連動，就不要疊。分層的圖裡旁邊
+  有一層沒疊時，這些欄位照常接受：那一層照常寫進 marking、被點亮，疊圖那一層不寫也不亮（框到一段不寫任何東西，
+  marking 用這個欄位時疊圖不變暗），圖上方的說明列與 `show_file` 摘要寫「the stack links by <位置>, <顏色> only
+  (each a sum)」（平均的疊圖寫 mean）。`show_file` 會讀資料：沒有任何一層的列逐列帶著這個欄位時，`keys:` 以
+  「keys: no layer can write '<欄位>'」拒絕，`highlight:` 以「no layer has the columns it names」拒絕。
+  `where:` 讀數值欄位時比的是每一段的聚合值，摘要寫「on a stack, <欄位> is each segment's sum」（或 mean）。
+  `where:` 裡的關鍵字參數（例如 `case=False`）、`inf`、三引號字串都不是欄位。疊圖的數值通道必須是 quantitative：
   時間或類別沒有總和，寫了會被拒絕。parquet 的類別欄位只依實際出現的組合分組，不會多出總和 0 的空組合。
-- 同一層裡同一個欄位只能有一種 `aggregate`：例如 y 用 mean、tooltip 用 max 會被拒絕；兩個都要，就在 transform 的
+- 圖上的「N selected · by <欄位>」數的是寫進 marking 的列：框到疊圖的一段、而那一段不寫東西時，不算進去。
+- 同一層裡同一個欄位只能有一種 `aggregate`（疊圖的數值通道也算，沒寫就是 sum）：例如 y 用 mean、tooltip 用 max 會被
+  拒絕；兩個都要，就在 transform 的
   `aggregate` 各取一個名字（`as:`）。
 - 對數軸上 0 與負值沒有位置，那些點不畫，圖上方的說明列寫「N values at or below 0 not drawn on the log y axis」，
   數的就是沒畫的值，包括 errorbar 的兩端與 boxplot 的五個摘要和離群點。errorbar 某一端沒有位置時，線畫到圖底、
@@ -121,7 +128,8 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - `show_file` 的 `validate` 對 `facet:` 檔案會直接建一次快取（和打開時同一個函式），所以打開時不會再被拒絕，
   也會馬上打開；代價是 `show_file` 要付一次建置時間（在同一個沙盒指令時間上限內）。
 - **疊圖與相減不需要 `facet`**：`transform:` 裡對 lattice 欄位做 `aggregate`，就是把所有群組疊成一張；
-  `diff` 則是兩組相減（見 `SKILL.md` 的 Transforms）。
+  `diff` 則是兩組相減（見 `SKILL.md` 的 Transforms）：只要一邊有的組都保留，count 與 sum 缺的那邊算 0，
+  其他聚合留空。
 - 快取放在沙盒的 `.home/.cache/views/`，不算 workspace 額度、不備份、隨沙盒回收；上限與容量估算見升級手冊
   [#857](migrations.md#pr-857)。`facet:` 的來源必須是表格檔，`{entity: …}` 會被拒絕。
 
