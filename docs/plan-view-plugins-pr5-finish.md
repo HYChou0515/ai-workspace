@@ -559,6 +559,17 @@ words are examples, not spec keys.
   no data check; a chart there writes nothing rather than clearing); a facet cache built
   before row 39 keeps its old summary until rebuilt; a `keys:` column absent from the
   data is still accepted on an unstacked chart.
+- **P45 — Review round 23's findings.**
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 41 | P44 row 37 made out-of-brush the same 0.15 opacity the marking dims to: on a chart lit by another view's marking, a brush that writes nothing no longer showed which rows it holds (4 states became 2) | A marking dims by opacity; a brush that writes nothing marks its outside by colour (desaturated, its lightness kept) — the two stay apart, and a point over a bar stays visible |
+  | 42 | At narrow widths the note collapsed to 0 px beside a long count, so a warning (a log axis's "values ≤ 0 not drawn") vanished | A note never vanishes: at least its ellipsis shows |
+  | 43 | `validate` refused a keyed chart whose rows are none (an empty source, a filter matching nothing yet): "empty on every row" of no rows | Empty is judged over rows that exist: no rows is not an empty key |
+  | 44 | `_signed` widened only unsigned ints: int8/16/32 and float16 still wrapped (127 − (−128) = −1), and a bool max/min crashed validate with a bare TypeError | The difference is taken wide for every integer, bool and narrow float; what cannot be subtracted is a refusal, not a crash |
+  | 45 | A brush that writes nothing on a keyed chart attached to a marking (every key empty) showed no count at all | A selection that writes nothing says "N selected" (P36 row 10), whatever the reason it wrote nothing |
+
+  Row 41 changes a visual encoding, so round 24 follows.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
