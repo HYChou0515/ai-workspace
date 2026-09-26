@@ -67,12 +67,12 @@ words are examples, not spec keys.
   from the view the action was taken in, with its transforms applied before the marking
   lights them.
 
-- **Made while building [mine, open to override]:**
+- **Made while building** (each tagged: [user] the user decided; [mine, open to override] the builder did):
   - (P2) The table a selection is made in is not filtered by it: it keeps every row,
     the marked ones highlighted ("fail marks N of M rows"), so the first click does not
     make the other rows vanish. Every other view on the marking still filters.
-  - (P2) A table decides only about the values it holds: ticking L03 in a 15-lot table
-    does not un-mark L19, which only a 25-lot chart has.
+  - (P2) A table decides only about the values it holds: ticking group G03 in a table of
+    15 groups does not un-mark G19, which only a 25-group chart has.
   - (P2) Members who cannot edit records still get the checkboxes on a marking; marking
     writes no record.
   - (P13) A chart no longer draws its `title:` inside the canvas; the view header right
@@ -150,6 +150,11 @@ words are examples, not spec keys.
     drawn or dimmed point is left as it is (ada832d5).
   - (P41) A stack links by its slot and colour only [user, 2026-09-26]: `keys:` and
     `highlight:` naming other fields are refused with the reason.
+  - (P41) `highlight.values:` may also name a stack's value field; `index` in a `where:`
+    is pandas' row index, not a field; a marking write equal to what the marking holds
+    answers true (it is held); the value-kind line in `_layer_rows` stays, since a slot
+    naming the value field reaches it (3990de02, 7249ca76, 75fec00e) [mine, open to
+    override].
 
 ## Phases
 
@@ -458,7 +463,7 @@ words are examples, not spec keys.
   | 25 | A stack whose value channel is temporal or a category summed nanoseconds / text | A stack's value channel is quantitative; anything else is refused |
   | 26 | Two channels aggregating one field by different ops: the first op won, and the tooltip labelled max showed the mean | One field, one op: two different ops on one field are refused |
   | 27 | `write` returned true when `ifEmpty` found the marking occupied and wrote nothing | The store's set says whether it wrote; `write` returns that |
-  | 28 | The horizontal slot's `ordinal` half and the value kind line were unpinned | The ordinal horizontal case is in the stack corpus (both halves); the value-kind line is removed (row 25 makes it unreachable) |
+  | 28 | The horizontal slot's `ordinal` half and the value kind line were unpinned | The ordinal horizontal case is in the stack corpus (both halves); the value-kind line is pinned (a slot naming the value field reaches it) |
 
   Also: a stack on a log axis sums its negatives into the segment, as a sum does (the
   note counts what the axis leaves out, not what a sum absorbed) — documented, not
@@ -475,11 +480,11 @@ words are examples, not spec keys.
   row 28 (the corpus case, and the corpus test's own oracle, which read only a nominal y as
   horizontal); row 24; row 27 (false only when `ifEmpty` finds the marking occupied; an
   equal write is held and answers true) [mine]. Demo (1440 and 390, seen): a stack keyed
-  by item cleared a table's 2 marked rows before, and shows the refusal after; a box over
+  by item cleared a table's marked rows before (2 at 1440, 1 at 390), and shows the refusal after; a box over
   b·s lights r09–r11 ("3 of 18 rows"); a parquet stack's r·b tooltip "region: —" →
   "region: s"; the horizontal line's lone 5 drawn. Known and left: the stack corpus
   (`wire-corpus/stack-sums.json`) keys its specs by fields `validate` now refuses — the
-  renderer never validates, and the web tests read those keys to show a summed field
+  corpus feeds `toOption` and `query.build`, neither of which validates, and the web tests read those keys to show a summed field
   writes no key; the `where:` lexer approximates a column named like a function.
 - **P42 — Review round 21's findings.** **Decision [user, 2026-09-26]: in a layered
   chart, the stack rule limits the stack layer only.**

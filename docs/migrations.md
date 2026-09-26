@@ -985,8 +985,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     **只有部署過這個分支較早的 build** 的環境，才會看到舊 bundle 的訊息：打開 chart，面板顯示
     `argument must be {'spec': <string>}`；打開縮圖牆顯示 `facet_build takes exactly ['spec'] (and an optional epoch)`；
     按「Save as table」得到 `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯；`stack: true` 的圖在同一個位置、
-    同一個顏色有多列時只畫出其中一列、疊出的高度少算（加總改在沙盒做了，舊 bundle 不加）；計數用的圓餅圖把計數值當成
-    key 寫進 marking（舊 bundle 的回應沒有告訴前端哪些欄位是聚合出來的）。
+    同一個顏色有多列時只畫出其中一列、疊出的高度少算（加總改在沙盒做了，舊 bundle 不加）；計數用的圓餅圖在 `keys:` 含被計數的欄位時，
+    把計數值當成 key 寫進 marking（舊 bundle 的回應沒有告訴前端哪些欄位是聚合出來的）。
 - **`sandbox.kind: local` 掛自己 plugin 目錄的部署**，`rollout 前`把 `chart` **與 `csv-table`** 用這一版重新
   `view_plugin build` 進那個目錄（做法同上）。
   - 為什麼：chart 的 `plugin.json` 多了 `provides` 與兩行 views，沙盒 bundle 多了指令；csv-table 的前端改成會接 marking，
