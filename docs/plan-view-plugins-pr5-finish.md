@@ -518,6 +518,18 @@ words are examples, not spec keys.
   <columns>" the count is what went to the marking — the rows of the layers that name a
   key (`markedCount`); a selection that went nowhere keeps counting every row picked
   (P36 row 10).
+- **P44 — Review round 22's findings, and what P43's demo showed.** All local; none
+  replaces a mechanism.
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 34 | The `where:` lexer read the words after a `#` as columns (pandas ignores a comment), kept a backtick name un-normalised and tested `inf`/`index` before NFKC (pandas reads `ｉｎｆ` as `inf`); the TS name class had no case separating it from the old one (`a·b`, `x℘`) | A comment ends the expression; every name — bare or backticked — is read in its NFKC form before it is judged; the corpus holds cases pandas separates, so both halves' name rules are pinned by pandas |
+  | 35 | A key column that is empty on every row was accepted, and a brush over such rows wrote `{}` (clearing every linked view); the count beside "by" counted rows with no key value | A key no row holds a value of is no key: `validate` requires one, a selection drops a key it found no value of, and the count is of rows that gave a key a value |
+  | 36 | At 390 the note and the count share a line and the count was cut ("6 selected · …"), hiding "by item" | The count is never cut: it comes first and the note yields |
+  | 37 | Out of a brush that writes nothing, marks turn `#ddd`: a scatter over grey bars vanished | Out of such a brush a mark keeps its colour at the dimmed opacity, as a marking's dimming does |
+  | 38 | `diff` subtracted unsigned sums in their own dtype and wrapped (0 − 7 = 4294967289); min/max alike | The difference is taken in a signed type |
+  | 39 | A facet's summary said "f 0" ("nanf 0") for a colour column with no value | A column with no value is said so |
+  | 40 | The schema's `stackValueChannel` message still said "a stack sums its rows" for a stack whose own aggregate is a mean | The message names what the stack does with its rows, as row 33's words do |
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
