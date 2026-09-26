@@ -41,9 +41,10 @@ function textEnd(expr: string, i: number): number {
 /** The columns a `where:` expression reads, as pandas reads them: each name
  * that is not a Python word, one of pandas' globals (`inf`), an attribute
  * (`.isin`), a function called (`abs(`), a keyword argument (`case=`), a
- * local (`@limit`) or the prefix of a text (`r'...'`), in its NFKC form as
- * Python reads a name; inside backticks, the text between them. Texts in
- * quotes, triple quotes too, are skipped. One pass, looking around each name
+ * local (`@limit`) or the prefix of a text (`r'...'`); inside backticks, the
+ * text between them. Every name is judged in its NFKC form, as Python reads a
+ * name (`ｉｎｆ` is `inf`). Texts in quotes, triple quotes too, are skipped,
+ * and a comment (`#`) ends the expression. One pass, looking around each name
  * by index, so it takes time in proportion to `expr`. Held to pandas itself
  * by `wire-corpus/where-names.json`. */
 export function whereNames(expr: string): string[] {
@@ -54,10 +55,13 @@ export function whereNames(expr: string): string[] {
     const ch = expr[i]!;
     if (ch === "'" || ch === '"') {
       i = textEnd(expr, i);
+    } else if (ch === "#") {
+      // a comment ends the expression
+      break;
     } else if (ch === "`") {
       const end = expr.indexOf("`", i + 1);
       if (end < 0) break;
-      names.push(expr.slice(i + 1, end));
+      names.push(expr.slice(i + 1, end).normalize("NFKC"));
       i = end + 1;
     } else if (DIGIT.test(ch)) {
       // (a leading dot is skipped, then its digits read)
@@ -71,7 +75,7 @@ export function whereNames(expr: string): string[] {
         i += 1;
         continue;
       }
-      const word = name[0];
+      const word = name[0].normalize("NFKC");
       const start = i;
       i = NAME.lastIndex;
       let b = start - 1;
@@ -91,7 +95,7 @@ export function whereNames(expr: string): string[] {
       ) {
         continue;
       }
-      names.push(word.normalize("NFKC"));
+      names.push(word);
     }
   }
   return [...new Set(names)];

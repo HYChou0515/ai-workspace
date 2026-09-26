@@ -56,9 +56,10 @@ def where_names(expr: str) -> list[str]:
     """The columns a `where:` expression reads, as pandas reads them: each
     name that is not a Python word, one of pandas' globals (`inf`), an
     attribute (`.isin`), a function called (`abs(`), a keyword argument
-    (`case=`), a local (`@limit`) or the prefix of a text (`r'...'`), in its
-    NFKC form as Python reads a name; inside backticks, the text between
-    them. Texts in quotes, triple quotes too, are skipped. One pass, looking
+    (`case=`), a local (`@limit`) or the prefix of a text (`r'...'`); inside
+    backticks, the text between them. Every name is judged in its NFKC form,
+    as Python reads a name (`ｉｎｆ` is `inf`). Texts in quotes, triple quotes
+    too, are skipped, and a comment (`#`) ends the expression. One pass, looking
     around each name by index, so it takes time in proportion to `expr`.
     Held to pandas itself by `wire-corpus/where-names.json`."""
     names: list[str] = []
@@ -67,11 +68,13 @@ def where_names(expr: str) -> list[str]:
         ch = expr[i]
         if ch in "'\"":
             i = _text_end(expr, i)
+        elif ch == "#":  # a comment ends the expression
+            break
         elif ch == "`":
             end = expr.find("`", i + 1)
             if end < 0:
                 break
-            names.append(expr[i + 1 : end])
+            names.append(unicodedata.normalize("NFKC", expr[i + 1 : end]))
             i = end + 1
         elif "0" <= ch <= "9":  # (a leading dot is skipped, then its digits read)
             number = _NUMBER.match(expr, i)
@@ -79,7 +82,7 @@ def where_names(expr: str) -> list[str]:
             i = number.end()
         elif ch.isidentifier():  # (a letter or `_`)
             start, i = i, _name_end(expr, i + 1)
-            word = expr[start:i]
+            word = unicodedata.normalize("NFKC", expr[start:i])
             b = start - 1
             while b >= 0 and expr[b].isspace():
                 b -= 1
@@ -95,7 +98,7 @@ def where_names(expr: str) -> list[str]:
                 or (expr[i : i + 1] in ("'", '"') and _TEXT_PREFIX.fullmatch(word))
             ):
                 continue
-            names.append(unicodedata.normalize("NFKC", word))
+            names.append(word)
         else:
             i += 1
     return list(dict.fromkeys(names))

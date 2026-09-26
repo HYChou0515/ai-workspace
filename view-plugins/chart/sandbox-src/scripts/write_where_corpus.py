@@ -83,6 +83,19 @@ CASES: list[tuple[str, dict[str, list[Any]]]] = [
     ("น้ำหนัก > 1", {unicodedata.normalize("NFKC", "น้ำหนัก"): NUM}),  # ำ is ํ + า
     (unicodedata.normalize("NFD", "café > 1"), {"café": NUM}),
     ("ﬁle > 1", {"file": NUM}),
+    # P44 row 34: Python's identifier characters beyond letters and marks --
+    # U+00B7 continues a name, U+2118 is a letter to Python though not to
+    # Unicode's categories
+    ("a·b > 1", {"a·b": NUM, "a": NUM, "b": NUM}),
+    ("x℘ > 1", {"x℘": NUM, "x": NUM}),
+    # a comment ends the expression; a `#` inside a text is text
+    ("value > 1 # comment x", {"value": NUM, "comment": NUM, "x": NUM}),
+    ("item == 'a # b' and value > 1 # c", {"item": TEXT, "value": NUM, "b": NUM, "c": NUM}),
+    # every name is judged in its NFKC form, a backticked one too
+    ("`ℌx` > 1", {"Hx": NUM, "ℌx": NUM}),
+    ("value < ｉｎｆ", {"value": NUM, "inf": NUM, "ｉｎｆ": NUM}),
+    ("value < ｉｎｄｅｘ", {"value": NUM, "index": NUM, "ｉｎｄｅｘ": NUM}),
+    ("flag == Ｔｒｕｅ", {"flag": FLAG, "True": FLAG, "Ｔｒｕｅ": FLAG}),
 ]
 
 

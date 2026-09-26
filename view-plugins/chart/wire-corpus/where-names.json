@@ -248,6 +248,55 @@
    "columns": [
     "file"
    ]
+  },
+  {
+   "where": "a·b > 1",
+   "columns": [
+    "a·b"
+   ]
+  },
+  {
+   "where": "x℘ > 1",
+   "columns": [
+    "x℘"
+   ]
+  },
+  {
+   "where": "value > 1 # comment x",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "item == 'a # b' and value > 1 # c",
+   "columns": [
+    "item",
+    "value"
+   ]
+  },
+  {
+   "where": "`ℌx` > 1",
+   "columns": [
+    "Hx"
+   ]
+  },
+  {
+   "where": "value < ｉｎｆ",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "value < ｉｎｄｅｘ",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "flag == Ｔｒｕｅ",
+   "columns": [
+    "flag"
+   ]
   }
  ]
 }
