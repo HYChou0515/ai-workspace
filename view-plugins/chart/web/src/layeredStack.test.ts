@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isLit } from "../../../../web/src/lib/markings";
-import { markingLit, selectionMarking } from "./marking";
+import { markedCount, markingLit, selectionMarking } from "./marking";
 import { measuredFields, toOption } from "./option";
 import { stackCase } from "./stackCorpus";
 import { answer, cat, f64, layer } from "./testAnswer";
@@ -82,6 +82,23 @@ describe("a stack beside an unstacked layer (P42 row 29)", () => {
     ];
     const wrote = selectionMarking(mixed, both, ["region"], measured);
     expect(Object.fromEntries(Object.entries(wrote ?? {}).map(([k, v]) => [k, [...v]]))).toEqual({ region: ["s"] });
+  });
+
+  // P43: the demo's box over group b's points and a segment said "7 selected ·
+  // by item" while the marking held 6 items: the segment wrote nothing. What
+  // is counted beside "by <columns>" is what went to the marking (P36 row 10).
+  it("counts, of a selection over both layers, only the rows that went to the marking", () => {
+    const measured = measuredFields(both);
+    const mixed = [
+      { source: "brush" as const, layer: 0, rows: [0, 1, 2] },
+      { source: "brush" as const, layer: 1, rows: [2, 4] },
+    ];
+    expect(markedCount(mixed, both, ["region"], measured)).toBe(2);
+  });
+
+  it("(control) counts every row when every selected layer writes", () => {
+    const measured = measuredFields(both);
+    expect(markedCount([{ source: "brush", layer: 1, rows: [0, 1, 2] }], both, ["region"], measured)).toBe(3);
   });
 
   it("writes nothing from a selection over the stack alone", () => {

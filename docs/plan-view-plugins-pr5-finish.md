@@ -498,6 +498,12 @@ words are examples, not spec keys.
   | 33 | "each segment's sum" in the summary, the refusals, the doc and the SKILL was false for a stack with its own `aggregate` (a mean) | The words name the op the segment is: "each segment's mean", "… sum" |
 
   Row 29 changes what `validate` accepts and adds a chart note, so round 22 follows.
+- **P43 — What P42's demo showed.** A box over group b's six points and one stack
+  segment, on a chart keyed by a field the stack does not link by, said "7 selected · by
+  item" while the marking held six items: the segment wrote nothing. Rule: beside "by
+  <columns>" the count is what went to the marking — the rows of the layers that name a
+  key (`markedCount`); a selection that went nowhere keeps counting every row picked
+  (P36 row 10).
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third

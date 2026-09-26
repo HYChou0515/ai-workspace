@@ -115,6 +115,22 @@ export function selectionMarking(
   return toMarking(named);
 }
 
+/** How many of a selection's rows went to the marking: those of the layers
+ * that name a key (#847/#848 PR 5 P43). A stack beside an unstacked layer
+ * writes nothing for a field it does not link by (P42 row 29), so counting its
+ * segment beside "by <columns>" said "7 selected · by item" for 6 items. */
+export function markedCount(
+  selections: readonly Selection[],
+  answer: Answer,
+  keys: string[],
+  measured: Measured,
+): number {
+  return selections.reduce(
+    (n, s) => n + (Object.keys(selectionValues(s, answer, keys, measured)).length > 0 ? s.rows.length : 0),
+    0,
+  );
+}
+
 /** The spec's `highlight:` as a marking — what seeds an empty marking on open,
  * resolved by the sandbox exactly as PR 2 draws it. null when no layer carries
  * a highlight, or the view has no `keys:`. */
