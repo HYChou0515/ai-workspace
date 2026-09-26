@@ -31,6 +31,8 @@ from jsonschema.exceptions import ValidationError, best_match
 from jsonschema.protocols import Validator
 from yaml.constructor import ConstructorError
 
+from chart_view.rules import rule_errors
+
 _NULL = re.compile(r"^(?:~|null|Null|NULL|)$")
 _BOOL = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
 _INT = re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$")
@@ -206,7 +208,9 @@ def _explain(error: ValidationError) -> ValidationError:
 
 
 def spec_errors(doc: Any) -> list[str]:
-    """Every way `doc` breaks the schema, one line each; empty means valid."""
+    """Every way `doc` breaks the schema, one line each; empty means valid.
+    A document the schema accepts is then held to the rules it cannot state
+    (`chart_view.rules`)."""
     lines: list[str] = []
     for error in sorted(_validator().iter_errors(doc), key=lambda e: list(e.absolute_path)):
         shown = _explain(error)
@@ -217,4 +221,4 @@ def spec_errors(doc: Any) -> list[str]:
             lines.append(f"{_where(shown)}: {stated}")
         else:
             lines.append(f"{_where(shown)}: {shown.instance!r} — expected {stated}")
-    return lines
+    return lines or rule_errors(doc)

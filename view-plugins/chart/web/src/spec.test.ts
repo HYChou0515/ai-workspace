@@ -164,4 +164,46 @@ describe("messages", () => {
   ])("does not refuse %s over x %s, y %s", (mark, x, y) => {
     expect(verdict(stack(mark, x, y))).toEqual([]);
   });
+
+  // #847/#848 PR 5 P41 row 26: a layer aggregates a field once (the first op
+  // won), and a tooltip labelled max showed the mean. test_spec_messages.py
+  // reads the same.
+  const twoOps = (y: string, tip: string) =>
+    `${base}mark: bar\nencoding:\n  x: {field: item, type: nominal}\n  y: {field: value, type: quantitative${y}}\n` +
+    `  tooltip:\n    - {field: item, type: nominal}\n    - {field: value, type: quantitative${tip}}\n`;
+
+  it("refuses one field aggregated two ways, saying why", () => {
+    expect(verdict(twoOps(", aggregate: mean", ", aggregate: max"))).toEqual([
+      "encoding.tooltip[1]: 'value' is aggregated as mean on y — a field has one " +
+        "aggregate in a layer, so max here would show the mean: use mean here too, " +
+        "or compute both in a transform aggregate, each under its own name (as:)",
+    ]);
+  });
+
+  it("refuses it on a single tooltip", () => {
+    const text =
+      `${base}mark: bar\nencoding:\n  x: {field: item, type: nominal}\n` +
+      "  y: {field: value, type: quantitative, aggregate: mean}\n" +
+      "  tooltip: {field: value, type: quantitative, aggregate: max}\n";
+    const [line] = verdict(text);
+    expect(line).toMatch(/^encoding\.tooltip: 'value' is aggregated as mean on y — /);
+  });
+
+  it("refuses it in a layer too", () => {
+    const layered =
+      `${base}layer:\n  - mark: line\n    encoding:\n      x: {field: item, type: nominal}\n` +
+      "      y: {field: value, type: quantitative, aggregate: sum}\n" +
+      "      size: {field: value, type: quantitative, aggregate: count}\n";
+    const [line] = verdict(layered);
+    expect(line).toMatch(/^layer\[0\]\.encoding\.size: 'value' is aggregated as sum on y — /);
+  });
+
+  it.each([
+    [", aggregate: mean", ", aggregate: mean"],
+    [", aggregate: mean", ""],
+    ["", ", aggregate: max"],
+    ["", ""],
+  ])("does not refuse one field aggregated one way (y%s, tooltip%s)", (y, tip) => {
+    expect(verdict(twoOps(y, tip))).toEqual([]);
+  });
 });

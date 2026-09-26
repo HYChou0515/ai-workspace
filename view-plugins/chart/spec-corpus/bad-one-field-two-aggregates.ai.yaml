@@ -1,0 +1,8 @@
+view: chart
+source: data/a.csv
+mark: line
+encoding:
+  x: {field: item, type: nominal}
+  y: {field: value, type: quantitative, aggregate: mean}
+  tooltip:
+    - {field: value, type: quantitative, aggregate: max}

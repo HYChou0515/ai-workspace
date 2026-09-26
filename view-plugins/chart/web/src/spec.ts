@@ -11,6 +11,7 @@ import Ajv2020, { type ErrorObject } from "ajv/dist/2020";
 import ajvErrors from "ajv-errors";
 
 import schema from "../../sandbox-src/src/chart_view/spec.schema.json";
+import { ruleErrors } from "./rules";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true, strictTypes: false, strictRequired: false });
 ajvErrors(ajv);
@@ -25,9 +26,11 @@ function where(e: ErrorObject): string {
   return path.replace(/^\./, "") || "(top level)";
 }
 
-/** Every way `doc` breaks the schema, one line each; empty means valid. */
+/** Every way `doc` breaks the schema, one line each; empty means valid. A
+ * document the schema accepts is then held to the rules it cannot state
+ * (`rules.ts`). */
 export function specErrors(doc: unknown): string[] {
-  if (validate(doc)) return [];
+  if (validate(doc)) return ruleErrors(doc);
   const all = validate.errors ?? [];
   // A stated sentence speaks for every error under the schema that states it.
   const stated = all.filter((e) => e.keyword === "errorMessage").map((e) => e.schemaPath.replace(/errorMessage$/, ""));

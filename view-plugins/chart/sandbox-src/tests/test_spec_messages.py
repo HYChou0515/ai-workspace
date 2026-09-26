@@ -216,6 +216,56 @@ def test_a_layer_stack_whose_value_is_a_time_says_why():
     assert _errors(layered) == [f"layer[0].encoding.y: {STACK_VALUE}"]
 
 
+def _two_ops(y: str, tip: str) -> str:
+    return (
+        BASE + "mark: bar\nencoding:\n  x: {field: item, type: nominal}\n"
+        f"  y: {{field: value, type: quantitative{y}}}\n"
+        f"  tooltip:\n    - {{field: item, type: nominal}}\n"
+        f"    - {{field: value, type: quantitative{tip}}}\n"
+    )
+
+
+def test_one_field_aggregated_two_ways_is_refused():
+    # #847/#848 PR 5 P41 row 26: a layer aggregates a field once (`_measures`:
+    # the first op wins), and a tooltip labelled max showed the mean. The
+    # renderer's spec.test.ts reads the same.
+    assert _errors(_two_ops(", aggregate: mean", ", aggregate: max")) == [
+        "encoding.tooltip[1]: 'value' is aggregated as mean on y — a field has one "
+        "aggregate in a layer, so max here would show the mean: use mean here too, "
+        "or compute both in a transform aggregate, each under its own name (as:)"
+    ]
+
+
+def test_one_field_aggregated_two_ways_by_a_single_tooltip_is_refused():
+    text = BASE + (
+        "mark: bar\nencoding:\n  x: {field: item, type: nominal}\n"
+        "  y: {field: value, type: quantitative, aggregate: mean}\n"
+        "  tooltip: {field: value, type: quantitative, aggregate: max}\n"
+    )
+    [line] = _errors(text)
+    assert line.startswith("encoding.tooltip: 'value' is aggregated as mean on y — ")
+
+
+def test_one_field_aggregated_two_ways_in_a_layer_is_refused():
+    layered = BASE + (
+        "layer:\n  - mark: line\n    encoding:\n      x: {field: item, type: nominal}\n"
+        "      y: {field: value, type: quantitative, aggregate: sum}\n"
+        "      size: {field: value, type: quantitative, aggregate: count}\n"
+    )
+    [line] = _errors(layered)
+    assert line.startswith("layer[0].encoding.size: 'value' is aggregated as sum on y — ")
+
+
+def test_one_field_aggregated_one_way_is_not_refused():
+    for y, tip in [
+        (", aggregate: mean", ", aggregate: mean"),
+        (", aggregate: mean", ""),
+        ("", ", aggregate: max"),
+        ("", ""),
+    ]:
+        assert _errors(_two_ops(y, tip)) == [], (y, tip)
+
+
 def test_a_stack_whose_value_is_a_number_or_no_stack_is_not_refused():
     for mark, x, y in [
         ("{type: bar, stack: true}", "nominal", "quantitative"),
