@@ -115,11 +115,27 @@ def _beside_stacks(spec: Mapping[str, Any], layers: list[LayerRows]) -> tuple[li
             f"keys: no layer can write '{k}' — {note}, and no other layer has '{k}' row by row"
             for k in other.keys
             if not any(
-                k in ly.rows.columns and k not in ly.measured and not binned(spec, ly)
+                k in ly.rows.columns
+                and k not in ly.measured
+                and not binned(spec, ly)
+                and ly.rows[k].notna().any()
                 for ly in layers
             )
         ]
     return list(dict.fromkeys(notes)), list(dict.fromkeys(errors))
+
+
+def _empty_keys(spec: Mapping[str, Any], layers: list[LayerRows]) -> list[str]:
+    """A key no row holds a value of is no key (#847/#848 PR 5 P44 row 35): a
+    brush over its rows would name no key, and a marking by it lights nothing.
+    Judged where a layer has the column; a key no layer has is left to the
+    other checks."""
+    return [
+        f"keys: '{k}' is empty on every row — a key with no value links nothing"
+        for k in spec.get("keys", [])
+        if any(k in ly.rows.columns for ly in layers)
+        and not any(ly.rows[k].notna().any() for ly in layers if k in ly.rows.columns)
+    ]
 
 
 BuildFacet = Callable[[str], Mapping[str, Any]]
@@ -174,6 +190,7 @@ def check(text: str, read_source: ReadSource, build_facet: BuildFacet = _build_f
         return Result(errors=errors)
 
     notes, errors = _beside_stacks(spec, layers)
+    errors = errors or _empty_keys(spec, layers)
     if errors:
         return Result(errors=errors)
 

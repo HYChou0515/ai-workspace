@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isLit, markedBy as hostMarkedBy, MarkingStore } from "../../../../web/src/lib/markings";
-import { highlightMarking, markedBy, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
+import { highlightMarking, markedBy, markedCount, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
 import { measuredFields } from "./option";
 import { answer, cat, f64, layer, time } from "./testAnswer";
 
@@ -162,6 +162,41 @@ describe("a selection that can name no key marks nothing (#847/#848 PR 5 P41 row
       { source: "brush" as const, layer: 1, rows: [0] },
     ];
     expect(Object.fromEntries(Object.entries(selectionMarking(sel, two, ["id"], [])!).map(([k, v]) => [k, [...v]]))).toEqual({ id: ["r1"] });
+  });
+});
+
+describe("a key no selected row holds a value of (#847/#848 PR 5 P44 row 35)", () => {
+  // Review round 22: a brush over rows whose key is empty kept the key with no
+  // values, so the selection counted as naming it and wrote `{}` -- the write
+  // that clears every linked view -- and the count beside "by item" counted
+  // rows that gave the key nothing ("3 selected · by item" for one item).
+  const E = answer(
+    layer("scatter", 3, { x: f64([1, 2, 3]), item: cat([null, null, "r01"]), group: cat(["a", null, null]) }),
+  );
+  const values = (m: MarkingValues | null) => (m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, [...v]])) : m);
+
+  it("marks nothing from rows with no key value", () => {
+    expect(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item"], [])).toBeNull();
+  });
+
+  it("writes the values the rows hold", () => {
+    expect(values(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item"], []))).toEqual({ item: ["r01"] });
+  });
+
+  it("drops a key it found no value of, keeping the others", () => {
+    expect(values(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item", "group"], []))).toEqual({ group: ["a"] });
+  });
+
+  it("counts the rows that gave a key a value", () => {
+    expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item"], [])).toBe(1);
+    expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item", "group"], [])).toBe(2);
+    expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item"], [])).toBe(0);
+  });
+
+  it("counts no row by a column a channel aggregates, as it writes none", () => {
+    const sums = answer(layer("bar", 2, { item: cat(["p", "q"]), value: f64([7, 13]) }));
+    expect(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], sums, ["value"], [new Set(["value"])])).toBeNull();
+    expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1] }], sums, ["value"], [new Set(["value"])])).toBe(0);
   });
 });
 

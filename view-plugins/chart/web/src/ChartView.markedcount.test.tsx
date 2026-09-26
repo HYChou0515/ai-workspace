@@ -77,11 +77,11 @@ const DOC = {
   ],
 };
 
-function mount(store: MarkingStore) {
-  sdk.useSandboxRun.mockReturnValue({ data: { stdout: JSON.stringify(BOTH), stderr: "", exit_code: 0 }, error: null, isLoading: false, refetch: vi.fn() });
+function mount(store: MarkingStore, data: Answer = BOTH, doc: unknown = DOC) {
+  sdk.useSandboxRun.mockReturnValue({ data: { stdout: JSON.stringify(data), stderr: "", exit_code: 0 }, error: null, isLoading: false, refetch: vi.fn() });
   render(
     <MarkingProvider store={store}>
-      <ChartView spec={{ __doc: DOC } as never} marking="m" path="/v/a.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />
+      <ChartView spec={{ __doc: doc } as never} marking="m" path="/v/a.ai.yaml" type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} />
     </MarkingProvider>,
   );
   return made.charts.at(-1)!;
@@ -104,5 +104,29 @@ describe("the count beside 'by <columns>' (P43)", () => {
     await settle();
     expect([...(store.get("m")?.marking.region ?? [])].sort()).toEqual(["n", "s"]);
     expect(screen.queryByText(/selected/)?.textContent).toBe("8 selected · by region");
+  });
+});
+
+// P44 row 35: rows that give the key no value mark nothing and are not counted
+// beside "by item" (review round 22's repro: items [null, null, r01] marked
+// {item: [r01]} and said "3 selected · by item").
+const SPARSE: Answer = answer(layer("scatter", 3, { x: f64([1, 2, 3]), value: f64([1, 2, 3]), item: cat([null, null, "r01"]) }));
+const SPARSE_DOC = {
+  view: "chart",
+  source: "data/a.csv",
+  keys: ["item"],
+  mark: "scatter",
+  encoding: { x: { field: "x", type: "quantitative" }, y: { field: "value", type: "quantitative" } },
+};
+
+describe("rows with no key value (P44 row 35)", () => {
+  it("counts only the rows that gave the key a value", async () => {
+    const store = new MarkingStore();
+    const chart = mount(store, SPARSE, SPARSE_DOC);
+    await settle();
+    act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
+    await settle();
+    expect([...(store.get("m")?.marking.item ?? [])]).toEqual(["r01"]);
+    expect(screen.queryByText(/selected/)?.textContent).toBe("1 selected · by item");
   });
 });

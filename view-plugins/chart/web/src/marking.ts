@@ -115,20 +115,23 @@ export function selectionMarking(
   return toMarking(named);
 }
 
-/** How many of a selection's rows went to the marking: those of the layers
- * that name a key (#847/#848 PR 5 P43). A stack beside an unstacked layer
- * writes nothing for a field it does not link by (P42 row 29), so counting its
- * segment beside "by <columns>" said "7 selected · by item" for 6 items. */
+/** How many of a selection's rows went to the marking: the rows that gave a
+ * key a value (#847/#848 PR 5 P43, P44 row 35). A stack beside an unstacked
+ * layer writes nothing for a field it does not link by (P42 row 29), so
+ * counting its segment beside "by <columns>" said "7 selected · by item" for
+ * 6 items; a row whose keys are all empty writes nothing either. */
 export function markedCount(
   selections: readonly Selection[],
   answer: Answer,
   keys: string[],
   measured: Measured,
 ): number {
-  return selections.reduce(
-    (n, s) => n + (Object.keys(selectionValues(s, answer, keys, measured)).length > 0 ? s.rows.length : 0),
-    0,
-  );
+  let n = 0;
+  for (const s of selections) {
+    const cols = keys.flatMap((k) => keyColumn(answer.layers[s.layer], k, measured[s.layer] ?? NONE_MEASURED) ?? []);
+    for (const r of s.rows) if (cols.some((col) => canon(col.value(r)) !== null)) n += 1;
+  }
+  return n;
 }
 
 /** The spec's `highlight:` as a marking — what seeds an empty marking on open,

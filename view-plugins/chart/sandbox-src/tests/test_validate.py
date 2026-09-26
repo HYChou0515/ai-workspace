@@ -264,3 +264,30 @@ def test_a_row_field_only_a_binned_layer_has_is_refused():
         f"keys: no layer can write 'item' — {SUM_NOTE.replace('group', 'at')}, and no other "
         "layer has 'item' row by row"
     ]
+
+
+# #847/#848 PR 5 P44 row 35: a key no row holds a value of is no key -- a
+# brush over such rows would name no key, and a marking by it lights nothing.
+EMPTY_KEY = "keys: 'item' is empty on every row — a key with no value links nothing"
+
+
+@pytest.mark.parametrize("empty", [None, float("nan")])
+def test_a_key_empty_on_every_row_is_refused(empty):
+    rows = WAFERS.assign(item=[empty] * 5)
+    assert check(SCATTER + "keys: [item]\n", lambda _: rows).errors == [EMPTY_KEY]
+    # one value is enough
+    held = WAFERS.assign(item=[empty] * 4 + ["r5"])
+    assert check(SCATTER + "keys: [item]\n", lambda _: held).errors == []
+
+
+def test_a_key_no_layer_has_is_not_called_empty():
+    # only a column that is there can be empty; a key no layer has is left
+    # to the other checks (a stack's), as before
+    assert check(SCATTER + "keys: [item]\n", _read).errors == []
+
+
+def test_a_layered_stack_keyed_by_a_field_empty_on_every_row_is_refused():
+    rows = ROWS.assign(item=[None] * 6)
+    assert check(LAYERED + "keys: [item]\n", lambda _: rows).errors == [
+        f"keys: no layer can write 'item' — {SUM_NOTE}, and no other layer has 'item' row by row"
+    ]

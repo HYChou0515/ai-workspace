@@ -157,7 +157,10 @@ export function keyColumn(layer: WireLayer | undefined, key: string, measured: R
 
 const NONE_MEASURED: ReadonlySet<string> = new Set();
 
-/** The `keys:` columns' values over the selected rows — what a marking holds. */
+/** The `keys:` columns' values over the selected rows — what a marking holds.
+ * A key none of the rows gives a value is left out (#847/#848 PR 5 P44 row
+ * 35): a key with no values names nothing, so a selection over such rows marks
+ * nothing rather than writing the `{}` that clears every linked view. */
 export function selectionValues(sel: Selection, answer: Answer, keys: string[], measured: Measured): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const key of keys) {
@@ -168,7 +171,7 @@ export function selectionValues(sel: Selection, answer: Answer, keys: string[], 
       const text = canon(col.value(r));
       if (text !== null) seen.add(text);
     }
-    out[key] = [...seen];
+    if (seen.size > 0) out[key] = [...seen];
   }
   return out;
 }
