@@ -133,7 +133,7 @@ describe("drawing callbacks", () => {
     const values = [0, 1, 3];
     const drawn = (s.renderItem as (p: unknown, api: unknown) => { children: { shape: unknown }[] })(
       {},
-      { coord, value: (d: number) => values[d], style: () => ({}) },
+      { coord, value: (d: number) => values[d], visual: () => "#555" },
     );
     expect(drawn.children.map((c) => c.shape)).toEqual([
       { x1: 0, y1: 90, x2: 0, y2: 70 },

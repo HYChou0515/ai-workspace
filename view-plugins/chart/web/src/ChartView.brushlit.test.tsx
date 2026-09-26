@@ -16,6 +16,10 @@ import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
 import { MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { answer, cat, f64, layer } from "./testAnswer";
+import { desaturated, sameColour } from "./testDrawn";
+
+/** The one series' palette colour. */
+const OWN = "#5470c6";
 
 const sdk = vi.hoisted(() => ({
   useSandboxRun: vi.fn(),
@@ -91,9 +95,10 @@ function styles(chart: echarts.ECharts): { fill?: string; opacity?: number }[] {
   });
 }
 
-/** Per row (the one series' points), how the chart draws it: "grey" is
- * ECharts' default out-of-brush colour, which no mark is drawn in any more
- * (P44 row 37); out of a brush that writes nothing a mark is "dim". */
+/** Per row (the one series' points), how the chart draws it: "lit" or
+ * "dim" by the marking (its opacity), "·out" when out of a brush that writes
+ * nothing (its colour desaturated, P45 row 41). "grey" is ECharts' default
+ * out-of-brush colour, which no mark is drawn in any more (P44 row 37). */
 function drawn(chart: echarts.ECharts): string[] {
   type Data = { count(): number; getItemVisual(i: number, k: "style"): { fill?: string; opacity?: number } };
   const model = (chart as unknown as { getModel(): { getSeriesByIndex(i: number): { getData(): Data } } }).getModel();
@@ -101,7 +106,9 @@ function drawn(chart: echarts.ECharts): string[] {
   return Array.from({ length: data.count() }, (_, i) => {
     const style = data.getItemVisual(i, "style");
     if (style.fill === "#ddd") return "grey";
-    return style.opacity === DIM_OPACITY ? "dim" : "lit";
+    const state = style.opacity === DIM_OPACITY ? "dim" : "lit";
+    if (sameColour(style.fill!, OWN)) return state;
+    return desaturated(style.fill!, OWN) ? `${state}·out` : `${state} in ${style.fill}`;
   });
 }
 
@@ -148,7 +155,7 @@ describe("the chart a selection is made in", () => {
   it("on no marking keeps showing its own brush selection", async () => {
     const { chart } = mount(new MarkingStore(), null);
     await brush(chart);
-    expect(drawn(chart)).toEqual(["lit", "dim", "dim", "lit", "dim"]);
+    expect(drawn(chart)).toEqual(["lit", "lit·out", "lit·out", "lit", "lit·out"]);
   });
 
   it("on a marking it cannot write (no `keys:`) keeps showing its own brush selection", async () => {
@@ -156,21 +163,23 @@ describe("the chart a selection is made in", () => {
     const { chart } = mount(store, "m", { ...DOC, keys: undefined });
     await brush(chart);
     expect(store.get("m")).toBeUndefined();
-    expect(drawn(chart)).toEqual(["lit", "dim", "dim", "lit", "dim"]);
+    expect(drawn(chart)).toEqual(["lit", "lit·out", "lit·out", "lit", "lit·out"]);
   });
 
   // P44 row 37: out of a brush that writes nothing, ECharts' default visual
   // painted every mark #ddd -- in P43's demo a scatter over grey bars vanished.
-  // A mark out of the brush keeps its own colour, dimmed as a marking dims.
-  it("dims a mark out of a brush that writes nothing in its own colour", async () => {
+  // P45 row 41: a mark out of the brush keeps its lightness and opacity and
+  // loses its colour; dimming is the marking's.
+  it("draws a mark out of a brush that writes nothing in its colour desaturated, at its own opacity", async () => {
     const { chart } = mount(new MarkingStore(), null);
     const { fill: own, opacity: drawnAt } = styles(chart)[0]!;
-    expect(own).toMatch(/^#/);
+    expect(own).toBe(OWN);
     expect(drawnAt).not.toBe(DIM_OPACITY);
     await brush(chart);
     const after = styles(chart);
-    expect(after.map((s) => s.fill)).toEqual([own, own, own, own, own]);
-    expect(after.map((s) => s.opacity)).toEqual([drawnAt, DIM_OPACITY, DIM_OPACITY, drawnAt, DIM_OPACITY]);
+    expect(after.map((s) => s.fill === own || desaturated(s.fill!, OWN))).toEqual([true, true, true, true, true]);
+    expect(after.map((s) => s.fill === own)).toEqual([true, false, false, true, false]);
+    expect(after.map((s) => s.opacity)).toEqual([drawnAt, drawnAt, drawnAt, drawnAt, drawnAt]);
   });
 
   it("shows its brush selection again once detached from the marking it wrote", async () => {
@@ -179,6 +188,6 @@ describe("the chart a selection is made in", () => {
     await brush(chart);
     rerender(null);
     await settle();
-    expect(drawn(chart)).toEqual(["lit", "dim", "dim", "lit", "dim"]);
+    expect(drawn(chart)).toEqual(["lit", "lit·out", "lit·out", "lit", "lit·out"]);
   });
 });

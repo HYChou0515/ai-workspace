@@ -894,7 +894,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           encode: { x: 0, y: [1, 2] },
           renderItem: (
             params: { dataIndex: number; coordSys?: { y: number; height: number } },
-            api: { value: (d: number) => number; coord: (p: number[]) => number[]; style: () => unknown },
+            api: { value: (d: number) => number; coord: (p: number[]) => number[]; visual: (k: "color") => unknown },
           ) => {
             const x = api.value(0);
             const [v1, v2] = [api.value(1), api.value(2)];
@@ -908,7 +908,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
             const [a, b] = [v1, v2].map((v, k) => (placed[k] ? api.coord([x, v]) : [api.coord([x, placed[0] ? v1 : v2])[0], foot]));
             const cap = 4;
             const opacity = lit && !lit[params.dataIndex] ? DIM_OPACITY : 1;
-            const style = { stroke: mark.color ?? "#555", lineWidth: 1.5, opacity };
+            // the item's colour as ECharts holds it: a brush that writes
+            // nothing desaturates it out of its box (PR 5 P45 row 41)
+            const style = { stroke: api.visual("color"), lineWidth: 1.5, opacity };
             const caps = [a, b].flatMap((p, k) =>
               placed[k] ? [{ type: "line", shape: { x1: p[0] - cap, y1: p[1], x2: p[0] + cap, y2: p[1] }, style }] : [],
             );
@@ -918,6 +920,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
             };
           },
           ...common(mark),
+          itemStyle: { color: mark.color ?? "#555" },
         },
         all,
       );

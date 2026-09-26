@@ -129,7 +129,7 @@ describe("a highlighted errorbar", () => {
     const draw = (row: number) =>
       (s.renderItem as (p: unknown, api: unknown) => { children: { style: { opacity: number } }[] })(
         { dataIndex: row },
-        { coord: (p: number[]) => p, value: (d: number) => [row, 1, 3][d], style: () => ({}) },
+        { coord: (p: number[]) => p, value: (d: number) => [row, 1, 3][d], visual: () => "#555" },
       ).children[0].style.opacity;
     expect([draw(0), draw(1), draw(2), draw(3)]).toEqual([0.15, 1, 1, 0.15]);
   });

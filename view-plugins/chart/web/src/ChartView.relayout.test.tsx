@@ -292,7 +292,7 @@ describe("a write the marking already holds", () => {
     resize(600);
     const outOfBrush = () => (chart.getOption() as { brush: { outOfBrush?: object }[] }).brush[0]!.outOfBrush;
     expect(store.get("m")?.marking.item).toEqual(new Set(["i3", "i4"]));
-    expect(outOfBrush()).toEqual({ opacity: DIM_OPACITY });
+    expect(outOfBrush()).toEqual({ colorSaturation: 0 });
     const px = pixels(chart);
     const [p, q] = [px(2.5, 0), px(4.5, 5)];
     const range = [

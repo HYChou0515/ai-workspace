@@ -19,6 +19,7 @@ import { MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer } from "./testAnswer";
+import { desaturated, sameColour } from "./testDrawn";
 import { clickAt, sliceAt } from "./testGesture";
 
 const sdk = vi.hoisted(() => ({
@@ -55,6 +56,8 @@ echarts.use([SVGRenderer]);
 // The chart debounces brush events (throttleDelay 250 ms in the option).
 const settle = () => act(() => new Promise((r) => setTimeout(r, 400)));
 const SELF = "/v/a.ai.yaml";
+/** The one series' palette colour. */
+const OWN = "#5470c6";
 const OTHER = "/v/other.ai.yaml";
 
 // Rows 0..3: (G1,1) (G1,2) (G2,1) (G2,2), at x 1..4; row 4 (G3,3) at x 5.
@@ -100,11 +103,13 @@ const marked = (store: MarkingStore, name = "m") =>
 const brushAreas = (chart: echarts.ECharts) =>
   (chart as unknown as { getModel(): { getComponent(m: string): { areas: unknown[] } } }).getModel().getComponent("brush").areas.length;
 
-/** Per row (the one series' points), how the chart draws it. Out of a brush
- * that writes nothing a point is "dim" in its own colour (P44 row 37), as a
- * marking dims it; "grey" is ECharts' default out-of-brush colour, which no
- * point is drawn in any more. Rows 1 and 2 are out of the box: the brush's
- * own visual dims them where the marking alone would light row 1. */
+/** Per row (the one series' points), how the chart draws it: "lit" or
+ * "dim" by the marking (its opacity), "·out" when out of a brush that writes
+ * nothing (its colour desaturated, P45 row 41). "grey" is ECharts' default
+ * out-of-brush colour, which no mark is drawn in any more (P44 row 37).
+ * Rows 1, 2 and 4 are out of the box: "lit·out" is a row the marking
+ * lights that the brush left out, "dim" one the brush took that the
+ * marking dims -- four states, each drawn apart. */
 function drawn(chart: echarts.ECharts): string[] {
   type Data = { count(): number; getItemVisual(i: number, k: "style"): { fill?: string; opacity?: number } };
   const model = (chart as unknown as { getModel(): { getSeriesByIndex(i: number): { getData(): Data } } }).getModel();
@@ -112,7 +117,9 @@ function drawn(chart: echarts.ECharts): string[] {
   return Array.from({ length: data.count() }, (_, i) => {
     const style = data.getItemVisual(i, "style");
     if (style.fill === "#ddd") return "grey";
-    return style.opacity === DIM_OPACITY ? "dim" : "lit";
+    const state = style.opacity === DIM_OPACITY ? "dim" : "lit";
+    if (sameColour(style.fill!, OWN)) return state;
+    return desaturated(style.fill!, OWN) ? `${state}·out` : `${state} in ${style.fill}`;
   });
 }
 
@@ -162,11 +169,11 @@ describe("a selection went to the marking only if what it wrote is the marking t
     await settle();
     expect(marked(store)).toEqual({ group: ["G1"] });
     // as a scatter on a marking it cannot write: the brush's own visual
-    // (outside the box dimmed in its colour), and the marking lighting the rest
+    // (outside the box its colour desaturated), and the marking lighting the rest
     expect({ text: selectedText(), boxes: brushAreas(chart), drawn: drawn(chart) }).toEqual({
       text: "2 selected",
       boxes: 2,
-      drawn: ["lit", "dim", "dim", "dim", "dim"],
+      drawn: ["lit", "lit·out", "dim·out", "dim", "dim·out"],
     });
   });
 
@@ -180,7 +187,7 @@ describe("a selection went to the marking only if what it wrote is the marking t
     expect(marked(store, "m")).toEqual({ group: ["G1", "G2"] });
     expect({ text: selectedText(), drawn: drawn(chart) }).toEqual({
       text: "2 selected",
-      drawn: ["dim", "dim", "dim", "lit", "dim"],
+      drawn: ["dim", "lit·out", "dim·out", "lit", "dim·out"],
     });
   });
 
