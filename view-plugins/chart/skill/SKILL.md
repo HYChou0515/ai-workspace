@@ -65,8 +65,8 @@ The keys to use:
 scatter, line, bar, text; an area's fill), `point` and `smooth` (line, area), `stack`
 (bar, area; raw rows add up per slot, no `aggregate: sum` needed: each colour's rows at a slot are summed into one
 segment. A stack links by its slot and colour only; `highlight:` may also test its value, which is each segment's
-sum (or its own aggregate). In a chart that is only stacks, any other field in `keys:` / `highlight:` (one no
-stack uses as its slot, colour or value) is refused, since a segment has no single value of it; beside an
+sum (or its own aggregate). In a chart that is only stacks, any other field in `keys:` (one no stack uses as its
+slot or colour) or `highlight:` (nor as its value) is refused, since a segment has no single value of it; beside an
 unstacked layer whose rows carry the field (e.g. points) it is accepted and only that layer writes and lights by it. A tooltip may not aggregate the stack's value field by another op. The value channel is quantitative, and a
 stack is coloured by a category — a quantitative colour is refused), `extent` (errorbar: `stderr` / `stdev` / `iqr`).
 

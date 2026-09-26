@@ -74,9 +74,10 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   `where:` 裡的關鍵字參數（例如 `case=False`）、`inf`、三引號字串都不是欄位。疊圖的數值通道必須是 quantitative：
   時間或類別沒有總和，寫了會被拒絕。parquet 的類別欄位只依實際出現的組合分組，不會多出總和 0 的空組合。
 - 圖上的「N selected · by <欄位>」數的是寫進 marking 的列：框到疊圖的一段、而那一段不寫東西時，不算進去；key 欄位
-  沒有值的列也不算，框到的列在 key 欄位都沒有值時不寫 marking（不會清掉其他 view）。計數永遠排在最前面、不會被截掉；
-  說明列放不下時以「…」收尾，完整文字在滑鼠停留的提示裡。`keys:` 的欄位整欄都沒有值時，`show_file` 以「keys:
-  '<欄位>' is empty on every row — a key with no value links nothing」拒絕。`where:` 裡 `#` 之後是註解；名稱照 Python
+  沒有值的列也不算，框到的列在 key 欄位都沒有值時不寫 marking（不會清掉其他 view）。計數排在最前面，不會因說明列而
+  被截掉（整行連計數都放不下時才以「…」收尾）；說明列放不下時以「…」收尾，完整文字在滑鼠停留的提示裡。`keys:` 的欄位整欄都沒有值時，`show_file` 以「keys:
+  '<欄位>' is empty on every row — a key with no value links nothing」拒絕（分層的圖旁有疊圖時，則是「keys: no layer can
+  write '<欄位>'」那一句）。`where:` 裡 `#` 之後是註解；名稱照 Python
   的讀法（NFKC）判斷，例如全形的 `ｉｎｆ` 就是 `inf`。
 - 同一層裡同一個欄位只能有一種 `aggregate`（疊圖的數值通道也算，沒寫就是 sum）：例如 y 用 mean、tooltip 用 max 會被
   拒絕；兩個都要，就在 transform 的

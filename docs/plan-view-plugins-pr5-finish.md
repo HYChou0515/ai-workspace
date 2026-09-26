@@ -159,7 +159,7 @@ words are examples, not spec keys.
     override].
   - (P42) In a layered chart the stack rule limits the stack layer only [user,
     2026-09-26]. The builder's reading [mine, open to override]: an unstacked layer — or
-    another stack by its slot, colour or value — may carry any field, so the static rule
+    another stack by its slot or colour (for a highlight, its value too) — may carry any field, so the static rule
     refuses only when no layer may link by it, and `validate` reads the data ("keys: no
     layer can write '<field>'"); the note says "the stack links by <slot>, <colour> only
     (each a <op>)" (8525ff92, d1087ab9).
@@ -168,6 +168,9 @@ words are examples, not spec keys.
     "the user's rule"; it is the builder's, from the P42 table].
   - (P43) Beside "by <columns>" the count is what went to the marking (78660df0)
     [mine, open to override].
+  - (P44) A `keys:` column no layer has is not called empty — it is left to the other
+    checks, as before; the note keeps its own hover title; a difference past int64 is
+    taken as float64 (a986fc38, and P44's row 36 / 38 commits) [mine, open to override].
 
 ## Phases
 
@@ -539,7 +542,7 @@ words are examples, not spec keys.
   |---|---|---|
   | 34 | The `where:` lexer read the words after a `#` as columns (pandas ignores a comment), kept a backtick name un-normalised and tested `inf`/`index` before NFKC (pandas reads `ｉｎｆ` as `inf`); the TS name class had no case separating it from the old one (`a·b`, `x℘`) | A comment ends the expression; every name — bare or backticked — is read in its NFKC form before it is judged; the corpus holds cases pandas separates, so both halves' name rules are pinned by pandas |
   | 35 | A key column that is empty on every row was accepted, and a brush over such rows wrote `{}` (clearing every linked view); the count beside "by" counted rows with no key value | A key no row holds a value of is no key: `validate` requires one, a selection drops a key it found no value of, and the count is of rows that gave a key a value |
-  | 36 | At 390 the note and the count share a line and the count was cut ("6 selected · …"), hiding "by item" | The count is never cut: it comes first and the note yields |
+  | 36 | At 390 the note and the count share a line and the count was cut ("6 selected · …"), hiding "by item" | The count is never cut: it comes first and the note yields — never cut for a note (a line too narrow for the count alone still ends it in P27's ellipsis) |
   | 37 | Out of a brush that writes nothing, marks turn `#ddd`: a scatter over grey bars vanished | Out of such a brush a mark keeps its colour at the dimmed opacity, as a marking's dimming does |
   | 38 | `diff` subtracted unsigned sums in their own dtype and wrapped (0 − 7 = 4294967289); min/max alike | The difference is taken in a signed type |
   | 39 | A facet's summary said "f 0" ("nanf 0") for a colour column with no value | A column with no value is said so |
@@ -554,7 +557,8 @@ words are examples, not spec keys.
   row 39 (`ContinuousScale.empty` in the cache index; "<colour> has no value"); row 40.
   Demo (1440 and 390, seen): "6 selected · by item" whole at 390; points visible, dimmed
   in their colour, beside a segment-only box; a `# comment` highlight lights n; a brush on
-  an all-empty key leaves the table's 6 marked rows (before: cleared). Known and left:
+  an all-empty key leaves the table's 6 marked rows (before: cleared; seen at 1440 — its
+  390 frames are P45's). Known and left:
   `validate`'s data refusals reach `show_file`, not the panel (the panel's query runs
   no data check; a chart there writes nothing rather than clearing); a facet cache built
   before row 39 keeps its old summary until rebuilt; a `keys:` column absent from the
@@ -573,7 +577,8 @@ words are examples, not spec keys.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
-  differs only in docs). ec115af6's "spec.test.ts: 10 new" is 11 (its `it.each` has 7
+  differs only in docs). a986fc38's "`some` -> `every` (3)" is 4 (marking.test ×2,
+  layeredStack, ChartView.markedcount). ec115af6's "spec.test.ts: 10 new" is 11 (its `it.each` has 7
   "not refused" cases, not 6). And ed3164f3's "red before … (3)" and "`v <= 0` counted as
   `v < 0` -> 1 red" were counted before the rule test was added; on the committed test
   file they are 4 and 2 (round 19 veracity F2).
