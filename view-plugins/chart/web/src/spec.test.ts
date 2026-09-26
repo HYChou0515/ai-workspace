@@ -263,6 +263,20 @@ describe("messages", () => {
     expect(line!.startsWith(`highlight.values: ${links}, so it has no single 'id': `)).toBe(true);
   });
 
+  // #847/#848 PR 5 P42 row 33: "the sum of its rows" was false for a stack
+  // whose value names its own aggregate. test_spec_messages.py reads the same.
+  it("names the op a stack's segments are", () => {
+    const mean = stackedBar.replace("type: quantitative}", "type: quantitative, aggregate: mean}");
+    const meanLinks = links.replace("the sum of its rows", "the mean of its rows");
+    expect(verdict(`${base}keys: [id]\n${mean}`)).toEqual([
+      `keys: ${meanLinks}, so it has no single 'id': key the view by its slot and colour, or drop stack so single rows link`,
+    ]);
+    expect(verdict(`${base}highlight: {where: "region == 'n'"}\n${mean}`)).toEqual([
+      `highlight.where: ${meanLinks}, so it has no single 'region': test its slot and colour, ` +
+        "or its value 'value' (each segment's mean), or drop stack so single rows light",
+    ]);
+  });
+
   it("names a layer's stack", () => {
     const layered =
       `${base}keys: [id]\nlayer:\n  - mark: {type: area, stack: true}\n    encoding:\n` +

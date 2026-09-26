@@ -167,6 +167,17 @@ def test_a_highlight_on_a_stacks_value_says_it_tests_each_segments_sum():
     )
 
 
+def test_a_highlight_on_a_mean_stacks_value_says_each_segments_mean():
+    # #847/#848 PR 5 P42 row 33: a stack whose value names its own aggregate
+    # is that aggregate per segment, not a sum -- the summary names the op
+    mean = STACK.replace("type: quantitative}", "type: quantitative, aggregate: mean}")
+    result = check(mean + "highlight: {where: 'value > 4.2'}\n", lambda _: ROWS)
+    # segments: a.n 4, a.s 5, b.n 4.5, b.s 1, c.n 2
+    assert result.summary == (
+        "highlight matches 2/5 rows; on a stack, value is each segment's mean; value 1–5"
+    )
+
+
 def test_a_highlight_on_a_stacks_slot_says_nothing_of_sums():
     result = check(STACK + "highlight: {where: \"group == 'b'\"}\n", lambda _: ROWS)
     assert result.summary == "highlight matches 2/5 rows; value 1–9"

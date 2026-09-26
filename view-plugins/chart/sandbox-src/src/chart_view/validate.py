@@ -79,14 +79,17 @@ def _highlight(spec: Mapping[str, Any], layers: list[LayerRows]) -> str:
 
 def _summed(spec: Mapping[str, Any]) -> list[str]:
     """The summary part saying a highlight's `where:` tests a stack's value as
-    each segment's sum (#847/#848 PR 5 P41 row 21): a stack's rows are its
-    segments, summed per slot and colour."""
+    each segment's sum (#847/#848 PR 5 P41 row 21) -- or its mean..., the
+    op the value names (P42 row 33): a stack's rows are its segments, one per
+    slot and colour."""
     where = spec["highlight"].get("where")
     read = where_names(where) if where else []
-    values = [
-        parts[1] for ly in spec_layers(spec) if (parts := stack_parts(ly)) and parts[1] in read
+    said = [
+        f"on a stack, {parts.value} is each segment's {parts.op}"
+        for ly in spec_layers(spec)
+        if (parts := stack_parts(ly)) and parts.value in read
     ]
-    return [f"on a stack, {v} is each segment's sum" for v in dict.fromkeys(values)]
+    return list(dict.fromkeys(said))
 
 
 BuildFacet = Callable[[str], Mapping[str, Any]]

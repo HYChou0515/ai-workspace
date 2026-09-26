@@ -139,18 +139,20 @@ export function stackParts(layer: Layer): StackParts | null {
 const quoted = (names: string[]) => names.map((n) => `'${n}'`).join(", ");
 
 /** #847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its slot
- * and colour only. A segment is the sum of its rows (P40 row 18), so it has
- * no single value of any other field: a `keys:` naming one wrote nothing a
- * linked view could light, and a `highlight:` reading one lit nothing. A
- * highlight may also test the value, which is each segment's sum. */
+ * and colour only. A segment is the sum of its rows (P40 row 18) -- or the
+ * value's own aggregate of them (the words name which: P42 row 33) -- so it
+ * has no single value of any other field: a `keys:` naming one wrote nothing
+ * a linked view could light, and a `highlight:` reading one lit nothing. A
+ * highlight may also test the value, which is each segment's sum (or
+ * mean...). */
 function stackLinks(doc: Doc, path: string, layer: Layer): string[] {
   const parts = stackParts(layer);
   if (!parts) return [];
-  const { links, value } = parts;
+  const { links, value, op } = parts;
   const subject = path ? `a stack (${path.replace(/\.$/, "")})` : "a stack";
   const head =
     `${subject} links by its slot and colour only (${quoted(links)}) — a segment is the` +
-    " sum of its rows, so it has no single";
+    ` ${op} of its rows, so it has no single`;
   const lines: string[] = [];
   const keys = (doc.keys ?? []).filter((k) => !links.includes(k));
   if (keys.length > 0) {
@@ -166,7 +168,7 @@ function stackLinks(doc: Doc, path: string, layer: Layer): string[] {
     if (other.length > 0) {
       lines.push(
         `highlight.${how}: ${head} ${quoted(other)}: test its slot and colour, or its` +
-          ` value '${value}' (each segment's sum), or drop stack so single rows light`,
+          ` value '${value}' (each segment's ${op}), or drop stack so single rows light`,
       );
     }
   }

@@ -342,6 +342,22 @@ def test_a_stack_highlighting_another_field_is_refused():
     assert line.startswith(f"highlight.values: {LINKS}, so it has no single 'id': ")
 
 
+def test_a_stacks_refusal_names_the_op_its_segments_are():
+    # #847/#848 PR 5 P42 row 33: "the sum of its rows" was false for a stack
+    # whose value names its own aggregate. The renderer's spec.test.ts reads
+    # the same.
+    mean = STACKED_BAR.replace("type: quantitative}", "type: quantitative, aggregate: mean}")
+    links = LINKS.replace("the sum of its rows", "the mean of its rows")
+    assert _errors(BASE + "keys: [id]\n" + mean) == [
+        f"keys: {links}, so it has no single 'id': key the view by its slot "
+        "and colour, or drop stack so single rows link"
+    ]
+    assert _errors(BASE + "highlight: {where: \"region == 'n'\"}\n" + mean) == [
+        f"highlight.where: {links}, so it has no single 'region': test its slot and "
+        "colour, or its value 'value' (each segment's mean), or drop stack so single rows light"
+    ]
+
+
 def test_a_layer_stack_is_named():
     layered = (
         BASE

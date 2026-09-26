@@ -150,19 +150,20 @@ def _quoted(names: list[str]) -> str:
 
 def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) -> list[str]:
     """#847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its
-    slot and colour only. A segment is the sum of its rows (P40 row 18), so
-    it has no single value of any other field: a `keys:` naming one wrote
-    nothing a linked view could light, and a `highlight:` reading one lit
-    nothing. A highlight may also test the value, which is each segment's
-    sum."""
+    slot and colour only. A segment is the sum of its rows (P40 row 18) --
+    or the value's own aggregate of them (the words name which: P42 row 33)
+    -- so it has no single value of any other field: a `keys:` naming one
+    wrote nothing a linked view could light, and a `highlight:` reading one
+    lit nothing. A highlight may also test the value, which is each
+    segment's sum (or mean...)."""
     parts = stack_parts(layer)
     if parts is None:
         return []
-    links, value = parts.links, parts.value
+    links, value, op = parts.links, parts.value, parts.op
     subject = f"a stack ({path.rstrip('.')})" if path else "a stack"
     head = (
         f"{subject} links by its slot and colour only ({_quoted(links)}) — a segment is the"
-        " sum of its rows, so it has no single"
+        f" {op} of its rows, so it has no single"
     )
     lines = []
     keys = [k for k in doc.get("keys", []) if k not in links]
@@ -180,7 +181,7 @@ def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) ->
         if other:
             lines.append(
                 f"highlight.{how}: {head} {_quoted(other)}: test its slot and colour, or its"
-                f" value '{value}' (each segment's sum), or drop stack so single rows light"
+                f" value '{value}' (each segment's {op}), or drop stack so single rows light"
             )
     return lines
 
