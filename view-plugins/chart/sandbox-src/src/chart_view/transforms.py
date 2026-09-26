@@ -355,6 +355,20 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
     return getattr(numbers.groupby([df[k] for k in keys], dropna=False, observed=True), op)()
 
 
+def _signed(side: pd.Series) -> pd.Series:
+    """`side` in a type a difference cannot wrap in (#847/#848 PR 5 P44 row
+    38): unsigned integers as int64 -- or float64 past int64's reach -- the
+    nullable kinds as their nullable twins. Subtracted in their own type, 0 - 7
+    was 4294967289."""
+    if side.dtype.kind != "u":
+        return side
+    wide = bool((side.dropna() > np.iinfo(np.int64).max).any())
+    nullable = isinstance(side.dtype, pd.api.extensions.ExtensionDtype)
+    return side.astype(
+        ("Float64" if wide else "Int64") if nullable else ("float64" if wide else "int64")
+    )
+
+
 def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
     by, items, groupby = t["diff"]["by"], t["aggregate"], list(t.get("groupby", []))
     need_columns(df, by)
@@ -376,7 +390,7 @@ def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
             # the sides' common type: a count stays whole, a sum of 2.5 is not cut
             kind = pd.concat([of[name], minus[name]]).dtype
             a, b = a.fillna(0).astype(kind), b.fillna(0).astype(kind)
-        both[name] = a - b
+        both[name] = _signed(a) - _signed(b)
     return both[[*groupby, *(i["as"] for i in items)]]
 
 
