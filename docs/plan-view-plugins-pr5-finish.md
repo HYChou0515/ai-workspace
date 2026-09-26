@@ -140,8 +140,16 @@ words are examples, not spec keys.
   - (P37 → P40) The rows of one colour at one stack slot draw as one segment, their
     sum: P37 did it in the browser (10cc4d93), P40 row 18 moves it to the sandbox as an
     implicit `aggregate: sum`, and refuses a stack coloured by a value (which rows form
-    a segment is not defined). The "palette colour for a mixed sum" P38 left is gone
-    with it.
+    a segment is not defined) (ec115af6). The "palette colour for a mixed sum" P38 left
+    is gone with it.
+  - (P40) A stack with its own `aggregate` is also grouped by slot and colour only
+    (ec115af6); the chart's own "N selected" counts segments (ec115af6); a box with a
+    summary a log axis leaves out is not drawn and has its own note, and an errorbar end
+    with no place runs its stem to the plot's foot, uncapped (8ce066d0).
+  - (P39) A line that hides its points shows a point whose neighbours are both empty; a
+    drawn or dimmed point is left as it is (ada832d5).
+  - (P41) A stack links by its slot and colour only [user, 2026-09-26]: `keys:` and
+    `highlight:` naming other fields are refused with the reason.
 
 ## Phases
 
@@ -428,7 +436,8 @@ words are examples, not spec keys.
   (`Axis.leftOut()`; errorbar ends and boxplot summaries go through `at`; an errorbar
   end with no place runs its stem to the plot's foot, uncapped; a box with a summary left
   out is not drawn and has its own note [mine, open to override]; a `line` with
-  `stack: true` keeps its 0 as a stack does). Measured end to end on 1,000,000 rows: the
+  `stack: true` stacks nothing, so its 0 is left out on a log axis and counted, as any
+  line's is). Measured end to end on 1,000,000 rows: the
   sandbox query 902–950 → 123–132 ms, the answer 13,023 → 4 KiB, toOption 312–335 → 0 ms.
   Demo (1440 and 390, seen): a box over one summed segment lights its 40 rows in the
   table ("40 of 135 rows"); a stack coloured by value shows the refusal; P39's joined
@@ -457,7 +466,8 @@ words are examples, not spec keys.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
-  differs only in docs). And ed3164f3's "red before … (3)" and "`v <= 0` counted as
+  differs only in docs). ec115af6's "spec.test.ts: 10 new" is 11 (its `it.each` has 7
+  "not refused" cases, not 6). And ed3164f3's "red before … (3)" and "`v <= 0` counted as
   `v < 0` -> 1 red" were counted before the rule test was added; on the committed test
   file they are 4 and 2 (round 19 veracity F2).
 
