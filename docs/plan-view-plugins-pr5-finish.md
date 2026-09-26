@@ -481,6 +481,18 @@ words are examples, not spec keys.
   (`wire-corpus/stack-sums.json`) keys its specs by fields `validate` now refuses — the
   renderer never validates, and the web tests read those keys to show a summed field
   writes no key; the `where:` lexer approximates a column named like a function.
+- **P42 — Review round 21's findings.** **Decision [user, 2026-09-26]: in a layered
+  chart, the stack rule limits the stack layer only.**
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 29 | A layered chart with a stack and an unstacked layer carrying `id` was refused for `keys: [id]` / a highlight on `id`, though the unstacked layer links by it (it did before P41) | The stack rule is the stack layer's [user]: `keys:` / `highlight:` are refused only when no unstacked layer carries the field; the stack layer then neither writes nor lights by it — a brush over its segment writes nothing, and the chart says so ("this layer is a sum: it links by <slot, colour>") |
+  | 30 | The `where:` lexer counted keyword arguments (`case=`), pandas' globals `inf`/`Inf` and the inside of triple-quoted text as columns, and Python split names with combining marks (Indic, Thai, NFD) where TS did not; Python sliced the string per name (quadratic) | A column is what pandas reads: kwargs, pandas' globals and any string literal are not; one identifier rule on both halves; every case pinned by pandas in `where-names.json`; linear time |
+  | 31 | Row 26 missed a stack's implicit sum: a tooltip `mean` of the value field showed sums | A stack's value channel carries its op (its own `aggregate`, else sum) in the one-op rule |
+  | 32 | P41's observed grouping let `diff` drop a group only one side has, on parquet categories (CSV already did: an inner merge) | `diff` keeps a group either side has: 0 on the missing side for count and sum, empty otherwise |
+  | 33 | "each segment's sum" in the summary, the refusals, the doc and the SKILL was false for a stack with its own `aggregate` (a mean) | The words name the op the segment is: "each segment's mean", "… sum" |
+
+  Row 29 changes what `validate` accepts and adds a chart note, so round 22 follows.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
