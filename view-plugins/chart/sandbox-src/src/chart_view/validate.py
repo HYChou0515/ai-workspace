@@ -118,7 +118,7 @@ def _beside_stacks(spec: Mapping[str, Any], layers: list[LayerRows]) -> tuple[li
                 k in ly.rows.columns
                 and k not in ly.measured
                 and not binned(spec, ly)
-                and ly.rows[k].notna().any()
+                and (ly.rows.empty or ly.rows[k].notna().any())
                 for ly in layers
             )
         ]
@@ -129,13 +129,14 @@ def _empty_keys(spec: Mapping[str, Any], layers: list[LayerRows]) -> list[str]:
     """A key no row holds a value of is no key (#847/#848 PR 5 P44 row 35): a
     brush over its rows would name no key, and a marking by it lights nothing.
     Judged where a layer has the column; a key no layer has is left to the
-    other checks."""
-    return [
-        f"keys: '{k}' is empty on every row — a key with no value links nothing"
-        for k in spec.get("keys", [])
-        if any(k in ly.rows.columns for ly in layers)
-        and not any(ly.rows[k].notna().any() for ly in layers if k in ly.rows.columns)
-    ]
+    other checks. Empty is judged over rows that exist (P45 row 43): a source
+    with no rows yet, or a filter matching none, holds no empty key."""
+    errors: list[str] = []
+    for k in spec.get("keys", []):
+        rows = [ly.rows[k] for ly in layers if k in ly.rows.columns]
+        if any(len(col) for col in rows) and not any(col.notna().any() for col in rows):
+            errors.append(f"keys: '{k}' is empty on every row — a key with no value links nothing")
+    return errors
 
 
 BuildFacet = Callable[[str], Mapping[str, Any]]

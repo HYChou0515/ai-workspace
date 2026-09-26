@@ -271,19 +271,29 @@ def test_a_row_field_only_a_binned_layer_has_is_refused():
 EMPTY_KEY = "keys: 'item' is empty on every row — a key with no value links nothing"
 
 
+POINTS = """\
+view: chart
+source: data/rows.csv
+mark: scatter
+encoding:
+  x: {field: group, type: nominal}
+  y: {field: value, type: quantitative}
+"""
+
+
 @pytest.mark.parametrize("empty", [None, float("nan")])
 def test_a_key_empty_on_every_row_is_refused(empty):
-    rows = WAFERS.assign(item=[empty] * 5)
-    assert check(SCATTER + "keys: [item]\n", lambda _: rows).errors == [EMPTY_KEY]
+    rows = ROWS.assign(item=[empty] * 6)
+    assert check(POINTS + "keys: [item]\n", lambda _: rows).errors == [EMPTY_KEY]
     # one value is enough
-    held = WAFERS.assign(item=[empty] * 4 + ["r5"])
-    assert check(SCATTER + "keys: [item]\n", lambda _: held).errors == []
+    held = ROWS.assign(item=[empty] * 5 + ["r6"])
+    assert check(POINTS + "keys: [item]\n", lambda _: held).errors == []
 
 
 def test_a_key_no_layer_has_is_not_called_empty():
     # only a column that is there can be empty; a key no layer has is left
     # to the other checks (a stack's), as before
-    assert check(SCATTER + "keys: [item]\n", _read).errors == []
+    assert check(POINTS + "keys: [item]\n", lambda _: ROWS.drop(columns="item")).errors == []
 
 
 def test_a_layered_stack_keyed_by_a_field_empty_on_every_row_is_refused():
@@ -291,3 +301,30 @@ def test_a_layered_stack_keyed_by_a_field_empty_on_every_row_is_refused():
     assert check(LAYERED + "keys: [item]\n", lambda _: rows).errors == [
         f"keys: no layer can write 'item' — {SUM_NOTE}, and no other layer has 'item' row by row"
     ]
+
+
+# #847/#848 PR 5 P45 row 43: empty is judged over rows that exist -- a source
+# with no rows yet, or a filter that matches none, holds no empty key.
+NO_ROWS = "transform:\n  - filter: \"group == 'z'\"\n"
+
+
+@pytest.mark.parametrize(
+    ("read", "extra"),
+    [(lambda _: ROWS.iloc[0:0], ""), (lambda _: ROWS, NO_ROWS)],
+    ids=["empty source", "filter matching nothing"],
+)
+def test_no_rows_is_not_an_empty_key(read, extra):
+    result = check(POINTS + extra + "keys: [item]\n", read)
+    assert result.errors == []
+    assert result.summary == "0 rows"
+
+
+@pytest.mark.parametrize(
+    ("read", "extra"),
+    [(lambda _: ROWS.iloc[0:0], ""), (lambda _: ROWS, NO_ROWS)],
+    ids=["empty source", "filter matching nothing"],
+)
+def test_a_layered_stack_with_no_rows_is_not_refused_a_row_key(read, extra):
+    result = check(LAYERED + extra + "keys: [item]\n", read)
+    assert result.errors == []
+    assert result.summary == f"0 rows; {SUM_NOTE}"
