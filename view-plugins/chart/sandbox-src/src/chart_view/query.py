@@ -159,11 +159,12 @@ def _stack_sum(
 
 
 def _shared(df: pd.DataFrame, fields: list[str], groups: list[str]) -> dict[str, pd.Series]:
-    """Per group of `groups` (in `aggregate`'s order), each field's value where
+    """Per group of `groups` that occurs (in `aggregate`'s order: the same, observed,
+    grouping -- #847/#848 PR 5 P41 row 22), each field's value where
     every row of the group has that one value, else missing. A list or
     mapping is compared as its marking text; the value kept is the row's own."""
     frame = df.assign(**{k: unhashable_as_text(df[k]) for k in groups})
-    codes = frame.groupby(groups, dropna=False, sort=True).ngroup().to_numpy()
+    codes = frame.groupby(groups, dropna=False, sort=True, observed=True).ngroup().to_numpy()
     first = pd.Series(np.arange(len(df))).groupby(codes).first().to_numpy()
     out: dict[str, pd.Series] = {}
     for f in fields:
@@ -187,7 +188,9 @@ def _boxplot(df: pd.DataFrame, channels, encoding) -> tuple[pd.DataFrame, pd.Dat
     groups = _group_fields(channels, value)
     df = df.assign(**{g: unhashable_as_text(df[g]) for g in groups})
     rows, outliers = [], []
-    for key, part in df.groupby(groups, dropna=False, sort=True) if groups else [((), df)]:
+    for key, part in (
+        df.groupby(groups, dropna=False, sort=True, observed=True) if groups else [((), df)]
+    ):
         v = pd.to_numeric(part[value], errors="coerce").dropna()
         q1, mid, q3 = (float(v.quantile(q)) for q in (0.25, 0.5, 0.75))
         reach = 1.5 * (q3 - q1)
@@ -208,7 +211,11 @@ def _errorbar(df: pd.DataFrame, channels, encoding, extent: str) -> pd.DataFrame
     groups = _group_fields(channels, value)
     df = df.assign(**{g: unhashable_as_text(df[g]) for g in groups})
     v = pd.to_numeric(df[value], errors="coerce")
-    grouped = v.groupby([df[g] for g in groups], dropna=False, sort=True) if groups else None
+    grouped = (
+        v.groupby([df[g] for g in groups], dropna=False, sort=True, observed=True)
+        if groups
+        else None
+    )
 
     def stat(fn: str, *args: Any) -> pd.Series:
         return (
@@ -255,7 +262,7 @@ def _bin(
     keys = list(dict.fromkeys(keys))
     frame = frame.assign(**{k: unhashable_as_text(frame[k]) for k in keys})
     frame["$lit"] = lit if lit is not None else False
-    grouped = frame.groupby(keys, dropna=False, sort=True)
+    grouped = frame.groupby(keys, dropna=False, sort=True, observed=True)
     sizes = grouped.size()
     assert isinstance(sizes, pd.Series)
     out = sizes.rename("$count").reset_index()

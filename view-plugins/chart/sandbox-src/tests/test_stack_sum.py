@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from chart_view.query import build
+from chart_view.sources import read_source
 from chart_view.spec import parse_spec
 
 
@@ -316,3 +317,68 @@ def test_the_stack_corpus_is_what_query_and_pandas_say():
             running = [r + sums.get((k, s), 0) for r, s in zip(running, order, strict=True)]
             want.append(running)
         assert want == c["tops"], c["name"]
+
+
+# #847/#848 PR 5 P41 row 22: a parquet file keeps a category column as a
+# pandas Categorical. `aggregate` grouped every combination of categories
+# (pandas' default, observed=False) while `_shared` numbered only the groups
+# that occur, so a segment took another's kept value and a phantom 0 row
+# appeared. One grouping, the observed one, for both. The oracle is pandas'
+# own groupby over the same rows as plain text.
+
+
+def _as_categories(df: pd.DataFrame, tmp_path: Path) -> pd.DataFrame:
+    """`df` written to a parquet file with its text columns as categories and
+    read back the way a chart's source is."""
+    text = [c for c in df.columns if df[c].dtype == object]
+    df.astype(dict.fromkeys(text, "category")).to_parquet(tmp_path / "a.parquet", index=False)
+    read = read_source(tmp_path, "a.parquet")
+    assert all(isinstance(read[c].dtype, pd.CategoricalDtype) for c in text)
+    return read
+
+
+def _one_or_none(s: pd.Series):
+    return s.iloc[0] if s.nunique(dropna=False) == 1 else None
+
+
+def test_a_stack_over_categories_has_one_row_per_group_that_occurs(rows, tmp_path):
+    enc = {"x": ITEM, "y": VALUE, "color": GROUP, "tooltip": {"field": "region", "type": "nominal"}}
+    [layer] = build(_spec(STACKED, enc), _as_categories(rows, tmp_path))["layers"]
+    assert _drawn(layer, "item") == _oracle(rows, ["item", "group"])
+    slots = list(zip(_cat(layer["columns"]["item"]), _cat(layer["columns"]["group"]), strict=True))
+    got = dict(zip(slots, _cat(layer["columns"]["region"]), strict=True))
+    assert got == rows.groupby(["item", "group"])["region"].agg(_one_or_none).to_dict()
+
+
+@pytest.mark.parametrize("op", ["sum", "count"])
+def test_an_aggregated_layer_over_categories_has_no_phantom_rows(rows, tmp_path, op):
+    # a sum and a count are grouped apart (`transforms._grouped`): both, once
+    enc = {"x": ITEM, "y": {**VALUE, "aggregate": op}, "color": GROUP}
+    [layer] = build(_spec("bar", enc), _as_categories(rows, tmp_path))["layers"]
+    want = rows.groupby(["item", "group"])["value"].agg(op)
+    assert _drawn(layer, "item") == {k: float(v) for k, v in want.items()}
+
+
+def test_an_errorbar_over_categories_has_no_phantom_groups(rows, tmp_path):
+    # the same grouping bug, where a mark summarises its groups itself
+    enc = {"x": ITEM, "y": VALUE, "color": GROUP}
+    mark = {"type": "errorbar", "extent": "stdev"}
+    [layer] = build(_spec(mark, enc), _as_categories(rows, tmp_path))["layers"]
+    assert layer["rows"] == rows.groupby(["item", "group"]).ngroups
+
+
+def test_a_boxplot_over_categories_summarises_the_groups_that_occur(rows, tmp_path):
+    # (pandas' iteration already skipped an empty group; its FutureWarning,
+    # an error under this suite's settings, is what pins the explicit rule)
+    [layer] = build(
+        _spec("boxplot", {"x": ITEM, "y": VALUE, "color": GROUP}), _as_categories(rows, tmp_path)
+    )["layers"]
+    assert layer["rows"] == rows.groupby(["item", "group"]).ngroups
+
+
+def test_a_binned_scatter_over_categories_has_no_phantom_cells(rows, tmp_path):
+    enc = {"x": VALUE, "y": VALUE, "color": GROUP}
+    spec = _spec("scatter", enc, bin_threshold=1)
+    [plain] = build(spec, rows)["layers"]
+    [layer] = build(spec, _as_categories(rows, tmp_path))["layers"]
+    assert layer["binned"] == plain["binned"] == {"points": 8, "bins": 8}

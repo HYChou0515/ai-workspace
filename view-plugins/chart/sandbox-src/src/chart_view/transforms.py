@@ -316,7 +316,9 @@ _ALL = "__all__"
 def aggregate(
     df: pd.DataFrame, items: Sequence[Mapping[str, Any]], groupby: Sequence[str]
 ) -> pd.DataFrame:
-    """One row per group — without `groupby`, one row for the frame (none for an
+    """One row per group that occurs — a category column (a parquet file keeps
+    one) makes no row for a combination no row holds (#847/#848 PR 5 P41 row
+    22) — and without `groupby`, one row for the frame (none for an
     empty one); a column per item."""
     need_columns(df, *groupby, *(i["field"] for i in items if i.get("field")))
     clash = [i["as"] for i in items if i["as"] in groupby]
@@ -328,7 +330,7 @@ def aggregate(
     # A list key (an entity or parquet list field) has no hash to group by.
     frame = df.assign(**{k: unhashable_as_text(df[k]) for k in groupby})
     frame = frame if groupby else frame.assign(**{_ALL: 0})
-    grouped = frame.groupby(keys, dropna=False, sort=True)
+    grouped = frame.groupby(keys, dropna=False, sort=True, observed=True)
     out = pd.DataFrame({i["as"]: _grouped(frame, grouped, keys, i) for i in items})
     out = out.reset_index()
     return out if groupby else out.drop(columns=_ALL)
@@ -350,7 +352,7 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
     if op == "rate":
         return grouped[field].agg(_rate)
     numbers = pd.to_numeric(df[field], errors="coerce")
-    return getattr(numbers.groupby([df[k] for k in keys], dropna=False), op)()
+    return getattr(numbers.groupby([df[k] for k in keys], dropna=False, observed=True), op)()
 
 
 def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
