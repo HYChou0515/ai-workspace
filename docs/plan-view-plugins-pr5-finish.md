@@ -434,6 +434,26 @@ words are examples, not spec keys.
   table ("40 of 135 rows"); a stack coloured by value shows the refusal; P39's joined
   band and lone dots. Known and left: a field the summed rows do not share shows "—" in
   the tooltip, which reads like a missing value.
+- **P41 — Review round 20's findings.** Round 20 (four lenses at 6432260f) found that
+  P40's sum dropped every field outside slot and colour: a stack whose `keys:` name a row id
+  wrote `{}` on a brush (clearing every linked view), a marking by id could not light it, and
+  a `highlight:` on another field was refused or silently lost. **Decision [user,
+  2026-09-26]: a stack links by slot and colour only.**
+
+  | # | Found | Rule installed |
+  |---|---|---|
+  | 21 | A stack's `keys:` / `highlight:` naming fields the sum drops | A stack links by its slot and colour only [user]: `validate` refuses a stack whose `keys:` name any other field, or whose `highlight:` reads any other field (`where:` columns, `values:` columns), saying why and that single rows link when not stacked; a `where:` on the value field tests each segment's sum, and says so. A marking on other columns does not light a stack. And whatever reaches it, a selection that can name no key marks nothing — never `{}` (the table's rule) |
+  | 22 | `_shared` numbered only groups that occur while `aggregate` grouped every category combination (`observed=False`): with categorical columns a segment took another's tooltip, and phantom 0 rows appeared | One grouping, the observed one, for the sum and for what is kept |
+  | 23 | A kept uint64 ≥ 2^63 crashed the query (cast to Int64) | Kept integers keep their signedness (`UInt64`) |
+  | 24 | The lone-point pass drew a stack's filler as a point, and read the category dimension of a horizontal line | Only a row's own point is a lone point; the value dimension is the value axis's |
+  | 25 | A stack whose value channel is temporal or a category summed nanoseconds / text | A stack's value channel is quantitative; anything else is refused |
+  | 26 | Two channels aggregating one field by different ops: the first op won, and the tooltip labelled max showed the mean | One field, one op: two different ops on one field are refused |
+  | 27 | `write` returned true when `ifEmpty` found the marking occupied and wrote nothing | The store's set says whether it wrote; `write` returns that |
+  | 28 | The horizontal slot's `ordinal` half and the value kind line were unpinned | The ordinal horizontal case is in the stack corpus (both halves); the value-kind line is removed (row 25 makes it unreachable) |
+
+  Also: a stack on a log axis sums its negatives into the segment, as a sum does (the
+  note counts what the axis leaves out, not what a sum absorbed) — documented, not
+  changed. Row 21 changes what `validate` accepts, so round 21 follows.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
