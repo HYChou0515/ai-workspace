@@ -100,15 +100,18 @@ const marked = (store: MarkingStore, name = "m") =>
 const brushAreas = (chart: echarts.ECharts) =>
   (chart as unknown as { getModel(): { getComponent(m: string): { areas: unknown[] } } }).getModel().getComponent("brush").areas.length;
 
-/** Per row (the one series' points), how the chart draws it: "brush-grey" is
- * ECharts' own brush visual (a point outside the box). */
+/** Per row (the one series' points), how the chart draws it. Out of a brush
+ * that writes nothing a point is "dim" in its own colour (P44 row 37), as a
+ * marking dims it; "grey" is ECharts' default out-of-brush colour, which no
+ * point is drawn in any more. Rows 1 and 2 are out of the box: the brush's
+ * own visual dims them where the marking alone would light row 1. */
 function drawn(chart: echarts.ECharts): string[] {
   type Data = { count(): number; getItemVisual(i: number, k: "style"): { fill?: string; opacity?: number } };
   const model = (chart as unknown as { getModel(): { getSeriesByIndex(i: number): { getData(): Data } } }).getModel();
   const data = model.getSeriesByIndex(0).getData();
   return Array.from({ length: data.count() }, (_, i) => {
     const style = data.getItemVisual(i, "style");
-    if (style.fill === "#ddd") return "brush-grey";
+    if (style.fill === "#ddd") return "grey";
     return style.opacity === DIM_OPACITY ? "dim" : "lit";
   });
 }
@@ -159,11 +162,11 @@ describe("a selection went to the marking only if what it wrote is the marking t
     await settle();
     expect(marked(store)).toEqual({ group: ["G1"] });
     // as a scatter on a marking it cannot write: the brush's own visual
-    // (outside the box grey), and the marking lighting the rest
+    // (outside the box dimmed in its colour), and the marking lighting the rest
     expect({ text: selectedText(), boxes: brushAreas(chart), drawn: drawn(chart) }).toEqual({
       text: "2 selected",
       boxes: 2,
-      drawn: ["lit", "brush-grey", "brush-grey", "dim", "brush-grey"],
+      drawn: ["lit", "dim", "dim", "dim", "dim"],
     });
   });
 
@@ -177,7 +180,7 @@ describe("a selection went to the marking only if what it wrote is the marking t
     expect(marked(store, "m")).toEqual({ group: ["G1", "G2"] });
     expect({ text: selectedText(), drawn: drawn(chart) }).toEqual({
       text: "2 selected",
-      drawn: ["dim", "brush-grey", "brush-grey", "lit", "brush-grey"],
+      drawn: ["dim", "dim", "dim", "lit", "dim"],
     });
   });
 

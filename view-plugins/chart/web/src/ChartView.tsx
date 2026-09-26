@@ -15,6 +15,7 @@ import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } 
 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
+import { DIM_OPACITY } from "./highlight";
 import { type Answer, type Built, compactAt, type Layout, measuredFields, toOption, withLayout } from "./option";
 import { highlightMarking, markedBy, markedCount, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
 import { type Cells, type RasterImage, upscale } from "./raster";
@@ -32,10 +33,12 @@ import { viewCall } from "./viewCall";
 
 export const PLUGIN = "chart";
 const FORMAT = 1;
-/** What ECharts paints a point outside the brush with, by default (echarts
- * component/brush/BrushModel.js DEFAULT_OUT_OF_BRUSH_COLOR): stated, so a
+/** What a mark outside a brush that writes nothing is drawn with: its own
+ * colour, dimmed as a marking dims (#847/#848 PR 5 P44 row 37). ECharts'
+ * default (component/brush/BrushModel.js DEFAULT_OUT_OF_BRUSH_COLOR) paints it
+ * #ddd, and a scatter over bars so painted vanished into them. Stated, so a
  * chart that stops lighting by its marking gets it back. */
-const OUT_OF_BRUSH = { color: "#ddd" };
+const OUT_OF_BRUSH = { opacity: DIM_OPACITY };
 
 function Notice({ role = "status", children }: { role?: "status" | "alert"; children: ReactNode }) {
   const color = role === "alert" ? "var(--err)" : "var(--text-paper-d)";
