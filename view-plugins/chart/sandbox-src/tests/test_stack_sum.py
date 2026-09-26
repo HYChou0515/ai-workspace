@@ -382,3 +382,12 @@ def test_a_binned_scatter_over_categories_has_no_phantom_cells(rows, tmp_path):
     [plain] = build(spec, rows)["layers"]
     [layer] = build(spec, _as_categories(rows, tmp_path))["layers"]
     assert layer["binned"] == plain["binned"] == {"points": 8, "bins": 8}
+
+
+# P41 row 23: a kept unsigned integer keeps its sign -- an Int64 cannot hold
+# 2**63 or more, and the query crashed on one.
+def test_a_kept_unsigned_integer_past_int64_is_kept(rows):
+    df = rows.assign(size=np.array([2**63 + 1] * 8, dtype="uint64"))
+    enc = {"x": ITEM, "y": VALUE, "color": GROUP, "text": {"field": "size", "type": "nominal"}}
+    [layer] = build(_spec(STACKED, enc), df)["layers"]
+    assert set(_cat(layer["columns"]["size"])) == {2**63 + 1}

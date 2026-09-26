@@ -158,6 +158,9 @@ def _stack_sum(
     return out, sorted({*summed, *kept})
 
 
+_NULLABLE = {"b": "boolean", "i": "Int64", "u": "UInt64"}
+
+
 def _shared(df: pd.DataFrame, fields: list[str], groups: list[str]) -> dict[str, pd.Series]:
     """Per group of `groups` that occurs (in `aggregate`'s order: the same, observed,
     grouping -- #847/#848 PR 5 P41 row 22), each field's value where
@@ -173,7 +176,8 @@ def _shared(df: pd.DataFrame, fields: list[str], groups: list[str]) -> dict[str,
         if picked.dtype.kind in "iub":
             # a missing value would turn integers into floats (1 -> 1.0, a
             # label "1.0") and true / false into numbers: nullable, they stay
-            picked = picked.astype("boolean" if picked.dtype.kind == "b" else "Int64")
+            # -- an unsigned one unsigned, which 2**63 and past need (P41 row 23)
+            picked = picked.astype(_NULLABLE[picked.dtype.kind])
         out[f] = picked.where(one)
     return out
 
