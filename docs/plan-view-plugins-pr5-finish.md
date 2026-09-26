@@ -67,7 +67,8 @@ words are examples, not spec keys.
   from the view the action was taken in, with its transforms applied before the marking
   lights them.
 
-- **Made while building** (each tagged: [user] the user decided; [mine, open to override] the builder did):
+- **Made while building** (tagged [user] where the user decided; every other item is the builder's call
+  [mine, open to override]):
   - (P2) The table a selection is made in is not filtered by it: it keeps every row,
     the marked ones highlighted ("fail marks N of M rows"), so the first click does not
     make the other rows vanish. Every other view on the marking still filters.
@@ -149,12 +150,24 @@ words are examples, not spec keys.
   - (P39) A line that hides its points shows a point whose neighbours are both empty; a
     drawn or dimmed point is left as it is (ada832d5).
   - (P41) A stack links by its slot and colour only [user, 2026-09-26]: `keys:` and
-    `highlight:` naming other fields are refused with the reason.
+    `highlight:` naming other fields are refused with the reason. (Narrowed by P42 row 29
+    [user, 2026-09-26]: only when no layer may link by the field.)
   - (P41) `highlight.values:` may also name a stack's value field; `index` in a `where:`
     is pandas' row index, not a field; a marking write equal to what the marking holds
     answers true (it is held); the value-kind line in `_layer_rows` stays, since a slot
     naming the value field reaches it (3990de02, 7249ca76, 75fec00e) [mine, open to
     override].
+  - (P42) In a layered chart the stack rule limits the stack layer only [user,
+    2026-09-26]. The builder's reading [mine, open to override]: an unstacked layer — or
+    another stack by its slot, colour or value — may carry any field, so the static rule
+    refuses only when no layer may link by it, and `validate` reads the data ("keys: no
+    layer can write '<field>'"); the note says "the stack links by <slot>, <colour> only
+    (each a <op>)" (8525ff92, d1087ab9).
+  - (P42) `diff` keeps a group either side has: 0 on the missing side for count and sum,
+    empty for other ops (20907757) [mine, open to override — 20907757's body calls it
+    "the user's rule"; it is the builder's, from the P42 table].
+  - (P43) Beside "by <columns>" the count is what went to the marking (78660df0)
+    [mine, open to override].
 
 ## Phases
 
@@ -491,8 +504,8 @@ words are examples, not spec keys.
 
   | # | Found | Rule installed |
   |---|---|---|
-  | 29 | A layered chart with a stack and an unstacked layer carrying `id` was refused for `keys: [id]` / a highlight on `id`, though the unstacked layer links by it (it did before P41) | The stack rule is the stack layer's [user]: `keys:` / `highlight:` are refused only when no unstacked layer carries the field; the stack layer then neither writes nor lights by it — a brush over its segment writes nothing, and the chart says so ("this layer is a sum: it links by <slot, colour>") |
-  | 30 | The `where:` lexer counted keyword arguments (`case=`), pandas' globals `inf`/`Inf` and the inside of triple-quoted text as columns, and Python split names with combining marks (Indic, Thai, NFD) where TS did not; Python sliced the string per name (quadratic) | A column is what pandas reads: kwargs, pandas' globals and any string literal are not; one identifier rule on both halves; every case pinned by pandas in `where-names.json`; linear time |
+  | 29 | A layered chart with a stack and an unstacked layer carrying `id` was refused for `keys: [id]` / a highlight on `id`, though the unstacked layer links by it (it did before P41) | The stack rule is the stack layer's [user]: `keys:` / `highlight:` are refused only when no unstacked layer carries the field; the stack layer then neither writes nor lights by it — a brush over its segment writes nothing, and the chart says so (built: "the stack links by <slot>, <colour> only (each a sum)"; a field another stack links by is carried too) |
+  | 30 | The `where:` lexer counted keyword arguments (`case=`), pandas' globals `inf`/`Inf` and the inside of triple-quoted text as columns, and Python split names with combining marks (Indic, Thai, NFD) where TS did not; Python sliced the string per name (quadratic) | A column is what pandas reads: kwargs, pandas' globals and any string literal are not; one identifier rule on both halves; every case pinned by pandas in `where-names.json` (three the pandas parser refuses — `x² > 1`, `² > value`, an unclosed `'''` — pinned by hand); linear time (measured, not tested: tests do not assert durations) |
   | 31 | Row 26 missed a stack's implicit sum: a tooltip `mean` of the value field showed sums | A stack's value channel carries its op (its own `aggregate`, else sum) in the one-op rule |
   | 32 | P41's observed grouping let `diff` drop a group only one side has, on parquet categories (CSV already did: an inner merge) | `diff` keeps a group either side has: 0 on the missing side for count and sum, empty otherwise |
   | 33 | "each segment's sum" in the summary, the refusals, the doc and the SKILL was false for a stack with its own `aggregate` (a mean) | The words name the op the segment is: "each segment's mean", "… sum" |
@@ -508,7 +521,8 @@ words are examples, not spec keys.
   unstacked layer may carry any field (only the data can tell), so the static rule refuses
   only when every layer is a stack that does not link by it, and `validate` reads the data
   ("keys: no layer can write '<field>'"); the note reads "the stack links by <slot>,
-  <colour> only (each a sum)", ellipsized at 390; `bad-layer-stack-highlight-values-other-
+  <colour> only (each a sum)", shortened so it fits at 390 (334 of 334 px), and a note too
+  long for its line ends in an ellipsis; `bad-layer-stack-highlight-values-other-
   field` was made all-stacks so it stays bad. Demo (1440 and 390, seen): the layered chart
   keyed by item draws, a box over group b's points marks r07–r12; a `case=False`
   highlight lights the n segments; a mean stack's refusal says "the mean of its rows".
