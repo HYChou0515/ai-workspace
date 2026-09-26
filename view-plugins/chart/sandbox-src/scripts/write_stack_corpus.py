@@ -118,6 +118,13 @@ CASES: list[tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]] = [
         {"x": AT, "y": VALUE, "color": GROUP},
         TWO_AT_ONE_X,
     ),
+    # (#847/#848 PR 5 P41 row 28) an ordinal y is a slot too, as a nominal one is
+    (
+        "a horizontal bar on an ordinal y",
+        BAR,
+        {"x": VALUE, "y": {"field": "item", "type": "ordinal"}, "color": GROUP},
+        ROWS,
+    ),
 ]
 
 

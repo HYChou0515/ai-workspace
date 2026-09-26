@@ -311,7 +311,7 @@ def test_the_stack_corpus_is_what_query_and_pandas_say():
         # the oracle, restated in plain Python: per colour, the running sum
         # of per-slot sums (a missing value adds nothing, a missing slot last)
         enc = c["spec"]["encoding"]
-        horizontal = enc["y"]["type"] == "nominal"
+        horizontal = enc["y"]["type"] in ("nominal", "ordinal")
         if enc["x" if horizontal else "y"].get("scale"):
             assert c["tops"] is None, c["name"]
             continue

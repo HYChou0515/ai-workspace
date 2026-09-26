@@ -4498,6 +4498,131 @@
      5.0
     ]
    ]
+  },
+  {
+   "name": "a horizontal bar on an ordinal y",
+   "data": {
+    "item": [
+     "p",
+     "p",
+     "q",
+     "p",
+     "q",
+     "q",
+     "q",
+     "r"
+    ],
+    "group": [
+     "a",
+     "a",
+     "a",
+     "b",
+     "b",
+     "b",
+     "a",
+     "b"
+    ],
+    "value": [
+     3,
+     4,
+     7,
+     5,
+     1,
+     2,
+     6,
+     8
+    ],
+    "region": [
+     "n",
+     "n",
+     "s",
+     "n",
+     "s",
+     "s",
+     "n",
+     "s"
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "keys": [
+     "item",
+     "group",
+     "region"
+    ],
+    "mark": {
+     "type": "bar",
+     "stack": true
+    },
+    "encoding": {
+     "x": {
+      "field": "value",
+      "type": "quantitative"
+     },
+     "y": {
+      "field": "item",
+      "type": "ordinal"
+     },
+     "color": {
+      "field": "group",
+      "type": "nominal"
+     }
+    }
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [
+       "value"
+      ],
+      "rows": 5,
+      "columns": {
+       "value": {
+        "kind": "f64",
+        "data": "AAAAAAAAHEAAAAAAAAAUQAAAAAAAACpAAAAAAAAACEAAAAAAAAAgQA=="
+       },
+       "item": {
+        "kind": "cat",
+        "levels": [
+         "p",
+         "q",
+         "r"
+        ],
+        "width": 1,
+        "codes": "AAABAQI="
+       },
+       "group": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAEAAQE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "tops": [
+    [
+     7.0,
+     13.0,
+     0.0
+    ],
+    [
+     12.0,
+     16.0,
+     8.0
+    ]
+   ]
   }
  ]
 }
