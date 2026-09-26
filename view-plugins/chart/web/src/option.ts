@@ -1056,18 +1056,24 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   // left out on a log axis, or missing -- was drawn nowhere, and nothing said
   // so. Such a point is shown (P39): every value the note does not count can
   // be seen.
-  for (const s of series) {
+  series.forEach((s, i) => {
     // (only a line that hides its points: drawn ones -- `point`, a highlight's dim -- stay)
-    if (s.type !== "line" || (s.itemStyle as { opacity?: number } | undefined)?.opacity !== 0) continue;
+    if (s.type !== "line" || (s.itemStyle as { opacity?: number } | undefined)?.opacity !== 0) return;
     const data = s.data as Item[];
-    const vi = s.encode ? 0 : 1; // lined up y-first by `lineUpStacks`, else [x, y]
+    // The value's place in a point (PR 5 P41 row 24): a point is [x, y] --
+    // the value second on an upright chart, first on a horizontal one (y a
+    // category) -- unless `lineUpStacks` listed y first (`encode`), which it
+    // does only on an upright chart whose x is no category: the value first.
+    const vi = s.encode ? 0 : 1 - baseAt;
     const empty = (d: Item | undefined) => d === undefined || (Array.isArray(d) ? d : d.value)[vi] === null;
+    const own = rows[i]!.rows;
     s.data = data.map((d, j) => {
-      if (empty(d) || !empty(data[j - 1]) || !empty(data[j + 1])) return d;
+      // only a row's own point stands alone: a stack's filler draws no row
+      if (own[j] === null || empty(d) || !empty(data[j - 1]) || !empty(data[j + 1])) return d;
       const item = Array.isArray(d) ? { value: d } : d;
       return { ...item, itemStyle: { ...(item.itemStyle as object), opacity: 1 } };
     });
-  }
+  });
 
   const tooltip = {
     trigger: "item",

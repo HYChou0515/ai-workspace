@@ -195,3 +195,62 @@ describe("a value at or below 0 on a log axis", () => {
     expect(built.notes.filter((n) => n.includes("log"))).toEqual([]);
   });
 });
+
+// #847/#848 PR 5 P41 row 24 (round 20): the lone-point pass drew a stack's
+// filler as a point, and read the category dimension of a horizontal line.
+describe("only a row's own point stands alone, read on the value axis", () => {
+  const opacityOf = (d: unknown) => (Array.isArray(d) ? undefined : (d as { itemStyle?: { opacity?: number } }).itemStyle?.opacity);
+
+  it("leaves a stack's filler clear, even between two left-out values", () => {
+    // B has -1 at s0 and s2 (left out) and no row at s1, where A's 5 lies
+    // beneath: B's filler there is 0, its neighbours empty
+    const doc = {
+      ...base,
+      mark: { type: "area", stack: true },
+      encoding: {
+        x: { field: "s", type: "nominal" },
+        y: { field: "v", type: "quantitative", scale: { type: "log" } },
+        color: { field: "g", type: "nominal" },
+      },
+    };
+    const built = toOption(doc, answer(layer("area", 3, { s: cat(["s1", "s0", "s2"]), g: cat(["A", "B", "B"]), v: f64([5, -1, -1]) })));
+    const series = built.option.series as { data: unknown[] }[];
+    const b = built.series.findIndex((s) => s.rows.some((r) => r === 1));
+    const fillers = built.series[b]!.rows.flatMap((r, j) => (r === null ? [j] : []));
+    expect(fillers.length).toBeGreaterThan(0);
+    for (const j of fillers) expect(opacityOf(series[b]!.data[j])).toBe(0);
+    // (control) A's own 5, between two empty fillers, is shown
+    const a = 1 - b;
+    const own = built.series[a]!.rows.indexOf(0);
+    expect(opacityOf(series[a]!.data[own])).toBe(1);
+  });
+
+  it("finds a lone value of a stack on a number x, which is listed y first", () => {
+    const doc = {
+      ...base,
+      mark: { type: "area", stack: true },
+      encoding: {
+        x: { field: "t", type: "quantitative" },
+        y: { field: "v", type: "quantitative", scale: { type: "log" } },
+      },
+    };
+    const built = toOption(doc, answer(layer("area", 3, { t: f64([1, 2, 3]), v: f64([-1, 5, -1]) })));
+    const s = (built.option.series as { data: unknown[]; encode?: unknown }[])[0]!;
+    expect(s.encode).toEqual({ x: 1, y: 0 });
+    expect(opacityOf(s.data[built.series[0]!.rows.indexOf(1)])).toBe(1);
+  });
+
+  it("finds a horizontal line's lone value on its x", () => {
+    const doc = {
+      ...base,
+      mark: { type: "line" },
+      encoding: {
+        x: { field: "v", type: "quantitative", scale: { type: "log" } },
+        y: { field: "c", type: "nominal" },
+      },
+    };
+    const built = toOption(doc, answer(layer("line", 3, { v: f64([-1, 5, -1]), c: cat(["a", "b", "c"]) })));
+    const data = (built.option.series as { data: unknown[] }[])[0]!.data;
+    expect(opacityOf(data[built.series[0]!.rows.indexOf(1)])).toBe(1);
+  });
+});
