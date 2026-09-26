@@ -163,6 +163,8 @@ function Plot({
     const full = withLayout(built, layout);
     return { ...full, brush: { ...(full.brush as object), outOfBrush: brushOff ? { colorAlpha: 1 } : OUT_OF_BRUSH } };
   }, [built, layout, brushOff]);
+  const optionRef = useRef(option);
+  optionRef.current = option;
   const notes = [...built.notes, ...laid.notes];
 
   // What a gesture writes, and what it wrote to the marking (null: nothing --
@@ -253,6 +255,13 @@ function Plot({
       brushed.current = drawn;
       writeRef.current(selectionFromBrush(event, builtRef.current));
     });
+    // A box drawn from ON a mark greys the rest while hover holds them in a
+    // state, and zrender restores a state's saved style when it is left (the
+    // whole style: Displayable._innerSaveToNormal), so the out-of-box marks took
+    // their colours back as the pointer left (P45 row 41, seen in Chromium).
+    // The series drawn again once the box is done -- as a change of lit rows
+    // draws them, the box kept -- each mark's saved style is its grey.
+    chart.on("brushEnd", () => chart.setOption(optionRef.current, { replaceMerge: ["series"] }));
     // The toolbox's ✕ dispatches `brush` with `command: "clear"` (echarts
     // toolbox/feature/Brush.js); a rebuild dispatches nothing. So the ✕ is the
     // person clearing, whatever the marking holds -- a seed from `highlight:`

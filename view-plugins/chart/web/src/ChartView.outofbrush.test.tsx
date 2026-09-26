@@ -258,3 +258,43 @@ describe("a point over a bar, out of a box over one segment", () => {
     }
   });
 });
+
+// Found in P45's demo (Chromium): a box drawn from ON a mark -- the pointer
+// hovering a bar when the drag began -- greyed the other marks while hover
+// held them blurred, and zrender restores a state's saved style on leaving it
+// (Displayable._innerSaveToNormal keeps the whole style), so as the pointer
+// left they took their colours back: the box's outside no longer showed.
+// Through zrender's own handler: hover, then drag, then move away.
+describe("a box drawn from on a mark", () => {
+  it("keeps its outside grey once the pointer leaves", async () => {
+    const chart = mount(new MarkingStore(), LAYERED, answer(c.answer.layers[0]!, points), null);
+    await settle();
+    const opt = chart.getOption() as { series: { type: string }[] };
+    const bars = opt.series.flatMap((s, i) => (s.type === "bar" ? [i] : []));
+    type Layout = { x: number; y: number; width: number; height: number };
+    type Model = { getSeriesByIndex(i: number): { getData(): { getItemLayout(i: number): Layout } } };
+    const seg = (chart as unknown as { getModel(): Model }).getModel().getSeriesByIndex(bars[0]!).getData().getItemLayout(0);
+    const own = bars.map((b) => [1, 2].map((i) => drawn(chart, b, i).fill!));
+    type Handler = Record<"mousemove" | "mousedown" | "mouseup", (e: object) => void>;
+    const h = (chart.getZr() as unknown as { handler: Handler }).handler;
+    const at = ([x, y]: number[]) => ({ zrX: x, zrY: y, offsetX: x, offsetY: y });
+    const from = [seg.x + seg.width / 2, seg.y + seg.height * 0.3];
+    const to = [seg.x + seg.width * 0.8, seg.y + seg.height * 0.7];
+    // the box tool picked (the toolbox's button does this)
+    act(() => chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "rect", brushMode: "single" } }));
+    act(() => h.mousemove(at(from)));
+    await settle();
+    act(() => {
+      h.mousedown(at(from));
+      for (let k = 1; k <= 5; k++) h.mousemove(at([from[0]! + ((to[0]! - from[0]!) * k) / 5, from[1]! + ((to[1]! - from[1]!) * k) / 5]));
+      h.mouseup(at(to));
+    });
+    await settle();
+    act(() => h.mousemove(at([590, 390])));
+    await settle();
+    // the other groups' segments (items 1, 2 of each bar series) are out of the box
+    bars.forEach((b, k) =>
+      [1, 2].forEach((i, j) => expect(desaturated(drawn(chart, b, i).fill!, own[k]![j]!), `series ${b} item ${i}`).toBe(true)),
+    );
+  });
+});
