@@ -463,6 +463,24 @@ words are examples, not spec keys.
   Also: a stack on a log axis sums its negatives into the segment, as a sum does (the
   note counts what the axis leaves out, not what a sum absorbed) — documented, not
   changed. Row 21 changes what `validate` accepts, so round 21 follows.
+  *P41 as built:* row 22 (every groupby that makes rows is the observed one — aggregate,
+  `_shared`, boxplot, errorbar, the binned scatter; explicit `aggregate` layers over category
+  columns lose their phantom rows too); row 23 (`UInt64`); row 25 (schema `stackValue`; the
+  value-kind line in `_layer_rows` stays — a slot naming the value field reaches it — and is
+  pinned); row 26 (`rules.py` / `rules.ts`, run after the schema); row 21 (keys ⊆ slot and
+  colour, highlight ⊆ slot, colour and value; a `where:` read by one lexer per half, held to
+  pandas by `wire-corpus/where-names.json`; validate's summary says "on a stack, <field> is
+  each segment's sum"; `selectionMarking` marks nothing for a selection naming no key;
+  `ok-area-log` re-keyed) [mine: `values:` may also name the value; `index` is not a field];
+  row 28 (the corpus case, and the corpus test's own oracle, which read only a nominal y as
+  horizontal); row 24; row 27 (false only when `ifEmpty` finds the marking occupied; an
+  equal write is held and answers true) [mine]. Demo (1440 and 390, seen): a stack keyed
+  by item cleared a table's 2 marked rows before, and shows the refusal after; a box over
+  b·s lights r09–r11 ("3 of 18 rows"); a parquet stack's r·b tooltip "region: —" →
+  "region: s"; the horizontal line's lone 5 drawn. Known and left: the stack corpus
+  (`wire-corpus/stack-sums.json`) keys its specs by fields `validate` now refuses — the
+  renderer never validates, and the web tests read those keys to show a summed field
+  writes no key; the `where:` lexer approximates a column named like a function.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third

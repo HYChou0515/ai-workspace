@@ -63,11 +63,18 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   加總的每一列原始資料；圖上的「N selected」數的是段數。依數值上色（quantitative color）的疊圖會被拒絕並說明原因：
   分不出哪些列是同一段。某個顏色在某個位置沒有資料時那裡算 0；對數軸上，底下沒有正值的位置留空。想看一列一列的
   值，就不要疊。
+- **疊圖只用位置和顏色連動**：`keys:` 只能寫它的位置欄位與顏色欄位；`highlight:` 只能讀位置、顏色與數值欄位
+  （`where:` 讀到的欄位、`values:` 的欄位都算）。寫了其他欄位（例如一列一列的編號）會被拒絕並說明原因：一段是
+  好幾列的總和，沒有單一的那個欄位值；想一列一列連動，就不要疊。`where:` 讀數值欄位時比的是每一段的總和，
+  `show_file` 的檢查摘要會寫「on a stack, <欄位> is each segment's sum」。疊圖的數值通道必須是 quantitative：
+  時間或類別沒有總和，寫了會被拒絕。parquet 的類別欄位只依實際出現的組合分組，不會多出總和 0 的空組合。
+- 同一層裡同一個欄位只能有一種 `aggregate`：例如 y 用 mean、tooltip 用 max 會被拒絕；兩個都要，就在 transform 的
+  `aggregate` 各取一個名字（`as:`）。
 - 對數軸上 0 與負值沒有位置，那些點不畫，圖上方的說明列寫「N values at or below 0 not drawn on the log y axis」，
   數的就是沒畫的值，包括 errorbar 的兩端與 boxplot 的五個摘要和離群點。errorbar 某一端沒有位置時，線畫到圖底、
   那一端不畫橫線；boxplot 任一摘要沒有位置時整個箱子不畫，說明列另寫「N boxes with a part at or below 0 not drawn
   on the log y axis」。疊圖裡某一層自己的 0 是「不加東西」，底下有正值時照常畫；折線上前後都沒畫的單獨一個值，
-  畫成一個點。
+  畫成一個點；水平的折線也是。疊圖為了對齊而補的 0 不是那一層自己的值，不畫成點。
 - 圖上的「N selected」只有在選取寫進**這張圖現在接的** marking 時才接「· by <欄位>」；沒有 `keys:` 的圖、斷開 marking
   時做的選取，或寫進的是另一個 marking，都只寫「N selected」。view 檔改名不算別的 view 寫的。
 - view 標頭的 marking 選單（標籤圖示＋`<名字> ▾`）可以把這張圖改接到別的 marking、新開一個，或斷開。這是**你自己的畫面狀態**，
