@@ -212,6 +212,28 @@ describe("ChartView", () => {
     expect(count.parentElement!.title).toBe("2 selected");
   });
 
+  it("ends a note too long for a narrow chart in an ellipsis, the whole line on hover (P42 row 29)", () => {
+    // at 390 wide the stack's note needed 338 px of a 334 px line: its field
+    // names were cut with nothing to say so
+    const stacked = {
+      ...DOC,
+      mark: undefined,
+      encoding: undefined,
+      layer: [
+        { mark: { type: "bar", stack: true }, encoding: { x: { field: "a", type: "nominal" }, y: { field: "b", type: "quantitative" } } },
+        { mark: "scatter", encoding: DOC.encoding },
+      ],
+    };
+    sdk.viewDocument.mockReturnValue(stacked);
+    const two = answer(layer("bar", 3, { a: cat(["1", "2", "3"]), b: f64([4, 5, 6]) }, { measured: ["b"] }), ANSWER.layers[0]!);
+    run({ data: ok(two) });
+    view();
+    const note = screen.getByText("the stack links by a only (each a sum)");
+    const { overflow, textOverflow, minWidth } = note.style;
+    expect({ overflow, textOverflow, minWidth }).toEqual({ overflow: "hidden", textOverflow: "ellipsis", minWidth: "0" });
+    expect(note.parentElement!.title).toBe("the stack links by a only (each a sum)");
+  });
+
   it("counts what a legend click leaves shown", () => {
     run({ data: ok() });
     view();

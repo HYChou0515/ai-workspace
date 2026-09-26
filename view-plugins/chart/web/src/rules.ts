@@ -190,7 +190,7 @@ export function unlinked(doc: unknown, parts: StackParts): Unlinked {
 /** What a chart says of a stack beside a layer that links by more (#847/#848
  * PR 5 P42 row 29) -- the sandbox's `sum_note`, word for word. */
 export function sumNote(parts: StackParts): string {
-  return `each stacked segment is a ${parts.op}: it links by ${parts.links.join(", ")}`;
+  return `the stack links by ${parts.links.join(", ")} only (each a ${parts.op})`;
 }
 
 /** Whether some layer of `doc` may link by `field`: one that is not a stack

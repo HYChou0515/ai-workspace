@@ -216,7 +216,7 @@ def unlinked(doc: Mapping[str, Any], parts: StackParts) -> Unlinked:
 def sum_note(parts: StackParts) -> str:
     """What a chart says of a stack beside a layer that links by more
     (#847/#848 PR 5 P42 row 29) -- the renderer's `sumNote`, word for word."""
-    return f"each stacked segment is a {parts.op}: it links by {', '.join(parts.links)}"
+    return f"the stack links by {', '.join(parts.links)} only (each a {parts.op})"
 
 
 def _carried(doc: Mapping[str, Any], field: str, highlight: bool) -> bool:

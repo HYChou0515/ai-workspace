@@ -45,7 +45,7 @@ const spec = (top: Record<string, unknown>) => ({
   ],
 });
 
-const NOTE = "each stacked segment is a sum: it links by item, group";
+const NOTE = "the stack links by item, group only (each a sum)";
 
 describe("a stack beside an unstacked layer (P42 row 29)", () => {
   it("says what the stack links by when the chart names a field it does not", () => {
@@ -71,7 +71,7 @@ describe("a stack beside an unstacked layer (P42 row 29)", () => {
     const mean = spec({ keys: ["region"] });
     const enc = { ...(c.spec.encoding as Record<string, unknown>), y: { field: "value", type: "quantitative", aggregate: "mean" } };
     (mean.layer[0] as { encoding: unknown }).encoding = enc;
-    expect(toOption(mean, both).notes).toEqual(["each stacked segment is a mean: it links by item, group"]);
+    expect(toOption(mean, both).notes).toEqual(["the stack links by item, group only (each a mean)"]);
   });
 
   it("writes, from a selection over both layers, only the unstacked layer's rows", () => {

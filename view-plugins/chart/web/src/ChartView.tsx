@@ -364,8 +364,12 @@ function Plot({
           color: "var(--text-paper-d)",
         }}
       >
+        {/* a note too long for the line ends in an ellipsis too (P42 row 29:
+            at 390 wide the stack's note lost its field names) */}
         {notes.map((n) => (
-          <span key={n}>{n}</span>
+          <span key={n} style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+            {n}
+          </span>
         ))}
         {/* shrinks to an ellipsis in a narrow chart: at 390 wide a 155 px
             panel cut "· by group, item" off with nothing to say so (P27); the

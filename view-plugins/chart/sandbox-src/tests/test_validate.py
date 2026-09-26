@@ -203,7 +203,7 @@ layer:
       x: {field: group, type: nominal}
       y: {field: value, type: quantitative}
 """
-SUM_NOTE = "each stacked segment is a sum: it links by group, region"
+SUM_NOTE = "the stack links by group, region only (each a sum)"
 # the unstacked layer a mean per group: its rows have no `item`
 AGGREGATED = LAYERED.split("  - mark: scatter")[0] + (
     "  - mark: line\n    encoding:\n      x: {field: group, type: nominal}\n"
@@ -228,7 +228,7 @@ def test_a_layered_stack_keyed_by_a_row_field_is_summarised_with_what_it_links_b
         "y: {field: value, type: quantitative, aggregate: mean}\n      color",
     )
     assert check(mean + "keys: [item]\n", lambda _: ROWS).summary == (
-        "5 rows; each stacked segment is a mean: it links by group, region; value 1–5"
+        "5 rows; the stack links by group, region only (each a mean); value 1–5"
     )
 
 
