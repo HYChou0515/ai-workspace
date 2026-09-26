@@ -544,6 +544,21 @@ words are examples, not spec keys.
   | 38 | `diff` subtracted unsigned sums in their own dtype and wrapped (0 − 7 = 4294967289); min/max alike | The difference is taken in a signed type |
   | 39 | A facet's summary said "f 0" ("nanf 0") for a colour column with no value | A column with no value is said so |
   | 40 | The schema's `stackValueChannel` message still said "a stack sums its rows" for a stack whose own aggregate is a mean | The message names what the stack does with its rows, as row 33's words do |
+  *P44 as built:* row 34 (a `#` ends the expression; names NFKC'd before judging,
+  backticks too; 8 pandas-pinned corpus cases, `a·b`/`x℘` redden the old TS class); row 35
+  (`validate` refuses a key column with no value — "keys: '<k>' is empty on every row";
+  a selection drops a key it found no value of; `markedCount` counts rows with a key
+  value) [mine: a key no layer has is left as before]; row 36 (the count first,
+  never shrunk; the note yields with its own title); row 37 (`outOfBrush` keeps the
+  colour at `DIM_OPACITY`); row 38 (`_signed`: int64, float64 past it, nullable twins);
+  row 39 (`ContinuousScale.empty` in the cache index; "<colour> has no value"); row 40.
+  Demo (1440 and 390, seen): "6 selected · by item" whole at 390; points visible, dimmed
+  in their colour, beside a segment-only box; a `# comment` highlight lights n; a brush on
+  an all-empty key leaves the table's 6 marked rows (before: cleared). Known and left:
+  `validate`'s data refusals reach `show_file`, not the panel (the panel's query runs
+  no data check; a chart there writes nothing rather than clearing); a facet cache built
+  before row 39 keeps its old summary until rebuilt; a `keys:` column absent from the
+  data is still accepted on an unstacked chart.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third

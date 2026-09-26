@@ -54,7 +54,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   還保有至少一半高度時；放不下就不畫，圖上方的說明列寫「colour key hidden (too short)」，顏色照舊。
   依顏色分組的圖例（例如分組的 scatter、line、bar）仍在圖上方，不受影響。
 - 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
-  （沒接 marking、或沒有 `keys:`）才把框外的點變灰。
+  （沒接 marking、或沒有 `keys:`）才把框外的點變淡：保留原本的顏色、淡到和 marking 變暗一樣，疊在長條上的點不會消失。
 - `stack: true`（bar、area）在任何軸上都照值疊，不用先 `aggregate: sum`：沙盒把同一個位置、同一個顏色的列
   加總成**一列**，等同在數值通道寫 `aggregate: sum`（數值通道有自己的 `aggregate` 就用它，而且只依位置與顏色分組）。
   空值不算，整組都是空值時總和是 0。其他通道有自己 `aggregate` 的欄位照它的 aggregate 算；其餘欄位（tooltip、text、
@@ -73,7 +73,11 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   `where:` 讀數值欄位時比的是每一段的聚合值，摘要寫「on a stack, <欄位> is each segment's sum」（或 mean）。
   `where:` 裡的關鍵字參數（例如 `case=False`）、`inf`、三引號字串都不是欄位。疊圖的數值通道必須是 quantitative：
   時間或類別沒有總和，寫了會被拒絕。parquet 的類別欄位只依實際出現的組合分組，不會多出總和 0 的空組合。
-- 圖上的「N selected · by <欄位>」數的是寫進 marking 的列：框到疊圖的一段、而那一段不寫東西時，不算進去。
+- 圖上的「N selected · by <欄位>」數的是寫進 marking 的列：框到疊圖的一段、而那一段不寫東西時，不算進去；key 欄位
+  沒有值的列也不算，框到的列在 key 欄位都沒有值時不寫 marking（不會清掉其他 view）。計數永遠排在最前面、不會被截掉；
+  說明列放不下時以「…」收尾，完整文字在滑鼠停留的提示裡。`keys:` 的欄位整欄都沒有值時，`show_file` 以「keys:
+  '<欄位>' is empty on every row — a key with no value links nothing」拒絕。`where:` 裡 `#` 之後是註解；名稱照 Python
+  的讀法（NFKC）判斷，例如全形的 `ｉｎｆ` 就是 `inf`。
 - 同一層裡同一個欄位只能有一種 `aggregate`（疊圖的數值通道也算，沒寫就是 sum）：例如 y 用 mean、tooltip 用 max 會被
   拒絕；兩個都要，就在 transform 的
   `aggregate` 各取一個名字（`as:`）。
@@ -124,12 +128,13 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
 - **牆旁的疊圖面板**：把選取的群組（沒選就是全部）在每個格子上疊成一張，欄位與統計自選；按 Set as B 把目前的選取
   存成 B，面板同時畫 A、B 與 A − B（發散色階）。疊圖在沙盒裡、依快取的版面算。
 - **第一次打開會顯示建置進度**：建置每做完一步印一行（讀檔、讀到幾列、分組、寫快取），畫面每秒更新一次，所以快的步驟可能一閃而過、只看得到其中幾行；快取還在的話只顯示「Opening the gallery…」。
-- 顏色欄是類別時，每個類別一種顏色，牆與放大圖都有圖例列出類別名稱。
+- 顏色欄是類別時，每個類別一種顏色，牆與放大圖都有圖例列出類別名稱。顏色欄整欄都沒有值時，`show_file` 的摘要寫
+  「<欄位> has no value」。
 - `show_file` 的 `validate` 對 `facet:` 檔案會直接建一次快取（和打開時同一個函式），所以打開時不會再被拒絕，
   也會馬上打開；代價是 `show_file` 要付一次建置時間（在同一個沙盒指令時間上限內）。
 - **疊圖與相減不需要 `facet`**：`transform:` 裡對 lattice 欄位做 `aggregate`，就是把所有群組疊成一張；
   `diff` 則是兩組相減（見 `SKILL.md` 的 Transforms）：只要一邊有的組都保留，count 與 sum 缺的那邊算 0，
-  其他聚合留空。
+  其他聚合留空。相減一律用有號數，無號整數的 0 − 7 是 −7，不會繞回。
 - 快取放在沙盒的 `.home/.cache/views/`，不算 workspace 額度、不備份、隨沙盒回收；上限與容量估算見升級手冊
   [#857](migrations.md#pr-857)。`facet:` 的來源必須是表格檔，`{entity: …}` 會被拒絕。
 

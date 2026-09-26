@@ -43,7 +43,7 @@ The keys to use:
 
 - `view`, `source` and either `mark` + `encoding` or `layer` are required.
 - `title`, `description`: text.
-- `keys`: column names.
+- `keys`: column names (a column no row holds a value of is refused).
 - `marking`: a name. Charts with the same `marking` are linked: rows the person
   selects in one (a box or a lasso on any mark but a pie or a rule, a click on a
   pie's slice, a legend click) light up in the others, matched on the columns named
@@ -136,7 +136,7 @@ transform:
     groupby: [cell_x, cell_y]
   - diff: {by: phase, of: after, minus: before}   # the aggregate where phase is after,
     aggregate: [{op: mean, field: t, as: delta}]  # minus where it is before,
-    groupby: [cell_x, cell_y]                     # per group either side has (count, sum: missing side 0; other ops: empty)
+    groupby: [cell_x, cell_y]                     # per group either side has (count, sum: missing side 0; other ops: empty); signed
 ```
 
 ### Facet: one small grid per group
