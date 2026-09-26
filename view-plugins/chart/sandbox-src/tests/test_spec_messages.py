@@ -181,10 +181,12 @@ def test_a_stack_coloured_by_a_category_or_no_stack_is_not_refused():
 
 # #847/#848 PR 5 P41 row 25: a stack sums its value channel; a time summed
 # nanoseconds and a category summed text. The renderer's spec.test.ts reads
-# the same.
+# the same. P44 row 40: a stack's segment is the op its value's `aggregate`
+# names (P42 row 33's words), not always a sum.
 STACK_VALUE = (
-    "a stack sums its rows, so its value channel must be quantitative — a time or "
-    "a category has no sum: make it quantitative, or drop stack"
+    "a stack's segment is the sum of its rows, or the aggregate its value channel "
+    "names, so its value channel must be quantitative — a time or a category is no "
+    "number to stack: make it quantitative, or drop stack"
 )
 
 

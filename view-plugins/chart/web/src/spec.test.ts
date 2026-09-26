@@ -132,9 +132,11 @@ describe("messages", () => {
 
   // #847/#848 PR 5 P41 row 25: a stack sums its value channel; a time summed
   // nanoseconds and a category summed text. test_spec_messages.py reads the same.
+  // P44 row 40: a stack's segment is the op its value's `aggregate` names.
   const stackValue =
-    "a stack sums its rows, so its value channel must be quantitative — a time or " +
-    "a category has no sum: make it quantitative, or drop stack";
+    "a stack's segment is the sum of its rows, or the aggregate its value channel " +
+    "names, so its value channel must be quantitative — a time or a category is no " +
+    "number to stack: make it quantitative, or drop stack";
   const stack = (mark: string, x: string, y: string) =>
     `${base}mark: ${mark}\nencoding:\n  x: {field: a, type: ${x}}\n  y: {field: b, type: ${y}}\n  color: {field: c, type: nominal}\n`;
 
