@@ -89,12 +89,14 @@ function fields(encoding: Encoding): [string, Def][] {
 
 /** #847/#848 PR 5 P41 row 26: a layer aggregates a field once (the first
  * channel naming it decides), so a second op on the same field would show
- * the first's value under its own label. */
-function oneOp(path: string, encoding: Encoding): string[] {
+ * the first's value under its own label. A stack's value channel carries the
+ * op its segments are (P42 row 31): its own `aggregate`, else sum. */
+function oneOp(path: string, layer: Layer): string[] {
+  const stack = stackParts(layer);
   const first = new Map<string, [string, string]>();
   const lines: string[] = [];
-  for (const [channel, d] of fields(encoding)) {
-    const op = d.aggregate;
+  for (const [channel, d] of fields(layer.encoding ?? {})) {
+    const op = stack && channel === stack.channel ? stack.op : d.aggregate;
     if (!op) continue;
     const field = d.field as string;
     const seen = first.get(field);
@@ -114,11 +116,15 @@ function oneOp(path: string, encoding: Encoding): string[] {
   return lines;
 }
 
-/** A stacked layer's slot and colour fields (the fields it links by) and its
- * value field; null for a layer that is not a stack -- a bar or an area with
- * `stack: true`. The slot is y when y is a category (a horizontal bar), else
- * x; a colour by value is refused by the schema. */
-export function stackParts(layer: Layer): { links: string[]; value: string } | null {
+/** A stacked layer's parts: its slot and colour fields (what it links by),
+ * its value field, the channel naming it (x or y) and what each segment is of
+ * its rows (the value's `aggregate`, else sum). */
+export type StackParts = { links: string[]; value: string; channel: string; op: string };
+
+/** A stacked layer's parts; null for a layer that is not a stack -- a bar or
+ * an area with `stack: true`. The slot is y when y is a category (a
+ * horizontal bar), else x; a colour by value is refused by the schema. */
+export function stackParts(layer: Layer): StackParts | null {
   const mark = layer.mark as { type?: string; stack?: unknown } | string | undefined;
   if (typeof mark !== "object" || !(mark.type === "bar" || mark.type === "area") || mark.stack !== true) return null;
   const encoding = layer.encoding as Record<string, Def>;
@@ -126,7 +132,8 @@ export function stackParts(layer: Layer): { links: string[]; value: string } | n
   const [slot, value] = horizontal ? ["y", "x"] : ["x", "y"];
   const colour = encoding.color?.field;
   const links = [encoding[slot]!.field as string, ...(colour !== undefined ? [colour] : [])];
-  return { links: [...new Set(links)], value: encoding[value]!.field as string };
+  const op = encoding[value]!.aggregate ?? "sum";
+  return { links: [...new Set(links)], value: encoding[value]!.field as string, channel: value, op };
 }
 
 const quoted = (names: string[]) => names.map((n) => `'${n}'`).join(", ");
@@ -170,7 +177,7 @@ function stackLinks(doc: Doc, path: string, layer: Layer): string[] {
 export function ruleErrors(doc: unknown): string[] {
   const lines: string[] = [];
   for (const [path, layer] of layers(doc as Doc)) {
-    lines.push(...oneOp(path, layer.encoding ?? {}));
+    lines.push(...oneOp(path, layer));
     lines.push(...stackLinks(doc as Doc, path, layer));
   }
   return lines;

@@ -266,6 +266,36 @@ def test_one_field_aggregated_one_way_is_not_refused():
         assert _errors(_two_ops(y, tip)) == [], (y, tip)
 
 
+def _stack_tip(y: str, tip: str, horizontal: bool = False) -> str:
+    slot, value = ("y", "x") if horizontal else ("x", "y")
+    return BASE + (
+        f"mark: {{type: bar, stack: true}}\nencoding:\n  {slot}: {{field: item, type: nominal}}\n"
+        f"  {value}: {{field: value, type: quantitative{y}}}\n"
+        f"  tooltip: [{{field: value, type: quantitative{tip}}}]\n"
+    )
+
+
+def test_a_stacks_own_sum_is_its_values_op():
+    # #847/#848 PR 5 P42 row 31: a stack sums its value channel when it names
+    # no aggregate (P40 row 18), so a tooltip mean of that field showed sums
+    # under a "mean" label. The renderer's spec.test.ts reads the same.
+    assert _errors(_stack_tip("", ", aggregate: mean")) == [
+        "encoding.tooltip[0]: 'value' is aggregated as sum on y — a field has one "
+        "aggregate in a layer, so mean here would show the sum: use sum here too, "
+        "or compute both in a transform aggregate, each under its own name (as:)"
+    ]
+    [line] = _errors(_stack_tip("", ", aggregate: max", horizontal=True))
+    assert line.startswith("encoding.tooltip[0]: 'value' is aggregated as sum on x — ")
+    [line] = _errors(_stack_tip(", aggregate: mean", ", aggregate: sum"))
+    assert line.startswith("encoding.tooltip[0]: 'value' is aggregated as mean on y — ")
+
+
+def test_a_stacks_tooltip_with_its_own_op_is_not_refused():
+    for y, tip in [("", ", aggregate: sum"), ("", ""), (", aggregate: mean", ", aggregate: mean")]:
+        assert _errors(_stack_tip(y, tip)) == [], (y, tip)
+        assert _errors(_stack_tip(y, tip, horizontal=True)) == [], (y, tip)
+
+
 def test_a_stack_whose_value_is_a_number_or_no_stack_is_not_refused():
     for mark, x, y in [
         ("{type: bar, stack: true}", "nominal", "quantitative"),

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 _CHANNELS = ("x", "y", "x2", "y2", "color", "size", "theta", "text")
 
@@ -88,14 +88,18 @@ def _fields(encoding: Mapping[str, Any]) -> Iterator[tuple[str, Mapping[str, Any
         yield "tooltip", tips
 
 
-def _one_op(path: str, encoding: Mapping[str, Any]) -> list[str]:
+def _one_op(path: str, layer: Mapping[str, Any]) -> list[str]:
     """#847/#848 PR 5 P41 row 26: a layer aggregates a field once (`query`'s
     `_measures`: the first channel naming it decides), so a second op on the
-    same field would show the first's value under its own label."""
+    same field would show the first's value under its own label. A stack's
+    value channel carries the op its segments are (P42 row 31): its own
+    `aggregate`, else sum."""
+    encoding = layer.get("encoding", {})
+    stack = stack_parts(layer)
     first: dict[str, tuple[str, str]] = {}
     lines = []
     for channel, d in _fields(encoding):
-        op = d.get("aggregate")
+        op = stack.op if stack and channel == stack.channel else d.get("aggregate")
         if not op:
             continue
         field = d["field"]
@@ -112,12 +116,18 @@ def _one_op(path: str, encoding: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def stack_parts(layer: Mapping[str, Any]) -> tuple[list[str], str] | None:
-    """A stacked layer's slot and colour fields (the fields it links by) and
-    its value field; None for a layer that is not a stack -- a bar or an
-    area with `stack: true`, as `query.stacked` reads it. The slot is y when
-    y is a category (a horizontal bar), else x; a colour by value is refused
-    by the schema."""
+class StackParts(NamedTuple):
+    links: list[str]  # its slot and colour fields: what it links by
+    value: str  # its value field
+    channel: str  # the channel naming it, x or y
+    op: str  # what each segment is of its rows: the value's aggregate, else sum
+
+
+def stack_parts(layer: Mapping[str, Any]) -> StackParts | None:
+    """A stacked layer's parts; None for a layer that is not a stack -- a
+    bar or an area with `stack: true`, as `query.stacked` reads it. The slot
+    is y when y is a category (a horizontal bar), else x; a colour by value
+    is refused by the schema."""
     mark = layer.get("mark")
     if not (
         isinstance(mark, Mapping)
@@ -130,7 +140,8 @@ def stack_parts(layer: Mapping[str, Any]) -> tuple[list[str], str] | None:
     slot, value = ("y", "x") if horizontal else ("x", "y")
     colour = encoding.get("color", {}).get("field")
     links = [encoding[slot]["field"], *([colour] if colour is not None else [])]
-    return list(dict.fromkeys(links)), encoding[value]["field"]
+    op = encoding[value].get("aggregate", "sum")
+    return StackParts(list(dict.fromkeys(links)), encoding[value]["field"], value, op)
 
 
 def _quoted(names: list[str]) -> str:
@@ -147,7 +158,7 @@ def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) ->
     parts = stack_parts(layer)
     if parts is None:
         return []
-    links, value = parts
+    links, value = parts.links, parts.value
     subject = f"a stack ({path.rstrip('.')})" if path else "a stack"
     head = (
         f"{subject} links by its slot and colour only ({_quoted(links)}) — a segment is the"
@@ -178,6 +189,6 @@ def rule_errors(doc: Mapping[str, Any]) -> list[str]:
     """Every way a schema-valid `doc` breaks these rules, one line each."""
     lines: list[str] = []
     for path, layer in _layers(doc):
-        lines += _one_op(path, layer.get("encoding", {}))
+        lines += _one_op(path, layer)
         lines += _stack_links(doc, path, layer)
     return lines

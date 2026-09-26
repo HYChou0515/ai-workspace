@@ -207,6 +207,38 @@ describe("messages", () => {
     expect(verdict(twoOps(y, tip))).toEqual([]);
   });
 
+  // #847/#848 PR 5 P42 row 31: a stack sums its value channel when it names no
+  // aggregate, so a tooltip mean of that field showed sums under a "mean"
+  // label. test_spec_messages.py reads the same.
+  const stackTip = (y: string, tip: string, horizontal = false) => {
+    const [slot, value] = horizontal ? ["y", "x"] : ["x", "y"];
+    return (
+      `${base}mark: {type: bar, stack: true}\nencoding:\n  ${slot}: {field: item, type: nominal}\n` +
+      `  ${value}: {field: value, type: quantitative${y}}\n  tooltip: [{field: value, type: quantitative${tip}}]\n`
+    );
+  };
+
+  it("counts a stack's own sum as its value's op", () => {
+    expect(verdict(stackTip("", ", aggregate: mean"))).toEqual([
+      "encoding.tooltip[0]: 'value' is aggregated as sum on y — a field has one " +
+        "aggregate in a layer, so mean here would show the sum: use sum here too, " +
+        "or compute both in a transform aggregate, each under its own name (as:)",
+    ]);
+    expect(verdict(stackTip("", ", aggregate: max", true))[0]).toMatch(/^encoding\.tooltip\[0\]: 'value' is aggregated as sum on x — /);
+    expect(verdict(stackTip(", aggregate: mean", ", aggregate: sum"))[0]).toMatch(
+      /^encoding\.tooltip\[0\]: 'value' is aggregated as mean on y — /,
+    );
+  });
+
+  it.each([
+    ["", ", aggregate: sum"],
+    ["", ""],
+    [", aggregate: mean", ", aggregate: mean"],
+  ])("does not refuse a stack's tooltip with its own op (y%s, tooltip%s)", (y, tip) => {
+    expect(verdict(stackTip(y, tip))).toEqual([]);
+    expect(verdict(stackTip(y, tip, true))).toEqual([]);
+  });
+
   // #847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its slot
   // and colour only. A segment is the sum of its rows, so it has no single
   // value of any other field. test_spec_messages.py reads the same.
