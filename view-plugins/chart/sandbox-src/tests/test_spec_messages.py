@@ -358,21 +358,62 @@ def test_a_stacks_refusal_names_the_op_its_segments_are():
     ]
 
 
-def test_a_layer_stack_is_named():
-    layered = (
-        BASE
-        + "keys: [id]\nlayer:\n  - mark: {type: area, stack: true}\n    encoding:\n"
-        + (
-            "      x: {field: item, type: nominal}\n      y: {field: value, type: quantitative}\n"
-            "  - mark: scatter\n    encoding:\n      x: {field: item, type: nominal}\n"
-            "      y: {field: value, type: quantitative}\n"
-        )
-    )
-    assert _errors(layered) == [
-        "keys: a stack (layer[0]) links by its slot and colour only ('item') — a segment "
-        "is the sum of its rows, so it has no single 'id': key the view by its slot and "
+# #847/#848 PR 5 P42 row 29 [user, 2026-09-26]: in a layered chart the stack
+# rule limits the stack layer only. A layer that is not stacked links by any
+# field its rows have, so `keys:` / `highlight:` are refused here only when
+# no layer is unstacked; whether one really has the field is `validate`'s
+# (it reads the data). The renderer's spec.test.ts reads the same.
+STACK_AND_POINTS = (
+    "layer:\n  - mark: {type: bar, stack: true}\n    encoding:\n"
+    "      x: {field: group, type: nominal}\n      y: {field: value, type: quantitative}\n"
+    "  - mark: scatter\n    encoding:\n      x: {field: group, type: nominal}\n"
+    "      y: {field: value, type: quantitative}\n      tooltip: {field: item, type: nominal}\n"
+)
+
+
+def test_a_stack_beside_an_unstacked_layer_limits_only_itself():
+    for top in [
+        "keys: [item]\n",
+        "keys: [group, item]\n",
+        "highlight: {where: \"item == 'x'\"}\n",
+        "highlight: {values: {item: [x]}}\n",
+    ]:
+        assert _errors(BASE + top + STACK_AND_POINTS) == [], top
+
+
+def test_a_chart_of_stacks_only_names_each_stack():
+    stacks = STACK_AND_POINTS.replace("mark: scatter", "mark: {type: area, stack: true}")
+    assert _errors(BASE + "keys: [item]\n" + stacks) == [
+        f"keys: a stack (layer[{i}]) links by its slot and colour only ('group') — a segment "
+        "is the sum of its rows, so it has no single 'item': key the view by its slot and "
         "colour, or drop stack so single rows link"
+        for i in (0, 1)
     ]
+
+
+def test_a_field_another_stack_links_by_is_not_refused():
+    # layer[1] is a stack by item: it writes and lights by item, layer[0] not
+    stacks = STACK_AND_POINTS.replace("mark: scatter", "mark: {type: area, stack: true}")
+    stacks = stacks.replace(
+        "      x: {field: group, type: nominal}\n      y: {field: value, type: quantitative}\n"
+        "      tooltip",
+        "      x: {field: group, type: nominal}\n      y: {field: value, type: quantitative}\n"
+        "      color: {field: item, type: nominal}\n      tooltip",
+    )
+    assert "color: {field: item" in stacks
+    for top in ["keys: [item]\n", "highlight: {where: \"item == 'x'\"}\n"]:
+        assert _errors(BASE + top + stacks) == [], top
+    [line] = _errors(BASE + "keys: [region]\n" + stacks)[:1]
+    assert line.startswith("keys: a stack (layer[0]) ") and "no single 'region'" in line
+    # a highlight may test another stack's value (each of its segments' sum)
+    sized = stacks.replace(
+        "y: {field: value, type: quantitative}\n      color",
+        "y: {field: size, type: quantitative}\n      color",
+    )
+    assert "field: size" in sized
+    assert _errors(BASE + "highlight: {where: 'size > 1'}\n" + sized) == []
+    [line] = _errors(BASE + "keys: [size]\n" + sized)[:1]
+    assert "no single 'size'" in line
 
 
 def test_a_horizontal_stack_links_by_its_y():

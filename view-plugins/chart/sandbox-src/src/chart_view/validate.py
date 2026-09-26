@@ -23,7 +23,7 @@ import pandas as pd
 from chart_view.datums import datum_errors
 from chart_view.facet import CacheUnusable
 from chart_view.query import LayerRows, answer, binned, layer_rows, spec_layers
-from chart_view.rules import stack_parts, where_names
+from chart_view.rules import stack_parts, sum_note, unlinked, where_names
 from chart_view.sources import SourceError
 from chart_view.spec import SpecError, parse_spec, spec_errors
 from chart_view.transforms import TransformError
@@ -92,6 +92,36 @@ def _summed(spec: Mapping[str, Any]) -> list[str]:
     return list(dict.fromkeys(said))
 
 
+def _beside_stacks(spec: Mapping[str, Any], layers: list[LayerRows]) -> tuple[list[str], list[str]]:
+    """(the summary parts, the refusals) for a stack whose `keys:` /
+    `highlight:` name a field it does not link by -- accepted beside a layer
+    that may (#847/#848 P42 row 29 [user, 2026-09-26]: the stack rule limits
+    the stack layer only). The summary says what the stack links by; a key
+    no layer's rows hold row by row (not binned, not an aggregate or a
+    stack's kept value) is refused, as `_highlight` refuses a highlight no
+    layer can see: nothing would ever write it."""
+    notes: list[str] = []
+    errors: list[str] = []
+    for layer in spec_layers(spec):
+        parts = stack_parts(layer)
+        if parts is None:
+            continue
+        other = unlinked(spec, parts)
+        if not other.keys and other.lights():
+            continue
+        note = sum_note(parts)
+        notes.append(note)
+        errors += [
+            f"keys: no layer can write '{k}' — {note}, and no other layer has '{k}' row by row"
+            for k in other.keys
+            if not any(
+                k in ly.rows.columns and k not in ly.measured and not binned(spec, ly)
+                for ly in layers
+            )
+        ]
+    return list(dict.fromkeys(notes)), list(dict.fromkeys(errors))
+
+
 BuildFacet = Callable[[str], Mapping[str, Any]]
 
 
@@ -143,6 +173,10 @@ def check(text: str, read_source: ReadSource, build_facet: BuildFacet = _build_f
     if errors:
         return Result(errors=errors)
 
+    notes, errors = _beside_stacks(spec, layers)
+    if errors:
+        return Result(errors=errors)
+
     drawn = next((ly for ly in layers if len(ly.rows.columns)), layers[0])
     parts: list[str] = []
     if "highlight" in spec:
@@ -155,6 +189,7 @@ def check(text: str, read_source: ReadSource, build_facet: BuildFacet = _build_f
         parts.append(f"{len(drawn.rows):,} points drawn as bins")
     else:
         parts.append(f"{len(drawn.rows)} rows")
+    parts += notes
     measure = _measure(drawn)
     if measure:
         parts.append(measure)

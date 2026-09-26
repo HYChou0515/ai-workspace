@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 from pandas.errors import UndefinedVariableError
 
+from chart_view.rules import stack_parts, unlinked
 from chart_view.transforms import (
     TransformError,
     aggregate,
@@ -369,6 +370,11 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
             df = df.assign(**{f"$key.{k}": df[k]})
             kinds[f"$key.{k}"] = "cat"
     lit = _highlight(df, spec.get("highlight"))
+    parts = stack_parts(layer)
+    if parts is not None and not unlinked(spec, parts).lights():
+        # a stack is not lit by a field it does not link by, though its
+        # tooltip keeps one where a segment's rows share it (P42 row 29)
+        lit = None
     return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds, measured)
 
 

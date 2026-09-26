@@ -167,13 +167,58 @@ export function stackParts(layer: Layer): StackParts | null {
 
 const quoted = (names: string[]) => names.map((n) => `'${n}'`).join(", ");
 
+/** What a spec's `keys:` / `highlight:` name that a stack does not link by:
+ * any field but its slot and colour, and for a highlight, its value (each
+ * segment's sum, or mean...). `highlight` holds "where" / "values" -> the
+ * fields each reads, for those the spec has. */
+export type Unlinked = { keys: string[]; highlight: [string, string[]][] };
+
+export function unlinked(doc: unknown, parts: StackParts): Unlinked {
+  const d = doc as Doc;
+  const keys = (d.keys ?? []).filter((k) => !parts.links.includes(k));
+  const highlight = d.highlight ?? {};
+  const reads: ["where" | "values", () => string[]][] = [
+    ["where", () => whereNames(highlight.where as string)],
+    ["values", () => Object.keys(highlight.values as object)],
+  ];
+  const other = reads
+    .filter(([how]) => how in highlight)
+    .map(([how, read]): [string, string[]] => [how, read().filter((c) => !parts.links.includes(c) && c !== parts.value)]);
+  return { keys, highlight: other };
+}
+
+/** What a chart says of a stack beside a layer that links by more (#847/#848
+ * PR 5 P42 row 29) -- the sandbox's `sum_note`, word for word. */
+export function sumNote(parts: StackParts): string {
+  return `each stacked segment is a ${parts.op}: it links by ${parts.links.join(", ")}`;
+}
+
+/** Whether some layer of `doc` may link by `field`: one that is not a stack
+ * (its rows may have any field -- the sandbox's validate reads the data), or
+ * a stack whose slot or colour it is (for a highlight, its value too). */
+function carried(doc: Doc, field: string, highlight: boolean): boolean {
+  return layers(doc).some(([, layer]) => {
+    const parts = stackParts(layer);
+    return parts === null || parts.links.includes(field) || (highlight && field === parts.value);
+  });
+}
+
 /** #847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its slot
  * and colour only. A segment is the sum of its rows (P40 row 18) -- or the
  * value's own aggregate of them (the words name which: P42 row 33) -- so it
  * has no single value of any other field: a `keys:` naming one wrote nothing
  * a linked view could light, and a `highlight:` reading one lit nothing. A
  * highlight may also test the value, which is each segment's sum (or
- * mean...). */
+ * mean...).
+ *
+ * P42 row 29 [user, 2026-09-26]: the rule limits the stack layer only. A
+ * layer that is not stacked links by any field its rows have, so these are
+ * refused only when no layer may link by them (every layer a stack, none by
+ * that slot or colour). Beside a layer that may, the stack neither writes nor
+ * lights by such a field (the sandbox's query, `keyColumn`), the sandbox's
+ * validate refuses a key no layer's rows hold and a highlight no layer can
+ * see (it reads the data), and the chart says what the stack links by
+ * (`sumNote`). */
 function stackLinks(doc: Doc, path: string, layer: Layer): string[] {
   const parts = stackParts(layer);
   if (!parts) return [];
@@ -183,20 +228,16 @@ function stackLinks(doc: Doc, path: string, layer: Layer): string[] {
     `${subject} links by its slot and colour only (${quoted(links)}) — a segment is the` +
     ` ${op} of its rows, so it has no single`;
   const lines: string[] = [];
-  const keys = (doc.keys ?? []).filter((k) => !links.includes(k));
+  const other = unlinked(doc, parts);
+  const keys = other.keys.filter((k) => !carried(doc, k, false));
   if (keys.length > 0) {
     lines.push(`keys: ${head} ${quoted(keys)}: key the view by its slot and colour, or drop stack so single rows link`);
   }
-  const highlight = doc.highlight ?? {};
-  const reads: ["where" | "values", () => string[]][] = [
-    ["where", () => whereNames(highlight.where as string)],
-    ["values", () => Object.keys(highlight.values as object)],
-  ];
-  for (const [how, read] of reads) {
-    const other = how in highlight ? read().filter((c) => !links.includes(c) && c !== value) : [];
-    if (other.length > 0) {
+  for (const [how, read] of other.highlight) {
+    const fields = read.filter((f) => !carried(doc, f, true));
+    if (fields.length > 0) {
       lines.push(
-        `highlight.${how}: ${head} ${quoted(other)}: test its slot and colour, or its` +
+        `highlight.${how}: ${head} ${quoted(fields)}: test its slot and colour, or its` +
           ` value '${value}' (each segment's ${op}), or drop stack so single rows light`,
       );
     }

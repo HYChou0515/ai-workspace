@@ -184,6 +184,52 @@ def _quoted(names: list[str]) -> str:
     return ", ".join(f"'{n}'" for n in names)
 
 
+class Unlinked(NamedTuple):
+    """What a spec's `keys:` / `highlight:` name that a stack does not link by."""
+
+    keys: list[str]
+    highlight: dict[str, list[str]]  # "where" / "values" -> the fields each reads
+
+    def lights(self) -> bool:
+        """Whether the highlight tests only what the stack links by (or its value)."""
+        return not any(self.highlight.values())
+
+
+def unlinked(doc: Mapping[str, Any], parts: StackParts) -> Unlinked:
+    """The fields `doc`'s `keys:` and `highlight:` name that a stack with
+    `parts` does not link by: any but its slot and colour, and for a
+    highlight, its value (each segment's sum, or mean...)."""
+    keys = [k for k in doc.get("keys", []) if k not in parts.links]
+    highlight = doc.get("highlight", {})
+    reads = {
+        "where": lambda: where_names(highlight["where"]),
+        "values": lambda: list(highlight["values"]),
+    }
+    other = {
+        how: [c for c in read() if c not in (*parts.links, parts.value)]
+        for how, read in reads.items()
+        if how in highlight
+    }
+    return Unlinked(keys, other)
+
+
+def sum_note(parts: StackParts) -> str:
+    """What a chart says of a stack beside a layer that links by more
+    (#847/#848 PR 5 P42 row 29) -- the renderer's `sumNote`, word for word."""
+    return f"each stacked segment is a {parts.op}: it links by {', '.join(parts.links)}"
+
+
+def _carried(doc: Mapping[str, Any], field: str, highlight: bool) -> bool:
+    """Whether some layer of `doc` may link by `field`: one that is not a
+    stack (its rows may have any field -- `validate` reads the data), or a
+    stack whose slot or colour it is (for a highlight, its value too)."""
+    for _, layer in _layers(doc):
+        parts = stack_parts(layer)
+        if parts is None or field in parts.links or (highlight and field == parts.value):
+            return True
+    return False
+
+
 def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) -> list[str]:
     """#847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its
     slot and colour only. A segment is the sum of its rows (P40 row 18) --
@@ -191,7 +237,16 @@ def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) ->
     -- so it has no single value of any other field: a `keys:` naming one
     wrote nothing a linked view could light, and a `highlight:` reading one
     lit nothing. A highlight may also test the value, which is each
-    segment's sum (or mean...)."""
+    segment's sum (or mean...).
+
+    P42 row 29 [user, 2026-09-26]: the rule limits the stack layer only. A
+    layer that is not stacked links by any field its rows have, so these
+    are refused only when no layer may link by them (every layer a stack,
+    none by that slot or colour). Beside a layer that may, the stack
+    neither writes nor lights by such a field (`query`, `selection.ts`),
+    `validate` refuses a key no layer's rows hold and a highlight no layer
+    can see (it reads the data), and the chart says what the stack links by
+    (`sum_note`)."""
     parts = stack_parts(layer)
     if parts is None:
         return []
@@ -202,21 +257,18 @@ def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) ->
         f" {op} of its rows, so it has no single"
     )
     lines = []
-    keys = [k for k in doc.get("keys", []) if k not in links]
+    other = unlinked(doc, parts)
+    keys = [k for k in other.keys if not _carried(doc, k, highlight=False)]
     if keys:
         lines.append(
-            f"keys: {head} {_quoted(keys)}: key the view by its slot and colour, or drop"
-            " stack so single rows link"
+            f"keys: {head} {_quoted(keys)}: key the view by its slot and colour, or"
+            " drop stack so single rows link"
         )
-    highlight = doc.get("highlight", {})
-    for how, read in (
-        ("where", lambda: where_names(highlight["where"])),
-        ("values", lambda: list(highlight["values"])),
-    ):
-        other = [c for c in read() if c not in (*links, value)] if how in highlight else []
-        if other:
+    for how, read in other.highlight.items():
+        fields = [f for f in read if not _carried(doc, f, highlight=True)]
+        if fields:
             lines.append(
-                f"highlight.{how}: {head} {_quoted(other)}: test its slot and colour, or its"
+                f"highlight.{how}: {head} {_quoted(fields)}: test its slot and colour, or its"
                 f" value '{value}' (each segment's {op}), or drop stack so single rows light"
             )
     return lines

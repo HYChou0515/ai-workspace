@@ -401,3 +401,32 @@ def test_a_kept_unsigned_integer_past_int64_is_kept(rows):
     enc = {"x": ITEM, "y": VALUE, "color": GROUP, "text": {"field": "size", "type": "nominal"}}
     [layer] = build(_spec(STACKED, enc), df)["layers"]
     assert set(_cat(layer["columns"]["size"])) == {2**63 + 1}
+
+
+# P42 row 29 [user, 2026-09-26]: in a layered chart the stack rule limits the
+# stack layer only -- a highlight on a field the stack does not link by lights
+# the unstacked layer's rows and leaves the stack unlit (null, drawn undimmed,
+# as a layer without the columns), though its tooltip keeps `region` where a
+# segment's rows share one (p.a and p.b are all n).
+def test_a_stack_is_not_lit_by_a_field_it_does_not_link_by(rows):
+    tip = {"field": "region", "type": "nominal"}
+    spec = {
+        "view": "chart",
+        "source": "data/a.csv",
+        "highlight": {"where": "region == 'n'"},
+        "layer": [
+            {"mark": STACKED, "encoding": {"x": ITEM, "y": VALUE, "color": GROUP, "tooltip": tip}},
+            {"mark": "scatter", "encoding": {"x": ITEM, "y": VALUE}},
+        ],
+    }
+    stack, points = build(spec, rows)["layers"]
+    assert set(_cat(stack["columns"]["region"])) == {"n", "s", None}  # kept where shared
+    assert (stack["highlight"], stack["lit"]) == (None, None)
+    assert points["lit"] == int((rows["region"] == "n").sum()) == 4
+    # a highlight on what the stack links by (and its value) still lights it
+    spec["highlight"] = {"where": "group == 'a' and value > 10"}
+    stack, points = build(spec, rows)["layers"]
+    assert stack["lit"] == 1  # q.a sums 7 + 6; p.a 3 + 4
+    spec["highlight"] = {"values": {"region": ["n"]}}
+    stack, points = build(spec, rows)["layers"]
+    assert (stack["highlight"], points["lit"]) == (None, 4)

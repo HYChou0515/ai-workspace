@@ -16,6 +16,7 @@
 import { clockFor, type Clock, type Precision, wallText } from "./clock";
 import { DIM_OPACITY, litRows } from "./highlight";
 import { CATEGORY_COLOURS, categoryTable, colourTable, lattice, paintCells, type Cells, type RasterImage } from "./raster";
+import { stackParts, sumNote, unlinked } from "./rules";
 
 export { CATEGORY_COLOURS };
 import { decodeColumn, type Column, type Scalar, type WireColumn } from "./wire";
@@ -615,6 +616,15 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   const slices: (string[] | undefined)[] = [];
   const grids: GridLayer[] = [];
   const notes: string[] = [];
+  // A stack beside a layer that links by more (P42 row 29): the chart says
+  // what the stack links by, for it neither writes nor lights by the rest.
+  for (const ly of specs) {
+    const parts = stackParts(ly);
+    if (!parts) continue;
+    const other = unlinked(doc, parts);
+    const note = sumNote(parts);
+    if ((other.keys.length > 0 || other.highlight.some(([, f]) => f.length > 0)) && !notes.includes(note)) notes.push(note);
+  }
   const visualMaps: Record<string, unknown>[] = [];
   const legend: string[] = [];
 

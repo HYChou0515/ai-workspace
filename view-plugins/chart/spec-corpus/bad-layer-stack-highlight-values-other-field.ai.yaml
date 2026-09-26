@@ -7,7 +7,8 @@ layer:
     encoding:
       x: {field: value, type: quantitative}
       y: {field: group, type: nominal}
-  - mark: scatter
+  - mark: {type: bar, stack: true}
     encoding:
       x: {field: value, type: quantitative}
       y: {field: group, type: nominal}
+      color: {field: region, type: nominal}

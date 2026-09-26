@@ -277,16 +277,53 @@ describe("messages", () => {
     ]);
   });
 
-  it("names a layer's stack", () => {
-    const layered =
-      `${base}keys: [id]\nlayer:\n  - mark: {type: area, stack: true}\n    encoding:\n` +
-      "      x: {field: item, type: nominal}\n      y: {field: value, type: quantitative}\n" +
-      "  - mark: scatter\n    encoding:\n      x: {field: item, type: nominal}\n" +
-      "      y: {field: value, type: quantitative}\n";
-    expect(verdict(layered)).toEqual([
-      "keys: a stack (layer[0]) links by its slot and colour only ('item') — a segment is the sum of its rows, " +
-        "so it has no single 'id': key the view by its slot and colour, or drop stack so single rows link",
-    ]);
+  // #847/#848 PR 5 P42 row 29 [user, 2026-09-26]: in a layered chart the
+  // stack rule limits the stack layer only. A layer that is not stacked links
+  // by any field its rows have, so `keys:` / `highlight:` are refused here
+  // only when no layer is unstacked; whether one really has the field is the
+  // sandbox's validate (it reads the data). test_spec_messages.py reads the same.
+  const stackAndPoints =
+    "layer:\n  - mark: {type: bar, stack: true}\n    encoding:\n" +
+    "      x: {field: group, type: nominal}\n      y: {field: value, type: quantitative}\n" +
+    "  - mark: scatter\n    encoding:\n      x: {field: group, type: nominal}\n" +
+    "      y: {field: value, type: quantitative}\n      tooltip: {field: item, type: nominal}\n";
+
+  it.each(["keys: [item]\n", "keys: [group, item]\n", "highlight: {where: \"item == 'x'\"}\n", "highlight: {values: {item: [x]}}\n"])(
+    "does not refuse a stack beside an unstacked layer with %s",
+    (top) => {
+      expect(verdict(base + top + stackAndPoints)).toEqual([]);
+    },
+  );
+
+  it("does not refuse a field another stack links by", () => {
+    // layer[1] is a stack by item: it writes and lights by item, layer[0] not
+    const stacks = stackAndPoints
+      .replace("mark: scatter", "mark: {type: area, stack: true}")
+      .replace(
+        "      y: {field: value, type: quantitative}\n      tooltip",
+        "      y: {field: value, type: quantitative}\n      color: {field: item, type: nominal}\n      tooltip",
+      );
+    expect(stacks).toContain("color: {field: item");
+    for (const top of ["keys: [item]\n", "highlight: {where: \"item == 'x'\"}\n"]) expect(verdict(base + top + stacks)).toEqual([]);
+    const [line] = verdict(`${base}keys: [region]\n${stacks}`);
+    expect(line!.startsWith("keys: a stack (layer[0]) ")).toBe(true);
+    expect(line).toContain("no single 'region'");
+    // a highlight may test another stack's value (each of its segments' sum)
+    const sized = stacks.replace("y: {field: value, type: quantitative}\n      color", "y: {field: size, type: quantitative}\n      color");
+    expect(sized).toContain("field: size");
+    expect(verdict(`${base}highlight: {where: 'size > 1'}\n${sized}`)).toEqual([]);
+    expect(verdict(`${base}keys: [size]\n${sized}`)[0]).toContain("no single 'size'");
+  });
+
+  it("names each stack of a chart of stacks only", () => {
+    const stacks = stackAndPoints.replace("mark: scatter", "mark: {type: area, stack: true}");
+    expect(verdict(`${base}keys: [item]\n${stacks}`)).toEqual(
+      [0, 1].map(
+        (i) =>
+          `keys: a stack (layer[${i}]) links by its slot and colour only ('group') — a segment is the sum of its rows, ` +
+          "so it has no single 'item': key the view by its slot and colour, or drop stack so single rows link",
+      ),
+    );
   });
 
   it("links a horizontal stack by its y", () => {

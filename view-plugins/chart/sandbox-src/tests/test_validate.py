@@ -181,3 +181,86 @@ def test_a_highlight_on_a_mean_stacks_value_says_each_segments_mean():
 def test_a_highlight_on_a_stacks_slot_says_nothing_of_sums():
     result = check(STACK + "highlight: {where: \"group == 'b'\"}\n", lambda _: ROWS)
     assert result.summary == "highlight matches 2/5 rows; value 1–9"
+
+
+# #847/#848 PR 5 P42 row 29 [user, 2026-09-26]: in a layered chart the stack
+# rule limits the stack layer only. The stack neither writes nor lights by a
+# field it does not link by (its tooltip keeps `item` where a segment's rows
+# share one -- a.n is r1 alone -- and that still lights nothing), the other
+# layers do, and the summary says which layer is a sum and what it links by.
+LAYERED = """\
+view: chart
+source: data/rows.csv
+layer:
+  - mark: {type: bar, stack: true}
+    encoding:
+      x: {field: group, type: nominal}
+      y: {field: value, type: quantitative}
+      color: {field: region, type: nominal}
+      tooltip: {field: item, type: nominal}
+  - mark: scatter
+    encoding:
+      x: {field: group, type: nominal}
+      y: {field: value, type: quantitative}
+"""
+SUM_NOTE = "each stacked segment is a sum: it links by group, region"
+# the unstacked layer a mean per group: its rows have no `item`
+AGGREGATED = LAYERED.split("  - mark: scatter")[0] + (
+    "  - mark: line\n    encoding:\n      x: {field: group, type: nominal}\n"
+    "      y: {field: value, type: quantitative, aggregate: mean}\n"
+)
+
+
+def test_a_layered_stack_keyed_by_a_row_field_is_summarised_with_what_it_links_by():
+    result = check(LAYERED + "keys: [item]\n", lambda _: ROWS)
+    assert result.errors == []
+    assert result.summary == f"5 rows; {SUM_NOTE}; value 1–9"
+    # two stacks that link alike are said once
+    stack = LAYERED.split("  - mark: scatter")[0].split("layer:\n")[1]
+    twice = LAYERED.replace("layer:\n", "layer:\n" + stack)
+    assert twice.count("stack: true") == 2
+    assert (
+        check(twice + "keys: [item]\n", lambda _: ROWS).summary == f"5 rows; {SUM_NOTE}; value 1–9"
+    )
+    # a mean stack is said to be one (P42 row 33)
+    mean = LAYERED.replace(
+        "y: {field: value, type: quantitative}\n      color",
+        "y: {field: value, type: quantitative, aggregate: mean}\n      color",
+    )
+    assert check(mean + "keys: [item]\n", lambda _: ROWS).summary == (
+        "5 rows; each stacked segment is a mean: it links by group, region; value 1–5"
+    )
+
+
+def test_a_layered_highlight_on_a_row_field_lights_only_the_unstacked_layer():
+    result = check(LAYERED + "highlight: {where: \"item == 'r1'\"}\n", lambda _: ROWS)
+    assert result.errors == []
+    assert result.summary == f"highlight matches 1/6 rows; {SUM_NOTE}; value 1–9"
+
+
+def test_a_row_field_no_unstacked_layer_has_is_refused():
+    assert "aggregate: mean" in AGGREGATED and "scatter" not in AGGREGATED
+    lit = check(AGGREGATED + "highlight: {where: \"item == 'r1'\"}\n", lambda _: ROWS)
+    assert lit.errors == ["highlight: no layer has the columns it names (item == 'r1')"]
+    keyed = check(AGGREGATED + "keys: [group, item]\n", lambda _: ROWS)
+    assert keyed.errors == [
+        f"keys: no layer can write 'item' — {SUM_NOTE}, and no other layer has 'item' row by row"
+    ]
+    # an aggregate is no row's value: the line's mean of `value` writes nothing
+    measured = check(AGGREGATED + "keys: [value]\n", lambda _: ROWS)
+    assert measured.errors == [
+        f"keys: no layer can write 'value' — {SUM_NOTE}, and no other layer has 'value' row by row"
+    ]
+    assert check(LAYERED + "keys: [value]\n", lambda _: ROWS).errors == []
+
+
+def test_a_row_field_only_a_binned_layer_has_is_refused():
+    # a binned scatter's rows are bins: it writes no key
+    over = ROWS.assign(at=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    text = LAYERED.replace("{field: group, type: nominal}", "{field: at, type: quantitative}")
+    assert check(text + "keys: [item]\n", lambda _: over).errors == []
+    binned = check(text + "keys: [item]\nbin_threshold: 1\n", lambda _: over)
+    assert binned.errors == [
+        f"keys: no layer can write 'item' — {SUM_NOTE.replace('group', 'at')}, and no other "
+        "layer has 'item' row by row"
+    ]
