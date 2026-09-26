@@ -169,8 +169,14 @@ words are examples, not spec keys.
   - (P43) Beside "by <columns>" the count is what went to the marking (78660df0)
     [mine, open to override].
   - (P44) A `keys:` column no layer has is not called empty — it is left to the other
-    checks, as before; the note keeps its own hover title; a difference past int64 is
-    taken as float64 (a986fc38, and P44's row 36 / 38 commits) [mine, open to override].
+    checks, as before; the note keeps its own hover title; an unsigned value past int64
+    was taken as float64 (a986fc38, 02402ab6; superseded by P45 row 44) [mine, open to
+    override].
+  - (P45) Out of a brush that writes nothing a mark desaturates (`colorSaturation: 0`);
+    the series is redrawn on `brushEnd` (one redraw per box); a note keeps `minWidth:
+    1.5em`; integers and bool subtract exactly, int64 when every difference fits, else
+    float64, float16/32 as float64; a complex min/max is refused; the builder's grid/pie
+    extension (680866a7) was not taken [mine, open to override].
 
 ## Phases
 
@@ -542,7 +548,7 @@ words are examples, not spec keys.
   |---|---|---|
   | 34 | The `where:` lexer read the words after a `#` as columns (pandas ignores a comment), kept a backtick name un-normalised and tested `inf`/`index` before NFKC (pandas reads `ｉｎｆ` as `inf`); the TS name class had no case separating it from the old one (`a·b`, `x℘`) | A comment ends the expression; every name — bare or backticked — is read in its NFKC form before it is judged; the corpus holds cases pandas separates, so both halves' name rules are pinned by pandas |
   | 35 | A key column that is empty on every row was accepted, and a brush over such rows wrote `{}` (clearing every linked view); the count beside "by" counted rows with no key value | A key no row holds a value of is no key: `validate` requires one, a selection drops a key it found no value of, and the count is of rows that gave a key a value |
-  | 36 | At 390 the note and the count share a line and the count was cut ("6 selected · …"), hiding "by item" | The count is never cut: it comes first and the note yields — never cut for a note (a line too narrow for the count alone still ends it in P27's ellipsis) |
+  | 36 | At 390 the note and the count share a line and the count was cut ("6 selected · …"), hiding "by item" | The count is never cut: it comes first and the note yields — never cut for a note (a line too narrow for the count alone still ends it in P27's ellipsis; P45 row 42: the count now also leaves each note its ellipsis) |
   | 37 | Out of a brush that writes nothing, marks turn `#ddd`: a scatter over grey bars vanished | Out of such a brush a mark keeps its colour at the dimmed opacity, as a marking's dimming does |
   | 38 | `diff` subtracted unsigned sums in their own dtype and wrapped (0 − 7 = 4294967289); min/max alike | The difference is taken in a signed type |
   | 39 | A facet's summary said "f 0" ("nanf 0") for a colour column with no value | A column with no value is said so |
@@ -568,9 +574,9 @@ words are examples, not spec keys.
   | # | Found | Rule installed |
   |---|---|---|
   | 41 | P44 row 37 made out-of-brush the same 0.15 opacity the marking dims to: on a chart lit by another view's marking, a brush that writes nothing no longer showed which rows it holds (4 states became 2) | A marking dims by opacity; a brush that writes nothing marks its outside by colour (desaturated, its lightness kept) — the two stay apart, and a point over a bar stays visible |
-  | 42 | At narrow widths the note collapsed to 0 px beside a long count, so a warning (a log axis's "values ≤ 0 not drawn") vanished | A note never vanishes: at least its ellipsis shows |
+  | 42 | At narrow widths the note collapsed to 0 px beside a long count, so a warning (a log axis's "N values at or below 0 not drawn on the log y axis") vanished | A note never vanishes: at least its ellipsis shows |
   | 43 | `validate` refused a keyed chart whose rows are none (an empty source, a filter matching nothing yet): "empty on every row" of no rows | Empty is judged over rows that exist: no rows is not an empty key |
-  | 44 | `_signed` widened only unsigned ints: int8/16/32 and float16 still wrapped (127 − (−128) = −1), and a bool max/min crashed validate with a bare TypeError | The difference is taken wide for every integer, bool and narrow float; what cannot be subtracted is a refusal, not a crash |
+  | 44 | `_signed` widened only unsigned ints: int8/16/32/64 still wrapped (127 − (−128) = −1), float16 overflowed to inf, and a bool max/min crashed validate with a bare TypeError | The difference is taken wide for every integer, bool and narrow float; an aggregate a column cannot take (complex min/max) is a refusal, not a crash |
   | 45 | A brush that writes nothing on a keyed chart attached to a marking (every key empty) showed no count at all | A selection that writes nothing says "N selected" (P36 row 10), whatever the reason it wrote nothing |
 
   Row 41 changes a visual encoding, so round 24 follows.
@@ -587,12 +593,22 @@ words are examples, not spec keys.
   palette scope for the pie — a new mechanism outside the round's findings; P34 row 6
   stands). Demo (1440 and 390, seen): four distinguishable states on an unkeyed chart
   lit by another view; the stack scene's points visible over grey bars; a narrow note
-  keeping "3…"; P44's empty-key scene at 390. Known and left: a line whose points are
-  undrawn shows no brush state; each finished box redraws the series once.
+  keeping "3…"; P44's empty-key scene at 390 — frames of the builder's tip, which also
+  carried 680866a7; the final live check reshoots them at the branch tip. Known and
+  left (round 24, each classed (B): rare input or cosmetic): a line whose points are
+  undrawn shows no brush state; each finished box redraws the series once (158 ms on a
+  100k-point scatter); a mark already grey (a chosen `#444`, the default errorbar
+  `#555`) shows no out-of-brush state, and the stack scene's `#444444` points prove only
+  that they are visible; Save as table after a `diff` of a float32 column writes float64
+  digits; with four or more notes on a ~155 px pane the count shrinks to "…"; a complex
+  mean/sum difference drops its imaginary part; `_minus`'s exact-int loop costs ~0.4 s
+  on 2M rows over 865k groups.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
-  differs only in docs). a986fc38's "`some` -> `every` (3)" is 4 (marking.test ×2,
+  differs only in docs). 92c2ac46's "the plugin suite, 2908 tests" is 2881 on this
+  branch (2908 was on the builder's tip, with 680866a7); 096e6f77's "grid and pie … the
+  next commit" names 680866a7, not taken. a986fc38's "`some` -> `every` (3)" is 4 (marking.test ×2,
   layeredStack, ChartView.markedcount). ec115af6's "spec.test.ts: 10 new" is 11 (its `it.each` has 7
   "not refused" cases, not 6). And ed3164f3's "red before … (3)" and "`v <= 0` counted as
   `v < 0` -> 1 red" were counted before the rule test was added; on the committed test
