@@ -177,3 +177,53 @@ def test_a_stack_coloured_by_a_category_or_no_stack_is_not_refused():
     ]:
         text = BASE + f"mark: {mark}\n" + enc + f"  color: {{field: c, type: {colour}}}\n"
         assert _errors(text) == [], (mark, colour)
+
+
+# #847/#848 PR 5 P41 row 25: a stack sums its value channel; a time summed
+# nanoseconds and a category summed text. The renderer's spec.test.ts reads
+# the same.
+STACK_VALUE = (
+    "a stack sums its rows, so its value channel must be quantitative — a time or "
+    "a category has no sum: make it quantitative, or drop stack"
+)
+
+
+def _stack(mark: str, x: str, y: str) -> str:
+    return (
+        BASE + f"mark: {mark}\nencoding:\n  x: {{field: a, type: {x}}}\n"
+        f"  y: {{field: b, type: {y}}}\n  color: {{field: c, type: nominal}}\n"
+    )
+
+
+def test_a_stack_whose_value_is_not_a_number_says_why():
+    # upright: the value is y; horizontal (y a category): the value is x
+    for mark, x, y, channel in [
+        ("{type: bar, stack: true}", "nominal", "temporal", "y"),
+        ("{type: area, stack: true}", "ordinal", "nominal", "x"),
+        ("{type: area, stack: true}", "temporal", "ordinal", "x"),
+        ("{type: bar, stack: true}", "temporal", "ordinal", "x"),
+        ("{type: bar, stack: true}", "nominal", "nominal", "x"),
+    ]:
+        want = [f"encoding.{channel}: {STACK_VALUE}"]
+        assert _errors(_stack(mark, x, y)) == want, (mark, x, y)
+
+
+def test_a_layer_stack_whose_value_is_a_time_says_why():
+    layered = BASE + (
+        "layer:\n  - mark: {type: bar, stack: true}\n    encoding:\n"
+        "      x: {field: a, type: nominal}\n      y: {field: b, type: temporal}\n"
+    )
+    assert _errors(layered) == [f"layer[0].encoding.y: {STACK_VALUE}"]
+
+
+def test_a_stack_whose_value_is_a_number_or_no_stack_is_not_refused():
+    for mark, x, y in [
+        ("{type: bar, stack: true}", "nominal", "quantitative"),
+        ("{type: bar, stack: true}", "temporal", "quantitative"),
+        ("{type: bar, stack: true}", "quantitative", "nominal"),
+        ("{type: area, stack: true}", "quantitative", "ordinal"),
+        ("{type: bar, stack: false}", "nominal", "temporal"),
+        ("{type: line, stack: true}", "nominal", "temporal"),
+        ("bar", "quantitative", "ordinal"),
+    ]:
+        assert _errors(_stack(mark, x, y)) == [], (mark, x, y)

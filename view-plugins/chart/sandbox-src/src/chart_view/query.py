@@ -351,6 +351,9 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
     elif stacked(mark, props):
         df, measured = _stack_sum(df, channels, encoding)
         value = encoding["x" if encoding["y"]["type"] in ("nominal", "ordinal") else "y"]
+        # The value channel is quantitative (`validate`, P41 row 25), but a
+        # slot naming the same field as a category names it first: the sum
+        # still travels as a number.
         kinds[value["field"]] = "f64"
     else:
         df, measured = _implicit_aggregate(df, channels)

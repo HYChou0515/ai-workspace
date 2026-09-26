@@ -126,6 +126,9 @@
       "$ref": "#/$defs/stackColour"
     },
     {
+      "$ref": "#/$defs/stackValue"
+    },
+    {
       "$ref": "#/$defs/datumChannels"
     },
     {
@@ -713,6 +716,9 @@
         },
         {
           "$ref": "#/$defs/stackColour"
+        },
+        {
+          "$ref": "#/$defs/stackValue"
         },
         {
           "$ref": "#/$defs/datumChannels"
@@ -1358,6 +1364,95 @@
             }
           }
         }
+      }
+    },
+    "stackValue": {
+      "description": "A stack sums its value channel: y, or x when y is a category (a horizontal bar).",
+      "if": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "type": "object",
+            "required": [
+              "type",
+              "stack"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "bar",
+                  "area"
+                ]
+              },
+              "stack": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "encoding": {
+            "if": {
+              "required": [
+                "y"
+              ],
+              "properties": {
+                "y": {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "nominal",
+                        "ordinal"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "x": {
+                  "$ref": "#/$defs/stackValueChannel"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "y": {
+                  "$ref": "#/$defs/stackValueChannel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stackValueChannel": {
+      "description": "A stack's value channel: a number to sum.",
+      "not": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "nominal",
+              "ordinal",
+              "temporal"
+            ]
+          }
+        }
+      },
+      "errorMessage": {
+        "not": "a stack sums its rows, so its value channel must be quantitative \u2014 a time or a category has no sum: make it quantitative, or drop stack"
       }
     }
   }

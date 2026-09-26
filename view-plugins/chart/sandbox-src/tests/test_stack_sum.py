@@ -277,6 +277,16 @@ def test_a_stack_coloured_by_its_own_value_field_is_summed_by_its_slot(rows):
     assert _drawn(layer, "item", None) == _oracle(rows, ["item"])
 
 
+def test_a_stack_whose_slot_names_its_value_field_sends_the_sum_as_a_number(rows):
+    # (#847/#848 PR 5 P41 row 25) the value channel is quantitative, but the
+    # slot may name the same field as a category, and names it first: the
+    # sum is still a number, not the label "36.0"
+    enc = {"x": {"field": "value", "type": "nominal"}, "y": VALUE}
+    [layer] = build(_spec(STACKED, enc), rows)["layers"]
+    assert layer["columns"]["value"]["kind"] == "f64"
+    assert _f64(layer["columns"]["value"]) == [rows["value"].sum()]
+
+
 def test_a_highlight_on_a_stack_is_on_its_sums(rows):
     enc = {"x": ITEM, "y": VALUE, "color": GROUP}
     [layer] = build(_spec(STACKED, enc, highlight={"where": "value > 10"}), rows)["layers"]

@@ -1,0 +1,8 @@
+view: chart
+source: data/a.csv
+layer:
+  - mark: {type: area, stack: true}
+    encoding:
+      x: {field: region, type: nominal}
+      y: {field: item, type: ordinal}
+      color: {field: group, type: nominal}

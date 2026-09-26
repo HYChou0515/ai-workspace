@@ -129,4 +129,39 @@ describe("messages", () => {
     const enc = "encoding:\n  x: {field: a, type: nominal}\n  y: {field: b, type: quantitative}\n";
     expect(verdict(`${base}mark: ${mark}\n${enc}  color: {field: c, type: ${colour}}\n`)).toEqual([]);
   });
+
+  // #847/#848 PR 5 P41 row 25: a stack sums its value channel; a time summed
+  // nanoseconds and a category summed text. test_spec_messages.py reads the same.
+  const stackValue =
+    "a stack sums its rows, so its value channel must be quantitative — a time or " +
+    "a category has no sum: make it quantitative, or drop stack";
+  const stack = (mark: string, x: string, y: string) =>
+    `${base}mark: ${mark}\nencoding:\n  x: {field: a, type: ${x}}\n  y: {field: b, type: ${y}}\n  color: {field: c, type: nominal}\n`;
+
+  it.each([
+    ["{type: bar, stack: true}", "nominal", "temporal", "y"],
+    ["{type: area, stack: true}", "ordinal", "nominal", "x"],
+    ["{type: area, stack: true}", "temporal", "ordinal", "x"],
+    ["{type: bar, stack: true}", "temporal", "ordinal", "x"],
+    ["{type: bar, stack: true}", "nominal", "nominal", "x"],
+  ])("says why %s over x %s, y %s is refused, on its value channel", (mark, x, y, channel) => {
+    expect(verdict(stack(mark, x, y))).toEqual([`encoding.${channel}: ${stackValue}`]);
+  });
+
+  it("says it of a layer's stack too", () => {
+    const layered = `${base}layer:\n  - mark: {type: bar, stack: true}\n    encoding:\n      x: {field: a, type: nominal}\n      y: {field: b, type: temporal}\n`;
+    expect(verdict(layered)).toEqual([`layer[0].encoding.y: ${stackValue}`]);
+  });
+
+  it.each([
+    ["{type: bar, stack: true}", "nominal", "quantitative"],
+    ["{type: bar, stack: true}", "temporal", "quantitative"],
+    ["{type: bar, stack: true}", "quantitative", "nominal"],
+    ["{type: area, stack: true}", "quantitative", "ordinal"],
+    ["{type: bar, stack: false}", "nominal", "temporal"],
+    ["{type: line, stack: true}", "nominal", "temporal"],
+    ["bar", "quantitative", "ordinal"],
+  ])("does not refuse %s over x %s, y %s", (mark, x, y) => {
+    expect(verdict(stack(mark, x, y))).toEqual([]);
+  });
 });
