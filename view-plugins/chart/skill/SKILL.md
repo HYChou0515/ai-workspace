@@ -136,7 +136,7 @@ transform:
     groupby: [cell_x, cell_y]
   - diff: {by: phase, of: after, minus: before}   # the aggregate where phase is after,
     aggregate: [{op: mean, field: t, as: delta}]  # minus where it is before,
-    groupby: [cell_x, cell_y]                     # per group either side has (count, sum: missing side 0; other ops: empty); signed
+    groupby: [cell_x, cell_y]                     # per group either side has (count, sum: missing side 0; other ops: empty); taken wide, never wraps
 ```
 
 ### Facet: one small grid per group

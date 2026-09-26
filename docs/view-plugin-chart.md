@@ -54,7 +54,9 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   還保有至少一半高度時；放不下就不畫，圖上方的說明列寫「colour key hidden (too short)」，顏色照舊。
   依顏色分組的圖例（例如分組的 scatter、line、bar）仍在圖上方，不受影響。
 - 在哪張圖選取，那張圖也照 marking 點亮（框留著，可以看、可以清），和其他 view 一致；只有不寫 marking 的圖
-  （沒接 marking、或沒有 `keys:`）才把框外的點變淡：保留原本的顏色、淡到和 marking 變暗一樣，疊在長條上的點不會消失。
+  （沒接 marking、沒有 `keys:`，或框到的列都寫不出 key）才自己標出框：框外的點失去顏色（變成一樣亮的灰），
+  不透明度不變。marking 變暗用的是透明度，所以「marking 亮／暗」×「框內／框外」四種情形都分得出來，疊在長條上的點
+  也不會消失。
 - `stack: true`（bar、area）在任何軸上都照值疊，不用先 `aggregate: sum`：沙盒把同一個位置、同一個顏色的列
   加總成**一列**，等同在數值通道寫 `aggregate: sum`（數值通道有自己的 `aggregate` 就用它，而且只依位置與顏色分組）。
   空值不算，整組都是空值時總和是 0。其他通道有自己 `aggregate` 的欄位照它的 aggregate 算；其餘欄位（tooltip、text、
@@ -75,9 +77,9 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   時間或類別沒有總和，寫了會被拒絕。parquet 的類別欄位只依實際出現的組合分組，不會多出總和 0 的空組合。
 - 圖上的「N selected · by <欄位>」數的是寫進 marking 的列：框到疊圖的一段、而那一段不寫東西時，不算進去；key 欄位
   沒有值的列也不算，框到的列在 key 欄位都沒有值時不寫 marking（不會清掉其他 view）。計數排在最前面，不會因說明列而
-  被截掉（整行連計數都放不下時才以「…」收尾）；說明列放不下時以「…」收尾，完整文字在滑鼠停留的提示裡。`keys:` 的欄位整欄都沒有值時，`show_file` 以「keys:
+  被截掉（整行連計數都放不下時才以「…」收尾）；說明列放不下時以「…」收尾、至少留下「…」，不會整則消失；完整文字在滑鼠停留的提示裡。`keys:` 的欄位整欄都沒有值時，`show_file` 以「keys:
   '<欄位>' is empty on every row — a key with no value links nothing」拒絕（分層的圖旁有疊圖時，則是「keys: no layer can
-  write '<欄位>'」那一句）。`where:` 裡 `#` 之後是註解；名稱照 Python
+  write '<欄位>'」那一句）。來源沒有列（空檔，或 filter 一列都沒留下）不算整欄沒有值。`where:` 裡 `#` 之後是註解；名稱照 Python
   的讀法（NFKC）判斷，例如全形的 `ｉｎｆ` 就是 `inf`。
 - 同一層裡同一個欄位只能有一種 `aggregate`（疊圖的數值通道也算，沒寫就是 sum）：例如 y 用 mean、tooltip 用 max 會被
   拒絕；兩個都要，就在 transform 的
@@ -135,7 +137,8 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   也會馬上打開；代價是 `show_file` 要付一次建置時間（在同一個沙盒指令時間上限內）。
 - **疊圖與相減不需要 `facet`**：`transform:` 裡對 lattice 欄位做 `aggregate`，就是把所有群組疊成一張；
   `diff` 則是兩組相減（見 `SKILL.md` 的 Transforms）：只要一邊有的組都保留，count 與 sum 缺的那邊算 0，
-  其他聚合留空。相減一律用有號數，無號整數的 0 − 7 是 −7，不會繞回。
+  其他聚合留空。相減一律用寬的型別：整數與 true/false 精確相減（int64 裝不下差值時整欄改 float64），float16/32
+  改用 float64；int8 的 127 − (−128) 是 255，不會繞回。
 - 快取放在沙盒的 `.home/.cache/views/`，不算 workspace 額度、不備份、隨沙盒回收；上限與容量估算見升級手冊
   [#857](migrations.md#pr-857)。`facet:` 的來源必須是表格檔，`{entity: …}` 會被拒絕。
 

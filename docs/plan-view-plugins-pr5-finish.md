@@ -574,6 +574,21 @@ words are examples, not spec keys.
   | 45 | A brush that writes nothing on a keyed chart attached to a marking (every key empty) showed no count at all | A selection that writes nothing says "N selected" (P36 row 10), whatever the reason it wrote nothing |
 
   Row 41 changes a visual encoding, so round 24 follows.
+  *P45 as built:* row 43 (no rows is not an empty key, in both checks); row 44 (`_minus`:
+  integers and bool subtracted exactly, int64 when every difference fits, else float64
+  [mine]; float16/32 → float64; a complex min/max is a refusal, not a crash); row 41
+  (`OUT_OF_BRUSH = {colorSaturation: 0}`; errorbar reads `api.visual("color")` so it
+  greys too; the demo found a box drawn from on a mark restored the outside's colour when
+  the pointer left — zrender's hover restores the saved style — so the series is redrawn
+  on `brushEnd`); row 42 (a note keeps `minWidth: 1.5em`; the count's cap leaves every
+  note its ellipsis); row 45 (not reproduced: a selection with every key empty writes
+  nothing and counts every row; 3 pin tests). **Not taken:** the builder's extension of
+  row 41 to a grid's and a pie's own pick (it reversed P34 row 6 and rebuilt ECharts'
+  palette scope for the pie — a new mechanism outside the round's findings; P34 row 6
+  stands). Demo (1440 and 390, seen): four distinguishable states on an unkeyed chart
+  lit by another view; the stack scene's points visible over grey bars; a narrow note
+  keeping "3…"; P44's empty-key scene at 390. Known and left: a line whose points are
+  undrawn shows no brush state; each finished box redraws the series once.
 - *A note on three commit bodies:* 802adbb2, 1aaa0b0f and 3f6bcc72 name the commit their
   red-before run used on the builder's branch (e4bbdfba, 8bc4b8ee, 381f7608). Those are
   not on this branch; their code is 14b81f9f's, 802adbb2's and 83c3f004's (the third
