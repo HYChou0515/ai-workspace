@@ -333,6 +333,10 @@ describe("the SPA bundle leaves ECharts to the chart plugin", () => {
     expect(names.filter((n) => CHART_PACKAGES.test(n))).toEqual([]);
   });
 
+  // Reads every SPA source file: ~0.9 s alone, but CI runs 500+ test files in
+  // parallel and it took 7.8 s there against vitest's 5 s default (run
+  // 36237282547). The cap is a hang guard, not a speed claim.
+  const WHOLE_SPA_WALK_MS = 60_000;
   it("imports no runtime plugin's files, and not ECharts, from any SPA module", () => {
     const files = sourceFiles(WEB_SRC);
     expect(files).toContain("main.tsx"); // the walk reached the entry
@@ -343,5 +347,5 @@ describe("the SPA bundle leaves ECharts to the chart plugin", () => {
       }
     }
     expect(offenders, "the SPA may not bundle a runtime plugin (or ECharts): it loads them at run time").toEqual([]);
-  });
+  }, WHOLE_SPA_WALK_MS);
 });
