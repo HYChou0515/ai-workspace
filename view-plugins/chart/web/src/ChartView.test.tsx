@@ -234,6 +234,41 @@ describe("ChartView", () => {
     expect(note.parentElement!.title).toBe("the stack links by a only (each a sum)");
   });
 
+  it("puts the count first and never cuts it for a note: the note yields (P44 row 36)", () => {
+    // P43's demo at 390 wide: the note and the count shared the line and the
+    // count was cut ("6 selected · …"), hiding "by item"
+    const stacked = {
+      ...DOC,
+      mark: undefined,
+      encoding: undefined,
+      layer: [
+        { mark: { type: "bar", stack: true }, encoding: { x: { field: "a", type: "nominal" }, y: { field: "b", type: "quantitative" } } },
+        { mark: "scatter", encoding: DOC.encoding },
+      ],
+    };
+    sdk.viewDocument.mockReturnValue(stacked);
+    const two = answer(layer("bar", 3, { a: cat(["1", "2", "3"]), b: f64([4, 5, 6]) }, { measured: ["b"] }), ANSWER.layers[0]!);
+    run({ data: ok(two) });
+    view();
+    act(() =>
+      chart.handlers.get("brushselected")?.({
+        batch: [{ areas: [{ brushType: "rect" }], selected: [{ seriesIndex: 1, dataIndex: [0, 1] }] }],
+      }),
+    );
+    const count = screen.getByText("2 selected");
+    const note = screen.getByText("the stack links by a only (each a sum)");
+    expect(count.parentElement).toBe(note.parentElement);
+    expect(count.nextElementSibling).toBe(note);
+    // the count keeps its width while a note is beside it; only a line too
+    // narrow for the count alone ends it in an ellipsis (P27)
+    expect({ flexShrink: count.style.flexShrink, maxWidth: count.style.maxWidth }).toEqual({ flexShrink: "0", maxWidth: "100%" });
+    // the note yields, its whole text on hover
+    expect({ flexShrink: note.style.flexShrink || "1", textOverflow: note.style.textOverflow }).toEqual({ flexShrink: "1", textOverflow: "ellipsis" });
+    expect(note.title).toBe("the stack links by a only (each a sum)");
+    // the line's title reads in the line's order
+    expect(count.parentElement!.title).toBe("2 selected · the stack links by a only (each a sum)");
+  });
+
   it("counts what a legend click leaves shown", () => {
     run({ data: ok() });
     view();

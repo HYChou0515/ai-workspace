@@ -356,7 +356,7 @@ function Plot({
       {/* Always there, one line high: added only once something was selected,
           it pushed the chart down under the pointer (#847/#848 P18). */}
       <div
-        title={[...notes, ...(selected ? [selected] : [])].join(" · ")}
+        title={[...(selected ? [selected] : []), ...notes].join(" · ")}
         style={{
           display: "flex",
           gap: 12,
@@ -369,19 +369,24 @@ function Plot({
           color: "var(--text-paper-d)",
         }}
       >
-        {/* a note too long for the line ends in an ellipsis too (P42 row 29:
-            at 390 wide the stack's note lost its field names) */}
+        {/* The count comes first and keeps its width beside a note (P44 row
+            36: at 390 wide the note left "6 selected · …", hiding "by
+            item"); only a line too narrow for the count alone ends it in an
+            ellipsis (P27: a 155 px panel cut "· by group, item" off with
+            nothing to say so). The line's title holds all of it. */}
+        {selected && (
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flexShrink: 0, maxWidth: "100%" }}>
+            {selected}
+          </span>
+        )}
+        {/* a note yields: too long for what the count leaves, it ends in an
+            ellipsis, its whole text on hover (P42 row 29: at 390 wide the
+            stack's note lost its field names) */}
         {notes.map((n) => (
-          <span key={n} style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+          <span key={n} title={n} style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
             {n}
           </span>
         ))}
-        {/* shrinks to an ellipsis in a narrow chart: at 390 wide a 155 px
-            panel cut "· by group, item" off with nothing to say so (P27); the
-            line's title holds all of it */}
-        {selected && (
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{selected}</span>
-        )}
       </div>
       {/* composited nearest-neighbour (P29): at a fractional pixel ratio
           the browser scales the canvas by a fraction of a pixel, which,
