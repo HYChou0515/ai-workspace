@@ -17,7 +17,7 @@ from chart_view.cli import main
 BASE = """\
 view: chart
 source: data/w.csv
-facet: {field: [lot, wafer], sort: {field: rate}}
+facet: {field: [group, item], sort: {field: rate}}
 mark: grid
 encoding:
   x: {field: x, type: ordinal}
@@ -25,18 +25,18 @@ encoding:
   color: {field: v, type: quantitative}
 """
 
-CSV = "lot,wafer,x,y,v,rate,tool\n" + "".join(
-    f"L1,{w},{x},{y},{w + x + y},{w / 10},{'AB'[(x + y) % 2]}\n"
+CSV = "group,item,x,y,v,rate,tool\n" + "".join(
+    f"G1,{w},{x},{y},{w + x + y},{w / 10},{'AB'[(x + y) % 2]}\n"
     for w in (1, 2, 3)
     for x in (0, 1)
     for y in (0, 1)
 )
-DUPLICATE = CSV + "L1,1,0,0,9,0.1,A\n"  # a second row at (0, 0) for group (L1, 1)
+DUPLICATE = CSV + "G1,1,0,0,9,0.1,A\n"  # a second row at (0, 0) for group (G1, 1)
 
 VARIANTS = {
     "fine": BASE,
     "entity-source": BASE.replace("source: data/w.csv", "source: {entity: task}"),
-    "no-facet-column": BASE.replace("field: [lot, wafer]", "field: [lot, nosuch]"),
+    "no-facet-column": BASE.replace("field: [group, item]", "field: [group, nosuch]"),
     "no-sort-column": BASE.replace("sort: {field: rate}", "sort: {field: nosuch}"),
     "no-color-column": BASE.replace("color: {field: v,", "color: {field: nosuch,"),
     "aggregate-on-color": BASE.replace(
@@ -110,6 +110,38 @@ def test_a_category_gallery_says_how_many_categories(
     (workspace / "ws" / "views" / "cat.ai.yaml").write_text(text)
     code, out, _ = _call(capsys, "validate", {"path": "views/cat.ai.yaml"})
     assert (code, out.strip()) == (0, "3 groups over 4 cells; tool: 2 categories")
+
+
+# #847/#848 PR 5 P44 row 39: a colour column with no value said "blank 0" (a
+# range of one number) or "blank: 0 categories"; it is said to have none.
+@pytest.mark.parametrize("kind", ["quantitative", "nominal"])
+def test_a_colour_with_no_value_is_said_to_have_none(
+    workspace: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    rows = CSV.splitlines()
+    blank = "\n".join([rows[0] + ",blank", *(r + "," for r in rows[1:])]) + "\n"
+    (workspace / "ws" / "data" / "blank.csv").write_text(blank)
+    text = BASE.replace("data/w.csv", "data/blank.csv").replace(
+        "color: {field: v, type: quantitative}", f"color: {{field: blank, type: {kind}}}"
+    )
+    (workspace / "ws" / "views" / "blank.ai.yaml").write_text(text)
+    code, out, err = _call(capsys, "validate", {"path": "views/blank.ai.yaml"})
+    assert (code, out.strip(), err) == (0, "3 groups over 4 cells; blank has no value", "")
+
+
+def test_a_colour_of_zeros_is_still_a_range(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # (control) a column of 0s has a value: its range is one number
+    rows = CSV.splitlines()
+    zeros = "\n".join([rows[0] + ",zero", *(r + ",0" for r in rows[1:])]) + "\n"
+    (workspace / "ws" / "data" / "zeros.csv").write_text(zeros)
+    text = BASE.replace("data/w.csv", "data/zeros.csv").replace(
+        "color: {field: v,", "color: {field: zero,"
+    )
+    (workspace / "ws" / "views" / "zeros.ai.yaml").write_text(text)
+    code, out, _ = _call(capsys, "validate", {"path": "views/zeros.ai.yaml"})
+    assert (code, out.strip()) == (0, "3 groups over 4 cells; zero 0")
 
 
 def test_a_cache_the_build_cannot_read_back_is_a_refusal_line_too() -> None:

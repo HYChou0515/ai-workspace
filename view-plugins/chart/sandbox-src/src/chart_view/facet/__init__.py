@@ -129,6 +129,9 @@ def progress_file(root: Path, spec_text: str) -> Path:
 class ContinuousScale:
     lo: float
     hi: float
+    # no cell has a value (#847/#848 PR 5 P44 row 39): lo and hi are then 0,
+    # which a column of 0s also has, so the scale says which it is
+    empty: bool = False
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.lo) and math.isfinite(self.hi) and self.lo <= self.hi):
@@ -167,7 +170,8 @@ class ContinuousScale:
         ]
 
     def to_json(self) -> dict[str, Any]:
-        return {"kind": "continuous", "lo": self.lo, "hi": self.hi}
+        out: dict[str, Any] = {"kind": "continuous", "lo": self.lo, "hi": self.hi}
+        return {**out, "empty": True} if self.empty else out
 
 
 @dataclass(frozen=True)
@@ -277,7 +281,7 @@ def _sort_value(field: str, v: Any) -> Any:
 def _scale_from_json(raw: Mapping[str, Any]) -> Scale:
     if raw["kind"] == "category":
         return CategoryScale(labels=raw["labels"])
-    return ContinuousScale(lo=raw["lo"], hi=raw["hi"])
+    return ContinuousScale(lo=raw["lo"], hi=raw["hi"], empty=raw.get("empty", False))
 
 
 def write_cache(

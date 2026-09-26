@@ -161,9 +161,13 @@ def _facet(spec: Mapping[str, Any], text: str, build: BuildFacet) -> Result:
     parts = [f"{built['groups']} groups over {built['cells']} cells"]
     colour = spec["encoding"]["color"]["field"]
     scale = built["scale"]
-    if scale["kind"] == "category":
+    if scale["kind"] == "category" and scale["labels"]:
         n = len(scale["labels"])
         parts.append(f"{colour}: {n} categor{'y' if n == 1 else 'ies'}")
+    elif scale["kind"] == "category" or scale.get("empty"):
+        # a column with no value has no categories and no range (P44 row 39):
+        # it said "<colour> 0" -- the range a column of 0s has
+        parts.append(f"{colour} has no value")
     else:
         parts.append(f"{colour} {_range(scale['lo'], scale['hi'])}")
     return Result(summary="; ".join(parts))

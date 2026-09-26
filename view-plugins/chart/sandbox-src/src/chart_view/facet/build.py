@@ -218,7 +218,7 @@ def _continuous(frame: pd.DataFrame, value: str) -> tuple[ContinuousScale, np.nd
     hi = float(finite.max()) if len(finite) else 0.0
     # the format codes NaN (a missing cell) and +/-inf as missing, as the
     # chart's q8 does; the exact section keeps inf and reads NaN back as None
-    return ContinuousScale(lo, hi), values
+    return ContinuousScale(lo, hi, empty=not len(finite)), values
 
 
 def _by_rows(
