@@ -229,8 +229,8 @@ describe("ChartView", () => {
     run({ data: ok(two) });
     view();
     const note = screen.getByText("the stack links by a only (each a sum)");
-    const { overflow, textOverflow, minWidth } = note.style;
-    expect({ overflow, textOverflow, minWidth }).toEqual({ overflow: "hidden", textOverflow: "ellipsis", minWidth: "0" });
+    const { overflow, textOverflow } = note.style;
+    expect({ overflow, textOverflow }).toEqual({ overflow: "hidden", textOverflow: "ellipsis" });
     expect(note.parentElement!.title).toBe("the stack links by a only (each a sum)");
   });
 
@@ -260,13 +260,57 @@ describe("ChartView", () => {
     expect(count.parentElement).toBe(note.parentElement);
     expect(count.nextElementSibling).toBe(note);
     // the count keeps its width while a note is beside it; only a line too
-    // narrow for the count alone ends it in an ellipsis (P27)
-    expect({ flexShrink: count.style.flexShrink, maxWidth: count.style.maxWidth }).toEqual({ flexShrink: "0", maxWidth: "100%" });
+    // narrow for the count and each note's ellipsis ends it in one (P27, P45
+    // row 42: below)
+    expect(count.style.flexShrink).toBe("0");
     // the note yields, its whole text on hover
     expect({ flexShrink: note.style.flexShrink || "1", textOverflow: note.style.textOverflow }).toEqual({ flexShrink: "1", textOverflow: "ellipsis" });
     expect(note.title).toBe("the stack links by a only (each a sum)");
     // the line's title reads in the line's order
     expect(count.parentElement!.title).toBe("2 selected · the stack links by a only (each a sum)");
+  });
+
+  // P45 row 42: beside a count wider than its line ("128 selected · by group,
+  // item, region, value, kind" in a 250 px pane) the note shrank to 0 px, so a
+  // warning -- a log axis's "values at or below 0 not drawn" -- vanished. A note
+  // never vanishes: it keeps the width of its ellipsis, and the count's cap
+  // leaves it that and the gap. (happy-dom lays nothing out: the widths are
+  // read in Chromium in the demo; here, the styles that make them.)
+  it("keeps every note at least its ellipsis wide beside a count wider than the line (P45 row 42)", () => {
+    // two notes: a scatter's value of 0 on a log y, and a rule's value with no place
+    const logged = {
+      view: "chart",
+      source: "data/a.csv",
+      layer: [
+        { mark: "scatter", encoding: { x: { field: "a", type: "quantitative" }, y: { field: "b", type: "quantitative", scale: { type: "log" } } } },
+        { mark: "rule", encoding: { y: { field: "b", type: "quantitative" } } },
+      ],
+    };
+    sdk.viewDocument.mockReturnValue(logged);
+    run({ data: ok(answer(layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([1, 0, 4]) }), layer("rule", 2, { b: f64([1, 0]) }))) });
+    view();
+    act(() =>
+      chart.handlers.get("brushselected")?.({
+        batch: [{ areas: [{ brushType: "rect" }], selected: [{ seriesIndex: 0, dataIndex: [0, 1] }] }],
+      }),
+    );
+    const count = screen.getByText("2 selected");
+    const line = count.parentElement!;
+    const notes = [...line.children].slice(1) as HTMLElement[];
+    expect(notes.map((n) => n.textContent)).toEqual([
+      "1 rule value with no place on the y axis — not drawn",
+      "1 value at or below 0 not drawn on the log y axis",
+    ]);
+    expect(line.style.gap).toBe("12px");
+    // each note: never narrower than its ellipsis
+    for (const n of notes) expect({ minWidth: n.style.minWidth, textOverflow: n.style.textOverflow }).toEqual({ minWidth: "1.5em", textOverflow: "ellipsis" });
+    // the count: capped at the line less each note's least width and its gap
+    expect(count.style.maxWidth).toBe("calc(100% - 2 * (1.5em + 12px))");
+    expect({ overflow: count.style.overflow, textOverflow: count.style.textOverflow, minWidth: count.style.minWidth }).toEqual({
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      minWidth: "0",
+    });
   });
 
   it("counts what a legend click leaves shown", () => {

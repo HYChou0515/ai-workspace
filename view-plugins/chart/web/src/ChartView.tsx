@@ -43,6 +43,11 @@ const FORMAT = 1;
  * gets it back. */
 const OUT_OF_BRUSH = { colorSaturation: 0 };
 
+/** The gap between the count and the notes on the line above the plot, and
+ * the least width a note keeps: its ellipsis (#847/#848 PR 5 P45 row 42). */
+const LINE_GAP = 12;
+const NOTE_LEAST = "1.5em";
+
 function Notice({ role = "status", children }: { role?: "status" | "alert"; children: ReactNode }) {
   const color = role === "alert" ? "var(--err)" : "var(--text-paper-d)";
   return (
@@ -365,7 +370,7 @@ function Plot({
         title={[...(selected ? [selected] : []), ...notes].join(" · ")}
         style={{
           display: "flex",
-          gap: 12,
+          gap: LINE_GAP,
           height: 20,
           lineHeight: "20px",
           padding: "0 12px",
@@ -377,19 +382,30 @@ function Plot({
       >
         {/* The count comes first and keeps its width beside a note (P44 row
             36: at 390 wide the note left "6 selected · …", hiding "by
-            item"); only a line too narrow for the count alone ends it in an
-            ellipsis (P27: a 155 px panel cut "· by group, item" off with
-            nothing to say so). The line's title holds all of it. */}
+            item"); only a line too narrow for the count and each note's
+            ellipsis ends it in one (P27: a 155 px panel cut "· by group,
+            item" off with nothing to say so; P45 row 42, below). The line's
+            title holds all of it. */}
         {selected && (
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flexShrink: 0, maxWidth: "100%" }}>
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
+              flexShrink: 0,
+              maxWidth: `calc(100% - ${notes.length} * (${NOTE_LEAST} + ${LINE_GAP}px))`,
+            }}
+          >
             {selected}
           </span>
         )}
         {/* a note yields: too long for what the count leaves, it ends in an
             ellipsis, its whole text on hover (P42 row 29: at 390 wide the
-            stack's note lost its field names) */}
+            stack's note lost its field names) -- and never vanishes: it keeps
+            its ellipsis (P45 row 42: beside a count wider than a 250 px
+            line it shrank to 0 px, and a log axis's warning went with it) */}
         {notes.map((n) => (
-          <span key={n} title={n} style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+          <span key={n} title={n} style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: NOTE_LEAST }}>
             {n}
           </span>
         ))}
