@@ -1,0 +1,14 @@
+{
+  "name": "gallery-alike-shown",
+  "note": "Many groups compared by their shape: a facet gallery over a grid (read the shown spec in _transcript.json; the expect can only see that a chart was shown).",
+  "data": [
+    "maps.csv"
+  ],
+  "prompt": "maps.csv has one small map per group. Which groups share the same pattern? Show all of them so I can compare.",
+  "expect": {
+    "must_call": [
+      "write_file",
+      "show_file"
+    ]
+  }
+}

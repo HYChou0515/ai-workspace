@@ -1,0 +1,6 @@
+view: chart
+source: data/a.csv
+layer:
+  - mark: bar
+    encoding:
+      x: {field: k, type: nominal}

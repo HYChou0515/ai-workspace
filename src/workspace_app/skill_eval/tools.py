@@ -21,8 +21,18 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import msgspec
+from pydantic import ValidationError
+
+from workspace_app.agent.shown_files import (
+    PATH_OR_LAYOUT,
+    LayoutError,
+    PaneLayout,
+    layout_paths,
+    layout_tree,
+)
 
 #: agent/tools.py caps exec output at ``exec.output_max_chars`` (30_000). The
 #: 200_000 ``tool_output_max_chars`` is the SDK-wide backstop, a different knob.
@@ -85,9 +95,12 @@ def schemas() -> list[dict]:
         fn(
             "show_file",
             "Show a workspace file to the user in the chat — an image renders "
-            "inline. Use it for any chart or file the user should look at.",
-            {"path": s, "caption": s},
-            ["path"],
+            "inline. Use it for any chart or file the user should look at. To show "
+            "several files together as one arrangement, give `layout` instead of "
+            "`path`: a `split` pane divides into `a` and `b` (`dir` `row` = side by "
+            "side, `col` = stacked), a `leaf` pane shows one file by `path`.",
+            {"path": s, "caption": s, "layout": _app_layout_schema()},
+            [],
         ),
         fn(
             "ask_user",
@@ -182,11 +195,7 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
     if name == "exec":
         return _exec(list(args["cmd"]), work)
     if name == "show_file":
-        target = work / args["path"]
-        events.append(Event("show_file", args["path"]))
-        if not target.is_file():
-            return f"no such file: {args['path']}"
-        return f"shown to the user: {args['path']}"
+        return _show(args, work, events)
     if name == "ask_user":
         events.append(Event("ask_user", args["question"]))
         return "(the question was put to the user; this turn ends here)"
@@ -253,3 +262,40 @@ def _exec(cmd: list[str], work: Path) -> str:
         return "Tool `exec` returned (exit_code=124):\ntimed out"
     body = done.stdout if done.returncode == 0 else f"{done.stdout}\n--- stderr ---\n{done.stderr}"
     return f"Tool `exec` returned (exit_code={done.returncode}):\n{truncate_middle(body, EXEC_CAP)}"
+
+
+def _show(args: dict[str, Any], work: Path, events: list[Event]) -> str:
+    """`show_file(path)` or `show_file(layout)`, refused as the app refuses them
+    (`agent.shown_files`): the layout is parsed by the app's own reader, and each
+    pane is one scored event, in the order the card shows them."""
+    path, layout = args.get("path"), args.get("layout")
+    if (path is None) == (layout is None):
+        return PATH_OR_LAYOUT
+    paths: list[str]
+    if layout is None:
+        paths = [str(path)]
+    else:
+        try:
+            tree = layout_tree(PaneLayout.model_validate(layout))
+        except (LayoutError, ValidationError) as e:
+            return f"error: layout {e} — nothing was shown."
+        paths = [p.lstrip("/") for p in layout_paths(tree)]
+    for p in paths:
+        events.append(Event("show_file", p))
+    missing = [p for p in paths if not (work / p).is_file()]
+    if missing:
+        return f"no such file: {missing[0]}"
+    return f"shown to the user: {', '.join(paths)}"
+
+
+def _app_layout_schema() -> dict[str, Any]:
+    """The `layout` argument exactly as the app's `show_file` offers it to the
+    model — a looser shape here would score a guidance the app would refuse."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import show_file_impl
+
+    tool = function_tool(show_file_impl, name_override="show_file")
+    schema = tool.params_json_schema
+    layout = schema["properties"]["layout"]
+    return {**layout, "$defs": schema["$defs"]} if "$defs" in schema else layout

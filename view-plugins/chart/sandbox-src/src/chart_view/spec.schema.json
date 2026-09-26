@@ -1,0 +1,1459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiws.local/view-plugins/chart/spec.schema.json",
+  "title": "view: chart",
+  "description": "A Vega-Lite subset written as YAML, plus source / keys / marking / highlight. The ONE schema: the sandbox's `validate` and the renderer both read this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "view",
+    "source"
+  ],
+  "properties": {
+    "view": {
+      "const": "chart"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "keys": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "marking": {
+      "$ref": "#/$defs/name"
+    },
+    "highlight": {
+      "$ref": "#/$defs/highlight"
+    },
+    "transform": {
+      "$ref": "#/$defs/transforms"
+    },
+    "facet": {
+      "type": "object",
+      "description": "Draw one small grid map per group (a gallery), grouped by these columns; mark must be grid.",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "properties": {
+        "field": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/name"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/name"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        },
+        "sort": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "field"
+          ],
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/name"
+            },
+            "order": {
+              "enum": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "stat": {
+              "description": "For a column with several values per group: the statistic each group is sorted by (count, min, max, mean, median for numbers; count, distinct for text; count, min, max for dates).",
+              "enum": [
+                "count",
+                "distinct",
+                "min",
+                "max",
+                "mean",
+                "median"
+              ]
+            }
+          }
+        },
+        "cache_mb": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "bin_threshold": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mark": {
+      "$ref": "#/$defs/mark"
+    },
+    "encoding": {
+      "$ref": "#/$defs/encoding"
+    },
+    "layer": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/layer"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/drawing"
+    },
+    {
+      "$ref": "#/$defs/markChannels"
+    },
+    {
+      "$ref": "#/$defs/stackColour"
+    },
+    {
+      "$ref": "#/$defs/stackValue"
+    },
+    {
+      "$ref": "#/$defs/datumChannels"
+    },
+    {
+      "if": {
+        "required": [
+          "facet"
+        ]
+      },
+      "then": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "anyOf": [
+              {
+                "const": "grid"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "grid"
+                  }
+                }
+              }
+            ],
+            "errorMessage": {
+              "anyOf": "grid, since facet draws a gallery of grid maps"
+            }
+          }
+        },
+        "errorMessage": {
+          "required": "facet draws a gallery of grid maps: it needs mark: grid"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "instant": {
+      "$comment": "A date a `temporal` datum may be written as. validate (chart_view/datums.py) and the renderer (web/src/option.ts:parseInstant) both read THIS pattern; wire-corpus/instants.json holds what each form means. parseInstant reads its groups by number: 1 year, 2 separator, 3 month, 4 day, 5 hour, 6 minute, 7 second, 8 fraction, 9 zone, 10 zone hour, 11 zone minute.",
+      "type": "string",
+      "pattern": "^(?:(?!0000)([0-9]{4})([-/])(0[1-9]|1[0-2])\\2(0[1-9]|[12][0-9]|3[01])(?:[T ]([01][0-9]|2[0-3]):([0-5][0-9])(?::([0-5][0-9])(?:\\.([0-9]{1,3}))?)?(Z|[+-]([01][0-9]|2[0-3]):?([0-5][0-9]))?)?)$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scalar": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "\\.(csv|tsv|parquet)$",
+          "description": "A workspace table file: .csv, .tsv or .parquet.",
+          "errorMessage": {
+            "pattern": "a table file in the workspace, ending in .csv, .tsv or .parquet"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entity"
+          ],
+          "properties": {
+            "entity": {
+              "$ref": "#/$defs/name"
+            }
+          }
+        }
+      ]
+    },
+    "highlight": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "where"
+          ],
+          "properties": {
+            "where": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "values"
+          ],
+          "properties": {
+            "values": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/scalar"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "op": {
+      "enum": [
+        "count",
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "rate"
+      ]
+    },
+    "aggregateItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "as"
+      ],
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "as": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "if": {
+        "properties": {
+          "op": {
+            "not": {
+              "const": "count"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "field"
+        ]
+      }
+    },
+    "aggregateList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/aggregateItem"
+      }
+    },
+    "groupby": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "uniqueItems": true
+    },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "equal": {
+          "$ref": "#/$defs/scalar"
+        },
+        "oneOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/scalar"
+          }
+        },
+        "range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "lt": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "lte": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "gt": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "gte": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "equal"
+          ]
+        },
+        {
+          "required": [
+            "oneOf"
+          ]
+        },
+        {
+          "required": [
+            "range"
+          ]
+        },
+        {
+          "required": [
+            "lt"
+          ]
+        },
+        {
+          "required": [
+            "lte"
+          ]
+        },
+        {
+          "required": [
+            "gt"
+          ]
+        },
+        {
+          "required": [
+            "gte"
+          ]
+        },
+        {
+          "required": [
+            "valid"
+          ]
+        }
+      ],
+      "errorMessage": {
+        "anyOf": "a field predicate needs a test: equal, oneOf, range, lt, lte, gt, gte, valid"
+      }
+    },
+    "transform": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "filter"
+          ],
+          "properties": {
+            "filter": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "A pandas query expression."
+                },
+                {
+                  "$ref": "#/$defs/predicate"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "aggregate"
+          ],
+          "properties": {
+            "aggregate": {
+              "$ref": "#/$defs/aggregateList"
+            },
+            "groupby": {
+              "$ref": "#/$defs/groupby"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "diff",
+            "aggregate"
+          ],
+          "properties": {
+            "diff": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "by",
+                "of",
+                "minus"
+              ],
+              "properties": {
+                "by": {
+                  "$ref": "#/$defs/name"
+                },
+                "of": {
+                  "$ref": "#/$defs/scalar"
+                },
+                "minus": {
+                  "$ref": "#/$defs/scalar"
+                }
+              }
+            },
+            "aggregate": {
+              "$ref": "#/$defs/aggregateList"
+            },
+            "groupby": {
+              "$ref": "#/$defs/groupby"
+            }
+          }
+        }
+      ]
+    },
+    "transforms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/transform"
+      }
+    },
+    "markType": {
+      "enum": [
+        "line",
+        "bar",
+        "scatter",
+        "heatmap",
+        "grid",
+        "area",
+        "pie",
+        "boxplot",
+        "rule",
+        "text",
+        "errorbar"
+      ]
+    },
+    "mark": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/markType"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/markType"
+            },
+            "color": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "point": {
+              "type": "boolean"
+            },
+            "smooth": {
+              "type": "boolean"
+            },
+            "stack": {
+              "type": "boolean"
+            },
+            "extent": {
+              "enum": [
+                "stderr",
+                "stdev",
+                "iqr"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "fieldType": {
+      "enum": [
+        "quantitative",
+        "nominal",
+        "ordinal",
+        "temporal"
+      ]
+    },
+    "channel": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "field",
+            "type"
+          ],
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/name"
+            },
+            "type": {
+              "$ref": "#/$defs/fieldType"
+            },
+            "aggregate": {
+              "$ref": "#/$defs/op"
+            },
+            "title": {
+              "type": "string"
+            },
+            "sort": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "ascending",
+                    "descending"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/scalar"
+                  }
+                }
+              ]
+            },
+            "scale": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "enum": [
+                    "linear",
+                    "log"
+                  ]
+                },
+                "zero": {
+                  "type": "boolean"
+                },
+                "domain": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "$ref": "#/$defs/scalar"
+                  }
+                },
+                "scheme": {
+                  "enum": [
+                    "sequential",
+                    "diverging"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "datum"
+          ],
+          "properties": {
+            "datum": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "encoding": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/channel"
+        },
+        "y": {
+          "$ref": "#/$defs/channel"
+        },
+        "x2": {
+          "$ref": "#/$defs/channel"
+        },
+        "y2": {
+          "$ref": "#/$defs/channel"
+        },
+        "color": {
+          "$ref": "#/$defs/channel"
+        },
+        "size": {
+          "$ref": "#/$defs/channel"
+        },
+        "theta": {
+          "$ref": "#/$defs/channel"
+        },
+        "text": {
+          "$ref": "#/$defs/channel"
+        },
+        "tooltip": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/channel"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/channel"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mark",
+        "encoding"
+      ],
+      "properties": {
+        "mark": {
+          "$ref": "#/$defs/mark"
+        },
+        "encoding": {
+          "$ref": "#/$defs/encoding"
+        },
+        "transform": {
+          "$ref": "#/$defs/transforms"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/markChannels"
+        },
+        {
+          "$ref": "#/$defs/stackColour"
+        },
+        {
+          "$ref": "#/$defs/stackValue"
+        },
+        {
+          "$ref": "#/$defs/datumChannels"
+        }
+      ]
+    },
+    "drawing": {
+      "oneOf": [
+        {
+          "required": [
+            "mark",
+            "encoding"
+          ],
+          "not": {
+            "required": [
+              "layer"
+            ]
+          }
+        },
+        {
+          "required": [
+            "layer"
+          ],
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "mark"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "encoding"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "errorMessage": {
+        "oneOf": "draw with either mark + encoding, or layer \u2014 not both, and not neither"
+      }
+    },
+    "markChannels": {
+      "description": "Which channels each mark needs to draw anything. That each names a field (not a datum) is datumChannels' rule, stated once there.",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "scatter"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "scatter"
+                      }
+                    }
+                  },
+                  {
+                    "const": "line"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "line"
+                      }
+                    }
+                  },
+                  {
+                    "const": "area"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "area"
+                      }
+                    }
+                  },
+                  {
+                    "const": "bar"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "bar"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "text"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "text"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y",
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "heatmap"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "heatmap"
+                      }
+                    }
+                  },
+                  {
+                    "const": "grid"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "grid"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "x",
+                  "y",
+                  "color"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "pie"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "pie"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "theta"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "boxplot"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "boxplot"
+                      }
+                    }
+                  },
+                  {
+                    "const": "errorbar"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "errorbar"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "required": [
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mark"
+            ],
+            "properties": {
+              "mark": {
+                "anyOf": [
+                  {
+                    "const": "rule"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "rule"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "encoding": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "x"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "y"
+                    ]
+                  }
+                ],
+                "errorMessage": {
+                  "anyOf": "a rule needs an x or a y (a field or a datum)"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "datumChannels": {
+      "description": "A datum is drawn only as a rule's x or y: every other channel (each item of a tooltip list too) names a field.",
+      "if": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "anyOf": [
+              {
+                "const": "rule"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "rule"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "encoding": {
+            "properties": {
+              "x2": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "y2": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "color": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "size": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "theta": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "text": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "tooltip": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                },
+                "items": {
+                  "not": {
+                    "type": "object",
+                    "required": [
+                      "datum"
+                    ]
+                  },
+                  "errorMessage": {
+                    "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "encoding": {
+            "properties": {
+              "x": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "y": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "x2": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "y2": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "color": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "size": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "theta": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "text": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                }
+              },
+              "tooltip": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "datum"
+                  ]
+                },
+                "errorMessage": {
+                  "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                },
+                "items": {
+                  "not": {
+                    "type": "object",
+                    "required": [
+                      "datum"
+                    ]
+                  },
+                  "errorMessage": {
+                    "not": "a datum is drawn only as a rule's x or y \u2014 drop it and name a field here"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stackColour": {
+      "description": "A stack (a bar or an area with stack: true) is summed per slot and colour; a colour by value makes no segments.",
+      "if": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "type": "object",
+            "required": [
+              "type",
+              "stack"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "bar",
+                  "area"
+                ]
+              },
+              "stack": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "encoding": {
+            "properties": {
+              "color": {
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "quantitative"
+                    }
+                  }
+                },
+                "errorMessage": {
+                  "not": "a stack cannot be coloured by value (quantitative): which rows form one segment of it is not defined \u2014 colour it by a category (nominal or ordinal), or drop stack"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stackValue": {
+      "description": "A stack sums its value channel: y, or x when y is a category (a horizontal bar).",
+      "if": {
+        "required": [
+          "mark"
+        ],
+        "properties": {
+          "mark": {
+            "type": "object",
+            "required": [
+              "type",
+              "stack"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "bar",
+                  "area"
+                ]
+              },
+              "stack": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "encoding": {
+            "if": {
+              "required": [
+                "y"
+              ],
+              "properties": {
+                "y": {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "nominal",
+                        "ordinal"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "x": {
+                  "$ref": "#/$defs/stackValueChannel"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "y": {
+                  "$ref": "#/$defs/stackValueChannel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stackValueChannel": {
+      "description": "A stack's value channel: a number to sum, or to aggregate as its own aggregate says.",
+      "not": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "nominal",
+              "ordinal",
+              "temporal"
+            ]
+          }
+        }
+      },
+      "errorMessage": {
+        "not": "a stack's segment is the sum of its rows, or the aggregate its value channel names, so its value channel must be quantitative \u2014 a time or a category is no number to stack: make it quantitative, or drop stack"
+      }
+    }
+  }
+}

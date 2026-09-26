@@ -164,6 +164,20 @@ export type ViewConfig = {
 
 export type EntityViewProps = {
   spec: ViewSpec;
+  /** #847 PR 3 — the view file's workspace path, e.g. what a view names as the
+   * `source` of a marking it writes. Absent outside a file (a preview). */
+  path?: string;
+  /** #847 PR 3 P3 — the named marking this view is on, as the header's marking
+   * control has it: the file's `marking:` until this person re-attaches or
+   * detaches it — view state, never written back to the file. `null`: on no
+   * marking (the file names none, or this person detached it). `undefined` only
+   * for a kind not registered `linkable` whose file names neither `marking:`
+   * nor `keys:`. */
+  marking?: string | null;
+  /** #847/#848 PR 5 — tell the header's marking control why selecting in this
+   * view marks nothing (null: it does, or there is nothing to say). Present
+   * whenever `marking` is. A table passes it to `useTableMarking`. */
+  onMarkingNote?: (note: string | null) => void;
   /** #690 P4 — identifies this view for per-user, per-view UI state kept in the
    * browser (which groups are collapsed). Not in the view FILE: where somebody
    * is looking is not a decision to make for the rest of the project. */

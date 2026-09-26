@@ -136,8 +136,9 @@ export function useHeaderTier(forced?: HeaderTier, contentKey = "") {
   // THEN into the record, and the header sat at "⋯" after the error was gone,
   // for the rest of the mount, unless the column grew `GROW_MARGIN` past it.
   // (The widths in this record are whatever `useContainerWidth` reports —
-  // content-box after its first observer callback — and record and gate read
-  // the same stream, so the unit does not matter to the comparison.)
+  // the border box, at attach and in every observer callback since #847/#848
+  // PR 5 P31 — and record and gate read the same stream, so the unit does not
+  // matter to the comparison.)
   const lastContentKey = useRef(contentKey);
   if (lastContentKey.current !== contentKey) {
     lastContentKey.current = contentKey;

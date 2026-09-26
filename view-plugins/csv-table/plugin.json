@@ -1,5 +1,8 @@
 {
   "name": "csv-table",
   "sdk": "1",
-  "kinds": ["csv-table"]
+  "kinds": ["csv-table"],
+  "views": [
+    { "kind": "csv-table", "when": "a table file's rows; with `marking:`, the rows a linked chart's selection lights" }
+  ]
 }

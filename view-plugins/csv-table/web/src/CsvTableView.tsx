@@ -10,8 +10,8 @@
  * The view file that drives it:
  *
  *     view: csv-table
- *     title: Wafer yield
- *     source: /data/wafer.csv
+ *     title: Monthly sales
+ *     source: /data/sales.csv
  *
  * `source` is not a key the platform knows, so it is NOT on the `ViewSpec` type
  * — `spec.source` doesn't compile. Read your own keys with `viewParam` /
@@ -23,9 +23,18 @@
  * guide this file mirrors.
  */
 
-import type { ReactNode } from "react";
+import { type ReactNode, useMemo } from "react";
 
-import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer, viewParamString } from "@aiws/view-sdk";
+import {
+  csvMarkingRows,
+  DataGrid,
+  type EntityViewProps,
+  parseCsv,
+  useFileBuffer,
+  useTableMarking,
+  viewParam,
+  viewParamString,
+} from "@aiws/view-sdk";
 
 function Notice({ children }: { children: ReactNode }) {
   return (
@@ -38,21 +47,65 @@ function Notice({ children }: { children: ReactNode }) {
 /** Reads the file. Split out so the `source`-missing case can return early in
  * the PARENT without a conditional hook — `useFileBuffer` must run on every
  * render of the component that owns it. */
-function CsvFromFile({ path }: { path: string }) {
+function CsvFromFile({
+  path,
+  marking,
+  viewKey,
+  keys,
+  source,
+  onMarkingNote,
+}: {
+  path: string;
+  marking: string | null;
+  viewKey?: string;
+  keys: string[];
+  source: string | null;
+  onMarkingNote?: (note: string | null) => void;
+}) {
   const { entry } = useFileBuffer(path);
-  if (entry.status === "loading") return <Notice>Loading {path}…</Notice>;
-  if (entry.status === "error") return <Notice>{entry.error ?? `could not read ${path}`}</Notice>;
+  const text = entry.status === "ready" ? entry.text : "";
   // Tab-separated files are as common as comma ones in exported lab data.
   const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
-  return <DataGrid rows={parseCsv(entry.text, delimiter)} />;
+  const rows = useMemo(() => parseCsv(text, delimiter), [text, delimiter]);
+  // On a marking (#847/#848 PR 5): the rows as the marking text a chart over
+  // the same file writes, lit by the platform's rule, under its bar; and a
+  // checkbox per row, which writes the marking (`keys:`, else the marking's
+  // own columns). On no marking the grid has no checkboxes at all.
+  const markingRows = useMemo(() => csvMarkingRows(rows), [rows]);
+  const columns = useMemo(() => rows[0] ?? [], [rows]);
+  const table = useTableMarking({ marking, viewKey, rows: markingRows, columns, keys, source, onNote: onMarkingNote });
+  if (entry.status === "loading") return <Notice>Loading {path}…</Notice>;
+  if (entry.status === "error") return <Notice>{entry.error ?? `could not read ${path}`}</Notice>;
+  return (
+    // The panel's free height, grown from nothing (#847/#848 PR 5 P24): grown
+    // from its rows, the grid made the panel as tall as all of them, and its
+    // sideways scrollbar sat below the pane. The grid (a flex child that
+    // scrolls) then scrolls both ways inside the pane; a few rows at least.
+    <div style={{ display: "flex", flexDirection: "column", flex: "1 1 0", minHeight: "6rem" }}>
+      {table.bar}
+      <DataGrid rows={rows} show={table.shown} highlighted={table.highlighted} select={table.select} />
+    </div>
+  );
 }
 
-export function CsvTableView({ spec }: EntityViewProps) {
+export function CsvTableView({ spec, path, marking, viewKey, onMarkingNote }: EntityViewProps) {
   // `source` is this kind's own key, so it isn't on `ViewSpec` — read it with
   // `viewParamString`, which hands back a string or nothing.
   const source = viewParamString(spec, "source")?.trim() ?? "";
   if (!source) {
     return <Notice>This view needs a `source:` naming the CSV/TSV file to show.</Notice>;
   }
-  return <CsvFromFile path={source} />;
+  // The header's marking control decides: the kind is registered `linkable`,
+  // so the view header always hands it the marking the view is on.
+  const keys = viewParam(spec, "keys");
+  return (
+    <CsvFromFile
+      path={source}
+      marking={marking ?? null}
+      viewKey={viewKey}
+      keys={Array.isArray(keys) ? keys.filter((k): k is string => typeof k === "string") : []}
+      source={path ?? null}
+      onMarkingNote={onMarkingNote}
+    />
+  );
 }

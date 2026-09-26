@@ -1,0 +1,223 @@
+"""``facet_build {"path", "rev"}`` / ``{"spec"}`` (plan-view-plugins-pr4 P3/P6;
+the path form #847/#848 P9, read by ``facet.cli``): a ``facet:`` spec's text
+in, the cache a gallery opens out.
+
+Built once per (normalised source path, its size and mtime, and only what
+shapes the bytes: the facet columns, the sort field, x / y / color field and
+type, the transform), so a second open, or a gallery refetching its index,
+reuses it -- sorting the other way or retitling costs no rebuild. The path
+keyed is the path read, so the cache can never hold another file's rows;
+every build then bounds the cache dir by the spec's ``facet.cache_mb`` (P3).
+That dir is shared by every gallery in the sandbox, so the cap a spec names
+bounds all of them, not just its own cache.
+The answer is ``{"key", "build", "groups", "cells", "built"}``; the progress
+lines go to stderr, which the runner hands back with the answer (it does not
+stream them).
+
+Imported only when ``facet_build`` runs: it loads pandas, which the pager
+commands beside it must not.
+"""
+
+from __future__ import annotations
+
+import json
+import posixpath
+import sys
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from chart_view.facet import (
+    CacheKey,
+    CacheUnusable,
+    cache_file,
+    progress_file,
+    read_index,
+    transform_hash,
+)
+from chart_view.facet.build import build_facet_cache
+from chart_view.facet.cap import enforce_cap
+from chart_view.facet.pager import _used
+from chart_view.query import _kinds
+from chart_view.sources import read_source
+from chart_view.spec import parse_spec, spec_errors
+from chart_view.transforms import apply_transforms
+
+DEFAULT_CAP_MB = 500
+_MB = 1024 * 1024
+
+
+class _Refused(ValueError):
+    """The spec cannot open as a gallery; the message says why."""
+
+
+def _channel(spec: dict[str, Any], name: str) -> dict[str, Any]:
+    # the schema requires a grid's x, y and colour fields (#855's markChannels),
+    # and a spec is checked against it before this runs
+    channel = spec["encoding"][name]
+    if "aggregate" in channel:
+        raise _Refused(
+            f"encoding.{name} aggregates, which a facet gallery cannot do per group: aggregate"
+            " in transform: with the facet columns in its groupby"
+        )
+    return channel
+
+
+def _key(root: Path, spec: dict[str, Any]) -> tuple[CacheKey, str]:
+    """The cache key, and the source path it was keyed on -- the one to read."""
+    source = spec["source"]
+    if not isinstance(source, str):
+        raise _Refused("a facet gallery reads a table file; source: {entity: ...} is not one")
+    # one file, one cache: "/data/w.csv", "./data/w.csv" and "data//w.csv" are it
+    relative = posixpath.normpath(source.lstrip("/"))
+    try:
+        stat = (root / relative).stat()
+    except OSError:
+        raise _Refused(f"source {source!r} is not a file in the workspace") from None
+    # only what shapes the cache's bytes: not the sort ORDER (the gallery sorts
+    # the index in hand), not titles or colour schemes, not the cap
+    facet = spec["facet"]
+    shape = {
+        "facet": {
+            "field": facet["field"],
+            # the column and the statistic shape each group's sort key; the order does not
+            "sort": [facet.get("sort", {}).get("field"), facet.get("sort", {}).get("stat")],
+        },
+        "encoding": {
+            c: {"field": spec["encoding"][c]["field"], "type": spec["encoding"][c]["type"]}
+            for c in ("x", "y", "color")
+        },
+        "transform": spec.get("transform", []),
+    }
+    key = CacheKey(
+        source_path=relative,
+        size=stat.st_size,
+        mtime_ns=stat.st_mtime_ns,
+        transform_hash=transform_hash(shape),
+    )
+    return key, relative
+
+
+class _Progress:
+    """A build's progress lines: to stderr, which the runner hands back with
+    the answer, and to the progress file ``facet_progress`` reads WHILE the
+    build runs (the runner does not stream). The file is started afresh by
+    the first line and removed when the build ends, however it ends."""
+
+    def __init__(self, path: Path, echo: bool) -> None:
+        self.path = path
+        self.echo = echo
+        self.started = False
+
+    def __call__(self, line: str) -> None:
+        if self.echo:
+            print(line, file=sys.stderr)
+        with self.path.open("a" if self.started else "w") as f:
+            f.write(line + "\n")
+        self.started = True
+
+    def done(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+
+def _answer(path: Path, key: CacheKey, built: bool) -> dict[str, Any]:
+    index = read_index(path)
+    return {
+        "key": key.digest(),
+        "build": index.build_id.decode("ascii"),
+        "groups": len(index.groups),
+        "cells": index.cells,
+        "scale": index.scale.to_json(),
+        "built": built,
+    }
+
+
+_KEEP: Any = object()  # no sort chosen in the gallery: the spec's own
+
+
+def _with_sort(spec: dict[str, Any], sort: Mapping[str, str] | None) -> dict[str, Any]:
+    """The spec with a sort the person picked in the gallery (P4) in place of
+    its own, or none, for the written order. (No order: the gallery flips it
+    over the index in hand, and it shapes nothing here.) It is then checked as
+    a spec would be."""
+    facet = {k: v for k, v in spec["facet"].items() if k != "sort"}
+    if sort is not None:
+        facet["sort"] = dict(sort)
+    return {**spec, "facet": facet}
+
+
+def build(
+    text: str, sort: Any = _KEEP, *, ident: str | None = None, echo: bool = True
+) -> dict[str, Any]:
+    """Build (or reuse) the cache ``text`` opens as; refuse as ``run`` says.
+    ``validate`` checks a facet spec by calling this (#848 P20), with
+    ``echo=False``: its stderr is the refusal lines alone. ``sort`` is the
+    gallery's choice in place of the spec's; ``ident`` names the build for
+    its progress file (the call's arguments; the text when not given)."""
+    spec = parse_spec(text)
+    if sort is not _KEEP and "facet" in spec:
+        spec = _with_sort(spec, sort)
+    errors = spec_errors(spec)
+    if errors:
+        raise _Refused("\n".join(errors))
+    if "facet" not in spec:
+        raise _Refused("facet_build needs a spec with facet:")
+    x, y, color = (_channel(spec, c) for c in ("x", "y", "color"))
+    channels: list[tuple[str, Mapping[str, Any]]] = [("x", x), ("y", y), ("color", color)]
+    workspace = Path.cwd()
+    key, relative = _key(workspace, spec)
+    views = Path.home() / ".cache" / "views"
+    views.mkdir(parents=True, exist_ok=True)
+    path = cache_file(views, key)
+    try:
+        answer = _answer(path, key, built=False)
+    except CacheUnusable:
+        pass  # none yet, or unusable: build it
+    else:
+        _used(path)  # reused is used: the cap evicts the least recently used
+        return answer
+
+    facet = spec["facet"]
+    fields = facet["field"] if isinstance(facet["field"], list) else [facet["field"]]
+    progress = _Progress(progress_file(views, text if ident is None else ident), echo)
+    try:
+        # read the path the key was made from: folding `..` as text and letting
+        # the OS walk a symlink first can name two different files
+        progress(f"reading {relative}")
+        frame = apply_transforms(read_source(workspace, relative), spec.get("transform", []))
+        build_facet_cache(
+            frame,
+            facet=fields,
+            x=x["field"],
+            y=y["field"],
+            value=color["field"],
+            sort=[facet["sort"]["field"]] if "sort" in facet else [],
+            stat=facet.get("sort", {}).get("stat"),
+            # what a stack reads its rows from: this source, as it is now, transformed
+            origin={
+                "source": relative,
+                "size": key.size,
+                "mtime_ns": key.mtime_ns,
+                "transform": spec.get("transform", []),
+                "x": {"field": x["field"], "type": x["type"]},
+                "y": {"field": y["field"], "type": y["type"]},
+            },
+            path=path,
+            x_type=x["type"],
+            y_type=y["type"],
+            # the colour's kind as query sends a grid's (q8 = a ramp, else categories)
+            continuous=_kinds("grid", channels)[color["field"]] == "q8",
+            progress=progress,
+        )
+        enforce_cap(views, cap_bytes=facet.get("cache_mb", DEFAULT_CAP_MB) * _MB, keep=path)
+    finally:
+        progress.done()
+    return _answer(path, key, built=True)
+
+
+def run(text: str, sort: Any = _KEEP, ident: str | None = None) -> int:
+    """Every refusal here (SpecError, SourceError, TransformError, BuildError,
+    _Refused) is a ValueError, which ``facet.cli.run`` answers as exit 2.
+    ``sort``, when given, is the gallery's choice in place of the spec's."""
+    json.dump(build(text, sort, ident=ident), sys.stdout, separators=(",", ":"))
+    return 0

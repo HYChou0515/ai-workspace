@@ -133,6 +133,27 @@ class WithheldSource(Struct):
     owner: str  # created_by — the grant authority and the "request access" target
 
 
+class SentMarking(Struct):
+    """#847 P7: a named marking (linked selection) the user sent with a message.
+
+    The values themselves live in the file at ``path`` — the thread keeps what a
+    chip shows (name, how many values per column) and where the AI reads the rest.
+    A marking whose write was refused is kept too, with ``error`` and no path, so
+    a reloaded thread still says which chip failed and why."""
+
+    name: str
+    path: str = ""
+    """Workspace path of the written ``.markings/<name>.json``; "" when not written."""
+    counts: dict[str, int] = field(default_factory=dict)
+    source: str | None = None
+    """The view file that last wrote the marking, when known."""
+    error: str | None = None
+    digest: str | None = None
+    """``api.markings.marking_digest`` of the values written — what "save as
+    table" from this chip checks the file against, since a later send under the
+    same name rewrites it. None when not written (or sent before P7's fix)."""
+
+
 class Message(Struct):
     role: str
     """One of `user` / `assistant` / `tool` / `system` / `error`.
@@ -229,6 +250,9 @@ class Message(Struct):
     cleaned, LLM-facing form (fed back to the model via history_items); the FE
     renders `tool_display` when present so the error the user saw stream live
     doesn't vanish from the reloaded card. "" ⇒ render `content`."""
+
+    markings: list[SentMarking] = field(default_factory=list)
+    """Only set when role=user (#847 P7) — the markings sent with this message."""
 
 
 class Conversation(Struct):

@@ -16,10 +16,12 @@ import { useCallback, useState } from "react";
 import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
+import { useContainerWidth } from "../../hooks/useContainerWidth";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
-import { ConflictBanner, fieldText, parseSpan, parseViewSpec } from "./shared";
+import { MarkingControl, useViewMarking } from "./MarkingControl";
+import { ConflictBanner, fieldText, parseSpan, parseViewSpec, viewParam } from "./shared";
 import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
 import { ViewSettingsPanel } from "./ViewSettingsPanel";
 import { resolveViewRenderer } from "./viewKindRegistry";
@@ -182,6 +184,9 @@ function DiagnosticBanner({ diagnostics }: { diagnostics: EntityDiagnostic[] }) 
 
 // ── dispatcher ─────────────────────────────────────────────────────────────
 
+/** Below this width (px) a view panel compacts its header (#847/#848 PR 5 P13). */
+export const NARROW_PANEL = 480;
+
 export type EntityViewBodyProps = EntityViewProps & {
   /** Record numbers whose write hit a 409 (§B2), shown as a dismissable banner. */
   conflicts?: number[];
@@ -214,14 +219,40 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   // its entity props were empty when they were not.
   const hasEntity = !!spec.entity;
   const showEmpty = hasEntity && entities.length === 0 && !renderer.ownsEmptyState;
+  // #847 P3: a view that names a marking or keys can be linked; its header
+  // carries the control, and the kind is told which marking it is on.
+  const fileMarking = viewParam(spec, "marking");
+  const linkable =
+    !!renderer.linkable || fileMarking !== undefined || viewParam(spec, "keys") !== undefined;
+  const [marking, setMarking] = useViewMarking(
+    props.viewKey,
+    typeof fileMarking === "string" && fileMarking ? fileMarking : null,
+  );
+  // #847/#848 PR 5 — the kind says why selecting in it marks nothing, and the
+  // marking control (where the person looks for "what is this view linked
+  // to") shows it.
+  const [markingNote, setMarkingNote] = useState<string | null>(null);
+  // #847/#848 PR 5 P13 — a layout pane can be a fifth of the screen: measured
+  // on the panel itself (not the viewport), and the stylesheet compacts the
+  // header below `NARROW_PANEL` (one truncated title line, controls beside it).
+  const [panelRef, panelWidth] = useContainerWidth<HTMLDivElement>();
+  const narrow = panelWidth > 0 && panelWidth < NARROW_PANEL;
   return (
-    <div className="ev-panel">
+    <div className="ev-panel" ref={panelRef} data-narrow={narrow ? "" : undefined}>
       <div className="ev-panel__head">
         <h3 className="ev-panel__title">
           {spec.title || spec.entity || spec.view}
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
+          {linkable && (
+            <MarkingControl
+              value={marking}
+              onChange={setMarking}
+              note={marking ? markingNote : null}
+              path={props.path}
+            />
+          )}
           {viewConfig && <ViewSettingsPanel config={viewConfig} />}
           {type && !renderer.suppressQuickCreate && canWrite && (
             <QuickCreate
@@ -277,7 +308,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           <div>No {spec.entity} records yet.</div>
         </div>
       ) : (
-        <Component {...props} />
+        <Component {...props} {...(linkable ? { marking, onMarkingNote: setMarkingNote } : {})} />
       )}
     </div>
   );

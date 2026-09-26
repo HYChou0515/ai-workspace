@@ -176,7 +176,7 @@ async def workspace_skill_payload(
     there is no such folder."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
     paths = sorted(p for p in await files.ls(workspace_id, prefix) if p != prefix + ORIGIN_FILE)
-    from ..files.facade import read_all
+    from ..filestore.batch import read_all
 
     return {
         path[len(prefix) :]: raw
@@ -205,7 +205,7 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/"
     paths = await files.ls(workspace_id, prefix)
-    from ..files.facade import read_all_existing
+    from ..filestore.batch import read_all_existing
     from ..filestore.protocol import FileNotFound
 
     wanted = [

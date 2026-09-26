@@ -109,8 +109,13 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 **P7 — highlight.**
 
 - The resolved highlight set comes back from `query`.
-- Matching marks are emphasized and the rest dimmed, using ECharts' own
-  `emphasis`/`blur` states rather than a second colour path.
+- Matching marks keep their colour and the rest are dimmed.
+- **As built [mine, open to override]:** the dimming is in the data itself (item
+  opacity; a grid's unlit cells at reduced alpha in its raster), not ECharts'
+  `emphasis`/`blur` states. Every ECharts highlight / downplay action starts with
+  `allLeaveBlur`, so a highlight kept there vanished at the first hover, and a second
+  series' highlight blurred the first's lit points (measured on real ECharts;
+  `view-plugins/chart/web/src/highlight.ts`).
 
 **P8 — the AI side.**
 

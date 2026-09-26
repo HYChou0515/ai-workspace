@@ -113,6 +113,25 @@ def test_frame_src_still_admits_the_frames_the_app_itself_uses(tmp_path: Path):
     assert "blob:" in frame_src
 
 
+def _directives(csp: str) -> set[str]:
+    return {d.split()[0] for d in csp.split(";") if d.strip()}
+
+
+def test_the_document_says_nothing_about_scripts(tmp_path: Path):
+    """#847/#848 P9: runtime view plugins reach the page as an INLINE import map
+    (`<script type="importmap">`, `web/vite-plugins/sharedModules.ts`) and a
+    dynamic `import()` of `/api/view-plugins/<name>/index.js`. A `script-src`
+    without `'unsafe-inline'` refuses the import map, and one without the API
+    path refuses the plugin -- every plugin view goes blank. `default-src` is
+    `script-src`'s fallback, so it counts too. The policy's job is child
+    frames (above); scripts are not its business."""
+    client = _client(tmp_path)
+    for path in ("/", "/index.html", "/a/rca/items/abc-123"):
+        csp = client.get(path).headers["content-security-policy"]
+        assert not _directives(csp) & {"script-src", "script-src-elem", "default-src"}, (path, csp)
+        assert _directives(csp) == {"frame-src"}, (path, csp)  # "exactly one directive" (SPA_CSP)
+
+
 def test_unknown_api_route_still_404s_json(tmp_path: Path):
     """An /api/* path that matches NO route falls through to the SPA mount, but
     the `api/` guard makes it 404 rather than serving index.html (#177) — an API

@@ -1,0 +1,7902 @@
+{
+ "kind": "datum-axes",
+ "cases": [
+  {
+   "name": "date on a time axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-01T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "zoned date on a time axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024/03/01T12:00+08:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "ms on a time axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1709294400000
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "loose date on a time axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-3-1"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "digits as text on a time axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "no such day on a time axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-02-30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "the rule layer first",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-3-1"
+       }
+      }
+     },
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "the rule layer first, a good date",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-02"
+       }
+      }
+     },
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a time y axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "t",
+        "type": "temporal"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "y": {
+        "datum": "2024-03-02"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a loose date on a time y axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "t",
+        "type": "temporal"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "y": {
+        "datum": "2024/3/2"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "the first layer with a field decides",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-01"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number on a number axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "text on a number axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "1.5"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a label on a category axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "b"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a date on a temporal grid",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-02"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a loose date on a temporal grid",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-3-2"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a label on an ordinal grid",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "b"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a label the category axis lacks",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "zzz"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number on a text category axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number label on a number-label axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "n",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 2022
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "n": {
+        "kind": "cat",
+        "levels": [
+         2022,
+         2023
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "its text on a number-label axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "n",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2022"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "n": {
+        "kind": "cat",
+        "levels": [
+         2022,
+         2023
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a label written otherwise",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "n",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2022.0"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "n": {
+        "kind": "cat",
+        "levels": [
+         2022,
+         2023
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number the labels lack",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "n",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1999
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "n": {
+        "kind": "cat",
+        "levels": [
+         2022,
+         2023
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a cell's label as text on a number grid",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "1"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "between two number cells",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "text that is no cell of a number grid",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "abc"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a cell written otherwise",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "1.0"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number past the cells",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 99
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a date past a temporal grid's cells",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2030-01-01"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a label a grid's row axis lacks",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "y": {
+        "datum": "zzz"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a label on a grid's row axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "y": {
+        "datum": "b"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a date whose field comes later",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-3-1"
+       }
+      }
+     },
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a grid second: its cells decide",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-02"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a label of a grid that comes second",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "a"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a positive number on a log axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "p",
+        "type": "quantitative",
+        "scale": {
+         "type": "log"
+        }
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "p": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAkQA=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "zero on a log axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "p",
+        "type": "quantitative",
+        "scale": {
+         "type": "log"
+        }
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 0
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "p": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAkQA=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a negative number on a log axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "p",
+        "type": "quantitative",
+        "scale": {
+         "type": "log"
+        }
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": -1
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "p": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAkQA=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a cell the lattice fills",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         3
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a label past a filled lattice",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "5"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         3
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "text on a number grid",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "1.5"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "text with no axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "abc"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a date with no axis",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-01"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a cell whose other coordinate is missing",
+   "data": {
+    "k": [
+     1,
+     2,
+     9
+    ],
+    "g": [
+     "a",
+     "b",
+     null
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 9
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 3,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         2,
+         9
+        ],
+        "width": 1,
+        "codes": "AAEC"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAH/"
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 3.0,
+        "codes": "AH/+"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a cell whose other coordinate is there",
+   "data": {
+    "k": [
+     1,
+     2,
+     9
+    ],
+    "g": [
+     "a",
+     "b",
+     null
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 2
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 3,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         2,
+         9
+        ],
+        "width": 1,
+        "codes": "AAEC"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAH/"
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 3.0,
+        "codes": "AH/+"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a gap the lattice fills at its limit",
+   "data": {
+    "k": [
+     1,
+     8
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "4"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         8
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a gap one past the lattice's limit",
+   "data": {
+    "k": [
+     1,
+     9
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "4"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         9
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "between two fractional cells",
+   "data": {
+    "k": [
+     0.5,
+     1.5
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1.0
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "f64",
+        "data": "AAAAAAAA4D8AAAAAAAD4Pw=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a label another layer reads as a number",
+   "data": {
+    "g": [
+     "01",
+     "a"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "g",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "1"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "01",
+         "a"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "scatter",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "g": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAD4fw=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a label only another layer's dates send",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      },
+      "transform": [
+       {
+        "filter": "t == '2024-03-01'"
+       }
+      ]
+     },
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-02"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 1,
+      "columns": {
+       "t": {
+        "kind": "cat",
+        "levels": [
+         "2024-03-01"
+        ],
+        "width": 1,
+        "codes": "AA=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a value binning moved",
+   "data": {
+    "w": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29
+    ],
+    "v": [
+     0.0,
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0,
+     7.0,
+     8.0,
+     9.0,
+     10.0,
+     11.0,
+     12.0,
+     13.0,
+     14.0,
+     15.0,
+     16.0,
+     17.0,
+     18.0,
+     19.0,
+     20.0,
+     21.0,
+     22.0,
+     23.0,
+     24.0,
+     25.0,
+     26.0,
+     27.0,
+     28.0,
+     29.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "bin_threshold": 5,
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "w",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "w",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 30,
+      "columns": {
+       "w": {
+        "kind": "cat",
+        "levels": [
+         0,
+         1,
+         2,
+         3,
+         4,
+         5,
+         6,
+         7,
+         8,
+         9,
+         10,
+         11,
+         12,
+         13,
+         14,
+         15,
+         16,
+         17,
+         18,
+         19,
+         20,
+         21,
+         22,
+         23,
+         24,
+         25,
+         26,
+         27,
+         28,
+         29
+        ],
+        "width": 1,
+        "codes": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwd"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAAAAAAAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABRAAAAAAAAAGEAAAAAAAAAcQAAAAAAAACBAAAAAAAAAIkAAAAAAAAAkQAAAAAAAACZAAAAAAAAAKEAAAAAAAAAqQAAAAAAAACxAAAAAAAAALkAAAAAAAAAwQAAAAAAAADFAAAAAAAAAMkAAAAAAAAAzQAAAAAAAADRAAAAAAAAANUAAAAAAAAA2QAAAAAAAADdAAAAAAAAAOEAAAAAAAAA5QAAAAAAAADpAAAAAAAAAO0AAAAAAAAA8QAAAAAAAAD1A"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "scatter",
+      "binned": {
+       "points": 30,
+       "bins": 30
+      },
+      "outliers": null,
+      "measured": [],
+      "rows": 30,
+      "columns": {
+       "w": {
+        "kind": "f64",
+        "data": "AAAAAAAArT8AAAAAANDuPwAAAAAAuP8/AAAAAAAECEAAAAAAABYQQAAAAAAAKhRAAAAAAADKF0AAAAAAAN4bQAAAAAAA8h9AAAAAAAADIkAAAAAAAA0kQAAAAAAAFyZAAAAAAADnJ0AAAAAAAPEpQAAAAAAA+ytAAAAAAAAFLkAAAAAAgAcwQAAAAACADDFAAAAAAID0MUAAAAAAgPkyQAAAAACA/jNAAAAAAIADNUAAAAAAgAg2QAAAAACADTdAAAAAAID1N0AAAAAAgPo4QAAAAACA/zlAAAAAAIAEO0AAAAAAgAk8QAAAAACA8TxA"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAArT8AAAAAANDuPwAAAAAAuP8/AAAAAAAECEAAAAAAABYQQAAAAAAAKhRAAAAAAADKF0AAAAAAAN4bQAAAAAAA8h9AAAAAAAADIkAAAAAAAA0kQAAAAAAAFyZAAAAAAADnJ0AAAAAAAPEpQAAAAAAA+ytAAAAAAAAFLkAAAAAAgAcwQAAAAACADDFAAAAAAID0MUAAAAAAgPkyQAAAAACA/jNAAAAAAIADNUAAAAAAgAg2QAAAAACADTdAAAAAAID1N0AAAAAAgPo4QAAAAACA/zlAAAAAAIAEO0AAAAAAgAk8QAAAAACA8TxA"
+       },
+       "$count": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a value only binning moved away",
+   "data": {
+    "w": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29
+    ],
+    "v": [
+     0.0,
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0,
+     7.0,
+     8.0,
+     9.0,
+     10.0,
+     11.0,
+     12.0,
+     13.0,
+     14.0,
+     15.0,
+     16.0,
+     17.0,
+     18.0,
+     19.0,
+     20.0,
+     21.0,
+     22.0,
+     23.0,
+     24.0,
+     25.0,
+     26.0,
+     27.0,
+     28.0,
+     29.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "bin_threshold": 5,
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "w",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      },
+      "transform": [
+       {
+        "filter": "w != 5"
+       }
+      ]
+     },
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "w",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 29,
+      "columns": {
+       "w": {
+        "kind": "cat",
+        "levels": [
+         0,
+         1,
+         2,
+         3,
+         4,
+         6,
+         7,
+         8,
+         9,
+         10,
+         11,
+         12,
+         13,
+         14,
+         15,
+         16,
+         17,
+         18,
+         19,
+         20,
+         21,
+         22,
+         23,
+         24,
+         25,
+         26,
+         27,
+         28,
+         29
+        ],
+        "width": 1,
+        "codes": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxw="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAAAAAAAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABhAAAAAAAAAHEAAAAAAAAAgQAAAAAAAACJAAAAAAAAAJEAAAAAAAAAmQAAAAAAAAChAAAAAAAAAKkAAAAAAAAAsQAAAAAAAAC5AAAAAAAAAMEAAAAAAAAAxQAAAAAAAADJAAAAAAAAAM0AAAAAAAAA0QAAAAAAAADVAAAAAAAAANkAAAAAAAAA3QAAAAAAAADhAAAAAAAAAOUAAAAAAAAA6QAAAAAAAADtAAAAAAAAAPEAAAAAAAAA9QA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "scatter",
+      "binned": {
+       "points": 30,
+       "bins": 30
+      },
+      "outliers": null,
+      "measured": [],
+      "rows": 30,
+      "columns": {
+       "w": {
+        "kind": "f64",
+        "data": "AAAAAAAArT8AAAAAANDuPwAAAAAAuP8/AAAAAAAECEAAAAAAABYQQAAAAAAAKhRAAAAAAADKF0AAAAAAAN4bQAAAAAAA8h9AAAAAAAADIkAAAAAAAA0kQAAAAAAAFyZAAAAAAADnJ0AAAAAAAPEpQAAAAAAA+ytAAAAAAAAFLkAAAAAAgAcwQAAAAACADDFAAAAAAID0MUAAAAAAgPkyQAAAAACA/jNAAAAAAIADNUAAAAAAgAg2QAAAAACADTdAAAAAAID1N0AAAAAAgPo4QAAAAACA/zlAAAAAAIAEO0AAAAAAgAk8QAAAAACA8TxA"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAArT8AAAAAANDuPwAAAAAAuP8/AAAAAAAECEAAAAAAABYQQAAAAAAAKhRAAAAAAADKF0AAAAAAAN4bQAAAAAAA8h9AAAAAAAADIkAAAAAAAA0kQAAAAAAAFyZAAAAAAADnJ0AAAAAAAPEpQAAAAAAA+ytAAAAAAAAFLkAAAAAAgAcwQAAAAACADDFAAAAAAID0MUAAAAAAgPkyQAAAAACA/jNAAAAAAIADNUAAAAAAgAg2QAAAAACADTdAAAAAAID1N0AAAAAAgPo4QAAAAACA/zlAAAAAAIAEO0AAAAAAgAk8QAAAAACA8TxA"
+       },
+       "$count": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number between cells, 1 first",
+   "data": {
+    "k": [
+     1,
+     "1",
+     1,
+     2
+    ],
+    "g": [
+     "a",
+     "b",
+     "c",
+     "d"
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0,
+     4.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 4,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         2,
+         "1"
+        ],
+        "width": 1,
+        "codes": "AAIAAQ=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b",
+         "c",
+         "d"
+        ],
+        "width": 1,
+        "codes": "AAECAw=="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 4.0,
+        "codes": "AFWp/g=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a number between cells, text 1 first",
+   "data": {
+    "k": [
+     "1",
+     1,
+     "1",
+     2
+    ],
+    "g": [
+     "a",
+     "b",
+     "c",
+     "d"
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0,
+     4.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 4,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         1,
+         2,
+         "1"
+        ],
+        "width": 1,
+        "codes": "AgACAQ=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b",
+         "c",
+         "d"
+        ],
+        "width": 1,
+        "codes": "AAECAw=="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 4.0,
+        "codes": "AFWp/g=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a date before 1970 on a time axis asking for log",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal",
+        "scale": {
+         "type": "log"
+        }
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "1969-06-01"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a rule's y datum is the one drawn",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2024-03-01"
+       },
+       "y": {
+        "datum": "zzz"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a rule's x datum is not drawn when it has a y",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "zzz"
+       },
+       "y": {
+        "datum": 1.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AABA+HTfeEIAAABex994Qg=="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a whole float on integer labels",
+   "data": {
+    "t": [
+     "2024-03-01",
+     "2024-03-02"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "n": [
+     2022,
+     2023
+    ],
+    "p": [
+     1.0,
+     10.0
+    ],
+    "k": [
+     1,
+     3
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "n",
+        "type": "ordinal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 2022.0
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "n": {
+        "kind": "cat",
+        "levels": [
+         2022,
+         2023
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a bin's centre on the axis binning made",
+   "data": {
+    "w": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29
+    ],
+    "v": [
+     0.0,
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0,
+     7.0,
+     8.0,
+     9.0,
+     10.0,
+     11.0,
+     12.0,
+     13.0,
+     14.0,
+     15.0,
+     16.0,
+     17.0,
+     18.0,
+     19.0,
+     20.0,
+     21.0,
+     22.0,
+     23.0,
+     24.0,
+     25.0,
+     26.0,
+     27.0,
+     28.0,
+     29.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "bin_threshold": 5,
+    "layer": [
+     {
+      "mark": "bar",
+      "encoding": {
+       "x": {
+        "field": "w",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "scatter",
+      "encoding": {
+       "x": {
+        "field": "w",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 0.056640625
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "bar",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 30,
+      "columns": {
+       "w": {
+        "kind": "cat",
+        "levels": [
+         0,
+         1,
+         2,
+         3,
+         4,
+         5,
+         6,
+         7,
+         8,
+         9,
+         10,
+         11,
+         12,
+         13,
+         14,
+         15,
+         16,
+         17,
+         18,
+         19,
+         20,
+         21,
+         22,
+         23,
+         24,
+         25,
+         26,
+         27,
+         28,
+         29
+        ],
+        "width": 1,
+        "codes": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwd"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAAAAAAAAAAAADwPwAAAAAAAABAAAAAAAAACEAAAAAAAAAQQAAAAAAAABRAAAAAAAAAGEAAAAAAAAAcQAAAAAAAACBAAAAAAAAAIkAAAAAAAAAkQAAAAAAAACZAAAAAAAAAKEAAAAAAAAAqQAAAAAAAACxAAAAAAAAALkAAAAAAAAAwQAAAAAAAADFAAAAAAAAAMkAAAAAAAAAzQAAAAAAAADRAAAAAAAAANUAAAAAAAAA2QAAAAAAAADdAAAAAAAAAOEAAAAAAAAA5QAAAAAAAADpAAAAAAAAAO0AAAAAAAAA8QAAAAAAAAD1A"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "scatter",
+      "binned": {
+       "points": 30,
+       "bins": 30
+      },
+      "outliers": null,
+      "measured": [],
+      "rows": 30,
+      "columns": {
+       "w": {
+        "kind": "f64",
+        "data": "AAAAAAAArT8AAAAAANDuPwAAAAAAuP8/AAAAAAAECEAAAAAAABYQQAAAAAAAKhRAAAAAAADKF0AAAAAAAN4bQAAAAAAA8h9AAAAAAAADIkAAAAAAAA0kQAAAAAAAFyZAAAAAAADnJ0AAAAAAAPEpQAAAAAAA+ytAAAAAAAAFLkAAAAAAgAcwQAAAAACADDFAAAAAAID0MUAAAAAAgPkyQAAAAACA/jNAAAAAAIADNUAAAAAAgAg2QAAAAACADTdAAAAAAID1N0AAAAAAgPo4QAAAAACA/zlAAAAAAIAEO0AAAAAAgAk8QAAAAACA8TxA"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAArT8AAAAAANDuPwAAAAAAuP8/AAAAAAAECEAAAAAAABYQQAAAAAAAKhRAAAAAAADKF0AAAAAAAN4bQAAAAAAA8h9AAAAAAAADIkAAAAAAAA0kQAAAAAAAFyZAAAAAAADnJ0AAAAAAAPEpQAAAAAAA+ytAAAAAAAAFLkAAAAAAgAcwQAAAAACADDFAAAAAAID0MUAAAAAAgPkyQAAAAACA/jNAAAAAAIADNUAAAAAAgAg2QAAAAACADTdAAAAAAID1N0AAAAAAgPo4QAAAAACA/zlAAAAAAIAEO0AAAAAAgAk8QAAAAACA8TxA"
+       },
+       "$count": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "numbers a text label sorts apart",
+   "data": {
+    "k": [
+     10,
+     "5",
+     9
+    ],
+    "g": [
+     "a",
+     "b",
+     "c"
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 9.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 3,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         9,
+         10,
+         "5"
+        ],
+        "width": 1,
+        "codes": "AQIA"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b",
+         "c"
+        ],
+        "width": 1,
+        "codes": "AAEC"
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 3.0,
+        "codes": "AH/+"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "between number cells whose text had a stray value",
+   "data": {
+    "k": [
+     "1",
+     "2",
+     "x"
+    ],
+    "g": [
+     "a",
+     "b",
+     "c"
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1.5
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 3,
+      "columns": {
+       "k": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQAAAAAAAAPh/"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b",
+         "c"
+        ],
+        "width": 1,
+        "codes": "AAEC"
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 3.0,
+        "codes": "AH/+"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a number cell written with a leading zero",
+   "data": {
+    "k": [
+     "01",
+     "02"
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a number on a true/false grid",
+   "data": {
+    "k": [
+     true,
+     false,
+     null
+    ],
+    "g": [
+     "a",
+     "b",
+     "c"
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 3,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         false,
+         true
+        ],
+        "width": 1,
+        "codes": "AQD/"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b",
+         "c"
+        ],
+        "width": 1,
+        "codes": "AAEC"
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 3.0,
+        "codes": "AH/+"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "true on a true/false grid",
+   "data": {
+    "k": [
+     true,
+     false,
+     null
+    ],
+    "g": [
+     "a",
+     "b",
+     "c"
+    ],
+    "v": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "true"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 3,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         false,
+         true
+        ],
+        "width": 1,
+        "codes": "AQD/"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b",
+         "c"
+        ],
+        "width": 1,
+        "codes": "AAEC"
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 3.0,
+        "codes": "AH/+"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a list's item on a grid of lists",
+   "data": {
+    "k": [
+     [
+      "a"
+     ],
+     [
+      "b"
+     ]
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "a"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         "['a']",
+         "['b']"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false
+  },
+  {
+   "name": "a list's marking on a grid of lists",
+   "data": {
+    "k": [
+     [
+      "a"
+     ],
+     [
+      "b"
+     ]
+    ],
+    "g": [
+     "a",
+     "b"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "k",
+        "type": "nominal"
+       },
+       "y": {
+        "field": "g",
+        "type": "nominal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "['a']"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "k": {
+        "kind": "cat",
+        "levels": [
+         "['a']",
+         "['b']"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a",
+         "b"
+        ],
+        "width": 1,
+        "codes": "AAE="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true
+  },
+  {
+   "name": "a zone-less date on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772884800000.0
+  },
+  {
+   "name": "a zone-less date the zone skipped",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-08T02:30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "America/New_York"
+   }
+  },
+  {
+   "name": "a zone-less date just past the skip",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-08T03:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772938800000.0
+  },
+  {
+   "name": "a zone-less date the zone had twice",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-11-01T01:30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "America/New_York"
+   }
+  },
+  {
+   "name": "a zone-less date just past the repeat",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-11-01T02:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1793498400000.0
+  },
+  {
+   "name": "a date with its offset on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-11-01T01:30-05:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1793496600000.0
+  },
+  {
+   "name": "epoch ms on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": 1772884800000
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772866800000.0
+  },
+  {
+   "name": "a zone-less date on a zoned y axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "v",
+        "type": "quantitative"
+       },
+       "y": {
+        "field": "t",
+        "type": "temporal"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "y": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       },
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "America/New_York"
+   },
+   "at": 1772884800000.0
+  },
+  {
+   "name": "a zone-less date on a fixed-offset axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "+05:45"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "+05:45"
+   },
+   "at": 1772884800000.0
+  },
+  {
+   "name": "a zone-less date at the calendar's start, ahead of UTC",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "0001-01-01"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "+05:00"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "+05:00"
+   },
+   "at": -62135596800000.0
+  },
+  {
+   "name": "a zone-less day on a zoned temporal grid",
+   "data": {
+    "t": [
+     "2026-02-28T16:00:00Z",
+     "2026-03-01T16:00:00Z"
+    ],
+    "g": [
+     "a",
+     "a"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-02"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AACApk/KeUIAAEAMosp5Qg==",
+        "zone": "Asia/Taipei"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a"
+        ],
+        "width": 1,
+        "codes": "AAA="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "Asia/Taipei"
+   }
+  },
+  {
+   "name": "that day read as UTC is no cell",
+   "data": {
+    "t": [
+     "2026-02-28T16:00:00Z",
+     "2026-03-01T16:00:00Z"
+    ],
+    "g": [
+     "a",
+     "a"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "grid",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "g",
+        "type": "ordinal"
+       },
+       "color": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-02T00:00Z"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "grid",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AACApk/KeUIAAEAMosp5Qg==",
+        "zone": "Asia/Taipei"
+       },
+       "g": {
+        "kind": "cat",
+        "levels": [
+         "a"
+        ],
+        "width": 1,
+        "codes": "AAA="
+       },
+       "v": {
+        "kind": "q8",
+        "min": 1.0,
+        "max": 2.0,
+        "codes": "AP4="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "Asia/Taipei"
+   }
+  },
+  {
+   "name": "no such day on a zoned axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-02-30"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "America/New_York"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": false,
+   "zones": {
+    "t": "America/New_York"
+   }
+  },
+  {
+   "name": "a zone-less date on a UTC axis",
+   "data": {
+    "t": [
+     "2026-03-07T05:00:00Z",
+     "2026-11-02T05:00:00Z"
+    ],
+    "v": [
+     1.0,
+     2.0
+    ]
+   },
+   "spec": {
+    "view": "chart",
+    "source": "a.csv",
+    "layer": [
+     {
+      "mark": "line",
+      "encoding": {
+       "x": {
+        "field": "t",
+        "type": "temporal"
+       },
+       "y": {
+        "field": "v",
+        "type": "quantitative"
+       }
+      }
+     },
+     {
+      "mark": "rule",
+      "encoding": {
+       "x": {
+        "datum": "2026-03-07T12:00"
+       }
+      }
+     }
+    ]
+   },
+   "answer": {
+    "format": 1,
+    "layers": [
+     {
+      "mark": "line",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 2,
+      "columns": {
+       "t": {
+        "kind": "time",
+        "data": "AADIqmrMeUIAAMgOqhl6Qg==",
+        "zone": "UTC"
+       },
+       "v": {
+        "kind": "f64",
+        "data": "AAAAAAAA8D8AAAAAAAAAQA=="
+       }
+      },
+      "highlight": null,
+      "lit": null
+     },
+     {
+      "mark": "rule",
+      "binned": null,
+      "outliers": null,
+      "measured": [],
+      "rows": 0,
+      "columns": {},
+      "highlight": null,
+      "lit": null
+     }
+    ]
+   },
+   "placed": true,
+   "zones": {
+    "t": "UTC"
+   },
+   "at": 1772884800000.0
+  }
+ ]
+}

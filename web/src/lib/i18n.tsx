@@ -222,6 +222,22 @@ export const messages = {
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
   "shownFile.open": { "zh-TW": "開啟", en: "Open" },
+  "shownLayout.files": { "zh-TW": "{n} 個檔案的版面", en: "Layout of {n} files" },
+  "markings.notSent": { "zh-TW": "未送出", en: "Not sent" },
+  "markings.remove": { "zh-TW": "這次不送 {name}", en: "Remove {name} from this message" },
+  // P7 — save a marking's lit rows as a new CSV in the workspace.
+  "markings.saveTable": { "zh-TW": "存成表格", en: "Save as table" },
+  "markings.saving": { "zh-TW": "儲存中…", en: "Saving…" },
+  "markings.saved": { "zh-TW": "已存 {n} 列 →", en: "Saved {n} rows →" },
+  "markings.savedOne": { "zh-TW": "已存 1 列 →", en: "Saved 1 row →" },
+  "markings.saveFailed": { "zh-TW": "表格沒有存成", en: "The table could not be saved" },
+  "markings.noView": { "zh-TW": "這個標記沒有記下來自哪個視圖", en: "No view is recorded for this marking" },
+  "markings.nothingMarked": { "zh-TW": "還沒有標記任何值", en: "Nothing is marked yet" },
+  "markings.notAFile": { "zh-TW": "這個視圖不是工作區裡的檔案", en: "This view is not a file in the workspace" },
+  // P27 — the columns a marking marks by, beside its picker and on its chip:
+  // over two columns it lights every combination of their values.
+  "markings.by": { "zh-TW": "依 {columns}", en: "by {columns}" },
+  "markings.listSep": { "zh-TW": "、", en: ", " },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },
   "entry.sources": { "zh-TW": "來源", en: "Sources" },
   // Permission-disclosure: relevant sources the user can see-exist but not read.

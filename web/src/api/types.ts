@@ -37,8 +37,32 @@ export type MessageRole =
   | "summary"
   | "error";
 
+/** #847 P7: a named marking as the composer sends it — `column → values`,
+ * opaque strings. Mirrors `api/schemas.py` `MarkingInput`. */
+export type MarkingInput = {
+  name: string;
+  source: string | null;
+  columns: Record<string, string[]>;
+};
+
+/** #847 P7: a marking as recorded on the user message it was sent with. The
+ * values live in the file at `path`; `path` is "" and `error` says why when the
+ * write was refused. Mirrors `resources/conversation.py` `SentMarking`. */
+export type SentMarking = {
+  name: string;
+  path: string;
+  counts: Record<string, number>;
+  source?: string | null;
+  error?: string | null;
+  /** P7: a hash of the values written — "save as table" from this chip sends
+   * it, and the route refuses when a later send has rewritten the file. */
+  digest?: string | null;
+};
+
 export type Message = {
   role: MessageRole;
+  /** role=user only (#847 P7): the markings sent with this message. */
+  markings?: SentMarking[];
   content: string;
   /** user id when role=user; agent name when role=assistant. */
   author?: string | null;
@@ -492,6 +516,9 @@ export type SendMessageArgs = {
    * The images are already uploaded as workspace files (the #364 chip flow), so
    * this carries paths. Ignored by a text-only model. */
   imagePaths?: string[];
+  /** #847 P7: the named markings kept as chips. Each is written to
+   * `.markings/<name>.json`, recorded on the message and summarised to the model. */
+  markings?: MarkingInput[];
 };
 
 export type ExecuteCellArgs = {

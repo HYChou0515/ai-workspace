@@ -106,6 +106,13 @@ def _check_sandbox(p: ViewPlugin, report: Report) -> None:
             f'plugin.json says "validate": true but {half.bundle}/commands.json has no '
             "`validate` command"
         )
+    provides = p.manifest.provides
+    rows = provides.marking_rows if provides is not None else None
+    if rows is not None and rows not in names:
+        report.errors.append(
+            f'plugin.json says "provides": {{"marking_rows": "{rows}"}} but '
+            f"{half.bundle}/commands.json has no `{rows}` command"
+        )
 
 
 def check_plugin(folder: Path) -> Report:

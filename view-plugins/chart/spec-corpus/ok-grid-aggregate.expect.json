@@ -1,0 +1,51 @@
+{
+  "view": "chart",
+  "title": "Where dies fail",
+  "source": "data/dies.parquet",
+  "mark": "grid",
+  "encoding": {
+    "x": {
+      "field": "die_x",
+      "type": "ordinal"
+    },
+    "y": {
+      "field": "die_y",
+      "type": "ordinal"
+    },
+    "color": {
+      "field": "fail_rate",
+      "type": "quantitative",
+      "scale": {
+        "scheme": "sequential"
+      }
+    }
+  },
+  "transform": [
+    {
+      "filter": {
+        "field": "layer",
+        "oneOf": [
+          "M1",
+          "M2"
+        ]
+      }
+    },
+    {
+      "aggregate": [
+        {
+          "op": "rate",
+          "field": "fail",
+          "as": "fail_rate"
+        },
+        {
+          "op": "count",
+          "as": "n"
+        }
+      ],
+      "groupby": [
+        "die_x",
+        "die_y"
+      ]
+    }
+  ]
+}

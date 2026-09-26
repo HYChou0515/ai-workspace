@@ -20,15 +20,18 @@ from workspace_app.view_plugins.discovery import (
     ViewPlugin,
     ViewPluginError,
     discover_view_plugins,
+    marking_rows_provider,
 )
-from workspace_app.view_plugins.manifest import PluginManifest, SandboxHalf, ViewEntry
+from workspace_app.view_plugins.manifest import PluginManifest, Provides, SandboxHalf, ViewEntry
 
 __all__ = [
     "BUILTIN_VIEW_KINDS",
     "PluginManifest",
+    "Provides",
     "SandboxHalf",
     "ViewEntry",
     "ViewPlugin",
     "ViewPluginError",
     "discover_view_plugins",
+    "marking_rows_provider",
 ]

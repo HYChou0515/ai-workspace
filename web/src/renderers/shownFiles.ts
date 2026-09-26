@@ -12,6 +12,8 @@
  *
  * Mirrors `SHOWN_FILES_MARKER` in `agent/tools.py` — keep them in sync.
  */
+import { isLayoutNode, type LayoutNode, layoutPaths } from "../pages/investigation/paneTree";
+
 const MARKER = "\n[shown-files]";
 
 export type ShownFile = {
@@ -53,6 +55,33 @@ export function parseShownFiles(output: string | undefined | null): ShownFile[] 
     if (typeof caption === "string" && caption) file.caption = caption;
     out.push(file);
   }
+  return out;
+}
+
+/** A `show_file(layout=…)` declaration (#847): one card that opens `layout`. */
+export type ShownLayout = { layout: LayoutNode; files: ShownFile[]; caption?: string };
+
+/** The layout `output` declared, or `null` — for an ordinary declaration, a
+ * truncated one, or a tree the chat could not draw (the files then render one
+ * by one, as `parseShownFiles` reads them). Never throws. */
+export function parseShownLayout(output: string | undefined | null): ShownLayout | null {
+  if (!output) return null;
+  const at = output.lastIndexOf(MARKER);
+  if (at < 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output.slice(at + MARKER.length));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const { layout, caption } = parsed as Record<string, unknown>;
+  if (!isLayoutNode(layout) || layout.type !== "split") return null;
+  const files = parseShownFiles(output);
+  const described = new Set(files.map((f) => f.path));
+  if (!layoutPaths(layout).every((p) => described.has(p))) return null;
+  const out: ShownLayout = { layout, files };
+  if (typeof caption === "string" && caption) out.caption = caption;
   return out;
 }
 

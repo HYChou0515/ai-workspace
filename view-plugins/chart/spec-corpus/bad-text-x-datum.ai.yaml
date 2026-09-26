@@ -1,0 +1,7 @@
+view: chart
+source: data/batches.csv
+mark: text
+encoding:
+  x: {datum: 1}
+  y: {field: fail_rate, type: quantitative}
+  text: {field: batch, type: nominal}

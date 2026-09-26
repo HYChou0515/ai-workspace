@@ -1,0 +1,6 @@
+view: chart
+source: data/batches.csv
+mark: boxplot
+encoding:
+  x: {datum: a}
+  y: {field: fail_rate, type: quantitative}

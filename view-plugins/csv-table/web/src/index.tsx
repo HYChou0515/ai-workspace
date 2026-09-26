@@ -13,6 +13,9 @@ import { CsvTableView } from "./CsvTableView";
 registerViewKind({
   kind: "csv-table",
   Component: CsvTableView,
+  // It follows a named marking (and writes it), so every csv-table view
+  // carries the header's marking control (#847/#848 PR 5).
+  linkable: true,
   // No `needsEntity` — this kind reads a workspace file, so a view file using
   // it declares no `entity:` and the entity props arrive empty.
 });

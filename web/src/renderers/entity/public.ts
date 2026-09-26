@@ -41,12 +41,33 @@ export { SDK_VERSION } from "../../viewPlugins/sdkVersion";
 export { useSandboxRun } from "../../viewPlugins/useSandboxRun";
 export type { SandboxRun, SandboxRunArgs, SandboxRunResult } from "../../viewPlugins/useSandboxRun";
 
+// ── named markings: linked selection across views (#847 PR 3) ─────────────
+// `useMarking(name)` reads and writes one item-wide marking (`column → set of
+// values`, opaque strings); only views on the same name link. `isLit` is THE
+// matching rule — use it rather than your own, or two views on one marking
+// will disagree about which rows are lit. `projectOntoKeys` turns selected
+// rows into what a view writes (`null` for a view without `keys:`). Additive
+// to SDK 1: no major bump.
+export { useMarking, useMarkingNames } from "../../hooks/useMarking";
+export type { WriteMarking } from "../../hooks/useMarking";
+export { isLit, projectOntoKeys } from "../../lib/markings";
+export type { Marking, MarkingEntry } from "../../lib/markings";
+// A TABLE on a marking (#847/#848 PR 5): its rows as the marking text a chart
+// writes (`csvMarkingRows` for a parsed CSV/TSV, `entityMarkingRow` for a
+// record as the API sends it), and `useTableMarking`, which filters them to
+// the lit ones under the platform's "filtered by <name>" bar — so every table
+// on a marking reads and says it the same way. Additive to SDK 1.
+export { csvMarkingRows, entityMarkingRow, litRows, markingText } from "../../lib/markingRows";
+export type { MarkingRow } from "../../lib/markingRows";
+export { useTableMarking } from "./tableMarking";
+export type { TableMarking } from "./tableMarking";
+
 // ── registration ───────────────────────────────────────────────────────────
 // `unregisterViewKind` is deliberately absent: it is a test seam, and exporting
 // it here would make the duplicate-name check opt-out for exactly the code it
 // exists to guard.
 export { registerViewKind } from "./viewKindRegistry";
-export type { ViewRenderer } from "./viewKindRegistry";
+export type { ViewRenderer, ViewThumbnailProps } from "./viewKindRegistry";
 
 // ── the view file ──────────────────────────────────────────────────────────
 // `ViewSpec` carries the parsed `.ai.yaml`. Fields the platform knows are typed

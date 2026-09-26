@@ -10,7 +10,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OpenFileProvider, WorkspaceVisibleProvider } from "../hooks/openFile";
+import {
+  OpenFileProvider,
+  ViewPageHrefProvider,
+  WorkspaceVisibleProvider,
+} from "../hooks/openFile";
 import type { ShownFile } from "../renderers/shownFiles";
 import { ShownFiles } from "./ShownFiles";
 
@@ -109,6 +113,23 @@ describe("ShownFiles", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("folded in an item, opens the editor-area page rather than the raw bytes (#847)", () => {
+    // The raw content URL shows a `.ai.yaml` view as YAML text; the item's own
+    // editor-area page renders it as the view.
+    render(
+      <ViewPageHrefProvider value={(t) => `/a/pm/PG-1/view?${"path" in t ? t.path : ""}`}>
+        <OpenFileProvider value={vi.fn()}>
+          <WorkspaceVisibleProvider value={false}>
+            <ShownFiles files={[chart]} fileUrl={fileUrl} />
+          </WorkspaceVisibleProvider>
+        </OpenFileProvider>
+      </ViewPageHrefProvider>,
+    );
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/a/pm/PG-1/view?/out/revenue.png");
+    // The thumbnail is still the file's own bytes.
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/api/files/out/revenue.png");
   });
 
   it("still names the file when there is no way to fetch it at all", () => {

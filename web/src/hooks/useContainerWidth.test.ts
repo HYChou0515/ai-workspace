@@ -104,6 +104,33 @@ describe("useContainerWidth", () => {
     expect(result.current[1]).toBe(1280);
   });
 
+  // #847/#848 PR 5 P31: the attach measures the BORDER box
+  // (getBoundingClientRect) and the observer reported the CONTENT box, so a
+  // padded element's width changed by its padding after the first paint -- and
+  // a view panel whose `data-narrow` changes its own padding flipped narrow /
+  // wide on every frame (measured in Chromium: a 507 px border box, a 475 / 491
+  // px content box, the chart in it resized every 10-20 ms).
+  it("reports the observed BORDER box, as the first measurement does", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    globalThis.ResizeObserver = class {
+      constructor(cb: ResizeObserverCallback) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const { result } = renderHook(() => useContainerWidth<HTMLDivElement>());
+    act(() => {
+      result.current[0](document.createElement("div"));
+    });
+    const entry = { contentRect: { width: 475 }, borderBoxSize: [{ inlineSize: 507.2, blockSize: 300 }] };
+    act(() => {
+      for (const cb of callbacks) cb([entry as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    });
+    expect(result.current[1]).toBe(507);
+  });
+
   it("degrades to 0 (viewport fallback) where ResizeObserver is unavailable", () => {
     // @ts-expect-error deliberately removing the global for the fallback path
     globalThis.ResizeObserver = undefined;

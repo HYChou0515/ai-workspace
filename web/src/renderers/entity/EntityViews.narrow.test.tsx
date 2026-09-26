@@ -1,0 +1,140 @@
+// @vitest-environment happy-dom
+/**
+ * #847/#848 PR 5 P13 — a view header compacts in a narrow pane.
+ *
+ * Measured in Chromium at 1440 wide with the file tree and chat open, a
+ * five-pane layout gave view panels of 215 and 88 px: the header's display-size title
+ * wrapped to 2–4 lines and the marking select and Refresh to rows of their own,
+ * 72–152 px of a 328 px pane. The panel now measures ITS OWN width (the
+ * viewport says nothing about a pane) and marks itself `data-narrow`; the
+ * stylesheet keeps its title to one truncated line and its controls on the same
+ * row. happy-dom lays nothing out, so this holds the mechanism — the width that
+ * flips it, and the rules it switches on; the pixels are measured in a browser.
+ */
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { DialogProvider } from "../../components/Dialog";
+import { effective, ENTITY_VIEWS_CSS } from "../../test/cssRules";
+import { EntityViewBody, NARROW_PANEL, parseViewSpec } from "./EntityViews";
+
+const realRO = globalThis.ResizeObserver;
+let emit: (width: number) => void = () => {};
+/** An observation as a browser makes one: both boxes. */
+let emitBoxes: (content: number, border: number) => void = () => {};
+beforeEach(() => {
+  const callbacks: ResizeObserverCallback[] = [];
+  globalThis.ResizeObserver = class {
+    constructor(cb: ResizeObserverCallback) {
+      callbacks.push(cb);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  emit = (width) =>
+    act(() => {
+      for (const cb of callbacks) cb([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+    });
+  emitBoxes = (content, border) =>
+    act(() => {
+      const entry = { contentRect: { width: content }, borderBoxSize: [{ inlineSize: border, blockSize: 400 }] };
+      for (const cb of callbacks) cb([entry as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    });
+});
+afterEach(() => {
+  globalThis.ResizeObserver = realRO;
+  cleanup();
+});
+
+function panel() {
+  const { container } = render(
+    <DialogProvider>
+      <EntityViewBody
+        spec={parseViewSpec("view: table\nentity: lot\ntitle: A title long enough to wrap in a pane\n")!}
+        type={null}
+        entities={[]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />
+    </DialogProvider>,
+  );
+  return container.querySelector(".ev-panel") as HTMLElement;
+}
+
+describe("a view panel in a narrow pane", () => {
+  it("marks itself narrow below its breakpoint, from its own width", () => {
+    const el = panel();
+    // unmeasured (happy-dom measures 0): not narrow — the first paint is the wide one
+    expect(el).not.toHaveAttribute("data-narrow");
+    emit(NARROW_PANEL - 1);
+    expect(el).toHaveAttribute("data-narrow");
+    emit(NARROW_PANEL);
+    expect(el).not.toHaveAttribute("data-narrow");
+  });
+
+  // #847/#848 PR 5 P31, found at 1440 wide (a gallery at 0.62 beside a
+  // scatter): a 507 px panel's content box is 475 px with the wide padding and
+  // 491 px with the narrow one, so read from the content box the panel went
+  // narrow, lost padding, went wide, and so on every frame -- the chart in it
+  // resized every 10-20 ms and a screenshot caught its canvas 16 px
+  // wider than its box ("0.8" drawn as "0."). The border box is the same
+  // either way.
+  it("decides from its border box, which its own padding does not change", () => {
+    const el = panel();
+    emitBoxes(NARROW_PANEL - 5, NARROW_PANEL + 27);
+    expect(el).not.toHaveAttribute("data-narrow");
+    emitBoxes(NARROW_PANEL + 11, NARROW_PANEL + 27);
+    expect(el).not.toHaveAttribute("data-narrow");
+    emitBoxes(NARROW_PANEL + 11, NARROW_PANEL - 1);
+    expect(el).toHaveAttribute("data-narrow");
+  });
+
+  it("keeps its title to one truncated line", () => {
+    const title = ".ev-panel[data-narrow] .ev-panel__title";
+    expect(effective(ENTITY_VIEWS_CSS, title, "white-space")).toBe("nowrap");
+    expect(effective(ENTITY_VIEWS_CSS, title, "overflow")).toBe("hidden");
+    expect(effective(ENTITY_VIEWS_CSS, title, "text-overflow")).toBe("ellipsis");
+    expect(effective(ENTITY_VIEWS_CSS, title, "min-width")).toBe("0");
+    // the marking select gives up width before the controls wrap
+    expect(effective(ENTITY_VIEWS_CSS, ".ev-panel[data-narrow] .ev-marking select", "max-width")).toBeDefined();
+  });
+
+  it("gives its title a full-width line of its own, the controls wrapping below it (P28)", () => {
+    // measured in Chromium at 390 wide (185 px panes): beside the marking
+    // select and "Save as table", a title was cut to 25-38 px ("W…", "Fail …")
+    const head = ".ev-panel[data-narrow] .ev-panel__head";
+    const title = ".ev-panel[data-narrow] .ev-panel__title";
+    expect(effective(ENTITY_VIEWS_CSS, head, "flex-wrap")).toBe("wrap");
+    expect(effective(ENTITY_VIEWS_CSS, title, "flex-basis")).toBe("100%");
+    // below the title, the controls start at its left edge
+    expect(effective(ENTITY_VIEWS_CSS, ".ev-panel[data-narrow] .ev-panel__actions", "justify-content")).toBe(
+      "flex-start",
+    );
+  });
+
+  it("a wide panel keeps its one-row header: the title's own line is the narrow rule's only", () => {
+    // "\n" anchors the base rule: `ruleBody` finds a selector by its text, and
+    // ".ev-panel__head {" is also the tail of the narrow rule's selector
+    expect(effective(ENTITY_VIEWS_CSS, "\n.ev-panel__title", "flex-basis")).toBeUndefined();
+    expect(effective(ENTITY_VIEWS_CSS, "\n.ev-panel__head", "justify-content")).toBe("space-between");
+  });
+});
+
+describe("a narrow view panel's controls (#847/#848 PR 5 P24)", () => {
+  it("wrap onto rows of their own, rather than past the pane's edge", () => {
+    // measured at 390 wide: an entity table's marking select, view settings
+    // and New button made a 246 px row in a 106 px box, so New was drawn at
+    // 442-501 in a pane that ends at 390
+    const actions = ".ev-panel[data-narrow] .ev-panel__actions";
+    expect(effective(ENTITY_VIEWS_CSS, actions, "flex-wrap")).toBe("wrap");
+    expect(effective(ENTITY_VIEWS_CSS, actions, "min-width")).toBe("0");
+  });
+});
+
+describe("a view panel in any pane", () => {
+  it("is at least as tall as its pane, so a chart in it can grow to the pane's height", () => {
+    expect(effective(ENTITY_VIEWS_CSS, ".ev-panel", "min-height")).toBe("100%");
+  });
+});

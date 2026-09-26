@@ -1,0 +1,15 @@
+{
+  "kind": "f64",
+  "values": [
+    1.5,
+    -2.0,
+    0.0,
+    null,
+    1e+300,
+    -1e-300
+  ],
+  "wire": {
+    "kind": "f64",
+    "data": "AAAAAAAA+D8AAAAAAAAAwAAAAAAAAAAAAAAAAAAA+H+cdQCIPOQ3flnz+MIfbqWB"
+  }
+}

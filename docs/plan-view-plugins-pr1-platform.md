@@ -132,7 +132,8 @@ CommonJS trap.
 - **`kind: docker`:** plugin sandbox halves are unsupported, as tools are. Calls fail
   loudly.
 - **The runner:** `POST /a/{slug}/items/{id}/view-plugins/{plugin}/{cmd}` takes
-  `{args}`. It is authorized as `read_content` and runs `exec_package_command`
+  `{args}`. It is authorized as `read_content` (kept after review, **[user]**) and runs
+  `exec_package_command`
   (`tooling/registry.py:319`, the same entry WUI's `callTool` uses), returning
   `{stdout, stderr, exit_code}`.
 - **Plugin commands are not agent tools.** They never enter any app's tool ceiling, and

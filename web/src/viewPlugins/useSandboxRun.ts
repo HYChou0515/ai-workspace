@@ -51,14 +51,17 @@ export function useSandboxRun(
     // nothing, so only an explicit `refetch()` or new args run it again.
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
-    queryFn: async (): Promise<SandboxRunResult> => {
+    // The signal is handed to the request, so a call every consumer has
+    // unmounted from (a chat card scrolled past, a gallery page scrolled away)
+    // is aborted rather than left to finish for nothing (#847/#848 P6).
+    queryFn: async ({ signal }): Promise<SandboxRunResult> => {
       if (!slug || !itemId) {
         throw new Error(`view plugin "${plugin}" can only run "${cmd}" inside an item workspace`);
       }
       const resp = await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/view-plugins/` +
           `${encodeURIComponent(plugin)}/${encodeURIComponent(cmd)}`,
-        { method: "POST", headers: { "content-type": "application/json" }, body },
+        { method: "POST", headers: { "content-type": "application/json" }, body, signal },
       );
       if (!resp.ok) {
         const why = (await detailSentence(resp.clone())) ?? `HTTP ${resp.status}`;

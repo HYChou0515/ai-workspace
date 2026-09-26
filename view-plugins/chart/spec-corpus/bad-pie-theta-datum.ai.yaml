@@ -1,0 +1,6 @@
+view: chart
+source: data/batches.csv
+mark: pie
+encoding:
+  theta: {datum: 1}
+  color: {field: batch, type: nominal}

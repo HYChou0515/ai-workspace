@@ -1,0 +1,9 @@
+view: chart
+source: data/a.csv
+mark: heatmap
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}
+transform:
+  - diff: {by: phase, of: after}
+    aggregate: [{op: mean, field: t, as: d}]

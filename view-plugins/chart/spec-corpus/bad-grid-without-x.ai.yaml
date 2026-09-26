@@ -1,0 +1,6 @@
+view: chart
+source: data/a.csv
+mark: {type: grid}
+encoding:
+  y: {field: b, type: ordinal}
+  color: {field: v, type: quantitative}

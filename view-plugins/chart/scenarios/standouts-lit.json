@@ -1,0 +1,19 @@
+{
+  "name": "standouts-lit",
+  "note": "Members that stand out: the chart should highlight them, and the answer should name them.",
+  "data": [
+    "batches.csv"
+  ],
+  "prompt": "Which batches in batches.csv have a fail rate above 0.3? Point them out so the team can see.",
+  "expect": {
+    "must_call": [
+      "write_file",
+      "show_file"
+    ],
+    "must_mention": [
+      "B07",
+      "B13",
+      "B21"
+    ]
+  }
+}

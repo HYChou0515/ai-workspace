@@ -1,0 +1,8 @@
+view: chart
+source: data/a.csv
+highlight: {where: "item == 'r1' or value > 10"}
+mark: {type: area, stack: true}
+encoding:
+  x: {field: group, type: ordinal}
+  y: {field: value, type: quantitative}
+  color: {field: region, type: nominal}
