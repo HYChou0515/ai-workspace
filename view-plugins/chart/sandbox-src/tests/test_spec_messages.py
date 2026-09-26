@@ -391,6 +391,8 @@ def test_a_stack_linked_by_its_slot_and_colour_or_lit_by_its_sum_is_not_refused(
         "keys: [group]\n",
         "highlight: {where: \"value > 10 and group == 'a'\"}\n",
         "highlight: {where: \"`item` == 'p' and index > 0\"}\n",
+        # P42 row 30: a keyword argument and pandas' globals are no fields
+        "highlight: {where: \"group.str.contains('A', case=False) and value < inf\"}\n",
         "highlight: {values: {item: [p], value: [13]}}\n",
     ]:
         assert _errors(BASE + top + STACKED_BAR) == [], top

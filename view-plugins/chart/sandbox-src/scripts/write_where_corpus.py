@@ -18,6 +18,7 @@ Rerun after changing a case:
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,29 @@ CASES: list[tuple[str, dict[str, list[Any]]]] = [
     ("value ** 2 > 3 and value % 2 == 1", {"value": NUM}),
     ("item == 'p' or item == \"q\"", {"item": TEXT}),
     ("_x > 1", {"_x": NUM}),
+    # P42 row 30: a keyword argument is no column, nor are pandas' globals
+    ("region.str.contains('n', case=False)", {"region": TEXT, "case": TEXT}),
+    (
+        "item.str.contains('p', case = False, regex=False, na=False)",
+        {"item": TEXT, "case": TEXT, "regex": TEXT, "na": TEXT},
+    ),
+    ("a==b", {"a": NUM, "b": NUM}),
+    (
+        "item . str . startswith('p') or sqrt (size) > 1",
+        {"item": TEXT, "str": TEXT, "startswith": TEXT, "size": NUM},
+    ),
+    ("value < inf", {"value": NUM, "inf": NUM}),
+    ("value > -Inf and value != 2", {"value": NUM, "Inf": NUM}),
+    # a triple-quoted text is text, quotes inside it too
+    ("item == '''it's'''", {"item": TEXT, "it": TEXT, "s": TEXT}),
+    ('item == """a "b" c"""', {"item": TEXT, "a": TEXT, "b": TEXT, "c": TEXT}),
+    ("item != '''''' and value > 1", {"item": TEXT, "value": NUM}),
+    # a name is Python's identifier: combining marks continue it, and it is
+    # read as its NFKC form
+    ("मूल्य > 1", {"मूल्य": NUM}),
+    ("น้ำหนัก > 1", {unicodedata.normalize("NFKC", "น้ำหนัก"): NUM}),  # ำ is ํ + า
+    (unicodedata.normalize("NFD", "café > 1"), {"café": NUM}),
+    ("ﬁle > 1", {"file": NUM}),
 ]
 
 

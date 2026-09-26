@@ -45,6 +45,11 @@ def test_where_names_reads_the_columns_pandas_reads(case):
         ("r'raw' == item", ["item"]),  # a text's prefix is no column
         ("value == 1.5j", ["value"]),
         ("value > 0x1F", ["value"]),
+        # P42 row 30: a superscript is no part of a Python name, nor a digit
+        # that starts a number; an unclosed triple-quoted text runs to the end
+        ("x² > 1", ["x"]),
+        ("² > value", ["value"]),
+        ("item == '''open ' and value", ["item"]),
     ],
 )
 def test_where_names_beyond_what_pandas_evaluates(where, names):

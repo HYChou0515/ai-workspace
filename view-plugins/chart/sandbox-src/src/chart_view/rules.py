@@ -10,56 +10,92 @@ shapes here are trusted.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterator, Mapping
 from typing import Any, NamedTuple
 
 _CHANNELS = ("x", "y", "x2", "y2", "color", "size", "theta", "text")
 
-_NUMBER = re.compile(r"0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d[\d_]*)?[jJ]?")
-_NAME = re.compile(r"[^\W\d]\w*")
-# Python's words, and pandas' own name for the row index (read as a column
-# only when a column has that name; a field is never needed for it)
-_NOT_COLUMNS = {"and", "or", "not", "in", "is", "True", "False", "None", "index"}
+_NUMBER = re.compile(
+    r"0[xXoObB][0-9a-fA-F_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?[jJ]?"
+)
+_ASCII_WORD = re.compile(r"[A-Za-z0-9_]*")
+# Python's words, pandas' own name for the row index (read as a column only
+# when a column has that name; a field is never needed for it) and the
+# globals `df.eval` resolves when no column has the name (P42 row 30)
+_NOT_COLUMNS = {"and", "or", "not", "in", "is", "True", "False", "None", "index", "inf", "Inf"}
 _TEXT_PREFIX = re.compile(r"[rRbBuUfF]{1,2}")
+
+
+def _name_end(expr: str, i: int) -> int:
+    """Where the name at `i` ends: Python's identifier rule (its characters
+    XID_Continue, so a combining mark continues it), as `rules.ts` reads it
+    with `\\p{XID_Continue}`."""
+    n = len(expr)
+    while True:
+        word = _ASCII_WORD.match(expr, i)
+        assert word is not None  # `*` matches the empty string
+        i = word.end()
+        if i < n and ("_" + expr[i]).isidentifier():
+            i += 1
+        else:
+            return i
+
+
+def _text_end(expr: str, i: int) -> int:
+    """Where the text opening at `i` ends (after its closing quote, or at the
+    end of `expr`): a triple-quoted text runs to the same three quotes."""
+    quote = expr[i] * 3 if expr.startswith(expr[i] * 3, i) else expr[i]
+    i, n = i + len(quote), len(expr)
+    while i < n and not expr.startswith(quote, i):
+        i += 2 if expr[i] == "\\" else 1
+    return i + len(quote)
 
 
 def where_names(expr: str) -> list[str]:
     """The columns a `where:` expression reads, as pandas reads them: each
-    name that is not a Python word, an attribute (`.isin`), a function called
-    (`abs(`), a local (`@limit`) or the prefix of a text (`r'...'`); inside
-    backticks, the text between them. Texts in quotes are skipped. Held to
-    pandas itself by `wire-corpus/where-names.json`."""
+    name that is not a Python word, one of pandas' globals (`inf`), an
+    attribute (`.isin`), a function called (`abs(`), a keyword argument
+    (`case=`), a local (`@limit`) or the prefix of a text (`r'...'`), in its
+    NFKC form as Python reads a name; inside backticks, the text between
+    them. Texts in quotes, triple quotes too, are skipped. One pass, looking
+    around each name by index, so it takes time in proportion to `expr`.
+    Held to pandas itself by `wire-corpus/where-names.json`."""
     names: list[str] = []
     i, n = 0, len(expr)
     while i < n:
         ch = expr[i]
         if ch in "'\"":
-            i += 1
-            while i < n and expr[i] != ch:
-                i += 2 if expr[i] == "\\" else 1
-            i += 1
+            i = _text_end(expr, i)
         elif ch == "`":
             end = expr.find("`", i + 1)
             if end < 0:
                 break
             names.append(expr[i + 1 : end])
             i = end + 1
-        elif ch.isdigit():  # (a leading dot is skipped, then its digits read)
+        elif "0" <= ch <= "9":  # (a leading dot is skipped, then its digits read)
             number = _NUMBER.match(expr, i)
             assert number is not None  # a digit starts one
             i = number.end()
-        elif name := _NAME.match(expr, i):
-            word, i = name.group(), name.end()
-            before = expr[: name.start()].rstrip()[-1:]
-            after = expr[i:].lstrip()[:1]
+        elif ch.isidentifier():  # (a letter or `_`)
+            start, i = i, _name_end(expr, i + 1)
+            word = expr[start:i]
+            b = start - 1
+            while b >= 0 and expr[b].isspace():
+                b -= 1
+            a = i
+            while a < n and expr[a].isspace():
+                a += 1
+            after = expr[a : a + 2]
             if (
                 word in _NOT_COLUMNS
-                or before in (".", "@")
-                or after == "("
+                or (b >= 0 and expr[b] in ".@")
+                or after[:1] == "("
+                or (after[:1] == "=" and after != "==")
                 or (expr[i : i + 1] in ("'", '"') and _TEXT_PREFIX.fullmatch(word))
             ):
                 continue
-            names.append(word)
+            names.append(unicodedata.normalize("NFKC", word))
         else:
             i += 1
     return list(dict.fromkeys(names))

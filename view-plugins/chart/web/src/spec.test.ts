@@ -303,6 +303,8 @@ describe("messages", () => {
     "keys: [group]\n",
     "highlight: {where: \"value > 10 and group == 'a'\"}\n",
     "highlight: {where: \"`item` == 'p' and index > 0\"}\n",
+    // P42 row 30: a keyword argument and pandas' globals are no fields
+    "highlight: {where: \"group.str.contains('A', case=False) and value < inf\"}\n",
     "highlight: {values: {item: [p], value: [13]}}\n",
   ])("does not refuse a stack with %s", (top) => {
     expect(verdict(base + top + stackedBar)).toEqual([]);

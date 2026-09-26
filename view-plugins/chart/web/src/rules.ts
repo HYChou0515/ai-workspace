@@ -16,18 +16,36 @@ type Doc = Layer & { layer?: Layer[]; keys?: string[]; highlight?: { where?: str
 const CHANNELS = ["x", "y", "x2", "y2", "color", "size", "theta", "text"];
 
 const NUMBER = /0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d[\d_]*)?[jJ]?/y;
-const NAME = /[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*/uy;
-// Python's words, and pandas' own name for the row index (read as a column
-// only when a column has that name; a field is never needed for it)
-const NOT_COLUMNS = new Set(["and", "or", "not", "in", "is", "True", "False", "None", "index"]);
+// Python's identifier rule (the sandbox's `_name_end`): a combining mark
+// continues a name
+const NAME = /[\p{XID_Start}_]\p{XID_Continue}*/uy;
+// Python's words, pandas' own name for the row index (read as a column only
+// when a column has that name; a field is never needed for it) and the
+// globals `df.eval` resolves when no column has the name (P42 row 30)
+const NOT_COLUMNS = new Set(["and", "or", "not", "in", "is", "True", "False", "None", "index", "inf", "Inf"]);
 const TEXT_PREFIX = /^[rRbBuUfF]{1,2}$/;
-const DIGIT = /\d/;
+const DIGIT = /[0-9]/;
+const SPACE = /\s/;
+
+/** Where the text opening at `i` ends (after its closing quote, or at the end
+ * of `expr`): a triple-quoted text runs to the same three quotes. */
+function textEnd(expr: string, i: number): number {
+  const ch = expr[i]!;
+  const quote = expr.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
+  const n = expr.length;
+  i += quote.length;
+  while (i < n && !expr.startsWith(quote, i)) i += expr[i] === "\\" ? 2 : 1;
+  return i + quote.length;
+}
 
 /** The columns a `where:` expression reads, as pandas reads them: each name
- * that is not a Python word, an attribute (`.isin`), a function called
- * (`abs(`), a local (`@limit`) or the prefix of a text (`r'...'`); inside
- * backticks, the text between them. Texts in quotes are skipped. Held to
- * pandas itself by `wire-corpus/where-names.json`. */
+ * that is not a Python word, one of pandas' globals (`inf`), an attribute
+ * (`.isin`), a function called (`abs(`), a keyword argument (`case=`), a
+ * local (`@limit`) or the prefix of a text (`r'...'`), in its NFKC form as
+ * Python reads a name; inside backticks, the text between them. Texts in
+ * quotes, triple quotes too, are skipped. One pass, looking around each name
+ * by index, so it takes time in proportion to `expr`. Held to pandas itself
+ * by `wire-corpus/where-names.json`. */
 export function whereNames(expr: string): string[] {
   const names: string[] = [];
   let i = 0;
@@ -35,9 +53,7 @@ export function whereNames(expr: string): string[] {
   while (i < n) {
     const ch = expr[i]!;
     if (ch === "'" || ch === '"') {
-      i += 1;
-      while (i < n && expr[i] !== ch) i += expr[i] === "\\" ? 2 : 1;
-      i += 1;
+      i = textEnd(expr, i);
     } else if (ch === "`") {
       const end = expr.indexOf("`", i + 1);
       if (end < 0) break;
@@ -58,11 +74,24 @@ export function whereNames(expr: string): string[] {
       const word = name[0];
       const start = i;
       i = NAME.lastIndex;
-      const before = expr.slice(0, start).trimEnd().slice(-1);
-      const after = expr.slice(i).trimStart().slice(0, 1);
+      let b = start - 1;
+      while (b >= 0 && SPACE.test(expr[b]!)) b -= 1;
+      let a = i;
+      while (a < n && SPACE.test(expr[a]!)) a += 1;
+      const before = b >= 0 ? expr[b] : "";
+      const after = expr.slice(a, a + 2);
       const quote = expr[i] === "'" || expr[i] === '"';
-      if (NOT_COLUMNS.has(word) || before === "." || before === "@" || after === "(" || (quote && TEXT_PREFIX.test(word))) continue;
-      names.push(word);
+      if (
+        NOT_COLUMNS.has(word) ||
+        before === "." ||
+        before === "@" ||
+        after[0] === "(" ||
+        (after[0] === "=" && after !== "==") ||
+        (quote && TEXT_PREFIX.test(word))
+      ) {
+        continue;
+      }
+      names.push(word.normalize("NFKC"));
     }
   }
   return [...new Set(names)];

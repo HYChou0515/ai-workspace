@@ -29,6 +29,11 @@ describe("whereNames", () => {
     ["r'raw' == item", ["item"]],
     ["value == 1.5j", ["value"]],
     ["value > 0x1F", ["value"]],
+    // P42 row 30: a superscript is no part of a Python name, nor a digit that
+    // starts a number; an unclosed triple-quoted text runs to the end
+    ["x² > 1", ["x"]],
+    ["² > value", ["value"]],
+    ["item == '''open ' and value", ["item"]],
   ])("%s beyond what pandas evaluates", (where, names) => {
     expect([...whereNames(where)].sort()).toEqual(names);
   });
