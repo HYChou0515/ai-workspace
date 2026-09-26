@@ -352,21 +352,36 @@ def _grouped(df: pd.DataFrame, grouped: Any, keys: list[str], item: Mapping[str,
     if op == "rate":
         return grouped[field].agg(_rate)
     numbers = pd.to_numeric(df[field], errors="coerce")
-    return getattr(numbers.groupby([df[k] for k in keys], dropna=False, observed=True), op)()
+    try:
+        return getattr(numbers.groupby([df[k] for k in keys], dropna=False, observed=True), op)()
+    except TypeError as e:  # complex numbers have no min / max (P45 row 44)
+        raise TransformError(f"{op} over {field!r}: its {numbers.dtype} values have none") from e
 
 
-def _signed(side: pd.Series) -> pd.Series:
-    """`side` in a type a difference cannot wrap in (#847/#848 PR 5 P44 row
-    38): unsigned integers as int64 -- or float64 past int64's reach -- the
-    nullable kinds as their nullable twins. Subtracted in their own type, 0 - 7
-    was 4294967289."""
-    if side.dtype.kind != "u":
-        return side
-    wide = bool((side.dropna() > np.iinfo(np.int64).max).any())
-    nullable = isinstance(side.dtype, pd.api.extensions.ExtensionDtype)
-    return side.astype(
-        ("Float64" if wide else "Int64") if nullable else ("float64" if wide else "int64")
-    )
+_INT64 = np.iinfo(np.int64)
+
+
+def _minus(a: pd.Series, b: pd.Series) -> pd.Series:
+    """`a - b` in a type the difference cannot wrap in (#847/#848 PR 5 P44
+    row 38, P45 row 44). A groupby keeps a min / max -- and a sum its values
+    fit -- in the column's own type, so subtracted there uint32 0 - 7 was
+    4294967289, int8 127 - (-128) was -1, float16 60000 - (-60000) was inf and
+    true - false raised. Integers and true/false are subtracted exactly, as
+    Python integers: an int64 column when int64 holds every difference, else
+    a float64 holding each rounded once. Any other number is a float64. A
+    nullable column stays nullable (Int64 / Float64)."""
+    # both sides are one aggregate of one column: nullable alike
+    nullable = isinstance(a.dtype, pd.api.extensions.ExtensionDtype)
+    if {a.dtype.kind, b.dtype.kind} <= {"b", "i", "u"}:
+        exact = [
+            None if pd.isna(x) or pd.isna(y) else int(x) - int(y)
+            for x, y in zip(a.tolist(), b.tolist(), strict=True)
+        ]
+        whole = all(v is None or _INT64.min <= v <= _INT64.max for v in exact)
+        kind = ("Int64" if whole else "Float64") if nullable else ("int64" if whole else "float64")
+        return pd.Series(pd.array(exact, dtype=kind), index=a.index)
+    wide = "Float64" if nullable else "float64"
+    return a.astype(wide) - b.astype(wide)
 
 
 def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
@@ -390,7 +405,7 @@ def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
             # the sides' common type: a count stays whole, a sum of 2.5 is not cut
             kind = pd.concat([of[name], minus[name]]).dtype
             a, b = a.fillna(0).astype(kind), b.fillna(0).astype(kind)
-        both[name] = _signed(a) - _signed(b)
+        both[name] = _minus(a, b)
     return both[[*groupby, *(i["as"] for i in items)]]
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -25,7 +26,7 @@ def dies() -> pd.DataFrame:
 
 @pytest.fixture
 def sided() -> pd.DataFrame:
-    # `dies` in neutral words, for the tests P42 row 32 wrote
+    # neutral words, for the tests P42 row 32 wrote
     return pd.DataFrame(
         {
             "group": ["A", "A", "A", "B", "B", "B"],
@@ -400,14 +401,16 @@ def test_diff_of_unsigned_numbers_is_signed(dtype, op):
 
 @pytest.mark.parametrize("low", [5, 2**63 + 2], ids=["one-side-past", "both-past"])
 @pytest.mark.parametrize("dtype", ["uint64", "UInt64"])
-def test_diff_of_unsigned_numbers_past_a_signed_integer_is_a_float(dtype, low):
-    # 2**63 + 10 has no int64: the difference is a float, not wrapped
+def test_diff_of_unsigned_numbers_past_a_signed_integer_is_exact(dtype, low):
+    # 2**63 + 10 has no int64. The difference is exact (P45 row 44): 8 when
+    # both sides are past int64 (P44 subtracted the sides as floats, 0.0), a
+    # float -- rounded once -- when the difference itself is past it.
     df = pd.DataFrame(
         {"side": ["after", "before"], "value": pd.array([2**63 + 10, low], dtype=dtype)}
     )
     for of, minus, want in [
-        ("after", "before", float(2**63 + 10) - float(low)),
-        ("before", "after", float(low) - float(2**63 + 10)),
+        ("after", "before", 2**63 + 10 - low),
+        ("before", "after", low - (2**63 + 10)),
     ]:
         out = apply_transforms(
             df,
@@ -418,8 +421,10 @@ def test_diff_of_unsigned_numbers_past_a_signed_integer_is_a_float(dtype, low):
                 }
             ],
         )
-        assert out["d"].dtype == ("Float64" if dtype == "UInt64" else "float64")
-        assert out["d"].tolist() == [want]
+        fits = -(2**63) <= want <= 2**63 - 1
+        kind = "int64" if fits else "float64"
+        assert out["d"].dtype == (kind.capitalize() if dtype == "UInt64" else kind)
+        assert out["d"].tolist() == [want if fits else float(want)]
 
 
 def test_diff_of_unsigned_numbers_int64_holds_stays_whole():
@@ -437,3 +442,113 @@ def test_diff_of_unsigned_numbers_int64_holds_stays_whole():
     )
     assert out["d"].dtype == "int64"
     assert out["d"].tolist() == [5 - top]
+
+
+# #847/#848 PR 5 P45 row 44: every narrow type is subtracted wide. int8/16/32
+# min and max stay narrow in a groupby and wrapped (127 - (-128) = -1), int64's
+# extremes too, float16 60000 - (-60000) was inf, and a bool max raised a bare
+# TypeError. The oracle is Python's own arithmetic on the values written: an
+# exact integer difference is an integer column when int64 holds every one,
+# else a float column holding it rounded once; a narrow float is a float64.
+def _extremes(dtype: str) -> tuple[object, object]:
+    kind = pd.api.types.pandas_dtype(dtype)
+    if kind.kind == "b":
+        return True, False
+    if kind.kind == "f":
+        return 60000.0, -60000.0  # float16 holds both; their difference it does not
+    info = np.iinfo(np.dtype(dtype.lower()))  # Int8 is int8 that may be missing
+    return int(info.max), int(info.min)
+
+
+_NARROW = ["int8", "int16", "int32", "int64", "Int8", "Int32", "Int64"]
+_NARROW += ["bool", "boolean", "float16", "float32", "Float32"]
+
+
+def _python(v: object) -> int | float:
+    assert isinstance(v, int | float)
+    return int(v) if isinstance(v, bool) else v
+
+
+@pytest.mark.parametrize("dtype", _NARROW)
+@pytest.mark.parametrize("op", ["sum", "min", "max"])
+@pytest.mark.parametrize("flip", [False, True], ids=["high-minus-low", "low-minus-high"])
+def test_diff_of_narrow_numbers_is_taken_wide(dtype, op, flip):
+    high, low = _extremes(dtype)
+    if flip:
+        high, low = low, high
+    df = pd.DataFrame(
+        {
+            "side": ["after", "before", "after", "before"],
+            "group": ["a", "a", "b", "b"],
+            "value": pd.array([high, low, low, low], dtype=dtype),
+        }
+    )
+    out = apply_transforms(
+        df,
+        [
+            {
+                "diff": {"by": "side", "of": "after", "minus": "before"},
+                "aggregate": [{"op": op, "field": "value", "as": "d"}],
+                "groupby": ["group"],
+            }
+        ],
+    )
+    # one row a side a group: sum, min and max are the value itself
+    want = {"a": _python(high) - _python(low), "b": _python(low) - _python(low)}
+    whole = all(isinstance(v, int) for v in want.values())
+    fits = whole and all(-(2**63) <= v <= 2**63 - 1 for v in want.values())
+    got = dict(zip(out["group"], out["d"], strict=True))
+    assert sorted(got) == ["a", "b"]
+    for g, v in want.items():
+        assert (int(got[g]) == v) if fits else (float(got[g]) == float(v)), g
+    assert out["d"].dtype.kind == ("i" if fits else "f")
+    assert out["d"].dtype.itemsize == 8  # int64 / float64, not the narrow type
+    nullable = pd.api.extensions.ExtensionDtype
+    assert isinstance(out["d"].dtype, nullable) == isinstance(df["value"].dtype, nullable)
+
+
+def test_diff_of_int64_extremes_is_the_exact_difference_rounded_once():
+    # 2**63 - 1 - (-1) has no int64: a float column, the true difference
+    df = pd.DataFrame({"side": ["after", "before"], "value": [2**63 - 1, -1]})
+    assert df["value"].dtype == "int64"
+    out = apply_transforms(
+        df,
+        [
+            {
+                "diff": {"by": "side", "of": "after", "minus": "before"},
+                "aggregate": [{"op": "max", "field": "value", "as": "d"}],
+            }
+        ],
+    )
+    assert out["d"].dtype == "float64"
+    assert out["d"].tolist() == [float(2**63)]
+
+
+def test_diff_of_a_nullable_integer_keeps_a_missing_side_missing():
+    df = pd.DataFrame(
+        {
+            "side": ["after", "before", "after"],
+            "group": ["a", "a", "b"],
+            "value": pd.array([127, -128, 5], dtype="Int8"),
+        }
+    )
+    out = apply_transforms(
+        df,
+        [
+            {
+                "diff": {"by": "side", "of": "after", "minus": "before"},
+                "aggregate": [{"op": "max", "field": "value", "as": "d"}],
+                "groupby": ["group"],
+            }
+        ],
+    )
+    assert out["d"].dtype == "Int64"
+    assert out["d"].iloc[0] == 255
+    assert out["d"].iloc[1] is pd.NA
+
+
+def test_an_aggregate_numbers_cannot_take_is_a_refusal():
+    # complex numbers have no max: a refusal naming the field, not a crash
+    df = pd.DataFrame({"side": ["after", "before"], "value": [1 + 2j, 3j]})
+    with pytest.raises(TransformError, match="max over 'value'"):
+        apply_transforms(df, [{"aggregate": [{"op": "max", "field": "value", "as": "d"}]}])

@@ -328,3 +328,36 @@ def test_a_layered_stack_with_no_rows_is_not_refused_a_row_key(read, extra):
     result = check(LAYERED + extra + "keys: [item]\n", read)
     assert result.errors == []
     assert result.summary == f"0 rows; {SUM_NOTE}"
+
+
+# #847/#848 PR 5 P45 row 44: a diff reaches `validate` whole -- int8's
+# extremes are 255 apart, not -1, and a true/false max subtracts as 1/0.
+SIDED = """\
+view: chart
+source: data/rows.csv
+transform:
+  - diff: {by: side, of: after, minus: before}
+    aggregate: [{op: max, field: value, as: d}]
+    groupby: [group]
+mark: bar
+encoding:
+  x: {field: group, type: nominal}
+  y: {field: d, type: quantitative}
+"""
+
+
+@pytest.mark.parametrize(
+    ("values", "summary"),
+    [
+        (pd.array([127, -128, 1, 57], dtype="int8"), "2 rows; d -56–255"),
+        ([True, False, False, True], "2 rows; d -1–1"),
+    ],
+    ids=["int8", "bool"],
+)
+def test_a_diff_of_narrow_values_is_summarised_whole(values, summary):
+    rows = pd.DataFrame(
+        {"side": ["after", "before", "after", "before"], "group": ["a", "a", "b", "b"]}
+    ).assign(value=values)
+    result = check(SIDED, lambda _: rows)
+    assert result.errors == []
+    assert result.summary == summary
