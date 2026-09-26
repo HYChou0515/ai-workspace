@@ -130,3 +130,46 @@ describe("rows with no key value (P44 row 35)", () => {
     expect(screen.queryByText(/selected/)?.textContent).toBe("1 selected · by item");
   });
 });
+
+// P45 row 45: a selection that writes nothing says "N selected" (P36 row 10),
+// whatever the reason it wrote nothing -- here every row it picked gives the
+// key no value, so nothing went to the marking.
+const EMPTY_KEY: Answer = answer(layer("scatter", 3, { x: f64([1, 2, 3]), value: f64([1, 2, 3]), item: cat([null, null, null]) }));
+
+describe("a brush that writes nothing on a keyed chart (P45 row 45)", () => {
+  it("says how many rows it picked, and not by what the marking marks", async () => {
+    const store = new MarkingStore();
+    const chart = mount(store, EMPTY_KEY, SPARSE_DOC);
+    await settle();
+    act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
+    await settle();
+    expect(store.get("m")).toBeUndefined();
+    expect(screen.queryByText(/selected/)?.textContent).toBe("3 selected");
+  });
+
+  it("says so on a marking another view holds, and leaves that marking as it was", async () => {
+    const store = new MarkingStore();
+    store.set("m", { item: new Set(["r01", "r02"]) }, "/v/table.ai.yaml");
+    const chart = mount(store, EMPTY_KEY, SPARSE_DOC);
+    await settle();
+    act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
+    await settle();
+    expect([...(store.get("m")?.marking.item ?? [])].sort()).toEqual(["r01", "r02"]);
+    expect(screen.queryByText(/selected/)?.textContent).toBe("3 selected");
+  });
+
+  it("says so after a write of its own it replaced", async () => {
+    const store = new MarkingStore();
+    const chart = mount(store, SPARSE, SPARSE_DOC);
+    await settle();
+    act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
+    await settle();
+    expect(screen.queryByText(/selected/)?.textContent).toBe("1 selected · by item");
+    // a box over the two rows with no key value: it writes nothing
+    const [x1] = chart.convertToPixel({ seriesIndex: 0 }, [1, 1]) as number[];
+    const [x2] = chart.convertToPixel({ seriesIndex: 0 }, [2, 2]) as number[];
+    act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[x1! - 5, x2! + 5], [0, 400]] }] }));
+    await settle();
+    expect(screen.queryByText(/selected/)?.textContent).toBe("2 selected");
+  });
+});
