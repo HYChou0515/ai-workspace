@@ -140,6 +140,31 @@ describe("a binned layer carries no key (round 15 defect lens D2)", () => {
   });
 });
 
+describe("a selection that can name no key marks nothing (#847/#848 PR 5 P41 row 21)", () => {
+  // Round 20's defect lens: a stack keyed by a row id (which `validate` now
+  // refuses) carries no `id` column -- its rows are sums -- and a brush over
+  // it wrote `{}`, the write that clears every linked view. As the table's
+  // rule has it, a view that cannot name a row must never send `{}`.
+  const SUMS = answer(layer("bar", 2, { item: cat(["p", "q"]), value: f64([7, 13]) }));
+
+  it("is null, not `{}`, when no selected layer carries any key", () => {
+    expect(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], SUMS, ["id"], [])).toBeNull();
+  });
+
+  it("is null when every key it carries is measured", () => {
+    expect(selectionMarking([{ source: "brush", layer: 0, rows: [1] }], SUMS, ["value"], [new Set(["value"])])).toBeNull();
+  });
+
+  it("still writes what a layer that carries a key names", () => {
+    const two = answer(layer("bar", 2, { item: cat(["p", "q"]), value: f64([7, 13]) }), layer("scatter", 1, { id: cat(["r1"]) }));
+    const sel = [
+      { source: "brush" as const, layer: 0, rows: [0] },
+      { source: "brush" as const, layer: 1, rows: [0] },
+    ];
+    expect(Object.fromEntries(Object.entries(selectionMarking(sel, two, ["id"], [])!).map(([k, v]) => [k, [...v]]))).toEqual({ id: ["r1"] });
+  });
+});
+
 describe("an aggregated channel's column is not a key (#847/#848 PR 5 P32)", () => {
   // Found in P30's demo: a pie with `theta: {field: item, aggregate: count}` on
   // a marking keyed {group, item} lit the slices whose COUNT equalled a marked

@@ -1,0 +1,172 @@
+{
+ "kind": "where-names",
+ "cases": [
+  {
+   "where": "value > 10",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "item == 'p' and group in ['a', 'b']",
+   "columns": [
+    "group",
+    "item"
+   ]
+  },
+  {
+   "where": "item == \"and group\" or value < 2",
+   "columns": [
+    "item",
+    "value"
+   ]
+  },
+  {
+   "where": "item == 'it\\'s value'",
+   "columns": [
+    "item"
+   ]
+  },
+  {
+   "where": "`my value` > 2",
+   "columns": [
+    "my value"
+   ]
+  },
+  {
+   "where": "`a-b` > 1 and region != 'n'",
+   "columns": [
+    "a-b",
+    "region"
+   ]
+  },
+  {
+   "where": "abs(value) < 3",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "sin(value) > 0 or sqrt(size) > 1",
+   "columns": [
+    "size",
+    "value"
+   ]
+  },
+  {
+   "where": "value.isin([1, 2])",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "item.str.startswith('p')",
+   "columns": [
+    "item"
+   ]
+  },
+  {
+   "where": "a + b * c > d",
+   "columns": [
+    "a",
+    "b",
+    "c",
+    "d"
+   ]
+  },
+  {
+   "where": "not flag",
+   "columns": [
+    "flag"
+   ]
+  },
+  {
+   "where": "~flag | other",
+   "columns": [
+    "flag",
+    "other"
+   ]
+  },
+  {
+   "where": "flag == True",
+   "columns": [
+    "flag"
+   ]
+  },
+  {
+   "where": "value > 1e5 or value < 2.5e-3",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "value > .5 and value < 1_000",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "item != item",
+   "columns": [
+    "item"
+   ]
+  },
+  {
+   "where": "a < b < c",
+   "columns": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  {
+   "where": "value in (1, 2)",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "(item == 'p') & (group != 'a')",
+   "columns": [
+    "group",
+    "item"
+   ]
+  },
+  {
+   "where": "item not in ['p']",
+   "columns": [
+    "item"
+   ]
+  },
+  {
+   "where": "Ünïcode_1 > 1",
+   "columns": [
+    "Ünïcode_1"
+   ]
+  },
+  {
+   "where": "value >= 1 and index < 2",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "value ** 2 > 3 and value % 2 == 1",
+   "columns": [
+    "value"
+   ]
+  },
+  {
+   "where": "item == 'p' or item == \"q\"",
+   "columns": [
+    "item"
+   ]
+  },
+  {
+   "where": "_x > 1",
+   "columns": [
+    "_x"
+   ]
+  }
+ ]
+}

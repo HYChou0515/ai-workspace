@@ -1,0 +1,9 @@
+view: chart
+source: data/a.csv
+marking: picked
+keys: [item]
+mark: {type: bar, stack: true}
+encoding:
+  x: {field: group, type: nominal}
+  y: {field: value, type: quantitative}
+  color: {field: region, type: nominal}

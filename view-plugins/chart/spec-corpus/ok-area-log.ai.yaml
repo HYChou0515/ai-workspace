@@ -1,7 +1,7 @@
 view: chart
 source: data/particles.parquet
-marking: lots
-keys: [lot]
+marking: sizes
+keys: [size_bin]
 mark: {type: area, stack: true, opacity: 0.6}
 encoding:
   x: {field: time, type: temporal}

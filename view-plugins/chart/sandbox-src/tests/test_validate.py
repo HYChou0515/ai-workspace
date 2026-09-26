@@ -135,3 +135,38 @@ encoding:
     assert check(text, _read).errors == [
         "y: datum 3 has no axis to sit on — no layer draws a field there"
     ]
+
+
+# #847/#848 PR 5 P41 row 21: a stack links by its slot and colour, and a
+# highlight may test its value, which is each segment's sum -- the summary
+# says so, so the author reads "5 rows" as the segments they are.
+ROWS = pd.DataFrame(
+    {
+        "item": ["r1", "r2", "r3", "r4", "r5", "r6"],
+        "group": ["a", "a", "b", "b", "b", "c"],
+        "region": ["n", "s", "n", "n", "s", "n"],
+        "value": [4.0, 5.0, 3.0, 6.0, 1.0, 2.0],
+    }
+)
+STACK = """\
+view: chart
+source: data/rows.csv
+mark: {type: bar, stack: true}
+encoding:
+  x: {field: group, type: nominal}
+  y: {field: value, type: quantitative}
+  color: {field: region, type: nominal}
+"""
+
+
+def test_a_highlight_on_a_stacks_value_says_it_tests_each_segments_sum():
+    result = check(STACK + "highlight: {where: 'value > 5'}\n", lambda _: ROWS)
+    # segments: a.n 4, a.s 5, b.n 9, b.s 1, c.n 2
+    assert result.summary == (
+        "highlight matches 1/5 rows; on a stack, value is each segment's sum; value 1–9"
+    )
+
+
+def test_a_highlight_on_a_stacks_slot_says_nothing_of_sums():
+    result = check(STACK + "highlight: {where: \"group == 'b'\"}\n", lambda _: ROWS)
+    assert result.summary == "highlight matches 2/5 rows; value 1–9"

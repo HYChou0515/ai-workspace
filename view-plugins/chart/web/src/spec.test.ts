@@ -206,4 +206,64 @@ describe("messages", () => {
   ])("does not refuse one field aggregated one way (y%s, tooltip%s)", (y, tip) => {
     expect(verdict(twoOps(y, tip))).toEqual([]);
   });
+
+  // #847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its slot
+  // and colour only. A segment is the sum of its rows, so it has no single
+  // value of any other field. test_spec_messages.py reads the same.
+  const stackedBar =
+    "mark: {type: bar, stack: true}\nencoding:\n  x: {field: item, type: nominal}\n" +
+    "  y: {field: value, type: quantitative}\n  color: {field: group, type: nominal}\n" +
+    "  tooltip: {field: region, type: nominal}\n";
+  const links = "a stack links by its slot and colour only ('item', 'group') — a segment is the sum of its rows";
+
+  it("refuses a stack keyed by another field, saying why", () => {
+    expect(verdict(`${base}keys: [item, id, group, region]\n${stackedBar}`)).toEqual([
+      `keys: ${links}, so it has no single 'id', 'region': key the view by its slot and colour, or drop stack so single rows link`,
+    ]);
+  });
+
+  it("refuses a stack highlighting another field, saying why", () => {
+    expect(verdict(`${base}highlight: {where: "region == 'n' and value > 3"}\n${stackedBar}`)).toEqual([
+      `highlight.where: ${links}, so it has no single 'region': test its slot and colour, ` +
+        "or its value 'value' (each segment's sum), or drop stack so single rows light",
+    ]);
+    const [line] = verdict(`${base}highlight: {values: {item: [p], id: [r1]}}\n${stackedBar}`);
+    expect(line!.startsWith(`highlight.values: ${links}, so it has no single 'id': `)).toBe(true);
+  });
+
+  it("names a layer's stack", () => {
+    const layered =
+      `${base}keys: [id]\nlayer:\n  - mark: {type: area, stack: true}\n    encoding:\n` +
+      "      x: {field: item, type: nominal}\n      y: {field: value, type: quantitative}\n" +
+      "  - mark: scatter\n    encoding:\n      x: {field: item, type: nominal}\n" +
+      "      y: {field: value, type: quantitative}\n";
+    expect(verdict(layered)).toEqual([
+      "keys: a stack (layer[0]) links by its slot and colour only ('item') — a segment is the sum of its rows, " +
+        "so it has no single 'id': key the view by its slot and colour, or drop stack so single rows link",
+    ]);
+  });
+
+  it("links a horizontal stack by its y", () => {
+    const horizontal =
+      "mark: {type: bar, stack: true}\nencoding:\n  x: {field: value, type: quantitative}\n  y: {field: item, type: ordinal}\n";
+    const [line] = verdict(`${base}keys: [group]\n${horizontal}`);
+    expect(line).toContain("only ('item')");
+    expect(line).toContain("no single 'group'");
+    expect(verdict(`${base}keys: [item]\n${horizontal}`)).toEqual([]);
+  });
+
+  it.each([
+    "keys: [item, group]\n",
+    "keys: [group]\n",
+    "highlight: {where: \"value > 10 and group == 'a'\"}\n",
+    "highlight: {where: \"`item` == 'p' and index > 0\"}\n",
+    "highlight: {values: {item: [p], value: [13]}}\n",
+  ])("does not refuse a stack with %s", (top) => {
+    expect(verdict(base + top + stackedBar)).toEqual([]);
+  });
+
+  it.each(["{type: bar, stack: false}", "bar", "{type: line, stack: true}"])("links single rows (%s) by any field", (mark) => {
+    const text = `${base}keys: [id]\nhighlight: {where: "region == 'n'"}\n${stackedBar.replace("{type: bar, stack: true}", mark)}`;
+    expect(verdict(text)).toEqual([]);
+  });
 });

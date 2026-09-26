@@ -277,3 +277,81 @@ def test_a_stack_whose_value_is_a_number_or_no_stack_is_not_refused():
         ("bar", "quantitative", "ordinal"),
     ]:
         assert _errors(_stack(mark, x, y)) == [], (mark, x, y)
+
+
+# #847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its slot and
+# colour only. A segment is the sum of its rows, so it has no single value of
+# any other field: a brush over one wrote `{}` for a row-id key (clearing
+# every linked view), and a highlight on another field lit nothing. The
+# renderer's spec.test.ts reads the same.
+STACKED_BAR = (
+    "mark: {type: bar, stack: true}\nencoding:\n  x: {field: item, type: nominal}\n"
+    "  y: {field: value, type: quantitative}\n  color: {field: group, type: nominal}\n"
+    "  tooltip: {field: region, type: nominal}\n"
+)
+LINKS = (
+    "a stack links by its slot and colour only ('item', 'group') — a segment is the sum of its rows"
+)
+
+
+def test_a_stack_keyed_by_another_field_is_refused():
+    assert _errors(BASE + "keys: [item, id, group, region]\n" + STACKED_BAR) == [
+        f"keys: {LINKS}, so it has no single 'id', 'region': key the view by its slot "
+        "and colour, or drop stack so single rows link"
+    ]
+
+
+def test_a_stack_highlighting_another_field_is_refused():
+    where = BASE + "highlight: {where: \"region == 'n' and value > 3\"}\n" + STACKED_BAR
+    assert _errors(where) == [
+        f"highlight.where: {LINKS}, so it has no single 'region': test its slot and "
+        "colour, or its value 'value' (each segment's sum), or drop stack so single rows light"
+    ]
+    values = BASE + "highlight: {values: {item: [p], id: [r1]}}\n" + STACKED_BAR
+    [line] = _errors(values)
+    assert line.startswith(f"highlight.values: {LINKS}, so it has no single 'id': ")
+
+
+def test_a_layer_stack_is_named():
+    layered = (
+        BASE
+        + "keys: [id]\nlayer:\n  - mark: {type: area, stack: true}\n    encoding:\n"
+        + (
+            "      x: {field: item, type: nominal}\n      y: {field: value, type: quantitative}\n"
+            "  - mark: scatter\n    encoding:\n      x: {field: item, type: nominal}\n"
+            "      y: {field: value, type: quantitative}\n"
+        )
+    )
+    assert _errors(layered) == [
+        "keys: a stack (layer[0]) links by its slot and colour only ('item') — a segment "
+        "is the sum of its rows, so it has no single 'id': key the view by its slot and "
+        "colour, or drop stack so single rows link"
+    ]
+
+
+def test_a_horizontal_stack_links_by_its_y():
+    horizontal = (
+        "mark: {type: bar, stack: true}\nencoding:\n  x: {field: value, type: quantitative}\n"
+        "  y: {field: item, type: ordinal}\n"
+    )
+    [line] = _errors(BASE + "keys: [group]\n" + horizontal)
+    assert "only ('item')" in line and "no single 'group'" in line
+    assert _errors(BASE + "keys: [item]\n" + horizontal) == []
+
+
+def test_a_stack_linked_by_its_slot_and_colour_or_lit_by_its_sum_is_not_refused():
+    for top in [
+        "keys: [item, group]\n",
+        "keys: [group]\n",
+        "highlight: {where: \"value > 10 and group == 'a'\"}\n",
+        "highlight: {where: \"`item` == 'p' and index > 0\"}\n",
+        "highlight: {values: {item: [p], value: [13]}}\n",
+    ]:
+        assert _errors(BASE + top + STACKED_BAR) == [], top
+
+
+def test_single_rows_link_by_any_field():
+    for mark in ["{type: bar, stack: false}", "bar", "{type: line, stack: true}"]:
+        text = BASE + "keys: [id]\nhighlight: {where: \"region == 'n'\"}\n"
+        text += STACKED_BAR.replace("{type: bar, stack: true}", mark)
+        assert _errors(text) == [], mark

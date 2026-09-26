@@ -9,10 +9,60 @@ shapes here are trusted.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
 _CHANNELS = ("x", "y", "x2", "y2", "color", "size", "theta", "text")
+
+_NUMBER = re.compile(r"0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d[\d_]*)?[jJ]?")
+_NAME = re.compile(r"[^\W\d]\w*")
+# Python's words, and pandas' own name for the row index (read as a column
+# only when a column has that name; a field is never needed for it)
+_NOT_COLUMNS = {"and", "or", "not", "in", "is", "True", "False", "None", "index"}
+_TEXT_PREFIX = re.compile(r"[rRbBuUfF]{1,2}")
+
+
+def where_names(expr: str) -> list[str]:
+    """The columns a `where:` expression reads, as pandas reads them: each
+    name that is not a Python word, an attribute (`.isin`), a function called
+    (`abs(`), a local (`@limit`) or the prefix of a text (`r'...'`); inside
+    backticks, the text between them. Texts in quotes are skipped. Held to
+    pandas itself by `wire-corpus/where-names.json`."""
+    names: list[str] = []
+    i, n = 0, len(expr)
+    while i < n:
+        ch = expr[i]
+        if ch in "'\"":
+            i += 1
+            while i < n and expr[i] != ch:
+                i += 2 if expr[i] == "\\" else 1
+            i += 1
+        elif ch == "`":
+            end = expr.find("`", i + 1)
+            if end < 0:
+                break
+            names.append(expr[i + 1 : end])
+            i = end + 1
+        elif ch.isdigit():  # (a leading dot is skipped, then its digits read)
+            number = _NUMBER.match(expr, i)
+            assert number is not None  # a digit starts one
+            i = number.end()
+        elif name := _NAME.match(expr, i):
+            word, i = name.group(), name.end()
+            before = expr[: name.start()].rstrip()[-1:]
+            after = expr[i:].lstrip()[:1]
+            if (
+                word in _NOT_COLUMNS
+                or before in (".", "@")
+                or after == "("
+                or (expr[i : i + 1] in ("'", '"') and _TEXT_PREFIX.fullmatch(word))
+            ):
+                continue
+            names.append(word)
+        else:
+            i += 1
+    return list(dict.fromkeys(names))
 
 
 def _layers(doc: Mapping[str, Any]) -> Iterator[tuple[str, Mapping[str, Any]]]:
@@ -62,9 +112,72 @@ def _one_op(path: str, encoding: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def stack_parts(layer: Mapping[str, Any]) -> tuple[list[str], str] | None:
+    """A stacked layer's slot and colour fields (the fields it links by) and
+    its value field; None for a layer that is not a stack -- a bar or an
+    area with `stack: true`, as `query.stacked` reads it. The slot is y when
+    y is a category (a horizontal bar), else x; a colour by value is refused
+    by the schema."""
+    mark = layer.get("mark")
+    if not (
+        isinstance(mark, Mapping)
+        and mark.get("type") in ("bar", "area")
+        and mark.get("stack") is True
+    ):
+        return None
+    encoding = layer["encoding"]
+    horizontal = encoding["y"]["type"] in ("nominal", "ordinal")
+    slot, value = ("y", "x") if horizontal else ("x", "y")
+    colour = encoding.get("color", {}).get("field")
+    links = [encoding[slot]["field"], *([colour] if colour is not None else [])]
+    return list(dict.fromkeys(links)), encoding[value]["field"]
+
+
+def _quoted(names: list[str]) -> str:
+    return ", ".join(f"'{n}'" for n in names)
+
+
+def _stack_links(doc: Mapping[str, Any], path: str, layer: Mapping[str, Any]) -> list[str]:
+    """#847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its
+    slot and colour only. A segment is the sum of its rows (P40 row 18), so
+    it has no single value of any other field: a `keys:` naming one wrote
+    nothing a linked view could light, and a `highlight:` reading one lit
+    nothing. A highlight may also test the value, which is each segment's
+    sum."""
+    parts = stack_parts(layer)
+    if parts is None:
+        return []
+    links, value = parts
+    subject = f"a stack ({path.rstrip('.')})" if path else "a stack"
+    head = (
+        f"{subject} links by its slot and colour only ({_quoted(links)}) — a segment is the"
+        " sum of its rows, so it has no single"
+    )
+    lines = []
+    keys = [k for k in doc.get("keys", []) if k not in links]
+    if keys:
+        lines.append(
+            f"keys: {head} {_quoted(keys)}: key the view by its slot and colour, or drop"
+            " stack so single rows link"
+        )
+    highlight = doc.get("highlight", {})
+    for how, read in (
+        ("where", lambda: where_names(highlight["where"])),
+        ("values", lambda: list(highlight["values"])),
+    ):
+        other = [c for c in read() if c not in (*links, value)] if how in highlight else []
+        if other:
+            lines.append(
+                f"highlight.{how}: {head} {_quoted(other)}: test its slot and colour, or its"
+                f" value '{value}' (each segment's sum), or drop stack so single rows light"
+            )
+    return lines
+
+
 def rule_errors(doc: Mapping[str, Any]) -> list[str]:
     """Every way a schema-valid `doc` breaks these rules, one line each."""
     lines: list[str] = []
     for path, layer in _layers(doc):
         lines += _one_op(path, layer.get("encoding", {}))
+        lines += _stack_links(doc, path, layer)
     return lines

@@ -97,8 +97,12 @@ function toMarking(values: Record<string, string[]>[]): MarkingValues {
 }
 
 /** What a selection writes. null for a view without `keys:` (it cannot be a
- * source), and for a selection made only on binned layers (their rows are
- * bins, which name no row); `{}` for an empty selection — the write that clears. */
+ * source), and for a selection whose layers can name no key -- binned ones
+ * (their rows are bins), and any carrying none of the keys, or only as a
+ * column a channel aggregates (#847/#848 PR 5 P41 row 21): a selection that
+ * names nothing marks nothing, never the `{}` that would clear every linked
+ * view (the table's rule). `{}` only for an empty selection — the write that
+ * clears. */
 export function selectionMarking(
   selections: readonly Selection[],
   answer: Answer,
@@ -106,9 +110,9 @@ export function selectionMarking(
   measured: Measured,
 ): MarkingValues | null {
   if (keys.length === 0) return null;
-  const onRows = selections.filter((s) => !answer.layers[s.layer]?.binned);
-  if (selections.length > 0 && onRows.length === 0) return null;
-  return toMarking(onRows.map((s) => selectionValues(s, answer, keys, measured)));
+  const named = selections.map((s) => selectionValues(s, answer, keys, measured)).filter((v) => Object.keys(v).length > 0);
+  if (selections.length > 0 && named.length === 0) return null;
+  return toMarking(named);
 }
 
 /** The spec's `highlight:` as a marking — what seeds an empty marking on open,

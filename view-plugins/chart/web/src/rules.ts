@@ -15,6 +15,59 @@ type Doc = Layer & { layer?: Layer[]; keys?: string[]; highlight?: { where?: str
 
 const CHANNELS = ["x", "y", "x2", "y2", "color", "size", "theta", "text"];
 
+const NUMBER = /0[xXoObB][0-9a-fA-F_]+|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d[\d_]*)?[jJ]?/y;
+const NAME = /[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*/uy;
+// Python's words, and pandas' own name for the row index (read as a column
+// only when a column has that name; a field is never needed for it)
+const NOT_COLUMNS = new Set(["and", "or", "not", "in", "is", "True", "False", "None", "index"]);
+const TEXT_PREFIX = /^[rRbBuUfF]{1,2}$/;
+const DIGIT = /\d/;
+
+/** The columns a `where:` expression reads, as pandas reads them: each name
+ * that is not a Python word, an attribute (`.isin`), a function called
+ * (`abs(`), a local (`@limit`) or the prefix of a text (`r'...'`); inside
+ * backticks, the text between them. Texts in quotes are skipped. Held to
+ * pandas itself by `wire-corpus/where-names.json`. */
+export function whereNames(expr: string): string[] {
+  const names: string[] = [];
+  let i = 0;
+  const n = expr.length;
+  while (i < n) {
+    const ch = expr[i]!;
+    if (ch === "'" || ch === '"') {
+      i += 1;
+      while (i < n && expr[i] !== ch) i += expr[i] === "\\" ? 2 : 1;
+      i += 1;
+    } else if (ch === "`") {
+      const end = expr.indexOf("`", i + 1);
+      if (end < 0) break;
+      names.push(expr.slice(i + 1, end));
+      i = end + 1;
+    } else if (DIGIT.test(ch)) {
+      // (a leading dot is skipped, then its digits read)
+      NUMBER.lastIndex = i;
+      NUMBER.exec(expr);
+      i = NUMBER.lastIndex;
+    } else {
+      NAME.lastIndex = i;
+      const name = NAME.exec(expr);
+      if (!name) {
+        i += 1;
+        continue;
+      }
+      const word = name[0];
+      const start = i;
+      i = NAME.lastIndex;
+      const before = expr.slice(0, start).trimEnd().slice(-1);
+      const after = expr.slice(i).trimStart().slice(0, 1);
+      const quote = expr[i] === "'" || expr[i] === '"';
+      if (NOT_COLUMNS.has(word) || before === "." || before === "@" || after === "(" || (quote && TEXT_PREFIX.test(word))) continue;
+      names.push(word);
+    }
+  }
+  return [...new Set(names)];
+}
+
 /** [the path its lines start with, the layer] for each layer of `doc`. */
 function layers(doc: Doc): [string, Layer][] {
   return doc.layer ? doc.layer.map((ly, i) => [`layer[${i}].`, ly]) : [["", doc]];
@@ -61,9 +114,64 @@ function oneOp(path: string, encoding: Encoding): string[] {
   return lines;
 }
 
+/** A stacked layer's slot and colour fields (the fields it links by) and its
+ * value field; null for a layer that is not a stack -- a bar or an area with
+ * `stack: true`. The slot is y when y is a category (a horizontal bar), else
+ * x; a colour by value is refused by the schema. */
+export function stackParts(layer: Layer): { links: string[]; value: string } | null {
+  const mark = layer.mark as { type?: string; stack?: unknown } | string | undefined;
+  if (typeof mark !== "object" || !(mark.type === "bar" || mark.type === "area") || mark.stack !== true) return null;
+  const encoding = layer.encoding as Record<string, Def>;
+  const horizontal = encoding.y!.type === "nominal" || encoding.y!.type === "ordinal";
+  const [slot, value] = horizontal ? ["y", "x"] : ["x", "y"];
+  const colour = encoding.color?.field;
+  const links = [encoding[slot]!.field as string, ...(colour !== undefined ? [colour] : [])];
+  return { links: [...new Set(links)], value: encoding[value]!.field as string };
+}
+
+const quoted = (names: string[]) => names.map((n) => `'${n}'`).join(", ");
+
+/** #847/#848 PR 5 P41 row 21 [user, 2026-09-26]: a stack links by its slot
+ * and colour only. A segment is the sum of its rows (P40 row 18), so it has
+ * no single value of any other field: a `keys:` naming one wrote nothing a
+ * linked view could light, and a `highlight:` reading one lit nothing. A
+ * highlight may also test the value, which is each segment's sum. */
+function stackLinks(doc: Doc, path: string, layer: Layer): string[] {
+  const parts = stackParts(layer);
+  if (!parts) return [];
+  const { links, value } = parts;
+  const subject = path ? `a stack (${path.replace(/\.$/, "")})` : "a stack";
+  const head =
+    `${subject} links by its slot and colour only (${quoted(links)}) — a segment is the` +
+    " sum of its rows, so it has no single";
+  const lines: string[] = [];
+  const keys = (doc.keys ?? []).filter((k) => !links.includes(k));
+  if (keys.length > 0) {
+    lines.push(`keys: ${head} ${quoted(keys)}: key the view by its slot and colour, or drop stack so single rows link`);
+  }
+  const highlight = doc.highlight ?? {};
+  const reads: ["where" | "values", () => string[]][] = [
+    ["where", () => whereNames(highlight.where as string)],
+    ["values", () => Object.keys(highlight.values as object)],
+  ];
+  for (const [how, read] of reads) {
+    const other = how in highlight ? read().filter((c) => !links.includes(c) && c !== value) : [];
+    if (other.length > 0) {
+      lines.push(
+        `highlight.${how}: ${head} ${quoted(other)}: test its slot and colour, or its` +
+          ` value '${value}' (each segment's sum), or drop stack so single rows light`,
+      );
+    }
+  }
+  return lines;
+}
+
 /** Every way a schema-valid `doc` breaks these rules, one line each. */
 export function ruleErrors(doc: unknown): string[] {
   const lines: string[] = [];
-  for (const [path, layer] of layers(doc as Doc)) lines.push(...oneOp(path, layer.encoding ?? {}));
+  for (const [path, layer] of layers(doc as Doc)) {
+    lines.push(...oneOp(path, layer.encoding ?? {}));
+    lines.push(...stackLinks(doc as Doc, path, layer));
+  }
   return lines;
 }

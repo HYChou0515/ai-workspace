@@ -1,9 +1,9 @@
 {
   "view": "chart",
   "source": "data/particles.parquet",
-  "marking": "lots",
+  "marking": "sizes",
   "keys": [
-    "lot"
+    "size_bin"
   ],
   "mark": {
     "type": "area",
