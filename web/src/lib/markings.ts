@@ -94,27 +94,30 @@ export class MarkingStore {
   }
 
   /** Write `name`. An empty marking (or `null`) clears it. The sets are copied:
-   * a caller mutating its own set afterwards does not change the marking. */
+   * a caller mutating its own set afterwards does not change the marking.
+   * Returns whether the marking holds the write (#847/#848 PR 5 P41 row 27):
+   * false only when `ifEmpty` found it occupied and nothing was written. The
+   * same write again is held already -- true, and silent: it tells no one. */
   set(
     name: string,
     marking: Marking | null,
     source: string | null,
     opts: { fromPeer?: boolean; ifEmpty?: boolean } = {},
-  ): void {
+  ): boolean {
     const had = this.entries.has(name);
     // A seed (a view's `highlight:` on open) never overwrites a selection: the
     // check is HERE, at write time, because two views opened in one commit both
     // saw "empty" when they rendered.
-    if (opts.ifEmpty && had) return;
+    if (opts.ifEmpty && had) return false;
     const held = this.entries.get(name);
     // The same write again changes nothing, so it tells no one: a view redrawn
     // with its new lit rows may report the same selection, and re-notifying
     // would redraw it, and so on without end.
     if (held && !isEmpty(marking) && held.source === source && sameMarking(held.marking, marking!)) {
-      return;
+      return true;
     }
     if (isEmpty(marking)) {
-      if (!had) return;
+      if (!had) return true;
       this.entries.delete(name);
     } else {
       const copy: Record<string, ReadonlySet<string>> = {};
@@ -132,6 +135,7 @@ export class MarkingStore {
     }
     const entry = this.entries.get(name);
     for (const cb of this.writeListeners) cb(name, entry, opts.fromPeer ?? false);
+    return true;
   }
 
   /** Every write, with whether it came from another tab (`markingsSync`). */

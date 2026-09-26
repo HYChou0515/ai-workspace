@@ -64,6 +64,41 @@ describe("projectOntoKeys — what a selection writes", () => {
   });
 });
 
+describe("MarkingStore.set says whether the marking holds the write (#847/#848 PR 5 P41 row 27)", () => {
+  it("is false when `ifEmpty` finds the marking occupied, and writes nothing", () => {
+    const s = new MarkingStore();
+    expect(s.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml")).toBe(true);
+    const onPicked = vi.fn();
+    s.subscribe("picked", onPicked);
+    expect(s.set("picked", { item: new Set(["q"]) }, "/v/b.ai.yaml", { ifEmpty: true })).toBe(false);
+    expect([...s.get("picked")!.marking.item!]).toEqual(["p"]);
+    expect(onPicked).not.toHaveBeenCalled();
+  });
+
+  it("is true for a seed on an empty marking", () => {
+    const s = new MarkingStore();
+    expect(s.set("picked", { item: new Set(["q"]) }, "/v/b.ai.yaml", { ifEmpty: true })).toBe(true);
+    expect(s.get("picked")?.source).toBe("/v/b.ai.yaml");
+  });
+
+  it("is true, and silent, for the same write again: the marking holds it", () => {
+    const s = new MarkingStore();
+    s.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml");
+    const onPicked = vi.fn();
+    s.subscribe("picked", onPicked);
+    expect(s.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml")).toBe(true);
+    expect(onPicked).not.toHaveBeenCalled();
+  });
+
+  it("is true for a clear, and for a clear of a marking that holds nothing", () => {
+    const s = new MarkingStore();
+    expect(s.set("picked", null, null)).toBe(true);
+    s.set("picked", { item: new Set(["p"]) }, null);
+    expect(s.set("picked", {}, null)).toBe(true);
+    expect(s.get("picked")).toBeUndefined();
+  });
+});
+
 describe("MarkingStore", () => {
   it("reads back what was written, with the view that wrote it", () => {
     const s = new MarkingStore();

@@ -73,6 +73,32 @@ describe("useMarking", () => {
     expect(store.names()).toEqual([]);
   });
 
+  it("write answers whether the store took it: false when a seed finds the marking occupied (P41 row 27)", () => {
+    const store = new MarkingStore();
+    store.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml");
+    let write: ReturnType<typeof useMarking>[1] | null = null;
+    function Seeder() {
+      const [, w] = useMarking("picked");
+      write = w;
+      return null;
+    }
+    render(
+      <MarkingProvider store={store}>
+        <Seeder />
+      </MarkingProvider>,
+    );
+    let took: boolean | null = null;
+    act(() => {
+      took = write!({ item: new Set(["q"]) }, "/v/b.ai.yaml", { ifEmpty: true });
+    });
+    expect(took).toBe(false);
+    act(() => {
+      took = write!({ item: new Set(["q"]) }, "/v/b.ai.yaml");
+    });
+    expect(took).toBe(true);
+    expect(store.get("picked")?.source).toBe("/v/b.ai.yaml");
+  });
+
   it("outside a provider, reads nothing and writes nowhere rather than throwing", () => {
     render(<View name="fail" />);
     expect(screen.getByTestId("view-fail")).toHaveTextContent("-");

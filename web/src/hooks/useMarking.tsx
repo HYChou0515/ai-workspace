@@ -20,7 +20,10 @@ const EMPTY: readonly string[] = [];
  * a view seeding its own default, which must never overwrite a selection.
  * Returns whether a store took the write: false for a detached view and
  * outside a provider, where it goes nowhere (a view whose write went nowhere
- * holds its own selection -- nothing else can replace it). */
+ * holds its own selection -- nothing else can replace it), and false when
+ * `ifEmpty` found the marking occupied (#847/#848 PR 5 P41 row 27: the
+ * store's own answer, `MarkingStore.set`). The same write again is held
+ * already: true. */
 export type WriteMarking = (
   marking: Marking | null,
   source: string | null,
@@ -42,8 +45,7 @@ export function useMarking(name: string | null): [MarkingEntry | undefined, Writ
   const write = useCallback<WriteMarking>(
     (marking, source, opts) => {
       if (!store || !name) return false;
-      store.set(name, marking, source, { ifEmpty: opts?.ifEmpty });
-      return true;
+      return store.set(name, marking, source, { ifEmpty: opts?.ifEmpty });
     },
     [store, name],
   );
