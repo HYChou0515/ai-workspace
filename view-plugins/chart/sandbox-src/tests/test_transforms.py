@@ -148,7 +148,7 @@ def test_diff_subtracts_the_same_aggregate_over_two_groups(dies):
     assert rows == {"A": 2.0, "B": 0.0}
 
 
-def test_diff_drops_a_group_that_only_one_side_has(dies):
+def test_diff_keeps_a_group_only_one_side_has_with_no_mean(dies):
     out = apply_transforms(
         dies,
         [
@@ -159,11 +159,12 @@ def test_diff_drops_a_group_that_only_one_side_has(dies):
             }
         ],
     )
-    # (A,1) has only "after", (B,1) only "before": neither has a difference.
-    assert sorted(zip(out["lot"], out["x"], out["delta"], strict=True)) == [
-        ("A", 0, 1.0),
-        ("B", 0, 2.0),
-    ]
+    # (A,1) has only "after", (B,1) only "before": both are kept (P42 row 32),
+    # and a mean of no row is missing, so their difference is too.
+    rows = {(lot, x): d for lot, x, d in zip(out["lot"], out["x"], out["delta"], strict=True)}
+    assert rows.keys() == {("A", 0), ("A", 1), ("B", 0), ("B", 1)}
+    assert (rows["A", 0], rows["B", 0]) == (1.0, 2.0)
+    assert math.isnan(rows["A", 1]) and math.isnan(rows["B", 1])
 
 
 def test_diff_matches_numbers_written_as_numbers():
@@ -238,4 +239,93 @@ def test_mean_of_an_all_missing_group_is_missing_not_an_error():
     out = apply_transforms(
         df, [{"aggregate": [{"op": "mean", "field": "v", "as": "m"}], "groupby": ["g"]}]
     )
+    assert math.isnan(out["m"].iloc[0])
+
+
+# #847/#848 PR 5 P42 row 32: `diff` keeps a group either side has -- 0 on the
+# missing side for count and sum, empty (missing) otherwise. The oracle is
+# pandas' own `Series.sub`, with `fill_value=0` for count and sum.
+_SIDES = {"lot": ["A", "A", "B", "A", "B", "B"], "bin": ["x", "y", "x", "y", "x", "z"]}
+
+
+def _sides(categorical: bool) -> pd.DataFrame:
+    df = pd.DataFrame({**_SIDES, "v": [1.0, 2.0, 4.0, 8.0, None, 16.0]})
+    if categorical:  # as a parquet file keeps them
+        df = df.astype({"lot": "category", "bin": "category"})
+    return df
+
+
+def _oracle(df: pd.DataFrame, op: str, field: str | None) -> dict[str, float]:
+    def side(lot: str) -> pd.Series:
+        grouped = df[df["lot"] == lot].groupby("bin", observed=True)
+        return grouped.size() if field is None else getattr(grouped[field], op)()
+
+    fill = 0 if op in ("count", "sum") else None
+    return side("A").sub(side("B"), fill_value=fill).to_dict()
+
+
+@pytest.mark.parametrize("categorical", [False, True], ids=["text", "categorical"])
+@pytest.mark.parametrize(
+    ("op", "field"), [("count", None), ("count", "v"), ("sum", "v"), ("mean", "v"), ("max", "v")]
+)
+def test_diff_keeps_a_group_either_side_has(categorical, op, field):
+    df = _sides(categorical)
+    item = {"op": op, "as": "d", **({"field": field} if field else {})}
+    out = apply_transforms(
+        df,
+        [{"diff": {"by": "lot", "of": "A", "minus": "B"}, "aggregate": [item], "groupby": ["bin"]}],
+    )
+    got = dict(zip(out["bin"].astype(str), out["d"], strict=True))
+    want = {str(k): v for k, v in _oracle(df, op, field).items()}
+    assert sorted(got) == sorted(want) == ["x", "y", "z"]
+    for k in want:
+        assert got[k] == pytest.approx(want[k], nan_ok=True), k
+
+
+def test_diff_of_a_count_keeps_whole_numbers():
+    # a count over a side with no row there is 0, not a float the fill made
+    out = apply_transforms(
+        _sides(False),
+        [
+            {
+                "diff": {"by": "lot", "of": "A", "minus": "B"},
+                "aggregate": [{"op": "count", "as": "n"}],
+                "groupby": ["bin"],
+            }
+        ],
+    )
+    assert out.to_dict("records") == [
+        {"bin": "x", "n": -1},
+        {"bin": "y", "n": 2},
+        {"bin": "z", "n": -1},
+    ]
+    assert out["n"].dtype.kind == "i"
+
+
+def test_diff_of_a_sum_over_mixed_numbers_keeps_the_fraction():
+    # one side sums whole numbers, the other 2.5: the 0 filled in is not a
+    # reason to read the other side as whole numbers
+    v = pd.Series([1, 2.5, 3], dtype=object)  # as an entity field holds them
+    df = pd.DataFrame({"lot": ["A", "B", "B"], "bin": ["x", "x", "y"], "v": v})
+    assert pd.to_numeric(df["v"][:1]).dtype.kind == "i"  # side A alone is whole
+    out = apply_transforms(
+        df,
+        [
+            {
+                "diff": {"by": "lot", "of": "A", "minus": "B"},
+                "aggregate": [{"op": "sum", "field": "v", "as": "d"}],
+                "groupby": ["bin"],
+            }
+        ],
+    )
+    assert out.to_dict("records") == [{"bin": "x", "d": -1.5}, {"bin": "y", "d": -3.0}]
+
+
+def test_diff_without_groupby_counts_a_side_with_no_row_as_zero(dies):
+    t = {
+        "diff": {"by": "phase", "of": "after", "minus": "never"},
+        "aggregate": [{"op": "count", "as": "n"}, {"op": "mean", "field": "t", "as": "m"}],
+    }
+    out = apply_transforms(dies, [t])
+    assert out["n"].tolist() == [3]
     assert math.isnan(out["m"].iloc[0])

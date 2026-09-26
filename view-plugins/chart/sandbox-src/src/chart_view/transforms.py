@@ -363,13 +363,21 @@ def _diff(df: pd.DataFrame, t: Mapping[str, Any]) -> pd.DataFrame:
     minus = aggregate(
         df[_equals(side, t["diff"]["minus"], f"diff on {by!r}: minus")], items, groupby
     )
-    names = [i["as"] for i in items]
+    # A group either side has is kept (#847/#848 PR 5 P42 row 32): a count or a
+    # sum over no row is 0, any other aggregate of no row is missing.
+    keys = groupby or [_ALL]
     if not groupby:
-        return of[names] - minus[names]
-    both = of.merge(minus, on=groupby, how="inner", suffixes=("", " minus"))
-    for name in names:
-        both[name] = both[name] - both[f"{name} minus"]
-    return both[[*groupby, *names]]
+        of, minus = of.assign(**{_ALL: 0}), minus.assign(**{_ALL: 0})
+    both = of.merge(minus, on=keys, how="outer", sort=True, suffixes=("", " minus"))
+    for i in items:
+        name = i["as"]
+        a, b = both[name], both[f"{name} minus"]
+        if i["op"] in ("count", "sum"):
+            # the sides' common type: a count stays whole, a sum of 2.5 is not cut
+            kind = pd.concat([of[name], minus[name]]).dtype
+            a, b = a.fillna(0).astype(kind), b.fillna(0).astype(kind)
+        both[name] = a - b
+    return both[[*groupby, *(i["as"] for i in items)]]
 
 
 def apply_transforms(df: pd.DataFrame, transforms: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
