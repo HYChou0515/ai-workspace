@@ -52,6 +52,39 @@ def test_the_file_route_refuses_a_write_into_a_readonly_copy(tmp_path: Path, mon
     assert client.put(f"/a/rca/items/{iid}/files/notes.md", content=b"mine").status_code == 204
 
 
+async def test_workspace_search_and_replace_leave_a_readonly_copy_out(tmp_path: Path, monkeypatch):
+    """Review #865 round 1 (regression A1): the workspace-wide search listed the
+    readonly copy too -- a common word drew hundreds of docs hits -- and Replace
+    wrote into it first (`.skill/` sorts early): a 403, and nothing replaced,
+    not even the person's own files. The copy is reference, not their content."""
+    sd = _readonly_skill(tmp_path)
+    (sd / "docs" / "a.md").write_text("the shipped workspace words")
+    monkeypatch.setitem(shared.SHARED_SKILLS, "ref", sd)
+    spec = make_spec()
+    store = SpecstarFileStore(spec)
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=store, runner=ScriptedAgentRunner([])
+    )
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    await materialize_skill(WorkspaceFiles(store), iid, "rca", None, "ref")
+    assert (
+        client.put(f"/a/rca/items/{iid}/files/notes.md", content=b"my workspace notes").status_code
+        == 204
+    )
+
+    hits = client.post(f"/a/rca/items/{iid}/search", json={"query": "workspace"}).json()
+    done = client.post(
+        f"/a/rca/items/{iid}/replace", json={"query": "workspace", "replacement": "item"}
+    )
+
+    assert [h["path"] for h in hits] == ["/notes.md"]
+    assert done.status_code == 200, done.text
+    assert client.get(f"/a/rca/items/{iid}/files/notes.md").content == b"my item notes"
+    copy = client.get(f"/a/rca/items/{iid}/files/.skill/ref/docs/a.md").content
+    assert copy == b"the shipped workspace words"
+
+
 async def test_the_skills_panel_says_which_copy_is_readonly(
     harness: Harness, tmp_path: Path, monkeypatch
 ):

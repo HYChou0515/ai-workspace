@@ -86,7 +86,7 @@ def test_every_other_doc_is_in_the_nav():
     assert sorted(pages - _nav_files()) == []
 
 
-def test_mkdocs_strict_fails_a_page_left_out_of_the_nav():
+def test_nav_omitted_files_is_warn_so_strict_fails_a_page_left_out():
     """With `nav.omitted_files: info` a page left out of the nav built under
     `--strict` with rc 0 (probed 2026-09-27); `warn` makes `--strict` fail it."""
     text = (ROOT / "mkdocs.yml").read_text()

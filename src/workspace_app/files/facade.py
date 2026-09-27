@@ -466,15 +466,17 @@ class WorkspaceFiles:
                 raise FileNotFound(path) from exc
         return await self._fs.read(workspace_id, path)
 
+    def is_readonly(self, path: str) -> bool:
+        """Whether `path` is inside a readonly skill's copy -- the same rule
+        `_check_writable` refuses by, for a caller that must leave such a copy
+        out rather than fail on it (the workspace search / replace)."""
+        return self._readonly is not None and self._readonly(abs_path(path))
+
     def _check_writable(self, path: str) -> None:
         """Refuse a change to a readonly skill's copy, unless the platform itself
         is writing it (`system_writes`). Every changing entry point calls this
         first."""
-        if (
-            self._readonly is not None
-            and not _SYSTEM_WRITE.get()
-            and self._readonly(abs_path(path))
-        ):
+        if not _SYSTEM_WRITE.get() and self.is_readonly(path):
             raise ReadOnlyPath(abs_path(path))
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:

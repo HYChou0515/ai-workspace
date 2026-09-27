@@ -15,7 +15,7 @@ import pytest
 
 import workspace_app.apps.shared_skills as shared
 from workspace_app.apps.skills import readonly_skill_path, resolve_skill_body
-from workspace_app.files import ReadOnlyPath, WorkspaceFiles
+from workspace_app.files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 
 
@@ -185,3 +185,81 @@ async def test_every_door_into_a_readonly_copy_is_shut(registry: Path, monkeypat
     assert await files.read(inv, "/.skill/ref/docs/a.md") == b"shipped"
     assert not await files.exists(inv, "/.skill/ref/docs/new.md")
     assert not await files.exists(inv, "/.skill/ref/docs/mine.md")
+
+
+# Review #865 round 1 (defect A): a first copy that could not finish. It used to
+# stop half-written with no `.origin`: never repaired (the refresh needs the
+# manifest), and never removable (the guard refuses deletes under it).
+async def test_a_copy_that_does_not_fit_writes_nothing(registry: Path, monkeypatch):
+    _register(
+        monkeypatch,
+        registry,
+        "ref",
+        readonly=True,
+        files={"docs/a.md": "a" * 150, "docs/b.md": "b" * 150},
+    )
+    files = WorkspaceFiles(MemoryFileStore(), quota=200, readonly=readonly_skill_path)
+    inv = "inv-1"
+
+    with pytest.raises(WorkspaceFull):
+        await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.ls(inv, "/.skill/ref/") == []
+
+
+async def test_a_half_written_readonly_copy_is_copied_again(registry: Path, monkeypatch):
+    _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = MemoryFileStore()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    # what an interrupted copy left: some files, no `.origin`
+    await store.write(inv, "/.skill/ref/SKILL.md", b"---\nname: ref\ndescription: d\n---\n\nold\n")
+    await store.write(inv, "/.skill/ref/docs/a.md", b"a")
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.read(inv, "/.skill/ref/docs/b.md") == b"b"
+    assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+# Review #865 round 1 (regression B2): a hub copy that happens to carry a
+# readonly skill's name is not that skill's copy. Asking for its upstream
+# without a hub raised ValueError, so read_skill crashed for the workspace.
+async def test_a_hub_copy_with_a_readonly_name_is_left_alone(registry: Path, monkeypatch):
+    import msgspec
+
+    from workspace_app.apps.skill_payload import origin_for
+
+    _register(monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "shipped"})
+    store = MemoryFileStore()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    payload = {"SKILL.md": b"---\nname: ref\ndescription: from the hub\n---\n\nhub body\n"}
+    await store.write(inv, "/.skill/ref/SKILL.md", payload["SKILL.md"])
+    await store.write(
+        inv, "/.skill/ref/.origin", msgspec.json.encode(origin_for("hub", payload, entry="e1"))
+    )
+
+    body = await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert body is not None and "hub body" in body
+
+
+# Review #865 round 1 (defect B): the guard judged the path as written, so a
+# spelling the filesystem normalises -- `/./`, `//`, `x/..` -- wrote into the copy.
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/./.skill/ref/docs/a.md",
+        "/.skill//ref/docs/a.md",
+        "/.skill/./ref/docs/a.md",
+        "/x/../.skill/ref/docs/a.md",
+    ],
+)
+async def test_a_path_spelled_another_way_is_still_refused(registry: Path, monkeypatch, path: str):
+    _register(monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "shipped"})
+    files, inv = _guarded(), "inv-1"
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    with pytest.raises(ReadOnlyPath):
+        await files.write(inv, path, b"edited")

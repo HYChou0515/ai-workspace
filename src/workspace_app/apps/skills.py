@@ -486,8 +486,14 @@ def readonly_skill_path(path: str) -> bool:
     """Whether ``path`` is inside the copy of a readonly shared skill -- the
     facade's `readonly` check (docs/plan-ai-reads-docs.md P1). Decided by the
     SHIPPED ``SKILL.md`` of the skill the folder is named for, never by the copy:
-    a readonly shared skill's name is reserved in every workspace."""
-    parts = path.lstrip("/").split("/")
+    a readonly shared skill's name is reserved in every workspace.
+
+    Judged on the path as the filesystem will resolve it: `/./`, `//` and `x/..`
+    are normalised first, or those spellings wrote straight into the copy
+    (review #865 round 1)."""
+    import posixpath
+
+    parts = posixpath.normpath("/" + path.lstrip("/")).lstrip("/").split("/")
     if len(parts) < 2 or parts[0] != WORKSPACE_SKILL_DIR:
         return False
     from .shared_skills import shared_skill_readonly
@@ -496,9 +502,11 @@ def readonly_skill_path(path: str) -> bool:
 
 
 def upstream_readonly(app_slug: str | None, profile: str | None, name: str) -> bool:
-    """Whether the skill this name resolves to upstream is readonly: a SHARED
-    skill whose shipped ``SKILL.md`` says so. A profile skill of the same name
-    shadows it and is never readonly (docs/plan-ai-reads-docs.md P1, as built)."""
+    """Whether the copy of this name follows upstream as a readonly skill: a
+    SHARED skill whose shipped ``SKILL.md`` says so. A profile skill of the same
+    name shadows it and is not refreshed as one -- though the name stays reserved,
+    so the facade still refuses writes to it (`readonly_skill_path`;
+    docs/plan-ai-reads-docs.md P1, as built)."""
     from .shared_skills import shared_skill_readonly
 
     found = _skill_source(app_slug, profile, name)
@@ -544,15 +552,28 @@ async def _materialize(
     name: str,
 ) -> None:
     """`materialize_skill`'s work, run under `system_writes`."""
-    if await files.ls(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/"):
+    here = await files.ls(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/")
+    if here:
         # A readonly skill (docs/plan-ai-reads-docs.md P1) is the exception: it is
         # reference the AI reads, never edits, so its copy follows what the image
         # ships -- replaced whole whenever the copy's `.origin` no longer matches.
-        if upstream_readonly(app_slug, profile, name):
+        if not upstream_readonly(app_slug, profile, name):
+            return
+        origin = await workspace_skill_origin(files, workspace_id, name)
+        if origin is not None and origin.source != "shared":
+            # A hub copy that happens to carry the name is not this skill's copy;
+            # asking for its upstream without a hub raised (review #865 round 1).
+            return
+        if origin is not None:
             up = await skill_upstream(files, workspace_id, app_slug, profile, name)
             if up is not None and up.update_available:
                 await refresh_skill(files, workspace_id, app_slug, profile, name, force=True)
-        return
+            return
+        # No `.origin`: a copy that never finished (review #865 round 1). Nobody
+        # can edit or delete it, and the refresh needs the manifest, so it would
+        # stay half-written for good -- it is cleared and copied again.
+        for path in here:
+            await files.delete(workspace_id, path)
     found = _skill_source(app_slug, profile, name)
     if found is None:
         return
@@ -568,6 +589,12 @@ async def _materialize(
     # guide reaches that workspace only through the skills panel's Refresh.
     if set(payload) <= {"SKILL.md"}:
         return
+    manifest = msgspec.json.encode(origin_for(source, payload))
+    # The whole copy is one operation (#538, as `install_hub_skill`): checked
+    # once, up front, so a workspace with room for some of the files and not the
+    # rest refuses cleanly instead of keeping half a copy with no `.origin`
+    # (review #865 round 1).
+    await files.ensure_room_for(workspace_id, sum(len(d) for d in payload.values()) + len(manifest))
     for rel, data in payload.items():
         await files.write(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{rel}", data)
     # Written LAST: until it exists the copy is incomplete, and a manifest that
@@ -576,7 +603,7 @@ async def _materialize(
     await files.write(
         workspace_id,
         f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}",
-        msgspec.json.encode(origin_for(source, payload)),
+        manifest,
     )
 
 

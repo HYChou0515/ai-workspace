@@ -661,6 +661,12 @@ def register_file_routes(
         for p in paths:
             if not path_selected(p, body.include, body.exclude):
                 continue
+            # A readonly skill's copy (the platform's docs) is reference, not the
+            # person's content: in the results it drowned their own files, and
+            # Replace wrote into it first and 403'd the whole operation (review
+            # #865 round 1).
+            if files.is_readonly(p):
+                continue
             data = await files.read(investigation_id, p)
             try:
                 text = data.decode("utf-8")
