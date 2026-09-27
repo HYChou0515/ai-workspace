@@ -1186,7 +1186,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   被框到的縮圖的**列數**（每張縮圖由很多列組成，所以通常比張數大）。
 - 送出一則帶這個 marking 的訊息：chip 寫「m1 · 4 · by group, item」；`.markings/m1.json` 裡是 `keys` 與 4 列 `rows`。
 
-### 2026-09-27 · #865 app 裡的 AI 讀得到平台的 docs 與設計計畫（readonly skill） {#pr-865}
+### 2026-09-27 · 5ae1131e · #865 app 裡的 AI 讀得到平台的 docs 與設計計畫（readonly skill） {#pr-865}
 
 **設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-ai-reads-docs.md`）：
 
