@@ -18,6 +18,7 @@
 | [plan-collab-workspace.md](plan-collab-workspace.md) | #43 多人協作 workspace（檔案 + chat，無 notebook） |
 | [plan-permissions.md](plan-permissions.md) · [plan-permissions-pr2-handoff.md](plan-permissions-pr2-handoff.md) | 權限模型設計與分階段交接 |
 | [plan-view-plugins.md](plan-view-plugins.md) · [PR1](plan-view-plugins-pr1-platform.md) · [PR2](plan-view-plugins-pr2-chart.md) · [PR3](plan-view-plugins-pr3-marking-layout.md) · [PR4](plan-view-plugins-pr4-stack-gallery.md) | #847 + #848:`*.ai.yaml` renderer 改成 runtime plugin(前端 + 沙盒 bundle + skill 一個資料夾)、chart plugin 當範例、有名字的 marking 跨 workspace 切版連動、疊圖 / 差異 / 上千組縮圖牆(沙盒端快取 + 分頁);機制零領域知識 |
+| [plan-ai-reads-docs.md](plan-ai-reads-docs.md) | app 裡的 AI 讀我們的 docs(含沒被推翻的計畫):readonly skill 每次 `read_skill` 比對 hash、不同就重複製;子 agent 先讀索引再挑檔;被推翻的計畫帶上推翻它的計畫 id |
 | [plan-ai-sheet.md](plan-ai-sheet.md) | `*.ai.csv` 試算表編輯：格子直接打字、增刪列欄、虛擬化、範圍選取與 TSV 剪貼簿（Excel 互通）、undo/redo；單一檔案零 sidecar，後端零知識；附「為何不用 xlsx」實測 |
 
 ## 知識庫（KB）與檢索
