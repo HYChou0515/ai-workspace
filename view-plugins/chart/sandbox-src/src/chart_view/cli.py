@@ -15,9 +15,9 @@
   ``rev`` is the renderer's digest of the text it holds, ignored here: it only
   makes an edited file a new call (the args are the renderer's cache key).
   ``query {"spec"}`` still takes the text, for a view with no file.
-- ``lit_rows {"view", "columns" | "marking"}`` — "save as table" (P7): the rows
-  a marking lights in the view's source, every column, as CSV
-  (`chart_view.lit_rows`).
+- ``lit_rows {"view", "keys" + "rows" | "marking"}`` — "save as table" (P7):
+  the rows a marking's picked tuples light in the view's source, every column,
+  as CSV (`chart_view.lit_rows`).
 
 Hand-written (no pydantic): two small commands, and a bundle that stays small.
 
@@ -62,10 +62,19 @@ LIT_ROWS: dict[str, Any] = {
                 "type": "string",
                 "description": "The view file (or table file) the rows come from.",
             },
-            "columns": {
-                "type": "object",
-                "additionalProperties": {"type": "array", "items": {"type": "string"}},
-                "description": "The marking: column -> values, as marking text.",
+            "keys": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+                "description": "The marking's key columns.",
+            },
+            "rows": {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "string"}},
+                "description": (
+                    "The picked rows: each one's values on the keys, in their order, "
+                    "as marking text."
+                ),
             },
             "marking": {
                 "type": "string",
@@ -73,7 +82,7 @@ LIT_ROWS: dict[str, Any] = {
             },
         },
         "required": ["view"],
-        "oneOf": [{"required": ["columns"]}, {"required": ["marking"]}],
+        "oneOf": [{"required": ["keys", "rows"]}, {"required": ["marking"]}],
         "additionalProperties": False,
     },
 }
