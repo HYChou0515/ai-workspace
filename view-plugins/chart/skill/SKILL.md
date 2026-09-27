@@ -179,9 +179,10 @@ hundreds or thousands of groups, because only what is on screen is loaded.
   that identify a member.
 - **One set of rows seen several ways**: give each chart the same `marking:`
   and `keys:`, then show them together with `show_file(layout=…)`, one chart
-  per pane. What the person selects in one lights the rest. A marking over
-  several `keys:` columns lights every combination of their values, so its count
-  can exceed the rows picked; the views say "by <columns>" beside it. A `csv-table` view
+  per pane. What the person selects in one lights the rest: exactly the rows
+  they picked, counted as picks, with "by <keys>" beside the count; a view that
+  has only some of the keys lights what contains a pick, and an aggregated bar
+  lights the picked part in front of its dimmed total. A `csv-table` view
   (`view: csv-table`, `source:`) on the same `marking:` shows the lit rows, and
   selecting rows there lights the charts. The person can save a marking's rows
   as `markings/<name>-<yyyymmdd-hhmm>.csv`; read it like any table file.
