@@ -2,6 +2,8 @@
 
 這裡收錄的是**設計演進的歷史紀錄**：每個功能在動工前的 grill-me / plan 文件、被否決的替代方案、以及給接手者的 handoff。它們**不是**目前架構的權威說明——權威說明請看 [系統架構](architecture.md)、[線上契約](contract.md) 與 [開發者指南](development.md)。
 
+> 寫新的 plan：在這裡的對應段落加一行；它若推翻了某份舊 plan，在那份舊 plan 的標題下加上推翻它的 id——規則見專案 `CLAUDE.md` 的 Workflow 段（「A plan that overturns an earlier plan marks it」）。app 裡的 AI 從這份索引找 plan，沒列在這裡的它讀不到。
+
 > 為什麼留著？這些文件記錄了「**為什麼這樣設計、當初考慮過哪些路、為什麼不走**」。當你想改某個決策時，先回來看看它原本被否決的理由，通常能省下重踩一次坑的時間。
 
 ---
