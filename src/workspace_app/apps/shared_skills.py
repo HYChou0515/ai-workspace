@@ -55,11 +55,11 @@ SHARED_SKILLS: dict[str, Path] = {
     # skill, and what to tell the user around each — the three tools' guidance.
     # Declared by the apps that grant the three tools.
     "skill-hub": SHARED_SKILLS_DIR / "skill-hub",
-    # system-design (docs/plan-ai-reads-docs.md): the platform's own docs and
+    # system-help (docs/plan-ai-reads-docs.md): the platform's own docs and
     # plans, so the AI answers "how does this work / why" from the design
     # rather than a guess. READONLY: its copy follows each release and nothing
     # edits it. Its `docs/` and `mkdocs.yml` are links to the repo's own.
-    "system-design": SHARED_SKILLS_DIR / "system-design",
+    "system-help": SHARED_SKILLS_DIR / "system-help",
 }
 
 

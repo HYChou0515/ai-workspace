@@ -1,5 +1,5 @@
 ---
-name: system-design
+name: system-help
 description: How this platform works and why it was built that way — its design docs and plans. Use when the user asks how some part of the system behaves or why, when they seem to expect something the system does not do, or before you explain a feature's rules.
 readonly: true
 ---
@@ -12,12 +12,12 @@ workspace, at the version deployed now. Answer from them.
 
 ## What is here
 
-- `.skill/system-design/docs/`: every doc and plan, exactly as deployed. This copy is
+- `.skill/system-help/docs/`: every doc and plan, exactly as deployed. This copy is
   readonly. The platform keeps it in step with each release, so never edit it.
 - The index of the **current docs** (how the system works now) is the `nav:` section of
-  `.skill/system-design/mkdocs.yml`: one title per doc.
+  `.skill/system-help/mkdocs.yml`: one title per doc.
 - The index of the **plans** (each design decision and why it was made) is
-  `.skill/system-design/docs/design-history.md`: one line per plan.
+  `.skill/system-help/docs/design-history.md`: one line per plan.
 
 All of it is far too large to read at once. Read an index first, then only the few files
 the question needs.
@@ -28,7 +28,7 @@ the question needs.
    `docs-reader` sub-agent, so the long reading stays out of this conversation.
    - If `run_agent` does not list `docs-reader`, save it first with `save_subagent`.
      Take the `name`, `description`, `tools` and body from
-     `.skill/system-design/references/docs-reader.md`. When you hold `exec`, add it to
+     `.skill/system-help/references/docs-reader.md`. When you hold `exec`, add it to
      `tools`, so the sub-agent can search with `grep`.
    - In the prompt, give the user's question in full and say what you need back.
 2. **Otherwise, read it yourself.** Read the two indexes, then the files they point to.

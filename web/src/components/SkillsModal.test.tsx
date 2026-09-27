@@ -231,7 +231,7 @@ describe("SkillsModal — a baked-in skill with a local copy (#589)", () => {
 describe("SkillsModal — a readonly skill", () => {
   const READONLY: ItemSkillState[] = [
     {
-      name: "system-design",
+      name: "system-help",
       description: "the system's docs",
       source: "shared",
       default_on: true,
@@ -248,12 +248,15 @@ describe("SkillsModal — a readonly skill", () => {
   // grill-me), "no `editable here`" already says it cannot be changed here.
   it("reads like any skill you cannot edit here: no pill, no update or reset", async () => {
     renderModal({ client: fakeClient(READONLY) as never });
-    expect(await screen.findByText("system-design")).toBeTruthy();
-    expect(screen.queryByTestId("skill-readonly-system-design")).toBeNull();
-    expect(screen.queryByTestId("skill-copy-system-design")).toBeNull();
-    expect(screen.queryByTestId("skill-update-system-design")).toBeNull();
-    expect(screen.queryByTestId("skill-refresh-system-design")).toBeNull();
-    expect(screen.queryByTestId("skill-reset-system-design")).toBeNull();
+    expect(await screen.findByText("system-help")).toBeTruthy();
+    expect(screen.queryByTestId("skill-readonly-system-help")).toBeNull();
+    // its files ARE in the workspace (the copy), but they are the platform's,
+    // not the person's to take away -- no download either, like chart
+    expect(screen.queryByTestId("skill-download-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-copy-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-update-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-refresh-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-reset-system-help")).toBeNull();
   });
 });
 

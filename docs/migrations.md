@@ -1190,25 +1190,25 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-ai-reads-docs.md`）：
 
-- 每個內建 app 多一個 shared skill `system-design`，預設開啟。使用者問「這個系統怎麼運作、為什麼這樣」時，
+- 每個內建 app 多一個 shared skill `system-help`，預設開啟。使用者問「這個系統怎麼運作、為什麼這樣」時，
   AI 會讀平台自己的 docs 與設計計畫來回答，不再憑印象說。
-- 新的 **readonly skill**：`SKILL.md` 標 `readonly: true` 的 shared skill（目前只有 `system-design`）。它的複本每次
+- 新的 **readonly skill**：`SKILL.md` 標 `readonly: true` 的 shared skill（目前只有 `system-help`）。它的複本每次
   `read_skill` 都和這次部署附帶的版本比對，不同就整份重新複製；AI 的檔案工具與檔案 API 都不能改它——檔案 API 回
   **403**（`readonly_skill`），AI 的檔案工具收到一句說明。沙盒裡的 shell（`exec`）擋不到：被它改掉的檔案會留到下一次
   改版、複本整份重新複製為止。workspace 的全域搜尋與取代會跳過這份複本。
 - 讀過這個 skill 的 workspace 會多約 3.6 MB（`docs/` 全部的文件與計畫），照算 workspace 容量；容量不夠時整份不複製，
   AI 的 `read_skill` 回報容量已滿。
-- workspace 裡**原本就有使用者自己的 `.skill/system-design/`**（名字撞到）：那個資料夾原封不動保留，不會被刪，但名字已被
-  保留，之後寫不進去；AI 的 `read_skill("system-design")` 讀到的不是平台的文件——資料夾裡有 `SKILL.md` 就讀到它，
+- workspace 裡**原本就有使用者自己的 `.skill/system-help/`**（名字撞到）：那個資料夾原封不動保留，不會被刪，但名字已被
+  保留，之後寫不進去；AI 的 `read_skill("system-help")` 讀到的不是平台的文件——資料夾裡有 `SKILL.md` 就讀到它，
   沒有就讀到平台的說明、但說明裡指的文件不在那裡。症狀：這個 workspace 的 AI 答不出系統設計的問題。處理：把那個資料夾
   改名。檔案樹的搬移與刪除都會被擋（兩端都檢查），請 AI 在 workspace 裡用 `exec` 改名（`exec` 不經過唯讀檢查）：
-  - 要繼續當 skill 用：`mv .skill/system-design .skill/my-design`（`.skill/my-design` 不能已存在，否則會被搬進它裡面），並把 `.skill/my-design/SKILL.md` 開頭的
+  - 要繼續當 skill 用：`mv .skill/system-help .skill/my-design`（`.skill/my-design` 不能已存在，否則會被搬進它裡面），並把 `.skill/my-design/SKILL.md` 開頭的
     `name:` 改成 `my-design`（skill 以資料夾名稱為準，名字對不上的會被略過）。
-  - 只是要留著檔案：`mv .skill/system-design my-design`。
-  改名後下一次 `read_skill("system-design")` 會複製平台的版本。該 app 若沒有開 `exec`，就只能靠在 sandbox 裡跑的
+  - 只是要留著檔案：`mv .skill/system-help my-design`。
+  改名後下一次 `read_skill("system-help")` 會複製平台的版本。該 app 若沒有開 `exec`，就只能靠在 sandbox 裡跑的
   程式（workflow 或 WUI 頁面的程式碼）改名；檔案樹與檔案操作都做不到。
 - 升級時要知道的：日後若把一個**已經有人用過的**一般 skill 改成 readonly，AI 改過的複本會在下一次 `read_skill`
-  被整份覆蓋。這一版的 `system-design` 是新的 skill，沒有舊複本。
+  被整份覆蓋。這一版的 `system-help` 是新的 skill，沒有舊複本。
 
 **資料** — 沒有 `Schema` 升版，也沒有要跑的指令。
 
@@ -1216,20 +1216,20 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 - **image 要重 build，`rollout 前`。** `.dockerignore` 不再排除 `docs/`，Dockerfile 把 `docs/` 與 `mkdocs.yml`
   複製到 `/app`。
-  - 為什麼：`system-design` skill 的 `docs` 與 `mkdocs.yml` 是指向 `../../docs` 與 `../../mkdocs.yml` 的連結，
+  - 為什麼：`system-help` skill 的 `docs` 與 `mkdocs.yml` 是指向 `../../docs` 與 `../../mkdocs.yml` 的連結，
     image 裡沒有它們，連結就是斷的。
-  - 漏做的症狀：AI 呼叫 `read_skill("system-design")` 時工具本身失敗，錯誤是
-    `FileNotFoundError … /app/sample-skills/system-design/docs`（斷掉的連結讀不到）；AI 拿不到任何文件。
+  - 漏做的症狀：AI 呼叫 `read_skill("system-help")` 時工具本身失敗，錯誤是
+    `FileNotFoundError … /app/sample-skills/system-help/docs`（斷掉的連結讀不到）；AI 拿不到任何文件。
 - **自己維護 Dockerfile 或 `.dockerignore` 的部署**（例如另建 image 的版本），`rollout 前`比照上一條：build context
   要帶 `docs/`，image 要把 `docs/` 與 `mkdocs.yml` 放在 `sample-skills/` 的上一層。
 
 **確認做完**
 
-- `kubectl exec <api-pod> -- ls /app/sample-skills/system-design/docs/ | head` 列得出文件（`design-history.md`、
+- `kubectl exec <api-pod> -- ls /app/sample-skills/system-help/docs/ | head` 列得出文件（`design-history.md`、
   `architecture.md`…），`ls /app/mkdocs.yml` 存在。
 - 在任一 item 問 AI 一個系統怎麼運作的問題（例如「workflow 的 cache 是什麼意思」）：agent log 裡看得到它
-  `read_skill("system-design")`，接著讀 `.skill/system-design/` 底下的文件或交給 `docs-reader`，回答附上文件名。
-- 該 item 的 Skills 面板：`system-design` 那一列沒有「可在此編輯」，也沒有 Update / Reset。
+  `read_skill("system-help")`，接著讀 `.skill/system-help/` 底下的文件或交給 `docs-reader`，回答附上文件名。
+- 該 item 的 Skills 面板：`system-help` 那一列沒有「可在此編輯」，也沒有 Update / Reset。
 
 ---
 

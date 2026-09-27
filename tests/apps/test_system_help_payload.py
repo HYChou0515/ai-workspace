@@ -20,7 +20,7 @@ import workspace_app.apps.shared_skills as shared
 from workspace_app.apps.skill_payload import skill_payload
 
 REPO = Path(shared.__file__).resolve().parents[3]
-FOLDER = shared.SHARED_SKILLS_DIR / "system-design"
+FOLDER = shared.SHARED_SKILLS_DIR / "system-help"
 
 
 def test_the_payload_is_exactly_the_skill_and_the_docs():
@@ -102,8 +102,8 @@ def test_the_context_reader_reads_dockerignore_as_docker_does(path: str, carried
         "docs/subsystems/workflow-engine.md",
         "docs/workflows-syntax.html",
         "mkdocs.yml",
-        "sample-skills/system-design/SKILL.md",
-        "sample-skills/system-design/references/docs-reader.md",
+        "sample-skills/system-help/SKILL.md",
+        "sample-skills/system-help/references/docs-reader.md",
     ],
 )
 def test_the_build_context_carries_the_docs(path: str):
@@ -111,7 +111,7 @@ def test_the_build_context_carries_the_docs(path: str):
 
 
 def test_the_image_puts_the_docs_where_the_links_point():
-    """`sample-skills/system-design/docs -> ../../docs`: with the skills at
+    """`sample-skills/system-help/docs -> ../../docs`: with the skills at
     `/app/sample-skills`, the docs must be at `/app/docs` and the nav at
     `/app/mkdocs.yml` (the Dockerfile's WORKDIR is /app)."""
     dockerfile = (REPO / "docker" / "Dockerfile").read_text()

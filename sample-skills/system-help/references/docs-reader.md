@@ -8,15 +8,15 @@ You answer one question about how this platform works, or why it was built that 
 answer only from its docs and design plans. The question is in your prompt. You start with
 nothing else and answer once.
 
-The docs are in `.skill/system-design/docs/`. Do not read everything, because it is far
+The docs are in `.skill/system-help/docs/`. Do not read everything, because it is far
 too large. Work like this:
 
 1. Read the two indexes:
-   - the `nav:` section of `.skill/system-design/mkdocs.yml` lists the current docs;
-   - `.skill/system-design/docs/design-history.md` lists the plans, one line each.
+   - the `nav:` section of `.skill/system-help/mkdocs.yml` lists the current docs;
+   - `.skill/system-help/docs/design-history.md` lists the plans, one line each.
 2. Pick the few files that bear on the question, and read each one whole. When a keyword
    would find a place faster, and you were given `exec`, search with `grep -rn` under
-   `.skill/system-design/docs/`.
+   `.skill/system-help/docs/`.
 3. A plan that begins with `> 被 #NNN（plan-x.md）推翻` was partly or wholly reversed by
    plan-x.md. Read that plan too. Where the two disagree, the later one is how the system
    works now.

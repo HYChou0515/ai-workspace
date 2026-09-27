@@ -1,4 +1,4 @@
-"""docs/plan-ai-reads-docs.md P2 — the `system-design` skill: the entry through
+"""docs/plan-ai-reads-docs.md P2 — the `system-help` skill: the entry through
 which the in-app AI reads the platform's docs and plans.
 """
 
@@ -15,14 +15,14 @@ from workspace_app.apps.subagents import SUBAGENT_FORBIDDEN_TOOLS, _def_from
 from .test_shared_skills import BARE_SKILL_FILE_POINTER
 
 APPS = Path(shared.__file__).resolve().parent
-FOLDER = shared.SHARED_SKILLS_DIR / "system-design"
+FOLDER = shared.SHARED_SKILLS_DIR / "system-help"
 
 
 def test_it_is_a_readonly_shared_skill():
-    assert shared.SHARED_SKILLS["system-design"] == FOLDER
+    assert shared.SHARED_SKILLS["system-help"] == FOLDER
     front, _body = _parse_frontmatter((FOLDER / "SKILL.md").read_bytes())
-    assert front["name"] == "system-design"
-    assert shared.shared_skill_readonly("system-design") is True
+    assert front["name"] == "system-help"
+    assert shared.shared_skill_readonly("system-help") is True
 
 
 def _declared_skill_lists() -> dict[str, list[str]]:
@@ -43,18 +43,18 @@ def _declared_skill_lists() -> dict[str, list[str]]:
 def test_every_shipped_app_and_profile_gives_it():
     lists = _declared_skill_lists()
     assert lists, "no app.json found"
-    missing = sorted(where for where, skills in lists.items() if "system-design" not in skills)
+    missing = sorted(where for where, skills in lists.items() if "system-help" not in skills)
     assert missing == []
 
 
 def test_every_path_it_names_is_one_the_copy_holds():
     """`read_file` resolves from the workspace root, so every path the body names
-    is the full `.skill/system-design/…` one, and each exists in the folder."""
+    is the full `.skill/system-help/…` one, and each exists in the folder."""
     text = (FOLDER / "SKILL.md").read_text() + (
         FOLDER / "references" / "docs-reader.md"
     ).read_text()
     assert BARE_SKILL_FILE_POINTER.findall(text) == []
-    named = set(re.findall(r"\.skill/system-design/([\w./-]+\.\w+)", text))
+    named = set(re.findall(r"\.skill/system-help/([\w./-]+\.\w+)", text))
     assert named, "the body names no file"
     assert sorted(p for p in named if not (FOLDER / p).exists()) == []
 

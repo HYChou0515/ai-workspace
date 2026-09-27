@@ -105,7 +105,7 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
     - the line that refuses the write;
     - the line that reads `readonly` from upstream;
     - the hash comparison.
-- **P2 — the docs skill.** `sample-skills/system-design/`, registered as a shared skill.
+- **P2 — the docs skill.** `sample-skills/system-help/`, registered as a shared skill.
   - `SKILL.md` covers:
     - when to consult the docs: any question about how the system behaves or why, and a user who seems to
       expect something the system does not do;
@@ -172,7 +172,7 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
     - a skill made readonly overwrites a copy the AI had edited, at its next `read_skill`.
 
     確認做完: open an item, ask how some part of the system works, and see the AI read
-    `.skill/system-design/` and cite a doc.
+    `.skill/system-help/` and cite a doc.
 - **P7 — live check.** Ask the in-app AI system questions and check it answers from the current design.
   One question is a trap, a decision a later plan overturned: why does boxing 4 tiles on a
   `(group, item)` marking light 4, when `plan-view-plugins-pr5-finish.md` P27 said all combinations
@@ -218,7 +218,7 @@ Where the build differs from the phases above, or found what they did not expect
   model was a stand-in that plays a script. Everything else was real: the app, the turn, and every tool,
   which the app executed.
   - Proven:
-    - `read_skill("system-design")` returns the body and copies the docs into the workspace (205 files,
+    - `read_skill("system-help")` returns the body and copies the docs into the workspace (205 files,
       as many as `docs/` holds);
     - the overturned `plan-view-plugins-pr5-finish.md` reads `> 被 #861（plan-marking-tuples.md）推翻`
       under its title, and `plan-marking-tuples.md` reads;
@@ -277,7 +277,7 @@ Where the build differs from the phases above, or found what they did not expect
     - Two `read_skill` calls at once can briefly leave the first reading a partial copy. The second
       clears and copies again, and both end complete.
     - The search's readonly check reads each skill file's shipped `SKILL.md`, a small read per file.
-    - A person's own `.skill/system-design/` is kept but locked by name, and `read_skill` serves it.
+    - A person's own `.skill/system-help/` is kept but locked by name, and `read_skill` serves it.
       The runbook says how to rename it.
 - **Review round 3 (#865)**: all four lenses found the same (A), in round 2's fix. A copy is most often
   cut short by a rollout, and the next read then runs on an image whose docs differ, so the bytes never
@@ -328,6 +328,9 @@ Where the build differs from the phases above, or found what they did not expect
       It stays until an image ships different docs.
     - If a skill stops being readonly, a marker left beside its `.origin` is never dropped: a stray
       empty `.copying` in the file tree, not part of the skill's files.
+- **After review (#865, the user):** the skill is named `system-help` (it was `system-design` through
+  the review rounds). Its row in the skills panel carries no pill and no download: a readonly copy is
+  the platform's, so it reads like a shared skill that is never copied, which is also not editable here.
 
 ## Done means
 

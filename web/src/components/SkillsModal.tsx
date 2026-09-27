@@ -254,8 +254,10 @@ export function SkillsModal({
                 onToggleApply={() => onToggleApply?.(s.name)}
                 // #589: a copy's files are in the workspace even though the row reports
                 // the package source it came from, so both cases are downloadable.
+                // A readonly skill's copy is the platform's, not the person's:
+                // it reads like a skill never copied, with nothing to take away.
                 onDownload={
-                filesHere(s) ? () => void download(s.name) : undefined
+                filesHere(s) && !s.readonly ? () => void download(s.name) : undefined
                 }
                 // Update only when there is something to bring; reset whenever
                 // there is an upstream to bring it FROM — it is the way back

@@ -239,7 +239,7 @@ flowchart LR
 
 ## 寫文件:讓 app 裡的 AI 讀得到
 
-app 裡的 AI 透過 `system-design` skill 讀這裡的 docs 與設計計畫(`docs/plan-ai-reads-docs.md`),它先讀**索引**
+app 裡的 AI 透過 `system-help` skill 讀這裡的 docs 與設計計畫(`docs/plan-ai-reads-docs.md`),它先讀**索引**
 再挑檔案。所以新寫一份文件,作者要做的只有:
 
 1. **放進 `docs/` 並加進索引**:`plan-*.md`(以及 `handoff-` / `q-`)在 [design-history.md](design-history.md)

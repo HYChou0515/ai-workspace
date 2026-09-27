@@ -57,7 +57,7 @@
       "grill-me",
       "verify-number",
       "skill-hub",
-      "system-design"
+      "system-help"
     ],
     "picker": [
       { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },

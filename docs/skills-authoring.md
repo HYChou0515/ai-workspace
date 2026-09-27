@@ -66,12 +66,12 @@ meta-skill,走一個七步流程:
 
 ## readonly skill:只讀、跟著平台更新
 
-有些 skill 是給 AI **讀**的參考資料,不是給它改的——例如 `system-design`(平台自己的 docs 與設計計畫,
+有些 skill 是給 AI **讀**的參考資料,不是給它改的——例如 `system-help`(平台自己的 docs 與設計計畫,
 見 `docs/plan-ai-reads-docs.md`)。這種 skill 在 `SKILL.md` 的 frontmatter 加 `readonly: true`:
 
 ```
 ---
-name: system-design
+name: system-help
 description: ...
 readonly: true
 ---
