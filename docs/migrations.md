@@ -1144,7 +1144,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   （「m1 · 4 · by group, item」，zh-TW 是「依 group、item」，不再是「by group (2), item (2)」）；圖表的「N selected」
   與表格數被選到、被點亮的列（一列靠它的 key 值認得：兩層畫同一批列的圖，例如折線加點，以前每列算兩次，
   現在只算一次）。
-- 彙總後的長條只亮被選到的那一段（整根變暗，亮的一段是只算被選到的列的同一種彙總），tooltip 多一行「picked: N」。
+- 彙總後的長條亮出被選到的部分：整根變暗，前面疊一根三分之一寬、靠左的亮長條，值是只算被選到的列的同一種彙總
+  （平均值比整根高時就高出去），tooltip 多一行「picked: N」。
 - 只有部分 key 欄位的 view（例如每個 group 一列的彙總表）照舊：包含被選到的列的那一格整個亮。
 - 表格的 `keys:` 和 marking 的欄位不同（多一個或換一個欄位）時，在表格上勾選會整個取代 marking，
   不再保留這張表沒顯示的值（寫的是另一組欄位，就是另一個 marking）。欄位相同或是其中幾個時照舊保留。

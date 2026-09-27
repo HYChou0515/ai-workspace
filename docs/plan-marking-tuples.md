@@ -27,14 +27,26 @@ builder.
   cross-highlight].** The bar keeps its full height, dimmed; in front of it a lit bar
   whose value is **the same aggregate over the picked rows only** (count 10 with a1, a2
   picked → a lit bar of 2). For a mean the lit bar is the picked rows' mean, drawn at its
-  own height even when it is taller than the dimmed one **[mine, open to override —
-  neither Power BI nor Spotfire documents that case]**.
+  own height even when it is taller than the dimmed one. **Drawn [user, 2026-09-27, after
+  review #862]: the lit bar is narrower than the bar [user] and aligned to its left edge
+  [user; overlapping-bar charts usually centre it], in front of the dimmed bar, so a picked value taller than the bar hides nothing — every split bar
+  (a count, a sum, a mean, a stack's segment) is drawn this way; a horizontal bar aligns to
+  its start edge [mine, open to override]. A third of the bar's width [mine, open to override]:
+  an overlapping (nested, bar-in-bar) chart draws the whole behind, wider and lighter, and the
+  part in front, narrower and darker, and no source fixes the ratio; at a half, the lit bar at
+  the left edge beside the dimmed half reads as two bars side by side, and much narrower is hard
+  to see where bars are already thin (many categories, a narrow pane). (Few's bullet graph draws its featured measure a third of
+  its CONTAINER's thickness, but the dimmed bar is data, not a container [user].)**
 - **D4. Other aggregated elements light whole [user, following Spotfire].** A heatmap or
   grid cell, a box, an errorbar, a pie slice, a point of a mean line: lit, with its own
   colour and shape unchanged, when it contains a picked row; dimmed otherwise. Spotfire:
   "if items in other visualizations include any of the marked data rows, they become
   marked too … the marked items keep their original colors".
-- **D5. Counts say how many were picked [user, following Spotfire's status bar].** *[As built, for the user to confirm: a chart's "N selected" counts the selected rows, as a single-layer chart did on #855 and as Spotfire's status bar counts marked rows (a row known by its keys, so a row two layers draw counts once) — review #862 found that counting distinct picks changed a single-key chart's count (D1); the chip counts picks, a gallery its lit tiles, a table its lit rows.]* Every
+- **D5. Counts say how many were picked [user, following Spotfire's status bar].** **[user, 2026-09-27, after review #862: the chip counts picks — what the AI receives in
+  `.markings/<name>.json`; a marking spans files, so "rows" would depend on which file is
+  counted (4 tiles are 208 source rows) and need a read of the data on every send. Every view
+  counts what it shows, as Spotfire's status bar does: a chart and a table their rows (a row
+  known by its keys, so a row two layers draw counts once), a gallery its lit tiles.]** Every
   view keeps its line format with the true number: "4 of 48 marked · by group, item",
   "4 selected · by group, item", "filtered by m1 · 4 of 18 rows · by group, item". The
   message chip becomes "m1 · 4 · by group, item" (not a per-column count).
@@ -107,7 +119,7 @@ builder.
   `selectionMarking`, `toMarking`, `markedCount`, `highlightMarking`, `stillWritten`; the
   gallery's `rangeMarking`, `groupsLit`, `cellsLit`; D2 and D4.
 - **P4 — Partial bars (D3).** Sandbox partials in `query.py`, the web draw (dimmed full
-  bar, lit bar from the axis with the rest dimmed on top), the fallback and its note. Both
+  bar, lit bar in front), the fallback and its note. Both
   halves parity-tested (`bar-partials.json`).
 - **P5 — Backend and Save as table.** `api/markings.py` file shape and digest,
   `SentMarking`, the chip (D5), `lit_rows.py` tuple matching, `marking_table.py`.
@@ -126,9 +138,13 @@ builder.
   command, not an argument of `query` — re-running `query` would redraw the chart and
   drop the brush just drawn. The schema has no median op; every op it has (count, sum,
   mean, min, max, rate) folds, so "lights whole" is left for an op that cannot be split
-  and for more than 200,000 parts. A split bar is drawn as two series in one slot (the
-  lit part from the axis, the rest dimmed on top), so layout, legend, colour and brush
-  mapping are unchanged. Only on a plain number value axis: a log axis has no 0 to start
+  and for more than 200,000 parts. A split bar is the bar whole, dimmed, and a silent custom
+  series in front (review #862 round 5, D3 as the user drew it): each lit bar a third of the
+  bar's width at its origin edge, from its base by the picked value, read on every draw from
+  where ECharts laid the bar out (`barAt.ts` -- one bar layout for every slot, stack and
+  width: a second, narrower bar series cannot share the bar's left edge, as `barGap` is one
+  per axis); layout, legend, colour and brush mapping are the bar's. Only on a plain number
+  value axis: a log axis has no 0 to start
   a part at, so its bars light whole (no note). A stack segment whose picked part does
   not fit inside it (a mixed-sign sum, a mean stack) lights the stack whole, with a note.
   A selection across layers that carry different key subsets writes picks over the keys
@@ -174,14 +190,16 @@ builder.
   value. The sentences now say so and two tests pin it (untick-all keeps only unshown groups; a
   finer pick in a shown group goes). A table writing other keys replaces the marking, now in the
   runbook.
+- **After round 4, the user's decisions (2026-09-27):** D5 as built stands — the chip counts
+  picks, each view what it shows. D3's drawing changes: a picked mean taller than its bar hid
+  the dimmed bar; the lit bar is now a third of the bar's width at its left edge, in front of
+  the whole bar dimmed (above, P4 as built). A new mechanism, so it takes its own review round.
 
 ## Known and left (each (B): rare input or cosmetic)
 
 - A row whose key cell is empty: the browser reads it as coarser and lights it when its group
   holds a pick; the sandbox (`lit_rows`, `partials`) does not. So a table can count such a row
   that Save as table leaves out. Already so on master; rare in key columns.
-- A mean (or min/max) bar whose picked value is longer than the bar hides the dimmed bar behind
-  it; the bar's own value stays in the tooltip.
 - The tooltip's "picked: N" is the unrounded number.
 - Key and row order sort by UTF-16 code unit in the browser and by code point in Python; only
   astral characters in names differ, and no digest depends on the browser's order.
@@ -191,8 +209,8 @@ builder.
   c3fcc2f3 say every count is picks (a table counts its lit rows; a chart counts rows, above);
   51c20d5c says an old chip gets "has changed" (see above); 4dc433dc says Save as table saves
   "those four rows" (it saves every source row of the four picks); 1d090865 says a
-  bar "keeps its full length, dimmed, with a lit bar in front" (as built, the lit part is
-  drawn from the axis and the dimmed rest on top of it); 756406e5 says a chart takes the most
+  bar "keeps its full length, dimmed, with a lit bar in front" (true again after round 5; until
+  then the lit part was drawn from the axis and the dimmed rest on top of it); 756406e5 says a chart takes the most
   of any layer and a table with every key writes plainly (round 3 replaced both, above);
   f32d1d5e says unshown picks stay while a table writes the marking's keys or some of them (per
   group the table shows, round 4).
@@ -206,5 +224,6 @@ builder.
 ## Done means
 
 Boxing four tiles lights four, counts four, sends four to the AI and saves four tiles'
-rows; a per-group bar beside it shows the picked count from the axis with the rest dimmed on top; a
+rows; a per-group bar beside it shows the picked count as a narrow lit bar in front of the dimmed
+bar; a
 per-group summary chart lights the groups that contain a pick.

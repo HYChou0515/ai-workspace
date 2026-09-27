@@ -181,8 +181,8 @@ hundreds or thousands of groups, because only what is on screen is loaded.
   and `keys:`, then show them together with `show_file(layout=…)`, one chart
   per pane. What the person selects in one lights the rest: exactly the rows
   they picked, with "by <keys>" beside the count; a view that has only some of
-  the keys lights what contains a pick, and an aggregated bar lights the
-  picked part from the axis with the rest of the bar dimmed on top. A `csv-table` view
+  the keys lights what contains a pick, and an aggregated bar is dimmed with
+  a narrow lit bar of the picked rows' value in front. A `csv-table` view
   (`view: csv-table`, `source:`) on the same `marking:` shows the lit rows, and
   selecting rows there lights the charts. The person can save a marking's rows
   as `markings/<name>-<yyyymmdd-hhmm>.csv`; read it like any table file.
