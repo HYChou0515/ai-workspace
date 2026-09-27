@@ -324,6 +324,63 @@ async def test_a_marker_left_beside_a_finished_copy_is_dropped(registry: Path, m
     assert not await files.exists(inv, "/.skill/ref/.copying")
 
 
+# Review #865 round 4 (conformance A1): the two marker deletes each meet a
+# marker another read already removed -- one read clears a copy another is
+# still writing, or two reads both drop a marker left beside a finished copy.
+async def test_a_marker_another_read_removed_mid_copy_is_not_an_error(registry: Path, monkeypatch):
+    _register(monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a"})
+
+    class _OtherReadClears(MemoryFileStore):
+        async def write(self, workspace_id: str, path: str, data: bytes) -> None:
+            if path.endswith("/.origin"):
+                await super().delete(workspace_id, "/.skill/ref/.copying")
+            await super().write(workspace_id, path, data)
+
+    files, inv = WorkspaceFiles(_OtherReadClears(), readonly=readonly_skill_path), "inv-1"
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+async def test_a_left_marker_another_read_already_dropped_is_not_an_error(
+    registry: Path, monkeypatch
+):
+    _register(monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a"})
+    files, inv = WorkspaceFiles(MemoryFileStore(), readonly=readonly_skill_path), "inv-1"
+    await resolve_skill_body(files, inv, None, None, "ref")
+    real_ls = files.ls
+
+    async def listed_before_the_other_read_dropped_it(ws: str, prefix: str = "/") -> list[str]:
+        return [*await real_ls(ws, prefix), "/.skill/ref/.copying"]
+
+    monkeypatch.setattr(files, "ls", listed_before_the_other_read_dropped_it)
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+# Review #865 round 4 (defect B1): two first reads at once -- one clears the
+# other's copy, dies, and the other finishes -- leave an `.origin` over files
+# that are not there. `.origin` alone matched upstream, so nothing ever refreshed
+# it. A file `.origin` lists and the folder lacks is a copy to refresh.
+async def test_a_copy_missing_a_file_its_origin_lists_is_refreshed(registry: Path, monkeypatch):
+    _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = MemoryFileStore()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await resolve_skill_body(files, inv, None, None, "ref")
+    await store.delete(inv, "/.skill/ref/SKILL.md")  # what the other read cleared
+    await store.delete(inv, "/.skill/ref/docs/a.md")
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.exists(inv, "/.skill/ref/SKILL.md")
+    assert await files.read(inv, "/.skill/ref/docs/a.md") == b"a"
+
+
 # The clearing can be cut short too. Its marker goes last, so what is left
 # still reads as the platform's copy and the next read finishes the job.
 async def test_a_clearing_cut_short_is_still_the_platforms_copy(registry: Path, monkeypatch):

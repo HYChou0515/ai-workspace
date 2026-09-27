@@ -579,8 +579,12 @@ async def _materialize(
             if marker in here:
                 # finished, and cut short before the marker went
                 await _delete_if_there(files, workspace_id, marker)
+            # `.origin` says what was shipped, not what is here: two first reads
+            # at once can leave it over files one of them cleared (review #865
+            # round 4). `here` is already listed, so this costs no round trip.
+            missing = any(prefix + rel not in here for rel in origin.files)
             up = await skill_upstream(files, workspace_id, app_slug, profile, name)
-            if up is not None and up.update_available:
+            if missing or (up is not None and up.update_available):
                 await refresh_skill(files, workspace_id, app_slug, profile, name, force=True)
             return
         # No `.origin`. With the marker it is the platform's own copy, cut short
