@@ -99,6 +99,11 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
     - a non-readonly skill is left alone (the control);
     - a copy whose own `SKILL.md` drops `readonly` is still readonly (upstream decides);
     - a workspace skill whose `SKILL.md` says `readonly` is not treated as readonly.
+  - Each guard is pinned by a mutation (file copy, restore). Exactly its test must go red when any
+    of these is mutated:
+    - the line that refuses the write;
+    - the line that reads `readonly` from upstream;
+    - the hash comparison.
 - **P2 — the docs skill.** `sample-skills/system-design/`, registered as a shared skill.
   - `SKILL.md` covers:
     - when to consult the docs: any question about how the system behaves or why, and a user who seems to
@@ -111,7 +116,8 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
   - It is added to every shipped app's `agent.skills` and to `_template`.
 - **P3 — the docs in the skill and in the image.**
   - The skill's `docs` symlink, and the Dockerfile copying `docs/`.
-  - A test that the skill's payload holds every doc, reading through the link.
+  - A parity test: the skill's payload, read through the link, holds exactly the files `docs/` holds.
+    The oracle is `docs/` listed at test time, never a hand-kept list.
   - A test that the image build context has it.
 - **P4 — the plans put in order.**
   - Every plan gets a line in `design-history.md`.
@@ -124,15 +130,32 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
   - The overturned-by line, where present, has the one format and names a file that exists.
   - A CLAUDE.md rule: a plan that overturns an earlier plan adds that plan's overturned-by line in the
     same PR.
+  - Each guard's list comes from `docs/` itself, not from the index it checks. Each guard is proven by a
+    mutation: drop a plan's index line, or break a marker's format, and exactly its test goes red.
 - **P6 — docs and runbook.**
   - `skills-authoring.md`: `readonly`.
-  - A `docs/migrations.md` entry. Every app gains a skill, a behaviour change with no knob. The image
-    gains `docs/`.
+  - A `docs/migrations.md` entry in the same PR, in its four boxes. Every action gives what to do, when
+    (rollout 前 / 後), why, and the symptom of skipping it:
+    - the image gains `docs/` (the build must include it, or the skill ships a dead link);
+    - every app gains a skill, a behaviour change with no knob;
+    - a skill made readonly overwrites a copy the AI had edited, at its next `read_skill`.
+
+    確認做完: open an item, ask how some part of the system works, and see the AI read
+    `.skill/system-design/` and cite a doc.
 - **P7 — live check.** Ask the in-app AI system questions and check it answers from the current design.
   One question is a trap, a decision a later plan overturned: why does boxing 4 tiles on a
   `(group, item)` marking light 4, when `plan-view-plugins-pr5-finish.md` P27 said all combinations
   light? It must answer from `plan-marking-tuples.md`.
-- **P8 — review rounds** (four lenses), then CI on the final sha.
+- **P8 — review rounds** (four lenses, each in its own worktree), then CI on the final sha.
+
+In every phase:
+
+- The per-change gate: the targeted tests, `ruff check`, `ruff format --check`, `ty check`, and
+  `mkdocs build --strict` for docs.
+- The three lenses (conformance / veracity / regression) run on my own diff before a push.
+- Push, then cancel the CI run the push starts; CI runs only on the final sha, after a clean round.
+- Every sentence in docs, comments and commits is written after the check it describes, and every
+  count is derived by counting.
 
 ## Done means
 
