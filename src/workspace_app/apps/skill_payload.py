@@ -35,9 +35,16 @@ _EXCLUDED_SUFFIXES = (".pyc",)
 #: the next and make "was this file edited locally?" answer about the wrong file.
 ORIGIN_FILE = ".origin"
 
+#: Written FIRST by the platform's copy of a readonly skill and removed after its
+#: `.origin` (docs/plan-ai-reads-docs.md, review #865 round 3): the one thing that
+#: says "the platform started this and never finished". Bytes cannot say it -- a
+#: copy is most often cut short by a rollout, and the next read runs on an image
+#: whose docs differ. Bookkeeping like `.origin`, so never part of a payload.
+COPYING_FILE = ".copying"
+
 
 def _is_noise(rel: PurePosixPath) -> bool:
-    if rel.as_posix() == ORIGIN_FILE:
+    if rel.as_posix() in (ORIGIN_FILE, COPYING_FILE):
         return True
     return bool(_EXCLUDED_DIRS.intersection(rel.parts)) or rel.name.endswith(_EXCLUDED_SUFFIXES)
 

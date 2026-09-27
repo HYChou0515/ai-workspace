@@ -207,21 +207,203 @@ async def test_a_copy_that_does_not_fit_writes_nothing(registry: Path, monkeypat
     assert await files.ls(inv, "/.skill/ref/") == []
 
 
+class _DiesAfter(MemoryFileStore):
+    """A store whose pod is killed after `left` more writes or deletes -- a
+    copy interrupted part-way by the real copy code, rather than a hand-made
+    imitation of what it leaves."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.left: int | None = None
+
+    def _tick(self) -> None:
+        if self.left is not None:
+            if self.left == 0:
+                raise RuntimeError("pod killed")
+            self.left -= 1
+
+    async def write(self, workspace_id: str, path: str, data: bytes) -> None:
+        self._tick()
+        await super().write(workspace_id, path, data)
+
+    async def delete(self, workspace_id: str, path: str) -> None:
+        self._tick()
+        await super().delete(workspace_id, path)
+
+
+async def _cut_short(store: _DiesAfter, files: WorkspaceFiles, inv: str) -> None:
+    store.left = 3
+    with pytest.raises(RuntimeError):
+        await resolve_skill_body(files, inv, None, None, "ref")
+    store.left = None
+    assert await files.ls(inv, "/.skill/ref/")  # it left files behind
+    assert not await files.exists(inv, "/.skill/ref/.origin")  # and never finished
+
+
 async def test_a_half_written_readonly_copy_is_copied_again(registry: Path, monkeypatch):
     _register(
         monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
     )
-    store = MemoryFileStore()
+    store = _DiesAfter()
     files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
-    # what an interrupted copy left: some of the shipped files, byte for byte,
-    # and no `.origin`
-    shipped = (registry / "ref" / "SKILL.md").read_bytes()
-    await store.write(inv, "/.skill/ref/SKILL.md", shipped)
-    await store.write(inv, "/.skill/ref/docs/a.md", b"a")
+    await _cut_short(store, files, inv)
 
     await resolve_skill_body(files, inv, None, None, "ref")
 
     assert await files.read(inv, "/.skill/ref/docs/b.md") == b"b"
+    assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+# Review #865 round 3 (defect A1, found by all four lenses): what interrupts a
+# copy is most often a rollout, and the next read then runs on an image whose
+# docs differ -- so "the files match what ships" cannot tell an interrupted copy
+# from a person's folder. The copy says so itself, before its first file.
+async def test_a_copy_cut_short_by_a_rollout_is_copied_again_by_the_new_image(
+    registry: Path, monkeypatch
+):
+    sd = _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "v1", "docs/b.md": "b"}
+    )
+    store = _DiesAfter()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await _cut_short(store, files, inv)
+    (sd / "docs" / "a.md").write_text("v2")  # the new image ships a different doc
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.read(inv, "/.skill/ref/docs/a.md") == b"v2"
+    assert await files.read(inv, "/.skill/ref/docs/b.md") == b"b"
+    assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+# Review #865 round 3 (the same race, in the refresh): a refresh cut short after
+# it deleted a doc upstream retired keeps the old `.origin`, which still lists
+# that doc -- so every later refresh deleted it again, met nothing there, and
+# that read_skill failed, for good.
+async def test_a_refresh_cut_short_after_a_removal_finishes_next_time(registry: Path, monkeypatch):
+    sd = _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = _DiesAfter()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await resolve_skill_body(files, inv, None, None, "ref")
+    (sd / "docs" / "b.md").unlink()  # the new image retires b.md
+    # the refresh rewrites SKILL.md and a.md, deletes b.md, and dies before `.origin`
+    store.left = 3
+    with pytest.raises(RuntimeError):
+        await resolve_skill_body(files, inv, None, None, "ref")
+    store.left = None
+    assert not await files.exists(inv, "/.skill/ref/docs/b.md")
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert sorted(await files.ls(inv, "/.skill/ref/")) == [
+        "/.skill/ref/.origin",
+        "/.skill/ref/SKILL.md",
+        "/.skill/ref/docs/a.md",
+    ]
+
+
+# Cut short in the one gap between `.origin` and the marker's removal: the copy
+# is complete, and the next read drops the marker it left.
+async def test_a_marker_left_beside_a_finished_copy_is_dropped(registry: Path, monkeypatch):
+    _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = _DiesAfter()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    store.left = 5  # the marker, SKILL.md, a.md, b.md, `.origin` -- then the pod dies
+    with pytest.raises(RuntimeError):
+        await resolve_skill_body(files, inv, None, None, "ref")
+    store.left = None
+    assert await files.exists(inv, "/.skill/ref/.origin")
+    assert await files.exists(inv, "/.skill/ref/.copying")
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert not await files.exists(inv, "/.skill/ref/.copying")
+
+
+# The clearing can be cut short too. Its marker goes last, so what is left
+# still reads as the platform's copy and the next read finishes the job.
+async def test_a_clearing_cut_short_is_still_the_platforms_copy(registry: Path, monkeypatch):
+    _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = _DiesAfter()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await _cut_short(store, files, inv)
+    store.left = 1  # one delete of the clearing lands, then the pod dies
+    with pytest.raises(RuntimeError):
+        await resolve_skill_body(files, inv, None, None, "ref")
+    store.left = None
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert await files.read(inv, "/.skill/ref/docs/b.md") == b"b"
+    assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+# Mid-copy the marker is there; it is still not one of the skill's files, for
+# whoever reads the folder as a skill (the hub, a download) or copies it on.
+async def test_the_marker_is_never_one_of_the_skills_files(registry: Path, monkeypatch, tmp_path):
+    from workspace_app.apps.skill_payload import skill_payload
+    from workspace_app.apps.skills import workspace_skill_payload
+
+    _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = _DiesAfter()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await _cut_short(store, files, inv)
+    assert await files.exists(inv, "/.skill/ref/.copying")
+
+    assert ".copying" not in await workspace_skill_payload(files, inv, "ref")
+    src = tmp_path / "downloaded"
+    src.mkdir()
+    (src / "SKILL.md").write_text("---\nname: x\ndescription: d\n---\n")
+    (src / ".copying").write_text("")
+    assert set(skill_payload(src)) == {"SKILL.md"}
+
+
+# The marker is the copy's bookkeeping, like `.origin`: a finished copy does not
+# keep it, and it is never one of the skill's files.
+async def test_a_finished_copy_carries_no_marker(registry: Path, monkeypatch):
+    from workspace_app.apps.skills import workspace_skill_payload
+
+    _register(monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a"})
+    files, inv = WorkspaceFiles(MemoryFileStore(), readonly=readonly_skill_path), "inv-1"
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert sorted(await files.ls(inv, "/.skill/ref/")) == [
+        "/.skill/ref/.origin",
+        "/.skill/ref/SKILL.md",
+        "/.skill/ref/docs/a.md",
+    ]
+    assert set(await workspace_skill_payload(files, inv, "ref")) == {"SKILL.md", "docs/a.md"}
+
+
+# Review #865 round 3 (defect B1): two reads over one interrupted copy both
+# clear it; the slower one's delete met a file the other had already removed
+# and raised, so that read_skill failed.
+async def test_a_file_already_cleared_by_another_read_is_not_an_error(registry: Path, monkeypatch):
+    _register(
+        monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "a", "docs/b.md": "b"}
+    )
+    store = _DiesAfter()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await _cut_short(store, files, inv)
+    real_ls = files.ls
+
+    async def listed_before_the_other_read_cleared(ws: str, prefix: str = "/") -> list[str]:
+        got = await real_ls(ws, prefix)
+        return [*got, "/.skill/ref/docs/gone.md"] if got else got
+
+    monkeypatch.setattr(files, "ls", listed_before_the_other_read_cleared)
+
+    await resolve_skill_body(files, inv, None, None, "ref")
+
     assert await files.exists(inv, "/.skill/ref/.origin")
 
 
@@ -281,6 +463,25 @@ async def test_an_applied_skill_that_does_not_fit_is_a_note_not_a_failed_turn(
         files={"scripts/a.py": "a" * 150, "scripts/b.py": "b" * 150},
     )
     files, inv = WorkspaceFiles(MemoryFileStore(), quota=250), "inv-1"
+
+    block = await build_applied_skills_block(files, inv, None, None, ["tool"])
+
+    assert "### tool" in block and "could not load" in block
+
+
+# Review #865 round 3 (conformance B2): the owner's total across items refuses
+# with `UserDiskFull`, which is not a `WorkspaceFull` -- the trap
+# `agent/tools.py` already documents -- so it still stopped the turn.
+async def test_an_applied_skill_over_the_owners_total_is_a_note_too(registry: Path, monkeypatch):
+    from workspace_app.apps.skills import build_applied_skills_block
+    from workspace_app.quota.disk_ledger import UserDiskFull
+
+    _register(monkeypatch, registry, "tool", readonly=False, files={"scripts/a.py": "a"})
+
+    async def owner_is_full(_ws: str, _after: int, extra: int, **_kw) -> None:
+        raise UserDiskFull(owner="alice", used=999, quota=1000, attempted=extra)
+
+    files, inv = WorkspaceFiles(MemoryFileStore(), person_gate=owner_is_full), "inv-1"
 
     block = await build_applied_skills_block(files, inv, None, None, ["tool"])
 
