@@ -1,5 +1,7 @@
 # Plan — Issue #281: 讀程式碼的 AI 生成 wiki
 
+> 被 #340（plan-issue-281-followup.md）推翻
+
 > 繼 #50（LLM wiki）+ P3.0（code-QA：git clone → SourceDoc + code embedder）。
 > 經一次 `/grill-me` session 鎖定決策樹後定案。被否決的替代方案就地記錄。
 >

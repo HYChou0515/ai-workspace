@@ -1,5 +1,8 @@
 # Plan — Issue #245: per-workspace storage quota + blob GC
 
+> 被 #813（plan-blob-gc-job.md）推翻
+> 被 #492（plan-issue-492.md）推翻
+
 Per-workspace total-size quota (protect the shared disk root from a single
 workspace filling it) + reclaim orphaned blobs so the quota stays honest.
 Split from #219 (single-file cap already shipped there; this issue owns the

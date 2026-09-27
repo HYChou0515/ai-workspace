@@ -1,5 +1,7 @@
 # PM — automatic scheduling on the Timeline
 
+> 被 #785（plan-issue-785.md）推翻
+
 > **Withdrawn from the PM app, 2026-09-04.** The requirement behind decision #1
 > below — "dates are computed, not typed" — no longer holds: the Timeline is
 > used with `span` set by hand, and re-arranging it is something the agent does

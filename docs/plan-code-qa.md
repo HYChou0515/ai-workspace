@@ -1,5 +1,7 @@
 # RCA 3.0 — Plan: P3 程式碼 KB(git clone + code-specialized embedder)
 
+> 被 #355（plan-issue-355.md）推翻
+
 > 跟 `plan-llamaindex-ingest.md` 的 P3 簡述對齊;這份是 full plan。經 `/grill-me`
 > 走完決策樹後定案。可勾選追蹤文件。
 >

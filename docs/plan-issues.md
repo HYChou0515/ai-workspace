@@ -1,5 +1,9 @@
 # Issue plan — backend batch
 
+> 被 #624（plan-issue-624.md）推翻
+> 被 #748（plan-issue-748.md）推翻
+> 被 #366（plan-issue-366.md）推翻
+
 Living checklist for the open GitHub issues. Decisions below were settled in a
 `/grill-me` pass; we implement them **one at a time**, each via `/tdd` with its
 own commit. Tick a box when it lands.

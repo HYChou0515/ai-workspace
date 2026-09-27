@@ -1,5 +1,7 @@
 # Plan — #366 sandbox address coherence (http sandbox-host)
 
+> 被 #492（plan-issue-492.md）推翻
+
 > 症狀：聊天室開著一段時間後 filetree 什麼都沒了、terminal `ls` → `sandbox not found`。
 > 定案 via `/grill-me`。線上跑 **http sandbox-host**（非 `kind: local` 共用 PVC）。
 

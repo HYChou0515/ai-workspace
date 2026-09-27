@@ -1,5 +1,7 @@
 # RCA 3.0 — Frontend Plan
 
+> 被 #89（plan-app-templates.md）推翻
+
 > **Note (post-plan):** the **knowledge-base (KB) chatbot** UI (the Ask-agent
 > drawer, the `/kb` collections + chat pages, the document viewer) was added
 > after this plan and is **not** covered below. It shares the agent-log

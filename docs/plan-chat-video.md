@@ -1,5 +1,7 @@
 # Plan：把一段對話紀錄做成影片（script 版先行，job / worker 版後接）
 
+> 被 #823（plan-chat-video-export.md）推翻
+
 > **狀態:script 版已實作(PR #817,P1–P17:P1–P5 主體、P6 顯示工具、P7–P17 九輪 review 的修正 + CI 第一次跑完 `rest` 的修正),使用說明在 [chat-video.md](chat-video.md);P16–P18(job + route + 前端按鈕)列出形狀、未做。** 正文寫的是**現在的**做法;當初計畫和實作的差異在文末〈實作偏差〉。
 
 ## 需求（user 原話的整理）

@@ -1,5 +1,7 @@
 # RCA 3.0 — Plan: 多人協作 + KB 引用分析 + KB 頁面改版
 
+> 被 #262（plan-permissions.md）推翻
+
 > 這份計畫涵蓋一批新功能(來源:`design_handoff_rca_3.0/design.md` + 使用者的
 > 6 點需求),經 `/grill-me` 把決策樹走過一遍後定案。**這是可勾選的追蹤文件** —
 > 每完成一階段就把對應的 `- [ ]` 打勾並 commit;全部勾完代表這批做完。

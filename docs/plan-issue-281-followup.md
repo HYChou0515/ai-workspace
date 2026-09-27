@@ -1,5 +1,7 @@
 # Plan — Issue #281 follow-up：code-wiki 修缺口 + scale
 
+> 被 #355（plan-issue-355.md）推翻
+
 > 繼 #281 本體（PR #336 已 merged，分層 code-wiki builder：L0 檔卡片 → L1 資料夾 →
 > L2 架構/index/topics，見 [`plan-issue-281.md`](plan-issue-281.md)）。
 > 本文處理 #281 merge 後**自我稽核**抓到的缺口，並把 build 從「單一 job 內序列跑完」

@@ -1,5 +1,7 @@
 # Plan — runtime view plugins, a chart plugin, stacked maps and a gallery (#847 + #848)
 
+> 被 #861（plan-marking-tuples.md）推翻
+
 Grilled 2026-09-25 (Q1–Q21) on master `6488a7ac`. Nothing under `src/` or `web/src`
 changes until each PR's own plan is agreed:
 

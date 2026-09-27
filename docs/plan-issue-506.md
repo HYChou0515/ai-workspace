@@ -1,5 +1,8 @@
 # Plan — #506 doc question / context card suggestion:效能 + 品質 + 閉環去重
 
+> 被 #634（plan-cardgen-drafter-wiki-suppression.md）推翻
+> 被 #804（plan-api-lifecycle-offload.md）推翻
+
 ## 需求(使用者六點)
 
 1. **前端顯示慢**(待審幾千筆,review 頁卡)。

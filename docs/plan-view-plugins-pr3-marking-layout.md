@@ -1,5 +1,7 @@
 # Plan — PR 3: named markings and layouts
 
+> 被 #861（plan-marking-tuples.md）推翻
+
 Part of [plan-view-plugins.md](plan-view-plugins.md). The decisions are Q5, Q5.1–Q5.3,
 Q6, Q10 and Q17. This PR stacks on PR 2 and is #847's acceptance scene: brush in one
 pane, and the linked views in other panes light up.

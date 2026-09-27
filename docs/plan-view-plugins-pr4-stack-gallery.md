@@ -1,5 +1,7 @@
 # Plan — PR 4: stack, diff and facet at scale
 
+> 被 #861（plan-marking-tuples.md）推翻
+
 Part of [plan-view-plugins.md](plan-view-plugins.md). The decisions are Q3, Q11, Q12 and
 Q13. This PR stacks on PR 3 and is #848's acceptance at the scale the user named:
 hundreds to thousands of groups. The mechanism stays generic. "Wafer" appears only in

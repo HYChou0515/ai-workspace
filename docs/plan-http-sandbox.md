@@ -1,5 +1,7 @@
 # Plan — HTTP Sandbox (#60)
 
+> 被 #366（plan-issue-366.md）推翻
+
 > **Superseded in part by #251:** the host described below as part of
 > `workspace_app` is now a **standalone project** (`sandbox-host/`, own deps/image,
 > env-based config, no shared modules). The wire contract is

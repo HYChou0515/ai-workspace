@@ -1,5 +1,7 @@
 # Plan — Sandbox as the single source of truth for files
 
+> 被 #492（plan-issue-492.md）推翻
+
 > 來源:使用者回報「sandbox 與 filestore 雙真實來源 → sync 複雜、路徑不一致、LLM 看到的(FileStore)與實際的(Sandbox)有落差」。經 `/grill-me` 把決策樹走過一遍後定案(Q1–Q8)。
 > **這是可勾選的追蹤文件** — 每完成一階段就把對應的 `- [ ]` 打勾並 commit;全部勾完代表這批做完。
 > 制定日期:2026-05-26。
