@@ -287,6 +287,31 @@ describe("markedCount is the selected rows that name a whole pick (review #862 r
     ];
     expect(markedCount(box, both, ["item"], [])).toBe(3);
   });
+
+  it("counts every row when two layers draw different rows (each its own transform; review #862 round 3)", () => {
+    // Layer 0 draws a1..a3, layer 1 b1..b3; one box over both selects all six.
+    // The marking holds six picks and a linked table lights six rows.
+    const both = answer(
+      layer("scatter", 3, { item: cat(["a1", "a2", "a3"]), v: f64([1, 2, 3]) }),
+      layer("scatter", 3, { item: cat(["b1", "b2", "b3"]), v: f64([1, 2, 3]) }),
+    );
+    const box = [
+      { source: "brush" as const, layer: 0, rows: [0, 1, 2] },
+      { source: "brush" as const, layer: 1, rows: [0, 1, 2] },
+    ];
+    expect(markedCount(box, both, ["item"], [])).toBe(6);
+  });
+
+  it("counts a row once when two layers select overlapping parts of the same rows (review #862 round 3)", () => {
+    // The line's box takes r1, r2; the points' takes r2, r3: three rows went.
+    const rows = { item: cat(["r1", "r2", "r3"]), v: f64([1, 2, 3]) };
+    const both = answer(layer("line", 3, rows), layer("scatter", 3, rows));
+    const box = [
+      { source: "brush" as const, layer: 0, rows: [0, 1] },
+      { source: "brush" as const, layer: 1, rows: [1, 2] },
+    ];
+    expect(markedCount(box, both, ["item"], [])).toBe(3);
+  });
 });
 
 describe("an aggregated channel's column is not a key (#847/#848 PR 5 P32)", () => {

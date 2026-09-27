@@ -172,4 +172,13 @@ describe("a table that has every key but writes fewer (`keys:` a subset; review 
     const m = store.get("fail")!.marking;
     expect({ keys: m.keys, rows: markingRows(m) }).toEqual({ keys: ["group"], rows: [["g1"], ["g2"]] });
   });
+
+  it("keeps the picks of groups it does not show, as whole groups (review #862 round 3)", () => {
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "a"], ["g9", "z"]]), "/views/gallery.ai.yaml");
+    const { result } = narrow(store);
+    act(() => result.current.select!.set(new Set([0, 2])));
+    const m = store.get("fail")!.marking;
+    expect({ keys: m.keys, rows: markingRows(m) }).toEqual({ keys: ["group"], rows: [["g1"], ["g2"], ["g9"]] });
+  });
 });

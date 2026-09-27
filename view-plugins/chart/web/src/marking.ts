@@ -114,12 +114,23 @@ function picks(
   const marking = markingFrom(common, rows);
   // `rows`: how many selected rows named a whole pick -- what a chart counts
   // (review #862), the picks themselves being fewer when rows repeat a key.
-  // Summed within a layer, the most of any layer across them: two layers
-  // drawing the same rows (a line with its points) are one set of rows, not
-  // two (review #862 round 2).
-  const perLayer = new Map<number, number>();
-  for (const s of naming) perLayer.set(s.layer, (perLayer.get(s.layer) ?? 0) + s.rows.flatMap(whole).length);
-  return markingSize(marking) > 0 ? { marking, rows: Math.max(...perLayer.values()) } : null;
+  // A row is known by its keys (the marking's own rule): per pick, the most
+  // rows any one layer selected for it, summed. Two layers drawing the same
+  // rows (a line with its points) count them once; layers drawing different
+  // rows (each its own transform) count them all (review #862 rounds 2, 3).
+  const most = new Map<string, number>();
+  for (const layer of new Set(naming.map((s) => s.layer))) {
+    const here = new Map<string, number>();
+    for (const s of naming.filter((n) => n.layer === layer)) {
+      for (const values of s.rows.flatMap(whole)) {
+        const pick = values.join("\u001f");
+        here.set(pick, (here.get(pick) ?? 0) + 1);
+      }
+    }
+    for (const [pick, n] of here) most.set(pick, Math.max(most.get(pick) ?? 0, n));
+  }
+  const count = [...most.values()].reduce((a, b) => a + b, 0);
+  return markingSize(marking) > 0 ? { marking, rows: count } : null;
 }
 
 /** What a selection writes. null for a view without `keys:` (it cannot be a
@@ -137,10 +148,12 @@ export function selectionMarking(
 }
 
 /** How many selected rows went to the marking: the count said beside "by
- * <keys>". Rows, as on #855 and as a linked table counts them (review #862 --
- * D1: a single key behaves as before); two rows with the same key values are
- * two rows here and one pick in the marking (the chip counts picks). Rows that
- * name no whole pick write nothing and are not counted (PR 5 P43, P44 row 35). */
+ * <keys>". Rows, as a linked table counts them (review #862 -- D1: a
+ * single-layer chart counts as on #855); two rows with the same key values are
+ * two rows here and one pick in the marking (the chip counts picks). A row is
+ * known by its keys, so a row two layers draw (a line with its points) counts
+ * once, and layers drawing different rows count them all. Rows that name no
+ * whole pick write nothing and are not counted (PR 5 P43, P44 row 35). */
 export function markedCount(
   selections: readonly Selection[],
   answer: Answer,
