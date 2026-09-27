@@ -128,8 +128,19 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
 - **P5 — guards.**
   - Every `plan-` / `handoff-` / `q-` file is linked from `design-history.md`.
   - The overturned-by line, where present, has the one format and names a file that exists.
-  - A CLAUDE.md rule: a plan that overturns an earlier plan adds that plan's overturned-by line in the
-    same PR.
+  - The rule goes in CLAUDE.md's `## Workflow`, beside "start with `/grill-me`" and the phase numbering.
+    Every Claude session in this repo loads it before any plan is written [user, 2026-09-27]:
+
+    > - **A plan that overturns an earlier plan marks it, in the same PR.** When a new plan reverses a
+    >   decision recorded in an older `plan-*.md`, add `> 被 #NNN（plan-new.md）推翻` as the old plan's
+    >   first line under its title. The old plan is not rewritten: an AI that reads both can tell which
+    >   is current; the one failure is reading the old one alone, and this line is what leads it to the
+    >   new one. The format and the target file are guarded (a test); whether a plan overturns another
+    >   is not, so the rule is the guard.
+
+  - `design-history.md` opens with one sentence pointing to that rule: a human author edits this file for
+    every new plan (the index), so it is where they meet the rule. It is a pointer, not a second copy of
+    the rule, since two copies drift.
   - Every other doc under `docs/` is in the mkdocs `nav`, the index of the current docs. Today nothing
     enforces it: `validation.nav.omitted_files` is `info`, and a probe doc left out of `nav` built under
     `--strict` with rc 0 and one INFO line (2026-09-27). So:
@@ -145,6 +156,14 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
     mutation: drop a plan's index line, or break a marker's format, and exactly its test goes red.
 - **P6 — docs and runbook.**
   - `skills-authoring.md`: `readonly`.
+  - The author's checklist, in `docs/index.md` (the developer guide) [user, 2026-09-27]. For a new doc to
+    reach the AI at the next release, its author:
+    1. puts it under `docs/` and indexes it: a `plan-*.md` gets a line in `design-history.md`, any other
+       doc goes in `mkdocs.yml`'s `nav` (the P5 guards fail the PR otherwise);
+    2. when it overturns an older plan, marks that plan (the CLAUDE.md rule above);
+    3. merges it as usual.
+
+    Everything else is automatic: the skill's link, the image, and the refresh on `read_skill`.
   - A `docs/migrations.md` entry in the same PR, in its four boxes. Every action gives what to do, when
     (rollout 前 / 後), why, and the symptom of skipping it:
     - the image gains `docs/` (the build must include it, or the skill ships a dead link);
