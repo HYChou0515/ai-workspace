@@ -205,6 +205,18 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     chart.dispose();
   });
 
+  it("keeps a hovered bar's lit bar lit: hovering a split bar fades nothing", () => {
+    // The lit bar is silent, so a hover lands on the bar behind it; a hover
+    // that faded every other element faded the very lit bar it was over.
+    const { bars, lits, chart } = draw(BAR, COUNTS, [[2, 3]]);
+    // ECharts marks a faded element's hover state 1 (blur), a hovered one 2
+    const state = (s: number, j: number) => (itemEl(chart, s, j) as { hoverState?: number } | undefined)?.hoverState ?? 0;
+    chart.dispatchAction({ type: "highlight", seriesIndex: bars[0], dataIndex: 0 });
+    expect(state(bars[0]!, 0)).toBe(2);
+    expect([state(lits[0]!, 0), state(lits[0]!, 1), state(bars[0]!, 1)]).not.toContain(1);
+    chart.dispose();
+  });
+
   it("says the picked value in the bar's tooltip", () => {
     const { built, bars, chart } = draw(BAR, COUNTS, [[2, null]]);
     const tip = (built.option.tooltip as { formatter: (p: object) => string }).formatter;
@@ -240,6 +252,14 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     chart.dispose();
   });
 });
+
+/** The element drawn for item j of series `s` (a group's first child). */
+function itemEl(chart: echarts.ECharts, s: number, j: number): El | undefined {
+  const model = (chart as unknown as { getModel(): Model }).getModel();
+  let el = model.getSeriesByIndex(s).getData().getItemGraphicEl(j);
+  while (el?.isGroup) el = el.childAt?.(0);
+  return el;
+}
 
 /** The y ECharts gives bar j's layout (its origin edge across a horizontal bar). */
 function model_y(chart: echarts.ECharts, s: number, j: number): number {

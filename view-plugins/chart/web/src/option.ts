@@ -1098,6 +1098,10 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       push(
         {
           ...s,
+          // A hover fades nothing: the lit bar is silent, so the hover lands
+          // on this bar behind it, and a focus on it faded the very lit bar
+          // the pointer was over. The marking already says what is picked.
+          emphasis: { focus: "none" },
           data: (s.data as Item[]).map((d) => {
             const it = Array.isArray(d) ? { value: d } : d;
             return { ...it, itemStyle: { ...(it.itemStyle as object), opacity: DIM_OPACITY } };
