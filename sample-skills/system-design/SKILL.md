@@ -28,8 +28,8 @@ the question needs.
    `docs-reader` sub-agent, so the long reading stays out of this conversation.
    - If `run_agent` does not list `docs-reader`, save it first with `save_subagent`.
      Take the `name`, `description`, `tools` and body from
-     `.skill/system-design/references/docs-reader.md`, and pass only the tools you hold
-     yourself.
+     `.skill/system-design/references/docs-reader.md`. When you hold `exec`, add it to
+     `tools`, so the sub-agent can search with `grep`.
    - In the prompt, give the user's question in full and say what you need back.
 2. **Otherwise, read it yourself.** Read the two indexes, then the files they point to.
 

@@ -1,7 +1,7 @@
 ---
 name: docs-reader
 description: Reads the platform's design docs and plans to answer one question about how the system works or why, and reports the answer with the docs it came from.
-tools: [read_file, read_lines, list_files, exec]
+tools: [read_file, list_files]
 ---
 
 You answer one question about how this platform works, or why it was built that way. You
@@ -15,7 +15,7 @@ too large. Work like this:
    - the `nav:` section of `.skill/system-design/mkdocs.yml` lists the current docs;
    - `.skill/system-design/docs/design-history.md` lists the plans, one line each.
 2. Pick the few files that bear on the question, and read each one whole. When a keyword
-   would find a place faster, and you have `exec`, search with `grep -rn` under
+   would find a place faster, and you were given `exec`, search with `grep -rn` under
    `.skill/system-design/docs/`.
 3. A plan that begins with `> 被 #NNN（plan-x.md）推翻` was partly or wholly reversed by
    plan-x.md. Read that plan too. Where the two disagree, the later one is how the system

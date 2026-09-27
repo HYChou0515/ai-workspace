@@ -213,6 +213,27 @@ Where the build differs from the phases above, or found what they did not expect
   - Some decisions were reversed outside any plan file, so they carry no marker: #714's
     workflow env, KB chat queueing, #537's wiki router, #538's quota at the facade, items private by
     default, `read_image` with a vision model, and the workspace tree filter.
+- **P7, the live check** (2026-09-27). This machine's ollama runs on CPU and cannot finish a turn, so the
+  model was a stand-in that plays a script. Everything else was real: the app, the turn, and every tool,
+  which the app executed.
+  - Proven:
+    - `read_skill("system-design")` returns the body and copies the docs into the workspace (205 files,
+      as many as `docs/` holds);
+    - the overturned `plan-view-plugins-pr5-finish.md` reads `> 被 #861（plan-marking-tuples.md）推翻`
+      under its title, and `plan-marking-tuples.md` reads;
+    - a `write_file` into the copy gets the readonly sentence, and the file route gets 403;
+    - `save_subagent` saves `docs-reader`, and `run_agent` runs it over both indexes;
+    - the skills panel marks the row readonly;
+    - a doc added to `docs/` reaches the copy on the next read, and a doc removed leaves it;
+    - built for real with the same `COPY` lines and `.dockerignore`, the image resolves the `docs` link
+      (205 files). With `docs` excluded again, the build fails on the `COPY`, which is the control.
+  - Not proven: that a real model chooses to consult the docs, delegates, or answers well. The
+    runbook's 確認做完 asks for exactly that on the deployed model.
+  - Found:
+    - The `docs-reader` template asked for `read_lines` and `exec`, which playground does not hold, so
+      `save_subagent` refused it.
+    - The template now asks for `read_file` and `list_files`, which every app and profile holding
+      `run_agent` has, and the skill says to add `exec` when held.
 
 ## Done means
 
