@@ -87,6 +87,12 @@ RUN uv sync --frozen --no-dev
 # from here. Keep in sync with apps/shared_skills.py + workflow/shared.py.
 COPY sample-skills/ ./sample-skills/
 COPY sample-workflows/ ./sample-workflows/
+# docs/plan-ai-reads-docs.md P3: the `system-help` skill's `docs` and
+# `mkdocs.yml` are links to `../../docs` and `../../mkdocs.yml`, so with the
+# skills at /app/sample-skills these land at /app. Without them the links
+# dangle, and the AI's read_skill("system-help") fails with FileNotFoundError.
+COPY docs/ ./docs/
+COPY mkdocs.yml ./mkdocs.yml
 
 # create_app mounts <repo>/web/dist at /; here <repo> == /app.
 COPY --from=web /web/dist ./web/dist

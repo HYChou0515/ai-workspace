@@ -1,5 +1,7 @@
 # RCA 3.0 — Backend Plan
 
+> 被 #89（plan-app-templates.md）推翻
+
 > **Note (post-plan):** the **knowledge-base (KB) chatbot** subsystem was added
 > after this plan and is **not** covered below. It reuses the platform here
 > (AgentRunner, specstar, SSE) but adds its own layers (ingest / embed /

@@ -1,5 +1,7 @@
 # Plan: LLM wiki — a second, parallel retrieval pipeline (#50)
 
+> 被 #506（plan-issue-506.md）推翻
+
 > 概念來源:Karpathy 的「LLM wiki」(gist 442a6bf…)。不是把原文切 chunk 在
 > query time 拼湊,而是讓 LLM 在 **ingest time** 把知識「編譯」成一組互連的
 > markdown 頁(summary / entity / concept / index,含 `[[wikilink]]`、標矛盾),

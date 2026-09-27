@@ -1,5 +1,7 @@
 # Plan — #377 AI 針對 doc 主動詢問不懂的地方
 
+> 被 #397（plan-issue-397.md）推翻
+
 > 狀態：grill-me 鎖定，待 /tdd。flat integer phases（P1、P2…）。
 
 ## 問題與目標

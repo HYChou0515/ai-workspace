@@ -55,6 +55,11 @@ SHARED_SKILLS: dict[str, Path] = {
     # skill, and what to tell the user around each — the three tools' guidance.
     # Declared by the apps that grant the three tools.
     "skill-hub": SHARED_SKILLS_DIR / "skill-hub",
+    # system-help (docs/plan-ai-reads-docs.md): the platform's own docs and
+    # plans, so the AI answers "how does this work / why" from the design
+    # rather than a guess. READONLY: its copy follows each release and nothing
+    # edits it. Its `docs/` and `mkdocs.yml` are links to the repo's own.
+    "system-help": SHARED_SKILLS_DIR / "system-help",
 }
 
 
@@ -110,6 +115,21 @@ def can_draw_views(tools: Collection[str] | None) -> bool:
 def shared_skill_source(name: str) -> Path | None:
     """Where a shared skill's folder is — a shipped one or a view plugin's."""
     return SHARED_SKILLS.get(name) or PLUGIN_SKILLS.get(name)
+
+
+def shared_skill_readonly(name: str) -> bool:
+    """Whether the shipped skill ``name`` says ``readonly: true`` (docs/plan-ai-reads-docs.md
+    P1). Read from the SHIPPED ``SKILL.md`` every time -- never from a workspace
+    copy, or deleting the field from the copy would lift the protection. A name
+    that is not a shipped skill is not readonly."""
+    src = shared_skill_source(name)
+    if src is None or not (src / "SKILL.md").is_file():
+        return False
+    try:
+        front, _body = skills._parse_frontmatter((src / "SKILL.md").read_bytes())
+    except skills.SkillError:
+        return False
+    return str(front.get("readonly", "")).strip().lower() == "true"
 
 
 def plugin_skills_for(tools: Collection[str] | None) -> list[SkillMeta]:

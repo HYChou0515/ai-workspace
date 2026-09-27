@@ -1,5 +1,7 @@
 # Plan — #284 `make_deck`: designed-pptx via a multimodal sub-agent loop
 
+> 被 #313（plan-make-deck-runtime-craft.md）推翻
+
 > Out-of-the-box PPT **craft**, not just the lib. The agent gets a `make_deck`
 > tool that builds a *designed* `.pptx` (pptxgenjs + absolute-coordinate layout
 > + design tokens + a render→see→fix loop) by driving a **multimodal sub-agent**

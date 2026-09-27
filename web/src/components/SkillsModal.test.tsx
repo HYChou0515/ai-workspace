@@ -225,6 +225,41 @@ describe("SkillsModal — a baked-in skill with a local copy (#589)", () => {
   });
 });
 
+// docs/plan-ai-reads-docs.md P1: a readonly skill's copy follows what the platform
+// ships and nobody edits it, so "editable here", Update and Reset are all false
+// promises on its row — it says what it is instead.
+describe("SkillsModal — a readonly skill", () => {
+  const READONLY: ItemSkillState[] = [
+    {
+      name: "system-help",
+      description: "the system's docs",
+      source: "shared",
+      default_on: true,
+      is_copy: true,
+      copy_of: "shared",
+      update_available: true,
+      readonly: true,
+      pref: "follow",
+      effective: true,
+    },
+  ];
+
+  // No pill of its own: like a shared skill that is never copied (chart,
+  // grill-me), "no `editable here`" already says it cannot be changed here.
+  it("reads like any skill you cannot edit here: no pill, no update or reset", async () => {
+    renderModal({ client: fakeClient(READONLY) as never });
+    expect(await screen.findByText("system-help")).toBeTruthy();
+    expect(screen.queryByTestId("skill-readonly-system-help")).toBeNull();
+    // its files ARE in the workspace (the copy), but they are the platform's,
+    // not the person's to take away -- no download either, like chart
+    expect(screen.queryByTestId("skill-download-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-copy-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-update-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-refresh-system-help")).toBeNull();
+    expect(screen.queryByTestId("skill-reset-system-help")).toBeNull();
+  });
+});
+
 // The copy is frozen at the version it was made from — deliberately, so the AI's
 // edits survive. That makes an explicit way to pull a newer version the other
 // half of the bargain: without it, "frozen" is just "stuck".

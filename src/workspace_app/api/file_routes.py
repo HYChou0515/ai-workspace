@@ -313,6 +313,7 @@ def register_file_routes(
         from ..apps.skills import (
             effective_item_skills,
             skill_upstream,
+            upstream_readonly,
             workspace_skill_metas,
         )
 
@@ -348,6 +349,7 @@ def register_file_routes(
                     update_available=(up := upstreams.get(s.name)) is not None
                     and up.update_available,
                     upstream=up.state if up is not None else None,
+                    readonly=upstream_readonly(slug, profile, s.name),
                     pref=_skill_pref_state(prefs.get(s.name)),
                     effective=s.effective,
                 )
@@ -658,6 +660,12 @@ def register_file_routes(
         results: list[tuple[str, bytes, list]] = []
         for p in paths:
             if not path_selected(p, body.include, body.exclude):
+                continue
+            # A readonly skill's copy (the platform's docs) is reference, not the
+            # person's content: in the results it drowned their own files, and
+            # Replace wrote into it first and 403'd the whole operation (review
+            # #865 round 1).
+            if files.is_readonly(p):
                 continue
             data = await files.read(investigation_id, p)
             try:

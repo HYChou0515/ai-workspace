@@ -1,5 +1,7 @@
 # Plan — finishing #847 and #848 on #855's branch
 
+> 被 #861（plan-marking-tuples.md）推翻
+
 Part of [plan-view-plugins.md](plan-view-plugins.md); the decisions are Q22 and Q23. The
 2026-09-25 audit of PRs 1–4 against #847/#848 found six asks that no PR built. The user
 chose to build all six before #855 reaches master **[user]**. The same audit's engineering

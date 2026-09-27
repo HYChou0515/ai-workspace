@@ -1,5 +1,7 @@
 # Plan — #219 workspace filestore: inline bytes → specstar `Binary`/blob store
 
+> 被 #492（plan-issue-492.md）推翻
+
 Migrate the workspace FileStore off inline `dict[str, bytes]` (one record per
 workspace) onto per-file `Binary` resources backed by the specstar blob store,
 and rebuild file **upload** into a real "convenient upload" feature (folders,

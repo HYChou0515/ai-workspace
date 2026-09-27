@@ -1,5 +1,7 @@
 # Sandbox 資源額度：依 App 設定 + 每人總量
 
+> 被 #771（plan-item-sandbox-resources.md）推翻
+
 依 **App 種類**設定 sandbox 資源(cpu / memory / disk quota),並限制**一個人跨 App items 總共能用多少**。
 
 本文件是**對帳用的**:每個 phase 都寫「驗收條件」而不是「做了什麼」——條件是「怎麼證明它真的生效」。

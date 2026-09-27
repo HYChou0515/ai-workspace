@@ -16,7 +16,8 @@ web/node_modules
 # a bare pattern matches the context root only.
 **/node_modules
 web/dist
-docs
+# `docs/` is NOT excluded (docs/plan-ai-reads-docs.md P3): the `system-help`
+# skill links to it, and the in-app AI reads the platform's docs from there.
 design_handoff_rca_3.0
 kubernetes
 *.md

@@ -30,7 +30,14 @@ from typing import TYPE_CHECKING, Any, Literal
 import msgspec
 
 from .frontmatter import FrontmatterError, parse_frontmatter
-from .skill_payload import ORIGIN_FILE, SkillOrigin, SkillSource, origin_for, skill_payload
+from .skill_payload import (
+    COPYING_FILE,
+    ORIGIN_FILE,
+    SkillOrigin,
+    SkillSource,
+    origin_for,
+    skill_payload,
+)
 
 if TYPE_CHECKING:
     from ..files import WorkspaceFiles
@@ -175,7 +182,8 @@ async def workspace_skill_payload(
     copy came from, which is the copy's business, not the skill's. Empty when
     there is no such folder."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
-    paths = sorted(p for p in await files.ls(workspace_id, prefix) if p != prefix + ORIGIN_FILE)
+    bookkeeping = {prefix + ORIGIN_FILE, prefix + COPYING_FILE}
+    paths = sorted(p for p in await files.ls(workspace_id, prefix) if p not in bookkeeping)
     from ..filestore.batch import read_all
 
     return {
@@ -482,6 +490,37 @@ def _skill_source(
     return ("shared", src) if src is not None else None
 
 
+def readonly_skill_path(path: str) -> bool:
+    """Whether ``path`` is inside the copy of a readonly shared skill -- the
+    facade's `readonly` check (docs/plan-ai-reads-docs.md P1). Decided by the
+    SHIPPED ``SKILL.md`` of the skill the folder is named for, never by the copy:
+    a readonly shared skill's name is reserved in every workspace.
+
+    Judged on the path as the filesystem will resolve it: `/./`, `//` and `x/..`
+    are normalised first, or those spellings wrote straight into the copy
+    (review #865 round 1)."""
+    import posixpath
+
+    parts = posixpath.normpath("/" + path.lstrip("/")).lstrip("/").split("/")
+    if len(parts) < 2 or parts[0] != WORKSPACE_SKILL_DIR:
+        return False
+    from .shared_skills import shared_skill_readonly
+
+    return shared_skill_readonly(parts[1])
+
+
+def upstream_readonly(app_slug: str | None, profile: str | None, name: str) -> bool:
+    """Whether the copy of this name follows upstream as a readonly skill: a
+    SHARED skill whose shipped ``SKILL.md`` says so. A profile skill of the same
+    name shadows it and is not refreshed as one -- though the name stays reserved,
+    so the facade still refuses writes to it (`readonly_skill_path`;
+    docs/plan-ai-reads-docs.md P1, as built)."""
+    from .shared_skills import shared_skill_readonly
+
+    found = _skill_source(app_slug, profile, name)
+    return found is not None and found[0] == "shared" and shared_skill_readonly(name)
+
+
 async def materialize_skill(
     files: WorkspaceFiles,
     workspace_id: str,
@@ -505,8 +544,63 @@ async def materialize_skill(
     durable store when it is cold — without waking it, which `read_skill`
     promises. A workspace over quota fails here, loudly, like any other write.
     """
-    if await files.ls(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/"):
-        return
+    from ..files import system_writes
+
+    # The platform writing the copy -- the one writer a readonly skill's copy
+    # admits (docs/plan-ai-reads-docs.md P1).
+    with system_writes():
+        await _materialize(files, workspace_id, app_slug, profile, name)
+
+
+async def _materialize(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> None:
+    """`materialize_skill`'s work, run under `system_writes`."""
+    prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+    marker = prefix + COPYING_FILE
+    here = await files.ls(workspace_id, prefix)
+    readonly = upstream_readonly(app_slug, profile, name)
+    if here:
+        # A readonly skill (docs/plan-ai-reads-docs.md P1) is the exception: it is
+        # reference the AI reads, never edits, so its copy follows what the image
+        # ships -- replaced whole whenever the copy's `.origin` no longer matches.
+        if not readonly:
+            return
+        origin = await workspace_skill_origin(files, workspace_id, name)
+        if origin is not None and origin.source != "shared":
+            # A hub copy that happens to carry the name is not this skill's copy;
+            # asking for its upstream without a hub raised (review #865 round 1).
+            return
+        if origin is not None:
+            if marker in here:
+                # finished, and cut short before the marker went
+                await _delete_if_there(files, workspace_id, marker)
+            # `.origin` says what was shipped, not what is here: two first reads
+            # at once can leave it over files one of them cleared (review #865
+            # round 4). `here` is already listed, so this costs no round trip.
+            missing = any(prefix + rel not in here for rel in origin.files)
+            up = await skill_upstream(files, workspace_id, app_slug, profile, name)
+            if missing or (up is not None and up.update_available):
+                await refresh_skill(files, workspace_id, app_slug, profile, name, force=True)
+            return
+        # No `.origin`. With the marker it is the platform's own copy, cut short
+        # (review #865 round 1): nobody can edit or delete it and the refresh
+        # needs the manifest, so it would stay half-written for good -- it is
+        # cleared and copied again. Without it the folder is the person's own,
+        # written before the name was reserved, and is never deleted (round 2).
+        # Not judged by its bytes: a rollout both cuts a copy short and ships
+        # different docs, so a copy's bytes never match the image that next
+        # reads it (round 3).
+        if marker not in here:
+            return
+        # The marker goes LAST: a clearing cut short in its turn must still read
+        # as the platform's copy.
+        for path in sorted(here, key=lambda p: p == marker):
+            await _delete_if_there(files, workspace_id, path)
     found = _skill_source(app_slug, profile, name)
     if found is None:
         return
@@ -522,6 +616,14 @@ async def materialize_skill(
     # guide reaches that workspace only through the skills panel's Refresh.
     if set(payload) <= {"SKILL.md"}:
         return
+    manifest = msgspec.json.encode(origin_for(source, payload))
+    # The whole copy is one operation (#538, as `install_hub_skill`): checked
+    # once, up front, so a workspace with room for some of the files and not the
+    # rest refuses cleanly instead of keeping half a copy with no `.origin`
+    # (review #865 round 1).
+    await files.ensure_room_for(workspace_id, sum(len(d) for d in payload.values()) + len(manifest))
+    if readonly:
+        await files.write(workspace_id, marker, b"")
     for rel, data in payload.items():
         await files.write(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{rel}", data)
     # Written LAST: until it exists the copy is incomplete, and a manifest that
@@ -530,8 +632,22 @@ async def materialize_skill(
     await files.write(
         workspace_id,
         f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}",
-        msgspec.json.encode(origin_for(source, payload)),
+        manifest,
     )
+    if readonly:
+        await _delete_if_there(files, workspace_id, marker)
+
+
+async def _delete_if_there(files: WorkspaceFiles, workspace_id: str, path: str) -> None:
+    """Delete ``path``; one already gone is what was wanted. Two reads of one
+    copy clear it at once, and a re-run meets what the run before it already
+    removed (review #865 round 3)."""
+    import contextlib
+
+    from ..filestore.protocol import FileNotFound
+
+    with contextlib.suppress(FileNotFound):
+        await files.delete(workspace_id, path)
 
 
 class Upstream(msgspec.Struct, frozen=True):
@@ -752,6 +868,28 @@ async def refresh_skill(
     to allow — and doing it on an action labelled "update" would destroy them at
     the moment the user least expects it.
     """
+    from ..files import system_writes
+
+    # The platform bringing a copy up to date -- a writer a readonly skill's copy
+    # admits (docs/plan-ai-reads-docs.md P1).
+    with system_writes():
+        return await _refresh(
+            files, workspace_id, app_slug, profile, name, force=force, hub=hub, viewer=viewer
+        )
+
+
+async def _refresh(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+    *,
+    force: bool,
+    hub: SkillHubStore | None,
+    viewer: str,
+) -> SkillRefresh:
+    """`refresh_skill`'s work, run under `system_writes`."""
     from ..filestore.protocol import FileNotFound
 
     root = f"/{WORKSPACE_SKILL_DIR}/{name}"
@@ -798,7 +936,9 @@ async def refresh_skill(
         if not force and not await _unchanged(rel):
             skipped.append(rel)
             continue
-        await files.delete(workspace_id, f"{root}/{rel}")
+        # A refresh cut short after this delete keeps the old `.origin`, which
+        # still lists the file, so the next one meets it gone (review #865 round 3).
+        await _delete_if_there(files, workspace_id, f"{root}/{rel}")
         removed.append(rel)
     await files.write(
         workspace_id,
@@ -857,11 +997,22 @@ async def build_applied_skills_block(
     them this turn. A name whose body can't be resolved (unknown, or over the cap)
     is skipped with a short note so the turn still proceeds. ``""`` when nothing
     resolves. Injected like the workspace block: transient, never persisted."""
+    from ..files import WorkspaceFull
+    from ..quota.disk_ledger import UserDiskFull
+
     sections: list[str] = []
     for name in names:
         try:
             body = await resolve_skill_body(files, workspace_id, app_slug, profile, name)
         except SkillError as e:
+            sections.append(f"### {name}\n\n(could not load: {e})")
+            continue
+        except (WorkspaceFull, UserDiskFull) as e:
+            # A copy that does not fit is refused whole (review #865 round 1), on
+            # every try until space is freed -- a note, like any skill that
+            # cannot load, rather than a turn that cannot start (round 2). The
+            # owner's total across items refuses too, and is not a WorkspaceFull
+            # (round 3).
             sections.append(f"### {name}\n\n(could not load: {e})")
             continue
         if body is None:

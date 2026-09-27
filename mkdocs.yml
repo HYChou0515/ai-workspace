@@ -147,4 +147,7 @@ validation:
   absolute_links: warn
   unrecognized_links: warn
   nav:
-    omitted_files: info
+    # docs/plan-ai-reads-docs.md P5: the in-app AI finds a current doc through
+    # this nav, so a page left out of it is one it never reads -- a warning,
+    # which `--strict` fails. History pages are listed in `not_in_nav` above.
+    omitted_files: warn

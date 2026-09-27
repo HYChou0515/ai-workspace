@@ -1,5 +1,7 @@
 # Plan — Issue #227: fan-out large index jobs (RabbitMQ 406 consumer-timeout)
 
+> 被 #806（plan-rag-context.md）推翻
+
 ## Problem
 
 `pika.exceptions.ChannelClosedByBroker (406) — delivery acknowledgement on

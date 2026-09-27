@@ -19,7 +19,7 @@ import yaml
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, ToolOutputText, function_tool
 from specstar.types import ResourceIDNotFoundError
 
-from ..files import WorkspaceFiles, WorkspaceFull, rel_path
+from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..kb.doc_resolve import DocResolution
 from ..quota.disk_ledger import UserDiskFull
@@ -690,6 +690,8 @@ def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
                 return _workspace_full_msg(exc)
             except UserDiskFull as exc:
                 return _user_disk_full_msg(exc)
+            except ReadOnlyPath as exc:
+                return _readonly_msg(exc)
 
         return _guarded_async
 
@@ -701,8 +703,22 @@ def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
             return _workspace_full_msg(exc)
         except UserDiskFull as exc:
             return _user_disk_full_msg(exc)
+        except ReadOnlyPath as exc:
+            return _readonly_msg(exc)
 
     return _guarded_sync
+
+
+def _readonly_msg(exc: ReadOnlyPath) -> str:
+    """docs/plan-ai-reads-docs.md P1: what the agent is told when it writes into
+    a readonly skill's copy. It names why (the copy follows what the platform
+    ships) and what to do instead, or a model retries the write or tries
+    edit_file, delete_file and a move in turn."""
+    return (
+        f"error: {rel_path(exc.path)} is part of a readonly skill: reference the platform "
+        "keeps in step with what it ships, so it cannot be changed. Write what you need "
+        "somewhere else in the workspace."
+    )
 
 
 def _workspace_full_msg(exc: WorkspaceFull) -> str:

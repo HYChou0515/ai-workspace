@@ -1,5 +1,7 @@
 # Plan: #43 workspace 多人協作
 
+> 被 #611（plan-event-bus-cross-pod-streaming.md）推翻
+
 > 經 `/grill-me` 走完決策樹後定案。可勾選追蹤文件 —— 每完成一階段打勾並 commit。
 > 範圍縮在 **檔案 + chat(agent)**；**notebook/jupyter 協作不做（for now）**。
 > 分支 `feat/issue-43-collab-workspace`。本地 commit，不 push。

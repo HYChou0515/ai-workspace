@@ -1,5 +1,7 @@
 # Plan — Issue #448：PM app 前端(三 renderer 互動 + 寫入 / 新增 / 容錯 / 協作 / 健康度)
 
+> 被 #640（plan-pm-view-ordering.md）推翻
+
 > 本文件是 `/grill-me` 的定案(全程繁中)。#448 是一個 **epic**;本 branch 只交付 **P1 = 基建 + 核心可操作**,其餘拆成 **6 個可平行的 follow-up**。
 
 ## 背景與 delta

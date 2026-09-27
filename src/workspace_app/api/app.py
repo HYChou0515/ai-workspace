@@ -36,7 +36,8 @@ if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
     # here would be circular. `SubagentModel` values arrive through parameters.
     from ..factories import SubagentModel
-from ..files import WorkspaceFiles, WorkspaceFull
+from ..apps.skills import readonly_skill_path
+from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
@@ -1192,6 +1193,10 @@ def create_app(
         # write chokepoint rather than in a route, because the agent's
         # `write_file` never touches one.
         on_write=_note_schedule_file,
+        # docs/plan-ai-reads-docs.md P1: a readonly skill's copy (the docs) is
+        # the platform's to write; every other writer is refused here, at the
+        # chokepoint the agent's tools, the file routes and workflows share.
+        readonly=readonly_skill_path,
     )
 
     admission = AdmissionGate(
@@ -1410,6 +1415,16 @@ def create_app(
     if perf_trace.enabled():
         perf_trace.install(spec, sandbox)
         app.add_middleware(perf_trace.PerfTraceMiddleware)
+
+    @app.exception_handler(ReadOnlyPath)
+    async def _readonly_refused(_request: Request, exc: Exception) -> JSONResponse:
+        """docs/plan-ai-reads-docs.md P1: one handler, so every route refuses a
+        change to a readonly skill's copy the same way -- 403, with a code the
+        front end words in the viewer's language."""
+        assert isinstance(exc, ReadOnlyPath)
+        return JSONResponse(
+            status_code=403, content={"error": "readonly_skill", "path": rel_path(exc.path)}
+        )
 
     @app.exception_handler(WorkspaceFull)
     @app.exception_handler(UserDiskFull)

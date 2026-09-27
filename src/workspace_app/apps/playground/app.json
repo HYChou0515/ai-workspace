@@ -48,7 +48,8 @@
       "author-skill",
       "author-workflow",
       "grill-me",
-      "skill-hub"
+      "skill-hub",
+      "system-help"
     ],
     "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],
     "suggestions": [

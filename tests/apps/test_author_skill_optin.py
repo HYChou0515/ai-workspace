@@ -123,6 +123,9 @@ def test_skills_endpoint_returns_picker_state_across_sources():
         "update_available": False,
         # …and no upstream STATE either (plan-skill-hub P5): only a copy has one.
         "upstream": None,
+        # …and a skill written here can never be readonly: it has no upstream
+        # to decide it (docs/plan-ai-reads-docs.md P1).
+        "readonly": False,
         "pref": "follow",
         "effective": True,
     }
