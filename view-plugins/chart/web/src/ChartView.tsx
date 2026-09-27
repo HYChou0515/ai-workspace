@@ -17,6 +17,7 @@ import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
 import { type Answer, type Built, compactAt, type Layout, measuredFields, toOption, withLayout } from "./option";
 import { highlightMarking, markedCount, markingLit, selectionMarking, stillWritten } from "./marking";
+import { litValues, readPartials } from "./partials";
 import { type Cells, type RasterImage, upscale } from "./raster";
 import {
   type BrushSelected,
@@ -28,7 +29,7 @@ import {
   selectionFromLegend,
 } from "./selection";
 import { specErrors } from "./spec";
-import { viewCall } from "./viewCall";
+import { type ViewCall, viewCall } from "./viewCall";
 
 export const PLUGIN = "chart";
 const FORMAT = 1;
@@ -93,11 +94,14 @@ export function readAnswer(stdout: string): Answer | string {
 function Plot({
   doc,
   answer,
+  call,
   marking,
   source,
 }: {
   doc: Record<string, unknown>;
   answer: Answer;
+  /** How the view was handed to `query`: `partials` is handed it the same way. */
+  call: ViewCall;
   /** The named marking this view is on (#847 PR 3), or null. */
   marking: string | null;
   /** The view file, named as the `source` of what it writes. */
@@ -138,11 +142,29 @@ function Plot({
   // and tied to no marking said "· by <columns>" of the marking the chart
   // moved to, and kept the brush visual off.
   const toMarking = wrote !== null && wrote.on === marking;
-  const lit = useMemo(() => {
+  // (recomputed with `toMarking`, which `brushOff` follows: see the draw effect)
+  const [lit, litByMarking] = useMemo(() => {
     const own = toMarking ? undefined : ownSelectionLit(answer, selection);
-    if (own || !marking) return own;
-    return entry ? markingLit(answer, entry.marking, measured) : answer.layers.map(() => null);
+    if (own || !marking) return [own, false] as const;
+    if (!entry) return [answer.layers.map(() => null), false] as const;
+    return [markingLit(answer, entry.marking, measured), markingSize(entry.marking) > 0] as const;
   }, [marking, toMarking, entry, answer, selection, measured]);
+  // #861 D3: an aggregated bar the marking lights shows the picked part of
+  // it. The sandbox splits its bars by the marking's keys (`partials`) --
+  // asked again only when the KEYS change: the args are the run's cache key,
+  // and a new set of picks on the same keys is folded here, never asked for.
+  const hasBars = answer.layers.some((ly, i) => ly.mark === "bar" && (measured[i]?.size ?? 0) > 0);
+  const by = litByMarking && hasBars ? entry!.marking.keys.join("\u001f") : null;
+  const partialsCall = useMemo(() => ({ ...call, by: by === null ? [] : by.split("\u001f") }), [call, by]);
+  const split = useSandboxRun(PLUGIN, "partials", partialsCall, { enabled: by !== null });
+  const partials = useMemo(
+    () => (split.data && split.data.exit_code === 0 ? readPartials(split.data.stdout) : null),
+    [split.data],
+  );
+  const picked = useMemo(
+    () => (litByMarking && partials ? partials.layers.map((p) => litValues(p, entry!.marking)) : undefined),
+    [litByMarking, partials, entry],
+  );
   // How the chart is laid out (#847/#848 PR 5 P31, P34): compact or not, read
   // from the width its host is given by the observer that resizes it, and --
   // compact -- its height, of which the plot keeps half. It is not part of
@@ -150,8 +172,8 @@ function Plot({
   // drawn chart as the layout alone (`Built.layout`), never a rebuild.
   const [layout, setLayout] = useState<Layout>({ compact: false });
   const built: Built = useMemo(
-    () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}) }),
-    [doc, answer, lit],
+    () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}), ...(picked ? { picked } : {}) }),
+    [doc, answer, lit, picked],
   );
   const builtRef = useRef(built);
   builtRef.current = built;
@@ -165,7 +187,9 @@ function Plot({
   }, [built, layout, brushOff]);
   const optionRef = useRef(option);
   optionRef.current = option;
-  const notes = [...built.notes, ...laid.notes];
+  // a bar the sandbox would not split is lit whole (D4), and says why
+  const whole = litByMarking && partials ? partials.layers.flatMap((p) => (p && "whole" in p ? [p.whole] : [])) : [];
+  const notes = [...new Set([...built.notes, ...whole])].concat(laid.notes);
 
   // What a gesture writes, and what it wrote to the marking (null: nothing --
   // no marking, or one this view cannot write). Read through a ref: the
@@ -454,7 +478,7 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   else if (run.data && run.data.exit_code !== 0)
     body = <Notice role="alert">{run.data.stderr.trim() || run.data.stdout.trim() || `exit ${run.data.exit_code}`}</Notice>;
   else if (typeof answer === "string") body = <Notice role="alert">{answer}</Notice>;
-  else if (answer) body = <Plot doc={doc} answer={answer} marking={marking} source={path ?? null} />;
+  else if (answer) body = <Plot doc={doc} answer={answer} call={call} marking={marking} source={path ?? null} />;
   else body = <Notice>Computing the chart in the sandbox…</Notice>;
 
   return (

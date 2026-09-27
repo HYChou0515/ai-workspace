@@ -109,6 +109,11 @@ export type Options = {
    * spec's own `highlight:` bitset (`null` = this layer is not linked, drawn
    * undimmed). Omitted: the spec's highlight, as before. */
   lit?: (boolean[] | null)[];
+  /** #861 D3: per layer, each row's aggregate over the rows a marking picked
+   * (`partials.ts:litValues`; null: none picked), or null for a layer lit as
+   * `lit` says. An aggregated bar layer given one is drawn in two parts: the
+   * full bar dimmed and, in front, a lit bar of the picked value. */
+  picked?: ((number | null)[] | null)[];
   /** The chart is narrower than `COMPACT_BELOW` (`compactAt`). */
   compact?: boolean;
   /** The chart's height in px, when measured (a compact layout keeps half of
@@ -675,6 +680,12 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   const yAt = (col: Column, row: number): number | null => (yAxis ? yAxis.at(col, row) : (col.value(row) as number | null));
   // boxes ECharts draws nothing of: one with a summary left out
   let boxesOut = 0;
+  // #861 D3: the axis a bar's length is on, and its place in a point
+  const valueAxis = baseAt === 0 ? yAxis : xAxis;
+  const vi = 1 - baseAt;
+  // per series of a split bar, its layer's picked value of each row, said in
+  // its tooltip
+  const pickedOf = new Map<number, readonly (number | null)[]>();
 
   const common = (mark: MarkDef) => ({
     emphasis: { focus: "self" },
@@ -980,6 +991,24 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const textCol = enc.text?.field ? cols[enc.text.field] : undefined;
     const stacked = isStacked(mark);
     const first = series.length;
+    // #861 D3: a bar the marking picks part of, split in two -- only on a
+    // plain number axis (a log one has no 0 to start a part at). In a stack
+    // each segment's picked part must lie inside it, or the stack would move:
+    // one that does not is lit whole, and the note says so.
+    let split = mark.type === "bar" && valueAxis?.kind === "value" ? (opts.picked?.[li] ?? null) : null;
+    if (split && stacked) {
+      const valueCol = cols[(baseAt === 0 ? enc.y : enc.x)?.field as string];
+      const fits = all.every((r) => {
+        const part = split![r];
+        const whole = valueCol?.value(r);
+        return part === null || part === undefined || (typeof whole === "number" && part * whole >= 0 && Math.abs(part) <= Math.abs(whole));
+      });
+      if (!fits) {
+        split = null;
+        const note = "a stack is lit whole: a picked part does not fit inside its segment";
+        if (!notes.includes(note)) notes.push(note);
+      }
+    }
     for (const key of order) {
       // (a stack's rows are one per slot here: the sandbox summed them, P40 row 18)
       const members = groups.get(key) ?? [];
@@ -1036,7 +1065,33 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           },
         };
       }
-      push(s, members, { legend: splitCol ? key : undefined });
+      const as = { legend: splitCol ? key : undefined };
+      if (!split) {
+        push(s, members, as);
+        continue;
+      }
+      // The two parts share one slot (one stack), and the name, so one
+      // palette colour and one legend entry: the lit part first, from the
+      // axis, and the rest of the bar dimmed on top. A picked value longer
+      // than the bar is drawn whole, the bar's rest then 0 (behind it); one
+      // on the other side of 0 is drawn there, the bar whole beside it.
+      const stack = stacked ? "stack" : `\u0000picked ${li} ${key}`;
+      const parts = members.map((r, j) => {
+        const whole = points[j]![vi] ?? null;
+        const part = split![r] ?? null;
+        if (whole === null) return { lit: null, rest: null };
+        if (part === null) return { lit: 0, rest: whole };
+        if (part * whole < 0) return { lit: part, rest: whole };
+        return { lit: part, rest: Math.abs(part) <= Math.abs(whole) ? whole - part : 0 };
+      });
+      const at = (j: number, v: number | null) => points[j]!.map((x, k) => (k === vi ? v : x));
+      pickedOf.set(series.length, split).set(series.length + 1, split);
+      push({ ...s, stack, label: undefined, data: members.map((_, j) => at(j, parts[j]!.lit)) }, members, as);
+      push(
+        { ...s, stack, data: members.map((_, j) => ({ value: at(j, parts[j]!.rest), itemStyle: { opacity: DIM_OPACITY } })) },
+        members,
+        as,
+      );
     }
     // a colour by value paints every series of the layer, not the first alone
     if (colourVisual) colourVisual.seriesIndex = Array.from({ length: series.length - first }, (_, k) => first + k);
@@ -1102,6 +1157,8 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         .filter((c) => cols[c.field!])
         .map((c) => `${escape(c.title ?? c.field!)}: <b>${escape(show(cols[c.field!], row))}</b>`);
       if (answer.layers[where.layer].binned && cols.$count) lines.push(`points: <b>${escape(show(cols.$count, row))}</b>`);
+      const part = pickedOf.get(p.seriesIndex)?.[row];
+      if (part !== undefined && part !== null) lines.push(`picked: <b>${escape(String(part))}</b>`);
       return lines.join("<br/>");
     },
   };

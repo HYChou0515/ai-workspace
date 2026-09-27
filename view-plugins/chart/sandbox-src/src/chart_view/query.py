@@ -124,6 +124,19 @@ def stacked(mark: str, props: Mapping[str, Any]) -> bool:
     return mark in ("bar", "area") and props.get("stack") is True
 
 
+def _stack_groups(encoding: Mapping[str, Any]) -> tuple[Mapping[str, Any], list[str]]:
+    """A stack's value channel and the fields its rows are summed by: the
+    slot -- y when y is a category (a horizontal bar), else x, as the
+    renderer stacks -- and the colour, unless that is by value."""
+    horizontal = encoding["y"]["type"] in ("nominal", "ordinal")
+    value = encoding["x" if horizontal else "y"]
+    groups = [encoding["y" if horizontal else "x"]["field"]]
+    colour = encoding.get("color")
+    if colour and "field" in colour and colour["type"] != "quantitative":
+        groups.append(colour["field"])
+    return value, list(dict.fromkeys(g for g in groups if g != value["field"]))
+
+
 def _stack_sum(
     df: pd.DataFrame, channels: list[tuple[str, Mapping[str, Any]]], encoding: Mapping[str, Any]
 ) -> tuple[pd.DataFrame, list[str]]:
@@ -140,13 +153,7 @@ def _stack_sum(
     differ. Also the fields it summed or kept (what the answer calls
     `measured`): neither is a key, so a selection writes the slot and colour.
     """
-    horizontal = encoding["y"]["type"] in ("nominal", "ordinal")
-    value = encoding["x" if horizontal else "y"]
-    groups = [encoding["y" if horizontal else "x"]["field"]]
-    colour = encoding.get("color")
-    if colour and "field" in colour and colour["type"] != "quantitative":
-        groups.append(colour["field"])
-    groups = list(dict.fromkeys(g for g in groups if g != value["field"]))
+    value, groups = _stack_groups(encoding)
     items = [{"op": value.get("aggregate", "sum"), "field": value["field"], "as": value["field"]}]
     items += [i for i in _measures(channels) if i["field"] != value["field"]]
     summed = {i["field"] for i in items}
@@ -313,6 +320,20 @@ def _encode(df: pd.DataFrame, kinds: Mapping[str, str]) -> dict[str, Any]:
 
 
 @dataclass
+class BarSource:
+    """What an aggregated bar layer's bars were computed from (#861 D3): the
+    rows before aggregating, the fields they were grouped by (in `aggregate`'s
+    order, one drawn row per group that occurs) and the value field and op
+    each bar's length is. `chart_view.partials` splits each bar by a
+    marking's keys from it."""
+
+    frame: pd.DataFrame
+    groups: list[str]
+    value: str
+    op: str
+
+
+@dataclass
 class LayerRows:
     """One layer's rows before binning and encoding — what `validate` reads."""
 
@@ -326,6 +347,25 @@ class LayerRows:
     # the fields sent holding an aggregate (a sum, a mean...) or, in a stack,
     # the value its rows share: never a key (see the module doc)
     measured: list[str] = field(default_factory=list)
+    # an aggregated bar's source rows (#861 D3), else None
+    bar: BarSource | None = None
+
+
+def _bar_source(
+    mark: str, frame: pd.DataFrame, channels: list[tuple[str, Mapping[str, Any]]], encoding
+) -> BarSource | None:
+    """An implicitly aggregated bar's source: grouped by every field channel
+    but the ones aggregated (as `_implicit_aggregate`), its length the value
+    channel's aggregate. None when the value channel is not aggregated."""
+    if mark != "bar":
+        return None
+    horizontal = encoding.get("y", {}).get("type") in ("nominal", "ordinal")
+    value = encoding.get("x" if horizontal else "y", {})
+    ops = {i["field"]: i["op"] for i in _measures(channels)}
+    if value.get("field") not in ops:
+        return None
+    groups = list(dict.fromkeys(d["field"] for _, d in channels if d["field"] not in ops))
+    return BarSource(frame, groups, value["field"], ops[value["field"]])
 
 
 def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str, Any]) -> LayerRows:
@@ -337,6 +377,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
     kinds = _kinds(mark, channels)
     outliers, outlier_kinds = None, {}
     measured: list[str] = []
+    bar: BarSource | None = None
 
     if not channels:  # a rule drawn only from `datum`s
         df = df.iloc[0:0][[]]
@@ -350,6 +391,9 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
         kinds = {f: kinds[f] for f in _group_fields(channels, encoding["y"]["field"])}
         kinds.update({k: "f64" for k in ("$lo", "$mid", "$hi")})
     elif stacked(mark, props):
+        if mark == "bar":
+            value, groups = _stack_groups(encoding)
+            bar = BarSource(df, groups, value["field"], value.get("aggregate", "sum"))
         df, measured = _stack_sum(df, channels, encoding)
         value = encoding["x" if encoding["y"]["type"] in ("nominal", "ordinal") else "y"]
         # The value channel is quantitative (`validate`, P41 row 25), but a
@@ -357,6 +401,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
         # still travels as a number.
         kinds[value["field"]] = "f64"
     else:
+        bar = _bar_source(mark, df, channels, encoding)
         df, measured = _implicit_aggregate(df, channels)
 
     for k in spec.get("keys", []):
@@ -375,7 +420,7 @@ def _layer_rows(spec: Mapping[str, Any], base: pd.DataFrame, layer: Mapping[str,
         # a stack is not lit by a field it does not link by, though its
         # tooltip keeps one where a segment's rows share it (P42 row 29)
         lit = None
-    return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds, measured)
+    return LayerRows(mark, encoding, df, kinds, lit, outliers, outlier_kinds, measured, bar)
 
 
 def layer_rows(spec: Mapping[str, Any], frame: pd.DataFrame) -> list[LayerRows]:
