@@ -106,3 +106,39 @@ describe("a marking over two keys (#861 D1)", () => {
     ]);
   });
 });
+
+describe("a table coarser than its marking (review #862 defect A1)", () => {
+  // A per-group table beside a per-item view: the marking holds (group, item)
+  // picks, the table only `group`.
+  const GROUPS = [{ group: "g1" }, { group: "g2" }];
+  const coarse = (store: MarkingStore, args: Partial<Parameters<typeof useTableMarking>[0]> = {}) =>
+    hook(store, { rows: GROUPS, columns: ["group"], keys: [], source: "/views/groups.ai.yaml", ...args });
+  const held = (store: MarkingStore) => {
+    const m = store.get("fail")!.marking;
+    return { keys: m.keys, rows: markingRows(m) };
+  };
+
+  it("unticking a group takes out only that group's picks: item-level picks and groups it lacks stay", () => {
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "1"], ["g2", "5"], ["g9", "3"]]), "/views/gallery.ai.yaml");
+    const { result } = coarse(store);
+    expect([...result.current.select!.checked]).toEqual([0, 1]);
+    act(() => result.current.select!.set(new Set([0])));
+    expect(held(store)).toEqual({
+      keys: ["group", "item"],
+      rows: [
+        ["g1", "1"],
+        ["g9", "3"],
+      ],
+    });
+  });
+
+  it("ticking a group it holds no pick in writes at the table's own keys", () => {
+    // (g2, *) cannot be said as item-level picks: the marking becomes per-group.
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "1"]]), "/views/gallery.ai.yaml");
+    const { result } = coarse(store);
+    act(() => result.current.select!.set(new Set([0, 1])));
+    expect(held(store)).toEqual({ keys: ["group"], rows: [["g1"], ["g2"]] });
+  });
+});

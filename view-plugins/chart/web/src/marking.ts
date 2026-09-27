@@ -97,7 +97,7 @@ function picks(
   answer: Answer,
   keys: readonly string[],
   measured: Measured,
-): Marking | null {
+): { marking: Marking; rows: number } | null {
   const naming = selections
     .map((s) => selectionRows(s, answer, keys, measured))
     .map((rows) => ({ rows, named: new Set(rows.flatMap((r) => Object.keys(r))) }))
@@ -111,7 +111,9 @@ function picks(
     return values.every((v): v is string => v !== undefined) ? [values] : [];
   });
   const marking = markingFrom(common, rows);
-  return markingSize(marking) > 0 ? marking : null;
+  // `rows`: how many selected rows named a whole pick -- what a chart counts
+  // (review #862), the picks themselves being fewer when rows repeat a key.
+  return markingSize(marking) > 0 ? { marking, rows: rows.length } : null;
 }
 
 /** What a selection writes. null for a view without `keys:` (it cannot be a
@@ -125,21 +127,22 @@ export function selectionMarking(
 ): Marking | null {
   if (keys.length === 0) return null;
   if (selections.length === 0) return markingFrom(keys, []);
-  return picks(selections, answer, keys, measured);
+  return picks(selections, answer, keys, measured)?.marking ?? null;
 }
 
-/** How many picks a selection wrote to the marking (#861 D5): the count said
- * beside "by <keys>", as every view on the marking counts. Rows that name no
- * pick write nothing and are not counted (PR 5 P43, P44 row 35); two rows with
- * the same key values are one pick. */
+/** How many selected rows went to the marking: the count said beside "by
+ * <keys>". Rows, as on #855 and as a linked table counts them (review #862 --
+ * D1: a single key behaves as before); two rows with the same key values are
+ * two rows here and one pick in the marking (the chip counts picks). Rows that
+ * name no whole pick write nothing and are not counted (PR 5 P43, P44 row 35). */
 export function markedCount(
   selections: readonly Selection[],
   answer: Answer,
   keys: string[],
   measured: Measured,
 ): number {
-  const m = keys.length === 0 ? null : picks(selections, answer, keys, measured);
-  return m ? markingSize(m) : 0;
+  const p = keys.length === 0 ? null : picks(selections, answer, keys, measured);
+  return p ? p.rows : 0;
 }
 
 /** The spec's `highlight:` as a marking — what seeds an empty marking on open,
@@ -153,5 +156,5 @@ export function highlightMarking(answer: Answer, keys: string[], measured: Measu
     if (lit) selections.push({ source: "brush", layer: i, rows: lit.flatMap((on, r) => (on ? [r] : [])) });
   });
   if (selections.length === 0) return null;
-  return picks(selections, answer, keys, measured);
+  return picks(selections, answer, keys, measured)?.marking ?? null;
 }

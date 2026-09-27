@@ -34,7 +34,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useMarking } from "../../hooks/useMarking";
 import { litRows, type MarkingRow } from "../../lib/markingRows";
-import { markedBy, projectOntoKeys } from "../../lib/markings";
+import { markedBy, projectOntoKeys, projectPick } from "../../lib/markings";
 
 export type TableMarking = {
   /** Indices (into the rows given) to show, in order. */
@@ -148,9 +148,26 @@ export function useTableMarking({
     // elsewhere. Only when it writes the same keys the marking holds -- other
     // keys are a different marking, which replaces it as any view's write does.
     const tuples = new Set(next.tuples);
+    const carried = projectOntoKeys(rows, writeKeys)!.tuples;
     if (held && held.keys.join("\u001f") === next.keys.join("\u001f")) {
-      const carried = projectOntoKeys(rows, writeKeys)!.tuples;
       for (const t of held.tuples) if (!carried.has(t)) tuples.add(t);
+      write({ keys: next.keys, tuples }, source);
+      return;
+    }
+    // A table coarser than the marking (a per-group table beside per-item
+    // picks, #861 D2) keeps writing at the marking's own keys while its ticks
+    // say only what the held picks already say: unticking a group takes out
+    // that group's picks, and every other pick -- finer than this table, or in
+    // a group it does not show -- stays (review #862 A1). A tick the held picks
+    // cannot say (a group with no pick) writes at the table's keys instead.
+    if (held && next.keys.length < held.keys.length && next.keys.every((k) => held.keys.includes(k))) {
+      const onto = projectPick(held, next.keys);
+      const said = new Set([...held.tuples].map(onto));
+      if ([...next.tuples].every((t) => said.has(t))) {
+        const kept = new Set([...held.tuples].filter((t) => next.tuples.has(onto(t)) || !carried.has(onto(t))));
+        write({ keys: held.keys, tuples: kept }, source);
+        return;
+      }
     }
     write({ keys: next.keys, tuples }, source);
   };

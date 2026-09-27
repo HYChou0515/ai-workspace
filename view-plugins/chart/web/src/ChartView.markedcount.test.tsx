@@ -102,14 +102,14 @@ afterEach(() => {
 });
 
 describe("the count beside 'by <columns>' (P43)", () => {
-  it("counts the picks that went to the marking: a box over every point and segment says 2 (regions n, s), not 8 rows + the segments (#861 D5)", async () => {
+  it("counts what went to the marking: a box over every point and segment says 8, not 8 + the segments (review #862: rows, as on #855)", async () => {
     const store = new MarkingStore();
     const chart = mount(store);
     await settle();
     act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
     await settle();
     expect(marked(store)).toEqual({ region: ["n", "s"] });
-    expect(screen.queryByText(/selected/)?.textContent).toBe("2 selected · by region");
+    expect(screen.queryByText(/selected/)?.textContent).toBe("8 selected · by region");
   });
 });
 

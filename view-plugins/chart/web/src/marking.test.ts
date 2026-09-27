@@ -258,16 +258,18 @@ describe("a key no selected row holds a value of (#847/#848 PR 5 P44 row 35)", (
   });
 });
 
-describe("markedCount is the number of picks (#861 D5)", () => {
+describe("markedCount is the selected rows that name a whole pick (review #862 regression A1)", () => {
   // Four rows over two groups and two items, three distinct (group, item)
-  // pairs: three picks -- not 4 rows, and not the 2 x 2 = 4 combinations.
+  // pairs. A chart says how many ROWS were selected, as on #855 and as its
+  // linked table counts them (D1: a single key behaves as before) -- not the
+  // three distinct picks the marking holds (the chip says those).
   const P = answer(layer("scatter", 4, { group: cat(["g1", "g1", "g2", "g1"]), item: cat(["1", "2", "1", "1"]) }));
   const all = [{ source: "brush" as const, layer: 0, rows: [0, 1, 2, 3] }];
 
-  it("equals the size of what the selection writes", () => {
-    expect(markedCount(all, P, ["group", "item"], [])).toBe(3);
+  it("counts every selected row, not the distinct picks", () => {
+    expect(markedCount(all, P, ["group", "item"], [])).toBe(4);
     expect(markingRows(selectionMarking(all, P, ["group", "item"], [])!)).toHaveLength(3);
-    expect(markedCount(all, P, ["group"], [])).toBe(2);
+    expect(markedCount(all, P, ["group"], [])).toBe(4);
   });
 
   it("is 0 for a view without keys", () => {

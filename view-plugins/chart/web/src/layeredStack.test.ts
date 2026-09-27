@@ -88,19 +88,19 @@ describe("a stack beside an unstacked layer (P42 row 29)", () => {
   // by item" while the marking held 6 items: the segment wrote nothing. What
   // is counted beside "by <keys>" is what went to the marking (P36 row 10):
   // its picks (#861 D5) -- rows 2 and 4 are both region s, one pick.
-  it("counts, of a selection over both layers, only the picks that went to the marking", () => {
+  it("counts, of a selection over both layers, only the rows that went to the marking", () => {
     const measured = measuredFields(both);
     const mixed = [
       { source: "brush" as const, layer: 0, rows: [0, 1, 2] },
       { source: "brush" as const, layer: 1, rows: [2, 4] },
     ];
-    expect(markedCount(mixed, both, ["region"], measured)).toBe(1);
+    expect(markedCount(mixed, both, ["region"], measured)).toBe(2);
   });
 
-  it("(control) counts every pick when every selected layer writes", () => {
+  it("(control) counts every row when every selected layer writes", () => {
     const measured = measuredFields(both);
     // rows 0, 1, 2: regions n, n, s
-    expect(markedCount([{ source: "brush", layer: 1, rows: [0, 1, 2] }], both, ["region"], measured)).toBe(2);
+    expect(markedCount([{ source: "brush", layer: 1, rows: [0, 1, 2] }], both, ["region"], measured)).toBe(3);
   });
 
   it("writes nothing from a selection over the stack alone", () => {

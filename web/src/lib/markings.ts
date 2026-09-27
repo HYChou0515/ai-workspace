@@ -66,6 +66,17 @@ function projected(marking: Marking, positions: readonly number[]): ReadonlySet<
   return set;
 }
 
+/** A pick of `marking` projected onto `keys` (some of its own keys, sorted),
+ * as the tuple text a marking on `keys` would hold — how a view coarser than
+ * the marking compares its rows with the picks (review #862 A1). */
+export function projectPick(marking: Marking, keys: readonly string[]): (tuple: string) => string {
+  const at = keys.map((k) => marking.keys.indexOf(k));
+  return (tuple) => {
+    const values = tuple.split(SEP);
+    return at.map((i) => values[i]!).join(SEP);
+  };
+}
+
 /** Whether `row` is lit by `marking`.
  *
  * - It has every key: lit iff it IS one of the picks (#861 D1).
@@ -91,8 +102,9 @@ export function isLit(row: Readonly<Record<string, string>>, marking: Marking): 
 }
 
 /** The columns a marking marks by, said next to a count: "by group, item"
- * (#847/#848 PR 5 P27). Since #861 the count is the picks, so this says which
- * columns link the views, not why a count ran high. */
+ * (#847/#848 PR 5 P27). Since #861 a count is no longer inflated by
+ * combinations (a chart and a table count rows, a chip counts picks), so this
+ * says which columns link the views, not why a count ran high. */
 export function markedBy(marking: Marking): string {
   return `by ${marking.keys.join(", ")}`;
 }

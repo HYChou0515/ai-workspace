@@ -124,7 +124,7 @@ describe("ChartView on a named marking", () => {
     expect(lastData(b!)).toEqual([dim([1, 4]), [2, 5], dim([3, 6])]);
   });
 
-  it("counts the picks its selection wrote, and says the keys they are by (P27, #861 D5)", () => {
+  it("counts the rows its selection wrote, writes the picks, and says the keys they are by (P27, review #862)", () => {
     const store = new MarkingStore();
     const two = answer(
       layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]), item: cat(["1", "2", "1"]) }),
@@ -132,9 +132,9 @@ describe("ChartView on a named marking", () => {
     sdk.useSandboxRun.mockReturnValue(ok(two));
     mount(store, [docOn("fail", { keys: ["group", "item"] })]);
     brush(charts.made[0]!, [0, 1, 2]);
-    // 3 rows, 2 picks: rows 0 and 2 are both (g1, 1)
+    // 3 rows, 2 picks: rows 0 and 2 are both (g1, 1) -- the chart counts rows
     expect(markingRows(store.get("fail")!.marking)).toEqual([["g1", "1"], ["g2", "2"]]);
-    expect(screen.getByText("2 selected · by group, item")).toBeTruthy();
+    expect(screen.getByText("3 selected · by group, item")).toBeTruthy();
   });
 
   it("a chart on another marking, or none, does not react — not even a re-render", () => {
