@@ -20,6 +20,19 @@
 | [plan-view-plugins.md](plan-view-plugins.md) · [PR1](plan-view-plugins-pr1-platform.md) · [PR2](plan-view-plugins-pr2-chart.md) · [PR3](plan-view-plugins-pr3-marking-layout.md) · [PR4](plan-view-plugins-pr4-stack-gallery.md) | #847 + #848:`*.ai.yaml` renderer 改成 runtime plugin(前端 + 沙盒 bundle + skill 一個資料夾)、chart plugin 當範例、有名字的 marking 跨 workspace 切版連動、疊圖 / 差異 / 上千組縮圖牆(沙盒端快取 + 分頁);機制零領域知識 |
 | [plan-ai-reads-docs.md](plan-ai-reads-docs.md) | app 裡的 AI 讀我們的 docs(含沒被推翻的計畫):readonly skill 每次 `read_skill` 比對 hash、不同就重複製;子 agent 先讀索引再挑檔;被推翻的計畫帶上推翻它的計畫 id |
 | [plan-ai-sheet.md](plan-ai-sheet.md) | `*.ai.csv` 試算表編輯：格子直接打字、增刪列欄、虛擬化、範圍選取與 TSV 剪貼簿（Excel 互通）、undo/redo；單一檔案零 sidecar，後端零知識；附「為何不用 xlsx」實測 |
+| [plan-external-handoff.md](plan-external-handoff.md) | 外部系統把工作交進 App 的 work item（不引入新概念） |
+| [plan-delete-item-cascade.md](plan-delete-item-cascade.md) | 刪除 item 時一併刪除它擁有的東西 |
+| [plan-issue-308.md](plan-issue-308.md) | #308 單份文件的權限覆寫 |
+| [plan-issue-608.md](plan-issue-608.md) | #608 依 group（組織層級的群組）設定權限 |
+| [plan-issue-331.md](plan-issue-331.md) | #331 topic-hub 在 step 之外沒有詳細進度 |
+| [plan-issue-748.md](plan-issue-748.md) | #748 一則回答是誰、什麼時候、花多少 |
+| [plan-subagent-model-choice.md](plan-subagent-model-choice.md) | `run_agent` 的呼叫方替子 agent 選模型 |
+| [plan-verify-number.md](plan-verify-number.md) | `verify-number` skill：交出可以查核的數字 |
+| [plan-third-party-tools.md](plan-third-party-tools.md) | 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上 |
+| [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
+| [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
+| [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
+| [plan-marking-tuples.md](plan-marking-tuples.md) | #861 marking 記住選到的整組 key（D1–D6） |
 
 ## 知識庫（KB）與檢索
 
@@ -33,6 +46,23 @@
 | [plan-llm-wiki.md](plan-llm-wiki.md) | #50 LLM wiki：與 chunk-RAG 平行的第二條維基管線 |
 | [plan-context-cards.md](plan-context-cards.md) | #106 Context cards：輕量、確定性的詞彙卡（glossary） |
 | [plan-collab-kb.md](plan-collab-kb.md) | KB 協作設計 |
+| [plan-issue-230.md](plan-issue-230.md) | #230 介紹 / 說明頁 + AI 問答 |
+| [plan-issue-281.md](plan-issue-281.md) | #281 讀程式碼的 AI 生成 wiki |
+| [plan-issue-281-followup.md](plan-issue-281-followup.md) | #281 follow-up：code-wiki 補缺口與擴展 |
+| [plan-issue-328.md](plan-issue-328.md) | #328 可找到性探測 modal（互動式 prompt 調校） |
+| [plan-issue-328-followup.md](plan-issue-328-followup.md) | #328 follow-up：Tune parsing（單份文件的 prompt 逃生口 + 答案預覽） |
+| [plan-issue-355.md](plan-issue-355.md) | #355 Web 表單建立 code collection、同步改成 job、每日 03:00 自動同步 |
+| [plan-issue-377.md](plan-issue-377.md) | #377 AI 針對文件主動詢問不懂的地方 |
+| [plan-issue-397.md](plan-issue-397.md) | #397 讓 AI 修改 wiki 的工具 + 即時指正 UX |
+| [plan-issue-402.md](plan-issue-402.md) | #402 文件檔案樹篩選 + 可調寬度 |
+| [plan-issue-506.md](plan-issue-506.md) | #506 文件提問 / context card 建議：效能、品質、閉環去重 |
+| [plan-cardgen-drafter-wiki-suppression.md](plan-cardgen-drafter-wiki-suppression.md) | Drafter 用 wiki 自我壓卡（#506 / #577 follow-up） |
+| [plan-issue-511.md](plan-issue-511.md) | #511 待審 inbox 真分頁：CardGen 提案抽成獨立 resource |
+| [plan-issue-520.md](plan-issue-520.md) | #518 + #520 卡片連文件、檢索收斂、「圖片 → 知識」起手範本 |
+| [plan-knowledge-graph-answers.md](plan-knowledge-graph-answers.md) | 知識圖譜的回答面（#534 → #628 / #630 / #633） |
+| [plan-issue-624.md](plan-issue-624.md) | #624 context 上限：偵測、處理、告知 |
+| [plan-context-limit-behind-proxy.md](plan-context-limit-behind-proxy.md) | 自架模型在 proxy 後面時解不出窗口上限 |
+| [plan-issue-739.md](plan-issue-739.md) | #739 對話塞不下時壓成摘要，而不是叫使用者開新對話 |
 
 ## Workflows
 
@@ -41,6 +71,12 @@
 | [plan-workflows.md](plan-workflows.md) | #100 API 觸發的 headless workflow：FS-as-journal、produce→review→commit |
 | [workflows-frontend-brief.md](workflows-frontend-brief.md) | Workflows 前端設計 brief |
 | [plan-make-deck-runtime-craft.md](plan-make-deck-runtime-craft.md) | #284 make_deck：意圖 → 多模態子代理迴圈產投影片 |
+| [plan-issue-323.md](plan-issue-323.md) | #323 使用者自己寫的 workflow（DSL） |
+| [plan-issue-343.md](plan-issue-343.md) | #343 在目前的對話裡啟動 workflow（接管） |
+| [plan-issue-429.md](plan-issue-429.md) | #429 Workflow 引擎三個待補缺口（+ 雜項） |
+| [plan-workflow-language-alignment.md](plan-workflow-language-alignment.md) | Workflow 可靠性：node contract、verify、authoring（維持 JSON DSL） |
+| [plan-cache-required.md](plan-cache-required.md) | DSL 每一步都必須有 `cache`；解析不了的 workflow 到處都說清楚 |
+| [plan-item-schedules.md](plan-item-schedules.md) | item 層級的排程：讓 AI 把自己做的 workflow 放上時鐘 |
 
 ## Sandbox 與基礎設施
 
@@ -66,6 +102,54 @@
 | [plan-sci-plot.md](plan-sci-plot.md) | #285 sci-plot 科學繪圖工具 |
 | [plan-read-image.md](plan-read-image.md) | #112 read_image：VLM-over-workspace-image 工具 |
 | [plan-code-qa.md](plan-code-qa.md) | 程式碼 QA 設計 |
+| [plan-issue-366.md](plan-issue-366.md) | #366 sandbox 位址一致性（http sandbox-host） |
+| [plan-issue-504.md](plan-issue-504.md) | #504 隔離 sandbox 的檔案 owner 不對 |
+| [plan-idle-reap-holds-the-handle.md](plan-idle-reap-holds-the-handle.md) | sandbox handle 永遠能從 registry 找到 |
+| [plan-sandbox-recovery-and-error-honesty.md](plan-sandbox-recovery-and-error-honesty.md) | 沙盒被收走之後平台不復原，還說錯原因 |
+| [plan-issue-830.md](plan-issue-830.md) | #830 沙盒大小的硬上限由 record 帶給前端 |
+| [plan-sandbox-modal-redo.md](plan-sandbox-modal-redo.md) | item 的 Sandbox modal 用現有元件重畫 |
+| [plan-lazy-file-tree.md](plan-lazy-file-tree.md) | 檔案樹懶載入：打開 item 不該等 50 秒 |
+| [plan-entity-listing-op-count.md](plan-entity-listing-op-count.md) | 列表變慢的真因：一次請求做了幾百次檔案操作 |
+| [plan-api-lifecycle-offload.md](plan-api-lifecycle-offload.md) | 把 API lifecycle 裡不是 pod-local 的工作搬離 API pod（PR #804） |
+| [plan-run-consumers-list.md](plan-run-consumers-list.md) | `server.run_consumers` 接受清單：all-in-one 行程只消費部分 JobType |
+
+## 前端與介面
+
+| 文件 | 主題 |
+|---|---|
+| [plan-issue-460.md](plan-issue-460.md) | #460 前端缺陷批次 + #105 品質分數顯示缺口 |
+| [plan-issue-680.md](plan-issue-680.md) | #680 entity 詳情 modal：三個 view 雙擊開啟 |
+| [plan-issue-779.md](plan-issue-779.md) | #779 modal 誤關：離開 modal 只有一套規則 |
+| [plan-input-class-sweep.md](plan-input-class-sweep.md) | #829 每個文字控制項都套 `.input` |
+| [plan-scrollbars.md](plan-scrollbars.md) | 該捲的地方要捲，該一致的地方要一致 |
+| [plan-datetimerange-role.md](plan-datetimerange-role.md) | `datetimerange` 這個 role 名稱已經在說謊 |
+| [plan-chat-rail-manifest-nouns.md](plan-chat-rail-manifest-nouns.md) | chat rail 一律說「chat」、重複平台選單、藏起自己的下拉 |
+| [plan-rail-menu-icons.md](plan-rail-menu-icons.md) | chat rail 的 ☰ 選單畫和全域切換器一樣的 icon |
+| [plan-export-current-chat.md](plan-export-current-chat.md) | 匯出下載的是第一個 chat，不是正在看的那一個 |
+| [plan-chat-video-export.md](plan-chat-video-export.md) | 前端匯出對話：文字（JSON / Markdown）與影片（job） |
+| [plan-marp-render.md](plan-marp-render.md) | 在 workspace 檔案預覽裡渲染 Marp 簡報 |
+| [plan-onboarding-images.md](plan-onboarding-images.md) | onboarding 內文走 markdown、可以放圖 |
+
+## PM App
+
+| 文件 | 主題 |
+|---|---|
+| [plan-pm-github-projects.md](plan-pm-github-projects.md) | 讓 PM app 用起來像 GitHub Projects |
+| [plan-pm-ui-review.md](plan-pm-ui-review.md) | PM app UI review（PR #640 與後續） |
+| [plan-pm-view-ordering.md](plan-pm-view-ordering.md) | PM view 排序 + View settings 面板（GitHub Projects 風格） |
+| [plan-pm-entity-body-edit.md](plan-pm-entity-body-edit.md) | 使用者改不了 entity 內文、看板卡片藏了編號 |
+| [plan-pm-gantt-urgency-and-axis.md](plan-pm-gantt-urgency-and-axis.md) | 甘特圖：緊急程度、上色來源、收合、以週為主的時間軸 |
+| [plan-pm-auto-schedule.md](plan-pm-auto-schedule.md) | Timeline 上的自動排程 |
+| [plan-issue-785.md](plan-issue-785.md) | #785 PM app 七項：時間軸到小時、非工時摺疊、一張會說謊的甘特圖 |
+
+## WUI
+
+| 文件 | 主題 |
+|---|---|
+| [plan-wui.md](plan-wui.md) | WUI：資料夾當可互動的網頁 |
+| [plan-wui-deploy.md](plan-wui-deploy.md) | WUI「Deploy」：一個直接落在頁面上的 URL |
+| [plan-wui-overview.md](plan-wui-overview.md) | WUI 總覽：列出所有已部署 WUI 的一頁 |
+| [plan-wui-overview-icon-favourites.md](plan-wui-overview-icon-favourites.md) | WUI 總覽：頁面自己的 icon 與瀏覽者的最愛 |
 
 ## 各 issue 的計畫
 
