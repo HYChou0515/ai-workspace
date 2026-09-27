@@ -1,0 +1,9 @@
+view: chart
+source: data/a.csv
+mark: bar
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}
+transform:
+  - aggregate: [{op: mean, as: m}]
+    groupby: [a]

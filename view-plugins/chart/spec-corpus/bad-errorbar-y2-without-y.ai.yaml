@@ -1,0 +1,6 @@
+view: chart
+source: data/a.csv
+mark: errorbar
+encoding:
+  x: {field: g, type: nominal}
+  y2: {field: hi, type: quantitative}

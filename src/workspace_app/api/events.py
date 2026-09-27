@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Literal, get_args
 
 # #100: workflow phase/step events live in the `workflow` package (so the step
@@ -131,6 +131,9 @@ class UserMessage:
     author: str
     content: str
     created_at: int = 0
+    # #847 P7: the markings sent with the message, as persisted (`SentMarking`),
+    # so live viewers draw the same chips a reload shows — a refused one too.
+    markings: list[dict[str, Any]] = field(default_factory=list)
     type: Literal["user_message"] = "user_message"
 
 

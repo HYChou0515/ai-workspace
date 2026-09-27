@@ -1,0 +1,5 @@
+view: chart
+source: data/a.csv
+mark: pie
+encoding:
+  color: {field: k, type: nominal}

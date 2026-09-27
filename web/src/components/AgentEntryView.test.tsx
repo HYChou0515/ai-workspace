@@ -818,6 +818,50 @@ describe("EntryView — show_file (files the agent showed)", () => {
     );
     expect(screen.queryByTestId("shown-files")).not.toBeInTheDocument();
   });
+
+  it("a user message shows the markings it was sent with, a refused one too (#847 P7)", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "message",
+          message: {
+            role: "user",
+            author: "u",
+            content: "why?",
+            markings: [
+              { name: "fail", path: "/.markings/fail.json", counts: { lot: 2 } },
+              { name: "big", path: "", counts: { lot: 9 }, error: "workspace is full" },
+            ],
+          },
+        }}
+      />,
+    );
+    const chips = screen.getAllByTestId("marking-chip");
+    expect(chips.map((c) => c.getAttribute("data-refused"))).toEqual(["false", "true"]);
+    expect(screen.getByTestId("message-body")).toHaveTextContent(/^why\?$/);
+  });
+
+  it("shows ONE layout card for a layout declaration, not a card per file (#847)", () => {
+    const layoutDeclared =
+      "A layout of 2 files is now displayed.\n[shown-files]" +
+      JSON.stringify({
+        shown_files: [
+          { path: "/v/a.ai.yaml", mime: "text/plain", size: 10 },
+          { path: "/v/b.png", mime: "image/png", size: 10 },
+        ],
+        layout: {
+          type: "split",
+          dir: "row",
+          ratio: 0.5,
+          a: { type: "leaf", path: "/v/a.ai.yaml" },
+          b: { type: "leaf", path: "/v/b.png" },
+        },
+      });
+    render(<EntryView entry={call(layoutDeclared)} fileUrl={fakeFileUrl} />);
+    expect(screen.getByTestId("shown-layout")).toBeInTheDocument();
+    expect(screen.queryByTestId("shown-files")).not.toBeInTheDocument();
+    expect(document.querySelector("details")).toBeNull();
+  });
 });
 
 // Any tool may declare files, not just `show_file` — a plotting tool's charts

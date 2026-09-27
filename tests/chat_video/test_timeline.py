@@ -285,6 +285,36 @@ def test_show_file_is_its_files_and_nothing_else():
     ]
 
 
+def test_a_layout_declaration_plays_as_each_of_its_files():
+    """`show_file(layout=…)` (#847) declares the tree AND every leaf in the flat
+    list. The chat draws one card that opens the arrangement; the video has no
+    panes to open, so it shows each file — the flat list is what it reads."""
+    tree = {
+        "type": "split",
+        "dir": "row",
+        "ratio": 0.5,
+        "a": {"type": "leaf", "path": "/a.png"},
+        "b": {"type": "leaf", "path": "/b.csv"},
+    }
+    shown = declare_shown_files(
+        "A layout of 2 files",
+        [
+            {"path": "/a.png", "mime": "image/png", "size": 9},
+            {"path": "/b.csv", "mime": "text/csv", "size": 9},
+        ],
+        layout=tree,
+        caption="linked",
+    )
+    [step] = build_timeline(
+        title="t",
+        messages=[{"role": "tool", "tool_name": "show_file", "content": shown}],
+        options=VideoOptions(),
+    ).steps
+
+    assert isinstance(step, ToolStep)
+    assert (step.card, [f.path for f in step.files]) == (False, ["/a.png", "/b.csv"])
+
+
 def test_the_timeline_names_every_workspace_path_it_will_want_bytes_for():
     """Declared IMAGES and `![](path)` images in answers — but not a declared
     non-image (a CSV is a card by the chat's own rule, `isInlineImage`, and a

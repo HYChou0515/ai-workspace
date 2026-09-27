@@ -46,6 +46,22 @@ describe("useEntityLiveSync (#455 P2)", () => {
     expect(spy).not.toHaveBeenCalledWith({ queryKey: ["entities", "pm", "pm-project/1"] });
   });
 
+  it("four open views of one item share ONE connection (#856 P9)", async () => {
+    // A layout of four charts used to open four; with the agent's and the
+    // presence stream that filled the browser's six-per-host limit and the
+    // next request (sending a message) queued forever.
+    const sub = vi.spyOn(api, "subscribeInvestigation").mockImplementation(streamOf([]) as never);
+    const qc = makeTestQueryClient();
+    const views = [1, 2, 3, 4].map(() =>
+      renderHook(() => useEntityLiveSync("pm", "pm-project/1"), {
+        wrapper: ({ children }: { children: ReactNode }) => <QueryWrap client={qc}>{children}</QueryWrap>,
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sub).toHaveBeenCalledTimes(1);
+    views.forEach((v) => v.unmount());
+  });
+
   it("does not open a subscription until the item id is known", () => {
     const sub = vi.spyOn(api, "subscribeInvestigation").mockImplementation(streamOf([]) as never);
     const qc = makeTestQueryClient();

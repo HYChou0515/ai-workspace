@@ -1,0 +1,7 @@
+view: chart
+source: data/dies.parquet
+facet: {field: wafer}
+mark: scatter
+encoding:
+  x: {field: die_x, type: quantitative}
+  y: {field: die_y, type: quantitative}

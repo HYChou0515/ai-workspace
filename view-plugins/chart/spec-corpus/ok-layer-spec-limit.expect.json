@@ -1,0 +1,70 @@
+{
+  "view": "chart",
+  "title": "Thickness by day, with the spec limit",
+  "source": "data/daily.csv",
+  "transform": [
+    {
+      "filter": "tool != 'T9'"
+    }
+  ],
+  "layer": [
+    {
+      "mark": {
+        "type": "line",
+        "point": true
+      },
+      "encoding": {
+        "x": {
+          "field": "day",
+          "type": "temporal"
+        },
+        "y": {
+          "field": "thickness",
+          "type": "quantitative",
+          "aggregate": "mean"
+        },
+        "color": {
+          "field": "tool",
+          "type": "nominal"
+        }
+      }
+    },
+    {
+      "mark": {
+        "type": "rule",
+        "color": "red"
+      },
+      "encoding": {
+        "y": {
+          "datum": 105.5,
+          "title": "upper spec"
+        }
+      }
+    },
+    {
+      "mark": "text",
+      "encoding": {
+        "x": {
+          "field": "day",
+          "type": "temporal"
+        },
+        "y": {
+          "field": "thickness",
+          "type": "quantitative"
+        },
+        "text": {
+          "field": "note",
+          "type": "nominal"
+        }
+      },
+      "transform": [
+        {
+          "filter": {
+            "field": "note",
+            "valid": true
+          }
+        }
+      ]
+    }
+  ]
+}

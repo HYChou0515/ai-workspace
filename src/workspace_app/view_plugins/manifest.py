@@ -39,6 +39,25 @@ class SandboxHalf(Struct, forbid_unknown_fields=True):
     validate: bool = False
 
 
+class Provides(Struct, forbid_unknown_fields=True):
+    """Platform capabilities a plugin's sandbox half serves, each named by the
+    sandbox command that serves it. The platform finds a capability's plugin
+    here and never by the plugin's name.
+
+    - ``marking_rows`` — "save a marking as a table" (plan-view-plugins-pr5
+      P7). The command takes ``{"view": <workspace path of a view file or a
+      table file>}`` plus exactly one of ``{"columns": {column: [text, …]}}`` or
+      ``{"marking": <workspace path of a .markings/<name>.json>}``, and answers
+      ``{"rows": n, "csv": text, "columns": {column: [text, …]}}`` — the view's
+      rows the marking lights, every column, and the marking it lit them by (as
+      given or as read from the file; the platform checks a chat chip's save
+      against it) — or exits 2 with one user-facing sentence on stderr. At most one
+      installed plugin may provide it (``discovery`` refuses two).
+    """
+
+    marking_rows: str | None = None
+
+
 class PluginManifest(Struct, forbid_unknown_fields=True):
     name: str
     #: The SDK major version the plugin was built against. The SPA refuses a
@@ -49,3 +68,4 @@ class PluginManifest(Struct, forbid_unknown_fields=True):
     #: Relative path of a folder holding ``SKILL.md``.
     skill: str | None = None
     sandbox: SandboxHalf | None = None
+    provides: Provides | None = None

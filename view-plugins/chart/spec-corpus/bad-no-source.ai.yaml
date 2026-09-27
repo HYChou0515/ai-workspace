@@ -1,0 +1,5 @@
+view: chart
+mark: line
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}

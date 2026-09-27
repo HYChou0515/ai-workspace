@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { VIEW_KIND, type EntityViewProps, type ViewSpec } from "./types";
-import { registerViewKind, resolveViewRenderer } from "./viewKindRegistry";
+import { registerViewKind, resolveViewRenderer, unregisterViewKind } from "./viewKindRegistry";
 
 afterEach(cleanup);
 
@@ -78,5 +78,20 @@ describe("viewKindRegistry", () => {
       />,
     );
     expect(screen.getByTestId("bar-1")).toBeInTheDocument();
+  });
+
+  it("a kind may offer a Thumbnail for chat cards; built-ins and unknown kinds offer none (#847/#848 P6)", () => {
+    // The capability is the KIND's: the chat card asks the registry, never a
+    // list of kinds it knows can be drawn small.
+    const Thumbnail = () => <div>small</div>;
+    registerViewKind({ kind: "thumbkind", Component: () => null, Thumbnail });
+    try {
+      expect(resolveViewRenderer("thumbkind").Thumbnail).toBe(Thumbnail);
+    } finally {
+      unregisterViewKind("thumbkind");
+    }
+    for (const kind of [VIEW_KIND.table, VIEW_KIND.board, VIEW_KIND.gantt, "nosuchkind"]) {
+      expect(resolveViewRenderer(kind).Thumbnail).toBeUndefined();
+    }
   });
 });

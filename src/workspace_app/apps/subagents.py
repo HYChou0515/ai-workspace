@@ -157,7 +157,7 @@ async def workspace_subagent_defs(
     so the `tools:` it names is a REQUEST. Clamping here (rather than at the call
     site) is what keeps a hand-written file from granting itself `exec` on an App
     that has no sandbox."""
-    from ..files.facade import read_all
+    from ..filestore.batch import read_all
 
     prefix = f"/{WORKSPACE_AGENT_DIR}/"
     wanted = [

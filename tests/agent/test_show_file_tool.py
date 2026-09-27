@@ -138,3 +138,172 @@ async def test_show_file_keeps_the_declaration_out_of_what_the_model_reads():
 
     assert out.splitlines()[0] == "a.png is now displayed in the chat — the user can see it."
     assert out.count(SHOWN_FILES_MARKER) == 1
+
+
+# --- #847 PR 3 P4: `show_file(layout=…)` — one card that opens an arrangement ---
+
+
+def _layout(tree: dict):
+    """What the SDK hands the impl: the model's JSON validated into the model."""
+    from workspace_app.agent.shown_files import PaneLayout
+
+    return PaneLayout.model_validate(tree)
+
+
+def _leaf(path: str) -> dict:
+    return {"type": "leaf", "path": path, "dir": None, "ratio": None, "a": None, "b": None}
+
+
+def _split(dir: str, a: dict, b: dict, ratio: float | None = None) -> dict:
+    return {"type": "split", "path": None, "dir": dir, "ratio": ratio, "a": a, "b": b}
+
+
+def _declaration(out: str) -> dict:
+    _head, sep, payload = out.partition(SHOWN_FILES_MARKER)
+    assert sep, out
+    return json.loads(payload)
+
+
+async def _three_files():
+    ctx, files = await _ctx()
+    for p in ("/v/grid.png", "/v/scatter.png", "/v/table.pdf"):
+        await files.write("inv-1", p, _PDF if p.endswith(".pdf") else _PNG)
+    return ctx
+
+
+async def test_show_file_layout_declares_the_tree_and_every_file():
+    """The marker carries the tree (paths as leaves, absolute like `path`) AND
+    every leaf in `shown_files`, so a consumer that only knows the flat list
+    still sees each file — the chat video and chat export read that list."""
+    ctx = await _three_files()
+    tree = _split(
+        "row",
+        _split("col", _leaf("v/grid.png"), _leaf("./v/scatter.png"), 0.4),
+        _leaf("/v/table.pdf"),
+    )
+
+    out = await show_file_impl(ctx, layout=_layout(tree), caption="fail rate, linked")
+
+    decl = _declaration(out)
+    assert decl["layout"] == {
+        "type": "split",
+        "dir": "row",
+        "ratio": 0.5,
+        "a": {
+            "type": "split",
+            "dir": "col",
+            "ratio": 0.4,
+            "a": {"type": "leaf", "path": "/v/grid.png"},
+            "b": {"type": "leaf", "path": "/v/scatter.png"},
+        },
+        "b": {"type": "leaf", "path": "/v/table.pdf"},
+    }
+    assert [f["path"] for f in decl["shown_files"]] == [
+        "/v/grid.png",
+        "/v/scatter.png",
+        "/v/table.pdf",
+    ]
+    assert decl["shown_files"][2]["mime"] == "application/pdf"
+    # The caption names the arrangement, so it rides on the layout, once.
+    assert decl["caption"] == "fail rate, linked"
+    assert all("caption" not in f for f in decl["shown_files"])
+
+
+async def test_show_file_layout_tells_the_agent_what_is_on_screen():
+    ctx = await _three_files()
+    tree = _split("row", _leaf("v/grid.png"), _leaf("v/table.pdf"))
+
+    note = (await show_file_impl(ctx, layout=_layout(tree))).partition(SHOWN_FILES_MARKER)[0]
+
+    assert note.startswith("A layout of 2 files")
+    assert "v/grid.png" in note and "v/table.pdf" in note
+    assert "/v/grid.png" not in note  # the agent's relative dialect (#549)
+
+
+async def test_show_file_layout_one_missing_leaf_declares_nothing():
+    """One failure declares nothing: a card whose third pane is empty is the
+    broken card the single-path rule already refuses to draw."""
+    ctx = await _three_files()
+    tree = _split("row", _leaf("v/grid.png"), _leaf("v/gone.png"))
+
+    out = await show_file_impl(ctx, layout=_layout(tree))
+
+    assert out.startswith("error:")
+    assert "v/gone.png" in out
+    assert SHOWN_FILES_MARKER not in out
+
+
+async def test_show_file_layout_rejects_malformed_nodes():
+    ctx = await _three_files()
+    ok = _split("row", _leaf("v/grid.png"), _leaf("v/table.pdf"))
+    cases = {
+        "a leaf with no path": _split("row", _leaf(""), _leaf("v/table.pdf")),
+        "a leaf that also splits": _split(
+            "row", _leaf("v/grid.png") | {"a": _leaf("x")}, _leaf("v/table.pdf")
+        ),
+        "a split missing a side": ok | {"b": None},
+        "a split with no dir": ok | {"dir": None},
+        "a split that also names a path": ok | {"path": "v/grid.png"},
+        "a ratio outside (0, 1)": ok | {"ratio": 1.0},
+        "the same file twice": _split("row", _leaf("v/grid.png"), _leaf("./v/grid.png")),
+        "a single leaf": _leaf("v/grid.png"),
+    }
+    for what, tree in cases.items():
+        out = await show_file_impl(ctx, layout=_layout(tree))
+        assert out.startswith("error: layout"), (what, out)
+        assert SHOWN_FILES_MARKER not in out, what
+
+
+async def test_show_file_needs_exactly_one_of_path_and_layout():
+    ctx = await _three_files()
+    tree = _split("row", _leaf("v/grid.png"), _leaf("v/table.pdf"))
+    both = await show_file_impl(ctx, "v/grid.png", layout=_layout(tree))
+    neither = await show_file_impl(ctx)
+    for out in (both, neither):
+        assert out.startswith("error:")
+        assert SHOWN_FILES_MARKER not in out
+
+
+def test_show_file_schema_offers_layout_without_refs_and_depth_bounded():
+    """The emitted schema is what the model sees. #613 inlines `$defs` for local
+    chat templates, so a layout must reach the model as plain nested objects —
+    a recursive type would leave a dangling `$ref` once the defs are dropped.
+    Bounded at three levels of split (eight panes)."""
+    from workspace_app.agent.tools import build_tools
+
+    [tool] = build_tools(["show_file"])
+    schema = tool.params_json_schema
+    assert "$ref" not in json.dumps(schema)
+    layout = next(v for v in schema["properties"]["layout"]["anyOf"] if v.get("type") == "object")
+    depth, node = 0, layout
+    while "a" in node["properties"]:
+        node = next(v for v in node["properties"]["a"]["anyOf"] if v.get("type") == "object")
+        depth += 1
+    assert depth == 3
+    assert set(node["properties"]) == {"type", "path"}
+
+
+def test_inlining_refuses_a_recursive_schema_instead_of_leaving_a_dangling_ref():
+    """`$defs` is dropped after inlining, so a self-reference cut off at some
+    depth points at nothing. The only honest outcome is to refuse it."""
+    import pytest
+
+    from workspace_app.agent.tools import _inline_schema_refs
+
+    schema = {
+        "$defs": {"N": {"type": "object", "properties": {"n": {"$ref": "#/$defs/N"}}}},
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/N"}},
+    }
+    with pytest.raises(ValueError, match="recursive tool schema"):
+        _inline_schema_refs(schema)
+    # The same def used twice side by side is not a cycle.
+    flat = {
+        "$defs": {"L": {"type": "string"}},
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/L"}, "b": {"$ref": "#/$defs/L"}},
+    }
+    assert _inline_schema_refs(flat)["properties"] == {
+        "a": {"type": "string"},
+        "b": {"type": "string"},
+    }

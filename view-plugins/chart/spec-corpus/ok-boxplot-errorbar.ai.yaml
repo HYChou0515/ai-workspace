@@ -1,0 +1,11 @@
+view: chart
+source: data/runs.tsv
+layer:
+  - mark: boxplot
+    encoding:
+      x: {field: recipe, type: nominal}
+      y: {field: yield, type: quantitative, scale: {zero: false}}
+  - mark: {type: errorbar, extent: stderr}
+    encoding:
+      x: {field: recipe, type: nominal}
+      y: {field: yield, type: quantitative}

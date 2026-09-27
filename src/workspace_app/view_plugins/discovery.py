@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -119,6 +119,14 @@ def load_view_plugin(sub: Path) -> ViewPlugin:
             raise bad("sandbox must name exactly one of `bundle` or `artifact`")
         if m.sandbox.bundle is not None and not _inside(sub, m.sandbox.bundle):
             raise bad(f"sandbox.bundle {m.sandbox.bundle!r} must be a folder inside the plugin")
+    rows = m.provides.marking_rows if m.provides is not None else None
+    if rows is not None:
+        if m.sandbox is None:
+            raise bad("provides.marking_rows names a sandbox command, but there is no `sandbox`")
+        if not _NAME.fullmatch(rows):
+            raise bad(
+                f"provides.marking_rows {rows!r} must be a command name ([a-z0-9][a-z0-9_-]*)"
+            )
     if not (sub / WEB_ENTRY).is_file():
         raise bad(f"{WEB_ENTRY.as_posix()} is missing — build the plugin's web half", sub)
     return ViewPlugin(name=m.name, dir=sub, manifest=m)
@@ -143,6 +151,20 @@ def is_furniture(name: str) -> bool:
     return name.startswith(".") or name == "lost+found"
 
 
+def _marking_rows(plugin: ViewPlugin) -> str | None:
+    provides = plugin.manifest.provides
+    return provides.marking_rows if provides is not None else None
+
+
+def marking_rows_provider(plugins: Sequence[ViewPlugin]) -> tuple[str, str] | None:
+    """``(plugin, command)`` of the one plugin providing ``marking_rows``, or
+    None when none does. Discovery refuses two, so the first is the one."""
+    for p in plugins:
+        if (cmd := _marking_rows(p)) is not None:
+            return p.name, cmd
+    return None
+
+
 def discover_view_plugins(plugins_dir: Path) -> list[ViewPlugin]:
     """Every plugin under ``plugins_dir``, sorted by name; ``[]`` when the dir
     does not exist. Raises ``ViewPluginError`` naming the first bad plugin."""
@@ -163,5 +185,12 @@ def discover_view_plugins(plugins_dir: Path) -> list[ViewPlugin]:
                 )
             owner[kind] = plugin.name
         out.append(plugin)
+    providers = [p.name for p in out if _marking_rows(p) is not None]
+    if len(providers) > 1:
+        raise ViewPluginError(
+            f"provides.marking_rows is declared by more than one plugin ({providers}, in "
+            f"{plugins_dir}) — saving a marking as a table could not say which one selects "
+            "the rows; keep it in one"
+        )
     logger.info("view plugins: discovered %d from %s", len(out), plugins_dir)
     return out

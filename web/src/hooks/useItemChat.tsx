@@ -81,6 +81,8 @@ export function useItemChat({
           applySkills: opts?.applySkills,
           // Attached image workspace paths — a VLM main model reads them inline.
           imagePaths: opts?.imagePaths,
+          // #847 P7: the markings kept as chips, written for the AI to read.
+          markings: opts?.markings,
           // grill-me: the `ask_user` question this message answers. This is the
           // surface the workspace actually uses, so dropping it here left the
           // field set everywhere except on the wire.

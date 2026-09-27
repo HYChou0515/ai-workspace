@@ -86,4 +86,10 @@ describe("sendMessage request body", () => {
     const body = JSON.parse(captured.bodies[0]!);
     expect(body.image_paths).toEqual(["/uploads/shot.png", "/uploads/chart.png"]);
   });
+
+  it("carries the markings kept as chips (#847 P7)", async () => {
+    const markings = [{ name: "fail", source: "/v/a.ai.yaml", columns: { lot: ["L1"] } }];
+    await realApi.sendMessage({ slug: "rca", investigationId: "inv-1", content: "q", markings });
+    expect(JSON.parse(captured.bodies[0]!).markings).toEqual(markings);
+  });
 });

@@ -110,6 +110,14 @@ class RunOut(BaseModel):
     exit_code: int
 
 
+#: Run one plugin command for an item the caller was ALREADY authorised on:
+#: ``(item_id, plugin, cmd, args) -> RunOut``, raising ``HTTPException`` for a
+#: call that never ran. The runner route is one caller; "save a marking as a
+#: table" (``api/marking_table.py``) is another, so both reach the sandbox
+#: through the same checks.
+RunPluginCommand = Callable[[str, str, str, dict[str, Any]], Awaitable[RunOut]]
+
+
 def register_view_plugin_runner(
     app: FastAPI | APIRouter,
     *,
@@ -118,7 +126,7 @@ def register_view_plugin_runner(
     sandbox: Sandbox,
     registry: Any,
     resolve_tools: Callable[[str], Awaitable[ExternalTools]],
-) -> None:
+) -> RunPluginCommand:
     """The one generic runner a plugin's web half calls (``useSandboxRun``).
 
     ``resolve_tools`` is what a turn resolves for the item — the app's
@@ -127,13 +135,7 @@ def register_view_plugin_runner(
     that comes later finds nothing missing. Plugin commands are not agent tools:
     nothing here touches an app's tool ceiling or the item's tool picker."""
 
-    @app.post("/a/{slug}/items/{item_id}/view-plugins/{plugin}/{cmd}")
-    async def run_view_plugin_command(
-        slug: str, item_id: str, plugin: str, cmd: str, body: RunBody
-    ) -> RunOut:
-        # Drawing a view is reading the item; the command's output only reaches
-        # the person who could already open the files it reads.
-        investigation_id = locator.require_access(slug, item_id, "read_content")
+    async def run(investigation_id: str, plugin: str, cmd: str, args: dict[str, Any]) -> RunOut:
         p = next((x for x in get_plugins() if x.name == plugin), None)
         if p is None:
             raise HTTPException(status_code=404, detail=f"no view plugin {plugin!r}")
@@ -146,7 +148,7 @@ def register_view_plugin_runner(
             raise HTTPException(
                 status_code=404, detail=f"view plugin {plugin!r} has no command {cmd!r}"
             )
-        args_json = json.dumps(body.args)
+        args_json = json.dumps(args)
         if len(args_json.encode()) >= ARGV_MAX:
             raise HTTPException(
                 status_code=413,
@@ -251,3 +253,14 @@ def register_view_plugin_runner(
             stderr=stderr,
             exit_code=result.exit_code,
         )
+
+    @app.post("/a/{slug}/items/{item_id}/view-plugins/{plugin}/{cmd}")
+    async def run_view_plugin_command(
+        slug: str, item_id: str, plugin: str, cmd: str, body: RunBody
+    ) -> RunOut:
+        # Drawing a view is reading the item; the command's output only reaches
+        # the person who could already open the files it reads.
+        investigation_id = locator.require_access(slug, item_id, "read_content")
+        return await run(investigation_id, plugin, cmd, body.args)
+
+    return run

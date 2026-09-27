@@ -1,0 +1,15 @@
+view: chart
+source: data/a.csv
+marking: picked
+keys: [item]
+highlight: {where: "item == 'x'"}
+layer:
+  - mark: {type: bar, stack: true}
+    encoding:
+      x: {field: group, type: nominal}
+      y: {field: value, type: quantitative}
+  - mark: scatter
+    encoding:
+      x: {field: group, type: nominal}
+      y: {field: value, type: quantitative}
+      tooltip: {field: item, type: nominal}

@@ -59,7 +59,23 @@ function walk(dir: string, keep: (name: string) => boolean): string[] {
   return out;
 }
 
-const SOURCES = walk(SRC, (n) => n.endsWith(".tsx") && !n.endsWith(".test.tsx"));
+const isSource = (n: string) => n.endsWith(".tsx") && !n.endsWith(".test.tsx");
+/** A view plugin's web half renders inside this SPA's document and wears its
+ * classes, so its controls are held to the same rule (a gallery toolbar
+ * shipped with bare native fields). Each plugin's own `web/src`, never its
+ * node_modules. */
+const PLUGINS = resolve(SRC, "../../view-plugins");
+const PLUGIN_SOURCES = readdirSync(PLUGINS)
+  .map((name) => join(PLUGINS, name, "web", "src"))
+  .filter((dir) => {
+    try {
+      return statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  })
+  .flatMap((dir) => walk(dir, isSource));
+const SOURCES = [...walk(SRC, isSource), ...PLUGIN_SOURCES];
 const SHEETS = walk(SRC, (n) => n.endsWith(".css"));
 const BASE_CSS = readFileSync(resolve(HERE, "base.css"), "utf8");
 
@@ -357,6 +373,8 @@ describe("the house input class", () => {
     expect(files.has("components/ItemEnvironmentPanel.tsx")).toBe(true);
     expect(CONTROLS.some((c) => c.el === "select")).toBe(true);
     expect(CONTROLS.some((c) => c.el === "textarea")).toBe(true);
+    // and the view plugins' web halves, which draw into this document
+    expect(files.has("../../view-plugins/chart/web/src/FacetGallery.tsx")).toBe(true);
     // The line a finding points at holds the tag's own `<input|textarea|select`.
     for (const c of CONTROLS) {
       const raw = readFileSync(resolve(SRC, c.file), "utf8").split("\n")[c.line - 1] ?? "";

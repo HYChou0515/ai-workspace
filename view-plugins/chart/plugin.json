@@ -1,0 +1,14 @@
+{
+  "name": "chart",
+  "sdk": "1",
+  "kinds": ["chart"],
+  "views": [
+    { "kind": "chart", "when": "a relationship, trend, distribution or comparison you are claiming" },
+    { "kind": "chart", "when": "with `mark: grid`, a value's pattern over a 2-D lattice" },
+    { "kind": "chart", "when": "with `facet:`, many groups side by side on one colour scale, sorted — which of them look alike" },
+    { "kind": "chart", "when": "with `mark: grid` and an `aggregate` over groups, one map that stacks many; with `diff`, one set minus another" }
+  ],
+  "skill": "skill",
+  "sandbox": { "bundle": "sandbox", "validate": true },
+  "provides": { "marking_rows": "lit_rows" }
+}

@@ -1,0 +1,20 @@
+{
+  "kind": "cat",
+  "values": [
+    "b",
+    "a",
+    null,
+    "b",
+    "c"
+  ],
+  "wire": {
+    "kind": "cat",
+    "levels": [
+      "a",
+      "b",
+      "c"
+    ],
+    "width": 1,
+    "codes": "AQD/AQI="
+  }
+}

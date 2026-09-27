@@ -1,6 +1,7 @@
 import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { MarkingInput } from "../api/types";
 import type { AgentEvent } from "../events";
 import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
 import {
@@ -57,6 +58,8 @@ export type { ChatThread };
 export type ChatSendOpts = {
   applySkills?: string[];
   imagePaths?: string[];
+  /** #847 P7: the markings kept as chips, sent with this message. */
+  markings?: MarkingInput[];
   /** grill-me: the `ask_user` question this message answers, when the user
    * clicked an option instead of typing. */
   answers?: string;
@@ -593,7 +596,15 @@ export function useChatSession(
       //
       // Stamp activity so the #202 poll gives the live stream one cycle to start.
       lastEventAtRef.current = Date.now();
-      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed }));
+      // #847 P7: the chips go with the words — as drafts (no path yet) until the
+      // broadcast says which the server wrote and which it refused.
+      const markings = opts?.markings?.map((m) => ({
+        name: m.name,
+        path: "",
+        counts: Object.fromEntries(Object.entries(m.columns).map(([c, v]) => [c, v.length])),
+        source: m.source,
+      }));
+      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed, markings }));
       try {
         await transport.post(trimmed, opts);
       } catch (err: unknown) {

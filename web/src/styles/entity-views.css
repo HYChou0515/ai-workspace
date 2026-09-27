@@ -23,6 +23,46 @@
   flex-direction: column;
   gap: var(--space-12);
   min-width: 0;
+  /* at least as tall as its pane, so a kind that fills the free height (a
+   * chart, #847/#848 PR 5 P13) has a height to fill */
+  min-height: 100%;
+}
+/* #847/#848 PR 5 P13 — a panel narrower than NARROW_PANEL (EntityViews.tsx,
+ * measured on the panel itself): the title is one truncated line, not a
+ * quarter of a pane. P28: that line is the title's own, the whole panel wide,
+ * and the controls wrap below it — beside the marking select and "Save as
+ * table" a title was cut to 25-38 px ("W…", "Fail …") at 390 wide. */
+.ev-panel[data-narrow] {
+  padding: var(--space-8);
+  gap: var(--space-8);
+}
+.ev-panel[data-narrow] .ev-panel__head {
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+.ev-panel[data-narrow] .ev-panel__title {
+  flex: 1 1 auto;
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: var(--text-body);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ev-panel[data-narrow] .ev-panel__actions {
+  flex: 0 1 auto;
+  /* P24 — rows of their own when they do not fit: kept on one row, an entity
+   * table's select, settings and New made 246 px in a 106 px box at 390
+   * wide, and New was drawn past the pane's edge. P28: below the title,
+   * starting at its left edge. */
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  min-width: 0;
+}
+.ev-panel[data-narrow] .ev-marking select {
+  max-width: 7rem;
+  min-width: 3.5rem;
 }
 .ev-panel__head {
   display: flex;
@@ -373,12 +413,24 @@
  * whole panel past the pane (which clipped DUE / PROGRESS — #3 "text cut"). */
 .ev-tableview {
   min-width: 0;
+  /* #847/#848 PR 5 P24 — the pane's free height, grown from nothing: grown
+   * from its own height, a table made the panel as tall as every row (775 px
+   * in a 356 px pane at 390 wide), so its sideways scrollbar sat below the
+   * pane. At least a few rows in a very short pane (the pane scrolls then). */
+  flex: 1 1 0;
+  min-height: 6rem;
+  display: flex;
+  flex-direction: column;
 }
 .ev-table-wrap {
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   overflow: auto;
   background: var(--white);
+  /* as tall as its rows; shrinks to the view's height, and scrolls, when they
+   * are taller (P24) */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 .ev-table {
   border-collapse: separate;
@@ -492,6 +544,42 @@
 /* a multi-selected row (moves as a block when dragged) */
 .ev-table__row--selected td {
   background: var(--accent-soft);
+}
+/* #847/#848 PR 5 — a row lit by the view's marking, while every row is shown
+ * ("show all"); also the csv-table plugin's grid, through the SDK's DataGrid. */
+tr[data-marked] td {
+  background: var(--accent-soft);
+}
+tr[data-marked] td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* the marking control's "why selecting here marks nothing" (#847/#848 PR 5) */
+.ev-marking__note {
+  /* its own line under the select: beside it, it squeezed the select to its
+   * arrow in a narrow pane (390 px live check) */
+  flex-basis: 100%;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  white-space: normal;
+  max-width: 36ch;
+}
+/* the marking control's "by group, item" (P27): the columns it marks by */
+.ev-marking__by {
+  min-width: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  overflow-wrap: anywhere;
+}
+/* the bar above a table on a marking: "filtered by <name> · 3 of 25 rows · by group · show all" */
+.ev-marking-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  min-width: 0;
+  margin-bottom: var(--space-8);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
 }
 /* the row a drag is hovering over — a drop-before indicator line */
 .ev-table tbody tr[data-over] td {

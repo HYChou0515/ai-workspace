@@ -1,6 +1,9 @@
 # Keep the build context small + reproducible (the image rebuilds deps/SPA).
 .git
 .venv
+# view-plugins/<name>/{sandbox-src/.venv, web/node_modules} are dev envs too:
+# the image builds each plugin from its lockfiles.
+**/.venv
 **/__pycache__
 **/*.pyc
 .pytest_cache

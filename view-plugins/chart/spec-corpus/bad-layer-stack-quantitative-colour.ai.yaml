@@ -1,0 +1,8 @@
+view: chart
+source: data/a.csv
+layer:
+  - mark: {type: area, stack: true}
+    encoding:
+      x: {field: item, type: nominal}
+      y: {field: value, type: quantitative}
+      color: {field: size, type: quantitative}

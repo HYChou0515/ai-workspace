@@ -1,0 +1,8 @@
+# Under YAML 1.1 `<<` merges and this is a valid x/y encoding; under the 1.2
+# core schema the host reads, `<<` is just a key, and not a channel.
+view: chart
+source: data/a.csv
+mark: line
+encoding:
+  <<: {x: {field: a, type: quantitative}}
+  y: {field: b, type: quantitative}

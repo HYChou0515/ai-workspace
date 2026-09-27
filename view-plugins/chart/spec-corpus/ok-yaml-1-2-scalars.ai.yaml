@@ -1,0 +1,15 @@
+# YAML 1.2 core, as js-yaml reads it: no/yes/on are strings, 017 is 17, 12:30
+# and dates are strings, and `<<` is not a merge (so it is used nowhere here).
+view: chart
+source: data/flags.csv
+keys: [answer, code, slot, day]
+mark: bar
+encoding:
+  x: {field: answer, type: nominal}
+  y: {field: code, type: quantitative, aggregate: count}
+highlight:
+  values:
+    answer: [no, yes, on, off, y, n, NO]
+    code: [017, 0o17, 0x1F, 1_000, +1, .5, 1e3, 1.]
+    slot: [12:30, 12:30:00]
+    day: [2024-01-01, 2024-01-01T10:00:00Z, True, FALSE]

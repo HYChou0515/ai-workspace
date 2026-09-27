@@ -1,0 +1,65 @@
+[project]
+name = "chart-view"
+version = "0.1.0"
+description = "The chart view plugin's sandbox half: validate a `view: chart` spec and compute what the chart draws."
+requires-python = ">=3.12"
+# Its OWN pandas + pyarrow: the carrier has no pyarrow, and this bundle is
+# launched through the isolated template, so a user's `pip install --user
+# pandas` never reaches it (docs/plan-view-plugins.md, check 2).
+dependencies = [
+    "pandas>=2.2,<3",
+    "pyarrow>=17",
+    "pyyaml>=6",
+    "jsonschema>=4.23",
+    "aiws-view-sdk",
+]
+
+# The script is named after the plugin: the bundle lands at /.tools/chart and
+# its launcher execs `.venv/bin/chart`.
+[project.scripts]
+chart = "chart_view.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chart_view"]
+
+[tool.uv.sources]
+# editable = false: the SDK is force-included from src/workspace_app at build
+# time, which an editable install would not do.
+aiws-view-sdk = { path = "../../sdk-python", editable = false }
+
+# The bundle runs under the ISOLATED launcher (#854 P6): the user site never
+# reaches it, so a `pip install --user pandas` cannot change what it imports.
+[tool.workspace-tool]
+launch = "isolated"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "coverage>=7", "ty", "types-pyyaml"]
+
+# Self-contained rootdir so `pytest` doesn't walk up into the parent repo's config.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["chart_view"]
+branch = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Absolute imports only — tool-package code is copied around too much for `..` forms.
+select = ["E", "F", "I", "B", "UP", "SIM", "TID252"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# The repo root excludes view-plugins/, and with no [tool.ty*] table of its own
+# ty walks up to that config and checks NOTHING ("No python files found" then
+# "All checks passed!") — the sandbox-host trap. Having a table stops the walk-up.
+[tool.ty.src]
+exclude = []

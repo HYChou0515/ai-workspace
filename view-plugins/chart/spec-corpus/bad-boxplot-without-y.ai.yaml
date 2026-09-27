@@ -1,0 +1,5 @@
+view: chart
+source: data/a.csv
+mark: boxplot
+encoding:
+  x: {field: g, type: nominal}

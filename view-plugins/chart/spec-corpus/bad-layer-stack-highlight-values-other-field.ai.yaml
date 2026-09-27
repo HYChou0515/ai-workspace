@@ -1,0 +1,14 @@
+view: chart
+source: data/a.csv
+highlight:
+  values: {item: [r1, r2]}
+layer:
+  - mark: {type: bar, stack: true}
+    encoding:
+      x: {field: value, type: quantitative}
+      y: {field: group, type: nominal}
+  - mark: {type: bar, stack: true}
+    encoding:
+      x: {field: value, type: quantitative}
+      y: {field: group, type: nominal}
+      color: {field: region, type: nominal}

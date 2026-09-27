@@ -263,3 +263,65 @@ def test_read_file_records_which_path_was_asked_for(tmp_path):
     assert run("read_file", {"path": "r.md"}, tmp_path, events) == "rules"
     assert run("read_file", {"path": "gone.md"}, tmp_path, events) == "no such file: gone.md"
     assert events == [Event("read_file", "r.md"), Event("read_file", "gone.md")]
+
+
+# #847/#848 PR 5 P8: `show_file(layout=…)` — the chart skill tells the model to
+# show linked views together, so a double without `layout` could not score it.
+
+
+def _leaf(path: str) -> dict:
+    # The strict shape the app's schema makes the model fill: every field, null
+    # where unused (agent/shown_files.py `_Pane1`).
+    return {"type": "leaf", "path": path, "dir": None, "ratio": None, "a": None, "b": None}
+
+
+_TWO = {
+    "type": "split",
+    "path": None,
+    "dir": "row",
+    "ratio": None,
+    "a": _leaf("views/a.ai.yaml"),
+    "b": _leaf("views/b.ai.yaml"),
+}
+
+
+def test_the_show_file_double_offers_a_layout_as_the_app_does():
+    [show] = [s for s in schemas() if s["function"]["name"] == "show_file"]
+    params = show["function"]["parameters"]
+    assert "path" not in params.get("required", [])
+    # Parity: the app's own tool is the oracle for the layout's shape.
+    from agents import function_tool
+
+    from workspace_app.agent.tools import show_file_impl
+
+    app = function_tool(show_file_impl, name_override="show_file").params_json_schema
+    assert params["properties"]["layout"]["anyOf"] == app["properties"]["layout"]["anyOf"]
+
+
+def test_a_layout_records_one_event_per_pane_in_visual_order(tmp_path):
+    (tmp_path / "views").mkdir()
+    for name in ("a", "b"):
+        (tmp_path / "views" / f"{name}.ai.yaml").write_text("view: chart\n")
+    events: list[Event] = []
+    out = run("show_file", {"layout": _TWO}, tmp_path, events)
+    assert "shown to the user" in out
+    assert events == [Event("show_file", "views/a.ai.yaml"), Event("show_file", "views/b.ai.yaml")]
+
+
+def test_a_layout_with_a_missing_pane_names_it_and_shows_nothing(tmp_path):
+    (tmp_path / "views").mkdir()
+    (tmp_path / "views" / "a.ai.yaml").write_text("view: chart\n")
+    events: list[Event] = []
+    assert run("show_file", {"layout": _TWO}, tmp_path, events) == "no such file: views/b.ai.yaml"
+    assert events == [Event("show_file", "views/a.ai.yaml"), Event("show_file", "views/b.ai.yaml")]
+
+
+def test_a_layout_the_app_would_refuse_is_refused_in_its_words(tmp_path):
+    # A root leaf is one file: the app says to use `path` (shown_files.layout_tree).
+    out = run("show_file", {"layout": _leaf("views/a.ai.yaml")}, tmp_path, [])
+    assert out.startswith("error: layout")
+
+
+def test_path_and_layout_together_are_refused_as_the_app_refuses_them(tmp_path):
+    out = run("show_file", {"path": "a.png", "layout": _TWO}, tmp_path, [])
+    assert out.startswith("error: give either path")

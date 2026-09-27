@@ -1,0 +1,34 @@
+{
+  "view": "chart",
+  "source": "data/a.csv",
+  "marking": "picked",
+  "keys": [
+    "group",
+    "region"
+  ],
+  "highlight": {
+    "where": "value > 10 and region == 'n'"
+  },
+  "mark": {
+    "type": "bar",
+    "stack": true
+  },
+  "encoding": {
+    "x": {
+      "field": "group",
+      "type": "nominal"
+    },
+    "y": {
+      "field": "value",
+      "type": "quantitative"
+    },
+    "color": {
+      "field": "region",
+      "type": "nominal"
+    },
+    "tooltip": {
+      "field": "item",
+      "type": "nominal"
+    }
+  }
+}

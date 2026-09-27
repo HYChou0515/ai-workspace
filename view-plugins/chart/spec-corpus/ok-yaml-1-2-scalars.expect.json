@@ -1,0 +1,55 @@
+{
+  "view": "chart",
+  "source": "data/flags.csv",
+  "keys": [
+    "answer",
+    "code",
+    "slot",
+    "day"
+  ],
+  "mark": "bar",
+  "encoding": {
+    "x": {
+      "field": "answer",
+      "type": "nominal"
+    },
+    "y": {
+      "field": "code",
+      "type": "quantitative",
+      "aggregate": "count"
+    }
+  },
+  "highlight": {
+    "values": {
+      "answer": [
+        "no",
+        "yes",
+        "on",
+        "off",
+        "y",
+        "n",
+        "NO"
+      ],
+      "code": [
+        17,
+        15,
+        31,
+        "1_000",
+        1,
+        0.5,
+        1000,
+        1
+      ],
+      "slot": [
+        "12:30",
+        "12:30:00"
+      ],
+      "day": [
+        "2024-01-01",
+        "2024-01-01T10:00:00Z",
+        true,
+        false
+      ]
+    }
+  }
+}

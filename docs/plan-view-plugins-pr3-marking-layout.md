@@ -9,7 +9,9 @@ pane, and the linked views in other panes light up.
 - Two `chart` views on the same `marking:` sit in different panes of the workspace's
   own split layout. A lasso in one lights the matched rows in the other. A third view on
   a different marking, or none, does not react.
-- The view header shows `🔗 <name> ▾`, which can re-attach or detach the view.
+- The view header shows the marking control (`<name> ▾`), which can re-attach or detach
+  the view. As built it draws the app's `tag` icon, not the `🔗` emoji (icons come from
+  the app's icon set).
 - The AI's `show_file(layout=…)` shows one card that opens the arrangement:
   - in the workspace by the Q17 rule;
   - in chat mode as an editor-area-only page.
@@ -46,10 +48,15 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 
 - Workspace-level state per item, living beside `useEditorGroups` in `WorkspaceShell`.
   It holds `name → {column → set of values}`.
+- As built, it is also kept in step across the item's browser tabs
+  (`web/src/lib/markingsSync.ts`), so a view in a second tab lights too [mine, open to
+  override].
 - Exposed through the SDK as `useMarking(name)`, which reads and writes.
 - It is knowledge-free: columns and values are opaque strings (Q6).
-- Matching rule: a row is lit when, for every column it shares with the marking, its
-  value is in the set.
+- Matching rule: a row is lit when it shares **at least one** column with the marking
+  and, for every column it shares, its value is in the set. ("At least one" was added
+  while building P1 [mine, open to override]: with none shared, "every shared column
+  matches" is vacuously true and would light every row of an unrelated view.)
 - A view without `keys:` can be lit but cannot write.
 
 **P2 — writing and reading marks in `chart`.**
@@ -63,7 +70,8 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 
 **P3 — the header control.**
 
-- `🔗 <name> ▾` offers: attach to an existing marking, attach to a new one, or detach.
+- The control (`tag` icon + `<name> ▾`) offers: attach to an existing marking, attach to
+  a new one, or detach.
 - The choice lives in view state. The spec file is **not** rewritten; a user edits the
   YAML to make it permanent.
 
@@ -73,8 +81,8 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   as leaves. The existing single `path` form is unchanged.
 - Every leaf path is resolved, and every `*.ai.yaml` leaf is validated as in PR 1 P9.
   One failure declares nothing.
-- The `[shown-files]` marker carries the tree, and `ShownFiles.tsx` renders one card
-  for it.
+- The `[shown-files]` marker carries the tree, and one card renders it (as built:
+  `ShownLayoutCard.tsx`, beside `ShownFiles.tsx`).
 
 **P5 — opening a layout in the workspace.**
 
@@ -87,7 +95,7 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
 
 **P6 — the chat-mode page.**
 
-- A new route `/a/{slug}/items/{id}/view?layout=…` (or `?path=`) renders only the
+- A new route `/a/{slug}/{itemId}/view?layout=…` (or `?path=`) renders only the
   editor area:
   - panes, views and markings;
   - no file tree, no chat.
@@ -104,10 +112,14 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   - recorded on the persisted user message, so they survive a reload;
   - summarised as one prompt line each (name, count per key, path).
 - A selection that is never sent writes nothing.
-- The write goes through `WorkspaceFiles`, so it respects the quota. On a full
-  workspace it fails the send's chip with the 507 reason, not the whole send.
+- The write goes through `WorkspaceFiles`, so it respects the quota. A marking
+  file that does not fit fails its chip with the reason, not the whole send. (As
+  built: a workspace that is ALREADY full still refuses the whole send first —
+  #538's `admit_turn` runs before any write. [found while building, mine])
+- The write also asks the sender's content verb — `add_content` for a new file,
+  `edit_content` to replace one — since sending asks only `converse`. [review]
 
-**P8 — docs and runbook.**
+**P8 — docs and runbook.** (P9 below was added when the live check found it.)
 
 - `show_file` doc for `layout`.
 - The marking concept in the chart reference.
@@ -117,6 +129,23 @@ The PRs are stacked, and a later PR builds on the earlier one's interfaces. The 
   - what appears in users' trees;
   - that it counts toward the quota;
   - the check that confirms it: send with a marking and see the file.
+
+**P9 — one connection to an item's stream per page** [found by the live check].
+
+- Every open `.ai.yaml` view held its own connection to the item's `/stream`. A
+  layout of four charts, plus the agent's and presence's, asked for 7; the browser
+  opens 6 per host, so sending a message queued forever.
+- `subscribeItemEvents` shares one per item per page (views, sheets, presence);
+  `useAgent` keeps its own (it resumes with `since`). The last presence roster is
+  handed to a listener that joins an open connection.
+
+As built, two reading rules the plan did not state [mine, open to override]:
+
+- A view links on the columns it shares with a marking through #855's
+  `keyColumn`. Without `keys:`, a `time` / `q8` channel column holds epoch ms /
+  quantized codes, not marking strings, so it is not compared (the view draws
+  undimmed); a view links on a time column by naming it in `keys:`.
+- On an empty marking every view on it draws undimmed, so linked views agree.
 
 ## Verification
 

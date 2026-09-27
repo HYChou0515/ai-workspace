@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AppRoutes } from "./App";
 import { MY_RESOURCES_PATH } from "./components/ResourceLinkText";
 import { translate } from "./lib/i18n";
+import { viewPageHref } from "./lib/viewPage";
 import { QueryWrap } from "./test/queryWrapper";
 
 afterEach(cleanup);
@@ -42,6 +43,12 @@ describe("AppRoutes", () => {
   it("renders the item workspace at /a/:slug/:itemId", () => {
     renderAt("/a/rca/rca-investigation%2F1");
     expect(screen.getByTestId("page-app-workspace")).toBeTruthy();
+  });
+
+  it("renders the editor-area-only page at the address viewPageHref builds (#847)", () => {
+    renderAt(viewPageHref("rca", "rca-investigation/1", { path: "/v/a.ai.yaml" }));
+    expect(screen.getByTestId("page-item-view")).toBeTruthy();
+    expect(screen.queryByTestId("page-app-workspace")).toBeNull();
   });
 
   // #692: every resource refusal now links here. The link spells the path via

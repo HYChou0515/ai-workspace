@@ -862,7 +862,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 單機清單寫法：stdout 有 `→ start index consumer …`（你列的每一種一步）和一行 `⚠ consumers: NOT consumed on this process: …`
   （你沒列的那幾種，排序）。
 
-### 2026-09-25 · #854 runtime view plugin 平台；`csv-table` 搬出 SPA、改由 plugin 目錄提供 {#pr-854}
+### 2026-09-25 · e2758724 · #854 runtime view plugin 平台；`csv-table` 搬出 SPA、改由 plugin 目錄提供 {#pr-854}
 
 **設定** — 不用動。新增選用的 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ `<repo>/.view-plugins`，
 映像裡是 `/app/.view-plugins`）。目錄不存在 = 沒有 plugin；**目錄裡任何一個 plugin 壞掉就拒絕開機**，
@@ -904,6 +904,234 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - 登入後 `GET /api/view-plugins` 回
   `[{"name": "csv-table", "sdk": "1", "kinds": ["csv-table"], "entry_url": "/view-plugins/csv-table/index.js"}]`。
 - 在任一 item 開一個 `view: csv-table` + `source:` 指向 CSV 的 `*.ai.yaml`，畫出表格。
+
+---
+
+### 2026-09-25 · #855 chart view plugin：AI 用 `show_file` 秀出可互動圖表（`view: chart`） {#pr-855}
+
+**設定** — 沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
+
+- 凡是同時擁有 `write_file` 與 `show_file` 的 app，每一輪 prompt 都會多這些：
+  - `## Available views` 整段，約 610 字元（實測 606）：標題、一句說明，加上 chart 的四行（圖表、grid、
+    `facet:` 縮圖牆、疊圖與相減）與 csv-table 的一行（接 `marking:` 的表格）；
+  - skill 索引的 `chart` 一行，約 230 字元；
+  - chart 的 SKILL.md 本文**不是每輪的成本**：和其他 skill 一樣，只在 AI `read_skill('chart')` 時才載入。
+- AI 主張資料關係時，會寫 `views/*.ai.yaml` 再 `show_file`。
+- **要關掉它**：從 plugin 目錄（`view_plugins.dir`）移除 `chart`。在某個 item 的 skill 偏好把 `chart`
+  關掉，只拿掉那份 skill，`## Available views` 裡 chart 的那幾行仍在。
+- **為你們的模型重調**：`uv run python -m workspace_app.view_plugin tune chart`，改
+  `<plugin 目錄>/chart/skill/SKILL.md` 再重跑。下一輪對話就生效。
+
+- 以下是 [#856](#pr-856)、[#857](#pr-857) 合進本分支之後、隨本 PR 一起進 master 的收尾
+  （`docs/plan-view-plugins-pr5-finish.md`），同樣是**行為改變，沒有開關**：
+  - **表格會依 marking 過濾**：內建的 entity `table` 與 `csv-table` 寫了 `marking:` 的，只剩被點亮的列
+    （上方有「show all」可切換）；勾選列也會寫進 marking。沒寫 `marking:` 的表格和以前一樣。
+  - **圖表不再在畫布裡畫 `title:`**，由 view 標頭顯示（標頭本來就有同一個標題）。
+  - **使用者按「Save as table」會在 workspace 寫 `markings/<名字>-<yyyymmdd-hhmm>.csv`**：出現在檔案樹、
+    會備份、**算進 workspace 額度**，需要新增檔案的權限；刪掉沒有副作用。
+  - 帶時區的時間欄位照**欄位自己的時區**顯示並寫出時區名稱，不再隨看的人的瀏覽器時區改變。
+  - `sandbox.kind: local` 開 jail 時，同一個沙盒同時跑的指令不再互相拆掉 `/dev`（[#859](https://github.com/HYChou0515/ai-workspace/issues/859)）：
+    以前在 live check 裡，一個五圖版面 30 次查詢壞 5 次（壓測 300 次壞 9 次），壞的那格面板顯示 traceback。沙盒根目錄下的 `dev/` 不再在每個指令後刪除
+    （留下一個空目錄），運營方不用做事。
+  - 前端量元素寬度的共用 hook（`useContainerWidth`）改成一律回報含 padding 與邊框的寬度（第一次量本來就是）。
+    原本只有 view 面板會受影響：內容寬度剛好在 480 px 上下時，面板在寬、窄兩種 padding 之間來回切換不停
+    （實測約 10 秒 777 次 resize 回呼），面板標頭跟著上下跳。workspace 版面、分頁列、skills 視窗底列量的元素沒有
+    左右 padding 或邊框，數值不變；對話面板標頭（決定標頭按鈕收進「⋯」的那個）左右各有 14 px padding，讀數大 28 px，
+    但它只拿自己前後的讀數互相比，行為不變。運營方不用做事。
+
+細節見 [chart：互動圖表 view plugin](view-plugin-chart.md)。
+
+**資料** — 不動。沒有 `Schema` 升版。
+
+- 縮圖牆的快取鍵與檔頭變了（加了排序統計、欄位清單與來源資訊），**每面縮圖牆在換版後第一次打開會重建一次快取**，
+  時間與記憶體見 [#857](#pr-857) 的表；舊快取之後照 `cache_mb` 的上限被清掉。不用手動刪。
+- 訊息上的 marking chip 多記一個內容摘要（`SentMarking.digest`，有預設值，舊訊息讀得出來）。換版**之前**送出的 chip
+  按「Save as table」會被拒絕並說明「再送一次」，因為沒有摘要就無法確認檔案還是當時送出的值。
+
+**k8s · CI 側**
+
+- **sandbox-host 映像要重 build，時機是 `rollout 前`**。
+  - 做什麼：它的 tools stage 現在會把 `view-plugins/*/sandbox-src` 建進 `builtin/chart`。圖表的聚合，
+    以及 `show_file` 的 `validate`，都在沙盒裡跑這個 bundle。
+  - 順序：sandbox-host 先上、API 後上。
+  - 映像會變大：`builtin/chart` 自帶一份 Python 與 pandas、pyarrow（isolated launcher 的前提，
+    使用者 `pip install` 的套件碰不到它）。
+  - 漏做的症狀：
+    - 打開任何 chart 檔，面板顯示 `view plugin "chart" could not run "query"`（502，沒有 `.tools/chart/launch`）；
+    - AI 的 `show_file` 對 chart 檔的回覆多一句 `(view plugin 'chart' could not check this view: …)`：
+      卡片照樣出現，但檔案沒經過檢查，打開後就是上一條的錯誤。
+- **`sandbox.kind: local` 跑 API 映像的部署**（`kubernetes/base` 的預設 `SANDBOX_KIND: "local"` 就是），
+  時機是 `rollout 前`：
+  - 做什麼：用 `uv run python -m workspace_app.view_plugin build view-plugins/chart <目錄>` 把 chart 完整裝進
+    一個 plugin 目錄（含 `sandbox/`），掛進 pod，並讓 `view_plugins.dir` 或 `WORKSPACE_VIEW_PLUGINS_DIR`
+    指到它。記得連 `csv-table` 一起裝，見 #854 的條目。
+  - 前提：在 **Linux、和 pod 相同的 CPU 架構**上 build。bundle 裡帶的是 build 機器上的那份 CPython，
+    `launch` 經由 Linux 的動態載入器執行它；在 Mac 上 build 的目錄掛進去，開機不會警告（`sandbox/` 在），
+    但每次呼叫都會失敗，面板顯示的是那個執行錯誤。
+  - 為什麼：API 映像只裝 plugin 的 web 半邊。`kind: local` 的沙盒要從 plugin 目錄拿 chart 的 bundle，而映像裡
+    沒有這份 bundle。
+  - 漏做的症狀：開機照常，但 log 有一行
+    `⚠ view plugin chart: sandbox.bundle 'sandbox' is not in this plugin dir, …`。之後每個 chart 面板顯示
+    `view plugin "chart" could not run "query"`（502），AI 的 `show_file` 則附上 `could not check this view`。
+  - 不走容器、直接跑 repo 的部署：`make view-plugins` 就會連 `sandbox/` 一起裝到 `<repo>/.view-plugins`。
+- API 映像的 plugin stage（前端 `index.js` + skill）見 #854 的條目。
+- **收尾（pr5）加了沙盒指令、改了 renderer 呼叫沙盒的方式，所以 sandbox-host 與 API 要照「sandbox-host 先上、API 後上」
+  這個順序，而且兩者都是這一版**（`rollout` 時）。
+  - 做什麼：用這一版重 build sandbox-host（上面第一條的同一件事），它的 chart bundle 會有 `lit_rows`、`facet_progress`、
+    `facet_stack`，而且 `query` / `facet_build` 收 view 檔的路徑。
+  - 為什麼：新的 renderer 傳給沙盒的是 view 檔路徑（spec 超過 128 KB 也畫得出來），舊的沙盒只收 spec 全文。
+    新沙盒兩種都收，所以先上沙盒不會壞舊的前端。
+  - 漏做的症狀：從 master 升上來、沒換 sandbox-host，症狀就是上面第一條的（沒有 `launch`，502）。
+    **只有部署過這個分支較早的 build** 的環境，才會看到舊 bundle 的訊息：打開 chart，面板顯示
+    `argument must be {'spec': <string>}`；打開縮圖牆顯示 `facet_build takes exactly ['spec'] (and an optional epoch)`；
+    按「Save as table」得到 `unknown command: lit_rows`；縮圖牆的疊圖面板與建置進度出錯；`stack: true` 的圖在同一個位置、
+    同一個顏色有多列時只畫出其中一列、疊出的高度少算（加總改在沙盒做了，舊 bundle 不加）；計數用的圓餅圖在 `keys:` 含被計數的欄位時，
+    把計數值當成 key 寫進 marking（舊 bundle 的回應沒有告訴前端哪些欄位是聚合出來的）。
+- **`sandbox.kind: local` 掛自己 plugin 目錄的部署**，`rollout 前`把 `chart` **與 `csv-table`** 用這一版重新
+  `view_plugin build` 進那個目錄（做法同上）。
+  - 為什麼：chart 的 `plugin.json` 多了 `provides` 與兩行 views，沙盒 bundle 多了指令；csv-table 的前端改成會接 marking，
+    `plugin.json` 也多了一行 views。
+  - 漏做的症狀：「Save as table」回 501「saving a marking as a table is not available in this deployment」；
+    `csv-table` 的表格不跟著 marking 過濾；chart 面板的症狀同上一條。
+
+**確認做完**
+
+- `kind: http`：在 sandbox-host pod 裡，`/opt/tools/builtin/chart/launch` 沒帶參數，印出含 `validate` 與 `query` 的 JSON 清單。
+- `kind: local`：API pod 的開機 log **沒有** `⚠ view plugin chart:` 那一行，而且在 pod 裡執行
+  `<plugin 目錄>/chart/sandbox/launch` 沒帶參數，也印出同一份清單（這一步才證明 bundle 能在這台機器上跑）。
+- `GET /api/view-plugins` 列出 `chart`。
+- 在一個 workspace 放一份 CSV，叫 AI「用圖表說明 X 和 Y 的關係」：
+  - 回覆出現一行 `… rows; <欄位> <最小>–<最大>` 摘要與一張卡片；
+  - 點開卡片是可以框選的圖表；
+  - 有 `highlight:` 時，被點亮的點保持原色，其餘變淡。
+- 收尾（pr5）：`launch` 不帶參數印出的清單有 9 個指令：`validate`、`query`、`lit_rows`、`facet_build`、`facet_progress`、
+  `facet_index`、`facet_page`、`facet_exact`、`facet_stack`。在一張有 `keys:` 與 `marking:` 的圖上框選幾個點，
+  標頭的「Save as table」寫出 `markings/<名字>-<時間>.csv`，打開是被點亮的列；同一個 `marking:` 的 `csv-table`
+  只剩那幾列。
+
+---
+
+### 2026-09-25 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
+
+隨 [#855](#pr-855) 進 master：#856 合進 #855 的分支，分支再 rebase 到 master，所以沒有自己的 merge commit。
+
+**設定** — 沒有新 key。以下是**行為改變，沒有開關**（運營方不用做事，但要知道）：
+
+- **使用者的 workspace 會多出 `.markings/` 資料夾。** 使用者在 `chart` view（#855）上框選、寫進有名字的 marking
+  （同一個 `marking:` 的圖彼此連動，見 [chart 說明](view-plugin-chart.md)）之後送訊息，composer 上方會列出
+  這些 marking 的 chip；留著的那幾個隨訊息寫成 `.markings/<name>.json`（marking 的值），AI 讀這個檔案。
+  為什麼寫檔而不是塞進 prompt：值可以上千個，每輪都塞進 prompt 太大；prompt 只放一行摘要（名稱、每欄幾個值、路徑），值留在檔案裡。
+  沒送出的選取什麼都不寫。檔案出現在檔案樹、會被備份、**算進 workspace 額度**，和使用者自己寫的檔一樣；刪掉沒有副作用
+  （下次送同一個 marking 會再寫一次）。
+- workspace 還有空間、但放不下某個 marking 檔時，那個 chip 會標成「未送出」並附原因（檔案層拒絕寫入的那句，例如
+  `workspace is full: … bytes used, and this write does not fit`），**訊息本身照送**。workspace **已經滿了**的話，
+  和以前一樣整則訊息在送出時就被 507 擋下（#538 的 `admit_turn`），不會走到寫 marking 這一步。
+- 寫 marking 檔要的權限和其他寫檔路徑一樣：新檔要 `add_content`、覆寫要 `edit_content`。只有 `converse`（能聊天、不能寫檔）
+  的成員送 marking，那個 chip 會標成「未送出」，訊息照送。
+  漏知道的症狀：使用者回報「我框的東西 AI 說沒看到」——看那則訊息上的 chip 是不是紅的。
+- 聊天模式（workspace 收起來）點 `show_file` 秀出的檔案卡，改成在新分頁開 `/a/<app>/<item>/view?path=…`
+  （只有編輯區的頁面），不再是原始檔案的下載網址——`.ai.yaml` 從此顯示成 view 而不是 YAML 原文。
+  圖片縮圖仍直接讀檔案本身。這個網址不是授權：打不開 item 的人照樣被 API 擋。
+
+- chart 的 `SKILL.md` 多了 `marking:` 與「幾張連動圖用 `show_file(layout=…)` 一起秀」兩段；只在 AI
+  `read_skill('chart')` 時載入，每輪 prompt 的固定成本不變。
+
+- 瀏覽器每個分頁對同一個 item 的 `/stream` 長連線從「每個開著的 `.ai.yaml` view 各一條」變成共用一條，另外 agent 一條、
+  聊天一條——工作區頁面 3 條、純編輯區頁面（沒有聊天）2 條，不再隨開著的 view 增加。以前一個版面開 4 張圖要 7 條，
+  瀏覽器對同一 host 只開 6 條，第 7 條和之後送訊息的請求就永遠排隊（live check 實測）。
+  運營方不用做事；ingress 看到的長連線數會變少。
+
+**資料** — 不用 migrate：`Message` 多了一個有預設值的 `markings` 欄位（舊訊息讀出來是空清單），
+沒有 `Schema` 升版。
+
+**k8s · CI 側** — 不動（新頁面是 SPA 路由，同一個 image）。
+
+**確認做完**
+
+- 在一個有兩個 `chart` view 共用 `marking:` 的 item 裡框選、送一則訊息：composer 上方出現 chip；送出後那則訊息下面有同樣的 chip，
+  重新整理還在；檔案樹多了 `.markings/<name>.json`，內容是 `{"name", "sources", "columns"}`。
+- 聊天模式點一張 `show_file` 卡：新分頁的網址是 `…/view?path=…`，畫面只有編輯區（沒有檔案樹、沒有聊天）。
+
+---
+
+### 2026-09-25 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
+
+隨 [#855](#pr-855) 進 master：#857 合進 #855 的分支，分支再 rebase 到 master，所以沒有自己的 merge commit。
+
+**設定** — 沒有新 config key。`facet.cache_mb` 是 **spec 裡**的旋鈕（寫在 `.ai.yaml`），不是部署設定。
+以下是**行為改變，沒有開關**（運營方要知道的是沙盒的 scratch 磁碟，以及建快取在沙盒指令的時間與記憶體上限之內）：
+
+- **每個沙盒的 `.home/.cache/views/` 會出現縮圖牆的快取檔（`*.vcache`）。** `facet:` 的 chart 第一次打開時，
+  沙盒讀一次來源檔、建一份快取，之後捲動、換排序、放大都從快取取，不再讀來源。
+  - 位置在沙盒的 infra 區（`.home`，和 workspace 並列）：**不算 workspace 額度、不出現在檔案樹、不備份**，
+    沙盒被回收時一起刪掉。
+  - 大小：連續值每格約 9 bytes（1 byte 量化色碼 + 8 bytes 精確值），類別值每格 1 byte。
+    例：200 組 × 50,000 格的連續值約 90 MB。
+  - 上限：每次建快取時，沙盒依 spec 的 `facet.cache_mb`（預設 500 MB）把整個 `.home/.cache/views/`
+    修到上限內，最久沒用的先刪。這個目錄是**同一個沙盒裡所有縮圖牆共用**的，所以一份 spec 設的上限管的是全部。
+  - **scratch 容量要這樣估（rollout 前）**：同時活著的沙盒數 × 500 MB（或你們預期的 `cache_mb`），
+    再加上原本 workspace 與 `.home` 的用量。為什麼在 rollout 前：換版之後第一個打開縮圖牆的人就開始寫快取；
+    沒估的症狀是 scratch 卷寫滿，連帶所有沙盒的寫檔一起失敗，不只縮圖牆。
+- **建快取的成本在沙盒的 cgroup 裡。** 在開發機（32 核，量測時 load average 1.4–3.5）用 bundle 的 `facet_build`
+  指令端到端實測（`launch` 照 runner 的方式呼叫、`SANDBOX_HOME` 指向全新的 `.home`），不是 CI 數字。
+  時間是從啟動 `launch` 到它結束的 wall clock，峰值記憶體是那個程序的 `ru_maxrss`，每格跑三次取中位數。
+  來源是隨機產生的測試資料（每列一個 group 字串、兩個整數座標 x / y、兩個 float），所以檔案大小只是這組資料的；
+  spec 是 `mark: grid`、`color` 為 quantitative 的 float、依每組一個值的 float 欄位排序，x / y 分別宣告成
+  `quantitative` 與 `ordinal` 各量一次。成本跟著列數與格數走，不跟檔案大小：
+
+  | 來源 | 列數 | x / y | 第一次開啟 | 峰值記憶體 | 快取大小 |
+  |---|---|---|---|---|---|
+  | 1000 組 × 5041 格，CSV（128.6 MB） | 5.04M | quantitative | 4.0 秒 | 1.02 GB | 45.5 MB |
+  | 同上 | 5.04M | ordinal | 3.7 秒 | 1.02 GB | 45.4 MB |
+  | 同上，parquet（9.7 MB） | 5.04M | quantitative | 3.4 秒 | 1.33 GB | 45.5 MB |
+  | 同上 | 5.04M | ordinal | 3.1 秒 | 1.35 GB | 45.4 MB |
+  | 200 組 × 50,176 格，parquet（19.0 MB） | 10.0M | quantitative | 6.2 秒 | 2.43 GB | 90.9 MB |
+  | 同上 | 10.0M | ordinal | 5.8 秒 | 2.44 GB | 90.7 MB |
+
+  之後再打開（重用快取）約 0.3–0.4 秒、0.12 GB；捲動與放大（`facet_index` / `facet_page` / `facet_exact`）每次約 0.05–0.07 秒、
+  約 25 MB，不載入 pandas。峰值記憶體大約和列數成正比（約每百萬列 0.2–0.27 GB）。
+  - **時間上限（rollout 前檢查）**：建快取是一個沙盒指令，受每個指令的總時間上限管（`kind: http` 是
+    sandbox-host 的 `SANDBOX_HOST_EXEC_TIMEOUT`，`kind: local` 是 `sandbox.exec_timeout`，預設都是 60 秒）。
+    預設值離上表很遠，不用動；**你們若把它調低到接近上表的秒數（依你們機器與預期最大來源估），rollout 前調回來**。
+    為什麼在 rollout 前：換版後第一個打開大縮圖牆的人就會撞到；AI 用 `show_file` 秀一份 `facet:` 檔也會，因為
+    `show_file` 的 `validate` 就是建一次快取，受同一個上限管。沒做的症狀：那面縮圖牆的面板顯示建置已印出的進度行，
+    最後一行是 `timed out after 60s (total) and was killed`（數字是你們設的上限），重開也一樣，因為沒建完就不會留下快取；
+    AI 那邊則是 `show_file` 回 `error: view plugin 'chart' refused <檔案> — nothing was shown:`，下一行是同一句
+    timed out，**卡片不出現**。
+    另一個上限是 idle（`SANDBOX_HOST_LOG_TIMEOUT` / `sandbox.log_timeout`，預設也是 60 秒，沒有輸出多久就殺）：
+    建置在讀檔前、讀完（`read N rows`）、分組完、寫完快取各印一行進度；上表每一列都量過相鄰兩行進度之間的空檔，最長的是 200 組那兩列的寫快取
+    （quantitative 與 ordinal 都約 3.2–3.4 秒）；**若你們把它調低到接近這個秒數，rollout 前調回來**，
+    沒做的症狀是最後一行變成 `no output for 60s; assumed hung and killed`（數字是你們設的上限）。
+  - **記憶體上限（rollout 前檢查）**：沙盒的記憶體上限低於上表的量級時，大來源的第一次打開會被 OOM 殺掉；
+    為什麼在 rollout 前：和時間上限一樣，換版後第一個打開大縮圖牆的人、或第一次 `show_file` 一份大 `facet:` 檔的 AI
+    就會撞到。沒做的症狀：面板顯示那次建置已經印出的進度行（通常是 `read N rows`）或它的 exit code，重試也一樣；
+    AI 的 `show_file` 回 `error: view plugin 'chart' refused <檔案> — nothing was shown:` 加上 exit code，卡片不出現。
+    這兩個症狀沒有實際觀察過，是依指令的輸出方式與 `show_file` 處理非 0 結束的方式推的。
+- `facet:` 的來源必須是 workspace 裡的表格檔（CSV / TSV / parquet）。`source: {entity: …}` 會被拒絕，
+  畫面顯示原因：它沒有檔案版本，無法判斷快取是否過期。
+- chart 的 `SKILL.md` 多了 `facet` 一段與一條「很多組長得一樣」的用法；只在 AI `read_skill('chart')` 時載入，
+  每輪 prompt 的固定成本不變（`## Available views` 沒有改）。
+
+**資料** — 不用 migrate，沒有 `Schema` 升版。
+
+**k8s · CI 側**
+
+- **rollout 前：scratch 容量估算與沙盒指令時間上限的檢查**，做法、為什麼與沒做的症狀見上面「行為」的
+  「scratch 容量要這樣估」與「時間上限」兩條。
+- **sandbox-host 用這一版重 build，順序照 [#855](#pr-855) 那條：sandbox-host 先上、API 後上。** 縮圖牆的沙盒指令
+  （`facet_build` / `facet_progress` / `facet_index` / `facet_page` / `facet_exact` / `facet_stack`）在 chart 的沙盒
+  bundle 裡，而那個 bundle 由 sandbox-host image 的 tools stage 建進 `builtin/chart`（同一個機制，做一次就夠）。
+  從 master 升上來、沒換 sandbox-host 的症狀是 #855 那條的（沒有 `launch`，502）；只有部署過這個分支較早、
+  還沒有縮圖牆的 build 的環境，才會看到 `unknown command: facet_build. available: validate, query`。
+
+**確認做完**
+
+- 在 sandbox-host pod 裡：`/opt/tools/builtin/chart/launch` 不帶參數，印出的清單含 `facet_build`、`facet_index`、
+  `facet_page`、`facet_exact`。
+- 打開一份 `facet:` 的 chart（寫法見 chart 的 `SKILL.md` 的 Facet 段落）：先出現「Opening the gallery…」；
+  建置跑超過約一秒時，會換成「Building the gallery in the sandbox…」加上建置印出的進度行。接著是縮圖牆與「N groups」；
+  捲動會載入後面的縮圖；只換排序方向立刻重排、不重建；換排序的欄位或統計會重建一次快取（小來源一閃而過）。
+- 在那個 item 的沙盒目錄裡看得到 `.home/.cache/views/<64 個 hex>.vcache`。
 
 ---
 

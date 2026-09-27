@@ -121,6 +121,20 @@ def test_validate_declared_needs_a_validate_command(tmp_path):
     assert check_plugin(d).errors == []
 
 
+def test_marking_rows_declared_needs_that_command(tmp_path):
+    d = _installed(
+        tmp_path, "m", sandbox={"bundle": "sandbox"}, provides={"marking_rows": "lit_rows"}
+    )
+    (d / "sandbox").mkdir()
+    (d / "sandbox" / "launch").write_text("#!/bin/sh\n")
+    (d / "sandbox" / "launch").chmod(0o755)
+    (d / "sandbox" / "commands.json").write_text('[{"name": "query"}]')
+    [err] = check_plugin(d).errors
+    assert "marking_rows" in err and "lit_rows" in err
+    (d / "sandbox" / "commands.json").write_text('[{"name": "lit_rows"}]')
+    assert check_plugin(d).errors == []
+
+
 def test_a_bundle_not_in_the_dir_is_only_a_note(tmp_path):
     r = check_plugin(_installed(tmp_path, "remote", sandbox={"bundle": "sandbox"}))
     assert r.errors == [] and "sandbox-host" in r.notes[0]

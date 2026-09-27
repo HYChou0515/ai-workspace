@@ -1,0 +1,7 @@
+view: chart
+source: data/a.csv
+mark: {type: bar, stack: true}
+encoding:
+  x: {field: item, type: nominal}
+  y: {field: value, type: quantitative}
+  tooltip: [{field: value, type: quantitative, aggregate: mean}]

@@ -1,0 +1,7 @@
+view: chart
+source: data/batches.csv
+mark: scatter
+encoding:
+  x: {field: thickness, type: quantitative}
+  y: {field: fail_rate, type: quantitative}
+  size: {datum: 5}

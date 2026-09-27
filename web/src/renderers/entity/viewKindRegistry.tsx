@@ -19,7 +19,19 @@ import type { ComponentType } from "react";
 import { BoardView } from "./BoardView";
 import { GanttView } from "./GanttView";
 import { TableView } from "./TableView";
-import { VIEW_KIND, type EntityViewProps } from "./types";
+import { VIEW_KIND, type EntityViewProps, type ViewSpec } from "./types";
+
+/** What a kind's `Thumbnail` is handed (#847/#848 P6). */
+export type ViewThumbnailProps = {
+  /** The parsed view file, as the live view gets it. */
+  spec: ViewSpec;
+  /** The view file's workspace path. */
+  path: string;
+  /** Call when there is nothing to draw (a spec that does not fit, a sandbox
+   * that said no): the host then shows its plain file card instead. Throwing
+   * while rendering does the same. */
+  onFail: (reason: string) => void;
+};
 
 export type ViewRenderer = {
   kind: string;
@@ -29,6 +41,11 @@ export type ViewRenderer = {
   ownsEmptyState?: boolean;
   /** The renderer has no header quick-create affordance. */
   suppressQuickCreate?: boolean;
+  /** #847 PR 3 — the kind takes part in named markings (reads `marking` from
+   * its props), so every view of it gets the header's marking control, even one
+   * whose file names neither `marking:` nor `keys:`. Omitted: only such a
+   * view that names one of them gets it. Additive to SDK 1. */
+  linkable?: boolean;
   /** #698 — the kind draws entity records, so its view file MUST name an
    * `entity:`; the dispatcher says so visibly when it doesn't. Omitted ≡ false,
    * which is what a plug-in reading workspace files wants: it has no entity, and
@@ -36,6 +53,13 @@ export type ViewRenderer = {
    * entity is a property OF THE KIND, so it lives here and nowhere else — the
    * parser used to hardcode `health` as the lone exception. */
   needsEntity?: boolean;
+  /** #847/#848 P6 — a small, static drawing of a view of this kind, for the
+   * chat card of a file the agent showed. It fills the box it is given, draws
+   * once, and takes no input: the host puts it inside the card's own click
+   * target (which opens the live view) with pointer events off, and mounts it
+   * only once the card has scrolled into view. Omitted: the card stays a plain
+   * file card. Additive to SDK 1. */
+  Thumbnail?: ComponentType<ViewThumbnailProps>;
 };
 
 /** Mutable so a second-party module can register on import (#698). Keyed by
@@ -105,7 +129,9 @@ export function resolveViewRenderer(kind: string): ViewRenderer {
 // cross-type and rendered by the container ahead of the dispatcher, so it isn't
 // a registry entry.
 
-registerViewKind({ kind: VIEW_KIND.table, Component: TableView, needsEntity: true });
+// #847/#848 PR 5 — a table follows a named marking (and writes it), so every
+// table view carries the header's marking control.
+registerViewKind({ kind: VIEW_KIND.table, Component: TableView, needsEntity: true, linkable: true });
 registerViewKind({ kind: VIEW_KIND.board, Component: BoardView, needsEntity: true });
 registerViewKind({
   kind: VIEW_KIND.gantt,

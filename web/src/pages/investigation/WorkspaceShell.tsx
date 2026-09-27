@@ -41,7 +41,15 @@ import { useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { OpenFileProvider, WorkspaceVisibleProvider } from "../../hooks/openFile";
+import {
+  type OpenLayout,
+  OpenFileProvider,
+  OpenLayoutProvider,
+  type ViewPageHref,
+  ViewPageHrefProvider,
+  WorkspaceVisibleProvider,
+} from "../../hooks/openFile";
+import { viewPageHref } from "../../lib/viewPage";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -59,6 +67,9 @@ import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
+import { MarkingProvider } from "../../hooks/useMarking";
+import { MarkingStore } from "../../lib/markings";
+import { syncMarkingsAcrossTabs } from "../../lib/markingsSync";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { shellIsNarrow, useContainerWidth } from "../../hooks/useContainerWidth";
@@ -173,10 +184,43 @@ export function WorkspaceShell({
   onFilesChanged?: () => void;
   onInvestigationChanged?: () => void;
 }) {
-  const service = useMemo(
-    () => investigationFileService(manifest.slug, item.resource_id),
-    [manifest.slug, item.resource_id],
+  return (
+    <WorkspaceProviders slug={manifest.slug} itemId={item.resource_id} unwalked={unwalked}>
+      {(bufferStore) => (
+        <ShellBody
+          item={item}
+          manifest={manifest}
+          files={files}
+          dirs={dirs}
+          unwalked={unwalked}
+          truncated={truncated}
+          ideCollapsed={ideCollapsed}
+          onIdeCollapsedChange={onIdeCollapsedChange}
+          onFilesChanged={onFilesChanged}
+          onInvestigationChanged={onInvestigationChanged}
+          bufferStore={bufferStore}
+        />
+      )}
+    </WorkspaceProviders>
   );
+}
+
+/** Everything an item's editor area reads from context: its file service and
+ * buffers, its agent (a report renders the agent's state), edit mode, the lazy
+ * folders. Shared by the workspace and the editor-area-only page (#847 Q5.3), so
+ * a file renders the same in both. */
+export function WorkspaceProviders({
+  slug,
+  itemId,
+  unwalked = [],
+  children,
+}: {
+  slug: string;
+  itemId: string;
+  unwalked?: string[];
+  children: (bufferStore: FileBufferStore) => React.ReactNode;
+}) {
+  const service = useMemo(() => investigationFileService(slug, itemId), [slug, itemId]);
   const queryClient = useQueryClient();
   const bufferStore = useMemo(() => {
     // The buffer reads/writes file content THROUGH the shared qk.file cache, so
@@ -185,32 +229,91 @@ export function WorkspaceShell({
     const io = bufferIO(service);
     return new FileBufferStore(io, reactQueryContentCache(queryClient, service.scopeId, io));
   }, [service, queryClient]);
+  // Named markings (#847 Q5.1) link the views of ONE item: a fresh store per
+  // item, so moving to another item never carries a selection across.
+  const markings = useMemo(() => new MarkingStore(), [slug, itemId]);
+  // …and the SAME item's store in every tab: chat mode opens views on the
+  // editor-area page in a new tab, and the composer that sends markings is in
+  // the chat tab (#847 Q5.3 × Q10).
+  useEffect(() => syncMarkingsAcrossTabs(markings, `${slug}/${itemId}`), [markings, slug, itemId]);
   return (
-    <WorkspaceSlugProvider value={manifest.slug}>
+    <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>
-        <AgentProvider investigationId={item.resource_id}>
+        <AgentProvider investigationId={itemId}>
           <FileBufferProvider store={bufferStore}>
             <EditModeProvider>
-              <LazyFoldersContext.Provider value={unwalked}>
-              <ShellBody
-                item={item}
-                manifest={manifest}
-                files={files}
-                dirs={dirs}
-                unwalked={unwalked}
-                truncated={truncated}
-                ideCollapsed={ideCollapsed}
-                onIdeCollapsedChange={onIdeCollapsedChange}
-                onFilesChanged={onFilesChanged}
-                onInvestigationChanged={onInvestigationChanged}
-                bufferStore={bufferStore}
-              />
-              </LazyFoldersContext.Provider>
+              <MarkingProvider store={markings}>
+                <LazyFoldersContext.Provider value={unwalked}>
+                  {children(bufferStore)}
+                </LazyFoldersContext.Provider>
+              </MarkingProvider>
             </EditModeProvider>
           </FileBufferProvider>
         </AgentProvider>
       </FileServiceProvider>
     </WorkspaceSlugProvider>
+  );
+}
+
+/** Close a tab, asking first when it holds the only copy of unsaved edits. */
+export function useRequestCloseTab(groups: Groups, bufferStore: FileBufferStore) {
+  const dialog = useDialog();
+  const gRef = useRef(groups);
+  gRef.current = groups;
+  return useCallback(
+    async (groupId: string, path: string) => {
+      const g = gRef.current;
+      const openElsewhere = Object.entries(g.groups).some(
+        ([gid, grp]) => gid !== groupId && grp.tabs.some((t) => t.path === path),
+      );
+      if (bufferStore.isDirty(path) && !openElsewhere) {
+        const choice = await dialog.confirm({
+          title: `Save changes to ${basename(path)}?`,
+          body: "Your changes will be lost if you don't save them.",
+          actions: [
+            { id: "save", label: "Save", variant: "primary" },
+            { id: "discard", label: "Don't Save", variant: "danger" },
+            { id: "cancel", label: "Cancel" },
+          ],
+        });
+        if (choice === null || choice === "cancel") return;
+        if (choice === "save") await bufferStore.save(path);
+        if (choice === "discard") bufferStore.discard(path);
+      }
+      gRef.current.closeTab(groupId, path);
+    },
+    [bufferStore, dialog],
+  );
+}
+
+/** The editor area's panes alone — the SAME component the workspace draws —
+ * for the editor-area-only page (#847 Q5.3): no file tree, no chat, no bottom
+ * panel. Tabs close through the same unsaved-edits question. */
+export function EditorPanes({
+  groups,
+  investigationId,
+  files,
+  bufferStore,
+}: {
+  groups: Groups;
+  investigationId: string;
+  files: FileInfo[];
+  bufferStore: FileBufferStore;
+}) {
+  const requestCloseTab = useRequestCloseTab(groups, bufferStore);
+  return (
+    <RequestCloseContext.Provider value={requestCloseTab}>
+      <div
+        style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, background: "var(--white)" }}
+      >
+        <GroupTreeView
+          node={groups.tree}
+          groups={groups}
+          investigationId={investigationId}
+          files={files}
+        />
+      </div>
+    </RequestCloseContext.Provider>
   );
 }
 
@@ -240,7 +343,6 @@ function ShellBody({
   bufferStore: FileBufferStore;
 }) {
   const [editOpen, setEditOpen] = useState(false);
-  const dialog = useDialog();
   // Inline-edit of domain fields (breadcrumb/statusbar) goes through the generic
   // per-App item update (read-modify-PUT), driven by the manifest's field schema.
   const { setField, setFields } = useUpdateItemField(
@@ -507,6 +609,21 @@ function ShellBody({
     },
     [groups, recentFiles, dispatchSidebar],
   );
+  // A `show_file(layout=…)` card (#847): the arrangement opens in these panes,
+  // placed by Q17 (`paneTree.placeLayout`). Same fold rule as `openFile`.
+  const openLayout = useCallback<OpenLayout>(
+    (layout) => {
+      groups.openLayout(layout);
+      dispatchSidebar({ type: "outside" });
+    },
+    [groups, dispatchSidebar],
+  );
+  // Where a shown-file card sends the user while the workspace is folded: this
+  // item's editor-area page, which renders a view as the view (#847 Q5.3).
+  const viewHref = useCallback<ViewPageHref>(
+    (target) => viewPageHref(manifest.slug, item.resource_id, target),
+    [manifest.slug, item.resource_id],
+  );
   // Is the file pane actually on screen? Same condition the IDE column renders
   // under — anything else would have the chat believe in a pane that isn't there.
   const workspaceVisible = Boolean(manifest.function.workspace && !ideCollapsed && _canSeeFiles);
@@ -545,30 +662,7 @@ function ShellBody({
 
   // Close a tab, prompting to save when it's the LAST open view of a dirty
   // file (a sibling pane still showing it means no data is at risk).
-  const requestCloseTab = useCallback(
-    async (groupId: string, path: string) => {
-      const g = gRef.current;
-      const openElsewhere = Object.entries(g.groups).some(
-        ([gid, grp]) => gid !== groupId && grp.tabs.some((t) => t.path === path),
-      );
-      if (bufferStore.isDirty(path) && !openElsewhere) {
-        const choice = await dialog.confirm({
-          title: `Save changes to ${basename(path)}?`,
-          body: "Your changes will be lost if you don't save them.",
-          actions: [
-            { id: "save", label: "Save", variant: "primary" },
-            { id: "discard", label: "Don't Save", variant: "danger" },
-            { id: "cancel", label: "Cancel" },
-          ],
-        });
-        if (choice === null || choice === "cancel") return;
-        if (choice === "save") await bufferStore.save(path);
-        if (choice === "discard") bufferStore.discard(path);
-      }
-      gRef.current.closeTab(groupId, path);
-    },
-    [bufferStore, dialog],
-  );
+  const requestCloseTab = useRequestCloseTab(groups, bufferStore);
   const requestCloseRef = useRef(requestCloseTab);
   requestCloseRef.current = requestCloseTab;
 
@@ -618,6 +712,8 @@ function ShellBody({
 
   return (
     <OpenFileProvider value={openFile}>
+      <OpenLayoutProvider value={openLayout}>
+      <ViewPageHrefProvider value={viewHref}>
       <WorkspaceVisibleProvider value={workspaceVisible}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
@@ -926,6 +1022,8 @@ function ShellBody({
       </div>
     </RequestCloseContext.Provider>
       </WorkspaceVisibleProvider>
+      </ViewPageHrefProvider>
+      </OpenLayoutProvider>
     </OpenFileProvider>
   );
 }
@@ -2204,6 +2302,7 @@ function GroupPane({
 
   return (
     <div
+      data-testid="editor-group"
       onMouseDown={() => groups.focusGroup(group.id)}
       onDragOver={(e) => {
         if (!hasPayload(e)) return;
@@ -2227,6 +2326,10 @@ function GroupPane({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
+        // #847/#848 PR 5 P13 — a pane clips what it cannot fit: in an 88 px
+        // pane the tab strip painted into the chat column, and at 390 px the
+        // view page scrolled sideways.
+        overflow: "hidden",
       }}
     >
       <GroupTabStrip group={group} groups={groups} />
@@ -2577,6 +2680,9 @@ function DirBrowser({
 
 /** A single editor group's tab strip — drives only its own group. Tabs
  * carry their group id so a drag onto another group moves/copies. */
+/** Below this width (px) a pane's tab strip compacts its buttons (#847/#848 PR 5 P13). */
+export const NARROW_TAB_STRIP = 260;
+
 function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }) {
   const active = group.activePath;
   // In a split, only the focused group's active tab gets full emphasis;
@@ -2592,9 +2698,15 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
   const gid = group.id;
+  // #847/#848 PR 5 P13 — measured on the strip (a pane of a layout is not the
+  // viewport): below NARROW_TAB_STRIP the Edit toggle is its icon and the split
+  // button goes (the tab's menu still splits), so the tab keeps some room.
+  const [stripRef, stripWidth] = useContainerWidth<HTMLDivElement>();
+  const compact = stripWidth > 0 && stripWidth < NARROW_TAB_STRIP;
 
   return (
     <div
+      ref={stripRef}
       style={{
         height: 38,
         background: "var(--paper)",
@@ -2674,10 +2786,24 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                 whiteSpace: "nowrap",
                 opacity: dragFrom === i ? 0.4 : 1,
                 fontStyle: t.preview ? "italic" : "normal",
+                // P13 — a tab shrinks with its pane and its title truncates
+                // inside it, rather than the strip overflowing the pane.
+                flex: "0 1 auto",
+                minWidth: 0,
+                overflow: "hidden",
               }}
             >
               <Icon name={t.pinned ? "pin" : "file"} size={12} />
-              <span style={{ fontSize: pxToRem(12) }}>{basename(t.path)}</span>
+              <span
+                style={{
+                  fontSize: pxToRem(12),
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {basename(t.path)}
+              </span>
               <TabClose
                 path={t.path}
                 onClose={() => requestClose(gid, t.path)}
@@ -2723,17 +2849,19 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
               size={12}
               color={editMode.isEditing(active) ? "var(--accent)" : "var(--text-paper-d)"}
             />
-            {editMode.isEditing(active) ? "Preview" : "Edit"}
+            {!compact && (editMode.isEditing(active) ? "Preview" : "Edit")}
           </button>
         )}
-        <button
-          type="button"
-          title="Split right"
-          onClick={() => groups.splitGroup(gid, "right", active)}
-          style={{ ...iconBtn, color: "var(--text-paper-d)" }}
-        >
-          <Icon name="split" size={14} />
-        </button>
+        {!compact && (
+          <button
+            type="button"
+            title="Split right"
+            onClick={() => groups.splitGroup(gid, "right", active)}
+            style={{ ...iconBtn, color: "var(--text-paper-d)" }}
+          >
+            <Icon name="split" size={14} />
+          </button>
+        )}
         {/* Run-all only exists for notebooks */}
         {activeIsNotebook && active && (
           <button

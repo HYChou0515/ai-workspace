@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo } from "react";
 
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
+import type { MarkingInput } from "../api/types";
 import {
   getStored as getKbEnhancementSelection,
   toBodyEnhancements,
@@ -42,7 +43,12 @@ export type AgentState = {
    * them after sending. */
   send: (
     content: string,
-    opts?: { applySkills?: string[]; imagePaths?: string[]; answers?: string },
+    opts?: {
+      applySkills?: string[];
+      imagePaths?: string[];
+      answers?: string;
+      markings?: MarkingInput[];
+    },
   ) => Promise<void>;
   /** @mention people to "come look" — notifies them, does NOT run the agent. */
   mention: (userIds: string[], note: string) => Promise<void>;
@@ -87,6 +93,8 @@ export function useAgentInternal(
           applySkills: opts?.applySkills,
           // Attached image workspace paths — a VLM main model reads them inline.
           imagePaths: opts?.imagePaths,
+          // #847 P7: the markings kept as chips, written for the AI to read.
+          markings: opts?.markings,
           // grill-me: the `ask_user` question this message answers, when the
           // user clicked an option instead of typing.
           answers: opts?.answers,

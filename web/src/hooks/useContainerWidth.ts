@@ -41,7 +41,12 @@ export function useContainerWidth<T extends HTMLElement>(): [
       // Rounded: `contentRect.width` is a fractional double, so an unrounded
       // value re-renders the whole shell on every frame of a window drag. The
       // two consumers are a boolean and a clamp; sub-pixel is noise to both.
-      if (entry) setWidth(Math.round(entry.contentRect.width));
+      // The BORDER box, as the attach measures it (#847/#848 PR 5 P31): the
+      // content box changes with the element's own padding, so a panel whose
+      // narrow style changes its padding moved across its own breakpoint and
+      // back on every frame. (`contentRect` only where a browser, or a test's
+      // stub, gives no border box.)
+      if (entry) setWidth(Math.round(entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width));
     });
     ro.observe(node);
     observer.current = ro;

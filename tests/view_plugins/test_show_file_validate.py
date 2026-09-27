@@ -202,3 +202,62 @@ async def test_a_sandbox_that_fails_to_run_the_check_shows_the_view_with_a_note(
     out = await show_file_impl(RunContextWrapper(ctx), "views/yield.ai.yaml")
     assert len(_declared(out)) == 1
     assert "could not check" in out.split(SHOWN_FILES_MARKER)[0]
+
+
+# --- #847 PR 3 P4: every `*.ai.yaml` leaf of a layout is validated the same way ---
+
+
+def _leaf(p: str) -> dict:
+    return {"type": "leaf", "path": p, "dir": None, "ratio": None, "a": None, "b": None}
+
+
+async def _show_layout(result: ExecResult):
+    from workspace_app.agent.shown_files import PaneLayout
+
+    files = WorkspaceFiles(MemoryFileStore())
+    await files.write("inv-1", "/v/a.ai.yaml", CHART.encode())
+    await files.write("inv-1", "/v/b.ai.yaml", CHART.encode())
+    await files.write("inv-1", "/v/notes.md", b"# n\n")
+    sb = _Sandbox(result)
+    ctx = AgentToolContext(
+        investigation_id="inv-1",
+        files=files,
+        sandbox=cast("Sandbox", sb),
+        handle=SandboxHandle(id="h"),
+    )
+    col = {"type": "split", "path": None, "dir": "col", "ratio": None}
+    tree = {
+        "type": "split",
+        "path": None,
+        "dir": "row",
+        "ratio": None,
+        "a": {**col, "a": _leaf("v/a.ai.yaml"), "b": _leaf("v/b.ai.yaml")},
+        "b": _leaf("v/notes.md"),
+    }
+    out = await show_file_impl(RunContextWrapper(ctx), layout=PaneLayout.model_validate(tree))
+    return out, sb.calls
+
+
+async def test_a_layout_validates_each_plugin_view_leaf_and_reports_each_summary():
+    out, calls = await _show_layout(ExecResult(exit_code=0, stdout=b"highlight matches 3/25\n"))
+    assert [c[2] for c in calls] == ['{"path": "v/a.ai.yaml"}', '{"path": "v/b.ai.yaml"}']
+    assert len(_declared(out)) == 3
+    assert out.split(SHOWN_FILES_MARKER)[0].count("highlight matches 3/25") == 2
+
+
+async def test_a_layout_with_one_refused_view_shows_nothing():
+    out, _ = await _show_layout(ExecResult(exit_code=1, stderr=b"no column fail_rate\n"))
+    assert _declared(out) == []
+    assert out.startswith("error:")
+    assert "no column fail_rate" in out
+
+
+async def test_a_layout_whose_check_cannot_run_is_shown_with_the_note_like_one_file():
+    """#854: a check that cannot run (no launcher) is the deployment's fault, not
+    the view's — the single-path branch shows the view with a note, and a layout
+    must do the same for each of its views, not refuse the whole card."""
+    gone = ExecResult(exit_code=127, stderr=b"sh: 1: ../.tools/chart/launch: not found\n")
+    out, _ = await _show_layout(gone)
+    assert not out.startswith("error:")
+    assert len(_declared(out)) == 3
+    assert out.split(SHOWN_FILES_MARKER)[0].count("could not check") == 2

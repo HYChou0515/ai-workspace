@@ -1,0 +1,13 @@
+{
+  "name": "lookup-no-chart",
+  "note": "A lookup has no claim to show: a count answers it.",
+  "data": [
+    "daily.csv"
+  ],
+  "prompt": "How many rows are in daily.csv?",
+  "expect": {
+    "must_not_call": [
+      "show_file"
+    ]
+  }
+}

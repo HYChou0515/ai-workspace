@@ -1,0 +1,6 @@
+view: chart
+source: data/a.xlsx
+mark: line
+encoding:
+  x: {field: a, type: quantitative}
+  y: {field: b, type: quantitative}

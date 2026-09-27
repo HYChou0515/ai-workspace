@@ -14,7 +14,7 @@ import type { BodyEnhancements } from "../lib/kbEnhancementMode";
 import type { AgentEvent } from "../events";
 import { apiFetch, httpErrorFrom } from "./http";
 import { parseSseStream } from "./sse";
-import type { Message } from "./types";
+import type { MarkingInput, Message } from "./types";
 
 const enc = encodeURIComponent;
 const base = (slug: string, itemId: string) => `/a/${enc(slug)}/items/${enc(itemId)}`;
@@ -134,6 +134,8 @@ export const itemChatApi = {
     /** Attached image workspace paths — a VLM main model reads them inline
      * (no read_image round-trip). Mirrors the item-level `api.sendMessage`. */
     imagePaths?: string[];
+    /** #847 P7: markings kept as chips. Mirrors the item-level `api.sendMessage`. */
+    markings?: MarkingInput[];
     signal?: AbortSignal;
   }): Promise<void> {
     // #43 broadcast model: POST enqueues (202); events arrive on `subscribe`.
@@ -149,6 +151,7 @@ export const itemChatApi = {
         disclosure: args.disclosure,
         apply_skills: args.applySkills,
         image_paths: args.imagePaths,
+        markings: args.markings,
         answers: args.answers,
       }),
       signal: args.signal,

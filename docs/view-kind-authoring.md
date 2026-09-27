@@ -53,6 +53,7 @@ plugin 目錄是 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ 
 | `views` | 選配。每一條變成 agent prompt 裡 `## Available views` 的一行 `` - `kind`: when ``；`kind` 必須是自己的 |
 | `skill` | 選配。plugin 裡一個有 `SKILL.md` 的資料夾；`SKILL.md` 的 `name` 必須等於 plugin 名 |
 | `sandbox` | 選配。`{"bundle": "<資料夾>"}` 或 `{"artifact": "<#674 artifact URL>"}` **二擇一**；`"validate": true` 見第 6 節 |
+| `provides` | 選配。平台向 plugin 要的能力，目前只有 `{"marking_rows": "<沙盒指令>"}`：把一個 marking 點亮的列寫成表格（使用者按「Save as table」）。指令回 `{"rows", "csv", "columns"}`。需要 `sandbox`，指令要在 bundle 的指令清單裡；**最多一個 plugin 宣告**，兩個會拒絕開機並點名兩者 |
 
 **未知的 key 一律拒絕**（跟設定檔 loader 同一條規則）——拼錯的 key 靜靜地不生效，比開機失敗更難查。
 
@@ -95,14 +96,14 @@ registerViewKind({ kind: "csv-table", Component: CsvTableView });
 使用者那邊放一個 view 檔就會生效：
 
 ```yaml
-# /views/yield.ai.yaml
+# /views/sales.ai.yaml
 view: csv-table          # 對應你註冊的 kind
-title: Wafer yield       # 面板標題（可省略）
-source: /data/wafer.csv  # 這是「你自己的」key，見第 4 節
+title: Monthly sales     # 面板標題（可省略）
+source: /data/sales.csv  # 這是「你自己的」key，見第 4 節
 ```
 
 `kind` 撞名會**直接丟例外**——兩個元件搶同一個 `view:` 沒有正確答案。取名建議加自己的前綴，
-例如 `acme-wafermap`。
+例如 `acme-heatmap`。
 
 **你的元件 throw 不會弄垮整個 app。** 面板外面包了一層 error boundary，壞掉時只有那個面板
 變成一則錯誤訊息，其餘畫面照常；完整的 stack 會進 console。錯誤訊息附一顆 **Retry**——因為
@@ -217,8 +218,54 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 | `onOpenRecord(number)` | 在畫面內開紀錄的編輯 modal。沒接 ⇒ 別畫那個入口 |
 | `onOpenRecordFile(number)` | 另開分頁到該紀錄的 `.md` 原始檔。同樣可能 `undefined` |
 | `viewKey` | 這個 view 的穩定識別（含 item 與檔案路徑）。存「這個人在這個 view 的摺疊狀態」這類 UI 偏好時當 key 用 |
+| `path` | 這份 view 檔的 workspace 路徑；你寫進 marking 時當 `source`。不在檔案裡（預覽）時沒有 |
+| `marking` | 這個 view 接著的 marking 名稱（見 4.4）；`null`：沒接任何 marking（檔案沒寫、或這個人斷開了）；只有沒宣告 `linkable` 的 kind、檔案又沒寫 `marking:` / `keys:` 時才是 `undefined` |
+| `onMarkingNote(note)` | 告訴標頭的 marking 選單「在這裡選取為什麼不會寫進 marking」，沒話說就傳 `null` |
 
 ⚠️ 凡是標「沒接就是 `undefined`」的，**要先判斷再畫**——畫一個按了沒反應的按鈕比不畫更糟。
+
+### 4.4 連動：marking
+
+同一個 item 裡寫了同一個 `marking: <名字>` 的 view 會連動：一邊選取，另一邊點亮對得上的列。marking 只是
+「欄位名 → 一組字串值」，平台不懂任何領域。
+
+- 註冊時 `registerViewKind({ …, linkable: true })`：這個 kind 的每個 view 標頭都有 marking 選單，
+  並從 props 拿到 `marking`（見上表）。沒宣告的 kind，只有 view 檔寫了 `marking:` 或 `keys:` 才有。
+- `useMarking(name)` → `[entry, write]`：讀 `entry.marking`，用 `write(marking, source)` 寫；`write` 回傳 store 有沒有
+  收下（沒有 marking provider 的預覽、或 view 斷開 marking 時是 `false`），沒收下的就不是寫進 marking 的選取；
+  `useMarkingNames()` 列出這個 item 現有的名字。
+- **比對一律用 `isLit(row, marking)`**，不要自己寫：規則是「和 marking 至少有一個共同欄位，而且每個共同欄位的值都在集合裡」，
+  兩個 view 各寫一套就會各亮各的。`projectOntoKeys(rows, keys)` 把選到的列投影成要寫的 marking。
+- 值要用**圖表寫 marking 的同一種文字**：數字、日期、清單的寫法和 chart 一致才對得上。表格類的 kind 直接用
+  `csvMarkingRows(rows)`（`parseCsv` 的結果）或 `entityMarkingRow(record)`（API 給的紀錄）轉，
+  單一值用 `markingText(value)`，整批比對用 `litRows(rows, marking)`。
+- **表格類的 kind 用 `useTableMarking`**，過濾、「show all」、共同欄位檢查、勾選寫回都在裡面，和內建 `table`、
+  `csv-table` 的行為一致：
+
+```tsx
+const markingRows = useMemo(() => csvMarkingRows(rows), [rows]);
+const table = useTableMarking({ marking, viewKey, rows: markingRows, columns, keys, source: path, onNote: onMarkingNote });
+return (
+  <>
+    {table.bar}
+    <DataGrid rows={rows} show={table.shown} highlighted={table.highlighted} select={table.select} />
+  </>
+);
+```
+
+  `DataGrid` 的 `show`（要畫哪幾列）、`highlighted`（反白哪幾列）、`select`（每列一個勾選框）都是選配；
+  不接 marking 時全部省略，就是原本的表格。完整範例是 `view-plugins/csv-table/web/src/CsvTableView.tsx`。
+
+### 4.5 對話卡片的縮圖：`Thumbnail`
+
+`registerViewKind({ …, Thumbnail })` 選配。AI 用 `show_file` 秀出你這個 kind 的 view 檔時，對話卡片捲進畫面後
+會掛一次 `Thumbnail`，props 是 `{ spec, path, onFail }`（型別 `ViewThumbnailProps`）。約定：
+
+- 填滿給你的框、畫一次、不接受任何輸入——它放在卡片的點擊區裡，滑鼠事件關掉，點卡片會開活的 view。
+- 沒東西可畫（spec 不合、沙盒拒絕）就呼叫 `onFail(reason)`；render 時丟例外也一樣。兩者都會退回純檔案卡片。
+- 用和活的 view 同樣的沙盒呼叫與參數，點開時就會沿用同一份快取。
+
+不提供 `Thumbnail` 的 kind，卡片維持檔名、大小、「open」的純檔案卡片。
 
 ## 5. 沙盒半邊：要算的東西在 item 的沙盒裡算
 
@@ -229,7 +276,7 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 ```tsx
 import { useSandboxRun } from "@aiws/view-sdk";
 
-const run = useSandboxRun("chart", "query", { source: "data/yield.csv", group_by: "lot" });
+const run = useSandboxRun("chart", "query", { source: "data/sales.csv", group_by: "region" });
 // run: { data?: {stdout, stderr, exit_code}, error: Error | null, isLoading, refetch() }
 ```
 

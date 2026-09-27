@@ -7,6 +7,7 @@ changes until each PR's own plan is agreed:
 - [PR 2: the chart plugin](plan-view-plugins-pr2-chart.md)
 - [PR 3: markings and layouts](plan-view-plugins-pr3-marking-layout.md)
 - [PR 4: stack and gallery](plan-view-plugins-pr4-stack-gallery.md)
+- [Finish: the #847/#848 asks no PR built](plan-view-plugins-pr5-finish.md) (Q22, on #855's branch)
 
 Every decision is tagged with who made it:
 
@@ -47,6 +48,22 @@ The outcome is four things:
 ### Scope
 
 - **Q1.** Do all of #847 and all of #848 **[user]**. Do not narrow to a "wafer slice".
+- **Q22.** Every ask in #847 and #848 is built before #855 reaches master **[user]**,
+  as Q1 asks. The 2026-09-25 audit found six that no PR built. They are
+  [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md):
+  - tables follow a marking, filtered with a "show all" toggle, and write it too;
+  - box select on the gallery;
+  - sort the gallery by any column, with a picked statistic;
+  - a stack panel beside the gallery, with any column and statistic, and A − B;
+  - card thumbnails drawn live by the same renderer;
+  - save a selection's rows as a CSV, the future #843 row source.
+  - **How Q21 was delivered (2026-09-25) [user]:** #856 and #857 were merged into
+    #855's branch, and the branch was then rebased onto master (after #854's merge),
+    so the three reach master in #855's merge, with this work, and the branch holds
+    no merge commit.
+- **Q23.** A wafer map is a generic map **[user]**. No option, default or label gives a
+  value a meaning ("bigger is redder is worse", "yield", "defect"). The domain words in
+  #847/#848 are examples.
 - **Q8.** `sci-plot` is deleted in prod. Design as if it does not exist **[user]**.
   An AI that needs a chart as evidence writes a `view: chart` spec and calls `show_file`.
   If a static image is ever needed, the AI runs matplotlib in the sandbox itself.
@@ -140,12 +157,14 @@ The outcome is four things:
 
   What that means:
   - Re-reading the source dominates. It happens **once per (source version, spec)** and
-    builds a cache: an index of per-group sort keys and offsets, plus fixed-size
-    per-group records. Pages are byte slices of that cache.
+    builds a cache: an index of per-group keys and sort values, plus fixed-size
+    per-group records whose offsets are derived from the index. Pages are byte slices
+    of that cache. (As built in #857 P2 — see that plan.)
   - **No downsampling.** Full resolution is cheap, and downsampling erases a thin edge
     ring.
-  - **Binary, not JSON.** Categories are 1 byte. Continuous values are quantized to 256
-    levels for colour, and the exact value is fetched on enlarge.
+  - **Binary, not JSON.** Categories are 1 byte. Continuous values are quantized to 255
+    levels for colour (the 256th code marks a missing cell), and the exact value is
+    fetched on enlarge from a float64 section of the same cache.
   - At 50k cells per group, a page must be tens of groups, and a 1 GB CSV takes 10–20 s
     to read, so **parquet ships in this plan** **[user]**.
 - **Q12.** The cache lives in `.home/.cache/views/`, the per-sandbox infra area

@@ -51,7 +51,9 @@ import { TurnStatus } from "../../components/TurnStatus";
 import { turnLooksSilent, turnsFromEntry } from "./agentLog";
 import type { CompactionReason } from "../../api/types";
 import type { QuotaKind } from "../../lib/quotaFailure";
+import { useAllMarkings } from "../../hooks/useMarking";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
+import { MarkingChips } from "../../components/MarkingChips";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
@@ -423,6 +425,14 @@ export function AgentPanel({
   // #380: skills the user queued from the Skills panel to APPLY this turn — a one-shot
   // set surfaced as accent chips near the composer and cleared once the message sends.
   const [appliedSkills, setAppliedSkills] = useState<string[]>([]);
+  // #847 P7: the item's markings, offered as send chips. A chip the user removes
+  // is left out of the NEXT message only; the selection itself stays in the views.
+  const allMarkings = useAllMarkings();
+  const [unsentMarkings, setUnsentMarkings] = useState<ReadonlySet<string>>(() => new Set());
+  const sentMarkings = useMemo(
+    () => [...allMarkings].filter(([name]) => !unsentMarkings.has(name)),
+    [allMarkings, unsentMarkings],
+  );
   const toggleApplySkill = (name: string) =>
     setAppliedSkills((prev) =>
       prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
@@ -634,9 +644,23 @@ export function AgentPanel({
     const body = imagePaths.length ? [attachPrompt(imagePaths), text].filter(Boolean).join("\n\n") : text;
     setDraft("");
     clearImageChips();
+    // #847 P7: the markings left as chips go with this message; a removed chip
+    // was removed for this message only, so it comes back for the next one.
+    const markings = sentMarkings.map(([name, e]) => ({
+      name,
+      source: e.source,
+      columns: Object.fromEntries(
+        Object.entries(e.marking).map(([c, v]) => [c, [...v].sort()]),
+      ),
+    }));
+    setUnsentMarkings(new Set());
     // #380: hand this turn's queued skills to `send`, then clear them — apply is
     // one-shot (the next turn starts with an empty apply set).
-    void send(body, { applySkills: appliedSkills, imagePaths });
+    void send(body, {
+      applySkills: appliedSkills,
+      imagePaths,
+      ...(markings.length ? { markings } : {}),
+    });
     setAppliedSkills([]);
   };
 
@@ -1144,6 +1168,19 @@ export function AgentPanel({
               </span>
             )}
           </div>
+        )}
+        {sentMarkings.length > 0 && (
+          <MarkingChips
+            markings={sentMarkings.map(([name, e]) => ({
+              name,
+              path: "",
+              counts: Object.fromEntries(
+                Object.entries(e.marking).map(([c, v]) => [c, v.size]),
+              ),
+              source: e.source,
+            }))}
+            onRemove={(name) => setUnsentMarkings((prev) => new Set(prev).add(name))}
+          />
         )}
         {appliedSkills.length > 0 && (
           // #380: the queued-for-this-turn skills. Accent-filled so they read as a

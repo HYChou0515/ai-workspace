@@ -10,10 +10,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type Edge,
+  type LayoutNode,
   type PaneNode,
   leaf,
   leafIds,
   linkedSiblingPath,
+  placeLayout,
   removeLeaf,
   setRatioAt,
   splitLeaf,
@@ -244,6 +246,18 @@ export function useEditorGroups(initialPaths: string[]) {
     [openInGroup, closeTab],
   );
 
+  /** Open a `show_file(layout=…)` card's arrangement (#847 Q17). `placeLayout`
+   * decides where; card files already open are moved, not duplicated. */
+  const openLayout = useCallback(
+    (layout: LayoutNode) => {
+      const placed = placeLayout(tree, groups, layout, newGroupId);
+      setTree(placed.tree);
+      setGroups(placed.groups);
+      setActiveGroupId(placed.activeGroupId);
+    },
+    [tree, groups],
+  );
+
   return useMemo(
     () => ({
       tree,
@@ -266,6 +280,7 @@ export function useEditorGroups(initialPaths: string[]) {
       setSplitRatio,
       collapseToSingle,
       dropTabOnGroup,
+      openLayout,
       isSplit: leafIds(tree).length > 1,
     }),
     [
@@ -289,6 +304,7 @@ export function useEditorGroups(initialPaths: string[]) {
       setSplitRatio,
       collapseToSingle,
       dropTabOnGroup,
+      openLayout,
     ],
   );
 }

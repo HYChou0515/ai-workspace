@@ -39,6 +39,21 @@ COPY scripts/ ./scripts/
 # `No module named sandbox_host`, which names the wrong culprit.
 RUN uv sync --frozen --no-dev --no-editable \
     && uv run --no-dev python scripts/prebuild_tools.py
+# View plugins shipped in this repo carry their sandbox half here too (#847/#848):
+# under `kind: http` a `{bundle: …}` plugin means "already in builtin/", and the
+# API's runner answers 502 naming the plugin when it is not. Each
+# `view-plugins/<name>/sandbox-src` becomes `builtin/<name>` — the name the
+# plugin's commands run as (`/.tools/<name>/launch`). `sdk-python` is their
+# path dependency (the platform's entity reader, vendored from src/).
+COPY view-plugins/ ./view-plugins/
+RUN for src in view-plugins/*/sandbox-src; do \
+      [ -d "$src" ] || continue; \
+      name=$(basename "$(dirname "$src")"); \
+      uv run --no-dev python -c "import sys; from pathlib import Path; \
+from workspace_app.tooling.prebuild import build_package; \
+build_package(name=sys.argv[1], source=Path(sys.argv[2]), dst=Path(sys.argv[3]), force=True)" \
+        "$name" "$src" "$WORKSPACE_TOOLS_DIR/$name" || exit 1; \
+    done
 
 # ---- stage 2: the lean host runtime ----
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS host
