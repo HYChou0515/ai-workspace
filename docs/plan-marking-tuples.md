@@ -73,6 +73,26 @@ builder.
   with the existing "has changed since this message was sent" refusal. No reader accepts
   the old `columns` shape — two formats would be two rules.
 
+## Formats (fixed before the phases split, so the halves are built to one contract)
+
+- **Browser** (`web/src/lib/markings.ts`): `Marking = { keys: readonly string[];
+  tuples: ReadonlySet<string> }`. `keys` are **sorted** — two views writing the same
+  columns in a different `keys:` order hold one marking — and a tuple is the row's
+  values in that order joined by U+001F. "by …" says the keys in that order.
+  `markingFrom(keys, rows)` / `markingRows(m)` convert to and from `string[][]`.
+- **Cross-tab** (`markingsSync`): `{kind: "set", name, keys, rows: string[][] | null,
+  source}` (`rows: null` clears).
+- **Send** (`MarkingInput`): `{name, source, keys: string[], rows: string[][]}`.
+- **File** (`.markings/<name>.json`): `{"name", "sources", "keys", "rows"}`, keys
+  sorted, rows sorted and distinct.
+- **Chip** (`SentMarking`): `{name, path, count, keys, source, error, digest}` —
+  `count` is the number of rows, `keys` what "by …" says.
+- **Digest**: sha256 of `json.dumps({"keys": keys, "rows": sorted distinct rows},
+  ensure_ascii=False, separators=(",", ":"))`.
+- **Save as table** body: `{name, view, marking: {keys, rows} | null, stamp, digest}`;
+  the sandbox `marking_rows` command takes `{"view", "keys", "rows"}` or
+  `{"view", "marking": <path>}`.
+
 ## Phases
 
 - **P1 — The platform marking holds tuples.** `markings.ts` (types, `isLit`,
