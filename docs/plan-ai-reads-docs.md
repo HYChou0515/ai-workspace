@@ -75,7 +75,17 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
 ## Phases
 
 - **P1 — readonly skills.**
-  - A `readonly: true` field in `SKILL.md`'s front matter.
+  - A `readonly: true` field in `SKILL.md`'s front matter. Where it is decided [user, 2026-09-27]:
+    - **Upstream decides**: the shipped `SKILL.md` (a shared or profile skill in the package), read at every
+      `read_skill`. The copy's own `SKILL.md` never decides, or deleting the field from the copy would
+      lift the protection; the copy's `SKILL.md` is overwritten from upstream anyway.
+    - **The skill's author sets it**: us, in the repo. `app.json` does not: a skill behaves the same in
+      every app.
+    - **A skill written in the workspace** (by the user or the AI, no upstream) cannot be readonly: there
+      is nothing to compare with or copy from.
+    - **Skill hub entries** are out of this plan; only packaged skills can be readonly.
+    - **A skill that becomes readonly on an upgrade** overwrites a copy the AI had edited, at its next
+      `read_skill`. The runbook entry (P6) says so.
   - For a readonly skill, `read_skill` compares the copy's `.origin` with the upstream hashes
     (`resolve_upstream`). When they differ, it deletes the copy's files and writes upstream's
     (`materialize_skill`'s writes, the manifest last).
@@ -86,7 +96,9 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
     - an older copy is replaced on read;
     - a file upstream removed is removed;
     - an edit is refused;
-    - a non-readonly skill is left alone (the control).
+    - a non-readonly skill is left alone (the control);
+    - a copy whose own `SKILL.md` drops `readonly` is still readonly (upstream decides);
+    - a workspace skill whose `SKILL.md` says `readonly` is not treated as readonly.
 - **P2 — the docs skill.** `sample-skills/system-design/`, registered as a shared skill.
   - `SKILL.md` covers:
     - when to consult the docs: any question about how the system behaves or why, and a user who seems to
