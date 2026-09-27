@@ -31,7 +31,12 @@ export function MarkingChips({
       {markings.map((m) => {
         const refused = Boolean(m.error);
         // #861 D5: how many rows were picked, and the keys that link them.
-        const counts = `· ${m.count} · ${t("markings.by", { columns: m.keys.join(t("markings.listSep")) })}`;
+        // A chip sent before #861 reads back with no keys (and a count of 0): it
+        // has nothing true to count, so it shows its name alone.
+        const counts =
+          m.keys.length > 0
+            ? `· ${m.count} · ${t("markings.by", { columns: m.keys.join(t("markings.listSep")) })}`
+            : "";
         const label = (
           <>
             <Icon name="tag" size={11} color={refused ? "var(--err)" : "var(--text-paper-d)"} />

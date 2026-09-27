@@ -41,6 +41,13 @@ describe("MarkingChips", () => {
     expect(chip).toHaveTextContent("· 4 · 依 lot、wafer");
   });
 
+  it("a chip sent before #861 (it reads back with no keys) shows its name, not a count of 0", () => {
+    // msgspec drops #855's `counts` and defaults `count` to 0, `keys` to [].
+    render(<MarkingChips markings={[{ name: "old", path: "/.markings/old.json", count: 0, keys: [] }]} />);
+    const chip = screen.getByTestId("marking-chip");
+    expect(chip).toHaveTextContent(/^old$/);
+  });
+
   it("says the count and the keys in the viewer's language (#861 D5)", () => {
     setStoredLocale("en");
     render(
