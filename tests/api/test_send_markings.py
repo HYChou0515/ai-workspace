@@ -40,10 +40,14 @@ def _app(runner, **kw):
     return app, spec
 
 
+#: As a view sends it: keys in its `keys:` order, rows in the order picked, a
+#: repeat. The file holds keys sorted, each row permuted to match, rows sorted
+#: and distinct (#861 Formats).
 FAIL = {
     "name": "fail",
     "source": "/v/grid.ai.yaml",
-    "columns": {"lot": ["L2", "L1"], "wafer": ["3", "4", "5"]},
+    "keys": ["wafer", "lot"],
+    "rows": [["4", "L2"], ["3", "L1"], ["5", "L2"], ["3", "L1"]],
 }
 
 
@@ -122,7 +126,7 @@ def test_adding_a_marking_file_asks_add_content_and_replacing_one_asks_edit_cont
     client.post(f"/a/rca/items/{iid}/messages", json={"content": "q1", "markings": [FAIL]})
     assert client.get(f"/a/rca/items/{iid}/files/.markings/fail.json").status_code == 200
 
-    again = {**FAIL, "columns": {"lot": ["L9"]}}
+    again = {**FAIL, "keys": ["lot"], "rows": [["L9"]]}
     client.post(f"/a/rca/items/{iid}/messages", json={"content": "q2", "markings": [again]})
 
     first, second = _user_messages(spec, iid)
@@ -177,22 +181,60 @@ def test_a_sent_marking_is_written_where_the_ai_can_read_it():
     assert json.loads(got.content) == {
         "name": "fail",
         "sources": ["/v/grid.ai.yaml"],
-        "columns": {"lot": ["L1", "L2"], "wafer": ["3", "4", "5"]},
+        "keys": ["lot", "wafer"],
+        "rows": [["L1", "3"], ["L2", "4"], ["L2", "5"]],
     }
 
 
-def test_the_model_gets_one_line_per_marking_naming_counts_and_path():
+def test_a_row_that_does_not_fit_the_keys_is_dropped_and_a_marking_left_empty_is_too():
+    cap = _Capture()
+    app, spec = _app(cap)
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+    ragged = {**FAIL, "rows": [["4", "L2"], ["3"], ["5", "L2", "x"]]}
+    none_fit = {"name": "e", "source": None, "keys": ["k"], "rows": [["a", "b"]]}
+    no_keys = {"name": "n", "source": None, "keys": [], "rows": [[]]}
+
+    client.post(
+        f"/a/rca/items/{iid}/messages",
+        json={"content": "q", "markings": [ragged, none_fit, no_keys]},
+    )
+
+    got = client.get(f"/a/rca/items/{iid}/files/.markings/fail.json")
+    assert json.loads(got.content)["rows"] == [["L2", "4"]]
+    [msg] = _user_messages(spec, iid)
+    assert [(m.name, m.count) for m in msg.markings] == [("fail", 1)]
+
+
+def test_a_marking_naming_a_column_twice_fails_its_chip():
+    cap = _Capture()
+    app, spec = _app(cap)
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+    twice = {"name": "t", "source": None, "keys": ["k", "k"], "rows": [["a", "b"]]}
+
+    r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [twice]})
+
+    assert r.status_code == 202
+    [msg] = _user_messages(spec, iid)
+    [m] = msg.markings
+    assert (m.path, m.error) == ("", "a marking cannot name a column twice")
+    assert client.get(f"/a/rca/items/{iid}/files/.markings/t.json").status_code == 404
+
+
+def test_the_model_gets_one_line_per_marking_naming_count_keys_and_path():
     cap = _Capture()
     app, spec = _app(cap)
     client = TestClient(app)
     iid = register_rca_item(spec)
 
-    client.post(f"/a/rca/items/{iid}/messages", json={"content": "why?", "markings": [FAIL]})
+    one = {"name": "one", "source": None, "keys": ["lot"], "rows": [["L1"]]}
+
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "why?", "markings": [FAIL, one]})
 
     assert cap.prompt is not None
-    assert "`fail`" in cap.prompt
-    assert "lot: 2, wafer: 3" in cap.prompt
-    assert ".markings/fail.json" in cap.prompt
+    assert "- `fail` (3 rows by lot, wafer) → .markings/fail.json\n" in cap.prompt
+    assert "- `one` (1 row by lot) → .markings/one.json\n" in cap.prompt
     assert cap.prompt.rstrip().endswith("why?")
 
 
@@ -208,10 +250,11 @@ def test_the_marking_is_recorded_on_the_persisted_message_but_not_in_its_text():
     [msg] = _user_messages(spec, iid)
     assert msg.content == "why?"
     [m] = msg.markings
-    assert (m.name, m.path, m.counts, m.source, m.error) == (
+    assert (m.name, m.path, m.count, m.keys, m.source, m.error) == (
         "fail",
         "/.markings/fail.json",
-        {"lot": 2, "wafer": 3},
+        3,
+        ["lot", "wafer"],
         "/v/grid.ai.yaml",
         None,
     )
@@ -239,7 +282,7 @@ def test_a_full_workspace_fails_that_chip_not_the_send():
     client = TestClient(app)
     iid = register_rca_item(spec)
     assert client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 90).status_code == 204
-    small = {"name": "s", "source": None, "columns": {"k": ["v"]}}
+    small = {"name": "s", "source": None, "keys": ["k"], "rows": [["v"]]}
 
     r = client.post(
         f"/a/rca/items/{iid}/messages",
@@ -263,7 +306,7 @@ def test_a_name_that_is_not_a_file_name_fails_its_chip():
     client = TestClient(app)
     iid = register_rca_item(spec)
     bad = [
-        {"name": n, "source": None, "columns": {"k": ["v"]}}
+        {"name": n, "source": None, "keys": ["k"], "rows": [["v"]]}
         for n in ("../escape", "a/b", ".hidden", "", "x" * 251)
     ]
 
@@ -284,7 +327,10 @@ def test_a_marking_with_no_values_is_not_a_marking():
 
     client.post(
         f"/a/rca/items/{iid}/messages",
-        json={"content": "q", "markings": [{"name": "e", "source": None, "columns": {"k": []}}]},
+        json={
+            "content": "q",
+            "markings": [{"name": "e", "source": None, "keys": ["k"], "rows": []}],
+        },
     )
 
     [msg] = _user_messages(spec, iid)
@@ -313,7 +359,7 @@ async def test_live_viewers_see_the_chips_the_reload_shows():
                 return
 
     collector = asyncio.create_task(collect())
-    bad = {"name": "a/b", "source": None, "columns": {"k": ["v"]}}
+    bad = {"name": "a/b", "source": None, "keys": ["k"], "rows": [["v"]]}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post(
             f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [FAIL, bad]}
@@ -335,8 +381,8 @@ def test_a_name_is_measured_in_bytes_as_a_file_name_is():
     app, spec = _app(cap)
     client = TestClient(app)
     iid = register_rca_item(spec)
-    long_bytes = {"name": "😀" * 100, "source": None, "columns": {"k": ["v"]}}
-    cjk = {"name": "批" * 80, "source": None, "columns": {"k": ["v"]}}  # 240 bytes: fits
+    long_bytes = {"name": "😀" * 100, "source": None, "keys": ["k"], "rows": [["v"]]}
+    cjk = {"name": "批" * 80, "source": None, "keys": ["k"], "rows": [["v"]]}  # 240 bytes: fits
 
     r = client.post(
         f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [long_bytes, cjk]}
@@ -385,3 +431,30 @@ def test_a_write_the_workspace_refuses_fails_that_chip_not_the_send(monkeypatch,
     [m] = msg.markings
     assert m.error and m.path == ""
     assert "/srv/sandbox" not in m.error  # no sandbox internals on the chip
+
+
+def test_a_thread_holding_a_chip_sent_before_tuples_still_loads():
+    """#861: `SentMarking.counts` became `count` + `keys`, with no schema bump.
+    A stored #855 chip still decodes — its old field ignored, the new ones at
+    their defaults — so a reload does not break the thread; saving it as a
+    table then fails on its digest (test_marking_table)."""
+    import msgspec
+
+    from workspace_app.resources.conversation import Message
+
+    old = {
+        "role": "user",
+        "content": "q",
+        "markings": [
+            {"name": "fail", "path": "/.markings/fail.json", "counts": {"lot": 2}, "digest": "d"}
+        ],
+    }
+
+    [m] = msgspec.json.decode(msgspec.json.encode(old), type=Message).markings
+    assert (m.name, m.path, m.count, m.keys, m.digest) == (
+        "fail",
+        "/.markings/fail.json",
+        0,
+        [],
+        "d",
+    )

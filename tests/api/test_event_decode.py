@@ -41,7 +41,7 @@ _SAMPLES = [
     UserMessage(
         content="why?",
         author="alice",
-        markings=[{"name": "fail", "path": "/.markings/fail.json", "counts": {"lot": 2}}],
+        markings=[{"name": "fail", "path": "/.markings/fail.json", "count": 2, "keys": ["lot"]}],
     ),
     FileChanged(path="/a.py", by="alice", kind="modified"),
     StepOutput(phase="commit", name="ingest", text="line\n", key="f.pdf"),

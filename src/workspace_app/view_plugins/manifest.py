@@ -46,10 +46,11 @@ class Provides(Struct, forbid_unknown_fields=True):
 
     - ``marking_rows`` — "save a marking as a table" (plan-view-plugins-pr5
       P7). The command takes ``{"view": <workspace path of a view file or a
-      table file>}`` plus exactly one of ``{"columns": {column: [text, …]}}`` or
-      ``{"marking": <workspace path of a .markings/<name>.json>}``, and answers
-      ``{"rows": n, "csv": text, "columns": {column: [text, …]}}`` — the view's
-      rows the marking lights, every column, and the marking it lit them by (as
+      table file>}`` plus either ``{"keys": [column, …], "rows": [[text, …], …]}``
+      (the picked key tuples, #861) or ``{"marking": <workspace path of a
+      .markings/<name>.json>}``, and answers ``{"rows": n, "csv": text,
+      "marking": {"keys": […], "rows": [[…], …]}}`` — the view's rows the
+      marking lights, every column, and the marking it lit them by (as
       given or as read from the file; the platform checks a chat chip's save
       against it) — or exits 2 with one user-facing sentence on stderr. At most one
       installed plugin may provide it (``discovery`` refuses two).

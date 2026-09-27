@@ -14,8 +14,9 @@ workspace, at ``/markings/<name>-<yyyymmdd-hhmm>.csv``:
 2. the CSV is written through the file facade, so the workspace quota applies
    exactly as to any other write, and the caller must hold ``add_content``.
 
-The header control sends the marking's values (it holds them); the chip sends
-none, and the sandbox reads the file the send wrote (``.markings/<name>.json``).
+The header control sends the marking's picked tuples (it holds them, #861); the
+chip sends none, and the sandbox reads the file the send wrote
+(``.markings/<name>.json``).
 
 Every refusal is a sentence the control shows as it is: no internals, no
 sandbox paths.
@@ -52,13 +53,21 @@ MAX_SUFFIX = 99
 UNREACHABLE = "the workspace could not be reached — try again"
 
 
+class MarkingTuples(BaseModel):
+    """A marking as the picked key tuples (#861 D1): each row is one picked
+    row's values on `keys`, in that order."""
+
+    keys: list[str]
+    rows: list[list[str]]
+
+
 class SaveTableBody(BaseModel):
     name: str
     #: The view the rows come from — a view file, or a table file itself.
     view: str
-    #: The marking's values (the header control holds them); None → read the
+    #: The marking's tuples (the header control holds them); None → read the
     #: marking the chat send wrote, `.markings/<name>.json` (the chip).
-    columns: dict[str, list[str]] | None = None
+    marking: MarkingTuples | None = None
     #: `yyyymmdd-hhmm` in the saver's own clock: the name they will look for.
     stamp: str
     #: The chip's `SentMarking.digest` — the values that message sent. The file
@@ -72,22 +81,31 @@ class SaveTableOut(BaseModel):
     rows: int
 
 
+def _is_text_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(x, str) for x in value)
+
+
 def _is_marking(value: Any) -> bool:
-    return isinstance(value, dict) and all(
-        isinstance(v, list) and all(isinstance(x, str) for x in v) for v in value.values()
+    """`{"keys": [text…], "rows": [[text…]…]}` — the tuples' LENGTHS are not
+    checked here: the digest drops a row that does not fit, as the send does."""
+    return (
+        isinstance(value, dict)
+        and _is_text_list(value.get("keys"))
+        and isinstance(value.get("rows"), list)
+        and all(_is_text_list(r) for r in value["rows"])
     )
 
 
-def _answer(stdout: str) -> tuple[int, str, dict[str, list[str]]] | None:
-    """The provider's `{"rows", "csv", "columns"}`, or None when it is not that."""
+def _answer(stdout: str) -> tuple[int, str, MarkingTuples] | None:
+    """The provider's `{"rows", "csv", "marking"}`, or None when it is not that."""
     try:
         answer = json.loads(stdout)
-        rows, csv, columns = answer["rows"], answer["csv"], answer["columns"]
+        rows, csv, marking = answer["rows"], answer["csv"], answer["marking"]
     except (ValueError, TypeError, KeyError):
         return None
-    if type(rows) is not int or not isinstance(csv, str) or not _is_marking(columns):
+    if type(rows) is not int or not isinstance(csv, str) or not _is_marking(marking):
         return None
-    return rows, csv, columns
+    return rows, csv, MarkingTuples(keys=marking["keys"], rows=marking["rows"])
 
 
 async def _free_path(files: WorkspaceFiles, item_id: str, base: str) -> str:
@@ -133,7 +151,7 @@ def register_marking_table_route(
                 status_code=422, detail="this marking has no view to take its rows from"
             )
         args: dict[str, Any] = {"view": body.view}
-        if body.columns is None:
+        if body.marking is None:
             if body.digest is None:
                 raise HTTPException(
                     status_code=409,
@@ -144,7 +162,8 @@ def register_marking_table_route(
                 )
             args["marking"] = f"{MARKINGS_DIR}/{body.name}.json"
         else:
-            args["columns"] = body.columns
+            args["keys"] = body.marking.keys
+            args["rows"] = body.marking.rows
         provider = marking_rows_provider(get_plugins())
         if provider is None:
             raise HTTPException(
@@ -182,7 +201,7 @@ def register_marking_table_route(
         rows, csv, lit_by = answer
         # A chip saves what ITS message sent, or nothing: checked against what
         # the rows were lit by, so there is no window between check and read.
-        if body.columns is None and marking_digest(lit_by) != body.digest:
+        if body.marking is None and marking_digest(lit_by.keys, lit_by.rows) != body.digest:
             raise HTTPException(
                 status_code=409,
                 detail=(

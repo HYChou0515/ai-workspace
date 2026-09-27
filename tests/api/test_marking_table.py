@@ -52,17 +52,18 @@ class _LitSandbox(MockSandbox):
                 raise self.answer
             if self.answer is not None:
                 return self.answer
-            # As the contract says: lit by the values given, or by the marking
+            # As the contract says: lit by the tuples given, or by the marking
             # file as it is NOW — and the answer names which.
             args = json.loads(cmd[2])
-            if "columns" in args:
-                columns = args["columns"]
+            if "keys" in args:
+                marking = {"keys": args["keys"], "rows": args["rows"]}
             else:
                 try:
-                    columns = json.loads(await self.download(handle, args["marking"]))["columns"]
+                    doc = json.loads(await self.download(handle, args["marking"]))
                 except FileNotFoundError:
                     return ExecResult(exit_code=2, stdout=b"", stderr=b"the marking is gone")
-            out = {"rows": 2, "csv": CSV, "columns": columns}
+                marking = {"keys": doc["keys"], "rows": doc["rows"]}
+            out = {"rows": 2, "csv": CSV, "marking": marking}
             return ExecResult(exit_code=0, stdout=json.dumps(out).encode(), stderr=b"")
         return await super().exec(handle, cmd, on_output, env, exec_timeout)
 
@@ -109,7 +110,7 @@ def _app(tmp_path: Path, sandbox: MockSandbox | None = None, *, provider: bool =
 BODY = {
     "name": "fail",
     "view": "/views/c.ai.yaml",
-    "columns": {"lot": ["A", "C"]},
+    "marking": {"keys": ["lot", "wafer"], "rows": [["A", "1"], ["C", "3"]]},
     "stamp": "20260925-1412",
 }
 
@@ -129,12 +130,16 @@ def test_the_lit_rows_land_as_a_new_csv_in_the_workspace(tmp_path):
     got = client.get(f"/a/rca/items/{iid}/files/markings/fail-20260925-1412.csv")
     assert got.status_code == 200 and got.text == CSV
     [call] = sb.lit_calls
-    assert json.loads(call[2]) == {"view": "/views/c.ai.yaml", "columns": {"lot": ["A", "C"]}}
+    assert json.loads(call[2]) == {
+        "view": "/views/c.ai.yaml",
+        "keys": ["lot", "wafer"],
+        "rows": [["A", "1"], ["C", "3"]],
+    }
 
 
-def _send(client, spec, iid: str, lots: list[str]) -> dict:
+def _send(client, spec, iid: str, lots: list[list[str]]) -> dict:
     """Send one message carrying marking `fail`; its persisted chip, as the FE gets it."""
-    marking = {"name": "fail", "source": "/views/c.ai.yaml", "columns": {"lot": lots}}
+    marking = {"name": "fail", "source": "/views/c.ai.yaml", "keys": ["lot"], "rows": lots}
     r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [marking]})
     assert r.status_code == 202, r.text
     rm = spec.get_resource_manager(Conversation)
@@ -144,13 +149,13 @@ def _send(client, spec, iid: str, lots: list[str]) -> dict:
 
 
 def _chip_body(chip: dict) -> dict:
-    return {**BODY, "view": chip["source"], "columns": None, "digest": chip["digest"]}
+    return {**BODY, "view": chip["source"], "marking": None, "digest": chip["digest"]}
 
 
 def test_the_chip_sends_no_values_and_the_sandbox_reads_the_sent_marking(tmp_path):
     client, spec, sb = _app(tmp_path)
     iid = register_rca_item(spec)
-    chip = _send(client, spec, iid, ["A", "C"])
+    chip = _send(client, spec, iid, [["A"], ["C"]])
 
     r = client.post(_url(iid), json=_chip_body(chip))
 
@@ -165,8 +170,8 @@ def test_an_older_chip_refuses_to_save_a_later_sends_values(tmp_path):
     name; B's chip saves."""
     client, spec, sb = _app(tmp_path)
     iid = register_rca_item(spec)
-    older = _send(client, spec, iid, ["A"])
-    newer = _send(client, spec, iid, ["B", "C"])
+    older = _send(client, spec, iid, [["A"]])
+    newer = _send(client, spec, iid, [["B"], ["C"]])
 
     r = client.post(_url(iid), json=_chip_body(older))
 
@@ -179,35 +184,97 @@ def test_an_older_chip_refuses_to_save_a_later_sends_values(tmp_path):
     assert client.post(_url(iid), json=_chip_body(newer)).status_code == 200
 
 
-def test_the_digest_is_of_the_set_not_its_spelling():
-    """A provider answers the marking it lit by in whatever order it holds it
-    (the header's values arrive unsorted); only the set may count."""
+def test_the_digest_is_the_formats_recipe():
+    """#861 Formats: sha256 of the compact JSON of `{"keys", "rows"}` — keys
+    sorted, rows sorted and distinct. Written out here from the contract."""
+    import hashlib
+
     from workspace_app.api.markings import marking_digest
 
-    assert marking_digest({"b": ["y", "x", "x"], "a": ["1"], "c": []}) == marking_digest(
-        {"a": ["1"], "b": ["x", "y"]}
+    text = '{"keys":["group","item"],"rows":[["g3","8"],["g5","é"]]}'
+    assert marking_digest(["group", "item"], [["g5", "é"], ["g3", "8"]]) == (
+        hashlib.sha256(text.encode()).hexdigest()
     )
-    assert marking_digest({"a": ["1"]}) != marking_digest({"a": ["2"]})
-    assert marking_digest({"a": ["1"]}) != marking_digest({"b": ["1"]})
+
+
+def test_the_digest_is_of_the_set_of_tuples_not_its_spelling():
+    """A provider answers the marking it lit by in whatever order it holds it
+    (the header's tuples arrive unsorted, its keys in a view's order); only the
+    set of tuples may count."""
+    from workspace_app.api.markings import marking_digest
+
+    assert marking_digest(["b", "a"], [["y", "1"], ["x", "1"], ["x", "1"]]) == marking_digest(
+        ["a", "b"], [["1", "x"], ["1", "y"]]
+    )
+    assert marking_digest(["a"], [["1"]]) != marking_digest(["a"], [["2"]])
+    assert marking_digest(["a"], [["1"]]) != marking_digest(["b"], [["1"]])
+    # The tuples, not each column's values: (1, x), (2, y) is not (1, y), (2, x).
+    assert marking_digest(["a", "b"], [["1", "x"], ["2", "y"]]) != marking_digest(
+        ["a", "b"], [["1", "y"], ["2", "x"]]
+    )
 
 
 def test_the_send_records_what_it_wrote_as_a_digest(tmp_path):
     client, spec, _ = _app(tmp_path)
     iid = register_rca_item(spec)
-    a = _send(client, spec, iid, ["A", "C"])
-    again = _send(client, spec, iid, ["C", "A", "A"])  # the same set, as the file holds it
-    b = _send(client, spec, iid, ["B"])
+    a = _send(client, spec, iid, [["A"], ["C"]])
+    again = _send(client, spec, iid, [["C"], ["A"], ["A"]])  # the same set, as the file holds it
+    b = _send(client, spec, iid, [["B"]])
 
     assert a["digest"] and a["digest"] == again["digest"] != b["digest"]
+
+
+def _send_tuples(client, spec, iid: str, keys: list[str], rows: list[list[str]]) -> dict:
+    marking = {"name": "fail", "source": "/views/c.ai.yaml", "keys": keys, "rows": rows}
+    r = client.post(f"/a/rca/items/{iid}/messages", json={"content": "q", "markings": [marking]})
+    assert r.status_code == 202, r.text
+    rm = spec.get_resource_manager(Conversation)
+    [meta] = rm.search_resources(query=None)
+    users = [m for m in rm.get(meta.resource_id).data.messages if m.role == "user"]
+    return msgspec.to_builtins(users[-1].markings[0])
+
+
+def test_a_later_send_of_other_tuples_over_the_same_values_is_a_change(tmp_path):
+    """#861 D1: (A, 1), (C, 3) and (A, 3), (C, 1) hold the same values per
+    column and light different rows, so the older chip must not save the
+    newer's rows."""
+    client, spec, sb = _app(tmp_path)
+    iid = register_rca_item(spec)
+    older = _send_tuples(client, spec, iid, ["lot", "wafer"], [["A", "1"], ["C", "3"]])
+    _send_tuples(client, spec, iid, ["lot", "wafer"], [["A", "3"], ["C", "1"]])
+
+    r = client.post(_url(iid), json=_chip_body(older))
+
+    assert r.status_code == 409
+    assert "has changed since this message was sent" in r.json()["detail"]
+
+
+def test_a_chip_sent_before_markings_held_tuples_is_a_change(tmp_path):
+    """A chip recorded under #855's digest (`column -> values`) cannot match
+    any file the send writes now: it gets the existing refusal (#861)."""
+    import hashlib
+
+    client, spec, sb = _app(tmp_path)
+    iid = register_rca_item(spec)
+    _send_tuples(client, spec, iid, ["lot"], [["A"], ["C"]])
+    old = hashlib.sha256(b'{"lot":["A","C"]}').hexdigest()
+
+    r = client.post(_url(iid), json={**BODY, "marking": None, "digest": old})
+
+    assert r.status_code == 409
+    assert "has changed since this message was sent" in r.json()["detail"]
+    assert (
+        client.get(f"/a/rca/items/{iid}/files/markings/fail-20260925-1412.csv").status_code == 404
+    )
 
 
 def test_a_chip_without_a_digest_is_refused_not_guessed(tmp_path):
     """A chip sent before the digest was recorded cannot be matched to its values."""
     client, spec, sb = _app(tmp_path)
     iid = register_rca_item(spec)
-    _send(client, spec, iid, ["A"])
+    _send(client, spec, iid, [["A"]])
 
-    r = client.post(_url(iid), json={**BODY, "columns": None})
+    r = client.post(_url(iid), json={**BODY, "marking": None})
 
     assert r.status_code == 409
     assert r.json()["detail"] == (
@@ -270,9 +337,25 @@ def test_the_sandboxs_refusal_is_the_controls_sentence_and_nothing_is_written(tm
         ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": 5}', stderr=b""),
         ExecResult(exit_code=0, stdout=b'{"rows": 2}', stderr=b""),
         ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": "a"}', stderr=b""),
-        ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": "a", "columns": 5}', stderr=b""),
+        ExecResult(exit_code=0, stdout=b'{"rows": 2, "csv": "a", "marking": 5}', stderr=b""),
+        *(
+            ExecResult(
+                exit_code=0,
+                stdout=json.dumps({"rows": 2, "csv": "a", "marking": m}).encode(),
+                stderr=b"",
+            )
+            for m in (
+                {"keys": ["lot"]},
+                {"keys": "lot", "rows": []},
+                {"keys": [1], "rows": []},
+                {"keys": ["lot"], "rows": "A"},
+                {"keys": ["lot"], "rows": ["A"]},
+                {"keys": ["lot"], "rows": [[1]]},
+            )
+        ),
+        # #855's answer: a marking as `column -> values`.
         ExecResult(
-            exit_code=0, stdout=b'{"rows": 2, "csv": "a", "columns": {"lot": [1]}}', stderr=b""
+            exit_code=0, stdout=b'{"rows": 2, "csv": "a", "columns": {"lot": ["A"]}}', stderr=b""
         ),
     ],
 )
@@ -313,7 +396,9 @@ def test_a_marking_too_big_for_one_call_says_to_send_it_from_the_chat(tmp_path):
     client, spec, sb = _app(tmp_path)
     iid = register_rca_item(spec)
 
-    r = client.post(_url(iid), json={**BODY, "columns": {"lot": ["x" * ARGV_MAX]}})
+    r = client.post(
+        _url(iid), json={**BODY, "marking": {"keys": ["lot"], "rows": [["x" * ARGV_MAX]]}}
+    )
 
     assert r.status_code == 413
     assert "send it in the chat" in r.json()["detail"]
@@ -389,7 +474,9 @@ def _bare(tmp, files=None, locator=None, run=None):
         if isinstance(run, Exception):
             raise run
         return RunOut(
-            stdout=json.dumps({"rows": 2, "csv": CSV, "columns": args["columns"]}),
+            stdout=json.dumps(
+                {"rows": 2, "csv": CSV, "marking": {"keys": args["keys"], "rows": args["rows"]}}
+            ),
             stderr="",
             exit_code=0,
         )
