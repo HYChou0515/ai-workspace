@@ -245,7 +245,7 @@ describe("a key no selected row holds a value of (#847/#848 PR 5 P44 row 35)", (
     });
   });
 
-  it("counts the picks written", () => {
+  it("counts the selected rows that name a whole pick", () => {
     expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item"], [])).toBe(1);
     expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["group"], [])).toBe(2);
     expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item"], [])).toBe(0);
@@ -274,6 +274,18 @@ describe("markedCount is the selected rows that name a whole pick (review #862 r
 
   it("is 0 for a view without keys", () => {
     expect(markedCount(all, P, [], [])).toBe(0);
+  });
+
+  it("counts each row once when two layers draw the same rows (a line with its points; review #862 round 2)", () => {
+    // Both layers draw the 3 rows; a box over the chart selects them in each.
+    // A linked table says 3 of 3 -- summing the layers said 6.
+    const rows = { item: cat(["r1", "r2", "r3"]), v: f64([1, 2, 3]) };
+    const both = answer(layer("line", 3, rows), layer("scatter", 3, rows));
+    const box = [
+      { source: "brush" as const, layer: 0, rows: [0, 1, 2] },
+      { source: "brush" as const, layer: 1, rows: [0, 1, 2] },
+    ];
+    expect(markedCount(box, both, ["item"], [])).toBe(3);
   });
 });
 

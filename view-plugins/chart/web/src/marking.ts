@@ -99,21 +99,27 @@ function picks(
   measured: Measured,
 ): { marking: Marking; rows: number } | null {
   const naming = selections
-    .map((s) => selectionRows(s, answer, keys, measured))
-    .map((rows) => ({ rows, named: new Set(rows.flatMap((r) => Object.keys(r))) }))
+    .map((s) => ({ layer: s.layer, rows: selectionRows(s, answer, keys, measured) }))
+    .map((s) => ({ ...s, named: new Set(s.rows.flatMap((r) => Object.keys(r))) }))
     .filter((s) => s.named.size > 0);
   if (naming.length === 0) return null;
   const common = keys.filter((k) => naming.every((s) => s.named.has(k)));
   // layers naming disjoint keys share no pick
   if (common.length === 0) return null;
-  const rows = naming.flatMap((s) => s.rows).flatMap((row) => {
+  const whole = (row: Readonly<Record<string, string>>) => {
     const values = common.map((k) => row[k]);
     return values.every((v): v is string => v !== undefined) ? [values] : [];
-  });
+  };
+  const rows = naming.flatMap((s) => s.rows).flatMap(whole);
   const marking = markingFrom(common, rows);
   // `rows`: how many selected rows named a whole pick -- what a chart counts
   // (review #862), the picks themselves being fewer when rows repeat a key.
-  return markingSize(marking) > 0 ? { marking, rows: rows.length } : null;
+  // Summed within a layer, the most of any layer across them: two layers
+  // drawing the same rows (a line with its points) are one set of rows, not
+  // two (review #862 round 2).
+  const perLayer = new Map<number, number>();
+  for (const s of naming) perLayer.set(s.layer, (perLayer.get(s.layer) ?? 0) + s.rows.flatMap(whole).length);
+  return markingSize(marking) > 0 ? { marking, rows: Math.max(...perLayer.values()) } : null;
 }
 
 /** What a selection writes. null for a view without `keys:` (it cannot be a

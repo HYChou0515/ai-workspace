@@ -48,6 +48,12 @@ describe("MarkingChips", () => {
     expect(chip).toHaveTextContent(/^old$/);
   });
 
+  it("a chip broadcast by an older pod mid-rollout (no `keys` at all) shows its name, not a crash", () => {
+    const live = { name: "old", path: "/.markings/old.json", counts: { lot: 2 } } as unknown as SentMarking;
+    render(<MarkingChips markings={[live]} />);
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^old$/);
+  });
+
   it("says the count and the keys in the viewer's language (#861 D5)", () => {
     setStoredLocale("en");
     render(

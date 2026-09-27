@@ -133,6 +133,16 @@ describe("a table coarser than its marking (review #862 defect A1)", () => {
     });
   });
 
+  it("ticking a group with no pick keeps the groups it does not show, as whole groups (review #862 round 2)", () => {
+    // (g9, 3) is in a group this table has no row for: it stays, said at the
+    // table's keys once the marking becomes per-group -- as #855 carried it.
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "1"], ["g9", "3"]]), "/views/gallery.ai.yaml");
+    const { result } = coarse(store);
+    act(() => result.current.select!.set(new Set([0, 1])));
+    expect(held(store)).toEqual({ keys: ["group"], rows: [["g1"], ["g2"], ["g9"]] });
+  });
+
   it("ticking a group it holds no pick in writes at the table's own keys", () => {
     // (g2, *) cannot be said as item-level picks: the marking becomes per-group.
     const store = new MarkingStore();
@@ -140,5 +150,26 @@ describe("a table coarser than its marking (review #862 defect A1)", () => {
     const { result } = coarse(store);
     act(() => result.current.select!.set(new Set([0, 1])));
     expect(held(store)).toEqual({ keys: ["group"], rows: [["g1"], ["g2"]] });
+  });
+});
+
+describe("a table that has every key but writes fewer (`keys:` a subset; review #862 round 2)", () => {
+  const ROWS2 = [
+    { group: "g1", item: "a" },
+    { group: "g1", item: "b" },
+    { group: "g2", item: "c" },
+    { group: "g1", item: "d" },
+  ];
+  const narrow = (store: MarkingStore) =>
+    hook(store, { rows: ROWS2, columns: ["group", "item"], keys: ["group"], source: "/views/t.ai.yaml" });
+
+  it("a tick is not a no-op: it writes at the table's keys", () => {
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "a"], ["g1", "b"], ["g2", "c"]]), "/views/gallery.ai.yaml");
+    const { result } = narrow(store);
+    // untick (g1, a): what `keys: [group]` says of rows b, c -- g1 and g2
+    act(() => result.current.select!.set(new Set([1, 2])));
+    const m = store.get("fail")!.marking;
+    expect({ keys: m.keys, rows: markingRows(m) }).toEqual({ keys: ["group"], rows: [["g1"], ["g2"]] });
   });
 });

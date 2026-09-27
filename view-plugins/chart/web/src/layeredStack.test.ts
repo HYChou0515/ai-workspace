@@ -87,7 +87,8 @@ describe("a stack beside an unstacked layer (P42 row 29)", () => {
   // P43: the demo's box over group b's points and a segment said "7 selected ·
   // by item" while the marking held 6 items: the segment wrote nothing. What
   // is counted beside "by <keys>" is what went to the marking (P36 row 10):
-  // its picks (#861 D5) -- rows 2 and 4 are both region s, one pick.
+  // the rows that name a pick (review #862) -- rows 2 and 4 are both region s:
+  // two rows, one pick.
   it("counts, of a selection over both layers, only the rows that went to the marking", () => {
     const measured = measuredFields(both);
     const mixed = [

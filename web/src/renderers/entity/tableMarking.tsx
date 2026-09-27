@@ -18,7 +18,12 @@
  * Checking or unchecking one writes the rows then checked, as picks on the
  * key columns — the spec's `keys:`, else the keys the marking already holds —
  * that this table has. A held pick no row of this table carries stays picked:
- * the table decides only about the rows it holds. With no
+ * the table decides only about the rows it holds. A table that lacks one of the
+ * marking's keys (a per-group table on (group, item) picks) is coarser: while
+ * its ticks say only what the held picks say, it writes at the marking's keys
+ * (unticking a group removes that group's picks, the rest stay); a tick of a
+ * group with no pick writes at the table's keys, groups it does not show kept as
+ * whole groups (review #862). With no
  * key column, nothing is written and `note` says
  * why (the header's marking control shows it). The table the selection was
  * made in is not filtered by it: it keeps every row with the marked ones
@@ -160,7 +165,11 @@ export function useTableMarking({
     // that group's picks, and every other pick -- finer than this table, or in
     // a group it does not show -- stays (review #862 A1). A tick the held picks
     // cannot say (a group with no pick) writes at the table's keys instead.
-    if (held && next.keys.length < held.keys.length && next.keys.every((k) => held.keys.includes(k))) {
+    // Only a table that LACKS one of the held keys is coarser: one that has them
+    // all but writes fewer (`keys:` a subset) lights exact picks, so a tick of
+    // it is a plain write at its keys, never a silent no-op (round 2).
+    const coarser = !!held && !held.keys.every((k) => columns.includes(k));
+    if (held && coarser && next.keys.length < held.keys.length && next.keys.every((k) => held.keys.includes(k))) {
       const onto = projectPick(held, next.keys);
       const said = new Set([...held.tuples].map(onto));
       if ([...next.tuples].every((t) => said.has(t))) {
@@ -168,6 +177,9 @@ export function useTableMarking({
         write({ keys: held.keys, tuples: kept }, source);
         return;
       }
+      // Written at the table's keys: a held pick in a group it does not show
+      // stays, said as that group (as #855 carried it) -- review #862 round 2.
+      for (const t of held.tuples) if (!carried.has(onto(t))) tuples.add(onto(t));
     }
     write({ keys: next.keys, tuples }, source);
   };

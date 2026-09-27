@@ -381,9 +381,10 @@ function Plot({
     setSelection([]);
   }, [option, laid, doc, answer, built]);
 
-  // Beside "by <keys>", the picks that went to the marking (#861 D5): a
-  // stack's segment that wrote nothing is not counted there (P43), and two
-  // rows with the same keys are one pick; otherwise every row picked.
+      // Beside "by <keys>", the selected rows that went to the marking (review
+      // #862): a stack segment that wrote nothing is not counted (P43); two rows
+      // with the same keys are two rows here and one pick in the marking; a row
+      // two layers draw is counted once.
   const marks = !!entry && toMarking;
   const count = marks
     ? markedCount(selection, answer, keys, measured)
