@@ -569,9 +569,20 @@ async def _materialize(
             if up is not None and up.update_available:
                 await refresh_skill(files, workspace_id, app_slug, profile, name, force=True)
             return
-        # No `.origin`: a copy that never finished (review #865 round 1). Nobody
-        # can edit or delete it, and the refresh needs the manifest, so it would
-        # stay half-written for good -- it is cleared and copied again.
+        # No `.origin`. An interrupted copy (review #865 round 1) holds nothing
+        # but shipped files, byte for byte: nobody can edit or delete it, and the
+        # refresh needs the manifest, so it would stay half-written for good --
+        # it is cleared and copied again. Anything else is a folder of the
+        # person's own that carries the name, written before it was reserved,
+        # and is never deleted (round 2).
+        found = _skill_source(app_slug, profile, name)
+        if found is None:
+            return
+        shipped = skill_payload(found[1])
+        prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+        held = await files.read_many_existing(workspace_id, here)
+        if any(shipped.get(path.removeprefix(prefix)) != data for path, data in held.items()):
+            return
         for path in here:
             await files.delete(workspace_id, path)
     found = _skill_source(app_slug, profile, name)
@@ -952,11 +963,19 @@ async def build_applied_skills_block(
     them this turn. A name whose body can't be resolved (unknown, or over the cap)
     is skipped with a short note so the turn still proceeds. ``""`` when nothing
     resolves. Injected like the workspace block: transient, never persisted."""
+    from ..files import WorkspaceFull
+
     sections: list[str] = []
     for name in names:
         try:
             body = await resolve_skill_body(files, workspace_id, app_slug, profile, name)
         except SkillError as e:
+            sections.append(f"### {name}\n\n(could not load: {e})")
+            continue
+        except WorkspaceFull as e:
+            # A copy that does not fit is refused whole (review #865 round 1), on
+            # every try until space is freed -- a note, like any skill that
+            # cannot load, rather than a turn that cannot start (round 2).
             sections.append(f"### {name}\n\n(could not load: {e})")
             continue
         if body is None:

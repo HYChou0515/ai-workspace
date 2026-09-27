@@ -213,14 +213,78 @@ async def test_a_half_written_readonly_copy_is_copied_again(registry: Path, monk
     )
     store = MemoryFileStore()
     files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
-    # what an interrupted copy left: some files, no `.origin`
-    await store.write(inv, "/.skill/ref/SKILL.md", b"---\nname: ref\ndescription: d\n---\n\nold\n")
+    # what an interrupted copy left: some of the shipped files, byte for byte,
+    # and no `.origin`
+    shipped = (registry / "ref" / "SKILL.md").read_bytes()
+    await store.write(inv, "/.skill/ref/SKILL.md", shipped)
     await store.write(inv, "/.skill/ref/docs/a.md", b"a")
 
     await resolve_skill_body(files, inv, None, None, "ref")
 
     assert await files.read(inv, "/.skill/ref/docs/b.md") == b"b"
     assert await files.exists(inv, "/.skill/ref/.origin")
+
+
+# Review #865 round 2 (defect A1): a folder of the person's own that carries
+# the name -- written before the name was reserved -- has no `.origin` either.
+# Only a folder whose every file is a shipped file, byte for byte, is an
+# interrupted copy; anything else is theirs, and is never deleted.
+async def test_a_persons_own_folder_with_the_name_is_never_cleared(registry: Path, monkeypatch):
+    _register(monkeypatch, registry, "ref", readonly=True, files={"docs/a.md": "shipped"})
+    store = MemoryFileStore()
+    files, inv = WorkspaceFiles(store, readonly=readonly_skill_path), "inv-1"
+    await store.write(
+        inv, "/.skill/ref/SKILL.md", b"---\nname: ref\ndescription: mine\n---\n\nmine\n"
+    )
+    await store.write(inv, "/.skill/ref/notes/design.md", b"MY WORK")
+
+    body = await resolve_skill_body(files, inv, None, None, "ref")
+
+    assert (
+        body is not None and "mine" in body
+    )  # read_skill serves the folder it found (the runbook says so)
+    assert await files.read(inv, "/.skill/ref/notes/design.md") == b"MY WORK"
+    assert b"mine" in await files.read(inv, "/.skill/ref/SKILL.md")
+
+
+# Review #865 round 2 (conformance B3): the up-front room check holds for an
+# ordinary skill's copy too, not only a readonly one.
+async def test_an_ordinary_copy_that_does_not_fit_writes_nothing(registry: Path, monkeypatch):
+    _register(
+        monkeypatch,
+        registry,
+        "tool",
+        readonly=False,
+        files={"scripts/a.py": "a" * 150, "scripts/b.py": "b" * 150},
+    )
+    files, inv = WorkspaceFiles(MemoryFileStore(), quota=250), "inv-1"
+
+    with pytest.raises(WorkspaceFull):
+        await resolve_skill_body(files, inv, None, None, "tool")
+
+    assert await files.ls(inv, "/.skill/tool/") == []
+
+
+# Review #865 round 2 (regression B1): a skill applied this turn whose copy does
+# not fit used to stop the turn outright (only a SkillError was caught); now the
+# turn goes on with a note, as for any skill that cannot load.
+async def test_an_applied_skill_that_does_not_fit_is_a_note_not_a_failed_turn(
+    registry: Path, monkeypatch
+):
+    from workspace_app.apps.skills import build_applied_skills_block
+
+    _register(
+        monkeypatch,
+        registry,
+        "tool",
+        readonly=False,
+        files={"scripts/a.py": "a" * 150, "scripts/b.py": "b" * 150},
+    )
+    files, inv = WorkspaceFiles(MemoryFileStore(), quota=250), "inv-1"
+
+    block = await build_applied_skills_block(files, inv, None, None, ["tool"])
+
+    assert "### tool" in block and "could not load" in block
 
 
 # Review #865 round 1 (regression B2): a hub copy that happens to carry a
