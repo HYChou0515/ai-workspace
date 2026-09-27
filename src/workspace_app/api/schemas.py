@@ -137,6 +137,10 @@ class _ItemSkillState(BaseModel):
     #: carry an update; the other two are shown so a dead upstream is a state
     #: on the row, not a broken Refresh.
     upstream: Literal["live", "unpublished", "deleted"] | None = None
+    #: docs/plan-ai-reads-docs.md P1 — a readonly skill: its copy follows what
+    #: the image ships and nobody edits it, so the panel offers no Update or
+    #: Reset (it updates itself on the next read) and says why.
+    readonly: bool = False
     pref: Literal["follow", "on", "off"]
     effective: bool
 

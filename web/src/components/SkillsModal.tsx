@@ -265,13 +265,17 @@ export function SkillsModal({
                 // so instead, and a press there did nothing and then said
                 // "Updated". An absent `upstream` (an older API pod mid-
                 // rollout) keeps today's behaviour.
+                // A readonly skill updates itself on the next read and is never
+                // edited, so neither control has anything to do there.
                 onRefresh={
-                  s.update_available && !upstreamGone(s)
+                  s.update_available && !upstreamGone(s) && !s.readonly
                     ? () => void refresh(s.name, false)
                     : undefined
                 }
                 onReset={
-                  s.is_copy && !upstreamGone(s) ? () => void refresh(s.name, true) : undefined
+                  s.is_copy && !upstreamGone(s) && !s.readonly
+                    ? () => void refresh(s.name, true)
+                    : undefined
                 }
                 // Only a skill whose files are HERE can be published: a
                 // hand-written one, or a copy installed from the skill hub
@@ -431,7 +435,24 @@ function SkillRow({
           >
             {skill.source}
           </span>
-          {skill.is_copy && (
+          {skill.readonly && (
+            // docs/plan-ai-reads-docs.md P1: reference the platform keeps in step
+            // with what it ships — said here, since "editable here" would be false.
+            <span
+              data-testid={`skill-readonly-${skill.name}`}
+              style={{
+                fontSize: pxToRem(10),
+                color: "var(--text-paper-d)",
+                border: "1px solid var(--paper-3)",
+                borderRadius: 999,
+                padding: "0 6px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t("skills.readonly")}
+            </span>
+          )}
+          {skill.is_copy && !skill.readonly && (
             // The source badge alone would read as "this is package content, you
             // can't touch it" — but a copy IS editable here, and that is the
             // whole point of copying it.
@@ -449,7 +470,7 @@ function SkillRow({
               {t("skills.copy")}
             </span>
           )}
-          {skill.update_available && !upstreamGone(skill) && (
+          {skill.update_available && !upstreamGone(skill) && !skill.readonly && (
             // In words (plan-skill-hub-ui-polish D4): a fourth unlabelled
             // icon was the only sign that upstream had moved. Not shown when
             // upstream is KNOWN gone (that row has its own badge); an absent

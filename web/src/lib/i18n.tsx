@@ -624,6 +624,7 @@ export const messages = {
     en: "Edited here, so left as they are",
   },
   "skills.copy": { "zh-TW": "可在此編輯", en: "editable here" },
+  "skills.readonly": { "zh-TW": "唯讀 · 隨平台更新", en: "readonly · follows the platform" },
   "skills.import": { "zh-TW": "匯入", en: "Import" },
   "skills.importHint": {
     "zh-TW": "選擇一個技能資料夾以加入這個工作區",

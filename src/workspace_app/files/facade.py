@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -147,6 +148,35 @@ class WorkspaceFull(Exception):
         self.attempted = attempted
 
 
+class ReadOnlyPath(Exception):
+    """A write was refused because the path is part of a readonly skill's copy
+    (docs/plan-ai-reads-docs.md P1): reference the AI reads and never edits, kept
+    in step with what the image ships. Raised by the facade, the chokepoint every
+    write shares, so an upload, an IDE save and the agent's own tools are refused
+    by the same rule. The API makes it a 403, the agent tools a sentence."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"{rel_path(path)} is part of a readonly skill and cannot be changed")
+        self.path = path
+
+
+#: Set while the platform itself writes a readonly skill's copy (materializing
+#: or refreshing it). A context variable, not a parameter: the writes happen
+#: deep inside the skill code, through the same facade calls every other writer
+#: uses, and only those calls -- in that task -- may pass.
+_SYSTEM_WRITE: contextvars.ContextVar[bool] = contextvars.ContextVar("_SYSTEM_WRITE", default=False)
+
+
+@contextlib.contextmanager
+def system_writes() -> Iterator[None]:
+    """Let the platform write a readonly skill's copy for the duration."""
+    token = _SYSTEM_WRITE.set(True)
+    try:
+        yield
+    finally:
+        _SYSTEM_WRITE.reset(token)
+
+
 def _dir_key(path: str) -> str:
     """`path` as a directory key: `""` for the workspace root, else `/a/b`.
 
@@ -201,6 +231,7 @@ class WorkspaceFiles:
         person_gate: PersonDiskGate | None = None,
         on_usage: Callable[[str, int], Awaitable[None]] | None = None,
         on_write: Callable[[str, str], None] | None = None,
+        readonly: Callable[[str], bool] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -219,6 +250,9 @@ class WorkspaceFiles:
         # one production use records "this item has schedules" (#WUI P14), which
         # is a point write against an in-memory-cached row.
         self._on_write = on_write
+        # Whether a path belongs to a readonly skill's copy (docs/plan-ai-reads-docs.md
+        # P1). Injected, not imported: the facade knows files, not skills.
+        self._readonly = readonly
         # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
         # wiki-page stores and other non-workspace uses are never gated).
         #
@@ -432,8 +466,20 @@ class WorkspaceFiles:
                 raise FileNotFound(path) from exc
         return await self._fs.read(workspace_id, path)
 
+    def _check_writable(self, path: str) -> None:
+        """Refuse a change to a readonly skill's copy, unless the platform itself
+        is writing it (`system_writes`). Every changing entry point calls this
+        first."""
+        if (
+            self._readonly is not None
+            and not _SYSTEM_WRITE.get()
+            and self._readonly(abs_path(path))
+        ):
+            raise ReadOnlyPath(abs_path(path))
+
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         path = abs_path(path)
+        self._check_writable(path)
         warm = await self._warm(workspace_id)
         previous = await self._ensure_headroom(workspace_id, path, len(data), warm)
         await self._write_unchecked(workspace_id, path, data, warm, previous)
@@ -505,6 +551,8 @@ class WorkspaceFiles:
         the destination is rolled back, so a failed move leaves the workspace
         exactly as it was — never a hole, and never a duplicate the user has to
         reconcile against a 500 (#588)."""
+        self._check_writable(src)
+        self._check_writable(dst)
         src, dst = abs_path(src), abs_path(dst)
         # Resolve liveness ONCE for the whole operation (#588). Each step used to
         # resolve it independently, so a sandbox reaped or rebuilt mid-move
@@ -542,6 +590,7 @@ class WorkspaceFiles:
         Exemptions stay NAMED operations, like `move` (which cannot grow the
         workspace at all), rather than a flag any caller can pass — an
         ungated write anyone can reach for is not a quota."""
+        self._check_writable(path)
         path = abs_path(path)
         await self._write_unchecked(workspace_id, path, data, await self._warm(workspace_id))
 
@@ -558,6 +607,7 @@ class WorkspaceFiles:
         an answer callers act on — `entity/store.py` walks to the next free
         number on it — so reporting "full" for a name that was taken anyway
         would abort a search that had nothing to do with space."""
+        self._check_writable(path)
         path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
@@ -588,6 +638,7 @@ class WorkspaceFiles:
         RAM (issue #219). Warm ⇒ stream straight into the live sandbox (the
         snapshot catches up on the next mirror, exactly like any warm write);
         cold ⇒ stream into the FileStore blob."""
+        self._check_writable(path)
         path = abs_path(path)
         # The streaming upload route also checks mid-stream so an over-quota body
         # is rejected before it's staged; this is the backstop that keeps the rule
@@ -969,6 +1020,7 @@ class WorkspaceFiles:
         return max(quota - (used - old), old)
 
     async def delete(self, workspace_id: str, path: str) -> None:
+        self._check_writable(path)
         await self._delete_with(workspace_id, path, await self._warm(workspace_id))
 
     async def _delete_with(self, workspace_id: str, path: str, warm) -> None:
@@ -1090,6 +1142,7 @@ class WorkspaceFiles:
         return [(p, 0) for p in await self._fs.ls(workspace_id, prefix)]
 
     async def mkdir(self, workspace_id: str, path: str) -> None:
+        self._check_writable(path)
         path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
@@ -1099,6 +1152,7 @@ class WorkspaceFiles:
             await self._fs.mkdir(workspace_id, path)
 
     async def rmdir(self, workspace_id: str, path: str) -> None:
+        self._check_writable(path)
         path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:

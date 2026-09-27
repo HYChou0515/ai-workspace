@@ -225,6 +225,35 @@ describe("SkillsModal — a baked-in skill with a local copy (#589)", () => {
   });
 });
 
+// docs/plan-ai-reads-docs.md P1: a readonly skill's copy follows what the platform
+// ships and nobody edits it, so "editable here", Update and Reset are all false
+// promises on its row — it says what it is instead.
+describe("SkillsModal — a readonly skill", () => {
+  const READONLY: ItemSkillState[] = [
+    {
+      name: "system-design",
+      description: "the system's docs",
+      source: "shared",
+      default_on: true,
+      is_copy: true,
+      copy_of: "shared",
+      update_available: true,
+      readonly: true,
+      pref: "follow",
+      effective: true,
+    },
+  ];
+
+  it("says it is readonly, and offers no edit, update or reset", async () => {
+    renderModal({ client: fakeClient(READONLY) as never });
+    expect(await screen.findByTestId("skill-readonly-system-design")).toHaveTextContent("唯讀");
+    expect(screen.queryByTestId("skill-copy-system-design")).toBeNull();
+    expect(screen.queryByTestId("skill-update-system-design")).toBeNull();
+    expect(screen.queryByTestId("skill-refresh-system-design")).toBeNull();
+    expect(screen.queryByTestId("skill-reset-system-design")).toBeNull();
+  });
+});
+
 // The copy is frozen at the version it was made from — deliberately, so the AI's
 // edits survive. That makes an explicit way to pull a newer version the other
 // half of the bargain: without it, "frozen" is just "stuck".

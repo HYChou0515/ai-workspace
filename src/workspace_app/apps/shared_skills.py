@@ -112,6 +112,21 @@ def shared_skill_source(name: str) -> Path | None:
     return SHARED_SKILLS.get(name) or PLUGIN_SKILLS.get(name)
 
 
+def shared_skill_readonly(name: str) -> bool:
+    """Whether the shipped skill ``name`` says ``readonly: true`` (docs/plan-ai-reads-docs.md
+    P1). Read from the SHIPPED ``SKILL.md`` every time -- never from a workspace
+    copy, or deleting the field from the copy would lift the protection. A name
+    that is not a shipped skill is not readonly."""
+    src = shared_skill_source(name)
+    if src is None or not (src / "SKILL.md").is_file():
+        return False
+    try:
+        front, _body = skills._parse_frontmatter((src / "SKILL.md").read_bytes())
+    except skills.SkillError:
+        return False
+    return str(front.get("readonly", "")).strip().lower() == "true"
+
+
 def plugin_skills_for(tools: Collection[str] | None) -> list[SkillMeta]:
     """The plugin skills an item with this RESOLVED tool set gets."""
     return shared_skill_metas(sorted(PLUGIN_SKILLS)) if can_draw_views(tools) else []

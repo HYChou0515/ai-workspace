@@ -482,6 +482,29 @@ def _skill_source(
     return ("shared", src) if src is not None else None
 
 
+def readonly_skill_path(path: str) -> bool:
+    """Whether ``path`` is inside the copy of a readonly shared skill -- the
+    facade's `readonly` check (docs/plan-ai-reads-docs.md P1). Decided by the
+    SHIPPED ``SKILL.md`` of the skill the folder is named for, never by the copy:
+    a readonly shared skill's name is reserved in every workspace."""
+    parts = path.lstrip("/").split("/")
+    if len(parts) < 2 or parts[0] != WORKSPACE_SKILL_DIR:
+        return False
+    from .shared_skills import shared_skill_readonly
+
+    return shared_skill_readonly(parts[1])
+
+
+def upstream_readonly(app_slug: str | None, profile: str | None, name: str) -> bool:
+    """Whether the skill this name resolves to upstream is readonly: a SHARED
+    skill whose shipped ``SKILL.md`` says so. A profile skill of the same name
+    shadows it and is never readonly (docs/plan-ai-reads-docs.md P1, as built)."""
+    from .shared_skills import shared_skill_readonly
+
+    found = _skill_source(app_slug, profile, name)
+    return found is not None and found[0] == "shared" and shared_skill_readonly(name)
+
+
 async def materialize_skill(
     files: WorkspaceFiles,
     workspace_id: str,
@@ -505,7 +528,30 @@ async def materialize_skill(
     durable store when it is cold — without waking it, which `read_skill`
     promises. A workspace over quota fails here, loudly, like any other write.
     """
+    from ..files import system_writes
+
+    # The platform writing the copy -- the one writer a readonly skill's copy
+    # admits (docs/plan-ai-reads-docs.md P1).
+    with system_writes():
+        await _materialize(files, workspace_id, app_slug, profile, name)
+
+
+async def _materialize(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> None:
+    """`materialize_skill`'s work, run under `system_writes`."""
     if await files.ls(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/"):
+        # A readonly skill (docs/plan-ai-reads-docs.md P1) is the exception: it is
+        # reference the AI reads, never edits, so its copy follows what the image
+        # ships -- replaced whole whenever the copy's `.origin` no longer matches.
+        if upstream_readonly(app_slug, profile, name):
+            up = await skill_upstream(files, workspace_id, app_slug, profile, name)
+            if up is not None and up.update_available:
+                await refresh_skill(files, workspace_id, app_slug, profile, name, force=True)
         return
     found = _skill_source(app_slug, profile, name)
     if found is None:
@@ -752,6 +798,28 @@ async def refresh_skill(
     to allow — and doing it on an action labelled "update" would destroy them at
     the moment the user least expects it.
     """
+    from ..files import system_writes
+
+    # The platform bringing a copy up to date -- a writer a readonly skill's copy
+    # admits (docs/plan-ai-reads-docs.md P1).
+    with system_writes():
+        return await _refresh(
+            files, workspace_id, app_slug, profile, name, force=force, hub=hub, viewer=viewer
+        )
+
+
+async def _refresh(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+    *,
+    force: bool,
+    hub: SkillHubStore | None,
+    viewer: str,
+) -> SkillRefresh:
+    """`refresh_skill`'s work, run under `system_writes`."""
     from ..filestore.protocol import FileNotFound
 
     root = f"/{WORKSPACE_SKILL_DIR}/{name}"
