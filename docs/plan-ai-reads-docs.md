@@ -130,6 +130,17 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
   - The overturned-by line, where present, has the one format and names a file that exists.
   - A CLAUDE.md rule: a plan that overturns an earlier plan adds that plan's overturned-by line in the
     same PR.
+  - Every other doc under `docs/` is in the mkdocs `nav`, the index of the current docs. Today nothing
+    enforces it: `validation.nav.omitted_files` is `info`, and a probe doc left out of `nav` built under
+    `--strict` with rc 0 and one INFO line (2026-09-27). So:
+    - set it to `warn`, so `--strict` fails such a doc (`plan-` / `handoff-` / `q-` stay in
+      `not_in_nav`);
+    - add a pytest guard, which runs on every PR.
+
+    A new doc then reaches the AI in three steps:
+    - the skill's link carries it into the payload (P3's parity test);
+    - the next deploy and `read_skill` refresh the copy (P1);
+    - the index names it, or a guard fails.
   - Each guard's list comes from `docs/` itself, not from the index it checks. Each guard is proven by a
     mutation: drop a plan's index line, or break a marker's format, and exactly its test goes red.
 - **P6 — docs and runbook.**
