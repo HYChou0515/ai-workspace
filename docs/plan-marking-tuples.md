@@ -31,7 +31,7 @@ builder.
   review #862]: the lit bar is narrower than the bar [user] and aligned to its left edge
   [user; overlapping-bar charts usually centre it], in front of the dimmed bar, so a picked value taller than the bar hides nothing — every split bar
   (a count, a sum, a mean, a stack's segment) is drawn this way; a horizontal bar aligns to
-  its start edge [mine, open to override]. A third of the bar's width [mine, open to override]:
+  its top edge [mine, open to override]. A third of the bar's width [mine, open to override]:
   an overlapping (nested, bar-in-bar) chart draws the whole behind, wider and lighter, and the
   part in front, narrower and darker, and no source fixes the ratio; at a half, the lit bar at
   the left edge beside the dimmed half reads as two bars side by side, and much narrower is hard
@@ -194,6 +194,12 @@ builder.
   picks, each view what it shows. D3's drawing changes: a picked mean taller than its bar hid
   the dimmed bar; the lit bar is now a third of the bar's width at its left edge, in front of
   the whole bar dimmed (above, P4 as built). A new mechanism, so it takes its own review round.
+- **Review round 5 (#862):** one (A): the lit bar, a custom series, was not clipped to the plot
+  (a bar series is), so on an axis whose domain leaves 0 out it was drawn over the x labels;
+  now `clip: true`. Tests added for what mutations left unpinned: the value-first data of a
+  stacked number x, and a horizontal picked mean widening its axis; a legend-hidden colour's
+  lit bar goes with its bar (it is drawn from the bar's layout, which a hidden bar lacks). A
+  horizontal bar's lit bar is at its top edge, said so.
 
 ## Known and left (each (B): rare input or cosmetic)
 
@@ -201,6 +207,9 @@ builder.
   holds a pick; the sandbox (`lit_rows`, `partials`) does not. So a table can count such a row
   that Save as table leaves out. Already so on master; rare in key columns.
 - The tooltip's "picked: N" is the unrounded number.
+- While the chart's own brush is being drawn, ECharts' out-of-brush colour greys the bars but
+  not their lit bars (a silent custom series); the brush's end redraws the chart and the lit
+  bars follow. The part of a lit bar above its bar (a picked mean) takes no hover or click.
 - Key and row order sort by UTF-16 code unit in the browser and by code point in Python; only
   astral characters in names differ, and no digest depends on the browser's order.
 - A selection across layers that carry different key subsets writes the keys every naming layer
@@ -213,7 +222,8 @@ builder.
   then the lit part was drawn from the axis and the dimmed rest on top of it); 756406e5 says a chart takes the most
   of any layer and a table with every key writes plainly (round 3 replaced both, above);
   f32d1d5e says unshown picks stay while a table writes the marking's keys or some of them (per
-  group the table shows, round 4).
+  group the table shows, round 4); 37aae919's mutation counts mix two ways of counting (half
+  width 4 over both test files, centred and own-length 7 over one: 8 each over both).
 - A `keys: [group]` table beside (group, item) picks decides every group it shows: ticking another
   group drops a finer pick in a shown group that no row of the table carries (keeping it at
   `[group]` would light the whole group).
