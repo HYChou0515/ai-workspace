@@ -19,9 +19,9 @@ const sdk = vi.hoisted(() => ({
   viewDocument: vi.fn(),
   registerViewKind: vi.fn(),
   useMarking: vi.fn(() => [undefined, vi.fn()]),
-  isLit: vi.fn(() => false),
 }));
-vi.mock("@aiws/view-sdk", () => sdk);
+// the platform's own marking functions (`isLit`, `markingFrom`, …) beside the doubles
+vi.mock("@aiws/view-sdk", async () => ({ ...(await import("../../../../web/src/lib/markings")), ...sdk }));
 
 const chart = vi.hoisted(() => {
   const instance = { setOption: vi.fn(), dispose: vi.fn(), on: vi.fn(), resize: vi.fn(), dispatchAction: vi.fn() };

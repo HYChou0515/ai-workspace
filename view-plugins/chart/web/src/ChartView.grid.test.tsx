@@ -18,9 +18,9 @@ const sdk = vi.hoisted(() => ({
   // a store that takes every write, as the host's does (P40 row 19: a write
   // no store took is the chart's own)
   useMarking: vi.fn(() => [undefined, vi.fn(() => true)]),
-  isLit: vi.fn(() => false),
 }));
-vi.mock("@aiws/view-sdk", () => sdk);
+// the platform's own marking functions (`isLit`, `markingFrom`, …) beside the doubles
+vi.mock("@aiws/view-sdk", async () => ({ ...(await import("../../../../web/src/lib/markings")), ...sdk }));
 
 type Handler = (p: unknown) => void;
 const chart = vi.hoisted(() => {

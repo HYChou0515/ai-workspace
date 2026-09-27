@@ -11,7 +11,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer } from "./testAnswer";
@@ -25,7 +25,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 // The chart's own module (its series, components and brush selectors), with
@@ -100,8 +100,11 @@ const byGroup = (mark: string) => ({
   encoding: { x: { field: "g", type: "nominal" }, y: { field: "v", type: "quantitative" } },
 });
 
-const marked = (store: MarkingStore) =>
-  Object.fromEntries(Object.entries(store.get("m")?.marking ?? {}).map(([k, v]) => [k, [...v].sort()]));
+/** What a marking holds: its keys (joined) → its picks, sorted; {} for none. */
+const marked = (store: MarkingStore, name = "m") => {
+  const m = store.get(name)?.marking;
+  return m ? { [m.keys.join(",")]: markingRows(m).map((r) => r.join(",")) } : {};
+};
 
 beforeEach(() => {
   made.charts.length = 0;
@@ -216,7 +219,7 @@ describe("a click on a pie's slice writes the marking", () => {
     // another view's selection on the marking is not this pie's to clear
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     click(chart, [5, 395]);
     expect(marked(store)).toEqual({ lot: ["L1"] });
   });
@@ -234,7 +237,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const doc = { ...byGroup("scatter"), encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } } };
     const chart = mount(store, doc, answer(layer("scatter", 2, { x: f64([1, 2]), y: f64([1, 2]), lot: cat(["L1", "L2"]) })));
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     click(chart, chart.convertToPixel({ gridIndex: 0 }, [2, 2]) as number[]);
     expect(marked(store)).toEqual({ lot: ["L1"] });
   });
@@ -299,7 +302,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, COUNTING, COUNTS);
     // rows (A, 4), (A, 5) and (B, 3) picked in another view
-    act(() => store.set("m", { group: new Set(["A", "B"]), item: new Set(["3", "4", "5"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["group", "item"], [["A", "4"], ["A", "5"], ["B", "3"]]), "/v/other.ai.yaml"));
     expect(opacities(chart)).toEqual([1, 1, DIM_OPACITY, DIM_OPACITY]);
   });
 
@@ -328,7 +331,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
     click(chart, sliceAt(chart, 1));
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     click(chart, [5, 395]);
     expect(marked(store)).toEqual({ lot: ["L1"] });
   });
@@ -337,7 +340,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
     click(chart, sliceAt(chart, 1));
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     click(chart, sliceAt(chart, 1));
     expect(marked(store)).toEqual({ lot: ["L2"] });
   });
@@ -346,7 +349,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
     click(chart, sliceAt(chart, 1));
-    act(() => store.set("m", { lot: new Set(["L2"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L2"]]), "/v/other.ai.yaml"));
     click(chart, [5, 395]);
     expect(marked(store)).toEqual({ lot: ["L2"] });
     expect(store.get("m")!.source).toBe("/v/other.ai.yaml");
@@ -359,8 +362,8 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
     click(chart, sliceAt(chart, 1));
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
-    act(() => store.set("m", { lot: new Set(["L2"]) }, "/v/a.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L2"]]), "/v/a.ai.yaml"));
     click(chart, [5, 395]);
     expect(marked(store)).toEqual({ lot: ["L2"] });
     expect(screen.queryByText(/selected/)).toBeNull();
@@ -384,7 +387,7 @@ describe("a click on a pie's slice writes the marking", () => {
   it("on a marking another view wrote, a pick that wrote nothing is still its own to clear (P34)", () => {
     const store = new MarkingStore();
     const chart = mount(store, KEYLESS, SLICES);
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     expect(opacities(chart)).toEqual([1, DIM_OPACITY, DIM_OPACITY]); // the marking's
     click(chart, sliceAt(chart, 1));
     expect(opacities(chart)).toEqual([DIM_OPACITY, 1, DIM_OPACITY]); // its own pick
@@ -400,7 +403,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, KEYLESS, SLICES);
     click(chart, sliceAt(chart, 1));
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     expect(screen.getByText("1 selected")).toBeTruthy();
     expect(screen.queryByText(/· by/)).toBeNull();
   });
@@ -408,7 +411,7 @@ describe("a click on a pie's slice writes the marking", () => {
   it("a pick that wrote nothing, made on a marking another view holds, is counted without its columns (P36)", () => {
     const store = new MarkingStore();
     const chart = mount(store, KEYLESS, SLICES);
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     click(chart, sliceAt(chart, 1));
     expect(screen.getByText("1 selected")).toBeTruthy();
     expect(screen.queryByText(/· by/)).toBeNull();
@@ -425,7 +428,7 @@ describe("a click on a pie's slice writes the marking", () => {
     const store = new MarkingStore();
     const chart = mount(store, PIE, SLICES);
     click(chart, sliceAt(chart, 1));
-    act(() => store.set("m", { lot: new Set(["L1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["lot"], [["L1"]]), "/v/other.ai.yaml"));
     expect(opacities(chart)).toEqual([1, DIM_OPACITY, DIM_OPACITY]);
   });
 

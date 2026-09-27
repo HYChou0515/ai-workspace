@@ -15,7 +15,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer } from "./testAnswer";
@@ -30,7 +30,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 const made = vi.hoisted(() => ({ charts: [] as import("echarts/core").ECharts[] }));
@@ -98,8 +98,11 @@ function mount(store: MarkingStore, doc: object, a: Answer, marking: string | nu
 }
 
 const selectedText = () => screen.queryByText(/selected/)?.textContent ?? null;
-const marked = (store: MarkingStore, name = "m") =>
-  Object.fromEntries(Object.entries(store.get(name)?.marking ?? {}).map(([k, v]) => [k, [...v].sort()]));
+/** What a marking holds: its keys (joined) → its picks, sorted; {} for none. */
+const marked = (store: MarkingStore, name = "m") => {
+  const m = store.get(name)?.marking;
+  return m ? { [m.keys.join(",")]: markingRows(m).map((r) => r.join(",")) } : {};
+};
 const brushAreas = (chart: echarts.ECharts) =>
   (chart as unknown as { getModel(): { getComponent(m: string): { areas: unknown[] } } }).getModel().getComponent("brush").areas.length;
 
@@ -164,7 +167,7 @@ describe("a selection went to the marking only if what it wrote is the marking t
     again(null);
     await settle();
     await brush(chart); // detached: written nowhere
-    act(() => store.set("m", { group: new Set(["G1"]) }, OTHER));
+    act(() => store.set("m", markingFrom(["group"], [["G1"]]), OTHER));
     again("m");
     await settle();
     expect(marked(store)).toEqual({ group: ["G1"] });
@@ -179,7 +182,7 @@ describe("a selection went to the marking only if what it wrote is the marking t
 
   it("a brush on m, the chart moved to n: counted without n's columns, with its own brush visual (red before: '· by item')", async () => {
     const store = new MarkingStore();
-    act(() => store.set("n", { item: new Set(["2"]) }, OTHER));
+    act(() => store.set("n", markingFrom(["item"], [["2"]]), OTHER));
     const { chart, again } = mount(store, SCATTER, POINTS);
     await brush(chart);
     again("n");
@@ -241,7 +244,7 @@ describe("the chart's write keeps the source it was made as (P37 row 15)", () =>
     await brush(chart);
     again("m", "/v/renamed.ai.yaml");
     await settle();
-    act(() => store.set("m", { group: new Set(["G3"]) }, OTHER));
+    act(() => store.set("m", markingFrom(["group"], [["G3"]]), OTHER));
     await settle();
     expect({ text: selectedText(), boxes: brushAreas(chart) }).toEqual({ text: null, boxes: 0 });
   });

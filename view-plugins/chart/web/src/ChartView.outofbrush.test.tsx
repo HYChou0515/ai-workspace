@@ -15,7 +15,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { stackCase } from "./stackCorpus";
@@ -30,7 +30,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 const made = vi.hoisted(() => ({ charts: [] as import("echarts/core").ECharts[] }));
@@ -97,7 +97,7 @@ describe("the four states of a row: lit or dimmed by the marking, in or out of t
   it("draws each apart: the marking by opacity, the brush's outside by colour", async () => {
     const store = new MarkingStore();
     // another view lit G1: rows 0 and 1
-    act(() => store.set("m", { group: new Set(["G1"]) }, "/v/other.ai.yaml"));
+    act(() => store.set("m", markingFrom(["group"], [["G1"]]), "/v/other.ai.yaml"));
     const chart = mount(store, SCATTER, POINTS);
     await settle();
     const own = drawn(chart, 0, 0);

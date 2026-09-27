@@ -7,7 +7,12 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FacetIndex } from "./gallery";
+import { type Marking, markingFrom, markingRows } from "../../../../web/src/lib/markings";
 import { f64, q8 } from "./testAnswer";
+
+const M = (keys: string[], ...rows: string[][]) => markingFrom(keys, rows);
+/** The item of each pick a write made (the facet is group, item). */
+const itemsWritten = () => markingRows(write.mock.calls.at(-1)![0] as Marking).map((r) => r[1]!);
 
 type Run = { data?: { stdout: string; stderr: string; exit_code: number }; error: Error | null; isLoading: boolean; refetch: () => void };
 
@@ -16,17 +21,12 @@ const sdk = vi.hoisted(() => ({
   viewDocument: vi.fn(),
   registerViewKind: vi.fn(),
   useMarking: vi.fn(),
-  isLit: vi.fn((row: Record<string, string>, marking: Record<string, Set<string>>) => {
-    let shared = false;
-    for (const [c, v] of Object.entries(marking)) {
-      if (!(c in row)) continue;
-      shared = true;
-      if (!v.has(row[c])) return false;
-    }
-    return shared;
-  }),
 }));
-vi.mock("@aiws/view-sdk", () => sdk);
+// the platform's own marking rule and constructor, not a double of them
+vi.mock("@aiws/view-sdk", async () => {
+  const lib = await import("../../../../web/src/lib/markings");
+  return { ...sdk, ...lib };
+});
 vi.mock("./echarts", () => ({ createChart: vi.fn() }));
 // thumbnail() and stackImage() themselves, recorded: which groups (and
 // stack cells) were painted dimmed
@@ -44,8 +44,8 @@ import { ChartView } from "./ChartView";
 const DOC = {
   view: "chart",
   source: "data/w.csv",
-  marking: "wafers",
-  facet: { field: ["lot", "wafer"], sort: { field: "rate", order: "descending" } },
+  marking: "picked",
+  facet: { field: ["group", "item"], sort: { field: "rate", order: "descending" } },
   mark: "grid",
   encoding: {
     x: { field: "x", type: "ordinal" },
@@ -58,16 +58,16 @@ const N = 1000;
 const INDEX: FacetIndex = {
   build: "b".repeat(32),
   scale: { kind: "continuous", lo: 0, hi: 254 },
-  facet: ["lot", "wafer"],
+  facet: ["group", "item"],
   // one cell per group (the page answers one code each): groupsPerPage(1) is
   // 200, so 1000 groups are 5 pages, and one screenful is the first of them
   cells: 1,
   layout: { x: [0], y: [0] },
-  groups: Array.from({ length: N }, (_, i) => ({ key: ["L1", String(i)], sort: { rate: i } })),
+  groups: Array.from({ length: N }, (_, i) => ({ key: ["g1", String(i)], sort: { rate: i } })),
   columns: [
     // the statistics come from the sandbox, per column: the gallery keeps no list of its own
-    { name: "lot", kind: "text", single: true, stats: ["distinct", "count"], stack: ["count", "distinct"] },
-    { name: "wafer", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
+    { name: "group", kind: "text", single: true, stats: ["distinct", "count"], stack: ["count", "distinct"] },
+    { name: "item", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
     { name: "rate", kind: "number", single: true, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
     { name: "v", kind: "number", single: false, stats: ["mean", "median", "min", "max", "count"], stack: ["mean", "median", "min", "max", "sum", "count"] },
     { name: "tool", kind: "text", single: false, stats: ["distinct", "count"], stack: ["count", "distinct"] },
@@ -175,7 +175,7 @@ describe("FacetGallery", () => {
   });
 
   it("asks for a spec over the argv cap with a call the size of any other (#847/#848 P9)", () => {
-    const big = { ...DOC, transform: [{ filter: { field: "lot", oneOf: Array.from({ length: 30_000 }, (_, i) => `L${i}`) } }] };
+    const big = { ...DOC, transform: [{ filter: { field: "group", oneOf: Array.from({ length: 30_000 }, (_, i) => `g${i}`) } }] };
     expect(JSON.stringify(big).length).toBeGreaterThan(128 * 1024);
     sdk.viewDocument.mockReturnValue(big);
     view();
@@ -219,24 +219,28 @@ describe("FacetGallery", () => {
     fireEvent.click(screen.getByRole("button", { name: /select ranks/i }));
     const [marking, source] = write.mock.calls.at(-1)!;
     expect(source).toBe("views/w.ai.yaml");
-    expect([...(marking as Record<string, Set<string>>).lot]).toEqual(["L1"]);
-    const wafers = (marking as Record<string, Set<string>>).wafer;
-    expect(wafers.size).toBe(300);
-    expect(wafers.has("999")).toBe(true); // rank 1, descending
-    expect(wafers.has("700")).toBe(true); // rank 300 — far past the loaded pages
-    expect(wafers.has("699")).toBe(false);
+    expect((marking as Marking).keys).toEqual(["group", "item"]);
+    const rows = markingRows(marking as Marking);
+    expect(rows).toHaveLength(300);
+    expect(rows.every((r) => r[0] === "g1")).toBe(true);
+    const picked = new Set(rows.map((r) => r[1]));
+    expect(picked.has("999")).toBe(true); // rank 1, descending
+    expect(picked.has("700")).toBe(true); // rank 300 — far past the loaded pages
+    expect(picked.has("699")).toBe(false);
   });
 
   it("clears the marking it wrote", () => {
     view();
     fireEvent.click(screen.getByRole("button", { name: /clear selection/i }));
-    expect(write).toHaveBeenLastCalledWith({}, "views/w.ai.yaml");
+    const [marking, source] = write.mock.calls.at(-1)!;
+    expect(source).toBe("views/w.ai.yaml");
+    expect((marking as Marking).tuples.size).toBe(0);
   });
 
   it("lights the groups the marking holds and says how many", () => {
-    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+    sdk.useMarking.mockReturnValue([{ marking: M(["item"], ["5"], ["6"]), source: "x" }, write]);
     view();
-    expect(screen.getByText("2 of 1000 marked · by wafer")).toBeTruthy();
+    expect(screen.getByText("2 of 1000 marked · by item")).toBeTruthy();
   });
 
   // #847/#848 PR 5 P31, found at 390 wide: the first selection added "N of M
@@ -253,19 +257,36 @@ describe("FacetGallery", () => {
     expect(line!.style.whiteSpace).toBe("nowrap");
     expect(line!.style.overflow).toBe("hidden");
     cleanup();
-    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+    sdk.useMarking.mockReturnValue([{ marking: M(["item"], ["5"], ["6"]), source: "x" }, write]);
     view();
     const marked = document.querySelector("[data-gallery-status]") as HTMLElement;
-    expect(within(marked).getByText("2 of 1000 marked · by wafer")).toBeTruthy();
+    expect(within(marked).getByText("2 of 1000 marked · by item")).toBeTruthy();
     expect(marked.style.height).toBe("20px");
   });
 
-  it("names the columns the marking marks by beside the count (P27)", () => {
-    // two columns light every combination of their values: the count can
-    // exceed the tiles picked, and the line says why
-    sdk.useMarking.mockReturnValue([{ marking: { lot: new Set(["L1"]), wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+  it("names the keys the marking marks by beside the count (P27)", () => {
+    sdk.useMarking.mockReturnValue([{ marking: M(["group", "item"], ["g1", "5"], ["g1", "6"]), source: "x" }, write]);
     view();
-    expect(screen.getByText("2 of 1000 marked · by lot, wafer")).toBeTruthy();
+    expect(screen.getByText("2 of 1000 marked · by group, item")).toBeTruthy();
+  });
+
+  // #861 D1 / D5, the #855 demo: boxing (g3, 8), (g4, 1), (g5, 1), (g5, 2)
+  // marked every combination of their groups and items -- nine tiles lit,
+  // "9 of 12 marked". It marks the four picked.
+  it("ranks over four tiles write four picks, light four and count four -- not nine", () => {
+    const keys = [["g3", "8"], ["g4", "1"], ["g5", "1"], ["g5", "2"], ["g3", "1"], ["g3", "2"], ["g4", "2"], ["g4", "8"], ["g5", "8"], ["g6", "1"], ["g6", "2"], ["g6", "8"]];
+    const groups = keys.map((key, i) => ({ key, sort: { rate: keys.length - i } }));
+    answers.index = ok({ ...INDEX, groups });
+    const { rerender } = view();
+    fireEvent.change(screen.getByLabelText(/from rank/i), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText(/to rank/i), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: /select ranks/i }));
+    const [marking] = write.mock.calls.at(-1)!;
+    expect(markingRows(marking as Marking)).toEqual([["g3", "8"], ["g4", "1"], ["g5", "1"], ["g5", "2"]]);
+    thumbnailSpy.mockClear();
+    sdk.useMarking.mockReturnValue([{ marking, source: "views/w.ai.yaml" }, write]);
+    rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
+    expect(screen.getByText("4 of 12 marked · by group, item")).toBeTruthy();
   });
 
   it("recovers from an index with no cache (exit 3) by asking the whole chain again at the next epoch", () => {
@@ -429,16 +450,15 @@ describe("FacetGallery", () => {
     const tiles = screen.getAllByRole("button", { name: /^group / });
     fireEvent.click(tiles[2]);
     fireEvent.click(tiles[5], { shiftKey: true });
-    const wafers = (write.mock.calls.at(-1)![0] as Record<string, Set<string>>).wafer;
     // ranks 3..6 of a descending sort over 1000
-    expect([...wafers].sort()).toEqual(["994", "995", "996", "997"]);
+    expect(itemsWritten().sort()).toEqual(["994", "995", "996", "997"]);
     expect(tiles.slice(2, 6).every((t) => t.getAttribute("aria-pressed") === "true")).toBe(true);
   });
 
   it("forgets its outlines when the marking is cleared elsewhere", () => {
     const { rerender } = view();
     fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]);
-    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["999"]) }, source: "views/w.ai.yaml" }, write]);
+    sdk.useMarking.mockReturnValue([{ marking: M(["item"], ["999"]), source: "views/w.ai.yaml" }, write]);
     rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
     expect(screen.getAllByRole("button", { name: /^group / })[0].getAttribute("aria-pressed")).toBe("true");
     sdk.useMarking.mockReturnValue([undefined, write]); // another view cleared it
@@ -475,28 +495,28 @@ describe("FacetGallery", () => {
   });
 
   it("labels a zoned facet column's groups on its clock, naming the zone (#847/#848 P14)", () => {
-    const groups = INDEX.groups.map((g, i) => ({ ...g, key: ["L1", `2026-03-${String((i % 28) + 1).padStart(2, "0")} 00:00:00+08:00`] }));
-    answers.index = ok({ ...INDEX, facet: ["lot", "day"], zones: { day: "Asia/Taipei" }, groups });
+    const groups = INDEX.groups.map((g, i) => ({ ...g, key: ["g1", `2026-03-${String((i % 28) + 1).padStart(2, "0")} 00:00:00+08:00`] }));
+    answers.index = ok({ ...INDEX, facet: ["group", "day"], zones: { day: "Asia/Taipei" }, groups });
     view();
     const labels = screen.getAllByRole("button", { name: /^group / }).map((b) => b.getAttribute("aria-label"));
-    expect(labels).toContain("group L1 · 2026-03-01 Asia/Taipei");
+    expect(labels).toContain("group g1 · 2026-03-01 Asia/Taipei");
     fireEvent.click(screen.getAllByRole("button", { name: /enlarge/i })[0]);
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toMatch(/^group L1 · 2026-03-\d\d Asia\/Taipei$/);
+    expect(screen.getByRole("dialog").getAttribute("aria-label")).toMatch(/^group g1 · 2026-03-\d\d Asia\/Taipei$/);
   });
 
   it("gives a tile's cut-short label whole on hover", () => {
     // a tile is a thumbnail wide: a zoned key with its zone is cut short there
-    const groups = INDEX.groups.map((g) => ({ ...g, key: ["L1", "2026-03-01 00:00:00+08:00"] }));
-    answers.index = ok({ ...INDEX, facet: ["lot", "day"], zones: { day: "Asia/Taipei" }, groups });
+    const groups = INDEX.groups.map((g) => ({ ...g, key: ["g1", "2026-03-01 00:00:00+08:00"] }));
+    answers.index = ok({ ...INDEX, facet: ["group", "day"], zones: { day: "Asia/Taipei" }, groups });
     view();
-    expect(screen.getAllByTitle("L1 · 2026-03-01 Asia/Taipei").length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle("g1 · 2026-03-01 Asia/Taipei").length).toBeGreaterThan(0);
   });
 
   it("paints an unlit group's thumbnail dimmed", () => {
-    sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["999"]) }, source: "x" }, write]);
+    sdk.useMarking.mockReturnValue([{ marking: M(["item"], ["999"]), source: "x" }, write]);
     view();
     const lits = thumbnailSpy.mock.calls.map((c) => c[3]);
-    expect(lits).toContain(true); // wafer 999, rank 1
+    expect(lits).toContain(true); // item 999, rank 1
     expect(lits).toContain(false); // the rest
   });
 
@@ -685,7 +705,7 @@ describe("FacetGallery", () => {
       fireEvent.mouseMove(window, { clientX: to[0], clientY: to[1], shiftKey });
       fireEvent.mouseUp(window, { clientX: to[0], clientY: to[1], shiftKey });
     };
-    const wafers = () => [...(write.mock.calls.at(-1)![0] as Record<string, Set<string>>).wafer].sort();
+    const picked = () => itemsWritten().sort();
 
     it("selects every tile the box touches and writes them to the marking", () => {
       view();
@@ -693,7 +713,7 @@ describe("FacetGallery", () => {
       // into row 1 of column 5: columns 5-6 of rows 0-1
       drag([790, 5], [600, 130]);
       // ranks 5, 6, 12, 13 of a descending sort over 1000
-      expect(wafers()).toEqual(["986", "987", "993", "994"]);
+      expect(picked()).toEqual(["986", "987", "993", "994"]);
       const tiles = screen.getAllByRole("button", { name: /^group / });
       expect([5, 6, 12, 13].every((r) => tiles[r].getAttribute("aria-pressed") === "true")).toBe(true);
       expect(tiles[4].getAttribute("aria-pressed")).toBe("false");
@@ -702,18 +722,18 @@ describe("FacetGallery", () => {
     it("replaces the selection on a plain drag, and adds to it on a Shift-drag", () => {
       view();
       drag([90, 0], [120, 10]); // tiles 0 and 1
-      expect(wafers()).toEqual(["998", "999"]);
+      expect(picked()).toEqual(["998", "999"]);
       drag([230, 0], [240, 10]); // tile 2 alone: replaces
-      expect(wafers()).toEqual(["997"]);
+      expect(picked()).toEqual(["997"]);
       drag([340, 0], [350, 10], true); // tile 3, Shift: adds
-      expect(wafers()).toEqual(["996", "997"]);
+      expect(picked()).toEqual(["996", "997"]);
     });
 
     it("selects a tile far below the drawn pages, by position not by the DOM", () => {
       view();
       // row 50 (ranks 350..356): page 1, never mounted at the top of the wall
       drag([0, 50 * 122 + 1], [1, 50 * 122 + 2]);
-      expect(wafers()).toEqual([String(N - 1 - 350)]);
+      expect(picked()).toEqual([String(N - 1 - 350)]);
     });
 
     it("does not start a box on a tile: a press there is the tile's click", () => {
@@ -751,15 +771,15 @@ describe("FacetGallery", () => {
 
     it("lists every column the index names, and the written order", () => {
       view();
-      expect(options(sortBy())).toEqual(["written order", "lot", "wafer", "rate", "v", "tool", "when"]);
+      expect(options(sortBy())).toEqual(["written order", "group", "item", "rate", "v", "tool", "when"]);
       expect(sortBy().value).toBe("rate"); // the spec's own
       expect(sortBy().className).toContain("input");
     });
 
     it("sorts by a one-value column's value: a new build keyed on it, the order kept", () => {
       view();
-      fireEvent.change(sortBy(), { target: { value: "lot" } });
-      expect(lastBuiltSort()).toEqual({ field: "lot" });
+      fireEvent.change(sortBy(), { target: { value: "group" } });
+      expect(lastBuiltSort()).toEqual({ field: "group" });
       expect(statistic()).toBeNull();
     });
 
@@ -810,7 +830,7 @@ describe("FacetGallery", () => {
 
     it("asks nothing new when the spec's own sort is picked again", () => {
       view();
-      fireEvent.change(sortBy(), { target: { value: "lot" } });
+      fireEvent.change(sortBy(), { target: { value: "group" } });
       fireEvent.change(sortBy(), { target: { value: "rate" } });
       expect(calls("facet_build").at(-1)![2]).toEqual(calls("facet_build")[0][2]);
       expect(calls("facet_build").at(-1)![2]).not.toHaveProperty("sort");
@@ -831,15 +851,15 @@ describe("FacetGallery", () => {
 
     it("stacks the selected tiles, by key", () => {
       view();
-      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]); // wafer 999
-      expect(lastStack().a).toEqual([["L1", "999"]]);
+      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]); // item 999
+      expect(lastStack().a).toEqual([["g1", "999"]]);
       expect(panel().textContent).toContain("1 tile");
     });
 
     it("stacks the tiles the marking lights when this view selected none", () => {
-      sdk.useMarking.mockReturnValue([{ marking: { wafer: new Set(["5", "6"]) }, source: "x" }, write]);
+      sdk.useMarking.mockReturnValue([{ marking: M(["item"], ["5"], ["6"]), source: "x" }, write]);
       view();
-      expect(lastStack().a).toEqual([["L1", "5"], ["L1", "6"]]);
+      expect(lastStack().a).toEqual([["g1", "5"], ["g1", "6"]]);
     });
 
     it("stacks the picked column by the picked statistic, offering the column's own", () => {
@@ -856,10 +876,10 @@ describe("FacetGallery", () => {
       const tiles = screen.getAllByRole("button", { name: /^group / });
       const setB = within(panel()).getByRole("button", { name: /set as b/i });
       expect((setB as HTMLButtonElement).disabled).toBe(true); // nothing selected yet
-      fireEvent.click(tiles[0]); // wafer 999
+      fireEvent.click(tiles[0]); // item 999
       fireEvent.click(within(panel()).getByRole("button", { name: /set as b/i }));
-      fireEvent.click(tiles[1]); // wafer 998: A moves on, B stays
-      expect(lastStack()).toMatchObject({ a: [["L1", "998"]], b: [["L1", "999"]] });
+      fireEvent.click(tiles[1]); // item 998: A moves on, B stays
+      expect(lastStack()).toMatchObject({ a: [["g1", "998"]], b: [["g1", "999"]] });
       const maps = within(panel()).getAllByRole("figure").map((f) => f.getAttribute("aria-label"));
       expect(maps).toEqual(["A", "B", "A − B"]);
       fireEvent.click(within(panel()).getByRole("button", { name: /clear b/i }));
@@ -878,17 +898,17 @@ describe("FacetGallery", () => {
 
     it("keeps B, the column and the statistic through a re-sort's rebuild", () => {
       const { rerender } = view();
-      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]); // wafer 999
+      fireEvent.click(screen.getAllByRole("button", { name: /^group / })[0]); // item 999
       fireEvent.click(within(panel()).getByRole("button", { name: /set as b/i }));
       fireEvent.change(inPanel(/stack column/i), { target: { value: "tool" } });
       fireEvent.change(inPanel(/stack statistic/i), { target: { value: "distinct" } });
       // a new sort is a new build: while it runs, the gallery (and the panel) go
-      loadingSpec = '"field":"lot"';
-      fireEvent.change(screen.getByRole("combobox", { name: /sort by/i }), { target: { value: "lot" } });
+      loadingSpec = '"field":"group"';
+      fireEvent.change(screen.getByRole("combobox", { name: /sort by/i }), { target: { value: "group" } });
       expect(screen.queryByRole("region", { name: /stack/i })).toBeNull();
       loadingSpec = null;
       rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
-      expect(lastStack()).toMatchObject({ b: [["L1", "999"]], column: "tool", stat: "distinct" });
+      expect(lastStack()).toMatchObject({ b: [["g1", "999"]], column: "tool", stat: "distinct" });
     });
 
     it("paints A − B on a diverging scale, A and B on the gallery's", () => {
@@ -900,7 +920,7 @@ describe("FacetGallery", () => {
     });
 
     it("dims the panel's cells the marking leaves unlit, by x / y", () => {
-      sdk.useMarking.mockReturnValue([{ marking: { x: new Set(["1"]) }, source: "x" }, write]);
+      sdk.useMarking.mockReturnValue([{ marking: M(["x"], ["1"]), source: "x" }, write]);
       view();
       // the one cell sits at x = 0: unlit
       expect(stackImageSpy.mock.calls.at(-1)![3]).toEqual([false]);
@@ -969,10 +989,10 @@ describe("FacetGallery", () => {
 
     it("asks about the build it is waiting for: the sort's, not the file's", () => {
       const { rerender } = view();
-      loadingSpec = '"field":"lot"';
-      fireEvent.change(screen.getByRole("combobox", { name: /sort by/i }), { target: { value: "lot" } });
+      loadingSpec = '"field":"group"';
+      fireEvent.change(screen.getByRole("combobox", { name: /sort by/i }), { target: { value: "group" } });
       rerender(<ChartView spec={{} as never} type={null} entities={[]} onCreate={() => {}} onPatch={() => {}} path="views/w.ai.yaml" />);
-      expect(calls("facet_progress").at(-1)![2]).toMatchObject({ path: "views/w.ai.yaml", sort: { field: "lot" } });
+      expect(calls("facet_progress").at(-1)![2]).toMatchObject({ path: "views/w.ai.yaml", sort: { field: "group" } });
     });
   });
 

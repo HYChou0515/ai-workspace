@@ -9,7 +9,10 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
+
+/** The one-key picks marking "fail" holds, sorted. */
+const picked = (store: MarkingStore) => markingRows(store.get("fail")!.marking).map((r) => r.join(","));
 import { answer, cat, f64, layer, q8 } from "./testAnswer";
 
 const sdk = vi.hoisted(() => ({
@@ -28,7 +31,7 @@ vi.mock("@aiws/view-sdk", async () => {
     renders.set(k, (renders.get(k) ?? 0) + 1);
     return hooks.useMarking(name);
   };
-  return { ...sdk, useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 type Handler = (p: unknown) => void;
@@ -61,13 +64,13 @@ const enc = {
 const docOn = (marking: string | null, extra: Record<string, unknown> = {}) => ({
   view: "chart",
   source: "data/a.csv",
-  keys: ["lot"],
+  keys: ["group"],
   mark: "scatter",
   encoding: enc,
   ...(marking ? { marking } : {}),
   ...extra,
 });
-const ANSWER = answer(layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }));
+const ANSWER = answer(layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }));
 const ok = (a = ANSWER) => ({ data: { stdout: JSON.stringify(a), stderr: "", exit_code: 0 }, error: null, isLoading: false, refetch: vi.fn() });
 
 function mount(store: MarkingStore, docs: Record<string, unknown>[], paths?: string[]) {
@@ -115,22 +118,23 @@ describe("ChartView on a named marking", () => {
     const store = new MarkingStore();
     mount(store, [docOn("fail"), docOn("fail")], ["/v/grid.ai.yaml", "/v/scatter.ai.yaml"]);
     const [a, b] = charts.made;
-    brush(a!, [1]); // row 1 is lot L2
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+    brush(a!, [1]); // row 1 is group g2
+    expect(picked(store)).toEqual(["g2"]);
     expect(store.get("fail")!.source).toBe("/v/grid.ai.yaml");
     expect(lastData(b!)).toEqual([dim([1, 4]), [2, 5], dim([3, 6])]);
   });
 
-  it("says which columns its selection marks by beside the count (P27)", () => {
+  it("counts the picks its selection wrote, and says the keys they are by (P27, #861 D5)", () => {
     const store = new MarkingStore();
     const two = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]), wafer: cat(["1", "2", "3"]) }),
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]), item: cat(["1", "2", "1"]) }),
     );
     sdk.useSandboxRun.mockReturnValue(ok(two));
-    mount(store, [docOn("fail", { keys: ["lot", "wafer"] })]);
-    brush(charts.made[0]!, [0, 1]);
-    // 2 rows picked; over lot x wafer the marking lights every combination
-    expect(screen.getByText("2 selected · by lot, wafer")).toBeTruthy();
+    mount(store, [docOn("fail", { keys: ["group", "item"] })]);
+    brush(charts.made[0]!, [0, 1, 2]);
+    // 3 rows, 2 picks: rows 0 and 2 are both (g1, 1)
+    expect(markingRows(store.get("fail")!.marking)).toEqual([["g1", "1"], ["g2", "2"]]);
+    expect(screen.getByText("2 selected · by group, item")).toBeTruthy();
   });
 
   it("a chart on another marking, or none, does not react — not even a re-render", () => {
@@ -150,33 +154,33 @@ describe("ChartView on a named marking", () => {
   it("the spec's highlight seeds an empty marking on open", () => {
     const store = new MarkingStore();
     const lit = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }, {
         highlight: btoa(String.fromCharCode(0b010)),
         lit: 1,
       }),
     );
     sdk.useSandboxRun.mockReturnValue(ok(lit));
     mount(store, [docOn("fail")]);
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+    expect(picked(store)).toEqual(["g2"]);
   });
 
   it("the highlight does not overwrite a marking another view already holds", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L1"]) }, "/v/other.ai.yaml");
+    store.set("fail", markingFrom(["group"], [["g1"]]), "/v/other.ai.yaml");
     const lit = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }, {
         highlight: btoa(String.fromCharCode(0b010)),
         lit: 1,
       }),
     );
     sdk.useSandboxRun.mockReturnValue(ok(lit));
     mount(store, [docOn("fail")]);
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L1"]);
+    expect(picked(store)).toEqual(["g1"]);
   });
 
   it("the chart's ✕ clears a marking its highlight seeded, with nothing brushed (#847/#848 P17)", () => {
     const lit = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }, {
         highlight: btoa(String.fromCharCode(0b010)),
         lit: 1,
       }),
@@ -184,7 +188,7 @@ describe("ChartView on a named marking", () => {
     sdk.useSandboxRun.mockReturnValue(ok(lit));
     const store = new MarkingStore();
     mount(store, [docOn("fail")]);
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]); // seeded on open
+    expect(picked(store)).toEqual(["g2"]); // seeded on open
     const [a] = charts.made;
     // what the toolbox's clear dispatches (echarts toolbox/feature/Brush.js),
     // then the empty brushselected the cleared component fires
@@ -195,7 +199,7 @@ describe("ChartView on a named marking", () => {
 
   it("a brush component rebuilding clears nothing: only the ✕ does", () => {
     const lit = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }, {
         highlight: btoa(String.fromCharCode(0b010)),
         lit: 1,
       }),
@@ -207,14 +211,14 @@ describe("ChartView on a named marking", () => {
     // a person's drag reports `brush` with areas and no command; a rebuild fires only brushselected
     act(() => a!.handlers.get("brush")!({ type: "brush", areas: [{ brushType: "rect", range: [0, 1] }] }));
     act(() => a!.handlers.get("brushselected")!({ batch: [{ areas: [], selected: [] }] }));
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+    expect(picked(store)).toEqual(["g2"]);
   });
 
   it("two charts opened together on an empty marking: the first seed stands", () => {
     // Both effects run in one commit and both saw "empty" when they rendered.
     const litAt = (bit: number) =>
       answer(
-        layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L3"]) }, {
+        layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g3"]) }, {
           highlight: btoa(String.fromCharCode(bit)),
           lit: 1,
         }),
@@ -225,12 +229,12 @@ describe("ChartView on a named marking", () => {
     );
     const store = new MarkingStore();
     mount(store, [docOn("fail", { title: "A" }), docOn("fail", { title: "B" })]);
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+    expect(picked(store)).toEqual(["g2"]);
   });
 
   it("re-attaching through the header does not seed again", () => {
     const lit = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }, {
         highlight: btoa(String.fromCharCode(0b010)),
         lit: 1,
       }),
@@ -254,7 +258,7 @@ describe("ChartView on a named marking", () => {
 
   it("charts on a cleared marking all draw undimmed — none falls back to its own highlight", () => {
     const lit = answer(
-      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), lot: cat(["L1", "L2", "L1"]) }, {
+      layer("scatter", 3, { a: f64([1, 2, 3]), b: f64([4, 5, 6]), group: cat(["g1", "g2", "g1"]) }, {
         highlight: btoa(String.fromCharCode(0b010)),
         lit: 1,
       }),
@@ -271,7 +275,7 @@ describe("ChartView on a named marking", () => {
     mount(store, [docOn("fail", { keys: undefined })]);
     brush(charts.made[0]!, [0]);
     expect(store.get("fail")).toBeUndefined();
-    act(() => store.set("fail", { lot: new Set(["L2"]) }, null));
+    act(() => store.set("fail", markingFrom(["group"], [["g2"]]), null));
     expect(lastData(charts.made[0]!)).toEqual([dim([1, 4]), [2, 5], dim([3, 6])]);
   });
 
@@ -339,12 +343,12 @@ describe("ChartView on a named marking", () => {
         batch: [
           {
             areas: [{ brushType: "polygon", coordRange: [[0, 0], [9, 0], [9, 9]] }],
-            selected: [{ seriesIndex: 0, dataIndex: [1, 2] }], // lots L2, L1
+            selected: [{ seriesIndex: 0, dataIndex: [1, 2] }], // groups g2, g1
           },
         ],
       }),
     );
-    expect([...store.get("fail")!.marking.lot!].sort()).toEqual(["L1", "L2"]);
+    expect(picked(store)).toEqual(["g1", "g2"]);
     expect(store.get("fail")!.source).toBe("/v/scatter.ai.yaml");
   });
 
@@ -352,7 +356,7 @@ describe("ChartView on a named marking", () => {
     // ECharts hands a grid's lasso over as the outline alone (a custom series
     // has no dataIndex to select), so the view finds the cells in it.
     sdk.useSandboxRun.mockReturnValue(
-      ok(answer(layer("grid", 3, { x: f64([0, 1, 2]), y: f64([0, 0, 0]), v: q8([0, 127, 254], 0, 1), lot: cat(["L1", "L2", "L3"]) }))),
+      ok(answer(layer("grid", 3, { x: f64([0, 1, 2]), y: f64([0, 0, 0]), v: q8([0, 127, 254], 0, 1), group: cat(["g1", "g2", "g3"]) }))),
     );
     const grid = docOn("fail", {
       mark: "grid",
@@ -368,19 +372,19 @@ describe("ChartView on a named marking", () => {
     // a pentagon around the centres of cells 1 and 2 (axis values are cell indices), not cell 0's
     const outline = [[0.6, -0.4], [2.9, -0.4], [2.9, 0.4], [1.5, 0.6], [0.6, 0.4]];
     act(() => a!.handlers.get("brushselected")!({ batch: [{ areas: [{ brushType: "polygon", coordRange: outline }], selected: [] }] }));
-    expect([...store.get("fail")!.marking.lot!].sort()).toEqual(["L2", "L3"]);
+    expect(picked(store)).toEqual(["g2", "g3"]);
   });
 
   it("a legend click writes the marking with the rows still shown", () => {
-    const coloured = docOn("fail", { encoding: { ...enc, color: { field: "lot", type: "nominal" } } });
+    const coloured = docOn("fail", { encoding: { ...enc, color: { field: "group", type: "nominal" } } });
     const store = new MarkingStore();
     mount(store, [coloured], ["/v/legend.ai.yaml"]);
     const [a] = charts.made;
-    act(() => a!.handlers.get("legendselectchanged")!({ selected: { L1: false, L2: true } }));
-    expect([...store.get("fail")!.marking.lot!]).toEqual(["L2"]);
+    act(() => a!.handlers.get("legendselectchanged")!({ selected: { g1: false, g2: true } }));
+    expect(picked(store)).toEqual(["g2"]);
     expect(store.get("fail")!.source).toBe("/v/legend.ai.yaml");
     // every entry shown again is no selection: the marking empties
-    act(() => a!.handlers.get("legendselectchanged")!({ selected: { L1: true, L2: true } }));
+    act(() => a!.handlers.get("legendselectchanged")!({ selected: { g1: true, g2: true } }));
     expect(store.get("fail")).toBeUndefined();
   });
 });

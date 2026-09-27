@@ -13,7 +13,13 @@ import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
+
+/** What a marking holds: its keys (joined) → its picks, sorted; {} for none. */
+const marked = (store: MarkingStore, name = "m") => {
+  const m = store.get(name)?.marking;
+  return m ? { [m.keys.join(",")]: markingRows(m).map((r) => r.join(",")) } : {};
+};
 import { type Answer } from "./option";
 import { stackCase } from "./stackCorpus";
 import { answer, cat, f64, layer } from "./testAnswer";
@@ -26,7 +32,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 const made = vi.hoisted(() => ({ charts: [] as import("echarts/core").ECharts[] }));
@@ -96,14 +102,14 @@ afterEach(() => {
 });
 
 describe("the count beside 'by <columns>' (P43)", () => {
-  it("counts what went to the marking: a box over every point and segment says 8, not 8 + the segments", async () => {
+  it("counts the picks that went to the marking: a box over every point and segment says 2 (regions n, s), not 8 rows + the segments (#861 D5)", async () => {
     const store = new MarkingStore();
     const chart = mount(store);
     await settle();
     act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
     await settle();
-    expect([...(store.get("m")?.marking.region ?? [])].sort()).toEqual(["n", "s"]);
-    expect(screen.queryByText(/selected/)?.textContent).toBe("8 selected · by region");
+    expect(marked(store)).toEqual({ region: ["n", "s"] });
+    expect(screen.queryByText(/selected/)?.textContent).toBe("2 selected · by region");
   });
 });
 
@@ -126,7 +132,7 @@ describe("rows with no key value (P44 row 35)", () => {
     await settle();
     act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
     await settle();
-    expect([...(store.get("m")?.marking.item ?? [])]).toEqual(["r01"]);
+    expect(marked(store)).toEqual({ item: ["r01"] });
     expect(screen.queryByText(/selected/)?.textContent).toBe("1 selected · by item");
   });
 });
@@ -149,12 +155,12 @@ describe("a brush that writes nothing on a keyed chart (P45 row 45)", () => {
 
   it("says so on a marking another view holds, and leaves that marking as it was", async () => {
     const store = new MarkingStore();
-    store.set("m", { item: new Set(["r01", "r02"]) }, "/v/table.ai.yaml");
+    store.set("m", markingFrom(["item"], [["r01"], ["r02"]]), "/v/table.ai.yaml");
     const chart = mount(store, EMPTY_KEY, SPARSE_DOC);
     await settle();
     act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range: [[0, 600], [0, 400]] }] }));
     await settle();
-    expect([...(store.get("m")?.marking.item ?? [])].sort()).toEqual(["r01", "r02"]);
+    expect(marked(store)).toEqual({ item: ["r01", "r02"] });
     expect(screen.queryByText(/selected/)?.textContent).toBe("3 selected");
   });
 

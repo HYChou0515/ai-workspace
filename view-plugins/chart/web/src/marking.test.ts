@@ -1,12 +1,12 @@
 /**
  * #847 PR 3 P2: a chart's rows ↔ a named marking. Reading lights each layer's
- * rows by the platform's one matching rule; writing projects a selection (or
- * the spec's `highlight:`) onto `keys:`.
+ * rows by the platform's one matching rule; writing turns a selection (or the
+ * spec's `highlight:`) into picks on `keys:` (#861 D1).
  */
 import { describe, expect, it } from "vitest";
 
-import { isLit, markedBy as hostMarkedBy, MarkingStore } from "../../../../web/src/lib/markings";
-import { highlightMarking, markedBy, markedCount, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
+import { type Marking, markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
+import { highlightMarking, markedCount, markingLit, selectionMarking, stillWritten } from "./marking";
 import { measuredFields } from "./option";
 import { answer, cat, f64, layer, time } from "./testAnswer";
 
@@ -14,31 +14,42 @@ const A = answer(
   layer(
     "scatter",
     4,
-    { x: f64([1, 2, 3, 4]), lot: cat(["L1", "L1", "L2", "L3"]), wafer: f64([1, 2, 1, 7]) },
+    { x: f64([1, 2, 3, 4]), group: cat(["g1", "g1", "g2", "g3"]), item: f64([1, 2, 1, 7]) },
     { highlight: btoa(String.fromCharCode(0b0101)), lit: 2 },
   ),
   layer("bar", 2, { y: f64([5, 6]) }),
 );
 
+/** A marking as its keys and sorted rows, for comparing. */
+const shape = (m: Marking | null) => m && { keys: [...m.keys], rows: markingRows(m) };
+
 describe("markingLit", () => {
-  it("lights each row of a layer that carries a marked column, by the platform's rule", () => {
-    const lit = markingLit(A, { lot: new Set(["L1"]) }, isLit, []);
+  it("lights each row of a layer that carries a marked key, by the platform's rule", () => {
+    const lit = markingLit(A, markingFrom(["group"], [["g1"]]), []);
     expect(lit[0]).toEqual([true, true, false, false]);
   });
 
-  it("uses every key the layer carries", () => {
-    const lit = markingLit(A, { lot: new Set(["L1"]), wafer: new Set(["2"]) }, isLit, []);
-    expect(lit[0]).toEqual([false, true, false, false]);
+  it("with every key, lights the picks only -- not every combination of their values (#861 D1)", () => {
+    // (g1, 2) and (g2, 1) picked: (g1, 1) holds a picked group AND a picked
+    // item, but was not picked.
+    const lit = markingLit(A, markingFrom(["group", "item"], [["g1", "2"], ["g2", "1"]]), []);
+    expect(lit[0]).toEqual([false, true, true, false]);
+  });
+
+  it("a layer with some of the keys lights the rows that contain a pick (D2)", () => {
+    const perGroup = answer(layer("bar", 3, { group: cat(["g1", "g2", "g3"]), v: f64([1, 2, 3]) }));
+    const lit = markingLit(perGroup, markingFrom(["group", "item"], [["g1", "2"], ["g3", "9"]]), []);
+    expect(lit[0]).toEqual([true, false, true]);
   });
 
   it("leaves a layer with none of the keys undimmed (null)", () => {
-    expect(markingLit(A, { lot: new Set(["L1"]) }, isLit, [])[1]).toBeNull();
+    expect(markingLit(A, markingFrom(["group"], [["g1"]]), [])[1]).toBeNull();
   });
 
   it("with no keys, still lights on a same-named column it carries", () => {
     // A view without `keys:` cannot write, but it can be lit (Q6): its layer
     // columns are what it shares with the marking.
-    const lit = markingLit(A, { lot: new Set(["L2"]) }, isLit, []);
+    const lit = markingLit(A, markingFrom(["group"], [["g2"]]), []);
     expect(lit[0]).toEqual([false, false, true, false]);
   });
 });
@@ -48,20 +59,23 @@ describe("markingLit reads keys the way selections write them (#855 keyColumn)",
     layer("line", 3, {
       day: time(["2024-01-01", "2024-01-02", "2024-01-03"]),
       "$key.day": cat(["2024-01-01", "2024-01-02", "2024-01-03"]),
+      group: cat(["g1", "g1", "g2"]),
       v: f64([1, 2, 3]),
     }),
   );
 
   it("a key a channel sends as time is lit by its marking strings", () => {
-    expect(markingLit(T, { day: new Set(["2024-01-02"]) }, isLit, [])[0]).toEqual([false, true, false]);
+    expect(markingLit(T, markingFrom(["day"], [["2024-01-02"]]), [])[0]).toEqual([false, true, false]);
   });
 
   it("round trip: what a selection writes lights exactly the selected rows", () => {
-    // selectionValues is the oracle for what a marking holds; reading must agree.
-    for (const rows of [[0], [1, 2], [0, 2]]) {
-      const written = selectionMarking([{ source: "brush", layer: 0, rows }], T, ["day"], [])!;
-      const lit = markingLit(T, written, isLit, [])[0]!;
-      expect(lit.flatMap((on, r) => (on ? [r] : []))).toEqual(rows);
+    // selectionMarking is the oracle for what a marking holds; reading must agree.
+    for (const keys of [["day"], ["day", "group"], ["group", "day"]]) {
+      for (const rows of [[0], [1, 2], [0, 2]]) {
+        const written = selectionMarking([{ source: "brush", layer: 0, rows }], T, keys, [])!;
+        const lit = markingLit(T, written, [])[0]!;
+        expect(lit.flatMap((on, r) => (on ? [r] : []))).toEqual(rows);
+      }
     }
   });
 });
@@ -73,32 +87,45 @@ describe("a view without keys: reading what another view wrote (Q6)", () => {
     layer("line", 3, {
       day: time(["2024-01-01", "2024-01-02", "2024-01-03"]),
       "$key.day": cat(["2024-01-01", "2024-01-02", "2024-01-03"]),
-      lot: cat(["L1", "L2", "L1"]),
-      wafer: f64([1, 2, 3]),
+      group: cat(["g1", "g2", "g1"]),
+      item: f64([1, 2, 3]),
     }),
   );
-  const written = selectionMarking([{ source: "brush", layer: 0, rows: [1] }], writer, ["day", "lot", "wafer"], [])!;
 
-  it("is lit on a same-named text or number column", () => {
-    const reader = answer(layer("bar", 3, { lot: cat(["L2", "L1", "L2"]), wafer: f64([2, 2, 5]), v: f64([1, 2, 3]) }));
-    const onlyLotWafer = { lot: written.lot!, wafer: written.wafer! };
-    expect(markingLit(reader, onlyLotWafer, isLit, [])[0]).toEqual([true, false, false]);
+  it("is lit on same-named text and number columns", () => {
+    const written = selectionMarking([{ source: "brush", layer: 0, rows: [1] }], writer, ["group", "item"], [])!;
+    const reader = answer(layer("bar", 3, { group: cat(["g2", "g1", "g2"]), item: f64([2, 2, 5]), v: f64([1, 2, 3]) }));
+    expect(markingLit(reader, written, [])[0]).toEqual([true, false, false]);
   });
 
   it("a time column it only carries as a channel is not compared — drawn undimmed, never all-dim", () => {
     // Its column holds epoch ms, not the marking's strings: comparing them lit
     // nothing, which drew the whole chart as "no match".
+    const written = selectionMarking([{ source: "brush", layer: 0, rows: [1] }], writer, ["day"], [])!;
     const reader = answer(layer("line", 3, { day: time(["2024-01-01", "2024-01-02", "2024-01-03"]), v: f64([1, 2, 3]) }));
-    expect(markingLit(reader, { day: written.day! }, isLit, [])[0]).toBeNull();
+    expect(markingLit(reader, written, [])[0]).toBeNull();
   });
 });
 
 describe("selectionMarking", () => {
-  it("projects the selected rows onto keys, as the canon strings", () => {
-    const m = selectionMarking([{ source: "brush", layer: 0, rows: [0, 2] }], A, ["lot", "wafer"], []);
-    expect(m && Object.fromEntries(Object.entries(m).map(([c, v]) => [c, [...v].sort()]))).toEqual({
-      lot: ["L1", "L2"],
-      wafer: ["1"],
+  it("writes each selected row's keys as one pick, as the canon strings (#861 D1)", () => {
+    // rows 0 and 2: (g1, 1) and (g2, 1) -- two picks, not {g1, g2} x {1}
+    const m = selectionMarking([{ source: "brush", layer: 0, rows: [0, 2] }], A, ["item", "group"], []);
+    expect(shape(m)).toEqual({ keys: ["group", "item"], rows: [["g1", "1"], ["g2", "1"]] });
+  });
+
+  it("the union of several layers' picks", () => {
+    const two = answer(
+      layer("scatter", 2, { group: cat(["g1", "g2"]), item: cat(["1", "2"]) }),
+      layer("scatter", 2, { group: cat(["g3", "g1"]), item: cat(["3", "1"]) }),
+    );
+    const sel = [
+      { source: "brush" as const, layer: 0, rows: [0] },
+      { source: "brush" as const, layer: 1, rows: [0, 1] },
+    ];
+    expect(shape(selectionMarking(sel, two, ["group", "item"], []))).toEqual({
+      keys: ["group", "item"],
+      rows: [["g1", "1"], ["g3", "3"]],
     });
   });
 
@@ -107,18 +134,21 @@ describe("selectionMarking", () => {
   });
 
   it("an empty selection is the empty marking (the write that clears)", () => {
-    expect(selectionMarking([], A, ["lot"], [])).toEqual({});
+    expect(shape(selectionMarking([], A, ["group"], []))).toEqual({ keys: ["group"], rows: [] });
   });
 });
 
 describe("highlightMarking", () => {
-  it("is the spec highlight's lit rows projected onto keys", () => {
-    const m = highlightMarking(A, ["lot"], []);
-    expect(m && [...m.lot!].sort()).toEqual(["L1", "L2"]);
+  it("is the spec highlight's lit rows as picks on keys", () => {
+    expect(shape(highlightMarking(A, ["group"], []))).toEqual({ keys: ["group"], rows: [["g1"], ["g2"]] });
+    expect(shape(highlightMarking(A, ["group", "item"], []))).toEqual({
+      keys: ["group", "item"],
+      rows: [["g1", "1"], ["g2", "1"]],
+    });
   });
 
   it("is null when no layer carries a highlight", () => {
-    expect(highlightMarking(answer(layer("bar", 2, { y: f64([5, 6]) })), ["lot"], [])).toBeNull();
+    expect(highlightMarking(answer(layer("bar", 2, { y: f64([5, 6]) })), ["group"], [])).toBeNull();
   });
 });
 
@@ -132,10 +162,10 @@ describe("a binned layer carries no key (round 15 defect lens D2)", () => {
   );
 
   it("is drawn undimmed rather than lit by bin centres", () => {
-    expect(markingLit(B, { a: new Set(["3"]) }, isLit, [])).toEqual([null]);
+    expect(markingLit(B, markingFrom(["a"], [["3"]]), [])).toEqual([null]);
   });
 
-  it("writes nothing — not the `{}` that would clear every linked view", () => {
+  it("writes nothing — not the empty marking that would clear every linked view", () => {
     expect(selectionMarking([{ source: "brush", layer: 0, rows: [2] }], B, ["a"], [])).toBeNull();
   });
 });
@@ -144,10 +174,10 @@ describe("a selection that can name no key marks nothing (#847/#848 PR 5 P41 row
   // Round 20's defect lens: a stack keyed by a row id (which `validate` now
   // refuses) carries no `id` column -- its rows are sums -- and a brush over
   // it wrote `{}`, the write that clears every linked view. As the table's
-  // rule has it, a view that cannot name a row must never send `{}`.
+  // rule has it, a view that cannot name a row must never send an empty marking.
   const SUMS = answer(layer("bar", 2, { item: cat(["p", "q"]), value: f64([7, 13]) }));
 
-  it("is null, not `{}`, when no selected layer carries any key", () => {
+  it("is null when no selected layer carries any key", () => {
     expect(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], SUMS, ["id"], [])).toBeNull();
   });
 
@@ -161,7 +191,22 @@ describe("a selection that can name no key marks nothing (#847/#848 PR 5 P41 row
       { source: "brush" as const, layer: 0, rows: [0] },
       { source: "brush" as const, layer: 1, rows: [0] },
     ];
-    expect(Object.fromEntries(Object.entries(selectionMarking(sel, two, ["id"], [])!).map(([k, v]) => [k, [...v]]))).toEqual({ id: ["r1"] });
+    expect(shape(selectionMarking(sel, two, ["id"], []))).toEqual({ keys: ["id"], rows: [["r1"]] });
+  });
+
+  it("a layer naming fewer keys makes the picks coarser; one naming none of the others' keys shares none", () => {
+    const two = answer(
+      layer("bar", 2, { group: cat(["g1", "g2"]), value: f64([7, 13]) }),
+      layer("scatter", 2, { group: cat(["g1", "g3"]), item: cat(["1", "2"]) }),
+      layer("scatter", 1, { item: cat(["9"]) }),
+    );
+    const bar = { source: "brush" as const, layer: 0, rows: [1] };
+    const pts = { source: "brush" as const, layer: 1, rows: [0, 1] };
+    expect(shape(selectionMarking([bar, pts], two, ["group", "item"], []))).toEqual({
+      keys: ["group"],
+      rows: [["g1"], ["g2"], ["g3"]],
+    });
+    expect(selectionMarking([bar, { source: "brush", layer: 2, rows: [0] }], two, ["group", "item"], [])).toBeNull();
   });
 });
 
@@ -171,25 +216,38 @@ describe("a key no selected row holds a value of (#847/#848 PR 5 P44 row 35)", (
   // that clears every linked view -- and the count beside "by item" counted
   // rows that gave the key nothing ("3 selected · by item" for one item).
   const E = answer(
-    layer("scatter", 3, { x: f64([1, 2, 3]), item: cat([null, null, "r01"]), group: cat(["a", null, null]) }),
+    layer("scatter", 3, { x: f64([1, 2, 3]), item: cat([null, null, "r01"]), group: cat(["a", null, "b"]) }),
   );
-  const values = (m: MarkingValues | null) => (m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, [...v]])) : m);
 
   it("marks nothing from rows with no key value", () => {
     expect(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item"], [])).toBeNull();
   });
 
-  it("writes the values the rows hold", () => {
-    expect(values(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item"], []))).toEqual({ item: ["r01"] });
+  it("writes the picks the rows name", () => {
+    expect(shape(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item"], []))).toEqual({
+      keys: ["item"],
+      rows: [["r01"]],
+    });
   });
 
   it("drops a key it found no value of, keeping the others", () => {
-    expect(values(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item", "group"], []))).toEqual({ group: ["a"] });
+    expect(shape(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item", "group"], []))).toEqual({
+      keys: ["group"],
+      rows: [["a"]],
+    });
   });
 
-  it("counts the rows that gave a key a value", () => {
+  it("a row missing one of the keys names no pick", () => {
+    // row 0 (a, -) and row 2 (b, r01): only row 2 names both
+    expect(shape(selectionMarking([{ source: "brush", layer: 0, rows: [0, 2] }], E, ["item", "group"], []))).toEqual({
+      keys: ["group", "item"],
+      rows: [["b", "r01"]],
+    });
+  });
+
+  it("counts the picks written", () => {
     expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item"], [])).toBe(1);
-    expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["item", "group"], [])).toBe(2);
+    expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1, 2] }], E, ["group"], [])).toBe(2);
     expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1] }], E, ["item"], [])).toBe(0);
   });
 
@@ -197,6 +255,23 @@ describe("a key no selected row holds a value of (#847/#848 PR 5 P44 row 35)", (
     const sums = answer(layer("bar", 2, { item: cat(["p", "q"]), value: f64([7, 13]) }));
     expect(selectionMarking([{ source: "brush", layer: 0, rows: [0, 1] }], sums, ["value"], [new Set(["value"])])).toBeNull();
     expect(markedCount([{ source: "brush", layer: 0, rows: [0, 1] }], sums, ["value"], [new Set(["value"])])).toBe(0);
+  });
+});
+
+describe("markedCount is the number of picks (#861 D5)", () => {
+  // Four rows over two groups and two items, three distinct (group, item)
+  // pairs: three picks -- not 4 rows, and not the 2 x 2 = 4 combinations.
+  const P = answer(layer("scatter", 4, { group: cat(["g1", "g1", "g2", "g1"]), item: cat(["1", "2", "1", "1"]) }));
+  const all = [{ source: "brush" as const, layer: 0, rows: [0, 1, 2, 3] }];
+
+  it("equals the size of what the selection writes", () => {
+    expect(markedCount(all, P, ["group", "item"], [])).toBe(3);
+    expect(markingRows(selectionMarking(all, P, ["group", "item"], [])!)).toHaveLength(3);
+    expect(markedCount(all, P, ["group"], [])).toBe(2);
+  });
+
+  it("is 0 for a view without keys", () => {
+    expect(markedCount(all, P, [], [])).toBe(0);
   });
 });
 
@@ -214,38 +289,38 @@ describe("an aggregated channel's column is not a key (#847/#848 PR 5 P32)", () 
     ),
   );
   const PIE_MEASURED = [new Set(["item"])];
-  // rows (A, 4), (A, 5) and (B, 3) picked elsewhere: A and B are marked
-  const PICKED = { group: new Set(["A", "B"]), item: new Set(["3", "4", "5"]) };
+  // rows (A, 4), (A, 5) and (B, 3) picked elsewhere: A and B contain a pick
+  const PICKED = markingFrom(["group", "item"], [["A", "4"], ["A", "5"], ["B", "3"]]);
 
-  it("a pie counting items lights by its group only", () => {
-    expect(markingLit(PIE, PICKED, isLit, PIE_MEASURED)[0]).toEqual([true, true, false, false]);
+  it("a pie counting items lights whole by its group only (D4)", () => {
+    expect(markingLit(PIE, PICKED, PIE_MEASURED)[0]).toEqual([true, true, false, false]);
   });
 
   it("a bar of an item mean lights by its group only", () => {
     const BAR = answer(layer("bar", 3, { group: cat(["A", "B", "C"]), item: f64([3.5, 2.5, 2]), "$key.item": cat([3.5, 2.5, 2]) }));
     // (A, 2) and (C, 2) picked: C's mean happens to be 2, A's is not
-    const lit = markingLit(BAR, { group: new Set(["A", "C"]), item: new Set(["2"]) }, isLit, [new Set(["item"])]);
+    const lit = markingLit(BAR, markingFrom(["group", "item"], [["A", "2"], ["C", "2"]]), [new Set(["item"])]);
     expect(lit[0]).toEqual([true, false, true]);
   });
 
   it("a layer whose only shared column is aggregated is drawn undimmed", () => {
-    expect(markingLit(PIE, { item: new Set(["4"]) }, isLit, PIE_MEASURED)).toEqual([null]);
+    expect(markingLit(PIE, markingFrom(["item"], [["4"]]), PIE_MEASURED)).toEqual([null]);
   });
 
   it("a slice picked writes its group, not its count", () => {
     const m = selectionMarking([{ source: "click", layer: 0, rows: [0] }], PIE, ["group", "item"], PIE_MEASURED);
-    expect(m && Object.fromEntries(Object.entries(m).map(([c, v]) => [c, [...v]]))).toEqual({ group: ["A"] });
+    expect(shape(m)).toEqual({ keys: ["group"], rows: [["A"]] });
   });
 
   it("a highlight seeds its group, not its count", () => {
-    const m = highlightMarking(PIE, ["group", "item"], PIE_MEASURED);
-    expect(m && Object.fromEntries(Object.entries(m).map(([c, v]) => [c, [...v]]))).toEqual({ group: ["B"] });
+    expect(shape(highlightMarking(PIE, ["group", "item"], PIE_MEASURED))).toEqual({ keys: ["group"], rows: [["B"]] });
   });
 
   it("(control) the same layer with nothing aggregated lights and writes by both columns", () => {
-    expect(markingLit(PIE, PICKED, isLit, [new Set()])[0]).toEqual([false, true, false, false]);
+    // row (B, 4) is not a pick; (A, 6) is not either
+    expect(markingLit(PIE, PICKED, [new Set()])[0]).toEqual([false, false, false, false]);
     const m = selectionMarking([{ source: "click", layer: 0, rows: [0] }], PIE, ["group", "item"], [new Set()]);
-    expect(m && Object.keys(m)).toEqual(["group", "item"]);
+    expect(shape(m)).toEqual({ keys: ["group", "item"], rows: [["A", "6"]] });
   });
 });
 
@@ -265,27 +340,11 @@ describe("measuredFields (P32, P40 row 18)", () => {
   });
 });
 
-describe("markedBy (P27)", () => {
-  // The host's tables say the same words beside their counts: the host's
-  // `markedBy` is the oracle, so a chart and a table on one marking agree.
-  it.each([
-    [{ lot: new Set(["L1"]) }],
-    [{ lot: new Set(["L1"]), wafer: new Set(["1", "2"]) }],
-    [{ wafer: new Set(["1"]), lot: new Set(["L1"]), "a column": new Set(["x"]) }],
-  ])("says what the host says for %o", (m) => {
-    expect(markedBy(m)).toBe(hostMarkedBy(m));
-  });
-
-  it("names the columns in the order the marking was written", () => {
-    expect(markedBy({ wafer: new Set(["1"]), lot: new Set(["L1"]) })).toBe("by wafer, lot");
-  });
-});
-
 describe("stillWritten (P34)", () => {
   // Whether the marking still holds exactly what a view wrote. The oracle is
   // the host's store: it takes a write as "the same again" -- and tells no
   // one -- exactly when the entry already holds it from the same source.
-  const same = (held: MarkingValues, heldFrom: string, wrote: MarkingValues, from: string): boolean => {
+  const same = (held: Marking, heldFrom: string, wrote: Marking, from: string): boolean => {
     const store = new MarkingStore();
     store.set("m", held, heldFrom);
     let told = false;
@@ -293,18 +352,19 @@ describe("stillWritten (P34)", () => {
     store.set("m", wrote, from);
     return !told;
   };
-  const S = (...v: string[]) => new Set(v);
-  it.each<[MarkingValues, string, MarkingValues, string]>([
-    [{ group: S("A") }, "/v/a", { group: S("A") }, "/v/a"],
-    [{ group: S("A") }, "/v/b", { group: S("A") }, "/v/a"],
-    [{ group: S("A", "B") }, "/v/a", { group: S("B", "A") }, "/v/a"],
-    [{ group: S("A", "B") }, "/v/a", { group: S("A") }, "/v/a"],
-    [{ group: S("A") }, "/v/a", { group: S("A", "B") }, "/v/a"],
-    [{ group: S("A") }, "/v/a", { item: S("A") }, "/v/a"],
-    [{ group: S("A"), item: S("1") }, "/v/a", { item: S("1"), group: S("A") }, "/v/a"],
-    [{ group: S("A"), item: S("1") }, "/v/a", { group: S("A") }, "/v/a"],
-    [{ group: S("A") }, "/v/a", { group: S("A"), item: S("1") }, "/v/a"],
-    [{ group: S("A") }, "/v/a", { group: S("A"), item: S() }, "/v/a"],
+  const M = (keys: string[], ...rows: string[][]) => markingFrom(keys, rows);
+  it.each<[Marking, string, Marking, string]>([
+    [M(["group"], ["A"]), "/v/a", M(["group"], ["A"]), "/v/a"],
+    [M(["group"], ["A"]), "/v/b", M(["group"], ["A"]), "/v/a"],
+    [M(["group"], ["A"], ["B"]), "/v/a", M(["group"], ["B"], ["A"]), "/v/a"],
+    [M(["group"], ["A"], ["B"]), "/v/a", M(["group"], ["A"]), "/v/a"],
+    [M(["group"], ["A"]), "/v/a", M(["group"], ["A"], ["B"]), "/v/a"],
+    [M(["group"], ["A"]), "/v/a", M(["item"], ["A"]), "/v/a"],
+    [M(["group", "item"], ["A", "1"]), "/v/a", M(["item", "group"], ["1", "A"]), "/v/a"],
+    [M(["group", "item"], ["A", "1"]), "/v/a", M(["group"], ["A"]), "/v/a"],
+    [M(["group"], ["A"]), "/v/a", M(["group", "item"], ["A", "1"]), "/v/a"],
+    // same keys and the same values per column, different picks
+    [M(["group", "item"], ["A", "1"], ["B", "2"]), "/v/a", M(["group", "item"], ["A", "2"], ["B", "1"]), "/v/a"],
   ])("agrees with the store: held %o from %s, wrote %o from %s", (held, heldFrom, wrote, from) => {
     const store = new MarkingStore();
     store.set("m", held, heldFrom);
@@ -312,9 +372,8 @@ describe("stillWritten (P34)", () => {
   });
 
   it("an empty write is still what the marking holds while it holds nothing", () => {
-    expect(stillWritten(undefined, {}, "/v/a")).toBe(true);
-    expect(stillWritten(undefined, { group: S() }, "/v/a")).toBe(true);
-    expect(stillWritten({ marking: { group: S("A") }, source: "/v/a" }, {}, "/v/a")).toBe(false);
-    expect(stillWritten(undefined, { group: S("A") }, "/v/a")).toBe(false);
+    expect(stillWritten(undefined, M(["group"]), "/v/a")).toBe(true);
+    expect(stillWritten({ marking: M(["group"], ["A"]), source: "/v/a" }, M(["group"]), "/v/a")).toBe(false);
+    expect(stillWritten(undefined, M(["group"], ["A"]), "/v/a")).toBe(false);
   });
 });
