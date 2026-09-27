@@ -36,7 +36,8 @@
     "skills": [
       "author-skill",
       "author-workflow",
-      "grill-me"
+      "grill-me",
+      "system-design"
     ],
     "picker": [{ "preset": "qwen3-local", "name": "My App · Qwen3 (local)" }],
     "suggestions": [{ "label": "Summarise", "prompt": "Summarise this item." }]
