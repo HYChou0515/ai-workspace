@@ -435,23 +435,6 @@ function SkillRow({
           >
             {skill.source}
           </span>
-          {skill.readonly && (
-            // docs/plan-ai-reads-docs.md P1: reference the platform keeps in step
-            // with what it ships — said here, since "editable here" would be false.
-            <span
-              data-testid={`skill-readonly-${skill.name}`}
-              style={{
-                fontSize: pxToRem(10),
-                color: "var(--text-paper-d)",
-                border: "1px solid var(--paper-3)",
-                borderRadius: 999,
-                padding: "0 6px",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {t("skills.readonly")}
-            </span>
-          )}
           {skill.is_copy && !skill.readonly && (
             // The source badge alone would read as "this is package content, you
             // can't touch it" — but a copy IS editable here, and that is the

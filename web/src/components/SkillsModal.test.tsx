@@ -244,9 +244,12 @@ describe("SkillsModal — a readonly skill", () => {
     },
   ];
 
-  it("says it is readonly, and offers no edit, update or reset", async () => {
+  // No pill of its own: like a shared skill that is never copied (chart,
+  // grill-me), "no `editable here`" already says it cannot be changed here.
+  it("reads like any skill you cannot edit here: no pill, no update or reset", async () => {
     renderModal({ client: fakeClient(READONLY) as never });
-    expect(await screen.findByTestId("skill-readonly-system-design")).toHaveTextContent("唯讀");
+    expect(await screen.findByText("system-design")).toBeTruthy();
+    expect(screen.queryByTestId("skill-readonly-system-design")).toBeNull();
     expect(screen.queryByTestId("skill-copy-system-design")).toBeNull();
     expect(screen.queryByTestId("skill-update-system-design")).toBeNull();
     expect(screen.queryByTestId("skill-refresh-system-design")).toBeNull();

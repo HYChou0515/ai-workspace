@@ -89,7 +89,7 @@ readonly: true
   `readonly` 也不算數,skill hub 上的 skill 也不能是 readonly。目前只有 shared skill(`sample-skills/`)能是。
 - **沙盒裡的 shell 擋不到。** `exec` 直接在沙盒改檔案,不經過上面那道關卡;被改掉的檔案會留到下一次上游
   改版、複本整份重新複製為止。
-- **Skills 面板** 那一列寫「唯讀」,沒有 Update / Reset。
+- **Skills 面板** 那一列沒有「可在此編輯」,也沒有 Update / Reset。
 - **workspace 的全域搜尋與取代** 會跳過它:它是參考資料,不是使用者的內容。
 
 把一個一般 skill 改成 readonly 時要注意:已經被 AI 改過的複本,會在下一次 `read_skill` 被整份覆蓋。

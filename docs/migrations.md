@@ -1229,7 +1229,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   `architecture.md`…），`ls /app/mkdocs.yml` 存在。
 - 在任一 item 問 AI 一個系統怎麼運作的問題（例如「workflow 的 cache 是什麼意思」）：agent log 裡看得到它
   `read_skill("system-design")`，接著讀 `.skill/system-design/` 底下的文件或交給 `docs-reader`，回答附上文件名。
-- 該 item 的 Skills 面板：`system-design` 那一列寫「唯讀」，沒有 Update / Reset。
+- 該 item 的 Skills 面板：`system-design` 那一列沒有「可在此編輯」，也沒有 Update / Reset。
 
 ---
 

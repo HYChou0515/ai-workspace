@@ -92,7 +92,7 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
     (`materialize_skill`'s writes, the manifest last).
   - Writes under a readonly skill's folder are refused at the shared write chokepoint, for the AI's file
     tools and for the user's file API alike.
-  - The skills panel shows a readonly skill as readonly.
+  - The skills panel offers a readonly skill no edit, update or reset.
   - Red-first tests:
     - an older copy is replaced on read;
     - a file upstream removed is removed;
@@ -224,7 +224,8 @@ Where the build differs from the phases above, or found what they did not expect
       under its title, and `plan-marking-tuples.md` reads;
     - a `write_file` into the copy gets the readonly sentence, and the file route gets 403;
     - `save_subagent` saves `docs-reader`, and `run_agent` runs it over both indexes;
-    - the skills panel marks the row readonly;
+    - the skills panel marks the row readonly (after review, the user had that pill removed: no
+      「可在此編輯」 already says a skill cannot be changed here, as for a shared skill never copied);
     - a doc added to `docs/` reaches the copy on the next read, and a doc removed leaves it;
     - built for real with the same `COPY` lines and `.dockerignore`, the image resolves the `docs` link
       (205 files). With `docs` excluded again, the build fails on the `COPY`, which is the control.
