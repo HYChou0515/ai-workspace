@@ -64,6 +64,35 @@ meta-skill,走一個七步流程:
 你儲存的 skill 會在同一個 workspace 立即載入(索引每個 turn 都會重新整理)。它**不會**
 外洩到其他 workspace——那正是 download/import 的用途。
 
+## readonly skill:只讀、跟著平台更新
+
+有些 skill 是給 AI **讀**的參考資料,不是給它改的——例如 `system-design`(平台自己的 docs 與設計計畫,
+見 `docs/plan-ai-reads-docs.md`)。這種 skill 在 `SKILL.md` 的 frontmatter 加 `readonly: true`:
+
+```
+---
+name: system-design
+description: ...
+readonly: true
+---
+```
+
+它和一般 skill 的差別:
+
+- **複本跟著平台走。** 一般 skill 的複本是「沒有才複製、之後不再覆蓋」(AI 的修改要留著)。readonly skill
+  每次 `read_skill` 都比對複本的 `.origin` 與這次部署附帶的版本,不同就整份重新複製;相同就不動。
+- **誰都不能改。** AI 的檔案工具、檔案 API(上傳、IDE 儲存、搬移、刪除)、workflow 對它資料夾底下的任何
+  寫入都會被拒絕:API 回 403(`readonly_skill`),AI 收到一句「這是 readonly 的參考資料,寫到 workspace
+  別處」。只有平台自己複製、更新它時例外。
+- **由上游決定。** 是否 readonly 看的是**打包在 image 裡**的 `SKILL.md`,不是 workspace 裡的複本——刪掉複本裡
+  那一行也解除不了。所以它是開發者在 repo 裡決定的事;workspace 裡使用者或 AI 自己寫的 skill 標了
+  `readonly` 也不算數,skill hub 上的 skill 也不能是 readonly。目前只有 shared skill(`sample-skills/`)能是。
+- **沙盒裡的 shell 擋不到。** `exec` 直接在沙盒改檔案,不經過上面那道關卡;被改掉的檔案會留到下一次上游
+  改版、複本整份重新複製為止。
+- **Skills 面板** 那一列寫「唯讀 · 隨平台更新」,沒有 Update / Reset。
+
+把一個一般 skill 改成 readonly 時要注意:已經被 AI 改過的複本,會在下一次 `read_skill` 被整份覆蓋。
+
 ## Skills 面板
 
 IDE 的檔案樹會把 `.skill/` 這個點開頭的資料夾藏起來,所以 chat header 裡的 **Skills** 按鈕

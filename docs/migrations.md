@@ -1186,6 +1186,39 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   被框到的縮圖的**列數**（每張縮圖由很多列組成，所以通常比張數大）。
 - 送出一則帶這個 marking 的訊息：chip 寫「m1 · 4 · by group, item」；`.markings/m1.json` 裡是 `keys` 與 4 列 `rows`。
 
+### 2026-09-27 · #865 app 裡的 AI 讀得到平台的 docs 與設計計畫（readonly skill） {#pr-865}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-ai-reads-docs.md`）：
+
+- 每個內建 app 多一個 shared skill `system-design`，預設開啟。使用者問「這個系統怎麼運作、為什麼這樣」時，
+  AI 會讀平台自己的 docs 與設計計畫來回答，不再憑印象說。
+- 新的 **readonly skill**：`SKILL.md` 標 `readonly: true` 的 shared skill（目前只有 `system-design`）。它的複本每次
+  `read_skill` 都和這次部署附帶的版本比對，不同就整份重新複製；AI 與使用者都不能改它——檔案 API 回 **403**
+  （`readonly_skill`），AI 的檔案工具收到一句說明。
+- 讀過這個 skill 的 workspace 會多約 3.4 MB（`docs/` 全部的文件與計畫），照算 workspace 容量。
+- 升級時要知道的：日後若把一個**已經有人用過的**一般 skill 改成 readonly，AI 改過的複本會在下一次 `read_skill`
+  被整份覆蓋。這一版的 `system-design` 是新的 skill，沒有舊複本。
+
+**資料** — 沒有 `Schema` 升版，也沒有要跑的指令。
+
+**k8s · CI 側**
+
+- **image 要重 build，`rollout 前`。** `.dockerignore` 不再排除 `docs/`，Dockerfile 把 `docs/` 與 `mkdocs.yml`
+  複製到 `/app`。
+  - 為什麼：`system-design` skill 的 `docs` 與 `mkdocs.yml` 是指向 `../../docs` 與 `../../mkdocs.yml` 的連結，
+    image 裡沒有它們，連結就是斷的。
+  - 漏做的症狀：AI 讀 `system-design` 時 `.skill/system-design/docs/` 是空的，它會回答「文件裡沒有寫」。
+- **自己維護 Dockerfile 或 `.dockerignore` 的部署**（例如另建 image 的版本），`rollout 前`比照上一條：build context
+  要帶 `docs/`，image 要把 `docs/` 與 `mkdocs.yml` 放在 `sample-skills/` 的上一層。
+
+**確認做完**
+
+- `kubectl exec <api-pod> -- ls /app/sample-skills/system-design/docs/ | head` 列得出文件（`design-history.md`、
+  `architecture.md`…），`ls /app/mkdocs.yml` 存在。
+- 在任一 item 問 AI 一個系統怎麼運作的問題（例如「workflow 的 cache 是什麼意思」）：agent log 裡看得到它
+  `read_skill("system-design")`，接著讀 `.skill/system-design/` 底下的文件或交給 `docs-reader`，回答附上文件名。
+- 該 item 的 Skills 面板：`system-design` 那一列寫「唯讀 · 隨平台更新」，沒有 Update / Reset。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

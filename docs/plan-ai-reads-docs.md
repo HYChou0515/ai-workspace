@@ -187,6 +187,33 @@ In every phase:
 - Every sentence in docs, comments and commits is written after the check it describes, and every
   count is derived by counting.
 
+## As built
+
+Where the build differs from the phases above, or found what they did not expect:
+
+- **Only shared skills can be readonly** (P1). The write guard lives in the files facade, which knows a
+  path and not an item's app or profile, so it decides by the folder's name against the shared
+  registry: a readonly shared skill's name is reserved in every workspace. A profile skill of the same
+  name shadows the shared one and is not readonly.
+- **The sandbox shell is not guarded** (P1). `exec` changes files in the sandbox without passing the
+  facade. A file changed that way stays until the next release changes the skill and the copy is
+  replaced whole.
+- **The current docs' index is `mkdocs.yml` itself** (P2). The skill links `mkdocs.yml` beside `docs/`.
+  `docs/index.md` could not serve: it links 12 of the nav's 45 pages.
+- **`.dockerignore` excluded `docs`** (P3). So a `COPY docs/` alone would have carried nothing. It
+  is now in the build context, and the P3 tests read `.dockerignore` as Docker does.
+- **Six plans sat at the repo root** (P4): `plan-104-remove-source-doc-id`, `plan-blob-gc-job`,
+  `plan-chat-column-vertical-space`, `plan-graceful-shutdown`, `plan-show-file-in-chat` and
+  `plan-stop-reliability`. They were in no index and outside `docs/`, so they were moved in and
+  indexed. A P5 guard now fails any plan at the root.
+- **History pages are what `not_in_nav` sets apart** (P5), not only `plan-` / `handoff-` / `q-`:
+  `fe-*.md` and `workflows-frontend-brief.md` are history too.
+- **P4's result:** 29 plans carry 33 overturned-by lines. The pairs and their evidence are in the P4
+  commit.
+  - Some decisions were reversed outside any plan file, so they carry no marker: #714's
+    workflow env, KB chat queueing, #537's wiki router, #538's quota at the facade, items private by
+    default, `read_image` with a vision model, and the workspace tree filter.
+
 ## Done means
 
 A user in any shipped app asks how some part of the system works or why. The AI:
