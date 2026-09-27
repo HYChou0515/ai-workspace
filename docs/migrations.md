@@ -907,7 +907,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-25 · #855 chart view plugin：AI 用 `show_file` 秀出可互動圖表（`view: chart`） {#pr-855}
+### 2026-09-27 · e45a8e6b · #855 chart view plugin：AI 用 `show_file` 秀出可互動圖表（`view: chart`） {#pr-855}
 
 **設定** — 沒有新 key。但有一個**行為改變，沒有開關**：預設映像帶 `chart` plugin。
 
@@ -1011,7 +1011,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-25 · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
+### 2026-09-27 · e45a8e6b · #856 view 之間的連動選取（markings）隨訊息送給 AI；`show_file` 可以一次秀一組分割版面 {#pr-856}
 
 隨 [#855](#pr-855) 進 master：#856 合進 #855 的分支，分支再 rebase 到 master，所以沒有自己的 merge commit。
 
@@ -1054,7 +1054,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-25 · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
+### 2026-09-27 · e45a8e6b · #857 chart 的 `facet:`：上千個群組的縮圖牆，疊圖與相減，依排名選取寫進 marking {#pr-857}
 
 隨 [#855](#pr-855) 進 master：#857 合進 #855 的分支，分支再 rebase 到 master，所以沒有自己的 merge commit。
 
