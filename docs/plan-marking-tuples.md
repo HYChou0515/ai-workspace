@@ -50,9 +50,10 @@ builder.
   hash lookup. `isLit(row, marking)` projects onto the keys the row has: no shared key →
   not lit (callers keep drawing such a view undimmed); every key shared → exact tuple
   membership; some keys shared → membership in the projection (D2), computed once per
-  marking and key subset. One implementation in `web/src/lib/markings.ts`; the chart
-  plugin and the sandbox (`lit_rows.py`) are parity-tested against it through the
-  existing corpus, not kept alike by hand.
+  marking and key subset. One implementation in `web/src/lib/markings.ts`; the chart plugin calls it through the SDK. The sandbox's `lit_rows.py` is a second
+  implementation, tested against a Python copy of the rule — not the corpus parity this line
+  first promised (review #862 A3/A7); the two differ on a row whose key cell is empty (see
+  Known and left).
 - **Writing.** A selection writes the tuples of its `keys:` columns over the picked rows
   (`projectOntoKeys` returns tuples). A table keeps #855's "a table only decides for
   rows it has": ticking writes the table's own tuples and keeps the held tuples none of its
@@ -69,8 +70,9 @@ builder.
 - **File and wire format.** `.markings/<name>.json` becomes
   `{"name", "sources", "keys": [...], "rows": [[...], ...]}`; the cross-tab message and
   `MarkingInput` carry `keys` and `rows`; `SentMarking.counts` becomes `count`; the
-  digest hashes keys + sorted rows. A chip saved before this change fails Save as table
-  with the existing "has changed since this message was sent" refusal. No reader accepts
+  digest hashes keys + sorted rows. A chip saved before this change fails Save as table: "the marking's file does not hold a
+  marking" while its file is still in the old shape, "has changed since this message was
+  sent" once the name was sent again (review #862 A1). No reader accepts
   the old `columns` shape — two formats would be two rules.
 
 ## Formats (fixed before the phases split, so the halves are built to one contract)
@@ -105,7 +107,8 @@ builder.
   `selectionMarking`, `toMarking`, `markedCount`, `highlightMarking`, `stillWritten`; the
   gallery's `rangeMarking`, `groupsLit`, `cellsLit`; D2 and D4.
 - **P4 — Partial bars (D3).** Sandbox partials in `query.py`, the web draw (dimmed full
-  bar, lit bar in front), the fallback and its note. Both halves parity-tested.
+  bar, lit bar from the axis with the rest dimmed on top), the fallback and its note. Both
+  halves parity-tested (`bar-partials.json`).
 - **P5 — Backend and Save as table.** `api/markings.py` file shape and digest,
   `SentMarking`, the chip (D5), `lit_rows.py` tuple matching, `marking_table.py`.
 - **P6 — The AI and the docs.** `SKILL.md`, the views index line, `docs/view-plugin-chart.md`,
@@ -134,6 +137,34 @@ builder.
   name alone. The sandbox refuses the old `columns` shape rather than guessing.
 - **SDK:** the marking shape is SDK surface, so the view SDK major moved to 2; a parity
   test ties the scaffold's and the first-party plugins' `"sdk"` to `sdkVersion.ts`.
+
+- **Review round 1 (#862):**
+  - A table coarser than its marking (a per-group table on (group, item) picks) keeps writing at
+    the marking's keys while its ticks say only what the held picks say: unticking a group
+    removes that group's picks and keeps the rest; ticking a group with no pick writes at the
+    table's keys (defect A1: it replaced the marking and dropped picks it did not show, a
+    regression from #855).
+  - A chart's "N selected" counts the selected rows that name a whole pick, as on #855 (the P43
+    rule), not the distinct picks (regression A1: a single-key chart said "2 selected" for 8
+    brushed points, where D1 says a single key behaves as before). The gallery's "N of M marked"
+    counts tiles and the chip counts picks, as D5 says; a table counts its lit rows.
+
+## Known and left (each (B): rare input or cosmetic)
+
+- A row whose key cell is empty: the browser reads it as coarser and lights it when its group
+  holds a pick; the sandbox (`lit_rows`, `partials`) does not. So a table can count such a row
+  that Save as table leaves out. Already so on master; rare in key columns.
+- A mean (or min/max) bar whose picked value is longer than the bar hides the dimmed bar behind
+  it; the bar's own value stays in the tooltip.
+- The tooltip's "picked: N" is the unrounded number.
+- Key and row order sort by UTF-16 code unit in the browser and by code point in Python; only
+  astral characters in names differ, and no digest depends on the browser's order.
+- A selection across layers that carry different key subsets writes the keys every naming layer
+  gave a value, so brushing points and a per-group bar together makes the picks per group.
+- Commit bodies that say otherwise (they cannot be rewritten after the push): b3e92c59 and
+  c3fcc2f3 say every count is picks (a table counts its lit rows; a chart counts rows, above);
+  51c20d5c says an old chip gets "has changed" (see above); 4dc433dc says Save as table saves
+  "those four rows" (it saves every source row of the four picks).
 
 ## Done means
 

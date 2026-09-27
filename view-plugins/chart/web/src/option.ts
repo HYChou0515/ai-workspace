@@ -111,8 +111,8 @@ export type Options = {
   lit?: (boolean[] | null)[];
   /** #861 D3: per layer, each row's aggregate over the rows a marking picked
    * (`partials.ts:litValues`; null: none picked), or null for a layer lit as
-   * `lit` says. An aggregated bar layer given one is drawn in two parts: the
-   * full bar dimmed and, in front, a lit bar of the picked value. */
+   * `lit` says. An aggregated bar layer given one is drawn in two parts: a
+   * lit bar of the picked value from the axis, the rest of the bar dimmed on top. */
   picked?: ((number | null)[] | null)[];
   /** The chart is narrower than `COMPACT_BELOW` (`compactAt`). */
   compact?: boolean;

@@ -53,7 +53,7 @@ plugin 目錄是 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ 
 | `views` | 選配。每一條變成 agent prompt 裡 `## Available views` 的一行 `` - `kind`: when ``；`kind` 必須是自己的 |
 | `skill` | 選配。plugin 裡一個有 `SKILL.md` 的資料夾；`SKILL.md` 的 `name` 必須等於 plugin 名 |
 | `sandbox` | 選配。`{"bundle": "<資料夾>"}` 或 `{"artifact": "<#674 artifact URL>"}` **二擇一**；`"validate": true` 見第 6 節 |
-| `provides` | 選配。平台向 plugin 要的能力，目前只有 `{"marking_rows": "<沙盒指令>"}`：把一個 marking 點亮的列寫成表格（使用者按「Save as table」）。指令回 `{"rows", "csv", "columns"}`。需要 `sandbox`，指令要在 bundle 的指令清單裡；**最多一個 plugin 宣告**，兩個會拒絕開機並點名兩者 |
+| `provides` | 選配。平台向 plugin 要的能力，目前只有 `{"marking_rows": "<沙盒指令>"}`：把一個 marking 點亮的列寫成表格（使用者按「Save as table」）。指令收 `{"view", "keys", "rows"}` 或 `{"view", "marking": <.markings 檔路徑>}`，回 `{"rows", "csv", "marking": {"keys", "rows"}}`（SDK 2，#861）。需要 `sandbox`，指令要在 bundle 的指令清單裡；**最多一個 plugin 宣告**，兩個會拒絕開機並點名兩者 |
 
 **未知的 key 一律拒絕**（跟設定檔 loader 同一條規則）——拼錯的 key 靜靜地不生效，比開機失敗更難查。
 

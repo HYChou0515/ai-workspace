@@ -1140,8 +1140,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 **設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-marking-tuples.md`）：
 
 - marking 記的是被選到的那幾列在 key 欄位上的值，一列一組。兩個以上欄位的 marking 只亮被選到的那幾組，
-  不再亮各欄位值的所有組合：縮圖牆框 4 張就是「4 of 48 marked」，不再是 9。計數一律是選到的列數；
-  訊息上的 chip 寫成「m1 · 4 · by group, item」，不再是「by group (2), item (2)」。
+  不再亮各欄位值的所有組合：縮圖牆框 4 張就是「4 of 48 marked」，不再是 9。訊息上的 chip 數的是選到幾組
+  （「m1 · 4 · by group, item」，zh-TW 是「依 group、item」，不再是「by group (2), item (2)」）；圖表的「N selected」
+  與表格照舊數被選到、被點亮的列。
 - 彙總後的長條只亮被選到的那一段（整根變暗，亮的一段是只算被選到的列的同一種彙總），tooltip 多一行「picked: N」。
 - 只有部分 key 欄位的 view（例如每個 group 一列的彙總表）照舊：包含被選到的列的那一格整個亮。
 
@@ -1149,8 +1150,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 - `.markings/<名字>.json` 的格式改成 `{"name", "sources", "keys", "rows"}`。換版**之前**寫下的檔案還在 workspace 裡：
   AI 讀到的是舊格式；拿它「Save as table」會得到「the marking's file does not hold a marking」。同名 marking 再送一次就會覆寫成新格式。
-- 換版之前送出的訊息 chip 讀回來沒有計數與欄位，只顯示名字；按「Save as table」被拒絕並說明
-  「… has changed since this message was sent」。從最新一則訊息的 chip 存，或再送一次。
+- 換版之前送出的訊息 chip 讀回來沒有計數與欄位，只顯示名字；按「Save as table」會失敗：同名 marking 還沒在新版送過時，
+  檔案還是舊格式，得到上一條的「the marking's file does not hold a marking」；送過之後，得到
+  「… has changed since this message was sent」。兩種都是把 marking 再送一次，從那則新訊息的 chip 存。
+- 升級進行中（新舊 pod 或新舊分頁並存時），帶 marking 送出的訊息會被拒絕（422，兩版的送出格式不同）；
+  換完版、重新整理頁面就好。沒帶 marking 的訊息不受影響。
 
 **k8s · CI 側**
 
@@ -1159,6 +1163,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 為什麼：瀏覽器的 loader 只載入和自己同一個 SDK 大版本的 plugin；舊的 bundle 讀的是舊形狀的 marking，載入了也會亮錯。
   - 漏做的症狀：每個 chart 與 csv-table 面板顯示
     `it was built for view SDK 1, and this app provides SDK 2`，畫不出來。
+- **你們自己寫的 view plugin**（不論用哪一種 `sandbox.kind`），`rollout 前`把它的 `plugin.json` 改成 `"sdk": "2"`、
+  重新 build 並裝回 plugin 目錄；有用到 marking 的，改用 `markingFrom` / `markingRows` / `isLit`（見
+  [寫一個 view kind](view-kind-authoring.md) 4.4）。
+  - 為什麼：loader 拒絕所有大版本不同的 plugin，不管它有沒有用到 marking。
+  - 漏做的症狀：那個 plugin 的每個面板顯示同一句 `it was built for view SDK 1, and this app provides SDK 2`。
 - **sandbox-host 映像要重 build，`rollout 前`，順序照舊是 sandbox-host 先上、API 後上。**
   - 做什麼：chart 的沙盒 bundle 多了 `partials` 指令，`lit_rows` 改收 `keys` + `rows`。
   - 為什麼：新前端拆長條時問沙盒 `partials`；「Save as table」送的是新形狀的 marking。
@@ -1169,7 +1178,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 - `launch` 不帶參數印出的清單多了 `partials`（共 10 個指令）。
 - 在一張 `keys: [group, item]`、`marking: m1` 的縮圖牆上框 4 張不同 group、不同 item 的縮圖：計數是「4 of N marked · by group, item」，
-  而不是各 group 與各 item 的所有組合；旁邊依 group 計數的長條圖，每根亮的那段就是那個 group 裡被框到的張數。
+  而不是各 group 與各 item 的所有組合；旁邊一張依 group 計數、來源和縮圖牆相同的長條圖，每根亮的那段是那個 group 裡
+  被框到的縮圖的**列數**（每張縮圖由很多列組成，所以通常比張數大）。
 - 送出一則帶這個 marking 的訊息：chip 寫「m1 · 4 · by group, item」；`.markings/m1.json` 裡是 `keys` 與 4 列 `rows`。
 
 ---

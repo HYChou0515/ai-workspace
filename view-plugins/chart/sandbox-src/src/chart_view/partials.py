@@ -1,13 +1,14 @@
 """`partials`: each aggregated bar split by a marking's keys (#861 D3).
 
-A marking lights an aggregated bar in part: the bar keeps its full length,
-dimmed, and in front of it a lit bar whose value is the same aggregate over
-the picked rows only. The browser draws that on every marking change without
-asking again: this answers, per drawn bar, the decomposable partials of its
-rows grouped by the marking's keys -- each a key tuple (as marking text,
-`canon`) and its rows' ``n``, ``sum``, ``min`` and ``max`` -- and the browser
-folds the lit ones (`partials.ts:litValue`). It is asked again only when the
-marking's KEYS change, never its values.
+A marking lights an aggregated bar in part: a lit bar from the axis whose
+value is the same aggregate over the picked rows only, with the rest of the
+bar dimmed on top (none when the picked value is the longer). The browser
+draws that on every marking change without asking again: this answers, per
+drawn bar, the decomposable partials of its rows grouped by the marking's
+keys -- each a key tuple (as marking text, `canon`) and its rows' ``n``,
+``sum``, ``min`` and ``max`` -- and the browser folds the lit ones
+(`partials.ts:litValues`). It is asked again only when the marking's KEYS
+change, never its values.
 
     {"format": 1, "layers": [layer, ...]}      # one per layer, as `query`'s
 

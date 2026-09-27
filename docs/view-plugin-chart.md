@@ -39,7 +39,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   已經有人選了就不覆蓋。marking 被清空後，接在上面的圖全部不變暗，不會各自退回自己的 `highlight:`。
 - 機制本身不懂任何領域：marking 記的是**被選到的那幾列在 key 欄位上的值**（一列一組），都是字串（#861）。
   所以 marking 有兩個以上的欄位時，亮的就是選到的那幾組：勾 (A, 1) 與 (B, 2)，(A, 2) 與 (B, 1) **不會**亮，
-  計數就是勾選的數量。
+  計數也不會被組合灌大：縮圖牆與訊息上的 chip 數的是選到幾組，圖表的「N selected」與表格數的是被選到、被點亮的列。
 - 一張 view 的資料只有 marking 的**部分**欄位時（例如每個 group 一列的彙總表，旁邊是每個 (group, item) 一張的縮圖牆），
   它比 marking 粗：包含被選到的列的那一格整個亮（選了 (A, 1)、(B, 2)，彙總表的 A、B 兩列亮）。這是 Spotfire 在有關聯的
   資料表之間傳遞 marking 的做法。
@@ -116,7 +116,9 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   表格和 marking 沒有共同欄位時，顯示全部列並說明「no column in common」。
 - **在表格上勾選也會寫 marking**：寫進 `keys:` 的欄位，沒有 `keys:` 就用 marking 本身的欄位；兩者都沒有就不寫，
   標頭會說原因。勾選的那張表自己不被過濾（只反白），免得一勾其他列就消失；表格只對自己有的列做決定，marking 裡
-  這張表沒有的那幾組照舊留著，不會取消別張圖才有的選取。沒接 marking 的 entity 表格，勾選照舊是批次編輯。
+  這張表沒有的那幾組照舊留著，不會取消別張圖才有的選取。表格的欄位比 marking 少時（例如每個 group 一列的表，
+  marking 記的是 (group, item)）：取消勾選一個 group 只拿掉那個 group 的選取，其他照舊；勾選一個還沒有任何選取的 group，
+  marking 就改成依 group 記。沒接 marking 的 entity 表格，勾選照舊是批次編輯。
 - 圖表工具列的 ✕ 會清空 marking，包括打開時由 `highlight:` 寫進去的起始選取。
 - **另存成表格**：marking 選單與訊息上的 chip 都有「Save as table」，把被點亮的列（來源的每一欄，套用該 view 的
   `transform:`）寫成 workspace 裡的 `markings/<名字>-<yyyymmdd-hhmm>.csv`，檔案樹看得到、`csv-table` 打得開、AI 讀得到。

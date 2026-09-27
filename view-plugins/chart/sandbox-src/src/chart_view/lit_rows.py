@@ -10,8 +10,10 @@ text (``canon``). The file form holds the same two fields.
 
 ``view`` is the view the action was taken in: a view file (its ``source:`` —
 or, for an entity view, its ``entity:`` — and, for ``view: chart``, its
-``transform:``), or a table file itself. The rows are lit by the platform's
-one rule, the SPA's ``isLit``: a row shares at least one key with the marking,
+``transform:``), or a table file itself. The rows are lit by the SPA's
+``isLit`` rule, decided per VIEW here (review #862: a row whose key cell is
+empty is not lit, where the browser lights it as coarser — known, left): a
+row shares at least one key with the marking,
 and its values on the keys it shares are one of the picked tuples projected
 onto those keys (#861 D2) — an exact tuple match when it has every key.
 

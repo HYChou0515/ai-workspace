@@ -234,8 +234,8 @@ export const messages = {
   "markings.noView": { "zh-TW": "這個標記沒有記下來自哪個視圖", en: "No view is recorded for this marking" },
   "markings.nothingMarked": { "zh-TW": "還沒有標記任何值", en: "Nothing is marked yet" },
   "markings.notAFile": { "zh-TW": "這個視圖不是工作區裡的檔案", en: "This view is not a file in the workspace" },
-  // P27 — the columns a marking marks by, beside its picker and on its chip:
-  // over two columns it lights every combination of their values.
+  // P27 — the keys a marking marks by, beside its picker and on its chip:
+  // which columns link the views (#861).
   "markings.by": { "zh-TW": "依 {columns}", en: "by {columns}" },
   "markings.listSep": { "zh-TW": "、", en: ", " },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },

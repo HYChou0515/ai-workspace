@@ -86,7 +86,7 @@ export function TableView({
     ? sortEntities(filtered, sort.column, sort.dir, type ?? null, refIndex)
     : sortRows(filtered, spec.sort, type ?? null, refIndex, users);
 
-  // #847/#848 PR 5 — on a marking that holds a set, only the rows it lights
+  // #847/#848 PR 5 — on a marking that holds picks, only the rows it lights
   // (or every row, the lit ones highlighted, after "show all"). Compared on
   // EVERY field a record carries plus its number, shown or not: a chart keyed
   // on a column this view hides still names these records. `marking` is the
