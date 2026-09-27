@@ -1135,7 +1135,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-27 · #862 marking 記整組：多欄位的選取只亮被選到的那幾組（#861） {#pr-862}
+### 2026-09-27 · 7a65ed6d · #862 marking 記整組：多欄位的選取只亮被選到的那幾組（#861） {#pr-862}
 
 **設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-marking-tuples.md`）：
 
