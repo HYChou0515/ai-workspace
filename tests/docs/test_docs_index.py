@@ -57,6 +57,12 @@ def _history() -> set[str]:
     }
 
 
+def test_no_plan_lives_outside_docs():
+    """A plan at the repo root is in no index and not in the skill's `docs` link:
+    six were, until docs/plan-ai-reads-docs.md P4 moved them in."""
+    assert sorted(p.name for p in ROOT.glob("*.md") if HISTORY.match(p.name)) == []
+
+
 def test_every_history_doc_is_in_design_history():
     index = (DOCS / "design-history.md").read_text()
     linked = set(re.findall(r"\]\(([\w\-/]+\.(?:md|html))\)", index))

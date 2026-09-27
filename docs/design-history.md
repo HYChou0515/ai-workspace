@@ -65,6 +65,7 @@
 | [plan-issue-624.md](plan-issue-624.md) | #624 context 上限：偵測、處理、告知 |
 | [plan-context-limit-behind-proxy.md](plan-context-limit-behind-proxy.md) | 自架模型在 proxy 後面時解不出窗口上限 |
 | [plan-issue-739.md](plan-issue-739.md) | #739 對話塞不下時壓成摘要，而不是叫使用者開新對話 |
+| [plan-104-remove-source-doc-id.md](plan-104-remove-source-doc-id.md) | #104 收尾：chunk 綁內容、去除 `source_doc_id` 依賴、拔除 re-home |
 
 ## Workflows
 
@@ -114,6 +115,9 @@
 | [plan-entity-listing-op-count.md](plan-entity-listing-op-count.md) | 列表變慢的真因：一次請求做了幾百次檔案操作 |
 | [plan-api-lifecycle-offload.md](plan-api-lifecycle-offload.md) | 把 API lifecycle 裡不是 pod-local 的工作搬離 API pod（PR #804） |
 | [plan-run-consumers-list.md](plan-run-consumers-list.md) | `server.run_consumers` 接受清單：all-in-one 行程只消費部分 JobType |
+| [plan-graceful-shutdown.md](plan-graceful-shutdown.md) | pod 離開時不能帶走使用者的對話（graceful shutdown、turn 換 pod） |
+| [plan-blob-gc-job.md](plan-blob-gc-job.md) | Blob GC 改成 job：API 只負責提出要求 |
+| [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
 
 ## 前端與介面
 
@@ -131,6 +135,8 @@
 | [plan-chat-video-export.md](plan-chat-video-export.md) | 前端匯出對話：文字（JSON / Markdown）與影片（job） |
 | [plan-marp-render.md](plan-marp-render.md) | 在 workspace 檔案預覽裡渲染 Marp 簡報 |
 | [plan-onboarding-images.md](plan-onboarding-images.md) | onboarding 內文走 markdown、可以放圖 |
+| [plan-show-file-in-chat.md](plan-show-file-in-chat.md) | agent 在 chat 中顯示 workspace 的檔案（`show_file`） |
+| [plan-chat-column-vertical-space.md](plan-chat-column-vertical-space.md) | 把聊天欄的高度還回來 |
 
 ## PM App
 
