@@ -52,8 +52,8 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
 
 ### Mine, open to override
 
-- **Quota.** A workspace that uses the skill holds about 3.6 MB of docs (the `.md` and `.html` under
-  `docs/`: 2.18 MB plans, 1.21 MB the rest). This counts against its quota like any file (the item quota
+- **Quota.** A workspace that uses the skill holds about 3.6 MB: every file the skill carries, which is
+  all of `docs/` plus `mkdocs.yml`. This counts against its quota like any file (the item quota
   is 20 GB by default). Exempting it would be a special case.
 - **Where the files come from.** The skill folder holds a symlink to `docs/`, so there is one copy of the
   docs in the repo. `skill_payload` walks with `iterdir` and `is_dir()`, which follow symlinks. The image
@@ -263,6 +263,20 @@ Where the build differs from the phases above, or found what they did not expect
     Each `read_skill` hashes the ~3.6 MB payload (5–7 ms, measured).
   - The P4 commit's title says "33 later plans". It is 33 markers naming 22 distinct later plans; the
     body is right.
+- **Review round 2 (#865)** found one (A), in round 1's own fix. Clearing a copy with no `.origin`
+  would also delete a folder of the person's own that carries the name, written before the name was
+  reserved. Now a folder is cleared only when every file in it is a shipped file, byte for byte, which
+  is what an interrupted copy leaves. Anything else is kept.
+  - Also fixed: a skill applied this turn whose copy does not fit is a "could not load" note, not a turn
+    that cannot start. This `WorkspaceFull` was never caught; round 1's whole-copy gate made it happen
+    on every turn.
+  - Also fixed: the plan's size sentence.
+  - Known and left:
+    - Two `read_skill` calls at once can briefly leave the first reading a partial copy. The second
+      clears and copies again, and both end complete.
+    - The search's readonly check reads each skill file's shipped `SKILL.md`, a small read per file.
+    - A person's own `.skill/system-design/` is kept but locked by name, and `read_skill` serves it.
+      The runbook says how to rename it.
 
 ## Done means
 

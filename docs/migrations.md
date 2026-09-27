@@ -1198,6 +1198,10 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   改版、複本整份重新複製為止。workspace 的全域搜尋與取代會跳過這份複本。
 - 讀過這個 skill 的 workspace 會多約 3.6 MB（`docs/` 全部的文件與計畫），照算 workspace 容量；容量不夠時整份不複製，
   AI 的 `read_skill` 回報容量已滿。
+- workspace 裡**原本就有使用者自己的 `.skill/system-design/`**（名字撞到）：那個資料夾原封不動保留，不會被刪，但名字已被
+  保留，之後寫不進去；AI 的 `read_skill("system-design")` 讀到的是它的內容而不是平台的文件。把那個資料夾改名（例如
+  移到別的名字）即可——檔案樹的搬移與刪除都會被擋（兩端都檢查），請 AI 在 workspace 裡用 `exec` 改名（例如
+  `mv .skill/system-design my-design`；`exec` 不經過唯讀檢查）。
 - 升級時要知道的：日後若把一個**已經有人用過的**一般 skill 改成 readonly，AI 改過的複本會在下一次 `read_skill`
   被整份覆蓋。這一版的 `system-design` 是新的 skill，沒有舊複本。
 
