@@ -31,9 +31,9 @@ export type SaveMarkingTableProps = {
   name: string;
   /** The view the rows come from; `null` → disabled with `why`. */
   view: string | null;
-  /** The marking's values, or `null` for the route to read the sent file. */
-  columns: Record<string, string[]> | null;
-  /** With `columns: null`: the digest of what the chip's message sent. */
+  /** The marking's picks, or `null` for the route to read the sent file. */
+  marking: { keys: string[]; rows: string[][] } | null;
+  /** With `marking: null`: the digest of what the chip's message sent. */
   digest?: string | null;
   /** Why the save cannot run now; the button is disabled and says so. */
   why?: string | null;
@@ -48,7 +48,7 @@ export function useSaveScope(): { slug: string; itemId: string } | null {
 }
 
 export function SaveMarkingTable(props: SaveMarkingTableProps & { scope: { slug: string; itemId: string } }) {
-  const { name, view, columns, digest = null, why, scope } = props;
+  const { name, view, marking, digest = null, why, scope } = props;
   const t = useT();
   const qc = useQueryClient();
   const opener = useOpenFile();
@@ -88,7 +88,7 @@ export function SaveMarkingTable(props: SaveMarkingTableProps & { scope: { slug:
         title={blocked ?? undefined}
         onClick={() =>
           view &&
-          save.mutate({ name, view, columns, stamp: tableStamp(new Date()), digest })
+          save.mutate({ name, view, marking, stamp: tableStamp(new Date()), digest })
         }
       >
         <Icon name="download" size={11} />

@@ -20,32 +20,35 @@ afterEach(() => {
 const written: SentMarking = {
   name: "fail",
   path: "/.markings/fail.json",
-  counts: { lot: 2, wafer: 12 },
+  count: 4,
+  keys: ["lot", "wafer"],
   error: null,
 };
 const refused: SentMarking = {
   name: "big",
   path: "",
-  counts: { lot: 9 },
+  count: 9,
+  keys: ["lot"],
   error: "workspace is full: 100 of 100 bytes used, and this write does not fit",
 };
 
 describe("MarkingChips", () => {
-  it("names each marking and how many values per column", () => {
+  it("names each marking, how many rows were picked, and the keys (#861 D5)", () => {
     render(<MarkingChips markings={[written]} />);
     const chip = screen.getByTestId("marking-chip");
     expect(chip).toHaveTextContent("fail");
-    expect(chip).toHaveTextContent("依 lot (2)、wafer (12)"); // P27: was "lot 2 · wafer 12"
+    // Not "lot (2), wafer (12)": the picks are counted, not each column's values.
+    expect(chip).toHaveTextContent("· 4 · 依 lot、wafer");
   });
 
-  it("names the columns it marks by, each with how many values (P27)", () => {
+  it("says the count and the keys in the viewer's language (#861 D5)", () => {
     setStoredLocale("en");
     render(
       <LocaleProvider>
         <MarkingChips markings={[written]} />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*by lot \(2\), wafer \(12\)$/);
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*· 4 · by lot, wafer$/);
   });
 
   it("names them in Chinese too", () => {
@@ -55,7 +58,7 @@ describe("MarkingChips", () => {
         <MarkingChips markings={[written]} />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*依 lot \(2\)、wafer \(12\)$/);
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*· 4 · 依 lot、wafer$/);
   });
 
   it("says why a refused one was not sent", () => {

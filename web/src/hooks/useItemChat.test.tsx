@@ -78,7 +78,7 @@ describe("useItemChat", () => {
     // reaches the backend, silently (`answers` once did exactly that).
     const client = fakeClient();
     const { result } = render(client);
-    const markings = [{ name: "fail", source: null, columns: { lot: ["L1"] } }];
+    const markings = [{ name: "fail", source: null, keys: ["lot"], rows: [["L1"]] }];
     await act(async () => {
       await result.current.send("why?", { markings });
     });

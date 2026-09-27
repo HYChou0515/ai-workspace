@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { DialogProvider } from "../../components/Dialog";
 import { MarkingProvider } from "../../hooks/useMarking";
-import { type Marking, MarkingStore } from "../../lib/markings";
+import { type Marking, markingFrom, markingRows, MarkingStore } from "../../lib/markings";
 import { EntityViewBody, parseViewSpec } from "./EntityViews";
 
 const lotType: EntityType = {
@@ -63,7 +63,11 @@ function view(text: string, store: MarkingStore, opts: { canWrite?: boolean; onP
 function held(store: MarkingStore, name = "fail"): Record<string, string[]> | undefined {
   const entry = store.get(name);
   if (!entry) return undefined;
-  return Object.fromEntries(Object.entries(entry.marking as Marking).map(([k, v]) => [k, [...v].sort()]));
+  // Each key's values over the picks: these cases write one key, where a
+  // pick IS its value (#861).
+  const m = entry.marking as Marking;
+  const rows = markingRows(m);
+  return Object.fromEntries(m.keys.map((k, i) => [k, [...new Set(rows.map((r) => r[i]!))].sort()]));
 }
 
 function shownNumbers(): number[] {
@@ -106,7 +110,7 @@ describe("selecting rows on a marking", () => {
 
   it("without `keys:`, writes the columns the marking already holds", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L1"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L1"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\nmarking: fail\n", store);
     fireEvent.click(screen.getByRole("button", { name: "show all" }));
     fireEvent.click(screen.getByLabelText("select 3"));
@@ -115,7 +119,7 @@ describe("selecting rows on a marking", () => {
 
   it("unchecking a row in a filtered table takes it out of the marking", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2", "L3"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"], ["L3"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\nmarking: fail\n", store);
     expect(screen.getByLabelText("select 2")).toBeChecked();
     fireEvent.click(screen.getByLabelText("select 3"));
@@ -126,7 +130,7 @@ describe("selecting rows on a marking", () => {
     // A chart over a wider source marked L9, which this table has no row for;
     // checking and unchecking rows here must not take L9 out of the marking.
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2", "L9"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"], ["L9"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\nmarking: fail\nkeys: [lot]\n", store);
     fireEvent.click(screen.getByRole("button", { name: "show all" }));
     fireEvent.click(screen.getByLabelText("select 3"));
@@ -137,7 +141,7 @@ describe("selecting rows on a marking", () => {
 
   it("a row hidden by the table's own value filter keeps its mark", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L3"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L3"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\nmarking: fail\nkeys: [lot]\n", store);
     fireEvent.click(screen.getByRole("button", { name: "show all" }));
     fireEvent.change(screen.getByLabelText("filter status"), { target: { value: "open" } });
@@ -174,7 +178,7 @@ describe("selecting rows on a marking", () => {
     const store = new MarkingStore();
     view("view: table\nentity: lot\nmarking: fail\nkeys: [lot]\n", store);
     fireEvent.click(screen.getByLabelText("select 1"));
-    act(() => store.set("fail", { lot: new Set(["L4"]) }, "/views/chart.ai.yaml"));
+    act(() => store.set("fail", markingFrom(["lot"], [["L4"]]), "/views/chart.ai.yaml"));
     expect(shownNumbers()).toEqual([4]);
     expect(screen.getByLabelText("select 4")).toBeChecked();
   });
@@ -223,7 +227,7 @@ describe("a table on no marking keeps its multi-select", () => {
 
   it("putting the view on a marking drops a batch selection made before it", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L4"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L4"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\n", store);
     fireEvent.click(screen.getByLabelText("select 1"));
     expect(screen.getByRole("toolbar", { name: "batch actions" })).toBeInTheDocument();

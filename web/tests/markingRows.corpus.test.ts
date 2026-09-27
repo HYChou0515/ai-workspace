@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { parseCsv } from "../src/renderers/csv";
-import { isLit, type Marking } from "../src/lib/markings";
+import { isLit, type Marking, markingFrom } from "../src/lib/markings";
 import { csvMarkingRows, entityMarkingRow, litRows } from "../src/lib/markingRows";
 
 const CORPUS = join(
@@ -46,18 +46,18 @@ function chartRows(columns: Columns, n: number): Record<string, string>[] {
 }
 
 /** Markings to light by: every single value of every column, and each pair of
- * columns at their first row's values. */
+ * columns picked at their first row's values (#861: one pick, two keys). */
 function markingsFor(columns: Columns): Marking[] {
   const out: Marking[] = [];
   const cols = Object.keys(columns);
   for (const c of cols) {
-    for (const v of new Set(columns[c]!)) if (v !== null) out.push({ [c]: new Set([v]) });
+    for (const v of new Set(columns[c]!)) if (v !== null) out.push(markingFrom([c], [[v]]));
   }
   for (const a of cols) {
     for (const b of cols) {
       const va = columns[a]![0];
       const vb = columns[b]![0];
-      if (a < b && va != null && vb != null) out.push({ [a]: new Set([va]), [b]: new Set([vb]) });
+      if (a < b && va != null && vb != null) out.push(markingFrom([a, b], [[va, vb]]));
     }
   }
   return out;

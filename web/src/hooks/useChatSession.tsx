@@ -601,7 +601,8 @@ export function useChatSession(
       const markings = opts?.markings?.map((m) => ({
         name: m.name,
         path: "",
-        counts: Object.fromEntries(Object.entries(m.columns).map(([c, v]) => [c, v.length])),
+        count: m.rows.length,
+        keys: m.keys,
         source: m.source,
       }));
       setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed, markings }));

@@ -14,7 +14,7 @@ import { EditModeProvider } from "../../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../../hooks/fileBuffer";
 import { MarkingProvider } from "../../hooks/useMarking";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
-import { MarkingStore } from "../../lib/markings";
+import { markingFrom, MarkingStore } from "../../lib/markings";
 import { QueryWrap } from "../../test/queryWrapper";
 import type { EntityViewProps } from "./types";
 import { registerViewKind, unregisterViewKind } from "./viewKindRegistry";
@@ -107,7 +107,7 @@ describe("the view header's marking control", () => {
 
   it("attaches to another marking the item already has", async () => {
     const store = new MarkingStore();
-    store.set("other", { lot: new Set(["L1"]) }, null);
+    store.set("other", markingFrom(["lot"], [["L1"]]), null);
     renderView(ON_FAIL, store);
     const select = await screen.findByRole("combobox", { name: /marking/i });
     expect([...(select as HTMLSelectElement).options].map((o) => o.value)).toContain("other");

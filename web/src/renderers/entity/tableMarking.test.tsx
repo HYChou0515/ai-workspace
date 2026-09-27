@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { MarkingProvider } from "../../hooks/useMarking";
-import { MarkingStore } from "../../lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../lib/markings";
 import { useTableMarking } from "./tableMarking";
 
 const ROWS = [{ lot: "L1" }, { lot: "L2" }, { lot: "L3" }];
@@ -29,11 +29,11 @@ describe("useTableMarking's writer", () => {
   it("never writes — so never clears — when the table has no key column, even if a plugin calls it", () => {
     // A projection onto no column is `{}`, the write that clears the marking.
     const store = new MarkingStore();
-    store.set("fail", { wafer: new Set(["W1"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["wafer"], [["W1"]]), "/views/chart.ai.yaml");
     const { result } = hook(store, { keys: ["wafer"] });
     expect(result.current.select!.enabled).toBe(false);
     act(() => result.current.select!.set(new Set([0])));
-    expect([...store.get("fail")!.marking.wafer!]).toEqual(["W1"]);
+    expect(markingRows(store.get("fail")!.marking)).toEqual([["W1"]]);
   });
 });
 
@@ -63,16 +63,46 @@ describe("the table a selection was made in", () => {
     // A marking whose writer named no file (a preview) must not read as
     // "made here" to every other file-less table.
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, null);
+    store.set("fail", markingFrom(["lot"], [["L2"]]), null);
     const { result } = hook(store, { source: null });
     expect(result.current.shown).toEqual([1]);
   });
 
   it("keeps every row, the marked ones highlighted", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/t.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/t.ai.yaml");
     const { result } = hook(store, { source: "/views/t.ai.yaml" });
     expect(result.current.shown).toEqual([0, 1, 2]);
     expect([...result.current.highlighted]).toEqual([1]);
+  });
+});
+
+describe("a marking over two keys (#861 D1)", () => {
+  const PAIRS = [
+    { group: "g3", item: "8" },
+    { group: "g3", item: "1" },
+    { group: "g4", item: "1" },
+    { group: "g4", item: "8" },
+  ];
+  const pairs = (store: MarkingStore, args: Partial<Parameters<typeof useTableMarking>[0]> = {}) =>
+    hook(store, { rows: PAIRS, columns: ["group", "item"], keys: ["group", "item"], ...args });
+
+  it("shows exactly the picked rows, not every combination of their values", () => {
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g3", "8"], ["g4", "1"]]), "/views/gallery.ai.yaml");
+    const { result } = pairs(store);
+    // #855 showed all four: group {g3, g4} x item {8, 1}.
+    expect(result.current.shown).toEqual([0, 2]);
+  });
+
+  it("ticking writes this table's picks and keeps a held pick none of its rows carries", () => {
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g3", "8"], ["g9", "9"]]), "/views/gallery.ai.yaml");
+    const { result } = pairs(store, { source: "/views/t.ai.yaml" });
+    act(() => result.current.select!.set(new Set([2])));
+    expect(markingRows(store.get("fail")!.marking)).toEqual([
+      ["g4", "1"],
+      ["g9", "9"],
+    ]);
   });
 });

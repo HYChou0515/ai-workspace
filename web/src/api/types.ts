@@ -37,12 +37,14 @@ export type MessageRole =
   | "summary"
   | "error";
 
-/** #847 P7: a named marking as the composer sends it — `column → values`,
- * opaque strings. Mirrors `api/schemas.py` `MarkingInput`. */
+/** #847 P7 / #861: a named marking as the composer sends it — the picked
+ * rows' values on `keys` (sorted), opaque strings. Mirrors `api/schemas.py`
+ * `MarkingInput`. */
 export type MarkingInput = {
   name: string;
   source: string | null;
-  columns: Record<string, string[]>;
+  keys: string[];
+  rows: string[][];
 };
 
 /** #847 P7: a marking as recorded on the user message it was sent with. The
@@ -51,7 +53,9 @@ export type MarkingInput = {
 export type SentMarking = {
   name: string;
   path: string;
-  counts: Record<string, number>;
+  /** #861 D5: how many rows were picked, and the keys "by …" names. */
+  count: number;
+  keys: string[];
   source?: string | null;
   error?: string | null;
   /** P7: a hash of the values written — "save as table" from this chip sends

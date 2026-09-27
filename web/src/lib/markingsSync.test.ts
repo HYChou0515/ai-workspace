@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { MarkingStore } from "./markings";
+import { markingFrom, markingRows, MarkingStore } from "./markings";
 import { syncMarkingsAcrossTabs } from "./markingsSync";
 
 const tick = () => new Promise((r) => setTimeout(r, 20));
@@ -25,16 +25,21 @@ describe("syncMarkingsAcrossTabs", () => {
   it("a marking made in one tab reaches the other tab of the same item", async () => {
     const page = tab("pm/1");
     const chat = tab("pm/1");
-    page.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/grid.ai.yaml");
+    // #861: the picks travel, not each column's values.
+    page.set("fail", markingFrom(["group", "item"], [["g3", "8"], ["g4", "1"]]), "/v/grid.ai.yaml");
     await tick();
-    expect([...chat.get("fail")!.marking.lot!].sort()).toEqual(["L1", "L2"]);
+    expect(chat.get("fail")!.marking.keys).toEqual(["group", "item"]);
+    expect(markingRows(chat.get("fail")!.marking)).toEqual([
+      ["g3", "8"],
+      ["g4", "1"],
+    ]);
     expect(chat.get("fail")!.source).toBe("/v/grid.ai.yaml");
   });
 
   it("clearing travels too", async () => {
     const page = tab("pm/1");
     const chat = tab("pm/1");
-    page.set("fail", { lot: new Set(["L1"]) }, null);
+    page.set("fail", markingFrom(["lot"], [["L1"]]), null);
     await tick();
     page.set("fail", null, null);
     await tick();
@@ -43,7 +48,7 @@ describe("syncMarkingsAcrossTabs", () => {
 
   it("a tab that opens later gets what the others already hold", async () => {
     const chat = tab("pm/1");
-    chat.set("fail", { lot: new Set(["L1"]) }, null);
+    chat.set("fail", markingFrom(["lot"], [["L1"]]), null);
     const page = tab("pm/1");
     await tick();
     expect(page.names()).toEqual(["fail"]);
@@ -52,7 +57,7 @@ describe("syncMarkingsAcrossTabs", () => {
   it("another item's tabs never see it", async () => {
     const a = tab("pm/1");
     const b = tab("pm/2");
-    a.set("fail", { lot: new Set(["L1"]) }, null);
+    a.set("fail", markingFrom(["lot"], [["L1"]]), null);
     await tick();
     expect(b.names()).toEqual([]);
   });
@@ -62,7 +67,7 @@ describe("syncMarkingsAcrossTabs", () => {
     const chat = tab("pm/1");
     let heard = 0;
     chat.subscribe("fail", () => heard++);
-    page.set("fail", { lot: new Set(["L1"]) }, null);
+    page.set("fail", markingFrom(["lot"], [["L1"]]), null);
     await tick();
     await tick();
     expect(heard).toBe(1);
@@ -74,7 +79,9 @@ describe("syncMarkingsAcrossTabs", () => {
     for (const junk of [null, "x", { kind: "set" }, { kind: "set", name: "a", columns: 3 }]) {
       stray.postMessage(junk);
     }
-    stray.postMessage({ kind: "set", name: "ok", columns: { lot: ["L1"] }, source: null });
+    // #855's per-column shape, from a tab still running the old build, is not ours to apply.
+    stray.postMessage({ kind: "set", name: "old", columns: { lot: ["L1"] }, source: null });
+    stray.postMessage({ kind: "set", name: "ok", keys: ["lot"], rows: [["L1"]], source: null });
     await tick();
     stray.close();
     expect(chat.names()).toEqual(["ok"]);

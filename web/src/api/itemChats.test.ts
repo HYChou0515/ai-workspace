@@ -37,7 +37,7 @@ describe("itemChatApi.sendMessage body", () => {
         return new Response(null, { status: 202 });
       }),
     );
-    const markings = [{ name: "fail", source: null, columns: { lot: ["L1"] } }];
+    const markings = [{ name: "fail", source: null, keys: ["lot"], rows: [["L1"]] }];
     await itemChatApi.sendMessage({ slug: "rca", itemId: "I", chatId: "c1", content: "q", markings });
     expect(JSON.parse(bodies[0]!).markings).toEqual(markings);
   });

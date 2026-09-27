@@ -12,9 +12,9 @@ export type SaveMarkingTableBody = {
   name: string;
   /** The view the rows come from: a view file, or a table file itself. */
   view: string;
-  /** The marking's values; `null` → the route reads the marking the chat
-   * send wrote (the chip holds only counts). */
-  columns: Record<string, string[]> | null;
+  /** The marking's picks; `null` → the route reads the marking the chat
+   * send wrote (the chip holds only its count). */
+  marking: { keys: string[]; rows: string[][] } | null;
   /** `yyyymmdd-hhmm` in the saver's own clock — the name they will look for. */
   stamp: string;
   /** The chip's `SentMarking.digest` (what its message sent); `null` from the

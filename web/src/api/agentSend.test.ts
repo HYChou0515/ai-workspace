@@ -88,7 +88,7 @@ describe("sendMessage request body", () => {
   });
 
   it("carries the markings kept as chips (#847 P7)", async () => {
-    const markings = [{ name: "fail", source: "/v/a.ai.yaml", columns: { lot: ["L1"] } }];
+    const markings = [{ name: "fail", source: "/v/a.ai.yaml", keys: ["group", "item"], rows: [["g3", "8"], ["g4", "1"]] }];
     await realApi.sendMessage({ slug: "rca", investigationId: "inv-1", content: "q", markings });
     expect(JSON.parse(captured.bodies[0]!).markings).toEqual(markings);
   });

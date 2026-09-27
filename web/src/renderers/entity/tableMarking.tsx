@@ -3,10 +3,11 @@
  * its header that says why, and what selecting its rows writes.
  *
  * Reading (P1):
- * - The marking holds a set and shares a column with the table: only the rows
+ * - The marking holds picks and shares a key with the table: only the rows
  *   it lights are shown, under "filtered by <name> · 3 of 25 rows · by group ·
- *   show all" (P27: the columns it marks by — over two columns a marking
- *   lights every combination of their values).
+ *   show all" (the keys it marks by). A table with every key lights exactly
+ *   the picked rows; one with some keys lights the rows that contain a pick
+ *   (#861 D1, D2).
  *   "show all" keeps every row and highlights the lit ones. The toggle is this
  *   person's, per view, kept in this browser like the header's marking choice
  *   (`useViewMarking`) — never written to the file.
@@ -14,10 +15,10 @@
  * - Empty, cleared, or no marking: every row, no bar.
  *
  * Writing (P2): on a marking, a row's checkbox is "this row is marked".
- * Checking or unchecking one writes the rows then checked, projected onto the
- * key columns — the spec's `keys:`, else the columns the marking already
- * holds — that this table has. A key value no row of this table carries keeps
- * the mark it had: the table decides only about the values it holds. With no
+ * Checking or unchecking one writes the rows then checked, as picks on the
+ * key columns — the spec's `keys:`, else the keys the marking already holds —
+ * that this table has. A held pick no row of this table carries stays picked:
+ * the table decides only about the rows it holds. With no
  * key column, nothing is written and `note` says
  * why (the header's marking control shows it). The table the selection was
  * made in is not filtered by it: it keeps every row with the marked ones
@@ -115,17 +116,17 @@ export function useTableMarking({
   const [showAll, setShowAll] = useShowAll(viewKey);
   const held = entry?.marking;
   const shared = useMemo(
-    () => (held ? Object.keys(held).filter((c) => columns.includes(c)) : []),
+    () => (held ? held.keys.filter((c) => columns.includes(c)) : []),
     [held, columns],
   );
   const lit = useMemo(() => (held && shared.length > 0 ? litRows(rows, held) : null), [held, shared, rows]);
   const all = useMemo(() => rows.map((_, i) => i), [rows]);
   const litIdx = useMemo(() => (lit ? all.filter((i) => lit[i]) : []), [all, lit]);
 
-  // What a selection writes: `keys:`, else the marking's own columns — only
-  // those this table has (a projection onto none is `{}`, the write that
+  // What a selection writes: `keys:`, else the marking's own keys — only
+  // those this table has (a projection onto none is empty, the write that
   // CLEARS the marking, which a table that cannot name a row must never send).
-  const writeKeys = (keys.length > 0 ? keys : held ? Object.keys(held) : []).filter((c) => columns.includes(c));
+  const writeKeys = (keys.length > 0 ? keys : held ? held.keys : []).filter((c) => columns.includes(c));
   const note = !name
     ? null
     : writeKeys.length > 0
@@ -140,16 +141,18 @@ export function useTableMarking({
 
   const set = (chosen: ReadonlySet<number>) => {
     if (writeKeys.length === 0) return;
-    const next = projectOntoKeys([...chosen].map((i) => rows[i]!), writeKeys)! as Record<string, Set<string>>;
-    // A table decides only about the values it holds: a key value no row of
-    // it carries (a value only a wider chart has, or a row its own value filter
-    // hides) keeps the mark it had, or ticking one box would silently unmark
-    // points elsewhere.
-    for (const c of writeKeys) {
-      const carried = new Set(rows.map((r) => r[c]));
-      for (const v of held?.[c] ?? []) if (!carried.has(v)) (next[c] ??= new Set()).add(v);
+    const next = projectOntoKeys([...chosen].map((i) => rows[i]!), writeKeys)!;
+    // A table decides only about the rows it holds: a held pick none of its
+    // rows carries (a row only a wider chart has, or one its own value filter
+    // hides) stays picked, or ticking one box would silently unmark points
+    // elsewhere. Only when it writes the same keys the marking holds -- other
+    // keys are a different marking, which replaces it as any view's write does.
+    const tuples = new Set(next.tuples);
+    if (held && held.keys.join("\u001f") === next.keys.join("\u001f")) {
+      const carried = projectOntoKeys(rows, writeKeys)!.tuples;
+      for (const t of held.tuples) if (!carried.has(t)) tuples.add(t);
     }
-    write(next, source);
+    write({ keys: next.keys, tuples }, source);
   };
   const select = name ? { checked: lit ? new Set(litIdx) : NONE, enabled: writeKeys.length > 0, set } : null;
 

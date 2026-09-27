@@ -1,7 +1,8 @@
 /**
  * Named markings (#847 Q5.1, Spotfire-style linked selection) — knowledge-free
- * (Q6): a marking is `column name → set of values`, both opaque strings. Which
- * columns link is each spec's `keys:`; views link on same-named columns.
+ * (Q6): a marking is the picked rows' values on its key columns, all opaque
+ * strings (#861). Which columns link is each spec's `keys:`; views link on
+ * same-named columns.
  *
  * One store per item (`MarkingProvider`, inside `WorkspaceProviders`), kept in
  * step across the item's browser tabs (`markingsSync`), so the workspace and the
@@ -9,68 +10,121 @@
  * marking re-renders only the views on it.
  */
 
-/** `column → values`. Values compare as strings; nothing is parsed. */
-export type Marking = { readonly [column: string]: ReadonlySet<string> };
+/** The picked rows (#861 D1): their values on `keys`, one tuple per pick.
+ * `keys` are sorted — two views writing the same columns in a different
+ * `keys:` order hold one marking — and a tuple is its values in that order
+ * joined by `SEP`. Build one with `markingFrom`; never assemble the text. */
+export type Marking = { readonly keys: readonly string[]; readonly tuples: ReadonlySet<string> };
 
 /** A marking as stored: what is marked, and the view file that last wrote it
  * (the `source` a `.markings/<name>.json` names for the AI, P7). */
 export type MarkingEntry = { readonly marking: Marking; readonly source: string | null };
 
-/** Whether `row` is lit by `marking`: it shares at least one column with the
- * marking, and on every shared column its value is in the set.
- *
- * "At least one": with none shared, "every shared column matches" is vacuously
- * true, which would light every row of a view keyed on something else. */
-export function isLit(row: Readonly<Record<string, string>>, marking: Marking): boolean {
-  let shared = false;
-  for (const [column, values] of Object.entries(marking)) {
-    if (!(column in row)) continue;
-    shared = true;
-    if (!values.has(row[column]!)) return false;
+/** U+001F (unit separator): no cell text a person or a CSV writes holds it, so
+ * `["a,b", "c"]` and `["a", "b,c"]` stay two tuples. */
+const SEP = "\u001f";
+
+/** The one constructor: keys sorted with each row's values moved alongside,
+ * a row of the wrong length dropped, duplicates dropped. */
+export function markingFrom(keys: readonly string[], rows: readonly (readonly string[])[]): Marking {
+  const order = keys.map((k, i) => [k, i] as const).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const tuples = new Set<string>();
+  for (const row of rows) {
+    if (row.length !== keys.length) continue;
+    tuples.add(order.map(([, i]) => row[i]!).join(SEP));
   }
-  return shared;
+  return { keys: order.map(([k]) => k), tuples };
 }
 
-/** The columns a marking marks by, as a view says them next to its count:
- * "by group, item" (#847/#848 PR 5 P27). A marking over two columns lights
- * every combination of their values, so a count can exceed what was picked;
- * naming the columns is what makes that count read as what it is. In the
- * order the marking was written (a view writes its `keys:` in order). */
+/** The picked rows as `string[][]` (the wire and file shape), sorted. */
+export function markingRows(marking: Marking): string[][] {
+  return [...marking.tuples].sort().map((t) => t.split(SEP));
+}
+
+/** How many rows were picked — what every count says (#861 D5). */
+export function markingSize(marking: Marking): number {
+  return marking.tuples.size;
+}
+
+// A coarser row's lookup (D2): the picks projected onto the keys it has, built
+// once per marking and key subset — `isLit` runs once per drawn row.
+const projections = new WeakMap<Marking, Map<string, ReadonlySet<string>>>();
+
+function projected(marking: Marking, positions: readonly number[]): ReadonlySet<string> {
+  let byShape = projections.get(marking);
+  if (!byShape) projections.set(marking, (byShape = new Map()));
+  const shape = positions.join(",");
+  let set = byShape.get(shape);
+  if (!set) {
+    const out = new Set<string>();
+    for (const t of marking.tuples) {
+      const values = t.split(SEP);
+      out.add(positions.map((i) => values[i]!).join(SEP));
+    }
+    byShape.set(shape, (set = out));
+  }
+  return set;
+}
+
+/** Whether `row` is lit by `marking`.
+ *
+ * - It has every key: lit iff it IS one of the picks (#861 D1).
+ * - It has some keys (a view coarser than the marking, e.g. a per-group
+ *   summary beside a per-item gallery): lit iff it contains a pick — its values
+ *   match a pick projected onto the keys it has (D2, Spotfire's relation).
+ * - It has none: not lit. "Matches on every shared key" is vacuously true with
+ *   none shared, which would light every row of a view keyed on something else;
+ *   a caller draws such a view undimmed instead. */
+export function isLit(row: Readonly<Record<string, string>>, marking: Marking): boolean {
+  const positions: number[] = [];
+  const values: string[] = [];
+  marking.keys.forEach((k, i) => {
+    const v = row[k];
+    if (v === undefined) return;
+    positions.push(i);
+    values.push(v);
+  });
+  if (positions.length === 0) return false;
+  const text = values.join(SEP);
+  if (positions.length === marking.keys.length) return marking.tuples.has(text);
+  return projected(marking, positions).has(text);
+}
+
+/** The columns a marking marks by, said next to a count: "by group, item"
+ * (#847/#848 PR 5 P27). Since #861 the count is the picks, so this says which
+ * columns link the views, not why a count ran high. */
 export function markedBy(marking: Marking): string {
-  return `by ${Object.keys(marking).join(", ")}`;
+  return `by ${marking.keys.join(", ")}`;
 }
 
-/** What a selection writes: each key's distinct values over the selected rows.
- * `null` for a view without `keys:` — it can be lit, but cannot be a source. An
- * empty selection projects to `{}`, the write that clears the marking. */
+/** What a selection writes: each selected row's `keys` values as one pick.
+ * `null` for a view without `keys:` — it can be lit, but cannot be a source. A
+ * row missing a key names no whole pick and is skipped. An empty selection is an
+ * empty marking, the write that clears. */
 export function projectOntoKeys(
   rows: readonly Readonly<Record<string, string>>[],
   keys: readonly string[],
 ): Marking | null {
   if (keys.length === 0) return null;
-  const out: Record<string, Set<string>> = {};
+  const picks: string[][] = [];
   for (const row of rows) {
-    for (const key of keys) {
-      const v = row[key];
-      if (v === undefined) continue;
-      (out[key] ??= new Set()).add(v);
-    }
+    const values = keys.map((k) => row[k]);
+    if (values.every((v): v is string => v !== undefined)) picks.push(values);
   }
-  return out;
+  return markingFrom(keys, picks);
 }
 
 function sameMarking(a: Marking, b: Marking): boolean {
-  const cols = Object.keys(b).filter((c) => b[c]!.size > 0);
-  if (cols.length !== Object.keys(a).length) return false;
-  return cols.every((c) => {
-    const x = a[c];
-    const y = b[c]!;
-    return x !== undefined && x.size === y.size && [...y].every((v) => x.has(v));
-  });
+  return (
+    a.keys.length === b.keys.length &&
+    a.keys.every((k, i) => k === b.keys[i]) &&
+    a.tuples.size === b.tuples.size &&
+    [...b.tuples].every((t) => a.tuples.has(t))
+  );
 }
 
 function isEmpty(marking: Marking | null): boolean {
-  return !marking || Object.values(marking).every((v) => v.size === 0);
+  return !marking || marking.tuples.size === 0;
 }
 
 export class MarkingStore {
@@ -93,8 +147,8 @@ export class MarkingStore {
     return this.nameList;
   }
 
-  /** Write `name`. An empty marking (or `null`) clears it. The sets are copied:
-   * a caller mutating its own set afterwards does not change the marking.
+  /** Write `name`. An empty marking (or `null`) clears it. The marking is
+   * copied: a caller mutating its own afterwards does not change it.
    * Returns whether the marking holds the write (#847/#848 PR 5 P41 row 27):
    * false only when `ifEmpty` found it occupied and nothing was written. The
    * same write again is held already -- true, and silent: it tells no one. */
@@ -120,11 +174,8 @@ export class MarkingStore {
       if (!had) return true;
       this.entries.delete(name);
     } else {
-      const copy: Record<string, ReadonlySet<string>> = {};
-      for (const [column, values] of Object.entries(marking!)) {
-        if (values.size > 0) copy[column] = new Set(values);
-      }
-      this.entries.set(name, { marking: copy, source });
+      // Copied: a caller keeping its own set cannot change the marking later.
+      this.entries.set(name, { marking: { keys: [...marking!.keys], tuples: new Set(marking!.tuples) }, source });
     }
     for (const cb of this.listeners.get(name) ?? []) cb();
     this.all = new Map([...this.entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));

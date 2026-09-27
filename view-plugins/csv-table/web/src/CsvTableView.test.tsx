@@ -18,7 +18,7 @@ import { EditModeProvider } from "../../../../web/src/hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../../../../web/src/hooks/fileBuffer";
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
 import { WorkspaceSlugProvider } from "../../../../web/src/hooks/useWorkspaceSlug";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
 import { QueryWrap } from "../../../../web/src/test/queryWrapper";
 
 const mock = vi.hoisted(() => ({
@@ -167,7 +167,7 @@ function renderLots(markings: MarkingStore, view = ON_FAIL) {
 describe("a csv-table on a marking", () => {
   it("shows only the rows the marking lights, under a bar that says so", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { lot: new Set(["B2", "C3"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["lot"], [["B2"], ["C3"]]), "/views/chart.ai.yaml");
     renderLots(markings);
     expect(await screen.findByText("B2")).toBeInTheDocument();
     expect(shownLots()).toEqual(["B2", "C3"]);
@@ -177,16 +177,16 @@ describe("a csv-table on a marking", () => {
 
   it("names the columns the marking marks by after its count (P27)", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { lot: new Set(["B2", "C3"]), day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["lot", "day"], [["B2", "2024-01-02"], ["C3", "2024-01-02"]]), "/views/chart.ai.yaml");
     renderLots(markings);
     expect(await screen.findByText("B2")).toBeInTheDocument();
     const bar = screen.getByRole("status", { name: /marking filter/i });
-    expect(bar).toHaveTextContent("filtered by fail · 2 of 3 rows · by lot, day · show all");
+    expect(bar).toHaveTextContent("filtered by fail · 2 of 3 rows · by day, lot · show all");
   });
 
   it("reads a number cell as pandas and the chart do: 0.90 is the chart's 0.9", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { yield: new Set(["0.9"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["yield"], [["0.9"]]), "/views/chart.ai.yaml");
     renderLots(markings);
     expect(await screen.findByText("B2")).toBeInTheDocument();
     expect(shownLots()).toEqual(["B2"]);
@@ -198,7 +198,7 @@ describe("a csv-table on a marking", () => {
     expect(await screen.findByText("B2")).toBeInTheDocument();
     expect(shownLots()).toEqual(["A1", "B2", "C3"]);
     expect(screen.queryByRole("status", { name: /marking filter/i })).not.toBeInTheDocument();
-    act(() => markings.set("fail", { day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml"));
+    act(() => markings.set("fail", markingFrom(["day"], [["2024-01-02"]]), "/views/chart.ai.yaml"));
     expect(shownLots()).toEqual(["B2", "C3"]);
     act(() => markings.set("fail", null, "/views/chart.ai.yaml"));
     expect(shownLots()).toEqual(["A1", "B2", "C3"]);
@@ -206,7 +206,7 @@ describe("a csv-table on a marking", () => {
 
   it("'show all' keeps every row and highlights the lit ones", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { lot: new Set(["B2"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["lot"], [["B2"]]), "/views/chart.ai.yaml");
     renderLots(markings);
     fireEvent.click(await screen.findByRole("button", { name: "show all" }));
     expect(shownLots()).toEqual(["A1", "B2", "C3"]);
@@ -216,7 +216,7 @@ describe("a csv-table on a marking", () => {
 
   it("shows every row and says so when it shares no column with the marking", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { wafer: new Set(["W1"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["wafer"], [["W1"]]), "/views/chart.ai.yaml");
     renderLots(markings);
     expect(await screen.findByText("B2")).toBeInTheDocument();
     expect(shownLots()).toEqual(["A1", "B2", "C3"]);
@@ -225,7 +225,7 @@ describe("a csv-table on a marking", () => {
 
   it("carries the header's marking control on a view whose file names no marking", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { lot: new Set(["A1"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["lot"], [["A1"]]), "/views/chart.ai.yaml");
     renderLots(markings, "view: csv-table\nsource: /data/lots.csv\n");
     expect(await screen.findByText("B2")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /marking/i }), { target: { value: "fail" } });
@@ -238,7 +238,9 @@ describe("a csv-table on a marking", () => {
 function held(markings: MarkingStore): Record<string, string[]> | undefined {
   const entry = markings.get("fail");
   if (!entry) return undefined;
-  return Object.fromEntries(Object.entries(entry.marking).map(([k, v]) => [k, [...v].sort()]));
+  // Each key's values over the picks: these cases write one key (#861).
+  const rows = markingRows(entry.marking);
+  return Object.fromEntries(entry.marking.keys.map((k, i) => [k, [...new Set(rows.map((r) => r[i]!))].sort()]));
 }
 
 describe("selecting rows in a csv-table on a marking", () => {
@@ -262,7 +264,7 @@ describe("selecting rows in a csv-table on a marking", () => {
 
   it("without `keys:`, writes the columns the marking already holds", async () => {
     const markings = new MarkingStore();
-    markings.set("fail", { lot: new Set(["A1"]) }, "/views/chart.ai.yaml");
+    markings.set("fail", markingFrom(["lot"], [["A1"]]), "/views/chart.ai.yaml");
     renderLots(markings);
     fireEvent.click(await screen.findByRole("button", { name: "show all" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "select row 3" }));

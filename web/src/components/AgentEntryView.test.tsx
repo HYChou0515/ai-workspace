@@ -829,8 +829,8 @@ describe("EntryView — show_file (files the agent showed)", () => {
             author: "u",
             content: "why?",
             markings: [
-              { name: "fail", path: "/.markings/fail.json", counts: { lot: 2 } },
-              { name: "big", path: "", counts: { lot: 9 }, error: "workspace is full" },
+              { name: "fail", path: "/.markings/fail.json", count: 2, keys: ["lot"] },
+              { name: "big", path: "", count: 9, keys: ["lot"], error: "workspace is full" },
             ],
           },
         }}
