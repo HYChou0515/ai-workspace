@@ -117,6 +117,24 @@ builder.
 - **P8 — Review rounds** (conformance / veracity / defect / regression), then CI on the
   final sha.
 
+## As built
+
+- **P4 [mine, open to override, from the builder]:** `partials` is its own sandbox
+  command, not an argument of `query` — re-running `query` would redraw the chart and
+  drop the brush just drawn. The schema has no median op; every op it has (count, sum,
+  mean, min, max, rate) folds, so "lights whole" is left for an op that cannot be split
+  and for more than 200,000 parts. A split bar is drawn as two series in one slot (the
+  lit part from the axis, the rest dimmed on top), so layout, legend, colour and brush
+  mapping are unchanged. Only on a plain number value axis: a log axis has no 0 to start
+  a part at, so its bars light whole (no note). A stack segment whose picked part does
+  not fit inside it (a mixed-sign sum, a mean stack) lights the stack whole, with a note.
+  A selection across layers that carry different key subsets writes picks over the keys
+  every naming layer gave a value.
+- **P5:** a chip stored before #861 reads back with no keys and a count of 0; it shows its
+  name alone. The sandbox refuses the old `columns` shape rather than guessing.
+- **SDK:** the marking shape is SDK surface, so the view SDK major moved to 2; a parity
+  test ties the scaffold's and the first-party plugins' `"sdk"` to `sdkVersion.ts`.
+
 ## Done means
 
 Boxing four tiles lights four, counts four, sends four to the AI and saves four tiles'
