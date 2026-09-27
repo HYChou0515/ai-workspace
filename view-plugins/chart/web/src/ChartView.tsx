@@ -11,12 +11,14 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { type EntityViewProps, isLit, useMarking, useSandboxRun, viewDocument } from "@aiws/view-sdk";
+import { type EntityViewProps, type Marking, markedBy, markingSize, useMarking, useSandboxRun, viewDocument } from "@aiws/view-sdk";
 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
+import { barAtOf } from "./barAt";
 import { type Answer, type Built, compactAt, type Layout, measuredFields, toOption, withLayout } from "./option";
-import { highlightMarking, markedBy, markedCount, markingLit, type MarkingValues, selectionMarking, stillWritten } from "./marking";
+import { highlightMarking, markedCount, markingLit, selectionMarking, stillWritten } from "./marking";
+import { litValues, readPartials } from "./partials";
 import { type Cells, type RasterImage, upscale } from "./raster";
 import {
   type BrushSelected,
@@ -28,7 +30,7 @@ import {
   selectionFromLegend,
 } from "./selection";
 import { specErrors } from "./spec";
-import { viewCall } from "./viewCall";
+import { type ViewCall, viewCall } from "./viewCall";
 
 export const PLUGIN = "chart";
 const FORMAT = 1;
@@ -93,11 +95,14 @@ export function readAnswer(stdout: string): Answer | string {
 function Plot({
   doc,
   answer,
+  call,
   marking,
   source,
 }: {
   doc: Record<string, unknown>;
   answer: Answer;
+  /** How the view was handed to `query`: `partials` is handed it the same way. */
+  call: ViewCall;
   /** The named marking this view is on (#847 PR 3), or null. */
   marking: string | null;
   /** The view file, named as the `source` of what it writes. */
@@ -125,33 +130,53 @@ function Plot({
   // source; null when it wrote nothing (no marking -- detached --, no
   // `keys:`). State, not a ref: whether the selection went to the marking is
   // read from it on render (below).
-  const [wrote, setWrote] = useState<{ on: string; source: string | null; values: MarkingValues } | null>(null);
+  const [wrote, setWrote] = useState<{ on: string; source: string | null; values: Marking } | null>(null);
   // Whether the person's selection here went to the marking (#847/#848 PR 5
   // P29). Then the marking lights this chart as it lights every other view,
   // and ECharts' own brush visual -- every point outside the box greyed -- is
-  // off: over two columns the marking lights every combination of their
-  // values, and the brushed chart showed 16 lit where the tables showed 27.
-  // A selection that writes nothing (no marking, no `keys:`) keeps it.
+  // off: the marking is what every view on it shows, so the brushed chart
+  // shows it as they do (a coarser view lights what contains a pick, #861
+  // D2). A selection that writes nothing (no marking, no `keys:`) keeps it.
   // Read from what the selection WROTE (P37 row 13): the marking it wrote to
   // is the one the chart is on now. One made detached wrote nothing, and one
   // written to another marking is that marking's -- a flag set at the write
   // and tied to no marking said "· by <columns>" of the marking the chart
   // moved to, and kept the brush visual off.
   const toMarking = wrote !== null && wrote.on === marking;
-  const lit = useMemo(() => {
+  // (recomputed with `toMarking`, which `brushOff` follows: see the draw effect)
+  const [lit, litByMarking] = useMemo(() => {
     const own = toMarking ? undefined : ownSelectionLit(answer, selection);
-    if (own || !marking) return own;
-    return entry ? markingLit(answer, entry.marking, isLit, measured) : answer.layers.map(() => null);
+    if (own || !marking) return [own, false] as const;
+    if (!entry) return [answer.layers.map(() => null), false] as const;
+    return [markingLit(answer, entry.marking, measured), markingSize(entry.marking) > 0] as const;
   }, [marking, toMarking, entry, answer, selection, measured]);
+  // #861 D3: an aggregated bar the marking lights shows the picked part of
+  // it. The sandbox splits its bars by the marking's keys (`partials`) --
+  // asked again only when the KEYS change: the args are the run's cache key,
+  // and a new set of picks on the same keys is folded here, never asked for.
+  const hasBars = answer.layers.some((ly, i) => ly.mark === "bar" && (measured[i]?.size ?? 0) > 0);
+  const by = litByMarking && hasBars ? entry!.marking.keys.join("\u001f") : null;
+  const partialsCall = useMemo(() => ({ ...call, by: by === null ? [] : by.split("\u001f") }), [call, by]);
+  const split = useSandboxRun(PLUGIN, "partials", partialsCall, { enabled: by !== null });
+  const partials = useMemo(
+    () => (split.data && split.data.exit_code === 0 ? readPartials(split.data.stdout) : null),
+    [split.data],
+  );
+  const picked = useMemo(
+    () => (litByMarking && partials ? partials.layers.map((p) => litValues(p, entry!.marking)) : undefined),
+    [litByMarking, partials, entry],
+  );
   // How the chart is laid out (#847/#848 PR 5 P31, P34): compact or not, read
   // from the width its host is given by the observer that resizes it, and --
   // compact -- its height, of which the plot keeps half. It is not part of
   // what the option is built from: a switch of layout is merged into the
   // drawn chart as the layout alone (`Built.layout`), never a rebuild.
   const [layout, setLayout] = useState<Layout>({ compact: false });
+  // #861 D3: a lit bar is drawn where the drawn chart laid its bar out
+  const barAt = useMemo(() => barAtOf(() => chartRef.current), []);
   const built: Built = useMemo(
-    () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}) }),
-    [doc, answer, lit],
+    () => toOption(doc, answer, { gridImage: gridCanvas, barAt, ...(lit ? { lit } : {}), ...(picked ? { picked } : {}) }),
+    [doc, answer, lit, picked, barAt],
   );
   const builtRef = useRef(built);
   builtRef.current = built;
@@ -165,12 +190,14 @@ function Plot({
   }, [built, layout, brushOff]);
   const optionRef = useRef(option);
   optionRef.current = option;
-  const notes = [...built.notes, ...laid.notes];
+  // a bar the sandbox would not split is lit whole (D4), and says why
+  const whole = litByMarking && partials ? partials.layers.flatMap((p) => (p && "whole" in p ? [p.whole] : [])) : [];
+  const notes = [...new Set([...built.notes, ...whole])].concat(laid.notes);
 
   // What a gesture writes, and what it wrote to the marking (null: nothing --
   // no marking, or one this view cannot write). Read through a ref: the
   // ECharts handlers are bound once.
-  const writeRef = useRef<(sel: Selection[]) => MarkingValues | null>(() => null);
+  const writeRef = useRef<(sel: Selection[]) => Marking | null>(() => null);
   // Whether this view's brush holds a selection the PERSON made. ECharts fires
   // `brushselected` with no areas whenever a brush component is (re)built —
   // every setOption does — and taking that as "cleared" would erase the marking
@@ -239,7 +266,7 @@ function Plot({
     if (!marking || seeded.current) return;
     seeded.current = true;
     const values = highlightMarking(answer, keys, measured);
-    if (values && Object.keys(values).length > 0) write(values, source, { ifEmpty: true });
+    if (values && markingSize(values) > 0) write(values, source, { ifEmpty: true });
   }, [marking, answer, keys, measured, write, source]);
 
   useEffect(() => {
@@ -357,17 +384,18 @@ function Plot({
     setSelection([]);
   }, [option, laid, doc, answer, built]);
 
-  // Beside "by <columns>", what went to the marking: a stack's segment that
-  // wrote nothing is not counted there (P43); otherwise every row picked.
+  // Beside "by <keys>", the selected rows that went to the marking (review
+  // #862, `markedCount`): a stack segment that wrote nothing is not counted
+  // (P43); two rows with the same keys are two rows here and one pick in the
+  // marking; a row two layers draw is counted once.
   const marks = !!entry && toMarking;
   const count = marks
     ? markedCount(selection, answer, keys, measured)
     : selection.reduce((n, s) => n + s.rows.length, 0);
-  // On a marking, which columns it marks by (P27): over two columns it lights
-  // every combination of their values, more than the rows picked here. Said
-  // only of a selection that went to the marking: one that wrote nothing (no
-  // `keys:`) picked just its own rows, which the marking's columns -- another
-  // view's write -- have nothing to do with (PR 5 P36 row 10).
+  // On a marking, which keys it marks by (P27), as every view on it says
+  // them. Said only of a selection that went to the marking: one that wrote
+  // nothing (no `keys:`) picked just its own rows, which the marking's keys --
+  // another view's write -- have nothing to do with (PR 5 P36 row 10).
   const selected = count > 0 ? `${count} selected${marks && entry ? ` · ${markedBy(entry.marking)}` : ""}` : null;
   return (
     // Takes the height its pane gives it (#847/#848 PR 5 P13); a fixed 360 px
@@ -454,7 +482,7 @@ export function ChartView({ spec, path, marking: chosen }: EntityViewProps) {
   else if (run.data && run.data.exit_code !== 0)
     body = <Notice role="alert">{run.data.stderr.trim() || run.data.stdout.trim() || `exit ${run.data.exit_code}`}</Notice>;
   else if (typeof answer === "string") body = <Notice role="alert">{answer}</Notice>;
-  else if (answer) body = <Plot doc={doc} answer={answer} marking={marking} source={path ?? null} />;
+  else if (answer) body = <Plot doc={doc} answer={answer} call={call} marking={marking} source={path ?? null} />;
   else body = <Notice>Computing the chart in the sandbox…</Notice>;
 
   return (

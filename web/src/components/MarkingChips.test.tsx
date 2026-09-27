@@ -20,32 +20,48 @@ afterEach(() => {
 const written: SentMarking = {
   name: "fail",
   path: "/.markings/fail.json",
-  counts: { lot: 2, wafer: 12 },
+  count: 4,
+  keys: ["lot", "wafer"],
   error: null,
 };
 const refused: SentMarking = {
   name: "big",
   path: "",
-  counts: { lot: 9 },
+  count: 9,
+  keys: ["lot"],
   error: "workspace is full: 100 of 100 bytes used, and this write does not fit",
 };
 
 describe("MarkingChips", () => {
-  it("names each marking and how many values per column", () => {
+  it("names each marking, how many rows were picked, and the keys (#861 D5)", () => {
     render(<MarkingChips markings={[written]} />);
     const chip = screen.getByTestId("marking-chip");
     expect(chip).toHaveTextContent("fail");
-    expect(chip).toHaveTextContent("依 lot (2)、wafer (12)"); // P27: was "lot 2 · wafer 12"
+    // Not "lot (2), wafer (12)": the picks are counted, not each column's values.
+    expect(chip).toHaveTextContent("· 4 · 依 lot、wafer");
   });
 
-  it("names the columns it marks by, each with how many values (P27)", () => {
+  it("a chip sent before #861 (it reads back with no keys) shows its name, not a count of 0", () => {
+    // msgspec drops #855's `counts` and defaults `count` to 0, `keys` to [].
+    render(<MarkingChips markings={[{ name: "old", path: "/.markings/old.json", count: 0, keys: [] }]} />);
+    const chip = screen.getByTestId("marking-chip");
+    expect(chip).toHaveTextContent(/^old$/);
+  });
+
+  it("a chip broadcast by an older pod mid-rollout (no `keys` at all) shows its name, not a crash", () => {
+    const live = { name: "old", path: "/.markings/old.json", counts: { lot: 2 } } as unknown as SentMarking;
+    render(<MarkingChips markings={[live]} />);
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^old$/);
+  });
+
+  it("says the count and the keys in the viewer's language (#861 D5)", () => {
     setStoredLocale("en");
     render(
       <LocaleProvider>
         <MarkingChips markings={[written]} />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*by lot \(2\), wafer \(12\)$/);
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*· 4 · by lot, wafer$/);
   });
 
   it("names them in Chinese too", () => {
@@ -55,7 +71,7 @@ describe("MarkingChips", () => {
         <MarkingChips markings={[written]} />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*依 lot \(2\)、wafer \(12\)$/);
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent(/^fail\s*· 4 · 依 lot、wafer$/);
   });
 
   it("says why a refused one was not sent", () => {

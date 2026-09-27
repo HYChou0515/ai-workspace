@@ -14,7 +14,13 @@ import type * as echarts from "echarts/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingRows, MarkingStore } from "../../../../web/src/lib/markings";
+
+/** What a marking holds: its keys (joined) → its picks, sorted; {} for none. */
+const marked = (store: MarkingStore, name = "m") => {
+  const m = store.get(name)?.marking;
+  return m ? { [m.keys.join(",")]: markingRows(m).map((r) => r.join(",")) } : {};
+};
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer, q8 } from "./testAnswer";
@@ -34,7 +40,7 @@ vi.mock("@aiws/view-sdk", async () => {
     renders.n += 1;
     return hooks.useMarking(name);
   };
-  return { ...sdk, useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 // The chart's own module, with each instance kept for the test: SSR at a fixed
@@ -232,10 +238,10 @@ describe("a layout switch keeps what the person did", () => {
     const store = new MarkingStore();
     const { chart, redraw } = mount(PIE, SLICES, "m", store);
     act(() => clickAt(chart, sliceAt(chart, 1)));
-    expect(store.get("m")?.marking.group).toEqual(new Set(["G2"]));
+    expect(marked(store)).toEqual({ group: ["G2"] });
     redraw({ ...PIE, title: "Share by group" }); // a new doc: rebuilt in full
     act(() => clickAt(chart, sliceAt(chart, 1)));
-    expect(store.get("m")?.marking.group).toEqual(new Set(["G2"]));
+    expect(marked(store)).toEqual({ group: ["G2"] });
   });
 
   it("(control) with no doc change, the second click on that slice clears it", () => {
@@ -291,7 +297,7 @@ describe("a write the marking already holds", () => {
     const { chart } = mount(SCATTER, seeded, "m", store);
     resize(600);
     const outOfBrush = () => (chart.getOption() as { brush: { outOfBrush?: object }[] }).brush[0]!.outOfBrush;
-    expect(store.get("m")?.marking.item).toEqual(new Set(["i3", "i4"]));
+    expect(marked(store)).toEqual({ item: ["i3", "i4"] });
     expect(outOfBrush()).toEqual({ colorSaturation: 0 });
     const px = pixels(chart);
     const [p, q] = [px(2.5, 0), px(4.5, 5)];
@@ -301,7 +307,7 @@ describe("a write the marking already holds", () => {
     ];
     act(() => chart.dispatchAction({ type: "brush", areas: [{ brushType: "rect", range }] }));
     await settle();
-    expect(store.get("m")?.marking.item).toEqual(new Set(["i3", "i4"]));
+    expect(marked(store)).toEqual({ item: ["i3", "i4"] });
     expect(outOfBrush()).toEqual({ colorAlpha: 1 });
   });
 });

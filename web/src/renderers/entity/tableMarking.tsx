@@ -3,10 +3,11 @@
  * its header that says why, and what selecting its rows writes.
  *
  * Reading (P1):
- * - The marking holds a set and shares a column with the table: only the rows
+ * - The marking holds picks and shares a key with the table: only the rows
  *   it lights are shown, under "filtered by <name> · 3 of 25 rows · by group ·
- *   show all" (P27: the columns it marks by — over two columns a marking
- *   lights every combination of their values).
+ *   show all" (the keys it marks by). A table with every key lights exactly
+ *   the picked rows; one with some keys lights the rows that contain a pick
+ *   (#861 D1, D2).
  *   "show all" keeps every row and highlights the lit ones. The toggle is this
  *   person's, per view, kept in this browser like the header's marking choice
  *   (`useViewMarking`) — never written to the file.
@@ -14,10 +15,21 @@
  * - Empty, cleared, or no marking: every row, no bar.
  *
  * Writing (P2): on a marking, a row's checkbox is "this row is marked".
- * Checking or unchecking one writes the rows then checked, projected onto the
- * key columns — the spec's `keys:`, else the columns the marking already
- * holds — that this table has. A key value no row of this table carries keeps
- * the mark it had: the table decides only about the values it holds. With no
+ * Checking or unchecking one writes the rows then checked, as picks on the
+ * key columns — the spec's `keys:`, else the keys the marking already holds —
+ * that this table has. While it writes the marking's keys or some of them,
+ * the table decides only about what it shows, said at the keys it writes: a
+ * held pick whose values on those keys no row here carries stays picked (said
+ * at those keys); one whose values a row here carries is the table's to keep
+ * or drop, so a finer pick in a group a `keys: [group]` table shows goes with
+ * that group's tick (as #855 decided a shown value). Other keys are a
+ * different marking, which replaces it. A table that lacks one of the marking's keys and writes some of them (a
+ * per-group table on (group, item) picks) is coarser: while its ticks say only
+ * what the held picks say, it writes at the marking's keys (unticking a group
+ * removes that group's picks, the rest stay). Any other write at fewer keys --
+ * a tick of a group with no pick, or `keys:` a subset on a table with every
+ * key -- is at the table's keys, the groups it does not show kept as whole
+ * groups (review #862). With no
  * key column, nothing is written and `note` says
  * why (the header's marking control shows it). The table the selection was
  * made in is not filtered by it: it keeps every row with the marked ones
@@ -33,7 +45,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useMarking } from "../../hooks/useMarking";
 import { litRows, type MarkingRow } from "../../lib/markingRows";
-import { markedBy, projectOntoKeys } from "../../lib/markings";
+import { markedBy, projectOntoKeys, projectPick } from "../../lib/markings";
 
 export type TableMarking = {
   /** Indices (into the rows given) to show, in order. */
@@ -115,17 +127,17 @@ export function useTableMarking({
   const [showAll, setShowAll] = useShowAll(viewKey);
   const held = entry?.marking;
   const shared = useMemo(
-    () => (held ? Object.keys(held).filter((c) => columns.includes(c)) : []),
+    () => (held ? held.keys.filter((c) => columns.includes(c)) : []),
     [held, columns],
   );
   const lit = useMemo(() => (held && shared.length > 0 ? litRows(rows, held) : null), [held, shared, rows]);
   const all = useMemo(() => rows.map((_, i) => i), [rows]);
   const litIdx = useMemo(() => (lit ? all.filter((i) => lit[i]) : []), [all, lit]);
 
-  // What a selection writes: `keys:`, else the marking's own columns — only
-  // those this table has (a projection onto none is `{}`, the write that
+  // What a selection writes: `keys:`, else the marking's own keys — only
+  // those this table has (a projection onto none is empty, the write that
   // CLEARS the marking, which a table that cannot name a row must never send).
-  const writeKeys = (keys.length > 0 ? keys : held ? Object.keys(held) : []).filter((c) => columns.includes(c));
+  const writeKeys = (keys.length > 0 ? keys : held ? held.keys : []).filter((c) => columns.includes(c));
   const note = !name
     ? null
     : writeKeys.length > 0
@@ -140,16 +152,43 @@ export function useTableMarking({
 
   const set = (chosen: ReadonlySet<number>) => {
     if (writeKeys.length === 0) return;
-    const next = projectOntoKeys([...chosen].map((i) => rows[i]!), writeKeys)! as Record<string, Set<string>>;
-    // A table decides only about the values it holds: a key value no row of
-    // it carries (a value only a wider chart has, or a row its own value filter
-    // hides) keeps the mark it had, or ticking one box would silently unmark
-    // points elsewhere.
-    for (const c of writeKeys) {
-      const carried = new Set(rows.map((r) => r[c]));
-      for (const v of held?.[c] ?? []) if (!carried.has(v)) (next[c] ??= new Set()).add(v);
+    const next = projectOntoKeys([...chosen].map((i) => rows[i]!), writeKeys)!;
+    // A table decides only about the rows it holds: a held pick none of its
+    // rows carries (a row only a wider chart has, or one its own value filter
+    // hides) stays picked, or ticking one box would silently unmark points
+    // elsewhere. Only when it writes the same keys the marking holds -- other
+    // keys are a different marking, which replaces it as any view's write does.
+    const tuples = new Set(next.tuples);
+    const carried = projectOntoKeys(rows, writeKeys)!.tuples;
+    if (held && held.keys.join("\u001f") === next.keys.join("\u001f")) {
+      for (const t of held.tuples) if (!carried.has(t)) tuples.add(t);
+      write({ keys: next.keys, tuples }, source);
+      return;
     }
-    write(next, source);
+    // A table coarser than the marking (a per-group table beside per-item
+    // picks, #861 D2) keeps writing at the marking's own keys while its ticks
+    // say only what the held picks already say: unticking a group takes out
+    // that group's picks, and every other pick -- finer than this table, or in
+    // a group it does not show -- stays (review #862 A1). A tick the held picks
+    // cannot say (a group with no pick) writes at the table's keys instead.
+    // Only a table that LACKS one of the held keys is coarser: one that has them
+    // all but writes fewer (`keys:` a subset) lights exact picks, so a tick of
+    // it is a plain write at its keys, never a silent no-op (round 2).
+    const coarser = !!held && !held.keys.every((k) => columns.includes(k));
+    if (held && next.keys.length < held.keys.length && next.keys.every((k) => held.keys.includes(k))) {
+      const onto = projectPick(held, next.keys);
+      const said = new Set([...held.tuples].map(onto));
+      if (coarser && [...next.tuples].every((t) => said.has(t))) {
+        const kept = new Set([...held.tuples].filter((t) => next.tuples.has(onto(t)) || !carried.has(onto(t))));
+        write({ keys: held.keys, tuples: kept }, source);
+        return;
+      }
+      // Written at the table's keys (a group with no pick, or `keys:` a subset
+      // on a table with every key): a held pick in a group it does not show
+      // stays, said as that group (as #855 carried it) -- review #862 rounds 2, 3.
+      for (const t of held.tuples) if (!carried.has(onto(t))) tuples.add(onto(t));
+    }
+    write({ keys: next.keys, tuples }, source);
   };
   const select = name ? { checked: lit ? new Set(litIdx) : NONE, enabled: writeKeys.length > 0, set } : null;
 

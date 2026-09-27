@@ -20,7 +20,7 @@ import { OpenFileProvider, WorkspaceVisibleProvider } from "../hooks/openFile";
 import { MarkingProvider } from "../hooks/useMarking";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { LocaleProvider, setStoredLocale } from "../lib/i18n";
-import { MarkingStore } from "../lib/markings";
+import { markingFrom, MarkingStore } from "../lib/markings";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { MarkingControl } from "../renderers/entity/MarkingControl";
 import { makeTestQueryClient, QueryWrap } from "../test/queryWrapper";
@@ -67,7 +67,8 @@ function Shell({
 const sent: SentMarking = {
   name: "fail",
   path: "/.markings/fail.json",
-  counts: { lot: 3 },
+  count: 3,
+  keys: ["lot"],
   source: "/views/c.ai.yaml",
   error: null,
   digest: "d1g3st",
@@ -111,7 +112,7 @@ describe("save as table — the sent chip", () => {
     expect(body(fetchMock)).toEqual({
       name: "fail",
       view: "/views/c.ai.yaml",
-      columns: null,
+      marking: null,
       stamp: "20260925-1407",
       // What THIS message sent: the route refuses when the file has changed since.
       digest: "d1g3st",
@@ -229,7 +230,7 @@ describe("save as table — the header control", () => {
     const fetchMock = reply({ path: "/markings/fail-20260925-1407.csv", rows: 2 });
     vi.stubGlobal("fetch", fetchMock);
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["C", "A"]) }, "/views/other.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["C"], ["A"]]), "/views/other.ai.yaml");
     render(
       <Shell store={store}>
         <MarkingControl value="fail" onChange={() => {}} path="/views/c.ai.yaml" />
@@ -243,7 +244,7 @@ describe("save as table — the header control", () => {
     expect(body(fetchMock)).toEqual({
       name: "fail",
       view: "/views/c.ai.yaml",
-      columns: { lot: ["A", "C"] },
+      marking: { keys: ["lot"], rows: [["A"], ["C"]] },
       stamp: "20260925-1407",
       digest: null,
     });
@@ -292,7 +293,7 @@ describe("save as table — the header control", () => {
 
   it("is disabled for a view that is not a file", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["A"]) }, null);
+    store.set("fail", markingFrom(["lot"], [["A"]]), null);
     render(
       <Shell store={store}>
         <MarkingControl value="fail" onChange={() => {}} />

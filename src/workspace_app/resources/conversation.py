@@ -136,15 +136,20 @@ class WithheldSource(Struct):
 class SentMarking(Struct):
     """#847 P7: a named marking (linked selection) the user sent with a message.
 
-    The values themselves live in the file at ``path`` — the thread keeps what a
-    chip shows (name, how many values per column) and where the AI reads the rest.
-    A marking whose write was refused is kept too, with ``error`` and no path, so
-    a reloaded thread still says which chip failed and why."""
+    The picked rows themselves live in the file at ``path`` — the thread keeps
+    what a chip shows (name, how many rows, by which keys) and where the AI
+    reads the rest. A marking whose write was refused is kept too, with
+    ``error`` and no path, so a reloaded thread still says which chip failed and
+    why."""
 
     name: str
     path: str = ""
     """Workspace path of the written ``.markings/<name>.json``; "" when not written."""
-    counts: dict[str, int] = field(default_factory=dict)
+    count: int = 0
+    """How many distinct rows were picked (#861 D5)."""
+    keys: list[str] = field(default_factory=list)
+    """The marking's key columns, sorted — what the chip's "by …" says. Empty on
+    a chip sent before #861 (its per-column ``counts`` are no longer read)."""
     source: str | None = None
     """The view file that last wrote the marking, when known."""
     error: str | None = None

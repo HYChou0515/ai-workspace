@@ -1,6 +1,6 @@
 {
   "name": "chart",
-  "sdk": "1",
+  "sdk": "2",
   "kinds": ["chart"],
   "views": [
     { "kind": "chart", "when": "a relationship, trend, distribution or comparison you are claiming" },

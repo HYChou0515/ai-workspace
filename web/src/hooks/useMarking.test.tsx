@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { MarkingStore } from "../lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../lib/markings";
 import { MarkingProvider, useMarking, useMarkingNames } from "./useMarking";
 
 afterEach(cleanup);
@@ -13,14 +13,14 @@ const renders: Record<string, number> = {};
 function View({ name }: { name: string | null }) {
   const [entry] = useMarking(name);
   renders[name ?? "none"] = (renders[name ?? "none"] ?? 0) + 1;
-  const lots = entry ? [...(entry.marking.lot ?? [])].join(",") : "-";
+  const lots = entry ? markingRows(entry.marking).map((r) => r.join("")).join(",") : "-";
   return <span data-testid={`view-${name ?? "none"}`}>{lots}</span>;
 }
 
 function Writer({ name }: { name: string }) {
   const [, write] = useMarking(name);
   return (
-    <button type="button" onClick={() => write({ lot: new Set(["L1"]) }, "/v/grid.ai.yaml")}>
+    <button type="button" onClick={() => write(markingFrom(["lot"], [["L1"]]), "/v/grid.ai.yaml")}>
       write {name}
     </button>
   );
@@ -68,14 +68,14 @@ describe("useMarking", () => {
         <Detached />
       </MarkingProvider>,
     );
-    act(() => write!({ lot: new Set(["L1"]) }, null));
+    act(() => write!(markingFrom(["lot"], [["L1"]]), null));
     expect(screen.getByTestId("d")).toHaveTextContent("dark");
     expect(store.names()).toEqual([]);
   });
 
   it("write answers whether the store took it: false when a seed finds the marking occupied (P41 row 27)", () => {
     const store = new MarkingStore();
-    store.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml");
+    store.set("picked", markingFrom(["item"], [["p"]]), "/v/a.ai.yaml");
     let write: ReturnType<typeof useMarking>[1] | null = null;
     function Seeder() {
       const [, w] = useMarking("picked");
@@ -89,11 +89,11 @@ describe("useMarking", () => {
     );
     let took: boolean | null = null;
     act(() => {
-      took = write!({ item: new Set(["q"]) }, "/v/b.ai.yaml", { ifEmpty: true });
+      took = write!(markingFrom(["item"], [["q"]]), "/v/b.ai.yaml", { ifEmpty: true });
     });
     expect(took).toBe(false);
     act(() => {
-      took = write!({ item: new Set(["q"]) }, "/v/b.ai.yaml");
+      took = write!(markingFrom(["item"], [["q"]]), "/v/b.ai.yaml");
     });
     expect(took).toBe(true);
     expect(store.get("picked")?.source).toBe("/v/b.ai.yaml");
@@ -110,7 +110,7 @@ describe("useMarking", () => {
     function Probe({ id, name }: { id: string; name: string | null }) {
       const [, write] = useMarking(name);
       return (
-        <button type="button" onClick={() => (took[id] = write({ lot: new Set(["L1"]) }, null))}>
+        <button type="button" onClick={() => (took[id] = write(markingFrom(["lot"], [["L1"]]), null))}>
           {id}
         </button>
       );

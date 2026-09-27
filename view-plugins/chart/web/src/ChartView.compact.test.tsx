@@ -21,7 +21,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 const made = vi.hoisted(() => ({ charts: [] as import("echarts/core").ECharts[] }));

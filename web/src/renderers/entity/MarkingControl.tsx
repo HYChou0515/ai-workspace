@@ -13,11 +13,11 @@ import { Icon } from "../../components/Icon";
 import { SaveMarkingTable, useSaveScope } from "../../components/SaveMarkingTable";
 import { useMarking, useMarkingNames } from "../../hooks/useMarking";
 import { useT } from "../../lib/i18n";
-import type { Marking } from "../../lib/markings";
+import { type Marking, markingRows } from "../../lib/markings";
 
-/** A marking as the save route takes it: each column's values, sorted. */
-function columnsOf(marking: Marking): Record<string, string[]> {
-  return Object.fromEntries(Object.entries(marking).map(([c, v]) => [c, [...v].sort()]));
+/** A marking as the save route takes it: its keys and picked rows (#861). */
+function picksOf(marking: Marking): { keys: string[]; rows: string[][] } {
+  return { keys: [...marking.keys], rows: markingRows(marking) };
 }
 
 /** The select's value that opens the new-name box — never a marking name
@@ -114,11 +114,10 @@ export function MarkingControl({
         ))}
         <option value={NEW}>New marking…</option>
       </select>
-      {/* P27: which columns the marking marks by — over two it lights every
-          combination of their values, so its counts can exceed what was picked */}
+      {/* P27: which keys the marking links views by */}
       {entry && (
         <span data-testid="marking-by" className="ev-marking__by">
-          {t("markings.by", { columns: Object.keys(entry.marking).join(t("markings.listSep")) })}
+          {t("markings.by", { columns: entry.marking.keys.join(t("markings.listSep")) })}
         </span>
       )}
       {naming && (
@@ -155,7 +154,7 @@ export function MarkingControl({
           scope={scope}
           name={value}
           view={path ?? null}
-          columns={entry ? columnsOf(entry.marking) : null}
+          marking={entry ? picksOf(entry.marking) : null}
           why={!entry ? t("markings.nothingMarked") : !path ? t("markings.notAFile") : null}
         />
       )}

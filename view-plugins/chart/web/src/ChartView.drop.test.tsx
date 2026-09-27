@@ -16,7 +16,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingFrom, markingRows, MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { type Answer } from "./option";
 import { answer, cat, f64, layer } from "./testAnswer";
@@ -30,7 +30,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 const made = vi.hoisted(() => ({ charts: [] as import("echarts/core").ECharts[] }));
@@ -68,8 +68,11 @@ function mount(store: MarkingStore, doc: object, a: Answer, marking: string | nu
   return made.charts.at(-1)!;
 }
 
-const marked = (store: MarkingStore) =>
-  Object.fromEntries(Object.entries(store.get("m")?.marking ?? {}).map(([k, v]) => [k, [...v].sort()]));
+/** What a marking holds: its keys (joined) → its picks, sorted; {} for none. */
+const marked = (store: MarkingStore, name = "m") => {
+  const m = store.get(name)?.marking;
+  return m ? { [m.keys.join(",")]: markingRows(m).map((r) => r.join(",")) } : {};
+};
 const selectedText = () => screen.queryByText(/selected/)?.textContent ?? null;
 const brushAreas = (chart: echarts.ECharts) =>
   (chart as unknown as { getModel(): { getComponent(m: string): { areas: unknown[] } } }).getModel().getComponent("brush").areas.length;
@@ -80,27 +83,27 @@ function opacities(chart: echarts.ECharts, s = 0): number[] {
   return Array.from({ length: data.count() }, (_, i) => data.getItemVisual(i, "style").opacity ?? 1);
 }
 const click = (chart: echarts.ECharts, at: number[]) => act(() => clickAt(chart, at));
-const other = (store: MarkingStore, lots: string[] | null, source = OTHER) =>
-  act(() => store.set("m", lots ? { lot: new Set(lots) } : null, source));
+const other = (store: MarkingStore, groups: string[] | null, source = OTHER) =>
+  act(() => store.set("m", groups ? markingFrom(["group"], groups.map((g) => [g])) : null, source));
 
 const PIE = {
   view: "chart",
   source: "data/a.csv",
-  keys: ["lot"],
+  keys: ["group"],
   mark: "pie",
-  encoding: { theta: { field: "n", type: "quantitative" }, color: { field: "lot", type: "nominal" } },
+  encoding: { theta: { field: "n", type: "quantitative" }, color: { field: "group", type: "nominal" } },
 };
-const SLICES = answer(layer("pie", 3, { n: f64([5, 3, 2]), lot: cat(["L1", "L2", "L3"]) }));
+const SLICES = answer(layer("pie", 3, { n: f64([5, 3, 2]), group: cat(["L1", "L2", "L3"]) }));
 const KEYLESS = { ...PIE, keys: undefined };
 
 const SCATTER = {
   view: "chart",
   source: "data/a.csv",
-  keys: ["lot"],
+  keys: ["group"],
   mark: "scatter",
-  encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" }, color: { field: "lot", type: "nominal" } },
+  encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" }, color: { field: "group", type: "nominal" } },
 };
-const POINTS = answer(layer("scatter", 3, { x: f64([1, 2, 3]), y: f64([1, 2, 3]), lot: cat(["L1", "L2", "L3"]) }));
+const POINTS = answer(layer("scatter", 3, { x: f64([1, 2, 3]), y: f64([1, 2, 3]), group: cat(["L1", "L2", "L3"]) }));
 
 /** A person's box over data x 1.5..3.5, y 1.5..3.5 (points L2, L3), in pixels. */
 async function brushTwo(chart: echarts.ECharts) {
@@ -140,11 +143,11 @@ describe("another view's write drops a chart's own selection that went to the ma
     expect({ text: selectedText(), areas: brushAreas(chart), marked: marked(store) }).toEqual({
       text: expect.stringMatching(/^2 selected/),
       areas: 1,
-      marked: { lot: ["L2", "L3"] },
+      marked: { group: ["L2", "L3"] },
     });
     other(store, ["L1"]);
     await settle();
-    expect({ text: selectedText(), areas: brushAreas(chart), marked: marked(store) }).toEqual({ text: null, areas: 0, marked: { lot: ["L1"] } });
+    expect({ text: selectedText(), areas: brushAreas(chart), marked: marked(store) }).toEqual({ text: null, areas: 0, marked: { group: ["L1"] } });
   });
 
   it("another view clearing the marking drops it too (a chart with no legend)", async () => {
@@ -168,13 +171,13 @@ describe("another view's write drops a chart's own selection that went to the ma
     const store = new MarkingStore();
     const chart = mount(store, SCATTER, POINTS);
     act(() => chart.dispatchAction({ type: "legendToggleSelect", name: "L1" }));
-    expect(marked(store)).toEqual({ lot: ["L2", "L3"] });
+    expect(marked(store)).toEqual({ group: ["L2", "L3"] });
     expect(selectedText()).toMatch(/^2 selected/);
     other(store, ["L1"]);
     const legend = (chart.getOption() as { legend: { selected?: Record<string, boolean> }[] }).legend[0]!.selected ?? {};
     expect(Object.values(legend).every((shown) => shown !== false)).toBe(true);
     expect(selectedText()).toBeNull();
-    expect(marked(store)).toEqual({ lot: ["L1"] }); // bringing them back writes nothing
+    expect(marked(store)).toEqual({ group: ["L1"] }); // bringing them back writes nothing
   });
 
   it("after the drop, the chart's next gesture selects and writes as ever", async () => {
@@ -187,7 +190,7 @@ describe("another view's write drops a chart's own selection that went to the ma
     expect({ text: selectedText(), areas: brushAreas(chart), marked: marked(store) }).toEqual({
       text: expect.stringMatching(/^2 selected/),
       areas: 1,
-      marked: { lot: ["L2", "L3"] },
+      marked: { group: ["L2", "L3"] },
     });
   });
 });
@@ -258,7 +261,7 @@ describe("what is not another view's write keeps the chart's own selection (P35 
     click(chart, sliceAt(chart, 1));
     other(store, ["L1"]);
     click(chart, [5, 395]);
-    expect(marked(store)).toEqual({ lot: ["L1"] });
+    expect(marked(store)).toEqual({ group: ["L1"] });
   });
 });
 
@@ -278,7 +281,7 @@ describe("with no marking store, the chart's selection is its own (P40 row 19)",
     const chart = mountBare(SCATTER, POINTS);
     await brushTwo(chart);
     await settle();
-    // "2 selected" alone: nothing went to a marking, so no "· by lot"
+    // "2 selected" alone: nothing went to a marking, so no "· by group"
     expect({ text: selectedText(), areas: brushAreas(chart) }).toEqual({ text: "2 selected", areas: 1 });
   });
 

@@ -20,33 +20,26 @@ import {
   thumbnail,
   tilesInBox,
 } from "./gallery";
+import { type Marking, markingFrom, markingRows } from "../../../../web/src/lib/markings";
 import { toOption } from "./option";
 import { categoryTable, lattice } from "./raster";
 import { answer, base, f64, layer, q8 } from "./testAnswer";
 
-// the platform's rule, as the SDK double in FacetGallery.test.tsx has it
-const isLitDouble = (row: Readonly<Record<string, string>>, marking: Record<string, ReadonlySet<string>>) => {
-  let shared = false;
-  for (const [c, v] of Object.entries(marking)) {
-    if (!(c in row)) continue;
-    shared = true;
-    if (!v.has(row[c])) return false;
-  }
-  return shared;
-};
+/** A marking as its keys and sorted rows, for comparing. */
+const shape = (m: Marking | null) => m && { keys: [...m.keys], rows: markingRows(m) };
 
 function index(over: Partial<FacetIndex> = {}): FacetIndex {
   return {
     build: "b".repeat(32),
     scale: { kind: "continuous", lo: 0, hi: 254 },
-    facet: ["lot", "wafer"],
+    facet: ["group", "item"],
     cells: 4,
     layout: { x: [0, 1, 0, 1], y: [0, 0, 1, 1] },
     groups: [
-      { key: ["L1", "1"], sort: { rate: 0.3 } },
-      { key: ["L1", "2"], sort: { rate: null } },
-      { key: ["L2", "3"], sort: { rate: 0.9 } },
-      { key: ["L2", "4"], sort: { rate: 0.3 } },
+      { key: ["g1", "1"], sort: { rate: 0.3 } },
+      { key: ["g1", "2"], sort: { rate: null } },
+      { key: ["g2", "3"], sort: { rate: 0.9 } },
+      { key: ["g2", "4"], sort: { rate: 0.3 } },
     ],
     columns: [],
     ...over,
@@ -78,35 +71,43 @@ describe("groupsPerPage", () => {
 });
 
 describe("rangeMarking", () => {
-  it("names every group in the positions, loaded or not, per facet column", () => {
-    const m = rangeMarking(index(), [2, 0, 3]);
-    expect(Object.keys(m).sort()).toEqual(["lot", "wafer"]);
-    expect([...m.lot].sort()).toEqual(["L1", "L2"]);
-    expect([...m.wafer].sort()).toEqual(["1", "3", "4"]);
+  it("picks each group in the positions, loaded or not, as one pick over the facet columns (#861 D1)", () => {
+    // (g2, 3), (g1, 1), (g2, 4): three picks -- not {g1, g2} x {1, 3, 4}
+    expect(shape(rangeMarking(index(), [2, 0, 3]))).toEqual({
+      keys: ["group", "item"],
+      rows: [["g1", "1"], ["g2", "3"], ["g2", "4"]],
+    });
+  });
+
+  it("a box over four tiles marks four, not the nine combinations of their values", () => {
+    // the #855 demo: (g3, 8), (g4, 1), (g5, 1), (g5, 2) boxed
+    const keys = [["g3", "8"], ["g4", "1"], ["g5", "1"], ["g5", "2"], ["g3", "1"], ["g4", "2"], ["g4", "8"], ["g5", "8"], ["g3", "2"]];
+    const idx = index({ groups: keys.map((key) => ({ key, sort: {} })) });
+    const m = rangeMarking(idx, [0, 1, 2, 3]);
+    expect(m.tuples.size).toBe(4);
+    expect(groupsLit(idx, m)).toEqual([true, true, true, true, false, false, false, false, false]);
   });
 
   it("is empty — the write that clears — for no positions", () => {
-    expect(rangeMarking(index(), [])).toEqual({});
+    expect(shape(rangeMarking(index(), []))).toEqual({ keys: ["group", "item"], rows: [] });
   });
 });
 
 describe("groupsLit", () => {
-  const isLit = (row: Readonly<Record<string, string>>, marking: Record<string, ReadonlySet<string>>) => {
-    let shared = false;
-    for (const [c, values] of Object.entries(marking)) {
-      if (!(c in row)) continue;
-      shared = true;
-      if (!values.has(row[c])) return false;
-    }
-    return shared;
-  };
+  it("lights the groups the marking picked, by the platform's rule", () => {
+    expect(groupsLit(index(), markingFrom(["item"], [["3"], ["4"]]))).toEqual([false, false, true, true]);
+    // (g1, 2) and (g2, 3) picked: (g1, 1) and (g2, 4) each hold a picked
+    // group, and neither was picked
+    expect(groupsLit(index(), markingFrom(["group", "item"], [["g1", "2"], ["g2", "3"]]))).toEqual([false, true, true, false]);
+  });
 
-  it("lights the groups whose key the marking holds, by the platform's rule", () => {
-    expect(groupsLit(index(), { wafer: new Set(["3", "4"]) }, isLit)).toEqual([false, false, true, true]);
+  it("a marking finer than the facet lights the tiles that contain a pick (D2)", () => {
+    const perGroup = index({ facet: ["group"], groups: [{ key: ["g1"], sort: {} }, { key: ["g2"], sort: {} }] });
+    expect(groupsLit(perGroup, markingFrom(["group", "item"], [["g2", "9"]]))).toEqual([false, true]);
   });
 
   it("is null when the marking shares no facet column: nothing is dimmed", () => {
-    expect(groupsLit(index(), { die: new Set(["7"]) }, isLit)).toBeNull();
+    expect(groupsLit(index(), markingFrom(["region"], [["7"]]))).toBeNull();
   });
 });
 
@@ -183,12 +184,12 @@ describe("thumbnail", () => {
 describe("groupLabel (#847/#848 P14)", () => {
   const two = (zones?: Record<string, string>) =>
     index({
-      facet: ["lot", "day"],
+      facet: ["group", "day"],
       ...(zones ? { zones } : {}),
       groups: [
-        { key: ["L1", "2026-03-01 00:00:00+08:00"], sort: {} },
-        { key: ["L1", "2026-03-01 12:30:00.500000+08:00"], sort: {} },
-        { key: ["L2", "not a date"], sort: {} },
+        { key: ["g1", "2026-03-01 00:00:00+08:00"], sort: {} },
+        { key: ["g1", "2026-03-01 12:30:00.500000+08:00"], sort: {} },
+        { key: ["g2", "not a date"], sort: {} },
       ],
     });
 
@@ -196,29 +197,29 @@ describe("groupLabel (#847/#848 P14)", () => {
     const idx = two({ day: "Asia/Taipei" });
     // P24: to the finest part the column has — here milliseconds, so
     // midnight shows them too (P14 showed it as the date alone)
-    expect(groupLabel(idx, 0)).toBe("L1 · 2026-03-01 00:00:00.000 Asia/Taipei");
+    expect(groupLabel(idx, 0)).toBe("g1 · 2026-03-01 00:00:00.000 Asia/Taipei");
     // pandas writes microseconds; the label reads them to the millisecond
-    expect(groupLabel(idx, 1)).toBe("L1 · 2026-03-01 12:30:00.500 Asia/Taipei");
+    expect(groupLabel(idx, 1)).toBe("g1 · 2026-03-01 12:30:00.500 Asia/Taipei");
     // a key that is no time is shown as it is
-    expect(groupLabel(idx, 2)).toBe("L2 · not a date");
+    expect(groupLabel(idx, 2)).toBe("g2 · not a date");
   });
 
   it("shows the time of day at midnight when the column has one, and a date column as dates (P24)", () => {
     // seen live: an hourly facet's midnight group read "2026-03-01 Asia/Taipei"
     const hourly = index({
-      facet: ["lot", "at", "day"],
+      facet: ["group", "at", "day"],
       zones: { at: "Asia/Taipei", day: "Asia/Taipei" },
       groups: [
-        { key: ["L1", "2026-03-01 00:00:00+08:00", "2026-03-01 00:00:00+08:00"], sort: {} },
-        { key: ["L1", "2026-03-01 06:00:00+08:00", "2026-03-02 00:00:00+08:00"], sort: {} },
+        { key: ["g1", "2026-03-01 00:00:00+08:00", "2026-03-01 00:00:00+08:00"], sort: {} },
+        { key: ["g1", "2026-03-01 06:00:00+08:00", "2026-03-02 00:00:00+08:00"], sort: {} },
       ],
     });
-    expect(groupLabel(hourly, 0)).toBe("L1 · 2026-03-01 00:00 Asia/Taipei · 2026-03-01 Asia/Taipei");
-    expect(groupLabel(hourly, 1)).toBe("L1 · 2026-03-01 06:00 Asia/Taipei · 2026-03-02 Asia/Taipei");
+    expect(groupLabel(hourly, 0)).toBe("g1 · 2026-03-01 00:00 Asia/Taipei · 2026-03-01 Asia/Taipei");
+    expect(groupLabel(hourly, 1)).toBe("g1 · 2026-03-01 06:00 Asia/Taipei · 2026-03-02 Asia/Taipei");
   });
 
   it("shows every key as it is when the index names no zone", () => {
-    expect(groupLabel(two(), 0)).toBe("L1 · 2026-03-01 00:00:00+08:00");
+    expect(groupLabel(two(), 0)).toBe("g1 · 2026-03-01 00:00:00+08:00");
     expect(groupLabel(index(), 0)).toBe(index().groups[0].key.join(" · "));
   });
 });
@@ -232,7 +233,7 @@ describe("sortArgs (P4)", () => {
 
   it("names the column and statistic of any other choice (the order stays the spec's)", () => {
     expect(sortArgs(doc, { field: "v", stat: "median" })).toEqual({ sort: { field: "v", stat: "median" } });
-    expect(sortArgs(doc, { field: "lot" })).toEqual({ sort: { field: "lot" } });
+    expect(sortArgs(doc, { field: "group" })).toEqual({ sort: { field: "group" } });
   });
 
   it("is a new choice when only the statistic changes", () => {
@@ -298,18 +299,30 @@ describe("the stack panel's pure half (P5)", () => {
   });
 
   it("lights a cell by the marking's x / y values, as the full grid does", () => {
-    const lit = cellsLit(index(), "x", "y", { x: new Set(["1"]) }, isLitDouble);
+    const lit = cellsLit(index(), "x", "y", markingFrom(["x"], [["1"]]));
     expect(lit).toEqual([false, true, false, true]); // layout x: [0, 1, 0, 1]
   });
 
+  it("a cell lights whole when it contains a pick finer than its x / y (D4)", () => {
+    // picks (item 7, x 1, y 0) and (item 2, x 0, y 1): a cell holds every
+    // tile's value there, so the cells (1, 0) and (0, 1) light
+    const m = markingFrom(["item", "x", "y"], [["7", "1", "0"], ["2", "0", "1"]]);
+    expect(cellsLit(index(), "x", "y", m)).toEqual([false, true, true, false]);
+  });
+
+  it("with both axes, lights the picked cells only -- not every combination", () => {
+    const m = markingFrom(["x", "y"], [["1", "0"], ["0", "1"]]);
+    expect(cellsLit(index(), "x", "y", m)).toEqual([false, true, true, false]);
+  });
+
   it("dims nothing when the marking names neither axis", () => {
-    expect(cellsLit(index(), "x", "y", { wafer: new Set(["1"]) }, isLitDouble)).toBeNull();
+    expect(cellsLit(index(), "x", "y", markingFrom(["item"], [["1"]]))).toBeNull();
   });
 
   it("stacks the selection, else the tiles the marking lights, else every tile", () => {
     const idx = index();
-    expect(stackSet(idx, new Set([2, 0]), [false, true, false, false])).toEqual([["L1", "1"], ["L2", "3"]]);
-    expect(stackSet(idx, new Set(), [false, true, false, true])).toEqual([["L1", "2"], ["L2", "4"]]);
+    expect(stackSet(idx, new Set([2, 0]), [false, true, false, false])).toEqual([["g1", "1"], ["g2", "3"]]);
+    expect(stackSet(idx, new Set(), [false, true, false, true])).toEqual([["g1", "2"], ["g2", "4"]]);
     expect(stackSet(idx, new Set(), [false, false, false, false])).toBeNull();
     expect(stackSet(idx, new Set(), null)).toBeNull();
   });

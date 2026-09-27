@@ -1135,6 +1135,59 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
+### 2026-09-27 · #862 marking 記整組：多欄位的選取只亮被選到的那幾組（#861） {#pr-862}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-marking-tuples.md`）：
+
+- marking 記的是被選到的那幾列在 key 欄位上的值，一列一組。兩個以上欄位的 marking 只亮被選到的那幾組，
+  不再亮各欄位值的所有組合：縮圖牆框 4 張就是「4 of 48 marked」，不再是 9。訊息上的 chip 數的是選到幾組
+  （「m1 · 4 · by group, item」，zh-TW 是「依 group、item」，不再是「by group (2), item (2)」）；圖表的「N selected」
+  與表格數被選到、被點亮的列（一列靠它的 key 值認得：兩層畫同一批列的圖，例如折線加點，以前每列算兩次，
+  現在只算一次）。
+- 彙總後的長條亮出被選到的部分：整根變暗，前面疊一根三分之一寬、靠左（橫向長條靠上緣）的亮長條，值是只算被選到的列的同一種彙總
+  （平均值比整根高時就高出去），tooltip 多一行「picked: N」。
+- 只有部分 key 欄位的 view（例如每個 group 一列的彙總表）照舊：包含被選到的列的那一格整個亮。
+- 表格的 `keys:` 和 marking 的欄位不同（多一個或換一個欄位）時，在表格上勾選會整個取代 marking，
+  不再保留這張表沒顯示的值（寫的是另一組欄位，就是另一個 marking）。欄位相同或是其中幾個時照舊保留。
+
+**資料** — 沒有 `Schema` 升版，也沒有要跑的指令。
+
+- `.markings/<名字>.json` 的格式改成 `{"name", "sources", "keys", "rows"}`。換版**之前**寫下的檔案還在 workspace 裡：
+  AI 讀到的是舊格式；拿它「Save as table」會得到「the marking's file does not hold a marking」。同名 marking 再送一次就會覆寫成新格式。
+- 換版之前送出的訊息 chip 讀回來沒有計數與欄位，只顯示名字；按「Save as table」會失敗：同名 marking 還沒在新版送過時，
+  檔案還是舊格式，得到上一條的「the marking's file does not hold a marking」；送過之後，得到
+  「… has changed since this message was sent」。兩種都是把 marking 再送一次，從那則新訊息的 chip 存。
+- 升級進行中（新舊 pod 或新舊分頁並存時），帶 marking 送出的訊息會被拒絕（422，兩版的送出格式不同）；
+  換完版、重新整理頁面就好。沒帶 marking 的訊息不受影響。
+
+**k8s · CI 側**
+
+- **view SDK 升到 2**（marking 的形狀是 SDK 的一部分）。**`sandbox.kind: local` 掛自己 plugin 目錄的部署**，
+  `rollout 前`把 `chart` 與 `csv-table` 都用這一版重新 `view_plugin build` 進那個目錄（做法見 [#855](#pr-855)）。
+  - 為什麼：瀏覽器的 loader 只載入和自己同一個 SDK 大版本的 plugin；舊的 bundle 讀的是舊形狀的 marking，載入了也會亮錯。
+  - 漏做的症狀：每個 chart 與 csv-table 面板顯示
+    `it was built for view SDK 1, and this app provides SDK 2`，畫不出來。
+- **你們自己寫的 view plugin**（不論用哪一種 `sandbox.kind`），`rollout 前`把它的 `plugin.json` 改成 `"sdk": "2"`、
+  重新 build 並裝回 plugin 目錄；有用到 marking 的，改用 `markingFrom` / `markingRows` / `isLit`（見
+  [寫一個 view kind](view-kind-authoring.md) 4.4）。
+  - 為什麼：loader 拒絕所有大版本不同的 plugin，不管它有沒有用到 marking。
+  - 漏做的症狀：那個 plugin 的每個面板顯示同一句 `it was built for view SDK 1, and this app provides SDK 2`。
+- **sandbox-host 映像要重 build，`rollout 前`，順序照舊是 sandbox-host 先上、API 後上。**
+  - 做什麼：chart 的沙盒 bundle 多了 `partials` 指令，`lit_rows` 改收 `keys` + `rows`。
+  - 為什麼：新前端拆長條時問沙盒 `partials`；「Save as table」送的是新形狀的 marking。
+  - 漏做的症狀：長條**不會**亮一段，被選到時整根亮，而且**沒有任何錯誤訊息**（前端把問不到當成不拆）；
+    「Save as table」失敗，顯示沙盒對舊參數的拒絕。
+
+**確認做完**
+
+- `launch` 不帶參數印出的清單多了 `partials`（共 10 個指令）。
+- 在一張 `keys: [group, item]`、`marking: m1` 的縮圖牆上框 4 張不同 group、不同 item 的縮圖：計數是「4 of N marked · by group, item」，
+  而不是各 group 與各 item 的所有組合；旁邊一張依 group 計數、來源和縮圖牆相同的長條圖，每根亮的那段是那個 group 裡
+  被框到的縮圖的**列數**（每張縮圖由很多列組成，所以通常比張數大）。
+- 送出一則帶這個 marking 的訊息：chip 寫「m1 · 4 · by group, item」；`.markings/m1.json` 裡是 `keys` 與 4 列 `rows`。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

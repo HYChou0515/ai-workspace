@@ -45,6 +45,7 @@ def test_bare_launch_lists_the_commands(capsys):
     assert names == [
         "validate",
         "query",
+        "partials",  # a bar's picked part (#861 D3); tests/test_partials.py pins it
         "lit_rows",  # "save as table" (P7); tests/test_lit_rows.py pins it
         "facet_build",
         "facet_progress",
@@ -180,7 +181,9 @@ def test_query_takes_a_spec_or_a_path_not_both_or_neither(workspace, capsys, arg
 
 
 @pytest.mark.parametrize(
-    ("cmd", "extra"), [("query", {}), ("facet_build", {"epoch": 1})], ids=["query", "facet_build"]
+    ("cmd", "extra"),
+    [("query", {}), ("partials", {"by": ["group"]}), ("facet_build", {"epoch": 1})],
+    ids=["query", "partials", "facet_build"],
 )
 def test_the_described_arguments_are_the_accepted_ones(capsys, cmd, extra):
     """What `launch <cmd>` describes is what `launch <cmd> <args>` accepts: the

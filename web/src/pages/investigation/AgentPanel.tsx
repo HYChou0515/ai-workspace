@@ -56,6 +56,7 @@ import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { MarkingChips } from "../../components/MarkingChips";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
+import { markingRows, markingSize } from "../../lib/markings";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
 import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
 
@@ -649,9 +650,8 @@ export function AgentPanel({
     const markings = sentMarkings.map(([name, e]) => ({
       name,
       source: e.source,
-      columns: Object.fromEntries(
-        Object.entries(e.marking).map(([c, v]) => [c, [...v].sort()]),
-      ),
+      keys: [...e.marking.keys],
+      rows: markingRows(e.marking),
     }));
     setUnsentMarkings(new Set());
     // #380: hand this turn's queued skills to `send`, then clear them — apply is
@@ -1174,9 +1174,8 @@ export function AgentPanel({
             markings={sentMarkings.map(([name, e]) => ({
               name,
               path: "",
-              counts: Object.fromEntries(
-                Object.entries(e.marking).map(([c, v]) => [c, v.size]),
-              ),
+              count: markingSize(e.marking),
+              keys: [...e.marking.keys],
               source: e.source,
             }))}
             onRemove={(name) => setUnsentMarkings((prev) => new Set(prev).add(name))}

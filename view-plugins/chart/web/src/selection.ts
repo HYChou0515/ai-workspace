@@ -4,8 +4,8 @@
  * ECharts reports selections per series and data index; `Built.series` maps
  * those back to the rows the sandbox's answer holds, so every gesture speaks
  * one language. PR 3 turns a `Selection` into a marking write through
- * `selectionValues` (the `keys:` columns' values over the selected rows, as
- * the marking strings `canon` makes). In this PR a selection is local to the
+ * `selectionRows` (each selected row's `keys:` values, as the marking strings
+ * `canon` makes). In this PR a selection is local to the
  * view.
  *
  * - brush (`rect`) and lasso (`polygon`): the points ECharts found inside. A
@@ -143,7 +143,7 @@ export function selectionFromLegend(selected: Record<string, boolean>, built: Bu
 /** Where a key's MARKING strings live in a layer: `$key.<name>` when a channel
  * sends the key as numbers / time / q8 (query.py adds it), else the key's own
  * column. The one lookup for everything that compares a layer with a marking —
- * writing one (`selectionValues`) and lighting by one — so the two never read
+ * writing one (`selectionRows`) and lighting by one — so the two never read
  * different columns. Null when the layer does not carry the key — nor does a
  * binned layer: its rows are bins, its columns bin centres, never a row's value
  * — nor a column a channel aggregates (`measured`, the layer's
@@ -157,21 +157,27 @@ export function keyColumn(layer: WireLayer | undefined, key: string, measured: R
 
 const NONE_MEASURED: ReadonlySet<string> = new Set();
 
-/** The `keys:` columns' values over the selected rows — what a marking holds.
- * A key none of the rows gives a value is left out (#847/#848 PR 5 P44 row
- * 35): a key with no values names nothing, so a selection over such rows marks
- * nothing rather than writing the `{}` that clears every linked view. */
-export function selectionValues(sel: Selection, answer: Answer, keys: string[], measured: Measured): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  for (const key of keys) {
+/** The selected rows as a marking compares them: per row, its `keys:` values
+ * as marking strings (`canon`), a key the layer does not carry or the row gives
+ * no value left out -- as a table leaves out a row's missing value
+ * (`markingRows.ts`). What a marking holds is these rows' picks (#861 D1,
+ * `selectionMarking`). */
+export function selectionRows(
+  sel: Selection,
+  answer: Answer,
+  keys: readonly string[],
+  measured: Measured,
+): Record<string, string>[] {
+  const cols = keys.flatMap((key) => {
     const col = keyColumn(answer.layers[sel.layer], key, measured[sel.layer] ?? NONE_MEASURED);
-    if (!col) continue;
-    const seen = new Set<string>();
-    for (const r of sel.rows) {
+    return col ? [[key, col] as const] : [];
+  });
+  return sel.rows.map((r) => {
+    const row: Record<string, string> = {};
+    for (const [key, col] of cols) {
       const text = canon(col.value(r));
-      if (text !== null) seen.add(text);
+      if (text !== null) row[key] = text;
     }
-    if (seen.size > 0) out[key] = [...seen];
-  }
-  return out;
+    return row;
+  });
 }

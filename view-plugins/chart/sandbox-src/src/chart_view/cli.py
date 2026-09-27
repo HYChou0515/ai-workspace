@@ -15,9 +15,13 @@
   ``rev`` is the renderer's digest of the text it holds, ignored here: it only
   makes an edited file a new call (the args are the renderer's cache key).
   ``query {"spec"}`` still takes the text, for a view with no file.
-- ``lit_rows {"view", "columns" | "marking"}`` — "save as table" (P7): the rows
-  a marking lights in the view's source, every column, as CSV
-  (`chart_view.lit_rows`).
+- ``partials {"path", "rev", "by"}`` (or ``{"spec", "by"}``) — each
+  aggregated bar split by a marking's keys `by` (#861 D3,
+  `chart_view.partials`): what the renderer asks once per marking KEY set, to
+  draw the picked part of a bar on every marking change without asking again.
+- ``lit_rows {"view", "keys" + "rows" | "marking"}`` — "save as table" (P7):
+  the rows a marking's picked tuples light in the view's source, every column,
+  as CSV (`chart_view.lit_rows`).
 
 Hand-written (no pydantic): two small commands, and a bundle that stays small.
 
@@ -46,7 +50,22 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "description": "Compute what a view: chart spec draws, as the renderer's JSON answer.",
         # its arguments are facet_cli.VIEW_ARGUMENTS (see _schema)
     },
+    "partials": {
+        "description": (
+            "Split each aggregated bar of a view: chart by a marking's keys, so the picked"
+            " part of a bar can be drawn."
+        ),
+        # facet_cli.VIEW_ARGUMENTS and `by` (see _schema)
+    },
 }
+
+#: ``partials``' own argument beside the view's (#861 D3).
+BY: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": "The marking's keys, sorted.",
+}
+PARTIALS_FORMS = tuple(f | {"by"} for f in facet_cli.VIEW_FORMS)
 
 #: ``lit_rows`` (P7, "save as table") takes an object, not one string, so it
 #: keeps its own schema; its body lives in ``chart_view.lit_rows`` (pandas).
@@ -62,10 +81,19 @@ LIT_ROWS: dict[str, Any] = {
                 "type": "string",
                 "description": "The view file (or table file) the rows come from.",
             },
-            "columns": {
-                "type": "object",
-                "additionalProperties": {"type": "array", "items": {"type": "string"}},
-                "description": "The marking: column -> values, as marking text.",
+            "keys": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+                "description": "The marking's key columns.",
+            },
+            "rows": {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "string"}},
+                "description": (
+                    "The picked rows: each one's values on the keys, in their order, "
+                    "as marking text."
+                ),
             },
             "marking": {
                 "type": "string",
@@ -73,7 +101,7 @@ LIT_ROWS: dict[str, Any] = {
             },
         },
         "required": ["view"],
-        "oneOf": [{"required": ["columns"]}, {"required": ["marking"]}],
+        "oneOf": [{"required": ["keys", "rows"]}, {"required": ["marking"]}],
         "additionalProperties": False,
     },
 }
@@ -82,6 +110,9 @@ LIT_ROWS: dict[str, Any] = {
 def _schema(name: str) -> dict[str, Any]:
     if name == "query":  # its file or its text, as facet_build takes a view
         return facet_cli.forms_schema(facet_cli.VIEW_ARGUMENTS, facet_cli.VIEW_FORMS, frozenset())
+    if name == "partials":
+        props = {**facet_cli.VIEW_ARGUMENTS, "by": BY}
+        return facet_cli.forms_schema(props, PARTIALS_FORMS, frozenset())
     c = COMMANDS[name]
     return {
         "type": "object",
@@ -104,6 +135,23 @@ def _argument(name: str, raw: str) -> str:
     if not isinstance(args, dict) or not isinstance(args.get(key), str):
         raise ValueError(f"argument must be {{{key!r}: <string>}}")
     return args[key]
+
+
+def _partials_argument(raw: str) -> tuple[str, str, list[str]]:
+    """What ``partials`` was given: its view as ``_query_argument`` reads it,
+    and the keys ``by``."""
+    args = _json(raw)
+    shape = (
+        "argument must be {'path': <string>, 'rev': <string>, 'by': [<string>, ...]}"
+        " or {'spec': <string>, 'by': [<string>, ...]}"
+    )
+    if not isinstance(args, dict) or set(args) not in PARTIALS_FORMS:
+        raise ValueError(shape)
+    by = args.pop("by")
+    if not isinstance(by, list) or not all(isinstance(k, str) for k in by):
+        raise ValueError(shape)
+    form, value = _query_argument(json.dumps(args))
+    return form, value, by
 
 
 def _query_argument(raw: str) -> tuple[str, str]:
@@ -144,6 +192,27 @@ def _validate(path: str) -> int:
         print("\n".join(result.errors), file=sys.stderr)
         return 2
     print(result.summary)
+    return 0
+
+
+def _partials(text: str, by: list[str]) -> int:
+    from chart_view.partials import partials
+    from chart_view.query import layer_rows
+    from chart_view.sources import SourceError, read_source
+    from chart_view.spec import SpecError, parse_spec, spec_errors
+    from chart_view.transforms import TransformError
+
+    try:
+        spec = parse_spec(text)
+        errors = spec_errors(spec)
+        if errors:
+            print("\n".join(errors), file=sys.stderr)
+            return 2
+        reply = partials(layer_rows(spec, read_source(Path.cwd(), spec["source"])), by)
+    except (SpecError, SourceError, TransformError) as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    json.dump(reply, sys.stdout, separators=(",", ":"), allow_nan=False)
     return 0
 
 
@@ -211,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if name == "validate":
             form, value = "validate", _argument(name, a[1])
+        elif name == "partials":
+            form, value, by = _partials_argument(a[1])
+            text = value if form == "spec" else read_view(value)
+            return 2 if text is None else _partials(text, by)
         else:
             form, value = _query_argument(a[1])
     except ValueError as e:

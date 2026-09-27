@@ -15,11 +15,14 @@ from .kb_chat_routes import EnhancementsInput
 
 
 class MarkingInput(BaseModel):
-    """One sent marking: `column → values`, opaque strings (#847 Q6)."""
+    """One sent marking: the picked key tuples (#861 D1) — `keys` names the
+    columns, each of `rows` is one picked row's values on them in that order;
+    opaque strings (#847 Q6)."""
 
     name: str
     source: str | None = None
-    columns: dict[str, list[str]]
+    keys: list[str]
+    rows: list[list[str]]
 
 
 class _MessageBody(BaseModel):

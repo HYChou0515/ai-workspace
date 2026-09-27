@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { DialogProvider } from "../../components/Dialog";
 import { MarkingProvider } from "../../hooks/useMarking";
-import { MarkingStore } from "../../lib/markings";
+import { markingFrom, MarkingStore } from "../../lib/markings";
 import { EntityViewBody, parseViewSpec } from "./EntityViews";
 
 const lotType: EntityType = {
@@ -75,7 +75,7 @@ afterEach(() => {
 describe("an entity table on a marking that holds a set", () => {
   it("shows only the rows the marking lights, under a bar that says so", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2", "L3"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"], ["L3"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     expect(shownNumbers()).toEqual([2, 3]);
     const bar = screen.getByRole("status", { name: /marking filter/i });
@@ -87,7 +87,7 @@ describe("an entity table on a marking that holds a set", () => {
     const store = new MarkingStore();
     view(ON_FAIL, store);
     expect(shownNumbers()).toEqual([1, 2, 3, 4]);
-    act(() => store.set("fail", { lot: new Set(["L4"]) }, "/views/chart.ai.yaml"));
+    act(() => store.set("fail", markingFrom(["lot"], [["L4"]]), "/views/chart.ai.yaml"));
     expect(shownNumbers()).toEqual([4]);
   });
 
@@ -95,45 +95,42 @@ describe("an entity table on a marking that holds a set", () => {
     // A chart keyed on fail_rate writes String(3) = "3" and String(0.4) = "0.4";
     // one keyed on a date field writes the date's text.
     const store = new MarkingStore();
-    store.set("fail", { fail_rate: new Set(["3", "0.4"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["fail_rate"], [["3"], ["0.4"]]), "/views/chart.ai.yaml");
     const first = view(ON_FAIL, store);
     expect(shownNumbers()).toEqual([2, 3]);
     first.unmount();
-    store.set("fail", { day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["day"], [["2024-01-02"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     expect(shownNumbers()).toEqual([2, 3]);
   });
 
   it("lights on the record number, a column every entity table has", () => {
     const store = new MarkingStore();
-    store.set("fail", { number: new Set(["4"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["number"], [["4"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     expect(shownNumbers()).toEqual([4]);
   });
 
   it("filters on a column the view does not show", () => {
     const store = new MarkingStore();
-    store.set("fail", { day: new Set(["2024-01-03"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["day"], [["2024-01-03"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\nmarking: fail\ncolumns: [lot]\n", store);
     expect(shownNumbers()).toEqual([4]);
   });
 });
 
-describe("the bar names the columns the marking marks by (P27)", () => {
-  // A marking is column -> values, so over two columns it lights every
-  // combination; the bar says which columns, so a count larger than the
-  // picked rows reads as what it is.
+describe("the bar names the keys the marking marks by (P27, #861 D5)", () => {
   it("filtering: '· by lot, day' after the count", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2", "L3"]), day: new Set(["2024-01-02"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot", "day"], [["L2", "2024-01-02"], ["L3", "2024-01-02"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     const bar = screen.getByRole("status", { name: /marking filter/i });
-    expect(bar).toHaveTextContent("filtered by fail · 2 of 4 rows · by lot, day · show all");
+    expect(bar).toHaveTextContent("filtered by fail · 2 of 4 rows · by day, lot · show all");
   });
 
   it("showing all: '· by lot' for a one-column marking", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     fireEvent.click(screen.getByRole("button", { name: "show all" }));
     const bar = screen.getByRole("status", { name: /marking filter/i });
@@ -144,7 +141,7 @@ describe("the bar names the columns the marking marks by (P27)", () => {
 describe("show all", () => {
   it("keeps every row and highlights the lit ones, and can go back to filtering", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     fireEvent.click(screen.getByRole("button", { name: "show all" }));
     expect(shownNumbers()).toEqual([1, 2, 3, 4]);
@@ -158,7 +155,7 @@ describe("show all", () => {
 
   it("is this person's choice for this view: kept across a remount, not shared with another view", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/chart.ai.yaml");
     const first = view(ON_FAIL, store);
     fireEvent.click(screen.getByRole("button", { name: "show all" }));
     first.unmount();
@@ -171,7 +168,7 @@ describe("show all", () => {
 
   it("does not highlight rows while filtering — every row shown is lit", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     const row = screen.getByTestId("row-open-2").closest("tr")!;
     expect(row).not.toHaveAttribute("data-marked");
@@ -181,7 +178,7 @@ describe("show all", () => {
 describe("a table the marking cannot light", () => {
   it("shows every row and says it has no column in common with the marking", () => {
     const store = new MarkingStore();
-    store.set("fail", { wafer: new Set(["W1"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["wafer"], [["W1"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     expect(shownNumbers()).toEqual([1, 2, 3, 4]);
     expect(screen.getByRole("status", { name: /marking filter/i })).toHaveTextContent(
@@ -201,16 +198,16 @@ describe("an empty or cleared marking", () => {
 
   it("brings every row back when the marking is cleared", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
-    act(() => store.set("fail", {}, "/views/chart.ai.yaml"));
+    act(() => store.set("fail", markingFrom(["lot"], []), "/views/chart.ai.yaml"));
     expect(shownNumbers()).toEqual([1, 2, 3, 4]);
     expect(screen.queryByRole("status", { name: /marking filter/i })).not.toBeInTheDocument();
   });
 
   it("does not filter a view detached from its marking in the header", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L2"]]), "/views/chart.ai.yaml");
     view(ON_FAIL, store);
     fireEvent.change(screen.getByRole("combobox", { name: /marking/i }), { target: { value: "" } });
     expect(shownNumbers()).toEqual([1, 2, 3, 4]);
@@ -220,7 +217,7 @@ describe("an empty or cleared marking", () => {
 describe("the table kind is linkable", () => {
   it("carries the header's marking control on a view whose file names no marking", () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L3"]) }, "/views/chart.ai.yaml");
+    store.set("fail", markingFrom(["lot"], [["L3"]]), "/views/chart.ai.yaml");
     view("view: table\nentity: lot\n", store);
     expect(shownNumbers()).toEqual([1, 2, 3, 4]);
     fireEvent.change(screen.getByRole("combobox", { name: /marking/i }), { target: { value: "fail" } });

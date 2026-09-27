@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useMarking, useMarkingNames } from "../../hooks/useMarking";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { WorkspaceProviders } from "./WorkspaceShell";
+import { markingFrom } from "../../lib/markings";
 
 vi.mock("../../hooks/useAgent", () => ({
   AgentProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -43,7 +44,7 @@ describe("WorkspaceProviders — one item's markings across tabs", () => {
         </WorkspaceProviders>
       </>,
     );
-    act(() => write!({ lot: new Set(["L1"]) }, "/v/grid.ai.yaml"));
+    act(() => write!(markingFrom(["lot"], [["L1"]]), "/v/grid.ai.yaml"));
     await waitFor(() => expect(screen.getByTestId("chat")).toHaveTextContent("fail"));
     expect(screen.getByTestId("other-item")).toHaveTextContent("");
   });

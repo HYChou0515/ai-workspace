@@ -37,7 +37,7 @@ plugin 目錄是 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ 
 ```json
 {
   "name": "chart",
-  "sdk": "1",
+  "sdk": "2",
   "kinds": ["chart"],
   "views": [{ "kind": "chart", "when": "numbers across categories or over time, from a table file" }],
   "skill": "skill",
@@ -53,7 +53,7 @@ plugin 目錄是 `view_plugins.dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ 
 | `views` | 選配。每一條變成 agent prompt 裡 `## Available views` 的一行 `` - `kind`: when ``；`kind` 必須是自己的 |
 | `skill` | 選配。plugin 裡一個有 `SKILL.md` 的資料夾；`SKILL.md` 的 `name` 必須等於 plugin 名 |
 | `sandbox` | 選配。`{"bundle": "<資料夾>"}` 或 `{"artifact": "<#674 artifact URL>"}` **二擇一**；`"validate": true` 見第 6 節 |
-| `provides` | 選配。平台向 plugin 要的能力，目前只有 `{"marking_rows": "<沙盒指令>"}`：把一個 marking 點亮的列寫成表格（使用者按「Save as table」）。指令回 `{"rows", "csv", "columns"}`。需要 `sandbox`，指令要在 bundle 的指令清單裡；**最多一個 plugin 宣告**，兩個會拒絕開機並點名兩者 |
+| `provides` | 選配。平台向 plugin 要的能力，目前只有 `{"marking_rows": "<沙盒指令>"}`：把一個 marking 點亮的列寫成表格（使用者按「Save as table」）。指令收 `{"view", "keys", "rows"}` 或 `{"view", "marking": <.markings 檔路徑>}`，回 `{"rows", "csv", "marking": {"keys", "rows"}}`（SDK 2，#861）。需要 `sandbox`，指令要在 bundle 的指令清單裡；**最多一個 plugin 宣告**，兩個會拒絕開機並點名兩者 |
 
 **未知的 key 一律拒絕**（跟設定檔 loader 同一條規則）——拼錯的 key 靜靜地不生效，比開機失敗更難查。
 
@@ -226,16 +226,20 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 
 ### 4.4 連動：marking
 
-同一個 item 裡寫了同一個 `marking: <名字>` 的 view 會連動：一邊選取，另一邊點亮對得上的列。marking 只是
-「欄位名 → 一組字串值」，平台不懂任何領域。
+同一個 item 裡寫了同一個 `marking: <名字>` 的 view 會連動：一邊選取，另一邊點亮對得上的列。marking 記的是
+被選到的那幾列在 key 欄位上的值——`{keys, tuples}`，`keys` 排好序、一列一組，都是字串——平台不懂任何領域
+（SDK 2，#861；SDK 1 的 marking 是「欄位名 → 一組值」，build 給 SDK 1 的 plugin 會被 loader 拒絕，要重 build）。
+不要自己拼 `tuples` 的文字：用 `markingFrom(keys, rows)` 建、`markingRows(m)` 取回 `string[][]`、
+`markingSize(m)` 是 marking 裡有幾組（不重複的選取）、`markedBy(m)` 是「by …」那句。
 
 - 註冊時 `registerViewKind({ …, linkable: true })`：這個 kind 的每個 view 標頭都有 marking 選單，
   並從 props 拿到 `marking`（見上表）。沒宣告的 kind，只有 view 檔寫了 `marking:` 或 `keys:` 才有。
 - `useMarking(name)` → `[entry, write]`：讀 `entry.marking`，用 `write(marking, source)` 寫；`write` 回傳 store 有沒有
   收下（沒有 marking provider 的預覽、或 view 斷開 marking 時是 `false`），沒收下的就不是寫進 marking 的選取；
   `useMarkingNames()` 列出這個 item 現有的名字。
-- **比對一律用 `isLit(row, marking)`**，不要自己寫：規則是「和 marking 至少有一個共同欄位，而且每個共同欄位的值都在集合裡」，
-  兩個 view 各寫一套就會各亮各的。`projectOntoKeys(rows, keys)` 把選到的列投影成要寫的 marking。
+- **比對一律用 `isLit(row, marking)`**，不要自己寫：規則是「列有全部的 key 欄位時，要剛好是被選到的某一組；
+  只有部分 key 欄位時，包含被選到的某一組就亮；一個都沒有就不亮」，兩個 view 各寫一套就會各亮各的。
+  `projectOntoKeys(rows, keys)` 把選到的列變成要寫的 marking（缺任一個 key 的列不算）。
 - 值要用**圖表寫 marking 的同一種文字**：數字、日期、清單的寫法和 chart 一致才對得上。表格類的 kind 直接用
   `csvMarkingRows(rows)`（`parseCsv` 的結果）或 `entityMarkingRow(record)`（API 給的紀錄）轉，
   單一值用 `markingText(value)`，整批比對用 `litRows(rows, marking)`。

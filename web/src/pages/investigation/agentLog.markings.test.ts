@@ -6,15 +6,15 @@ import { describe, expect, it } from "vitest";
 
 import { drawOwnAsk, EMPTY_LOG, reduceAgent } from "./agentLog";
 
-const sent = { name: "fail", path: "/.markings/fail.json", counts: { lot: 2 }, error: null };
-const refused = { name: "big", path: "", counts: { lot: 9 }, error: "workspace is full" };
+const sent = { name: "fail", path: "/.markings/fail.json", count: 2, keys: ["lot"], error: null };
+const refused = { name: "big", path: "", count: 9, keys: ["lot"], error: "workspace is full" };
 
 describe("markings on a user message", () => {
   it("the sender's own draw carries the chips it sent", () => {
     const log = drawOwnAsk(EMPTY_LOG, {
       author: "u",
       content: "why?",
-      markings: [{ name: "fail", path: "", counts: { lot: 2 } }],
+      markings: [{ name: "fail", path: "", count: 2, keys: ["lot"] }],
     });
     const last = log.entries.at(-1)!;
     expect(last.kind === "message" && last.message.markings?.map((m) => m.name)).toEqual([
@@ -27,8 +27,8 @@ describe("markings on a user message", () => {
       author: "u",
       content: "why?",
       markings: [
-        { name: "fail", path: "", counts: { lot: 2 } },
-        { name: "big", path: "", counts: { lot: 9 } },
+        { name: "fail", path: "", count: 2, keys: ["lot"] },
+        { name: "big", path: "", count: 9, keys: ["lot"] },
       ],
     });
     const after = reduceAgent(drawn, {

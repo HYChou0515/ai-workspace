@@ -6,11 +6,13 @@
  * - A thumbnail is painted by the same calls the full grid makes
  *   (`decodeColumn` -> `lattice` -> `colourTable` -> `paintCells`), so the same
  *   cells are the same pixels (Q13).
- * - A selection is a range of sorted positions; it names every group in it,
- *   loaded or not, and lights groups by the platform's own `isLit`.
+ * - A selection is a range of sorted positions; it picks every group in it,
+ *   loaded or not -- each group one pick over the facet columns (#861 D1) --
+ *   and lights groups by the platform's own `isLit`.
  */
+import { isLit, type Marking, markingFrom } from "@aiws/view-sdk";
+
 import { clockFor, type Precision } from "./clock";
-import type { MarkingValues, IsLit } from "./marking";
 import { parseInstant } from "./option";
 import { categoryTable, colourTable, lattice, paintCells, type Cell, type Cells, type RasterImage } from "./raster";
 import { canon, decodeColumn, type WireColumn } from "./wire";
@@ -119,19 +121,22 @@ export function groupsPerPage(cells: number): number {
   return Math.min(MAX_PAGE, Math.max(1, Math.floor(PAGE_BYTES / perGroup)));
 }
 
-/** The marking a selection of positions writes: each facet column's key values
- * over every group in it. `{}` (the write that clears) for none. */
-export function rangeMarking(index: FacetIndex, positions: readonly number[]): Record<string, Set<string>> {
-  if (positions.length === 0) return {};
-  const out: Record<string, Set<string>> = Object.fromEntries(index.facet.map((c) => [c, new Set<string>()]));
-  for (const p of positions) index.facet.forEach((c, k) => out[c].add(index.groups[p].key[k]));
-  return out;
+/** The marking a selection of positions writes: each group in it as ONE pick
+ * over the facet columns (#861 D1) -- boxing (g3, 8) and (g4, 1) picks those
+ * two, never (g3, 1) or (g4, 8). Empty (the write that clears) for none. */
+export function rangeMarking(index: FacetIndex, positions: readonly number[]): Marking {
+  return markingFrom(
+    index.facet,
+    positions.map((p) => index.groups[p].key),
+  );
 }
 
 /** Per group (written order), whether the marking lights it; null when the
- * marking shares none of the facet columns — then nothing is dimmed. */
-export function groupsLit(index: FacetIndex, marking: MarkingValues, isLit: IsLit): boolean[] | null {
-  if (!index.facet.some((c) => c in marking)) return null;
+ * marking shares none of the facet columns — then nothing is dimmed. A tile
+ * with every key lights iff it is a pick; one faceted on some of them iff it
+ * contains a pick (#861 D1, D2). */
+export function groupsLit(index: FacetIndex, marking: Marking): boolean[] | null {
+  if (!marking.keys.some((k) => index.facet.includes(k))) return null;
   return index.groups.map((g) => isLit(Object.fromEntries(index.facet.map((c, k) => [c, g.key[k]])), marking));
 }
 
@@ -197,15 +202,10 @@ export function stackImage(
 
 /** Per cache cell, whether the marking lights it by its x / y values (as
  * the full grid's rows are lit); null when the marking names neither axis --
- * then nothing is dimmed. */
-export function cellsLit(
-  index: FacetIndex,
-  xField: string,
-  yField: string,
-  marking: MarkingValues,
-  isLit: IsLit,
-): boolean[] | null {
-  if (!(xField in marking) && !(yField in marking)) return null;
+ * then nothing is dimmed. A cell holds every tile's value there, so it lights
+ * whole when it contains a pick (#861 D4, the projection rule). */
+export function cellsLit(index: FacetIndex, xField: string, yField: string, marking: Marking): boolean[] | null {
+  if (!marking.keys.includes(xField) && !marking.keys.includes(yField)) return null;
   return index.layout.x.map((x, i) => {
     const row: Record<string, string> = {};
     const [cx, cy] = [canon(x), canon(index.layout.y[i])];

@@ -14,7 +14,7 @@ import * as echarts from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
 import { describe, expect, it } from "vitest";
 
-import { isLit } from "../../../../web/src/lib/markings";
+import { isLit, markingRows } from "../../../../web/src/lib/markings";
 import "./echarts"; // registers the chart's series + components
 import { markingLit, selectionMarking } from "./marking";
 import { measuredFields, toOption } from "./option";
@@ -79,9 +79,9 @@ describe("a stack summed in the sandbox, drawn as any aggregated layer (P40 row 
     };
     const sel = selectionFromBrush(brushed, built);
     const wrote = selectionMarking(sel, c.answer, c.spec.keys, measured)!;
-    expect(Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, [...v]]))).toEqual({ item: ["p"], group: ["a"] });
+    expect({ keys: wrote.keys, rows: markingRows(wrote) }).toEqual({ keys: ["group", "item"], rows: [["a", "p"]] });
     // the chart lights the one summed bar
-    const lit = markingLit(c.answer, wrote, isLit, measured)[0]!;
+    const lit = markingLit(c.answer, wrote, measured)[0]!;
     expect(lit.filter(Boolean)).toHaveLength(1);
     // a table of the raw rows lights exactly those the bar summed: 0 and 1
     const rows = c.data.item.map((_, r) => ({ item: String(c.data.item[r]), group: String(c.data.group[r]), region: String(c.data.region[r]) }));
@@ -93,6 +93,6 @@ describe("a stack summed in the sandbox, drawn as any aggregated layer (P40 row 
     const { built } = draw(c);
     const sel = selectionFromLegend({ a: true, b: false }, built);
     const wrote = selectionMarking(sel, c.answer, c.spec.keys, measuredFields(c.answer))!;
-    expect([...wrote.group]).toEqual(["a"]);
+    expect(new Set(markingRows(wrote).map((r) => r[wrote.keys.indexOf("group")]))).toEqual(new Set(["a"]));
   });
 });

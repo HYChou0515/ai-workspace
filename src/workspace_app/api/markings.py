@@ -1,14 +1,16 @@
 """Named markings sent with a chat message reach the AI (#847 PR 3 P7, Q10).
 
-A marking is a linked selection — `column → values`, both opaque strings — that
-the user kept as a chip when sending. The send:
+A marking is a linked selection — the picked key TUPLES (#861 D1): `keys` names
+the columns, each row is one picked row's values on them, all opaque strings —
+that the user kept as a chip when sending. The send:
 
 1. writes each one to ``.markings/<name>.json`` through the file facade, so the
    workspace quota applies exactly as to any other write;
 2. records it on the persisted user message (`SentMarking`), so a reload still
    shows the chip — a refused one with its reason;
-3. gives the model one line per written marking: its name, how many values per
-   column, and the path to read them from.
+3. gives the model one line per written marking: its name, how many rows by
+   which keys, and the path to read them from (#861 D6: no cap — the file holds
+   them all).
 
 A refused write fails THAT chip, never the send: the question the user typed is
 still a question, and the reason travels on the chip.
@@ -18,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Sequence
 
 from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..perm import Verb
@@ -33,13 +35,26 @@ MARKINGS_DIR = "/.markings"
 MAX_NAME_BYTES = 250
 
 
-def marking_digest(columns: Mapping[str, Iterable[str]]) -> str:
-    """One marking's values as a stable hash: each non-empty column's distinct
-    values, sorted, in column order. The send records it on the chip (P7), and
-    "save as table" from that chip compares it with the marking the rows were
-    actually lit by — a later send under the same name rewrites the file."""
-    canon = {c: sorted(set(v)) for c, v in sorted(columns.items()) if v}
-    text = json.dumps(canon, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+def normalize_marking(
+    keys: Sequence[str], rows: Sequence[Sequence[str]]
+) -> tuple[list[str], list[list[str]]]:
+    """A marking in its one spelling (#861 Formats): keys sorted, each row's
+    values permuted to match, rows sorted and distinct. A row that does not hold
+    one value per key is not a picked row and is dropped. The keys are taken to
+    be distinct — `write_markings` refuses a marking that names one twice."""
+    order = sorted(range(len(keys)), key=lambda i: keys[i])
+    fitting = {tuple(row[i] for i in order) for row in rows if len(row) == len(keys)}
+    return [keys[i] for i in order], [list(t) for t in sorted(fitting)]
+
+
+def marking_digest(keys: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """One marking's picked tuples as a stable hash (#861 Formats): sha256 of the
+    compact JSON of ``{"keys", "rows"}`` in their normalized spelling. The send
+    records it on the chip (P7), and "save as table" from that chip compares it
+    with the marking the rows were actually lit by — a later send under the
+    same name rewrites the file."""
+    keys, rows = normalize_marking(keys, rows)
+    text = json.dumps({"keys": keys, "rows": rows}, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -64,7 +79,8 @@ async def write_markings(
     may_write: Callable[[Verb], str | None],
 ) -> list[SentMarking]:
     """Write each non-empty marking; one `SentMarking` per marking, in order.
-    A marking with no values is not a marking and is dropped.
+    A marking with no keys, or no row that fits them, is not a marking and is
+    dropped.
 
     `may_write(verb)` answers for the SENDER: None if they hold `verb`, else the
     reason. A new file asks `add_content`, replacing one asks `edit_content` —
@@ -73,11 +89,14 @@ async def write_markings(
     create or overwrite files here."""
     out: list[SentMarking] = []
     for m in markings:
-        columns = {c: sorted(set(v)) for c, v in m.columns.items() if v}
-        if not columns:
+        if len(set(m.keys)) != len(m.keys):
+            twice = "a marking cannot name a column twice"
+            out.append(SentMarking(name=m.name, source=m.source, error=twice))
             continue
-        counts = {c: len(v) for c, v in columns.items()}
-        sent = SentMarking(name=m.name, counts=counts, source=m.source)
+        keys, rows = normalize_marking(m.keys, m.rows)
+        if not keys or not rows:
+            continue
+        sent = SentMarking(name=m.name, count=len(rows), keys=keys, source=m.source)
         if (problem := _name_problem(m.name)) is not None:
             sent.error = problem
             out.append(sent)
@@ -86,7 +105,8 @@ async def write_markings(
         doc = {
             "name": m.name,
             "sources": [m.source] if m.source else [],
-            "columns": columns,
+            "keys": keys,
+            "rows": rows,
         }
         verb: Verb = "edit_content" if await files.exists(workspace_id, path) else "add_content"
         if (refused := may_write(verb)) is not None:
@@ -105,7 +125,7 @@ async def write_markings(
             sent.error = "the workspace could not be reached — send the marking again"
         else:
             sent.path = path
-            sent.digest = marking_digest(columns)
+            sent.digest = marking_digest(keys, rows)
         out.append(sent)
     return out
 
@@ -114,7 +134,8 @@ def markings_prompt_block(sent: list[SentMarking]) -> str:
     """The model's view of the markings: one line each for those written. ""
     when there are none — a refused chip is the user's to see, not the model's."""
     lines = [
-        f"- `{m.name}` ({', '.join(f'{c}: {n}' for c, n in m.counts.items())}) → {rel_path(m.path)}"
+        f"- `{m.name}` ({m.count} {'row' if m.count == 1 else 'rows'} by {', '.join(m.keys)})"
+        f" → {rel_path(m.path)}"
         for m in sent
         if m.path
     ]
@@ -122,6 +143,7 @@ def markings_prompt_block(sent: list[SentMarking]) -> str:
         return ""
     return (
         "The user sent these markings (selections made in linked views) with this "
-        "message. Each file holds the marked values per column; read it for them.\n"
+        "message. Each file holds the picked rows: `keys` names the columns, and each "
+        "entry of `rows` is one picked row's values in that order; read it for them.\n"
         + "\n".join(lines)
     )

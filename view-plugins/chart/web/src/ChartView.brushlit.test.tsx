@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 /**
  * #847/#848 PR 5 P29: the chart a selection is made in lights by the marking,
- * as every other view on it does. With a marking by two columns (group, item)
- * the brushed chart showed only ECharts' own brush visual -- every point
- * outside the box greyed -- so it showed the rows it brushed while the tables
- * showed every combination the marking lights, more. The chart here is REAL
+ * as every other view on it does -- ECharts' own brush visual (every point
+ * outside the box greyed) is off. Since #861 D1 the marking holds the picked
+ * rows, so over two keys (group, item) it lights what was brushed and nothing
+ * more: never every combination of the picked values. The chart here is REAL
  * ECharts (SSR); the marking is the host's real store, through the SDK double.
  */
 import { act, cleanup, render } from "@testing-library/react";
@@ -13,7 +13,7 @@ import { SVGRenderer } from "echarts/renderers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarkingProvider } from "../../../../web/src/hooks/useMarking";
-import { MarkingStore } from "../../../../web/src/lib/markings";
+import { markingRows, MarkingStore } from "../../../../web/src/lib/markings";
 import { DIM_OPACITY } from "./highlight";
 import { answer, cat, f64, layer } from "./testAnswer";
 import { desaturated, sameColour } from "./testDrawn";
@@ -29,7 +29,7 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@aiws/view-sdk", async () => {
   const hooks = await import("../../../../web/src/hooks/useMarking");
   const lib = await import("../../../../web/src/lib/markings");
-  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, isLit: lib.isLit };
+  return { ...sdk, useMarking: hooks.useMarking, useMarkingNames: hooks.useMarkingNames, ...lib };
 });
 
 // The chart's own module (its series, components and line brush selector),
@@ -57,12 +57,12 @@ echarts.use([SVGRenderer]);
 // The chart debounces brush events (throttleDelay 250 ms in the option).
 const settle = () => act(() => new Promise((r) => setTimeout(r, 400)));
 
-// Rows 0..3: (G1,1) (G1,2) (G2,1) (G2,2), at x 1..4; row 4 (G3,3) at x 5.
+// Rows 0..3: (g1,1) (g1,2) (g2,1) (g2,2), at x 1..4; row 4 (g3,3) at x 5.
 const ANSWER = answer(
   layer("scatter", 5, {
     a: f64([1, 2, 3, 4, 5]),
     b: f64([1, 1, 1, 1, 1]),
-    group: cat(["G1", "G1", "G2", "G2", "G3"]),
+    group: cat(["g1", "g1", "g2", "g2", "g3"]),
     item: cat(["1", "2", "1", "2", "3"]),
   }),
 );
@@ -112,7 +112,7 @@ function drawn(chart: echarts.ECharts): string[] {
   });
 }
 
-/** A brush over x 0.5..1.5 and 3.5..4.5: rows 0 (G1,1) and 3 (G2,2). */
+/** A brush over x 0.5..1.5 and 3.5..4.5: rows 0 (g1,1) and 3 (g2,2). */
 async function brush(chart: echarts.ECharts) {
   act(() =>
     chart.dispatchAction({
@@ -141,12 +141,10 @@ describe("the chart a selection is made in", () => {
     const store = new MarkingStore();
     const { chart } = mount(store, "m");
     await brush(chart);
-    // the brush wrote group {G1, G2} x item {1, 2}: all four combinations light
-    expect(Object.fromEntries(Object.entries(store.get("m")!.marking).map(([k, v]) => [k, [...v].sort()]))).toEqual({
-      group: ["G1", "G2"],
-      item: ["1", "2"],
-    });
-    expect(drawn(chart)).toEqual(["lit", "lit", "lit", "lit", "dim"]);
+    // the brush picked (g1, 1) and (g2, 2): those two light, not the four
+    // combinations of their groups and items (#861 D1)
+    expect(markingRows(store.get("m")!.marking)).toEqual([["g1", "1"], ["g2", "2"]]);
+    expect(drawn(chart)).toEqual(["lit", "dim", "dim", "lit", "dim"]);
     // the box the person drew stays, to see and to clear
     const model = (chart as unknown as { getModel(): { getComponent(main: string): { areas: unknown[] } } }).getModel();
     expect(model.getComponent("brush").areas).toHaveLength(2);

@@ -109,12 +109,36 @@ export type Options = {
    * spec's own `highlight:` bitset (`null` = this layer is not linked, drawn
    * undimmed). Omitted: the spec's highlight, as before. */
   lit?: (boolean[] | null)[];
+  /** #861 D3: per layer, each row's aggregate over the rows a marking picked
+   * (`partials.ts:litValues`; null: none picked), or null for a layer lit as
+   * `lit` says. An aggregated bar layer given one is drawn whole, dimmed, with
+   * a lit bar of the picked value in front: a third of the bar's width, at its
+   * left edge (a horizontal bar's top) [user, review #862], from the bar's own base. */
+  picked?: ((number | null)[] | null)[];
+  /** Where ECharts laid bar `dataIndex` of series `seriesIndex` out, and its
+   * fill (`barAt.ts`, read from the drawn chart): a picked part's lit bar is
+   * drawn from it on every draw. Omitted: no lit bar is drawn. */
+  barAt?: BarAt;
   /** The chart is narrower than `COMPACT_BELOW` (`compactAt`). */
   compact?: boolean;
   /** The chart's height in px, when measured (a compact layout keeps half of
    * it for the plot, PR 5 P34). */
   height?: number;
 };
+
+/** A bar as ECharts laid it out: `x`, `y` its origin corner -- the left edge
+ * across it (a horizontal bar's top), the base along it -- `width`, `height`
+ * signed, and its fill. */
+export type BarRect = { x: number; y: number; width: number; height: number; fill?: string };
+export type BarAt = (seriesIndex: number, dataIndex: number) => BarRect | undefined;
+
+/** The lit bar's share of the bar's width (#861 D3). An overlapping (nested,
+ * bar-in-bar) chart draws the whole behind, wider and lighter, and the part in
+ * front, narrower and darker; nothing fixes the ratio. A third [mine]: at a
+ * half, the lit bar at the left edge beside the dimmed half reads as two bars
+ * side by side; much narrower is hard to see where bars are already thin
+ * (many categories, a narrow pane). */
+export const LIT_SHARE = 1 / 3;
 
 /** Below this width (px) a chart is laid out compact (#847/#848 PR 5 P31). */
 export const COMPACT_BELOW = 320;
@@ -675,6 +699,13 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
   const yAt = (col: Column, row: number): number | null => (yAxis ? yAxis.at(col, row) : (col.value(row) as number | null));
   // boxes ECharts draws nothing of: one with a summary left out
   let boxesOut = 0;
+  // #861 D3: the axis a bar's length is on
+  const valueAxis = baseAt === 0 ? yAxis : xAxis;
+  // per series of a split bar, its layer's picked value of each row, said in
+  // its tooltip
+  const pickedOf = new Map<number, readonly (number | null)[]>();
+  // the split bars, their lit bars drawn once every stack is lined up
+  const splits: { li: number; bar: number; split: readonly (number | null)[]; as: { legend: string | undefined } }[] = [];
 
   const common = (mark: MarkDef) => ({
     emphasis: { focus: "self" },
@@ -980,6 +1011,24 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     const textCol = enc.text?.field ? cols[enc.text.field] : undefined;
     const stacked = isStacked(mark);
     const first = series.length;
+    // #861 D3: a bar the marking picks part of, split in two -- only on a
+    // plain number axis (a log one has no 0 to start a part at). In a stack
+    // each segment's picked part must lie inside it, or the stack would move:
+    // one that does not is lit whole, and the note says so.
+    let split = mark.type === "bar" && valueAxis?.kind === "value" ? (opts.picked?.[li] ?? null) : null;
+    if (split && stacked) {
+      const valueCol = cols[(baseAt === 0 ? enc.y : enc.x)?.field as string];
+      const fits = all.every((r) => {
+        const part = split![r];
+        const whole = valueCol?.value(r);
+        return part === null || part === undefined || (typeof whole === "number" && part * whole >= 0 && Math.abs(part) <= Math.abs(whole));
+      });
+      if (!fits) {
+        split = null;
+        const note = "a stack is lit whole: a picked part does not fit inside its segment";
+        if (!notes.includes(note)) notes.push(note);
+      }
+    }
     for (const key of order) {
       // (a stack's rows are one per slot here: the sandbox summed them, P40 row 18)
       const members = groups.get(key) ?? [];
@@ -1036,7 +1085,32 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
           },
         };
       }
-      push(s, members, { legend: splitCol ? key : undefined });
+      const as = { legend: splitCol ? key : undefined };
+      if (!split) {
+        push(s, members, as);
+        continue;
+      }
+      // The bar is drawn whole, dimmed, where it always is; its lit bar is a
+      // series of its own drawn in front once the stacks are lined up (below),
+      // from where ECharts laid the bar out -- so a picked value longer than
+      // the bar (a mean) is seen above it, the bar whole behind (#861 D3).
+      pickedOf.set(series.length, split);
+      splits.push({ li, bar: series.length, split, as });
+      push(
+        {
+          ...s,
+          // A hover fades nothing: the lit bar is silent, so the hover lands
+          // on this bar behind it, and a focus on it faded the very lit bar
+          // the pointer was over. The marking already says what is picked.
+          emphasis: { focus: "none" },
+          data: (s.data as Item[]).map((d) => {
+            const it = Array.isArray(d) ? { value: d } : d;
+            return { ...it, itemStyle: { ...(it.itemStyle as object), opacity: DIM_OPACITY } };
+          }),
+        },
+        members,
+        as,
+      );
     }
     // a colour by value paints every series of the layer, not the first alone
     if (colourVisual) colourVisual.seriesIndex = Array.from({ length: series.length - first }, (_, k) => first + k);
@@ -1051,6 +1125,57 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     category: (baseAt === 1 ? yAxis : xAxis)?.kind === "category",
     at: baseAt,
   });
+  // #861 D3: each split bar's lit bar, in front of it -- a third of its
+  // width at its origin edge (the left, or a horizontal bar's top), from its
+  // base to its base plus the picked value, read from where ECharts laid the
+  // bar out on this draw (a resize, a legend toggle, a stack moves it). Point
+  // j of the lit series is point j of its bar, as lined up; silent, so a
+  // hover, click or brush is the bar's.
+  for (const { li, bar, split, as } of splits) {
+    const barSeries = series[bar]!;
+    const valueFirst = !!barSeries.encode;
+    const parts = (barSeries.data as Item[]).map((d, j) => {
+      const row = rows[bar]!.rows[j];
+      const part = typeof row === "number" ? (split[row] ?? null) : null;
+      const v = Array.isArray(d) ? d : d.value;
+      const at = valueFirst ? v[1] : v[baseAt];
+      return { at, part };
+    });
+    const barAt = opts.barAt;
+    series.push({
+      type: "custom",
+      name: barSeries.name,
+      silent: true,
+      // clipped to the plot as the bar is: on an axis that leaves 0 out both
+      // start below it (a custom series is not clipped by default)
+      clip: true,
+      // the picked value on the value axis, so a longer one widens it
+      data: parts.map(({ at, part }) => (baseAt === 0 ? [at, part] : [part, at])),
+      renderItem: (
+        params: { dataIndex: number },
+        api: { coord: (p: (number | string | null)[]) => number[]; value: (d: number) => number | string | null },
+      ) => {
+        const part = parts[params.dataIndex]?.part;
+        const box = part === null || part === undefined ? undefined : barAt?.(bar, params.dataIndex);
+        if (!box || part === null || part === undefined) return null;
+        // px per unit along the bar, from the axis itself (linear: a split is
+        // never drawn on a log axis)
+        const pos = api.value(baseAt);
+        const unit =
+          baseAt === 0
+            ? api.coord([pos, 1])[1]! - api.coord([pos, 0])[1]!
+            : api.coord([1, pos])[0]! - api.coord([0, pos])[0]!;
+        const shape =
+          baseAt === 0
+            ? { x: box.x, y: box.y, width: box.width * LIT_SHARE, height: part * unit }
+            : { x: box.x, y: box.y, width: part * unit, height: box.height * LIT_SHARE };
+        return { type: "rect", shape, style: { fill: box.fill, opacity: 1 } };
+      },
+    });
+    rows.push({ layer: li, rows: [] });
+    names.push(as.legend);
+    slices.push(undefined);
+  }
   // What a log axis leaves out, said once per axis: exactly what its `at`
   // left out (PR 5 P40 row 20), and the stack 0s `lineUpStacks` left empty
   // (a stack's value keeps its 0s, which add nothing, P39). A rule's own
@@ -1102,6 +1227,8 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
         .filter((c) => cols[c.field!])
         .map((c) => `${escape(c.title ?? c.field!)}: <b>${escape(show(cols[c.field!], row))}</b>`);
       if (answer.layers[where.layer].binned && cols.$count) lines.push(`points: <b>${escape(show(cols.$count, row))}</b>`);
+      const part = pickedOf.get(p.seriesIndex)?.[row];
+      if (part !== undefined && part !== null) lines.push(`picked: <b>${escape(String(part))}</b>`);
       return lines.join("<br/>");
     },
   };

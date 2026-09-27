@@ -1,54 +1,98 @@
 /**
- * Named markings (#847 PR 3 P1, Q5.1 / Q6): a knowledge-free `name → {column →
- * values}` store. Columns and values are opaque strings; views link on
- * same-named columns.
+ * Named markings (#847 PR 3 P1, Q5.1 / Q6; #861): a knowledge-free `name →
+ * picks` store -- the picked rows' values on the marking's keys. Columns and
+ * values are opaque strings; views link on same-named columns.
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { isLit, MarkingStore, projectOntoKeys } from "./markings";
+import { isLit, markedBy, markingFrom, markingRows, markingSize, MarkingStore, projectOntoKeys } from "./markings";
 
-describe("isLit — the matching rule", () => {
-  const marking = { lot: new Set(["L1", "L2"]), wafer: new Set(["3"]) };
+const one = (key: string, ...values: string[]) => markingFrom([key], values.map((v) => [v]));
 
-  it("lights a row whose every shared column is in the marking", () => {
-    expect(isLit({ lot: "L1", wafer: "3", x: "0" }, marking)).toBe(true);
-    // Only `lot` is shared: `wafer` is not this view's column, so it does not
-    // constrain it — a lot-level table lights every row of a marked lot.
-    expect(isLit({ lot: "L2", yield: "0.9" }, marking)).toBe(true);
+describe("isLit — a marking remembers the picked rows (#861 D1, D2)", () => {
+  // Four gallery tiles boxed: (g3, 8), (g4, 1), (g5, 1), (g5, 2).
+  const marking = markingFrom(["group", "item"], [["g3", "8"], ["g4", "1"], ["g5", "1"], ["g5", "2"]]);
+
+  it("lights exactly the picked rows, not every combination of their values (D1)", () => {
+    expect(isLit({ group: "g3", item: "8", x: "0" }, marking)).toBe(true);
+    expect(isLit({ group: "g5", item: "2" }, marking)).toBe(true);
+    // Under #855's per-column sets these lit too: g3 × {1, 2}, g4 × {2, 8}, g5 × {8}.
+    expect(isLit({ group: "g3", item: "1" }, marking)).toBe(false);
+    expect(isLit({ group: "g4", item: "8" }, marking)).toBe(false);
+    expect(isLit({ group: "g5", item: "8" }, marking)).toBe(false);
   });
 
-  it("does not light a row that misses on any shared column", () => {
-    expect(isLit({ lot: "L1", wafer: "4" }, marking)).toBe(false);
-    expect(isLit({ lot: "L9" }, marking)).toBe(false);
+  it("lights a row coarser than the marking when it contains a pick (D2, Spotfire's relation)", () => {
+    // A per-group summary has no `item`: the picks project onto `group`.
+    expect(isLit({ group: "g4", mean: "72" }, marking)).toBe(true);
+    expect(isLit({ group: "g1", mean: "70" }, marking)).toBe(false);
+    // Onto `item` alone: {8, 1, 2}.
+    expect(isLit({ item: "2" }, marking)).toBe(true);
+    expect(isLit({ item: "7" }, marking)).toBe(false);
   });
 
-  it("does not light a row that shares NO column — an unrelated view stays dark", () => {
-    // "every shared column matches" is vacuously true with none shared; taken
-    // literally it would light every row of a view keyed on something else.
-    expect(isLit({ tool: "ETCH-1" }, marking)).toBe(false);
+  it("does not light a row that shares NO key — an unrelated view stays dark", () => {
+    expect(isLit({ tool: "t1" }, marking)).toBe(false);
   });
 
   it("lights nothing for an empty marking", () => {
-    expect(isLit({ lot: "L1" }, {})).toBe(false);
+    expect(isLit({ group: "g3" }, markingFrom(["group"], []))).toBe(false);
   });
 
   it("compares values as strings — opaque, no parsing", () => {
-    expect(isLit({ wafer: "3" }, { wafer: new Set(["3"]) })).toBe(true);
-    expect(isLit({ wafer: "03" }, { wafer: new Set(["3"]) })).toBe(false);
+    const m = markingFrom(["item"], [["3"]]);
+    expect(isLit({ item: "3" }, m)).toBe(true);
+    expect(isLit({ item: "03" }, m)).toBe(false);
+  });
+
+  it("keeps a value holding a comma apart from a pair (the tuple text is joined by U+001F)", () => {
+    const m = markingFrom(["p", "q"], [["a,b", "c"]]);
+    expect(isLit({ p: "a", q: "b,c" }, m)).toBe(false);
+    expect(isLit({ p: "a,b", q: "c" }, m)).toBe(true);
+  });
+});
+
+describe("markingFrom / markingRows — the one shape on every wire", () => {
+  it("sorts the keys and moves each row's values with them, so key order is not identity", () => {
+    const a = markingFrom(["item", "group"], [["8", "g3"]]);
+    const b = markingFrom(["group", "item"], [["g3", "8"]]);
+    expect(a.keys).toEqual(["group", "item"]);
+    expect(markingRows(a)).toEqual([["g3", "8"]]);
+    expect(markingRows(a)).toEqual(markingRows(b));
+  });
+
+  it("drops duplicates and rows of the wrong length; rows come back sorted", () => {
+    const m = markingFrom(["group", "item"], [["g5", "2"], ["g3", "8"], ["g5", "2"], ["g4"]]);
+    expect(markingRows(m)).toEqual([
+      ["g3", "8"],
+      ["g5", "2"],
+    ]);
+    expect(markingSize(m)).toBe(2);
+  });
+});
+
+describe("markedBy — what a count says it counts (D5)", () => {
+  it("names the keys", () => {
+    expect(markedBy(markingFrom(["item", "group"], [["1", "g1"]]))).toBe("by group, item");
   });
 });
 
 describe("projectOntoKeys — what a selection writes", () => {
-  it("collects each key's distinct values over the selected rows", () => {
+  it("writes each picked row's key values as one tuple", () => {
     const rows = [
       { lot: "L1", wafer: "3", x: "0" },
       { lot: "L1", wafer: "4", x: "1" },
       { lot: "L2", wafer: "3", x: "2" },
     ];
     const m = projectOntoKeys(rows, ["lot", "wafer"])!;
-    expect([...m.lot!].sort()).toEqual(["L1", "L2"]);
-    expect([...m.wafer!].sort()).toEqual(["3", "4"]);
-    expect(Object.keys(m)).toEqual(["lot", "wafer"]);
+    expect(m.keys).toEqual(["lot", "wafer"]);
+    expect(markingRows(m)).toEqual([
+      ["L1", "3"],
+      ["L1", "4"],
+      ["L2", "3"],
+    ]);
+    // Not the fourth combination (L2, 4).
+    expect(isLit({ lot: "L2", wafer: "4" }, m)).toBe(false);
   });
 
   it("is null for a view without keys — it can be lit but cannot write", () => {
@@ -56,45 +100,46 @@ describe("projectOntoKeys — what a selection writes", () => {
   });
 
   it("is an empty marking for an empty selection (the write that clears)", () => {
-    expect(projectOntoKeys([], ["lot"])).toEqual({});
+    expect(markingSize(projectOntoKeys([], ["lot"])!)).toBe(0);
   });
 
-  it("skips a key a row does not carry", () => {
-    expect(projectOntoKeys([{ lot: "L1" }], ["lot", "wafer"])).toEqual({ lot: new Set(["L1"]) });
+  it("skips a row that does not carry every key — it names no whole pick", () => {
+    const m = projectOntoKeys([{ lot: "L1" }, { lot: "L2", wafer: "3" }], ["lot", "wafer"])!;
+    expect(markingRows(m)).toEqual([["L2", "3"]]);
   });
 });
 
 describe("MarkingStore.set says whether the marking holds the write (#847/#848 PR 5 P41 row 27)", () => {
   it("is false when `ifEmpty` finds the marking occupied, and writes nothing", () => {
     const s = new MarkingStore();
-    expect(s.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml")).toBe(true);
+    expect(s.set("picked", one("item", "p"), "/v/a.ai.yaml")).toBe(true);
     const onPicked = vi.fn();
     s.subscribe("picked", onPicked);
-    expect(s.set("picked", { item: new Set(["q"]) }, "/v/b.ai.yaml", { ifEmpty: true })).toBe(false);
-    expect([...s.get("picked")!.marking.item!]).toEqual(["p"]);
+    expect(s.set("picked", one("item", "q"), "/v/b.ai.yaml", { ifEmpty: true })).toBe(false);
+    expect(markingRows(s.get("picked")!.marking)).toEqual([["p"]]);
     expect(onPicked).not.toHaveBeenCalled();
   });
 
   it("is true for a seed on an empty marking", () => {
     const s = new MarkingStore();
-    expect(s.set("picked", { item: new Set(["q"]) }, "/v/b.ai.yaml", { ifEmpty: true })).toBe(true);
+    expect(s.set("picked", one("item", "q"), "/v/b.ai.yaml", { ifEmpty: true })).toBe(true);
     expect(s.get("picked")?.source).toBe("/v/b.ai.yaml");
   });
 
   it("is true, and silent, for the same write again: the marking holds it", () => {
     const s = new MarkingStore();
-    s.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml");
+    s.set("picked", one("item", "p"), "/v/a.ai.yaml");
     const onPicked = vi.fn();
     s.subscribe("picked", onPicked);
-    expect(s.set("picked", { item: new Set(["p"]) }, "/v/a.ai.yaml")).toBe(true);
+    expect(s.set("picked", one("item", "p"), "/v/a.ai.yaml")).toBe(true);
     expect(onPicked).not.toHaveBeenCalled();
   });
 
   it("is true for a clear, and for a clear of a marking that holds nothing", () => {
     const s = new MarkingStore();
     expect(s.set("picked", null, null)).toBe(true);
-    s.set("picked", { item: new Set(["p"]) }, null);
-    expect(s.set("picked", {}, null)).toBe(true);
+    s.set("picked", one("item", "p"), null);
+    expect(s.set("picked", one("item"), null)).toBe(true);
     expect(s.get("picked")).toBeUndefined();
   });
 });
@@ -102,8 +147,8 @@ describe("MarkingStore.set says whether the marking holds the write (#847/#848 P
 describe("MarkingStore", () => {
   it("reads back what was written, with the view that wrote it", () => {
     const s = new MarkingStore();
-    s.set("fail", { lot: new Set(["L1"]) }, "/v/grid.ai.yaml");
-    expect(s.get("fail")?.marking).toEqual({ lot: new Set(["L1"]) });
+    s.set("fail", one("lot", "L1"), "/v/grid.ai.yaml");
+    expect(markingRows(s.get("fail")!.marking)).toEqual([["L1"]]);
     expect(s.get("fail")?.source).toBe("/v/grid.ai.yaml");
     expect(s.get("other")).toBeUndefined();
   });
@@ -114,17 +159,17 @@ describe("MarkingStore", () => {
     const onOther = vi.fn();
     s.subscribe("fail", onFail);
     s.subscribe("other", onOther);
-    s.set("fail", { lot: new Set(["L1"]) }, null);
+    s.set("fail", one("lot", "L1"), null);
     expect(onFail).toHaveBeenCalledTimes(1);
     expect(onOther).not.toHaveBeenCalled();
   });
 
   it("an empty marking clears the name", () => {
     const s = new MarkingStore();
-    s.set("fail", { lot: new Set(["L1"]) }, null);
-    s.set("fail", {}, null);
+    s.set("fail", one("lot", "L1"), null);
+    s.set("fail", one("lot"), null);
     expect(s.get("fail")).toBeUndefined();
-    s.set("fail", { lot: new Set() }, null);
+    s.set("fail", one("lot"), null);
     expect(s.get("fail")).toBeUndefined();
   });
 
@@ -132,8 +177,8 @@ describe("MarkingStore", () => {
     const s = new MarkingStore();
     const onNames = vi.fn();
     s.subscribeNames(onNames);
-    s.set("b", { lot: new Set(["L1"]) }, null);
-    s.set("a", { lot: new Set(["L2"]) }, null);
+    s.set("b", one("lot", "L1"), null);
+    s.set("a", one("lot", "L2"), null);
     expect(s.names()).toEqual(["a", "b"]);
     s.set("b", null, null);
     expect(s.names()).toEqual(["a"]);
@@ -145,13 +190,13 @@ describe("MarkingStore", () => {
     const cb = vi.fn();
     const off = s.subscribe("fail", cb);
     off();
-    s.set("fail", { lot: new Set(["L1"]) }, null);
+    s.set("fail", one("lot", "L1"), null);
     expect(cb).not.toHaveBeenCalled();
   });
 
   it("returns the same snapshot until the marking changes (useSyncExternalStore)", () => {
     const s = new MarkingStore();
-    s.set("fail", { lot: new Set(["L1"]) }, null);
+    s.set("fail", one("lot", "L1"), null);
     expect(s.get("fail")).toBe(s.get("fail"));
     expect(s.names()).toBe(s.names());
   });
@@ -162,38 +207,38 @@ describe("MarkingStore", () => {
     s.subscribeAll(onAny);
     const empty = s.snapshot();
     expect(s.snapshot()).toBe(empty);
-    s.set("fail", { lot: new Set(["L1"]) }, "/v/a.ai.yaml");
-    s.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/a.ai.yaml");
+    s.set("fail", one("lot", "L1"), "/v/a.ai.yaml");
+    s.set("fail", one("lot", "L1", "L2"), "/v/a.ai.yaml");
     expect(onAny).toHaveBeenCalledTimes(2);
     const snap = s.snapshot();
     expect(snap).not.toBe(empty);
     expect([...snap.keys()]).toEqual(["fail"]);
-    expect(snap.get("fail")!.marking.lot!.size).toBe(2);
+    expect(markingSize(snap.get("fail")!.marking)).toBe(2);
   });
 
   it("writing what it already holds notifies no one (breaks write → redraw → write loops)", () => {
     // A chart redrawn with its new lit rows can report the same selection again;
     // if that write re-notified, it would redraw, report, write… forever.
     const s = new MarkingStore();
-    s.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/a.ai.yaml");
+    s.set("fail", one("lot", "L1", "L2"), "/v/a.ai.yaml");
     const cb = vi.fn();
     s.subscribe("fail", cb);
     s.subscribeAll(cb);
     s.subscribeWrites(cb);
     const before = s.get("fail");
-    s.set("fail", { lot: new Set(["L2", "L1"]) }, "/v/a.ai.yaml");
+    s.set("fail", one("lot", "L2", "L1"), "/v/a.ai.yaml");
     expect(cb).not.toHaveBeenCalled();
     expect(s.get("fail")).toBe(before);
     // A different source is a different write.
-    s.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/b.ai.yaml");
+    s.set("fail", one("lot", "L1", "L2"), "/v/b.ai.yaml");
     expect(cb).toHaveBeenCalled();
   });
 
   it("does not keep the caller's sets — a later mutation cannot change the marking", () => {
     const s = new MarkingStore();
-    const lots = new Set(["L1"]);
-    s.set("fail", { lot: lots }, null);
-    lots.add("L2");
-    expect([...s.get("fail")!.marking.lot!]).toEqual(["L1"]);
+    const rows = [["L1"]];
+    s.set("fail", markingFrom(["lot"], rows), null);
+    rows.push(["L2"]);
+    expect(markingRows(s.get("fail")!.marking)).toEqual([["L1"]]);
   });
 });

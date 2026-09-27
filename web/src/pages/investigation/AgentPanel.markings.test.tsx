@@ -13,7 +13,7 @@ import { kbApi } from "../../api/kb";
 import { DialogProvider } from "../../components/Dialog";
 import type { AgentState } from "../../hooks/useAgent";
 import { MarkingProvider } from "../../hooks/useMarking";
-import { MarkingStore } from "../../lib/markings";
+import { markingFrom, MarkingStore } from "../../lib/markings";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { AgentPanel } from "./AgentPanel";
 
@@ -69,13 +69,14 @@ describe("AgentPanel — markings go with a message (#847 P7)", () => {
     const store = new MarkingStore();
     renderPanel(store);
     expect(screen.queryByTestId("marking-chip")).not.toBeInTheDocument();
-    act(() => store.set("fail", { lot: new Set(["L1", "L2"]) }, "/v/grid.ai.yaml"));
-    expect(screen.getByTestId("marking-chip")).toHaveTextContent("lot (2)");
+    act(() => store.set("fail", markingFrom(["lot"], [["L1"], ["L2"]]), "/v/grid.ai.yaml"));
+    // #861 D5: how many rows were picked, then the keys.
+    expect(screen.getByTestId("marking-chip")).toHaveTextContent("· 2 · 依 lot");
   });
 
   it("sends the chips' markings with the message", async () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L2", "L1"]), wafer: new Set(["3"]) }, "/v/grid.ai.yaml");
+    store.set("fail", markingFrom(["wafer", "lot"], [["3", "L2"], ["3", "L1"]]), "/v/grid.ai.yaml");
     const agent = renderPanel(store);
     type("why these?");
     await waitFor(() => expect(agent.send).toHaveBeenCalled());
@@ -86,7 +87,11 @@ describe("AgentPanel — markings go with a message (#847 P7)", () => {
         {
           name: "fail",
           source: "/v/grid.ai.yaml",
-          columns: { lot: ["L1", "L2"], wafer: ["3"] },
+          keys: ["lot", "wafer"],
+          rows: [
+            ["L1", "3"],
+            ["L2", "3"],
+          ],
         },
       ],
     });
@@ -94,7 +99,7 @@ describe("AgentPanel — markings go with a message (#847 P7)", () => {
 
   it("a removed chip is not sent, and comes back for the next message", async () => {
     const store = new MarkingStore();
-    store.set("fail", { lot: new Set(["L1"]) }, null);
+    store.set("fail", markingFrom(["lot"], [["L1"]]), null);
     const agent = renderPanel(store);
     fireEvent.click(within(screen.getByTestId("marking-chip")).getByRole("button"));
     expect(screen.queryByTestId("marking-chip")).not.toBeInTheDocument();

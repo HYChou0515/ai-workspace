@@ -1,6 +1,6 @@
 /**
  * `keyColumn` — where a key's marking strings live in a layer. The ONE lookup:
- * selectionValues (what a marking holds) and a marking's own lighting (#856)
+ * selectionRows (what a marking holds) and a marking's own lighting (#856)
  * must read the same column, or a key a channel sends as time / numbers is
  * written as "2024-01-02" and compared as "1704153600000" (review round 2).
  */
@@ -21,11 +21,11 @@ describe("keyColumn", () => {
   });
 
   it("reads a key sent as a category directly", () => {
-    const col = keyColumn(layer("bar", 1, { lot: cat(["A"]), v: f64([1]) }), "lot", new Set());
+    const col = keyColumn(layer("bar", 1, { group: cat(["A"]), v: f64([1]) }), "group", new Set());
     expect(col?.value(0)).toBe("A");
   });
 
   it("has nothing for a key the layer does not carry", () => {
-    expect(keyColumn(layer("bar", 1, { v: f64([1]) }), "lot", new Set())).toBeNull();
+    expect(keyColumn(layer("bar", 1, { v: f64([1]) }), "group", new Set())).toBeNull();
   });
 });

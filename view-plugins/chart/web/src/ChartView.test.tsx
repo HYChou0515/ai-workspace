@@ -15,9 +15,9 @@ const sdk = vi.hoisted(() => ({
   registerViewKind: vi.fn(),
   // Markings are exercised in ChartView.marking.test.tsx; here, no marking.
   useMarking: vi.fn(() => [undefined, vi.fn()]),
-  isLit: vi.fn(() => false),
 }));
-vi.mock("@aiws/view-sdk", () => sdk);
+// the platform's own marking functions (`isLit`, `markingFrom`, …) beside the doubles
+vi.mock("@aiws/view-sdk", async () => ({ ...(await import("../../../../web/src/lib/markings")), ...sdk }));
 
 type Handler = (p: unknown) => void;
 const chart = vi.hoisted(() => {

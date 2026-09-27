@@ -246,7 +246,7 @@ def scaffold_plugin(
     kind = name
     manifest: dict = {
         "name": name,
-        "sdk": "1",
+        "sdk": "2",
         "kinds": [kind],
         "views": [{"kind": kind, "when": "a workspace file the user wants to look at"}],
     }

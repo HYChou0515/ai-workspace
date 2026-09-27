@@ -12,8 +12,8 @@
  *   the exact value under the pointer back through `gallery.cellAt`, i.e.
  *   through the lattice's own placement.
  * - A selection is a range of SORTED positions (shift-click, or ranks a–b); it
- *   writes every group in it to the marking, loaded or not (P7). Groups the
- *   marking holds are lit by the platform's `isLit`.
+ *   writes every group in it to the marking as one pick, loaded or not (P7,
+ *   #861 D1). Groups the marking picked are lit by the platform's `isLit`.
  * - Recovery is an EPOCH carried in every call's arguments. A failed answer
  *   (exit 3: no usable cache; exit 4: the cache was rebuilt since the index)
  *   moves the epoch on, and the args being the query key, the whole chain —
@@ -25,7 +25,7 @@
  */
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { isLit, useMarking, useSandboxRun } from "@aiws/view-sdk";
+import { markedBy, useMarking, useSandboxRun } from "@aiws/view-sdk";
 
 import {
   cellAt,
@@ -43,7 +43,6 @@ import {
   type FacetIndex,
   type SortChoice,
 } from "./gallery";
-import { markedBy } from "./marking";
 import { categoryColour, type RasterImage } from "./raster";
 import { viewCall } from "./viewCall";
 import { decodeColumn, type WireColumn } from "./wire";
@@ -613,9 +612,9 @@ export function FacetGallery({
   );
 
   const [entry, write] = useMarking(marking);
-  const lit = useMemo(() => (idx && entry ? groupsLit(idx, entry.marking, isLit) : null), [idx, entry]);
+  const lit = useMemo(() => (idx && entry ? groupsLit(idx, entry.marking) : null), [idx, entry]);
   const cellLit = useMemo(
-    () => (idx && entry ? cellsLit(idx, encoding.x?.field ?? "", encoding.y?.field ?? "", entry.marking, isLit) : null),
+    () => (idx && entry ? cellsLit(idx, encoding.x?.field ?? "", encoding.y?.field ?? "", entry.marking) : null),
     [idx, entry, encoding.x?.field, encoding.y?.field],
   );
   const [anchor, setAnchor] = useState<number | null>(null);

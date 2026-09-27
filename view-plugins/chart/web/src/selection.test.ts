@@ -5,28 +5,28 @@
 import { describe, expect, it } from "vitest";
 
 import { toOption } from "./option";
-import { ownSelectionLit, selectionFromBrush, selectionFromLegend, selectionValues } from "./selection";
+import { ownSelectionLit, selectionFromBrush, selectionFromLegend, selectionRows } from "./selection";
 import { answer, base, cat, f64, layer, q8 } from "./testAnswer";
 
 const scatter = {
   ...base,
-  keys: ["wafer"],
+  keys: ["item"],
   mark: "scatter",
   encoding: {
     x: { field: "a", type: "quantitative" },
     y: { field: "b", type: "quantitative" },
-    color: { field: "lot", type: "nominal" },
+    color: { field: "group", type: "nominal" },
   },
 };
 const scatterAnswer = answer(
   layer("scatter", 4, {
     a: f64([1, 2, 3, 4]),
     b: f64([5, 6, 7, 8]),
-    lot: cat(["A", "B", "A", "B"]),
-    wafer: cat([7, 8, 9, 10]),
+    group: cat(["A", "B", "A", "B"]),
+    item: cat([7, 8, 9, 10]),
   }),
 );
-// series 0 = lot A = rows [0, 2]; series 1 = lot B = rows [1, 3]
+// series 0 = group A = rows [0, 2]; series 1 = group B = rows [1, 3]
 
 describe("brush and lasso", () => {
   it("maps the selected data points of each series back to layer rows", () => {
@@ -115,10 +115,14 @@ describe("legend", () => {
   });
 });
 
-describe("selectionValues", () => {
-  it("gives each key's values over the selected rows, as marking strings, once each", () => {
-    const values = selectionValues({ source: "brush", layer: 0, rows: [0, 2, 1] }, scatterAnswer, ["wafer", "lot", "gone"], []);
-    expect(values).toEqual({ wafer: ["7", "9", "8"], lot: ["A", "B"] });
+describe("selectionRows", () => {
+  it("gives each selected row's keys, as marking strings, a key the layer lacks left out", () => {
+    const rows = selectionRows({ source: "brush", layer: 0, rows: [0, 2, 1] }, scatterAnswer, ["item", "group", "gone"], []);
+    expect(rows).toEqual([
+      { item: "7", group: "A" },
+      { item: "9", group: "A" },
+      { item: "8", group: "B" },
+    ]);
   });
 });
 

@@ -30,13 +30,14 @@ export function MarkingChips({
     >
       {markings.map((m) => {
         const refused = Boolean(m.error);
-        // P27: the columns it marks by, each with how many values it holds —
-        // over two columns a marking lights every combination of their values.
-        const counts = t("markings.by", {
-          columns: Object.entries(m.counts)
-            .map(([c, n]) => `${c} (${n})`)
-            .join(t("markings.listSep")),
-        });
+        // #861 D5: how many distinct picks were written, and the keys that link them.
+        // A chip sent before #861 reads back with no keys (and a count of 0), and
+        // one broadcast live by an older pod mid-rollout has no `keys` at all: it
+        // has nothing true to count, so it shows its name alone.
+        const counts =
+          (m.keys ?? []).length > 0
+            ? `· ${m.count} · ${t("markings.by", { columns: m.keys.join(t("markings.listSep")) })}`
+            : "";
         const label = (
           <>
             <Icon name="tag" size={11} color={refused ? "var(--err)" : "var(--text-paper-d)"} />
@@ -58,7 +59,7 @@ export function MarkingChips({
             scope={scope}
             name={m.name}
             view={m.source ?? null}
-            columns={null}
+            marking={null}
             digest={m.digest ?? null}
           />
         ) : null;
