@@ -124,6 +124,24 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     chart.dispose();
   });
 
+  it("lights each row's own bar where its category is drawn, in a sorted order too", () => {
+    // descending: g2 is drawn left of g1. The picked values are per layer
+    // row (the sandbox's drawn row), whatever order the axis shows them in.
+    const doc = { ...BAR, encoding: { ...BAR.encoding, x: { field: "group", type: "nominal", sort: "descending" } } };
+    const unsplit = draw(doc, COUNTS);
+    const { built, tops, lefts, chart } = draw(doc, COUNTS, [[2, 3]]);
+    const at = (s: number, row: number) => built.series[s]!.rows.indexOf(row);
+    // g1 (row 0): lit 2 of 10; g2 (row 1): lit 3 of 4
+    expect([tops[0]![at(0, 0)], tops[0]![at(0, 1)]]).toEqual([2, 3]);
+    expect([tops[1]![at(1, 0)], tops[1]![at(1, 1)]]).toEqual([10, 4]);
+    // each lit part in its own bar's slot
+    const own = (row: number) => unsplit.lefts[0]![unsplit.built.series[0]!.rows.indexOf(row)];
+    expect([lefts[0]![at(0, 0)], lefts[0]![at(0, 1)]]).toEqual([own(0), own(1)]);
+    expect(own(1)).toBeLessThan(own(0)!);
+    unsplit.chart.dispose();
+    chart.dispose();
+  });
+
   it("maps both parts to the layer's rows, so a brush over either selects the bar", () => {
     const { built, chart } = draw(BAR, COUNTS, [[2, null]]);
     expect(built.series.map((s) => s.rows)).toEqual([

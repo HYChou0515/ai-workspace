@@ -7,6 +7,7 @@ The value of a bar over its picked rows must fold from what this answers --
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import math
@@ -372,3 +373,63 @@ def test_the_fold_is_the_sandbox_aggregate_over_the_picked_rows():
                     assert got == want, c["name"]
                 else:
                     assert math.isclose(got, want, rel_tol=1e-12), (c["name"], got, want)
+
+
+# ── each drawn bar gets its own rows' partials, whatever order they come in ──
+
+# rows written out of order -- groups g3 g1 g2 ..., colours b a ... -- so the
+# written, first-seen and sorted (drawn) orders all differ
+SHUFFLED = pd.DataFrame(
+    {
+        "group": ["g3", "g1", "g2", "g1", "g3", "g2", "g1"],
+        "item": ["b", "a", "b", "b", "a", "a", "a"],
+        "value": [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
+        "region": ["n", "s", "n", "s", "s", "n", "n"],
+    }
+)
+
+
+def _cat(col: dict) -> list[Any]:
+    """A `cat` wire column's values (one-byte codes: a handful of levels)."""
+    codes = base64.b64decode(col["codes"])
+    return [col["levels"][c] for c in codes]
+
+
+@pytest.mark.parametrize(
+    ("mark", "encoding", "fields", "by"),
+    [
+        (
+            "bar",
+            {
+                "x": {**GROUP, "sort": "descending"},
+                "y": {"field": "value", "type": "quantitative", "aggregate": "sum"},
+            },
+            ["group"],
+            ["group", "item"],
+        ),
+        (
+            {"type": "bar", "stack": True},
+            {"x": GROUP, "y": {"field": "value", "type": "quantitative"}, "color": ITEM},
+            ["group", "item"],
+            ["region"],
+        ),
+    ],
+    ids=["a bar sorted descending", "a stack"],
+)
+def test_each_drawn_bar_gets_its_own_rows_partials(mark, encoding, fields, by):
+    spec = {"view": "chart", "source": "a.csv", "keys": by, "mark": mark, "encoding": encoding}
+    [answer] = build(parse_spec(json.dumps(spec)), SHUFFLED)["layers"]
+    drawn = list(zip(*(_cat(answer["columns"][f]) for f in fields), strict=True))
+    [layer] = layer_rows(parse_spec(json.dumps(spec)), SHUFFLED)
+    got = layer_partials(layer, by)
+    assert got is not None and "bars" in got
+    assert len(got["bars"]) == len(drawn)
+    for key, entries in zip(drawn, got["bars"], strict=True):
+        # the oracle: this drawn bar's own source rows, summed per `by` tuple
+        mine = SHUFFLED[(SHUFFLED[fields] == list(key)).all(axis=1)]
+        want = {
+            (k if isinstance(k, tuple) else (k,)): v
+            for k, v in mine.groupby(by)["value"].sum().to_dict().items()
+        }
+        have = {tuple(got["keys"][e[0]]): e[2] for e in entries}
+        assert have == want, key
