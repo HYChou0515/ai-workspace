@@ -17,10 +17,13 @@
  * Writing (P2): on a marking, a row's checkbox is "this row is marked".
  * Checking or unchecking one writes the rows then checked, as picks on the
  * key columns — the spec's `keys:`, else the keys the marking already holds —
- * that this table has. While it writes the marking's keys or some of them, a
- * held pick no row of this table carries stays picked: the table decides only
- * about the rows it holds (other keys are a different marking, which replaces
- * it). A table that lacks one of the marking's keys and writes some of them (a
+ * that this table has. While it writes the marking's keys or some of them,
+ * the table decides only about what it shows, said at the keys it writes: a
+ * held pick whose values on those keys no row here carries stays picked (said
+ * at those keys); one whose values a row here carries is the table's to keep
+ * or drop, so a finer pick in a group a `keys: [group]` table shows goes with
+ * that group's tick (as #855 decided a shown value). Other keys are a
+ * different marking, which replaces it. A table that lacks one of the marking's keys and writes some of them (a
  * per-group table on (group, item) picks) is coarser: while its ticks say only
  * what the held picks say, it writes at the marking's keys (unticking a group
  * removes that group's picks, the rest stay). Any other write at fewer keys --

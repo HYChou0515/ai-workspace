@@ -154,8 +154,8 @@ builder.
     held picks of groups it does not show (as whole groups, as #855 carried them) — the tick
     path of round 1's A1.
   - Only a table that LACKS one of the marking's keys takes the coarser path: a table that has
-    them all but writes fewer (`keys:` a subset) writes plainly at its keys (round 1 had made its
-    ticks a silent no-op).
+    them all but writes fewer (`keys:` a subset) wrote plainly at its keys (round 1 had made its
+    ticks a silent no-op; round 3 added the carry below).
   - A chart counted rows summed within a layer and the most of any layer across them, so a line
     with its points counts each row once (was 6 for 3 rows, as on #855).
 - **Review round 3 (#862):**
@@ -166,6 +166,14 @@ builder.
     boxes over {r1, r2} and {r2, r3} count 3.
   - A table with every key but a `keys:` subset now keeps the held picks of groups it does not
     show, as whole groups, as the coarser table does.
+- **Review round 4 (#862):** no finding in the chart count (per pick, the most rows of one layer
+  is never below the largest layer's total, and equals it for one layer). The table header and
+  the chart doc said "a held pick no row of this table carries stays picked" for every write at
+  the marking's keys or some of them; at fewer keys that holds per group the table shows, not
+  per pick — a finer pick in a shown group goes with that group's tick, as #855 decided a shown
+  value. The sentences now say so and two tests pin it (untick-all keeps only unshown groups; a
+  finer pick in a shown group goes). A table writing other keys replaces the marking, now in the
+  runbook.
 
 ## Known and left (each (B): rare input or cosmetic)
 
@@ -185,7 +193,12 @@ builder.
   "those four rows" (it saves every source row of the four picks); 1d090865 says a
   bar "keeps its full length, dimmed, with a lit bar in front" (as built, the lit part is
   drawn from the axis and the dimmed rest on top of it); 756406e5 says a chart takes the most
-  of any layer and a table with every key writes plainly (round 3 replaced both, above).
+  of any layer and a table with every key writes plainly (round 3 replaced both, above);
+  f32d1d5e says unshown picks stay while a table writes the marking's keys or some of them (per
+  group the table shows, round 4).
+- A `keys: [group]` table beside (group, item) picks decides every group it shows: ticking another
+  group drops a finer pick in a shown group that no row of the table carries (keeping it at
+  `[group]` would light the whole group).
 - A row is known by its keys: two different source rows two layers draw with the same key values
   count once in "N selected" (the answer carries no row identity across layers; the marking
   already holds them as one pick).

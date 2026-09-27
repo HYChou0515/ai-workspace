@@ -181,4 +181,24 @@ describe("a table that has every key but writes fewer (`keys:` a subset; review 
     const m = store.get("fail")!.marking;
     expect({ keys: m.keys, rows: markingRows(m) }).toEqual({ keys: ["group"], rows: [["g1"], ["g2"], ["g9"]] });
   });
+
+  it("unticking every row clears only the groups it shows (review #862 round 4)", () => {
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "a"], ["g9", "z"]]), "/views/gallery.ai.yaml");
+    const { result } = narrow(store);
+    act(() => result.current.select!.set(new Set()));
+    const m = store.get("fail")!.marking;
+    expect({ keys: m.keys, rows: markingRows(m) }).toEqual({ keys: ["group"], rows: [["g9"]] });
+  });
+
+  it("decides every group it shows, at its keys: a finer pick in a shown group goes (review #862 round 4)", () => {
+    // (g1, z) is no row here, but g1 is: written by group, keeping it would
+    // light every g1 row. #855 decided a shown value the same way.
+    const store = new MarkingStore();
+    store.set("fail", markingFrom(["group", "item"], [["g1", "z"], ["g9", "q"]]), "/views/gallery.ai.yaml");
+    const { result } = narrow(store);
+    act(() => result.current.select!.set(new Set([2])));
+    const m = store.get("fail")!.marking;
+    expect({ keys: m.keys, rows: markingRows(m) }).toEqual({ keys: ["group"], rows: [["g2"], ["g9"]] });
+  });
 });
