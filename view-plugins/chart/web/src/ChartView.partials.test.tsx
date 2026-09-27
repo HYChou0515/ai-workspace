@@ -3,7 +3,8 @@
  * #861 D3: a chart with an aggregated bar asks the sandbox to split its bars
  * by the marking's keys (`partials`) -- once per key SET: new picks on the
  * same keys are folded in the browser, never asked for -- and draws each bar
- * the marking picks part of as the full bar dimmed with the picked part lit.
+ * the marking picks part of whole, dimmed, with a lit bar of the picked
+ * value in front, where the chart laid the bar out.
  * The marking is the host's real store; the sandbox and ECharts are doubles.
  */
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -32,6 +33,15 @@ const chart = vi.hoisted(() => ({
   dispose: vi.fn(),
   on: vi.fn(),
   getZr: () => ({ on: vi.fn() }),
+  // where the (double) chart laid bar j out: 100 px apart, 60 wide, 90 tall
+  getModel: () => ({
+    getSeriesByIndex: () => ({
+      getData: () => ({
+        getItemLayout: (j: number) => ({ x: 10 + 100 * j, y: 300, width: 60, height: -90 }),
+        getItemVisual: () => ({ fill: "#123456" }),
+      }),
+    }),
+  }),
 }));
 vi.mock("./echarts", () => ({ createChart: vi.fn(() => chart) }));
 
@@ -112,18 +122,33 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     mount(store);
     act(() => void store.set("m", markingFrom(["group", "item"], [["g1", "2"]]), "/v/table.ai.yaml"));
     expect(asked()).toEqual([["group", "item"]]);
-    // g1: 1 of its 3 picked, lit; the other 2 dimmed on it. g2: none picked.
+    // the bars whole (dimmed); g1: 1 of its 3 picked, lit in front. g2: none.
     expect(drawnTo()).toEqual([
-      [1, 0],
-      [2, 1],
+      [3, 1],
+      [1, null],
     ]);
     // new picks on the same keys: drawn anew, not asked for
     act(() => void store.set("m", markingFrom(["group", "item"], [["g1", "1"], ["g2", "1"]]), "/v/table.ai.yaml"));
     expect(asked()).toEqual([["group", "item"]]);
     expect(drawnTo()).toEqual([
+      [3, 1],
       [2, 1],
-      [1, 0],
     ]);
+  });
+
+  it("draws the lit bar where the drawn chart laid its bar out, a third of its width", () => {
+    const store = new MarkingStore();
+    mount(store);
+    act(() => void store.set("m", markingFrom(["group", "item"], [["g1", "2"]]), "/v/table.ai.yaml"));
+    const series = (chart.setOption.mock.calls.at(-1)![0] as { series: { type: string; renderItem?: Function }[] }).series;
+    const lit = series.find((s) => s.type === "custom")!;
+    // an axis of 30 px per unit, upward
+    const api = { value: () => 0, coord: ([x, y]: number[]) => [x!, 300 - 30 * y!] };
+    expect(lit.renderItem!({ dataIndex: 0 }, api)).toEqual({
+      type: "rect",
+      shape: { x: 10, y: 300, width: 20, height: -30 },
+      style: { fill: "#123456", opacity: 1 },
+    });
   });
 
   it("asks again when the keys change, and draws whole what it cannot split", () => {

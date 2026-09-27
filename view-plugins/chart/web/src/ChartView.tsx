@@ -15,6 +15,7 @@ import { type EntityViewProps, type Marking, markedBy, markingSize, useMarking, 
 
 import { createChart, type Chart } from "./echarts";
 import { FacetGallery } from "./FacetGallery";
+import { barAtOf } from "./barAt";
 import { type Answer, type Built, compactAt, type Layout, measuredFields, toOption, withLayout } from "./option";
 import { highlightMarking, markedCount, markingLit, selectionMarking, stillWritten } from "./marking";
 import { litValues, readPartials } from "./partials";
@@ -171,9 +172,11 @@ function Plot({
   // what the option is built from: a switch of layout is merged into the
   // drawn chart as the layout alone (`Built.layout`), never a rebuild.
   const [layout, setLayout] = useState<Layout>({ compact: false });
+  // #861 D3: a lit bar is drawn where the drawn chart laid its bar out
+  const barAt = useMemo(() => barAtOf(() => chartRef.current), []);
   const built: Built = useMemo(
-    () => toOption(doc, answer, { gridImage: gridCanvas, ...(lit ? { lit } : {}), ...(picked ? { picked } : {}) }),
-    [doc, answer, lit, picked],
+    () => toOption(doc, answer, { gridImage: gridCanvas, barAt, ...(lit ? { lit } : {}), ...(picked ? { picked } : {}) }),
+    [doc, answer, lit, picked, barAt],
   );
   const builtRef = useRef(built);
   builtRef.current = built;
