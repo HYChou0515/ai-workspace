@@ -49,7 +49,8 @@ export type { SandboxRun, SandboxRunArgs, SandboxRunResult } from "../../viewPlu
 // will disagree about which rows are lit. `projectOntoKeys` turns selected
 // rows into what a view writes (`null` for a view without `keys:`);
 // `markingFrom` / `markingRows` convert to and from `string[][]`;
-// `markingSize` is how many rows were picked, `markedBy` the "by …" words.
+// `markingSize` is how many distinct picks it holds (what a chip counts),
+// `markedBy` the "by …" words.
 export { useMarking, useMarkingNames } from "../../hooks/useMarking";
 export type { WriteMarking } from "../../hooks/useMarking";
 export { isLit, markedBy, markingFrom, markingRows, markingSize, projectOntoKeys } from "../../lib/markings";

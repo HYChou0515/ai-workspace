@@ -39,7 +39,8 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   已經有人選了就不覆蓋。marking 被清空後，接在上面的圖全部不變暗，不會各自退回自己的 `highlight:`。
 - 機制本身不懂任何領域：marking 記的是**被選到的那幾列在 key 欄位上的值**（一列一組），都是字串（#861）。
   所以 marking 有兩個以上的欄位時，亮的就是選到的那幾組：勾 (A, 1) 與 (B, 2)，(A, 2) 與 (B, 1) **不會**亮，
-  計數也不會被組合灌大：縮圖牆與訊息上的 chip 數的是選到幾組，圖表的「N selected」與表格數的是被選到、被點亮的列。
+  計數也不會被組合灌大：訊息上的 chip 數的是選到幾組，縮圖牆數的是被點亮的縮圖，圖表的「N selected」與表格數的是
+  被選到、被點亮的列（兩層畫同一批列的圖，例如折線加點，每一列只算一次）。
 - 一張 view 的資料只有 marking 的**部分**欄位時（例如每個 group 一列的彙總表，旁邊是每個 (group, item) 一張的縮圖牆），
   它比 marking 粗：包含被選到的列的那一格整個亮（選了 (A, 1)、(B, 2)，彙總表的 A、B 兩列亮）。這是 Spotfire 在有關聯的
   資料表之間傳遞 marking 的做法。
@@ -54,7 +55,7 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   為了讓這件事看得見，每個顯示計數的地方都寫出 marking 的欄位（以 `keys: [group, item]` 為例）：
   縮圖牆「12 of 48 marked · by group, item」、接了 marking 的圖表「16 selected · by group, item」、
   表格「filtered by … · 4 of 48 rows · by group, item」、標頭的「by group, item」，
-  以及訊息上的 chip「m1 · 4 · by group, item」（4 是選到的列數）。
+  以及訊息上的 chip「m1 · 4 · by group, item」（4 是選到幾組）。
 - 框選與套索對圓餅圖與 rule 以外的每一種 mark 都有效（rule 是參考線，不對應任何列），都以畫出來的位置判定：line 與 area 看點（疊起來的 area 以它疊上去的高度算）、
   heatmap 與 grid 看格子中心、boxplot 看箱子（q1–q3；只碰到鬚不算）、errorbar 看中間那條線。
   圓餅圖用點的：點一片就選那一片的列，再點同一片或點空白處就清掉點選的那份（其他 view 寫的選取與圖例的選擇不動）；
@@ -118,7 +119,8 @@ AI 主張的那群資料一打開就被點亮。它是平台的第一個 **runti
   標頭會說原因。勾選的那張表自己不被過濾（只反白），免得一勾其他列就消失；表格只對自己有的列做決定，marking 裡
   這張表沒有的那幾組照舊留著，不會取消別張圖才有的選取。表格的欄位比 marking 少時（例如每個 group 一列的表，
   marking 記的是 (group, item)）：取消勾選一個 group 只拿掉那個 group 的選取，其他照舊；勾選一個還沒有任何選取的 group，
-  marking 就改成依 group 記。沒接 marking 的 entity 表格，勾選照舊是批次編輯。
+  marking 就改成依 group 記，這張表沒有的 group 照舊留著（改成整個 group）。表格有 marking 的全部欄位、只是 `keys:`
+  寫得比較少時，勾選就依 `keys:` 寫。沒接 marking 的 entity 表格，勾選照舊是批次編輯。
 - 圖表工具列的 ✕ 會清空 marking，包括打開時由 `highlight:` 寫進去的起始選取。
 - **另存成表格**：marking 選單與訊息上的 chip 都有「Save as table」，把被點亮的列（來源的每一欄，套用該 view 的
   `transform:`）寫成 workspace 裡的 `markings/<名字>-<yyyymmdd-hhmm>.csv`，檔案樹看得到、`csv-table` 打得開、AI 讀得到。

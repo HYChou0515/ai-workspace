@@ -1,6 +1,6 @@
 /**
- * Named markings (#847 PR 3 P1, Q5.1 / Q6): a knowledge-free `name → {column →
- * values}` store. Columns and values are opaque strings; views link on
+ * Named markings (#847 PR 3 P1, Q5.1 / Q6; #861): a knowledge-free `name →
+ * picks` store -- the picked rows' values on the marking's keys. Columns and values are opaque strings; views link on
  * same-named columns.
  */
 import { describe, expect, it, vi } from "vitest";

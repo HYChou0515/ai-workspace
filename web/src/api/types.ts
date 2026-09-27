@@ -53,7 +53,7 @@ export type MarkingInput = {
 export type SentMarking = {
   name: string;
   path: string;
-  /** #861 D5: how many rows were picked, and the keys "by …" names. */
+  /** #861 D5: how many distinct picks were written, and the keys "by …" names. */
   count: number;
   keys: string[];
   source?: string | null;

@@ -39,8 +39,8 @@ def test_continuous_groups_round_trip_within_half_a_level(tmp_path: Path) -> Non
 
 
 def test_a_group_key_splits_back_into_one_value_per_facet_column(tmp_path: Path) -> None:
-    """A marking is `column -> set of values` (Q6), so a facet over two columns
-    must give back each column's value, never one joined string."""
+    """A marking holds picks on its keys, one value per key (#861), so a facet
+    over two columns must give back each column's value, never one joined string."""
     groups = [
         Group(key=("L1", "W03"), sort={}, values=[1.0]),
         Group(key=("L1", "W04"), sort={}, values=[2.0]),

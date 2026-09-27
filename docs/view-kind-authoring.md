@@ -230,7 +230,7 @@ const whole = viewDocument(spec);                                // ✅ 整份�
 被選到的那幾列在 key 欄位上的值——`{keys, tuples}`，`keys` 排好序、一列一組，都是字串——平台不懂任何領域
 （SDK 2，#861；SDK 1 的 marking 是「欄位名 → 一組值」，build 給 SDK 1 的 plugin 會被 loader 拒絕，要重 build）。
 不要自己拼 `tuples` 的文字：用 `markingFrom(keys, rows)` 建、`markingRows(m)` 取回 `string[][]`、
-`markingSize(m)` 是選到幾列、`markedBy(m)` 是「by …」那句。
+`markingSize(m)` 是 marking 裡有幾組（不重複的選取）、`markedBy(m)` 是「by …」那句。
 
 - 註冊時 `registerViewKind({ …, linkable: true })`：這個 kind 的每個 view 標頭都有 marking 選單，
   並從 props 拿到 `marking`（見上表）。沒宣告的 kind，只有 view 檔寫了 `marking:` 或 `keys:` 才有。

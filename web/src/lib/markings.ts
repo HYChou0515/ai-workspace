@@ -41,7 +41,9 @@ export function markingRows(marking: Marking): string[][] {
   return [...marking.tuples].sort().map((t) => t.split(SEP));
 }
 
-/** How many rows were picked — what every count says (#861 D5). */
+/** How many distinct picks the marking holds -- what the chip counts (#861
+ * D5). A view counts its own things: a chart and a table their rows, a
+ * gallery its lit tiles. */
 export function markingSize(marking: Marking): number {
   return marking.tuples.size;
 }

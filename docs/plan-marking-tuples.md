@@ -34,7 +34,7 @@ builder.
   colour and shape unchanged, when it contains a picked row; dimmed otherwise. Spotfire:
   "if items in other visualizations include any of the marked data rows, they become
   marked too … the marked items keep their original colors".
-- **D5. Counts say how many were picked [user, following Spotfire's status bar].** Every
+- **D5. Counts say how many were picked [user, following Spotfire's status bar].** *[As built, for the user to confirm: a chart's "N selected" counts the selected rows, as on #855 and as Spotfire's status bar counts marked rows — review #862 found that counting distinct picks changed a single-key chart's count (D1); the chip counts picks, a gallery its lit tiles, a table its lit rows.]* Every
   view keeps its line format with the true number: "4 of 48 marked · by group, item",
   "4 selected · by group, item", "filtered by m1 · 4 of 18 rows · by group, item". The
   message chip becomes "m1 · 4 · by group, item" (not a per-column count).
@@ -88,7 +88,7 @@ builder.
 - **File** (`.markings/<name>.json`): `{"name", "sources", "keys", "rows"}`, keys
   sorted, rows sorted and distinct.
 - **Chip** (`SentMarking`): `{name, path, count, keys, source, error, digest}` —
-  `count` is the number of rows, `keys` what "by …" says.
+  `count` is the number of picks (distinct rows of the file), `keys` what "by …" says.
 - **Digest**: sha256 of `json.dumps({"keys": keys, "rows": sorted distinct rows},
   ensure_ascii=False, separators=(",", ":"))`.
 - **Save as table** body: `{name, view, marking: {keys, rows} | null, stamp, digest}`;
@@ -149,6 +149,16 @@ builder.
     brushed points, where D1 says a single key behaves as before). The gallery's "N of M marked"
     counts tiles and the chip counts picks, as D5 says; a table counts its lit rows.
 
+- **Review round 2 (#862):**
+  - A coarser table's tick of a group with no pick, written at the table's keys, keeps the
+    held picks of groups it does not show (as whole groups, as #855 carried them) — the tick
+    path of round 1's A1.
+  - Only a table that LACKS one of the marking's keys takes the coarser path: a table that has
+    them all but writes fewer (`keys:` a subset) writes plainly at its keys (round 1 had made its
+    ticks a silent no-op).
+  - A chart counts rows summed within a layer and the most of any layer across them, so a line
+    with its points counts each row once (was 6 for 3 rows, as on #855).
+
 ## Known and left (each (B): rare input or cosmetic)
 
 - A row whose key cell is empty: the browser reads it as coarser and lights it when its group
@@ -164,10 +174,12 @@ builder.
 - Commit bodies that say otherwise (they cannot be rewritten after the push): b3e92c59 and
   c3fcc2f3 say every count is picks (a table counts its lit rows; a chart counts rows, above);
   51c20d5c says an old chip gets "has changed" (see above); 4dc433dc says Save as table saves
-  "those four rows" (it saves every source row of the four picks).
+  "those four rows" (it saves every source row of the four picks); 1d090865 says a
+  bar "keeps its full length, dimmed, with a lit bar in front" (as built, the lit part is
+  drawn from the axis and the dimmed rest on top of it).
 
 ## Done means
 
 Boxing four tiles lights four, counts four, sends four to the AI and saves four tiles'
-rows; a per-group bar beside it shows the picked count in front of the dimmed total; a
+rows; a per-group bar beside it shows the picked count from the axis with the rest dimmed on top; a
 per-group summary chart lights the groups that contain a pick.
