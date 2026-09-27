@@ -240,7 +240,8 @@ Where the build differs from the phases above, or found what they did not expect
     Stop or a rollout mid-copy left files but no `.origin`. The refresh needs the `.origin`, and the
     guard refuses deletes. Fixed in two ways:
     - the copy is checked for room up front, as `install_hub_skill` does, and refused whole;
-    - a readonly copy with no `.origin` is cleared and copied again.
+    - a readonly copy with no `.origin` is cleared and copied again (round 3: only the platform's own,
+      told by its `.copying` marker).
   - **The workspace search and replace took in the readonly copy.** Hundreds of docs hits buried the
     person's files. Replace wrote into the copy first and returned 403 for the whole operation, so
     even their own files were left unchanged. Both now skip it, by the facade's same rule
@@ -265,8 +266,8 @@ Where the build differs from the phases above, or found what they did not expect
     body is right.
 - **Review round 2 (#865)** found one (A), in round 1's own fix. Clearing a copy with no `.origin`
   would also delete a folder of the person's own that carries the name, written before the name was
-  reserved. Now a folder is cleared only when every file in it is a shipped file, byte for byte, which
-  is what an interrupted copy leaves. Anything else is kept.
+  reserved. Round 2 cleared a folder only when every file in it matched a shipped file byte for byte;
+  round 3 overturned that (below).
   - Also fixed: a skill applied this turn whose copy does not fit is a "could not load" note, not a turn
     that cannot start. This `WorkspaceFull` was never caught; round 1's whole-copy gate made it happen
     on every turn.
@@ -277,6 +278,32 @@ Where the build differs from the phases above, or found what they did not expect
     - The search's readonly check reads each skill file's shipped `SKILL.md`, a small read per file.
     - A person's own `.skill/system-design/` is kept but locked by name, and `read_skill` serves it.
       The runbook says how to rename it.
+- **Review round 3 (#865)**: all four lenses found the same (A), in round 2's fix. A copy is most often
+  cut short by a rollout, and the next read then runs on an image whose docs differ, so the bytes never
+  match and the half copy was kept for good. The lenses probed it with a copy the real code wrote and a
+  store that fails part-way; one probe also showed a file cut off mid-write fails the byte check the
+  same way.
+  - The fix: the platform's copy of a readonly skill writes an empty `.copying` marker before its first
+    file and removes it after `.origin`. So:
+    - no `.origin` but the marker means the platform's copy was cut short, and it is cleared (the marker
+      last, so a clearing cut short still reads as ours) and copied again;
+    - neither means the folder is the person's own, and it is kept;
+    - `.origin` plus the marker means the copy was cut short in the one gap between the two, and the
+      marker is dropped.
+  - `.copying` is bookkeeping like `.origin`, never one of a skill's files (`skill_payload`,
+    `workspace_skill_payload`). Readonly is new in this PR, so no copy exists from before the marker.
+  - The same review found the same race twice more, both fixed with a delete that treats "already
+    gone" as done:
+    - two reads clearing one copy at once: the slower read's delete raised;
+    - a refresh cut short after it removed a doc upstream retired keeps the old `.origin`, which still
+      lists that doc, so every later refresh raised on it, and the copy never refreshed again.
+  - Also fixed: the owner's total across items refuses with `UserDiskFull`, which is not a
+    `WorkspaceFull`, and still stopped the turn from the applied-skills block.
+  - Every guard line is pinned by mutation: 9 mutations, each reddening its own test.
+  - Known and left:
+    - A person's own same-named folder with no `SKILL.md` gets the platform's body, which names doc
+      paths that are not there.
+    - Renaming that folder needs `exec`. An app without it has no way to rename it in the product.
 
 ## Done means
 
