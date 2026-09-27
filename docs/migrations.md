@@ -1142,7 +1142,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - marking 記的是被選到的那幾列在 key 欄位上的值，一列一組。兩個以上欄位的 marking 只亮被選到的那幾組，
   不再亮各欄位值的所有組合：縮圖牆框 4 張就是「4 of 48 marked」，不再是 9。訊息上的 chip 數的是選到幾組
   （「m1 · 4 · by group, item」，zh-TW 是「依 group、item」，不再是「by group (2), item (2)」）；圖表的「N selected」
-  與表格照舊數被選到、被點亮的列。
+  與表格數被選到、被點亮的列（一列靠它的 key 值認得：兩層畫同一批列的圖，例如折線加點，以前每列算兩次，
+  現在只算一次）。
 - 彙總後的長條只亮被選到的那一段（整根變暗，亮的一段是只算被選到的列的同一種彙總），tooltip 多一行「picked: N」。
 - 只有部分 key 欄位的 view（例如每個 group 一列的彙總表）照舊：包含被選到的列的那一格整個亮。
 

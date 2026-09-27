@@ -34,7 +34,7 @@ builder.
   colour and shape unchanged, when it contains a picked row; dimmed otherwise. Spotfire:
   "if items in other visualizations include any of the marked data rows, they become
   marked too … the marked items keep their original colors".
-- **D5. Counts say how many were picked [user, following Spotfire's status bar].** *[As built, for the user to confirm: a chart's "N selected" counts the selected rows, as on #855 and as Spotfire's status bar counts marked rows — review #862 found that counting distinct picks changed a single-key chart's count (D1); the chip counts picks, a gallery its lit tiles, a table its lit rows.]* Every
+- **D5. Counts say how many were picked [user, following Spotfire's status bar].** *[As built, for the user to confirm: a chart's "N selected" counts the selected rows, as a single-layer chart did on #855 and as Spotfire's status bar counts marked rows (a row known by its keys, so a row two layers draw counts once) — review #862 found that counting distinct picks changed a single-key chart's count (D1); the chip counts picks, a gallery its lit tiles, a table its lit rows.]* Every
   view keeps its line format with the true number: "4 of 48 marked · by group, item",
   "4 selected · by group, item", "filtered by m1 · 4 of 18 rows · by group, item". The
   message chip becomes "m1 · 4 · by group, item" (not a per-column count).
@@ -156,8 +156,16 @@ builder.
   - Only a table that LACKS one of the marking's keys takes the coarser path: a table that has
     them all but writes fewer (`keys:` a subset) writes plainly at its keys (round 1 had made its
     ticks a silent no-op).
-  - A chart counts rows summed within a layer and the most of any layer across them, so a line
+  - A chart counted rows summed within a layer and the most of any layer across them, so a line
     with its points counts each row once (was 6 for 3 rows, as on #855).
+- **Review round 3 (#862):**
+  - Round 2's largest-layer count under-counted layers that draw different rows (each its own
+    `transform:`): two layers of three rows each said 3 while the marking held 6. A row is known
+    by its keys (the marking's own rule), so the count is, per pick, the most rows any one layer
+    selected for it, summed: a line with its points counts 3, disjoint layers 6, overlapping
+    boxes over {r1, r2} and {r2, r3} count 3.
+  - A table with every key but a `keys:` subset now keeps the held picks of groups it does not
+    show, as whole groups, as the coarser table does.
 
 ## Known and left (each (B): rare input or cosmetic)
 
@@ -176,7 +184,11 @@ builder.
   51c20d5c says an old chip gets "has changed" (see above); 4dc433dc says Save as table saves
   "those four rows" (it saves every source row of the four picks); 1d090865 says a
   bar "keeps its full length, dimmed, with a lit bar in front" (as built, the lit part is
-  drawn from the axis and the dimmed rest on top of it).
+  drawn from the axis and the dimmed rest on top of it); 756406e5 says a chart takes the most
+  of any layer and a table with every key writes plainly (round 3 replaced both, above).
+- A row is known by its keys: two different source rows two layers draw with the same key values
+  count once in "N selected" (the answer carries no row identity across layers; the marking
+  already holds them as one pick).
 
 ## Done means
 
