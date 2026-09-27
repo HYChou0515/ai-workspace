@@ -52,7 +52,7 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
 
 ### Mine, open to override
 
-- **Quota.** A workspace that uses the skill holds about 3.4 MB of docs (the `.md` and `.html` under
+- **Quota.** A workspace that uses the skill holds about 3.6 MB of docs (the `.md` and `.html` under
   `docs/`: 2.18 MB plans, 1.21 MB the rest). This counts against its quota like any file (the item quota
   is 20 GB by default). Exempting it would be a special case.
 - **Where the files come from.** The skill folder holds a symlink to `docs/`, so there is one copy of the
@@ -69,8 +69,9 @@ Each decision is tagged with its source: [user] for the user's call, [mine] for 
   added, and a guard test fails when a plan is not in it.
 - **Surfaces.** Every shipped app's agent gets the skill (listed in `agent.skills`, as `author-workflow`
   is). KB chat and the /help chat have no skills today, so they are left out of this plan.
-- **Workflow agent steps** do not get it. They process data; they do not answer questions about the
-  system.
+- **Workflow agent steps** get it too, as they get every skill their item's app declares (their prompt is
+  the item's own, `## Available skills` included). Corrected in review #865 round 1: this line first
+  said they do not. Nothing is filtered, since reading a skill costs nothing until a step asks for it.
 
 ## Phases
 
@@ -234,6 +235,34 @@ Where the build differs from the phases above, or found what they did not expect
       `save_subagent` refused it.
     - The template now asks for `read_file` and `list_files`, which every app and profile holding
       `run_agent` has, and the skill says to add `exec` when held.
+- **Review round 1 (#865)** found three (A) findings and fixed them.
+  - **A first copy that could not finish stayed half-written for good.** A workspace near its quota, a
+    Stop or a rollout mid-copy left files but no `.origin`. The refresh needs the `.origin`, and the
+    guard refuses deletes. Fixed in two ways:
+    - the copy is checked for room up front, as `install_hub_skill` does, and refused whole;
+    - a readonly copy with no `.origin` is cleared and copied again.
+  - **The workspace search and replace took in the readonly copy.** Hundreds of docs hits buried the
+    person's files. Replace wrote into the copy first and returned 403 for the whole operation, so
+    even their own files were left unchanged. Both now skip it, by the facade's same rule
+    (`is_readonly`).
+  - **The runbook named a symptom that cannot happen.** A dangling `docs` link makes `read_skill`
+    fail. It does not produce an empty folder.
+
+  Also fixed:
+  - the guard normalises the path, so `/./`, `//` and `x/..` spellings no longer write into the copy;
+  - a hub copy that carries a readonly name no longer crashes `read_skill`;
+  - several sentences were corrected (the size is 3.6 MB; the sandbox shell is not guarded; mkdocs
+    `--strict` runs on master's docs deploy, not on a PR).
+- **Known and left** (each (B): rare, or cosmetic):
+  - `rmdir /.skill` (the parent) and a move of `/.skill` are not guarded as a whole. A move of the
+    folder gets a 403 when it reaches the readonly copy, and a removal is harmless because the next
+    read copies the skill again.
+  - A profile skill that carries a readonly shared skill's name is refused writes by name, but is not
+    refreshed as a readonly copy. No shipped profile has one.
+  - The readonly check re-reads the shipped `SKILL.md` on each write into its folder (~30 µs, measured).
+    Each `read_skill` hashes the ~3.6 MB payload (5–7 ms, measured).
+  - The P4 commit's title says "33 later plans". It is 33 markers naming 22 distinct later plans; the
+    body is right.
 
 ## Done means
 

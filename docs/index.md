@@ -244,7 +244,7 @@ app 裡的 AI 透過 `system-design` skill 讀這裡的 docs 與設計計畫(`do
 
 1. **放進 `docs/` 並加進索引**:`plan-*.md`(以及 `handoff-` / `q-`)在 [design-history.md](design-history.md)
    的對應段落加一行;其他文件加進 `mkdocs.yml` 的 `nav`。漏了的話 `tests/docs/test_docs_index.py`
-   與 `mkdocs build --strict` 會讓 PR 失敗。
+   會讓 PR 失敗(`mkdocs build --strict` 也會,但它只在合進 master 後的文件站部署才跑)。
 2. **它推翻了某份舊計畫時**,在那份舊計畫的標題下加一行 `> 被 #NNN（plan-新的.md）推翻`(規則在
    `CLAUDE.md` 的 Workflow 段)。
 3. **照常合進 master。**

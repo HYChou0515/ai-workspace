@@ -90,7 +90,7 @@ COPY sample-workflows/ ./sample-workflows/
 # docs/plan-ai-reads-docs.md P3: the `system-design` skill's `docs` and
 # `mkdocs.yml` are links to `../../docs` and `../../mkdocs.yml`, so with the
 # skills at /app/sample-skills these land at /app. Without them the links
-# dangle and the in-app AI has no docs to read.
+# dangle, and the AI's read_skill("system-design") fails with FileNotFoundError.
 COPY docs/ ./docs/
 COPY mkdocs.yml ./mkdocs.yml
 

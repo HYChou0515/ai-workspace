@@ -2,7 +2,7 @@
 
 > 被 #813（plan-blob-gc-job.md）推翻
 
-> **2026-09-17 更新**：下面「blob GC 留在 API（決定 0）」已被推翻——它在 prod 把 API pod 殺了（死前最後一行 `blob-gc: won lease`）。現在是 `blob-gc` JobType + 自己的 worker,而 worker 用 API 自己那整套組裝（`__main__.build_app`,只組不 serve）來解決「registry 不完整會刪 blob」的問題;見 repo 根目錄的 `plan-blob-gc-job.md` 與 `migrations.md` §5.5。
+> **2026-09-17 更新**：下面「blob GC 留在 API（決定 0）」已被推翻——它在 prod 把 API pod 殺了（死前最後一行 `blob-gc: won lease`）。現在是 `blob-gc` JobType + 自己的 worker,而 worker 用 API 自己那整套組裝（`__main__.build_app`,只組不 serve）來解決「registry 不完整會刪 blob」的問題;見 [plan-blob-gc-job.md](plan-blob-gc-job.md) 與 `migrations.md` §5.5。
 
 ## 背景
 
