@@ -288,8 +288,8 @@ Where the build differs from the phases above, or found what they did not expect
     - no `.origin` but the marker means the platform's copy was cut short, and it is cleared (the marker
       last, so a clearing cut short still reads as ours) and copied again;
     - neither means the folder is the person's own, and it is kept;
-    - `.origin` plus the marker means the copy was cut short in the one gap between the two, and the
-      marker is dropped.
+    - `.origin` plus the marker means a copy finished and its marker was not removed (cut short in
+      the gap between the two, or another read's copy in flight), and the marker is dropped.
   - `.copying` is bookkeeping like `.origin`, never one of a skill's files (`skill_payload`,
     `workspace_skill_payload`). Readonly is new in this PR, so no copy exists from before the marker.
   - The same review found the same race twice more, both fixed with a delete that treats "already
@@ -299,11 +299,34 @@ Where the build differs from the phases above, or found what they did not expect
       lists that doc, so every later refresh raised on it, and the copy never refreshed again.
   - Also fixed: the owner's total across items refuses with `UserDiskFull`, which is not a
     `WorkspaceFull`, and still stopped the turn from the applied-skills block.
-  - Every guard line is pinned by mutation: 9 mutations, each reddening its own test.
   - Known and left:
     - A person's own same-named folder with no `SKILL.md` gets the platform's body, which names doc
       paths that are not there.
-    - Renaming that folder needs `exec`. An app without it has no way to rename it in the product.
+    - Renaming that folder needs code running in the sandbox (`exec`, or a workflow's or WUI page's
+      code). The product's file operations cannot, since the name is reserved.
+- **Review round 4 (#865)**, on round 3's marker. No lens found a wrong result in a single read; two
+  findings were fixed:
+  - Conformance (A): "every guard line is pinned" was false. The two marker deletes were not pinned
+    one line at a time; reverting either to a plain delete reddened nothing. Now four tests pin the
+    four places a delete meets a file already gone, one each.
+  - Defect: two first reads at once -- one clears the other's copy and is then killed (probed), or refused for
+    room (reasoned, not run) -- leave an `.origin` over files that are not there. `.origin` matched upstream, so nothing
+    ever refreshed it, and nobody can delete a readonly folder. Now a file `.origin` lists that the
+    folder lacks forces a refresh; the folder is already listed, so this costs no round trip.
+  - Every guard line is pinned by mutation, one line at a time: 14 mutations against
+    `test_skill_readonly.py` + `test_skill_materialize.py` (66 tests), each reddening the test for
+    its own line (M1 7, M3 3 and M5 4, because more than one test walks those lines; every other 1).
+    Round 3's commit body said M1 5 and M3 2; those were counted before the last tests were added.
+  - The regression lens's probe showed round 3's "already gone is done" delete also fixes an older
+    bug, in ordinary skills: a file the person deleted that upstream then retired made Reset raise
+    `FileNotFound` before `.origin` was rewritten, so every later Reset failed the same way.
+  - No round 5: the two fixes are a one-line guard and tests, each line pinned by its own mutation.
+  - Known and left:
+    - A refresh cut short and then a rollback to the image the old `.origin` names leaves some files
+      of the newer version: `.origin` equals upstream again, and the file bytes are not compared.
+      It stays until an image ships different docs.
+    - If a skill stops being readonly, a marker left beside its `.origin` is never dropped: a stray
+      empty `.copying` in the file tree, not part of the skill's files.
 
 ## Done means
 

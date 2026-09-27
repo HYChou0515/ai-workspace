@@ -1202,10 +1202,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   保留，之後寫不進去；AI 的 `read_skill("system-design")` 讀到的不是平台的文件——資料夾裡有 `SKILL.md` 就讀到它，
   沒有就讀到平台的說明、但說明裡指的文件不在那裡。症狀：這個 workspace 的 AI 答不出系統設計的問題。處理：把那個資料夾
   改名。檔案樹的搬移與刪除都會被擋（兩端都檢查），請 AI 在 workspace 裡用 `exec` 改名（`exec` 不經過唯讀檢查）：
-  - 要繼續當 skill 用：`mv .skill/system-design .skill/my-design`，並把 `.skill/my-design/SKILL.md` 開頭的
+  - 要繼續當 skill 用：`mv .skill/system-design .skill/my-design`（`.skill/my-design` 不能已存在，否則會被搬進它裡面），並把 `.skill/my-design/SKILL.md` 開頭的
     `name:` 改成 `my-design`（skill 以資料夾名稱為準，名字對不上的會被略過）。
   - 只是要留著檔案：`mv .skill/system-design my-design`。
-  改名後下一次 `read_skill("system-design")` 會複製平台的版本。該 app 若沒有開 `exec`，產品裡沒有其他改名的方法。
+  改名後下一次 `read_skill("system-design")` 會複製平台的版本。該 app 若沒有開 `exec`，就只能靠在 sandbox 裡跑的
+  程式（workflow 或 WUI 頁面的程式碼）改名；檔案樹與檔案操作都做不到。
 - 升級時要知道的：日後若把一個**已經有人用過的**一般 skill 改成 readonly，AI 改過的複本會在下一次 `read_skill`
   被整份覆蓋。這一版的 `system-design` 是新的 skill，沒有舊複本。
 
