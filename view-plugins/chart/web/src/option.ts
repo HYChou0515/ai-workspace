@@ -113,7 +113,7 @@ export type Options = {
    * (`partials.ts:litValues`; null: none picked), or null for a layer lit as
    * `lit` says. An aggregated bar layer given one is drawn whole, dimmed, with
    * a lit bar of the picked value in front: a third of the bar's width, at its
-   * left (start) edge [user, review #862], from the bar's own base. */
+   * left edge (a horizontal bar's top) [user, review #862], from the bar's own base. */
   picked?: ((number | null)[] | null)[];
   /** Where ECharts laid bar `dataIndex` of series `seriesIndex` out, and its
    * fill (`barAt.ts`, read from the drawn chart): a picked part's lit bar is
@@ -126,8 +126,9 @@ export type Options = {
   height?: number;
 };
 
-/** A bar as ECharts laid it out: `x`, `y` its origin corner -- the left (start)
- * edge across it, the base along it -- `width`, `height` signed, and its fill. */
+/** A bar as ECharts laid it out: `x`, `y` its origin corner -- the left edge
+ * across it (a horizontal bar's top), the base along it -- `width`, `height`
+ * signed, and its fill. */
 export type BarRect = { x: number; y: number; width: number; height: number; fill?: string };
 export type BarAt = (seriesIndex: number, dataIndex: number) => BarRect | undefined;
 
@@ -1125,7 +1126,7 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
     at: baseAt,
   });
   // #861 D3: each split bar's lit bar, in front of it -- a third of its
-  // width at its origin edge (the left, or a horizontal bar's start), from its
+  // width at its origin edge (the left, or a horizontal bar's top), from its
   // base to its base plus the picked value, read from where ECharts laid the
   // bar out on this draw (a resize, a legend toggle, a stack moves it). Point
   // j of the lit series is point j of its bar, as lined up; silent, so a
@@ -1145,6 +1146,9 @@ export function toOption(doc: object, answer: Answer, opts: Options = {}): Built
       type: "custom",
       name: barSeries.name,
       silent: true,
+      // clipped to the plot as the bar is: on an axis that leaves 0 out both
+      // start below it (a custom series is not clipped by default)
+      clip: true,
       // the picked value on the value axis, so a longer one widens it
       data: parts.map(({ at, part }) => (baseAt === 0 ? [at, part] : [part, at])),
       renderItem: (

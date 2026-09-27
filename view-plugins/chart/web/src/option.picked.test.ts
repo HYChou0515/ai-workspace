@@ -146,7 +146,7 @@ describe("a bar the marking picks part of (#861 D3)", () => {
       const j = lit(l, 0) ? 0 : 1;
       expect(style(l, j).fill).toBe(style(bars[k]!, j).fill);
     }
-    // n picked in g1 only (row 0); s in g2 (row 3) and g1 (row 1: none)
+    // n picked in g1 (row 0) and g2 (row 2); s in g2 (row 3), none in g1 (row 1)
     expect(lits.map((l) => [lit(l, 0) !== null, lit(l, 1) !== null])).toEqual([
       [true, true],
       [false, true],
@@ -154,6 +154,19 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     // a lit series is its colour's legend entry
     expect(built.names).toEqual(["n", "s", "n", "s"]);
     unsplit.chart.dispose();
+    chart.dispose();
+  });
+
+  it("hides a colour's lit bar with its bar when the legend hides the colour", () => {
+    const a = answer(
+      layer("bar", 4, { group: cat(["g1", "g1", "g2", "g2"]), region: cat(["n", "s", "n", "s"]), n: f64([6, 8, 2, 4]) }, { measured: ["n"] }),
+    );
+    const doc = { ...BAR, encoding: { ...BAR.encoding, color: { field: "region", type: "nominal" } } };
+    const { bars, lits, bar, lit, chart } = draw(doc, a, [[1, 5, 2, 3]]);
+    chart.dispatchAction({ type: "legendUnSelect", name: "n" });
+    expect([lit(lits[0]!, 0), lit(lits[0]!, 1)]).toEqual([null, null]);
+    // s, laid out again alone, keeps its lit bar at its edge
+    expect(lit(lits[1]!, 0)!.left).toBeCloseTo(bar(bars[1]!, 0).left, 5);
     chart.dispose();
   });
 
@@ -217,6 +230,29 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     chart.dispose();
   });
 
+  it("clips the lit bar to the plot, as a bar is: on an axis that leaves 0 out it starts below the plot", () => {
+    // y from 5: the bar and its lit bar both start at 0, below the plot. The
+    // bar is clipped there; an unclipped lit bar was drawn over the x labels.
+    const doc = { ...BAR, encoding: { ...BAR.encoding, y: { ...BAR.encoding.y, scale: { domain: [5, 20] } } } };
+    const { lits, chart } = draw(doc, COUNTS, [[8, null]]);
+    type View = { group: { getClipPath(): { shape: Rect } | null | undefined } };
+    const view = (chart as unknown as { getViewOfSeriesModel(m: unknown): View }).getViewOfSeriesModel(
+      (chart as unknown as { getModel(): { getSeriesByIndex(i: number): unknown } }).getModel().getSeriesByIndex(lits[0]!),
+    );
+    const clip = view.group.getClipPath();
+    expect(clip).toBeTruthy();
+    const plot = edges(clip!.shape);
+    const grid = (chart as unknown as { getModel(): { getComponent(t: string): { coordinateSystem: { getRect(): Rect } } } })
+      .getModel()
+      .getComponent("grid").coordinateSystem.getRect();
+    // along the bar exactly the plot (ECharts pads its clip by a pixel across)
+    const g = edges(grid);
+    expect([plot.top, plot.bottom]).toEqual([g.top, g.bottom]);
+    expect(Math.abs(plot.left - g.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(plot.right - g.right)).toBeLessThanOrEqual(1);
+    chart.dispose();
+  });
+
   it("says the picked value in the bar's tooltip", () => {
     const { built, bars, chart } = draw(BAR, COUNTS, [[2, null]]);
     const tip = (built.option.tooltip as { formatter: (p: object) => string }).formatter;
@@ -238,20 +274,37 @@ describe("a bar the marking picks part of (#861 D3)", () => {
     chart.dispose();
   });
 
-  it("on a horizontal bar, at the bar's start edge", () => {
+  it("widens the value axis to a picked value longer than its bar, on a horizontal bar too", () => {
+    const up = draw(BAR, COUNTS, [[16, null]]);
+    expect(extentOf(up.chart, "yAxis")[1]).toBeGreaterThanOrEqual(16);
+    up.chart.dispose();
+    const doc = { ...BAR, encoding: { y: { field: "group", type: "nominal" }, x: { field: "n", type: "quantitative", aggregate: "count" } } };
+    const across = draw(doc, COUNTS, [[16, null]]);
+    expect(extentOf(across.chart, "xAxis")[1]).toBeGreaterThanOrEqual(16);
+    across.chart.dispose();
+  });
+
+  it("on a horizontal bar, at the bar's top edge", () => {
     const doc = { ...BAR, encoding: { y: { field: "group", type: "nominal" }, x: { field: "n", type: "quantitative", aggregate: "count" } } };
     const { bars, lits, bar, lit, px, chart } = draw(doc, COUNTS, [[2, null]]);
     const whole = bar(bars[0]!, 0);
     const part = lit(lits[0]!, 0)!;
-    // the layout's own origin edge across the bar, a third of its thickness
-    const origin = model_y(chart, bars[0]!, 0);
-    expect(Math.abs(origin - part.top) < 1e-6 || Math.abs(origin - part.bottom) < 1e-6).toBe(true);
+    // at the bar's top edge on screen (its layout's origin across it), a
+    // third of its thickness
+    expect(model_y(chart, bars[0]!, 0)).toBeCloseTo(whole.top, 5);
+    expect(part.top).toBeCloseTo(whole.top, 5);
     expect(part.bottom - part.top).toBeCloseTo((whole.bottom - whole.top) / 3, 5);
     expect(part.left).toBeCloseTo(whole.left, 5);
     expect(part.right).toBeCloseTo(px(2, "g1")[0]!, 5);
     chart.dispose();
   });
 });
+
+/** The extent ECharts gave an axis (`xAxis` / `yAxis`, index 0). */
+function extentOf(chart: echarts.ECharts, axis: "xAxis" | "yAxis"): number[] {
+  type Axis = { axis: { scale: { getExtent(): number[] } } };
+  return (chart as unknown as { getModel(): { getComponent(t: string): Axis } }).getModel().getComponent(axis).axis.scale.getExtent();
+}
 
 /** The element drawn for item j of series `s` (a group's first child). */
 function itemEl(chart: echarts.ECharts, s: number, j: number): El | undefined {
@@ -302,6 +355,22 @@ describe("a stacked bar's segments (#861 D3)", () => {
     const s2 = lit(lits[1]!, 1)!;
     expect(s2.top).toBeCloseTo(px("g2", 6)[1]!, 5);
     expect(built.notes).not.toContain("a stack is lit whole: a picked part does not fit inside its segment");
+    chart.dispose();
+  });
+
+  it("on a number x, from each segment's base, the x axis kept to the bars' own", () => {
+    const a = answer(
+      layer("bar", 4, { pos: f64([1, 1, 3, 3]), region: cat(["n", "s", "n", "s"]), v: f64([6, 8, 2, 4]) }, { measured: ["v"] }),
+    );
+    const numeric = { ...doc, encoding: { ...doc.encoding, x: { field: "pos", type: "quantitative" } } };
+    const { bars, lits, bar, lit, px, chart } = draw(numeric, a, [[1, 3, null, 4]]);
+    const s1 = lit(lits[1]!, 0)!;
+    expect(s1.bottom).toBeCloseTo(bar(bars[1]!, 0).bottom, 5);
+    expect(s1.top).toBeCloseTo(px(1, 9)[1]!, 5);
+    // the lit bars add no x of their own: the axis spans the bars' 1 and 3
+    const [lo, hi] = extentOf(chart, "xAxis");
+    expect(hi).toBeLessThan(6);
+    expect(lo).toBeGreaterThan(-2);
     chart.dispose();
   });
 
