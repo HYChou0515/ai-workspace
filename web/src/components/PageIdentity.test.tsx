@@ -32,6 +32,7 @@ function open({
   policy = {},
   shared = {},
   mine = {},
+  auto = {},
   providers = [] as EnvProvider[],
   rows = [] as BindingRow[],
 } = {}) {
@@ -53,7 +54,7 @@ function open({
       }}
       privateClient={{
         layers: vi.fn(async () => ({ shared, policy })),
-        get: vi.fn(async () => mine),
+        get: vi.fn(async () => ({ values: mine, auto })),
         put: vi.fn(async () => {}),
         clear: vi.fn(async () => {}),
       }}
@@ -88,6 +89,11 @@ describe("PageIdentityBar", () => {
 
   it("says signed in once they do", async () => {
     open({ shared: { ERP_TOKEN: "x" }, policy: { VPN_KEY: "private_only" }, mine: { VPN_KEY: "v" } });
+    expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
+  });
+
+  it("counts a value the deploy filled in as the viewer's own", async () => {
+    open({ shared: { ERP_TOKEN: "x" }, policy: { VPN_KEY: "private_only" }, auto: { SSO: "s" } });
     expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
   });
 

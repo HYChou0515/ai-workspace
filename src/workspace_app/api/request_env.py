@@ -8,9 +8,13 @@ person — the caller's own SSO session cookie, a header their gateway stamped o
 — because putting that on the item would hand one person's credential to
 everyone the item is shared with.
 
-So this seam exists to compose those per-request values, and the values it
-returns are NEVER written back anywhere. They live for exactly one turn: the one
-started by the request they were read from.
+So this seam exists to compose those per-request values. They are never written
+to the ITEM. Since `plan-wui-viewer-login` (Q4b) the latest answer about a person
+IS kept — in that person's own PRIVATE row for the item (`api.private_env`,
+``PrivateSeam``), replaced whole at each change and readable by them alone — so
+their turns with no request behind them (a re-run on another pod, their goal
+rounds, a run they started) still have it. Implementations should assume that:
+return only what that person may keep.
 
 A turn nobody pressed send for — a scheduled workflow node, a goal-driver
 continuation — has no request to read, and the same seam answers for it through
@@ -86,8 +90,9 @@ class IRequestEnv(abc.ABC):
         user, so no step carries a credential the next step lacks), a
         goal-driver continuation of a chat, and a chat turn a peer RE-RUNS
         after the pod driving it went away (plan-graceful-shutdown P3: the
-        person's own request env was composed for one turn and never stored,
-        so the re-run asks here). ``user_id`` is the user that turn was captured
+        re-run has no request, so it asks here — and, since
+        `plan-wui-viewer-login`, also gets the author's own stored values over
+        this answer). ``user_id`` is the user that turn was captured
         as: the item's OWNER for an item schedule and for a run a WUI page
         button starts (both run the schedule engine), the goal's setter for a
         goal turn, the profile's declared ``acting_user`` for an event trigger,

@@ -3209,7 +3209,7 @@ describe("WuiView — a page asks the platform to sign the viewer in (plan-wui-v
       shared: {},
       policy: { ERP_TOKEN: "private_only" },
     });
-    vi.spyOn(privateEnvApi, "get").mockResolvedValue({});
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
     render(
       <QueryWrap>
         <WorkspaceSlugProvider value="rca">
@@ -3254,7 +3254,7 @@ describe("WuiView — sign-in in the workspace pane's toolbar (plan-wui-viewer-l
     const { scheduleBindingsApi } = await import("../../api/scheduleBindings");
     const { api } = await import("../../api");
     vi.spyOn(privateEnvApi, "layers").mockResolvedValue({ shared: {}, policy });
-    vi.spyOn(privateEnvApi, "get").mockResolvedValue({});
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
     vi.spyOn(scheduleBindingsApi, "list").mockResolvedValue([]);
     vi.spyOn(api, "getItemTools").mockResolvedValue([]);
     vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);

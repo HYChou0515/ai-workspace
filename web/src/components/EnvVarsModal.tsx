@@ -20,7 +20,7 @@
  * attention and showed one at a time. Each section is headed by one of three
  * states in symbol + colour + words (Carbon; never colour alone), most urgent
  * first, and only the ones missing a required value start unfolded. A tool
- * that declared nothing is drawn as ready — a UI-layer choice: the provider
+ * that declared nothing gets no section — a UI-layer choice: the provider
  * owes the declaration (`envNeeds.undeclared` still records it).
  *
  * The `.env` text box stays for what people actually do with these — paste a
@@ -33,7 +33,7 @@
  * returned unredacted to anyone with `read_meta`, so a mask would hide them
  * from the one person who may edit them and from nobody else.
  */
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
@@ -127,16 +127,17 @@ export function EnvVarsModal({
   useEffect(() => {
     // Seeded once from the server; afterwards the form is what the person is
     // editing, and a background refetch must not overwrite it.
-    if (mineQ.data && mine === null) setMine({ ...mineQ.data });
+    if (mineQ.data && mine === null) setMine({ ...mineQ.data.values });
   }, [mineQ.data, mine]);
   const mineValues = mine ?? {};
+  // What the deploy filled in at their last request — shown, not editable, and
+  // it wins a name (the server's `unattended_layer` / `private_layer`).
+  const auto = mineQ.data?.auto ?? {};
 
   const [creds, setCreds] = useState<Record<string, string>>({});
-  const dirty =
-    text !== toEnvText(envVars) ||
-    !sameShape(policy, envPolicy) ||
-    (mine !== null && mineQ.data !== undefined && !sameShape(mine, mineQ.data)) ||
-    Object.values(creds).some((v) => v.trim() !== "");
+  const sharedDirty = text !== toEnvText(envVars) || !sameShape(policy, envPolicy);
+  const mineDirty = mine !== null && mineQ.data !== undefined && !sameShape(mine, mineQ.data.values);
+  const dirty = sharedDirty || mineDirty || Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
 
   const tools = toolsQ.data ?? [];
@@ -148,17 +149,42 @@ export function EnvVarsModal({
   const toolsSettled = !hasItem || toolsQ.isSuccess || toolsQ.isError;
   const mineSettled = !hasItem || mine !== null || mineQ.isError;
 
-  const saveMine = async () => {
-    if (!hasItem) return;
-    await privateClient.put(slug!, itemId!, mineValues);
-    await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
-    onClose();
+  /** After one tab saves: close only if the OTHER tab has nothing unsaved;
+   * otherwise stay, on that tab (#779 — a Save is a deliberate exit, and it
+   * must not throw away the other tab's work without asking). */
+  const afterSave = (other: Tab, otherDirty: boolean) => {
+    if (otherDirty) setTab(other);
+    else onClose();
   };
-  const logout = async () => {
-    if (!hasItem) return;
-    await privateClient.clear(slug!, itemId!);
-    setMine({});
-    await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
+  // Mutations, not bare awaits: a failed write reaches the app's one write-
+  // failure notice (MutationCache.onError) instead of failing in silence.
+  const saveMine = useMutation({
+    mutationFn: async () => {
+      // A cleared field is "no value of mine", not an empty value — "" would
+      // override the shared value the person meant to fall back to.
+      const kept = Object.fromEntries(Object.entries(mineValues).filter(([, v]) => v !== ""));
+      await privateClient.put(slug!, itemId!, kept);
+      return kept;
+    },
+    onSuccess: async (kept) => {
+      setMine(kept);
+      queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: kept, auto });
+      afterSave("shared", sharedDirty);
+    },
+  });
+  const logout = useMutation({
+    mutationFn: () => privateClient.clear(slug!, itemId!),
+    onSuccess: async () => {
+      setMine({});
+      await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
+    },
+  });
+  const saveShared = async () => {
+    if (!onSave) return;
+    await onSave(parseEnvText(text), policy);
+    // A page's platform strip reads these through its own query.
+    if (hasItem) await queryClient.invalidateQueries({ queryKey: qk.envLayers(slug!, itemId!) });
+    afterSave("mine", mineDirty);
   };
 
   // A provider is offered when it produces a name some tool asked for — the
@@ -246,6 +272,7 @@ export function EnvVarsModal({
             shared={shared}
             policy={policy}
             mine={mineValues}
+            auto={auto}
             failed={mineQ.isError}
             setMine={(name, value) => setMine((prev) => ({ ...(prev ?? {}), [name]: value }))}
             login={
@@ -286,7 +313,7 @@ export function EnvVarsModal({
                 className="btn"
                 data-size="sm"
                 data-testid="env-save"
-                onClick={() => void onSave(parseEnvText(text), policy)}
+                onClick={() => void saveShared()}
               >
                 {t("env.save")}
               </button>
@@ -301,7 +328,7 @@ export function EnvVarsModal({
               data-size="sm"
               data-testid="env-mine-logout"
               style={{ marginRight: "auto" }}
-              onClick={() => void logout()}
+              onClick={() => logout.mutate()}
             >
               {t("env.logout")}
             </button>
@@ -320,7 +347,10 @@ export function EnvVarsModal({
               className="btn"
               data-size="sm"
               data-testid="env-mine-save"
-              onClick={() => void saveMine()}
+              // Not until the person's values have loaded: Save replaces the
+              // whole set, and saving over a failed read erased it (F5).
+              disabled={mine === null || saveMine.isPending}
+              onClick={() => saveMine.mutate()}
             >
               {t("env.save")}
             </button>
@@ -766,6 +796,7 @@ function MineTab({
   shared,
   policy,
   mine,
+  auto,
   failed,
   setMine,
   login,
@@ -776,6 +807,7 @@ function MineTab({
   shared: Record<string, string>;
   policy: Record<string, string>;
   mine: Record<string, string>;
+  auto: Record<string, string>;
   failed: boolean;
   setMine: (name: string, value: string) => void;
   login: ReactNode;
@@ -783,15 +815,18 @@ function MineTab({
   const t = useT();
   // What a tool would get for each name, so a section's status is about THIS
   // person — a tool "ready" for everyone can still be missing their own value.
+  // The person's private layer as a tool gets it: what the deploy filled in
+  // wins a name over what they typed (the server's composition).
+  const own = { ...mine, ...auto };
   const names = new Set([
     ...tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)),
     ...Object.keys(shared),
-    ...Object.keys(mine),
+    ...Object.keys(own),
   ]);
   const effective: Record<string, string> = {};
   for (const n of names) {
-    const layer = layerInUse(n, shared, mine, policy);
-    if (layer !== "none") effective[n] = (layer === "private" ? mine : shared)[n];
+    const layer = layerInUse(n, shared, own, policy);
+    if (layer !== "none") effective[n] = (layer === "private" ? own : shared)[n];
   }
   const view = deriveEnvNeeds(tools, effective);
   const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
@@ -799,7 +834,7 @@ function MineTab({
   // item asks each person to fill in.
   const other = [
     ...new Set([
-      ...Object.keys(mine),
+      ...Object.keys(own),
       ...Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first"),
     ]),
   ].filter((n) => !declared.has(n));
@@ -825,7 +860,7 @@ function MineTab({
         other={other}
         // What only THEY can fill and have not: unfold it, or a person who
         // opened this from a page finds it folded below every tool.
-        otherOpen={other.some((n) => policyOf(n, policy) === "private_only" && !mine[n])}
+        otherOpen={other.some((n) => policyOf(n, policy) === "private_only" && !own[n])}
         row={(field, section) => (
           <MineRow
             key={`${section.key}:${field.name}`}
@@ -834,6 +869,7 @@ function MineTab({
             shared={shared}
             policy={policy}
             mine={mine}
+            auto={auto}
             setMine={setMine}
           />
         )}
@@ -850,6 +886,7 @@ function MineRow({
   shared,
   policy,
   mine,
+  auto,
   setMine,
 }: {
   name: string;
@@ -857,12 +894,17 @@ function MineRow({
   shared: Record<string, string>;
   policy: Record<string, string>;
   mine: Record<string, string>;
+  auto: Record<string, string>;
   setMine: (name: string, value: string) => void;
 }) {
   const t = useT();
   const [revealed, setRevealed] = useState(false);
   const p = policyOf(name, policy);
-  const layer = layerInUse(name, shared, mine, policy);
+  const layer = layerInUse(name, shared, { ...mine, ...auto }, policy);
+  // Filled in by the deploy at the person's last request: it wins over
+  // anything typed, and their next request rewrites it — a box here would
+  // edit nothing.
+  const automatic = Object.hasOwn(auto, name);
   // `shared_first` with a shared value set: nothing the person types could be
   // used, so no box is offered — a field that silently does nothing is worse.
   const pinned = p === "shared_first" && Object.hasOwn(shared, name);
@@ -874,6 +916,10 @@ function MineRow({
       {pinned ? (
         <span data-testid={`env-pinned-${name}`} style={MUTED}>
           {t("env.pinned")}
+        </span>
+      ) : automatic ? (
+        <span data-testid={`env-auto-${name}`} style={MUTED}>
+          {t("env.hint.auto")}
         </span>
       ) : (
         <div style={{ display: "flex", gap: 6 }}>

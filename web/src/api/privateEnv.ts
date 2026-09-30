@@ -9,6 +9,8 @@
 
 import { apiFetch, httpErrorFrom } from "./http";
 
+export type MineValues = { values: Record<string, string>; auto: Record<string, string> };
+
 const base = (slug: string, itemId: string) =>
   `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env/private`;
 
@@ -26,10 +28,13 @@ export const privateEnvApi = {
     return (await r.json()) as { shared: Record<string, string>; policy: Record<string, string> };
   },
 
-  async get(slug: string, itemId: string): Promise<Record<string, string>> {
+  /** `values`: what the person typed or signed in with — editable. `auto`:
+   * what the deploy said about them at their last request — shown, not
+   * editable, and it wins a name (it is rewritten by their next request). */
+  async get(slug: string, itemId: string): Promise<MineValues> {
     const r = await apiFetch(base(slug, itemId));
     if (!r.ok) throw await httpErrorFrom(r, `private env failed: ${r.status}`);
-    return ((await r.json()) as { values: Record<string, string> }).values;
+    return (await r.json()) as MineValues;
   },
 
   /** The whole set: a name left out is removed. */

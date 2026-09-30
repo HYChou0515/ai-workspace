@@ -123,3 +123,15 @@ describe("identityState", () => {
     expect(s.missing).toEqual([]);
   });
 });
+
+describe("keyLabel (review round 1, V7)", () => {
+  it("calls three sign-ins systems, but never calls plain variables systems", async () => {
+    const { keyLabelParts } = await import("./identityState");
+    const login = (name: string) => ({ kind: "login" as const, name });
+    const set = (name: string) => ({ kind: "set" as const, name });
+
+    expect(keyLabelParts([login("A"), login("B"), login("C")])).toEqual({ kind: "manySystems", count: 3 });
+    expect(keyLabelParts([login("A"), set("B"), set("C")])).toEqual({ kind: "manyItems", count: 3 });
+    expect(keyLabelParts([login("A"), set("B")])).toEqual({ kind: "list", logins: ["A"], sets: ["B"] });
+  });
+});

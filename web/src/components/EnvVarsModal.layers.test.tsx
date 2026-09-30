@@ -41,17 +41,19 @@ function open({
   envVars = {},
   envPolicy = {},
   mine = {},
+  auto = {},
   canEdit = true,
 }: {
   tools?: ItemToolState[];
   envVars?: Record<string, string>;
   envPolicy?: Record<string, string>;
   mine?: Record<string, string>;
+  auto?: Record<string, string>;
   canEdit?: boolean;
 } = {}) {
   const onSave = vi.fn();
   const privateClient = {
-    get: vi.fn(async () => mine),
+    get: vi.fn(async () => ({ values: mine, auto })),
     put: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
   };
@@ -322,7 +324,7 @@ describe("signing in from Only me", () => {
   it("puts what the login returned into the person's own values, not the shared ones", async () => {
     const onSave = vi.fn();
     const privateClient = {
-      get: vi.fn(async () => ({})),
+      get: vi.fn(async () => ({ values: {}, auto: {} })),
       put: vi.fn(async () => {}),
       clear: vi.fn(async () => {}),
     };
@@ -364,5 +366,228 @@ describe("signing in from Only me", () => {
       expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "from-login" }),
     );
     expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+describe("review round 1: saving and leaving", () => {
+  it("does not let Only-me save over values it failed to load", async () => {
+    // F5: the fallback was {} and PUT replaces the whole set — a transient
+    // read failure, one typed value, Save, and every stored value was gone.
+    const onSave = vi.fn();
+    const privateClient = {
+      get: vi.fn(async () => {
+        throw new Error("503");
+      }),
+      put: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+    };
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={onSave}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={privateClient}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("env-mine-save")).toBeDisabled());
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+    expect(privateClient.put).not.toHaveBeenCalled();
+  });
+
+  it("clearing a value removes it rather than storing an empty one", async () => {
+    // F7: "" is a value — under private_first it would override the shared
+    // one the person meant to fall back to.
+    const { privateClient } = open({ envPolicy: { ERP_TOKEN: "private_first" }, mine: { ERP_TOKEN: "t" } });
+    await toolsLoaded();
+    unfold("erp");
+    await waitFor(() =>
+      expect((screen.getByTestId("env-mine-ERP_TOKEN") as HTMLInputElement).value).toBe("t"),
+    );
+
+    fireEvent.change(screen.getByTestId("env-mine-ERP_TOKEN"), { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+
+    await waitFor(() => expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", {}));
+  });
+
+  it("saving Only-me keeps the panel open while Everyone has unsaved edits", async () => {
+    // C5/F6: one tab's Save closed the modal and dropped the other tab's work,
+    // without asking — #779 says every deliberate exit goes through the guard.
+    const onClose = vi.fn();
+    const privateClient = {
+      get: vi.fn(async () => ({ values: {}, auto: {} })),
+      put: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+    };
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={vi.fn()}
+        onClose={onClose}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={privateClient}
+      />,
+    );
+    await toolsLoaded();
+    everyone();
+    fireEvent.click(screen.getByTestId("env-policy-ERP_TOKEN-private_only"));
+    fireEvent.click(screen.getByTestId("env-tab-mine"));
+
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+
+    await waitFor(() => expect(privateClient.put).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("env-tab-shared")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("saving Everyone keeps the panel open while Only-me has unsaved edits", async () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    const privateClient = {
+      get: vi.fn(async () => ({ values: {}, auto: {} })),
+      put: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+    };
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        envPolicy={{ ERP_TOKEN: "private_only" }}
+        onSave={onSave}
+        onClose={onClose}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={privateClient}
+      />,
+    );
+    await toolsLoaded();
+    fireEvent.change(screen.getByTestId("env-mine-ERP_TOKEN"), { target: { value: "t" } });
+    everyone();
+
+    fireEvent.click(screen.getByTestId("env-save"));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("env-tab-mine")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("asks before Cancel drops a changed policy", async () => {
+    const onClose = vi.fn();
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={vi.fn()}
+        onClose={onClose}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={{
+          get: vi.fn(async () => ({ values: {}, auto: {} })),
+          put: vi.fn(async () => {}),
+          clear: vi.fn(async () => {}),
+        }}
+      />,
+    );
+    await toolsLoaded();
+    everyone();
+    fireEvent.click(screen.getByTestId("env-policy-ERP_TOKEN-private_only"));
+
+    fireEvent.click(screen.getByTestId("env-cancel"));
+
+    expect(await screen.findByTestId("dialog-action-discard")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("asks before Cancel drops an edited value of one's own", async () => {
+    const onClose = vi.fn();
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        envPolicy={{ ERP_TOKEN: "private_only" }}
+        onSave={vi.fn()}
+        onClose={onClose}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={{
+          get: vi.fn(async () => ({ values: {}, auto: {} })),
+          put: vi.fn(async () => {}),
+          clear: vi.fn(async () => {}),
+        }}
+      />,
+    );
+    await toolsLoaded();
+    fireEvent.change(screen.getByTestId("env-mine-ERP_TOKEN"), { target: { value: "t" } });
+
+    fireEvent.click(screen.getByTestId("env-cancel"));
+
+    expect(await screen.findByTestId("dialog-action-discard")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes on Cancel without asking when neither tab was touched", async () => {
+    const onClose = vi.fn();
+    open({ mine: { ERP_TOKEN: "t" } });
+    // `open` wires its own onClose; drive a fresh one to observe it.
+    cleanup();
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={vi.fn()}
+        onClose={onClose}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={{
+          get: vi.fn(async () => ({ values: { ERP_TOKEN: "t" }, auto: {} })),
+          put: vi.fn(async () => {}),
+          clear: vi.fn(async () => {}),
+        }}
+      />,
+    );
+    await toolsLoaded();
+
+    fireEvent.click(screen.getByTestId("env-cancel"));
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows what the deploy filled in as in use, and not editable", async () => {
+    open({ tools: [], auto: { SSO_TOKEN: "auto" } });
+
+    const row = await screen.findByTestId("env-mine-row-SSO_TOKEN");
+    expect(row).toHaveAttribute("data-in-use", "mine");
+    expect(screen.getByTestId("env-auto-SSO_TOKEN")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-mine-SSO_TOKEN")).not.toBeInTheDocument();
   });
 });

@@ -1,9 +1,9 @@
 /**
  * What the item's current toolset says it wants from the environment (#750).
  *
- * The panel renders this two ways at once — a dropdown of the tools that
- * declared, and the fields of whichever is picked — and both are derived here
- * so they cannot drift apart. Storage is
+ * The panel draws `sections` — one collapsible section per tool that asks for
+ * something (`plan-wui-viewer-login`) — and every figure it shows is derived
+ * here so none can drift from another. Storage is
  * untouched: this describes the SAME flat `Record<string, string>` the text box
  * edits, which is why a variable two tools want is one field with one value.
  *
@@ -62,12 +62,12 @@ export type EnvNeedsView = {
    * variable, most urgent first (the order the panel draws them). A tool with
    * no or an empty declaration has none: the UI takes it at its word. */
   sections: ToolSection[];
-  /** One per effective tool that declared at least one variable — the rows
-   * the picker offers, in the order the toolset resolved. */
+  /** One per effective tool that declared at least one variable, in the order
+   * the toolset resolved — not drawn (the panel draws `sections`). */
   groups: ToolEnvGroup[];
-  /** Labels of effective tools that shipped no declaration. Named, not
-   * counted as needing nothing: almost every tool predates #750, and someone
-   * hunting a missing variable must not be told there is nothing to find. */
+  /** Labels of effective tools that shipped no declaration. NOT drawn: the
+   * panel takes a tool at its word that it needs nothing — declaring is the
+   * provider's job (`plan-wui-viewer-login`). Kept so the fact is not lost. */
   undeclared: string[];
   /** Names still to fill, counting ONLY variables an author explicitly marked
    * required. An unmarked variable is not "optional" — it is unstated — and

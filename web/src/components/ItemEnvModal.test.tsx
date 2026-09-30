@@ -18,7 +18,7 @@ describe("ItemEnvModal", () => {
   it("opens on the person's own values, with the item's layers loaded", async () => {
     const privateClient = {
       layers: vi.fn(async () => ({ shared: {}, policy: { VPN_KEY: "private_only" } })),
-      get: vi.fn(async () => ({})),
+      get: vi.fn(async () => ({ values: {}, auto: {} })),
       put: vi.fn(async () => {}),
       clear: vi.fn(async () => {}),
     };

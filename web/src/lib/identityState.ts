@@ -62,3 +62,25 @@ export function identityState({
   const holdsOwn = Object.values(mine).some((v) => v.trim() !== "");
   return { show: personal || offered.length > 0 || hasSchedules, missing, holdsOwn };
 }
+
+/** How the key button names what is missing (`plan-wui-viewer-login` Q11):
+ * the names while there are one or two; beyond that a count — of SYSTEMS only
+ * when every entry is a sign-in, since a variable to type is not a system
+ * (review round 1, V7). */
+export type KeyLabel =
+  | { kind: "list"; logins: string[]; sets: string[] }
+  | { kind: "manySystems"; count: number }
+  | { kind: "manyItems"; count: number };
+
+export function keyLabelParts(missing: Missing[]): KeyLabel {
+  if (missing.length >= 3) {
+    return missing.every((m) => m.kind === "login")
+      ? { kind: "manySystems", count: missing.length }
+      : { kind: "manyItems", count: missing.length };
+  }
+  return {
+    kind: "list",
+    logins: missing.filter((m) => m.kind === "login").map((m) => m.name),
+    sets: missing.filter((m) => m.kind === "set").map((m) => m.name),
+  };
+}

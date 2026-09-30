@@ -777,13 +777,12 @@ class TurnContextBuilder:
             # after it, so a user value placed there would be silently
             # overwritten for exactly the names that collide.
             #
-            # #714: whatever the CALLER contributed goes in FIRST, so the item's
-            # own panel wins a name collision. The two are different kinds of
-            # thing — the caller's values are never stored (a person's send
-            # carries what their request said; a turn with no request behind it
-            # — a workflow node, the goal driver — carries what the deploy's
-            # seam answers for such a turn, `docs/plan-headless-env.md`), the
-            # item's are a shared copy every participant can read.
+            # #714: the CALLER's contribution is the person's PRIVATE layer — what
+            # their request said, over what they keep for this item
+            # (`plan-wui-viewer-login`); a turn with no request behind it — a
+            # workflow node, the goal driver — carries the deploy's request-less
+            # answer with that person's values over it. The item's are a
+            # shared copy every participant can read.
             #
             # Which one wins is the item's per-name policy
             # (`plan-wui-viewer-login`): the caller's values are the PRIVATE

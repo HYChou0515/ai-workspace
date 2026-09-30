@@ -18,7 +18,7 @@
  * whole window. In the workspace pane the toolbar already IS that line, and
  * `PageIdentityControls` sits in it.
  */
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
@@ -30,7 +30,7 @@ import {
   type ScheduleBindingsClient,
 } from "../api/scheduleBindings";
 import type { ApiClient } from "../api/types";
-import { identityState, type Missing } from "../lib/identityState";
+import { identityState, keyLabelParts, type Missing } from "../lib/identityState";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { useDialog } from "./Dialog";
@@ -83,7 +83,8 @@ export function usePageIdentity({
     tools: tools.data ?? [],
     shared: layers.data?.shared ?? {},
     policy: layers.data?.policy ?? {},
-    mine: mine.data ?? {},
+    // What the deploy filled in wins a name over what they typed.
+    mine: { ...(mine.data?.values ?? {}), ...(mine.data?.auto ?? {}) },
     providers: providers.data ?? [],
     hasSchedules: (rows.data ?? []).length > 0,
   });
@@ -104,13 +105,13 @@ function useKeyLabel(missing: Missing[], holdsOwn: boolean): { state: KeyState; 
   return { state: "missing", label: missingLabel(t, missing) };
 }
 
-function missingLabel(t: ReturnType<typeof useT>, missing: Missing[]): string {
-  if (missing.length >= 3) return t("env.bar.many", { count: String(missing.length) });
-  const logins = missing.filter((m) => m.kind === "login").map((m) => m.name);
-  const sets = missing.filter((m) => m.kind === "set").map((m) => m.name);
+export function missingLabel(t: ReturnType<typeof useT>, missing: Missing[]): string {
+  const parts = keyLabelParts(missing);
+  if (parts.kind === "manySystems") return t("env.bar.many", { count: String(parts.count) });
+  if (parts.kind === "manyItems") return t("env.bar.manyItems", { count: String(parts.count) });
   return [
-    logins.length > 0 ? t("env.bar.login", { names: logins.join("、") }) : "",
-    sets.length > 0 ? t("env.bar.set", { names: sets.join("、") }) : "",
+    parts.logins.length > 0 ? t("env.bar.login", { names: parts.logins.join("、") }) : "",
+    parts.sets.length > 0 ? t("env.bar.set", { names: parts.sets.join("、") }) : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -128,33 +129,35 @@ export function PageIdentityControls(props: Where & Clients) {
 
   const change = async (row: BindingRow) => {
     setProblem(null);
-    try {
-      if (row.mine) {
-        await bindingsClient.unbind(slug, itemId, path, row.trigger_id);
-      } else {
-        if (row.bound_to) {
-          const choice = await dialog.confirm({
-            title: t("sched.replaceTitle"),
-            body: t("sched.replaceBody", { who: row.bound_to }),
-            actions: [
-              { id: "cancel", label: t("env.cancel") },
-              { id: "replace", label: t("sched.replaceMe"), variant: "primary" },
-            ],
-          });
-          if (choice !== "replace") return;
-        }
-        await bindingsClient.bind(slug, itemId, path, row.trigger_id);
-      }
-    } catch (err) {
+    if (!row.mine && row.bound_to) {
+      const choice = await dialog.confirm({
+        title: t("sched.replaceTitle"),
+        body: t("sched.replaceBody", { who: row.bound_to }),
+        actions: [
+          { id: "cancel", label: t("env.cancel") },
+          { id: "replace", label: t("sched.replaceMe"), variant: "primary" },
+        ],
+      });
+      if (choice !== "replace") return;
+    }
+    toggle.mutate(row);
+  };
+  // A mutation, not a bare await: a failure also reaches the app's one write-
+  // failure notice (MutationCache.onError), not only this panel's line.
+  const toggle = useMutation({
+    mutationFn: (row: BindingRow) =>
+      row.mine
+        ? bindingsClient.unbind(slug, itemId, path, row.trigger_id)
+        : bindingsClient.bind(slug, itemId, path, row.trigger_id),
+    onError: (err) => {
       const why = (err as { detail?: unknown })?.detail;
       setProblem(
         t("sched.failed", { why: typeof why === "string" ? why : String((err as Error).message) }),
       );
-    } finally {
-      await queryClient.invalidateQueries({ queryKey: qk.scheduleBindings(slug, itemId, path) });
-    }
-  };
-
+    },
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: qk.scheduleBindings(slug, itemId, path) }),
+  });
   // Nothing to say ⇒ nothing drawn: most pages have no one to sign in.
   if (!settled || !state.show) return null;
   return (
@@ -346,4 +349,51 @@ function SchedulesButton({ t, children }: { t: ReturnType<typeof useT>; children
       )}
     </>
   );
+}
+
+/** What the viewer still has to provide for this item's tools — for an entry
+ * point that is not a page (the chat's Env button). No schedules here: a chat
+ * has none of its own. */
+export function useEnvMissing({
+  slug,
+  itemId,
+  shared,
+  policy,
+  enabled,
+  client = defaultApi,
+  privateClient = privateEnvApi,
+}: {
+  slug: string;
+  itemId: string;
+  shared: Record<string, string>;
+  policy: Record<string, string>;
+  enabled: boolean;
+  client?: Pick<ApiClient, "getItemTools" | "getEnvProviders">;
+  privateClient?: Pick<PrivateEnvClient, "get">;
+}): Missing[] {
+  const on = enabled && Boolean(slug && itemId);
+  const tools = useQuery({
+    queryKey: qk.itemTools(slug, itemId),
+    queryFn: () => client.getItemTools(slug, itemId),
+    enabled: on,
+  });
+  const providers = useQuery({
+    queryKey: qk.envProviders(slug, itemId),
+    queryFn: () => client.getEnvProviders(slug, itemId),
+    enabled: on,
+  });
+  const mine = useQuery({
+    queryKey: qk.privateEnv(slug, itemId),
+    queryFn: () => privateClient.get(slug, itemId),
+    enabled: on,
+  });
+  if (!on) return [];
+  return identityState({
+    tools: tools.data ?? [],
+    shared,
+    policy,
+    mine: { ...(mine.data?.values ?? {}), ...(mine.data?.auto ?? {}) },
+    providers: providers.data ?? [],
+    hasSchedules: false,
+  }).missing;
 }

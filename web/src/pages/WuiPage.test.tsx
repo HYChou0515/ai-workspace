@@ -526,7 +526,7 @@ describe("WuiPage — the platform strip above the page (plan-wui-viewer-login Q
     const { scheduleBindingsApi } = await import("../api/scheduleBindings");
     const { api } = await import("../api");
     vi.spyOn(privateEnvApi, "layers").mockResolvedValue({ shared: {}, policy });
-    vi.spyOn(privateEnvApi, "get").mockResolvedValue({});
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
     vi.spyOn(scheduleBindingsApi, "list").mockResolvedValue([]);
     vi.spyOn(api, "getItemTools").mockResolvedValue([]);
     vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);

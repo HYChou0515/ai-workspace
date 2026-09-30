@@ -1598,7 +1598,7 @@ export const messages = {
   "env.search": { "zh-TW": "搜尋工具或變數…", en: "Search tools or variables…" },
   "env.alsoUsedBy": { "zh-TW": "與 {tools} 共用", en: "Shared with {tools}" },
   // The three section states. Symbol + colour + these words (Carbon: never
-  // colour alone). A tool that declared nothing reads as ready: its provider
+  // colour alone). A tool that declared nothing has no section: its provider
   // owes the declaration, and the panel takes it at its word.
   "env.status.missingRequired": { "zh-TW": "缺 {count} 個必填", en: "{count} required missing" },
   "env.status.missingOptional": {
@@ -1612,16 +1612,16 @@ export const messages = {
   "env.tab.mine": { "zh-TW": "只有我", en: "Only me" },
   "env.tab.shared": { "zh-TW": "所有參與者", en: "Everyone" },
   "env.mineDesc": {
-    "zh-TW": "只有你看得到這裡的值。登入換到的值也存在這裡。",
-    en: "Only you can see these values. Values from signing in are kept here too.",
+    "zh-TW": "只有你看得到這裡的值。登入換到的值也存在這裡;由你的登入狀態自動帶入的值,每次操作都會重新帶入。",
+    en: "Only you can see these values. Values from signing in are kept here too; ones filled in from your sign-in are refilled at every request.",
   },
   "env.sharedDesc": {
     "zh-TW": "這裡的值,所有能打開這個工作區的人都看得到。",
     en: "Everyone who can open this workspace can see these values.",
   },
   "env.readonly": {
-    "zh-TW": "只有工作區擁有者能修改這一頁。",
-    en: "Only the workspace owner can change this page.",
+    "zh-TW": "只有能修改這個工作區設定的人可以改這一頁。",
+    en: "Only people who can change this workspace's settings can change this page.",
   },
   "env.affectsEveryone": {
     "zh-TW": "會影響這個工作區的所有參與者",
@@ -1652,9 +1652,17 @@ export const messages = {
   },
   "env.hint.private_first": { "zh-TW": "填了就會改用你的", en: "Fill it in to use yours" },
   "env.hint.private_only": { "zh-TW": "由你自己提供", en: "You provide this one" },
+  // Written by the deploy from the person's own request (their SSO session):
+  // rewritten at every request, so there is nothing to type.
+  "env.hint.auto": {
+    "zh-TW": "由你的登入狀態自動帶入",
+    en: "Filled in automatically from your sign-in",
+  },
   "env.reveal": { "zh-TW": "顯示", en: "Show" },
   "env.hide": { "zh-TW": "隱藏", en: "Hide" },
-  "env.logout": { "zh-TW": "登出全部", en: "Sign out of all" },
+  // Clears what the person KEEPS; what their sign-in fills in comes back at
+  // their next request — so not "sign out", which it cannot promise.
+  "env.logout": { "zh-TW": "清除我的值", en: "Clear my values" },
   // The `/w/` page's platform bar (`plan-wui-viewer-login` Q11): WHAT to do,
   // by name — never "N missing", which says nothing about what to press.
   "env.bar.signedIn": { "zh-TW": "已登入", en: "Signed in" },
@@ -1663,11 +1671,13 @@ export const messages = {
   "env.bar.login": { "zh-TW": "登入 {names}", en: "Sign in to {names}" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
   "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
+  // Three or more, not all sign-ins: a variable to type is not a "system".
+  "env.bar.manyItems": { "zh-TW": "還有 {count} 項要設定", en: "{count} things to set up" },
   "env.bar.schedules": { "zh-TW": "這一頁的排程", en: "This page's schedules" },
   // Who a schedule runs as ("run as me", Q7/Q12).
   "sched.runsAsNobody": {
-    "zh-TW": "未綁定,只用共用值",
-    en: "Not bound — runs with the shared values only",
+    "zh-TW": "未綁定,不用任何人自己的值",
+    en: "Not bound — runs with nobody's own values",
   },
   "sched.runsAsYou": { "zh-TW": "用你的身分執行", en: "Runs as you" },
   "sched.runsAs": { "zh-TW": "用 {who} 的身分執行", en: "Runs as {who}" },

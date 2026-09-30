@@ -18,10 +18,13 @@ afterEach(() => {
 });
 
 describe("privateEnvApi", () => {
-  it("reads the caller's own values for the item", async () => {
-    vi.mocked(fetch).mockResolvedValue(ok({ values: { ERP_TOKEN: "t" } }));
+  it("reads the caller's own values for the item, and what the deploy filled in", async () => {
+    vi.mocked(fetch).mockResolvedValue(ok({ values: { ERP_TOKEN: "t" }, auto: { SSO: "s" } }));
 
-    expect(await privateEnvApi.get("rca", "item 1")).toEqual({ ERP_TOKEN: "t" });
+    expect(await privateEnvApi.get("rca", "item 1")).toEqual({
+      values: { ERP_TOKEN: "t" },
+      auto: { SSO: "s" },
+    });
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain("/a/rca/items/item%201/env/private");
   });
 

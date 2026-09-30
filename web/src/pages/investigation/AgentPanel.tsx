@@ -22,6 +22,7 @@ import { ResizeDivider } from "../../components/ResizeDivider";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
+import { missingLabel, useEnvMissing } from "../../components/PageIdentity";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
@@ -1568,6 +1569,15 @@ export function AgentHeader({
     videoJob ? "video" : "",
   ].join("|");
   const { tier, headerRef, identityRef } = useHeaderTier(tierProp, contentKey);
+  // `plan-wui-viewer-login`: what the viewer still has to provide, on the button.
+  const envMissing = useEnvMissing({
+    slug,
+    itemId: investigationId,
+    shared: envVars ?? {},
+    policy: envPolicy ?? {},
+    enabled: Boolean(canOpenEnv || onSaveEnvVars),
+  });
+  const envMissingText = missingLabel(t, envMissing);
   return (
     <header
       ref={headerRef}
@@ -1626,14 +1636,9 @@ export function AgentHeader({
         <EnvVarsModal
           envVars={envVars ?? {}}
           envPolicy={envPolicy ?? {}}
-          onSave={
-            onSaveEnvVars
-              ? (next, policy) => {
-                  onSaveEnvVars(next, policy);
-                  setShowEnv(false);
-                }
-              : undefined
-          }
+          // The panel closes ITSELF after a save — and stays open when its other
+          // tab still has unsaved work (#779); closing here overrode that.
+          onSave={onSaveEnvVars}
           onClose={() => setShowEnv(false)}
           // #750: which item, so the panel can offer a field per variable this
           // item's own tools declared. Only reached when the modal is open, so
@@ -1736,10 +1741,13 @@ export function AgentHeader({
           (canOpenEnv || onSaveEnvVars) && {
             id: "env",
             testid: "env-button",
-            aria: t("env.title"),
+            aria: envMissing.length > 0 ? `${t("env.title")} — ${envMissingText}` : t("env.title"),
             icon: "tag",
             label: t("env.button"),
-            tip: t("env.title"),
+            // What is still missing, by name (`plan-wui-viewer-login`), in the
+            // tooltip — and an amber dot beside the label so it is seen.
+            tip: envMissing.length > 0 ? `${t("env.title")} — ${envMissingText}` : t("env.title"),
+            attention: envMissing.length > 0,
             onClick: () => setShowEnv(true),
           },
           // #298: the Skills panel — see / download / import the skills the user

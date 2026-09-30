@@ -291,9 +291,9 @@ def register_wui_routes(
         # Vite's `loadEnv` picks `VITE_`-prefixed names out of `process.env`
         # and `define`s them into the bundle. So a per-request credential
         # reaching here would be baked into a file other people download —
-        # which is exactly what `IRequestEnv` promises never happens ("the
-        # values it returns are NEVER written back anywhere. They live for
-        # exactly one turn").
+        # one person's credential in everybody's copy. The same holds for a
+        # person's stored PRIVATE values (`plan-wui-viewer-login`): the build
+        # reads the shared layer only.
         #
         # A tool call is the opposite shape: its output goes to the one person
         # who asked, and dies with the exec. That is why `wui_call_tool` DOES

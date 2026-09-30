@@ -231,7 +231,8 @@ reader to the wrong place most of the time. `examples/external/` does this.
 ### Signing in
 
 Some of the item's variables are **each person's own** — a token for a system
-they sign in to themselves (the item's owner decides which, in the Env panel).
+they sign in to themselves (whoever can change the workspace's settings decides
+which, in the Env panel).
 Your page never sees them and must never ask for them: no password field, no
 token box. A credential typed into your page would pass through code anyone
 with edit rights can change.
