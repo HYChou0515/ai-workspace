@@ -870,9 +870,14 @@ def register_item_routes(
                         satellite_rm.permanently_delete(cid)
                 with contextlib.suppress(ResourceIDNotFoundError):
                     conv_rm.permanently_delete(cid)
+            from ..workflow.run_identity import RunIdentities
+
+            identities = RunIdentities(spec)
             for rid in run_ids:
                 with contextlib.suppress(ResourceIDNotFoundError):
                     run_rm.permanently_delete(rid)
+                # Whose private values the run used (`plan-wui-viewer-login`).
+                identities.forget(rid)
 
         try:
             # The environment FIRST, because it is the one step that can refuse:

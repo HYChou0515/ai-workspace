@@ -618,3 +618,30 @@ async def test_a_goal_setter_who_lost_access_no_longer_lends_their_values():
         )
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-goal-setter", "FROM_ITEM": "i"}]
+
+
+def test_nobody_can_choose_whose_values_a_run_uses_through_the_run_record():
+    """Review round 1 (R5): `WorkflowRun` has auto-CRUD with no write gate, so an
+    `env_user` field ON it let anyone PATCH a paused run into someone else's
+    private values. Whose values a run uses lives where no route reaches it;
+    the run record has no such field to write."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.workflow.run import WorkflowRun
+
+    assert "env_user" not in WorkflowRun.__struct_fields__
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(
+        seam, owner="owner-o", user="presser-p"
+    )
+    PrivateEnvStore(spec).replace("presser-p", item_id, {"ERP": "presser"})
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/nightly.json", content=_ONE_AGENT_STEP)
+        assert client.post(f"{base}/wui/run", json={"workflow": "nightly"}).status_code == 200
+        runs = client.get(f"{base}/runs").json()
+        assert _poll_until_terminal(client, item_id, runs[0]["run_id"]) == "done"
+        paths = {getattr(r, "path", "") for r in cast(FastAPI, client.app).routes}
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-owner-o", "ERP": "presser"}]
+    assert not any("run-identity" in p for p in paths)

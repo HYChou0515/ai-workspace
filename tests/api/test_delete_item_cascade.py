@@ -663,3 +663,24 @@ async def test_deleting_an_item_takes_its_schedule_bindings():
 
     assert bindings.binder("k-doomed") == ""
     assert bindings.binder("k-kept") == "alice"
+
+
+async def test_deleting_an_item_takes_whose_values_its_runs_used():
+    """The run's identity row (`workflow.run_identity`) names a person whose
+    private values the run's tools got; it goes with the run."""
+    from workspace_app.workflow.run import WorkflowRun
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    app, spec, _ = _build()
+    client = TestClient(app)
+    item_id = _create_item(client)
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="default-user"))
+        .resource_id
+    )
+    RunIdentities(spec).record(run_id, "alice")
+
+    assert client.delete(f"/a/rca/items/{item_id}").status_code == 204
+
+    assert RunIdentities(spec).env_user(run_id) == ""

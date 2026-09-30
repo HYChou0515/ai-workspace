@@ -32,6 +32,7 @@ from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert
 from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
+from ..workflow.run_identity import RunIdentities
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
@@ -105,7 +106,7 @@ class WorkflowExecutor:
     ) -> None:
         self._spec = spec
         # `plan-wui-viewer-login`: each person's private env values per item; a
-        # run started by a person overlays theirs (`WorkflowRun.env_user`).
+        # run started by a person overlays theirs (`workflow.run_identity`).
         self._private_env = private_env
         self._files = files
         self._registry = registry
@@ -557,15 +558,9 @@ class WorkflowExecutor:
             await self._registry.flush(item_id)
 
     def _run_env_user(self, run_id: str) -> str:
-        """``WorkflowRun.env_user`` for this run; "" when the row cannot be read
-        (a run built outside the orchestrator) — nobody's private values, the
-        side that hands out less."""
-        try:
-            data = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
-        except ResourceIDNotFoundError:
-            return ""
-        assert isinstance(data, WorkflowRun)
-        return data.env_user
+        """Whose private values this run uses (`workflow.run_identity`); "" when
+        none was recorded — nobody's, the side that hands out less."""
+        return RunIdentities(self._spec).env_user(run_id)
 
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str

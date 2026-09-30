@@ -112,13 +112,6 @@ class WorkflowRun(Struct):
     resume run under ``rm.using(user=captured_user)`` since they have no request
     context, so ``created_by`` / ingestion attribution / notifications stay right."""
 
-    env_user: str = ""
-    """Whose PRIVATE env layer this run's tools get (`plan-wui-viewer-login`) —
-    the person who pressed the button that started it, which is NOT
-    ``captured_user`` for a page's run (captured, and billed, as the owner).
-    "" ⇒ nobody's: an unbound schedule or a trigger runs on the shared layer and
-    the deploy's request-less answer only."""
-
     chat_id: str = ""
     """The workflow CHAT this run drives (topic-hub P8, manual §3) — the opaque
     stream/turn key the orchestrator publishes + enqueues on. "" → the legacy path

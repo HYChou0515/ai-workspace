@@ -76,6 +76,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.run_identity import register_run_identity
 from ..workflow.schedule_bindings import (
     ScheduleBinding,
     ScheduleBindings,
@@ -1786,6 +1787,9 @@ def create_app(
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
     register_schedule_bindings(spec)
+    # Whose private values a run uses — off `WorkflowRun`, whose auto-CRUD is
+    # writable (review round 1, R5).
+    register_run_identity(spec)
     # `may` is asked before a person's values are used with nobody at the
     # request (schedules, goal rounds, re-runs): removed, they stop lending them.
     private_env_store = PrivateEnvStore(

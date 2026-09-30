@@ -59,6 +59,7 @@ from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
 from .run import PhaseState, RunStatus, StepState, WorkflowRun
+from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
@@ -407,7 +408,6 @@ class WorkflowOrchestrator:
                 WorkflowRun(
                     item_id=item_id,
                     captured_user=captured_user,
-                    env_user=env_user,
                     phases=phases,
                     chat_id=chat_id,
                     workflow_id=workflow_id,
@@ -421,6 +421,10 @@ class WorkflowOrchestrator:
             )
             .resource_id
         )
+        if env_user:
+            # Whose private values the run's tools get — kept where no route
+            # reaches it (`run_identity`, review round 1 R5).
+            RunIdentities(self.spec).record(run_id, env_user)
         self._prune_runs(item_id, keep=run_id)
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
         logger.info(
@@ -470,6 +474,7 @@ class WorkflowOrchestrator:
             if rid == keep or data.status in _ACTIVE or rid in pinned:
                 continue
             self._rm().permanently_delete(rid)
+            RunIdentities(self.spec).forget(rid)
             to_drop -= 1
             prunable -= 1
 
