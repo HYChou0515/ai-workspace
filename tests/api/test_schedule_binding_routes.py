@@ -206,3 +206,49 @@ def test_a_binding_from_another_item_cannot_be_taken_off_through_this_one():
 
     assert r.status_code == 404
     assert ScheduleBindings(spec).binder("foreign-key") == "carol"
+
+
+def test_the_app_drops_a_binding_whose_binder_was_removed_and_says_why():
+    """Review round 1 (C2/F1), through the app's OWN sweeper: carol binds, is
+    removed from the item, and the next tick must stop using her values and tell
+    her the true reason — not "your schedule was edited"."""
+    from workspace_app.api.notifications import Notification
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    client, holder, rid, spec = _world()
+    nightly = json.dumps(
+        {
+            "id": "x",
+            "title": "Nightly",
+            "phases": [{"id": "p"}],
+            "steps": [
+                {"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}
+            ],
+        }
+    )
+    with client:
+        base = f"/a/rca/items/{rid}/files"
+        assert client.put(f"{base}/.workflows/nightly.json", content=nightly).status_code == 204
+        rows = json.dumps({"schedules": [{"every": "minutes", "n": 1, "run": "nightly"}]})
+        assert client.put(f"{base}{FILE}", content=rows).status_code == 204
+        holder["id"] = "carol"
+        (row,) = _list(client, rid)
+        assert _bind(client, rid, row["trigger_id"]).status_code == 200
+
+        rm = spec.get_resource_manager(RcaInvestigation)
+        with rm.using("bob"):
+            item = rm.get(rid).data
+            assert isinstance(item, RcaInvestigation)
+            item.permission = Permission(visibility="restricted")  # carol removed
+            rm.update(rid, item)
+
+        assert client.portal is not None
+        client.portal.call(client.app.state.user_schedule_sweeper.tick)
+
+    assert ScheduleBindings(spec).binder(row["trigger_id"]) == ""
+    kinds = [
+        r.data.kind
+        for r in spec.get_resource_manager(Notification).list_resources()
+        if r.data.recipient == "carol"
+    ]
+    assert kinds == ["schedule_binding_no_access"]

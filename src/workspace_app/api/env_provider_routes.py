@@ -72,15 +72,18 @@ def register_env_provider_routes(
         return list(getattr(request.app.state, "env_providers", ()) or ())
 
     def _gate(slug: str, item_id: str) -> None:
-        """Same verb as storing a variable by hand: ``write_meta``.
+        """``read_meta`` — whoever may open the item, the verb of the private-layer
+        routes (`plan-wui-viewer-login`).
 
-        The exchange mints a credential's product for THIS item, and the whole
-        point is to put it in the panel — so anyone who could not save it by
-        hand must not be able to mint it either. Gating only the eventual save
-        would leave a reader able to trigger a login and read the token out of
-        the response."""
+        #750 gated this on ``write_meta``: the product's only home was the
+        SHARED variables, and a reader minting one would have read a token they
+        could not store. A viewer's sign-in now fills THEIR private layer, the
+        exchange takes nothing but what they typed, and the provider is given no
+        item context — so minting it grants nothing they did not bring. Storing
+        the product in the SHARED layer is still the item PATCH, still
+        ``write_meta``."""
         require_item_access(
-            spec, slug, item_id, "write_meta", user=get_user_id(), superusers=superusers
+            spec, slug, item_id, "read_meta", user=get_user_id(), superusers=superusers
         )
 
     def _describe(provider: IEnvProvider) -> EnvProviderOut | None:

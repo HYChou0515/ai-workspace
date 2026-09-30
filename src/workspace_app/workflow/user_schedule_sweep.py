@@ -36,7 +36,14 @@ from .offered import no_such_workflow, unparsable_workflow
 from .orchestrator import ActiveRunExists
 from .schedule_bindings import ScheduleBinding, ScheduleBindings
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
-from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
+from .user_schedules import (
+    file_rows,
+    in_zone,
+    over_cap,
+    trigger_id_for,
+    usable_rows,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +156,14 @@ class UserScheduleSweeper:
         confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
         lease: ScanLease | None = None,
         bindings: ScheduleBindings | None = None,
-        on_expired: Callable[[ScheduleBinding], object] | None = None,
+        on_expired: Callable[[ScheduleBinding, str], object] | None = None,
+        binder_may: Callable[[str, str], bool] | None = None,
     ) -> None:
+        #: Whether a binder may STILL make this item run work (``execute``),
+        #: asked at every fire: a person removed from the item must stop lending
+        #: their values the moment they are removed (review round 1, C2/F1).
+        #: None ⇒ unchecked (a composition that wired none).
+        self._binder_may = binder_may
         #: `plan-wui-viewer-login` Q7: who each schedule runs AS. None ⇒ no
         #: store wired, every fire runs as nobody in particular (as before).
         self._bindings = bindings
@@ -276,23 +289,79 @@ class UserScheduleSweeper:
             )
             return UNKNOWN
 
-    async def _expire_bindings(self, item_id: str, path: str, live: set[str]) -> None:
+    async def _binder_for(self, item_id: str, trigger_id: str) -> str:
+        """Whose private values this fire runs with: the binder — if they may
+        still make this item run work. One who may not (removed from the item,
+        demoted) has the binding dropped and is told; the fire runs as nobody."""
+        if self._bindings is None:
+            return ""
+        binding = await asyncio.to_thread(self._bindings.get, trigger_id)
+        if binding is None:
+            return ""
+        if self._binder_may is None or await asyncio.to_thread(
+            self._binder_may, binding.user_id, item_id
+        ):
+            return binding.user_id
+        await asyncio.to_thread(self._bindings.unbind, trigger_id)
+        await self._tell(binding, "no_access")
+        return ""
+
+    async def _tell(self, binding: ScheduleBinding, why: str) -> None:
+        """Tell the binder their name is off a schedule, and WHY — ``changed``
+        (the row or file no longer holds it) or ``no_access`` (they may no
+        longer run work in the item). The notice must say the true reason."""
+        if self._on_expired is None:
+            return
+        try:
+            await asyncio.to_thread(self._on_expired, binding, why)
+        except Exception:  # noqa: BLE001 — a failed notice is not a failed schedule
+            logger.exception("user schedules: could not tell %s", binding.user_id)
+
+    async def _expire_bindings(self, item_id: str, path: str, raw: str) -> None:
         """Drop the bindings of rows this file no longer holds — an edited row is
-        a new key — and tell each binder. A store failure is logged and the tick
-        goes on: firing on schedule matters more than tidying a binding."""
+        a new key — and tell each binder. Dropping is not undoable (the person
+        has to press "Run as me" again), so a key must be absent from BOTH the
+        snapshot and the live workspace (review round 1):
+
+        * the snapshot LAGS the live file, and "Run as me" is pressed on what
+          the page just saved — absent there only means "not synced yet" (F2);
+        * a file that does not parse says nothing about which rows it holds — a
+          stray brace must not cost every binder their consent (F3);
+        * a live read that fails or times out decides nothing.
+
+        A store failure is logged and the tick goes on."""
+        assert self._bindings is not None
+        snapshot = _keys_in(item_id, path, raw)
+        if snapshot is None:
+            return
+        try:
+            bound = await asyncio.to_thread(self._bindings.for_item, item_id)
+        except Exception:  # noqa: BLE001 — one item's bookkeeping must not cost the tick
+            logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
+            return
+        if not any(b.path == path and b.trigger_id not in snapshot for b in bound):
+            return  # the common case: nothing to confirm, no second read
+        found = await self._still_there(item_id, path)
+        if found is UNKNOWN:
+            return
+        if found is None:
+            live: set[str] | None = set()
+        else:
+            assert isinstance(found, bytes)
+            live = _keys_in(item_id, path, found.decode("utf-8", "replace"))
+        if live is None:
+            return
+        await self._drop_bindings(item_id, path, keep=snapshot | live)
+
+    async def _drop_bindings(self, item_id: str, path: str, *, keep: set[str]) -> None:
         assert self._bindings is not None
         try:
-            gone = await asyncio.to_thread(self._bindings.expire_absent, item_id, path, live)
+            gone = await asyncio.to_thread(self._bindings.expire_absent, item_id, path, keep)
         except Exception:  # noqa: BLE001 — one item's bookkeeping must not cost the tick
             logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
             return
         for binding in gone:
-            if self._on_expired is None:
-                continue
-            try:
-                await asyncio.to_thread(self._on_expired, binding)
-            except Exception:  # noqa: BLE001 — a failed notice is not a failed schedule
-                logger.exception("user schedules: could not tell %s", binding.user_id)
+            await self._tell(binding, "changed")
 
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
@@ -323,6 +392,10 @@ class UserScheduleSweeper:
                     "user schedules: %s %s is gone — dropping from the index", item_id, path
                 )
                 await asyncio.to_thread(self._index.forget, item_id, path)
+                # Confirmed gone (the live workspace agrees): its schedules are
+                # gone, and so is every consent given to them (round 1, C12).
+                if self._bindings is not None:
+                    await self._drop_bindings(item_id, path, keep=set())
                 return 0
             assert isinstance(found, bytes)
             raw = found.decode("utf-8", "replace")
@@ -383,9 +456,7 @@ class UserScheduleSweeper:
         # over-cap file (both returned above) — because dropping a binding is
         # not undoable: the person has to press "run as me" again.
         if self._bindings is not None:
-            await self._expire_bindings(
-                item_id, path, {trigger_id_for(item_id, folder, row) for row in rows}
-            )
+            await self._expire_bindings(item_id, path, raw)
         owner = await asyncio.to_thread(self._owner_of, item_id)
         # The ceiling `run` has to stay inside. Checked HERE and per ROW, the
         # same shape as every other lint in this file: the interactive entrance
@@ -514,11 +585,7 @@ class UserScheduleSweeper:
                     key=trigger_id,
                     # Captured as the owner above; RUN WITH the binder's private
                     # values, or nobody's ("") when no one pressed "run as me".
-                    env_user=(
-                        await asyncio.to_thread(self._bindings.binder, trigger_id)
-                        if self._bindings is not None
-                        else ""
-                    ),
+                    env_user=await self._binder_for(item_id, trigger_id),
                 )
             except ActiveRunExists:
                 # NOT a failure. The schedule's previous fire is still running,
@@ -627,3 +694,12 @@ class UserScheduleSweeper:
         ]:
             del self._said[key]
         return fired
+
+
+def _keys_in(item_id: str, path: str, raw: str) -> set[str] | None:
+    """The keys a schedules file's rows would fire under, or ``None`` when the
+    file does not parse as a whole — which says nothing about its rows."""
+    if file_rows(raw) is None:
+        return None
+    folder = path.rsplit("/", 1)[0]
+    return {trigger_id_for(item_id, folder, row) for row in usable_rows(raw)[0]}

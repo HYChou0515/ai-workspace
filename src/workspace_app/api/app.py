@@ -108,7 +108,7 @@ from .health_routes import (
     register_replay_routes,
     register_sanity_routes,
 )
-from .item_authz import check_access, load_access_facts
+from .item_authz import check_access, load_access_facts, user_may
 from .item_routes import register_item_routes
 from .kb_chat_routes import (
     register_kb_chat_routes,
@@ -1306,23 +1306,31 @@ def create_app(
             env_user=env_user,
         )
 
-    def _binding_expired(binding: ScheduleBinding) -> None:
-        """Tell a binder their name is off a schedule whose content changed."""
+    def _binding_expired(binding: ScheduleBinding, why: str) -> None:
+        """Tell a binder their name is off a schedule — with the true reason."""
+        if why == "no_access":
+            title = "A schedule no longer runs as you"
+            body = (
+                f"You no longer have permission to run work in the item that holds "
+                f"{binding.path}, so its schedule stopped using your values."
+            )
+        else:
+            title = "A schedule you ran as yourself was changed"
+            body = (
+                f"The schedule in {binding.path} was edited or removed, so it no longer "
+                "runs with your values. Open the page and choose “Run as me” again if "
+                "you still want it to."
+            )
         notify(
             spec,
             recipient=binding.user_id,
-            kind="schedule_binding_expired",
-            title="A schedule you ran as yourself was changed",
-            body=(
-                f"The schedule in {binding.path} was edited, so it no longer runs "
-                "with your values. Open the page and choose “Run as me” again if "
-                "you still want it to."
-            ),
-            # Per BINDING (its `bound_at`), not per key: re-binding the same
-            # schedule and seeing it edited again is a second, real notice.
+            kind=f"schedule_binding_{why}",
+            title=title,
+            body=body,
+            # Per BINDING (its `bound_at`) and reason: re-binding and losing it
+            # again is a second, real notice.
             dedup_key=(
-                f"schedule-binding-expired:{binding.trigger_id}:{binding.user_id}"
-                f":{binding.bound_at}"
+                f"schedule-binding-{why}:{binding.trigger_id}:{binding.user_id}:{binding.bound_at}"
             ),
         )
 
@@ -1348,6 +1356,7 @@ def create_app(
         # plan-wui-viewer-login Q7: who each schedule runs AS.
         bindings=ScheduleBindings(spec),
         on_expired=_binding_expired,
+        binder_may=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
         owner_of=_owner_of_item,
         # The SAME rule the page's own `startRun` is held to (`workflow.offered`),
         # answered from the DURABLE store — `_workflows_for_sweep`, for the same
@@ -1777,7 +1786,11 @@ def create_app(
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
     register_schedule_bindings(spec)
-    private_env_store = PrivateEnvStore(spec)
+    # `may` is asked before a person's values are used with nobody at the
+    # request (schedules, goal rounds, re-runs): removed, they stop lending them.
+    private_env_store = PrivateEnvStore(
+        spec, may=lambda user, item, verb: user_may(spec, item, user, verb, superusers=superusers)
+    )
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a

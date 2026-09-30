@@ -210,3 +210,21 @@ def test_the_items_layers_are_refused_to_someone_who_cannot_open_it():
     holder["id"] = "mallory"
 
     assert client.get(f"/a/rca/items/{rid}/env/layers").status_code in (403, 404)
+
+
+# ─── "may this OTHER person still…" — asked when nobody is at the request ────
+
+
+def test_user_may_answers_for_someone_other_than_the_caller():
+    """Review round 1 (C2/F1): a schedule, a goal round, a re-run act FOR a person
+    who is not making the request. Whether they may still use the item has to
+    be asked about THEM — and answered from the item's live permission."""
+    from workspace_app.api.item_authz import user_may
+
+    _client, _holder, rid, spec = _world()
+
+    assert user_may(spec, rid, "alice", "read_meta") is True
+    assert user_may(spec, rid, "alice", "execute") is False
+    assert user_may(spec, rid, "mallory", "read_meta") is False
+    assert user_may(spec, "no-such-item", "alice", "read_meta") is False
+    assert user_may(spec, rid, "root", "execute", superusers=frozenset({"root"})) is True

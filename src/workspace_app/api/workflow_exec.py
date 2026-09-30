@@ -298,7 +298,12 @@ class WorkflowExecutor:
         # values over the seam's answer — not the captured user, who for a
         # page's run is the owner it is billed to.
         return await unattended_layer(
-            self._private_env, headless=headless, acting_for=env_user, item_id=item_id
+            self._private_env,
+            headless=headless,
+            acting_for=env_user,
+            item_id=item_id,
+            # The presser / binder must STILL be able to make this item run work.
+            verb="execute",
         )
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:

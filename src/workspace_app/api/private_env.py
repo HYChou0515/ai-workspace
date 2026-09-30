@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..perm import Verb
 from .locator import ItemLocator
 from .timeutil import now_ms
 
@@ -61,9 +62,22 @@ def register_private_env(spec: SpecStar) -> None:
 
 
 class PrivateEnvStore:
-    def __init__(self, spec: SpecStar, *, now: Callable[[], int] = now_ms) -> None:
+    def __init__(
+        self,
+        spec: SpecStar,
+        *,
+        now: Callable[[], int] = now_ms,
+        may: Callable[[str, str, Verb], bool] | None = None,
+    ) -> None:
         self._spec = spec
         self._now = now
+        #: ``may(user, item_id, verb)`` — asked before a person's values are used
+        #: with nobody at the request (review round 1, C2/F1): removed from the
+        #: item, they must stop lending them. None ⇒ unchecked.
+        self._may = may
+
+    def may(self, user_id: str, item_id: str, verb: Verb) -> bool:
+        return self._may is None or self._may(user_id, item_id, verb)
 
     def _rm(self):
         return self._spec.get_resource_manager(PrivateEnv)
@@ -133,7 +147,12 @@ async def private_layer(
 
 
 async def unattended_layer(
-    store: PrivateEnvStore | None, *, headless: dict[str, str], acting_for: str, item_id: str
+    store: PrivateEnvStore | None,
+    *,
+    headless: dict[str, str],
+    acting_for: str,
+    item_id: str,
+    verb: Verb,
 ) -> dict[str, str]:
     """The PRIVATE layer of a turn with no request behind it: the seam's
     request-less answer (``env_without_request`` — a service account, or
@@ -141,8 +160,14 @@ async def unattended_layer(
     the PERSON the turn runs for — the presser of a page button, the starter
     of a run, the setter of a goal — which is not necessarily who the turn is
     attributed or billed to. Empty ``acting_for`` (an unbound schedule, an
-    entity trigger) ⇒ the seam's answer alone: nobody's private values."""
+    entity trigger) ⇒ the seam's answer alone: nobody's private values.
+
+    ``verb`` is what ``acting_for`` must STILL hold on the item — asked here,
+    at use, because nobody is at the request to be gated: a person removed from
+    the item stops lending their values at the next turn (review round 1)."""
     if store is None or not acting_for:
+        return headless
+    if not await asyncio.to_thread(store.may, acting_for, item_id, verb):
         return headless
     stored = await asyncio.to_thread(store.get, acting_for, item_id)
     return {**headless, **stored}

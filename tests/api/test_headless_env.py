@@ -586,3 +586,35 @@ async def test_a_goal_driven_send_uses_the_setters_private_values():
         )
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-goal-setter", "MINE": "g", "FROM_ITEM": "i"}]
+
+
+async def test_a_goal_setter_who_lost_access_no_longer_lends_their_values():
+    """Review round 1 (C2/F1): the goal driver continues a chat FOR its setter
+    with nobody at the request. Removed from the item, their stored values must
+    stop reaching its tools — the seam's request-less answer still does."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.perm import Permission
+
+    seam = RequestOnlyEnv()
+    client, runner, item_id, spec = _send_app(seam, env_vars={"FROM_ITEM": "i"}, user="admin")
+    rm = spec.get_resource_manager(PlaygroundItem)
+    item = rm.get(item_id).data
+    assert isinstance(item, PlaygroundItem)
+    item.permission = Permission(visibility="restricted", read_meta=["user:admin"])
+    rm.update(item_id, item)
+    PrivateEnvStore(spec).replace("goal-setter", item_id, {"MINE": "g"})
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="goal-setter",
+            driven_by="goal-driver",
+        )
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-goal-setter", "FROM_ITEM": "i"}]

@@ -466,7 +466,11 @@ class ChatSendService:
                     # The goal driver continues ONE person's chat: their own
                     # stored values over the seam's request-less answer.
                     return await unattended_layer(
-                        self._private_env, headless=headless, acting_for=user_id, item_id=item_id
+                        self._private_env,
+                        headless=headless,
+                        acting_for=user_id,
+                        item_id=item_id,
+                        verb="converse",
                     )
                 fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
             except Exception:
@@ -1053,6 +1057,7 @@ class ChatSendService:
                 headless=headless,
                 acting_for=claim.author,
                 item_id=claim.investigation_id,
+                verb="converse",
             )
 
         task = asyncio.create_task(
