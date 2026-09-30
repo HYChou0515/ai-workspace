@@ -8,6 +8,9 @@ schedules with who each runs as, bind one to the caller, and unbind one's own.
 from __future__ import annotations
 
 import json
+from typing import cast
+
+from fastapi import FastAPI
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.apps.rca.model import RcaInvestigation
@@ -273,3 +276,14 @@ def test_binding_records_the_workflow_as_it_was_consented_to():
     binding = ScheduleBindings(spec).get(row["trigger_id"])
     assert binding is not None
     assert binding.workflow_digest == hashlib.sha256(body).hexdigest()
+
+
+def test_there_is_no_raw_resource_route_for_bindings():
+    """Registered after `spec.apply`, like the private layer: the caller-scoped
+    routes under /a/{slug}/items/… are the only door (review round 2)."""
+    client, _holder, _rid, _ = _world()
+
+    paths = {getattr(r, "path", "") for r in cast(FastAPI, client.app).routes}
+
+    assert not any(p.startswith("/schedule-binding") for p in paths)
+    assert any("/schedule-bindings" in p for p in paths)  # the real routes are there

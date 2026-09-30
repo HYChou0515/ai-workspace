@@ -52,9 +52,10 @@ class TurnClaim(Struct):
     dict (pydantic's `model_dump`).
 
     NOT on it: the request-composed env (#714). That is the caller's own
-    cookie, a header their gateway stamped on — composed for one turn and, by
-    `request_env.py`'s contract, never written back anywhere. A re-run is a
-    turn nobody pressed send for, and asks the seam what such a turn gets."""
+    cookie, a header their gateway stamped on, and a claim row is readable by
+    whoever reclaims it. A re-run is a turn nobody pressed send for: it asks
+    the seam what such a turn gets, with the author's own stored private
+    values over that (`plan-wui-viewer-login` — kept in THEIR row, never here)."""
 
     key: str  # the engine key (item id for the default chat, else the chat id)
     created_at: int  # the persisted user message's `created_at` (ms)

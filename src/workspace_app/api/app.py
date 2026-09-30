@@ -1793,7 +1793,10 @@ def create_app(
     # `may` is asked before a person's values are used with nobody at the
     # request (schedules, goal rounds, re-runs): removed, they stop lending them.
     private_env_store = PrivateEnvStore(
-        spec, may=lambda user, item, verb: user_may(spec, item, user, verb, superusers=superusers)
+        spec,
+        may=lambda user, item, verb: user_may(spec, item, user, verb, superusers=superusers),
+        # No seam configured ⇒ a seam answer left from when one was is not used.
+        seam_enabled=request_env is not None,
     )
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so

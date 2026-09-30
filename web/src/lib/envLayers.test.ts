@@ -23,3 +23,22 @@ describe("layerInUse", () => {
     expect(layerInUse("K", c.shared, c.private, c.policy)).toBe(c.expected);
   });
 });
+
+import ownCases from "../../../tests/fixtures/private_layer_cases.json";
+
+import { ownLayer } from "./envLayers";
+
+type OwnCase = {
+  typed: Record<string, string>;
+  seam: Record<string, string>;
+  expected: [string, string][];
+};
+
+describe("ownLayer", () => {
+  // Review round 2: the FE composed a person's layer by hand in four places,
+  // held to nothing. The backend's `own_layer` generates and re-checks this
+  // table; entries (not the dict) because the order is part of it.
+  it.each(ownCases.cases as unknown as OwnCase[])("agrees with own_layer: %j", (c) => {
+    expect(Object.entries(ownLayer(c.typed, c.seam))).toEqual(c.expected);
+  });
+});

@@ -131,7 +131,13 @@ describe("keyLabel (review round 1, V7)", () => {
     const set = (name: string) => ({ kind: "set" as const, name });
 
     expect(keyLabelParts([login("A"), login("B"), login("C")])).toEqual({ kind: "manySystems", count: 3 });
-    expect(keyLabelParts([login("A"), set("B"), set("C")])).toEqual({ kind: "manyItems", count: 3 });
+    // Never a bare count (plan UI §): the first two by name, and how many in all
+    // (review round 2, conformance 1).
+    expect(keyLabelParts([login("A"), set("B"), set("C")])).toEqual({
+      kind: "manyItems",
+      count: 3,
+      first: ["A", "B"],
+    });
     expect(keyLabelParts([login("A"), set("B")])).toEqual({ kind: "list", logins: ["A"], sets: ["B"] });
   });
 });

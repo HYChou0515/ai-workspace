@@ -322,3 +322,52 @@ def test_logging_out_forgets_the_seams_answer_too():
     store.clear("alice", rid)
 
     assert store.seam("alice", rid) == {}
+
+
+# ─── round 2 ─────────────────────────────────────────────────────────────────
+
+
+def test_the_private_layer_case_table_still_says_what_own_layer_does():
+    """`tests/fixtures/private_layer_cases.json` is what the FE's copy of the
+    composition (`web/src/lib/envLayers.ts` `ownLayer`) is held to. This pins
+    the table to the backend, order included."""
+    import json
+    from pathlib import Path
+
+    from workspace_app.api.private_env import own_layer
+
+    table = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "private_layer_cases.json").read_text()
+    )
+    assert len(table["cases"]) == 16
+    for case in table["cases"]:
+        got = [list(kv) for kv in own_layer(case["typed"], case["seam"]).items()]
+        assert got == case["expected"], case
+
+
+async def test_a_seam_answer_left_from_a_removed_seam_is_not_used():
+    """Review round 2: a deploy that drops `server.request_env` keeps the rows
+    its seam wrote — and nothing will ever rewrite them. They must not keep
+    reaching a person's unattended turns."""
+    from workspace_app.api.private_env import PrivateEnvStore, unattended_layer
+
+    _client, _holder, rid, spec = _world()
+    PrivateEnvStore(spec).record_seam("alice", rid, {"SSO": "old"})
+    no_seam = PrivateEnvStore(spec, seam_enabled=False)
+
+    got = await unattended_layer(
+        no_seam, headless={}, acting_for="alice", item_id=rid, verb="read_meta"
+    )
+
+    assert got == {}
+
+
+def test_a_deploy_without_a_seam_does_not_use_a_left_over_seam_row():
+    """…and `create_app` wires it that way when no seam is configured."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    client, holder, rid, spec = _world()  # no request_env
+    PrivateEnvStore(spec).record_seam("alice", rid, {"SSO": "old"})
+    holder["id"] = "alice"
+
+    assert client.get(_url(rid)).json() == {"values": {}, "auto": {}}

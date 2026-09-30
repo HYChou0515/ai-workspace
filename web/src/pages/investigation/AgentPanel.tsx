@@ -218,7 +218,10 @@ export function AgentPanel({
   envVars?: Record<string, string>;
   envPolicy?: Record<string, string>;
   canOpenEnv?: boolean;
-  onSaveEnvVars?: (envVars: Record<string, string>, envPolicy: Record<string, string>) => void;
+  onSaveEnvVars?: (
+    envVars: Record<string, string>,
+    envPolicy: Record<string, string>,
+  ) => void | boolean | Promise<void | boolean>;
   /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
    *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
    *  button is not drawn: a control that can never do anything is worse than
@@ -1523,7 +1526,10 @@ export function AgentHeader({
   canOpenEnv?: boolean;
   /** Persist the shared values + policy. Absent → the panel's Everyone tab is
    * read-only (and, without `canOpenEnv`, there is no button at all). */
-  onSaveEnvVars?: (envVars: Record<string, string>, envPolicy: Record<string, string>) => void;
+  onSaveEnvVars?: (
+    envVars: Record<string, string>,
+    envPolicy: Record<string, string>,
+  ) => void | boolean | Promise<void | boolean>;
   /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
    *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
    *  button is not drawn: a control that can never do anything is worse than

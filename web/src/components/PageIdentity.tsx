@@ -30,6 +30,7 @@ import {
   type ScheduleBindingsClient,
 } from "../api/scheduleBindings";
 import type { ApiClient } from "../api/types";
+import { ownLayer } from "../lib/envLayers";
 import { identityState, keyLabelParts, type Missing } from "../lib/identityState";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -84,7 +85,7 @@ export function usePageIdentity({
     shared: layers.data?.shared ?? {},
     policy: layers.data?.policy ?? {},
     // What the deploy filled in wins a name over what they typed.
-    mine: { ...(mine.data?.values ?? {}), ...(mine.data?.auto ?? {}) },
+    mine: ownLayer(mine.data?.values ?? {}, mine.data?.auto ?? {}),
     providers: providers.data ?? [],
     hasSchedules: (rows.data ?? []).length > 0,
   });
@@ -108,7 +109,8 @@ function useKeyLabel(missing: Missing[], holdsOwn: boolean): { state: KeyState; 
 export function missingLabel(t: ReturnType<typeof useT>, missing: Missing[]): string {
   const parts = keyLabelParts(missing);
   if (parts.kind === "manySystems") return t("env.bar.many", { count: String(parts.count) });
-  if (parts.kind === "manyItems") return t("env.bar.manyItems", { count: String(parts.count) });
+  if (parts.kind === "manyItems")
+    return t("env.bar.manyItems", { names: parts.first.join("、"), count: String(parts.count) });
   return [
     parts.logins.length > 0 ? t("env.bar.login", { names: parts.logins.join("、") }) : "",
     parts.sets.length > 0 ? t("env.bar.set", { names: parts.sets.join("、") }) : "",
@@ -392,7 +394,7 @@ export function useEnvMissing({
     tools: tools.data ?? [],
     shared,
     policy,
-    mine: { ...(mine.data?.values ?? {}), ...(mine.data?.auto ?? {}) },
+    mine: ownLayer(mine.data?.values ?? {}, mine.data?.auto ?? {}),
     providers: providers.data ?? [],
     hasSchedules: false,
   }).missing;

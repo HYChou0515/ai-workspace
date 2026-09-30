@@ -345,7 +345,7 @@ function ShellBody({
   const [editOpen, setEditOpen] = useState(false);
   // Inline-edit of domain fields (breadcrumb/statusbar) goes through the generic
   // per-App item update (read-modify-PUT), driven by the manifest's field schema.
-  const { setField, setFields } = useUpdateItemField(
+  const { setField, setFields, setFieldsOk } = useUpdateItemField(
     manifest.slug,
     manifest.resource_route,
     item as unknown as AppItem,
@@ -1000,7 +1000,7 @@ function ShellBody({
               onSaveEnvVars={
                 _canWriteMeta
                   ? (envVars, envPolicy) =>
-                      setFields({ env_vars: envVars, env_policy: envPolicy })
+                      setFieldsOk({ env_vars: envVars, env_policy: envPolicy })
                   : undefined
               }
               // Gated on the App HAVING an environment, not on who may edit the

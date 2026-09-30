@@ -64,19 +64,20 @@ export function identityState({
 }
 
 /** How the key button names what is missing (`plan-wui-viewer-login` Q11):
- * the names while there are one or two; beyond that a count — of SYSTEMS only
- * when every entry is a sign-in, since a variable to type is not a system
- * (review round 1, V7). */
+ * the names while there are one or two; beyond that the first two by name and
+ * how many in all — never a bare count (plan UI §) — and "systems" only when
+ * every entry is a sign-in, since a variable to type is not a system (review
+ * rounds 1 V7, 2). */
 export type KeyLabel =
   | { kind: "list"; logins: string[]; sets: string[] }
   | { kind: "manySystems"; count: number }
-  | { kind: "manyItems"; count: number };
+  | { kind: "manyItems"; count: number; first: string[] };
 
 export function keyLabelParts(missing: Missing[]): KeyLabel {
   if (missing.length >= 3) {
     return missing.every((m) => m.kind === "login")
       ? { kind: "manySystems", count: missing.length }
-      : { kind: "manyItems", count: missing.length };
+      : { kind: "manyItems", count: missing.length, first: missing.slice(0, 2).map((m) => m.name) };
   }
   return {
     kind: "list",

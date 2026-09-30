@@ -591,3 +591,39 @@ describe("review round 1: saving and leaving", () => {
     expect(screen.queryByTestId("env-mine-SSO_TOKEN")).not.toBeInTheDocument();
   });
 });
+
+describe("review round 2", () => {
+  it("stays open with the edits when saving the shared values fails", async () => {
+    // A failed PATCH resolved like a success, and the panel closed over the
+    // edits it had not stored.
+    const onClose = vi.fn();
+    const onSave = vi.fn(async () => false);
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={onSave}
+        onClose={onClose}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => [ERP]),
+          getEnvProviders: vi.fn(async () => []),
+          resolveEnvProvider: vi.fn(),
+        }}
+        privateClient={{
+          get: vi.fn(async () => ({ values: {}, auto: {} })),
+          put: vi.fn(async () => {}),
+          clear: vi.fn(async () => {}),
+        }}
+      />,
+    );
+    await toolsLoaded();
+    everyone();
+    fireEvent.click(screen.getByTestId("env-policy-ERP_TOKEN-private_only"));
+
+    fireEvent.click(screen.getByTestId("env-save"));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

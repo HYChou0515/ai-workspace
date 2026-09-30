@@ -89,9 +89,14 @@ class PrivateEnvStore:
         *,
         now: Callable[[], int] = now_ms,
         may: Callable[[str, str, Verb], bool] | None = None,
+        seam_enabled: bool = True,
     ) -> None:
         self._spec = spec
         self._now = now
+        #: False when the deploy has no ``IRequestEnv``: a seam answer stored
+        #: while one WAS configured must not keep reaching turns after it is
+        #: removed (review round 2) — nothing would ever rewrite it.
+        self._seam_enabled = seam_enabled
         #: ``may(user, item_id, verb)`` — asked before a person's values are used
         #: with nobody at the request (review round 1, C2/F1): removed from the
         #: item, they must stop lending them. None ⇒ unchecked.
@@ -127,7 +132,10 @@ class PrivateEnvStore:
         return self._read(PrivateEnv, user_id, item_id)
 
     def seam(self, user_id: str, item_id: str) -> dict[str, str]:
-        """The deploy's ``env_for`` answer about them, as of their last request."""
+        """The deploy's ``env_for`` answer about them, as of their last request —
+        nothing when the deploy has no seam (any row is left over from one)."""
+        if not self._seam_enabled:
+            return {}
         return self._read(PrivateSeam, user_id, item_id)
 
     def replace(self, user_id: str, item_id: str, values: dict[str, str]) -> None:
@@ -161,6 +169,15 @@ class PrivateEnvStore:
                     rm.permanently_delete(rid)
 
 
+def own_layer(typed: dict[str, str], seam: dict[str, str]) -> dict[str, str]:
+    """A person's private layer: what they typed, with the seam's answer over it
+    (the automatic value wins a name, Q5). ONE function both compositions below
+    call, and the one the FE's copy is held to
+    (`tests/fixtures/private_layer_cases.json`) — order included, since the
+    names become ``SANDBOX_USER_ENV_KEYS``."""
+    return {**typed, **seam}
+
+
 async def private_layer(
     store: PrivateEnvStore | None, *, user_id: str, item_id: str, fresh: dict[str, str] | None
 ) -> dict[str, str]:
@@ -182,7 +199,7 @@ async def private_layer(
     if fresh is not None:
         await asyncio.to_thread(store.record_seam, user_id, item_id, fresh)
     typed = await asyncio.to_thread(store.get, user_id, item_id)
-    return {**typed, **seam}
+    return own_layer(typed, seam)
 
 
 async def unattended_layer(
@@ -214,7 +231,7 @@ async def unattended_layer(
         return headless
     typed = await asyncio.to_thread(store.get, acting_for, item_id)
     seam = await asyncio.to_thread(store.seam, acting_for, item_id)
-    return {**headless, **typed, **seam}
+    return {**headless, **own_layer(typed, seam)}
 
 
 class PrivateValues(BaseModel):

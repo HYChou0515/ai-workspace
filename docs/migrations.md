@@ -1243,11 +1243,21 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     只有本人讀得到，superuser 也不行。每次寫入都是先刪再建，**不留舊值的 revision**；刪除 item 會一併清掉所有人的列。
   - ⚠️ **沒有人在場的 turn，那個人存的值同名時蓋過 `env_without_request` 的服務帳號**（那條路是替他跑的）。
     已經靠 #809 服務帳號跑 goal / 重跑 / 手動 run 的部署：同一個人送過一次聊天之後，這些路徑改用他自己的值。
-    想維持服務帳號，就讓 `env_for` 與 `env_without_request` **不要回同一個變數名**。
-  - 你的 impl 要當作回的值會被存下來：**只回那個人本來就可以保留的東西**。
+    - **要做的事（`rollout 前`）**：想維持服務帳號，就改你的 `IRequestEnv` impl，讓 `env_for` 與
+      `env_without_request` **不要回同一個變數名**。
+    - 為什麼：同名時個人值贏；這是把個人登入帶進背景 run 的設計本身。
+    - 漏做的症狀：goal 續跑 / 重跑 / 手動 run 開始用某個人最後一次的 cookie 值打外部系統；那個 cookie 過期後
+      這些路徑失敗（401），而不是像以前一樣用服務帳號成功。
+  - **要做的事（`rollout 前`）**：檢查你的 impl 回的值——它們現在會**存進資料庫**（那個人自己的列）。
+    - 為什麼：存下來才能在沒有人在場時用。
+    - 漏做的症狀：impl 回了不該落地的東西（例如一次性的 session secret），它會出現在 DB 與 DB 備份裡。
+  - 部署**拿掉** `server.request_env` 之後，先前存下的 seam 值**不再被使用**（啟動時就不讀），要清掉可請使用者在
+    Env 面板「只有我」按「清除我的值」，或刪除 item。
 - **有人在場、沒設政策、沒有人自己存值的 item，行為不變**：預設 `shared_first` 就是舊的 `{**request_env, **item_env}`。
 - **`IEnvProvider` 的兩條路由從 `write_meta` 改成 `read_meta`**：能打開 item 的人都能用登入鈕，換出的值進他自己的
-  「只有我」。存成共用值仍然要 `write_meta`。你的 impl 會被更多人呼叫——rate limit 照這個量抓。
+  「只有我」。存成共用值仍然要 `write_meta`。
+  - **要做的事（`rollout 前`）**：你的 provider impl 會被更多人呼叫——它自己的 rate limit / 鎖帳號規則照這個量檢查。
+  - 漏做的症狀：參與者一起登入時觸發你那邊的鎖帳號或 429，登入框回「取得失敗」。
 - 聊天的「環境變數」鈕現在**有 `converse` 的人也看得到**，而且**預設開在「只有我」分頁**；存共用值仍要 `write_meta`，
   其他人「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**。
   缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
@@ -1256,8 +1266,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改、排程檔被刪，綁定就取消並通知他。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
   約 32px 的平台列。
-- 成本：每次聊天送出與頁面 `callTool` 多一次 private 讀取（有 seam 時值變了再多一次寫入）；排程 sweep 每個排程檔
-  多一次綁定查詢，要觸發的每一列多一次綁定讀取與一次 workflow 檔讀取。
+- 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
+  再多一次刪除與建立。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
+  （`user_may`：item 與使用者群組各讀一次）與兩次 private 讀取。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
+  多一次綁定讀取，有綁定時再多一次存取確認與一到兩次 workflow 檔讀取。聊天標頭的「環境變數」鈕多一次 private 讀取
+  （與 tool 清單共用快取）。
 
 **資料** — 沒有 `Schema` 升版、沒有要跑的指令。新 model `PrivateEnv`、`PrivateSeam`、`ScheduleBinding`、`RunIdentity`
 在啟動時註冊（沒有 auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資料讀出來就是空的。

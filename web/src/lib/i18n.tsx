@@ -1671,8 +1671,12 @@ export const messages = {
   "env.bar.login": { "zh-TW": "登入 {names}", en: "Sign in to {names}" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
   "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
-  // Three or more, not all sign-ins: a variable to type is not a "system".
-  "env.bar.manyItems": { "zh-TW": "還有 {count} 項要設定", en: "{count} things to set up" },
+  // Three or more, not all sign-ins: a variable to type is not a "system" —
+  // and never a bare count: the first two by name, then how many in all.
+  "env.bar.manyItems": {
+    "zh-TW": "要設定 {names} 等 {count} 項",
+    en: "Set up {names} and {count} in all",
+  },
   "env.bar.schedules": { "zh-TW": "這一頁的排程", en: "This page's schedules" },
   // Who a schedule runs as ("run as me", Q7/Q12).
   "sched.runsAsNobody": {

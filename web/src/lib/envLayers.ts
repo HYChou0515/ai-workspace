@@ -35,3 +35,13 @@ export function layerInUse(
       return has(shared) ? "shared" : has(mine) ? "private" : "none";
   }
 }
+
+/** A person's private layer: what they typed, with what the deploy filled in
+ * over it (the automatic value wins a name). The FE's copy of the backend's
+ * `own_layer`, held to it by `tests/fixtures/private_layer_cases.json`. */
+export function ownLayer(
+  typed: Record<string, string>,
+  auto: Record<string, string>,
+): Record<string, string> {
+  return { ...typed, ...auto };
+}

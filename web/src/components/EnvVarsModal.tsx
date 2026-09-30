@@ -42,7 +42,7 @@ import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
-import { layerInUse, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
+import { layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
 import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -76,7 +76,10 @@ export function EnvVarsModal({
   envPolicy?: Record<string, string>;
   /** Store the SHARED values and policy. Absent ⇒ the caller may not
    * (`write_meta`), and the Everyone tab is read-only. */
-  onSave?: (next: Record<string, string>, policy: Record<string, string>) => void | Promise<void>;
+  onSave?: (
+    next: Record<string, string>,
+    policy: Record<string, string>,
+  ) => void | boolean | Promise<void | boolean>;
   onClose: () => void;
   /** The item. Without one there is no private layer (and no declared tools):
    * only the Everyone tab is drawn. */
@@ -181,7 +184,9 @@ export function EnvVarsModal({
   });
   const saveShared = async () => {
     if (!onSave) return;
-    await onSave(parseEnvText(text), policy);
+    // `false` = the write failed (the app's write-failure notice says so):
+    // stay open with the edits rather than close over work that was not stored.
+    if ((await onSave(parseEnvText(text), policy)) === false) return;
     // A page's platform strip reads these through its own query.
     if (hasItem) await queryClient.invalidateQueries({ queryKey: qk.envLayers(slug!, itemId!) });
     afterSave("mine", mineDirty);
@@ -817,7 +822,7 @@ function MineTab({
   // person — a tool "ready" for everyone can still be missing their own value.
   // The person's private layer as a tool gets it: what the deploy filled in
   // wins a name over what they typed (the server's composition).
-  const own = { ...mine, ...auto };
+  const own = ownLayer(mine, auto);
   const names = new Set([
     ...tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)),
     ...Object.keys(shared),
@@ -900,7 +905,7 @@ function MineRow({
   const t = useT();
   const [revealed, setRevealed] = useState(false);
   const p = policyOf(name, policy);
-  const layer = layerInUse(name, shared, { ...mine, ...auto }, policy);
+  const layer = layerInUse(name, shared, ownLayer(mine, auto), policy);
   // Filled in by the deploy at the person's last request: it wins over
   // anything typed, and their next request rewrites it — a box here would
   // edit nothing.

@@ -489,13 +489,14 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
     目前沒有接它、也沒有 config 欄位——所以今天實際上永遠序列,要**同時**打你的 broker 是一個
     程式碼改動,不是設定);
     steer 提案最多 3 次;cache 命中而跳過的 node 不問。impl 的 rate limit 要照這個量抓。
-  - ⚠️ **同一個 chat 裡,人送出的那輪和 goal driver 續的那輪身分會不同**(一個 `env_for`、
-    一個 `env_without_request`)。這是需求本身。但如果你想讓工具或 WUI 頁面靠「個人 token
-    在不在」判斷有沒有人在,兩個方法就**不要回同一個變數名**——否則那個訊號就消失了。
+  - ⚠️ **「個人 token 在不在」已經不能拿來判斷有沒有人在場。** `plan-wui-viewer-login` 之後,一個人
+    最後一次 `env_for` 的值會存在他自己的 private 層,用在他的 goal 續跑、被接手重跑的 turn、他按下起的
+    run——沒有人在場的 turn 也拿得到。要判斷「有沒有人在」,請另外設計(例如 `env_without_request`
+    多回一個只有它會回的名字)。兩個方法回同一個名字時,同名的**個人值**蓋過服務帳號。
   - **WUI 的 rebuild 刻意沒有——兩個方法都沒有。** build 產出的 `dist/` 會落到永久儲存、並且被組進**每一個**
     看這個 item 的人拿到的文件裡;而 bundler 的工作就是把環境變數烤進產出物(Vite 的
     `loadEnv` 會把 `VITE_` 開頭的名字從 `process.env` 撈進 bundle)。per-request 的憑證
-    進到那裡,就等於寫進別人下載得到的檔案——正好違反上面第一條「不落地」;service account
+    進到那裡,就等於把一個人的憑證寫進別人下載得到的檔案;service account
     的憑證進到那裡也一樣是憑證進到共享成品。build 需要的 registry 憑證放 item 的
     `env_vars`:那是所有能看這個頁面的人本來就有權拿到的東西。
   - **注意呼叫次數。** `callTool` 是頁面按一下就一次,不是一輪 turn 一次。impl 自己的
