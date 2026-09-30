@@ -191,3 +191,18 @@ build 只拿 shared:`dist/` 會進永久儲存、組進每個看這頁的人拿�
 | P9 | 文件:`extending-the-platform.md`(兩層、政策、同 item 可讀 private 的界線、沒附 `env.json` = 平台說不需要)、WUI skill(排程沒綁定時 `private only` 拿不到)、`docs/migrations.md` 一筆、`design-history.md` 索引 | docs |
 
 版面(P7/P8)用真 Chromium 在 1280 與 390 兩個寬度量。
+
+## 實作後與上面不同的地方(2026-10-01,實作時決定,待 user 確認)
+
+每一條都寫了**為什麼**與**證據**;推翻任何一條只要改回對應的 commit。
+
+| # | 計畫寫的 | 實作做的 | 為什麼 |
+|---|---|---|---|
+| D1 | 沒有 `env.json` 的 tool 在 UI 上畫成「已就緒」 | **不列出**(沒有區段);任何沒有宣告變數的 tool 都不列 | 真 Chromium 量到:Env 面板把每一支內建工具(Exec、Read File…數十支)都列成「已就緒」,把使用者要填的變數擠出畫面。「沒寫 = 都不需要」照樣成立,只是「不需要」的 tool 沒有東西可列。內核三態不動 |
+| D2 | 🔑 按鈕:缺東西時寫要登入什麼,否則「已登入」 | 否則分兩種:本人**有**自己的值 →「已登入」;**沒有** →「你的登入」 | 真瀏覽器看到「Signed in」掛在一個空面板上——沒有「缺」只是因為沒有 tool 把那些名字標必填,「已登入」這句話是假的 |
+| D3 | 「只有我」和「這一頁的排程」在同一個下拉 | 平台列上兩顆鈕:🔑 開 Env 面板(「只有我」分頁),「這一頁的排程」開自己的面板 | 重用已測過的 Env 面板,而不是在下拉裡再做一份;排程面板用自己的定位,因為共用的 `Popover` 在 390px 會跑出畫面左邊(#868 在重做它) |
+| D4 | Env 按鈕給有 `converse` 或 `execute` 的人 | 給 `converse` 或 `write_meta` 的人 | FE 的 `useItemAccess` 沒有 `execute`;Collaborator 以上都有 `converse`。只被單獨勾了 `execute` 的 Custom 權限看不到這顆鈕——但在 WUI 頁面上他仍有平台列 |
+| D5 | 頁面按鈕起的 `wui/run` 用按的人的 private | 同上,**加上 `POST …/run`(workflow 面板的 Run)也用按的人** | 同一條規則「有人按的 run 用按的人」;只做一條會讓同一個人、同一個 workflow,從兩扇門進來拿到不同身分 |
+| D6 | goal 續跑、重跑用原作者的 private | 用 `{**env_without_request, **原作者的 private}` | 只用 private 會讓已經靠 #809 service account 的部署,在這兩條路上**少掉**那個值(回歸) |
+| D7 | (未寫) | 新增 `GET …/env/layers`(`read_meta`)回 item 的 shared 值與政策 | `/w/` 頁面只有 item id、沒有 item 記錄;這兩個欄位 `read_meta` 本來就回得到 |
+| D8 | 排程內容一改,綁定失效 | 另外:**排程從檔案裡消失**(被刪掉)也視為失效並通知 | 兩者對 sweep 無法區分(key 不在檔案裡);只在**讀取與解析都成功**之後才判定,讀取失敗不動綁定 |

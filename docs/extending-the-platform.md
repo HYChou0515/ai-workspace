@@ -269,6 +269,10 @@ def run(args: Args) -> str:
 - **AI 讀得到,擋不住。** tool 和 agent 跑在**同一個 uid**,所以 agent 可以在 tool 執行的當下
   讀 `/proc/<pid>/environ`。這裡**不是 secret store**。比起把值放在 sandbox 裡的檔案(agent
   隨時 `cat` 得到),窗口窄很多,但不是零——要真的隔開,得讓 tool 與 agent 用不同 uid。
+  ⚠️ **下面「每個人自己的值」也一樣。** uid 是依 **item** 分配的(`uid_base + xxhash(item_id)`),
+  不是依人:同一個 item 裡有 `execute` / `use_terminal` 的人,可以在別人的 tool 跑的那幾秒讀到
+  他的值,tool 本身也能把收到的 env 寫進 workspace。每人自己的值防得住**介面**上的其他人,
+  防不住同一個 item 裡能執行程式的人。(`plan-wui-viewer-login.md`:只寫進文件,不另外擋。)
 
 ### 說出你需要哪些變數(#750)
 
@@ -297,8 +301,9 @@ def run(args: Args) -> str:
 
 ⚠️ **不寫 `required` 不等於「選填」。** 三種狀態是分開的:標 `true` 會被算進「還缺幾個」,
 標 `false` 不會,**不標則兩者都不是**——面板會列出它但不催你。所以你只在真的想清楚時才標,
-不用為了填欄位而亂猜。同樣地,**整個檔案缺席 ≠ 不需要變數**,面板會照實說「這個工具沒有列出
-它需要什麼」,而不是說它不需要。
+不用為了填欄位而亂猜。**整個檔案缺席:平台內部仍記得「沒宣告」≠「宣告了不需要」**(`env_needs` 是三態),**但面板
+會告訴使用者這個 tool 什麼都不需要、不列它**(`plan-wui-viewer-login`)。說清楚需要什麼是 tool
+provider 的義務——沒寫導致使用者跑下去才知道缺什麼,責任在 provider。
 
 `env.json` 格式錯誤的話,**prebuild 會當場失敗並指名檔案**(你在自己的 build 上,改得掉);
 但在別人的部署上 `discover_packages` 會**降級成「沒宣告」並記一條 warning**,不會讓對方的
@@ -358,6 +363,36 @@ server:
 - 這顆鈕和手動存檔一樣要 `write_meta`。只能讀的參與者按不動——否則他能換出一個自己存不進去的
   token 並從回應裡讀走。
 
+### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
+
+上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
+**private**:**每個人、每個 item 一份**,只有本人讀得到(連 superuser 也不行——路由只認
+「我的」,沒有指定別人的參數)。來源有三個:本人在 Env 面板「只有我」分頁手 key、本人按登入
+(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 每次請求自動寫入。同一個名字**最後寫的贏**。
+
+tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_policy`,要 `write_meta` 才能改)決定:
+
+| 政策 | 畫面文字 | tool 拿到 |
+|---|---|---|
+| `shared_first`(預設,沒設就是它) | 用共用值 | 共用的有值就用共用的,沒有才用本人的 |
+| `private_first` | 各人可改用自己的 | 本人的有值就用本人的,沒有才用共用的 |
+| `private_only` | 各人自己填 | 只用本人的;沒有就**不傳**(不是擋下——必不必填是 tool 的事) |
+
+預設就是 #714 那行 `{**request_env, **item_env}`:沒設政策的 item,行為一個字都沒變。
+
+「本人」是誰:
+
+| 入口 | 用誰的 private |
+|---|---|
+| 聊天送出、WUI 頁面的 `callTool` | 送出 / 按的人 |
+| 頁面按鈕起的 `wui/run`、`POST …/run` | **按的人**(帳照舊記在 run 的 `captured_user`) |
+| goal driver 續跑、pod 死掉後被接手重跑的 turn | 那一輪的作者 |
+| 頁面排程 | **本人按了「用我的身分執行」才有**;沒人按 → 誰的都沒有(shared + `env_without_request`)。排程內容一改,綁定就失效並通知那個人 |
+| event trigger、profile 層級排程 | 誰的都沒有 |
+| WUI build | **誰的都沒有**,只拿 shared(`dist/` 是大家共用的成品) |
+
+tool 端完全不用改:`os.environ` 讀到的就是解析過的那一個值。
+
 ### 隨「按下送出的那個人」而變的變數(#714)
 
 上面那組是**一個 item 一份、大家共用**的。有一種值它天生裝不下:**每個人不一樣的身分**——
@@ -394,9 +429,12 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
 
 規則:
 
-- **不落地。** 值只活在觸發它的那一輪 turn,不寫進 item、不寫進任何儲存。
-- **item 的設定蓋過它。** 同名時 `env_vars` 那格贏,而且沒有提示(要拿服務帳號的值壓過去做
-  測試時就靠這個)。
+- **寫進本人的 private 層,不寫進 item。** 這一條原本是「不落地、只活一輪」;
+  `plan-wui-viewer-login` Q4(b) 刻意改掉它:值存在**那個人、那個 item** 的 private 列,
+  pod 死掉後被接手重跑的 turn、他自己的 goal 續跑才拿得到。別人的值**永遠不會**被重播
+  給另一個人的 turn(列是依人分的)。`env_without_request` 的值仍然**不寫**任何地方。
+- **同名時聽 item 的政策**(上一節)。沒設政策就是 `shared_first`:`env_vars` 那格贏,而且沒有
+  提示(要拿服務帳號的值壓過去做測試時就靠這個)——也就是 #714 原本的行為。
 - **有 request 的入口問 `env_for`:聊天送出、WUI 頁面的 `callTool`。** 兩者的共同點是:
   一次請求、一個人、結果只回給問的那個人,而且用完就沒了。
 - **沒有 request 的 turn 問 `env_without_request`**(`docs/plan-headless-env.md`):goal driver
