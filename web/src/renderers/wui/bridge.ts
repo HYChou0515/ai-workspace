@@ -75,6 +75,12 @@ export type BridgeContext = {
   /** Start a run and stream its events, or `null` where no backend is wired. */
   startRun: StartRun | null;
   /**
+   * Show the platform's own sign-in for this item (`plan-wui-viewer-login`),
+   * drawn OUTSIDE the frame, or `null` where the page is shown without one.
+   * Takes nothing from the page: a credential must never pass through it.
+   */
+  openLogin: (() => void) | null;
+  /**
    * Hand one of a run's events to the page, tagged with the CALL's id.
    *
    * The id matters: a page may have two judgements in flight and has no other
@@ -301,6 +307,14 @@ export async function dispatchWuiRequest(
 
     case "whoami":
       return ok(id, { user: ctx.me });
+
+    case "openLogin":
+      // Answers once the sign-in is SHOWN, not when it is done: whether the
+      // person signs in is theirs, and the page learns it the ordinary way —
+      // its next `callTool` works.
+      if (!ctx.openLogin) return refuse(id, "Signing in is not offered where this page is shown.");
+      ctx.openLogin();
+      return ok(id, { opened: true });
 
     default:
       // The verb set is closed on purpose, so an unknown one is most often an

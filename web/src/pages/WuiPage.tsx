@@ -24,6 +24,7 @@ import { classifyReadFailure } from "../renderers/wui/assets";
 import { TryAgain } from "../renderers/wui/TryAgain";
 import { parseViewSpec } from "../renderers/entity/EntityViews";
 import { VIEW_KIND } from "../renderers/entity/types";
+import { PageIdentityBar } from "../components/PageIdentity";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { WuiView } from "../renderers/wui/WuiView";
 import { useQuery } from "@tanstack/react-query";
@@ -139,6 +140,16 @@ export function WuiPage({
     <WorkspaceSlugProvider value={slug}>
       <FileServiceProvider value={service}>
         <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
+          {/* The platform's strip, ABOVE the frame and never over it
+              (`plan-wui-viewer-login` Q11): sign-in and "run as me" live on
+              the line between our pixels and the page's. Drawn only when the
+              viewer has something of their own to provide. */}
+          <PageIdentityBar
+            slug={slug}
+            itemId={itemId}
+            folder={path.slice(0, path.lastIndexOf("/"))}
+            title={typeof spec.title === "string" && spec.title ? spec.title : path}
+          />
           {/* The reader's chrome: no toolbar, no build log, no reports, and the
               page is never rebuilt on their account — a link serves what is
               already built (docs/plan-wui-deploy.md). */}

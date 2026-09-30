@@ -281,6 +281,7 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 | `whoami` | 誰在看 |
 | `callTool` | 只通這個 App 開放、且頁面在 yaml 宣告過的 tool |
 | `startRun` | 起一個 workflow 並把進度串回來 |
+| `openLogin` | 請平台打開**它自己的**登入框(畫在頁面框外;頁面什麼都不交、也看不到輸入了什麼 —— `plan-wui-viewer-login.md`)。不能從 `callTool` 進來的論證:它存在的目的就是讓憑證**不經過頁面** |
 
 **執行期沒有網路。** 這是說「頁面跑起來之後」——`fetch`、遠端 `<script src>`、web font、
 遠端圖片，連「把自己導航到別的網站」都擋掉（那條靠 app 文件的 `frame-src`，見

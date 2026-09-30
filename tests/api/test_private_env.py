@@ -181,3 +181,32 @@ def test_the_latest_request_overwrites_only_the_names_it_carries():
     assert PrivateEnvStore(spec).get("u", item_id) == {"SSO": "fresh", "TYPED": "t", "CALLER": "u"}
     assert runner.envs[-1]["SSO"] == "fresh"
     assert runner.envs[-1]["TYPED"] == "t"
+
+
+# ─── what a page needs to label a person's values (P8) ─────────────────────
+
+
+def test_the_items_layers_are_readable_by_whoever_may_read_the_item():
+    """The `/w/` page has the item's id but not its record. This hands it the
+    two fields `read_meta` already returns on the item — the shared values and
+    the per-name policy — and nothing else."""
+    client, holder, rid, spec = _world()
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        item = rm.get(rid).data
+        assert isinstance(item, RcaInvestigation)
+        item.env_vars = {"DB_HOST": "db"}
+        item.env_policy = {"ERP_TOKEN": "private_only"}
+        rm.update(rid, item)
+    holder["id"] = "alice"
+
+    r = client.get(f"/a/rca/items/{rid}/env/layers")
+
+    assert r.json() == {"shared": {"DB_HOST": "db"}, "policy": {"ERP_TOKEN": "private_only"}}
+
+
+def test_the_items_layers_are_refused_to_someone_who_cannot_open_it():
+    client, holder, rid, _ = _world()
+    holder["id"] = "mallory"
+
+    assert client.get(f"/a/rca/items/{rid}/env/layers").status_code in (403, 404)

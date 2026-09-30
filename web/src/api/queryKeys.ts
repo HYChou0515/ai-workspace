@@ -97,6 +97,11 @@ export const qk = {
   envProviders: (slug: string, itemId: string) => ["envProviders", slug, itemId] as const,
   // `plan-wui-viewer-login`: the CALLER's private env values for one item.
   privateEnv: (slug: string, itemId: string) => ["privateEnv", slug, itemId] as const,
+  // The item's shared values + policy, for a page that has only its id.
+  envLayers: (slug: string, itemId: string) => ["envLayers", slug, itemId] as const,
+  // One schedules file's rows with who each runs as ("run as me").
+  scheduleBindings: (slug: string, itemId: string, path: string) =>
+    ["scheduleBindings", slug, itemId, path] as const,
 
   // #380: one item's skills-picker state (per-skill source + tri-state + effective).
   // Invalidate after saving the picker (the override changed).

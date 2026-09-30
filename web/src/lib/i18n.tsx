@@ -1655,6 +1655,33 @@ export const messages = {
   "env.reveal": { "zh-TW": "顯示", en: "Show" },
   "env.hide": { "zh-TW": "隱藏", en: "Hide" },
   "env.logout": { "zh-TW": "登出全部", en: "Sign out of all" },
+  // The `/w/` page's platform bar (`plan-wui-viewer-login` Q11): WHAT to do,
+  // by name — never "N missing", which says nothing about what to press.
+  "env.bar.signedIn": { "zh-TW": "已登入", en: "Signed in" },
+  "env.bar.login": { "zh-TW": "登入 {names}", en: "Sign in to {names}" },
+  "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
+  "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
+  "env.bar.schedules": { "zh-TW": "這一頁的排程", en: "This page's schedules" },
+  // Who a schedule runs as ("run as me", Q7/Q12).
+  "sched.runsAsNobody": {
+    "zh-TW": "未綁定,只用共用值",
+    en: "Not bound — runs with the shared values only",
+  },
+  "sched.runsAsYou": { "zh-TW": "用你的身分執行", en: "Runs as you" },
+  "sched.runsAs": { "zh-TW": "用 {who} 的身分執行", en: "Runs as {who}" },
+  "sched.bindMe": { "zh-TW": "用我的身分執行", en: "Run as me" },
+  "sched.replaceMe": { "zh-TW": "改用我的身分", en: "Run as me instead" },
+  "sched.unbind": { "zh-TW": "停止用我的身分", en: "Stop running as me" },
+  "sched.replaceTitle": { "zh-TW": "改用你的身分執行?", en: "Run this as you instead?" },
+  "sched.replaceBody": {
+    "zh-TW": "目前用 {who} 的身分執行。改成你的之後,{who} 的值就不會再被使用,我們會通知 {who}。",
+    en: "It runs as {who} now. Once it runs as you, {who}'s values are no longer used, and {who} is told.",
+  },
+  "sched.none": { "zh-TW": "這一頁沒有排程", en: "This page has no schedules" },
+  "sched.failed": {
+    "zh-TW": "沒辦法更改:{why}",
+    en: "Could not change it: {why}",
+  },
   "env.mineFailed": {
     "zh-TW": "讀不到你的值,請稍後再試。",
     en: "Could not load your values. Try again in a moment.",

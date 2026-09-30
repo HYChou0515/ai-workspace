@@ -13,6 +13,19 @@ const base = (slug: string, itemId: string) =>
   `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env/private`;
 
 export const privateEnvApi = {
+  /** The item's SHARED values and per-name policy — for a page opened at its
+   * own address, which has the item's id but not its record. */
+  async layers(
+    slug: string,
+    itemId: string,
+  ): Promise<{ shared: Record<string, string>; policy: Record<string, string> }> {
+    const r = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/env/layers`,
+    );
+    if (!r.ok) throw await httpErrorFrom(r, `env layers failed: ${r.status}`);
+    return (await r.json()) as { shared: Record<string, string>; policy: Record<string, string> };
+  },
+
   async get(slug: string, itemId: string): Promise<Record<string, string>> {
     const r = await apiFetch(base(slug, itemId));
     if (!r.ok) throw await httpErrorFrom(r, `private env failed: ${r.status}`);

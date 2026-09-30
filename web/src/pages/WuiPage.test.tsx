@@ -13,7 +13,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
 import { WUI_PROTOCOL } from "../renderers/wui/protocol";
@@ -506,5 +506,52 @@ describe("WuiPage: what a reader is handed", () => {
     expect(said).toHaveTextContent(/not been published/i);
     expect(said).not.toHaveTextContent("index.html");
     expect(document.querySelector("iframe")).toBeNull();
+  });
+});
+
+describe("WuiPage — the platform strip above the page (plan-wui-viewer-login Q11)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const files: Record<string, string> = {
+    "/scrap-review/page.ai.yaml": YAML,
+    "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+  };
+  const readFile = vi.fn(async (path: string) => {
+    const text = files[path];
+    if (text === undefined) throw notFound(path);
+    return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+  });
+
+  async function stub(policy: Record<string, string>) {
+    const { privateEnvApi } = await import("../api/privateEnv");
+    const { scheduleBindingsApi } = await import("../api/scheduleBindings");
+    const { api } = await import("../api");
+    vi.spyOn(privateEnvApi, "layers").mockResolvedValue({ shared: {}, policy });
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({});
+    vi.spyOn(scheduleBindingsApi, "list").mockResolvedValue([]);
+    vi.spyOn(api, "getItemTools").mockResolvedValue([]);
+    vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
+  }
+
+  it("draws the strip ABOVE the frame when the viewer has something of their own to provide", async () => {
+    await stub({ VPN_KEY: "private_only" });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    const bar = await screen.findByTestId("page-identity-bar");
+    await waitFor(() => expect(document.querySelector("iframe")).toBeInTheDocument());
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    // Its own box, before the frame in the document — not layered over it.
+    expect(bar.contains(iframe)).toBe(false);
+    expect(bar.compareDocumentPosition(iframe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // And it says whose page this is.
+    expect(bar).toHaveTextContent("Scrap review");
+  });
+
+  it("leaves the whole window to a page nobody signs in to", async () => {
+    await stub({});
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    await waitFor(() => expect(document.querySelector("iframe")).toBeInTheDocument());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("page-identity-bar")).not.toBeInTheDocument();
   });
 });

@@ -51,3 +51,15 @@ describe("privateEnvApi", () => {
     await expect(privateEnvApi.get("rca", "i1")).rejects.toThrow();
   });
 });
+
+describe("privateEnvApi.layers", () => {
+  it("reads the item's shared values and policy for a page opened on its own", async () => {
+    vi.mocked(fetch).mockResolvedValue(ok({ shared: { A: "1" }, policy: { B: "private_only" } }));
+
+    expect(await privateEnvApi.layers("rca", "i1")).toEqual({
+      shared: { A: "1" },
+      policy: { B: "private_only" },
+    });
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain("/a/rca/items/i1/env/layers");
+  });
+});

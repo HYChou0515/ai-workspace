@@ -83,7 +83,7 @@ export function EnvVarsModal({
   slug?: string;
   itemId?: string;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
-  privateClient?: PrivateEnvClient;
+  privateClient?: Pick<PrivateEnvClient, "get" | "put" | "clear">;
 }) {
   const t = useT();
   const queryClient = useQueryClient();

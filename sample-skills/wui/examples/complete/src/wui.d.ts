@@ -78,6 +78,16 @@ export interface Workspace {
    * of somebody who cannot see why.
    */
   whoami(): Promise<{ user: string | null }>;
+  /**
+   * Ask the platform to show ITS OWN sign-in for this item — drawn outside
+   * your page, so what the person types there never reaches you. Takes
+   * nothing: a credential must never pass through a page.
+   *
+   * Resolves once the sign-in is SHOWN, not when the person finishes. Call it
+   * when a tool answers that it is not authorised, then let them try again:
+   * their next `callTool` runs with what they signed in with.
+   */
+  openLogin(): Promise<{ opened: true }>;
   /** The page's only reach outside the item. Declare the tool in `tools:` first.
    *  `args` is optional — a tool that takes none is called with just a name. */
   callTool(name: string, args?: Record<string, unknown>): Promise<WuiToolResult>;

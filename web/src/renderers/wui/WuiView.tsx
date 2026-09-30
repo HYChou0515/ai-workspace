@@ -28,6 +28,8 @@ import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { ItemEnvModal } from "../../components/ItemEnvModal";
+import { PageIdentityControls } from "../../components/PageIdentity";
 import { HttpError } from "../../api/http";
 import { wuiAddress, wuiApi } from "../../api/wui";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
@@ -456,6 +458,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     return Array.isArray(raw) ? raw.filter((w): w is string => typeof w === "string") : [];
   }, [spec]);
 
+  /** The platform's own sign-in for this item, opened at a page's request
+   * (`plan-wui-viewer-login`). Drawn here, outside the frame: what is typed
+   * into it never reaches the page. No item (no slug) ⇒ nothing to sign in to. */
+  const [loginOpen, setLoginOpen] = useState(false);
+  const openLogin = useMemo(() => (slug ? () => setLoginOpen(true) : null), [slug]);
+
   const startRun = useMemo(() => {
     if (!slug) return null;
     const run = itemRun(slug, fs.scopeId);
@@ -512,6 +520,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         callTool,
         declaredWorkflows,
         startRun,
+        openLogin,
         // Each event carries the CALL's id: a page may have two judgements in
         // flight and has no other way to tell whose progress it is looking at.
         onRunEvent: (id, event) =>
@@ -537,7 +546,19 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [author, fs, folder, openFile, me, meReady, declaredTools, callTool, declaredWorkflows, startRun]);
+  }, [
+    author,
+    fs,
+    folder,
+    openFile,
+    me,
+    meReady,
+    declaredTools,
+    callTool,
+    declaredWorkflows,
+    startRun,
+    openLogin,
+  ]);
 
   // Forwarded, not acted on: the platform cannot know whether a half-finished
   // form should be thrown away, and only the page does.
@@ -995,6 +1016,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      {loginOpen && slug && (
+        <ItemEnvModal slug={slug} itemId={fs.scopeId} onClose={() => setLoginOpen(false)} />
+      )}
       {author && (
       <div
         style={{
@@ -1087,6 +1111,14 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           <Btn size="sm" onClick={cancelDeploy} title={`Stop deploying ${running?.path.split("/").pop() ?? ""}`}>
             Cancel
           </Btn>
+        )}
+        {/* The toolbar is this pane's line between the platform and the page,
+            so sign-in and "run as me" sit here (`plan-wui-viewer-login`) —
+            only when the viewer has something of their own to provide. */}
+        {slug && (
+          <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <PageIdentityControls slug={slug} itemId={fs.scopeId} folder={folder} />
+          </span>
         )}
       </div>
       )}

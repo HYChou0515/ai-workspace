@@ -152,6 +152,11 @@ class PrivateValues(BaseModel):
     values: dict[str, str]
 
 
+class ItemLayers(BaseModel):
+    shared: dict[str, str]
+    policy: dict[str, str]
+
+
 def register_private_env_routes(
     app: FastAPI | APIRouter,
     *,
@@ -159,6 +164,15 @@ def register_private_env_routes(
     locator: ItemLocator,
     get_user_id: Callable[[], str],
 ) -> None:
+    @app.get("/a/{slug}/items/{item_id}/env/layers", response_model=ItemLayers)
+    async def get_env_layers(slug: str, item_id: str) -> ItemLayers:
+        """The item's SHARED values and per-name policy — for a page opened at
+        its own address, which has the item's id but not its record. The same
+        two fields `read_meta` already returns on the item, under the same verb."""
+        workspace_id = locator.require_access(slug, item_id, "read_meta")
+        layers = locator.env_layers_of(workspace_id)
+        return ItemLayers(shared=layers.shared, policy=layers.policy)
+
     @app.get("/a/{slug}/items/{item_id}/env/private", response_model=PrivateValues)
     async def get_private_env(slug: str, item_id: str) -> PrivateValues:
         workspace_id = locator.require_access(slug, item_id, "read_meta")
