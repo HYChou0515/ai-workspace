@@ -30,7 +30,7 @@ export function identityState({
   mine: Record<string, string>;
   providers: EnvProvider[];
   hasSchedules: boolean;
-}): { show: boolean; missing: Missing[] } {
+}): { show: boolean; missing: Missing[]; holdsOwn: boolean } {
   const live = tools.filter((t) => t.effective);
   const declared = new Set(live.flatMap((t) => (t.env_needs ?? []).map((n) => n.name)));
   const offered = providers.filter((p) => p.produces.some((n) => declared.has(n)));
@@ -57,5 +57,8 @@ export function identityState({
   }
 
   const personal = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
-  return { show: personal || offered.length > 0 || hasSchedules, missing };
+  // Whether "signed in" would be TRUE: nothing missing is not the same as
+  // holding anything of one's own.
+  const holdsOwn = Object.values(mine).some((v) => v.trim() !== "");
+  return { show: personal || offered.length > 0 || hasSchedules, missing, holdsOwn };
 }

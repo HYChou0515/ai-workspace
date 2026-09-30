@@ -79,6 +79,18 @@ describe("PageIdentityBar", () => {
     expect(key).not.toHaveTextContent(/\d/);
   });
 
+  it("never claims 'signed in' for someone who holds nothing of their own", async () => {
+    // Seen in a real browser: nothing was MISSING (no tool marks these names
+    // required), so the key said "Signed in" over an empty panel.
+    open({ shared: { ERP_TOKEN: "x" }, policy: { VPN_KEY: "private_only" } });
+    expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "yours");
+  });
+
+  it("says signed in once they do", async () => {
+    open({ shared: { ERP_TOKEN: "x" }, policy: { VPN_KEY: "private_only" }, mine: { VPN_KEY: "v" } });
+    expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
+  });
+
   it("opens the platform's own sign-in, not anything the page draws", async () => {
     open({ policy: { ERP_TOKEN: "private_only" } });
 

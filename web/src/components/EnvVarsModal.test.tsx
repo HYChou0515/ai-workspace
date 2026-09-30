@@ -234,16 +234,14 @@ describe("EnvVarsModal declared fields (#750)", () => {
     );
   });
 
-  it("draws a tool that declared nothing as ready", async () => {
+  it("draws no section for a tool that declared nothing", async () => {
     // `plan-wui-viewer-login`: the provider owes the declaration, so the PANEL
-    // takes it at its word — the "did not declare" state still exists
-    // underneath (`deriveEnvNeeds().undeclared`), it is just not a fourth
-    // thing on screen.
+    // takes it at its word that the tool needs nothing — and has nothing to
+    // show for it. The "did not declare" fact still exists underneath
+    // (`deriveEnvNeeds().undeclared`).
     openWith(SAP);
-    expect(await screen.findByTestId("env-section-head-legacy")).toHaveAttribute(
-      "data-status",
-      "ready",
-    );
+    await screen.findByTestId("env-section-head-sap-tools");
+    expect(screen.queryByTestId("env-section-head-legacy")).not.toBeInTheDocument();
   });
 
   it("offers a login for the variables it can fill, and fills them without saving", async () => {

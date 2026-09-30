@@ -112,14 +112,14 @@ describe("Everyone: tools as sections", () => {
     const heads = screen
       .getAllByTestId(/^env-section-head-/)
       .filter((h) => h.dataset.testid !== "env-section-head-__other");
+    // `silent` declared nothing: no section (it needs nothing to show).
     expect(heads.map((h) => h.dataset.testid)).toEqual([
       "env-section-head-erp",
       "env-section-head-maps",
-      "env-section-head-silent",
     ]);
     // Symbol + colour + WORDS: any one missing, the other two still read.
     expect(heads[0]).toHaveAttribute("data-status", "missingRequired");
-    expect(heads[2]).toHaveAttribute("data-status", "ready");
+    expect(heads[1]).toHaveAttribute("data-status", "ready"); // DB_HOST is set
   });
 
   it("opens the sections that need something and leaves the rest folded", async () => {
@@ -292,6 +292,29 @@ describe("Only me", () => {
     const row = await screen.findByTestId("env-mine-row-SSO_TOKEN");
     await waitFor(() => expect(row).toHaveAttribute("data-in-use", "mine"));
     expect(within(row).getByTestId("env-mine-SSO_TOKEN")).toBeInTheDocument();
+  });
+});
+
+describe("Only me: the variables that are each person's to fill", () => {
+  it("unfolds them even when tools have sections of their own", async () => {
+    // Seen in a real browser: opened from a page, the variables the viewer came
+    // to fill sat folded under "Other variables" below every tool.
+    open({ envPolicy: { VPN_KEY: "private_only" } });
+    await toolsLoaded();
+
+    expect(screen.getByTestId("env-section-head-__other")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("env-mine-row-VPN_KEY")).toBeInTheDocument();
+  });
+
+  it("claims no status for variables no tool declared", async () => {
+    // Seen in a real browser: "✓ Ready" over a row saying "Not set". Nothing
+    // declared these names, so there is nothing to be ready FOR.
+    open({ envPolicy: { VPN_KEY: "private_only" } });
+    await toolsLoaded();
+
+    const head = screen.getByTestId("env-section-head-__other");
+    expect(head).not.toHaveAttribute("data-status");
+    expect(within(head).queryByText("✓")).toBeNull();
   });
 });
 

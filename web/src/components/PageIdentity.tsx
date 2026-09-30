@@ -3,7 +3,7 @@
  *
  * Two buttons, drawn by the PLATFORM and never inside a page's frame:
  *
- * * **🔑** — names what the viewer must sign in to or set ("Sign in to ERP",
+ * * **The key button** (the Env button's own icon) — names what the viewer must sign in to or set ("Sign in to ERP",
  *   "Set MAP_KEY"; three or more: "Sign in to 3 systems"), and opens the
  *   platform's own panel (`ItemEnvModal`). What is typed there never reaches
  *   the page.
@@ -19,7 +19,7 @@
  * `PageIdentityControls` sits in it.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
@@ -35,7 +35,7 @@ import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { useDialog } from "./Dialog";
 import { ItemEnvModal } from "./ItemEnvModal";
-import { Popover } from "./Popover";
+import { Icon } from "./Icon";
 
 type Clients = {
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
@@ -90,9 +90,21 @@ export function usePageIdentity({
   return { settled, state, rows: rows.data ?? [], path };
 }
 
-function useKeyLabel(missing: Missing[]): string {
+type KeyState = "missing" | "signedIn" | "yours";
+
+function useKeyLabel(missing: Missing[], holdsOwn: boolean): { state: KeyState; label: string } {
   const t = useT();
-  if (missing.length === 0) return t("env.bar.signedIn");
+  if (missing.length === 0) {
+    // "Signed in" only when it is true — nothing missing is not the same as
+    // holding anything of one's own.
+    return holdsOwn
+      ? { state: "signedIn", label: t("env.bar.signedIn") }
+      : { state: "yours", label: t("env.bar.yours") };
+  }
+  return { state: "missing", label: missingLabel(t, missing) };
+}
+
+function missingLabel(t: ReturnType<typeof useT>, missing: Missing[]): string {
   if (missing.length >= 3) return t("env.bar.many", { count: String(missing.length) });
   const logins = missing.filter((m) => m.kind === "login").map((m) => m.name);
   const sets = missing.filter((m) => m.kind === "set").map((m) => m.name);
@@ -110,7 +122,7 @@ export function PageIdentityControls(props: Where & Clients) {
   const dialog = useDialog();
   const queryClient = useQueryClient();
   const { settled, state, rows, path } = usePageIdentity(props);
-  const label = useKeyLabel(state.missing);
+  const key = useKeyLabel(state.missing, state.holdsOwn);
   const [envOpen, setEnvOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -148,24 +160,7 @@ export function PageIdentityControls(props: Where & Clients) {
   return (
     <>
       {rows.length > 0 && (
-        <Popover
-          align="end"
-          width={340}
-          trigger={({ onClick, open }) => (
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              data-testid="page-schedules"
-              aria-expanded={open}
-              onClick={onClick}
-            >
-              {t("env.bar.schedules")} ▾
-            </button>
-          )}
-        >
-          {() => (
+        <SchedulesButton t={t}>
             <div style={{ display: "grid", gap: 8, padding: 8 }}>
               {rows.map((row) => (
                 <div
@@ -209,8 +204,7 @@ export function PageIdentityControls(props: Where & Clients) {
                 </p>
               )}
             </div>
-          )}
-        </Popover>
+        </SchedulesButton>
       )}
       <button
         type="button"
@@ -218,10 +212,14 @@ export function PageIdentityControls(props: Where & Clients) {
         data-variant={state.missing.length > 0 ? "primary" : "secondary"}
         data-size="sm"
         data-testid="page-identity-key"
+        data-state={key.state}
         onClick={() => setEnvOpen(true)}
+        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
       >
-        <span aria-hidden>🔑 </span>
-        {label}
+        {/* The Env button's own icon — this opens the same panel. An emoji
+            key rendered as an empty box where the font had none. */}
+        <Icon name="tag" size={12} />
+        {key.label}
       </button>
       {envOpen && (
         <ItemEnvModal
@@ -273,5 +271,79 @@ export function PageIdentityBar(props: Where & Clients & { title: string }) {
         <PageIdentityControls {...props} />
       </span>
     </div>
+  );
+}
+
+/** The schedules list, in a panel clamped to the viewport. The shared
+ * `Popover` pins a fixed-width box to one edge of its trigger; with the trigger
+ * mid-strip on a 390px phone NEITHER edge fits and it ran off the screen (seen
+ * in a real browser). This one opens below the button, right-aligned to it,
+ * and slides left as far as it must to stay on screen. */
+function SchedulesButton({ t, children }: { t: ReturnType<typeof useT>; children: ReactNode }) {
+  const [at, setAt] = useState<{ top: number; left: number; width: number } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!at) return;
+    const onDoc = (e: MouseEvent) => {
+      const n = e.target as Node;
+      if (!panel.current?.contains(n) && !button.current?.contains(n)) setAt(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAt(null);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [at]);
+  const toggle = () => {
+    if (at) return setAt(null);
+    const r = button.current?.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const margin = 8;
+    const width = Math.min(340, vw - 2 * margin);
+    const right = r ? r.right : vw - margin;
+    const left = Math.max(margin, Math.min(right - width, vw - margin - width));
+    setAt({ top: (r ? r.bottom : 0) + 6, left, width });
+  };
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
+        data-testid="page-schedules"
+        aria-expanded={at !== null}
+        onClick={toggle}
+      >
+        {t("env.bar.schedules")} ▾
+      </button>
+      {at && (
+        <div
+          ref={panel}
+          role="dialog"
+          aria-label={t("env.bar.schedules")}
+          data-testid="page-schedules-panel"
+          style={{
+            position: "fixed",
+            top: at.top,
+            left: at.left,
+            width: at.width,
+            background: "var(--white)",
+            border: "1px solid var(--paper-3)",
+            borderRadius: "var(--radius-card)",
+            boxShadow: "0 6px 20px rgba(20,22,28,0.08)",
+            zIndex: "var(--z-popover)",
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </>
   );
 }

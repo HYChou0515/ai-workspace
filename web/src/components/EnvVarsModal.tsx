@@ -350,11 +350,15 @@ function Section({
   open,
   onToggle,
   children,
+  claimsStatus = true,
 }: {
   section: ToolSection;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
+  /** False for "Other variables": no tool declared them, so there is nothing
+   * to be ready FOR, and a "✓ Ready" over an unset row was a false sentence. */
+  claimsStatus?: boolean;
 }) {
   const t = useT();
   const look = STATUS_LOOK[section.status];
@@ -370,7 +374,7 @@ function Section({
       <button
         type="button"
         data-testid={`env-section-head-${section.key}`}
-        data-status={section.status}
+        data-status={claimsStatus ? section.status : undefined}
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={onToggle}
@@ -389,16 +393,22 @@ function Section({
         <span aria-hidden style={{ ...MUTED, width: 10 }}>
           {open ? "▾" : "▸"}
         </span>
-        <span aria-hidden style={{ color: look.color }}>
-          {look.mark}
-        </span>
+        {claimsStatus && (
+          <span aria-hidden style={{ color: look.color }}>
+            {look.mark}
+          </span>
+        )}
         <span style={{ fontWeight: 500, fontSize: pxToRem(13) }}>{section.label}</span>
         {(section.author || section.version) && (
           <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
             {[section.author, section.version].filter(Boolean).join(" · ")}
           </span>
         )}
-        <span style={{ marginLeft: "auto", fontSize: pxToRem(11), color: look.color }}>{words}</span>
+        {claimsStatus && (
+          <span style={{ marginLeft: "auto", fontSize: pxToRem(11), color: look.color }}>
+            {words}
+          </span>
+        )}
       </button>
       {open && (
         <div id={bodyId} style={{ display: "grid", gap: 10, padding: "4px 0 8px 18px" }}>
@@ -415,6 +425,7 @@ function Sections({
   other,
   row,
   otherExtra,
+  otherOpen = false,
 }: {
   sections: ToolSection[];
   query: string;
@@ -422,6 +433,9 @@ function Sections({
   other: string[];
   row: (field: EnvField, section: ToolSection) => ReactNode;
   otherExtra?: ReactNode;
+  /** Unfold "Other variables" from the start — it holds what the person came
+   * to fill. */
+  otherOpen?: boolean;
 }) {
   const t = useT();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -430,7 +444,10 @@ function Sections({
   // missing. Recomputing it would fold a section the moment the person filled
   // the value they came for — the fold would move under their hands.
   const [initial] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(sections.map((s) => [s.key, s.status === "missingRequired"])),
+    ({
+      ...Object.fromEntries(sections.map((s) => [s.key, s.status === "missingRequired"])),
+      __other: otherOpen,
+    }),
   );
   const q = query.trim().toLowerCase();
   const otherSection: ToolSection = {
@@ -464,6 +481,7 @@ function Sections({
             section={s}
             open={open}
             onToggle={() => setOverrides((prev) => ({ ...prev, [s.key]: !open }))}
+            claimsStatus={s.key !== "__other"}
           >
             {s.fields.map((f) => row(f, s))}
             {s.key === "__other" && otherExtra}
@@ -805,6 +823,9 @@ function MineTab({
         sections={view.sections}
         query={query}
         other={other}
+        // What only THEY can fill and have not: unfold it, or a person who
+        // opened this from a page finds it folded below every tool.
+        otherOpen={other.some((n) => policyOf(n, policy) === "private_only" && !mine[n])}
         row={(field, section) => (
           <MineRow
             key={`${section.key}:${field.name}`}

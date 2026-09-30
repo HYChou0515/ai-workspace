@@ -95,6 +95,15 @@ describe("identityState", () => {
     expect(s.missing.map((m) => m.name)).toEqual(["A"]);
   });
 
+  it("says whether the viewer holds anything of their own", () => {
+    // "Signed in" on a key that opens an empty panel was a false sentence
+    // (seen in a real browser): nothing was MISSING, but nothing was theirs.
+    expect(identityState({ ...base, tools: [], policy: { A: "private_only" } }).holdsOwn).toBe(false);
+    expect(
+      identityState({ ...base, tools: [], policy: { A: "private_only" }, mine: { A: "v" } }).holdsOwn,
+    ).toBe(true);
+  });
+
   it("is satisfied once the viewer's own value is there", () => {
     const s = identityState({
       ...base,

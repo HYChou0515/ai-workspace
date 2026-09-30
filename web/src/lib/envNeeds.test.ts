@@ -289,7 +289,7 @@ describe("deriveEnvNeeds", () => {
 /**
  * `plan-wui-viewer-login`: the panel lists EVERY tool the item runs as a
  * collapsible section, each headed by one of three states, most urgent first.
- * A tool that declared nothing is drawn as ready — a UI-layer choice (the
+ * A tool that declared nothing gets no section — a UI-layer choice (the
  * provider owes the declaration); `undeclared` above still says it happened.
  */
 describe("deriveEnvNeeds sections", () => {
@@ -307,12 +307,14 @@ describe("deriveEnvNeeds sections", () => {
       { A: "x" },
     );
 
+    // A tool that asks for nothing — no declaration, or an empty one — has no
+    // section: the UI takes it at its word that it needs nothing, and dozens of
+    // built-ins listed as "ready" buried the variables a person came to fill
+    // (seen in a real browser).
     expect(view.sections.map((s) => [s.key, s.status])).toEqual([
       ["required", "missingRequired"],
       ["optional", "missingOptional"],
       ["ready", "ready"],
-      ["silent", "ready"],
-      ["none", "ready"],
     ]);
   });
 

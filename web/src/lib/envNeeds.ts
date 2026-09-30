@@ -41,7 +41,7 @@ export type ToolEnvGroup = {
 };
 
 /** How much attention one tool's section asks for (`plan-wui-viewer-login`).
- * Three states, not four: a tool that declared nothing reads as `ready` here —
+ * Three states, not four: a tool that declared nothing has no section at all —
  * the provider owes the declaration, and the panel takes it at its word. */
 export type SectionStatus = "missingRequired" | "missingOptional" | "ready";
 
@@ -58,9 +58,9 @@ export type ToolSection = {
 };
 
 export type EnvNeedsView = {
-  /** EVERY tool the item runs, one collapsible section each, most urgent
-   * first (the order the panel draws them). Includes tools with no or an empty
-   * declaration, as `ready`. */
+  /** One collapsible section per tool the item runs that asks for at least one
+   * variable, most urgent first (the order the panel draws them). A tool with
+   * no or an empty declaration has none: the UI takes it at its word. */
   sections: ToolSection[];
   /** One per effective tool that declared at least one variable — the rows
    * the picker offers, in the order the toolset resolved. */
@@ -205,6 +205,8 @@ export function deriveEnvNeeds(
         order,
       };
     })
+    // A tool that asks for nothing has nothing to show — no section.
+    .filter((x) => x.section.fields.length > 0)
     // Stable within a state: the order the toolset resolved in.
     .sort((a, b) => rank[a.section.status] - rank[b.section.status] || a.order - b.order)
     .map((x) => x.section);
