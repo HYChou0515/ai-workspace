@@ -51,6 +51,7 @@ from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .markings import markings_prompt_block, write_markings
 from .notifications import notify
+from .private_env import private_layer
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from .activity import ActivityLog
     from .compaction import IConversationCompactor
     from .locator import ItemLocator
+    from .private_env import PrivateEnvStore
     from .request_env import IRequestEnv
     from .subagent_bridge import SubagentBridge
     from .turn_claims import ClaimRow, ITurnClaimStore
@@ -221,6 +223,7 @@ class ChatSendService:
         flush_item: Callable[[str], Awaitable[None]],
         admission: AdmissionGate | None = None,
         request_env: IRequestEnv | None = None,
+        private_env: PrivateEnvStore | None = None,
         send_await_timeout: float = 25.0,
         turn_claims: ITurnClaimStore | None = None,
     ) -> None:
@@ -228,6 +231,10 @@ class ChatSendService:
         # from if this pod goes away. None ⇒ no store (single-pod / tests):
         # turns are as pod-bound as they always were.
         self._turn_claims = turn_claims
+        # `plan-wui-viewer-login`: each person's PRIVATE env values per item.
+        # None ⇒ no store (a composition that never wired one): the private
+        # layer is exactly what the request seam answered, as before.
+        self._private_env = private_env
         self._spec = spec
         self._locator = locator
         self._turn_ctx = turn_ctx
@@ -449,23 +456,24 @@ class ChatSendService:
         the impl knows whether it built that string out of the very cookie it was
         reading. The server log keeps the traceback.
         """
-        if self._request_env is None:
-            return {}
-        if request is None and not driven_by:
-            return {}
-        try:
-            if request is None:
-                return await self._request_env.env_without_request(user_id=user_id, item_id=item_id)
-            return await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
-        except Exception:
-            logger.exception("chat_send: request env source failed for item %s", item_id)
-            raise HTTPException(
-                # Not 502/503/504: the chat client reads those as "an idle
-                # gateway cut the POST while the turn runs" and keeps waiting for
-                # a reply that this refusal guarantees will never come.
-                status_code=500,
-                detail={"error": "request_env_failed"},
-            ) from None
+        fresh: dict[str, str] = {}
+        if self._request_env is not None and (request is not None or driven_by):
+            try:
+                if request is None:
+                    return await self._request_env.env_without_request(
+                        user_id=user_id, item_id=item_id
+                    )
+                fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
+            except Exception:
+                logger.exception("chat_send: request env source failed for item %s", item_id)
+                raise HTTPException(
+                    # Not 502/503/504: the chat client reads those as "an idle
+                    # gateway cut the POST while the turn runs" and keeps waiting
+                    # for a reply that this refusal guarantees will never come.
+                    status_code=500,
+                    detail={"error": "request_env_failed"},
+                ) from None
+        return await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
 
     # ── #613 P3: goal auto-continue ─────────────────────────────────────
 

@@ -155,6 +155,7 @@ def build(
     registry: _Registry | None = None,
     locator: _Locator | None = None,
     request_env=None,
+    private_env=None,
     orchestrator=None,
     turn_engine=None,
     workflows: list[str] | None = None,
@@ -181,6 +182,7 @@ def build(
         prebuilt_dir=None,
         resolve_external=_external,
         request_env=request_env,
+        private_env=private_env,
         get_user_id=lambda: "default-user",
         orchestrator=orchestrator,
         turn_engine=turn_engine,
@@ -766,6 +768,55 @@ def test_a_page_tool_call_follows_the_items_policy_for_each_name():
     assert resp.status_code == 200
     assert sandbox.envs[-1]["MES_TOKEN"] == "mine"
     assert sandbox.envs[-1]["MES_HOST"] == "shared"
+
+
+def _private_store():
+    from workspace_app.api.private_env import PrivateEnvStore, register_private_env
+    from workspace_app.resources import make_spec
+
+    spec = make_spec()
+    register_private_env(spec)
+    return PrivateEnvStore(spec)
+
+
+def test_the_build_never_sees_anyones_private_values():
+    """`plan-wui-viewer-login` keeps #788's rule for the new source: `dist/` is
+    served to every viewer, and a bundler bakes env into it, so whoever pressed
+    Rebuild must not leave their private token in everyone's copy."""
+    store = _private_store()
+    store.replace("default-user", "i1", {"ERP_TOKEN": "mine"})
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox, env={"NPM_TOKEN": "s"}, private_env=store)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert "ERP_TOKEN" not in sandbox.envs[0]
+    assert sandbox.envs[0]["NPM_TOKEN"] == "s"
+
+
+def test_a_page_tool_call_carries_the_pressers_own_stored_values():
+    """`plan-wui-viewer-login`: what the person typed or logged in for this item
+    is their PRIVATE layer, whether or not the deploy has a request seam."""
+    store = _private_store()
+    store.replace("default-user", "i1", {"ERP_TOKEN": "mine"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, env={"MES_HOST": "h"}, private_env=store)
+
+    assert client.post(URL, json={"args": {}}).status_code == 200
+
+    assert sandbox.envs[-1]["ERP_TOKEN"] == "mine"
+    assert sandbox.envs[-1]["MES_HOST"] == "h"
+
+
+def test_a_page_tool_call_keeps_what_the_seam_said_in_the_pressers_row():
+    store = _private_store()
+    env = _Env({"MES_TOKEN": "from-request"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, request_env=env, private_env=store)
+
+    assert client.post(URL, json={"args": {}}).status_code == 200
+
+    assert store.get("default-user", "i1") == {"MES_TOKEN": "from-request"}
 
 
 def test_a_failing_env_source_refuses_a_tool_call():

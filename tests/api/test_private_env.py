@@ -126,3 +126,58 @@ def test_logging_out_needs_no_access_to_the_item():
 
     assert client.delete(_url(rid)).status_code == 204
     assert PrivateEnvStore(spec).get("mallory", rid) == {}
+
+
+# ─── what writes it: the deploy's IRequestEnv, on every request (P4) ───────
+
+
+def test_a_senders_request_env_is_kept_in_their_private_row():
+    """`plan-wui-viewer-login` Q4(b): what the deploy's `env_for` says about a
+    person is written to THEIR private row, so a turn with no request behind it
+    later (a re-run on another pod) still has it."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    from .test_request_env import CookieEnv, _send_app
+
+    client, _runner, item_id, spec = _send_app(CookieEnv())
+    client.cookies.set("sso", "abc")
+
+    with client:
+        client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    assert PrivateEnvStore(spec).get("u", item_id) == {"SSO": "abc", "CALLER": "u"}
+
+
+def test_a_value_the_person_typed_reaches_their_turn_with_no_seam_configured():
+    """The private layer is not a feature of `IRequestEnv`: a deploy with no seam
+    still has people who typed their own value for an item."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    from .test_request_env import _send_app
+
+    client, runner, item_id, spec = _send_app(None, env_vars={"FROM_ITEM": "i"})
+    PrivateEnvStore(spec).replace("u", item_id, {"MINE": "x"})
+
+    with client:
+        client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    assert runner.envs == [{"MINE": "x", "FROM_ITEM": "i"}]
+
+
+def test_the_latest_request_overwrites_only_the_names_it_carries():
+    """Last write wins, per name: the seam re-writes what it provides on every
+    request; a name it does not provide (typed by hand) is left alone."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    from .test_request_env import CookieEnv, _send_app
+
+    client, runner, item_id, spec = _send_app(CookieEnv())
+    PrivateEnvStore(spec).replace("u", item_id, {"SSO": "stale", "TYPED": "t"})
+    client.cookies.set("sso", "fresh")
+
+    with client:
+        client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    assert PrivateEnvStore(spec).get("u", item_id) == {"SSO": "fresh", "TYPED": "t", "CALLER": "u"}
+    assert runner.envs[-1]["SSO"] == "fresh"
+    assert runner.envs[-1]["TYPED"] == "t"

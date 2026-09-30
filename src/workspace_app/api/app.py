@@ -1736,6 +1736,7 @@ def create_app(
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
+    private_env_store = PrivateEnvStore(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -2365,6 +2366,8 @@ def create_app(
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
         # a turn's tools see the item's env_vars alone, exactly as before.
         request_env=request_env,
+        # `plan-wui-viewer-login`: each person's private env layer per item.
+        private_env=private_env_store,
         # plan-graceful-shutdown P3: every app-chat send (not the KB chat's, which
         # builds its turn in its route) opens a durable claim a peer
         # can re-run the turn from.
@@ -2536,6 +2539,7 @@ def create_app(
         packages=packages,
         prebuilt_dir=prebuilt_dir,
         request_env=request_env,
+        private_env=private_env_store,
         get_user_id=get_user_id,
         # #WUI P18: a page can start a run and watch it live. Resolved at CALL
         # time — the orchestrator is built later than this registration, the same
@@ -2587,7 +2591,7 @@ def create_app(
     )
 
     register_private_env_routes(
-        api, store=PrivateEnvStore(spec), locator=locator, get_user_id=get_user_id
+        api, store=private_env_store, locator=locator, get_user_id=get_user_id
     )
 
     # plan-chat-video-export: queue a video of a transcript; the consumer is

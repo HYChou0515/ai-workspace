@@ -23,6 +23,7 @@ Registered post-``spec.apply`` so specstar emits no auto-CRUD routes for it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Callable
 from urllib.parse import quote
@@ -86,6 +87,18 @@ class PrivateEnvStore:
             return
         rm.update(rid, row)
 
+    def merge(self, user_id: str, item_id: str, fresh: dict[str, str]) -> dict[str, str]:
+        """Write ``fresh`` over the row — last write wins, per name — and return
+        the whole row. A name ``fresh`` does not carry is left as it was, so a
+        seam re-writing what it provides on every request never erases a value
+        the person typed. Skips the write when nothing changed: this runs on
+        every send and every page tool call."""
+        stored = self.get(user_id, item_id)
+        merged = {**stored, **fresh}
+        if merged != stored:
+            self.replace(user_id, item_id, merged)
+        return merged
+
     def clear(self, user_id: str, item_id: str) -> None:
         """Hard delete — logging out must leave nothing behind. Absent is fine:
         a second logout is the state asked for."""
@@ -101,6 +114,22 @@ class PrivateEnvStore:
             assert isinstance(rid, str)
             with contextlib.suppress(ResourceIDNotFoundError):
                 rm.permanently_delete(rid)
+
+
+async def private_layer(
+    store: PrivateEnvStore | None, *, user_id: str, item_id: str, fresh: dict[str, str]
+) -> dict[str, str]:
+    """A person's PRIVATE env layer for one item, as a tool about to run for
+    them gets it: what the deploy's seam just said about them (``fresh``)
+    written over their stored row — last write wins, per name — then the whole
+    row. The ONE composition both the chat send and a page's ``callTool`` use,
+    so the two cannot drift. Off the loop: specstar I/O on a request path.
+
+    ``store`` None (a composition that wired none) ⇒ the layer is exactly what
+    the seam answered, as before this plan."""
+    if store is None:
+        return fresh
+    return await asyncio.to_thread(store.merge, user_id, item_id, fresh)
 
 
 class PrivateValues(BaseModel):

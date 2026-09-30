@@ -43,6 +43,7 @@ from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_c
 from ..workflow.offered import no_such_workflow, wont_parse
 from .env_layers import resolve_env
 from .locator import ItemLocator
+from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
 
@@ -181,6 +182,7 @@ def register_wui_routes(
     resolve_external: Callable[[str], Any] | None = None,
     view_plugin_artifacts: Mapping[str, str],
     request_env: IRequestEnv | None = None,
+    private_env: PrivateEnvStore | None = None,
     get_user_id: Callable[[], str] | None = None,
     orchestrator: Any = None,
     turn_engine: Any = None,
@@ -226,11 +228,13 @@ def register_wui_routes(
         means anything. Its message is not relayed: only the impl knows whether
         it built that string out of the cookie it was reading.
         """
-        if request_env is None:
-            return {}
         uid = get_user_id() if get_user_id is not None else ""
         try:
-            return await request_env.env_for(request, user_id=uid, item_id=item_id)
+            fresh = (
+                {}
+                if request_env is None
+                else await request_env.env_for(request, user_id=uid, item_id=item_id)
+            )
         except Exception:
             logger.exception("wui: request env source failed for item %s", item_id)
             raise HTTPException(
@@ -243,6 +247,7 @@ def register_wui_routes(
                 # built that string out of the cookie it was reading.
                 detail="This page could not confirm who you are. Sign in again, then reopen it.",
             ) from None
+        return await private_layer(private_env, user_id=uid, item_id=item_id, fresh=fresh)
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
