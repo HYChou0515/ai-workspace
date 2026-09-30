@@ -1279,3 +1279,122 @@ async def test_steer_waits_for_a_finished_run_to_finish_tearing_down(spec_instan
 
     teardown.set()
     await asyncio.wait_for(steering, timeout=2)
+
+
+# ── whose private values a run uses: consent is to the run AS STARTED ──────────
+# (plan-wui-viewer-login, review round 2 D1/D2)
+
+
+def _identity_spec(spec):
+    from workspace_app.workflow.run_identity import register_run_identity
+
+    register_run_identity(spec)
+    return spec
+
+
+async def test_a_run_remembers_who_it_runs_for_and_by_which_right(spec_instance: SpecStar):
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    run_id = await orch.start(
+        slug="rca",
+        item_id="iID",
+        profile="echo",
+        captured_user="owner",
+        env_user="presser",
+        env_verb="converse",
+    )
+
+    ident = RunIdentities(spec_instance).get(run_id)
+    assert ident is not None
+    assert (ident.env_user, ident.verb) == ("presser", "converse")
+
+
+async def test_a_run_rebuilt_on_a_different_workflow_drops_whose_values_it_uses(
+    spec_instance: SpecStar,
+):
+    """D1: `workflow_id` and `status` are writable through the run's auto-CRUD,
+    and every respawn (resume / gate decide / steer) rebuilds from them. The
+    presser consented to the workflow the run STARTED with; rebuilt on any
+    other manifest, it runs as nobody in particular."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    run_id = await orch.start(
+        slug="rca", item_id="iID2", profile="echo", captured_user="owner", env_user="presser"
+    )
+    other = WorkflowManifest(phases=[WorkflowPhase(id="exfiltrate")])
+
+    orch._build_handle(run_id, "iID2", "owner", other, "iID2")
+
+    assert RunIdentities(spec_instance).env_user(run_id) == ""
+
+
+async def test_the_same_workflow_keeps_whose_values_it_uses(spec_instance: SpecStar):
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    run_id = await orch.start(
+        slug="rca", item_id="iID3", profile="echo", captured_user="owner", env_user="presser"
+    )
+
+    orch._build_handle(run_id, "iID3", "owner", MANIFEST, "iID3")
+
+    assert RunIdentities(spec_instance).env_user(run_id) == "presser"
+
+
+@pytest.mark.parametrize(("edited", "kept"), [(True, ""), (False, "presser")])
+async def test_a_resumed_run_whose_workflow_was_edited_drops_whose_values_it_uses(
+    spec_instance: SpecStar, edited: bool, kept: str
+):
+    """Round 2 veracity V1: `resume` reloads the LIVE workflow file ("an edited
+    def is picked up"), so an orphan edited while it waited must not carry on
+    with the presser's values; unedited, it must."""
+    from workspace_app.workflow.run_identity import RunIdentities, manifest_digest
+
+    now_def = [MANIFEST]
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, now=lambda: 1_000_000)
+    orch.load_manifest = lambda _s, _p, _w="": now_def[0]
+    rid = _insert_run(orch, item_id="iR", status=RunStatus.RUNNING, started=0, progress_at=0)
+    RunIdentities(spec_instance).record(
+        rid, "presser", verb="execute", manifest_digest=manifest_digest(MANIFEST)
+    )
+    if edited:
+        now_def[0] = WorkflowManifest(phases=[WorkflowPhase(id="payroll")])
+
+    assert await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000) is True
+    await asyncio.sleep(0)
+
+    assert RunIdentities(spec_instance).env_user(rid) == kept
+
+
+async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: SpecStar):
+    """D1: a steer rewrites the plan, and any converse holder can propose and
+    approve one — the presser never consented to the rewritten run."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    calls: list[str] = []
+
+    async def run(wf, inputs):
+        await run_step(wf, name="ingest", phase="review", args={}, execute=_rec(calls, "ingest"))
+        return {}
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(
+        slug="rca", item_id="iST2", profile="echo", captured_user="u", env_user="presser"
+    )
+    for _ in range(50):
+        if (await _ran(orch, run_id, spec_instance)).status is RunStatus.DONE:
+            break
+    await orch.steer(slug="rca", item_id="iST2", profile="echo", run_id=run_id, instruction="x")
+    assert (await _ran(orch, run_id, spec_instance)).pending_steer is not None
+
+    await orch.confirm_steer(
+        slug="rca", item_id="iST2", profile="echo", run_id=run_id, approve=True, decided_by="bob"
+    )
+
+    assert RunIdentities(spec_instance).env_user(run_id) == ""

@@ -1612,8 +1612,8 @@ export const messages = {
   "env.tab.mine": { "zh-TW": "只有我", en: "Only me" },
   "env.tab.shared": { "zh-TW": "所有參與者", en: "Everyone" },
   "env.mineDesc": {
-    "zh-TW": "只有你看得到這裡的值。登入換到的值也存在這裡;由你的登入狀態自動帶入的值,每次操作都會重新帶入。",
-    en: "Only you can see these values. Values from signing in are kept here too; ones filled in from your sign-in are refilled at every request.",
+    "zh-TW": "只有你看得到這裡的值。登入換到的值也存在這裡;由你的登入狀態自動帶入的值,在你每次於這裡聊天或使用頁面工具時更新。",
+    en: "Only you can see these values. Values from signing in are kept here too; ones filled in from your sign-in are updated each time you chat or use a page tool here.",
   },
   "env.sharedDesc": {
     "zh-TW": "這裡的值,所有能打開這個工作區的人都看得到。",

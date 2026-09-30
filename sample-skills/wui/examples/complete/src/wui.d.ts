@@ -84,8 +84,9 @@ export interface Workspace {
    * nothing: a credential must never pass through a page.
    *
    * Resolves once the sign-in is SHOWN, not when the person finishes. Call it
-   * when a tool answers that it is not authorised, then let them try again:
-   * their next `callTool` runs with what they signed in with.
+   * when a tool answers that it is not authorised, then let them try again.
+   * What they sign in with fills their own values once they SAVE it, and a
+   * tool gets it for names the item lets them supply themselves.
    */
   openLogin(): Promise<{ opened: true }>;
   /** The page's only reach outside the item. Declare the tool in `tools:` first.

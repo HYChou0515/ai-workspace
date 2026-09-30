@@ -679,7 +679,7 @@ async def test_deleting_an_item_takes_whose_values_its_runs_used():
         .create(WorkflowRun(item_id=item_id, captured_user="default-user"))
         .resource_id
     )
-    RunIdentities(spec).record(run_id, "alice")
+    RunIdentities(spec).record(run_id, "alice", verb="execute", manifest_digest="")
 
     assert client.delete(f"/a/rca/items/{item_id}").status_code == 204
 

@@ -1647,8 +1647,9 @@ export function AgentHeader({
           onSave={onSaveEnvVars}
           onClose={() => setShowEnv(false)}
           // #750: which item, so the panel can offer a field per variable this
-          // item's own tools declared. Only reached when the modal is open, so
-          // a closed panel costs nothing.
+          // item's own tools declared. The header's missing-value hint already
+          // holds the same three queries (`useEnvMissing`), so opening the panel
+          // adds no request of its own.
           slug={slug}
           itemId={investigationId}
         />

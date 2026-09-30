@@ -20,7 +20,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
     from ..kb.llm import ILlm
+    from ..perm import Verb
     from ..quota.admission import AdmissionGate
     from .locator import ItemLocator
     from .private_env import PrivateEnvStore
@@ -157,6 +158,7 @@ class WorkflowExecutor:
         lane: str | None = None,
         entity_write_origin: EntityOrigin | None = None,
         env_user: str = "",
+        env_verb: str = "execute",
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
@@ -215,7 +217,7 @@ class WorkflowExecutor:
             # #429 P10: an agent node's entity writes carry the run's trigger origin, so
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
-            caller_env=await self._headless_env(captured_user, item_id, env_user),
+            caller_env=await self._headless_env(captured_user, item_id, env_user, env_verb),
         )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
@@ -256,7 +258,7 @@ class WorkflowExecutor:
         return answer
 
     async def _headless_env(
-        self, captured_user: str, item_id: str, env_user: str = ""
+        self, captured_user: str, item_id: str, env_user: str = "", env_verb: str = "execute"
     ) -> dict[str, str]:
         """What this node's tools get from the deploy's seam, given that no
         request is behind it: the seam's answer for ``captured_user`` — the item
@@ -303,8 +305,8 @@ class WorkflowExecutor:
             headless=headless,
             acting_for=env_user,
             item_id=item_id,
-            # The presser / binder must STILL be able to make this item run work.
-            verb="execute",
+            # The right that admitted them to start it — which they must still hold.
+            verb=cast("Verb", env_verb),
         )
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
@@ -557,10 +559,11 @@ class WorkflowExecutor:
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
 
-    def _run_env_user(self, run_id: str) -> str:
-        """Whose private values this run uses (`workflow.run_identity`); "" when
-        none was recorded — nobody's, the side that hands out less."""
-        return RunIdentities(self._spec).env_user(run_id)
+    def _run_identity(self, run_id: str) -> tuple[str, str]:
+        """Whose private values this run uses, and the right they must still
+        hold (`workflow.run_identity`); ("", …) when none — nobody's."""
+        found = RunIdentities(self._spec).get(run_id)
+        return (found.env_user, found.verb) if found is not None else ("", "execute")
 
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
@@ -575,7 +578,7 @@ class WorkflowExecutor:
         # Whose private values the run's turns get — read off the run row once,
         # as `_build_handle` reads the trigger origin, rather than threaded
         # through every drive/execute signature; fixed for the run's lifetime.
-        env_user = self._run_env_user(run_id)
+        env_user, env_verb = self._run_identity(run_id)
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
             item_id,
             chat_key,
@@ -584,6 +587,7 @@ class WorkflowExecutor:
             tools,
             entity_write_origin=origin,
             env_user=env_user,
+            env_verb=env_verb,
         )
         wf.reconcile = lambda: self._reconcile(item_id)
         # #429 P5: a per-element turn-lane factory — each map element drives its own
@@ -599,6 +603,7 @@ class WorkflowExecutor:
                 lane=f"{chat_key}#{subkey}",
                 entity_write_origin=origin,
                 env_user=env_user,
+                env_verb=env_verb,
             )
         )
         wf.turn_concurrency = self._turn_concurrency

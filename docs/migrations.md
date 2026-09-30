@@ -1240,7 +1240,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   每次變化就**整份取代**，不再只活一輪。為什麼：pod 死掉後被接手重跑的 turn、那個人自己的 goal 續跑、他按下起的
   run，都沒有 request 可問。別人的值不會用在另一個人的 turn。`env_without_request` 的值仍然不存。
   - ⚠️ **憑證因此落在資料庫裡**（明文，和 item 的 `env_vars` 一樣）。DB 的備份與能直接讀 DB 的人都拿得到；透過 API
-    只有本人讀得到，superuser 也不行。每次寫入都是先刪再建，**不留舊值的 revision**；刪除 item 會一併清掉所有人的列。
+    只有本人讀得到，superuser 也不行。每次寫入都是取代後刪掉舊 revision，**不留舊值的歷史**；刪除 item 會一併清掉所有人的列。
   - ⚠️ **沒有人在場的 turn，那個人存的值同名時蓋過 `env_without_request` 的服務帳號**（那條路是替他跑的）。
     已經靠 #809 服務帳號跑 goal / 重跑 / 手動 run 的部署：同一個人送過一次聊天之後，這些路徑改用他自己的值。
     - **要做的事（`rollout 前`）**：想維持服務帳號，就改你的 `IRequestEnv` impl，讓 `env_for` 與
@@ -1251,6 +1251,10 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - **要做的事（`rollout 前`）**：檢查你的 impl 回的值——它們現在會**存進資料庫**（那個人自己的列）。
     - 為什麼：存下來才能在沒有人在場時用。
     - 漏做的症狀：impl 回了不該落地的東西（例如一次性的 session secret），它會出現在 DB 與 DB 備份裡。
+  - ⚠️ **存下的值只在那個人於該 item 聊天送出或按頁面工具時更新**（只有這兩條路問 `env_for`）。他登出 SSO
+    之後，到他下一次在那裡操作前，替他跑的 goal 續跑 / 重跑 / 他按的 run / 他綁定的排程用的仍是舊值。
+    - 為什麼：沒有人在場的路徑沒有 request 可問，只能用最後一次存下的。
+    - 你會看到的：這段期間外部系統收到已登出的 session；它若已失效就回 401，和這個 PR 之前用服務帳號時不同。
   - 部署**拿掉** `server.request_env` 之後，先前存下的 seam 值**不再被使用**（啟動時就不讀），要清掉可請使用者在
     Env 面板「只有我」按「清除我的值」，或刪除 item。
 - **有人在場、沒設政策、沒有人自己存值的 item，行為不變**：預設 `shared_first` 就是舊的 `{**request_env, **item_env}`。
@@ -1262,15 +1266,18 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   其他人「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**。
   缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
 - 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
-  **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它）。頁面排程只有在有人按「用我的身分執行」後
-  才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改、排程檔被刪，綁定就取消並通知他。
+  **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它；run 之後被換成別的 workflow——`workflow_id`
+  被改、續跑前 workflow 檔被改、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
+  才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
+  綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
   約 32px 的平台列。
 - 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
   再多一次刪除與建立。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
   （`user_may`：item 與使用者群組各讀一次）與兩次 private 讀取。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
-  多一次綁定讀取，有綁定時再多一次存取確認與一到兩次 workflow 檔讀取。聊天標頭的「環境變數」鈕多一次 private 讀取
-  （與 tool 清單共用快取）。
+  多一次綁定讀取，有綁定時再多一次存取確認與一次（即時）workflow 檔讀取。前端：聊天標頭顯示「環境變數」鈕時，
+  打開 item 就發 3 個 GET（tool 清單、登入方法、自己的值；以前要打開面板才發）；`/w/` 頁面與 WUI 分頁的工具列
+  打開時各發 5 個 GET（再加 `env/layers` 與排程綁定），同一個 item 共用快取。
 
 **資料** — 沒有 `Schema` 升版、沒有要跑的指令。新 model `PrivateEnv`、`PrivateSeam`、`ScheduleBinding`、`RunIdentity`
 在啟動時註冊（沒有 auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資料讀出來就是空的。

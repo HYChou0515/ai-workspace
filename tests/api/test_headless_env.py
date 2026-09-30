@@ -208,6 +208,7 @@ def _executor_app(
     env_vars: dict[str, str] | None = None,
     owner: str = "owner-o",
     user: str = "admin",
+    creator: str | None = None,
 ) -> tuple[WorkflowExecutor, str, SpecStar, CapturingRunner, TestClient]:
     """The real composition root with the executor it built captured, and one
     item whose OWNER is not the user the app resolves — so a node attributed to
@@ -228,11 +229,13 @@ def _executor_app(
             request_env=source,
             get_user_id=lambda: user,
         )
-    item_id = (
-        spec.get_resource_manager(PlaygroundItem)
-        .create(PlaygroundItem(title="t", owner=owner, profile="echo", env_vars=env_vars or {}))
-        .resource_id
-    )
+    # `created_by` is who the permission check treats as the owner (every verb),
+    # so a test about a missing verb must create the item as someone else.
+    rm = spec.get_resource_manager(PlaygroundItem)
+    with rm.using(creator or user):
+        item_id = rm.create(
+            PlaygroundItem(title="t", owner=owner, profile="echo", env_vars=env_vars or {})
+        ).resource_id
     return captured["ex"], item_id, spec, runner, TestClient(app)
 
 
@@ -269,12 +272,12 @@ def _poll_until_terminal(client: TestClient, item_id: str, run_id: str) -> str:
     return status
 
 
-def test_a_run_a_person_starts_by_hand_runs_on_the_headless_source_not_their_request():
+def test_the_post_that_starts_a_run_is_not_asked_for_its_request_env():
     """#714's reason for keeping workflow off the request still stands — a run
-    re-runs on the clock and on uploads, when the person is gone — so the run
-    they start by hand reads the same source its re-run will. Their cookie is
-    on this POST and must not reach the node; the seam is asked for THEM,
-    since the run is captured as them, but through the request-less method."""
+    re-runs on the clock and on uploads, when the person is gone — so the POST
+    that starts one is not asked `env_for`: its cookie must not reach the node.
+    The seam is asked for THEM through the request-less method. (What they
+    stored earlier does reach it — the next test.)"""
     seam = ServiceAccountEnv()
     executor, item_id, _spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
     client.cookies.set("sso", "hua-cookie")
@@ -288,6 +291,25 @@ def test_a_run_a_person_starts_by_hand_runs_on_the_headless_source_not_their_req
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-hua"}]
     assert seam.asked_for == [("hua", item_id)]
+
+
+def test_what_a_chat_send_stored_reaches_the_run_the_same_person_starts_by_hand():
+    """`plan-wui-viewer-login` Q4b + D5: the seam's answer at the person's chat
+    send is kept as theirs, and the run they press uses it (round 2, R2)."""
+    seam = ServiceAccountEnv()
+    _executor, item_id, _spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    client.cookies.set("sso", "hua-cookie")
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        assert client.post(f"{base}/messages", json={"content": "hi"}).status_code == 202
+        _wait(lambda: len(runner.envs) == 1)
+        client.cookies.set("sso", "not-this-post")
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert runner.envs[-1] == {"SA_TOKEN": "sa-for-hua", "SSO": "hua-cookie", "CALLER": "hua"}
 
 
 _ONE_AGENT_STEP = json.dumps(
@@ -662,3 +684,40 @@ async def test_a_send_with_neither_request_nor_driver_uses_no_stored_values_eith
         await service.send(item_id, rid, conv, item_id, _MessageBody(content="hi"))
 
     assert runner.envs == [{"FROM_ITEM": "i"}]
+
+
+def test_a_run_pressed_by_someone_who_may_converse_but_not_execute_keeps_their_values():
+    """Round 2 (D2): the workflow panel's Run is gated on `converse`, but the
+    presser's values were then dropped for lacking `execute` — accepted, and
+    run silently without the credential."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.perm import Permission
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(
+        seam, owner="owner-o", user="hua", creator="owner-o"
+    )
+    rm = spec.get_resource_manager(PlaygroundItem)
+    item = rm.get(item_id).data
+    assert isinstance(item, PlaygroundItem)
+    who = ["user:hua"]
+    item.permission = Permission(
+        visibility="restricted",
+        read_meta=who,
+        read_chat=who,
+        read_content=who,
+        converse=who,
+        add_content=who,
+        edit_content=who,
+    )
+    with rm.using("owner-o"):
+        rm.update(item_id, item)
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]

@@ -12,10 +12,12 @@ Three rules, each for a reason:
   (`user_schedules.trigger_id_for`), so an edited row is a different schedule
   with no binding; and the binding records a digest of the item's own
   ``.workflows/<run>.json`` (`workflow_digest`), so rewriting the workflow's
-  body drops it too (review round 1, F4). Either way "bind the harmless one,
-  then swap in the payroll query" cannot run the payroll query as the person
-  who consented. The sweep drops such a binding — only once the live file
-  agrees, since the snapshot it reads lags — and says so to the binder.
+  body drops it too (review round 1, F4). The sweep compares against the LIVE
+  file — the one the fire will load — before each fire (round 2, D3), drops a
+  binding that no longer matches, and says so to the binder. The digest covers
+  that one file only: a script the workflow calls, or a file an agent node
+  reads, is not part of what was consented to, and anyone who may edit the
+  item's content may change those (round 2 veracity, V1).
 * **A binder who may no longer run work in the item** (removed, demoted) has
   the binding dropped at the next fire, and is told why.
 * **One person per schedule** (Q8). Another may take it over; the one replaced

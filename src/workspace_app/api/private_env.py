@@ -5,12 +5,17 @@ Per (person, item), two rows:
 * ``PrivateEnv`` — what the person put there themselves: typed in "Only me", or
   filled by a sign-in (``IEnvProvider``). Changed only by them.
 * ``PrivateSeam`` — the deploy's ``IRequestEnv.env_for`` answer about them, as of
-  their LAST request: replaced whole every time it changes, never merged.
+  their last chat send or page ``callTool`` in this item (the only two paths
+  that ask it): replaced whole every time it changes, never merged.
 
 The SHARED layer is the item's ``env_vars``; which of the two layers a tool gets
 for a given name is the item's ``env_policy`` (`env_layers`). Within the private
 layer the seam's answer wins a name: it is the automatic, always-current value
-(Q5), and a name it stops returning (signed out of SSO) stops reaching tools.
+(Q5), and a name it stops returning stops reaching tools from that request
+on. Signing out of SSO is not a request this app sees, so until the person's
+next one here, work done for them with nobody present (goal rounds, re-runs,
+runs they pressed, schedules they bound) keeps the last answer (round 2
+veracity, V2).
 
 Why each part is the way it is:
 
@@ -28,8 +33,9 @@ Why each part is the way it is:
   kept names the seam had stopped returning, reordered the names a tool sees,
   and a seam write racing a sign-out rewrote the values just cleared. Apart,
   a seam write never touches what the person put there.
-* **No history.** Every write is delete-then-create: an update would keep each
-  past value — each rotated token — as a readable revision.
+* **No history.** Every write is one replace followed by pruning the older
+  revisions: a plain update keeps each past value — each rotated token — as a
+  readable revision, and a delete-then-create left a moment with no row.
 
 Registered post-``spec.apply`` so specstar emits no auto-CRUD routes for either.
 """
@@ -57,6 +63,9 @@ class PrivateEnv(Struct):
     item_id: str
     values: dict[str, str]
     updated_at: int
+    #: The names in the order they were given: the store canonicalises a dict's
+    #: key order, and the order becomes ``SANDBOX_USER_ENV_KEYS`` (round 2, R3).
+    names: list[str] = []
 
 
 class PrivateSeam(Struct):
@@ -64,6 +73,7 @@ class PrivateSeam(Struct):
     item_id: str
     values: dict[str, str]
     updated_at: int
+    names: list[str] = []
 
 
 #: specstar ids cannot hold `/`; U+2215 is what `wui_deploy` uses in its place.
@@ -111,21 +121,37 @@ class PrivateEnvStore:
         except ResourceIDNotFoundError:
             return {}
         assert isinstance(data, PrivateEnv | PrivateSeam)
-        return dict(data.values)
+        ordered = [n for n in data.names if n in data.values]
+        rest = [n for n in data.values if n not in ordered]
+        return {n: data.values[n] for n in [*ordered, *rest]}
 
     def _write(self, model: type, user_id: str, item_id: str, values: dict[str, str]) -> None:
-        """Delete, then create — no revision keeps the value it replaced. Empty
-        ⇒ no row at all. Two concurrent writers: the loser's create collides and
-        is dropped, which is fine because each wrote an equally current value."""
+        """ONE replace, then prune the older revisions — so a reader sees the old
+        value or the new one, never a moment with no row (round 2, D4: a
+        delete-then-create let a goal round in between run without the
+        person's credential), and no revision keeps a replaced value (R4).
+        Empty ⇒ no row at all. Concurrent writers: the last one wins."""
         rm = self._spec.get_resource_manager(model)
         rid = private_env_id(user_id, item_id)
-        with contextlib.suppress(ResourceIDNotFoundError):
-            rm.permanently_delete(rid)
         if not values:
+            with contextlib.suppress(ResourceIDNotFoundError):
+                rm.permanently_delete(rid)
             return
-        row = model(user_id=user_id, item_id=item_id, values=values, updated_at=self._now())
-        with contextlib.suppress(DuplicateResourceError):
-            rm.create(row, resource_id=rid)
+        row = model(
+            user_id=user_id,
+            item_id=item_id,
+            values=values,
+            updated_at=self._now(),
+            names=list(values),
+        )
+        try:
+            rm.update(rid, row)
+        except ResourceIDNotFoundError:
+            try:
+                rm.create(row, resource_id=rid)
+            except DuplicateResourceError:  # a concurrent first write got there
+                rm.update(rid, row)
+        rm.prune_revisions(rid, keep_last_n=1)
 
     def get(self, user_id: str, item_id: str) -> dict[str, str]:
         """What the person put there themselves."""

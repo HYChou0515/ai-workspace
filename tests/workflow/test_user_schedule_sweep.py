@@ -2217,3 +2217,45 @@ def test_a_workflow_the_snapshot_has_not_caught_up_with_keeps_the_binding():
 
     assert started.env_users == ["bob"]
     assert expired == []
+
+
+def test_the_workflow_that_counts_is_the_live_one_the_run_will_load():
+    """Round 2 (D3): the snapshot matching what was consented to said nothing
+    about the LIVE file — which is what the run loads."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    snapshot = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V1})
+    live = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V2})
+
+    asyncio.run(
+        _bound_sweeper(
+            spec, snapshot, started, datetime(2026, 9, 5, 9, 30), expired, live=live
+        ).tick()
+    )
+
+    assert started.env_users == [""]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
+def test_a_bindings_store_that_fails_does_not_stop_the_schedule():
+    """Round 2 (R4): the fire runs, as nobody in particular — never as a
+    binder it could not check."""
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob(spec, DAILY)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    sweeper = _bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired)
+
+    def boom(_key):
+        raise RuntimeError("store down")
+
+    sweeper._bindings.get = boom
+    asyncio.run(sweeper.tick())
+
+    assert started.env_users == [""]

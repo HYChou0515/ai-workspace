@@ -296,7 +296,11 @@ class UserScheduleSweeper:
         the fire runs as nobody."""
         if self._bindings is None:
             return ""
-        binding = await asyncio.to_thread(self._bindings.get, trigger_id)
+        try:
+            binding = await asyncio.to_thread(self._bindings.get, trigger_id)
+        except Exception:  # noqa: BLE001 — the schedule still fires, as nobody (round 2, R4)
+            logger.exception("user schedules: %s: could not read the binding", trigger_id)
+            return ""
         if binding is None:
             return ""
         if self._binder_may is not None and not await asyncio.to_thread(
@@ -312,13 +316,12 @@ class UserScheduleSweeper:
         return binding.user_id
 
     async def _workflow_changed(self, item_id: str, workflow_id: str, bound: str) -> bool:
-        """Has the workflow's body changed since the binder consented (F4)? Only
-        a difference in BOTH the snapshot and the live file counts — the binding
-        was made on the live file, which the snapshot may lag — and a read that
-        fails decides nothing (keep the binding)."""
+        """Has the workflow's body changed since the binder consented (F4)? Asked
+        of the LIVE file — the one the run will load, and the one the binding
+        was made on (round 2, D3: the snapshot matching said nothing about
+        it). Only read when the schedule is bound. A read that fails decides
+        nothing (keep the binding)."""
         try:
-            if await workflow_digest(self._read, item_id, workflow_id) == bound:
-                return False
             live = self._read_live or self._read
             return await workflow_digest(live, item_id, workflow_id) != bound
         except Exception:  # noqa: BLE001 — an unanswered question is not a change

@@ -59,7 +59,7 @@ from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
 from .run import PhaseState, RunStatus, StepState, WorkflowRun
-from .run_identity import RunIdentities
+from .run_identity import RunIdentities, manifest_digest
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
@@ -371,6 +371,7 @@ class WorkflowOrchestrator:
         profile: str,
         captured_user: str,
         env_user: str = "",
+        env_verb: str = "execute",
         workflow_id: str = "",
         chat_id: str = "",
         origin_trigger: str = "",
@@ -424,7 +425,9 @@ class WorkflowOrchestrator:
         if env_user:
             # Whose private values the run's tools get — kept where no route
             # reaches it (`run_identity`, review round 1 R5).
-            RunIdentities(self.spec).record(run_id, env_user)
+            RunIdentities(self.spec).record(
+                run_id, env_user, verb=env_verb, manifest_digest=manifest_digest(manifest)
+            )
         self._prune_runs(item_id, keep=run_id)
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
         logger.info(
@@ -624,6 +627,15 @@ class WorkflowOrchestrator:
             run_id=run_id,
             run_started_at=res.info.created_time,
         )
+        # Consent is to the run AS STARTED (round 2, D1): rebuilt on any other
+        # manifest — a PATCHed `workflow_id`, a workflow file edited before a
+        # resume — it no longer runs with the presser's values.
+        identities = RunIdentities(self.spec)
+        ident = identities.get(run_id)
+        if ident is not None and (
+            manifest is None or ident.manifest_digest != manifest_digest(manifest)
+        ):
+            identities.forget(run_id)
         self.wire_handle(wf, run_id, item_id, captured_user, key)
         return wf
 
@@ -878,6 +890,9 @@ class WorkflowOrchestrator:
             self.load_upload_dir(slug, profile),
         )
         await apply_steer(wf, data.pending_steer, decided_by=decided_by)
+        # The steer rewrote the plan, and anyone who may converse can propose and
+        # approve one — the presser never consented to it (round 2, D1).
+        RunIdentities(self.spec).forget(run_id)
         self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
         logger.info("confirm_steer: run %s steer approved, resuming", run_id)
         self._spawn(

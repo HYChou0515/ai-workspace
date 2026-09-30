@@ -371,3 +371,46 @@ def test_a_deploy_without_a_seam_does_not_use_a_left_over_seam_row():
     holder["id"] = "alice"
 
     assert client.get(_url(rid)).json() == {"values": {}, "auto": {}}
+
+
+def test_a_write_never_leaves_a_moment_with_no_row():
+    """Round 2 (D4/D5): delete-then-create let a reader between the two see
+    nothing — a goal round ran without the person's credential. A write is now
+    one replace (then the older revision is pruned)."""
+    from unittest import mock
+
+    from workspace_app.api.private_env import PrivateEnv, PrivateEnvStore, PrivateSeam
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.replace("alice", rid, {"A": "1"})
+    store.record_seam("alice", rid, {"S": "1"})
+    deletes = []
+    for model in (PrivateEnv, PrivateSeam):
+        rm = spec.get_resource_manager(model)
+        real = rm.permanently_delete
+        rm.permanently_delete = mock.Mock(
+            side_effect=lambda rid_, _r=real: (deletes.append(rid_), _r(rid_))
+        )
+
+    store.replace("alice", rid, {"A": "2"})
+    store.record_seam("alice", rid, {"S": "2"})
+
+    assert deletes == []
+    assert store.get("alice", rid) == {"A": "2"}
+    assert store.seam("alice", rid) == {"S": "2"}
+
+
+def test_stored_values_come_back_in_the_order_they_were_given():
+    """Round 2 (R3): the store canonicalises key order, so an unattended turn saw
+    the names sorted while the attended one saw the seam's order — and the
+    names become SANDBOX_USER_ENV_KEYS."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"Z": "1", "A": "2", "M": "3"})
+    store.replace("alice", rid, {"Q": "1", "B": "2"})
+
+    assert list(store.seam("alice", rid)) == ["Z", "A", "M"]
+    assert list(store.get("alice", rid)) == ["Q", "B"]
