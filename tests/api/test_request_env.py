@@ -72,8 +72,11 @@ async def _dummy_subagent(*_a, **_k):
     return "", []
 
 
-def _app_with_item(env_vars: dict[str, str]) -> tuple[TurnContextBuilder, str]:
-    """The real composition root, plus one item carrying ``env_vars``."""
+def _app_with_item(
+    env_vars: dict[str, str], *, env_policy: dict[str, str] | None = None
+) -> tuple[TurnContextBuilder, str]:
+    """The real composition root, plus one item carrying ``env_vars`` (and, for
+    `test_env_layers.py`, the per-name policy beside them)."""
     spec = make_spec()
     captured: dict[str, TurnContextBuilder] = {}
     real = app_mod.TurnContextBuilder
@@ -92,7 +95,11 @@ def _app_with_item(env_vars: dict[str, str]) -> tuple[TurnContextBuilder, str]:
         )
     item_id = (
         spec.get_resource_manager(PlaygroundItem)
-        .create(PlaygroundItem(title="t", owner="u", profile="echo", env_vars=env_vars))
+        .create(
+            PlaygroundItem(
+                title="t", owner="u", profile="echo", env_vars=env_vars, env_policy=env_policy or {}
+            )
+        )
         .resource_id
     )
     return captured["b"], item_id

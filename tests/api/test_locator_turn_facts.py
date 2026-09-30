@@ -28,6 +28,7 @@ def _locator_and_item():
                 profile="echo",
                 attached_skill_prefs={"grill-me": False},
                 env_vars={"TZ": "Asia/Taipei"},
+                env_policy={"TZ": "private_first"},
             )
         )
         .resource_id
@@ -44,6 +45,11 @@ def test_turn_facts_answers_exactly_what_the_accessors_answer():
     assert facts.profile == locator.profile_of(item_id)
     assert facts.skill_prefs == locator.skill_prefs_of(item_id)
     assert facts.env_vars == locator.env_vars_of(item_id)
+    # A page's `callTool` reads the layers through `env_layers_of`; a turn reads
+    # them here. Two readers of one pair must agree, or a page and the agent
+    # reach different systems (`plan-wui-viewer-login`).
+    assert (facts.env_vars, facts.env_policy) == tuple(locator.env_layers_of(item_id))
+    assert facts.env_policy == {"TZ": "private_first"}
 
 
 def test_turn_facts_matches_the_accessors_for_an_unknown_id():
@@ -55,3 +61,4 @@ def test_turn_facts_matches_the_accessors_for_an_unknown_id():
     assert facts.profile == locator.profile_of("no-such-item")
     assert facts.skill_prefs == locator.skill_prefs_of("no-such-item")
     assert facts.env_vars == locator.env_vars_of("no-such-item")
+    assert (facts.env_vars, facts.env_policy) == tuple(locator.env_layers_of("no-such-item"))

@@ -41,6 +41,7 @@ from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from ..workflow.offered import no_such_workflow, wont_parse
+from .env_layers import resolve_env
 from .locator import ItemLocator
 from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
@@ -525,6 +526,7 @@ def register_wui_routes(
             )
         pkg, command = found
 
+        layers = locator.env_layers_of(investigation_id)
         session = await registry.session(investigation_id)
         ctx = AgentToolContext(
             investigation_id=investigation_id,
@@ -533,14 +535,15 @@ def register_wui_routes(
             packages=list(available),
             agent_config=config,
             prebuilt_dir=prebuilt_dir,
-            # The item's own win, exactly as they do in a turn
-            # (`turn_context`): those are the ones a person set on purpose,
-            # and a page must not be able to reach a different system from
-            # the one the agent reaches.
-            user_env={
-                **await _request_env(request, investigation_id),
-                **locator.env_vars_of(investigation_id),
-            },
+            # Resolved exactly as a turn resolves them (`turn_context`): the
+            # person who pressed the button is the PRIVATE layer, the item's
+            # copy the SHARED one, and the item's per-name policy picks — so a
+            # page cannot reach a different system from the one the agent does.
+            user_env=resolve_env(
+                shared=layers.shared,
+                private=await _request_env(request, investigation_id),
+                policy=layers.policy,
+            ),
             # The registry's own wake path, so this shares the item's ONE
             # sandbox with its turns rather than racing a second one into
             # existence beside it.
