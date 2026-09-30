@@ -1470,6 +1470,29 @@ async def test_a_digest_read_that_fails_at_start_leaves_no_run_behind(spec_insta
     assert orch.active_run("iX") is None
 
 
+@pytest.mark.parametrize("verb", ["decide", "steer", "confirm_steer"])
+async def test_a_run_is_only_answered_through_its_own_item(spec_instance: SpecStar, verb: str):
+    """Round 6: `decide` / `steer` / `confirm_steer` took the item from the URL
+    and the run from its id, and never checked they belong together — a run of
+    item A resumed INSIDE item B through B's URL (the gap predates this PR;
+    with private values on runs it carried them, round 5, and a forget there
+    stripped them for good, round 6). A run of another item is not found."""
+    from specstar.types import ResourceIDNotFoundError
+
+    orch, _ = _orch(spec_instance, lambda _wf, _i: _ok(None))
+    rid = _insert_run(orch, item_id="iA", status=RunStatus.AWAITING_HUMAN)
+    common = {"slug": "rca", "item_id": "iB", "profile": "echo", "run_id": rid}
+    call = {
+        "decide": lambda: orch.decide(**common, choice="approve"),
+        "steer": lambda: orch.steer(**common, instruction="go"),
+        "confirm_steer": lambda: orch.confirm_steer(**common, approve=True),
+    }[verb]
+
+    with pytest.raises(ResourceIDNotFoundError):
+        await call()
+    assert orch._get(rid).status is RunStatus.AWAITING_HUMAN
+
+
 async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: SpecStar):
     """D1: a steer rewrites the plan, and any converse holder can propose and
     approve one — the presser never consented to the rewritten run."""

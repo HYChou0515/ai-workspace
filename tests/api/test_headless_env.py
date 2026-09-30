@@ -526,13 +526,12 @@ def test_a_gate_decided_through_another_items_url_does_not_carry_the_pressers_va
             if client.get(f"{base_a}/runs/{run_id}").json()["status"] == "awaiting_human":
                 break
             time.sleep(0.02)
-        client.post(
+        cross = client.post(
             f"/a/playground/items/{item_b}/runs/{run_id}/decisions", json={"choice": "approve"}
         )
-        for _ in range(400):
-            if client.get(f"{base_a}/runs/{run_id}").json()["status"] in ("done", "error"):
-                break
-            time.sleep(0.02)
+        # Round 6: not answered at all — a run of A is not found under B.
+        assert cross.status_code == 404
+        assert client.get(f"{base_a}/runs/{run_id}").json()["status"] == "awaiting_human"
 
     assert all("ERP" not in env for env in runner.envs), runner.envs
 

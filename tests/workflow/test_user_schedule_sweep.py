@@ -2250,6 +2250,27 @@ def test_the_workflow_that_counts_is_the_live_one_the_run_will_load():
     assert ScheduleBindings(spec).binder(key) == ""
 
 
+def test_deleting_the_workflow_a_bound_schedule_runs_drops_the_binding():
+    """A gone file digests to "" (the profile's workflow of that id), which is
+    not what was consented to: dropped, and the binder told it `changed`. The
+    live reader here raises the builtin `FileNotFoundError` — the loader must
+    read that as "no file", not as an unanswered read that keeps the binding
+    (round 6 conformance)."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
 @pytest.mark.parametrize("fails", ["get", "may", "unbind"])
 def test_a_binding_check_that_fails_does_not_stop_the_schedule(fails: str):
     """Round 2 (R4), round 3 (defect 2): whichever part of the check fails —

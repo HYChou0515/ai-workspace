@@ -38,7 +38,6 @@ from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ..api.timeutil import now_ms
 from .workspace_store import load_workspace_workflow_digested
 
 
@@ -64,9 +63,9 @@ class ScheduleBinding(Struct):
     path: str
     user_id: str
     bound_at: int
-    #: sha256 of the item's own ``.workflows/<run>.json`` as it was when the
-    #: binder pressed "Run as me" ("" for a workflow that is not a workspace
-    #: file — a profile's, which no one edits from the item). The row's key only
+    #: `workflow_digest` of the row's workflow when the binder pressed "Run as
+    #: me" — the digest the build would run from ("" means a profile's
+    #: workflow; a file that will not parse cannot be bound). The row's key only
     #: covers the ROW; the workflow it names can be rewritten by anyone who edits
     #: the item, and the binder consented to it as it was (review round 1, F4).
     workflow_digest: str = ""
@@ -108,6 +107,11 @@ class ScheduleBindings:
     ) -> str:
         """Bind the schedule to ``user_id``, replacing whoever held it. Returns
         the replaced person ("" when there was none, or it was them already)."""
+        # Imported here: `api/__init__` builds the app, which imports this
+        # module — a module-level import made it a cycle for any reader that
+        # reached this module first.
+        from ..api.timeutil import now_ms
+
         row = ScheduleBinding(
             trigger_id=trigger_id,
             item_id=item_id,

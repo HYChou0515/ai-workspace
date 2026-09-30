@@ -2291,8 +2291,8 @@ def create_app(
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
         load_workspace=_load_workspace,
-        # A press's consent: the file's bytes, hashed by the one function a
-        # binding and the built interpreter use (`workflow_bytes_digest`).
+        # A press's consent: the digest the build would run from — the same
+        # loader a binding and the build go through (`workflow_digest`).
         digest_workflow=lambda item_id, workflow_id: workflow_digest(
             files.read, item_id, workflow_id
         ),

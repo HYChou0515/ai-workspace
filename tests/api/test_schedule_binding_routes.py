@@ -287,3 +287,26 @@ def test_there_is_no_raw_resource_route_for_bindings():
 
     assert not any(p.startswith("/schedule-binding") for p in paths)
     assert any("/schedule-bindings" in p for p in paths)  # the real routes are there
+
+
+def test_a_schedule_whose_workflow_will_not_parse_cannot_be_bound():
+    """Round 6 (defect 1): bound while the file would not parse, the consent
+    recorded "" — what the profile's workflow of that id digests to. Delete the
+    file later and "" == "": the binding stood and the PACKAGE workflow ran
+    with the binder's values. Nothing to consent to until the file parses."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    client, holder, rid, spec = _world()
+    broken = (
+        b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+    )
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}/.workflows/build-report.json", content=broken).status_code == 204
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+
+    r = _bind(client, rid, row["trigger_id"])
+
+    assert r.status_code == 422, r.text
+    assert "won't parse" in r.json()["detail"]
+    assert ScheduleBindings(spec).get(row["trigger_id"]) is None

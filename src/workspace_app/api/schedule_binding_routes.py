@@ -23,6 +23,7 @@ from specstar import SpecStar
 
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
+from ..workflow.offered import unparsable_workflow, wont_parse
 from ..workflow.schedule_bindings import ScheduleBindings, workflow_digest
 from ..workflow.user_schedules import describe_row, trigger_id_for, usable_rows
 from ..workflow.workspace_store import SCHEDULES_FILE
@@ -108,6 +109,12 @@ def register_schedule_binding_routes(
             raise HTTPException(
                 status_code=404, detail="that schedule has changed — reload the page"
             )
+        # Nothing to consent to while the file will not parse (round 6): the
+        # consent would record "", the profile workflow's digest, and a later
+        # delete would let that workflow run with this person's values.
+        problem = await unparsable_workflow(files.read, workspace_id, found.run)
+        if problem is not None:
+            raise HTTPException(status_code=422, detail=wont_parse(found.run, problem))
         me = get_user_id()
         # The workflow as it is NOW is part of what is consented to (F4): the
         # sweep drops the binding when that file's body changes.

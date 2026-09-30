@@ -226,6 +226,17 @@ class WorkflowOrchestrator:
         assert isinstance(data, WorkflowRun)
         return data
 
+    def _get_in(self, run_id: str, item_id: str) -> WorkflowRun:
+        """The run, IF it belongs to ``item_id`` — else not found. For the entrances
+        that take the item from a URL and the run from an id (`decide`, `steer`,
+        `confirm_steer`): without it a run of item A resumed INSIDE item B through
+        B's URL, gated only on B (round 6; with private values on runs it carried
+        or stripped a person's, rounds 5–6)."""
+        data = self._get(run_id)
+        if data.item_id != item_id:
+            raise ResourceIDNotFoundError(run_id)
+        return data
+
     def _patch(self, run_id: str, **changes: Any) -> None:
         # #429 P8: every patch is progress, so stamp the liveness heartbeat unless a caller
         # set it explicitly. A live run's `progress_at` advances step-by-step; a dead pod's
@@ -777,7 +788,7 @@ class WorkflowOrchestrator:
         """Record a gate decision as an artifact and resume the run (§10). Re-running
         replays completed steps (they skip, §9); the gate finds the decision and
         continues. Rejects a decision on a run that isn't paused at a gate."""
-        data = self._get(run_id)
+        data = self._get_in(run_id, item_id)
         if data.status is not RunStatus.AWAITING_HUMAN or data.pending_decision is None:
             raise NotAwaitingDecision(run_id)
         phase = data.pending_decision.phase
@@ -817,7 +828,7 @@ class WorkflowOrchestrator:
         steerer in the background. It streams into the run's chat and, when it has a
         plan, suspends the run ``awaiting_human`` with ``pending_steer`` set for the
         human to confirm. A failed proposal leaves the run ``cancelled``."""
-        data = self._get(run_id)
+        data = self._get_in(run_id, item_id)
         if data.status in (RunStatus.RUNNING, RunStatus.PENDING):
             await self.cancel(run_id, item_id)
         else:
@@ -899,7 +910,7 @@ class WorkflowOrchestrator:
         the steps (deterministically), then **resume the same run** (§9 re-run skips the
         valid prefix). **Reject** → discard the plan; the run returns to its gate (if it
         was paused at one) or to a stopped state. Rejects a confirm with no plan pending."""
-        data = self._get(run_id)
+        data = self._get_in(run_id, item_id)
         if data.pending_steer is None:
             raise NotAwaitingSteer(run_id)
         key = data.chat_id or item_id

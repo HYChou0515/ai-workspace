@@ -1270,6 +1270,11 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   被改後重新組、在別的 item / profile 上重新組、重新組出 run 時讀到的 workflow 檔和他同意的不同（開始、gate 決定、續跑、steer 都會重新組）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
   才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
   綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
+- **run 的 gate 決定、steer、steer 確認，只接受 run 所屬 item 的網址**：從別的 item 的網址送來回 404（以前會在
+  網址那個 item 裡接著跑那個 run，只檢查網址 item 的權限）。「用我的身分執行」遇到 workflow 檔解析不了時回 422
+  （修好檔案再按）。workflow id 含 `/` 或 `..` 的（巢狀、跳出 `.workflows/`）不再當作工作區 workflow 讀取，改找
+  同名的 profile workflow——以前 `../notes` 會拿資料夾外的 `/notes.json` 來跑。
+  - 你會看到的：自動化若用別的 item 的網址回應 gate，現在拿到 404；改用 run 所屬 item 的網址。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
   約 32px 的平台列。
 - 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了

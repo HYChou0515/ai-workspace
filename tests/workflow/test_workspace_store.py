@@ -198,3 +198,17 @@ async def test_a_consent_digest_is_what_the_build_would_run_from() -> None:
     for wid in ("good", "broken", "missing", "sub/nested", "", "schedules"):
         built = await load_workspace_workflow_digested(files.read, ws, wid)
         assert await workflow_digest(files.read, ws, wid) == (built[2] if built else ""), wid
+
+
+async def test_only_a_flat_file_in_the_folder_is_a_workspace_workflow() -> None:
+    """Round 6: the loader read `/.workflows/<id>.json` for ANY id — `../notes`
+    built a run from `/notes.json` outside the folder, `../../x` raised out of
+    the NFS store (a 500 on the bind route). The same rule `unparsable_workflow`
+    applies, now in the one loader every reader (build, press, binding) uses."""
+    from workspace_app.workflow.workspace_store import load_workspace_workflow_digested
+
+    files, ws = _files()
+    await files.write(ws, "/notes.json", _VALID.encode())
+    await files.write(ws, "/.workflows/sub/nested.json", _VALID.encode())
+    for wid in ("../notes", "sub/nested", "../../x"):
+        assert await load_workspace_workflow_digested(files.read, ws, wid) is None, wid

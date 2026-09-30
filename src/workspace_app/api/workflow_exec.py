@@ -562,7 +562,9 @@ class WorkflowExecutor:
     def _run_identity(self, run_id: str) -> tuple[str, str]:
         """Whose private values this node uses, and the right they must still
         hold (`workflow.run_identity`); ("", …) — nobody's — when none. Read per
-        node, so a steer approved mid-run takes effect at the next one. Whether
+        node, not once when the handle is wired: `_execute` wires the handle
+        BEFORE it builds the interpreter and checks the identity, so a forget
+        there must still reach this handle's nodes. Whether
         the run is still running what they consented to is decided where its
         interpreter is BUILT (`orchestrator._hold_identity_to`), not here: the
         live file at a node says nothing about the interpreter already running
@@ -581,7 +583,7 @@ class WorkflowExecutor:
         # here; it's fixed for the run's lifetime.
         origin = wf.entity_origin
         # Whose private values a node gets is read per node, by run id
-        # (`_run_identity`), so a steer approved mid-run takes effect at the next.
+        # (`_run_identity`): the build-time check runs after this wiring.
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
             item_id,
             chat_key,

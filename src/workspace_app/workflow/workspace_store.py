@@ -104,8 +104,16 @@ async def load_workspace_workflow_digested(
 ) -> tuple[WorkflowDef, WorkflowManifest, str] | None:
     """`load_workspace_workflow`, plus the digest of the very bytes it parsed —
     so a run is checked against what its interpreter was BUILT from, not a
-    second read that may see different bytes (review round 4, defect 1)."""
-    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
+    second read that may see different bytes (review round 4, defect 1).
+
+    Only a FLAT ``<id>.json`` in the folder is a workspace workflow — the rule
+    `offered.unparsable_workflow` applies — so a traversal or nested id is the
+    profile's workflow, never a read outside the folder (round 6)."""
+    if (
+        not workflow_id
+        or workflow_id == RESERVED_WORKFLOW_ID
+        or not is_workspace_workflow_path(workspace_workflow_path(workflow_id))
+    ):
         # The schedules file is not a workflow, whatever body somebody wrote
         # into it — refused HERE, in the one loader the orchestrator, the panel's
         # resolver and the run route all share, so no reader can run it.
@@ -113,8 +121,9 @@ async def load_workspace_workflow_digested(
     try:
         raw = await read(workspace_id, workspace_workflow_path(workflow_id))
         d = parse_def(raw)
-    # `FileNotFoundError` too: a live reader handed in by the schedule sweep
-    # may raise the builtin, and "no file" means the profile's workflow.
+    # `FileNotFoundError` too: the facade converts it, but this takes any
+    # reader (the sweep's is injected), and "no file" means the profile's
+    # workflow whichever way a reader says it.
     except (FileNotFound, FileNotFoundError, DslError):
         return None
     return (

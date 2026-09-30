@@ -32,9 +32,9 @@ class RunIdentity(Struct):
     #: the workflow panel's Run). Round 2, D2.
     verb: str = "execute"
     #: The workflow the person consented to, and the digest of its file's bytes
-    #: (`workspace_store.workflow_bytes_digest` — the one function a schedule
-    #: binding, a press and a built interpreter all use; "" for a profile's
-    #: workflow, which ships with the deploy). Checked where the run's
+    #: (what `workspace_store.load_workspace_workflow_digested` — the one loader
+    #: a schedule binding, a press and a built interpreter all go through —
+    #: answers; "" for a profile's workflow, which ships with the deploy). Checked where the run's
     #: interpreter is BUILT (`orchestrator._hold_identity_to` — start, gate
     #: decision, resume, steer), against the bytes it was built from: a PATCHed
     #: `workflow_id`, an edited file, another item or profile there runs as
