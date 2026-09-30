@@ -1275,7 +1275,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
   再多一次取代與刪舊 revision。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
   （`user_may`：重讀 item 的存取資料與使用者群組，不快取）與 private 讀取（有 seam 時兩列）；帶 `env_user` 的 run
-  另外在開始時讀一次 workflow 檔；每個 agent 節點多一次身分列讀取（沒有身分的 run 也是一次，查不到就結束）。
+  若是有人按下的 run，開始時另外讀一次 workflow 檔（排程觸發的 run 用綁定記下的，不讀）；每個 agent 節點多一次身分列讀取（沒有身分的 run 也是一次，查不到就結束）。
   seam 回的名字順序若每次不同（例如從 set 組出來），每次聊天送出與頁面 `callTool` 都會多一次寫入——順序本身
   就是 tool 看到的值，所以算變化。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
   多一次綁定讀取，有綁定時再多一次存取確認與一次（即時）workflow 檔讀取。前端：聊天標頭顯示「環境變數」鈕時，

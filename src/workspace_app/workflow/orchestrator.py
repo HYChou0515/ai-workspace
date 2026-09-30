@@ -424,10 +424,10 @@ class WorkflowOrchestrator:
         manifest = await self._resolve_manifest(slug, profile, workflow_id, item_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
-        # What the presser consented to: handed in by a schedule's fire (the
-        # binding's digest — read again here, an edit since the sweep's check
-        # would be recorded as consented), else the file as it is now, when they
-        # pressed. Read BEFORE the row exists: a read that raised after it left
+        # What the presser consented to: for a schedule's fire, the binding's
+        # own digest, handed in (were it read again here instead, an edit made
+        # after the sweep's check would be recorded as consented); for a press,
+        # the file as it is now. Read BEFORE the row exists: a read that raised after it left
         # a PENDING run nothing reclaims (round 4, regression 1).
         digest = ""
         if env_user:
