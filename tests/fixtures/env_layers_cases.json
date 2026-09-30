@@ -1,5 +1,5 @@
 {
- "_comment": "plan-wui-viewer-login: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/src/lib/envLayers.test.ts holds the FE's copy to the same rows.",
+ "_comment": "plan-wui-viewer-login: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows.",
  "cases": [
   {
    "shared": {},

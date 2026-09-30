@@ -4,12 +4,15 @@
  * (`tests/fixtures/env_layers_cases.json`), so the two rules cannot drift by
  * hand: a label that disagreed with what the tool really receives would be
  * the panel lying about a credential.
+ *
+ * In `web/tests/`, not beside the module: the fixtures live outside `web/`,
+ * which the image build never copies (`importBoundary.test.ts`).
  */
 import { describe, expect, it } from "vitest";
 
-import table from "../../../tests/fixtures/env_layers_cases.json";
+import table from "../../tests/fixtures/env_layers_cases.json";
 
-import { layerInUse } from "./envLayers";
+import { layerInUse } from "../src/lib/envLayers";
 
 type Case = {
   shared: Record<string, string>;
@@ -24,9 +27,9 @@ describe("layerInUse", () => {
   });
 });
 
-import ownCases from "../../../tests/fixtures/private_layer_cases.json";
+import ownCases from "../../tests/fixtures/private_layer_cases.json";
 
-import { ownLayer } from "./envLayers";
+import { ownLayer } from "../src/lib/envLayers";
 
 type OwnCase = {
   typed: Record<string, string>;

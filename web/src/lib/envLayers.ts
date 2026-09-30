@@ -3,7 +3,7 @@
  *
  * The FE's copy of `api.env_layers.resolve_env`, used ONLY to label the panel
  * ("in use: yours / the shared value"). The backend decides what a tool
- * receives; this is held to it by a shared table (`envLayers.test.ts`).
+ * receives; this is held to it by a shared table (`web/tests/envLayersParity.test.ts`).
  */
 
 export type EnvPolicy = "shared_first" | "private_first" | "private_only";
