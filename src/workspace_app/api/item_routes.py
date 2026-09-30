@@ -917,6 +917,12 @@ def register_item_routes(
             # the cascade exists for, and the docstring's "everything it owns"
             # has to be true of a row added after the cascade was written.
             await asyncio.to_thread(_purge_schedule_index, spec, item_id)
+            # Every person's PRIVATE env values for this item
+            # (`plan-wui-viewer-login`): credentials nobody else can reach to
+            # delete, and nothing can use once the item is gone.
+            from .private_env import PrivateEnvStore
+
+            await asyncio.to_thread(PrivateEnvStore(spec).purge_item, item_id)
             # Off the event loop: pg round-trips per row would otherwise
             # serialise the whole pod (the #657 class).
             await asyncio.to_thread(_sweep_rows, conv_ids, run_ids)

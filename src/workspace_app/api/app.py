@@ -116,6 +116,7 @@ from .mention import MentionService
 from .meta_routes import register_meta_routes
 from .notification_delivery import INotificationChannel
 from .notifications import register_notification_routes
+from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
 from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
@@ -1732,6 +1733,9 @@ def create_app(
     # everything above, and both reasons apply: Deploy on a bare test client
     # writes one, and the blob-gc worker must hold every model the API does.
     register_deployed_wui(spec)
+    # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
+    # its only door is the caller-scoped routes below.
+    register_private_env(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -2580,6 +2584,10 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+    )
+
+    register_private_env_routes(
+        api, store=PrivateEnvStore(spec), locator=locator, get_user_id=get_user_id
     )
 
     # plan-chat-video-export: queue a video of a transcript; the consumer is

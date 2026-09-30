@@ -621,3 +621,26 @@ def test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index
     assert resp.status_code == 204, resp.text
     with pytest.raises(ResourceIDNotFoundError):
         spec.get_resource_manager(RcaInvestigation).get(item_id)
+
+
+async def test_deleting_an_item_takes_everyones_private_env_rows_for_it():
+    """`plan-wui-viewer-login`: a person's private values for an item are
+    credentials. Once the item is gone nothing can use them, and nobody else
+    can reach them to delete — so the cascade must, for every person, while
+    leaving the same people's rows for OTHER items alone."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    app, spec, _ = _build()
+    client = TestClient(app)
+    doomed = _create_item(client)
+    kept = _create_item(client)
+    store = PrivateEnvStore(spec)
+    store.replace("alice", doomed, {"ERP_TOKEN": "a"})
+    store.replace("bob", doomed, {"ERP_TOKEN": "b"})
+    store.replace("alice", kept, {"ERP_TOKEN": "a2"})
+
+    assert client.delete(f"/a/rca/items/{doomed}").status_code == 204
+
+    assert store.get("alice", doomed) == {}
+    assert store.get("bob", doomed) == {}
+    assert store.get("alice", kept) == {"ERP_TOKEN": "a2"}
