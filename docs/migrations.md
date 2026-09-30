@@ -1233,6 +1233,33 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
+### 2026-09-30 · #867 沙盒 chown 不再跟著 symlink 走：有斷掉連結的 item 打得開了 {#pr-867}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**：沙盒把 workspace 裡的檔案交給沙盒使用者時（sandbox-host 還原後的
+`reown`、app `kind: local` 的 `_own`），改的是**連結本身**，不再是連結指到的東西。
+
+- 修的是：workspace 裡有一個**斷掉的 symlink**，最常見的是 pnpm 的 `node_modules/.pnpm/node_modules/fsevents`
+  （只在 macOS 安裝的套件，在 Linux 上指向不存在的目錄），這個 item 的沙盒被回收之後就再也建不起來，檔案樹回 500、
+  使用者看起來像是資料不見了。資料其實一直在備份裡。
+- 同時關掉的：以 root 執行的 chown 原本會跟著使用者建立的連結，把 workspace **外面**的檔案改成沙盒使用者所有。
+
+**資料** — 沒有 `Schema` 升版，也沒有要跑的指令。已經打不開的 item，新的 sandbox-host 上線後重新開啟就會恢復。
+
+**k8s · CI 側**
+
+- **sandbox-host 的 image 要重 build 並 rollout，`rollout 後`即生效。**
+  - 為什麼：修正在 sandbox-host 的程式碼裡（`sandbox-host/src/sandbox_host/isolated_process.py`）。只更新 API 的 image，
+    `kind: http` 的部署**完全沒有修到**。
+  - 漏做的症狀：有斷掉連結的 item 仍然打不開；sandbox-host 的 log 有
+    `FileNotFoundError: [Errno 2] No such file or directory: '…/node_modules/.pnpm/node_modules/fsevents'`。
+- 等不及 rollout 的止血（可選，`rollout 前`）：在 sandbox-host pod 裡刪掉備份裡**斷掉的**連結——
+  `find "$SANDBOX_HOST_NFS_ROOT" -xtype l -print -delete`。`-xtype l` 只挑目標不存在的 symlink，不會刪到資料。
+
+**確認做完**
+
+- 打開原本打不開的 item：檔案樹正常載入。
+- 該時段的 sandbox-host log 沒有 `FileNotFoundError … fsevents`。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
