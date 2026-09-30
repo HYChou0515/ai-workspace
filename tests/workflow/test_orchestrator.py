@@ -1324,7 +1324,13 @@ async def test_a_run_records_the_workflow_file_its_presser_consented_to(
         asked.append((item_id, workflow_id))
         return "d-of-" + workflow_id
 
-    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    async def load_workspace(_item_id: str, workflow_id: str):
+        # The build reads the same file: a real run keeps the identity.
+        return (lambda _wf, _i: _ok(None)), MANIFEST, "d-of-" + workflow_id
+
+    orch, _ = _orch(
+        _identity_spec(spec_instance), lambda _wf, _i: _ok(None), load_workspace=load_workspace
+    )
     orch.digest_workflow = digest
     run_id = await orch.start(
         slug="rca",
@@ -1334,6 +1340,7 @@ async def test_a_run_records_the_workflow_file_its_presser_consented_to(
         env_user="presser",
         workflow_id="nightly",
     )
+    await asyncio.sleep(0)  # let the build run — asserting before it proved nothing (round 5)
 
     ident = RunIdentities(spec_instance).get(run_id)
     assert ident is not None
@@ -1350,7 +1357,12 @@ async def test_a_scheduled_run_records_what_its_binder_consented_to(spec_instanc
     async def digest(_item_id: str, _workflow_id: str) -> str:
         return "d-edited-since"
 
-    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    async def load_workspace(_item_id: str, _workflow_id: str):
+        return (lambda _wf, _i: _ok(None)), MANIFEST, "d-consented"
+
+    orch, _ = _orch(
+        _identity_spec(spec_instance), lambda _wf, _i: _ok(None), load_workspace=load_workspace
+    )
     orch.digest_workflow = digest
     run_id = await orch.start(
         slug="rca",
@@ -1361,6 +1373,7 @@ async def test_a_scheduled_run_records_what_its_binder_consented_to(spec_instanc
         env_digest="d-consented",
         workflow_id="nightly",
     )
+    await asyncio.sleep(0)  # the build ran, and kept it
 
     ident = RunIdentities(spec_instance).get(run_id)
     assert ident is not None and ident.workflow_digest == "d-consented"
@@ -1402,12 +1415,17 @@ async def test_a_run_keeps_its_pressers_values_only_if_built_from_what_they_saw(
     assert RunIdentities(spec_instance).env_user(rid) == kept
 
 
-async def test_a_run_resumed_on_another_workflow_id_drops_whose_values_it_uses(
-    spec_instance: SpecStar,
+@pytest.mark.parametrize(
+    ("differs", "kept"),
+    [("nothing", "presser"), ("workflow_id", ""), ("item", ""), ("profile", "")],
+)
+async def test_a_run_rebuilt_anywhere_but_where_it_was_pressed_drops_whose_values_it_uses(
+    spec_instance: SpecStar, differs: str, kept: str
 ):
-    """`WorkflowRun.workflow_id` is writable through its auto-CRUD, and a resume
-    builds from it — a PATCH onto another workflow (a package one included,
-    whose digest is "") must not carry the presser along."""
+    """`WorkflowRun.workflow_id` is writable through its auto-CRUD and a resume
+    builds from it; a gate decision builds in the item its URL names (round 5);
+    a profile can change under a paused run. Any of them — a package workflow
+    included, whose digest is "" either way — must not carry the presser."""
     from workspace_app.workflow.run_identity import RunIdentities
 
     async def run(wf, inputs):
@@ -1415,16 +1433,22 @@ async def test_a_run_resumed_on_another_workflow_id_drops_whose_values_it_uses(
 
     orch, _ = _orch(_identity_spec(spec_instance), run, now=lambda: 1_000_000)
     rid = _insert_run(
-        orch, item_id="iP", status=RunStatus.RUNNING, started=0, progress_at=0, workflow_id="other"
+        orch, item_id="iP", status=RunStatus.RUNNING, started=0, progress_at=0, workflow_id="w"
     )
     RunIdentities(spec_instance).record(
-        rid, "presser", verb="execute", workflow_id="w", workflow_digest=""
+        rid,
+        "presser",
+        verb="execute",
+        item_id="elsewhere" if differs == "item" else "iP",
+        profile="other" if differs == "profile" else "echo",
+        workflow_id="other" if differs == "workflow_id" else "w",
+        workflow_digest="",
     )
 
     assert await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000) is True
     await asyncio.sleep(0)
 
-    assert RunIdentities(spec_instance).env_user(rid) == ""
+    assert RunIdentities(spec_instance).env_user(rid) == kept
 
 
 async def test_a_digest_read_that_fails_at_start_leaves_no_run_behind(spec_instance: SpecStar):

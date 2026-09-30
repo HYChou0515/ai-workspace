@@ -413,7 +413,7 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
   而能改 item 內容的人都改得到它們——綁定前要看的是整個 workflow 會碰到什麼。
 - **按下 run 的人同意的是 run 開始時的那個 workflow 檔**(內容的 digest,和排程綁定比的是同一份位元組):
   每次**組出要跑的 workflow**(開始、gate 決定後、續跑、steer 之後)都拿「這次實際讀進來的那份位元組」比對:
-  run 的 `workflow_id` 被改、或那份檔案和他同意的不同,從此就不再帶那個人的值;steer 被核准也一樣。run 已經在跑、
+  run 的 `workflow_id` 被改、組在別的 item 或 profile 上、或那份檔案和他同意的不同,從此就不再帶那個人的值;steer 被核准也一樣。run 已經在跑、
   中途改檔但沒有重新組出來,跑的仍是他同意的那些步驟,照樣帶他的值。
 
 tool 端完全不用改:`os.environ` 讀到的就是解析過的那一個值。

@@ -580,8 +580,8 @@ class WorkflowExecutor:
         # agent node's entity writes are depth-counted like the handle's own — read once
         # here; it's fixed for the run's lifetime.
         origin = wf.entity_origin
-        # Whose private values the run's turns get is asked per node, by run id
-        # (`_run_identity`), so an edit between nodes is seen.
+        # Whose private values a node gets is read per node, by run id
+        # (`_run_identity`), so a steer approved mid-run takes effect at the next.
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
             item_id,
             chat_key,

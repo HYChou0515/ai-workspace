@@ -498,6 +498,45 @@ def test_a_map_elements_agent_node_carries_the_pressers_values_too():
     assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]
 
 
+def test_a_gate_decided_through_another_items_url_does_not_carry_the_pressers_values():
+    """Round 5 (defect 1): `decide` resumes a run in the item the URL names,
+    without checking it is the run's own (that gap predates this PR). With
+    the same workflow bytes in both items the digest matched, and the node ran
+    in B carrying the presser's values for B — where they pressed nothing.
+    Consent is to the item it was given in."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_a, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    rm = spec.get_resource_manager(PlaygroundItem)
+    with rm.using("hua"):
+        item_b = rm.create(PlaygroundItem(title="b", owner="owner-o", profile="echo")).resource_id
+    store = PrivateEnvStore(spec)
+    store.replace("hua", item_a, {"ERP": "A-values"})
+    store.replace("hua", item_b, {"ERP": "B-values"})
+    good = json.dumps(_GATED)
+
+    with client:
+        for item in (item_a, item_b):
+            client.put(f"/a/playground/items/{item}/files/.workflows/g.json", content=good)
+            client.put(f"/a/playground/items/{item}/files/uploads/input.json", content='{"n": 1}')
+        base_a = f"/a/playground/items/{item_a}"
+        run_id = client.post(f"{base_a}/run", params={"workflow_id": "g"}).json()["run_id"]
+        for _ in range(400):
+            if client.get(f"{base_a}/runs/{run_id}").json()["status"] == "awaiting_human":
+                break
+            time.sleep(0.02)
+        client.post(
+            f"/a/playground/items/{item_b}/runs/{run_id}/decisions", json={"choice": "approve"}
+        )
+        for _ in range(400):
+            if client.get(f"{base_a}/runs/{run_id}").json()["status"] in ("done", "error"):
+                break
+            time.sleep(0.02)
+
+    assert all("ERP" not in env for env in runner.envs), runner.envs
+
+
 # ─── a failing impl: the turn does not run, and its words stay server-side ───
 
 

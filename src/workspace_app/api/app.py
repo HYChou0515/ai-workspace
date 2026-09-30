@@ -2254,7 +2254,7 @@ def create_app(
         in this item to its ``(run, manifest, digest)`` — the interpreter + its manifest
         from the one parsed DSL, and the digest of the bytes parsed — or ``None``
         (absent / malformed), so the orchestrator falls back to a package workflow."""
-        res = await load_workspace_workflow_digested(files, item_id, workflow_id)
+        res = await load_workspace_workflow_digested(files.read, item_id, workflow_id)
         return (build_run(res[0]), res[1], res[2]) if res is not None else None
 
     # #54: the workflow execution callbacks (agent turn / sandbox / ingest / card

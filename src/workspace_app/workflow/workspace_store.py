@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Awaitable, Callable
 
 import msgspec
 
@@ -91,15 +92,15 @@ def workflow_problem(raw: bytes | str) -> str | None:
 
 def workflow_bytes_digest(raw: bytes) -> str:
     """What a person's consent to a workflow FILE is recorded as
-    (`plan-wui-viewer-login`): the sha256 of its bytes. ONE function for the
-    three places that must agree — a schedule binding
-    (`schedule_bindings.workflow_digest`), a pressed run's start, and the
-    interpreter a run is built from (`load_workspace_workflow_digested`)."""
+    (`plan-wui-viewer-login`): the sha256 of its bytes. Only
+    `load_workspace_workflow_digested` calls it; a binding and a press take
+    the loader's answer (`schedule_bindings.workflow_digest`), so which file
+    counts and what a broken one digests to are decided in one place."""
     return hashlib.sha256(raw).hexdigest()
 
 
 async def load_workspace_workflow_digested(
-    files: WorkspaceFiles, workspace_id: str, workflow_id: str
+    read: Callable[[str, str], Awaitable[bytes]], workspace_id: str, workflow_id: str
 ) -> tuple[WorkflowDef, WorkflowManifest, str] | None:
     """`load_workspace_workflow`, plus the digest of the very bytes it parsed —
     so a run is checked against what its interpreter was BUILT from, not a
@@ -110,9 +111,11 @@ async def load_workspace_workflow_digested(
         # resolver and the run route all share, so no reader can run it.
         return None
     try:
-        raw = await files.read(workspace_id, workspace_workflow_path(workflow_id))
+        raw = await read(workspace_id, workspace_workflow_path(workflow_id))
         d = parse_def(raw)
-    except (FileNotFound, DslError):
+    # `FileNotFoundError` too: a live reader handed in by the schedule sweep
+    # may raise the builtin, and "no file" means the profile's workflow.
+    except (FileNotFound, FileNotFoundError, DslError):
         return None
     return (
         d,
@@ -126,9 +129,10 @@ async def load_workspace_workflow(
 ) -> tuple[WorkflowDef, WorkflowManifest] | None:
     """A workspace ``.workflows/<workflow_id>.json`` parsed into ``(def, manifest)`` (the
     manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
-    or ``None`` when absent / malformed. The single read backing both the orchestrator's
-    run resolution and the route's manifest 404 guard (#323 P4)."""
-    got = await load_workspace_workflow_digested(files, workspace_id, workflow_id)
+    or ``None`` when absent / malformed. `load_workspace_workflow_digested` without the
+    digest: the same read and parse the orchestrator builds a run from, for the
+    route's manifest 404 guard and the panel's resolver (#323 P4)."""
+    got = await load_workspace_workflow_digested(files.read, workspace_id, workflow_id)
     return (got[0], got[1]) if got is not None else None
 
 

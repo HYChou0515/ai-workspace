@@ -37,11 +37,19 @@ class RunIdentity(Struct):
     #: workflow, which ships with the deploy). Checked where the run's
     #: interpreter is BUILT (`orchestrator._hold_identity_to` — start, gate
     #: decision, resume, steer), against the bytes it was built from: a PATCHed
-    #: `workflow_id` or an edited file there runs as nobody. An edit with no
-    #: rebuild changes nothing that runs. Round 2 D1; round 3 (a manifest digest
+    #: `workflow_id`, an edited file, another item or profile there runs as
+    #: nobody. An edit with no rebuild changes no step of the running workflow
+    #: (files its steps read, skills and agent config are outside the consent —
+    #: plan D8). Round 2 D1; round 3 (a manifest digest
     #: missed the steps); round 4 (a live read per node missed a swap-and-back).
     workflow_id: str = ""
     workflow_digest: str = ""
+    #: WHERE they consented: the item and its profile. A gate decision, a steer
+    #: or a resume builds in the item and profile the request names, not
+    #: necessarily the run's own — the same bytes in another item matched the
+    #: digest and carried the person's values for THAT item (round 5).
+    item_id: str = ""
+    profile: str = ""
 
 
 def register_run_identity(spec: SpecStar) -> None:
@@ -57,13 +65,23 @@ class RunIdentities:
         return self._spec.get_resource_manager(RunIdentity)
 
     def record(
-        self, run_id: str, env_user: str, *, verb: str, workflow_id: str, workflow_digest: str
+        self,
+        run_id: str,
+        env_user: str,
+        *,
+        verb: str,
+        item_id: str,
+        profile: str,
+        workflow_id: str,
+        workflow_digest: str,
     ) -> None:
         self._rm().create(
             RunIdentity(
                 run_id=run_id,
                 env_user=env_user,
                 verb=verb,
+                item_id=item_id,
+                profile=profile,
                 workflow_id=workflow_id,
                 workflow_digest=workflow_digest,
             ),

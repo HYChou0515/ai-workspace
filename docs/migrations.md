@@ -1267,7 +1267,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
 - 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
   **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它；run 之後不再是他按下的那個——`workflow_id`
-  被改、重新組出 run 時讀到的 workflow 檔和他同意的不同（開始、gate 決定、續跑、steer 都會重新組）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
+  被改、在別的 item / profile 上重新組、重新組出 run 時讀到的 workflow 檔和他同意的不同（開始、gate 決定、續跑、steer 都會重新組）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
   才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
   綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
@@ -1275,7 +1275,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
   再多一次取代與刪舊 revision。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
   （`user_may`：重讀 item 的存取資料與使用者群組，不快取）與 private 讀取（有 seam 時兩列）；帶 `env_user` 的 run
-  若是有人按下的 run，開始時另外讀一次 workflow 檔（排程觸發的 run 用綁定記下的，不讀）；每個 agent 節點多一次身分列讀取（沒有身分的 run 也是一次，查不到就結束）。
+  若是有人按下的 run，開始時另外讀一次 workflow 檔（排程觸發的 run 用綁定記下的，不讀）；每次組出 run（開始、gate 決定、續跑、steer）與每個 agent 節點各多一次身分列讀取（沒有身分的 run 也是，
+  查不到就結束；對不上時再多一次刪除）。
   seam 回的名字順序若每次不同（例如從 set 組出來），每次聊天送出與頁面 `callTool` 都會多一次寫入——順序本身
   就是 tool 看到的值，所以算變化。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
   多一次綁定讀取，有綁定時再多一次存取確認與一次（即時）workflow 檔讀取。前端：聊天標頭顯示「環境變數」鈕時，

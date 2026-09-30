@@ -39,32 +39,21 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..api.timeutil import now_ms
-from ..filestore.protocol import FileNotFound
-from .workspace_store import (
-    RESERVED_WORKFLOW_ID,
-    is_workspace_workflow_path,
-    workflow_bytes_digest,
-    workspace_workflow_path,
-)
+from .workspace_store import load_workspace_workflow_digested
 
 
 async def workflow_digest(
     read: Callable[[str, str], Awaitable[bytes]], item_id: str, workflow_id: str
 ) -> str:
-    """sha256 of the item's own ``.workflows/<workflow_id>.json`` — "" when the id
-    is not a workspace workflow file, or there is none (a profile's workflow).
-    The same "is this a workflow file" rules as `offered.unparsable_workflow`.
-    A read that fails otherwise RAISES: the caller decides what an unknown means."""
-    path = workspace_workflow_path(workflow_id)
-    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
-        return ""
-    if not is_workspace_workflow_path(path):
-        return ""
-    try:
-        raw = await read(item_id, path)
-    except (FileNotFound, FileNotFoundError):
-        return ""
-    return workflow_bytes_digest(raw)
+    """What consenting to ``workflow_id`` in this item is recorded as: the
+    digest the BUILD would run from (`load_workspace_workflow_digested`) — ""
+    when it would run a profile's workflow (no file, one that will not parse,
+    the reserved id). Defined BY the loader, so a binding, a press and a
+    built interpreter cannot disagree (round 5: a broken file digested as its
+    bytes here and as "" at the build). A read that fails otherwise RAISES:
+    the caller decides what an unknown means."""
+    built = await load_workspace_workflow_digested(read, item_id, workflow_id)
+    return built[2] if built is not None else ""
 
 
 class ScheduleBinding(Struct):

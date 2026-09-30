@@ -346,18 +346,23 @@ class WorkflowOrchestrator:
                 return ws[0], ws[2]
         return self.load_run(slug, profile, workflow_id), ""
 
-    def _hold_identity_to(self, run_id: str, workflow_id: str, built_from: str) -> None:
+    def _hold_identity_to(
+        self, run_id: str, item_id: str, profile: str, workflow_id: str, built_from: str
+    ) -> None:
         """A pressed or bound run's consent is to the workflow FILE its person
         saw (`run_identity`). Checked HERE, where the interpreter that will run
         is built — start, gate decision, resume, steer all come through
         `_execute` — against the digest of the very bytes it was built from.
         Not the live file at each node: an evil body swapped in for a gate
         decision and swapped back before the node passed that (review round 4,
-        defect 1). Not a digest of the manifest: it has no steps (round 3)."""
+        defect 1). Not a digest of the manifest: it has no steps (round 3). And
+        in the item and profile it was given in: a decision sent through another
+        item's URL builds there, from that item's copy (round 5)."""
         identities = RunIdentities(self.spec)
         ident = identities.get(run_id)
         if ident is not None and (
-            ident.workflow_id != workflow_id or ident.workflow_digest != built_from
+            (ident.item_id, ident.profile, ident.workflow_id, ident.workflow_digest)
+            != (item_id, profile, workflow_id, built_from)
         ):
             identities.forget(run_id)
 
@@ -458,7 +463,13 @@ class WorkflowOrchestrator:
             # Whose private values the run's tools get — kept where no route
             # reaches it (`run_identity`, review round 1 R5).
             RunIdentities(self.spec).record(
-                run_id, env_user, verb=env_verb, workflow_id=workflow_id, workflow_digest=digest
+                run_id,
+                env_user,
+                verb=env_verb,
+                item_id=item_id,
+                profile=profile,
+                workflow_id=workflow_id,
+                workflow_digest=digest,
             )
         self._prune_runs(item_id, keep=run_id)
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
@@ -583,7 +594,7 @@ class WorkflowOrchestrator:
             run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
         )
         profile_run, built_from = await self._resolve_run(slug, profile, workflow_id, item_id)
-        self._hold_identity_to(run_id, workflow_id, built_from)
+        self._hold_identity_to(run_id, item_id, profile, workflow_id, built_from)
         inputs = _with_trigger_payload(
             await resolve_inputs(wf, manifest), self._get(run_id).trigger_payload
         )
