@@ -517,3 +517,72 @@ async def test_the_agents_own_exec_hands_the_sandbox_no_env_headless_or_otherwis
     await exec_impl(ctx, ["env"])
 
     assert sandbox.exec_envs == [{}]
+
+
+# ─── whose PRIVATE layer a run with no request uses (plan-wui-viewer-login P5) ─
+
+
+def test_a_page_button_run_uses_the_pressers_private_values_not_the_owners():
+    """Q6: the run is still CAPTURED as the owner (#805 bills it there — the seam
+    above is still asked for the owner), but the private layer is the presser's.
+    Otherwise pressing a button on someone else's page would run with the
+    values the owner kept for themselves."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(
+        seam, owner="owner-o", user="presser-p"
+    )
+    store = PrivateEnvStore(spec)
+    store.replace("presser-p", item_id, {"ERP": "presser"})
+    store.replace("owner-o", item_id, {"ERP": "owner", "OWNER_ONLY": "o"})
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/nightly.json", content=_ONE_AGENT_STEP)
+        assert client.post(f"{base}/wui/run", json={"workflow": "nightly"}).status_code == 200
+        runs = client.get(f"{base}/runs").json()
+        assert _poll_until_terminal(client, item_id, runs[0]["run_id"]) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-owner-o", "ERP": "presser"}]
+
+
+def test_a_run_started_by_hand_uses_the_starters_private_values():
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]
+
+
+async def test_a_goal_driven_send_uses_the_setters_private_values():
+    """The goal driver continues ONE person's chat; its private layer is theirs,
+    over the seam's request-less answer."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = RequestOnlyEnv()
+    client, runner, item_id, spec = _send_app(seam, env_vars={"FROM_ITEM": "i"}, user="admin")
+    PrivateEnvStore(spec).replace("goal-setter", item_id, {"MINE": "g"})
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="goal-setter",
+            driven_by="goal-driver",
+        )
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-goal-setter", "MINE": "g", "FROM_ITEM": "i"}]

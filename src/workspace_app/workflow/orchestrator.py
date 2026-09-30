@@ -369,6 +369,7 @@ class WorkflowOrchestrator:
         item_id: str,
         profile: str,
         captured_user: str,
+        env_user: str = "",
         workflow_id: str = "",
         chat_id: str = "",
         origin_trigger: str = "",
@@ -406,6 +407,7 @@ class WorkflowOrchestrator:
                 WorkflowRun(
                     item_id=item_id,
                     captured_user=captured_user,
+                    env_user=env_user,
                     phases=phases,
                     chat_id=chat_id,
                     workflow_id=workflow_id,

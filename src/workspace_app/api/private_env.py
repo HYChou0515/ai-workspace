@@ -132,6 +132,22 @@ async def private_layer(
     return await asyncio.to_thread(store.merge, user_id, item_id, fresh)
 
 
+async def unattended_layer(
+    store: PrivateEnvStore | None, *, headless: dict[str, str], acting_for: str, item_id: str
+) -> dict[str, str]:
+    """The PRIVATE layer of a turn with no request behind it: the seam's
+    request-less answer (``env_without_request`` — a service account, or
+    nothing) with ``acting_for``'s own stored row over it. ``acting_for`` is
+    the PERSON the turn runs for — the presser of a page button, the starter
+    of a run, the setter of a goal — which is not necessarily who the turn is
+    attributed or billed to. Empty ``acting_for`` (an unbound schedule, an
+    entity trigger) ⇒ the seam's answer alone: nobody's private values."""
+    if store is None or not acting_for:
+        return headless
+    stored = await asyncio.to_thread(store.get, acting_for, item_id)
+    return {**headless, **stored}
+
+
 class PrivateValues(BaseModel):
     values: dict[str, str]
 

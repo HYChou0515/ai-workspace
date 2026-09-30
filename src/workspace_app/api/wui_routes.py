@@ -449,6 +449,9 @@ def register_wui_routes(
                 item_id=investigation_id,
                 profile=locator.profile_of(investigation_id),
                 captured_user=locator.owner_of(investigation_id) or "",
+                # Billed to the owner, but run with the PRESSER's private
+                # values (`plan-wui-viewer-login` Q6) — never the owner's.
+                env_user=get_user_id() if get_user_id is not None else "",
                 workflow_id=body.workflow,
                 chat_id=key,
                 payload=body.payload,

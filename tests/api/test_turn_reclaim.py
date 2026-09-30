@@ -466,11 +466,12 @@ async def test_a_rerun_takes_its_history_from_before_the_claimed_question():
 
 
 async def test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie():
-    """#714's request env is composed for ONE turn and never written back —
-    it is the caller's own cookie, a header their gateway stamped on. The
-    claim carries none of it (round 1 found it persisted, plaintext, for the
-    turn's whole life). A re-run is a turn nobody pressed send for, so it
-    asks the seam what such a turn gets — the goal driver's answer."""
+    """#714's request env is the caller's own cookie, a header their gateway
+    stamped on. The CLAIM carries none of it (round 1 found it persisted,
+    plaintext, for the turn's whole life). A re-run is a turn nobody pressed
+    send for, so it asks the seam what such a turn gets — the goal driver's
+    answer. (Since `plan-wui-viewer-login` the author's seam values DO live on,
+    in their private row — see the next test — but never on the claim.)"""
 
     class _Seam(IRequestEnv):
         async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:  # noqa: ANN001
@@ -520,6 +521,64 @@ async def test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie():
         await _service(client).rerun(row)
         await _settle(store)
     assert envs == [{"HEADLESS_FOR": "alice"}]
+
+
+async def test_a_rerun_carries_its_authors_private_values_and_nobody_elses():
+    """`plan-wui-viewer-login`: the private layer is stored per (person, item)
+    on the SHARED backend — exactly so a peer re-running this turn after its pod
+    died has it. The claim still carries nothing; the peer reads the author's
+    row, over the seam's request-less answer, and not another person's."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    class _Seam(IRequestEnv):
+        async def env_for(self, request, *, user_id: str, item_id: str) -> dict[str, str]:  # noqa: ANN001
+            return {}
+
+        async def env_without_request(self, *, user_id: str, item_id: str) -> dict[str, str]:
+            return {"HEADLESS_FOR": user_id}
+
+    spec = make_spec(default_user="u")
+    item_id, rid = _item_with_chat(spec)
+    _append(spec, rid, "user", "hi", 1_000)
+    runner = _Runner("from the peer")
+    envs: list[dict[str, str]] = []
+    original = runner.run
+
+    async def spying(prompt, ctx):  # noqa: ANN001, ANN202
+        envs.append(dict(ctx.user_env))
+        async for ev in original(prompt, ctx):
+            yield ev
+
+    runner.run = spying  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    client = TestClient(
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner,
+            run_consumers=False,
+            turn_reclaim_interval=None,
+            request_env=_Seam(),
+        )
+    )
+    PrivateEnvStore(spec).replace("alice", item_id, {"MINE": "alice"})
+    PrivateEnvStore(spec).replace("u", item_id, {"MINE": "someone-else"})
+    with client:
+        store = _claims(client)
+        store.open(
+            TurnClaim(
+                key=item_id,
+                created_at=1_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "hi"},
+            )
+        )
+        (row,) = store.list_open()
+        await _service(client).rerun(row)
+        await _settle(store)
+    assert envs == [{"HEADLESS_FOR": "alice", "MINE": "alice"}]
 
 
 async def test_a_key_a_peer_is_taking_is_left_whole():

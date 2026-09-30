@@ -486,6 +486,7 @@ def register_workflow_routes(
                 item_id=investigation_id,
                 profile=profile,
                 captured_user=get_user_id(),
+                env_user=get_user_id(),
                 workflow_id=workflow_id,
                 chat_id=target_chat_id,
             )

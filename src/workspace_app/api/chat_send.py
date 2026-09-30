@@ -51,7 +51,7 @@ from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .markings import markings_prompt_block, write_markings
 from .notifications import notify
-from .private_env import private_layer
+from .private_env import private_layer, unattended_layer
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
@@ -460,8 +460,13 @@ class ChatSendService:
         if self._request_env is not None and (request is not None or driven_by):
             try:
                 if request is None:
-                    return await self._request_env.env_without_request(
+                    headless = await self._request_env.env_without_request(
                         user_id=user_id, item_id=item_id
+                    )
+                    # The goal driver continues ONE person's chat: their own
+                    # stored values over the seam's request-less answer.
+                    return await unattended_layer(
+                        self._private_env, headless=headless, acting_for=user_id, item_id=item_id
                     )
                 fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
             except Exception:
@@ -1012,8 +1017,9 @@ class ChatSendService:
         to hand over, the claim left this pod's (round 4). Held here, the
         drain finds its token and releases the claim like any preparing send.
         The request env is what a turn with no request behind it gets
-        (`env_without_request`), as for a goal-driven round —
-        the caller's own cookie was composed for one turn and is not stored.
+        (`env_without_request`), as for a goal-driven round, with the author's
+        own stored private values over it (`plan-wui-viewer-login`) — read from
+        the shared backend, never from the claim.
         A failure before the turn exists ends the thread the way a failed
         preparation does; the claim is finished, not re-taken every tick."""
         claim = row.claim
@@ -1032,10 +1038,21 @@ class ChatSendService:
             # heartbeat: the claim is this pod's from `take` on, and a policy
             # that takes its time with no beat behind it read as a dead owner
             # to the next tick, which took the claim again (round 2).
-            if seam is None:
-                return None
-            return await seam.env_without_request(
-                user_id=claim.author, item_id=claim.investigation_id
+            headless = (
+                {}
+                if seam is None
+                else await seam.env_without_request(
+                    user_id=claim.author, item_id=claim.investigation_id
+                )
+            )
+            # The author's own stored values (`plan-wui-viewer-login`): kept on
+            # the shared backend so exactly this peer has them; the claim
+            # itself still carries none.
+            return await unattended_layer(
+                self._private_env,
+                headless=headless,
+                acting_for=claim.author,
+                item_id=claim.investigation_id,
             )
 
         task = asyncio.create_task(

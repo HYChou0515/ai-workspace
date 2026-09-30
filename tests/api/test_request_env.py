@@ -293,24 +293,47 @@ def test_the_chat_scoped_send_carries_the_request_too():
     assert [env["SSO"] for env in runner.envs] == ["abc"]
 
 
-async def test_a_send_with_no_request_behind_it_replays_nobodys_cookie():
+async def test_a_send_with_no_request_behind_it_replays_only_its_own_persons_values():
     """The goal driver (#615) continues a chat by re-entering this very method
-    with nobody watching and no request in hand. It is the same `send` the
-    routes call, so it is worth pinning that a seam which answers only for
-    requests (`CookieEnv` leaves `env_without_request` at its default) gives
-    that turn nothing — the last person's cookie is not stored and replayed.
-    What such a turn CAN carry is the seam's own answer for a request-less
-    turn: `test_headless_env.py`."""
-    client, runner, item_id, spec = _send_app(CookieEnv())
+    with nobody watching and no request in hand, as the goal's setter.
+
+    #714 said such a turn gets nothing and the last cookie is never stored.
+    `plan-wui-viewer-login` Q4(b) CHANGED the second half on purpose: what the
+    seam says about a person IS kept, in THEIR private row, precisely so their
+    unattended turns still have it. What still holds — and is the point of
+    keying the row by person — is that nobody ELSE's values are replayed: the
+    last person to press send is not who a goal-driven turn runs as."""
+    client, runner, item_id, spec = _send_app(CookieEnv(), user="alice")
+    client.cookies.set("sso", "alice-cookie")
     service = cast(FastAPI, client.app).state.chat_send  # what the sweeper holds
     rid, conv = _default_chat(spec, item_id)
 
     with client:
+        client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
         await service.send(
-            item_id, rid, conv, item_id, _MessageBody(content="driven"), driven_by="goal-driver"
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="bob",
+            driven_by="goal-driver",
+        )
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="alice",
+            driven_by="goal-driver",
         )
 
-    assert runner.envs == [{}]
+    assert runner.envs == [
+        {"SSO": "alice-cookie", "CALLER": "alice"},  # alice's own send
+        {},  # bob's goal: alice's cookie is NOT replayed for him
+        {"SSO": "alice-cookie", "CALLER": "alice"},  # alice's goal: her own row
+    ]
 
 
 def _default_chat(spec: SpecStar, item_id: str) -> tuple[str, Conversation]:

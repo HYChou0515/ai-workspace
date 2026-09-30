@@ -2228,6 +2228,8 @@ def create_app(
         # #714 / plan-headless-env: the same seam the send path holds, asked
         # here for what a node with no request behind it gets.
         request_env=request_env,
+        # plan-wui-viewer-login: a run a person started overlays their values.
+        private_env=private_env_store,
     )
 
     workflow_credentials = CredentialBroker()
