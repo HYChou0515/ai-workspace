@@ -34,7 +34,7 @@ from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .offered import no_such_workflow, unparsable_workflow
 from .orchestrator import ActiveRunExists
-from .schedule_bindings import ScheduleBinding, ScheduleBindings
+from .schedule_bindings import ScheduleBinding, ScheduleBindings, workflow_digest
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import (
     file_rows,
@@ -289,22 +289,46 @@ class UserScheduleSweeper:
             )
             return UNKNOWN
 
-    async def _binder_for(self, item_id: str, trigger_id: str) -> str:
+    async def _binder_for(self, item_id: str, trigger_id: str, workflow_id: str) -> str:
         """Whose private values this fire runs with: the binder — if they may
-        still make this item run work. One who may not (removed from the item,
-        demoted) has the binding dropped and is told; the fire runs as nobody."""
+        still make this item run work, and the workflow is still the one they
+        consented to. Otherwise the binding is dropped and they are told why;
+        the fire runs as nobody."""
         if self._bindings is None:
             return ""
         binding = await asyncio.to_thread(self._bindings.get, trigger_id)
         if binding is None:
             return ""
-        if self._binder_may is None or await asyncio.to_thread(
+        if self._binder_may is not None and not await asyncio.to_thread(
             self._binder_may, binding.user_id, item_id
         ):
-            return binding.user_id
-        await asyncio.to_thread(self._bindings.unbind, trigger_id)
-        await self._tell(binding, "no_access")
-        return ""
+            await asyncio.to_thread(self._bindings.unbind, trigger_id)
+            await self._tell(binding, "no_access")
+            return ""
+        if await self._workflow_changed(item_id, workflow_id, binding.workflow_digest):
+            await asyncio.to_thread(self._bindings.unbind, trigger_id)
+            await self._tell(binding, "changed")
+            return ""
+        return binding.user_id
+
+    async def _workflow_changed(self, item_id: str, workflow_id: str, bound: str) -> bool:
+        """Has the workflow's body changed since the binder consented (F4)? Only
+        a difference in BOTH the snapshot and the live file counts — the binding
+        was made on the live file, which the snapshot may lag — and a read that
+        fails decides nothing (keep the binding)."""
+        try:
+            if await workflow_digest(self._read, item_id, workflow_id) == bound:
+                return False
+            live = self._read_live or self._read
+            return await workflow_digest(live, item_id, workflow_id) != bound
+        except Exception:  # noqa: BLE001 — an unanswered question is not a change
+            logger.warning(
+                "user schedules: %s: could not read workflow %r to check a binding",
+                item_id,
+                workflow_id,
+                exc_info=True,
+            )
+            return False
 
     async def _tell(self, binding: ScheduleBinding, why: str) -> None:
         """Tell the binder their name is off a schedule, and WHY — ``changed``
@@ -585,7 +609,7 @@ class UserScheduleSweeper:
                     key=trigger_id,
                     # Captured as the owner above; RUN WITH the binder's private
                     # values, or nobody's ("") when no one pressed "run as me".
-                    env_user=await self._binder_for(item_id, trigger_id),
+                    env_user=await self._binder_for(item_id, trigger_id, row.run),
                 )
             except ActiveRunExists:
                 # NOT a failure. The schedule's previous fire is still running,

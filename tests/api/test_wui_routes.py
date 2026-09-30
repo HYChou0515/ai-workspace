@@ -816,7 +816,8 @@ def test_a_page_tool_call_keeps_what_the_seam_said_in_the_pressers_row():
 
     assert client.post(URL, json={"args": {}}).status_code == 200
 
-    assert store.get("default-user", "i1") == {"MES_TOKEN": "from-request"}
+    # Kept as the seam's last answer about the presser (its own row).
+    assert store.seam("default-user", "i1") == {"MES_TOKEN": "from-request"}
 
 
 def test_a_failing_env_source_refuses_a_tool_call():

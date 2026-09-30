@@ -7,12 +7,17 @@ from then on the schedule's fires carry that person's private layer.
 
 Three rules, each for a reason:
 
-* **The binding is to the schedule's KEY, which is derived from its content**
-  (`user_schedules.trigger_id_for`). Edit the row and it is a different
-  schedule with no binding — so "bind the harmless one, then swap in the
-  payroll query" cannot run the payroll query as the person who consented. The
-  sweep notices a binding whose key its file no longer holds, drops it and says
-  so to the binder.
+* **The binding is to what was consented to: the ROW and the WORKFLOW it
+  names.** The key is derived from the row's content
+  (`user_schedules.trigger_id_for`), so an edited row is a different schedule
+  with no binding; and the binding records a digest of the item's own
+  ``.workflows/<run>.json`` (`workflow_digest`), so rewriting the workflow's
+  body drops it too (review round 1, F4). Either way "bind the harmless one,
+  then swap in the payroll query" cannot run the payroll query as the person
+  who consented. The sweep drops such a binding — only once the live file
+  agrees, since the snapshot it reads lags — and says so to the binder.
+* **A binder who may no longer run work in the item** (removed, demoted) has
+  the binding dropped at the next fire, and is told why.
 * **One person per schedule** (Q8). Another may take it over; the one replaced
   is told. Per-person fan-out would multiply every fire by its subscribers.
 * **Only the person themself can create a binding in their name** — the route
@@ -25,12 +30,39 @@ Registered post-``spec.apply``: no auto-CRUD, so the routes are the only door.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+from collections.abc import Awaitable, Callable
 
 from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..api.timeutil import now_ms
+from ..filestore.protocol import FileNotFound
+from .workspace_store import (
+    RESERVED_WORKFLOW_ID,
+    is_workspace_workflow_path,
+    workspace_workflow_path,
+)
+
+
+async def workflow_digest(
+    read: Callable[[str, str], Awaitable[bytes]], item_id: str, workflow_id: str
+) -> str:
+    """sha256 of the item's own ``.workflows/<workflow_id>.json`` — "" when the id
+    is not a workspace workflow file, or there is none (a profile's workflow).
+    The same "is this a workflow file" rules as `offered.unparsable_workflow`.
+    A read that fails otherwise RAISES: the caller decides what an unknown means."""
+    path = workspace_workflow_path(workflow_id)
+    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
+        return ""
+    if not is_workspace_workflow_path(path):
+        return ""
+    try:
+        raw = await read(item_id, path)
+    except (FileNotFound, FileNotFoundError):
+        return ""
+    return hashlib.sha256(raw).hexdigest()
 
 
 class ScheduleBinding(Struct):
@@ -41,6 +73,12 @@ class ScheduleBinding(Struct):
     path: str
     user_id: str
     bound_at: int
+    #: sha256 of the item's own ``.workflows/<run>.json`` as it was when the
+    #: binder pressed "Run as me" ("" for a workflow that is not a workspace
+    #: file — a profile's, which no one edits from the item). The row's key only
+    #: covers the ROW; the workflow it names can be rewritten by anyone who edits
+    #: the item, and the binder consented to it as it was (review round 1, F4).
+    workflow_digest: str = ""
 
 
 def register_schedule_bindings(spec: SpecStar) -> None:
@@ -68,11 +106,24 @@ class ScheduleBindings:
         found = self.get(trigger_id)
         return found.user_id if found is not None else ""
 
-    def bind(self, trigger_id: str, *, item_id: str, path: str, user_id: str) -> str:
+    def bind(
+        self,
+        trigger_id: str,
+        *,
+        item_id: str,
+        path: str,
+        user_id: str,
+        workflow_digest: str = "",
+    ) -> str:
         """Bind the schedule to ``user_id``, replacing whoever held it. Returns
         the replaced person ("" when there was none, or it was them already)."""
         row = ScheduleBinding(
-            trigger_id=trigger_id, item_id=item_id, path=path, user_id=user_id, bound_at=now_ms()
+            trigger_id=trigger_id,
+            item_id=item_id,
+            path=path,
+            user_id=user_id,
+            bound_at=now_ms(),
+            workflow_digest=workflow_digest,
         )
         previous = self.get(trigger_id)
         if previous is None:

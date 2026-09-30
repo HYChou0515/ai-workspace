@@ -21,7 +21,7 @@ import base64
 import contextlib
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import magic
 import msgspec
@@ -456,33 +456,48 @@ class ChatSendService:
         the impl knows whether it built that string out of the very cookie it was
         reading. The server log keeps the traceback.
         """
-        fresh: dict[str, str] = {}
-        if self._request_env is not None and (request is not None or driven_by):
-            try:
-                if request is None:
+        if request is None:
+            if not driven_by:
+                # Neither a request nor the platform's own driver: the safe
+                # side, as before this plan (review round 1, R6) — nothing of
+                # anybody's.
+                return {}
+            # The goal driver continues ONE person's chat: the seam's
+            # request-less answer, with their own values over it — if they may
+            # still talk to the agent here.
+            headless: dict[str, str] = {}
+            if self._request_env is not None:
+                try:
                     headless = await self._request_env.env_without_request(
                         user_id=user_id, item_id=item_id
                     )
-                    # The goal driver continues ONE person's chat: their own
-                    # stored values over the seam's request-less answer.
-                    return await unattended_layer(
-                        self._private_env,
-                        headless=headless,
-                        acting_for=user_id,
-                        item_id=item_id,
-                        verb="converse",
-                    )
+                except Exception:
+                    self._request_env_failed(item_id)
+            return await unattended_layer(
+                self._private_env,
+                headless=headless,
+                acting_for=user_id,
+                item_id=item_id,
+                verb="converse",
+            )
+        fresh: dict[str, str] | None = None
+        if self._request_env is not None:
+            try:
                 fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
             except Exception:
-                logger.exception("chat_send: request env source failed for item %s", item_id)
-                raise HTTPException(
-                    # Not 502/503/504: the chat client reads those as "an idle
-                    # gateway cut the POST while the turn runs" and keeps waiting
-                    # for a reply that this refusal guarantees will never come.
-                    status_code=500,
-                    detail={"error": "request_env_failed"},
-                ) from None
+                self._request_env_failed(item_id)
         return await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
+
+    @staticmethod
+    def _request_env_failed(item_id: str) -> NoReturn:
+        logger.exception("chat_send: request env source failed for item %s", item_id)
+        raise HTTPException(
+            # Not 502/503/504: the chat client reads those as "an idle gateway
+            # cut the POST while the turn runs" and keeps waiting for a reply
+            # that this refusal guarantees will never come.
+            status_code=500,
+            detail={"error": "request_env_failed"},
+        ) from None
 
     # ── #613 P3: goal auto-continue ─────────────────────────────────────
 

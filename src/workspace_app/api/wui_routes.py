@@ -230,8 +230,9 @@ def register_wui_routes(
         """
         uid = get_user_id() if get_user_id is not None else ""
         try:
+            # None = no seam configured (the person's own values still apply).
             fresh = (
-                {}
+                None
                 if request_env is None
                 else await request_env.env_for(request, user_id=uid, item_id=item_id)
             )

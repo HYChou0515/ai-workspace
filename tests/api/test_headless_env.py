@@ -645,3 +645,20 @@ def test_nobody_can_choose_whose_values_a_run_uses_through_the_run_record():
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-owner-o", "ERP": "presser"}]
     assert not any("run-identity" in p for p in paths)
+
+
+async def test_a_send_with_neither_request_nor_driver_uses_no_stored_values_either():
+    """Review round 1 (R6): base gave such a send the item's copy alone — "the
+    safe side" — and so does this, whatever the author keeps."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    client, runner, item_id, spec = _send_app(seam, env_vars={"FROM_ITEM": "i"}, user="admin")
+    PrivateEnvStore(spec).replace("admin", item_id, {"MINE": "m"})
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(item_id, rid, conv, item_id, _MessageBody(content="hi"))
+
+    assert runner.envs == [{"FROM_ITEM": "i"}]

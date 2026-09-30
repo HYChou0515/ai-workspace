@@ -252,3 +252,24 @@ def test_the_app_drops_a_binding_whose_binder_was_removed_and_says_why():
         if r.data.recipient == "carol"
     ]
     assert kinds == ["schedule_binding_no_access"]
+
+
+def test_binding_records_the_workflow_as_it_was_consented_to():
+    """Review round 1 (F4): "Run as me" consents to the workflow the row names
+    as it is NOW; the sweep drops the binding if that file's body changes."""
+    import hashlib
+
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    client, holder, rid, spec = _world()
+    body = b'{"id":"build-report","title":"Weekly","phases":[{"id":"p"}],"steps":[]}'
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}/.workflows/build-report.json", content=body).status_code == 204
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+
+    _bind(client, rid, row["trigger_id"])
+
+    binding = ScheduleBindings(spec).get(row["trigger_id"])
+    assert binding is not None
+    assert binding.workflow_digest == hashlib.sha256(body).hexdigest()

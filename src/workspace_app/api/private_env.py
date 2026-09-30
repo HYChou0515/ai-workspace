@@ -1,9 +1,16 @@
 """The PRIVATE environment layer's storage (`docs/plan-wui-viewer-login.md`).
 
-One row per (person, item): the values that person keeps for that item's tools
-— typed by hand, filled by a login, or written for them by the deploy's
-``IRequestEnv``. The SHARED layer is the item's ``env_vars``; which of the two a
-tool gets for a given name is the item's ``env_policy`` (`env_layers`).
+Per (person, item), two rows:
+
+* ``PrivateEnv`` — what the person put there themselves: typed in "Only me", or
+  filled by a sign-in (``IEnvProvider``). Changed only by them.
+* ``PrivateSeam`` — the deploy's ``IRequestEnv.env_for`` answer about them, as of
+  their LAST request: replaced whole every time it changes, never merged.
+
+The SHARED layer is the item's ``env_vars``; which of the two layers a tool gets
+for a given name is the item's ``env_policy`` (`env_layers`). Within the private
+layer the seam's answer wins a name: it is the automatic, always-current value
+(Q5), and a name it stops returning (signed out of SSO) stops reaching tools.
 
 Why each part is the way it is:
 
@@ -17,8 +24,14 @@ Why each part is the way it is:
 * **Addressed only as "mine".** The routes take no user parameter: the row is
   always the caller's. Nobody, a superuser included, can name someone else's,
   so "only you can read this" is a property of the shape, not of a check.
+* **The seam's answer in its OWN row** (review round 1): merged into one row it
+  kept names the seam had stopped returning, reordered the names a tool sees,
+  and a seam write racing a sign-out rewrote the values just cleared. Apart,
+  a seam write never touches what the person put there.
+* **No history.** Every write is delete-then-create: an update would keep each
+  past value — each rotated token — as a readable revision.
 
-Registered post-``spec.apply`` so specstar emits no auto-CRUD routes for it.
+Registered post-``spec.apply`` so specstar emits no auto-CRUD routes for either.
 """
 
 from __future__ import annotations
@@ -32,7 +45,7 @@ from fastapi import APIRouter, FastAPI, Response
 from msgspec import Struct
 from pydantic import BaseModel
 from specstar import QB, SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import DuplicateResourceError, ResourceIDNotFoundError
 
 from ..perm import Verb
 from .locator import ItemLocator
@@ -40,6 +53,13 @@ from .timeutil import now_ms
 
 
 class PrivateEnv(Struct):
+    user_id: str
+    item_id: str
+    values: dict[str, str]
+    updated_at: int
+
+
+class PrivateSeam(Struct):
     user_id: str
     item_id: str
     values: dict[str, str]
@@ -57,8 +77,9 @@ def private_env_id(user_id: str, item_id: str) -> str:
 
 
 def register_private_env(spec: SpecStar) -> None:
-    with contextlib.suppress(ValueError):
-        spec.add_model(PrivateEnv, indexed_fields=["item_id"])
+    for model in (PrivateEnv, PrivateSeam):
+        with contextlib.suppress(ValueError):
+            spec.add_model(model, indexed_fields=["item_id"])
 
 
 class PrivateEnvStore:
@@ -79,71 +100,89 @@ class PrivateEnvStore:
     def may(self, user_id: str, item_id: str, verb: Verb) -> bool:
         return self._may is None or self._may(user_id, item_id, verb)
 
-    def _rm(self):
-        return self._spec.get_resource_manager(PrivateEnv)
-
-    def get(self, user_id: str, item_id: str) -> dict[str, str]:
+    def _read(self, model: type, user_id: str, item_id: str) -> dict[str, str]:
         try:
-            data = self._rm().get(private_env_id(user_id, item_id)).data
+            data = self._spec.get_resource_manager(model).get(private_env_id(user_id, item_id)).data
         except ResourceIDNotFoundError:
             return {}
-        assert isinstance(data, PrivateEnv)  # narrow for ty (coverage-clean)
+        assert isinstance(data, PrivateEnv | PrivateSeam)
         return dict(data.values)
 
-    def replace(self, user_id: str, item_id: str, values: dict[str, str]) -> None:
-        rm = self._rm()
+    def _write(self, model: type, user_id: str, item_id: str, values: dict[str, str]) -> None:
+        """Delete, then create — no revision keeps the value it replaced. Empty
+        ⇒ no row at all. Two concurrent writers: the loser's create collides and
+        is dropped, which is fine because each wrote an equally current value."""
+        rm = self._spec.get_resource_manager(model)
         rid = private_env_id(user_id, item_id)
-        row = PrivateEnv(user_id=user_id, item_id=item_id, values=values, updated_at=self._now())
-        try:
-            rm.get(rid)
-        except ResourceIDNotFoundError:
-            rm.create(row, resource_id=rid)
+        with contextlib.suppress(ResourceIDNotFoundError):
+            rm.permanently_delete(rid)
+        if not values:
             return
-        rm.update(rid, row)
+        row = model(user_id=user_id, item_id=item_id, values=values, updated_at=self._now())
+        with contextlib.suppress(DuplicateResourceError):
+            rm.create(row, resource_id=rid)
 
-    def merge(self, user_id: str, item_id: str, fresh: dict[str, str]) -> dict[str, str]:
-        """Write ``fresh`` over the row — last write wins, per name — and return
-        the whole row. A name ``fresh`` does not carry is left as it was, so a
-        seam re-writing what it provides on every request never erases a value
-        the person typed. Skips the write when nothing changed: this runs on
-        every send and every page tool call."""
-        stored = self.get(user_id, item_id)
-        merged = {**stored, **fresh}
-        if merged != stored:
-            self.replace(user_id, item_id, merged)
-        return merged
+    def get(self, user_id: str, item_id: str) -> dict[str, str]:
+        """What the person put there themselves."""
+        return self._read(PrivateEnv, user_id, item_id)
+
+    def seam(self, user_id: str, item_id: str) -> dict[str, str]:
+        """The deploy's ``env_for`` answer about them, as of their last request."""
+        return self._read(PrivateSeam, user_id, item_id)
+
+    def replace(self, user_id: str, item_id: str, values: dict[str, str]) -> None:
+        self._write(PrivateEnv, user_id, item_id, values)
+
+    def record_seam(self, user_id: str, item_id: str, fresh: dict[str, str]) -> None:
+        """Keep the seam's latest answer — whole, so a name it dropped is gone.
+        Skips the write when nothing changed: this runs on every send and every
+        page tool call."""
+        if self.seam(user_id, item_id) != fresh:
+            self._write(PrivateSeam, user_id, item_id, fresh)
 
     def clear(self, user_id: str, item_id: str) -> None:
-        """Hard delete — logging out must leave nothing behind. Absent is fine:
-        a second logout is the state asked for."""
-        with contextlib.suppress(ResourceIDNotFoundError):
-            self._rm().permanently_delete(private_env_id(user_id, item_id))
+        """Forget both rows. What the seam provides comes back at the person's
+        next request — it is still what their request says about them."""
+        for model in (PrivateEnv, PrivateSeam):
+            with contextlib.suppress(ResourceIDNotFoundError):
+                self._spec.get_resource_manager(model).permanently_delete(
+                    private_env_id(user_id, item_id)
+                )
 
     def purge_item(self, item_id: str) -> None:
-        """Every person's row for one item, permanently — the item-delete
+        """Every person's rows for one item, permanently — the item-delete
         cascade's step. Nobody else could reach these rows to remove them."""
-        rm = self._rm()
-        for res in rm.list_resources((QB["item_id"] == item_id).build()):
-            rid = res.info.resource_id
-            assert isinstance(rid, str)
-            with contextlib.suppress(ResourceIDNotFoundError):
-                rm.permanently_delete(rid)
+        for model in (PrivateEnv, PrivateSeam):
+            rm = self._spec.get_resource_manager(model)
+            for res in rm.list_resources((QB["item_id"] == item_id).build()):
+                rid = res.info.resource_id  # ty: ignore[unresolved-attribute]
+                assert isinstance(rid, str)
+                with contextlib.suppress(ResourceIDNotFoundError):
+                    rm.permanently_delete(rid)
 
 
 async def private_layer(
-    store: PrivateEnvStore | None, *, user_id: str, item_id: str, fresh: dict[str, str]
+    store: PrivateEnvStore | None, *, user_id: str, item_id: str, fresh: dict[str, str] | None
 ) -> dict[str, str]:
-    """A person's PRIVATE env layer for one item, as a tool about to run for
-    them gets it: what the deploy's seam just said about them (``fresh``)
-    written over their stored row — last write wins, per name — then the whole
-    row. The ONE composition both the chat send and a page's ``callTool`` use,
-    so the two cannot drift. Off the loop: specstar I/O on a request path.
+    """A person's PRIVATE layer for a turn or tool call WITH a request behind it:
+    what they put there themselves, with what the deploy's seam just said about
+    them over it (``fresh``; ``None`` = no seam configured). The seam's answer is
+    kept (whole) for their turns with no request behind them.
 
-    ``store`` None (a composition that wired none) ⇒ the layer is exactly what
-    the seam answered, as before this plan."""
+    The ONE composition the chat send and a page's ``callTool`` share, so the
+    two cannot drift. Off the loop: specstar I/O on a request path.
+
+    ``store`` None (a composition that wired none) ⇒ exactly the seam's answer,
+    as before this plan. Order: typed names, then the seam's in ITS order — with
+    nothing typed that is the seam's order, as before (the names become
+    ``SANDBOX_USER_ENV_KEYS``, which a tool can see)."""
+    seam = fresh or {}
     if store is None:
-        return fresh
-    return await asyncio.to_thread(store.merge, user_id, item_id, fresh)
+        return dict(seam)
+    if fresh is not None:
+        await asyncio.to_thread(store.record_seam, user_id, item_id, fresh)
+    typed = await asyncio.to_thread(store.get, user_id, item_id)
+    return {**typed, **seam}
 
 
 async def unattended_layer(
@@ -156,11 +195,15 @@ async def unattended_layer(
 ) -> dict[str, str]:
     """The PRIVATE layer of a turn with no request behind it: the seam's
     request-less answer (``env_without_request`` — a service account, or
-    nothing) with ``acting_for``'s own stored row over it. ``acting_for`` is
-    the PERSON the turn runs for — the presser of a page button, the starter
-    of a run, the setter of a goal — which is not necessarily who the turn is
-    attributed or billed to. Empty ``acting_for`` (an unbound schedule, an
-    entity trigger) ⇒ the seam's answer alone: nobody's private values.
+    nothing), with ``acting_for``'s own values over it — what they put there,
+    then the seam's last answer about them. ``acting_for`` is the PERSON the
+    turn runs for (the presser of a page button, the starter of a run, the
+    binder of a schedule, the setter of a goal), which is not necessarily who
+    the turn is attributed or billed to. Empty ``acting_for`` (an unbound
+    schedule, an entity trigger) ⇒ the seam's answer alone.
+
+    ⚠️ A person's value BEATS the service account on the same name: this path
+    runs FOR them, and their own credential is what they would have used.
 
     ``verb`` is what ``acting_for`` must STILL hold on the item — asked here,
     at use, because nobody is at the request to be gated: a person removed from
@@ -169,12 +212,21 @@ async def unattended_layer(
         return headless
     if not await asyncio.to_thread(store.may, acting_for, item_id, verb):
         return headless
-    stored = await asyncio.to_thread(store.get, acting_for, item_id)
-    return {**headless, **stored}
+    typed = await asyncio.to_thread(store.get, acting_for, item_id)
+    seam = await asyncio.to_thread(store.seam, acting_for, item_id)
+    return {**headless, **typed, **seam}
 
 
 class PrivateValues(BaseModel):
     values: dict[str, str]
+
+
+class MineOut(BaseModel):
+    #: What the person put there themselves — editable in "Only me".
+    values: dict[str, str]
+    #: What the deploy's seam said about them at their last request — shown,
+    #: not editable: it is rewritten by their next request anyway.
+    auto: dict[str, str]
 
 
 class ItemLayers(BaseModel):
@@ -195,24 +247,27 @@ def register_private_env_routes(
         its own address, which has the item's id but not its record. The same
         two fields `read_meta` already returns on the item, under the same verb."""
         workspace_id = locator.require_access(slug, item_id, "read_meta")
-        layers = locator.env_layers_of(workspace_id)
+        layers = await asyncio.to_thread(locator.env_layers_of, workspace_id)
         return ItemLayers(shared=layers.shared, policy=layers.policy)
 
-    @app.get("/a/{slug}/items/{item_id}/env/private", response_model=PrivateValues)
-    async def get_private_env(slug: str, item_id: str) -> PrivateValues:
+    @app.get("/a/{slug}/items/{item_id}/env/private", response_model=MineOut)
+    async def get_private_env(slug: str, item_id: str) -> MineOut:
         workspace_id = locator.require_access(slug, item_id, "read_meta")
-        return PrivateValues(values=store.get(get_user_id(), workspace_id))
+        me = get_user_id()
+        values = await asyncio.to_thread(store.get, me, workspace_id)
+        auto = await asyncio.to_thread(store.seam, me, workspace_id)
+        return MineOut(values=values, auto=auto)
 
     @app.put("/a/{slug}/items/{item_id}/env/private", response_model=PrivateValues)
     async def put_private_env(slug: str, item_id: str, body: PrivateValues) -> PrivateValues:
         workspace_id = locator.require_access(slug, item_id, "read_meta")
-        store.replace(get_user_id(), workspace_id, dict(body.values))
+        await asyncio.to_thread(store.replace, get_user_id(), workspace_id, dict(body.values))
         return PrivateValues(values=dict(body.values))
 
     @app.delete("/a/{slug}/items/{item_id}/env/private", status_code=204)
     async def delete_private_env(slug: str, item_id: str) -> Response:
-        """Log out. NOT gated on the item: it touches only the caller's own row,
+        """Log out. NOT gated on the item: it touches only the caller's own rows,
         and someone who has lost access must still be able to take their
         credential back out."""
-        store.clear(get_user_id(), item_id)
+        await asyncio.to_thread(store.clear, get_user_id(), item_id)
         return Response(status_code=204)

@@ -55,7 +55,7 @@ def test_a_person_reads_back_what_they_stored():
 
     assert client.put(_url(rid), json={"values": {"ERP_TOKEN": "a-1"}}).status_code == 200
 
-    assert client.get(_url(rid)).json() == {"values": {"ERP_TOKEN": "a-1"}}
+    assert client.get(_url(rid)).json() == {"values": {"ERP_TOKEN": "a-1"}, "auto": {}}
 
 
 def test_nobody_else_reads_it_not_even_the_items_owner():
@@ -67,7 +67,7 @@ def test_nobody_else_reads_it_not_even_the_items_owner():
 
     holder["id"] = "bob"
 
-    assert client.get(_url(rid)).json() == {"values": {}}
+    assert client.get(_url(rid)).json() == {"values": {}, "auto": {}}
 
 
 def test_a_superuser_cannot_read_it_either():
@@ -77,7 +77,7 @@ def test_a_superuser_cannot_read_it_either():
 
     holder["id"] = "root"
 
-    assert client.get(_url(rid)).json() == {"values": {}}
+    assert client.get(_url(rid)).json() == {"values": {}, "auto": {}}
 
 
 def test_an_item_the_caller_cannot_open_stores_nothing():
@@ -112,7 +112,7 @@ def test_logging_out_forgets_the_row():
 
     assert client.delete(_url(rid)).status_code == 204
 
-    assert client.get(_url(rid)).json() == {"values": {}}
+    assert client.get(_url(rid)).json() == {"values": {}, "auto": {}}
 
 
 def test_logging_out_needs_no_access_to_the_item():
@@ -145,7 +145,8 @@ def test_a_senders_request_env_is_kept_in_their_private_row():
     with client:
         client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
 
-    assert PrivateEnvStore(spec).get("u", item_id) == {"SSO": "abc", "CALLER": "u"}
+    # Kept as the seam's LAST answer (its own field, replaced whole each time).
+    assert PrivateEnvStore(spec).seam("u", item_id) == {"SSO": "abc", "CALLER": "u"}
 
 
 def test_a_value_the_person_typed_reaches_their_turn_with_no_seam_configured():
@@ -164,21 +165,20 @@ def test_a_value_the_person_typed_reaches_their_turn_with_no_seam_configured():
     assert runner.envs == [{"MINE": "x", "FROM_ITEM": "i"}]
 
 
-def test_the_latest_request_overwrites_only_the_names_it_carries():
-    """Last write wins, per name: the seam re-writes what it provides on every
-    request; a name it does not provide (typed by hand) is left alone."""
+def test_the_seams_answer_wins_over_a_typed_value_of_the_same_name():
+    """The automatic value is always current (Q5): a name the seam provides is
+    the seam's, whatever was typed; a name it does not provide is the typed one."""
     from workspace_app.api.private_env import PrivateEnvStore
 
     from .test_request_env import CookieEnv, _send_app
 
     client, runner, item_id, spec = _send_app(CookieEnv())
-    PrivateEnvStore(spec).replace("u", item_id, {"SSO": "stale", "TYPED": "t"})
+    PrivateEnvStore(spec).replace("u", item_id, {"SSO": "typed", "TYPED": "t"})
     client.cookies.set("sso", "fresh")
 
     with client:
         client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
 
-    assert PrivateEnvStore(spec).get("u", item_id) == {"SSO": "fresh", "TYPED": "t", "CALLER": "u"}
     assert runner.envs[-1]["SSO"] == "fresh"
     assert runner.envs[-1]["TYPED"] == "t"
 
@@ -228,3 +228,97 @@ def test_user_may_answers_for_someone_other_than_the_caller():
     assert user_may(spec, rid, "mallory", "read_meta") is False
     assert user_may(spec, "no-such-item", "alice", "read_meta") is False
     assert user_may(spec, rid, "root", "execute", superusers=frozenset({"root"})) is True
+
+
+# ─── round 1 (R2/R3/R4/F8/R6): the seam's answer is its own, replaced whole ───
+
+
+def _seam_app():
+    from fastapi import Request
+
+    from workspace_app.api.request_env import IRequestEnv
+
+    from .test_request_env import _send_app
+
+    class SsoOnly(IRequestEnv):
+        async def env_for(self, request: Request, *, user_id: str, item_id: str):
+            raw = request.headers.get("x-env", "")
+            return dict(p.split("=", 1) for p in raw.split(",") if p)
+
+    return _send_app(SsoOnly())
+
+
+def _send(client, item_id, env: str):
+    client.post(
+        f"/a/playground/items/{item_id}/messages",
+        json={"content": "hi"},
+        headers={"x-env": env},
+    )
+
+
+def test_a_name_the_seam_stops_returning_stops_reaching_the_tools():
+    """R2: signed out of SSO, the old session must not keep reaching tools."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    client, runner, item_id, spec = _seam_app()
+    with client:
+        _send(client, item_id, "SESSION=abc")
+        _send(client, item_id, "")
+
+    assert runner.envs == [{"SESSION": "abc"}, {}]
+    # And not kept for their turns with no request behind them either — those
+    # read the STORED answer, which the live turn above never consults.
+    assert PrivateEnvStore(spec).seam("u", item_id) == {}
+
+
+def test_the_order_a_tool_sees_is_the_seams_every_time():
+    """R3: the names become SANDBOX_USER_ENV_KEYS — order is visible to a tool,
+    and a stored row coming back sorted changed it from the second send on."""
+    client, runner, item_id, _spec = _seam_app()
+    with client:
+        _send(client, item_id, "Z=1,B=2")
+        _send(client, item_id, "Z=1,B=2")
+
+    assert [list(e) for e in runner.envs] == [["Z", "B"], ["Z", "B"]]
+
+
+def test_a_rotated_credential_leaves_no_history_behind():
+    """R4: every past value of a rotating token was kept as a revision."""
+    from workspace_app.api.private_env import PrivateEnvStore, PrivateSeam, private_env_id
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    for i in range(5):
+        store.record_seam("alice", rid, {"TOKEN": f"t{i}"})
+
+    rm = spec.get_resource_manager(PrivateSeam)
+    assert len(list(rm.list_revisions(private_env_id("alice", rid)))) == 1
+    assert store.seam("alice", rid) == {"TOKEN": "t4"}
+
+
+def test_writing_the_seams_answer_never_brings_back_cleared_values():
+    """F8: a seam write racing a logout used to rewrite the whole pre-logout row.
+    It no longer touches the typed values at all."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.replace("alice", rid, {"TYPED": "secret"})
+    store.clear("alice", rid)
+
+    store.record_seam("alice", rid, {"SSO": "new"})
+
+    assert store.get("alice", rid) == {}
+    assert store.seam("alice", rid) == {"SSO": "new"}
+
+
+def test_logging_out_forgets_the_seams_answer_too():
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"SSO": "s"})
+
+    store.clear("alice", rid)
+
+    assert store.seam("alice", rid) == {}

@@ -23,7 +23,7 @@ from specstar import SpecStar
 
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
-from ..workflow.schedule_bindings import ScheduleBindings
+from ..workflow.schedule_bindings import ScheduleBindings, workflow_digest
 from ..workflow.user_schedules import describe_row, trigger_id_for, usable_rows
 from ..workflow.workspace_store import SCHEDULES_FILE
 from .file_routes import _workspace_path
@@ -109,8 +109,16 @@ def register_schedule_binding_routes(
                 status_code=404, detail="that schedule has changed — reload the page"
             )
         me = get_user_id()
+        # The workflow as it is NOW is part of what is consented to (F4): the
+        # sweep drops the binding when that file's body changes.
+        digest = await workflow_digest(files.read, workspace_id, found.run)
         replaced = await asyncio.to_thread(
-            bindings.bind, trigger_id, item_id=workspace_id, path=file_path, user_id=me
+            bindings.bind,
+            trigger_id,
+            item_id=workspace_id,
+            path=file_path,
+            user_id=me,
+            workflow_digest=digest,
         )
         if replaced:
             await asyncio.to_thread(

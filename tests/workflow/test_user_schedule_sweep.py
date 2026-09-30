@@ -2137,3 +2137,83 @@ def test_deleting_the_whole_schedules_file_drops_its_bindings_and_says_so():
 
     assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
     assert ScheduleBindings(spec).binder(key) == ""
+
+
+# ── round 1 (F4): the binding is to the workflow it runs, too ────────────────
+
+_WF_V1 = '{"id":"build-report","phases":[{"id":"p"}],"steps":[]}'
+_WF_V2 = '{"id":"build-report","title":"Payroll","phases":[{"id":"p"}],"steps":[]}'
+_WF_PATH = "/.workflows/build-report.json"
+
+
+def _bind_bob_with_workflow(spec, body: str) -> str:
+    import hashlib
+
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    register_schedule_bindings(spec)
+    key = _key(DAILY)
+    ScheduleBindings(spec).bind(
+        key,
+        item_id=ITEM,
+        path=PATH,
+        user_id="bob",
+        workflow_digest=hashlib.sha256(body.encode()).hexdigest(),
+    )
+    return key
+
+
+def test_swapping_the_workflow_a_bound_schedule_runs_drops_the_binding():
+    """Review round 1 (F4): the schedule ROW's key is its content, but the
+    workflow it names can be rewritten by anyone who edits the item — "bind the
+    harmless one, then swap in the payroll query" through the workflow body.
+    The binder consented to the workflow as it was."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V2})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
+def test_an_unchanged_workflow_keeps_the_binding():
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V1})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == ["bob"]
+    assert expired == []
+
+
+def test_a_workflow_the_snapshot_has_not_caught_up_with_keeps_the_binding():
+    """Bound on the LIVE workflow file; the durable snapshot still has the old
+    one. Not a change — a lag."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob_with_workflow(spec, _WF_V2)
+    started, expired = _Started(), []
+    snapshot = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V1})
+    live = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V2})
+
+    asyncio.run(
+        _bound_sweeper(
+            spec, snapshot, started, datetime(2026, 9, 5, 9, 30), expired, live=live
+        ).tick()
+    )
+
+    assert started.env_users == ["bob"]
+    assert expired == []
