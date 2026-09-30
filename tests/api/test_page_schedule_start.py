@@ -59,7 +59,7 @@ class _Orchestrator:
         return self.run_id
 
 
-async def _fire(loc: _Locator, orch: _Orchestrator) -> str | None:
+async def _fire(loc: _Locator, orch: _Orchestrator, *, env_user: str = "") -> str | None:
     return await start_page_schedule(
         locator=loc,
         orchestrator=orch,
@@ -68,7 +68,20 @@ async def _fire(loc: _Locator, orch: _Orchestrator) -> str | None:
         acting_user="alice",
         payload={"line": "A"},
         key="wui:i1:abcd",
+        env_user=env_user,
     )
+
+
+async def test_the_run_carries_the_binder_as_whose_private_values_it_uses() -> None:
+    """`plan-wui-viewer-login` Q7: captured as the owner (alice) for billing, but
+    RUN WITH the binder's (bob's) private layer — the two are different fields
+    on the run, and the sweep's answer must reach the second."""
+    orch = _Orchestrator()
+
+    await _fire(_Locator(), orch, env_user="bob")
+
+    assert orch.starts[0]["captured_user"] == "alice"
+    assert orch.starts[0]["env_user"] == "bob"
 
 
 async def test_a_started_run_is_never_reported_as_not_started() -> None:

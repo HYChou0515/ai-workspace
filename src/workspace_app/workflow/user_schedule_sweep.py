@@ -34,6 +34,7 @@ from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .offered import no_such_workflow, unparsable_workflow
 from .orchestrator import ActiveRunExists
+from .schedule_bindings import ScheduleBinding, ScheduleBindings
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
 
@@ -126,6 +127,7 @@ class StartRun(Protocol):
         acting_user: str,
         payload: dict[str, Any],
         key: str,
+        env_user: str,
     ) -> str | None: ...
 
 
@@ -146,7 +148,16 @@ class UserScheduleSweeper:
         max_rows: int = DEFAULT_MAX_ROWS,
         confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
         lease: ScanLease | None = None,
+        bindings: ScheduleBindings | None = None,
+        on_expired: Callable[[ScheduleBinding], object] | None = None,
     ) -> None:
+        #: `plan-wui-viewer-login` Q7: who each schedule runs AS. None ⇒ no
+        #: store wired, every fire runs as nobody in particular (as before).
+        self._bindings = bindings
+        #: Told about each binding a file edit invalidated, so its binder learns
+        #: their name is no longer on it. Best effort: a failure here must not
+        #: cost the tick.
+        self._on_expired = on_expired
         self._index = index
         #: #804: None ⇒ every caller scans (a single process, or a test that is
         #: not about pods). The API passes one so that N pods cost one scan.
@@ -265,6 +276,24 @@ class UserScheduleSweeper:
             )
             return UNKNOWN
 
+    async def _expire_bindings(self, item_id: str, path: str, live: set[str]) -> None:
+        """Drop the bindings of rows this file no longer holds — an edited row is
+        a new key — and tell each binder. A store failure is logged and the tick
+        goes on: firing on schedule matters more than tidying a binding."""
+        assert self._bindings is not None
+        try:
+            gone = await asyncio.to_thread(self._bindings.expire_absent, item_id, path, live)
+        except Exception:  # noqa: BLE001 — one item's bookkeeping must not cost the tick
+            logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
+            return
+        for binding in gone:
+            if self._on_expired is None:
+                continue
+            try:
+                await asyncio.to_thread(self._on_expired, binding)
+            except Exception:  # noqa: BLE001 — a failed notice is not a failed schedule
+                logger.exception("user schedules: could not tell %s", binding.user_id)
+
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
             raw = (await self._read(item_id, path)).decode("utf-8", "replace")
@@ -350,6 +379,13 @@ class UserScheduleSweeper:
             self._said.pop((item_id, path), None)
 
         folder = path.rsplit("/", 1)[0]
+        # HERE — after a clean read and parse, never on a read failure or an
+        # over-cap file (both returned above) — because dropping a binding is
+        # not undoable: the person has to press "run as me" again.
+        if self._bindings is not None:
+            await self._expire_bindings(
+                item_id, path, {trigger_id_for(item_id, folder, row) for row in rows}
+            )
         owner = await asyncio.to_thread(self._owner_of, item_id)
         # The ceiling `run` has to stay inside. Checked HERE and per ROW, the
         # same shape as every other lint in this file: the interactive entrance
@@ -476,6 +512,13 @@ class UserScheduleSweeper:
                     # run drives and the lock that stops it running twice agree
                     # about what "this schedule" means.
                     key=trigger_id,
+                    # Captured as the owner above; RUN WITH the binder's private
+                    # values, or nobody's ("") when no one pressed "run as me".
+                    env_user=(
+                        await asyncio.to_thread(self._bindings.binder, trigger_id)
+                        if self._bindings is not None
+                        else ""
+                    ),
                 )
             except ActiveRunExists:
                 # NOT a failure. The schedule's previous fire is still running,

@@ -923,6 +923,11 @@ def register_item_routes(
             from .private_env import PrivateEnvStore
 
             await asyncio.to_thread(PrivateEnvStore(spec).purge_item, item_id)
+            # And every "run as me" on its schedules: each names a person whose
+            # values a schedule of THIS item runs with.
+            from ..workflow.schedule_bindings import ScheduleBindings
+
+            await asyncio.to_thread(ScheduleBindings(spec).purge_item, item_id)
             # Off the event loop: pg round-trips per row would otherwise
             # serialise the whole pod (the #657 class).
             await asyncio.to_thread(_sweep_rows, conv_ids, run_ids)

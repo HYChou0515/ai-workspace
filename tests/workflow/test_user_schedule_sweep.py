@@ -78,12 +78,23 @@ class _Started:
         #: chat it selects is what `active_run_for_chat` collides on — a key that
         #: changes per fire silently switches the one-run rule off.
         self.keys: list[str] = []
+        #: Whose private env layer each fire ran with (`plan-wui-viewer-login`):
+        #: the schedule's binder, or "" for nobody's.
+        self.env_users: list[str] = []
 
     async def __call__(
-        self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict, key: str
+        self,
+        *,
+        item_id: str,
+        workflow_id: str,
+        acting_user: str,
+        payload: dict,
+        key: str,
+        env_user: str,
     ):
         self.runs.append((item_id, workflow_id, acting_user, payload))
         self.keys.append(key)
+        self.env_users.append(env_user)
         return "run-1"
 
 
@@ -1929,3 +1940,89 @@ def test_a_schedule_that_overruns_again_later_says_so_again(caplog):
         "the schedule overran again after recovering and the sweep stayed silent "
         "— the memo outlived the overrun it was about"
     )
+
+
+# ── whose private values a fire runs with (plan-wui-viewer-login P6) ─────────
+
+
+def _bound_sweeper(spec, files, started, now, expired):
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    register_schedule_bindings(spec)
+    return UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        read_live=files.read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: now,
+        bindings=ScheduleBindings(spec),
+        on_expired=expired.append,
+    )
+
+
+def _key(row: dict) -> str:
+    (parsed,), _ = usable_rows(_file(row))
+    return trigger_id_for(ITEM, PAGE, parsed)
+
+
+def test_an_unbound_schedule_runs_with_nobodys_private_values():
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+
+
+def test_a_bound_schedule_runs_with_its_binders_private_values():
+    """Q7: bound = somebody pressed "run as me"; the fire is still captured as the
+    owner, but the private layer is the binder's."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    ScheduleBindings(spec).bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob")
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.runs[0][2] == "alice"  # still captured as the owner
+    assert started.env_users == ["bob"]
+
+
+def test_editing_a_bound_schedule_drops_the_binding_and_says_so():
+    """Q7: the binding is to WHAT was consented to. A changed row is a different
+    schedule (its key is derived from its content), so the old binding is dropped
+    and its binder told — otherwise "bind the harmless one, then swap in the
+    payroll query" would run the payroll query as them."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    bindings = ScheduleBindings(spec)
+    bindings.bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob")
+    edited = {**DAILY, "with": {"line": "PAYROLL"}}
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(edited)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.trigger_id) for b in expired] == [("bob", _key(DAILY))]
+    assert bindings.binder(_key(DAILY)) == ""

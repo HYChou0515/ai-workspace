@@ -644,3 +644,22 @@ async def test_deleting_an_item_takes_everyones_private_env_rows_for_it():
     assert store.get("alice", doomed) == {}
     assert store.get("bob", doomed) == {}
     assert store.get("alice", kept) == {"ERP_TOKEN": "a2"}
+
+
+async def test_deleting_an_item_takes_its_schedule_bindings():
+    """A binding names a person whose values a schedule runs with; the item
+    gone, it names nothing — and it is a row the cascade exists to leave none of."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    app, spec, _ = _build()
+    client = TestClient(app)
+    doomed = _create_item(client)
+    kept = _create_item(client)
+    bindings = ScheduleBindings(spec)
+    bindings.bind("k-doomed", item_id=doomed, path="/p/schedules.json", user_id="alice")
+    bindings.bind("k-kept", item_id=kept, path="/p/schedules.json", user_id="alice")
+
+    assert client.delete(f"/a/rca/items/{doomed}").status_code == 204
+
+    assert bindings.binder("k-doomed") == ""
+    assert bindings.binder("k-kept") == "alice"

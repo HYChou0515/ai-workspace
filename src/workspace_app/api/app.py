@@ -76,6 +76,11 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.schedule_bindings import (
+    ScheduleBinding,
+    ScheduleBindings,
+    register_schedule_bindings,
+)
 from ..workflow.triggers import ScanLease, SpecstarTriggerStore, register_trigger_store
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
@@ -115,7 +120,7 @@ from .marking_table import register_marking_table_route
 from .mention import MentionService
 from .meta_routes import register_meta_routes
 from .notification_delivery import INotificationChannel
-from .notifications import register_notification_routes
+from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
 from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
@@ -125,6 +130,7 @@ from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
 from .sandbox_address import IAddressStore, SpecstarAddressStore, register_sandbox_address
+from .schedule_binding_routes import register_schedule_binding_routes
 from .schedule_index import (
     ScheduleIndex,
     is_schedule_file,
@@ -237,6 +243,7 @@ async def start_page_schedule(
     acting_user: str,
     payload: dict[str, Any],
     key: str,
+    env_user: str = "",
 ) -> str | None:
     """Launch one page-declared schedule.
 
@@ -284,6 +291,9 @@ async def start_page_schedule(
             item_id=item_id,
             profile=await asyncio.to_thread(locator.profile_of, item_id),
             captured_user=acting_user,
+            # Whose private values it runs with — the schedule's binder, or ""
+            # (`plan-wui-viewer-login` Q7); billing stays with `acting_user`.
+            env_user=env_user,
             workflow_id=workflow_id,
             chat_id=chat_id,
             payload=payload,
@@ -1269,7 +1279,13 @@ def create_app(
         return _owner_of(item_id) or ""
 
     async def _start_page_schedule(
-        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any], key: str
+        *,
+        item_id: str,
+        workflow_id: str,
+        acting_user: str,
+        payload: dict[str, Any],
+        key: str,
+        env_user: str,
     ) -> str | None:
         """Launch one page-declared schedule.
 
@@ -1287,6 +1303,27 @@ def create_app(
             acting_user=acting_user,
             payload=payload,
             key=key,
+            env_user=env_user,
+        )
+
+    def _binding_expired(binding: ScheduleBinding) -> None:
+        """Tell a binder their name is off a schedule whose content changed."""
+        notify(
+            spec,
+            recipient=binding.user_id,
+            kind="schedule_binding_expired",
+            title="A schedule you ran as yourself was changed",
+            body=(
+                f"The schedule in {binding.path} was edited, so it no longer runs "
+                "with your values. Open the page and choose “Run as me” again if "
+                "you still want it to."
+            ),
+            # Per BINDING (its `bound_at`), not per key: re-binding the same
+            # schedule and seeing it edited again is a second, real notice.
+            dedup_key=(
+                f"schedule-binding-expired:{binding.trigger_id}:{binding.user_id}"
+                f":{binding.bound_at}"
+            ),
         )
 
     user_schedule_sweeper = UserScheduleSweeper(
@@ -1308,6 +1345,9 @@ def create_app(
         # construction, so the ordinary tick still wakes nothing.
         read_live=files.read,
         start=_start_page_schedule,
+        # plan-wui-viewer-login Q7: who each schedule runs AS.
+        bindings=ScheduleBindings(spec),
+        on_expired=_binding_expired,
         owner_of=_owner_of_item,
         # The SAME rule the page's own `startRun` is held to (`workflow.offered`),
         # answered from the DURABLE store — `_workflows_for_sweep`, for the same
@@ -1736,6 +1776,7 @@ def create_app(
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
+    register_schedule_bindings(spec)
     private_env_store = PrivateEnvStore(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
@@ -2594,6 +2635,14 @@ def create_app(
 
     register_private_env_routes(
         api, store=private_env_store, locator=locator, get_user_id=get_user_id
+    )
+    register_schedule_binding_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        files=files,
+        bindings=ScheduleBindings(spec),
+        get_user_id=get_user_id,
     )
 
     # plan-chat-video-export: queue a video of a transcript; the consumer is
