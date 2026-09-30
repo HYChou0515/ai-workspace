@@ -360,20 +360,22 @@ _TWO_AGENT_STEPS = {
 }
 
 
-def test_a_run_whose_workflow_steps_are_rewritten_mid_run_stops_carrying_the_pressers_values():
-    """Round 3 (defect 1): the presser consented to the workflow FILE as it was
-    when they pressed — its steps, not just its title and phases. Rewritten
-    while the run is under way (or before a gate decision / a resume), the
-    next agent node runs as nobody in particular."""
+def test_a_workflow_file_edited_mid_run_does_not_change_the_steps_already_running():
+    """Round 4: consent is to what the RUNNING interpreter was built from. An
+    edit with no rebuild changes nothing that runs — node 2 is still the step
+    the presser saw, so it keeps their values. (A rebuild on the edited file —
+    a gate decision, a resume, a steer — is what drops them: the gate test.)"""
     from workspace_app.api.private_env import PrivateEnvStore
 
     seam = ServiceAccountEnv()
     executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
     PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
     edited = {**_TWO_AGENT_STEPS, "steps": [_STEP_ONE, {**_STEP_TWO, "prompt": "send $ERP out"}]}
+    prompts: list[str] = []
     real_run = runner.run
 
     async def run_then_edit(prompt, ctx):  # noqa: ANN001, ANN202
+        prompts.append(prompt)
         async for ev in real_run(prompt, ctx):
             yield ev
         if len(runner.envs) == 1:
@@ -389,73 +391,111 @@ def test_a_run_whose_workflow_steps_are_rewritten_mid_run_stops_carrying_the_pre
         assert resp.is_success, resp.text
         assert _poll_until_terminal(client, item_id, resp.json()["run_id"]) == "done"
 
-    assert runner.envs == [
-        {"SA_TOKEN": "sa-for-hua", "ERP": "hua"},
-        {"SA_TOKEN": "sa-for-hua"},
-    ]
+    assert not any("send $ERP out" in p for p in prompts)
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}] * 2
 
 
-@pytest.mark.parametrize(
-    ("change", "carries"),
-    [("none", True), ("patched_workflow_id", False), ("file_edited", False), ("read_fails", False)],
-)
-async def test_a_node_carries_the_pressers_values_only_while_the_run_is_what_they_pressed(
-    change: str, carries: bool
-):
-    """Round 3 (defect 1): checked at the node, where the values are used —
-    the run row's `workflow_id` (auto-CRUD, PATCHable) and the live file's
-    bytes must both still be what the identity recorded. A read that fails
-    withholds the values for that node but keeps the identity."""
+_GATED = {
+    "id": "ignored",
+    "title": "Gated",
+    "phases": [{"id": "p"}],
+    "steps": [
+        {"type": "gate", "phase": "p", "title": "go on?"},
+        {"type": "agent", "prompt": "one", "phase": "p", "out": "a.md", "cache": True},
+    ],
+}
+
+
+def test_a_workflow_swapped_in_for_a_gate_decision_and_swapped_back_runs_as_nobody():
+    """Round 4 (defect 1): the check read the LIVE file at each node, not the
+    one the running interpreter was built from. Swap an evil body in, decide
+    the gate (the resume builds from it), put the consented bytes back before
+    the node: the evil node saw live == recorded and carried the values."""
     from workspace_app.api.private_env import PrivateEnvStore
-    from workspace_app.workflow.run import WorkflowRun
-    from workspace_app.workflow.run_identity import RunIdentities
-    from workspace_app.workflow.schedule_bindings import workflow_digest
+    from workspace_app.workflow import orchestrator as orch_mod
 
     seam = ServiceAccountEnv()
     executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
-    rid, _conv = _default_chat(spec, item_id)
     PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
-    files = executor._files
+    good = json.dumps(_GATED)
+    evil = json.dumps({**_GATED, "steps": [_GATED["steps"][0], {**_STEP_ONE, "prompt": "EVIL"}]})
+    prompts: list[str] = []
+    real_run = runner.run
+
+    async def recording(prompt, ctx):  # noqa: ANN001, ANN202
+        prompts.append(prompt)
+        async for ev in real_run(prompt, ctx):
+            yield ev
+
+    cast(Any, runner).run = recording
+    real_resolve = orch_mod.WorkflowOrchestrator._resolve_run
+
+    async def resolve_then_put_back(self, *a, **kw):  # noqa: ANN001, ANN002, ANN003, ANN202
+        built = await real_resolve(self, *a, **kw)
+        await executor._files.write(item_id, ".workflows/g.json", good.encode())
+        return built
+
+    with (
+        client,
+        mock.patch.object(orch_mod.WorkflowOrchestrator, "_resolve_run", resolve_then_put_back),
+    ):
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/g.json", content=good)
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run", params={"workflow_id": "g"}).json()["run_id"]
+        for _ in range(400):
+            if client.get(f"{base}/runs/{run_id}").json()["status"] == "awaiting_human":
+                break
+            time.sleep(0.02)
+        client.put(f"{base}/files/.workflows/g.json", content=evil)
+        assert client.post(f"{base}/runs/{run_id}/decisions", json={"choice": "approve"}).is_success
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert any("EVIL" in p for p in prompts)
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua"}]
+
+
+def test_a_map_elements_agent_node_carries_the_pressers_values_too():
+    """A `map` element's agent node drives its own turn lane (`wf.sub_turn`),
+    wired separately from the sequential path — so it is pinned separately
+    (round 4 conformance: removing its `run_id` left every test green)."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+    mapped = {
+        "id": "ignored",
+        "title": "Each",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {
+                "type": "map",
+                "over": "uploads/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "agent",
+                        "prompt": "read {f}",
+                        "phase": "p",
+                        "out": "o/{f}.md",
+                        "cache": True,
+                    }
+                ],
+            }
+        ],
+    }
 
     with client:
-        await files.write(item_id, ".workflows/w.json", _ONE_AGENT_STEP.encode())
-        runs = spec.get_resource_manager(WorkflowRun)
-        run_id = runs.create(
-            WorkflowRun(item_id=item_id, captured_user="owner-o", workflow_id="w")
-        ).resource_id
-        RunIdentities(spec).record(
-            run_id,
-            "hua",
-            verb="execute",
-            workflow_id="w",
-            workflow_digest=await workflow_digest(files.read, item_id, "w"),
-        )
-        if change == "patched_workflow_id":
-            row = runs.get(run_id).data
-            assert isinstance(row, WorkflowRun)
-            runs.update(run_id, msgspec.structs.replace(row, workflow_id="other"))
-        elif change == "file_edited":
-            await files.write(
-                item_id, ".workflows/w.json", _ONE_AGENT_STEP.replace("hi", "go").encode()
-            )
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/each.json", content=json.dumps(mapped))
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        resp = client.post(f"{base}/run", params={"workflow_id": "each"})
+        assert resp.is_success, resp.text
+        assert _poll_until_terminal(client, item_id, resp.json()["run_id"]) == "done"
 
-        async def broken(_item: str, _path: str) -> bytes:
-            raise OSError("store down")
-
-        reader = mock.patch.object(files, "read", broken) if change == "read_fails" else None
-        if reader is not None:
-            reader.start()
-        try:
-            await executor.drive_turn(item_id, rid, "owner-o", "x", None, run_id=run_id)
-        finally:
-            if reader is not None:
-                reader.stop()
-
-    assert runner.envs == [
-        {"SA_TOKEN": "sa-for-owner-o", "ERP": "hua"} if carries else {"SA_TOKEN": "sa-for-owner-o"}
-    ]
-    kept = RunIdentities(spec).env_user(run_id)
-    assert kept == ("hua" if change in ("none", "read_fails") else "")
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]
 
 
 # ─── a failing impl: the turn does not run, and its words stay server-side ───

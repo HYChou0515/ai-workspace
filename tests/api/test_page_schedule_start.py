@@ -212,3 +212,17 @@ async def test_the_fire_path_does_not_hold_the_event_loop() -> None:
         f"takes {BLOCK * 1000:.0f}ms — so at least one is still running on it, "
         "inside the sweep's tick, on every pod"
     )
+
+
+def test_the_launcher_takes_every_argument_the_sweep_passes() -> None:
+    """`create_app` forwards the sweep's arguments with `**fire`, which `ty`
+    cannot see through (round 4, defect 2): a parameter added to the sweep's
+    start protocol and not here would raise `TypeError` at fire time, inside
+    the sweep's generic handler, with no static signal. This is that signal."""
+    import inspect
+
+    from workspace_app.workflow.user_schedule_sweep import StartRun
+
+    wanted = set(inspect.signature(StartRun.__call__).parameters) - {"self"}
+    taken = set(inspect.signature(start_page_schedule).parameters)
+    assert wanted <= taken, f"start_page_schedule is missing {sorted(wanted - taken)}"

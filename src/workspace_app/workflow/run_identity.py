@@ -31,13 +31,15 @@ class RunIdentity(Struct):
     #: when their values are used (`execute` for a page's run, `converse` for
     #: the workflow panel's Run). Round 2, D2.
     verb: str = "execute"
-    #: The workflow the run STARTED with, and the digest of its file's bytes
-    #: (`schedule_bindings.workflow_digest` — the same bytes a schedule binding
-    #: consents to; "" for a profile's workflow, which ships with the deploy).
-    #: Consent is to that file: checked where the values are USED (each agent
-    #: node, `workflow_exec`), so a PATCHed `workflow_id`, a file edited before
-    #: a resume or a gate decision, or one edited mid-run all run as nobody.
-    #: Round 2 D1, round 3 defect 1 (a manifest digest missed the steps).
+    #: The workflow the person consented to, and the digest of its file's bytes
+    #: (`workspace_store.workflow_bytes_digest` — the one function a schedule
+    #: binding, a press and a built interpreter all use; "" for a profile's
+    #: workflow, which ships with the deploy). Checked where the run's
+    #: interpreter is BUILT (`orchestrator._hold_identity_to` — start, gate
+    #: decision, resume, steer), against the bytes it was built from: a PATCHed
+    #: `workflow_id` or an edited file there runs as nobody. An edit with no
+    #: rebuild changes nothing that runs. Round 2 D1; round 3 (a manifest digest
+    #: missed the steps); round 4 (a live read per node missed a swap-and-back).
     workflow_id: str = ""
     workflow_digest: str = ""
 

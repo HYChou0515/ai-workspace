@@ -2247,15 +2247,15 @@ def create_app(
     from ..apps.profiles import load_profile_workflow
     from ..workflow.dsl import build_run
     from ..workflow.offered import offered_workflow_ids, unparsable_workflow
-    from ..workflow.workspace_store import load_workspace_workflow
+    from ..workflow.workspace_store import load_workspace_workflow_digested
 
     async def _load_workspace(item_id: str, workflow_id: str):
         """#323 P4 (manual §22, Q5): resolve a WORKSPACE-authored ``.workflows/<id>.json``
-        in this item to its ``(run, manifest)`` — the interpreter + its manifest from the
-        one parsed DSL — or ``None`` (absent / malformed), so the orchestrator falls back
-        to a package workflow."""
-        res = await load_workspace_workflow(files, item_id, workflow_id)
-        return (build_run(res[0]), res[1]) if res is not None else None
+        in this item to its ``(run, manifest, digest)`` — the interpreter + its manifest
+        from the one parsed DSL, and the digest of the bytes parsed — or ``None``
+        (absent / malformed), so the orchestrator falls back to a package workflow."""
+        res = await load_workspace_workflow_digested(files, item_id, workflow_id)
+        return (build_run(res[0]), res[1], res[2]) if res is not None else None
 
     # #54: the workflow execution callbacks (agent turn / sandbox / ingest / card
     # upsert+find / landed-check) plus the orchestrator's upload-dir / wire-handle /
@@ -2291,8 +2291,8 @@ def create_app(
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
         load_workspace=_load_workspace,
-        # The same bytes, read the same way, as a schedule binding's consent
-        # (`schedule_binding_routes`) and the node-time check (`workflow_exec`).
+        # A press's consent: the file's bytes, hashed by the one function a
+        # binding and the built interpreter use (`workflow_bytes_digest`).
         digest_workflow=lambda item_id, workflow_id: workflow_digest(
             files.read, item_id, workflow_id
         ),

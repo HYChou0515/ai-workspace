@@ -33,7 +33,6 @@ from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
-from ..workflow.schedule_bindings import workflow_digest
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
@@ -300,7 +299,7 @@ class WorkflowExecutor:
         # "" for an unbound schedule or a trigger) contributes their own stored
         # values over the seam's answer — not the captured user, who for a
         # page's run is the owner it is billed to.
-        env_user, env_verb = await self._run_identity(run_id, item_id)
+        env_user, env_verb = await asyncio.to_thread(self._run_identity, run_id)
         return await unattended_layer(
             self._private_env,
             headless=headless,
@@ -560,37 +559,16 @@ class WorkflowExecutor:
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
 
-    async def _run_identity(self, run_id: str, item_id: str) -> tuple[str, str]:
+    def _run_identity(self, run_id: str) -> tuple[str, str]:
         """Whose private values this node uses, and the right they must still
-        hold (`workflow.run_identity`); ("", …) — nobody's — when there is no
-        identity, or the run is no longer running what they consented to.
-
-        Asked at EVERY agent node, where the values are used, rather than once
-        when the handle is built: a workflow file edited mid-run, before a gate
-        decision or before a resume, and a PATCHed ``workflow_id``, all reach
-        the next node through here and through nothing else (round 3, defect
-        1). The file is read live — the one the run loads. A read that fails
-        withholds the values for this node but keeps the identity: an
-        unanswered question is not a change."""
-        identities = RunIdentities(self._spec)
-        found = identities.get(run_id) if run_id else None
-        if found is None:
-            return "", "execute"
-        run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
-        assert isinstance(run, WorkflowRun)
-        try:
-            live = await workflow_digest(self._files.read, item_id, found.workflow_id)
-        except Exception:  # noqa: BLE001 — see the docstring
-            logger.warning(
-                "workflow_exec: run %s: could not read its workflow; running as nobody",
-                run_id,
-                exc_info=True,
-            )
-            return "", "execute"
-        if run.workflow_id != found.workflow_id or live != found.workflow_digest:
-            identities.forget(run_id)
-            return "", "execute"
-        return found.env_user, found.verb
+        hold (`workflow.run_identity`); ("", …) — nobody's — when none. Read per
+        node, so a steer approved mid-run takes effect at the next one. Whether
+        the run is still running what they consented to is decided where its
+        interpreter is BUILT (`orchestrator._hold_identity_to`), not here: the
+        live file at a node says nothing about the interpreter already running
+        (review round 4, defect 1)."""
+        found = RunIdentities(self._spec).get(run_id) if run_id else None
+        return (found.env_user, found.verb) if found is not None else ("", "execute")
 
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str

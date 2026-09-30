@@ -171,7 +171,7 @@ class WorkflowOrchestrator:
     # (the default — existing callers/tests are unchanged; resolution falls back to
     # ``load_run`` / ``load_manifest``).
     load_workspace: (
-        Callable[[str, str], Awaitable[tuple[ProfileRun, WorkflowManifest] | None]] | None
+        Callable[[str, str], Awaitable[tuple[ProfileRun, WorkflowManifest, str] | None]] | None
     ) = None
     # `plan-wui-viewer-login`: ``digest_workflow(item_id, workflow_id)`` — what a
     # pressed run's consent is recorded against (`run_identity`). None ⇒ "".
@@ -335,14 +335,31 @@ class WorkflowOrchestrator:
 
     async def _resolve_run(
         self, slug: str, profile: str, workflow_id: str, item_id: str
-    ) -> ProfileRun:
+    ) -> tuple[ProfileRun, str]:
         """The run's ``run()`` — the interpreter over a workspace ``.workflows/<id>.json``
-        if wired + present, else the package ``run.py`` / package DSL (§22/Q5)."""
+        if wired + present, else the package ``run.py`` / package DSL (§22/Q5) — and
+        the digest of the bytes it was built from ("" for a package workflow, which
+        ships with the deploy and nobody in an item can edit)."""
         if self.load_workspace is not None:
             ws = await self.load_workspace(item_id, workflow_id)
             if ws is not None:
-                return ws[0]
-        return self.load_run(slug, profile, workflow_id)
+                return ws[0], ws[2]
+        return self.load_run(slug, profile, workflow_id), ""
+
+    def _hold_identity_to(self, run_id: str, workflow_id: str, built_from: str) -> None:
+        """A pressed or bound run's consent is to the workflow FILE its person
+        saw (`run_identity`). Checked HERE, where the interpreter that will run
+        is built — start, gate decision, resume, steer all come through
+        `_execute` — against the digest of the very bytes it was built from.
+        Not the live file at each node: an evil body swapped in for a gate
+        decision and swapped back before the node passed that (review round 4,
+        defect 1). Not a digest of the manifest: it has no steps (round 3)."""
+        identities = RunIdentities(self.spec)
+        ident = identities.get(run_id)
+        if ident is not None and (
+            ident.workflow_id != workflow_id or ident.workflow_digest != built_from
+        ):
+            identities.forget(run_id)
 
     def active_run(self, item_id: str) -> str | None:
         """The item's active run id, or None. Scoped to the item via the indexed
@@ -407,6 +424,17 @@ class WorkflowOrchestrator:
         manifest = await self._resolve_manifest(slug, profile, workflow_id, item_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
+        # What the presser consented to: handed in by a schedule's fire (the
+        # binding's digest — read again here, an edit since the sweep's check
+        # would be recorded as consented), else the file as it is now, when they
+        # pressed. Read BEFORE the row exists: a read that raised after it left
+        # a PENDING run nothing reclaims (round 4, regression 1).
+        digest = ""
+        if env_user:
+            if env_digest is not None:
+                digest = env_digest
+            elif self.digest_workflow is not None:
+                digest = await self.digest_workflow(item_id, workflow_id)
         run_id = (
             self._rm()
             .create(
@@ -429,16 +457,6 @@ class WorkflowOrchestrator:
         if env_user:
             # Whose private values the run's tools get — kept where no route
             # reaches it (`run_identity`, review round 1 R5).
-            # What they consented to: handed in by a schedule's fire (the
-            # binding's digest — read again here, an edit since the sweep's
-            # check would be recorded as consented), else the file as it is now,
-            # when they pressed.
-            if env_digest is not None:
-                digest = env_digest
-            elif self.digest_workflow is not None:
-                digest = await self.digest_workflow(item_id, workflow_id)
-            else:
-                digest = ""
             RunIdentities(self.spec).record(
                 run_id, env_user, verb=env_verb, workflow_id=workflow_id, workflow_digest=digest
             )
@@ -564,7 +582,8 @@ class WorkflowOrchestrator:
         wf = self._build_handle(
             run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
         )
-        profile_run = await self._resolve_run(slug, profile, workflow_id, item_id)
+        profile_run, built_from = await self._resolve_run(slug, profile, workflow_id, item_id)
+        self._hold_identity_to(run_id, workflow_id, built_from)
         inputs = _with_trigger_payload(
             await resolve_inputs(wf, manifest), self._get(run_id).trigger_payload
         )

@@ -12,6 +12,7 @@ Decoupled from the agent context so it unit-tests against a bare ``FileStore``.
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 import msgspec
@@ -88,6 +89,38 @@ def workflow_problem(raw: bytes | str) -> str | None:
     return None
 
 
+def workflow_bytes_digest(raw: bytes) -> str:
+    """What a person's consent to a workflow FILE is recorded as
+    (`plan-wui-viewer-login`): the sha256 of its bytes. ONE function for the
+    three places that must agree — a schedule binding
+    (`schedule_bindings.workflow_digest`), a pressed run's start, and the
+    interpreter a run is built from (`load_workspace_workflow_digested`)."""
+    return hashlib.sha256(raw).hexdigest()
+
+
+async def load_workspace_workflow_digested(
+    files: WorkspaceFiles, workspace_id: str, workflow_id: str
+) -> tuple[WorkflowDef, WorkflowManifest, str] | None:
+    """`load_workspace_workflow`, plus the digest of the very bytes it parsed —
+    so a run is checked against what its interpreter was BUILT from, not a
+    second read that may see different bytes (review round 4, defect 1)."""
+    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
+        # The schedules file is not a workflow, whatever body somebody wrote
+        # into it — refused HERE, in the one loader the orchestrator, the panel's
+        # resolver and the run route all share, so no reader can run it.
+        return None
+    try:
+        raw = await files.read(workspace_id, workspace_workflow_path(workflow_id))
+        d = parse_def(raw)
+    except (FileNotFound, DslError):
+        return None
+    return (
+        d,
+        msgspec.structs.replace(build_manifest(d), id=workflow_id),
+        workflow_bytes_digest(raw),
+    )
+
+
 async def load_workspace_workflow(
     files: WorkspaceFiles, workspace_id: str, workflow_id: str
 ) -> tuple[WorkflowDef, WorkflowManifest] | None:
@@ -95,16 +128,8 @@ async def load_workspace_workflow(
     manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
     or ``None`` when absent / malformed. The single read backing both the orchestrator's
     run resolution and the route's manifest 404 guard (#323 P4)."""
-    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
-        # The schedules file is not a workflow, whatever body somebody wrote
-        # into it — refused HERE, in the one loader the orchestrator, the panel's
-        # resolver and the run route all share, so no reader can run it.
-        return None
-    try:
-        d = parse_def(await files.read(workspace_id, workspace_workflow_path(workflow_id)))
-    except (FileNotFound, DslError):
-        return None
-    return d, msgspec.structs.replace(build_manifest(d), id=workflow_id)
+    got = await load_workspace_workflow_digested(files, workspace_id, workflow_id)
+    return (got[0], got[1]) if got is not None else None
 
 
 #: The one workflow id no workspace may use: its file would BE the item's

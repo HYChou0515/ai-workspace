@@ -32,7 +32,6 @@ Registered post-``spec.apply``: no auto-CRUD, so the routes are the only door.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 from collections.abc import Awaitable, Callable
 
 from msgspec import Struct
@@ -44,6 +43,7 @@ from ..filestore.protocol import FileNotFound
 from .workspace_store import (
     RESERVED_WORKFLOW_ID,
     is_workspace_workflow_path,
+    workflow_bytes_digest,
     workspace_workflow_path,
 )
 
@@ -64,7 +64,7 @@ async def workflow_digest(
         raw = await read(item_id, path)
     except (FileNotFound, FileNotFoundError):
         return ""
-    return hashlib.sha256(raw).hexdigest()
+    return workflow_bytes_digest(raw)
 
 
 class ScheduleBinding(Struct):

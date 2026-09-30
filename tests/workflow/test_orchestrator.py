@@ -1201,7 +1201,7 @@ async def test_workspace_workflow_resolution_shadows_package_and_falls_back(
     ws_manifest = WorkflowManifest(phases=[WorkflowPhase(id="ws-phase")])
 
     async def load_workspace(_item_id, workflow_id):
-        return (workspace_run, ws_manifest) if workflow_id == "myflow" else None
+        return (workspace_run, ws_manifest, "d") if workflow_id == "myflow" else None
 
     store = MemoryFileStore()
     await store.write("rca/i1", "/uploads/input.json", b"{}")
@@ -1364,6 +1364,86 @@ async def test_a_scheduled_run_records_what_its_binder_consented_to(spec_instanc
 
     ident = RunIdentities(spec_instance).get(run_id)
     assert ident is not None and ident.workflow_digest == "d-consented"
+
+
+@pytest.mark.parametrize(
+    ("recorded", "built_from", "kept"),
+    [("d1", "d1", "presser"), ("d1", "d2", "")],
+)
+async def test_a_run_keeps_its_pressers_values_only_if_built_from_what_they_saw(
+    spec_instance: SpecStar, recorded: str, built_from: str, kept: str
+):
+    """Round 4 (defect 1): checked where the interpreter is BUILT, against the
+    digest of the bytes it was built from — so no read between that build and
+    a node can make an evil interpreter look consented."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    async def digest(_item_id: str, _workflow_id: str) -> str:
+        return recorded
+
+    async def load_workspace(_item_id: str, _workflow_id: str):
+        return run, MANIFEST, built_from
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, load_workspace=load_workspace)
+    orch.digest_workflow = digest
+    rid = await orch.start(
+        slug="rca",
+        item_id="iB",
+        profile="echo",
+        captured_user="o",
+        env_user="presser",
+        workflow_id="w",
+    )
+    await asyncio.sleep(0)
+
+    assert RunIdentities(spec_instance).env_user(rid) == kept
+
+
+async def test_a_run_resumed_on_another_workflow_id_drops_whose_values_it_uses(
+    spec_instance: SpecStar,
+):
+    """`WorkflowRun.workflow_id` is writable through its auto-CRUD, and a resume
+    builds from it — a PATCH onto another workflow (a package one included,
+    whose digest is "") must not carry the presser along."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, now=lambda: 1_000_000)
+    rid = _insert_run(
+        orch, item_id="iP", status=RunStatus.RUNNING, started=0, progress_at=0, workflow_id="other"
+    )
+    RunIdentities(spec_instance).record(
+        rid, "presser", verb="execute", workflow_id="w", workflow_digest=""
+    )
+
+    assert await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000) is True
+    await asyncio.sleep(0)
+
+    assert RunIdentities(spec_instance).env_user(rid) == ""
+
+
+async def test_a_digest_read_that_fails_at_start_leaves_no_run_behind(spec_instance: SpecStar):
+    """Round 4 (regression 1): the digest was read AFTER the run row was
+    created; a read that raised left a PENDING row that counts as active and
+    that no sweeper reclaims — every later Run on that chat got a 409."""
+
+    async def digest(_item_id: str, _workflow_id: str) -> str:
+        raise RuntimeError("sandbox busy")
+
+    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    orch.digest_workflow = digest
+
+    with pytest.raises(RuntimeError):
+        await orch.start(
+            slug="rca", item_id="iX", profile="echo", captured_user="o", env_user="presser"
+        )
+
+    assert orch.active_run("iX") is None
 
 
 async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: SpecStar):
