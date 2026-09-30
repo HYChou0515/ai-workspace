@@ -1231,6 +1231,38 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   `read_skill("system-help")`，接著讀 `.skill/system-help/` 底下的文件或交給 `docs-reader`，回答附上文件名。
 - 該 item 的 Skills 面板：`system-help` 那一列沒有「可在此編輯」，也沒有 Update / Reset。
 
+
+### 2026-10-01 · #869 看頁面的人用自己的登入：環境變數分 shared / private 兩層、每個變數一種政策、排程「用我的身分執行」 {#pr-869}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-wui-viewer-login.md`）：
+
+- **`IRequestEnv.env_for` 回的值現在會存下來**，存在「那個人、那個 item」的 private 列（新 model `PrivateEnv`），
+  不再只活一輪。為什麼：pod 死掉後被接手重跑的 turn、那個人自己的 goal 續跑，沒有 request 可問。
+  別人的值不會用在另一個人的 turn。`env_without_request` 的值仍然不存。
+  - ⚠️ **憑證因此落在資料庫裡**（明文，和 item 的 `env_vars` 一樣）。DB 的備份與能直接讀 DB 的人都拿得到；
+    透過 API 只有本人讀得到，superuser 也不行。刪除 item 會一併清掉所有人的列。
+- **沒設政策的 item 行為不變**：預設 `shared_first` 就是舊的 `{**request_env, **item_env}`。
+- 聊天的「環境變數」鈕現在**有 `converse` 的人也看得到**（放自己的值用）；存共用值仍要 `write_meta`，其他人
+  「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**。
+- 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
+  **按的人**自己的值（新欄位 `WorkflowRun.env_user`）。頁面排程只有在有人按「用我的身分執行」後才帶那個人的值。
+- WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
+  約 32px 的平台列。
+
+**資料** — 沒有 `Schema` 升版、沒有要跑的指令。新 model `PrivateEnv`、`ScheduleBinding` 在啟動時註冊（沒有
+auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資料讀出來就是空的。
+
+**k8s · CI 側** — 沒有新 manifest、env、probe 或 JobType。image 照常重 build 即可。
+
+**確認做完**
+
+- 在一個 item 的「環境變數」→「所有參與者」把某個變數設成「各人自己填」並儲存；換一個有 `converse` 的參與者打開，
+  「只有我」分頁看得到那一列、能填、存完再打開值還在（遮罩，按「顯示」看得到）。
+- 部署有接 `server.request_env` 的話：那個人送一則聊天後，`GET /api/a/{slug}/items/{id}/env/private`（以他的身分）
+  回得到 `env_for` 給的值；以**別人**的身分打同一個網址，回的是別人自己的（通常是空的）。
+- 一個有 `schedules.json` 的 WUI 頁面用 `/w/...` 打開：上方有平台列，「這一頁的排程」列得出每一列、按「用我的身分
+  執行」後那一列顯示用你的身分。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
