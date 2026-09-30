@@ -135,6 +135,7 @@ class StartRun(Protocol):
         payload: dict[str, Any],
         key: str,
         env_user: str,
+        env_digest: str | None = None,
     ) -> str | None: ...
 
 
@@ -289,41 +290,63 @@ class UserScheduleSweeper:
             )
             return UNKNOWN
 
-    async def _binder_for(self, item_id: str, trigger_id: str, workflow_id: str) -> str:
+    async def _binder_for(
+        self, item_id: str, trigger_id: str, workflow_id: str
+    ) -> tuple[str, str | None]:
         """Whose private values this fire runs with: the binder — if they may
         still make this item run work, and the workflow is still the one they
         consented to. Otherwise the binding is dropped and they are told why;
-        the fire runs as nobody."""
+        the fire runs as nobody. Returns ``(binder, the workflow digest they
+        consented to)`` — the run records that digest, not one read at start.
+
+        A check that FAILS, at any step, runs the fire as nobody too — never as
+        a binder it could not check, and never not at all (a raise here would
+        reach the start's handler and skip the window). Round 2 R4 guarded only
+        the read; round 3 (defect 2) found the access check and the unbind
+        outside it."""
         if self._bindings is None:
-            return ""
+            return "", None
         try:
-            binding = await asyncio.to_thread(self._bindings.get, trigger_id)
-        except Exception:  # noqa: BLE001 — the schedule still fires, as nobody (round 2, R4)
-            logger.exception("user schedules: %s: could not read the binding", trigger_id)
-            return ""
+            return await self._checked_binder(self._bindings, item_id, trigger_id, workflow_id)
+        except Exception:  # noqa: BLE001 — see the docstring
+            logger.exception("user schedules: %s: could not check the binding", trigger_id)
+            return "", None
+
+    async def _checked_binder(
+        self, bindings: ScheduleBindings, item_id: str, trigger_id: str, workflow_id: str
+    ) -> tuple[str, str | None]:
+        binding = await asyncio.to_thread(bindings.get, trigger_id)
         if binding is None:
-            return ""
+            return "", None
         if self._binder_may is not None and not await asyncio.to_thread(
             self._binder_may, binding.user_id, item_id
         ):
-            await asyncio.to_thread(self._bindings.unbind, trigger_id)
+            await asyncio.to_thread(bindings.unbind, trigger_id)
             await self._tell(binding, "no_access")
-            return ""
+            return "", None
         if await self._workflow_changed(item_id, workflow_id, binding.workflow_digest):
-            await asyncio.to_thread(self._bindings.unbind, trigger_id)
+            await asyncio.to_thread(bindings.unbind, trigger_id)
             await self._tell(binding, "changed")
-            return ""
-        return binding.user_id
+            return "", None
+        return binding.user_id, binding.workflow_digest
 
     async def _workflow_changed(self, item_id: str, workflow_id: str, bound: str) -> bool:
         """Has the workflow's body changed since the binder consented (F4)? Asked
         of the LIVE file — the one the run will load, and the one the binding
         was made on (round 2, D3: the snapshot matching said nothing about
-        it). Only read when the schedule is bound. A read that fails decides
-        nothing (keep the binding)."""
+        it). Only read when the schedule is bound. A read that fails, or does
+        not answer within the sweep's confirmation bound, decides nothing (keep
+        the binding): a live read can rebuild a reaped sandbox, and the sweep
+        walks items one after another, so an unbounded one held up every other
+        item's schedules (round 3, regression 1)."""
         try:
             live = self._read_live or self._read
-            return await workflow_digest(live, item_id, workflow_id) != bound
+            return (
+                await asyncio.wait_for(
+                    workflow_digest(live, item_id, workflow_id), self._confirm_timeout_s
+                )
+                != bound
+            )
         except Exception:  # noqa: BLE001 — an unanswered question is not a change
             logger.warning(
                 "user schedules: %s: could not read workflow %r to check a binding",
@@ -593,6 +616,7 @@ class UserScheduleSweeper:
             if not await asyncio.to_thread(self._store.try_claim, trigger_id, window):
                 continue
             try:
+                binder, consented = await self._binder_for(item_id, trigger_id, row.run)
                 await self._start(
                     item_id=item_id,
                     workflow_id=row.run,
@@ -612,7 +636,8 @@ class UserScheduleSweeper:
                     key=trigger_id,
                     # Captured as the owner above; RUN WITH the binder's private
                     # values, or nobody's ("") when no one pressed "run as me".
-                    env_user=await self._binder_for(item_id, trigger_id, row.run),
+                    env_user=binder,
+                    env_digest=consented,
                 )
             except ActiveRunExists:
                 # NOT a failure. The schedule's previous fire is still running,

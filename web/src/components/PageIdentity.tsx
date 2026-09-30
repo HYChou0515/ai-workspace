@@ -108,12 +108,13 @@ function useKeyLabel(missing: Missing[], holdsOwn: boolean): { state: KeyState; 
 
 export function missingLabel(t: ReturnType<typeof useT>, missing: Missing[]): string {
   const parts = keyLabelParts(missing);
+  const sep = t("env.bar.sep");
   if (parts.kind === "manySystems") return t("env.bar.many", { count: String(parts.count) });
   if (parts.kind === "manyItems")
-    return t("env.bar.manyItems", { names: parts.first.join("、"), count: String(parts.count) });
+    return t("env.bar.manyItems", { names: parts.first.join(sep), count: String(parts.count) });
   return [
-    parts.logins.length > 0 ? t("env.bar.login", { names: parts.logins.join("、") }) : "",
-    parts.sets.length > 0 ? t("env.bar.set", { names: parts.sets.join("、") }) : "",
+    parts.logins.length > 0 ? t("env.bar.login", { names: parts.logins.join(sep) }) : "",
+    parts.sets.length > 0 ? t("env.bar.set", { names: parts.sets.join(sep) }) : "",
   ]
     .filter(Boolean)
     .join(" · ");

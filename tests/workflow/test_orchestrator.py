@@ -1310,66 +1310,60 @@ async def test_a_run_remembers_who_it_runs_for_and_by_which_right(spec_instance:
     assert (ident.env_user, ident.verb) == ("presser", "converse")
 
 
-async def test_a_run_rebuilt_on_a_different_workflow_drops_whose_values_it_uses(
+async def test_a_run_records_the_workflow_file_its_presser_consented_to(
     spec_instance: SpecStar,
 ):
-    """D1: `workflow_id` and `status` are writable through the run's auto-CRUD,
-    and every respawn (resume / gate decide / steer) rebuilds from them. The
-    presser consented to the workflow the run STARTED with; rebuilt on any
-    other manifest, it runs as nobody in particular."""
+    """Round 3 (defect 1): the consent is to the workflow FILE — the digest the
+    orchestrator is handed for it, not one of its manifest, which leaves the
+    steps out. `workflow_exec` checks it at every agent node."""
     from workspace_app.workflow.run_identity import RunIdentities
 
+    asked: list[tuple[str, str]] = []
+
+    async def digest(item_id: str, workflow_id: str) -> str:
+        asked.append((item_id, workflow_id))
+        return "d-of-" + workflow_id
+
     orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    orch.digest_workflow = digest
     run_id = await orch.start(
-        slug="rca", item_id="iID2", profile="echo", captured_user="owner", env_user="presser"
+        slug="rca",
+        item_id="iWD",
+        profile="echo",
+        captured_user="owner",
+        env_user="presser",
+        workflow_id="nightly",
     )
-    other = WorkflowManifest(phases=[WorkflowPhase(id="exfiltrate")])
 
-    orch._build_handle(run_id, "iID2", "owner", other, "iID2")
+    ident = RunIdentities(spec_instance).get(run_id)
+    assert ident is not None
+    assert (ident.workflow_id, ident.workflow_digest) == ("nightly", "d-of-nightly")
+    assert asked == [("iWD", "nightly")]
 
-    assert RunIdentities(spec_instance).env_user(run_id) == ""
 
-
-async def test_the_same_workflow_keeps_whose_values_it_uses(spec_instance: SpecStar):
+async def test_a_scheduled_run_records_what_its_binder_consented_to(spec_instance: SpecStar):
+    """Round 3: a schedule's fire hands over the binding's digest. Read again
+    at start instead, an edit between the sweep's check and the start would be
+    recorded as consented."""
     from workspace_app.workflow.run_identity import RunIdentities
 
+    async def digest(_item_id: str, _workflow_id: str) -> str:
+        return "d-edited-since"
+
     orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    orch.digest_workflow = digest
     run_id = await orch.start(
-        slug="rca", item_id="iID3", profile="echo", captured_user="owner", env_user="presser"
+        slug="rca",
+        item_id="iSD",
+        profile="echo",
+        captured_user="owner",
+        env_user="binder",
+        env_digest="d-consented",
+        workflow_id="nightly",
     )
 
-    orch._build_handle(run_id, "iID3", "owner", MANIFEST, "iID3")
-
-    assert RunIdentities(spec_instance).env_user(run_id) == "presser"
-
-
-@pytest.mark.parametrize(("edited", "kept"), [(True, ""), (False, "presser")])
-async def test_a_resumed_run_whose_workflow_was_edited_drops_whose_values_it_uses(
-    spec_instance: SpecStar, edited: bool, kept: str
-):
-    """Round 2 veracity V1: `resume` reloads the LIVE workflow file ("an edited
-    def is picked up"), so an orphan edited while it waited must not carry on
-    with the presser's values; unedited, it must."""
-    from workspace_app.workflow.run_identity import RunIdentities, manifest_digest
-
-    now_def = [MANIFEST]
-
-    async def run(wf, inputs):
-        return {"ok": True}
-
-    orch, _ = _orch(_identity_spec(spec_instance), run, now=lambda: 1_000_000)
-    orch.load_manifest = lambda _s, _p, _w="": now_def[0]
-    rid = _insert_run(orch, item_id="iR", status=RunStatus.RUNNING, started=0, progress_at=0)
-    RunIdentities(spec_instance).record(
-        rid, "presser", verb="execute", manifest_digest=manifest_digest(MANIFEST)
-    )
-    if edited:
-        now_def[0] = WorkflowManifest(phases=[WorkflowPhase(id="payroll")])
-
-    assert await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000) is True
-    await asyncio.sleep(0)
-
-    assert RunIdentities(spec_instance).env_user(rid) == kept
+    ident = RunIdentities(spec_instance).get(run_id)
+    assert ident is not None and ident.workflow_digest == "d-consented"
 
 
 async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: SpecStar):

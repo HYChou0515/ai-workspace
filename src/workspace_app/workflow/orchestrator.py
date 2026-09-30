@@ -59,7 +59,7 @@ from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
 from .run import PhaseState, RunStatus, StepState, WorkflowRun
-from .run_identity import RunIdentities, manifest_digest
+from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
@@ -173,6 +173,9 @@ class WorkflowOrchestrator:
     load_workspace: (
         Callable[[str, str], Awaitable[tuple[ProfileRun, WorkflowManifest] | None]] | None
     ) = None
+    # `plan-wui-viewer-login`: ``digest_workflow(item_id, workflow_id)`` — what a
+    # pressed run's consent is recorded against (`run_identity`). None ⇒ "".
+    digest_workflow: Callable[[str, str], Awaitable[str]] | None = None
     # Release the run's resources (manual §16): ``release(item_id, terminal, chat_key)``.
     # ``terminal`` is True on done/error/cancelled (tear down sandbox + the run's turn
     # session), False on an ``awaiting_human`` pause (free the sandbox but keep the
@@ -372,6 +375,7 @@ class WorkflowOrchestrator:
         captured_user: str,
         env_user: str = "",
         env_verb: str = "execute",
+        env_digest: str | None = None,
         workflow_id: str = "",
         chat_id: str = "",
         origin_trigger: str = "",
@@ -425,8 +429,18 @@ class WorkflowOrchestrator:
         if env_user:
             # Whose private values the run's tools get — kept where no route
             # reaches it (`run_identity`, review round 1 R5).
+            # What they consented to: handed in by a schedule's fire (the
+            # binding's digest — read again here, an edit since the sweep's
+            # check would be recorded as consented), else the file as it is now,
+            # when they pressed.
+            if env_digest is not None:
+                digest = env_digest
+            elif self.digest_workflow is not None:
+                digest = await self.digest_workflow(item_id, workflow_id)
+            else:
+                digest = ""
             RunIdentities(self.spec).record(
-                run_id, env_user, verb=env_verb, manifest_digest=manifest_digest(manifest)
+                run_id, env_user, verb=env_verb, workflow_id=workflow_id, workflow_digest=digest
             )
         self._prune_runs(item_id, keep=run_id)
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
@@ -627,15 +641,6 @@ class WorkflowOrchestrator:
             run_id=run_id,
             run_started_at=res.info.created_time,
         )
-        # Consent is to the run AS STARTED (round 2, D1): rebuilt on any other
-        # manifest — a PATCHed `workflow_id`, a workflow file edited before a
-        # resume — it no longer runs with the presser's values.
-        identities = RunIdentities(self.spec)
-        ident = identities.get(run_id)
-        if ident is not None and (
-            manifest is None or ident.manifest_digest != manifest_digest(manifest)
-        ):
-            identities.forget(run_id)
         self.wire_handle(wf, run_id, item_id, captured_user, key)
         return wf
 

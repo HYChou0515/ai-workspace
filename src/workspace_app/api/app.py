@@ -81,6 +81,7 @@ from ..workflow.schedule_bindings import (
     ScheduleBinding,
     ScheduleBindings,
     register_schedule_bindings,
+    workflow_digest,
 )
 from ..workflow.triggers import ScanLease, SpecstarTriggerStore, register_trigger_store
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
@@ -245,6 +246,7 @@ async def start_page_schedule(
     payload: dict[str, Any],
     key: str,
     env_user: str = "",
+    env_digest: str | None = None,
 ) -> str | None:
     """Launch one page-declared schedule.
 
@@ -295,6 +297,8 @@ async def start_page_schedule(
             # Whose private values it runs with — the schedule's binder, or ""
             # (`plan-wui-viewer-login` Q7); billing stays with `acting_user`.
             env_user=env_user,
+            # The workflow digest the binder consented to (round 3).
+            env_digest=env_digest,
             workflow_id=workflow_id,
             chat_id=chat_id,
             payload=payload,
@@ -1279,32 +1283,19 @@ def create_app(
         """
         return _owner_of(item_id) or ""
 
-    async def _start_page_schedule(
-        *,
-        item_id: str,
-        workflow_id: str,
-        acting_user: str,
-        payload: dict[str, Any],
-        key: str,
-        env_user: str,
-    ) -> str | None:
+    async def _start_page_schedule(**fire: Any) -> str | None:
         """Launch one page-declared schedule.
 
         A thin adapter over :func:`start_page_schedule`, which holds the whole
         body. The orchestrator is read HERE, at call time, because it is
         constructed later than this line — the same deferred wiring
         `entity_write_sink` uses. The body lives at module level so a test can
-        drive it; see `tests/api/test_page_schedule_start.py`.
+        drive it; see `tests/api/test_page_schedule_start.py`. The sweep's
+        arguments are FORWARDED, not re-listed: a re-listed copy is where a new
+        one (round 3's ``env_digest``) is dropped without any test noticing.
         """
         return await start_page_schedule(
-            locator=locator,
-            orchestrator=workflow_orchestrator,
-            item_id=item_id,
-            workflow_id=workflow_id,
-            acting_user=acting_user,
-            payload=payload,
-            key=key,
-            env_user=env_user,
+            locator=locator, orchestrator=workflow_orchestrator, **fire
         )
 
     def _binding_expired(binding: ScheduleBinding, why: str) -> None:
@@ -2300,6 +2291,11 @@ def create_app(
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
         load_workspace=_load_workspace,
+        # The same bytes, read the same way, as a schedule binding's consent
+        # (`schedule_binding_routes`) and the node-time check (`workflow_exec`).
+        digest_workflow=lambda item_id, workflow_id: workflow_digest(
+            files.read, item_id, workflow_id
+        ),
         load_upload_dir=workflow_executor.upload_dir,
         wire_handle=workflow_executor.wire_handle,
         publish=turn_engine.publish,

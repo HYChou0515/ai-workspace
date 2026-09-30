@@ -414,3 +414,39 @@ def test_stored_values_come_back_in_the_order_they_were_given():
 
     assert list(store.seam("alice", rid)) == ["Z", "A", "M"]
     assert list(store.get("alice", rid)) == ["Q", "B"]
+
+
+def test_a_sign_out_that_lands_between_the_write_and_its_prune_does_not_raise():
+    """Round 3 (defect 3): `clear` in the gap after the update left `prune`
+    naming a row that is gone — raised out of the chat send as a 500."""
+    from workspace_app.api.private_env import PrivateEnvStore, PrivateSeam
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "t0"})
+    rm = spec.get_resource_manager(PrivateSeam)
+    real_update = rm.update
+
+    def update_then_sign_out(*a, **kw):  # noqa: ANN002, ANN003, ANN202
+        out = real_update(*a, **kw)
+        store.clear("alice", rid)
+        return out
+
+    rm.update = update_then_sign_out
+    store.record_seam("alice", rid, {"TOKEN": "t1"})
+
+    assert store.seam("alice", rid) == {}
+
+
+def test_the_seam_answering_the_same_names_in_a_new_order_is_kept_in_that_order():
+    """Round 3 (defect 4): tools see names in the order the seam gave them
+    (R3), and an unattended turn reads them back from the row — so a new order
+    alone is a change to keep."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"Z": "1", "B": "2"})
+    store.record_seam("alice", rid, {"B": "2", "Z": "1"})
+
+    assert list(store.seam("alice", rid)) == ["B", "Z"]

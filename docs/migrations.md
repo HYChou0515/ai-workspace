@@ -1263,18 +1263,19 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - **要做的事（`rollout 前`）**：你的 provider impl 會被更多人呼叫——它自己的 rate limit / 鎖帳號規則照這個量檢查。
   - 漏做的症狀：參與者一起登入時觸發你那邊的鎖帳號或 429，登入框回「取得失敗」。
 - 聊天的「環境變數」鈕現在**有 `converse` 的人也看得到**，而且**預設開在「只有我」分頁**；存共用值仍要 `write_meta`，
-  其他人「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**。
+  其他人「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**，#750 的「某工具沒有宣告它需要哪些變數」提示也拿掉了（畫面上把沒宣告當作不需要；核心仍分「沒宣告」與「不需要」）。
   缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
 - 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
-  **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它；run 之後被換成別的 workflow——`workflow_id`
-  被改、續跑前 workflow 檔被改、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
+  **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它；run 之後不再是他按下的那個——`workflow_id`
+  被改、workflow 檔內容被改（每個 agent 節點執行前比對即時檔案，run 進行中改也算）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
   才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
   綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
   約 32px 的平台列。
 - 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
-  再多一次刪除與建立。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
-  （`user_may`：item 與使用者群組各讀一次）與兩次 private 讀取。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
+  再多一次取代與刪舊 revision。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
+  （`user_may`：重讀 item 的存取資料與使用者群組，不快取）與 private 讀取（有 seam 時兩列）；帶 `env_user` 的 run
+  另外在開始時讀一次 workflow 檔，每個 agent 節點再讀一次 run 列與即時 workflow 檔。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
   多一次綁定讀取，有綁定時再多一次存取確認與一次（即時）workflow 檔讀取。前端：聊天標頭顯示「環境變數」鈕時，
   打開 item 就發 3 個 GET（tool 清單、登入方法、自己的值；以前要打開面板才發）；`/w/` 頁面與 WUI 分頁的工具列
   打開時各發 5 個 GET（再加 `env/layers` 與排程綁定），同一個 item 共用快取。

@@ -11,8 +11,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BindingRow } from "../api/scheduleBindings";
 import type { EnvProvider, ItemToolState } from "../api/types";
+import { translate } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
-import { PageIdentityBar } from "./PageIdentity";
+import { missingLabel, PageIdentityBar } from "./PageIdentity";
 
 afterEach(cleanup);
 
@@ -165,5 +166,19 @@ describe("PageIdentityBar", () => {
     await waitFor(() =>
       expect(bindings.unbind).toHaveBeenCalledWith("rca", "i1", "/report/schedules.json", "c"),
     );
+  });
+});
+
+describe("missingLabel", () => {
+  it("lists names with the reader's own separator (round 3: English read 'A、B')", () => {
+    type Args = Parameters<typeof translate>;
+    const en = (key: Args[1], vars?: Args[2]) => translate("en", key, vars);
+    const zh = (key: Args[1], vars?: Args[2]) => translate("zh-TW", key, vars);
+    const two = [
+      { kind: "login" as const, name: "ERP" },
+      { kind: "login" as const, name: "MES" },
+    ];
+    expect(missingLabel(en, two)).toBe("Sign in to ERP, MES");
+    expect(missingLabel(zh, two)).toBe("登入 ERP、MES");
   });
 });

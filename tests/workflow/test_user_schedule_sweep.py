@@ -14,6 +14,7 @@ is to be boring:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -81,6 +82,9 @@ class _Started:
         #: Whose private env layer each fire ran with (`plan-wui-viewer-login`):
         #: the schedule's binder, or "" for nobody's.
         self.env_users: list[str] = []
+        #: The workflow digest the binder consented to, handed to the run as
+        #: what its nodes must still be running (round 3).
+        self.env_digests: list[str | None] = []
 
     async def __call__(
         self,
@@ -91,10 +95,12 @@ class _Started:
         payload: dict,
         key: str,
         env_user: str,
+        env_digest: str | None = None,
     ):
         self.runs.append((item_id, workflow_id, acting_user, payload))
         self.keys.append(key)
         self.env_users.append(env_user)
+        self.env_digests.append(env_digest)
         return "run-1"
 
 
@@ -2197,6 +2203,9 @@ def test_an_unchanged_workflow_keeps_the_binding():
 
     assert started.env_users == ["bob"]
     assert expired == []
+    # Round 3: the fire hands the run the digest the binder CONSENTED to — not
+    # one read again at start, which an edit in between would make its own.
+    assert started.env_digests == [hashlib.sha256(_WF_V1.encode()).hexdigest()]
 
 
 def test_a_workflow_the_snapshot_has_not_caught_up_with_keeps_the_binding():
@@ -2241,21 +2250,59 @@ def test_the_workflow_that_counts_is_the_live_one_the_run_will_load():
     assert ScheduleBindings(spec).binder(key) == ""
 
 
-def test_a_bindings_store_that_fails_does_not_stop_the_schedule():
-    """Round 2 (R4): the fire runs, as nobody in particular — never as a
-    binder it could not check."""
+@pytest.mark.parametrize("fails", ["get", "may", "unbind"])
+def test_a_binding_check_that_fails_does_not_stop_the_schedule(fails: str):
+    """Round 2 (R4), round 3 (defect 2): whichever part of the check fails —
+    reading the binding, asking whether the binder may, dropping it — the fire
+    runs, as nobody in particular: never as a binder it could not check, and
+    never not at all."""
+
+    def boom(*_a):
+        raise RuntimeError("store down")
 
     spec = _spec()
     ScheduleIndex(spec).record(ITEM, PATH)
     _bind_bob(spec, DAILY)
     started, expired = _Started(), []
     files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
-    sweeper = _bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired)
-
-    def boom(_key):
-        raise RuntimeError("store down")
-
-    sweeper._bindings.get = boom
+    may = {"get": lambda _u, _i: True, "may": boom, "unbind": lambda _u, _i: False}[fails]
+    sweeper = _bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired, may=may)
+    if fails == "get":
+        sweeper._bindings.get = boom
+    elif fails == "unbind":
+        sweeper._bindings.unbind = boom
     asyncio.run(sweeper.tick())
 
     assert started.env_users == [""]
+
+
+def test_a_workflow_read_that_never_answers_does_not_hold_up_the_sweep():
+    """Round 3 (regression 1): the binding check reads the LIVE workflow file on
+    every bound fire, and a live read can rebuild a reaped sandbox. Unbounded,
+    one hung read stalled every item behind it — schedules master would have
+    fired. Bounded like the sweep's other live read; unanswered is not a
+    change, so the binding stands."""
+
+    class _HangsOnWorkflows(_Files):
+        async def read(self, item_id: str, path: str) -> bytes:
+            if path.startswith("/.workflows/"):
+                await asyncio.sleep(30)
+            return await super().read(item_id, path)
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob(spec, DAILY)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    live = _HangsOnWorkflows(**files.files)
+    sweeper = _bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired, live=live)
+    sweeper._confirm_timeout_s = 0.05
+
+    async def bounded() -> None:
+        # A hang is a FAILURE here, not a 30-second wait.
+        await asyncio.wait_for(sweeper.tick(), 10)
+
+    asyncio.run(bounded())
+
+    assert started.env_users == ["bob"]
+    assert expired == []

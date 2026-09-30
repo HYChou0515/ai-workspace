@@ -33,6 +33,7 @@ from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
+from ..workflow.schedule_bindings import workflow_digest
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
@@ -157,8 +158,7 @@ class WorkflowExecutor:
         *,
         lane: str | None = None,
         entity_write_origin: EntityOrigin | None = None,
-        env_user: str = "",
-        env_verb: str = "execute",
+        run_id: str = "",
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
@@ -217,7 +217,7 @@ class WorkflowExecutor:
             # #429 P10: an agent node's entity writes carry the run's trigger origin, so
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
-            caller_env=await self._headless_env(captured_user, item_id, env_user, env_verb),
+            caller_env=await self._headless_env(captured_user, item_id, run_id),
         )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
@@ -258,7 +258,7 @@ class WorkflowExecutor:
         return answer
 
     async def _headless_env(
-        self, captured_user: str, item_id: str, env_user: str = "", env_verb: str = "execute"
+        self, captured_user: str, item_id: str, run_id: str = ""
     ) -> dict[str, str]:
         """What this node's tools get from the deploy's seam, given that no
         request is behind it: the seam's answer for ``captured_user`` — the item
@@ -300,6 +300,7 @@ class WorkflowExecutor:
         # "" for an unbound schedule or a trigger) contributes their own stored
         # values over the seam's answer — not the captured user, who for a
         # page's run is the owner it is billed to.
+        env_user, env_verb = await self._run_identity(run_id, item_id)
         return await unattended_layer(
             self._private_env,
             headless=headless,
@@ -559,11 +560,37 @@ class WorkflowExecutor:
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
 
-    def _run_identity(self, run_id: str) -> tuple[str, str]:
-        """Whose private values this run uses, and the right they must still
-        hold (`workflow.run_identity`); ("", …) when none — nobody's."""
-        found = RunIdentities(self._spec).get(run_id)
-        return (found.env_user, found.verb) if found is not None else ("", "execute")
+    async def _run_identity(self, run_id: str, item_id: str) -> tuple[str, str]:
+        """Whose private values this node uses, and the right they must still
+        hold (`workflow.run_identity`); ("", …) — nobody's — when there is no
+        identity, or the run is no longer running what they consented to.
+
+        Asked at EVERY agent node, where the values are used, rather than once
+        when the handle is built: a workflow file edited mid-run, before a gate
+        decision or before a resume, and a PATCHed ``workflow_id``, all reach
+        the next node through here and through nothing else (round 3, defect
+        1). The file is read live — the one the run loads. A read that fails
+        withholds the values for this node but keeps the identity: an
+        unanswered question is not a change."""
+        identities = RunIdentities(self._spec)
+        found = identities.get(run_id) if run_id else None
+        if found is None:
+            return "", "execute"
+        run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
+        assert isinstance(run, WorkflowRun)
+        try:
+            live = await workflow_digest(self._files.read, item_id, found.workflow_id)
+        except Exception:  # noqa: BLE001 — see the docstring
+            logger.warning(
+                "workflow_exec: run %s: could not read its workflow; running as nobody",
+                run_id,
+                exc_info=True,
+            )
+            return "", "execute"
+        if run.workflow_id != found.workflow_id or live != found.workflow_digest:
+            identities.forget(run_id)
+            return "", "execute"
+        return found.env_user, found.verb
 
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
@@ -575,10 +602,8 @@ class WorkflowExecutor:
         # agent node's entity writes are depth-counted like the handle's own — read once
         # here; it's fixed for the run's lifetime.
         origin = wf.entity_origin
-        # Whose private values the run's turns get — read off the run row once,
-        # as `_build_handle` reads the trigger origin, rather than threaded
-        # through every drive/execute signature; fixed for the run's lifetime.
-        env_user, env_verb = self._run_identity(run_id)
+        # Whose private values the run's turns get is asked per node, by run id
+        # (`_run_identity`), so an edit between nodes is seen.
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
             item_id,
             chat_key,
@@ -586,8 +611,7 @@ class WorkflowExecutor:
             prompt,
             tools,
             entity_write_origin=origin,
-            env_user=env_user,
-            env_verb=env_verb,
+            run_id=run_id,
         )
         wf.reconcile = lambda: self._reconcile(item_id)
         # #429 P5: a per-element turn-lane factory — each map element drives its own
@@ -602,8 +626,7 @@ class WorkflowExecutor:
                 tools,
                 lane=f"{chat_key}#{subkey}",
                 entity_write_origin=origin,
-                env_user=env_user,
-                env_verb=env_verb,
+                run_id=run_id,
             )
         )
         wf.turn_concurrency = self._turn_concurrency

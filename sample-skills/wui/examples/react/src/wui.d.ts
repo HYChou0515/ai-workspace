@@ -85,8 +85,9 @@ export interface Workspace {
    *
    * Resolves once the sign-in is SHOWN, not when the person finishes. Call it
    * when a tool answers that it is not authorised, then let them try again.
-   * What they sign in with fills their own values once they SAVE it, and a
-   * tool gets it for names the item lets them supply themselves.
+   * What they sign in with fills their own values once they SAVE it. A tool
+   * gets their value unless the item has a shared value for that name and
+   * keeps the shared one first (the default).
    */
   openLogin(): Promise<{ opened: true }>;
   /** The page's only reach outside the item. Declare the tool in `tools:` first.

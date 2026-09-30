@@ -59,7 +59,9 @@ class _Orchestrator:
         return self.run_id
 
 
-async def _fire(loc: _Locator, orch: _Orchestrator, *, env_user: str = "") -> str | None:
+async def _fire(
+    loc: _Locator, orch: _Orchestrator, *, env_user: str = "", env_digest: str | None = None
+) -> str | None:
     return await start_page_schedule(
         locator=loc,
         orchestrator=orch,
@@ -69,6 +71,7 @@ async def _fire(loc: _Locator, orch: _Orchestrator, *, env_user: str = "") -> st
         payload={"line": "A"},
         key="wui:i1:abcd",
         env_user=env_user,
+        env_digest=env_digest,
     )
 
 
@@ -78,10 +81,12 @@ async def test_the_run_carries_the_binder_as_whose_private_values_it_uses() -> N
     on the run, and the sweep's answer must reach the second."""
     orch = _Orchestrator()
 
-    await _fire(_Locator(), orch, env_user="bob")
+    await _fire(_Locator(), orch, env_user="bob", env_digest="d-consented")
 
     assert orch.starts[0]["captured_user"] == "alice"
     assert orch.starts[0]["env_user"] == "bob"
+    # Round 3: and what bob consented to, which the run must still be running.
+    assert orch.starts[0]["env_digest"] == "d-consented"
 
 
 async def test_a_started_run_is_never_reported_as_not_started() -> None:

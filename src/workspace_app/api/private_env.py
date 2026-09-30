@@ -151,7 +151,10 @@ class PrivateEnvStore:
                 rm.create(row, resource_id=rid)
             except DuplicateResourceError:  # a concurrent first write got there
                 rm.update(rid, row)
-        rm.prune_revisions(rid, keep_last_n=1)
+        # A sign-out may land between the write and this (round 3, defect 3):
+        # the row is gone, with every revision — nothing left to prune.
+        with contextlib.suppress(ResourceIDNotFoundError):
+            rm.prune_revisions(rid, keep_last_n=1)
 
     def get(self, user_id: str, item_id: str) -> dict[str, str]:
         """What the person put there themselves."""
@@ -169,9 +172,10 @@ class PrivateEnvStore:
 
     def record_seam(self, user_id: str, item_id: str, fresh: dict[str, str]) -> None:
         """Keep the seam's latest answer — whole, so a name it dropped is gone.
-        Skips the write when nothing changed: this runs on every send and every
-        page tool call."""
-        if self.seam(user_id, item_id) != fresh:
+        Skips the write when nothing changed — ORDER included, since tools see
+        the names in the order given (round 3, defect 4): this runs on every
+        send and every page tool call."""
+        if list(self.seam(user_id, item_id).items()) != list(fresh.items()):
             self._write(PrivateSeam, user_id, item_id, fresh)
 
     def clear(self, user_id: str, item_id: str) -> None:

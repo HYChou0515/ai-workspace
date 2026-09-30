@@ -241,8 +241,9 @@ When a tool answers that the person is not authorised, call
 `workspace.openLogin()`. The platform shows ITS OWN sign-in, drawn outside your
 page, and the answer is only that it was shown — whether they signed in is
 theirs. Tell them to press your button again once they have saved it. What they
-signed in with reaches a tool only for names the item's owner lets each person
-supply (a name pinned to the shared value keeps the shared one).
+signed in with reaches a tool unless the item has a shared value for that name
+and keeps the shared one first — the default, which whoever manages the item's
+settings can change per name.
 
 ```js
 const r = await workspace.callTool("lot-status", { lot: id });

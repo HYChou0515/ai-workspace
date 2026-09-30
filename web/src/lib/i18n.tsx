@@ -1668,6 +1668,8 @@ export const messages = {
   "env.bar.signedIn": { "zh-TW": "已登入", en: "Signed in" },
   // Nothing missing, but nothing of theirs either: "signed in" would be false.
   "env.bar.yours": { "zh-TW": "你的登入", en: "Your sign-ins" },
+  // Between the names in the key button's label (round 3: English read "A、B").
+  "env.bar.sep": { "zh-TW": "、", en: ", " },
   "env.bar.login": { "zh-TW": "登入 {names}", en: "Sign in to {names}" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
   "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },

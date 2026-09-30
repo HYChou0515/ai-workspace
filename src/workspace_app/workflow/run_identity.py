@@ -18,9 +18,7 @@ harmless — it holds a name, no values, and a run id nothing will start again.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 
-import msgspec
 from msgspec import Struct
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -33,10 +31,15 @@ class RunIdentity(Struct):
     #: when their values are used (`execute` for a page's run, `converse` for
     #: the workflow panel's Run). Round 2, D2.
     verb: str = "execute"
-    #: Digest of the manifest the run STARTED with. Consent is to the run as
-    #: started: rebuilt on any other manifest (a PATCHed `workflow_id`, an
-    #: edited workflow file before a resume) it runs as nobody. Round 2, D1.
-    manifest_digest: str = ""
+    #: The workflow the run STARTED with, and the digest of its file's bytes
+    #: (`schedule_bindings.workflow_digest` — the same bytes a schedule binding
+    #: consents to; "" for a profile's workflow, which ships with the deploy).
+    #: Consent is to that file: checked where the values are USED (each agent
+    #: node, `workflow_exec`), so a PATCHed `workflow_id`, a file edited before
+    #: a resume or a gate decision, or one edited mid-run all run as nobody.
+    #: Round 2 D1, round 3 defect 1 (a manifest digest missed the steps).
+    workflow_id: str = ""
+    workflow_digest: str = ""
 
 
 def register_run_identity(spec: SpecStar) -> None:
@@ -51,10 +54,16 @@ class RunIdentities:
     def _rm(self):
         return self._spec.get_resource_manager(RunIdentity)
 
-    def record(self, run_id: str, env_user: str, *, verb: str, manifest_digest: str) -> None:
+    def record(
+        self, run_id: str, env_user: str, *, verb: str, workflow_id: str, workflow_digest: str
+    ) -> None:
         self._rm().create(
             RunIdentity(
-                run_id=run_id, env_user=env_user, verb=verb, manifest_digest=manifest_digest
+                run_id=run_id,
+                env_user=env_user,
+                verb=verb,
+                workflow_id=workflow_id,
+                workflow_digest=workflow_digest,
             ),
             resource_id=run_id,
         )
@@ -74,8 +83,3 @@ class RunIdentities:
     def forget(self, run_id: str) -> None:
         with contextlib.suppress(ResourceIDNotFoundError, KeyError):
             self._rm().permanently_delete(run_id)
-
-
-def manifest_digest(manifest: object) -> str:
-    """A stable digest of a workflow manifest — what "the run as started" means."""
-    return hashlib.sha256(msgspec.json.encode(manifest)).hexdigest()
