@@ -1267,7 +1267,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
 - 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
   **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它；run 之後不再是他按下的那個——`workflow_id`
-  被改、在別的 item / profile 上重新組、重新組出 run 時讀到的 workflow 檔和他同意的不同（開始、gate 決定、續跑、steer 都會重新組）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
+  被改後重新組、在別的 item / profile 上重新組、重新組出 run 時讀到的 workflow 檔和他同意的不同（開始、gate 決定、續跑、steer 都會重新組）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
   才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
   綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
