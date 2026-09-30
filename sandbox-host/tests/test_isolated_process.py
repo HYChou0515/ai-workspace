@@ -264,10 +264,65 @@ async def test_reown_recursively_chowns_the_restored_workspace(isolated):
 
 
 def test_run_chown_calls_oschown_with_uid_and_unchanged_gid(monkeypatch, tmp_path):
-    calls: list[tuple[Path, int, int]] = []
-    monkeypatch.setattr(os, "chown", lambda p, u, g: calls.append((p, u, g)))
+    calls: list[tuple[Path, int, int, bool]] = []
+
+    def record(p, u, g, *, follow_symlinks=True):
+        calls.append((p, u, g, follow_symlinks))
+
+    monkeypatch.setattr(os, "chown", record)
     _run_chown(tmp_path / "f", 4321)
-    assert calls == [(tmp_path / "f", 4321, -1)]
+    # follow_symlinks=False: the path is inside a USER's workspace, so it may be a
+    # link the user made — chowning its target as root would hand them whatever
+    # it points at.
+    assert calls == [(tmp_path / "f", 4321, -1, False)]
+
+
+def _real_chown_sandbox(tmp_path) -> IsolatedProcessSandbox:
+    """The default `_run_chown`, for real — the uid pool is the test's own uid,
+    so a chown is permitted non-root."""
+    return IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid(),
+        acl_runner=lambda argv: None,
+    )
+
+
+async def test_reown_survives_a_dangling_symlink(tmp_path):
+    # pnpm leaves `node_modules/.pnpm/node_modules/fsevents` pointing at a
+    # macOS-only package that is never installed on Linux. Following it raised
+    # FileNotFoundError, so every restore of such an item failed and the item
+    # could not be opened at all.
+    sb = _real_chown_sandbox(tmp_path)
+    h = await sb.create(SandboxSpec())
+    ws = sb._workspace(h)
+    pnpm = ws / "node_modules" / ".pnpm" / "node_modules"
+    pnpm.mkdir(parents=True)
+    (pnpm / "fsevents").symlink_to("../fsevents@2.3.3/node_modules/fsevents")
+    await sb.reown(h)
+
+
+async def test_reown_never_chowns_what_a_workspace_symlink_points_at(tmp_path, monkeypatch):
+    # The host runs reown as root. A user who links `ws/x -> /etc/passwd` must
+    # not get /etc/passwd chowned to their sandbox uid.
+    sb = _real_chown_sandbox(tmp_path)
+    h = await sb.create(SandboxSpec())
+    ws = sb._workspace(h)
+    outside = tmp_path / "not-yours"
+    outside.write_bytes(b"secret")
+    (ws / "x").symlink_to(outside)
+    followed: list[Path] = []
+    real = os.chown
+
+    def spy(path, uid, gid, *, follow_symlinks=True):
+        if follow_symlinks and Path(path).is_symlink():
+            followed.append(Path(path))
+        real(path, uid, gid, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "chown", spy)
+    await sb.reown(h)
+    assert followed == []
 
 
 def test_constructs_default_chown_runner(tmp_path):

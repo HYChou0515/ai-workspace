@@ -229,8 +229,14 @@ def _run_setfacl(argv: list[str]) -> None:
 def _run_chown(path: Path, uid: int) -> None:
     """Chown `path` to `uid`, leaving the gid unchanged (-1). Chowning to a
     foreign uid needs CAP_CHOWN (or root) — the same power `_provision` already
-    uses; a host without it must fall back to the plain `LocalProcessSandbox`."""
-    os.chown(path, uid, -1)
+    uses; a host without it must fall back to the plain `LocalProcessSandbox`.
+
+    Never follows a symlink: every path here is inside a USER's workspace, so a
+    link may be one they made, and following it chowned the target — a link to
+    a file outside the workspace handed that file to the item uid. Same rule as
+    the sandbox-host copy (whose restore also died on pnpm's dangling
+    `fsevents` link) and `tool_cache`'s `lchown`."""
+    os.chown(path, uid, -1, follow_symlinks=False)
 
 
 # A seam for the one true system-binary boundary (`setfacl`): the default shells
