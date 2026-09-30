@@ -870,8 +870,34 @@ describe("AgentPanel env vars", () => {
     fireEvent.change(screen.getByTestId("env-text"), { target: { value: "API_KEY=sk-2\n" } });
     fireEvent.click(screen.getByTestId("env-save"));
 
-    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" });
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" }, {});
     expect(screen.queryByTestId("env-modal")).toBeNull(); // and it closes
+  });
+
+  it("offers the panel to someone who may keep their own values but not store shared ones", () => {
+    // `plan-wui-viewer-login`: a person's OWN values need no `write_meta`, so
+    // the button follows `canOpenEnv`; the shared half is read-only for them.
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          chatId="chat-1"
+          agent={stubAgent()}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          envVars={{ API_KEY: "sk-1" }}
+          canOpenEnv
+        />
+      </DialogProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("env-button"));
+
+    expect(screen.getByTestId("env-readonly")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-save")).toBeNull();
   });
 });
 

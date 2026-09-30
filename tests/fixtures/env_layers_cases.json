@@ -1,0 +1,197 @@
+{
+ "_comment": "plan-wui-viewer-login: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/src/lib/envLayers.test.ts holds the FE's copy to the same rows.",
+ "cases": [
+  {
+   "shared": {},
+   "private": {},
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  }
+ ]
+}

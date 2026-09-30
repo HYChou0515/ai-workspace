@@ -1,213 +1,522 @@
 /**
- * The per-item environment variables panel.
+ * The per-item environment variables panel — two layers
+ * (`docs/plan-wui-viewer-login.md`).
  *
- * The item's `env_vars` are handed to the tools its agent runs — API keys and
- * the like. This edits them; the backend names them on the `exec` that
- * dispatches each tool, per turn, and stores them nowhere else (#673).
+ * * **Only me** (the default tab) — the viewer's PRIVATE values for this item:
+ *   typed, filled by a login, or written for them by the deploy's seam. Only
+ *   they can read them (`api/privateEnv.ts`), so they are masked until asked.
+ * * **Everyone** — the item's SHARED `env_vars` plus a per-variable POLICY
+ *   saying which layer a tool gets: `shared_first` (the default, and what every
+ *   item did before), `private_first`, `private_only`. Written by whoever holds
+ *   `write_meta`; everyone else sees it read-only, with the reason.
  *
- * Shown only to someone who may actually store them (`write_meta`) — the shell
- * withholds the save callback otherwise, and the header draws no button without
- * it. Before that, every Participant was offered this panel and answered 403 by
- * a request no one was reading.
+ * One layer is edited at a time, each tab saving on its own: Postman retired
+ * editing a shared and a local value side by side in one row, and VS Code
+ * separates User / Workspace the same way. Every "Only me" row says whose value
+ * is in use and why (`lib/envLayers.ts`, held to the backend's rule by a shared
+ * table).
  *
- * A text box holding the whole set as `.env` text, and — for the variables the
- * item's own tools DECLARED (#750) — a field apiece above it. The box came
- * first and stays first for a reason: what people actually do with these is
- * paste a block in from somewhere else (a colleague, a password manager,
- * another project's `.env`), and a pure row editor turns that into one Add plus
- * two clicks per line. It also makes the format the same one they already have
- * on their disk, so Import is a convenience rather than the only way in.
+ * The tools are SECTIONS, not a dropdown: a dropdown hid which tool needed
+ * attention and showed one at a time. Each section is headed by one of three
+ * states in symbol + colour + words (Carbon; never colour alone), most urgent
+ * first, and only the ones missing a required value start unfolded. A tool
+ * that declared nothing is drawn as ready — a UI-layer choice: the provider
+ * owes the declaration (`envNeeds.undeclared` still records it).
  *
- * The fields do not replace that; they answer a different question. The box is
- * how you enter values you already have. The fields are how you find out WHICH
- * values this workspace's tools are waiting for — which, before #750, nothing
- * anywhere could tell you.
+ * The `.env` text box stays for what people actually do with these — paste a
+ * block from elsewhere — folded under the list, and still the ONE copy the
+ * shared fields edit (`setEnvValue`, in place, so a keystroke in a field never
+ * costs the comments written in the box). It holds values only; a policy is
+ * set on the variable's row.
  *
- * Both edit ONE value. The fields read and write the box's text (through
- * `setEnvValue`, in place, so a keystroke in a field cannot cost the reader the
- * comments they wrote), and Save stores what the box parses to. Nothing here
- * holds a second copy of anything.
- *
- * Storage is unchanged: the text is parsed into `dict[str, str]` on save
- * (`lib/envFile.ts`). Two consequences worth knowing rather than hiding:
- * comments and blank lines are not stored, so they do not survive a reopen; and
- * a name written twice keeps the last, which is dotenv's own rule and is at
- * least visible here, both lines being on screen.
- *
- * Nothing is masked, deliberately — but the reason has changed and the old one
- * is worth not repeating. It used to be "the agent can read the delivered file
- * anyway"; there is no file any more (#673). The reason now is that the values
- * are a plain field on the item record, returned unredacted to anyone with
- * `read_meta`, so a mask here hides them from the one person who may edit them
- * and from nobody else — it would remove the ability to spot a mistyped key and
- * deliver no protection at all. If these should ever be secret FROM readers,
- * that is a backend change (redact on read), not a mask in this component.
+ * Shared values are not masked: they are a plain field on the item record,
+ * returned unredacted to anyone with `read_meta`, so a mask would hide them
+ * from the one person who may edit them and from nobody else.
  */
-import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
+import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
-import type { ApiClient } from "../api/types";
+import type { ApiClient, EnvProvider } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
-import { deriveEnvNeeds } from "../lib/envNeeds";
-import { fuzzyFilter } from "../lib/fuzzy";
+import { layerInUse, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
+import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
+import { sameShape } from "../lib/sameShape";
 import { ModalShell } from "./ModalShell";
-import { Popover, PopoverItem } from "./Popover";
+
+type Tab = "mine" | "shared";
+
+const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) };
+const MUTED = { fontSize: pxToRem(11), color: "var(--text-paper-d)" } as const;
+
+/** The three section states: symbol, colour and words together. Amber, not
+ * the error red — a missing required value is a hint (#750), Save always works. */
+const STATUS_LOOK: Record<SectionStatus, { mark: string; color: string }> = {
+  missingRequired: { mark: "◆", color: "var(--warn)" },
+  missingOptional: { mark: "◇", color: "var(--text-paper-d)" },
+  ready: { mark: "✓", color: "var(--ok)" },
+};
 
 export function EnvVarsModal({
   envVars,
+  envPolicy = {},
   onSave,
   onClose,
   slug,
   itemId,
   client = defaultApi,
+  privateClient = privateEnvApi,
 }: {
   envVars: Record<string, string>;
-  onSave: (next: Record<string, string>) => void | Promise<void>;
+  envPolicy?: Record<string, string>;
+  /** Store the SHARED values and policy. Absent ⇒ the caller may not
+   * (`write_meta`), and the Everyone tab is read-only. */
+  onSave?: (next: Record<string, string>, policy: Record<string, string>) => void | Promise<void>;
   onClose: () => void;
-  /** When given, the panel also offers a field per variable the item's current
-   * tools declared (#750). Optional so the box alone still works — the whole
-   * feature is a convenience over an editor that was already complete. */
+  /** The item. Without one there is no private layer (and no declared tools):
+   * only the Everyone tab is drawn. */
   slug?: string;
   itemId?: string;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
+  privateClient?: PrivateEnvClient;
 }) {
   const t = useT();
-  const [text, setText] = useState(() => toEnvText(envVars));
-  const fileRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
+  const hasItem = Boolean(slug && itemId);
+  const [tab, setTab] = useState<Tab>(hasItem ? "mine" : "shared");
+  const [query, setQuery] = useState("");
 
-  // #779: nothing here is stored until Save, and these are pasted credentials —
-  // the values a person is least likely to still have on the clipboard.
-
-  // The picker's own query, by the same key: one answer to "which tools does
-  // this item run", shared with the tool picker rather than re-resolved here.
   const toolsQ = useQuery({
     queryKey: qk.itemTools(slug ?? "", itemId ?? ""),
     queryFn: () => client.getItemTools(slug!, itemId!),
-    enabled: Boolean(slug && itemId),
+    enabled: hasItem,
   });
-
-  // Derived from the TEXT BOX, not from the last saved state: the form and the
-  // box edit one value, and a field disagreeing with the text above it would
-  // leave the person to guess which one Save is going to use.
-  const values = parseEnvText(text);
-  const view = deriveEnvNeeds(toolsQ.data ?? [], values);
-
-  // In place, not a round trip through the map: this runs on every keystroke
-  // in a declared field, and rebuilding the text from the parsed map would
-  // silently delete the reader's comments and any line still being typed.
-  const setVar = (name: string, value: string) => setText(setEnvValue(text, name, value));
-
-  // Which tool's variables are on screen. A FILTER over one set of values, not
-  // a form per tool: a variable two tools want is one stored name with one
-  // value, and a per-tool copy would let it read differently depending on which
-  // one was showing. Falls back to the first group so picking a tool that is
-  // switched off between renders cannot leave the panel showing nothing.
-  // What this deploy can obtain from something a person types. Empty is the
-  // ordinary case, and the panel is complete without it — the button only ever
-  // saves typing.
   const providersQ = useQuery({
     queryKey: qk.envProviders(slug ?? "", itemId ?? ""),
     queryFn: () => client.getEnvProviders(slug!, itemId!),
-    enabled: Boolean(slug && itemId),
+    enabled: hasItem,
+  });
+  const mineQ = useQuery({
+    queryKey: qk.privateEnv(slug ?? "", itemId ?? ""),
+    queryFn: () => privateClient.get(slug!, itemId!),
+    enabled: hasItem,
   });
 
-  // A provider is offered when it produces a name some tool asked for. That
-  // name is the ONLY join: the tool never named the provider, so a third-party
-  // author cannot choose which credential this dialog asks for.
-  const declaredNames = new Set(view.groups.flatMap((g) => g.fields.map((f) => f.name)));
-  const offered = (providersQ.data ?? []).filter((p) =>
-    p.produces.some((name) => declaredNames.has(name)),
-  );
+  // ── the SHARED layer: the box's text is the one copy of the values ────────
+  const [text, setText] = useState(() => toEnvText(envVars));
+  const [policy, setPolicy] = useState<Record<string, string>>(() => ({ ...envPolicy }));
+  const shared = parseEnvText(text);
+  const setVar = (name: string, value: string) => setText(setEnvValue(text, name, value));
+  const choosePolicy = (name: string, p: EnvPolicy) =>
+    setPolicy((prev) => {
+      const next = { ...prev };
+      // The default is stored as ABSENCE, so an item nobody touched stays
+      // byte-identical to one from before policies existed.
+      if (p === "shared_first") delete next[name];
+      else next[name] = p;
+      return next;
+    });
 
-  const [dialog, setDialog] = useState<string | null>(null);
+  // ── the PRIVATE layer ─────────────────────────────────────────────────────
+  const [mine, setMine] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    // Seeded once from the server; afterwards the form is what the person is
+    // editing, and a background refetch must not overwrite it.
+    if (mineQ.data && mine === null) setMine({ ...mineQ.data });
+  }, [mineQ.data, mine]);
+  const mineValues = mine ?? {};
+
   const [creds, setCreds] = useState<Record<string, string>>({});
+  const dirty =
+    text !== toEnvText(envVars) ||
+    !sameShape(policy, envPolicy) ||
+    (mine !== null && mineQ.data !== undefined && !sameShape(mine, mineQ.data)) ||
+    Object.values(creds).some((v) => v.trim() !== "");
+  const attemptClose = useDirtyClose(dirty, onClose);
 
-  // The provider fields count as unsaved work too: they are password inputs the
-  // user typed for a credential exchange that has not happened yet, so leaving
-  // loses them exactly the way leaving loses the box — and this modal's whole
-  // argument is that these are the values least likely to still be on a
-  // clipboard.
-  const attemptClose = useDirtyClose(
-    text !== toEnvText(envVars) || Object.values(creds).some((v) => v.trim() !== ""),
-    onClose,
-  );
+  const tools = toolsQ.data ?? [];
+  const canEdit = onSave !== undefined;
+  // Sections are drawn once what decides their grouping and default fold has
+  // arrived — otherwise a declared variable first appears under "Other
+  // variables", then jumps under its tool, and a section unfolded for a missing
+  // value folds again the moment the person's own value loads.
+  const toolsSettled = !hasItem || toolsQ.isSuccess || toolsQ.isError;
+  const mineSettled = !hasItem || mine !== null || mineQ.isError;
 
-  const [credError, setCredError] = useState<string | null>(null);
-  const [exchanging, setExchanging] = useState(false);
-  const openProvider = offered.find((p) => p.id === dialog);
-
-  /** Run the exchange and put the result in the FORM. Nothing is stored: the
-   * person still presses Save, the same as after an Import. */
-  const runExchange = async () => {
-    if (!openProvider) return;
-    setExchanging(true);
-    setCredError(null);
-    try {
-      const env = await client.resolveEnvProvider(slug!, itemId!, openProvider.id, creds);
-      // Refused WHOLE and by name when a pair cannot survive this panel's text
-      // format: being told the value does not fit is recoverable, being handed
-      // a truncated certificate is not, and applying only the pairs that
-      // happened to fit leaves a half-exchange nobody asked for.
-      //
-      // `unstorable` asks by round trip rather than by forbidden characters.
-      // The first version of this check tested for newlines, which was the case
-      // in front of me — and let a NAME containing `=` through, which stores a
-      // different variable than the one on screen.
-      const cannotStore = unstorable(env);
-      if (cannotStore.length > 0) {
-        setCredError(t("env.providerValueTooComplex", { names: cannotStore.join(", ") }));
-        return;
-      }
-      // Merged, not replaced, and unfiltered: a provider may legitimately
-      // return a name no tool declared, and dropping it would discard exactly
-      // what an incomplete declaration most needs to keep. Applied name by name
-      // through the same in-place writer the fields use, so a login does not
-      // cost someone the comments they had written either.
-      setText((prev) =>
-        Object.entries(env).reduce((acc, [name, v]) => setEnvValue(acc, name, v), prev),
-      );
-      setDialog(null);
-      setCreds({});
-    } catch (err) {
-      // The implementation's own sentence, when it sent one — it is the only
-      // party that knows why its login said no, and "帳號或密碼不正確" is what
-      // the person needs. Falling back to a generic line rather than to
-      // `err.message`, which is a status line with a JSON envelope stapled to
-      // it: internals, in front of someone who was only trying to log in.
-      const why = (err as { detail?: { why?: unknown } })?.detail?.why;
-      setCredError(typeof why === "string" && why ? why : t("env.providerFailed"));
-    } finally {
-      setExchanging(false);
-    }
+  const saveMine = async () => {
+    if (!hasItem) return;
+    await privateClient.put(slug!, itemId!, mineValues);
+    await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
+    onClose();
+  };
+  const logout = async () => {
+    if (!hasItem) return;
+    await privateClient.clear(slug!, itemId!);
+    setMine({});
+    await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
   };
 
-  const [picked, setPicked] = useState<string | null>(null);
-  const [toolQuery, setToolQuery] = useState("");
-  const shownGroup = view.groups.find((g) => g.key === picked) ??
-    view.groups[0] ?? { key: "", label: "", fields: [], author: null, version: null, missing: 0 };
-  // Narrowed on what someone would type: the tool's name or the publisher's.
-  const offeredGroups = fuzzyFilter(
-    toolQuery,
-    view.groups,
-    (g) => `${g.label} ${g.author ?? ""}`,
-  );
+  // A provider is offered when it produces a name some tool asked for — the
+  // name is the ONLY join, so a third-party author never chooses which
+  // credential this dialog asks for (#750).
+  const declared = new Set(tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)));
+  const offered = (providersQ.data ?? []).filter((p) => p.produces.some((n) => declared.has(n)));
 
-  /** Import MERGES into what is in the BOX, not into the last saved state: the
-   * box is what the user is looking at, and importing on top of something they
-   * cannot see would be a different operation than it appears to be. */
+  return (
+    <ModalShell
+      onClose={attemptClose}
+      ariaLabel={t("env.title")}
+      data-testid="env-modal"
+      width={560}
+      maxWidth="92vw"
+      panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}
+    >
+      <strong style={{ fontSize: pxToRem(14) }}>{t("env.title")}</strong>
+
+      {hasItem && (
+        <div role="tablist" aria-label={t("env.title")} style={{ display: "flex", gap: 6 }}>
+          {(["mine", "shared"] as const).map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              className="btn"
+              data-size="sm"
+              data-variant={tab === id ? "primary" : "secondary"}
+              data-testid={`env-tab-${id}`}
+              aria-selected={tab === id}
+              onClick={() => setTab(id)}
+            >
+              {t(id === "mine" ? "env.tab.mine" : "env.tab.shared")}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {hasItem && (
+        <input
+          type="search"
+          className="input input--block"
+          data-testid="env-search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("env.search")}
+          aria-label={t("env.search")}
+        />
+      )}
+
+      <div className="scrollable" style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10 }}>
+        {tab === "shared" ? (
+          <SharedTab
+            settled={toolsSettled}
+            tools={tools}
+            query={query}
+            shared={shared}
+            policy={policy}
+            canEdit={canEdit}
+            onVar={setVar}
+            onPolicy={choosePolicy}
+            text={text}
+            setText={setText}
+            login={
+              <Logins
+                offered={offered}
+                disabled={!canEdit}
+                creds={creds}
+                setCreds={setCreds}
+                exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
+                onFilled={(env) =>
+                  setText((prev) =>
+                    Object.entries(env).reduce((acc, [n, v]) => setEnvValue(acc, n, v), prev),
+                  )
+                }
+              />
+            }
+          />
+        ) : (
+          <MineTab
+            settled={toolsSettled && mineSettled}
+            tools={tools}
+            query={query}
+            shared={shared}
+            policy={policy}
+            mine={mineValues}
+            failed={mineQ.isError}
+            setMine={(name, value) => setMine((prev) => ({ ...(prev ?? {}), [name]: value }))}
+            login={
+              <Logins
+                offered={offered}
+                creds={creds}
+                setCreds={setCreds}
+                exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
+                onFilled={(env) => setMine((prev) => ({ ...(prev ?? {}), ...env }))}
+              />
+            }
+          />
+        )}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
+        {tab === "shared" ? (
+          <>
+            {canEdit && (
+              <span data-testid="env-affects" style={{ ...MUTED, marginRight: "auto" }}>
+                {t("env.affectsEveryone")}
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="env-cancel"
+              style={canEdit ? undefined : { marginLeft: "auto" }}
+              onClick={attemptClose}
+            >
+              {t("env.cancel")}
+            </button>
+            {canEdit && (
+              <button
+                type="button"
+                className="btn"
+                data-size="sm"
+                data-testid="env-save"
+                onClick={() => void onSave(parseEnvText(text), policy)}
+              >
+                {t("env.save")}
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="env-mine-logout"
+              style={{ marginRight: "auto" }}
+              onClick={() => void logout()}
+            >
+              {t("env.logout")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="env-cancel"
+              onClick={attemptClose}
+            >
+              {t("env.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-size="sm"
+              data-testid="env-mine-save"
+              onClick={() => void saveMine()}
+            >
+              {t("env.save")}
+            </button>
+          </>
+        )}
+      </div>
+    </ModalShell>
+  );
+}
+
+// ── sections ──────────────────────────────────────────────────────────────
+
+/** Sections matching the search: by tool name / publisher, or by a variable
+ * one of them asks for. */
+function matching(sections: ToolSection[], query: string): ToolSection[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return sections;
+  return sections.filter(
+    (s) =>
+      `${s.label} ${s.author ?? ""}`.toLowerCase().includes(q) ||
+      s.fields.some((f) => f.name.toLowerCase().includes(q)),
+  );
+}
+
+function Section({
+  section,
+  open,
+  onToggle,
+  children,
+}: {
+  section: ToolSection;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const t = useT();
+  const look = STATUS_LOOK[section.status];
+  const words =
+    section.status === "missingRequired"
+      ? t("env.status.missingRequired", { count: String(section.missingRequired) })
+      : section.status === "missingOptional"
+        ? t("env.status.missingOptional", { count: String(section.missingOptional) })
+        : t("env.status.ready");
+  const bodyId = useId();
+  return (
+    <section style={{ borderTop: "1px solid var(--paper-3)", paddingTop: 6 }}>
+      <button
+        type="button"
+        data-testid={`env-section-head-${section.key}`}
+        data-status={section.status}
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={onToggle}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          padding: "4px 0",
+          background: "transparent",
+          border: 0,
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        <span aria-hidden style={{ ...MUTED, width: 10 }}>
+          {open ? "▾" : "▸"}
+        </span>
+        <span aria-hidden style={{ color: look.color }}>
+          {look.mark}
+        </span>
+        <span style={{ fontWeight: 500, fontSize: pxToRem(13) }}>{section.label}</span>
+        {(section.author || section.version) && (
+          <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
+            {[section.author, section.version].filter(Boolean).join(" · ")}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: pxToRem(11), color: look.color }}>{words}</span>
+      </button>
+      {open && (
+        <div id={bodyId} style={{ display: "grid", gap: 10, padding: "4px 0 8px 18px" }}>
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Sections({
+  sections,
+  query,
+  other,
+  row,
+  otherExtra,
+}: {
+  sections: ToolSection[];
+  query: string;
+  /** Names no tool declared, drawn as a last section. */
+  other: string[];
+  row: (field: EnvField, section: ToolSection) => ReactNode;
+  otherExtra?: ReactNode;
+}) {
+  const t = useT();
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  // The default fold is decided ONCE, when the list is first drawn (it is only
+  // drawn once its data has arrived): unfolded where a required value is
+  // missing. Recomputing it would fold a section the moment the person filled
+  // the value they came for — the fold would move under their hands.
+  const [initial] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(sections.map((s) => [s.key, s.status === "missingRequired"])),
+  );
+  const q = query.trim().toLowerCase();
+  const otherSection: ToolSection = {
+    key: "__other",
+    label: t("env.otherVars"),
+    author: null,
+    version: null,
+    status: "ready",
+    missingRequired: 0,
+    missingOptional: 0,
+    fields: other
+      .filter((n) => !q || n.toLowerCase().includes(q))
+      .map((name) => ({ name, description: "", required: null, wantedBy: [], filled: true })),
+  };
+  const shown = matching(sections, query);
+  const all = [...shown, ...(otherSection.fields.length > 0 || otherExtra ? [otherSection] : [])];
+  if (all.length === 0) {
+    return <p style={MUTED}>{t("env.noMatches")}</p>;
+  }
+  return (
+    <>
+      {all.map((s) => {
+        // A search unfolds what it found; otherwise the first-drawn default
+        // (the "other" section too when there are no tools at all). The
+        // person's own clicks win over both.
+        const byDefault = q !== "" || (initial[s.key] ?? false) || sections.length === 0;
+        const open = overrides[s.key] ?? byDefault;
+        return (
+          <Section
+            key={s.key}
+            section={s}
+            open={open}
+            onToggle={() => setOverrides((prev) => ({ ...prev, [s.key]: !open }))}
+          >
+            {s.fields.map((f) => row(f, s))}
+            {s.key === "__other" && otherExtra}
+          </Section>
+        );
+      })}
+    </>
+  );
+}
+
+// ── Everyone ──────────────────────────────────────────────────────────────
+
+function SharedTab({
+  settled,
+  tools,
+  query,
+  shared,
+  policy,
+  canEdit,
+  onVar,
+  onPolicy,
+  text,
+  setText,
+  login,
+}: {
+  settled: boolean;
+  tools: Parameters<typeof deriveEnvNeeds>[0];
+  query: string;
+  shared: Record<string, string>;
+  policy: Record<string, string>;
+  canEdit: boolean;
+  onVar: (name: string, value: string) => void;
+  onPolicy: (name: string, p: EnvPolicy) => void;
+  text: string;
+  setText: (next: string) => void;
+  login: ReactNode;
+}) {
+  const t = useT();
+  const view = deriveEnvNeeds(tools, shared);
+  const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
+  const other = [...new Set([...Object.keys(shared), ...Object.keys(policy)])].filter(
+    (n) => !declared.has(n),
+  );
+  const [newName, setNewName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
   const importFile = async (file: File) => {
+    // MERGES into what is in the box — the thing the person is looking at.
     setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))));
   };
-
-  /** Export what is in the box, unsaved edits included — a download that
-   * silently disagreed with the panel would be worse than none. Straight to the
-   * browser, never into the workspace: a file there is one the agent can read. */
   const exportFile = () => {
+    // What is in the box, unsaved edits included; to the browser, never into
+    // the workspace (a file there is one the agent can read).
     const url = URL.createObjectURL(
       new Blob([toEnvText(parseEnvText(text))], { type: "text/plain" }),
     );
@@ -221,187 +530,423 @@ export function EnvVarsModal({
   };
 
   return (
-    <ModalShell
-      onClose={attemptClose}
-      ariaLabel={t("env.title")}
-      data-testid="env-modal"
-      width={520}
-      maxWidth="92vw"
-      panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}
-    >
-      <strong style={{ fontSize: pxToRem(14) }}>{t("env.title")}</strong>
+    <>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-        {t("env.desc")}
+        {t("env.sharedDesc")}
       </p>
-
-      {(view.groups.length > 0 || view.undeclared.length > 0) && (
-        <p
-          data-testid="env-missing"
-          style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
-        >
+      {!canEdit && (
+        <p data-testid="env-readonly" style={{ margin: 0, fontSize: pxToRem(12) }}>
+          {t("env.readonly")}
+        </p>
+      )}
+      {view.sections.length > 0 && (
+        <p data-testid="env-missing" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
           {view.missingRequired.length > 0
             ? t("env.stillMissing", { names: view.missingRequired.join(", ") })
             : t("env.nothingMissing")}
         </p>
       )}
-
-      {view.groups.length > 1 && (
-        <Popover
-          width={320}
-          trigger={({ onClick, open }) => (
+      {!settled ? (
+        <p data-testid="env-loading" style={MUTED}>
+          …
+        </p>
+      ) : (
+      <Sections
+        sections={view.sections}
+        query={query}
+        other={other}
+        row={(field, section) => (
+          <SharedRow
+            key={`${section.key}:${field.name}`}
+            field={field}
+            section={section}
+            value={shared[field.name] ?? ""}
+            policy={policyOf(field.name, policy)}
+            hasShared={Object.hasOwn(shared, field.name)}
+            canEdit={canEdit}
+            onVar={onVar}
+            onPolicy={onPolicy}
+          />
+        )}
+        otherExtra={
+          canEdit ? (
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                className="input"
+                data-testid="env-add-private-name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder={t("env.addPrivateName")}
+                aria-label={t("env.addPrivateName")}
+                spellCheck={false}
+                style={MONO}
+              />
+              <button
+                type="button"
+                className="btn"
+                data-variant="secondary"
+                data-size="sm"
+                data-testid="env-add-private"
+                disabled={!newName.trim() || unstorable({ [newName.trim()]: "x" }).length > 0}
+                onClick={() => {
+                  onPolicy(newName.trim(), "private_only");
+                  setNewName("");
+                }}
+              >
+                {t("env.addPrivate")}
+              </button>
+            </div>
+          ) : null
+        }
+      />
+      )}
+      {login}
+      <details data-testid="env-text-details">
+        <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>{t("env.editAsText")}</summary>
+        <textarea
+          data-testid="env-text"
+          aria-label={t("env.title")}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          readOnly={!canEdit}
+          placeholder={"FOO=BAR\nBAZ=HOO"}
+          spellCheck={false}
+          rows={8}
+          className="input input--block"
+          style={{
+            ...MONO,
+            marginTop: 6,
+            lineHeight: 1.6,
+            whiteSpace: "pre",
+            overflowWrap: "normal",
+            overflowX: "auto",
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".env,text/plain"
+            data-testid="env-import"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importFile(f);
+              e.target.value = ""; // so re-picking the same file fires again
+            }}
+          />
+          {canEdit && (
             <button
               type="button"
               className="btn"
               data-variant="secondary"
               data-size="sm"
-              data-testid="env-tool-trigger"
-              aria-expanded={open}
-              onClick={onClick}
-              style={{ justifyContent: "space-between", width: "100%" }}
+              data-testid="env-import-button"
+              onClick={() => fileRef.current?.click()}
             >
-              {/* Collapsed, and naming what is showing. The panel already
-                  carries an intro, a summary, the fields, a login button, a
-                  caveat and the box; an always-open list pushes all of it down
-                  for something most visits never touch. */}
-              <span>{shownGroup.label}</span>
-              {/* A glyph, not `<Icon name="chevron-down">`: this set has no
-                  chevron, and an unknown name renders NOTHING — a trigger with
-                  no affordance, and no error anywhere to say why. */}
-              <span aria-hidden style={{ color: "var(--text-paper-d)", fontSize: pxToRem(10) }}>
-                ▾
-              </span>
+              {t("env.import")}
             </button>
           )}
-        >
-          {(close) => (
-            <div style={{ display: "grid", gap: 4 }}>
-              <input
-                type="search"
-                className="input"
-                data-testid="env-tool-search"
-                value={toolQuery}
-                onChange={(e) => setToolQuery(e.target.value)}
-                placeholder={t("env.searchTools")}
-                aria-label={t("env.searchTools")}
-                style={{ width: "100%" }}
-              />
-              {/* Capped and scrollable, like every other list of this shape
-                  here: the search box stays outside the scroll area so it can
-                  never be scrolled out of reach. */}
-              <div className="scrollable" style={{ maxHeight: "min(240px, 30vh)", overflowY: "auto" }}>
-                {offeredGroups.map((group) => (
-                  <PopoverItem
-                    key={group.key}
-                    testId={`env-tool-${group.key}`}
-                    selected={group.key === shownGroup.key}
-                    // dirty-close-exempt: this `close` is the Popover's, not the
-                    // modal's — a name collision, not a bypass. Picking a tool
-                    // shuts the popover and leaves the modal exactly where it was.
-                    onClick={() => {
-                      setPicked(group.key);
-                      close();
-                    }}
-                  >
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontWeight: 500 }}>{group.label}</span>
-                      {/* Who shipped it and which release resolved (#724): two
-                          bundles can share a name and differ only in this. */}
-                      {(group.author || group.version) && (
-                        <span
-                          style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}
-                        >
-                          {" "}
-                          {[group.author, group.version].filter(Boolean).join(" · ")}
-                        </span>
-                      )}
-                    </span>
-                    <span
-                      style={{
-                        // Pushed right explicitly rather than left to the
-                        // sibling's `flex: 1`, which did not expand inside the
-                        // shared item and left the count touching the name.
-                        marginLeft: "auto",
-                        whiteSpace: "nowrap",
-                        fontSize: pxToRem(11),
-                        color: "var(--text-paper-d)",
-                      }}
-                    >
-                      {group.missing > 0
-                        ? t("env.toolStillNeeds", { count: String(group.missing) })
-                        : t("env.toolReady")}
-                    </span>
-                  </PopoverItem>
-                ))}
-                {offeredGroups.length === 0 && (
-                  <p
-                    data-testid="env-tool-none"
-                    style={{
-                      margin: 0,
-                      padding: "6px 10px",
-                      fontSize: pxToRem(12),
-                      color: "var(--text-paper-d)",
-                    }}
-                  >
-                    {t("env.noToolMatches")}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </Popover>
-      )}
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid="env-export"
+            onClick={exportFile}
+          >
+            {t("env.export")}
+          </button>
+        </div>
+      </details>
+    </>
+  );
+}
 
-      {view.groups.length > 0 && (
-        <section data-testid={`env-group-${shownGroup.key}`}>
-          <strong style={{ fontSize: pxToRem(12) }}>{shownGroup.label}</strong>
-          {shownGroup.fields.map((field) => (
-            <label key={field.name} style={{ display: "block", marginTop: 8 }}>
-              <span
-                style={{
-                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                  fontSize: pxToRem(12),
-                }}
-              >
-                {field.name}
-              </span>
-              {field.description && (
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: pxToRem(11),
-                    color: "var(--text-paper-d)",
-                  }}
-                >
-                  {field.description}
-                </span>
-              )}
-              {field.wantedBy.length > 1 && (
-                <span
-                  data-testid={`env-shared-${field.name}`}
-                  style={{ display: "block", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
-                >
-                  {t("env.alsoUsedBy", { tools: field.wantedBy.join(", ") })}
-                </span>
-              )}
-              <input
-                data-testid={`env-field-${field.name}`}
-                value={values[field.name] ?? ""}
-                onChange={(e) => setVar(field.name, e.target.value)}
-                spellCheck={false}
-                // Never `true`. A required-but-empty field is NOT YET FILLED,
-                // not wrong: the declaration is a hint and Save is always
-                // available, so an error style would be a gate in disguise —
-                // the button works, the screen says it should not be pressed.
-                aria-invalid="false"
-                className="input input--block"
-                // Monospace: these are keys, proofread by eye (l/1, O/0).
-                style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) }}
-              />
-            </label>
-          ))}
-        </section>
+function SharedRow({
+  field,
+  section,
+  value,
+  policy,
+  hasShared,
+  canEdit,
+  onVar,
+  onPolicy,
+}: {
+  field: EnvField;
+  section: ToolSection;
+  value: string;
+  policy: EnvPolicy;
+  hasShared: boolean;
+  canEdit: boolean;
+  onVar: (name: string, value: string) => void;
+  onPolicy: (name: string, p: EnvPolicy) => void;
+}) {
+  const t = useT();
+  const others = field.wantedBy.filter((w) => w !== section.label);
+  return (
+    <div data-testid={`env-row-${field.name}`} style={{ display: "grid", gap: 4 }}>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={MONO}>{field.name}</span>
+        {field.description && <span style={MUTED}>{field.description}</span>}
+        {others.length > 0 && (
+          <span data-testid={`env-shared-${field.name}`} style={MUTED}>
+            {t("env.alsoUsedBy", { tools: others.join(", ") })}
+          </span>
+        )}
+        <input
+          data-testid={`env-field-${field.name}`}
+          value={value}
+          onChange={(e) => onVar(field.name, e.target.value)}
+          readOnly={!canEdit}
+          spellCheck={false}
+          // Never `true`: an empty required field is NOT YET FILLED, not wrong
+          // — the declaration is a hint and Save always works (#750).
+          aria-invalid="false"
+          className="input input--block"
+          style={MONO}
+        />
+      </label>
+      {/* Radios, not a dropdown: three options fit on screen, and a closed
+          dropdown hides what the choices even are (NN/g). Named PER SECTION so a
+          variable shown under two tools gets two independent native groups
+          that both reflect the one stored policy. */}
+      <div
+        role="radiogroup"
+        aria-label={t("env.policyLabel", { name: field.name })}
+        style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: pxToRem(12) }}
+      >
+        {POLICIES.map((p) => (
+          <label key={p} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <input
+              type="radio"
+              name={`env-policy-${section.key}-${field.name}`}
+              data-testid={`env-policy-${field.name}-${p}`}
+              checked={policy === p}
+              disabled={!canEdit}
+              onChange={() => onPolicy(field.name, p)}
+            />
+            {t(`env.policy.${p}`)}
+          </label>
+        ))}
+      </div>
+      {policy === "private_only" && hasShared && (
+        <span data-testid={`env-shared-unused-${field.name}`} style={MUTED}>
+          {t("env.sharedUnused")}
+        </span>
       )}
+    </div>
+  );
+}
 
+// ── Only me ───────────────────────────────────────────────────────────────
+
+function MineTab({
+  settled,
+  tools,
+  query,
+  shared,
+  policy,
+  mine,
+  failed,
+  setMine,
+  login,
+}: {
+  settled: boolean;
+  tools: Parameters<typeof deriveEnvNeeds>[0];
+  query: string;
+  shared: Record<string, string>;
+  policy: Record<string, string>;
+  mine: Record<string, string>;
+  failed: boolean;
+  setMine: (name: string, value: string) => void;
+  login: ReactNode;
+}) {
+  const t = useT();
+  // What a tool would get for each name, so a section's status is about THIS
+  // person — a tool "ready" for everyone can still be missing their own value.
+  const names = new Set([
+    ...tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)),
+    ...Object.keys(shared),
+    ...Object.keys(mine),
+  ]);
+  const effective: Record<string, string> = {};
+  for (const n of names) {
+    const layer = layerInUse(n, shared, mine, policy);
+    if (layer !== "none") effective[n] = (layer === "private" ? mine : shared)[n];
+  }
+  const view = deriveEnvNeeds(tools, effective);
+  const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
+  // Undeclared names worth showing here: ones the person holds, and ones the
+  // item asks each person to fill in.
+  const other = [
+    ...new Set([
+      ...Object.keys(mine),
+      ...Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first"),
+    ]),
+  ].filter((n) => !declared.has(n));
+
+  return (
+    <>
+      <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+        {t("env.mineDesc")}
+      </p>
+      {failed && (
+        <p role="alert" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--err)" }}>
+          {t("env.mineFailed")}
+        </p>
+      )}
+      {!settled ? (
+        <p data-testid="env-loading" style={MUTED}>
+          …
+        </p>
+      ) : (
+      <Sections
+        sections={view.sections}
+        query={query}
+        other={other}
+        row={(field, section) => (
+          <MineRow
+            key={`${section.key}:${field.name}`}
+            name={field.name}
+            description={field.description}
+            shared={shared}
+            policy={policy}
+            mine={mine}
+            setMine={setMine}
+          />
+        )}
+      />
+      )}
+      {login}
+    </>
+  );
+}
+
+function MineRow({
+  name,
+  description,
+  shared,
+  policy,
+  mine,
+  setMine,
+}: {
+  name: string;
+  description: string;
+  shared: Record<string, string>;
+  policy: Record<string, string>;
+  mine: Record<string, string>;
+  setMine: (name: string, value: string) => void;
+}) {
+  const t = useT();
+  const [revealed, setRevealed] = useState(false);
+  const p = policyOf(name, policy);
+  const layer = layerInUse(name, shared, mine, policy);
+  // `shared_first` with a shared value set: nothing the person types could be
+  // used, so no box is offered — a field that silently does nothing is worse.
+  const pinned = p === "shared_first" && Object.hasOwn(shared, name);
+  const inUse = layer === "private" ? "mine" : layer;
+  return (
+    <div data-testid={`env-mine-row-${name}`} data-in-use={inUse} style={{ display: "grid", gap: 3 }}>
+      <span style={MONO}>{name}</span>
+      {description && <span style={MUTED}>{description}</span>}
+      {pinned ? (
+        <span data-testid={`env-pinned-${name}`} style={MUTED}>
+          {t("env.pinned")}
+        </span>
+      ) : (
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            data-testid={`env-mine-${name}`}
+            // Masked: these are the person's own credentials and only they can
+            // read them — but a screen can be seen over a shoulder.
+            type={revealed ? "text" : "password"}
+            value={mine[name] ?? ""}
+            onChange={(e) => setMine(name, e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="input input--block"
+            style={MONO}
+          />
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid={`env-reveal-${name}`}
+            aria-pressed={revealed}
+            onClick={() => setRevealed((r) => !r)}
+          >
+            {t(revealed ? "env.hide" : "env.reveal")}
+          </button>
+        </div>
+      )}
+      <span style={{ ...MUTED, display: "flex", gap: 8 }}>
+        {!pinned && p !== "shared_first" && <span>{t(`env.hint.${p}`)}</span>}
+        <span style={{ marginLeft: "auto" }}>
+          {inUse === "mine" ? "✓ " : ""}
+          {t(`env.inUse.${layer}`)}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+// ── logins (`IEnvProvider`, #750) ─────────────────────────────────────────
+
+/** The deploy's "log in, get the variables" buttons. The exchange result goes
+ * into the FORM of whichever tab is open — never stored until that tab's Save.
+ * The credential typed here reaches the deploy's implementation and stops. */
+function Logins({
+  offered,
+  disabled = false,
+  creds,
+  setCreds,
+  exchange,
+  onFilled,
+}: {
+  offered: EnvProvider[];
+  disabled?: boolean;
+  creds: Record<string, string>;
+  setCreds: (next: Record<string, string>) => void;
+  exchange: (providerId: string, values: Record<string, string>) => Promise<Record<string, string>>;
+  onFilled: (env: Record<string, string>) => void;
+}) {
+  const t = useT();
+  const [dialog, setDialog] = useState<string | null>(null);
+  const [credError, setCredError] = useState<string | null>(null);
+  const [exchanging, setExchanging] = useState(false);
+  const openProvider = offered.find((p) => p.id === dialog);
+
+  const runExchange = async () => {
+    if (!openProvider) return;
+    setExchanging(true);
+    setCredError(null);
+    try {
+      const env = await exchange(openProvider.id, creds);
+      // Refused WHOLE and by name when a pair cannot survive the text format:
+      // a truncated certificate is not recoverable, being told is.
+      const cannotStore = unstorable(env);
+      if (cannotStore.length > 0) {
+        setCredError(t("env.providerValueTooComplex", { names: cannotStore.join(", ") }));
+        return;
+      }
+      onFilled(env);
+      setDialog(null);
+      setCreds({});
+    } catch (err) {
+      // The implementation's own sentence when it sent one — never the HTTP
+      // envelope, which is internals in front of someone trying to log in.
+      const why = (err as { detail?: { why?: unknown } })?.detail?.why;
+      setCredError(typeof why === "string" && why ? why : t("env.providerFailed"));
+    } finally {
+      setExchanging(false);
+    }
+  };
+
+  if (offered.length === 0) return null;
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
       {offered.map((provider) => (
         <div key={provider.id}>
           <button
@@ -410,6 +955,7 @@ export function EnvVarsModal({
             data-variant="secondary"
             data-size="sm"
             data-testid={`env-provider-${provider.id}`}
+            disabled={disabled}
             onClick={() => {
               setDialog(provider.id);
               setCreds({});
@@ -418,15 +964,11 @@ export function EnvVarsModal({
           >
             {provider.label}
           </button>
-          {/* Which variables it will fill, next to the button. Two systems can
-              look alike; a person about to type a production password needs to
-              see what they are about to do BEFORE typing it, not after. */}
-          <span style={{ marginLeft: 8, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+          <span style={{ marginLeft: 8, ...MUTED }}>
             {t("env.providerFills", { names: provider.produces.join(", ") })}
           </span>
         </div>
       ))}
-
       {openProvider && (
         <div data-testid="env-cred-dialog" style={{ display: "grid", gap: 6 }}>
           {openProvider.inputs.map((field) => (
@@ -442,10 +984,7 @@ export function EnvVarsModal({
             </label>
           ))}
           {credError && (
-            <p
-              data-testid="env-cred-error"
-              style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
-            >
+            <p data-testid="env-cred-error" style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}>
               {credError}
             </p>
           )}
@@ -478,85 +1017,6 @@ export function EnvVarsModal({
           </div>
         </div>
       )}
-
-      {view.undeclared.length > 0 && (
-        <p
-          data-testid="env-undeclared"
-          style={{ margin: 0, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
-        >
-          {t("env.undeclared", { tools: view.undeclared.join(", ") })}
-        </p>
-      )}
-
-      <textarea
-        data-testid="env-text"
-        aria-label={t("env.title")}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={"FOO=BAR\nBAZ=HOO"}
-        spellCheck={false}
-        rows={10}
-        className="input input--block"
-        style={{
-          // Monospace: these are keys, and a column of them is proofread by
-          // eye. Proportional type hides the difference between l/1 and O/0.
-          fontFamily: "var(--font-mono, ui-monospace, monospace)",
-          fontSize: pxToRem(12),
-          lineHeight: 1.6,
-          whiteSpace: "pre",
-          overflowWrap: "normal",
-          overflowX: "auto",
-        }}
-      />
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".env,text/plain"
-          data-testid="env-import"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void importFile(f);
-            e.target.value = ""; // so re-picking the same file fires again
-          }}
-        />
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
-          data-testid="env-import-button"
-          onClick={() => fileRef.current?.click()}
-        >
-          {t("env.import")}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
-          data-testid="env-export"
-          style={{ marginRight: "auto" }}
-          onClick={exportFile}
-        >
-          {t("env.export")}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
-          data-testid="env-cancel"
-          onClick={attemptClose}
-        >
-          {t("env.cancel")}
-        </button>
-        <button type="button" className="btn" data-size="sm" data-testid="env-save" onClick={() => void onSave(parseEnvText(text))}>
-          {t("env.save")}
-        </button>
-      </div>
-    </ModalShell>
+    </div>
   );
 }

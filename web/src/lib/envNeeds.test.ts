@@ -285,3 +285,43 @@ describe("deriveEnvNeeds", () => {
     });
   });
 });
+
+/**
+ * `plan-wui-viewer-login`: the panel lists EVERY tool the item runs as a
+ * collapsible section, each headed by one of three states, most urgent first.
+ * A tool that declared nothing is drawn as ready — a UI-layer choice (the
+ * provider owes the declaration); `undeclared` above still says it happened.
+ */
+describe("deriveEnvNeeds sections", () => {
+  const need = (name: string, required: boolean | null) => ({ name, description: "", required });
+
+  it("heads each tool with the state that needs the most attention, most urgent first", () => {
+    const view = deriveEnvNeeds(
+      [
+        tool({ key: "ready", env_needs: [need("A", true)] }),
+        tool({ key: "optional", env_needs: [need("B", null)] }),
+        tool({ key: "required", env_needs: [need("C", true), need("D", null)] }),
+        tool({ key: "silent" }), // no declaration at all
+        tool({ key: "none", env_needs: [] }),
+      ],
+      { A: "x" },
+    );
+
+    expect(view.sections.map((s) => [s.key, s.status])).toEqual([
+      ["required", "missingRequired"],
+      ["optional", "missingOptional"],
+      ["ready", "ready"],
+      ["silent", "ready"],
+      ["none", "ready"],
+    ]);
+  });
+
+  it("counts what is left under each state", () => {
+    const view = deriveEnvNeeds(
+      [tool({ key: "t", env_needs: [need("C", true), need("D", null), need("E", false)] })],
+      {},
+    );
+
+    expect(view.sections[0]).toMatchObject({ missingRequired: 1, missingOptional: 2 });
+  });
+});

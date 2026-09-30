@@ -40,7 +40,28 @@ export type ToolEnvGroup = {
   missing: number;
 };
 
+/** How much attention one tool's section asks for (`plan-wui-viewer-login`).
+ * Three states, not four: a tool that declared nothing reads as `ready` here —
+ * the provider owes the declaration, and the panel takes it at its word. */
+export type SectionStatus = "missingRequired" | "missingOptional" | "ready";
+
+export type ToolSection = {
+  key: string;
+  label: string;
+  author: string | null;
+  version: string | null;
+  fields: EnvField[];
+  status: SectionStatus;
+  /** Unset variables its author marked required / did not. */
+  missingRequired: number;
+  missingOptional: number;
+};
+
 export type EnvNeedsView = {
+  /** EVERY tool the item runs, one collapsible section each, most urgent
+   * first (the order the panel draws them). Includes tools with no or an empty
+   * declaration, as `ready`. */
+  sections: ToolSection[];
   /** One per effective tool that declared at least one variable — the rows
    * the picker offers, in the order the toolset resolved. */
   groups: ToolEnvGroup[];
@@ -156,7 +177,40 @@ export function deriveEnvNeeds(
     ),
   ];
 
+  const rank: Record<SectionStatus, number> = { missingRequired: 0, missingOptional: 1, ready: 2 };
+  const sections: ToolSection[] = live
+    .map((t, order) => {
+      const fields: EnvField[] = usable(t).map((need) => ({
+        name: need.name,
+        description: need.description,
+        required: need.required ?? null,
+        wantedBy: wantedBy.get(need.name) ?? [t.label],
+        filled: filled(need.name),
+      }));
+      const missingRequired = fields.filter((f) => f.required === true && !f.filled).length;
+      const missingOptional = fields.filter((f) => f.required !== true && !f.filled).length;
+      const status: SectionStatus =
+        missingRequired > 0 ? "missingRequired" : missingOptional > 0 ? "missingOptional" : "ready";
+      return {
+        section: {
+          key: t.key,
+          label: t.label,
+          author: t.author ?? null,
+          version: t.version ?? null,
+          fields,
+          status,
+          missingRequired,
+          missingOptional,
+        },
+        order,
+      };
+    })
+    // Stable within a state: the order the toolset resolved in.
+    .sort((a, b) => rank[a.section.status] - rank[b.section.status] || a.order - b.order)
+    .map((x) => x.section);
+
   return {
+    sections,
     groups,
     // `null` only. A tool answering `[]` looked and needs nothing — that is a
     // claim, and repeating it as a caveat would bury the tools that made none.

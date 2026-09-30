@@ -95,6 +95,8 @@ export const qk = {
   // #750: this deploy's credential->variable implementations, per item
   // (the item decides who may ask, so the answer is not global).
   envProviders: (slug: string, itemId: string) => ["envProviders", slug, itemId] as const,
+  // `plan-wui-viewer-login`: the CALLER's private env values for one item.
+  privateEnv: (slug: string, itemId: string) => ["privateEnv", slug, itemId] as const,
 
   // #380: one item's skills-picker state (per-skill source + tri-state + effective).
   // Invalidate after saving the picker (the override changed).

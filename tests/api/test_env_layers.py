@@ -98,3 +98,22 @@ async def test_a_workflow_turn_honours_the_policy_too():
     )
 
     assert ctx.user_env == {}
+
+
+def test_the_shared_case_table_still_says_what_resolve_env_does():
+    """`tests/fixtures/env_layers_cases.json` is what the FE's copy of this rule
+    (`web/src/lib/envLayers.ts`, which labels whose value is in use) is held
+    to. This pins the table to THIS function, so the two cannot drift by hand:
+    change the rule and this reddens until the table is regenerated, and then
+    the FE test reddens until the FE follows."""
+    import json
+    from pathlib import Path
+
+    table = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "env_layers_cases.json").read_text()
+    )
+    assert len(table["cases"]) == 20
+    for case in table["cases"]:
+        got = resolve_env(shared=case["shared"], private=case["private"], policy=case["policy"])
+        layer = {"s": "shared", "p": "private"}.get(got.get("K", ""), "none")
+        assert layer == case["expected"], case

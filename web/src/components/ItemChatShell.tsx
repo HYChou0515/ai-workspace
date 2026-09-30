@@ -53,7 +53,12 @@ type AgentChrome = {
   /** The item's environment variables + a way to persist them, threaded to the
    * AgentPanel header's Env panel; absent → no Env button. */
   envVars?: Record<string, string>;
-  onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  /** Which layer each variable comes from (`plan-wui-viewer-login`). */
+  envPolicy?: Record<string, string>;
+  /** May this viewer open the panel at all — for their OWN values, which needs
+   * no `write_meta`. Saving the shared ones is `onSaveEnvVars`. */
+  canOpenEnv?: boolean;
+  onSaveEnvVars?: (envVars: Record<string, string>, envPolicy: Record<string, string>) => void;
   /** #P4: whether this App ever opens a sandbox, and whether this viewer may
    * resize it. Absent → no Environment button. Gated on the App HAVING one
    * rather than on who may edit: everyone in the workspace needs to see whether
@@ -97,6 +102,8 @@ export function ItemChatShell({
   onAttachPreset,
   onSaveToolPrefs,
   envVars,
+  envPolicy,
+  canOpenEnv,
   onSaveEnvVars,
   environment,
   canExportVideo,
@@ -383,6 +390,8 @@ export function ItemChatShell({
           onAttachPreset={onAttachPreset}
           onSaveToolPrefs={onSaveToolPrefs}
           envVars={envVars}
+          envPolicy={envPolicy}
+          canOpenEnv={canOpenEnv}
           onSaveEnvVars={onSaveEnvVars}
           environment={environment}
           canExportVideo={canExportVideo}
@@ -440,6 +449,8 @@ function ItemChatPanel({
   onAttachPreset,
   onSaveToolPrefs,
   envVars,
+  envPolicy,
+  canOpenEnv,
   onSaveEnvVars,
   environment,
   canExportVideo,
@@ -567,6 +578,8 @@ function ItemChatPanel({
         onAttachPreset={onAttachPreset}
         onSaveToolPrefs={onSaveToolPrefs}
         envVars={envVars}
+        envPolicy={envPolicy}
+        canOpenEnv={canOpenEnv}
         onSaveEnvVars={onSaveEnvVars}
         environment={environment}
         canExportVideo={canExportVideo}

@@ -1593,31 +1593,71 @@ export const messages = {
   },
   "env.button": { "zh-TW": "環境變數", en: "Env" },
   "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
-  // Read top to bottom, this is the first sentence — and until #750 it
-  // described a text box, which is now the SECOND thing on screen. Seen by
-  // opening the panel: someone is told they are looking at an editor, then
-  // shown a form. Says what the panel is now, and keeps "this workspace only",
-  // which is the part people actually need to know before typing a key in.
-  "env.desc": {
-    "zh-TW":
-      "這些值會交給這個工作區的工具使用,常見用途是 API 金鑰。有列出需求的工具會直接顯示欄位;其餘的可以在下方以「名稱=值」自行增減。只影響這個工作區。",
-    en: "These are handed to the tools this workspace runs — API keys and the like. Tools that said what they need get a field; anything else can be added below as `NAME=value`. This workspace only.",
+  // `plan-wui-viewer-login`: the panel lists every tool as a section, with
+  // one always-open search box instead of a tool dropdown.
+  "env.search": { "zh-TW": "搜尋工具或變數…", en: "Search tools or variables…" },
+  "env.alsoUsedBy": { "zh-TW": "與 {tools} 共用", en: "Shared with {tools}" },
+  // The three section states. Symbol + colour + these words (Carbon: never
+  // colour alone). A tool that declared nothing reads as ready: its provider
+  // owes the declaration, and the panel takes it at its word.
+  "env.status.missingRequired": { "zh-TW": "缺 {count} 個必填", en: "{count} required missing" },
+  "env.status.missingOptional": {
+    "zh-TW": "{count} 個選填未設",
+    en: "{count} optional not set",
   },
-  // #750. Says what is true and no more: these tools SAID what they want.
-  // Never "this is everything you need" — an author may have left names out,
-  // and the panel has no way to know that they did.
-  "env.searchTools": { "zh-TW": "搜尋工具…", en: "Search tools…" },
-  // A count, not a list: the list is the fields right below it.
-  "env.toolStillNeeds": { "zh-TW": "還缺 {count} 個", en: "{count} to fill" },
-  "env.toolReady": { "zh-TW": "齊了", en: "ready" },
-  "env.noToolMatches": { "zh-TW": "沒有符合的工具", en: "No tool matches" },
-  "env.alsoUsedBy": { "zh-TW": "{tools} 也會用到", en: "Also used by {tools}" },
-  // The third state, spelled out. NOT "needs nothing": these tools shipped no
-  // list at all, and someone hunting a variable they are missing must not be
-  // told there is nothing left to find.
-  "env.undeclared": {
-    "zh-TW": "{tools} 沒有列出它需要哪些變數,不代表它不需要。",
-    en: "{tools} did not list what it needs — which is not the same as needing nothing.",
+  "env.status.ready": { "zh-TW": "已就緒", en: "Ready" },
+  "env.noMatches": { "zh-TW": "沒有符合的工具或變數", en: "No tool or variable matches" },
+  "env.otherVars": { "zh-TW": "其他變數(沒有工具宣告)", en: "Other variables (no tool declared them)" },
+  // Tabs say WHO SEES the values, not the internal names of the layers.
+  "env.tab.mine": { "zh-TW": "只有我", en: "Only me" },
+  "env.tab.shared": { "zh-TW": "所有參與者", en: "Everyone" },
+  "env.mineDesc": {
+    "zh-TW": "只有你看得到這裡的值。登入換到的值也存在這裡。",
+    en: "Only you can see these values. Values from signing in are kept here too.",
+  },
+  "env.sharedDesc": {
+    "zh-TW": "這裡的值,所有能打開這個工作區的人都看得到。",
+    en: "Everyone who can open this workspace can see these values.",
+  },
+  "env.readonly": {
+    "zh-TW": "只有工作區擁有者能修改這一頁。",
+    en: "Only the workspace owner can change this page.",
+  },
+  "env.affectsEveryone": {
+    "zh-TW": "會影響這個工作區的所有參與者",
+    en: "Affects everyone in this workspace",
+  },
+  // The three policies, in words a person decides by.
+  "env.policy.shared_first": { "zh-TW": "用共用值", en: "Use the shared value" },
+  "env.policy.private_first": { "zh-TW": "各人可改用自己的", en: "Each person may use their own" },
+  "env.policy.private_only": { "zh-TW": "各人自己填", en: "Each person fills it in" },
+  "env.policyLabel": { "zh-TW": "{name} 由誰提供", en: "Who provides {name}" },
+  "env.sharedUnused": {
+    "zh-TW": "共用值不會被使用",
+    en: "The shared value is not used",
+  },
+  "env.addPrivate": { "zh-TW": "+ 加一個由各人自己填的變數", en: "+ Add a variable each person fills in" },
+  "env.addPrivateName": { "zh-TW": "變數名稱", en: "Variable name" },
+  "env.editAsText": {
+    "zh-TW": "用 .env 文字編輯(貼上、匯入、匯出)",
+    en: "Edit as .env text (paste, import, export)",
+  },
+  // "Only me" rows: whose value a tool gets, and why this row looks as it does.
+  "env.inUse.private": { "zh-TW": "使用中:你的", en: "In use: yours" },
+  "env.inUse.shared": { "zh-TW": "使用中:共用值", en: "In use: the shared value" },
+  "env.inUse.none": { "zh-TW": "未設定", en: "Not set" },
+  "env.pinned": {
+    "zh-TW": "這個變數固定用共用值",
+    en: "This variable always uses the shared value",
+  },
+  "env.hint.private_first": { "zh-TW": "填了就會改用你的", en: "Fill it in to use yours" },
+  "env.hint.private_only": { "zh-TW": "由你自己提供", en: "You provide this one" },
+  "env.reveal": { "zh-TW": "顯示", en: "Show" },
+  "env.hide": { "zh-TW": "隱藏", en: "Hide" },
+  "env.logout": { "zh-TW": "登出全部", en: "Sign out of all" },
+  "env.mineFailed": {
+    "zh-TW": "讀不到你的值,請稍後再試。",
+    en: "Could not load your values. Try again in a moment.",
   },
   // Says what the button will FILL, beside it. Two systems can look alike,
   // and someone about to type a production password has to see which one

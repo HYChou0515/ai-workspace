@@ -149,6 +149,8 @@ export function AgentPanel({
   onSaveToolPrefs,
   onSaveSkillPrefs,
   envVars,
+  envPolicy,
+  canOpenEnv,
   onSaveEnvVars,
   environment,
   canExportVideo = false,
@@ -213,7 +215,9 @@ export function AgentPanel({
   /** The item's environment variables + a way to persist them, forwarded to the
    * header's Env panel. Absent → no Env button (surfaces with no item). */
   envVars?: Record<string, string>;
-  onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  envPolicy?: Record<string, string>;
+  canOpenEnv?: boolean;
+  onSaveEnvVars?: (envVars: Record<string, string>, envPolicy: Record<string, string>) => void;
   /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
    *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
    *  button is not drawn: a control that can never do anything is worse than
@@ -731,6 +735,8 @@ export function AgentPanel({
         onSaveToolPrefs={onSaveToolPrefs}
         onSaveSkillPrefs={onSaveSkillPrefs}
         envVars={envVars}
+        envPolicy={envPolicy}
+        canOpenEnv={canOpenEnv}
         onSaveEnvVars={onSaveEnvVars}
         environment={environment}
         canExportVideo={canExportVideo}
@@ -1470,6 +1476,8 @@ export function AgentHeader({
   onSaveToolPrefs,
   onSaveSkillPrefs,
   envVars,
+  envPolicy,
+  canOpenEnv,
   onSaveEnvVars,
   environment,
   canExportVideo = false,
@@ -1504,11 +1512,17 @@ export function AgentHeader({
   /** #380: persist this item's per-skill override (`attached_skill_prefs`). Absent →
    * the Skills panel still lists + applies, but its Save is a no-op. */
   onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
-  /** The item's environment variables, handed to the tools it runs. */
+  /** The item's SHARED environment variables, handed to the tools it runs,
+   * and the per-variable policy picking shared vs each person's own
+   * (`plan-wui-viewer-login`). */
   envVars?: Record<string, string>;
-  /** Persist them. Absent → no Env button, the same way the Tools picker is
-   * withheld on a surface that cannot persist onto an item. */
-  onSaveEnvVars?: (envVars: Record<string, string>) => void;
+  envPolicy?: Record<string, string>;
+  /** Draw the Env button: the viewer may keep their OWN values here, which
+   * needs no `write_meta`. */
+  canOpenEnv?: boolean;
+  /** Persist the shared values + policy. Absent → the panel's Everyone tab is
+   * read-only (and, without `canOpenEnv`, there is no button at all). */
+  onSaveEnvVars?: (envVars: Record<string, string>, envPolicy: Record<string, string>) => void;
   /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
    *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
    *  button is not drawn: a control that can never do anything is worse than
@@ -1547,7 +1561,7 @@ export function AgentHeader({
     onNewChat ? "new" : "",
     onSaveToolPrefs ? t("tools.button") : "",
     environment ? t("itemenv.button") : "",
-    onSaveEnvVars ? t("env.button") : "",
+    canOpenEnv || onSaveEnvVars ? t("env.button") : "",
     t("skills.button"),
     t("workflows.button"),
     chatId ? "export" : "",
@@ -1608,13 +1622,18 @@ export function AgentHeader({
           onClose={() => setShowItemEnv(false)}
         />
       )}
-      {showEnv && onSaveEnvVars && (
+      {showEnv && (canOpenEnv || onSaveEnvVars) && (
         <EnvVarsModal
           envVars={envVars ?? {}}
-          onSave={(next) => {
-            onSaveEnvVars(next);
-            setShowEnv(false);
-          }}
+          envPolicy={envPolicy ?? {}}
+          onSave={
+            onSaveEnvVars
+              ? (next, policy) => {
+                  onSaveEnvVars(next, policy);
+                  setShowEnv(false);
+                }
+              : undefined
+          }
           onClose={() => setShowEnv(false)}
           // #750: which item, so the panel can offer a field per variable this
           // item's own tools declared. Only reached when the modal is open, so
@@ -1714,7 +1733,7 @@ export function AgentHeader({
           },
           // The item's environment variables, for the tools this workspace runs.
           // A tag — a named value — rather than the gear Tools wears.
-          onSaveEnvVars && {
+          (canOpenEnv || onSaveEnvVars) && {
             id: "env",
             testid: "env-button",
             aria: t("env.title"),

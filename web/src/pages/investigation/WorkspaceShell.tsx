@@ -990,8 +990,18 @@ function ShellBody({
                 _canWriteMeta ? (prefs) => setField("attached_skill_prefs", prefs) : undefined
               }
               envVars={(item as unknown as { env_vars?: Record<string, string> }).env_vars ?? {}}
+              envPolicy={
+                (item as unknown as { env_policy?: Record<string, string> }).env_policy ?? {}
+              }
+              // Anyone who can make this item's tools run for them keeps their
+              // OWN values here (`plan-wui-viewer-login`) — that needs no
+              // `write_meta`; storing the SHARED ones still does.
+              canOpenEnv={_canConverse || _canWriteMeta}
               onSaveEnvVars={
-                _canWriteMeta ? (envVars) => setField("env_vars", envVars) : undefined
+                _canWriteMeta
+                  ? (envVars, envPolicy) =>
+                      setFields({ env_vars: envVars, env_policy: envPolicy })
+                  : undefined
               }
               // Gated on the App HAVING an environment, not on who may edit the
               // item: everyone in the workspace needs to see whether one is
