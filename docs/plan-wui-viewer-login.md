@@ -201,8 +201,15 @@ build 只拿 shared:`dist/` 會進永久儲存、組進每個看這頁的人拿�
 | D1 | 沒有 `env.json` 的 tool 在 UI 上畫成「已就緒」 | **不列出**(沒有區段);任何沒有宣告變數的 tool 都不列 | 真 Chromium 量到:Env 面板把每一支內建工具(Exec、Read File…數十支)都列成「已就緒」,把使用者要填的變數擠出畫面。「沒寫 = 都不需要」照樣成立,只是「不需要」的 tool 沒有東西可列。內核三態不動 |
 | D2 | 🔑 按鈕:缺東西時寫要登入什麼,否則「已登入」 | 否則分兩種:本人**有**自己的值 →「已登入」;**沒有** →「你的登入」 | 真瀏覽器看到「Signed in」掛在一個空面板上——沒有「缺」只是因為沒有 tool 把那些名字標必填,「已登入」這句話是假的 |
 | D3 | 「只有我」和「這一頁的排程」在同一個下拉 | 平台列上兩顆鈕:🔑 開 Env 面板(「只有我」分頁),「這一頁的排程」開自己的面板 | 重用已測過的 Env 面板,而不是在下拉裡再做一份;排程面板用自己的定位,因為共用的 `Popover` 在 390px 會跑出畫面左邊(#868 在重做它) |
-| D4 | Env 按鈕給有 `converse` 或 `execute` 的人 | 給 `converse` 或 `write_meta` 的人 | FE 的 `useItemAccess` 沒有 `execute`;Collaborator 以上都有 `converse`。只被單獨勾了 `execute` 的 Custom 權限看不到這顆鈕——但在 WUI 頁面上他仍有平台列 |
+| D4 | Env 按鈕給有 `converse` 或 `execute` 的人 | 給 `converse` 或 `write_meta` 的人 | FE 的 `useItemAccess` 沒有 `execute`;Collaborator 以上都有 `converse`。只被單獨勾了 `execute` 的 Custom 權限看不到這顆鈕;若他也沒有 `read_content`,WUI 頁面本身就打不開,也不會有平台列(review round 1 V8 更正:原本這格寫「他仍有平台列」是錯的) |
 | D5 | 頁面按鈕起的 `wui/run` 用按的人的 private | 同上,**加上 `POST …/run`(workflow 面板的 Run)也用按的人** | 同一條規則「有人按的 run 用按的人」;只做一條會讓同一個人、同一個 workflow,從兩扇門進來拿到不同身分 |
 | D6 | goal 續跑、重跑用原作者的 private | 用 `{**env_without_request, **原作者的 private}` | 只用 private 會讓已經靠 #809 service account 的部署,在這兩條路上**少掉**那個值(回歸) |
 | D7 | (未寫) | 新增 `GET …/env/layers`(`read_meta`)回 item 的 shared 值與政策 | `/w/` 頁面只有 item id、沒有 item 記錄;這兩個欄位 `read_meta` 本來就回得到 |
-| D8 | 排程內容一改,綁定失效 | 另外:**排程從檔案裡消失**(被刪掉)也視為失效並通知 | 兩者對 sweep 無法區分(key 不在檔案裡);只在**讀取與解析都成功**之後才判定,讀取失敗不動綁定 |
+| D9 | 〔預設〕`IEnvProvider` 可選擇回傳 `expires_at` | **沒做** | 目前沒有任何 provider 回過期時間;過期的 token 會在 tool 那端失敗,重新登入就好。有需要時再加(介面是加欄位,不破壞既有 impl) |
+| D10 | 平台列:有 private 政策或有 `IEnvProvider` 才畫 | 另外**頁面有排程**也畫;`IEnvProvider` 只算「產出的名字有 tool 宣告」的 | 「用我的身分執行」的鈕要有地方放;一個跟這頁 tool 無關的 provider 沒有東西可登入 |
+| D11 | WUI build 只拿 shared | 同上,而且**不看政策**:`private_only` 的名字若有共用值,build 照樣拿到 | 共用值本來就是所有參與者讀得到的東西,烤進 `dist/` 不會多洩漏什麼;政策管的是 tool 替誰跑,build 不替任何人跑 |
+| D12 | `env_for` 的值寫進 private,最後寫的贏 | 存在**另一列**(`PrivateSeam`),每次**整份取代**;同名時它贏過手 key 的;沒人在場的 turn 用 `{**服務帳號, **手 key, **seam}` | review round 1 R2/R3/R4/F8:合在一列時,seam 不再回的名字(登出 SSO)會一直留著、tool 看到的名字順序從第二次起就變、每個輪換過的 token 都留成 revision、seam 寫入和「清除我的值」賽跑會把剛清掉的值寫回來。拆開後四個都不成立;「自動的永遠最新、贏過手 key」這條 user 的決定不變 |
+| D13 | (#750:`IEnvProvider` 要 `write_meta`) | 改成 `read_meta` | review round 1 C1:看頁面的人要能登入進自己的 private 層,這是這份計畫的主要目的;換出的值只進本人的 private,存成共用值仍要 `write_meta` |
+| D14 | run 用按的人的 private | 「按的人」存在 `RunIdentity`(沒有 API 路由),不是 `WorkflowRun` 的欄位 | review round 1 R5:`WorkflowRun` 的 auto-CRUD 沒有寫入閘,放在它上面等於讓任何人 PATCH 一個暫停中的 run 去用別人的值 |
+| D15 | 〔預設〕本人失去存取權時 private 列清掉 | **不清列,改成每次「沒有人在場」的使用前確認他還能用**(goal / 重跑 `converse`、run `execute`、排程綁定 `execute`,失去就取消綁定並通知) | 有人在場的路徑本來就先過存取閘;列留著對他無害(只有他讀得到,而且他仍可自己「清除我的值」),真正的洞是背景路徑繼續替他用值——round 1 C2/F1 |
+| D8 | 排程內容一改,綁定失效 | 另外:排程列被刪、**排程檔整份被刪**、它要跑的 **workflow 檔內容被改**,都失效並通知 | 前兩者對 sweep 無法區分(key 不在檔案裡);workflow 檔改了而 key 不變,是 review round 1 F4 找到的繞道。判定前以**即時檔案**再確認一次(持久快照會落後),**檔案整份解析不了時什麼都不動**(round 1 F2/F3 更正:第一版在解析失敗時會把整份檔案的綁定全刪) |

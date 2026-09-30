@@ -1236,21 +1236,31 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-wui-viewer-login.md`）：
 
-- **`IRequestEnv.env_for` 回的值現在會存下來**，存在「那個人、那個 item」的 private 列（新 model `PrivateEnv`），
-  不再只活一輪。為什麼：pod 死掉後被接手重跑的 turn、那個人自己的 goal 續跑，沒有 request 可問。
-  別人的值不會用在另一個人的 turn。`env_without_request` 的值仍然不存。
-  - ⚠️ **憑證因此落在資料庫裡**（明文，和 item 的 `env_vars` 一樣）。DB 的備份與能直接讀 DB 的人都拿得到；
-    透過 API 只有本人讀得到，superuser 也不行。刪除 item 會一併清掉所有人的列。
-- **沒設政策的 item 行為不變**：預設 `shared_first` 就是舊的 `{**request_env, **item_env}`。
-- 聊天的「環境變數」鈕現在**有 `converse` 的人也看得到**（放自己的值用）；存共用值仍要 `write_meta`，其他人
-  「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**。
+- **`IRequestEnv.env_for` 回的值現在會存下來**，存在「那個人、那個 item」自己的一列（新 model `PrivateSeam`），
+  每次變化就**整份取代**，不再只活一輪。為什麼：pod 死掉後被接手重跑的 turn、那個人自己的 goal 續跑、他按下起的
+  run，都沒有 request 可問。別人的值不會用在另一個人的 turn。`env_without_request` 的值仍然不存。
+  - ⚠️ **憑證因此落在資料庫裡**（明文，和 item 的 `env_vars` 一樣）。DB 的備份與能直接讀 DB 的人都拿得到；透過 API
+    只有本人讀得到，superuser 也不行。每次寫入都是先刪再建，**不留舊值的 revision**；刪除 item 會一併清掉所有人的列。
+  - ⚠️ **沒有人在場的 turn，那個人存的值同名時蓋過 `env_without_request` 的服務帳號**（那條路是替他跑的）。
+    已經靠 #809 服務帳號跑 goal / 重跑 / 手動 run 的部署：同一個人送過一次聊天之後，這些路徑改用他自己的值。
+    想維持服務帳號，就讓 `env_for` 與 `env_without_request` **不要回同一個變數名**。
+  - 你的 impl 要當作回的值會被存下來：**只回那個人本來就可以保留的東西**。
+- **有人在場、沒設政策、沒有人自己存值的 item，行為不變**：預設 `shared_first` 就是舊的 `{**request_env, **item_env}`。
+- **`IEnvProvider` 的兩條路由從 `write_meta` 改成 `read_meta`**：能打開 item 的人都能用登入鈕，換出的值進他自己的
+  「只有我」。存成共用值仍然要 `write_meta`。你的 impl 會被更多人呼叫——rate limit 照這個量抓。
+- 聊天的「環境變數」鈕現在**有 `converse` 的人也看得到**，而且**預設開在「只有我」分頁**；存共用值仍要 `write_meta`，
+  其他人「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**。
+  缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
 - 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
-  **按的人**自己的值（新欄位 `WorkflowRun.env_user`）。頁面排程只有在有人按「用我的身分執行」後才帶那個人的值。
+  **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它）。頁面排程只有在有人按「用我的身分執行」後
+  才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改、排程檔被刪，綁定就取消並通知他。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
   約 32px 的平台列。
+- 成本：每次聊天送出與頁面 `callTool` 多一次 private 讀取（有 seam 時值變了再多一次寫入）；排程 sweep 每個排程檔
+  多一次綁定查詢，要觸發的每一列多一次綁定讀取與一次 workflow 檔讀取。
 
-**資料** — 沒有 `Schema` 升版、沒有要跑的指令。新 model `PrivateEnv`、`ScheduleBinding` 在啟動時註冊（沒有
-auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資料讀出來就是空的。
+**資料** — 沒有 `Schema` 升版、沒有要跑的指令。新 model `PrivateEnv`、`PrivateSeam`、`ScheduleBinding`、`RunIdentity`
+在啟動時註冊（沒有 auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資料讀出來就是空的。
 
 **k8s · CI 側** — 沒有新 manifest、env、probe 或 JobType。image 照常重 build 即可。
 
@@ -1259,7 +1269,9 @@ auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資�
 - 在一個 item 的「環境變數」→「所有參與者」把某個變數設成「各人自己填」並儲存；換一個有 `converse` 的參與者打開，
   「只有我」分頁看得到那一列、能填、存完再打開值還在（遮罩，按「顯示」看得到）。
 - 部署有接 `server.request_env` 的話：那個人送一則聊天後，`GET /api/a/{slug}/items/{id}/env/private`（以他的身分）
-  回得到 `env_for` 給的值；以**別人**的身分打同一個網址，回的是別人自己的（通常是空的）。
+  的 `auto` 回得到 `env_for` 給的值；以**別人**的身分打同一個網址，回的是別人自己的（通常是空的）。
+- 有 `IEnvProvider` 的部署：以只有 `read_meta` 的參與者身分打開 Env 面板，「只有我」分頁看得到登入鈕，登入後值出現在
+  他自己的欄位。
 - 一個有 `schedules.json` 的 WUI 頁面用 `/w/...` 打開：上方有平台列，「這一頁的排程」列得出每一列、按「用我的身分
   執行」後那一列顯示用你的身分。
 

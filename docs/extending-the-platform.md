@@ -271,8 +271,9 @@ def run(args: Args) -> str:
   隨時 `cat` 得到),窗口窄很多,但不是零——要真的隔開,得讓 tool 與 agent 用不同 uid。
   ⚠️ **下面「每個人自己的值」也一樣。** uid 是依 **item** 分配的(`uid_base + xxhash(item_id)`),
   不是依人:同一個 item 裡有 `execute` / `use_terminal` 的人,可以在別人的 tool 跑的那幾秒讀到
-  他的值,tool 本身也能把收到的 env 寫進 workspace。每人自己的值防得住**介面**上的其他人,
-  防不住同一個 item 裡能執行程式的人。(`plan-wui-viewer-login.md`:只寫進文件,不另外擋。)
+  他的值,tool 本身也能把收到的 env 寫進 workspace;能跟 agent 對話(`converse`)的人也能請 agent
+  去讀。每人自己的值防得住**介面**上的其他人,防不住同一個 item 裡能讓 sandbox 跑程式的人。
+  (`plan-wui-viewer-login.md`:只寫進文件,不另外擋。)
 
 ### 說出你需要哪些變數(#750)
 
@@ -360,15 +361,19 @@ server:
 - **自己設逾時**。平台不知道你的閘道多久算合理,在這裡定一個數字只會拒絕掉「只是有點慢」的請求。
 - **丟例外 = 告訴使用者失敗**,面板保留他已經打好的其他內容。訊息裡**不要放 `values`**。
 - **沒有設定任何方法 = 沒有鈕**,不是壞掉:每個變數都還是能手打,那條路永遠可用。
-- 這顆鈕和手動存檔一樣要 `write_meta`。只能讀的參與者按不動——否則他能換出一個自己存不進去的
-  token 並從回應裡讀走。
+- **能打開 item 的人都按得到(`read_meta`)。** #750 原本要 `write_meta`,理由是換出來的值只有
+  「共用」一個去處,只能讀的人會換出一個存不進去的 token;`plan-wui-viewer-login` 之後它有了
+  **只屬於他自己**的去處(Env 面板「只有我」),換的是他自己輸入的帳密,你的 impl 也拿不到
+  item 的任何資訊——所以換出來不會多給他什麼。把結果存成**共用**值仍然要 `write_meta`。
 
 ### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
 
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
 **private**:**每個人、每個 item 一份**,只有本人讀得到(連 superuser 也不行——路由只認
 「我的」,沒有指定別人的參數)。來源有三個:本人在 Env 面板「只有我」分頁手 key、本人按登入
-(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 每次請求自動寫入。同一個名字**最後寫的贏**。
+(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 每次請求自動寫入。後者存在**另一列**、每次
+**整份取代**:它沒再回的名字就消失(登出 SSO 之後舊 session 不會留著),同名時它贏過手 key 的
+(自動帶入的永遠是最新的)。所有寫入都是先刪再建,**不留舊值的歷史**。
 
 tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_policy`,要 `write_meta` 才能改)決定:
 
@@ -378,7 +383,11 @@ tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_pol
 | `private_first` | 各人可改用自己的 | 本人的有值就用本人的,沒有才用共用的 |
 | `private_only` | 各人自己填 | 只用本人的;沒有就**不傳**(不是擋下——必不必填是 tool 的事) |
 
-預設就是 #714 那行 `{**request_env, **item_env}`:沒設政策的 item,行為一個字都沒變。
+預設就是 #714 那行 `{**request_env, **item_env}`:沒設政策、也**沒有人存過自己的值**的 item,
+有人在場的 turn 行為一個字都沒變。唯一的差別在**沒有人在場**的 turn(見下面 #714 那段的「寫進本人的
+private 層」):部署有 `IRequestEnv` 時,一個人最後一次請求帶的值會用在他自己的 goal 續跑、被接手重跑的
+turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的服務帳號(那條路是替他跑的,他自己的
+憑證就是他會用的那個)。
 
 「本人」是誰:
 
@@ -390,6 +399,13 @@ tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_pol
 | 頁面排程 | **本人按了「用我的身分執行」才有**;沒人按 → 誰的都沒有(shared + `env_without_request`)。排程內容一改,綁定就失效並通知那個人 |
 | event trigger、profile 層級排程 | 誰的都沒有 |
 | WUI build | **誰的都沒有**,只拿 shared(`dist/` 是大家共用的成品) |
+
+- **沒有人在場時,每次使用前都重新確認那個人還能用這個 item**(goal / 重跑要 `converse`,run 要
+  `execute`)。被移出 item 的人,他的值從下一個 turn 起就不再被使用;他綁定的排程會取消綁定並通知他
+  「你已沒有權限」。
+- **「用我的身分執行」同意的是那一列排程,也是它要跑的 workflow 檔**(`.workflows/<run>.json` 的內容)。
+  兩者任一改了,綁定就取消並通知;排程檔整份被刪也一樣。判斷前會以即時檔案再確認一次(持久快照會落後),
+  檔案整份解析不了時什麼都不取消。
 
 tool 端完全不用改:`os.environ` 讀到的就是解析過的那一個值。
 
@@ -436,7 +452,8 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
 - **同名時聽 item 的政策**(上一節)。沒設政策就是 `shared_first`:`env_vars` 那格贏,而且沒有
   提示(要拿服務帳號的值壓過去做測試時就靠這個)——也就是 #714 原本的行為。
 - **有 request 的入口問 `env_for`:聊天送出、WUI 頁面的 `callTool`。** 兩者的共同點是:
-  一次請求、一個人、結果只回給問的那個人,而且用完就沒了。
+  一次請求、一個人、結果只回給問的那個人。(那個人最後一次的值會留在**他自己的** private 層,
+  見下一條;不會留在 item 上。)
 - **沒有 request 的 turn 問 `env_without_request`**(`docs/plan-headless-env.md`):goal driver
   (#615)自己續的回合(`user_id` = 設目標的人)、以及 **workflow 的每一個 agent node**——item
   排程(`user_id` = item owner)、WUI 頁面按鈕起的 `wui/run`(= **item owner**,它跟排程是同一個
