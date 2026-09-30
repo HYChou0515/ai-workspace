@@ -170,3 +170,39 @@ def test_the_path_must_name_a_schedules_file():
     r = client.get(f"/a/rca/items/{rid}/schedule-bindings", params={"path": "/report/index.html"})
 
     assert r.status_code == 400
+
+
+def test_a_page_with_no_schedules_file_lists_nothing():
+    client, _holder, rid, _ = _world()
+
+    r = client.get(
+        f"/a/rca/items/{rid}/schedule-bindings", params={"path": "/other/schedules.json"}
+    )
+
+    assert r.json() == {"rows": []}
+
+
+def test_unbinding_a_schedule_nobody_runs_as_is_the_state_asked_for():
+    client, holder, rid, _ = _world()
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+    url = f"/a/rca/items/{rid}/schedule-bindings/{row['trigger_id']}"
+
+    assert client.delete(url, params={"path": FILE}).status_code == 204
+
+
+def test_a_binding_from_another_item_cannot_be_taken_off_through_this_one():
+    """The key names a schedule in ONE item; asking through another item's URL
+    (one the caller can open) must not reach it."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    client, holder, rid, spec = _world()
+    ScheduleBindings(spec).bind(
+        "foreign-key", item_id="some-other-item", path=FILE, user_id="carol"
+    )
+    holder["id"] = "carol"
+
+    r = client.delete(f"/a/rca/items/{rid}/schedule-bindings/foreign-key", params={"path": FILE})
+
+    assert r.status_code == 404
+    assert ScheduleBindings(spec).binder("foreign-key") == "carol"
