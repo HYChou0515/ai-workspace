@@ -191,3 +191,31 @@ build 只拿 shared:`dist/` 會進永久儲存、組進每個看這頁的人拿�
 | P9 | 文件:`extending-the-platform.md`(兩層、政策、同 item 可讀 private 的界線、沒附 `env.json` = 平台說不需要)、WUI skill(排程沒綁定時 `private only` 拿不到)、`docs/migrations.md` 一筆、`design-history.md` 索引 | docs |
 
 版面(P7/P8)用真 Chromium 在 1280 與 390 兩個寬度量。
+
+## 實作後與上面不同的地方(2026-10-01,實作時決定)
+
+每一條都寫了**為什麼**與**證據**;推翻任何一條只要改回對應的 commit。
+
+**user 確認(2026-10-01):** D1–D3 同意。D5:面板的「執行」用按的人的值,哪一層照 policy(與 chat 同一個
+`resolve_env`)。D13:符合「有 `write_meta` 才能設定共用值、沒有的只能設定私人值」,存共用值的權限沒放寬,只是
+換 token 的那條 API 降到 `read_meta`。D15:照現在的做法——被移出的人的值留在 DB 但不再被使用。其餘各條已實作,
+user 沒有要求更動。
+
+| # | 計畫寫的 | 實作做的 | 為什麼 |
+|---|---|---|---|
+| D1 | 沒有 `env.json` 的 tool 在 UI 上畫成「已就緒」 | **不列出**(沒有區段);任何沒有宣告變數的 tool 都不列 | 真 Chromium 量到:Env 面板把每一支內建工具(Exec、Read File…數十支)都列成「已就緒」,把使用者要填的變數擠出畫面。「沒寫 = 都不需要」照樣成立,只是「不需要」的 tool 沒有東西可列。內核三態不動 |
+| D2 | 🔑 按鈕:缺東西時寫要登入什麼,否則「已登入」 | 否則分兩種:本人**有**自己的值 →「已登入」;**沒有** →「你的登入」 | 真瀏覽器看到「Signed in」掛在一個空面板上——沒有「缺」只是因為沒有 tool 把那些名字標必填,「已登入」這句話是假的 |
+| D3 | 「只有我」和「這一頁的排程」在同一個下拉 | 平台列上兩顆鈕:🔑 開 Env 面板(「只有我」分頁),「這一頁的排程」開自己的面板 | 重用已測過的 Env 面板,而不是在下拉裡再做一份;排程面板用自己的定位,因為共用的 `Popover` 在 390px 會跑出畫面左邊(#868 在重做它) |
+| D4 | Env 按鈕給有 `converse` 或 `execute` 的人 | 給 `converse` 或 `write_meta` 的人 | FE 的 `useItemAccess` 沒有 `execute`;Collaborator 以上都有 `converse`。只被單獨勾了 `execute` 的 Custom 權限看不到這顆鈕;若他也沒有 `read_content`,WUI 頁面本身就打不開,也不會有平台列(review round 1 V8 更正:原本這格寫「他仍有平台列」是錯的) |
+| D5 | 頁面按鈕起的 `wui/run` 用按的人的 private | 同上,**加上 `POST …/run`(workflow 面板的 Run)也用按的人** | 同一條規則「有人按的 run 用按的人」;只做一條會讓同一個人、同一個 workflow,從兩扇門進來拿到不同身分 |
+| D6 | goal 續跑、重跑用原作者的 private | 用 `{**env_without_request, **原作者的 private}` | 只用 private 會讓已經靠 #809 service account 的部署,在這兩條路上**少掉**那個值(回歸) |
+| D7 | (未寫) | 新增 `GET …/env/layers`(`read_meta`)回 item 的 shared 值與政策 | `/w/` 頁面只有 item id、沒有 item 記錄;這兩個欄位 `read_meta` 本來就回得到 |
+| D9 | 〔預設〕`IEnvProvider` 可選擇回傳 `expires_at` | **沒做** | 目前沒有任何 provider 回過期時間;過期的 token 會在 tool 那端失敗,重新登入就好。有需要時再加(介面是加欄位,不破壞既有 impl) |
+| D10 | 平台列:有 private 政策或有 `IEnvProvider` 才畫 | 另外**頁面有排程**也畫;`IEnvProvider` 只算「產出的名字有 tool 宣告」的 | 「用我的身分執行」的鈕要有地方放;一個跟這頁 tool 無關的 provider 沒有東西可登入 |
+| D11 | WUI build 只拿 shared | 同上,而且**不看政策**:`private_only` 的名字若有共用值,build 照樣拿到 | 共用值本來就是所有參與者讀得到的東西,烤進 `dist/` 不會多洩漏什麼;政策管的是 tool 替誰跑,build 不替任何人跑 |
+| D12 | `env_for` 的值寫進 private,最後寫的贏 | 存在**另一列**(`PrivateSeam`),每次**整份取代**;同名時它贏過手 key 的;沒人在場的 turn 用 `{**服務帳號, **手 key, **seam}` | review round 1 R2/R3/R4/F8:合在一列時,seam 不再回的名字(登出 SSO)會一直留著、tool 看到的名字順序從第二次起就變、每個輪換過的 token 都留成 revision、seam 寫入和「清除我的值」賽跑會把剛清掉的值寫回來。拆開後四個都不成立;「自動的贏過手 key」這條 user 的決定不變。部署拿掉 seam 後,留下的 seam 列不再被讀(round 2)。寫入是**取代後刪舊 revision**(round 2 D4/D5:先刪再建有一瞬間沒有列;round 3:刪舊 revision 前本人剛好登出,列已不在,不再往外丟錯),名字順序另存一欄照原樣還原(R3)。**「最新」只到本人上一次在這個 item 聊天或按頁面工具為止**:只有這兩條路問 `env_for`,登出 SSO 不是這個 app 看得到的請求,所以之前替他跑的背景工作仍用舊值(round 2 veracity V2) |
+| D13 | (#750:`IEnvProvider` 要 `write_meta`) | 改成 `read_meta` | review round 1 C1:看頁面的人要能登入進自己的 private 層,這是這份計畫的主要目的;換出的值只進本人的 private,存成共用值仍要 `write_meta` |
+| D14 | run 用按的人的 private | 「按的人」存在 `RunIdentity`(沒有 API 路由),不是 `WorkflowRun` 的欄位 | review round 1 R5:`WorkflowRun` 的 auto-CRUD 沒有寫入閘,放在它上面等於讓任何人 PATCH 一個暫停中的 run 去用別人的值。這只保護了「替誰跑」;`workflow_id` 仍改得到,所以 `RunIdentity` 另記 run 開始時的 `workflow_id` 與 workflow **檔**的 digest(和排程綁定同一個函式),**每次組出要跑的 workflow 時**(`_execute`:開始、gate 決定、續跑、steer)拿「這次讀進來組 interpreter 的那份位元組」的 digest、`workflow_id`、item 與 profile 比,對不上就丟掉身分(round 5:gate 決定走別的 item 的網址時會在那個 item 組,既有的缺口,身分不能跟過去);三處 digest 都由同一個 loader 定義(round 5:壞檔在綁定時算位元組、組的時候算 "");round 6:gate 決定 / steer / steer 確認只接受 run 自己 item 的網址(404;同一類的取消、讀 run、看串流三條沒改,見 #870;身分比對 item 仍留著當第二道),「用我的身分執行」拒絕解析不了的 workflow(422,否則同意記成 "",檔案刪掉後就讓同名 profile workflow 帶著值跑),loader 只認資料夾裡平的 `<id>.json`(和 `unparsable_workflow` 同樣的規則,目前是手抄的兩份,見 #870);組的時候讀檔失敗,run 不會被標成錯誤——新開的停在 pending,gate 決定 / steer 確認之後的停在 running(之後才可能被清理程式標成錯誤);這個 PR 之前就是如此,不會走到身分判斷;已知不修:gate 決定 / 續跑時 manifest 是另一次讀取(輸入預設值、`config` 取自它),digest 只涵蓋組 interpreter 的那份——DSL interpreter 用的是檔案自己的 `config`,換的窗口也只在同一個請求內(round 5 veracity);steer 核准也丟(round 2 D1、veracity V5;round 3:第一版比的是 manifest 的 digest,manifest 不含 steps;round 4 defect 1:改成每個節點讀即時檔案後,「換成惡意檔 → 決定 gate → 換回來」照樣過,因為節點看的是檔案不是正在跑的 interpreter) |
+| D15 | 〔預設〕本人失去存取權時 private 列清掉 | **不清列,改成每次「沒有人在場」的使用前確認他還能用**(goal / 重跑 `converse`、run `execute`、排程綁定 `execute`,失去就取消綁定並通知) | 有人在場的路徑本來就先過存取閘;列留著對他無害(只有他讀得到;要刪只能直接打 `DELETE …/env/private`,UI 在他打不開的 Env 面板裡——round 2 veracity V6 更正),真正的洞是背景路徑繼續替他用值——round 1 C2/F1 |
+| D8 | 排程內容一改,綁定失效 | 另外:排程列被刪、**排程檔整份被刪**、它要跑的 **workflow 檔內容被改**,都失效並通知 | 前兩者對 sweep 無法區分(key 不在檔案裡);workflow 檔改了而 key 不變,是 review round 1 F4 找到的繞道。判定前以**即時檔案**再確認一次(持久快照會落後),**檔案整份解析不了時什麼都不動**(round 1 F2/F3 更正:第一版在解析失敗時會把整份檔案的綁定全刪)。workflow 檔只比對**即時檔案**(round 2 D3:快照相同時直接放行,會讓快照追上前的修改帶著綁定者的值跑),讀取有和刪除確認同一個逾時上限、逾時當沒變(round 3 regression 1:沒上限時一次卡住的讀取會拖住所有 item 的排程);觸發時把綁定的 digest 交給 run 記下,不在 start 重讀(round 3)。**只比對那一個檔**:它呼叫的腳本、agent 讀的其他檔被改不會取消(veracity V1,已知不修:要把 workflow 會碰到的所有檔都算進同意範圍,沒有可靠的邊界) |
+| D16 | run 用按的人的 private,使用前確認他還能 `execute` | workflow 面板的 `POST …/run` 記的權限是 **`converse`**(那扇門本身就只要 `converse`);頁面的 `wui/run` 記 `execute` | round 2 D2:一律確認 `execute` 會讓只有 `converse` 的人按下的 run 被接受、卻默默不帶他的值 |

@@ -34,8 +34,16 @@ from ..api.schedule_index import ScheduleIndex
 from ..filestore.protocol import FileNotFound
 from .offered import no_such_workflow, unparsable_workflow
 from .orchestrator import ActiveRunExists
+from .schedule_bindings import ScheduleBinding, ScheduleBindings, workflow_digest
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
-from .user_schedules import in_zone, over_cap, trigger_id_for, usable_rows, utc_now
+from .user_schedules import (
+    file_rows,
+    in_zone,
+    over_cap,
+    trigger_id_for,
+    usable_rows,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +134,8 @@ class StartRun(Protocol):
         acting_user: str,
         payload: dict[str, Any],
         key: str,
+        env_user: str,
+        env_digest: str | None = None,
     ) -> str | None: ...
 
 
@@ -146,7 +156,22 @@ class UserScheduleSweeper:
         max_rows: int = DEFAULT_MAX_ROWS,
         confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
         lease: ScanLease | None = None,
+        bindings: ScheduleBindings | None = None,
+        on_expired: Callable[[ScheduleBinding, str], object] | None = None,
+        binder_may: Callable[[str, str], bool] | None = None,
     ) -> None:
+        #: Whether a binder may STILL make this item run work (``execute``),
+        #: asked at every fire: a person removed from the item must stop lending
+        #: their values the moment they are removed (review round 1, C2/F1).
+        #: None ⇒ unchecked (a composition that wired none).
+        self._binder_may = binder_may
+        #: `plan-wui-viewer-login` Q7: who each schedule runs AS. None ⇒ no
+        #: store wired, every fire runs as nobody in particular (as before).
+        self._bindings = bindings
+        #: Told about each binding a file edit invalidated, so its binder learns
+        #: their name is no longer on it. Best effort: a failure here must not
+        #: cost the tick.
+        self._on_expired = on_expired
         self._index = index
         #: #804: None ⇒ every caller scans (a single process, or a test that is
         #: not about pods). The API passes one so that N pods cost one scan.
@@ -265,6 +290,129 @@ class UserScheduleSweeper:
             )
             return UNKNOWN
 
+    async def _binder_for(
+        self, item_id: str, trigger_id: str, workflow_id: str
+    ) -> tuple[str, str | None]:
+        """Whose private values this fire runs with: the binder — if they may
+        still make this item run work, and the workflow is still the one they
+        consented to. Otherwise the binding is dropped and they are told why;
+        the fire runs as nobody. Returns ``(binder, the workflow digest they
+        consented to)`` — the run records that digest, not one read at start.
+
+        A check that FAILS, at any step, runs the fire as nobody too — never as
+        a binder it could not check, and never not at all (a raise here would
+        reach the start's handler and skip the window). Round 2 R4 guarded only
+        the read; round 3 (defect 2) found the access check and the unbind
+        outside it."""
+        if self._bindings is None:
+            return "", None
+        try:
+            return await self._checked_binder(self._bindings, item_id, trigger_id, workflow_id)
+        except Exception:  # noqa: BLE001 — see the docstring
+            logger.exception("user schedules: %s: could not check the binding", trigger_id)
+            return "", None
+
+    async def _checked_binder(
+        self, bindings: ScheduleBindings, item_id: str, trigger_id: str, workflow_id: str
+    ) -> tuple[str, str | None]:
+        binding = await asyncio.to_thread(bindings.get, trigger_id)
+        if binding is None:
+            return "", None
+        if self._binder_may is not None and not await asyncio.to_thread(
+            self._binder_may, binding.user_id, item_id
+        ):
+            await asyncio.to_thread(bindings.unbind, trigger_id)
+            await self._tell(binding, "no_access")
+            return "", None
+        if await self._workflow_changed(item_id, workflow_id, binding.workflow_digest):
+            await asyncio.to_thread(bindings.unbind, trigger_id)
+            await self._tell(binding, "changed")
+            return "", None
+        return binding.user_id, binding.workflow_digest
+
+    async def _workflow_changed(self, item_id: str, workflow_id: str, bound: str) -> bool:
+        """Has the workflow's body changed since the binder consented (F4)? Asked
+        of the LIVE file — the one the run will load, and the one the binding
+        was made on (round 2, D3: the snapshot matching said nothing about
+        it). Only read when the schedule is bound. A read that fails, or does
+        not answer within the sweep's confirmation bound, decides nothing (keep
+        the binding): a live read can rebuild a reaped sandbox, and the sweep
+        walks items one after another, so an unbounded one held up every other
+        item's schedules (round 3, regression 1)."""
+        try:
+            live = self._read_live or self._read
+            return (
+                await asyncio.wait_for(
+                    workflow_digest(live, item_id, workflow_id), self._confirm_timeout_s
+                )
+                != bound
+            )
+        except Exception:  # noqa: BLE001 — an unanswered question is not a change
+            logger.warning(
+                "user schedules: %s: could not read workflow %r to check a binding",
+                item_id,
+                workflow_id,
+                exc_info=True,
+            )
+            return False
+
+    async def _tell(self, binding: ScheduleBinding, why: str) -> None:
+        """Tell the binder their name is off a schedule, and WHY — ``changed``
+        (the row or file no longer holds it) or ``no_access`` (they may no
+        longer run work in the item). The notice must say the true reason."""
+        if self._on_expired is None:
+            return
+        try:
+            await asyncio.to_thread(self._on_expired, binding, why)
+        except Exception:  # noqa: BLE001 — a failed notice is not a failed schedule
+            logger.exception("user schedules: could not tell %s", binding.user_id)
+
+    async def _expire_bindings(self, item_id: str, path: str, raw: str) -> None:
+        """Drop the bindings of rows this file no longer holds — an edited row is
+        a new key — and tell each binder. Dropping is not undoable (the person
+        has to press "Run as me" again), so a key must be absent from BOTH the
+        snapshot and the live workspace (review round 1):
+
+        * the snapshot LAGS the live file, and "Run as me" is pressed on what
+          the page just saved — absent there only means "not synced yet" (F2);
+        * a file that does not parse says nothing about which rows it holds — a
+          stray brace must not cost every binder their consent (F3);
+        * a live read that fails or times out decides nothing.
+
+        A store failure is logged and the tick goes on."""
+        assert self._bindings is not None
+        snapshot = _keys_in(item_id, path, raw)
+        if snapshot is None:
+            return
+        try:
+            bound = await asyncio.to_thread(self._bindings.for_item, item_id)
+        except Exception:  # noqa: BLE001 — one item's bookkeeping must not cost the tick
+            logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
+            return
+        if not any(b.path == path and b.trigger_id not in snapshot for b in bound):
+            return  # the common case: nothing to confirm, no second read
+        found = await self._still_there(item_id, path)
+        if found is UNKNOWN:
+            return
+        if found is None:
+            live: set[str] | None = set()
+        else:
+            assert isinstance(found, bytes)
+            live = _keys_in(item_id, path, found.decode("utf-8", "replace"))
+        if live is None:
+            return
+        await self._drop_bindings(item_id, path, keep=snapshot | live)
+
+    async def _drop_bindings(self, item_id: str, path: str, *, keep: set[str]) -> None:
+        assert self._bindings is not None
+        try:
+            gone = await asyncio.to_thread(self._bindings.expire_absent, item_id, path, keep)
+        except Exception:  # noqa: BLE001 — one item's bookkeeping must not cost the tick
+            logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
+            return
+        for binding in gone:
+            await self._tell(binding, "changed")
+
     async def _one_file(self, item_id: str, path: str) -> int:
         try:
             raw = (await self._read(item_id, path)).decode("utf-8", "replace")
@@ -294,6 +442,10 @@ class UserScheduleSweeper:
                     "user schedules: %s %s is gone — dropping from the index", item_id, path
                 )
                 await asyncio.to_thread(self._index.forget, item_id, path)
+                # Confirmed gone (the live workspace agrees): its schedules are
+                # gone, and so is every consent given to them (round 1, C12).
+                if self._bindings is not None:
+                    await self._drop_bindings(item_id, path, keep=set())
                 return 0
             assert isinstance(found, bytes)
             raw = found.decode("utf-8", "replace")
@@ -350,6 +502,11 @@ class UserScheduleSweeper:
             self._said.pop((item_id, path), None)
 
         folder = path.rsplit("/", 1)[0]
+        # HERE — after a clean read and parse, never on a read failure or an
+        # over-cap file (both returned above) — because dropping a binding is
+        # not undoable: the person has to press "run as me" again.
+        if self._bindings is not None:
+            await self._expire_bindings(item_id, path, raw)
         owner = await asyncio.to_thread(self._owner_of, item_id)
         # The ceiling `run` has to stay inside. Checked HERE and per ROW, the
         # same shape as every other lint in this file: the interactive entrance
@@ -459,6 +616,7 @@ class UserScheduleSweeper:
             if not await asyncio.to_thread(self._store.try_claim, trigger_id, window):
                 continue
             try:
+                binder, consented = await self._binder_for(item_id, trigger_id, row.run)
                 await self._start(
                     item_id=item_id,
                     workflow_id=row.run,
@@ -476,6 +634,10 @@ class UserScheduleSweeper:
                     # run drives and the lock that stops it running twice agree
                     # about what "this schedule" means.
                     key=trigger_id,
+                    # Captured as the owner above; RUN WITH the binder's private
+                    # values, or nobody's ("") when no one pressed "run as me".
+                    env_user=binder,
+                    env_digest=consented,
                 )
             except ActiveRunExists:
                 # NOT a failure. The schedule's previous fire is still running,
@@ -584,3 +746,12 @@ class UserScheduleSweeper:
         ]:
             del self._said[key]
         return fired
+
+
+def _keys_in(item_id: str, path: str, raw: str) -> set[str] | None:
+    """The keys a schedules file's rows would fire under, or ``None`` when the
+    file does not parse as a whole — which says nothing about its rows."""
+    if file_rows(raw) is None:
+        return None
+    folder = path.rsplit("/", 1)[0]
+    return {trigger_id_for(item_id, folder, row) for row in usable_rows(raw)[0]}

@@ -120,6 +120,8 @@ def _workspace_path(raw: str) -> str:
       path and the ``path`` query parameter
     * ``queue_chat_video`` (``api/chat_video_routes.py``) — the body's
       ``output_path`` (the two files beside it take its name)
+    * ``list_schedule_bindings`` / ``bind_schedule`` / ``unbind_schedule``
+      (``api/schedule_binding_routes.py``) — the ``path`` query parameter
 
     Known NOT to pass through here, deliberately or otherwise:
     ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store

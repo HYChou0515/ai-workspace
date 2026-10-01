@@ -76,6 +76,13 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from ..workflow.run_identity import register_run_identity
+from ..workflow.schedule_bindings import (
+    ScheduleBinding,
+    ScheduleBindings,
+    register_schedule_bindings,
+    workflow_digest,
+)
 from ..workflow.triggers import ScanLease, SpecstarTriggerStore, register_trigger_store
 from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
@@ -103,7 +110,7 @@ from .health_routes import (
     register_replay_routes,
     register_sanity_routes,
 )
-from .item_authz import check_access, load_access_facts
+from .item_authz import check_access, load_access_facts, user_may
 from .item_routes import register_item_routes
 from .kb_chat_routes import (
     register_kb_chat_routes,
@@ -115,7 +122,8 @@ from .marking_table import register_marking_table_route
 from .mention import MentionService
 from .meta_routes import register_meta_routes
 from .notification_delivery import INotificationChannel
-from .notifications import register_notification_routes
+from .notifications import notify, register_notification_routes
+from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
 from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
@@ -124,6 +132,7 @@ from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
 from .sandbox_address import IAddressStore, SpecstarAddressStore, register_sandbox_address
+from .schedule_binding_routes import register_schedule_binding_routes
 from .schedule_index import (
     ScheduleIndex,
     is_schedule_file,
@@ -236,6 +245,8 @@ async def start_page_schedule(
     acting_user: str,
     payload: dict[str, Any],
     key: str,
+    env_user: str = "",
+    env_digest: str | None = None,
 ) -> str | None:
     """Launch one page-declared schedule.
 
@@ -283,6 +294,11 @@ async def start_page_schedule(
             item_id=item_id,
             profile=await asyncio.to_thread(locator.profile_of, item_id),
             captured_user=acting_user,
+            # Whose private values it runs with — the schedule's binder, or ""
+            # (`plan-wui-viewer-login` Q7); billing stays with `acting_user`.
+            env_user=env_user,
+            # The workflow digest the binder consented to (round 3).
+            env_digest=env_digest,
             workflow_id=workflow_id,
             chat_id=chat_id,
             payload=payload,
@@ -1267,25 +1283,47 @@ def create_app(
         """
         return _owner_of(item_id) or ""
 
-    async def _start_page_schedule(
-        *, item_id: str, workflow_id: str, acting_user: str, payload: dict[str, Any], key: str
-    ) -> str | None:
+    async def _start_page_schedule(**fire: Any) -> str | None:
         """Launch one page-declared schedule.
 
         A thin adapter over :func:`start_page_schedule`, which holds the whole
         body. The orchestrator is read HERE, at call time, because it is
         constructed later than this line — the same deferred wiring
         `entity_write_sink` uses. The body lives at module level so a test can
-        drive it; see `tests/api/test_page_schedule_start.py`.
+        drive it; see `tests/api/test_page_schedule_start.py`. The sweep's
+        arguments are FORWARDED, not re-listed: a re-listed copy is where a new
+        one (round 3's ``env_digest``) is dropped without any test noticing.
         """
         return await start_page_schedule(
-            locator=locator,
-            orchestrator=workflow_orchestrator,
-            item_id=item_id,
-            workflow_id=workflow_id,
-            acting_user=acting_user,
-            payload=payload,
-            key=key,
+            locator=locator, orchestrator=workflow_orchestrator, **fire
+        )
+
+    def _binding_expired(binding: ScheduleBinding, why: str) -> None:
+        """Tell a binder their name is off a schedule — with the true reason."""
+        if why == "no_access":
+            title = "A schedule no longer runs as you"
+            body = (
+                f"You no longer have permission to run work in the item that holds "
+                f"{binding.path}, so its schedule stopped using your values."
+            )
+        else:
+            title = "A schedule you ran as yourself was changed"
+            body = (
+                f"The schedule in {binding.path} was edited or removed, so it no longer "
+                "runs with your values. Open the page and choose “Run as me” again if "
+                "you still want it to."
+            )
+        notify(
+            spec,
+            recipient=binding.user_id,
+            kind=f"schedule_binding_{why}",
+            title=title,
+            body=body,
+            # Per BINDING (its `bound_at`) and reason: re-binding and losing it
+            # again is a second, real notice.
+            dedup_key=(
+                f"schedule-binding-{why}:{binding.trigger_id}:{binding.user_id}:{binding.bound_at}"
+            ),
         )
 
     user_schedule_sweeper = UserScheduleSweeper(
@@ -1307,6 +1345,10 @@ def create_app(
         # construction, so the ordinary tick still wakes nothing.
         read_live=files.read,
         start=_start_page_schedule,
+        # plan-wui-viewer-login Q7: who each schedule runs AS.
+        bindings=ScheduleBindings(spec),
+        on_expired=_binding_expired,
+        binder_may=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
         owner_of=_owner_of_item,
         # The SAME rule the page's own `startRun` is held to (`workflow.offered`),
         # answered from the DURABLE store — `_workflows_for_sweep`, for the same
@@ -1732,6 +1774,21 @@ def create_app(
     # everything above, and both reasons apply: Deploy on a bare test client
     # writes one, and the blob-gc worker must hold every model the API does.
     register_deployed_wui(spec)
+    # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
+    # its only door is the caller-scoped routes below.
+    register_private_env(spec)
+    register_schedule_bindings(spec)
+    # Whose private values a run uses — off `WorkflowRun`, whose auto-CRUD is
+    # writable (review round 1, R5).
+    register_run_identity(spec)
+    # `may` is asked before a person's values are used with nobody at the
+    # request (schedules, goal rounds, re-runs): removed, they stop lending them.
+    private_env_store = PrivateEnvStore(
+        spec,
+        may=lambda user, item, verb: user_may(spec, item, user, verb, superusers=superusers),
+        # No seam configured ⇒ a seam answer left from when one was is not used.
+        seam_enabled=request_env is not None,
+    )
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -2190,15 +2247,15 @@ def create_app(
     from ..apps.profiles import load_profile_workflow
     from ..workflow.dsl import build_run
     from ..workflow.offered import offered_workflow_ids, unparsable_workflow
-    from ..workflow.workspace_store import load_workspace_workflow
+    from ..workflow.workspace_store import load_workspace_workflow_digested
 
     async def _load_workspace(item_id: str, workflow_id: str):
         """#323 P4 (manual §22, Q5): resolve a WORKSPACE-authored ``.workflows/<id>.json``
-        in this item to its ``(run, manifest)`` — the interpreter + its manifest from the
-        one parsed DSL — or ``None`` (absent / malformed), so the orchestrator falls back
-        to a package workflow."""
-        res = await load_workspace_workflow(files, item_id, workflow_id)
-        return (build_run(res[0]), res[1]) if res is not None else None
+        in this item to its ``(run, manifest, digest)`` — the interpreter + its manifest
+        from the one parsed DSL, and the digest of the bytes parsed — or ``None``
+        (absent / malformed), so the orchestrator falls back to a package workflow."""
+        res = await load_workspace_workflow_digested(files.read, item_id, workflow_id)
+        return (build_run(res[0]), res[1], res[2]) if res is not None else None
 
     # #54: the workflow execution callbacks (agent turn / sandbox / ingest / card
     # upsert+find / landed-check) plus the orchestrator's upload-dir / wire-handle /
@@ -2223,6 +2280,8 @@ def create_app(
         # #714 / plan-headless-env: the same seam the send path holds, asked
         # here for what a node with no request behind it gets.
         request_env=request_env,
+        # plan-wui-viewer-login: a run a person started overlays their values.
+        private_env=private_env_store,
     )
 
     workflow_credentials = CredentialBroker()
@@ -2232,6 +2291,11 @@ def create_app(
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
         load_workspace=_load_workspace,
+        # A press's consent: the digest the build would run from — the same
+        # loader a binding and the build go through (`workflow_digest`).
+        digest_workflow=lambda item_id, workflow_id: workflow_digest(
+            files.read, item_id, workflow_id
+        ),
         load_upload_dir=workflow_executor.upload_dir,
         wire_handle=workflow_executor.wire_handle,
         publish=turn_engine.publish,
@@ -2361,6 +2425,8 @@ def create_app(
         # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
         # a turn's tools see the item's env_vars alone, exactly as before.
         request_env=request_env,
+        # `plan-wui-viewer-login`: each person's private env layer per item.
+        private_env=private_env_store,
         # plan-graceful-shutdown P3: every app-chat send (not the KB chat's, which
         # builds its turn in its route) opens a durable claim a peer
         # can re-run the turn from.
@@ -2532,6 +2598,7 @@ def create_app(
         packages=packages,
         prebuilt_dir=prebuilt_dir,
         request_env=request_env,
+        private_env=private_env_store,
         get_user_id=get_user_id,
         # #WUI P18: a page can start a run and watch it live. Resolved at CALL
         # time — the orchestrator is built later than this registration, the same
@@ -2579,6 +2646,18 @@ def create_app(
         locator=locator,
         files=files,
         pages=DeployedPages(spec),
+        get_user_id=get_user_id,
+    )
+
+    register_private_env_routes(
+        api, store=private_env_store, locator=locator, get_user_id=get_user_id
+    )
+    register_schedule_binding_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        files=files,
+        bindings=ScheduleBindings(spec),
         get_user_id=get_user_id,
     )
 

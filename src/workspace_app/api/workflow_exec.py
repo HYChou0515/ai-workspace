@@ -20,7 +20,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -32,7 +32,9 @@ from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert
 from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
+from ..workflow.run_identity import RunIdentities
 from .notifications import notification_sent, notify
+from .private_env import unattended_layer
 from .rca_messages import to_rca_message
 from .timeutil import now_ms
 from .turn_gate import admit_turn
@@ -43,8 +45,10 @@ if TYPE_CHECKING:
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
     from ..kb.llm import ILlm
+    from ..perm import Verb
     from ..quota.admission import AdmissionGate
     from .locator import ItemLocator
+    from .private_env import PrivateEnvStore
     from .registry import InvestigationRegistry
     from .request_env import IRequestEnv
     from .turn_context import TurnContextBuilder
@@ -99,8 +103,12 @@ class WorkflowExecutor:
         ask_llm: ILlm | None = None,
         admission: AdmissionGate | None = None,
         request_env: IRequestEnv | None = None,
+        private_env: PrivateEnvStore | None = None,
     ) -> None:
         self._spec = spec
+        # `plan-wui-viewer-login`: each person's private env values per item; a
+        # run started by a person overlays theirs (`workflow.run_identity`).
+        self._private_env = private_env
         self._files = files
         self._registry = registry
         self._sandbox = sandbox
@@ -149,6 +157,7 @@ class WorkflowExecutor:
         *,
         lane: str | None = None,
         entity_write_origin: EntityOrigin | None = None,
+        run_id: str = "",
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
@@ -207,7 +216,7 @@ class WorkflowExecutor:
             # #429 P10: an agent node's entity writes carry the run's trigger origin, so
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
-            caller_env=await self._headless_env(captured_user, item_id),
+            caller_env=await self._headless_env(captured_user, item_id, run_id),
         )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
@@ -247,7 +256,9 @@ class WorkflowExecutor:
             raise asyncio.CancelledError
         return answer
 
-    async def _headless_env(self, captured_user: str, item_id: str) -> dict[str, str]:
+    async def _headless_env(
+        self, captured_user: str, item_id: str, run_id: str = ""
+    ) -> dict[str, str]:
         """What this node's tools get from the deploy's seam, given that no
         request is behind it: the seam's answer for ``captured_user`` — the item
         owner for an item schedule and for a page-button run, the trigger's
@@ -269,19 +280,34 @@ class WorkflowExecutor:
         everyone the item is shared with; only the impl knows whether it built its message out
         of the very token it was exchanging (the chat send keeps the same rule
         for the same reason). The traceback goes to the server log."""
-        if self._request_env is None:
-            return {}
-        try:
-            return await self._request_env.env_without_request(
-                user_id=captured_user, item_id=item_id
-            )
-        except Exception as exc:
-            logger.exception(
-                "workflow_exec: request env source failed for item %s (user %s)",
-                item_id,
-                captured_user,
-            )
-            raise StepFailed("the deployment's environment source failed for this turn") from exc
+        headless: dict[str, str] = {}
+        if self._request_env is not None:
+            try:
+                headless = await self._request_env.env_without_request(
+                    user_id=captured_user, item_id=item_id
+                )
+            except Exception as exc:
+                logger.exception(
+                    "workflow_exec: request env source failed for item %s (user %s)",
+                    item_id,
+                    captured_user,
+                )
+                raise StepFailed(
+                    "the deployment's environment source failed for this turn"
+                ) from exc
+        # `plan-wui-viewer-login`: the person who started the run (``env_user``,
+        # "" for an unbound schedule or a trigger) contributes their own stored
+        # values over the seam's answer — not the captured user, who for a
+        # page's run is the owner it is billed to.
+        env_user, env_verb = await asyncio.to_thread(self._run_identity, run_id)
+        return await unattended_layer(
+            self._private_env,
+            headless=headless,
+            acting_for=env_user,
+            item_id=item_id,
+            # The right that admitted them to start it — which they must still hold.
+            verb=cast("Verb", env_verb),
+        )
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
         """Leave the #624 marker in the workflow chat.
@@ -533,6 +559,19 @@ class WorkflowExecutor:
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
 
+    def _run_identity(self, run_id: str) -> tuple[str, str]:
+        """Whose private values this node uses, and the right they must still
+        hold (`workflow.run_identity`); ("", …) — nobody's — when none. Read per
+        node, not once when the handle is wired: `_execute` wires the handle
+        BEFORE it builds the interpreter and checks the identity, so a forget
+        there must still reach this handle's nodes. Whether
+        the run is still running what they consented to is decided where its
+        interpreter is BUILT (`orchestrator._hold_identity_to`), not here: the
+        live file at a node says nothing about the interpreter already running
+        (review round 4, defect 1)."""
+        found = RunIdentities(self._spec).get(run_id) if run_id else None
+        return (found.env_user, found.verb) if found is not None else ("", "execute")
+
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
     ) -> None:
@@ -543,8 +582,16 @@ class WorkflowExecutor:
         # agent node's entity writes are depth-counted like the handle's own — read once
         # here; it's fixed for the run's lifetime.
         origin = wf.entity_origin
+        # Whose private values a node gets is read per node, by run id
+        # (`_run_identity`): the build-time check runs after this wiring.
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
-            item_id, chat_key, captured_user, prompt, tools, entity_write_origin=origin
+            item_id,
+            chat_key,
+            captured_user,
+            prompt,
+            tools,
+            entity_write_origin=origin,
+            run_id=run_id,
         )
         wf.reconcile = lambda: self._reconcile(item_id)
         # #429 P5: a per-element turn-lane factory — each map element drives its own
@@ -559,6 +606,7 @@ class WorkflowExecutor:
                 tools,
                 lane=f"{chat_key}#{subkey}",
                 entity_write_origin=origin,
+                run_id=run_id,
             )
         )
         wf.turn_concurrency = self._turn_concurrency

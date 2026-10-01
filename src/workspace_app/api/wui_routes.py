@@ -41,7 +41,9 @@ from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from ..workflow.offered import no_such_workflow, wont_parse
+from .env_layers import resolve_env
 from .locator import ItemLocator
+from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
 from .turn_context import resolve_item_tools
 
@@ -180,6 +182,7 @@ def register_wui_routes(
     resolve_external: Callable[[str], Any] | None = None,
     view_plugin_artifacts: Mapping[str, str],
     request_env: IRequestEnv | None = None,
+    private_env: PrivateEnvStore | None = None,
     get_user_id: Callable[[], str] | None = None,
     orchestrator: Any = None,
     turn_engine: Any = None,
@@ -225,11 +228,14 @@ def register_wui_routes(
         means anything. Its message is not relayed: only the impl knows whether
         it built that string out of the cookie it was reading.
         """
-        if request_env is None:
-            return {}
         uid = get_user_id() if get_user_id is not None else ""
         try:
-            return await request_env.env_for(request, user_id=uid, item_id=item_id)
+            # None = no seam configured (the person's own values still apply).
+            fresh = (
+                None
+                if request_env is None
+                else await request_env.env_for(request, user_id=uid, item_id=item_id)
+            )
         except Exception:
             logger.exception("wui: request env source failed for item %s", item_id)
             raise HTTPException(
@@ -242,6 +248,7 @@ def register_wui_routes(
                 # built that string out of the cookie it was reading.
                 detail="This page could not confirm who you are. Sign in again, then reopen it.",
             ) from None
+        return await private_layer(private_env, user_id=uid, item_id=item_id, fresh=fresh)
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
@@ -284,9 +291,9 @@ def register_wui_routes(
         # Vite's `loadEnv` picks `VITE_`-prefixed names out of `process.env`
         # and `define`s them into the bundle. So a per-request credential
         # reaching here would be baked into a file other people download —
-        # which is exactly what `IRequestEnv` promises never happens ("the
-        # values it returns are NEVER written back anywhere. They live for
-        # exactly one turn").
+        # one person's credential in everybody's copy. The same holds for a
+        # person's stored PRIVATE values (`plan-wui-viewer-login`): the build
+        # reads the shared layer only.
         #
         # A tool call is the opposite shape: its output goes to the one person
         # who asked, and dies with the exec. That is why `wui_call_tool` DOES
@@ -443,6 +450,9 @@ def register_wui_routes(
                 item_id=investigation_id,
                 profile=locator.profile_of(investigation_id),
                 captured_user=locator.owner_of(investigation_id) or "",
+                # Billed to the owner, but run with the PRESSER's private
+                # values (`plan-wui-viewer-login` Q6) — never the owner's.
+                env_user=get_user_id() if get_user_id is not None else "",
                 workflow_id=body.workflow,
                 chat_id=key,
                 payload=body.payload,
@@ -525,6 +535,7 @@ def register_wui_routes(
             )
         pkg, command = found
 
+        layers = locator.env_layers_of(investigation_id)
         session = await registry.session(investigation_id)
         ctx = AgentToolContext(
             investigation_id=investigation_id,
@@ -533,14 +544,15 @@ def register_wui_routes(
             packages=list(available),
             agent_config=config,
             prebuilt_dir=prebuilt_dir,
-            # The item's own win, exactly as they do in a turn
-            # (`turn_context`): those are the ones a person set on purpose,
-            # and a page must not be able to reach a different system from
-            # the one the agent reaches.
-            user_env={
-                **await _request_env(request, investigation_id),
-                **locator.env_vars_of(investigation_id),
-            },
+            # Resolved exactly as a turn resolves them (`turn_context`): the
+            # person who pressed the button is the PRIVATE layer, the item's
+            # copy the SHARED one, and the item's per-name policy picks — so a
+            # page cannot reach a different system from the one the agent does.
+            user_env=resolve_env(
+                shared=layers.shared,
+                private=await _request_env(request, investigation_id),
+                policy=layers.policy,
+            ),
             # The registry's own wake path, so this shares the item's ONE
             # sandbox with its turns rather than racing a second one into
             # existence beside it.

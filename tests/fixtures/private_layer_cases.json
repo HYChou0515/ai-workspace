@@ -1,0 +1,252 @@
+{
+ "_comment": "plan-wui-viewer-login (review round 2): a person's private layer, as `api.private_env.own_layer` composes it \u2014 generated from it, re-checked against it by tests/api/test_private_env.py, and the FE's `ownLayer` (web/src/lib/envLayers.ts) is held to the same rows. `expected` is entries, so ORDER is part of it.",
+ "cases": [
+  {
+   "typed": {},
+   "seam": {},
+   "expected": []
+  },
+  {
+   "typed": {},
+   "seam": {
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "B",
+     "sB"
+    ]
+   ]
+  },
+  {
+   "typed": {},
+   "seam": {
+    "A": "sA"
+   },
+   "expected": [
+    [
+     "A",
+     "sA"
+    ]
+   ]
+  },
+  {
+   "typed": {},
+   "seam": {
+    "A": "sA",
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "A",
+     "sA"
+    ],
+    [
+     "B",
+     "sB"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB"
+   },
+   "seam": {},
+   "expected": [
+    [
+     "B",
+     "tB"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB"
+   },
+   "seam": {
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "B",
+     "sB"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB"
+   },
+   "seam": {
+    "A": "sA"
+   },
+   "expected": [
+    [
+     "B",
+     "tB"
+    ],
+    [
+     "A",
+     "sA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB"
+   },
+   "seam": {
+    "A": "sA",
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "B",
+     "sB"
+    ],
+    [
+     "A",
+     "sA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "A": "tA"
+   },
+   "seam": {},
+   "expected": [
+    [
+     "A",
+     "tA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "A": "tA"
+   },
+   "seam": {
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "A",
+     "tA"
+    ],
+    [
+     "B",
+     "sB"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "A": "tA"
+   },
+   "seam": {
+    "A": "sA"
+   },
+   "expected": [
+    [
+     "A",
+     "sA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "A": "tA"
+   },
+   "seam": {
+    "A": "sA",
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "A",
+     "sA"
+    ],
+    [
+     "B",
+     "sB"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB",
+    "A": "tA"
+   },
+   "seam": {},
+   "expected": [
+    [
+     "B",
+     "tB"
+    ],
+    [
+     "A",
+     "tA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB",
+    "A": "tA"
+   },
+   "seam": {
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "B",
+     "sB"
+    ],
+    [
+     "A",
+     "tA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB",
+    "A": "tA"
+   },
+   "seam": {
+    "A": "sA"
+   },
+   "expected": [
+    [
+     "B",
+     "tB"
+    ],
+    [
+     "A",
+     "sA"
+    ]
+   ]
+  },
+  {
+   "typed": {
+    "B": "tB",
+    "A": "tA"
+   },
+   "seam": {
+    "A": "sA",
+    "B": "sB"
+   },
+   "expected": [
+    [
+     "B",
+     "sB"
+    ],
+    [
+     "A",
+     "sA"
+    ]
+   ]
+  }
+ ]
+}

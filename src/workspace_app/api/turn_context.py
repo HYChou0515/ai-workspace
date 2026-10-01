@@ -51,6 +51,7 @@ from ..tokens import CallLane
 from ..tooling.catalog import narrow_entries
 from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
 from ..workflow.user_schedules import SchedulePolicy
+from .env_layers import resolve_env
 from .locator import TurnFacts
 from .turns import history_items
 
@@ -776,16 +777,21 @@ class TurnContextBuilder:
             # after it, so a user value placed there would be silently
             # overwritten for exactly the names that collide.
             #
-            # #714: whatever the CALLER contributed goes in FIRST, so the item's
-            # own panel wins a name collision. The two are different kinds of
-            # thing — the caller's values are never stored (a person's send
-            # carries what their request said; a turn with no request behind it
-            # — a workflow node, the goal driver — carries what the deploy's
-            # seam answers for such a turn, `docs/plan-headless-env.md`), the
-            # item's are a shared copy every participant can read — and the
-            # decision was that the stored one overrides, unannounced, so a
-            # value can be pinned for testing.
-            user_env={**(caller_env or {}), **facts.env_vars},
+            # #714: the CALLER's contribution is the person's PRIVATE layer — what
+            # their request said, over what they keep for this item
+            # (`plan-wui-viewer-login`); a turn with no request behind it — a
+            # workflow node, the goal driver — carries the deploy's request-less
+            # answer with that person's values over it. The item's are a
+            # shared copy every participant can read.
+            #
+            # Which one wins is the item's per-name policy
+            # (`plan-wui-viewer-login`): the caller's values are the PRIVATE
+            # layer, the item's the SHARED one, and a name with no policy is
+            # `shared_first` — the stored copy overriding, unannounced, which is
+            # what #714 decided so a value can be pinned for testing.
+            user_env=resolve_env(
+                shared=facts.env_vars, private=caller_env or {}, policy=facts.env_policy
+            ),
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create

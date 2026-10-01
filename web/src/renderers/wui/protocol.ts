@@ -22,6 +22,11 @@
  * mechanical rather than a matter of taste: `callTool` answers exactly once, and
  * a run reports progress for minutes before it answers. Every future addition
  * owes the same argument in writing, or this rule has quietly become nothing.
+ *
+ * `openLogin` (`plan-wui-viewer-login`) is the second, and its argument is that
+ * it CANNOT be a tool call either: its whole point is that the credential never
+ * passes through the page. The platform draws its own sign-in outside the
+ * frame; the page may only ask for it to be shown, and hands over nothing.
  */
 
 export const WUI_PROTOCOL = "wui/1";

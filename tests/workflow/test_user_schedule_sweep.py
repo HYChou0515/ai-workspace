@@ -14,6 +14,7 @@ is to be boring:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -78,12 +79,28 @@ class _Started:
         #: chat it selects is what `active_run_for_chat` collides on — a key that
         #: changes per fire silently switches the one-run rule off.
         self.keys: list[str] = []
+        #: Whose private env layer each fire ran with (`plan-wui-viewer-login`):
+        #: the schedule's binder, or "" for nobody's.
+        self.env_users: list[str] = []
+        #: The workflow digest the binder consented to, handed to the run as
+        #: what its nodes must still be running (round 3).
+        self.env_digests: list[str | None] = []
 
     async def __call__(
-        self, *, item_id: str, workflow_id: str, acting_user: str, payload: dict, key: str
+        self,
+        *,
+        item_id: str,
+        workflow_id: str,
+        acting_user: str,
+        payload: dict,
+        key: str,
+        env_user: str,
+        env_digest: str | None = None,
     ):
         self.runs.append((item_id, workflow_id, acting_user, payload))
         self.keys.append(key)
+        self.env_users.append(env_user)
+        self.env_digests.append(env_digest)
         return "run-1"
 
 
@@ -1929,3 +1946,384 @@ def test_a_schedule_that_overruns_again_later_says_so_again(caplog):
         "the schedule overran again after recovering and the sweep stayed silent "
         "— the memo outlived the overrun it was about"
     )
+
+
+# ── whose private values a fire runs with (plan-wui-viewer-login P6) ─────────
+
+
+class _Expired:
+    """One dropped binding and why — attribute access like the binding itself."""
+
+    def __init__(self, binding, why: str) -> None:
+        self.user_id = binding.user_id
+        self.trigger_id = binding.trigger_id
+        self.why = why
+
+
+def _bound_sweeper(spec, files, started, now, expired, *, may=lambda _user, _item: True, live=None):
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    register_schedule_bindings(spec)
+    return UserScheduleSweeper(
+        spec=spec,
+        index=ScheduleIndex(spec),
+        read=files.read,
+        # The live workspace, which may be AHEAD of the durable snapshot.
+        read_live=(live or files).read,
+        start=started,
+        owner_of=lambda _item: "alice",
+        now=lambda: now,
+        bindings=ScheduleBindings(spec),
+        # (binding, why) — the notice must say the true reason.
+        on_expired=lambda binding, why: expired.append(_Expired(binding, why)),
+        binder_may=may,
+    )
+
+
+def _key(row: dict) -> str:
+    (parsed,), _ = usable_rows(_file(row))
+    return trigger_id_for(ITEM, PAGE, parsed)
+
+
+def test_an_unbound_schedule_runs_with_nobodys_private_values():
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+
+
+def test_a_bound_schedule_runs_with_its_binders_private_values():
+    """Q7: bound = somebody pressed "run as me"; the fire is still captured as the
+    owner, but the private layer is the binder's."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    ScheduleBindings(spec).bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob")
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.runs[0][2] == "alice"  # still captured as the owner
+    assert started.env_users == ["bob"]
+
+
+def test_editing_a_bound_schedule_drops_the_binding_and_says_so():
+    """Q7: the binding is to WHAT was consented to. A changed row is a different
+    schedule (its key is derived from its content), so the old binding is dropped
+    and its binder told — otherwise "bind the harmless one, then swap in the
+    payroll query" would run the payroll query as them."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    bindings = ScheduleBindings(spec)
+    bindings.bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob")
+    edited = {**DAILY, "with": {"line": "PAYROLL"}}
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(edited)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.trigger_id, b.why) for b in expired] == [("bob", _key(DAILY), "changed")]
+    assert bindings.binder(_key(DAILY)) == ""
+
+
+def test_a_binder_who_lost_access_no_longer_lends_their_values():
+    """Review round 1 (C2/F1): removed from the item, a binder's values kept
+    reaching every fire — and they could not even see the schedule to take their
+    name off. The binding is dropped at the first fire after, and they are told."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    ScheduleBindings(spec).bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob")
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(
+        _bound_sweeper(
+            spec, files, started, datetime(2026, 9, 5, 9, 30), expired, may=lambda u, _i: u != "bob"
+        ).tick()
+    )
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "no_access")]
+    assert ScheduleBindings(spec).binder(_key(DAILY)) == ""
+
+
+def _bind_bob(spec, row: dict) -> str:
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    register_schedule_bindings(spec)
+    key = _key(row)
+    ScheduleBindings(spec).bind(key, item_id=ITEM, path=PATH, user_id="bob")
+    return key
+
+
+def test_a_binding_made_on_the_live_file_survives_a_snapshot_that_has_not_caught_up():
+    """Review round 1 (F2): "Run as me" is pressed on what the page just saved
+    (the LIVE file); the sweep reads the durable snapshot, which lags. The new
+    key is "absent" there — dropping the binding and telling the binder their
+    schedule was edited would be a false notice for a fresh consent."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    edited = {**DAILY, "at": "10:00"}
+    key = _bind_bob(spec, edited)
+    started, expired = _Started(), []
+    snapshot = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    live = _Files(**{f"{ITEM}{PATH}": _file(edited)})
+
+    asyncio.run(
+        _bound_sweeper(
+            spec, snapshot, started, datetime(2026, 9, 5, 9, 30), expired, live=live
+        ).tick()
+    )
+
+    assert expired == []
+    assert ScheduleBindings(spec).binder(key) == "bob"
+
+
+def test_a_file_that_does_not_parse_drops_no_binding():
+    """Review round 1 (F3): one stray brace while editing ANOTHER row must not
+    cost every binder in the file their consent."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob(spec, DAILY)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)[:-1]})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert expired == []
+    assert ScheduleBindings(spec).binder(key) == "bob"
+
+
+def test_deleting_the_whole_schedules_file_drops_its_bindings_and_says_so():
+    """Review round 1 (C12): the file confirmed gone, its schedules are gone —
+    and so is every consent given to them."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob(spec, DAILY)
+    started, expired = _Started(), []
+
+    asyncio.run(
+        _bound_sweeper(spec, _Files(), started, datetime(2026, 9, 5, 9, 30), expired).tick()
+    )
+
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
+# ── round 1 (F4): the binding is to the workflow it runs, too ────────────────
+
+_WF_V1 = '{"id":"build-report","phases":[{"id":"p"}],"steps":[]}'
+_WF_V2 = '{"id":"build-report","title":"Payroll","phases":[{"id":"p"}],"steps":[]}'
+_WF_PATH = "/.workflows/build-report.json"
+
+
+def _bind_bob_with_workflow(spec, body: str) -> str:
+    import hashlib
+
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    register_schedule_bindings(spec)
+    key = _key(DAILY)
+    ScheduleBindings(spec).bind(
+        key,
+        item_id=ITEM,
+        path=PATH,
+        user_id="bob",
+        workflow_digest=hashlib.sha256(body.encode()).hexdigest(),
+    )
+    return key
+
+
+def test_swapping_the_workflow_a_bound_schedule_runs_drops_the_binding():
+    """Review round 1 (F4): the schedule ROW's key is its content, but the
+    workflow it names can be rewritten by anyone who edits the item — "bind the
+    harmless one, then swap in the payroll query" through the workflow body.
+    The binder consented to the workflow as it was."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V2})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
+def test_an_unchanged_workflow_keeps_the_binding():
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V1})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == ["bob"]
+    assert expired == []
+    # Round 3: the fire hands the run the digest the binder CONSENTED to — not
+    # one read again at start, which an edit in between would make its own.
+    assert started.env_digests == [hashlib.sha256(_WF_V1.encode()).hexdigest()]
+
+
+def test_a_workflow_the_snapshot_has_not_caught_up_with_keeps_the_binding():
+    """Bound on the LIVE workflow file; the durable snapshot still has the old
+    one. Not a change — a lag."""
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob_with_workflow(spec, _WF_V2)
+    started, expired = _Started(), []
+    snapshot = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V1})
+    live = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V2})
+
+    asyncio.run(
+        _bound_sweeper(
+            spec, snapshot, started, datetime(2026, 9, 5, 9, 30), expired, live=live
+        ).tick()
+    )
+
+    assert started.env_users == ["bob"]
+    assert expired == []
+
+
+def test_the_workflow_that_counts_is_the_live_one_the_run_will_load():
+    """Round 2 (D3): the snapshot matching what was consented to said nothing
+    about the LIVE file — which is what the run loads."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    snapshot = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V1})
+    live = _Files(**{f"{ITEM}{PATH}": _file(DAILY), f"{ITEM}{_WF_PATH}": _WF_V2})
+
+    asyncio.run(
+        _bound_sweeper(
+            spec, snapshot, started, datetime(2026, 9, 5, 9, 30), expired, live=live
+        ).tick()
+    )
+
+    assert started.env_users == [""]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
+def test_deleting_the_workflow_a_bound_schedule_runs_drops_the_binding():
+    """A gone file digests to "" (the profile's workflow of that id), which is
+    not what was consented to: dropped, and the binder told it `changed`. The
+    live reader here raises the builtin `FileNotFoundError` — the loader must
+    read that as "no file", not as an unanswered read that keeps the binding
+    (round 6 conformance)."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    key = _bind_bob_with_workflow(spec, _WF_V1)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert started.env_users == [""]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert ScheduleBindings(spec).binder(key) == ""
+
+
+@pytest.mark.parametrize("fails", ["get", "may", "unbind"])
+def test_a_binding_check_that_fails_does_not_stop_the_schedule(fails: str):
+    """Round 2 (R4), round 3 (defect 2): whichever part of the check fails —
+    reading the binding, asking whether the binder may, dropping it — the fire
+    runs, as nobody in particular: never as a binder it could not check, and
+    never not at all."""
+
+    def boom(*_a):
+        raise RuntimeError("store down")
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob(spec, DAILY)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    may = {"get": lambda _u, _i: True, "may": boom, "unbind": lambda _u, _i: False}[fails]
+    sweeper = _bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired, may=may)
+    if fails == "get":
+        sweeper._bindings.get = boom
+    elif fails == "unbind":
+        sweeper._bindings.unbind = boom
+    asyncio.run(sweeper.tick())
+
+    assert started.env_users == [""]
+
+
+def test_a_workflow_read_that_never_answers_does_not_hold_up_the_sweep():
+    """Round 3 (regression 1): the binding check reads the LIVE workflow file on
+    every bound fire, and a live read can rebuild a reaped sandbox. Unbounded,
+    one hung read stalled every item behind it — schedules master would have
+    fired. Bounded like the sweep's other live read; unanswered is not a
+    change, so the binding stands."""
+
+    class _HangsOnWorkflows(_Files):
+        async def read(self, item_id: str, path: str) -> bytes:
+            if path.startswith("/.workflows/"):
+                await asyncio.sleep(30)
+            return await super().read(item_id, path)
+
+    spec = _spec()
+    ScheduleIndex(spec).record(ITEM, PATH)
+    _bind_bob(spec, DAILY)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+    live = _HangsOnWorkflows(**files.files)
+    sweeper = _bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired, live=live)
+    sweeper._confirm_timeout_s = 0.05
+
+    async def bounded() -> None:
+        # A hang is a FAILURE here, not a 30-second wait.
+        await asyncio.wait_for(sweeper.tick(), 10)
+
+    asyncio.run(bounded())
+
+    assert started.env_users == ["bob"]
+    assert expired == []

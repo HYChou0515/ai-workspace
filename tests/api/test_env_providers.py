@@ -268,17 +268,20 @@ def test_an_unknown_provider_is_a_404(harness: Harness):
     assert resp.status_code == 404
 
 
-def test_a_participant_cannot_mint_a_token_they_could_not_have_stored():
-    """The exchange is gated on `write_meta`, the verb for storing a variable.
+def test_a_participant_signs_in_for_their_own_values_but_still_cannot_store_shared_ones():
+    """`plan-wui-viewer-login`: a viewer's sign-in fills THEIR private layer, so
+    the exchange is open to whoever may open the item (`read_meta`, the verb the
+    private-layer routes use) — which the conformance review found was the
+    plan's whole point and still gated on `write_meta`.
 
-    A Participant can READ this item's variables but not write them (#673). If
-    the exchange were gated any looser, that same person could press the button,
-    and the token would come back in the response body — they would have minted
-    a credential's product for an item they cannot configure, and read it,
-    without ever touching the field the permission guards.
+    #750 gated it on `write_meta` because the product had only one home, the
+    SHARED variables, and a reader minting one would read it without being able
+    to store it. The product now has a home that is theirs alone, the exchange
+    takes nothing but what they typed, and the provider is given no item
+    context — so minting it grants nothing they did not bring. What stays
+    closed is the shared layer: they still cannot PATCH it.
 
-    A real second identity, not the owner with a flag flipped: the rule being
-    tested is about two people, and one identity cannot exercise it."""
+    A real second identity, not the owner with a flag flipped."""
     from specstar import SpecStar
     from starlette.testclient import TestClient
 
@@ -301,18 +304,49 @@ def test_a_participant_cannot_mint_a_token_they_could_not_have_stored():
     client = TestClient(app)
     rid = _participant_item(spec, owner="bob", guest="alice", env={})
 
-    refused = client.post(
+    listed = client.get(f"/api/a/rca/items/{rid}/env-providers")
+    assert listed.status_code == 200, listed.text
+    minted = client.post(
         f"/api/a/rca/items/{rid}/env-providers/sap-login",
         json={"values": {"user": "alice", "password": "x"}},
     )
-    assert refused.status_code == 403, refused.text
+    assert minted.status_code == 200, minted.text
 
-    holder["id"] = "bob"  # the owner, who could store it by hand, still can
-    allowed = client.post(
-        f"/api/a/rca/items/{rid}/env-providers/sap-login",
-        json={"values": {"user": "bob", "password": "x"}},
+    stored = client.patch(
+        f"/api/rca-investigation/{rid}",
+        json=[{"op": "replace", "path": "/env_vars", "value": minted.json()["env"]}],
     )
-    assert allowed.status_code == 200, allowed.text
+    assert stored.status_code == 403
+
+
+def test_someone_who_cannot_open_the_item_cannot_sign_in_for_it():
+    from specstar import SpecStar
+    from starlette.testclient import TestClient
+
+    from workspace_app.api.app import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .test_item_env_vars import _participant_item
+
+    holder = {"id": "mallory"}
+    spec: SpecStar = _make_spec_as(holder)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_scripted(),
+        get_user_id=lambda: holder["id"],
+    )
+    app.state.env_providers = [_SapLogin()]
+    client = TestClient(app)
+    rid = _participant_item(spec, owner="bob", guest="alice", env={})
+
+    r = client.post(
+        f"/api/a/rca/items/{rid}/env-providers/sap-login",
+        json={"values": {"user": "m", "password": "x"}},
+    )
+    assert r.status_code in (403, 404)
 
 
 def _make_spec_as(holder: dict[str, str]):

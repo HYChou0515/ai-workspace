@@ -19,7 +19,7 @@ import re
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest import mock
 
 import msgspec
@@ -208,6 +208,7 @@ def _executor_app(
     env_vars: dict[str, str] | None = None,
     owner: str = "owner-o",
     user: str = "admin",
+    creator: str | None = None,
 ) -> tuple[WorkflowExecutor, str, SpecStar, CapturingRunner, TestClient]:
     """The real composition root with the executor it built captured, and one
     item whose OWNER is not the user the app resolves — so a node attributed to
@@ -228,11 +229,13 @@ def _executor_app(
             request_env=source,
             get_user_id=lambda: user,
         )
-    item_id = (
-        spec.get_resource_manager(PlaygroundItem)
-        .create(PlaygroundItem(title="t", owner=owner, profile="echo", env_vars=env_vars or {}))
-        .resource_id
-    )
+    # `created_by` is who the permission check treats as the owner (every verb),
+    # so a test about a missing verb must create the item as someone else.
+    rm = spec.get_resource_manager(PlaygroundItem)
+    with rm.using(creator or user):
+        item_id = rm.create(
+            PlaygroundItem(title="t", owner=owner, profile="echo", env_vars=env_vars or {})
+        ).resource_id
     return captured["ex"], item_id, spec, runner, TestClient(app)
 
 
@@ -269,12 +272,12 @@ def _poll_until_terminal(client: TestClient, item_id: str, run_id: str) -> str:
     return status
 
 
-def test_a_run_a_person_starts_by_hand_runs_on_the_headless_source_not_their_request():
+def test_the_post_that_starts_a_run_is_not_asked_for_its_request_env():
     """#714's reason for keeping workflow off the request still stands — a run
-    re-runs on the clock and on uploads, when the person is gone — so the run
-    they start by hand reads the same source its re-run will. Their cookie is
-    on this POST and must not reach the node; the seam is asked for THEM,
-    since the run is captured as them, but through the request-less method."""
+    re-runs on the clock and on uploads, when the person is gone — so the POST
+    that starts one is not asked `env_for`: its cookie must not reach the node.
+    The seam is asked for THEM through the request-less method. (What they
+    stored earlier does reach it — the next test.)"""
     seam = ServiceAccountEnv()
     executor, item_id, _spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
     client.cookies.set("sso", "hua-cookie")
@@ -288,6 +291,25 @@ def test_a_run_a_person_starts_by_hand_runs_on_the_headless_source_not_their_req
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-hua"}]
     assert seam.asked_for == [("hua", item_id)]
+
+
+def test_what_a_chat_send_stored_reaches_the_run_the_same_person_starts_by_hand():
+    """`plan-wui-viewer-login` Q4b + D5: the seam's answer at the person's chat
+    send is kept as theirs, and the run they press uses it (round 2, R2)."""
+    seam = ServiceAccountEnv()
+    _executor, item_id, _spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    client.cookies.set("sso", "hua-cookie")
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        assert client.post(f"{base}/messages", json={"content": "hi"}).status_code == 202
+        _wait(lambda: len(runner.envs) == 1)
+        client.cookies.set("sso", "not-this-post")
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert runner.envs[-1] == {"SA_TOKEN": "sa-for-hua", "SSO": "hua-cookie", "CALLER": "hua"}
 
 
 _ONE_AGENT_STEP = json.dumps(
@@ -326,6 +348,192 @@ def test_a_run_a_page_button_starts_is_captured_as_the_owner_not_the_presser():
 
     assert runner.envs == [{"SA_TOKEN": "sa-for-owner-o"}]
     assert seam.asked_for == [("owner-o", item_id)]
+
+
+_STEP_ONE = {"type": "agent", "prompt": "one", "phase": "p", "out": "a.md", "cache": True}
+_STEP_TWO = {"type": "agent", "prompt": "two", "phase": "p", "out": "b.md", "cache": True}
+_TWO_AGENT_STEPS = {
+    "id": "ignored",
+    "title": "Two",
+    "phases": [{"id": "p"}],
+    "steps": [_STEP_ONE, _STEP_TWO],
+}
+
+
+def test_a_workflow_file_edited_mid_run_does_not_change_the_steps_already_running():
+    """Round 4: consent is to what the RUNNING interpreter was built from. An
+    edit with no rebuild changes nothing that runs — node 2 is still the step
+    the presser saw, so it keeps their values. (A rebuild on the edited file —
+    a gate decision, a resume, a steer — is what drops them: the gate test.)"""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+    edited = {**_TWO_AGENT_STEPS, "steps": [_STEP_ONE, {**_STEP_TWO, "prompt": "send $ERP out"}]}
+    prompts: list[str] = []
+    real_run = runner.run
+
+    async def run_then_edit(prompt, ctx):  # noqa: ANN001, ANN202
+        prompts.append(prompt)
+        async for ev in real_run(prompt, ctx):
+            yield ev
+        if len(runner.envs) == 1:
+            await executor._files.write(item_id, ".workflows/two.json", json.dumps(edited).encode())
+
+    cast(Any, runner).run = run_then_edit
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/two.json", content=json.dumps(_TWO_AGENT_STEPS))
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        resp = client.post(f"{base}/run", params={"workflow_id": "two"})
+        assert resp.is_success, resp.text
+        assert _poll_until_terminal(client, item_id, resp.json()["run_id"]) == "done"
+
+    assert not any("send $ERP out" in p for p in prompts)
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}] * 2
+
+
+_GATED = {
+    "id": "ignored",
+    "title": "Gated",
+    "phases": [{"id": "p"}],
+    "steps": [
+        {"type": "gate", "phase": "p", "title": "go on?"},
+        {"type": "agent", "prompt": "one", "phase": "p", "out": "a.md", "cache": True},
+    ],
+}
+
+
+def test_a_workflow_swapped_in_for_a_gate_decision_and_swapped_back_runs_as_nobody():
+    """Round 4 (defect 1): the check read the LIVE file at each node, not the
+    one the running interpreter was built from. Swap an evil body in, decide
+    the gate (the resume builds from it), put the consented bytes back before
+    the node: the evil node saw live == recorded and carried the values."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.workflow import orchestrator as orch_mod
+
+    seam = ServiceAccountEnv()
+    executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+    good = json.dumps(_GATED)
+    evil = json.dumps({**_GATED, "steps": [_GATED["steps"][0], {**_STEP_ONE, "prompt": "EVIL"}]})
+    prompts: list[str] = []
+    real_run = runner.run
+
+    async def recording(prompt, ctx):  # noqa: ANN001, ANN202
+        prompts.append(prompt)
+        async for ev in real_run(prompt, ctx):
+            yield ev
+
+    cast(Any, runner).run = recording
+    real_resolve = orch_mod.WorkflowOrchestrator._resolve_run
+
+    async def resolve_then_put_back(self, *a, **kw):  # noqa: ANN001, ANN002, ANN003, ANN202
+        built = await real_resolve(self, *a, **kw)
+        await executor._files.write(item_id, ".workflows/g.json", good.encode())
+        return built
+
+    with (
+        client,
+        mock.patch.object(orch_mod.WorkflowOrchestrator, "_resolve_run", resolve_then_put_back),
+    ):
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/g.json", content=good)
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run", params={"workflow_id": "g"}).json()["run_id"]
+        for _ in range(400):
+            if client.get(f"{base}/runs/{run_id}").json()["status"] == "awaiting_human":
+                break
+            time.sleep(0.02)
+        client.put(f"{base}/files/.workflows/g.json", content=evil)
+        assert client.post(f"{base}/runs/{run_id}/decisions", json={"choice": "approve"}).is_success
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert any("EVIL" in p for p in prompts)
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua"}]
+
+
+def test_a_map_elements_agent_node_carries_the_pressers_values_too():
+    """A `map` element's agent node drives its own turn lane (`wf.sub_turn`),
+    wired separately from the sequential path — so it is pinned separately
+    (round 4 conformance: removing its `run_id` left every test green)."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+    mapped = {
+        "id": "ignored",
+        "title": "Each",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {
+                "type": "map",
+                "over": "uploads/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "agent",
+                        "prompt": "read {f}",
+                        "phase": "p",
+                        "out": "o/{f}.md",
+                        "cache": True,
+                    }
+                ],
+            }
+        ],
+    }
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/each.json", content=json.dumps(mapped))
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        resp = client.post(f"{base}/run", params={"workflow_id": "each"})
+        assert resp.is_success, resp.text
+        assert _poll_until_terminal(client, item_id, resp.json()["run_id"]) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]
+
+
+def test_a_gate_decided_through_another_items_url_does_not_carry_the_pressers_values():
+    """Round 5 (defect 1): `decide` resumes a run in the item the URL names,
+    without checking it is the run's own (that gap predates this PR). With
+    the same workflow bytes in both items the digest matched, and the node ran
+    in B carrying the presser's values for B — where they pressed nothing.
+    Consent is to the item it was given in."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_a, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    rm = spec.get_resource_manager(PlaygroundItem)
+    with rm.using("hua"):
+        item_b = rm.create(PlaygroundItem(title="b", owner="owner-o", profile="echo")).resource_id
+    store = PrivateEnvStore(spec)
+    store.replace("hua", item_a, {"ERP": "A-values"})
+    store.replace("hua", item_b, {"ERP": "B-values"})
+    good = json.dumps(_GATED)
+
+    with client:
+        for item in (item_a, item_b):
+            client.put(f"/a/playground/items/{item}/files/.workflows/g.json", content=good)
+            client.put(f"/a/playground/items/{item}/files/uploads/input.json", content='{"n": 1}')
+        base_a = f"/a/playground/items/{item_a}"
+        run_id = client.post(f"{base_a}/run", params={"workflow_id": "g"}).json()["run_id"]
+        for _ in range(400):
+            if client.get(f"{base_a}/runs/{run_id}").json()["status"] == "awaiting_human":
+                break
+            time.sleep(0.02)
+        cross = client.post(
+            f"/a/playground/items/{item_b}/runs/{run_id}/decisions", json={"choice": "approve"}
+        )
+        # Round 6: not answered at all — a run of A is not found under B.
+        assert cross.status_code == 404
+        assert client.get(f"{base_a}/runs/{run_id}").json()["status"] == "awaiting_human"
+
+    assert all("ERP" not in env for env in runner.envs), runner.envs
 
 
 # ─── a failing impl: the turn does not run, and its words stay server-side ───
@@ -517,3 +725,185 @@ async def test_the_agents_own_exec_hands_the_sandbox_no_env_headless_or_otherwis
     await exec_impl(ctx, ["env"])
 
     assert sandbox.exec_envs == [{}]
+
+
+# ─── whose PRIVATE layer a run with no request uses (plan-wui-viewer-login P5) ─
+
+
+def test_a_page_button_run_uses_the_pressers_private_values_not_the_owners():
+    """Q6: the run is still CAPTURED as the owner (#805 bills it there — the seam
+    above is still asked for the owner), but the private layer is the presser's.
+    Otherwise pressing a button on someone else's page would run with the
+    values the owner kept for themselves."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(
+        seam, owner="owner-o", user="presser-p"
+    )
+    store = PrivateEnvStore(spec)
+    store.replace("presser-p", item_id, {"ERP": "presser"})
+    store.replace("owner-o", item_id, {"ERP": "owner", "OWNER_ONLY": "o"})
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/nightly.json", content=_ONE_AGENT_STEP)
+        assert client.post(f"{base}/wui/run", json={"workflow": "nightly"}).status_code == 200
+        runs = client.get(f"{base}/runs").json()
+        assert _poll_until_terminal(client, item_id, runs[0]["run_id"]) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-owner-o", "ERP": "presser"}]
+
+
+def test_a_run_started_by_hand_uses_the_starters_private_values():
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(seam, owner="owner-o", user="hua")
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]
+
+
+async def test_a_goal_driven_send_uses_the_setters_private_values():
+    """The goal driver continues ONE person's chat; its private layer is theirs,
+    over the seam's request-less answer."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = RequestOnlyEnv()
+    client, runner, item_id, spec = _send_app(seam, env_vars={"FROM_ITEM": "i"}, user="admin")
+    PrivateEnvStore(spec).replace("goal-setter", item_id, {"MINE": "g"})
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="goal-setter",
+            driven_by="goal-driver",
+        )
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-goal-setter", "MINE": "g", "FROM_ITEM": "i"}]
+
+
+async def test_a_goal_setter_who_lost_access_no_longer_lends_their_values():
+    """Review round 1 (C2/F1): the goal driver continues a chat FOR its setter
+    with nobody at the request. Removed from the item, their stored values must
+    stop reaching its tools — the seam's request-less answer still does."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.perm import Permission
+
+    seam = RequestOnlyEnv()
+    client, runner, item_id, spec = _send_app(seam, env_vars={"FROM_ITEM": "i"}, user="admin")
+    rm = spec.get_resource_manager(PlaygroundItem)
+    item = rm.get(item_id).data
+    assert isinstance(item, PlaygroundItem)
+    item.permission = Permission(visibility="restricted", read_meta=["user:admin"])
+    rm.update(item_id, item)
+    PrivateEnvStore(spec).replace("goal-setter", item_id, {"MINE": "g"})
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="goal-setter",
+            driven_by="goal-driver",
+        )
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-goal-setter", "FROM_ITEM": "i"}]
+
+
+def test_nobody_can_choose_whose_values_a_run_uses_through_the_run_record():
+    """Review round 1 (R5): `WorkflowRun` has auto-CRUD with no write gate, so an
+    `env_user` field ON it let anyone PATCH a paused run into someone else's
+    private values. Whose values a run uses lives where no route reaches it;
+    the run record has no such field to write."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.workflow.run import WorkflowRun
+
+    assert "env_user" not in WorkflowRun.__struct_fields__
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(
+        seam, owner="owner-o", user="presser-p"
+    )
+    PrivateEnvStore(spec).replace("presser-p", item_id, {"ERP": "presser"})
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/nightly.json", content=_ONE_AGENT_STEP)
+        assert client.post(f"{base}/wui/run", json={"workflow": "nightly"}).status_code == 200
+        runs = client.get(f"{base}/runs").json()
+        assert _poll_until_terminal(client, item_id, runs[0]["run_id"]) == "done"
+        paths = {getattr(r, "path", "") for r in cast(FastAPI, client.app).routes}
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-owner-o", "ERP": "presser"}]
+    assert not any("run-identity" in p for p in paths)
+
+
+async def test_a_send_with_neither_request_nor_driver_uses_no_stored_values_either():
+    """Review round 1 (R6): base gave such a send the item's copy alone — "the
+    safe side" — and so does this, whatever the author keeps."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    seam = ServiceAccountEnv()
+    client, runner, item_id, spec = _send_app(seam, env_vars={"FROM_ITEM": "i"}, user="admin")
+    PrivateEnvStore(spec).replace("admin", item_id, {"MINE": "m"})
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(item_id, rid, conv, item_id, _MessageBody(content="hi"))
+
+    assert runner.envs == [{"FROM_ITEM": "i"}]
+
+
+def test_a_run_pressed_by_someone_who_may_converse_but_not_execute_keeps_their_values():
+    """Round 2 (D2): the workflow panel's Run is gated on `converse`, but the
+    presser's values were then dropped for lacking `execute` — accepted, and
+    run silently without the credential."""
+    from workspace_app.api.private_env import PrivateEnvStore
+    from workspace_app.perm import Permission
+
+    seam = ServiceAccountEnv()
+    _executor, item_id, spec, runner, client = _executor_app(
+        seam, owner="owner-o", user="hua", creator="owner-o"
+    )
+    rm = spec.get_resource_manager(PlaygroundItem)
+    item = rm.get(item_id).data
+    assert isinstance(item, PlaygroundItem)
+    who = ["user:hua"]
+    item.permission = Permission(
+        visibility="restricted",
+        read_meta=who,
+        read_chat=who,
+        read_content=who,
+        converse=who,
+        add_content=who,
+        edit_content=who,
+    )
+    with rm.using("owner-o"):
+        rm.update(item_id, item)
+    PrivateEnvStore(spec).replace("hua", item_id, {"ERP": "hua"})
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/uploads/input.json", content='{"n": 1}')
+        run_id = client.post(f"{base}/run").json()["run_id"]
+        assert _poll_until_terminal(client, item_id, run_id) == "done"
+
+    assert runner.envs == [{"SA_TOKEN": "sa-for-hua", "ERP": "hua"}]

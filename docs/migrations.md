@@ -1231,6 +1231,88 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   `read_skill("system-help")`，接著讀 `.skill/system-help/` 底下的文件或交給 `docs-reader`，回答附上文件名。
 - 該 item 的 Skills 面板：`system-help` 那一列沒有「可在此編輯」，也沒有 Update / Reset。
 
+
+### 2026-10-01 · #869 看頁面的人用自己的登入：環境變數分 shared / private 兩層、每個變數一種政策、排程「用我的身分執行」 {#pr-869}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-wui-viewer-login.md`）：
+
+- **`IRequestEnv.env_for` 回的值現在會存下來**，存在「那個人、那個 item」自己的一列（新 model `PrivateSeam`），
+  每次變化就**整份取代**，不再只活一輪。為什麼：pod 死掉後被接手重跑的 turn、那個人自己的 goal 續跑、他按下起的
+  run，都沒有 request 可問。別人的值不會用在另一個人的 turn。`env_without_request` 的值仍然不存。
+  - ⚠️ **憑證因此落在資料庫裡**（明文，和 item 的 `env_vars` 一樣）。DB 的備份與能直接讀 DB 的人都拿得到；透過 API
+    只有本人讀得到，superuser 也不行。每次寫入都是取代後刪掉舊 revision，**不留舊值的歷史**；刪除 item 會一併清掉所有人的列。
+  - ⚠️ **沒有人在場的 turn，那個人存的值同名時蓋過 `env_without_request` 的服務帳號**（那條路是替他跑的）。
+    已經靠 #809 服務帳號跑 goal / 重跑 / 手動 run 的部署：同一個人送過一次聊天之後，這些路徑改用他自己的值。
+    - **要做的事（`rollout 前`）**：想維持服務帳號，就改你的 `IRequestEnv` impl，讓 `env_for` 與
+      `env_without_request` **不要回同一個變數名**。
+    - 為什麼：同名時個人值贏；這是把個人登入帶進背景 run 的設計本身。
+    - 漏做的症狀：goal 續跑 / 重跑 / 手動 run 開始用某個人最後一次的 cookie 值打外部系統；那個 cookie 過期後
+      這些路徑失敗（401），而不是像以前一樣用服務帳號成功。
+  - **要做的事（`rollout 前`）**：檢查你的 impl 回的值——它們現在會**存進資料庫**（那個人自己的列）。
+    - 為什麼：存下來才能在沒有人在場時用。
+    - 漏做的症狀：impl 回了不該落地的東西（例如一次性的 session secret），它會出現在 DB 與 DB 備份裡。
+  - ⚠️ **存下的值只在那個人於該 item 聊天送出或按頁面工具時更新**（只有這兩條路問 `env_for`）。他登出 SSO
+    之後，到他下一次在那裡操作前，替他跑的 goal 續跑 / 重跑 / 他按的 run / 他綁定的排程用的仍是舊值。
+    - 為什麼：沒有人在場的路徑沒有 request 可問，只能用最後一次存下的。
+    - 你會看到的：這段期間外部系統收到已登出的 session；它若已失效就回 401，和這個 PR 之前用服務帳號時不同。
+  - 部署**拿掉** `server.request_env` 之後，先前存下的 seam 值**不再被使用**（啟動時就不讀），要清掉可請使用者在
+    Env 面板「只有我」按「清除我的值」，或刪除 item。
+- **有人在場、沒設政策、沒有人自己存值的 item，行為不變**：預設 `shared_first` 就是舊的 `{**request_env, **item_env}`。
+- **`IEnvProvider` 的兩條路由從 `write_meta` 改成 `read_meta`**：能打開 item 的人都能用登入鈕，換出的值進他自己的
+  「只有我」。存成共用值仍然要 `write_meta`。
+  - **要做的事（`rollout 前`）**：你的 provider impl 會被更多人呼叫——它自己的 rate limit / 鎖帳號規則照這個量檢查。
+  - 漏做的症狀：參與者一起登入時觸發你那邊的鎖帳號或 429，登入框回「取得失敗」。
+- 聊天的「環境變數」鈕現在**有 `converse` 的人也看得到**，而且**預設開在「只有我」分頁**；存共用值仍要 `write_meta`，
+  其他人「所有參與者」分頁唯讀。原本的 tool 下拉選單換成依 tool 分段的清單；**沒宣告任何變數的 tool 不再列出**，#750 的「某工具沒有宣告它需要哪些變數」提示也拿掉了（畫面上把沒宣告當作不需要；核心仍分「沒宣告」與「不需要」）。
+  缺值時鈕旁有琥珀色點、tooltip 寫出缺什麼。
+- 頁面按鈕起的 `wui/run` 與 workflow 面板的 `POST …/run`：run 照舊記在原本的人名下（計費不變），但 tool 另外拿到
+  **按的人**自己的值（新 model `RunIdentity`，沒有 API 路由可以改它；run 之後不再是他按下的那個——`workflow_id`
+  被改後重新組、在別的 item / profile 上重新組、重新組出 run 時讀到的 workflow 檔和他同意的不同（開始、gate 決定、續跑、steer 都會重新組）、steer 被核准——就不再帶他的值）。頁面排程只有在有人按「用我的身分執行」後
+  才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
+  綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
+- **run 的 gate 決定、steer、steer 確認，只接受 run 所屬 item 的網址**：從別的 item 的網址送來回 404（以前會在
+  網址那個 item 裡接著跑那個 run，只檢查網址 item 的權限）。同一類的另外三條——取消 run、讀 run、看 run 串流——
+  **這個 PR 沒有改**，見 #870。
+  - **要做的事（`rollout 前`）**：查你們有沒有腳本或 bot 用 `POST …/runs/{run_id}/decisions`、`…/steer`、
+    `…/steer/confirm` 回應 gate；網址裡的 item 必須是 run 所屬的那個。
+  - 為什麼：網址的 item 和 run 對不上時，run 會在錯的 item 裡接著跑；現在一律當作找不到。
+  - 漏做的症狀：那些呼叫拿到 404，gate 一直停在等人決定。
+- **「用我的身分執行」遇到 workflow 檔解析不了時回 422**（修好檔案再按）。
+  - 你會看到的：排程面板那一列按下去出現「won't parse」的錯誤，那一列不會綁定。
+- **workflow id 含 `/` 的不再當作工作區 workflow 讀取**（例如 `sub/x`、`../notes`），改找同名的 profile workflow——以前
+  `../notes` 會拿資料夾外的 `/notes.json` 來跑。只認 `.workflows/` 底下平的 `<id>.json`；正常流程（存 workflow 時的
+  id 一律 slugify）不會產生這種 id。
+- WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
+  約 32px 的平台列。
+- 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
+  再多一次取代與刪舊 revision。每個 goal 續跑 / 重跑 / 帶 `env_user` 的 run 的 agent turn 多一次存取確認
+  （`user_may`：重讀 item 的存取資料與使用者群組，不快取）與 private 讀取（有 seam 時兩列）；帶 `env_user` 的 run
+  若是有人按下的 run，開始時另外讀一次 workflow 檔（排程觸發的 run 用綁定記下的，不讀）；每次組出 run（開始、gate 決定、續跑、steer）與每個 agent 節點各多一次身分列讀取（沒有身分的 run 也是，
+  查不到就結束；對不上時再多一次刪除）。
+  seam 回的名字順序若每次不同（例如從 set 組出來），每次聊天送出與頁面 `callTool` 都會多一次寫入——順序本身
+  就是 tool 看到的值，所以算變化。排程 sweep 每個排程檔多一次綁定查詢；要觸發的每一列
+  多一次綁定讀取，有綁定時再多一次存取確認與一次（即時）workflow 檔讀取。前端：聊天標頭顯示「環境變數」鈕時，
+  打開 item 就發 3 個 GET（tool 清單、登入方法、自己的值；以前要打開面板才發）；`/w/` 頁面與 WUI 分頁的工具列
+  打開時各發 5 個 GET（再加 `env/layers` 與排程綁定），同一個 item 共用快取。
+
+**資料** — 沒有 `Schema` 升版、沒有要跑的指令。新 model `PrivateEnv`、`PrivateSeam`、`ScheduleBinding`、`RunIdentity`
+在啟動時註冊（沒有 auto-CRUD 路由）；item 多一個欄位 `env_policy`，預設 `{}`，舊資料讀出來就是空的。
+
+**k8s · CI 側** — 沒有新 manifest、env、probe 或 JobType。image 照常重 build 即可。
+
+**確認做完**
+
+- 在一個 item 的「環境變數」→「所有參與者」把某個變數設成「各人自己填」並儲存；換一個有 `converse` 的參與者打開，
+  「只有我」分頁看得到那一列、能填、存完再打開值還在（遮罩，按「顯示」看得到）。
+- 部署有接 `server.request_env` 的話：那個人送一則聊天後，`GET /api/a/{slug}/items/{id}/env/private`（以他的身分）
+  的 `auto` 回得到 `env_for` 給的值；以**別人**的身分打同一個網址，回的是別人自己的（通常是空的）。
+- 有 `IEnvProvider` 的部署：以只有 `read_meta` 的參與者身分打開 Env 面板，「只有我」分頁看得到登入鈕，登入後值出現在
+  他自己的欄位。
+- 對一個停在 gate 的 run，用**另一個 item** 的網址打 `POST /api/a/{slug}/items/{另一個 item}/runs/{run_id}/decisions`
+  回 `404`，run 仍停在原本的 gate。
+- 一個有 `schedules.json` 的 WUI 頁面用 `/w/...` 打開：上方有平台列，「這一頁的排程」列得出每一列、按「用我的身分
+  執行」後那一列顯示用你的身分。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

@@ -16,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from workspace_app.api.locator import ItemLocator
+from workspace_app.api.locator import ItemEnv, ItemLocator
 from workspace_app.api.wui_routes import BUILD_STEP_MARK, register_wui_routes
 from workspace_app.resources import AgentConfig
 from workspace_app.sandbox.protocol import (
@@ -86,9 +86,15 @@ class _Registry:
 
 
 class _Locator:
-    def __init__(self, allowed: list[str] | None, env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        allowed: list[str] | None,
+        env: dict[str, str] | None = None,
+        env_policy: dict[str, str] | None = None,
+    ):
         self.allowed = allowed
         self.env = env or {}
+        self.env_policy = env_policy or {}
         self.asked_verb: list[str] = []
         self.opened: list[tuple[str, str]] = []
         self.settled: list[tuple[str, str | None]] = []
@@ -102,6 +108,9 @@ class _Locator:
 
     def env_vars_of(self, item_id: str) -> dict[str, str]:
         return dict(self.env)
+
+    def env_layers_of(self, item_id: str) -> ItemEnv:
+        return ItemEnv(shared=dict(self.env), policy=dict(self.env_policy))
 
     def profile_of(self, item_id: str) -> str:
         return "default"
@@ -141,10 +150,12 @@ def build(
     packages: list[PackageInfo] | None = None,
     external: ExternalTools | None = None,
     env: dict[str, str] | None = None,
+    env_policy: dict[str, str] | None = None,
     sandbox: _Sandbox | None = None,
     registry: _Registry | None = None,
     locator: _Locator | None = None,
     request_env=None,
+    private_env=None,
     orchestrator=None,
     turn_engine=None,
     workflows: list[str] | None = None,
@@ -153,7 +164,7 @@ def build(
     sb = sandbox or _Sandbox()
     reg = registry or _Registry()
     grants = ["mes"] if allowed is _UNSET else cast("list[str] | None", allowed)
-    loc = locator or _Locator(grants, env)
+    loc = locator or _Locator(grants, env, env_policy)
 
     async def _external(item_id: str) -> ExternalTools:
         return external or ExternalTools()
@@ -171,6 +182,7 @@ def build(
         prebuilt_dir=None,
         resolve_external=_external,
         request_env=request_env,
+        private_env=private_env,
         get_user_id=lambda: "default-user",
         orchestrator=orchestrator,
         turn_engine=turn_engine,
@@ -736,6 +748,76 @@ def test_a_tool_called_from_a_page_gets_the_request_environment():
     # two names that could not collide, and flipping the merge kept it green.
     assert sandbox.envs[-1]["MES_HOST"] == "from-item"
     assert env.asked == [("default-user", "i1")]
+
+
+def test_a_page_tool_call_follows_the_items_policy_for_each_name():
+    """`plan-wui-viewer-login`: the person who pressed the button is the PRIVATE
+    layer. A name the item marked `private_first` takes their value over the
+    shared one; an unmarked name still resolves the way it always did."""
+    env = _Env({"MES_TOKEN": "mine", "MES_HOST": "mine"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(
+        sandbox=sandbox,
+        env={"MES_TOKEN": "shared", "MES_HOST": "shared"},
+        env_policy={"MES_TOKEN": "private_first"},
+        request_env=env,
+    )
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 200
+    assert sandbox.envs[-1]["MES_TOKEN"] == "mine"
+    assert sandbox.envs[-1]["MES_HOST"] == "shared"
+
+
+def _private_store():
+    from workspace_app.api.private_env import PrivateEnvStore, register_private_env
+    from workspace_app.resources import make_spec
+
+    spec = make_spec()
+    register_private_env(spec)
+    return PrivateEnvStore(spec)
+
+
+def test_the_build_never_sees_anyones_private_values():
+    """`plan-wui-viewer-login` keeps #788's rule for the new source: `dist/` is
+    served to every viewer, and a bundler bakes env into it, so whoever pressed
+    Rebuild must not leave their private token in everyone's copy."""
+    store = _private_store()
+    store.replace("default-user", "i1", {"ERP_TOKEN": "mine"})
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(sandbox=sandbox, env={"NPM_TOKEN": "s"}, private_env=store)
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert "ERP_TOKEN" not in sandbox.envs[0]
+    assert sandbox.envs[0]["NPM_TOKEN"] == "s"
+
+
+def test_a_page_tool_call_carries_the_pressers_own_stored_values():
+    """`plan-wui-viewer-login`: what the person typed or logged in for this item
+    is their PRIVATE layer, whether or not the deploy has a request seam."""
+    store = _private_store()
+    store.replace("default-user", "i1", {"ERP_TOKEN": "mine"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, env={"MES_HOST": "h"}, private_env=store)
+
+    assert client.post(URL, json={"args": {}}).status_code == 200
+
+    assert sandbox.envs[-1]["ERP_TOKEN"] == "mine"
+    assert sandbox.envs[-1]["MES_HOST"] == "h"
+
+
+def test_a_page_tool_call_keeps_what_the_seam_said_in_the_pressers_row():
+    store = _private_store()
+    env = _Env({"MES_TOKEN": "from-request"})
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(sandbox=sandbox, request_env=env, private_env=store)
+
+    assert client.post(URL, json={"args": {}}).status_code == 200
+
+    # Kept as the seam's last answer about the presser (its own row).
+    assert store.seam("default-user", "i1") == {"MES_TOKEN": "from-request"}
 
 
 def test_a_failing_env_source_refuses_a_tool_call():

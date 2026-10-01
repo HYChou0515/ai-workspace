@@ -12,7 +12,9 @@ Decoupled from the agent context so it unit-tests against a bare ``FileStore``.
 
 from __future__ import annotations
 
+import hashlib
 import re
+from collections.abc import Awaitable, Callable
 
 import msgspec
 
@@ -88,23 +90,59 @@ def workflow_problem(raw: bytes | str) -> str | None:
     return None
 
 
-async def load_workspace_workflow(
-    files: WorkspaceFiles, workspace_id: str, workflow_id: str
-) -> tuple[WorkflowDef, WorkflowManifest] | None:
-    """A workspace ``.workflows/<workflow_id>.json`` parsed into ``(def, manifest)`` (the
-    manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
-    or ``None`` when absent / malformed. The single read backing both the orchestrator's
-    run resolution and the route's manifest 404 guard (#323 P4)."""
-    if not workflow_id or workflow_id == RESERVED_WORKFLOW_ID:
+def workflow_bytes_digest(raw: bytes) -> str:
+    """What a person's consent to a workflow FILE is recorded as
+    (`plan-wui-viewer-login`): the sha256 of its bytes. Only
+    `load_workspace_workflow_digested` calls it; a binding and a press take
+    the loader's answer (`schedule_bindings.workflow_digest`), so which file
+    counts and what a broken one digests to are decided in one place."""
+    return hashlib.sha256(raw).hexdigest()
+
+
+async def load_workspace_workflow_digested(
+    read: Callable[[str, str], Awaitable[bytes]], workspace_id: str, workflow_id: str
+) -> tuple[WorkflowDef, WorkflowManifest, str] | None:
+    """`load_workspace_workflow`, plus the digest of the very bytes it parsed —
+    so a run is checked against what its interpreter was BUILT from, not a
+    second read that may see different bytes (review round 4, defect 1).
+
+    Only a FLAT ``<id>.json`` in the folder is a workspace workflow — the rule
+    `offered.unparsable_workflow` applies — so a traversal or nested id is the
+    profile's workflow, never a read outside the folder (round 6)."""
+    if (
+        not workflow_id
+        or workflow_id == RESERVED_WORKFLOW_ID
+        or not is_workspace_workflow_path(workspace_workflow_path(workflow_id))
+    ):
         # The schedules file is not a workflow, whatever body somebody wrote
         # into it — refused HERE, in the one loader the orchestrator, the panel's
         # resolver and the run route all share, so no reader can run it.
         return None
     try:
-        d = parse_def(await files.read(workspace_id, workspace_workflow_path(workflow_id)))
-    except (FileNotFound, DslError):
+        raw = await read(workspace_id, workspace_workflow_path(workflow_id))
+        d = parse_def(raw)
+    # `FileNotFoundError` too: the facade converts it, but this takes any
+    # reader (the sweep's is injected), and "no file" means the profile's
+    # workflow whichever way a reader says it.
+    except (FileNotFound, FileNotFoundError, DslError):
         return None
-    return d, msgspec.structs.replace(build_manifest(d), id=workflow_id)
+    return (
+        d,
+        msgspec.structs.replace(build_manifest(d), id=workflow_id),
+        workflow_bytes_digest(raw),
+    )
+
+
+async def load_workspace_workflow(
+    files: WorkspaceFiles, workspace_id: str, workflow_id: str
+) -> tuple[WorkflowDef, WorkflowManifest] | None:
+    """A workspace ``.workflows/<workflow_id>.json`` parsed into ``(def, manifest)`` (the
+    manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
+    or ``None`` when absent / malformed. `load_workspace_workflow_digested` without the
+    digest: the same read and parse the orchestrator builds a run from, for the
+    route's manifest 404 guard and the panel's resolver (#323 P4)."""
+    got = await load_workspace_workflow_digested(files.read, workspace_id, workflow_id)
+    return (got[0], got[1]) if got is not None else None
 
 
 #: The one workflow id no workspace may use: its file would BE the item's

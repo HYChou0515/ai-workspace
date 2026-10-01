@@ -21,7 +21,7 @@ import base64
 import contextlib
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import magic
 import msgspec
@@ -51,6 +51,7 @@ from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .markings import markings_prompt_block, write_markings
 from .notifications import notify
+from .private_env import private_layer, unattended_layer
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from .activity import ActivityLog
     from .compaction import IConversationCompactor
     from .locator import ItemLocator
+    from .private_env import PrivateEnvStore
     from .request_env import IRequestEnv
     from .subagent_bridge import SubagentBridge
     from .turn_claims import ClaimRow, ITurnClaimStore
@@ -221,6 +223,7 @@ class ChatSendService:
         flush_item: Callable[[str], Awaitable[None]],
         admission: AdmissionGate | None = None,
         request_env: IRequestEnv | None = None,
+        private_env: PrivateEnvStore | None = None,
         send_await_timeout: float = 25.0,
         turn_claims: ITurnClaimStore | None = None,
     ) -> None:
@@ -228,6 +231,10 @@ class ChatSendService:
         # from if this pod goes away. None ⇒ no store (single-pod / tests):
         # turns are as pod-bound as they always were.
         self._turn_claims = turn_claims
+        # `plan-wui-viewer-login`: each person's PRIVATE env values per item.
+        # None ⇒ no store (a composition that never wired one): the private
+        # layer is exactly what the request seam answered, as before.
+        self._private_env = private_env
         self._spec = spec
         self._locator = locator
         self._turn_ctx = turn_ctx
@@ -449,23 +456,48 @@ class ChatSendService:
         the impl knows whether it built that string out of the very cookie it was
         reading. The server log keeps the traceback.
         """
-        if self._request_env is None:
-            return {}
-        if request is None and not driven_by:
-            return {}
-        try:
-            if request is None:
-                return await self._request_env.env_without_request(user_id=user_id, item_id=item_id)
-            return await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
-        except Exception:
-            logger.exception("chat_send: request env source failed for item %s", item_id)
-            raise HTTPException(
-                # Not 502/503/504: the chat client reads those as "an idle
-                # gateway cut the POST while the turn runs" and keeps waiting for
-                # a reply that this refusal guarantees will never come.
-                status_code=500,
-                detail={"error": "request_env_failed"},
-            ) from None
+        if request is None:
+            if not driven_by:
+                # Neither a request nor the platform's own driver: the safe
+                # side, as before this plan (review round 1, R6) — nothing of
+                # anybody's.
+                return {}
+            # The goal driver continues ONE person's chat: the seam's
+            # request-less answer, with their own values over it — if they may
+            # still talk to the agent here.
+            headless: dict[str, str] = {}
+            if self._request_env is not None:
+                try:
+                    headless = await self._request_env.env_without_request(
+                        user_id=user_id, item_id=item_id
+                    )
+                except Exception:
+                    self._request_env_failed(item_id)
+            return await unattended_layer(
+                self._private_env,
+                headless=headless,
+                acting_for=user_id,
+                item_id=item_id,
+                verb="converse",
+            )
+        fresh: dict[str, str] | None = None
+        if self._request_env is not None:
+            try:
+                fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
+            except Exception:
+                self._request_env_failed(item_id)
+        return await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
+
+    @staticmethod
+    def _request_env_failed(item_id: str) -> NoReturn:
+        logger.exception("chat_send: request env source failed for item %s", item_id)
+        raise HTTPException(
+            # Not 502/503/504: the chat client reads those as "an idle gateway
+            # cut the POST while the turn runs" and keeps waiting for a reply
+            # that this refusal guarantees will never come.
+            status_code=500,
+            detail={"error": "request_env_failed"},
+        ) from None
 
     # ── #613 P3: goal auto-continue ─────────────────────────────────────
 
@@ -1004,8 +1036,9 @@ class ChatSendService:
         to hand over, the claim left this pod's (round 4). Held here, the
         drain finds its token and releases the claim like any preparing send.
         The request env is what a turn with no request behind it gets
-        (`env_without_request`), as for a goal-driven round —
-        the caller's own cookie was composed for one turn and is not stored.
+        (`env_without_request`), as for a goal-driven round, with the author's
+        own stored private values over it (`plan-wui-viewer-login`) — read from
+        the shared backend, never from the claim.
         A failure before the turn exists ends the thread the way a failed
         preparation does; the claim is finished, not re-taken every tick."""
         claim = row.claim
@@ -1024,10 +1057,22 @@ class ChatSendService:
             # heartbeat: the claim is this pod's from `take` on, and a policy
             # that takes its time with no beat behind it read as a dead owner
             # to the next tick, which took the claim again (round 2).
-            if seam is None:
-                return None
-            return await seam.env_without_request(
-                user_id=claim.author, item_id=claim.investigation_id
+            headless = (
+                {}
+                if seam is None
+                else await seam.env_without_request(
+                    user_id=claim.author, item_id=claim.investigation_id
+                )
+            )
+            # The author's own stored values (`plan-wui-viewer-login`): kept on
+            # the shared backend so exactly this peer has them; the claim
+            # itself still carries none.
+            return await unattended_layer(
+                self._private_env,
+                headless=headless,
+                acting_for=claim.author,
+                item_id=claim.investigation_id,
+                verb="converse",
             )
 
         task = asyncio.create_task(

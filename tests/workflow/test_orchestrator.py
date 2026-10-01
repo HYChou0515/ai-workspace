@@ -1201,7 +1201,7 @@ async def test_workspace_workflow_resolution_shadows_package_and_falls_back(
     ws_manifest = WorkflowManifest(phases=[WorkflowPhase(id="ws-phase")])
 
     async def load_workspace(_item_id, workflow_id):
-        return (workspace_run, ws_manifest) if workflow_id == "myflow" else None
+        return (workspace_run, ws_manifest, "d") if workflow_id == "myflow" else None
 
     store = MemoryFileStore()
     await store.write("rca/i1", "/uploads/input.json", b"{}")
@@ -1279,3 +1279,243 @@ async def test_steer_waits_for_a_finished_run_to_finish_tearing_down(spec_instan
 
     teardown.set()
     await asyncio.wait_for(steering, timeout=2)
+
+
+# ── whose private values a run uses: consent is to the run AS STARTED ──────────
+# (plan-wui-viewer-login, review round 2 D1/D2)
+
+
+def _identity_spec(spec):
+    from workspace_app.workflow.run_identity import register_run_identity
+
+    register_run_identity(spec)
+    return spec
+
+
+async def test_a_run_remembers_who_it_runs_for_and_by_which_right(spec_instance: SpecStar):
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    run_id = await orch.start(
+        slug="rca",
+        item_id="iID",
+        profile="echo",
+        captured_user="owner",
+        env_user="presser",
+        env_verb="converse",
+    )
+
+    ident = RunIdentities(spec_instance).get(run_id)
+    assert ident is not None
+    assert (ident.env_user, ident.verb) == ("presser", "converse")
+
+
+async def test_a_run_records_the_workflow_file_its_presser_consented_to(
+    spec_instance: SpecStar,
+):
+    """Round 3 (defect 1): the consent is to the workflow FILE — the digest the
+    orchestrator is handed for it, not one of its manifest, which leaves the
+    steps out. `workflow_exec` checks it at every agent node."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    asked: list[tuple[str, str]] = []
+
+    async def digest(item_id: str, workflow_id: str) -> str:
+        asked.append((item_id, workflow_id))
+        return "d-of-" + workflow_id
+
+    async def load_workspace(_item_id: str, workflow_id: str):
+        # The build reads the same file: a real run keeps the identity.
+        return (lambda _wf, _i: _ok(None)), MANIFEST, "d-of-" + workflow_id
+
+    orch, _ = _orch(
+        _identity_spec(spec_instance), lambda _wf, _i: _ok(None), load_workspace=load_workspace
+    )
+    orch.digest_workflow = digest
+    run_id = await orch.start(
+        slug="rca",
+        item_id="iWD",
+        profile="echo",
+        captured_user="owner",
+        env_user="presser",
+        workflow_id="nightly",
+    )
+    await asyncio.sleep(0)  # let the build run — asserting before it proved nothing (round 5)
+
+    ident = RunIdentities(spec_instance).get(run_id)
+    assert ident is not None
+    assert (ident.workflow_id, ident.workflow_digest) == ("nightly", "d-of-nightly")
+    assert asked == [("iWD", "nightly")]
+
+
+async def test_a_scheduled_run_records_what_its_binder_consented_to(spec_instance: SpecStar):
+    """Round 3: a schedule's fire hands over the binding's digest. Read again
+    at start instead, an edit between the sweep's check and the start would be
+    recorded as consented."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    async def digest(_item_id: str, _workflow_id: str) -> str:
+        return "d-edited-since"
+
+    async def load_workspace(_item_id: str, _workflow_id: str):
+        return (lambda _wf, _i: _ok(None)), MANIFEST, "d-consented"
+
+    orch, _ = _orch(
+        _identity_spec(spec_instance), lambda _wf, _i: _ok(None), load_workspace=load_workspace
+    )
+    orch.digest_workflow = digest
+    run_id = await orch.start(
+        slug="rca",
+        item_id="iSD",
+        profile="echo",
+        captured_user="owner",
+        env_user="binder",
+        env_digest="d-consented",
+        workflow_id="nightly",
+    )
+    await asyncio.sleep(0)  # the build ran, and kept it
+
+    ident = RunIdentities(spec_instance).get(run_id)
+    assert ident is not None and ident.workflow_digest == "d-consented"
+
+
+@pytest.mark.parametrize(
+    ("recorded", "built_from", "kept"),
+    [("d1", "d1", "presser"), ("d1", "d2", "")],
+)
+async def test_a_run_keeps_its_pressers_values_only_if_built_from_what_they_saw(
+    spec_instance: SpecStar, recorded: str, built_from: str, kept: str
+):
+    """Round 4 (defect 1): checked where the interpreter is BUILT, against the
+    digest of the bytes it was built from — so no read between that build and
+    a node can make an evil interpreter look consented."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    async def digest(_item_id: str, _workflow_id: str) -> str:
+        return recorded
+
+    async def load_workspace(_item_id: str, _workflow_id: str):
+        return run, MANIFEST, built_from
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, load_workspace=load_workspace)
+    orch.digest_workflow = digest
+    rid = await orch.start(
+        slug="rca",
+        item_id="iB",
+        profile="echo",
+        captured_user="o",
+        env_user="presser",
+        workflow_id="w",
+    )
+    await asyncio.sleep(0)
+
+    assert RunIdentities(spec_instance).env_user(rid) == kept
+
+
+@pytest.mark.parametrize(
+    ("differs", "kept"),
+    [("nothing", "presser"), ("workflow_id", ""), ("item", ""), ("profile", "")],
+)
+async def test_a_run_rebuilt_anywhere_but_where_it_was_pressed_drops_whose_values_it_uses(
+    spec_instance: SpecStar, differs: str, kept: str
+):
+    """`WorkflowRun.workflow_id` is writable through its auto-CRUD and a resume
+    builds from it; a gate decision builds in the item its URL names (round 5);
+    a profile can change under a paused run. Any of them — a package workflow
+    included, whose digest is "" either way — must not carry the presser."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, now=lambda: 1_000_000)
+    rid = _insert_run(
+        orch, item_id="iP", status=RunStatus.RUNNING, started=0, progress_at=0, workflow_id="w"
+    )
+    RunIdentities(spec_instance).record(
+        rid,
+        "presser",
+        verb="execute",
+        item_id="elsewhere" if differs == "item" else "iP",
+        profile="other" if differs == "profile" else "echo",
+        workflow_id="other" if differs == "workflow_id" else "w",
+        workflow_digest="",
+    )
+
+    assert await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000) is True
+    await asyncio.sleep(0)
+
+    assert RunIdentities(spec_instance).env_user(rid) == kept
+
+
+async def test_a_digest_read_that_fails_at_start_leaves_no_run_behind(spec_instance: SpecStar):
+    """Round 4 (regression 1): the digest was read AFTER the run row was
+    created; a read that raised left a PENDING row that counts as active and
+    that no sweeper reclaims — every later Run on that chat got a 409."""
+
+    async def digest(_item_id: str, _workflow_id: str) -> str:
+        raise RuntimeError("sandbox busy")
+
+    orch, _ = _orch(_identity_spec(spec_instance), lambda _wf, _i: _ok(None))
+    orch.digest_workflow = digest
+
+    with pytest.raises(RuntimeError):
+        await orch.start(
+            slug="rca", item_id="iX", profile="echo", captured_user="o", env_user="presser"
+        )
+
+    assert orch.active_run("iX") is None
+
+
+@pytest.mark.parametrize("verb", ["decide", "steer", "confirm_steer"])
+async def test_a_run_is_only_answered_through_its_own_item(spec_instance: SpecStar, verb: str):
+    """Round 6: `decide` / `steer` / `confirm_steer` took the item from the URL
+    and the run from its id, and never checked they belong together — a run of
+    item A resumed INSIDE item B through B's URL (the gap predates this PR;
+    with private values on runs it carried them, round 5, and a forget there
+    stripped them for good, round 6). A run of another item is not found."""
+    from specstar.types import ResourceIDNotFoundError
+
+    orch, _ = _orch(spec_instance, lambda _wf, _i: _ok(None))
+    rid = _insert_run(orch, item_id="iA", status=RunStatus.AWAITING_HUMAN)
+    common = {"slug": "rca", "item_id": "iB", "profile": "echo", "run_id": rid}
+    call = {
+        "decide": lambda: orch.decide(**common, choice="approve"),
+        "steer": lambda: orch.steer(**common, instruction="go"),
+        "confirm_steer": lambda: orch.confirm_steer(**common, approve=True),
+    }[verb]
+
+    with pytest.raises(ResourceIDNotFoundError):
+        await call()
+    assert orch._get(rid).status is RunStatus.AWAITING_HUMAN
+
+
+async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: SpecStar):
+    """D1: a steer rewrites the plan, and any converse holder can propose and
+    approve one — the presser never consented to the rewritten run."""
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    calls: list[str] = []
+
+    async def run(wf, inputs):
+        await run_step(wf, name="ingest", phase="review", args={}, execute=_rec(calls, "ingest"))
+        return {}
+
+    orch, _ = _orch(_identity_spec(spec_instance), run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(
+        slug="rca", item_id="iST2", profile="echo", captured_user="u", env_user="presser"
+    )
+    for _ in range(50):
+        if (await _ran(orch, run_id, spec_instance)).status is RunStatus.DONE:
+            break
+    await orch.steer(slug="rca", item_id="iST2", profile="echo", run_id=run_id, instruction="x")
+    assert (await _ran(orch, run_id, spec_instance)).pending_steer is not None
+
+    await orch.confirm_steer(
+        slug="rca", item_id="iST2", profile="echo", run_id=run_id, approve=True, decided_by="bob"
+    )
+
+    assert RunIdentities(spec_instance).env_user(run_id) == ""

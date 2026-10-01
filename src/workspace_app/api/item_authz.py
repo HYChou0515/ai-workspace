@@ -247,3 +247,35 @@ def require_item_access(
         refuse_if_gone(facts, item_id)
     assert facts is not None  # check_access raises on None
     return facts.item, facts.created_by
+
+
+def user_may(
+    spec: SpecStar,
+    item_id: str,
+    user: str,
+    verb: Verb,
+    *,
+    superusers: frozenset[str] = frozenset(),
+) -> bool:
+    """May ``user`` — who is NOT necessarily the one making this request — still
+    ``verb`` this item? (`plan-wui-viewer-login`, review round 1.)
+
+    For work done FOR a person with nobody at the request: a schedule running
+    with its binder's values, a goal round or a re-run with its author's. Read
+    fresh every time (no cache): the answer is about whether a removal has
+    happened, and a cached "yes" is exactly the one that outlives it. A deleted
+    or unknown item is "no"."""
+    facts = load_access_facts(spec, item_id)
+    try:
+        check_access(
+            facts,
+            ANY_APP,
+            item_id,
+            verb,
+            user=user,
+            groups=groups_of(spec, user),
+            superusers=superusers,
+        )
+    except HTTPException:
+        return False
+    return True
