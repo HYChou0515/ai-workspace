@@ -1271,10 +1271,17 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   才帶那個人的值；那個人被移出 item、排程列或它的 workflow 檔被改（每次觸發前比對即時檔案）、排程檔被刪，
   綁定就取消並通知他。**只比對 `.workflows/<run>.json`**：workflow 呼叫的腳本或 agent 讀的其他檔案被改不會取消。
 - **run 的 gate 決定、steer、steer 確認，只接受 run 所屬 item 的網址**：從別的 item 的網址送來回 404（以前會在
-  網址那個 item 裡接著跑那個 run，只檢查網址 item 的權限）。「用我的身分執行」遇到 workflow 檔解析不了時回 422
-  （修好檔案再按）。workflow id 含 `/` 或 `..` 的（巢狀、跳出 `.workflows/`）不再當作工作區 workflow 讀取，改找
-  同名的 profile workflow——以前 `../notes` 會拿資料夾外的 `/notes.json` 來跑。
-  - 你會看到的：自動化若用別的 item 的網址回應 gate，現在拿到 404；改用 run 所屬 item 的網址。
+  網址那個 item 裡接著跑那個 run，只檢查網址 item 的權限）。同一類的另外三條——取消 run、讀 run、看 run 串流——
+  **這個 PR 沒有改**，見 #870。
+  - **要做的事（`rollout 前`）**：查你們有沒有腳本或 bot 用 `POST …/runs/{run_id}/decisions`、`…/steer`、
+    `…/steer/confirm` 回應 gate；網址裡的 item 必須是 run 所屬的那個。
+  - 為什麼：網址的 item 和 run 對不上時，run 會在錯的 item 裡接著跑；現在一律當作找不到。
+  - 漏做的症狀：那些呼叫拿到 404，gate 一直停在等人決定。
+- **「用我的身分執行」遇到 workflow 檔解析不了時回 422**（修好檔案再按）。
+  - 你會看到的：排程面板那一列按下去出現「won't parse」的錯誤，那一列不會綁定。
+- **workflow id 含 `/` 的不再當作工作區 workflow 讀取**（例如 `sub/x`、`../notes`），改找同名的 profile workflow——以前
+  `../notes` 會拿資料夾外的 `/notes.json` 來跑。只認 `.workflows/` 底下平的 `<id>.json`；正常流程（存 workflow 時的
+  id 一律 slugify）不會產生這種 id。
 - WUI bridge 多一個動詞 `openLogin`（頁面請平台打開它自己的登入框）；`/w/` 頁面在需要時於 iframe **上方**多一條
   約 32px 的平台列。
 - 成本（沒有要做的事）：每次聊天送出與頁面 `callTool` 多一次 private 讀取；有 seam 時再多一次 seam 列讀取，值變了
@@ -1301,6 +1308,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   的 `auto` 回得到 `env_for` 給的值；以**別人**的身分打同一個網址，回的是別人自己的（通常是空的）。
 - 有 `IEnvProvider` 的部署：以只有 `read_meta` 的參與者身分打開 Env 面板，「只有我」分頁看得到登入鈕，登入後值出現在
   他自己的欄位。
+- 對一個停在 gate 的 run，用**另一個 item** 的網址打 `POST /api/a/{slug}/items/{另一個 item}/runs/{run_id}/decisions`
+  回 `404`，run 仍停在原本的 gate。
 - 一個有 `schedules.json` 的 WUI 頁面用 `/w/...` 打開：上方有平台列，「這一頁的排程」列得出每一列、按「用我的身分
   執行」後那一列顯示用你的身分。
 

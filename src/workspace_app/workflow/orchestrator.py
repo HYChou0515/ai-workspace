@@ -231,7 +231,8 @@ class WorkflowOrchestrator:
         that take the item from a URL and the run from an id (`decide`, `steer`,
         `confirm_steer`): without it a run of item A resumed INSIDE item B through
         B's URL, gated only on B (round 6; with private values on runs it carried
-        or stripped a person's, rounds 5–6)."""
+        or stripped a person's, rounds 5–6). Cancel, the run detail and the run
+        stream take the same shape and do not go through here yet (#870)."""
         data = self._get(run_id)
         if data.item_id != item_id:
             raise ResourceIDNotFoundError(run_id)
