@@ -229,16 +229,26 @@ def _run_setfacl(argv: list[str]) -> None:
 def _run_chown(path: Path, uid: int) -> None:
     """Chown `path` to `uid`, leaving the gid unchanged (-1). Chowning to a
     foreign uid needs CAP_CHOWN (or root) — the same power `_provision` already
-    uses; a host without it must fall back to the plain `LocalProcessSandbox`."""
-    os.chown(path, uid, -1)
+    uses; a host without it must fall back to the plain `LocalProcessSandbox`.
+
+    Never follows a symlink that IS `path` (the final component): every path
+    here is inside a USER's workspace, so it may be a link they made, and
+    following it chowned the target — a link to a file outside the workspace
+    handed that file to the item uid. A symlinked DIRECTORY earlier in the path
+    is still resolved by the kernel; `_resolve` is lexical and does not refuse
+    one, a separate and older gap. Same rule as the sandbox-host copy (whose
+    restore also died on pnpm's dangling `fsevents` link) and `tool_cache`'s
+    `lchown`."""
+    os.chown(path, uid, -1, follow_symlinks=False)
 
 
 # A seam for the one true system-binary boundary (`setfacl`): the default shells
 # out; tests inject a spy so they need neither root nor the `acl` package.
 AclRunner = Callable[[list[str]], None]
-# A seam for the privileged `chown` in `_own`/restore reown (#504): the default
-# calls `os.chown`; tests inject a spy to assert the (path, uid) pairs without
-# root (the derived uid collapses to the caller's own uid via uid_range=1).
+# A seam for the privileged `chown` in `_own` (#504): the default calls
+# `os.chown` without following a final-component link; tests inject a spy to
+# assert the (path, uid) pairs without root (the derived uid collapses to the
+# caller's own uid via uid_range=1).
 ChownRunner = Callable[[Path, int], None]
 
 

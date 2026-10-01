@@ -393,10 +393,44 @@ def test_constructs_default_acl_runner(tmp_path):
 
 
 def test_run_chown_calls_oschown_with_uid_and_unchanged_gid(monkeypatch, tmp_path):
-    calls: list[tuple[Path, int, int]] = []
-    monkeypatch.setattr(os, "chown", lambda p, u, g: calls.append((p, u, g)))
+    calls: list[tuple[Path, int, int, bool]] = []
+
+    def record(p, u, g, *, follow_symlinks=True):
+        calls.append((p, u, g, follow_symlinks))
+
+    monkeypatch.setattr(os, "chown", record)
     _run_chown(tmp_path / "f", 4321)
-    assert calls == [(tmp_path / "f", 4321, -1)]  # gid -1 = leave as-is
+    # gid -1 = leave as-is; follow_symlinks=False: the path is in a USER's
+    # workspace, so it may be a link they made.
+    assert calls == [(tmp_path / "f", 4321, -1, False)]
+
+
+async def test_renaming_a_symlink_never_chowns_what_it_points_at(tmp_path, monkeypatch):
+    # The chown runs with CAP_CHOWN. A user who renames `x -> /etc/passwd` must
+    # not get /etc/passwd handed to their item uid.
+    sb = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_base=os.getuid(),
+        uid_range=1,
+        acl_runner=lambda argv: None,
+    )
+    h = await sb.create(SandboxSpec(), sandbox_id="item-1")
+    ws = sb._workspace(h)
+    outside = tmp_path / "not-yours"
+    outside.write_bytes(b"secret")
+    (ws / "x").symlink_to(outside)
+    followed: list[Path] = []
+    real = os.chown
+
+    def spy(path, uid, gid, *, follow_symlinks=True):
+        if follow_symlinks and Path(path).is_symlink():
+            followed.append(Path(path))
+        real(path, uid, gid, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "chown", spy)
+    await sb.rename(h, "x", "y")
+    assert followed == []
 
 
 def test_constructs_default_chown_runner(tmp_path):

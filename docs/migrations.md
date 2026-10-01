@@ -1233,6 +1233,45 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
+### 2026-09-30 · #867 沙盒 chown 不再跟著 symlink 走：有斷掉連結的 item 打得開了 {#pr-867}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**：沙盒把 workspace 裡的檔案交給沙盒使用者時（sandbox-host 還原後的
+`reown` 與 `_own`；app 在 `sandbox.isolation` 開啟時的 `_own`），路徑**最後一段**是 symlink 的話，改的是連結本身，
+不再是連結指到的東西。
+
+- 修的是：workspace 裡有一個**斷掉的 symlink**，這個 item 的沙盒被回收之後就再也建不起來，檔案樹回 500、使用者看起來
+  像是資料不見了。prod 遇到的是 pnpm 的 `node_modules/.pnpm/node_modules/fsevents`（只在 macOS 安裝的套件，在 Linux
+  上指向不存在的目錄）。資料一直在備份裡：還原失敗發生在標記 ready 之前，備份不會被覆寫。
+- 同時關掉的：以 root 執行的 chown 跟著「最後一段就是連結」的路徑，把 workspace **外面**的檔案改成沙盒使用者所有。
+  路徑**中間**的資料夾是連結時仍會被解析——那是寫入路徑本身的舊缺口，不在這次修正範圍。
+
+**資料** — 沒有 `Schema` 升版，也沒有要跑的指令。已經打不開的 item，新版上線後重新開啟就會恢復。
+
+**k8s · CI 側**
+
+- **合併時 `sandbox-host/src/sandbox_host/isolated_process.py` 要一起進，`rollout 前`。**
+  - 為什麼：prod 的 `kind: http` 由 sandbox-host 做還原後的 chown；API 這邊只改了 `kind: local` 用的那一份。
+    `sandbox-host/` 是根目錄旁的獨立 uv 專案，fork 合併時最容易漏或解錯衝突。
+  - 確認：`git diff <合併前> <合併後> -- sandbox-host/src/sandbox_host/isolated_process.py` 看得到
+    `os.chown(path, uid, -1, follow_symlinks=False)`。
+  - 漏做的症狀：有斷掉連結的 item 仍然打不開。
+- 等不及上線的止血（可選，`rollout 前`，不做的話這些 item 一直打不開到新版上線）：在 sandbox-host pod 裡刪掉**所有 item**
+  備份裡斷掉的連結，包含使用者自己建的。「斷掉」是從 sandbox-host pod 看備份路徑判定的，所以一個絕對路徑的連結
+  在沙盒裡指得到、從備份位置指不到時也會被刪。先看清單再刪：
+  ```bash
+  find "$SANDBOX_HOST_NFS_ROOT" -xtype l -print          # 先看會刪哪些
+  find "$SANDBOX_HOST_NFS_ROOT" -xtype l -print -delete  # 確認後再刪
+  ```
+
+**確認做完**
+
+- 打開原本打不開的 item：檔案樹正常載入。
+- 該時段的 **API pod** log 沒有 `sandbox-http: create refused for item <id> -> FileNotFoundError`
+  （`kubectl logs <api-pod> --since=15m | grep "create refused"`）。sandbox-host 自己的 log 在修正前後都只有一行
+  `POST /sandboxes` 的存取紀錄（修正前是 404），看它分不出有沒有修好。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
