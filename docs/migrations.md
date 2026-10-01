@@ -1233,7 +1233,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-09-30 · #867 沙盒 chown 不再跟著 symlink 走：有斷掉連結的 item 打得開了 {#pr-867}
+### 2026-10-01 · 24e951d8 · #867 沙盒 chown 不再跟著 symlink 走：有斷掉連結的 item 打得開了 {#pr-867}
 
 **設定** — 沒有新 key。**行為改變，沒有開關**：沙盒把 workspace 裡的檔案交給沙盒使用者時（sandbox-host 還原後的
 `reown` 與 `_own`；app 在 `sandbox.isolation` 開啟時的 `_own`），路徑**最後一段**是 symlink 的話，改的是連結本身，
