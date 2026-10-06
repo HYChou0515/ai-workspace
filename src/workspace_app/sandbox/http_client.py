@@ -536,9 +536,10 @@ class HttpSandbox:
         # app↔host connection (it can't hang the way the old per-file mirror
         # did). `delete` ⇒ --delete reconcile at a quiesced turn-end / reap;
         # False ⇒ additive-only mid-turn checkpoint. `pack` (reap only,
-        # docs/plan-archive-pack.md) asks the host to also leave a single-file
-        # copy the next restore reads instead of walking every path; an older
-        # host ignores the field and simply does not pack.
+        # docs/plan-archive-pack.md) asks the host to also leave, when the kill
+        # that follows tears the sandbox down, a single-file copy the next
+        # restore reads instead of walking every path; an older host ignores
+        # the field and simply does not pack.
         logger.info("sandbox-http: persist sandbox %s delete=%s pack=%s", handle.id, delete, pack)
         await self._request(handle, "POST", "/persist", json={"delete": delete, "pack": pack})
 

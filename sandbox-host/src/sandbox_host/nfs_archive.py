@@ -18,8 +18,9 @@ never here (#492 Q3 / #504).
 
 The packed copy (docs/plan-archive-pack.md). Restoring the tree costs one NFS
 round trip per path — 88,889 paths took 58 s, at the ingress timeout — so a
-reconciling persist on reap may also leave ``<root>/<item>.pack.<gen>-<bytes>.tar``, a
-single file the reopen path reads in one sequential stream. The TREE stays the
+reap may also leave ``<root>/<item>.pack.<gen>-<bytes>.tar`` (``pack``, which the
+host calls while tearing the sandbox down), a single file the reopen path reads
+in one sequential stream. The TREE stays the
 truth; the pack is a cache whose validity is its NAME: every write to the tree
 first replaces ``<root>/<item>.gen``, so a pack made before that write is named
 after a generation that is no longer current and is never chosen. No delete has
@@ -61,14 +62,9 @@ def _check_item(item_id: str) -> str:
 # devices/specials — but deliberately NOT owner/group (see module docstring).
 _RSYNC_FLAGS = "-rlptD"
 
-#: Asked twice around a pack — before the tar and before the rename — by the
-#: caller that knows whether the SANDBOX is being touched (the host controller's
-#: in-flight count). The generation only sees writes to the TREE; a write into
-#: the live dir during the tar is invisible to it, so this is the other half.
-PackGuard = Callable[[], bool]
-
-_PACK_TMP = "tmp"  # `<item>.pack.tmp`
 _GEN_RE = re.compile(r"[0-9a-f]{32}")
+# `<item>.pack.<uuid>.tmp`: one per pack being written, so two never share one.
+_PACK_TMP_RE = re.compile(r"[0-9a-f]{32}\.tmp")
 # `<gen>-<bytes>.tar`: the byte count is part of the promise. GNU tar exits 0 on
 # an archive cut at an entry boundary — it extracts the first half and calls it
 # the end — so "tar succeeded" does not mean "the workspace is whole".
@@ -102,20 +98,19 @@ class NfsArchive:
         workspace_dir: Path,
         *,
         delete: bool,
-        pack_guard: PackGuard | None = None,
-    ) -> None:
+    ) -> bool:
         """rsync the sandbox's local working dir → the item's NFS archive. With
         ``delete`` the archive is reconciled to match exactly (turn-end / reap /
         shutdown, at a quiesced ``.ready`` sandbox); without it the copy is
         additive only (the 30 s mid-turn durability checkpoint).
 
         Every call first moves the item to a new generation, so any pack made
-        before it stops being chosen. A ``pack_guard`` — given only on reap —
-        asks for a pack of the local dir after a reconcile that really ran; it
-        is skipped whenever the guard says the sandbox is being touched."""
+        before it stops being chosen. Returns whether a reconcile RAN — the one
+        state after which the tree is a copy of the dir, and so the only one a
+        pack may follow."""
         dst = self._item_dir(item_id)
         await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
-        gen = await asyncio.to_thread(self._new_generation, item_id)
+        await asyncio.to_thread(self._new_generation, item_id)
         # #492 safety valve: a ``--delete`` from an EMPTY source over a NON-empty
         # archive wipes durable data — the exact disaster this feature exists to
         # prevent. An empty source is indistinguishable here from a silently-failed
@@ -134,11 +129,44 @@ class NfsArchive:
         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
         argv += [f"{workspace_dir}/", f"{dst}/"]
         await self._invoke(argv)
-        # Only after a reconcile that RAN: a refused one (the empty-source valve
-        # above) leaves an archive that is not this dir, and packing the empty
-        # dir would publish an empty workspace as the fast way back.
-        if reconcile and pack_guard is not None and self._pack:
-            await self._pack_dir(item_id, Path(workspace_dir), gen, pack_guard)
+        return reconcile
+
+    async def pack(self, item_id: str, workspace_dir: Path) -> bool:
+        """tar the local dir into ``<item>.pack.<gen>-<bytes>.tar``, named after
+        the generation current BEFORE the tar. Returns whether one was published.
+
+        The caller's job is that nothing writes the DIR meanwhile (the host packs
+        only while tearing a sandbox down, with the sandbox closed to requests).
+        The generation covers the TREE: a write to it during the tar changes the
+        generation first, so the pack is stale the moment it is published — slow
+        on the next reopen, never wrong."""
+        if not self._pack:
+            return False
+        gen = await asyncio.to_thread(self._current_generation, item_id)
+        if gen is None:
+            return False
+        tmp = self._root / f"{item_id}.pack.{uuid.uuid4().hex}.tmp"
+        rc, err = await self._run(
+            [self._tar, "--format=posix", "-C", str(workspace_dir), "-cf", str(tmp), "."]
+        )
+        try:
+            if rc != 0:
+                logger.warning(
+                    "archive: pack of item %s failed (tar exited %d: %s)",
+                    item_id,
+                    rc,
+                    err.decode(errors="replace").strip(),
+                )
+                return False
+            size = (await asyncio.to_thread(tmp.stat)).st_size
+            await asyncio.to_thread(os.replace, tmp, self._pack_path(item_id, gen, size))
+            return True
+        except FileNotFoundError:
+            # A writer's generation change cleared this item's tmps, ours among
+            # them: that writer has already made any pack of the old tree stale.
+            return False
+        finally:
+            await asyncio.to_thread(tmp.unlink, missing_ok=True)
 
     def _new_generation(self, item_id: str) -> str:
         """Move the item to a fresh generation and clear what the old one left.
@@ -160,14 +188,14 @@ class NfsArchive:
         return gen
 
     def _pack_files(self, item_id: str) -> list[Path]:
-        """This item's packs and pack tmp — and nothing else. Item ids are free
+        """This item's packs and pack tmps — and nothing else. Item ids are free
         text, so `a`'s files are not told apart by prefix alone: `a.pack.x` is
         another item, and `a.pack.notes.txt` is nobody's pack."""
         prefix = f"{item_id}.pack."
         out = []
         for path in self._root.glob(f"{_glob_escape(prefix)}*"):
             rest = path.name[len(prefix) :]
-            if rest == _PACK_TMP or _PACK_RE.fullmatch(rest):
+            if _PACK_TMP_RE.fullmatch(rest) or _PACK_RE.fullmatch(rest):
                 out.append(path)
         return out
 
@@ -197,26 +225,6 @@ class NfsArchive:
         except FileNotFoundError:
             return None
         return gen if _GEN_RE.fullmatch(gen) else None
-
-    async def _pack_dir(
-        self, item_id: str, workspace_dir: Path, gen: str, guard: PackGuard
-    ) -> None:
-        """tar the local dir into a tmp beside the tree, then rename it to the
-        name of the generation it was made under. The guard is asked before the
-        tar (do nothing while the sandbox is in use) and before the rename (a
-        request that arrived during the tar may have written a file the tar read
-        half of). A pack that fails either way is discarded, never renamed."""
-        if not guard():
-            return
-        tmp = self._root / f"{item_id}.pack.{_PACK_TMP}"
-        rc, _err = await self._run(
-            [self._tar, "--format=posix", "-C", str(workspace_dir), "-cf", str(tmp), "."]
-        )
-        if rc != 0 or not guard():
-            await asyncio.to_thread(tmp.unlink, missing_ok=True)
-            return
-        size = (await asyncio.to_thread(tmp.stat)).st_size
-        await asyncio.to_thread(os.replace, tmp, self._pack_path(item_id, gen, size))
 
     async def _would_wipe(self, src: Path, dst: Path) -> bool:
         """True when a ``--delete`` reconcile would WIPE durable data: the source

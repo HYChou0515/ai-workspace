@@ -55,7 +55,8 @@ async def _reap(root: Path, item: str, tmp_path: Path) -> None:
     ws.mkdir()
     (ws / "a.txt").write_text("alpha")
     archive = _host_archive_class()(root, runner=_rsync_free)
-    await archive.persist(item, ws, delete=True, pack_guard=lambda: True)
+    await archive.persist(item, ws, delete=True)
+    assert await archive.pack(item, ws)
 
 
 async def test_purge_removes_the_items_pack_and_generation(
@@ -67,20 +68,26 @@ async def test_purge_removes_the_items_pack_and_generation(
     await _reap(root, "work-item:1", tmp_path)
     beside = sorted(p.name for p in root.iterdir() if p.name != "work-item:1")
     assert any(".pack." in n for n in beside) and "work-item:1.gen" in beside, beside
-    # What a host that died mid-write leaves. The generation's tmp comes from
-    # the host itself, stopped before its rename; the pack's tmp is a fixed
-    # name (`_pack_dir` in sandbox-host/src/sandbox_host/nfs_archive.py).
-    archive = _host_archive_class()(root, runner=_rsync_free)
 
+    # What a host that died mid-write leaves, made by the host itself: the
+    # generation's tmp, stopped before its rename, and a pack's tmp, stopped
+    # while tar was writing it.
     def died(src, dst):
         raise SystemExit("host died before the rename")
 
     monkeypatch.setattr("os.replace", died)
     with pytest.raises(SystemExit):
-        archive._new_generation("work-item:1")
+        _host_archive_class()(root, runner=_rsync_free)._new_generation("work-item:1")
     monkeypatch.undo()
-    assert any(n.endswith(".tmp") for n in os.listdir(root)), os.listdir(root)
-    (root / "work-item:1.pack.tmp").write_text("x")
+
+    async def tar_dies(argv: list[str]) -> tuple[int, bytes]:
+        Path(argv[argv.index("-cf") + 1]).write_bytes(b"half")
+        raise SystemExit("host died mid-tar")
+
+    with pytest.raises(SystemExit):
+        await _host_archive_class()(root, runner=tar_dies).pack("work-item:1", tmp_path)
+    tmps = [n for n in os.listdir(root) if n.endswith(".tmp")]
+    assert len(tmps) == 2, os.listdir(root)
 
     await fs.purge("work-item:1")
 

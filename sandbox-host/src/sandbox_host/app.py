@@ -306,7 +306,8 @@ def check_cgroup_ready(cgroup_root: Path, *, controllers_marker: Path = _CGROUP_
 
 
 class _InFlight:
-    """Counts the requests to each sandbox that have started and not finished.
+    """Counts the requests to each sandbox that have started and not finished,
+    and turns away every request to a sandbox that is being torn down.
 
     Pure ASGI, not `@app.middleware("http")`: that one's `call_next` returns as
     soon as a response STARTS, and `exec` is a streaming response — the command
@@ -325,6 +326,11 @@ class _InFlight:
             await self.app(scope, receive, send)
             return
         rid = parts[2]
+        if rid in self.controller.closing:
+            # Answered here, before the count: it never touches the sandbox.
+            gone = SandboxNotFound(f"sandbox {rid} is being torn down")
+            await _error(gone)(scope, receive, send)
+            return
         counts = self.controller.in_flight
         counts[rid] = counts.get(rid, 0) + 1
         try:
@@ -369,6 +375,13 @@ class _HostController:
         # guard reads it: `_last_active` is stamped when a request begins and
         # cannot tell "began a minute ago and still writing" from "done".
         self.in_flight: dict[str, int] = {}
+        # Sandboxes a reap's write-back asked to pack, packed as they are torn
+        # down (docs/plan-archive-pack.md) — not inside the write-back, where
+        # every app pod's periodic checkpoint of the same sandbox interrupted it.
+        self.pack_on_kill: set[str] = set()
+        # Sandboxes being torn down: `_InFlight` turns their requests away, so
+        # nothing writes the dir while it is packed.
+        self.closing: set[str] = set()
 
     def start_draining(self) -> None:
         self.draining = True
@@ -422,32 +435,23 @@ class _HostController:
         A no-op when no archive is wired, this handle has no item mapping, or the
         sandbox is not ready (a half-restored dir must never overwrite the
         archive — the #492 Q9 `.ready` gate on persist, so `--delete` can't wipe
-        durable data)."""
+        durable data).
+
+        ``pack`` (a reap's write-back) asks for a pack when the sandbox is torn
+        down — remembered only if the reconcile RAN, since only then is the tree
+        a copy of the dir. Later write-backs do not undo the request: they are
+        the checkpoints that made packing here impossible."""
         item = self._item_of.get(rid)
         if self._archive is None or item is None:
             return
         handle = SandboxHandle(id=rid)
         if not await self.sandbox.is_ready(handle):
             return
-        await self._archive.persist(
-            item,
-            self.sandbox.workspace_dir(handle),
-            delete=delete,
-            pack_guard=self._quiet_since_now(rid) if pack else None,
+        reconciled = await self._archive.persist(
+            item, self.sandbox.workspace_dir(handle), delete=delete
         )
-
-    def _quiet_since_now(self, rid: str) -> Callable[[], bool]:
-        """A guard that holds while THIS request is the only one in flight on the
-        sandbox and none has started since it began. Both halves are needed: the
-        count catches a request still running (an exec that began first), the
-        timestamp catches one that came and went between the guard's two
-        questions, when the count is back to one."""
-        t0 = self._last_active.get(rid)
-
-        def quiet() -> bool:
-            return self.in_flight.get(rid, 0) == 1 and self._last_active.get(rid) == t0
-
-        return quiet
+        if pack and reconciled:
+            self.pack_on_kill.add(rid)
 
     async def kill(self, rid: str) -> None:
         """Forget it only once it is really gone.
@@ -457,10 +461,36 @@ class _HostController:
         — so nothing would ever retry it and nothing could report it, which
         defeats the one mechanism the app has for finding an orphan. An
         already-unknown handle raises `SandboxNotFound` from the backend before
-        anything is dropped, which is the same answer as before."""
-        await self.sandbox.kill(SandboxHandle(id=rid))
+        anything is dropped, which is the same answer as before.
+
+        Closed to requests FIRST, then packed if a reap asked, then killed. A
+        kill that raises reopens the sandbox: it is still running, and a closed
+        one could never be retried."""
+        handle = SandboxHandle(id=rid)
+        self.closing.add(rid)
+        try:
+            if rid in self.pack_on_kill:
+                await self._pack(rid, handle)
+            await self.sandbox.kill(handle)
+        finally:
+            self.closing.discard(rid)
+            self.pack_on_kill.discard(rid)
         self._last_active.pop(rid, None)
         self._item_of.pop(rid, None)
+
+    async def _pack(self, rid: str, handle: SandboxHandle) -> None:
+        """Best effort: the reap is the sandbox going away, the pack only makes
+        the next reopen fast. Skipped while any OTHER request is still running —
+        closing turns new ones away, but one that began before (an exec still
+        streaming) may be writing the dir."""
+        item = self._item_of.get(rid)
+        if self._archive is None or item is None or self.in_flight.get(rid, 0) > 1:
+            return
+        try:
+            if await self.sandbox.is_ready(handle):
+                await self._archive.pack(item, self.sandbox.workspace_dir(handle))
+        except Exception:  # noqa: BLE001 - a failed pack must not keep a sandbox alive
+            logger.warning("host: pack of %s for item %s failed", rid, item, exc_info=True)
 
     async def sweep_tool_cache(self, *, max_bytes: int | None = None) -> list[str]:
         """#674: reclaim third-party bundles nothing is running any more.

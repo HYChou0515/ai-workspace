@@ -91,7 +91,8 @@ async def test_a_workspace_restored_from_the_pack_costs_the_next_persist_nothing
             os.utime(f, (1_600_000_000, 1_600_000_000))
 
     archive = NfsArchive(tmp_path / "nfs")
-    await archive.persist("item-1", ws, delete=True, pack_guard=lambda: True)
+    await archive.persist("item-1", ws, delete=True)
+    await archive.pack("item-1", ws)
     assert list((tmp_path / "nfs").glob("item-1.pack.*.tar")), "no pack was made"
 
     out = tmp_path / "restored"

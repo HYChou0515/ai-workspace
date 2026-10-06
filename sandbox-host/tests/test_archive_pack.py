@@ -1,6 +1,6 @@
 """The packed copy of an item's archive (docs/plan-archive-pack.md).
 
-The tree `<root>/<item>/` stays the truth; `<root>/<item>.pack.<gen>.tar` is a
+The tree `<root>/<item>/` stays the truth; `<root>/<item>.pack.<gen>-<bytes>.tar` is a
 cache the reopen path can read in ONE sequential NFS read instead of one round
 trip per path (88,889 paths took 58 s in production). Its validity is carried
 by its NAME: every writer of the tree replaces `<root>/<item>.gen` first, so a
@@ -47,8 +47,11 @@ class _Runner:
         return [a for a in self.calls if Path(a[0]).name == "tar"]
 
 
-def _quiet() -> bool:
-    return True
+async def _reap(archive: NfsArchive, item: str, ws: Path) -> None:
+    """What the host does on reap: the reconciling write-back, then — as the
+    sandbox is torn down — the pack."""
+    assert await archive.persist(item, ws, delete=True)
+    await archive.pack(item, ws)
 
 
 @pytest.fixture
@@ -143,10 +146,10 @@ async def test_two_persists_of_one_item_can_change_the_generation_at_once(
 # ── who packs ────────────────────────────────────────────────────────────────
 
 
-async def test_a_reconciling_persist_with_a_guard_leaves_a_pack_named_after_the_generation(
+async def test_a_pack_is_named_after_the_current_generation_and_its_size(
     archive: NfsArchive, root: Path, ws: Path
 ) -> None:
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (name,) = _packs(root, "item-1")
     size = (root / name).stat().st_size
     assert name == f"item-1.pack.{_gen(root, 'item-1')}-{size}.tar", (
@@ -157,45 +160,22 @@ async def test_a_reconciling_persist_with_a_guard_leaves_a_pack_named_after_the_
 async def test_a_pack_is_made_from_the_local_dir_in_posix_format(
     archive: NfsArchive, runner: _Runner, ws: Path
 ) -> None:
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (argv,) = runner.tars()
     assert "--format=posix" in argv and "-cf" in argv
     assert str(ws) in argv
 
 
-async def test_an_additive_checkpoint_never_packs(
-    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
+@pytest.mark.parametrize("delete", [False, True])
+async def test_persist_says_whether_it_reconciled(
+    archive: NfsArchive, ws: Path, delete: bool
 ) -> None:
-    await archive.persist("item-1", ws, delete=False, pack_guard=_quiet)
-    assert _packs(root, "item-1") == [] and runner.tars() == []
+    """The host packs only after a reconcile that ran: an additive checkpoint
+    leaves the tree a superset of the dir, not a copy of it."""
+    assert await archive.persist("item-1", ws, delete=delete) is delete
 
 
-async def test_without_a_guard_nothing_is_packed(
-    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
-) -> None:
-    await archive.persist("item-1", ws, delete=True)
-    assert _packs(root, "item-1") == [] and runner.tars() == []
-
-
-async def test_a_guard_that_fails_before_the_tar_packs_nothing(
-    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
-) -> None:
-    await archive.persist("item-1", ws, delete=True, pack_guard=lambda: False)
-    assert _packs(root, "item-1") == [] and runner.tars() == []
-
-
-async def test_a_guard_that_fails_after_the_tar_publishes_nothing_and_leaves_no_tmp(
-    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
-) -> None:
-    """Someone touched the sandbox while it was being packed: the tar may hold a
-    file half written. Thrown away, never renamed into place."""
-    answers = iter([True, False])
-    await archive.persist("item-1", ws, delete=True, pack_guard=lambda: next(answers))
-    assert len(runner.tars()) == 1, "the pack was never attempted — the test proves nothing"
-    assert _packs(root, "item-1") == []
-
-
-async def test_a_refused_reconcile_does_not_pack(
+async def test_a_refused_reconcile_says_so(
     archive: NfsArchive, root: Path, tmp_path: Path, ws: Path
 ) -> None:
     """An empty source over a non-empty archive is downgraded to an additive
@@ -205,13 +185,93 @@ async def test_a_refused_reconcile_does_not_pack(
     (root / "item-1" / "kept.txt").write_bytes(b"x")  # …and is not empty
     empty = tmp_path / "empty"
     empty.mkdir()
-    await archive.persist("item-1", empty, delete=True, pack_guard=_quiet)
+    assert await archive.persist("item-1", empty, delete=True) is False
+
+
+async def test_an_item_never_written_back_is_not_packed(
+    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
+) -> None:
+    """No generation, no name to give a pack."""
+    assert await archive.pack("item-1", ws) is False
+    assert runner.tars() == [] and _packs(root, "item-1") == []
+
+
+async def test_a_write_during_the_tar_leaves_a_pack_nobody_will_choose(
+    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
+) -> None:
+    """The pack is named after the generation read BEFORE the tar. A tree write
+    that lands meanwhile changes the generation first, so the pack is already
+    stale when it is published."""
+    await archive.persist("item-1", ws, delete=True)
+
+    async def tar_while_somebody_writes(argv: list[str]) -> tuple[int, bytes]:
+        if Path(argv[0]).name == "tar" and "-cf" in argv:
+            await archive.persist("item-1", ws, delete=False)
+        return await runner(argv)
+
+    archive._run = tar_while_somebody_writes  # type: ignore[method-assign]
+    await archive.pack("item-1", ws)
+    archive._run = runner  # type: ignore[method-assign]
+    runner.calls.clear()
+    await archive.restore("item-1", tmp_path / "out")
+    assert len(runner.rsyncs()) == 1 and runner.tars() == []
+
+
+async def test_a_tar_that_fails_publishes_nothing_and_leaves_no_tmp(
+    root: Path, ws: Path
+) -> None:
+    async def failing(argv: list[str]) -> tuple[int, bytes]:
+        if Path(argv[0]).name != "tar":
+            return 0, b""
+        # Like a real tar that fails part-way: the output exists, half written.
+        Path(argv[argv.index("-cf") + 1]).write_bytes(b"half a pack")
+        return 2, b"tar: boom"
+
+    archive = NfsArchive(root, runner=failing)
+    await archive.persist("item-1", ws, delete=True)
+    assert await archive.pack("item-1", ws) is False
     assert _packs(root, "item-1") == []
+
+
+async def test_a_tmp_cleared_under_the_tar_publishes_nothing(
+    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
+) -> None:
+    """Another writer's generation change clears this item's tmps — including
+    one still being written. That is a pack not made, not a failed teardown."""
+    await archive.persist("item-1", ws, delete=True)
+
+    async def tar_then_cleared(argv: list[str]) -> tuple[int, bytes]:
+        result = await runner(argv)
+        if Path(argv[0]).name == "tar" and "-cf" in argv:
+            archive._new_generation("item-1")
+        return result
+
+    archive._run = tar_then_cleared  # type: ignore[method-assign]
+    assert await archive.pack("item-1", ws) is False
+    assert _packs(root, "item-1") == []
+
+
+async def test_two_packs_of_one_item_do_not_share_a_tmp(
+    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
+) -> None:
+    await archive.persist("item-1", ws, delete=True)
+    tmps: list[str] = []
+
+    async def recording(argv: list[str]) -> tuple[int, bytes]:
+        if Path(argv[0]).name == "tar" and "-cf" in argv:
+            tmps.append(argv[argv.index("-cf") + 1])
+        return await runner(argv)
+
+    archive._run = recording  # type: ignore[method-assign]
+    await archive.pack("item-1", ws)
+    await archive.pack("item-1", ws)
+    assert len(set(tmps)) == 2, tmps
 
 
 async def test_packing_disabled_packs_nothing(root: Path, runner: _Runner, ws: Path) -> None:
     archive = NfsArchive(root, runner=runner, pack=False)
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await archive.persist("item-1", ws, delete=True)
+    assert await archive.pack("item-1", ws) is False
     assert _packs(root, "item-1") == [] and runner.tars() == []
 
 
@@ -221,7 +281,7 @@ async def test_packing_disabled_packs_nothing(root: Path, runner: _Runner, ws: P
 async def test_restore_reads_the_current_pack_instead_of_the_tree(
     archive: NfsArchive, runner: _Runner, tmp_path: Path, ws: Path
 ) -> None:
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     runner.calls.clear()
     out = tmp_path / "out"
     assert await archive.restore("item-1", out) is True
@@ -235,7 +295,7 @@ async def test_restore_extracts_without_restoring_owners(
 ) -> None:
     """rsync never sets owners (NFS root_squash); tar run as root would, from the
     headers. `reown` re-applies the sandbox uid afterwards either way."""
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     runner.calls.clear()
     await archive.restore("item-1", tmp_path / "out")
     (argv,) = runner.tars()
@@ -245,7 +305,7 @@ async def test_restore_extracts_without_restoring_owners(
 async def test_a_write_after_the_pack_makes_restore_walk_the_tree(
     archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
 ) -> None:
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     await archive.persist("item-1", ws, delete=False)  # a later checkpoint
     runner.calls.clear()
     await archive.restore("item-1", tmp_path / "out")
@@ -257,7 +317,7 @@ async def test_a_pack_named_after_another_generation_is_never_used(
 ) -> None:
     """Even if the cleanup never ran (a host that died between the generation
     change and the cleanup), the NAME decides — not the file's existence."""
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (pack,) = root.glob("item-1.pack.*.tar")
     (root / "item-1.gen").write_text("0" * 32)  # a writer moved on; pack left behind
     assert pack.exists()
@@ -270,7 +330,7 @@ async def test_a_file_that_only_looks_like_the_current_pack_is_never_used(
     archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
 ) -> None:
     """The lookup globs `<gen>-*.tar`; the `*` must still be a byte count."""
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (pack,) = root.glob("item-1.pack.*.tar")
     gen = _gen(root, "item-1")
     pack.rename(pack.with_name(pack.name.replace(f"{gen}-", f"{gen}-copy-")))
@@ -290,7 +350,7 @@ async def test_a_pack_removed_while_restore_looks_at_it_walks_the_tree(
     """Another pod's persist clears the old generation's pack between this
     restore's listing and its size check. That is a missing pack, not a failed
     reopen."""
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (pack,) = root.glob("item-1.pack.*.tar")
     real_stat = Path.stat
 
@@ -309,7 +369,7 @@ async def test_a_half_written_pack_is_never_used(
     archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
 ) -> None:
     await archive.persist("item-1", ws, delete=False)
-    (root / "item-1.pack.tmp").write_bytes(b"not a tar")
+    (root / f"item-1.pack.{'0' * 32}.tmp").write_bytes(b"not a tar")
     runner.calls.clear()
     await archive.restore("item-1", tmp_path / "out")
     assert len(runner.rsyncs()) == 1 and runner.tars() == []
@@ -338,7 +398,7 @@ async def test_a_truncated_pack_is_never_extracted(
     the pack the name promises."""
     for n in range(40):
         (ws / f"f{n}.txt").write_bytes(b"x" * 600)
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (pack,) = root.glob("item-1.pack.*.tar")
     data = pack.read_bytes()
     pack.write_bytes(data[: (len(data) // 2) // 512 * 512])  # at a block boundary
@@ -359,7 +419,7 @@ async def test_a_pack_that_fails_mid_extract_leaves_nothing_behind_and_walks_the
     and then fails. Half a directory must never be marked ready."""
     for n in range(40):
         (ws / f"f{n}.txt").write_bytes(b"x" * 600)
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (pack,) = root.glob("item-1.pack.*.tar")
     data = bytearray(pack.read_bytes())
     mid = (len(data) // 2) // 512 * 512
@@ -381,7 +441,7 @@ async def test_a_pack_that_fails_to_extract_is_reported(
     """The fallback is silent to the user — the reopen is just slow again — so
     the operator's only way to learn that packs are being made and not used is
     the host log. The host sets no log level, so it has to be a warning."""
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "item-1", ws)
     (pack,) = root.glob("item-1.pack.*.tar")
     pack.write_bytes(b"\xff" * pack.stat().st_size)  # right size, not a tar
 
@@ -405,7 +465,7 @@ async def test_restore_without_a_generation_walks_the_tree(
 async def test_packing_disabled_ignores_an_existing_pack(
     root: Path, runner: _Runner, tmp_path: Path, ws: Path
 ) -> None:
-    await NfsArchive(root, runner=runner).persist("item-1", ws, delete=True, pack_guard=_quiet)
+    await _reap(NfsArchive(root, runner=runner), "item-1", ws)
     runner.calls.clear()
     await NfsArchive(root, runner=runner, pack=False).restore("item-1", tmp_path / "out")
     assert len(runner.rsyncs()) == 1 and runner.tars() == []
@@ -417,8 +477,8 @@ async def test_packing_disabled_ignores_an_existing_pack(
 async def test_a_write_removes_the_items_old_packs_and_its_tmp(
     archive: NfsArchive, root: Path, ws: Path
 ) -> None:
-    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
-    (root / "item-1.pack.tmp").write_bytes(b"left by a host that died mid-tar")
+    await _reap(archive, "item-1", ws)
+    (root / f"item-1.pack.{'0' * 32}.tmp").write_bytes(b"left by a host that died mid-tar")
     await archive.persist("item-1", ws, delete=False)
     assert _packs(root, "item-1") == []
 
@@ -428,7 +488,7 @@ async def test_cleanup_touches_only_this_items_files(
 ) -> None:
     """Item ids are free text: `a`'s cleanup must not take `a.pack.x`'s files,
     nor anything that merely starts with `a.pack.`."""
-    await archive.persist("a.pack.x", ws, delete=True, pack_guard=_quiet)
+    await _reap(archive, "a.pack.x", ws)
     theirs = _packs(root, "a.pack.x")
     assert theirs
     (root / "a.pack.notes.txt").write_bytes(b"someone else's")
