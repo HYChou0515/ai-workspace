@@ -1277,7 +1277,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 ### 2026-10-06 · #872 沙盒回收時多存一個打包檔：再開時讀一個檔，不再逐檔複製 {#pr-872}
 
 **設定** — sandbox-host 新 env **`SANDBOX_HOST_ARCHIVE_PACK`，預設開**。只認 `1`/`0`、`true`/`false`、`yes`/`no`、
-`on`/`off`；其他值 host **開不了機**（`ValueError` 會點名這個 key）。`0` = 不打包，也不讀已經存在的打包檔。app 端沒有新 key。
+`on`/`off`；其他值 host **開不了機**（`ValueError` 會點名這個 key）。`0` = 不打包，也不讀已經存在的打包檔。
+另一個新 env **`SANDBOX_HOST_PACK_DRAIN_S`，預設 `300`**：回收要打包時，等沙盒上已經在跑的請求結束的上限秒數（見下）；
+host log 常出現 `no pack for … still running` 時再調大。兩個值都印在 host 開機那行 echo 裡。app 端沒有新 key。
 
 行為改變（預設開）：
 
@@ -1293,7 +1295,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   所以打包檔只會在「回收之後、下次寫回之前」那段時間存在並被讀到。
 - 要打包的那次 kill 期間這個沙盒**不接任何請求**：host 先把它關起來，之後進來的請求（任何 app pod 的 checkpoint、
   檔案寫入、exec）直接得到「沙盒不見了」——它本來就要不見了。關起來之前就在跑的請求（例如一個 checkpoint 的 rsync）
-  會等它跑完，最多 60 秒；等不到（例如一個還在跑的長 exec）就不打包，host log 會有 `no pack for … still running` 的 warning。
+  會等它跑完，最多 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒）；等不到（例如一個還在跑的長 exec）就不打包，host log 會有 `no pack for … still running` 的 warning。
   不打包的 kill（開關關著、沒有 NFS、不是回收）和以前一樣，砍完之前照常回應。
   打包失敗只印 warning，沙盒照砍；下次開就照舊逐檔複製。這個 PR 自己的失敗都只會「慢」，不會「錯」：樹永遠是真相。
   會「錯」的只有下面兩條規則沒做到的情況。
@@ -1304,7 +1306,9 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - **空間**：每個「已回收、還沒再開過」的 item 多一份大約等於它 workspace 大小的 tar（不壓縮）——最壞約 2×。
   再開之後的第一次寫回就會刪掉它；刪除 item 時也會一起刪掉它的 `.gen` 與打包檔。
   - 量現在用了多少：`du -ch "$SANDBOX_HOST_NFS_ROOT"/*.pack.*.tar | tail -1`
-  - 不想要這份空間：設 `SANDBOX_HOST_ARCHIVE_PACK=0`，再 `find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -delete`。
+  - 不想要這份空間（任何時候，可選）：設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，滾完再
+    `find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -delete`。順序反過來的話，還開著的 pod 會在你刪完之後再打新的包；
+    不做只是多佔空間。
 - **從今以後的規則：不經過 host、直接改 `$SANDBOX_HOST_NFS_ROOT/<item>/` 的任何操作，做完都要刪那個 item 的打包檔。**
   包括手動 rsync、[#867](#pr-867) 那條 `find -delete`、從備份還原 NFS 樹。
   ```bash
@@ -1321,7 +1325,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 **k8s · CI 側**
 
 - **sandbox-host 要重 build、重 deploy 才有效果**（`sandbox-host/` 是獨立的 uv 專案和 image）。
-  - 什麼時候：任何時候；和 app 的先後順序自由：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
+  - 什麼時候：照下一項的三步驟滾（**第一次滾上時開關要設 `0`**）；和 app 誰先上都可以：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
   - 不需要新權限、新 volume、新 manifest：`tar` 是 base image（Debian bookworm）本來就有的 GNU tar 1.34，打包檔寫在既有的 NFS 掛載上。
   - 漏做的症狀：沒有壞處，只是還原照舊逐檔複製。
 - **新舊版 sandbox-host 同時在跑的期間，打包必須是關的。** 每次從「沒有這個 PR 的版本」滾到「有的版本」（第一次上線、
@@ -1338,7 +1342,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     第 2 步清掉的是回滾前留下、gen 又沒被舊版換掉的打包檔；第一次上線時它什麼都不會刪。
   - 漏做的症狀：在新舊並存期間被回收又被重開的 item，下次打開時回到修改前的內容，修改被無聲地撤銷。
   - **回滾**（滾回沒有這個 PR 的版本）反過來：先設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，再換回舊 image。
-    舊版不讀打包檔，但回滾途中還在跑的新版 pod 會讀。
+    舊版不讀打包檔，但回滾途中還在跑的新版 pod 會讀。漏做的症狀同上：回滾途中被回收又被重開的 item 回到修改前的內容。
 
 **確認做完**
 

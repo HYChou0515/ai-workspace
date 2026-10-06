@@ -40,8 +40,8 @@ user 回報：一個 item 的沙盒被回收之後再開，「開不起來」。
 |---|---|---|---|
 | 1 | 真相是誰 | **樹**（`<nfs_root>/<item>/`）永遠是真相；pack 是加速用的快取。任何失敗的結果都是「沒有 pack → 走樹」，**只會慢，不會錯** | #492 的設計不變；`_would_wipe`、`.ready` gate、`reown` 順序全不動 |
 | 2 | pack 怎麼知道自己還有效 | **名字帶 gen 和位元組數**：`<item>.pack.<gen>-<bytes>.tar`。`<item>.gen` 是一個 uuid，每個要寫樹的人**寫之前先換掉**（tmp + rename）。還原讀現在的 gen、只找那個名字；舊 pack 因為名字過期而自然作廢，**不需要刪、不需要事後驗**。還原時檔案大小 ≠ 名字上的位元組數 → 當作沒有 pack | 消掉「刪 pack 和 rename 誰先」與「發佈了來不及驗」兩個窗口；NFS 沒有鎖，靠不可變的名字比靠順序可靠。位元組數是 P2 才加的：**GNU tar 對剛好在檔案邊界被截斷的 archive 回 0**——解出前半、當成結尾——所以「tar 成功」不等於「workspace 完整」（`test_a_truncated_pack_is_never_extracted` 先紅過） |
-| 3 | 誰、何時打包 | **只有 `kill_idle` 的回收**要求打包：它的 `persist(delete=True, pack=True)` 在 rsync 對齊**真的跑了**之後，讓 host 記下這個沙盒「砍的時候要打包」（`_would_wipe` 把對齊降成非刪除的複製時不記——那時本機是空的，打包等於把空 workspace 發佈成快路）。**打包發生在接著的 `DELETE /sandboxes/{rid}` 裡**，沙盒拆掉之前。`flush`（turn 結束）、`close_all`（關機）、`_teardown`（關閉／CAS 輸家砍孤兒）、mid-turn checkpoint 一律 `pack=False`；之後的 checkpoint（`delete: false`）不會取消這個要求（P8）；之後一次**對齊**卻沒帶 `pack`（turn 結束——回收的 kill 沒來、沙盒又被用了）會取消它（第二輪 review） | 回收是「全域閒置、沙盒要拆掉、沒人等」唯一同時成立的時刻；關機有預算而打包 ∝ 位元組；孤兒的本機目錄不是真相。放在 kill 而不是 persist：見死路表最後一列 |
-| 4 | 本機那側怎麼知道沒人在寫 | **要打包的** kill **先封鎖**這個 rid（其他 kill——沒要求、開關關著、沒有 NFS——和以前一樣，砍完之前照常回應）：純 ASGI middleware（`_InFlight`）對封鎖中的 rid 一律直接回 `SandboxNotFound`，任何 pod 的 checkpoint、檔案寫入、exec 都進不來。封鎖之前就開始、還在跑的請求由同一個 middleware 的 **per-sandbox in-flight 計數**看見（進 +1、出 −1，含例外；必須是純 ASGI，因為 exec 是 streaming response，`@app.middleware` 的 `call_next` 在 response **開始**時就回來了）：**等**它們跑完（封鎖之後不會有新的，所以一定會結束），上限 `pack_drain_s`（60 秒），等不到就不打包。「只剩自己」的份額看呼叫者：DELETE 路由自己算 1，host 自己的 idle reaper 不經過 HTTP、算 0。kill 失敗 → 解除封鎖（沙盒還活著，要能重試） | 第二輪 review：大 item 的 checkpoint rsync 本身就很長，DELETE 到達時幾乎總有一個在跑——「計數 > 1 就放棄」又讓打包落空；封鎖之後沒有新請求，所以等待有終點，不需要時間戳或序號。上限是給跑很久的 exec 的；`kill` 走的是沒有讀取期限的 HTTP（app 的 `read_timeout` 預設 0），回收的 sweep 逐 item 等；被擋下的 checkpoint 得到的答案（沙盒不見了）正是它幾毫秒後會得到的。打包失敗只記 warning，不擋 kill：回收是沙盒消失，打包只是讓下次快 |
+| 3 | 誰、何時打包 | **只有 `kill_idle` 的回收**要求打包：它的 `persist(delete=True, pack=True)` 在 rsync 對齊**真的跑了**之後，讓 host 記下這個沙盒「砍的時候要打包」（`_would_wipe` 把對齊降成非刪除的複製時不記——那時本機是空的，打包等於把空 workspace 發佈成快路）。**打包發生在接著的 `DELETE /sandboxes/{rid}` 裡**，沙盒拆掉之前。`flush`（turn 結束）、`close_all`（關機）、`_teardown`（關閉／CAS 輸家砍孤兒）、mid-turn checkpoint 一律 `pack=False`；之後的 checkpoint（`delete: false`）不會取消這個要求（P8）；之後每一次**對齊**都重新決定：沒帶 `pack`（turn 結束——回收的 kill 沒來、沙盒又被用了）或被 `_would_wipe` 擋下，都會取消它（第二、三輪 review） | 回收是「全域閒置、沙盒要拆掉、沒人等」唯一同時成立的時刻；關機有預算而打包 ∝ 位元組；孤兒的本機目錄不是真相。放在 kill 而不是 persist：見死路表最後一列 |
+| 4 | 本機那側怎麼知道沒人在寫 | **要打包的** kill **先封鎖**這個 rid（其他 kill——沒要求、開關關著、沒有 NFS——和以前一樣，砍完之前照常回應）：純 ASGI middleware（`_InFlight`）對封鎖中的 rid 一律直接回 `SandboxNotFound`，任何 pod 的 checkpoint、檔案寫入、exec 都進不來。封鎖之前就開始、還在跑的請求由同一個 middleware 的 **per-sandbox in-flight 計數**看見（進 +1、出 −1，含例外；必須是純 ASGI，因為 exec 是 streaming response，`@app.middleware` 的 `call_next` 在 response **開始**時就回來了）：**等**它們跑完（封鎖之後不會有新的，所以一定會結束），上限 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒：一次 checkpoint 走完約 8.9 萬個路徑約一分鐘，幾顆 pod 同時走會更久——第三輪 review），等不到就不打包。「只剩自己」的份額看呼叫者：DELETE 路由自己算 1，host 自己的 idle reaper 不經過 HTTP、算 0。kill 失敗 → 解除封鎖（沙盒還活著，要能重試） | 第二輪 review：大 item 的 checkpoint rsync 本身就很長，DELETE 到達時幾乎總有一個在跑——「計數 > 1 就放棄」又讓打包落空；封鎖之後沒有新請求，所以等待有終點，不需要時間戳或序號。上限是給跑很久的 exec 的；`kill` 走的是沒有讀取期限的 HTTP（app 的 `read_timeout` 預設 0），回收的 sweep 逐 item 等；被擋下的 checkpoint 得到的答案（沙盒不見了）正是它在這次拆除結束後會得到的（封鎖最長是等待上限加打包的時間）。打包失敗只記 warning，不擋 kill：回收是沙盒消失，打包只是讓下次快 |
 | 5 | tar 怎麼打、怎麼解 | `tar --format=posix -cf`；解 `tar -xf --no-same-owner`，之後照舊 `reown`、`mark_ready` | rsync 刻意不碰擁有者（NFS root_squash，#492 Q3），tar 用 root 解開預設會照檔頭設回去；posix 格式帶次秒 mtime |
 | 6 | 解開壞掉怎麼辦 | 解進剛建好的（空的）本機目錄；非零結束 → 清空目錄 → 走樹。截斷的 pack 在解之前就被決定 2 的大小檢查擋掉 | 半個目錄絕不能被 `mark_ready`，否則下一次 `persist --delete` 把備份對齊成那半個 |
 | 7 | 空間 | 閒置的 item 多一份 pack，最多約 2× | 可之後再加「路徑數超過門檻才打包」或壓縮；都不影響對錯 |
@@ -67,11 +67,11 @@ app  kill_idle 判定全域閒置
  └─► host  POST /sandboxes/{rid}/persist {delete: true, pack: true}
         1. .gen ← g0 = uuid4()（寫 <item>.gen.<uuid>.tmp 再 rename）；刪掉這個 item 的 pack 與 pack tmp
         2. rsync 本機 → 樹，--delete（_would_wipe 擋下 → 到此為止，不記）
-        3. 記下：rid 砍的時候要打包；回 204（之後一次沒帶 pack 的對齊會撤銷這個記錄；checkpoint 不會）
+        3. 記下：rid 砍的時候要打包；回 204（之後每一次對齊都重新決定：沒帶 pack 或被擋下都撤銷這個記錄；checkpoint 不動它）
      （這裡到第 4 步之間，任何 pod 的 checkpoint 照常寫樹、換 gen——不影響，打包時才讀 gen）
  └─► host  DELETE /sandboxes/{rid}
         4. 有記第 3 步才做 4–5（第 3 步只在開關開著時記）：封鎖 rid——之後所有 /sandboxes/{rid}/… 請求直接回 SandboxNotFound
-        5. 等 in-flight 降到 1（只剩這個 DELETE；host 自己的 reaper 是 0），最多 60 秒，等不到 → warning、不打包；
+        5. 等 in-flight 降到 1（只剩這個 DELETE；host 自己的 reaper 是 0），最多 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒），等不到 → warning、不打包；
            沙盒 ready → 打包：
              g = 讀現在的 .gen（沒有 → 不打包）
              tar --format=posix 本機 → <item>.pack.<uuid>.tmp（讀本機；寫 NFS 一條串流）
@@ -82,7 +82,7 @@ app  kill_idle 判定全域閒置
         7. 解除封鎖、忘掉第 3 步的記錄（第 6 步失敗也一樣：沙盒還活著，要能回應、能重試）
 ```
 
-其他寫樹的人（`delete: false` 的 checkpoint、`flush`、`close_all`、`_teardown`）：只做第 1–2 步。
+其他寫樹的人（`delete: false` 的 checkpoint、`flush`、`close_all`、`_teardown`）：只做第 1–2 步（對齊的那幾個還會撤銷第 3 步的記錄）。
 一寫樹，現有 pack 的名字就過期；打包途中有人寫樹，打包讀的是寫之前的 gen，發佈出來就已經過期。
 
 還原（`_HostController.create` 不變，只是 `NfsArchive.restore` 多一條分支）：
@@ -92,7 +92,7 @@ g = 讀 .gen；<item>.pack.<g>-<n>.tar 在、且大小 == n → tar -xf --no-sam
 解開失敗 → 清空目錄 → rsync 樹
 ```
 
-開關 `SANDBOX_HOST_ARCHIVE_PACK=0`：第 5 步不打包、還原不找 pack（第 1 步照樣換 gen，所以之後再打開不會撿到舊 pack）。
+開關 `SANDBOX_HOST_ARCHIVE_PACK=0`：第 3 步不記，所以 4–5 都不做（kill 不封鎖）、還原不找 pack（第 1 步照樣換 gen，所以之後再打開不會撿到舊 pack）。
 
 ### 決定 9 的依據：app 端直接寫樹的每一條路（P5 時逐條查）
 
@@ -112,7 +112,7 @@ host-managed 模式下 app 的 durable store 就是那棵樹（`NfsTreeFileStore
 1. **人工不經 persist 改樹**（決定 9）——規則，不是碼；漏做的方向是**修改被撤銷**。
 2. **3–4 之間（兩個請求之間）有人寫本機**：打包讀的是第 5 步當下的本機，所以 pack **比樹新**（含那筆寫入）；樹要到下次開、第一次寫回才跟上。方向是保住使用者最後的狀態——今天這筆寫入會被第 6 步砍掉。
 3. **host 在第 5 步中途死掉**：`<item>.pack.<uuid>.tmp` 留在 NFS 到下次 persist（或刪除 item）。永遠不再被碰的 item 留一個死檔。
-4. **封鎖期間（含等待在飛請求的最多 60 秒）的請求一律被當成沙盒不見了**：本來就要砍了，差別只有幾秒；app 對 `SandboxNotFound` 的反應（rebuild）和砍完之後一樣。
+4. **封鎖期間（含等待在飛請求的最多 `SANDBOX_HOST_PACK_DRAIN_S`）的請求一律被當成沙盒不見了**：本來就要砍了，差別是封鎖的長度（最多 `SANDBOX_HOST_PACK_DRAIN_S` 的等待加打包時間，打包時間和位元組成正比）；這段時間裡重開這個 item，app 會從樹 rebuild；app 對 `SandboxNotFound` 的反應（rebuild）和砍完之後一樣。
 5. **兩個 host 上同一個 item 的沙盒（#366 CAS 輸家）**：另一個沙盒在我讀 gen **之前**寫了樹，pack 會是我這邊的本機——比樹少了它的寫入。這是 #366 split-brain 的同一類，今天它的寫入也會被我的對齊 `--delete` 蓋掉。
 6. **成本，不是對錯**：每次 persist 的清理 glob 一次 `<nfs_root>`，而那個目錄每個 item 一筆、現在每個寫過的 item 還多一個 `.gen`。每顆 pod 每 5 秒對每個 warm 沙盒 checkpoint 一次，所以這是一個新的、每次 checkpoint 都付的目錄列舉。和 rsync 本身逐檔 stat 的成本比起來小；沒有量過，量到才改（例如「`.gen` 已存在且沒有打包檔」時跳過）。
 7. **既有、沒變**：#366 CAS 輸家的陳舊 persist 覆蓋樹——pack 跟著樹走，不更好也不更壞；回收砍到正在用的沙盒那個 TOCTOU 也還在（in-flight 計數其實是比心跳更準的「有人在用」訊號，照理整個回收都該中止，但那是改回收的行為，另一題）。
@@ -128,10 +128,12 @@ host-managed 模式下 app 的 durable store 就是那棵樹（`NfsTreeFileStore
 | P5 | **刪除 item 帶走打包檔**：`NfsTreeFileStore.purge` 一併刪 `<item>.gen`、`.gen.tmp`、`<item>.pack.<gen>-<bytes>.tar`、`.pack.tmp`（regex 全名比對，不是前綴）。測試從原始碼載入 host 的 `NfsArchive` 產生檔案當 oracle | 先紅（`.gen` 與 pack 留著）；拿掉前綴檢查、拿掉 regex、拿掉 `.gen.tmp`、拿掉 `.pack.tmp`、root 不存在的 `return`——五個突變各紅一條 |
 | P6 | **docs**：`migrations.md` 一條（空間 ≈2×、開關、**決定 9 的規則**、確認做完的命令）；#867 條目補一行指過來；`configuration.md` §C、`sandbox-host.md` 的 env 表、`sandbox-host-wire.md` 的 persist body；CLAUDE.md 檔案樹那條的最後一句補「pack 快路」半句。#842（備份）還是 draft、它的 runbook 不在 master 上：規則先寫進這條 migrations（「從備份還原 NFS 樹」在列），**後合的那一個 PR** 在備份 runbook 補「load 之後刪 `*.pack.*.tar`」 | 每句對著碼；mkdocs `--strict` 綠 |
 | P7 | **第一輪 review（regression／defect）**：`.gen` 的 tmp 共用一個名字，同一個 item 兩個 persist 重疊時後一個 rename 找不到檔 → 帶 uuid；purge 的 regex 跟著改，測試讓 host 自己留下 tmp | 紅：在 `os.replace` 前插入同 item 的另一次換 gen（重現回報的 `FileNotFoundError`）；改回固定名字 → 紅，而且 purge 的 parity 測試一起紅 |
-| P8 | **第一輪 review（defect blocker）：打包從 persist 搬到 kill**（決定 3、4 與機制段改寫；死路表最後一列）。`NfsArchive.persist` 回傳「對齊有沒有真的跑」、`NfsArchive.pack` 獨立；controller 的 `pack_on_kill` / `closing`；`_InFlight` 擋封鎖中的 rid；pack tmp 也帶 uuid | 紅：寫回和砍之間來一次 checkpoint 仍然打包；封鎖期間的寫入回 404 `SandboxNotFound`；砍時還有 exec 在跑不打包；對齊被拒不打包；沒要求的砍不打包；沙盒沒 ready 不打包；打包失敗照砍；砍失敗解除封鎖；請求結束後什麼都不留；打包途中寫樹 → pack 一發佈就過期；tar 失敗、tmp 被清掉不發佈；兩次打包不共用 tmp。每個判準各做一條突變（檔案備份還原），每條都有測試紅 |
+| P8 | **第一輪 review（defect blocker）：打包從 persist 搬到 kill**（決定 3、4 與機制段改寫；死路表最後一列）。`NfsArchive.persist` 回傳「對齊有沒有真的跑」、`NfsArchive.pack` 獨立；controller 的 `pack_on_kill` / `closing`；`_InFlight` 擋封鎖中的 rid；pack tmp 也帶 uuid | 紅：寫回和砍之間來一次 checkpoint 仍然打包；封鎖期間的寫入回 404 `SandboxNotFound`；砍時還有 exec 在跑不打包（P10 改成等，等不到才不打包）；對齊被拒不打包；沒要求的砍不打包；沙盒沒 ready 不打包；打包失敗照砍；砍失敗解除封鎖；請求結束後什麼都不留；打包途中寫樹 → pack 一發佈就過期；tar 失敗、tmp 被清掉不發佈；兩次打包不共用 tmp。每個判準各做一條突變（檔案備份還原），每條都有測試紅 |
 | P9 | 推、draft PR（點名動到 `sandbox-host/`；k8s 側**沒有**新項——tar 是 base image 的 GNU tar 1.34，不需要權限）、第二輪 review | PR body 含「prod 怎麼驗證」：回收一次後 `ls $SANDBOX_HOST_NFS_ROOT/<item>.pack.*.tar`；再開的等待時間；host log 沒有 `did not extract` |
 | P10 | **第二輪 review 的修正**：(a) defect：DELETE 到達時已經在跑的 checkpoint 讓打包落空 → 封鎖後**等**在飛請求（上限 `pack_drain_s`），呼叫者自己的份額由呼叫者給（路由 1、host reaper 0——原本 reaper 少算一個）；(b) regression：只有要打包的 kill 才封鎖，`NfsArchive.packing` 讓開關關著時不記、不封鎖；(c) conformance：回收的 kill 沒來、沙盒又被用了 → 下一次沒帶 pack 的對齊撤銷記錄；(d) veracity：rollout 程序改成「先以開關 0 滾、全部換新後刪打包檔、再打開」，回滾先關開關（事後刪擋不住並存期間本身） | 紅：在跑的 checkpoint 被等到、打包；等不到不打包（快速失敗，不吊住）；reaper 不把自己算進去；不打包的 kill 不封鎖（沒要求、開關關）；沒帶 pack 的對齊撤銷、checkpoint 不撤銷。每個判準各一條突變，卡住的也改成快速失敗 |
-| P11 | 第三輪 review（P10 的等待是新機制）、CI 對最終 sha | 同 P9 |
+| P11 | 第三輪 review（P10 的等待是新機制）。修正：被擋下的對齊也撤銷記錄（conformance：前一次回收的 kill 沒來、目錄後來空了，會把空目錄打成包）；「kill 失敗解除封鎖」的測試補上 `pack: true`（P10 之後它從沒封鎖過，突變不紅）；runbook 第一項的 WHEN 指向三步驟；計劃的措辭（封鎖的長度不是「幾秒」） | 紅：被擋下的對齊撤銷記錄；把 `finally` 裡的解除封鎖拿掉 → 紅 |
+| P12 | **第三輪 review（defect）：等待上限可設定**。寫死的 60 秒和一次大 item checkpoint 同量級，幾顆 pod 一起走就等不到，偏偏落在目標 item；改成 env `SANDBOX_HOST_PACK_DRAIN_S`，預設 300 秒，開機 echo 印出來 | 紅：預設 300；`build_host_app` 把設定傳進 controller（拿掉 → 紅）；env 名拼錯 → 衍生式 config 測試紅 |
+| P13 | CI 對最終 sha | 同 P9 |
 
 **不做**：關機時打包、在 `close`（使用者關閉環境）時打包（可之後：那也是靜止點，但使用者在等回應）、路徑數門檻、壓縮、overlay。
 
