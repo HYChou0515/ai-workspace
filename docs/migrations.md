@@ -1270,6 +1270,62 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   （`kubectl logs <api-pod> --since=15m | grep "create refused"`）。sandbox-host 自己的 log 在修正前後都只有一行
   `POST /sandboxes` 的存取紀錄（修正前是 404），看它分不出有沒有修好。
 
+> [#872](#pr-872) 上線之後再跑上面的止血：刪完連結要接著刪打包檔，否則被回收的 item 會從打包檔把刪掉的連結還原回來。命令在 #872。
+
+---
+
+### 2026-10-06 · #872 沙盒回收時多存一個打包檔：再開時讀一個檔，不再逐檔複製 {#pr-872}
+
+**設定** — sandbox-host 新 env **`SANDBOX_HOST_ARCHIVE_PACK`，預設開**。只認 `1`/`0`、`true`/`false`、`yes`/`no`、
+`on`/`off`；其他值 host **開不了機**（`ValueError` 會點名這個 key）。`0` = 不打包，也不讀已經存在的打包檔。app 端沒有新 key。
+
+行為改變（預設開）：
+
+- app 判定一個 item **全域閒置**（8 小時，`create_app` 的預設，沒有設定 key）、要回收它的沙盒時，送給 host 的 `persist`
+  多帶 `pack: true`。turn 結束、回合中的 checkpoint、關機、使用者關閉環境都**不**帶。
+- host 收到之後：照舊把沙盒 rsync 回 `$SANDBOX_HOST_NFS_ROOT/<item>/`，然後在旁邊寫
+  `<item>.pack.<gen>-<位元組數>.tar`（整個 workspace 的一個 tar）。下次開這個 item 時，host 解開這一個檔，
+  不再逐個路徑從 NFS 複製——還原的成本從「路徑數 × 一次 NFS 往返」變成「一次讀一個大檔」。
+  回報的那個 item 有 88,889 個路徑，逐路徑複製花了 58 秒，壓在 ingress 預設的 60 秒上。
+- 每一次 `persist`（不論有沒有打包）**先**把 `$SANDBOX_HOST_NFS_ROOT/<item>.gen` 換成新的值，並刪掉這個 item
+  舊的打包檔。打包檔名字裡的 `<gen>` 不等於現在的 `.gen`、或檔案大小不等於名字上的位元組數，就不會被用——
+  所以打包檔只會在「回收之後、下次寫回之前」那段時間存在並被讀到。
+- 打包時 host 正在處理這個沙盒的其他請求（還在跑的 exec、打包途中進來的任何請求），就不打包、或丟掉打包到一半的檔；
+  下次開就照舊逐檔複製。任何失敗的結果都只是「慢」，不是「錯」：樹永遠是真相。
+
+**資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。NFS 上多兩種檔，都在 item 目錄**旁邊**，不在裡面：
+`<item>.gen`（幾十個位元組，每個寫過的 item 都有，開關關掉也會寫）與 `<item>.pack.*.tar`。
+
+- **空間**：每個「已回收、還沒再開過」的 item 多一份大約等於它 workspace 大小的 tar（不壓縮）——最壞約 2×。
+  再開之後的第一次寫回就會刪掉它；刪除 item 時也會一起刪掉它的 `.gen` 與打包檔。
+  - 量現在用了多少：`du -ch "$SANDBOX_HOST_NFS_ROOT"/*.pack.*.tar | tail -1`
+  - 不想要這份空間：設 `SANDBOX_HOST_ARCHIVE_PACK=0`，再 `find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -delete`。
+- **從今以後的規則：不經過 host、直接改 `$SANDBOX_HOST_NFS_ROOT/<item>/` 的任何操作，做完都要刪那個 item 的打包檔。**
+  包括手動 rsync、[#867](#pr-867) 那條 `find -delete`、從備份還原 NFS 樹。
+  ```bash
+  rm -f "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar                                # 一個 item
+  find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete   # 全部
+  ```
+  - 為什麼：host 只看名字判斷打包檔還有沒有效，而名字只有經過 host 的寫入才會作廢。逐一比對打包檔和樹是否一致，
+    本身就是逐路徑的 NFS 往返，等於沒做——所以這一條擋不了，只能靠規則。
+  - 漏做的症狀：那個 item 下次打開時是**改之前**的內容，而且 turn 結束的寫回會把樹也對齊成改之前的樣子——你的修改被**無聲地撤銷**。
+    刪打包檔永遠安全：最壞是下次開回到逐檔複製的速度。
+
+**k8s · CI 側**
+
+- **sandbox-host 要重 build、重 deploy 才有效果**（`sandbox-host/` 是獨立的 uv 專案和 image）。
+  - 什麼時候：任何時候。rollout 順序自由：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
+  - 不需要新權限、新 volume、新 manifest：`tar` 是 base image（Debian bookworm）本來就有的 GNU tar 1.34，打包檔寫在既有的 NFS 掛載上。
+  - 漏做的症狀：沒有壞處，只是還原照舊逐檔複製。
+
+**確認做完**
+
+- host 開機那一行 echo 帶 `archive_pack=1`：`kubectl logs <sandbox-host-pod> | grep archive_pack`。
+- 一個 item 被回收（閒置 8 小時）之後：`ls -la "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar` 有一個檔。
+- 再打開那個 item：等待時間比之前短；host log 裡**沒有** `did not extract`
+  （`kubectl logs <sandbox-host-pod> --since=15m | grep "did not extract"`）。有的話 host 退回逐檔複製，訊息裡有 tar 的錯誤。
+- 打開後跑一個 turn：那個打包檔不見了（寫回把它作廢並刪除）。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

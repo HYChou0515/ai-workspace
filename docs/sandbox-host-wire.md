@@ -34,7 +34,7 @@ sandbox。
 | `POST /sandboxes` | `{image?, env?, exposed_ports?, item_id?}` | `200 {pod_url, remote_id}` | 建立 |
 | `DELETE /sandboxes/{rid}` | — | `204` | 終止 |
 | `POST /sandboxes/{rid}/exec` | `{cmd: [str], env?: {str: str}}` | `200` NDJSON stream | exec(見下) |
-| `POST /sandboxes/{rid}/persist` | `{delete: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492) |
+| `POST /sandboxes/{rid}/persist` | `{delete: bool, pack: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492);`pack` 見下 |
 | `PUT /sandboxes/{rid}/file?path=` | raw octet-stream body | `204` | 上傳 |
 | `GET /sandboxes/{rid}/file?path=` | — | `200` octet-stream | 下載 |
 | `POST /sandboxes/{rid}/files` | `{paths: [str]}` | `200 {files: [base64\|null]}` | 一次下載多個檔(#781)。順序同 `paths`;**某個路徑不存在回 `null` 而不是整批失敗** —— 那是「這個路徑沒有」的答案,呼叫端才能為它要的檔案報錯、為列表順手略過。其他錯誤照常往上拋(目錄不是「檔案不存在」)。app 端分塊送,一次上限 200 個路徑 |
@@ -88,6 +88,13 @@ host 公告它實際會套的天花板,由 **enforcer 自己回答**(問 sandbox
 `delete: true` 是靜止點的**對帳**,`false` 是回合中的**純追加** checkpoint,且**只在 ready 為真
 時**執行(半還原的目錄絕不能覆蓋封存)。沒有 archive 或沒帶 `item_id` ⇒ 兩者都是 no-op,舊
 client 因此照舊可用。
+
+**`pack`([設計](plan-archive-pack.md))**:預設 `false`;app 只在回收(全域閒置、沙盒要拆)時送 `true`。
+`delete: true` 的對齊真的跑了、而且這個沙盒當下沒有別的請求在處理時,host 在樹旁邊寫
+`{nfs_root}/{item_id}.pack.<gen>-<位元組數>.tar`;之後的 `create` 在名字對得上現在的 `.gen`、大小對得上名字時解開它,不再逐檔 rsync;
+對不上、或解開失敗(清空目錄、印 warning)就照舊逐檔 rsync。
+每一次 `persist` 都會先換掉 `{item_id}.gen`,所以打包檔只在下一次寫回之前有效。舊 host 不認得這個
+欄位、忽略它(pydantic 預設);舊 app 從不送。
 
 ### `POST /tools/resolve` —— 為什麼回應是「部分成功」
 
