@@ -123,3 +123,10 @@ def test_archive_pack_refuses_a_value_it_cannot_read(raw: str) -> None:
     with the key named, rather than silently meaning on."""
     with pytest.raises(ValueError, match="SANDBOX_HOST_ARCHIVE_PACK"):
         load_settings({"SANDBOX_HOST_ARCHIVE_PACK": raw})
+
+
+def test_a_packing_kill_waits_five_minutes_by_default() -> None:
+    """Long enough for a checkpoint already running on an item the pack is for
+    (one walk of ~89k paths took ~a minute) to finish, with room for a few
+    pods' walks contending."""
+    assert load_settings({}).pack_drain_s == 300.0

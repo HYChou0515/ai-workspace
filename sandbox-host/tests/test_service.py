@@ -98,3 +98,10 @@ def test_build_host_app_advertise_url_uses_pod_ip(tmp_path, pod_ip):
         SandboxHostSettings(bind="0.0.0.0:8123", cgroup_root=str(tmp_path / "cg")), pod_ip=pod_ip
     )
     assert isinstance(app, FastAPI)
+
+
+def test_build_host_app_threads_the_pack_drain_bound(tmp_path):
+    app = build_host_app(
+        SandboxHostSettings(cgroup_root=str(tmp_path / "cg"), pack_drain_s=12.5), pod_ip=None
+    )
+    assert app.state.controller._pack_drain_s == 12.5

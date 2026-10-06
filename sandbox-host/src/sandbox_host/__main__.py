@@ -134,7 +134,8 @@ def main() -> None:
     print(
         f"→ timeouts: exec_timeout={settings.exec_timeout:g}s "
         f"log_timeout={settings.log_timeout:g}s idle_ttl={settings.idle_ttl:g}s "
-        f"| nfs_root={settings.nfs_root} archive_pack={int(settings.archive_pack)}",
+        f"| nfs_root={settings.nfs_root} archive_pack={int(settings.archive_pack)} "
+        f"pack_drain_s={settings.pack_drain_s:g}",
         flush=True,
     )
     check_cgroup_ready(cgroup_root)  # fail loud: isolation needs cgroup v2

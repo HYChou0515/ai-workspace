@@ -101,4 +101,5 @@ def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> Fast
         readiness=lambda: check_cgroup_ready(cgroup_root),
         archive=build_archive(settings),
         tool_resolver=build_tool_resolver(settings),
+        pack_drain_s=settings.pack_drain_s,
     )

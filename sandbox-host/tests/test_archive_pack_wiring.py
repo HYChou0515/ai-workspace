@@ -168,6 +168,22 @@ async def test_a_reconcile_the_archive_refused_is_not_followed_by_a_pack():
     assert archive.packs == []
 
 
+async def test_a_refused_reconcile_withdraws_an_earlier_request():
+    """An earlier reap's kill never came; the dir has since emptied, and the
+    next reap's reconcile is refused (the empty-source valve). Packing now would
+    publish an empty workspace as the way back."""
+    archive = _Archive()
+    app = make_host_app(
+        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
+    )
+    async with _client(app) as c:
+        rid = await _new(c)
+        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
+        archive.reconciles = False
+        await _reap(c, rid)
+    assert archive.packs == []
+
+
 async def test_a_checkpoint_still_running_at_teardown_is_waited_for():
     """Round 2: closing turns away what starts LATER; a checkpoint already
     running when the kill arrives — on a big item, almost always one — must be
@@ -314,6 +330,8 @@ async def test_a_teardown_that_fails_reopens_the_sandbox():
     app = make_host_app(_Stuck(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=_Archive())
     async with _client(app) as c:
         rid = await _new(c)
+        # A reap's write-back: only a kill that packs closes the sandbox.
+        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
         with pytest.raises(RuntimeError):
             await c.delete(f"/sandboxes/{rid}")
         assert (await c.get(f"/sandboxes/{rid}/ready")).status_code == 200

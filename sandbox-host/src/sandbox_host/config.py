@@ -56,6 +56,11 @@ class SandboxHostSettings:
     # Costs up to ~2× archive space for idle items. Off ⇒ never pack, never read
     # a pack: restore is exactly the tree walk.
     archive_pack: bool = True
+    # How long a packing kill waits for requests already running on the sandbox
+    # (a checkpoint's rsync, an exec) before giving up on the pack. A checkpoint
+    # of an item the pack is for walks every path on NFS — about a minute for
+    # ~89k paths — and several pods may be walking it at once.
+    pack_drain_s: float = 300.0
 
 
 def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
@@ -109,4 +114,5 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         idle_ttl=f("SANDBOX_HOST_IDLE_TTL", 1800.0),
         nfs_root=opt("SANDBOX_HOST_NFS_ROOT"),
         archive_pack=b("SANDBOX_HOST_ARCHIVE_PACK", True),
+        pack_drain_s=f("SANDBOX_HOST_PACK_DRAIN_S", 300.0),
     )

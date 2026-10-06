@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .artifact import ArtifactError
+from .config import SandboxHostSettings
 from .nfs_archive import NfsArchive
 from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 from .tool_cache import ToolCache
@@ -357,7 +358,7 @@ class _HostController:
         tool_cache: ToolCache | None = None,
         clock: Callable[[], float],
         archive: NfsArchive | None = None,
-        pack_drain_s: float = 60.0,
+        pack_drain_s: float = SandboxHostSettings.pack_drain_s,
     ) -> None:
         self.sandbox = sandbox
         # How long a packing kill waits for requests that began before it (a
@@ -447,9 +448,9 @@ class _HostController:
         ``pack`` (a reap's write-back) asks for a pack when the sandbox is torn
         down — remembered only if the reconcile RAN, since only then is the tree
         a copy of the dir. A later checkpoint (``delete`` off) leaves the request
-        standing — checkpoints are what made packing here impossible; a later
-        reconcile without ``pack`` withdraws it, since only a sandbox back in use
-        (a turn ending) sends one."""
+        standing — checkpoints are what made packing here impossible; every later
+        reconcile decides afresh, so one without ``pack`` (a turn ending: the
+        sandbox is in use again) or one the archive refused withdraws it."""
         item = self._item_of.get(rid)
         if self._archive is None or item is None:
             return
@@ -461,9 +462,11 @@ class _HostController:
         )
         if pack and reconciled and self._archive.packing:
             self.pack_on_kill.add(rid)
-        elif delete and not pack:
-            # A turn-end reconcile: the sandbox is in use again (the reap's kill
-            # never came), so a later close is a plain teardown.
+        elif delete:
+            # Every reconciling write-back decides afresh. Without `pack` it is a
+            # turn end — the sandbox is in use again (the reap's kill never came);
+            # with `pack` but refused (the empty-source valve) the dir is not the
+            # item's workspace, and an earlier request must not pack it.
             self.pack_on_kill.discard(rid)
 
     async def kill(self, rid: str, *, own: int = 0) -> None:
@@ -583,7 +586,7 @@ def make_host_app(
     readiness: ReadinessCheck | None = None,
     archive: NfsArchive | None = None,
     tool_resolver: ToolResolver | None = None,
-    pack_drain_s: float = 60.0,
+    pack_drain_s: float = SandboxHostSettings.pack_drain_s,
 ) -> FastAPI:
     app = FastAPI()
     controller = _HostController(
