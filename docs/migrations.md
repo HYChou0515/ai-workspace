@@ -1291,8 +1291,10 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 - 每一次 `persist`（不論有沒有打包）**先**把 `$SANDBOX_HOST_NFS_ROOT/<item>.gen` 換成新的值，並刪掉這個 item
   舊的打包檔。打包檔名字裡的 `<gen>` 不等於現在的 `.gen`、或檔案大小不等於名字上的位元組數，就不會被用——
   所以打包檔只會在「回收之後、下次寫回之前」那段時間存在並被讀到。
-- 打包期間這個沙盒**不接任何請求**：host 先把它關起來，之後進來的請求（任何 app pod 的 checkpoint、檔案寫入、exec）
-  直接得到「沙盒不見了」——它本來幾秒後就會不見。關起來之前就在跑、還沒結束的請求（例如還在跑的 exec）→ 不打包。
+- 要打包的那次 kill 期間這個沙盒**不接任何請求**：host 先把它關起來，之後進來的請求（任何 app pod 的 checkpoint、
+  檔案寫入、exec）直接得到「沙盒不見了」——它本來就要不見了。關起來之前就在跑的請求（例如一個 checkpoint 的 rsync）
+  會等它跑完，最多 60 秒；等不到（例如一個還在跑的長 exec）就不打包，host log 會有 `no pack for … still running` 的 warning。
+  不打包的 kill（開關關著、沒有 NFS、不是回收）和以前一樣，砍完之前照常回應。
   打包失敗只印 warning，沙盒照砍；下次開就照舊逐檔複製。這個 PR 自己的失敗都只會「慢」，不會「錯」：樹永遠是真相。
   會「錯」的只有下面兩條規則沒做到的情況。
 
@@ -1322,16 +1324,21 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
   - 什麼時候：任何時候；和 app 的先後順序自由：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
   - 不需要新權限、新 volume、新 manifest：`tar` 是 base image（Debian bookworm）本來就有的 GNU tar 1.34，打包檔寫在既有的 NFS 掛載上。
   - 漏做的症狀：沒有壞處，只是還原照舊逐檔複製。
-- **sandbox-host 每次從「沒有這個 PR 的版本」滾到「有的版本」（第一次上線、回滾之後再上線），在 rollout 前、以及 rollout
-  完成（所有 sandbox-host pod 都是新版）後，各刪一次所有打包檔**：
-  ```bash
-  find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete
-  ```
-  - 為什麼：新版 pod 回收某個 item 時打了包，同一個 item 接著在還沒換掉的舊版 pod 上被重開、修改、寫回——舊版寫回不換 `.gen`，
-    那個打包檔仍然被當成有效。rollout 前那次清掉回滾前留下的打包檔，rollout 後那次清掉新舊並存期間打的。第一次上線時
-    rollout 前那次什麼都不會刪。
-  - 漏做的症狀：極少數在新舊並存期間被回收又被重開的 item，下次打開時回到修改前的內容，修改被無聲地撤銷（同上一條規則）。
-  - 回滾本身（滾回沒有這個 PR 的版本）不需要做任何事：舊版不讀打包檔。
+- **新舊版 sandbox-host 同時在跑的期間，打包必須是關的。** 每次從「沒有這個 PR 的版本」滾到「有的版本」（第一次上線、
+  回滾之後再上線）分三步：
+  1. **rollout 前**：在 sandbox-host 的 env 設 `SANDBOX_HOST_ARCHIVE_PACK=0`，用它滾上新 image。
+  2. **rollout 完成**（`kubectl rollout status` 說所有 sandbox-host pod 都是新版）**後**：刪掉所有打包檔
+     ```bash
+     find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete
+     ```
+  3. 把 `SANDBOX_HOST_ARCHIVE_PACK` 拿掉（或設 `1`），再滾一次。
+  - 為什麼：舊版 host 寫樹不換 `.gen`。新舊並存時，新版 pod 回收某個 item 時打的包，可能接著被舊版 pod 重開、修改、
+    寫回而**不作廢**；舊 pod 被輪替掉之後，新 pod 從那個過期的打包檔還原。這整串都可能發生在 rollout 途中，所以「事後刪」
+    擋不住，只能讓新版在並存期間不打包、不讀打包檔（開關關著時仍然照樣換 `.gen`，所以第 3 步之後不會撿到舊的）。
+    第 2 步清掉的是回滾前留下、gen 又沒被舊版換掉的打包檔；第一次上線時它什麼都不會刪。
+  - 漏做的症狀：在新舊並存期間被回收又被重開的 item，下次打開時回到修改前的內容，修改被無聲地撤銷。
+  - **回滾**（滾回沒有這個 PR 的版本）反過來：先設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，再換回舊 image。
+    舊版不讀打包檔，但回滾途中還在跑的新版 pod 會讀。
 
 **確認做完**
 
