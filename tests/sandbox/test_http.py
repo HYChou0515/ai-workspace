@@ -51,6 +51,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     app = FastAPI()
     app.state.created_item_ids = []  # #492: item_ids seen by create
     app.state.persisted = []  # #492: (rid, delete) seen by persist
+    app.state.packs = []  # plan-archive-pack: the `pack` field as sent
     app.state.created_tools = []  # #674: `{name: sha}` seen by create
     # The resource ceilings the host reads off a create. Modelled here because a
     # test that only asserted "our side sent something" would be immune to the
@@ -109,6 +110,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         # #492: record (rid, delete) so the client's persist call can be asserted.
         backend._require(SandboxHandle(id=rid))  # raise SandboxNotFound for a dead handle
         app.state.persisted.append((rid, bool(body.get("delete", False))))
+        app.state.packs.append(body.get("pack"))
 
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:
@@ -347,6 +349,14 @@ async def test_persist_posts_delete_flag(host_and_client):
     await sandbox.persist(h, delete=False)
     _, remote_id = _decode_handle(h)
     assert app.state.persisted == [(remote_id, True), (remote_id, False)]
+
+
+async def test_persist_sends_pack_only_when_asked(host_and_client):
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    await sandbox.persist(h, delete=True, pack=True)
+    await sandbox.persist(h, delete=True)
+    assert app.state.packs == [True, False]
 
 
 async def test_persist_on_dead_handle_raises_sandbox_not_found(host_and_client):

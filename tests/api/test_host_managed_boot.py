@@ -34,7 +34,9 @@ def test_host_managed_without_persist_op_fails_loud_at_boot():
 
 def test_host_managed_with_a_persist_op_boots():
     class _PersistMock(MockSandbox):
-        async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:  # pragma: no cover
+        async def persist(  # pragma: no cover
+            self, handle: SandboxHandle, *, delete: bool, pack: bool = False
+        ) -> None:
             return None
 
     app = create_app(
