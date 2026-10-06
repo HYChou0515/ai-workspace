@@ -110,6 +110,11 @@ class _PersistBody(BaseModel):
     # #492: `delete` ⇒ rsync --delete (turn-end / reap reconcile, at a quiesced
     # ready sandbox); False ⇒ additive-only mid-turn durability checkpoint.
     delete: bool = False
+    # docs/plan-archive-pack.md: the app sets this on REAP only — the one moment
+    # the item is globally idle and the sandbox is about to go. The archive packs
+    # after the reconcile if, and only if, nobody is touching the sandbox.
+    # Defaults off, so an app that never sends it gets today's persist.
+    pack: bool = False
 
 
 class _CreateReply(BaseModel):
@@ -300,6 +305,38 @@ def check_cgroup_ready(cgroup_root: Path, *, controllers_marker: Path = _CGROUP_
         )
 
 
+class _InFlight:
+    """Counts the requests to each sandbox that have started and not finished.
+
+    Pure ASGI, not `@app.middleware("http")`: that one's `call_next` returns as
+    soon as a response STARTS, and `exec` is a streaming response — the command
+    is still writing the sandbox long after. Here the count is held across the
+    whole `await self.app(...)`, which returns only once the last byte is sent,
+    and released in `finally`, so a request that raises does not leave the
+    sandbox looking busy forever."""
+
+    def __init__(self, app: Any, controller: _HostController) -> None:
+        self.app = app
+        self.controller = controller
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        parts = scope.get("path", "").split("/") if scope["type"] == "http" else []
+        if len(parts) <= 2 or parts[1] != "sandboxes":
+            await self.app(scope, receive, send)
+            return
+        rid = parts[2]
+        counts = self.controller.in_flight
+        counts[rid] = counts.get(rid, 0) + 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            left = counts.get(rid, 1) - 1
+            if left:
+                counts[rid] = left
+            else:
+                counts.pop(rid, None)
+
+
 class _HostController:
     """Owns the host's operational state: which sandboxes are live (for the
     idle-reaper), whether we're draining, and the activity clock. Create/kill
@@ -326,6 +363,12 @@ class _HostController:
         # know which archive dir to write.
         self._archive = archive
         self._item_of: dict[str, str] = {}
+        # Requests to each sandbox that have STARTED and not FINISHED — counted
+        # by `_InFlight` around the whole ASGI call, so a streaming `exec` stays
+        # counted until its last byte, not until its handler returns. The pack
+        # guard reads it: `_last_active` is stamped when a request begins and
+        # cannot tell "began a minute ago and still writing" from "done".
+        self.in_flight: dict[str, int] = {}
 
     def start_draining(self) -> None:
         self.draining = True
@@ -374,7 +417,7 @@ class _HostController:
         # field a reader cannot interpret is worse than an absent one.
         return [{"remote_id": rid, "item_id": self._item_of.get(rid)} for rid in self._last_active]
 
-    async def persist(self, rid: str, *, delete: bool) -> None:
+    async def persist(self, rid: str, *, delete: bool, pack: bool = False) -> None:
         """#492: rsync the sandbox's live working dir → its durable NFS archive.
         A no-op when no archive is wired, this handle has no item mapping, or the
         sandbox is not ready (a half-restored dir must never overwrite the
@@ -386,7 +429,25 @@ class _HostController:
         handle = SandboxHandle(id=rid)
         if not await self.sandbox.is_ready(handle):
             return
-        await self._archive.persist(item, self.sandbox.workspace_dir(handle), delete=delete)
+        await self._archive.persist(
+            item,
+            self.sandbox.workspace_dir(handle),
+            delete=delete,
+            pack_guard=self._quiet_since_now(rid) if pack else None,
+        )
+
+    def _quiet_since_now(self, rid: str) -> Callable[[], bool]:
+        """A guard that holds while THIS request is the only one in flight on the
+        sandbox and none has started since it began. Both halves are needed: the
+        count catches a request still running (an exec that began first), the
+        timestamp catches one that came and went between the guard's two
+        questions, when the count is back to one."""
+        t0 = self._last_active.get(rid)
+
+        def quiet() -> bool:
+            return self.in_flight.get(rid, 0) == 1 and self._last_active.get(rid) == t0
+
+        return quiet
 
     async def kill(self, rid: str) -> None:
         """Forget it only once it is really gone.
@@ -472,6 +533,7 @@ def make_host_app(
         tool_cache=tool_resolver.cache if tool_resolver is not None else None,
     )
     app.state.controller = controller
+    app.add_middleware(_InFlight, controller=controller)
 
     @app.middleware("http")
     async def _track_activity(request: Request, call_next):
@@ -634,7 +696,7 @@ def make_host_app(
     async def persist(rid: str, body: _PersistBody) -> None:
         # #492: rsync the sandbox's live working dir → its durable NFS archive.
         # Host-local, so no app↔host network in the bulk path (can't hang).
-        await controller.persist(rid, delete=body.delete)
+        await controller.persist(rid, delete=body.delete, pack=body.pack)
 
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:

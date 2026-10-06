@@ -67,3 +67,41 @@ async def test_upload_only_persist_does_not_delete(tmp_path: Path):
     (ws / "f").unlink()
     await archive.persist("item-1", ws, delete=False)
     assert (tmp_path / "nfs" / "item-1" / "f").exists()
+
+
+@skip_no_rsync
+async def test_a_workspace_restored_from_the_pack_costs_the_next_persist_nothing(tmp_path: Path):
+    """docs/plan-archive-pack.md, with rsync as its own oracle. rsync decides
+    what to send by size and mtime; if the tar round trip moved an mtime, the
+    first persist after a pack restore would re-send the whole tree to NFS —
+    the cost moved, not saved."""
+    import os
+    import subprocess
+
+    ws = tmp_path / "ws"
+    for a in range(20):
+        d = ws / f"d{a}"
+        d.mkdir(parents=True)
+        for b in range(10):
+            f = d / f"f{b}.txt"
+            f.write_bytes(f"{a}-{b}".encode())
+            # Years back: rsync compares mtimes to the SECOND, and this whole
+            # test runs inside one — an extract that stamped "now" on every
+            # file would still compare equal and the oracle would see nothing.
+            os.utime(f, (1_600_000_000, 1_600_000_000))
+
+    archive = NfsArchive(tmp_path / "nfs")
+    await archive.persist("item-1", ws, delete=True, pack_guard=lambda: True)
+    assert list((tmp_path / "nfs").glob("item-1.pack.*.tar")), "no pack was made"
+
+    out = tmp_path / "restored"
+    assert await archive.restore("item-1", out) is True
+
+    sent = subprocess.run(
+        ["rsync", "-rlptD", "--dry-run", "-i", f"{out}/", f"{tmp_path / 'nfs' / 'item-1'}/"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    files = [line for line in sent.splitlines() if line[:2] in (">f", "<f")]
+    assert files == [], f"rsync would re-send {len(files)} files after a pack restore"

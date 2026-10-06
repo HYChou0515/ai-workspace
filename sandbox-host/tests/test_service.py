@@ -13,10 +13,18 @@ from sandbox_host.config import SandboxHostSettings
 from sandbox_host.isolated_process import IsolatedProcessSandbox
 from sandbox_host.service import (
     advertise_url,
+    build_archive,
     build_host_app,
     build_sandbox,
     resolve_tools_dir,
 )
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_build_archive_threads_the_pack_switch(tmp_path, on: bool):
+    """`SANDBOX_HOST_ARCHIVE_PACK` reaches the archive the host actually runs."""
+    archive = build_archive(SandboxHostSettings(nfs_root=str(tmp_path), archive_pack=on))
+    assert archive is not None and archive._pack is on
 
 
 def test_advertise_url_prefers_pod_ip():

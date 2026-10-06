@@ -51,6 +51,11 @@ class SandboxHostSettings:
     # it back via rsync (host-local, so no app↔host network in the bulk path).
     # None = no archive (the transitional / local-dev default).
     nfs_root: str | None = None
+    # docs/plan-archive-pack.md: on reap, also leave `<item>.pack.<gen>.tar`
+    # beside the tree so the reopen reads ONE file instead of walking every path.
+    # Costs up to ~2× archive space for idle items. Off ⇒ never pack, never read
+    # a pack: restore is exactly the tree walk.
+    archive_pack: bool = True
 
 
 def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
@@ -71,6 +76,20 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
     def opt(name: str) -> str | None:
         return env.get(name)
 
+    def b(name: str, default: bool) -> bool:
+        # A string is not a bool — `bool("false")` is True. Read the spellings
+        # people write; refuse anything else with the key named, instead of
+        # letting a typo silently mean the default.
+        raw = env.get(name)
+        if raw is None:
+            return default
+        word = raw.strip().lower()
+        if word in ("1", "true", "yes", "on"):
+            return True
+        if word in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"{name}={raw!r}: expected one of 1/0, true/false, yes/no, on/off")
+
     return SandboxHostSettings(
         bind=s("SANDBOX_HOST_BIND", "0.0.0.0:8000"),
         uid_min=i("SANDBOX_HOST_UID_MIN", 100000),
@@ -89,4 +108,5 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         uv_cache_max_bytes=(int(raw) if (raw := opt("SANDBOX_HOST_UV_CACHE_MAX_BYTES")) else None),
         idle_ttl=f("SANDBOX_HOST_IDLE_TTL", 1800.0),
         nfs_root=opt("SANDBOX_HOST_NFS_ROOT"),
+        archive_pack=b("SANDBOX_HOST_ARCHIVE_PACK", True),
     )
