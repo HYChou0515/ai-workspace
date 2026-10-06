@@ -15,6 +15,7 @@ recorder, because what is pinned is which path restore took, not rsync itself.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
@@ -240,6 +241,45 @@ async def test_a_pack_named_after_another_generation_is_never_used(
     assert len(runner.rsyncs()) == 1 and runner.tars() == []
 
 
+async def test_a_file_that_only_looks_like_the_current_pack_is_never_used(
+    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
+) -> None:
+    """The lookup globs `<gen>-*.tar`; the `*` must still be a byte count."""
+    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    (pack,) = root.glob("item-1.pack.*.tar")
+    gen = _gen(root, "item-1")
+    pack.rename(pack.with_name(pack.name.replace(f"{gen}-", f"{gen}-copy-")))
+    runner.calls.clear()
+    await archive.restore("item-1", tmp_path / "out")
+    assert len(runner.rsyncs()) == 1 and runner.tars() == []
+
+
+async def test_a_pack_removed_while_restore_looks_at_it_walks_the_tree(
+    archive: NfsArchive,
+    root: Path,
+    runner: _Runner,
+    tmp_path: Path,
+    ws: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another pod's persist clears the old generation's pack between this
+    restore's listing and its size check. That is a missing pack, not a failed
+    reopen."""
+    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    (pack,) = root.glob("item-1.pack.*.tar")
+    real_stat = Path.stat
+
+    def stat(self: Path, **kwargs):
+        if self.name == pack.name:
+            raise FileNotFoundError(self)
+        return real_stat(self, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    runner.calls.clear()
+    await archive.restore("item-1", tmp_path / "out")
+    assert len(runner.rsyncs()) == 1 and runner.tars() == []
+
+
 async def test_a_half_written_pack_is_never_used(
     archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
 ) -> None:
@@ -308,6 +348,24 @@ async def test_a_pack_that_fails_mid_extract_leaves_nothing_behind_and_walks_the
     assert await archive.restore("item-1", out) is True
     assert len(runner.tars()) == 1, "the pack was never tried — the test proves nothing"
     assert seen == [[]], "the tree was copied over a half-extracted pack"
+
+
+async def test_a_pack_that_fails_to_extract_is_reported(
+    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path, caplog
+) -> None:
+    """The fallback is silent to the user — the reopen is just slow again — so
+    the operator's only way to learn that packs are being made and not used is
+    the host log. The host sets no log level, so it has to be a warning."""
+    await archive.persist("item-1", ws, delete=True, pack_guard=_quiet)
+    (pack,) = root.glob("item-1.pack.*.tar")
+    pack.write_bytes(b"\xff" * pack.stat().st_size)  # right size, not a tar
+
+    with caplog.at_level(logging.WARNING, logger="sandbox_host.nfs_archive"):
+        await archive.restore("item-1", tmp_path / "out")
+
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    assert "item-1" in record.getMessage() and pack.name in record.getMessage()
 
 
 async def test_restore_without_a_generation_walks_the_tree(

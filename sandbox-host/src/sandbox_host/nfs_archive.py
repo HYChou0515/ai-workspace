@@ -32,12 +32,15 @@ the tree": slow, never wrong. All three names sit BESIDE the item dir, where a
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # A runner takes the rsync argv and returns (returncode, stderr) — the seam that
 # lets tests assert the command without shelling out.
@@ -256,11 +259,21 @@ class NfsArchive:
         pack = await asyncio.to_thread(self._whole_pack, item_id, gen)
         if pack is None:
             return False
-        rc, _err = await self._run(
+        rc, err = await self._run(
             [self._tar, "-C", str(target), "-xf", str(pack), "--no-same-owner"]
         )
         if rc == 0:
             return True
+        # Nobody else sees this: the reopen is just slow again. The host sets no
+        # log level, so anything quieter than a warning never reaches the pod log.
+        logger.warning(
+            "archive: pack %s for item %s did not extract (tar exited %d: %s); "
+            "walking the tree instead",
+            pack.name,
+            item_id,
+            rc,
+            err.decode(errors="replace").strip(),
+        )
         await asyncio.to_thread(_empty_dir, target)
         return False
 
