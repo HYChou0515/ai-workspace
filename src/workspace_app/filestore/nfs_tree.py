@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Sequence
@@ -33,6 +34,13 @@ from ..sandbox.walk import scandir_lister, walk_tree
 from .protocol import FileExists, FileNotFound
 
 logger = logging.getLogger(__name__)
+
+# What sandbox-host leaves BESIDE an item's tree (docs/plan-archive-pack.md):
+# `<item>.gen`, its `.gen.tmp`, `<item>.pack.<gen>-<bytes>.tar` and the pack's
+# `.pack.tmp`. Matched whole, after the item's own prefix — item ids are free
+# text, so `a.pack.x/` is another item and `a.pack.notes.txt` nobody's pack.
+# The host's `NfsArchive` is the oracle (tests/filestore/test_nfs_tree_purge_pack.py).
+_BESIDE_RE = re.compile(r"\.gen(\.tmp)?|\.pack\.([0-9a-f]{32}-[0-9]+\.tar|tmp)")
 
 
 def _check_ws(workspace_id: str) -> str:
@@ -269,6 +277,18 @@ class NfsTreeFileStore:
         def _rm() -> None:
             with contextlib.suppress(FileNotFoundError):
                 shutil.rmtree(item_root)
+            # The host's packed copy is a whole workspace's worth of bytes; left
+            # here it belongs to no item and nothing would ever remove it.
+            prefix = item_root.name
+            try:
+                beside = list(os.scandir(self._root))
+            except FileNotFoundError:
+                return
+            for entry in beside:
+                rest = entry.name[len(prefix) :]
+                if entry.name.startswith(prefix) and _BESIDE_RE.fullmatch(rest):
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(entry.path)
 
         await asyncio.to_thread(_rm)
 
