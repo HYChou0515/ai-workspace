@@ -1320,7 +1320,8 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 **確認做完**
 
-- host 開機那一行 echo 帶 `archive_pack=1`：`kubectl logs <sandbox-host-pod> | grep archive_pack`。
+- host 開機那一行 echo 帶 `archive_pack=1`，**而且同一行的 `nfs_root=` 不是 `None`**（沒有 NFS 封存就什麼都不打包）：
+  `kubectl logs <sandbox-host-pod> | grep archive_pack`。
 - 一個 item 被回收（閒置 8 小時）之後：`ls -la "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar` 有一個檔。
 - 再打開那個 item：等待時間比之前短；host log 裡**沒有** `did not extract`
   （`kubectl logs <sandbox-host-pod> --since=15m | grep "did not extract"`）。有的話 host 退回逐檔複製，訊息裡有 tar 的錯誤。

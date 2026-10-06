@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,30 @@ async def test_the_generation_changes_before_the_tree_is_written(root: Path, ws:
     assert seen[1] == _gen(root, "item-1") != first, (
         "rsync ran while the generation still named the previous tree"
     )
+
+
+async def test_two_persists_of_one_item_can_change_the_generation_at_once(
+    archive: NfsArchive, root: Path, ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing serialises persists of one item: a turn-end flush and another
+    pod's checkpoint sweep can arrive together, each changing the generation on
+    its own thread. Overlapping persists were harmless before there was a
+    generation, and must stay so — a shared tmp name made the second rename
+    find nothing and the persist fail."""
+    import sandbox_host.nfs_archive as module
+
+    real_replace = os.replace
+    entered: list[int] = []
+
+    def replace(src, dst):
+        if not entered:  # the other persist's whole swap lands in between
+            entered.append(1)
+            archive._new_generation("item-1")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(module.os, "replace", replace)
+    await archive.persist("item-1", ws, delete=False)
+    assert entered and _gen(root, "item-1")
 
 
 # ── who packs ────────────────────────────────────────────────────────────────

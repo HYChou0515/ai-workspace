@@ -36,11 +36,11 @@ from .protocol import FileExists, FileNotFound
 logger = logging.getLogger(__name__)
 
 # What sandbox-host leaves BESIDE an item's tree (docs/plan-archive-pack.md):
-# `<item>.gen`, its `.gen.tmp`, `<item>.pack.<gen>-<bytes>.tar` and the pack's
-# `.pack.tmp`. Matched whole, after the item's own prefix — item ids are free
-# text, so `a.pack.x/` is another item and `a.pack.notes.txt` nobody's pack.
+# `<item>.gen`, its `.gen.<gen>.tmp`, `<item>.pack.<gen>-<bytes>.tar` and the
+# pack's `.pack.tmp`. Matched whole, after the item's own prefix — item ids are
+# free text, so `a.pack.x/` is another item and `a.pack.notes.txt` nobody's pack.
 # The host's `NfsArchive` is the oracle (tests/filestore/test_nfs_tree_purge_pack.py).
-_BESIDE_RE = re.compile(r"\.gen(\.tmp)?|\.pack\.([0-9a-f]{32}-[0-9]+\.tar|tmp)")
+_BESIDE_RE = re.compile(r"\.gen(\.[0-9a-f]{32}\.tmp)?|\.pack\.([0-9a-f]{32}-[0-9]+\.tar|tmp)")
 
 
 def _check_ws(workspace_id: str) -> str:

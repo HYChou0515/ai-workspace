@@ -15,6 +15,7 @@ The host is the oracle for what those files are called.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 from pathlib import Path
 
@@ -57,16 +58,28 @@ async def _reap(root: Path, item: str, tmp_path: Path) -> None:
     await archive.persist(item, ws, delete=True, pack_guard=lambda: True)
 
 
-async def test_purge_removes_the_items_pack_and_generation(tmp_path: Path) -> None:
+async def test_purge_removes_the_items_pack_and_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "nfs"
     fs = NfsTreeFileStore(root)
     await fs.write("work-item:1", "/a.txt", b"alpha")
     await _reap(root, "work-item:1", tmp_path)
     beside = sorted(p.name for p in root.iterdir() if p.name != "work-item:1")
     assert any(".pack." in n for n in beside) and "work-item:1.gen" in beside, beside
-    # What a host that died mid-write leaves: `_new_generation`'s tmp and
-    # `_pack_dir`'s tmp (sandbox-host/src/sandbox_host/nfs_archive.py).
-    (root / "work-item:1.gen.tmp").write_text("x")
+    # What a host that died mid-write leaves. The generation's tmp comes from
+    # the host itself, stopped before its rename; the pack's tmp is a fixed
+    # name (`_pack_dir` in sandbox-host/src/sandbox_host/nfs_archive.py).
+    archive = _host_archive_class()(root, runner=_rsync_free)
+
+    def died(src, dst):
+        raise SystemExit("host died before the rename")
+
+    monkeypatch.setattr("os.replace", died)
+    with pytest.raises(SystemExit):
+        archive._new_generation("work-item:1")
+    monkeypatch.undo()
+    assert any(n.endswith(".tmp") for n in os.listdir(root)), os.listdir(root)
     (root / "work-item:1.pack.tmp").write_text("x")
 
     await fs.purge("work-item:1")

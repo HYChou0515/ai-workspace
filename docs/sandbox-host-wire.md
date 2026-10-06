@@ -90,7 +90,7 @@ host 公告它實際會套的天花板,由 **enforcer 自己回答**(問 sandbox
 client 因此照舊可用。
 
 **`pack`([設計](plan-archive-pack.md))**:預設 `false`;app 只在回收(全域閒置、沙盒要拆)時送 `true`。
-`delete: true` 的對齊真的跑了、而且這個沙盒當下沒有別的請求在處理時,host 在樹旁邊寫
+`SANDBOX_HOST_ARCHIVE_PACK` 開著、`delete: true` 的對齊真的跑了、而且這個沙盒當下沒有別的請求在處理時,host 在樹旁邊寫
 `{nfs_root}/{item_id}.pack.<gen>-<位元組數>.tar`;之後的 `create` 在名字對得上現在的 `.gen`、大小對得上名字時解開它,不再逐檔 rsync;
 對不上、或解開失敗(清空目錄、印 warning)就照舊逐檔 rsync。
 每一次 `persist` 都會先換掉 `{item_id}.gen`,所以打包檔只在下一次寫回之前有效。舊 host 不認得這個

@@ -18,14 +18,14 @@ never here (#492 Q3 / #504).
 
 The packed copy (docs/plan-archive-pack.md). Restoring the tree costs one NFS
 round trip per path — 88,889 paths took 58 s, at the ingress timeout — so a
-reconciling persist on reap may also leave ``<root>/<item>.pack.<gen>.tar``, a
+reconciling persist on reap may also leave ``<root>/<item>.pack.<gen>-<bytes>.tar``, a
 single file the reopen path reads in one sequential stream. The TREE stays the
 truth; the pack is a cache whose validity is its NAME: every write to the tree
 first replaces ``<root>/<item>.gen``, so a pack made before that write is named
 after a generation that is no longer current and is never chosen. No delete has
 to win a race and nothing has to be verified after publishing. Every failure —
 a stale name, a half-written tmp, a tar that does not extract — ends as "walk
-the tree": slow, never wrong. All three names sit BESIDE the item dir, where a
+the tree": slow, never wrong. Every name it writes sits BESIDE the item dir, where a
 ``--delete`` reconcile of the tree cannot reach them.
 """
 
@@ -146,10 +146,13 @@ class NfsArchive:
         Written before the tree is touched: a pack whose name carries the old
         generation must already be stale when the first byte of the new tree
         lands. Replaced atomically (tmp + rename), so a reader sees one value or
-        the other. The cleanup is housekeeping, not correctness — the name
-        already makes those files unusable."""
+        the other. The tmp is named after the generation it carries: nothing
+        serialises two persists of one item (a turn-end flush and another pod's
+        checkpoint), and a shared tmp name made the second rename find nothing.
+        The cleanup is housekeeping, not correctness — the name already makes
+        those files unusable."""
         gen = uuid.uuid4().hex
-        tmp = self._root / f"{_check_item(item_id)}.gen.tmp"
+        tmp = self._root / f"{_check_item(item_id)}.gen.{gen}.tmp"
         tmp.write_text(gen)
         os.replace(tmp, self._root / f"{item_id}.gen")
         for path in self._pack_files(item_id):

@@ -160,7 +160,7 @@
 | [plan-wui-deploy.md](plan-wui-deploy.md) | WUI「Deploy」：一個直接落在頁面上的 URL |
 | [plan-wui-overview.md](plan-wui-overview.md) | WUI 總覽：列出所有已部署 WUI 的一頁 |
 | [plan-wui-overview-icon-favourites.md](plan-wui-overview-icon-favourites.md) | WUI 總覽：頁面自己的 icon 與瀏覽者的最愛 |
-| [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
+| [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
 
 ## 各 issue 的計畫
 

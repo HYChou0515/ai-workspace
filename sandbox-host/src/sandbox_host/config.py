@@ -51,7 +51,7 @@ class SandboxHostSettings:
     # it back via rsync (host-local, so no app↔host network in the bulk path).
     # None = no archive (the transitional / local-dev default).
     nfs_root: str | None = None
-    # docs/plan-archive-pack.md: on reap, also leave `<item>.pack.<gen>.tar`
+    # docs/plan-archive-pack.md: on reap, also leave `<item>.pack.<gen>-<bytes>.tar`
     # beside the tree so the reopen reads ONE file instead of walking every path.
     # Costs up to ~2× archive space for idle items. Off ⇒ never pack, never read
     # a pack: restore is exactly the tree walk.
