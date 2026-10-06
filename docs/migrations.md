@@ -1283,15 +1283,18 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 - app 判定一個 item **全域閒置**（8 小時，`create_app` 的預設，沒有設定 key）、要回收它的沙盒時，送給 host 的 `persist`
   多帶 `pack: true`。turn 結束、回合中的 checkpoint、關機、使用者關閉環境都**不**帶。
-- host 收到之後：照舊把沙盒 rsync 回 `$SANDBOX_HOST_NFS_ROOT/<item>/`，然後在旁邊寫
+- host 收到之後：照舊把沙盒 rsync 回 `$SANDBOX_HOST_NFS_ROOT/<item>/`，並記下這個沙盒「砍的時候要打包」；
+  app 緊接著送的 kill（`DELETE /sandboxes/{rid}`）在拆掉沙盒之前，在樹旁邊寫
   `<item>.pack.<gen>-<位元組數>.tar`（整個 workspace 的一個 tar）。下次開這個 item 時，host 解開這一個檔，
   不再逐個路徑從 NFS 複製——還原的成本從「路徑數 × 一次 NFS 往返」變成「一次讀一個大檔」。
   回報的那個 item 有 88,889 個路徑，逐路徑複製花了 58 秒，壓在 ingress 預設的 60 秒上。
 - 每一次 `persist`（不論有沒有打包）**先**把 `$SANDBOX_HOST_NFS_ROOT/<item>.gen` 換成新的值，並刪掉這個 item
   舊的打包檔。打包檔名字裡的 `<gen>` 不等於現在的 `.gen`、或檔案大小不等於名字上的位元組數，就不會被用——
   所以打包檔只會在「回收之後、下次寫回之前」那段時間存在並被讀到。
-- 打包時 host 正在處理這個沙盒的其他請求（還在跑的 exec、打包途中進來的任何請求），就不打包、或丟掉打包到一半的檔；
-  下次開就照舊逐檔複製。任何失敗的結果都只是「慢」，不是「錯」：樹永遠是真相。
+- 打包期間這個沙盒**不接任何請求**：host 先把它關起來，之後進來的請求（任何 app pod 的 checkpoint、檔案寫入、exec）
+  直接得到「沙盒不見了」——它本來幾秒後就會不見。關起來之前就在跑、還沒結束的請求（例如還在跑的 exec）→ 不打包。
+  打包失敗只印 warning，沙盒照砍；下次開就照舊逐檔複製。這個 PR 自己的失敗都只會「慢」，不會「錯」：樹永遠是真相。
+  會「錯」的只有下面兩條規則沒做到的情況。
 
 **資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。NFS 上多兩種檔，都在 item 目錄**旁邊**，不在裡面：
 `<item>.gen`（幾十個位元組，每個寫過的 item 都有，開關關掉也會寫）與 `<item>.pack.*.tar`。
@@ -1310,13 +1313,25 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
     本身就是逐路徑的 NFS 往返，等於沒做——所以這一條擋不了，只能靠規則。
   - 漏做的症狀：那個 item 下次打開時是**改之前**的內容，而且 turn 結束的寫回會把樹也對齊成改之前的樣子——你的修改被**無聲地撤銷**。
     刪打包檔永遠安全：最壞是下次開回到逐檔複製的速度。
+- **沒有這個 PR 的 sandbox-host 也算「不經過 host」**：它寫樹不換 `.gen`、也不刪打包檔。所以新舊版本的 host 同時在跑的期間
+  （rollout 途中、回滾之後），新版打的包可能被舊版的寫入繞過。處理方式在下面「k8s · CI 側」的第二項。
 
 **k8s · CI 側**
 
 - **sandbox-host 要重 build、重 deploy 才有效果**（`sandbox-host/` 是獨立的 uv 專案和 image）。
-  - 什麼時候：任何時候。rollout 順序自由：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
+  - 什麼時候：任何時候；和 app 的先後順序自由：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
   - 不需要新權限、新 volume、新 manifest：`tar` 是 base image（Debian bookworm）本來就有的 GNU tar 1.34，打包檔寫在既有的 NFS 掛載上。
   - 漏做的症狀：沒有壞處，只是還原照舊逐檔複製。
+- **sandbox-host 每次從「沒有這個 PR 的版本」滾到「有的版本」（第一次上線、回滾之後再上線），在 rollout 前、以及 rollout
+  完成（所有 sandbox-host pod 都是新版）後，各刪一次所有打包檔**：
+  ```bash
+  find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete
+  ```
+  - 為什麼：新版 pod 回收某個 item 時打了包，同一個 item 接著在還沒換掉的舊版 pod 上被重開、修改、寫回——舊版寫回不換 `.gen`，
+    那個打包檔仍然被當成有效。rollout 前那次清掉回滾前留下的打包檔，rollout 後那次清掉新舊並存期間打的。第一次上線時
+    rollout 前那次什麼都不會刪。
+  - 漏做的症狀：極少數在新舊並存期間被回收又被重開的 item，下次打開時回到修改前的內容，修改被無聲地撤銷（同上一條規則）。
+  - 回滾本身（滾回沒有這個 PR 的版本）不需要做任何事：舊版不讀打包檔。
 
 **確認做完**
 
