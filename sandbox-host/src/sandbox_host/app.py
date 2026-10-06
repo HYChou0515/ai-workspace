@@ -111,9 +111,10 @@ class _PersistBody(BaseModel):
     # ready sandbox); False ⇒ additive-only mid-turn durability checkpoint.
     delete: bool = False
     # docs/plan-archive-pack.md: the app sets this on REAP only — the one moment
-    # the item is globally idle and the sandbox is about to go. The archive packs
-    # after the reconcile if, and only if, nobody is touching the sandbox.
-    # Defaults off, so an app that never sends it gets today's persist.
+    # the item is globally idle and the sandbox is about to go. The persist only
+    # records the request; the kill that follows packs, with the sandbox closed
+    # to every other request. Defaults off, so an app that never sends it gets
+    # today's persist.
     pack: bool = False
 
 
@@ -356,8 +357,14 @@ class _HostController:
         tool_cache: ToolCache | None = None,
         clock: Callable[[], float],
         archive: NfsArchive | None = None,
+        pack_drain_s: float = 60.0,
     ) -> None:
         self.sandbox = sandbox
+        # How long a packing kill waits for requests that began before it (a
+        # checkpoint's rsync, an exec) to finish. Nothing new can start once the
+        # sandbox is closed, so the wait ends on its own; the bound is for an
+        # exec that would outlast it, and then the sandbox goes without a pack.
+        self._pack_drain_s = pack_drain_s
         self.idle_ttl = idle_ttl
         self._tool_cache = tool_cache
         self.clock = clock
@@ -439,8 +446,10 @@ class _HostController:
 
         ``pack`` (a reap's write-back) asks for a pack when the sandbox is torn
         down — remembered only if the reconcile RAN, since only then is the tree
-        a copy of the dir. Later write-backs do not undo the request: they are
-        the checkpoints that made packing here impossible."""
+        a copy of the dir. A later checkpoint (``delete`` off) leaves the request
+        standing — checkpoints are what made packing here impossible; a later
+        reconcile without ``pack`` withdraws it, since only a sandbox back in use
+        (a turn ending) sends one."""
         item = self._item_of.get(rid)
         if self._archive is None or item is None:
             return
@@ -450,10 +459,14 @@ class _HostController:
         reconciled = await self._archive.persist(
             item, self.sandbox.workspace_dir(handle), delete=delete
         )
-        if pack and reconciled:
+        if pack and reconciled and self._archive.packing:
             self.pack_on_kill.add(rid)
+        elif delete and not pack:
+            # A turn-end reconcile: the sandbox is in use again (the reap's kill
+            # never came), so a later close is a plain teardown.
+            self.pack_on_kill.discard(rid)
 
-    async def kill(self, rid: str) -> None:
+    async def kill(self, rid: str, *, own: int = 0) -> None:
         """Forget it only once it is really gone.
 
         Popping first meant a kill that raised left a sandbox still running and
@@ -463,14 +476,19 @@ class _HostController:
         already-unknown handle raises `SandboxNotFound` from the backend before
         anything is dropped, which is the same answer as before.
 
-        Closed to requests FIRST, then packed if a reap asked, then killed. A
-        kill that raises reopens the sandbox: it is still running, and a closed
-        one could never be retried."""
+        A kill a reap asked to pack is closed to requests FIRST, then packed,
+        then killed; every other kill serves requests until the sandbox is gone,
+        as it always did. A kill that raises reopens the sandbox: it is still
+        running, and a closed one could never be retried. ``own`` is how many of
+        the in-flight requests are the caller's — 1 for the DELETE route, 0 for
+        the host's own reaper."""
         handle = SandboxHandle(id=rid)
-        self.closing.add(rid)
+        packing = rid in self.pack_on_kill
+        if packing:
+            self.closing.add(rid)
         try:
-            if rid in self.pack_on_kill:
-                await self._pack(rid, handle)
+            if packing:
+                await self._pack(rid, handle, own)
             await self.sandbox.kill(handle)
         finally:
             self.closing.discard(rid)
@@ -478,14 +496,26 @@ class _HostController:
         self._last_active.pop(rid, None)
         self._item_of.pop(rid, None)
 
-    async def _pack(self, rid: str, handle: SandboxHandle) -> None:
+    async def _pack(self, rid: str, handle: SandboxHandle, own: int) -> None:
         """Best effort: the reap is the sandbox going away, the pack only makes
-        the next reopen fast. Skipped while any OTHER request is still running —
-        closing turns new ones away, but one that began before (an exec still
-        streaming) may be writing the dir."""
+        the next reopen fast. Closing turns new requests away; ones that began
+        before (a checkpoint's rsync — on a big item, nearly always one — or an
+        exec) are waited for, up to the bound, and then it is no pack."""
         item = self._item_of.get(rid)
-        if self._archive is None or item is None or self.in_flight.get(rid, 0) > 1:
+        if self._archive is None or item is None:
             return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._pack_drain_s
+        while self.in_flight.get(rid, 0) > own:
+            if loop.time() >= deadline:
+                logger.warning(
+                    "host: no pack for %s (item %s): a request was still running after %gs",
+                    rid,
+                    item,
+                    self._pack_drain_s,
+                )
+                return
+            await asyncio.sleep(0.05)
         try:
             if await self.sandbox.is_ready(handle):
                 await self._archive.pack(item, self.sandbox.workspace_dir(handle))
@@ -553,6 +583,7 @@ def make_host_app(
     readiness: ReadinessCheck | None = None,
     archive: NfsArchive | None = None,
     tool_resolver: ToolResolver | None = None,
+    pack_drain_s: float = 60.0,
 ) -> FastAPI:
     app = FastAPI()
     controller = _HostController(
@@ -560,6 +591,7 @@ def make_host_app(
         idle_ttl=idle_ttl,
         clock=clock,
         archive=archive,
+        pack_drain_s=pack_drain_s,
         tool_cache=tool_resolver.cache if tool_resolver is not None else None,
     )
     app.state.controller = controller
@@ -730,7 +762,7 @@ def make_host_app(
 
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:
-        await controller.kill(rid)
+        await controller.kill(rid, own=1)  # this DELETE is one of the in-flight
 
     @app.put("/sandboxes/{rid}/file", status_code=204)
     async def upload(rid: str, path: str, request: Request) -> None:

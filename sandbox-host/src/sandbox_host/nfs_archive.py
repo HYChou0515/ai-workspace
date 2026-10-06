@@ -89,6 +89,12 @@ class NfsArchive:
         # the restore is exactly the tree walk it was before.
         self._pack = pack
 
+    @property
+    def packing(self) -> bool:
+        """Whether a pack would be made (``SANDBOX_HOST_ARCHIVE_PACK``) — so the
+        host closes a sandbox for one only when it would."""
+        return self._pack
+
     def _item_dir(self, item_id: str) -> Path:
         return self._root / _check_item(item_id)
 

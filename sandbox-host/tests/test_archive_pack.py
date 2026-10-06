@@ -217,9 +217,7 @@ async def test_a_write_during_the_tar_leaves_a_pack_nobody_will_choose(
     assert len(runner.rsyncs()) == 1 and runner.tars() == []
 
 
-async def test_a_tar_that_fails_publishes_nothing_and_leaves_no_tmp(
-    root: Path, ws: Path
-) -> None:
+async def test_a_tar_that_fails_publishes_nothing_and_leaves_no_tmp(root: Path, ws: Path) -> None:
     async def failing(argv: list[str]) -> tuple[int, bytes]:
         if Path(argv[0]).name != "tar":
             return 0, b""
@@ -270,6 +268,8 @@ async def test_two_packs_of_one_item_do_not_share_a_tmp(
 
 async def test_packing_disabled_packs_nothing(root: Path, runner: _Runner, ws: Path) -> None:
     archive = NfsArchive(root, runner=runner, pack=False)
+    assert archive.packing is False, "the host would close sandboxes for packs never made"
+    assert NfsArchive(root, runner=runner).packing is True
     await archive.persist("item-1", ws, delete=True)
     assert await archive.pack("item-1", ws) is False
     assert _packs(root, "item-1") == [] and runner.tars() == []
