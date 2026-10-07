@@ -71,6 +71,7 @@ from .schema import (
     SandboxSettings,
     ServerSettings,
     Settings,
+    SkillHubSettings,
     ToolsSettings,
     ViewPluginsSettings,
     WikiSettings,
@@ -742,6 +743,8 @@ _TOP_SCHEMA: dict[str, Any] = {
     "chat_video": _dataclass_keys(ChatVideoSettings),
     # #847/#848: where runtime view plugins are installed.
     "view_plugins": _dataclass_keys(ViewPluginsSettings),
+    # plan-skill-hub-history G2: where the skill hub's git repos live.
+    "skill_hub": _dataclass_keys(SkillHubSettings),
 }
 
 
@@ -1113,6 +1116,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         failover=_build_failover(d["failover"]),
         chat_video=_build(ChatVideoSettings, d["chat_video"]),
         view_plugins=_build(ViewPluginsSettings, d["view_plugins"]),
+        skill_hub=_build(SkillHubSettings, d["skill_hub"]),
     )
 
 
