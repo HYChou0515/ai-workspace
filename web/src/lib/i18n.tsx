@@ -2146,6 +2146,8 @@ export const messages = {
   },
   "skillHub.history.kind.transfer": { "zh-TW": "轉移給 {owner}", en: "Transferred to {owner}" },
   "skillHub.history.audience": { "zh-TW": "開放給：{who}", en: "Open to: {who}" },
+  "skillHub.history.audience.everyone": { "zh-TW": "所有人", en: "everyone" },
+  "skillHub.history.audience.group": { "zh-TW": "一個群組", en: "a group" },
   "skillHub.history.kind.permission": {
     "zh-TW": "可見範圍改為「{visibility}」",
     en: "Visibility set to “{visibility}”",

@@ -30,6 +30,7 @@ import contextlib
 import datetime as dt
 import difflib
 import hashlib
+import logging
 import random
 import re
 import uuid
@@ -62,6 +63,8 @@ if TYPE_CHECKING:
 #: this viewer may not read it (the owner made it private / restricted them out
 #: — Q5). `deleted`: soft-deleted or never existed — from outside there is no
 #: difference (Q10).
+logger = logging.getLogger(__name__)
+
 UpstreamState = Literal["live", "unpublished", "deleted"]
 
 #: Where an entry published BEFORE the git store kept its files: a synthetic
@@ -83,6 +86,10 @@ _FIRST_PUBLISH_TRIES = 5
 #: A pending draft older than this is a dead publisher's, not one in flight
 #: (§7 Q3): far longer than a publish takes.
 _DRAFT_TTL = dt.timedelta(minutes=10)
+#: What a publish says when its row went away mid-publish (round 3).
+_VANISHED = (
+    "the skill hub entry for {name!r} was removed while it was being published — publish it again"
+)
 #: How many times a row write re-reads after losing its compare-and-swap.
 _WRITE_TRIES = 5
 # Versions whose sha256 map `file_sha256s` keeps; a version never changes, so
@@ -421,8 +428,9 @@ class HistoryEvent(Struct, kw_only=True):
     review_notes: list[str]
     #: On a rollback: the revision that first published the version brought back.
     to_revision: str = ""
-    #: On a permission change: the visibility after it, and who may read it
-    #: (`read_content`'s `user:` / `group:` subjects) — G24's 「含名單」.
+    #: On a permission change: the visibility after it, and — when it is
+    #: `restricted` — who may read it (`read_content`'s `user:` / `group:`
+    #: subjects), G24's 「含名單」. Empty for private / public.
     visibility: str = ""
     audience: list[str] = field(default_factory=list)
     current: bool = False
@@ -789,7 +797,11 @@ class SkillHubStore:
                         "permission",
                         row.owner,
                         visibility=row.permission.visibility,
-                        audience=list(row.permission.read_content),
+                        # The lists only mean something while restricted: a
+                        # private or public row names nobody (round 3).
+                        audience=list(row.permission.read_content)
+                        if row.permission.visibility == "restricted"
+                        else [],
                     )
                 )
             prev = row
@@ -898,7 +910,7 @@ class SkillHubStore:
             raise VersionMoved(entry_id) from None
         if not moved:
             raise VersionMoved(entry_id)
-        await self._change(
+        written = await self._change(
             entry_id,
             lambda row: msgspec.structs.replace(
                 row,
@@ -909,6 +921,12 @@ class SkillHubStore:
             ),
             current_commit=old.commit,
         )
+        if written is None:
+            # Not recorded: the entry was deleted meanwhile (round 3), or a
+            # publish moved master on — which is the current version now.
+            if self.get(entry_id) is None:
+                raise UnknownRevision(revision_id)
+            raise VersionMoved(entry_id)
         return old.commit
 
     async def migrate_legacy(self) -> MigrationReport:
@@ -1058,11 +1076,16 @@ class SkillHubStore:
                 with contextlib.suppress(ResourceIDNotFoundError):
                     self._rm().permanently_delete(entry_id)
                 raise
-            # The draft is this call's own row: nobody else writes it.
-            await self._change(
-                entry_id,
-                lambda draft: msgspec.structs.replace(row, commit=commit, pending=False),
-            )
+            # The draft is this call's own row: nobody else writes it — but it
+            # can be cleared as a dead publisher's (round 3).
+            if (
+                await self._change(
+                    entry_id,
+                    lambda draft: msgspec.structs.replace(row, commit=commit, pending=False),
+                )
+                is None
+            ):
+                raise ValueError(_VANISHED.format(name=name))
             return entry_id
 
         current = self.get(existing)
@@ -1072,9 +1095,15 @@ class SkillHubStore:
             # goes in first, so the new one has it as parent (round 1,
             # conformance #3) — otherwise the migration would skip a row that
             # already has a commit, and the old version would be gone.
-            await self._ensure_in_git(existing, current)
+            dropped: list[str] = []
+            await self._ensure_in_git(existing, current, dropped=dropped)
+            if dropped:
+                logger.warning(
+                    "skill hub: %s moved into git without its own top-level .gitattributes",
+                    existing,
+                )
         commit = await self._commit_on_master(existing, payload, author=owner, name=name)
-        await self._change(
+        written = await self._change(
             existing,
             lambda now: msgspec.structs.replace(
                 now,
@@ -1088,6 +1117,10 @@ class SkillHubStore:
             ),
             current_commit=commit,
         )
+        # `None` either way: another publish moved master on (its version is
+        # current, this one stays in git), or the entry was deleted meanwhile.
+        if written is None and self.get(existing) is None:
+            raise ValueError(_VANISHED.format(name=name))
         return existing
 
     async def _commit_on_master(

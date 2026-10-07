@@ -1465,8 +1465,10 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   - 也修得好 rollout 期間舊 pod 寫壞的列（見下面「rollout 期間」）：跑完之後那些條目指回 repo 裡的版本。
   - `duplicates` 不是空的：同一個人有兩個同名條目（以前的競態留下的）。這個指令**不合併**，兩個都搬；請那位擁有者決定留哪一個，
     在 skill hub 頁面刪掉另一個（刪除只有擁有者能按）。
+  - `gitattributes_dropped` 不是空的：那些舊條目最上層有自己的 `.gitattributes`，搬進 git 時拿掉了（rollout 後才第一次重新發布、順帶搬進去的條目不在回報裡，只在 API pod 的 warning log：`moved into git without its own top-level .gitattributes`）（那個位置是
+    skill hub 的 LFS 規則）。舊檔案位置裡的原件還在；需要的話請擁有者把它移到子資料夾後重新發布。
   - 舊的檔案位置（FileStore 裡 `skill-hub:<id>:…` 的 namespace）**不再刪除**：搬完、重新發布、刪除條目都不刪
-    （以前重新發布與刪除會釋放舊版的檔案）。佔的空間停在上線那天的大小，不再增加——新版本都進 git。
+    （以前重新發布與刪除會釋放舊版的檔案）。新 pod 寫的新版本都進 git，所以佔的空間在 rollout 結束後就不再增加（rollout 期間舊 pod 重新發布仍會寫進新的舊位置）。
 - **rollout 期間（新舊 pod 同時在跑）**：
   - 舊 pod 讀不到新 pod **首次發布**的條目（詳情頁 500、安裝出一個只有 `.origin` 的資料夾）；搬過的條目，舊 pod 讀到的是
     搬移前的版本（舊檔案位置還在）。
@@ -1480,8 +1482,6 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
     master（500 與搬移前的版本就修回來了；舊 pod 重新發布的內容除外，見上）。
   - 降版（回到這個 PR 之前的 image）：首次發布在 git 的條目讀不到（500）；搬過的條目讀得到，但是是搬移前的版本——之後在
     git 裡發布的版本都看不到。
-  - `gitattributes_dropped` 不是空的：那些舊條目最上層有自己的 `.gitattributes`，搬進 git 時拿掉了（那個位置是
-    skill hub 的 LFS 規則）。舊檔案位置裡的原件還在；需要的話請擁有者把它移到子資料夾後重新發布。
 - 不是 superuser 打這條路由回 404。
 
 **k8s · CI 側** — API image 多裝 `git`（`docker/Dockerfile`）；不需要 `git-lfs`（大檔由平台自己寫成 LFS 格式）。

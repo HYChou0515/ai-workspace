@@ -59,7 +59,11 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
     const user = subjectUser(subject);
     if (user !== null) return personName(user);
     const group = subjectGroup(subject);
-    return group !== null ? (groups.find((g) => g.resource_id === group)?.name ?? group) : subject;
+    if (group !== null) {
+      // One the viewer cannot pick is named as a group, not by its id.
+      return groups.find((g) => g.resource_id === group)?.name ?? t("skillHub.history.audience.group");
+    }
+    return t("skillHub.history.audience.everyone"); // `all`, the only other subject
   };
   const { data: events, isPending, isError } = useQuery({
     queryKey: qk.skillHubHistory(entry.id),

@@ -565,6 +565,25 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     expect(rows[0]).not.toHaveTextContent("user:");
   });
 
+  it("never prints a subject it cannot name: `all` is everyone, an unknown group is a group", async () => {
+    const history = [
+      ev({
+        revision: "e-1:3",
+        kind: "permission",
+        visibility: "restricted",
+        audience: ["all", "group:g-hidden"],
+        current: true,
+      }),
+      ev({ revision: "e-1:1" }),
+    ];
+    mount(client(OWNED, OPEN, history));
+
+    const rows = within(await timeline()).getAllByRole("listitem");
+    const who = `${word("skillHub.history.audience.everyone")}, ${word("skillHub.history.audience.group")}`;
+    expect(rows[0]).toHaveTextContent(word("skillHub.history.audience", { who }));
+    expect(rows[0]).not.toHaveTextContent("g-hidden");
+  });
+
   it("lists every row newest first, says what each did, and marks the current one", async () => {
     mount(client(detail({}), OPEN, HISTORY));
 

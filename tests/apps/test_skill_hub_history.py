@@ -193,3 +193,30 @@ async def test_a_visibility_row_says_who_it_was_opened_to(store: SkillHubStore) 
         "restricted",
         ["user:bob", "group:qa"],
     )
+
+
+async def test_only_a_restricted_row_names_who_it_was_opened_to(store: SkillHubStore) -> None:
+    """Round 3 (veracity #1): unpublish / republish keep the grant lists, and
+    those lists only mean anything while the entry is restricted — a private
+    row said 「開放給：bob」 to a bob who could not read it."""
+    entry = await _publish(store, V1, "one")
+    for visibility in ("restricted", "private", "public"):
+        await store.set_permission(
+            entry,
+            Permission(visibility=visibility, read_content=["user:bob"]),
+        )
+
+    rows = [(e.visibility, e.audience) for e in await store.history(entry, viewer="alice")]
+
+    assert rows[:3] == [("public", []), ("private", []), ("restricted", ["user:bob"])]
+
+
+async def test_a_management_write_to_a_deleted_entry_records_nothing(store: SkillHubStore) -> None:
+    """Round 3 (veracity #4): the read side of `_change`'s deleted-row case."""
+    entry = await _publish(store, V1, "one")
+    await store.delete(entry)
+
+    await store.set_permission(entry, Permission(visibility="private"))
+    await store.transfer(entry, "bob")
+
+    assert store.get(entry) is None

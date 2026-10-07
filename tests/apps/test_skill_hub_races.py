@@ -287,3 +287,80 @@ async def test_a_transfer_onto_someone_mid_first_publish_is_refused(
     assert store.name_taken("bob", "triage")
     assert not store.name_taken("carol", "triage")
     del alices
+
+
+async def test_a_rollback_whose_entry_was_deleted_meanwhile_says_so(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 3 (defect #2): the lease moved master, the row was gone, and the
+    rollback still answered 200 — an entry nobody can see was "rolled back"."""
+    from workspace_app.apps.skill_hub import UnknownRevision
+
+    entry = await _publish(store, "one")
+    first = spec.get_resource_manager(SkillHubEntry).get(entry).info.revision_id
+    await _publish(store, "two")
+    row = store.get(entry)
+    assert row is not None
+    real_move = store.repos.move_master
+
+    async def move(entry_id, commit, *, expected):  # noqa: ANN001, ANN202
+        moved = await real_move(entry_id, commit, expected=expected)
+        spec.get_resource_manager(SkillHubEntry).delete(entry)  # another pod
+        return moved
+
+    monkeypatch.setattr(store.repos, "move_master", move)
+    with pytest.raises(UnknownRevision):
+        await store.rollback(entry, first, expected=row.commit)
+
+
+@pytest.mark.parametrize("first", [True, False])
+async def test_a_publish_whose_entry_vanished_meanwhile_says_so(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch, first: bool
+) -> None:
+    """Round 3 (defect #3): the version reached git, the row (a first
+    publish's draft, or the entry itself) was gone, and publish returned an
+    id that names nothing."""
+    if not first:
+        await _publish(store, "one")
+    real_move = store.repos.move_master
+
+    async def move(entry_id, commit, *, expected):  # noqa: ANN001, ANN202
+        moved = await real_move(entry_id, commit, expected=expected)
+        spec.get_resource_manager(SkillHubEntry).permanently_delete(entry_id)  # another pod
+        return moved
+
+    monkeypatch.setattr(store.repos, "move_master", move)
+    with pytest.raises(ValueError, match="publish it again"):
+        await _publish(store, "two")
+
+
+async def test_a_republish_moving_an_old_entry_in_says_its_gitattributes_were_left_out(
+    spec: SpecStar,
+    store: SkillHubStore,
+    legacy: MemoryFileStore,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Round 3: the migrate route reports it; a re-publish that moves the
+    entry in first has no report to put it in, so it says so in the log."""
+    old = {"SKILL.md": _md("legacy"), ".gitattributes": b"* text\n"}
+    for rel, data in old.items():
+        await legacy.write("skill-hub:old1:v1", f"/{rel}", data)
+    spec.get_resource_manager(SkillHubEntry).create(
+        SkillHubEntry(
+            owner="alice",
+            name="triage",
+            description="legacy",
+            source_item="i",
+            source_app="rca",
+            source_profile="p",
+            review=SkillHubReview(verdict="ok"),
+            blobs="skill-hub:old1:v1",
+            origin=origin_for("hub", old, entry="old1"),
+        ),
+        resource_id="old1",
+    )
+
+    with caplog.at_level("WARNING"):
+        await _publish(store, "new")
+
+    assert "old1 moved into git without its own top-level .gitattributes" in caplog.text

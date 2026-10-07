@@ -20,7 +20,7 @@ from workspace_app.apps.skill_hub import (
 )
 from workspace_app.apps.skill_hub_git import GitError, SkillHubRepos
 from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
-from workspace_app.apps.skills import SkillError, install_hub_skill, refresh_skill
+from workspace_app.apps.skills import install_hub_skill, refresh_skill
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.perm import Permission
@@ -110,7 +110,11 @@ async def test_a_copy_whose_recorded_version_is_unreadable_refreshes_with_a_reas
     await files.write("inv", f"/.skill/triage/{ORIGIN_FILE}", msgspec.json.encode(broken))
     await _publish(store, {"SKILL.md": _MD + b"v2\n"})
 
-    with pytest.raises(SkillError, match="reset"):
+    # Looked up now, not at import: other tests `reload` the skills module,
+    # after which an imported `SkillError` is a different class (round 3).
+    import workspace_app.apps.skills as skills_now
+
+    with pytest.raises(skills_now.SkillError, match="reset"):
         await refresh_skill(files, "inv", "rca", "p", "triage", hub=store, viewer="bob")
     # The way out the reason names: a forced refresh needs no baseline.
     done = await refresh_skill(
