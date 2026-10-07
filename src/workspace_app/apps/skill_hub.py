@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Literal
 import msgspec
 from msgspec import Struct, field
 from specstar import QB, SpecStar
-from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError, RevisionNotFoundError
 
 from ..perm import Actor, Permission, authorize
 from ..resources.groups import groups_of
@@ -375,6 +375,16 @@ def register_skill_hub(spec: SpecStar) -> None:
         spec.add_model(SkillHubEntry, indexed_fields=["owner", "name", "forked_from"])
 
 
+class UnknownRevision(LookupError):
+    """The revision is not one of this entry's versions."""
+
+
+class VersionMoved(Exception):
+    """The entry's current version is not the one the caller decided against —
+    someone published or rolled back meanwhile (G6). Not retried: the owner
+    chose looking at the version they saw."""
+
+
 class MigrationReport(Struct, kw_only=True):
     """What `SkillHubStore.migrate_legacy` did: the entries it moved into git,
     and every `owner/name` held by more than one entry (left for the operator)."""
@@ -605,6 +615,42 @@ class SkillHubStore:
         current = self.get(entry_id)
         assert current is not None
         await self._manage(entry_id, msgspec.structs.replace(current, owner=owner))
+
+    async def rollback(self, entry_id: str, revision_id: str, *, expected: str) -> str:
+        """Make the version `revision_id` was current in the current one (§4.3).
+
+        `expected` is the commit the owner was looking at; master moves only
+        from it, so a version published since is refused rather than silently
+        discarded. The row takes the OLD revision's content fields — `commit`,
+        `description`, `review`, `referenced_tools` — and keeps today's owner and
+        permission: specstar's `switch` would bring those back too (G18). No new
+        review: that version was reviewed when it was published (G20)."""
+        current = self.get(entry_id)
+        assert current is not None  # the route resolved it a moment ago
+        try:
+            old = self._rm().get_resource_revision(entry_id, revision_id).data
+        # The memory and postgres stores raise `KeyError`; the documented one is
+        # `RevisionNotFoundError`. Either means the entry has no such revision.
+        except (KeyError, RevisionNotFoundError) as e:
+            raise UnknownRevision(revision_id) from e
+        if not isinstance(old, SkillHubEntry) or not old.commit:
+            # A draft, or a revision written before the entry was moved into git.
+            raise UnknownRevision(revision_id)
+        if old.commit == current.commit:
+            return current.commit
+        # The lease is the one check: master is written before the row, so a
+        # row never names a commit master has not reached.
+        if not await self.repos.move_master(entry_id, old.commit, expected=expected):
+            raise VersionMoved(entry_id)
+        row = msgspec.structs.replace(
+            current,
+            commit=old.commit,
+            description=old.description,
+            review=old.review,
+            referenced_tools=list(old.referenced_tools),
+        )
+        await self._tag(entry_id, self._update(entry_id, row), old.commit)
+        return old.commit
 
     async def migrate_legacy(self) -> MigrationReport:
         """Move every entry published before the git store into it (§6, G10):

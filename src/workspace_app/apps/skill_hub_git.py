@@ -272,6 +272,13 @@ class SkillHubRepos:
         )
         return out.decode().strip() if code == 0 else None
 
+    async def parent(self, entry_id: str, commit: str) -> str | None:
+        """The commit `commit` was written on top of; ``None`` for a first version."""
+        code, out = await self._git(
+            entry_id, "rev-parse", "--verify", "-q", f"{commit}^", check=False
+        )
+        return out.decode().strip() if code == 0 else None
+
     async def tagged_revisions(self, entry_id: str) -> dict[str, str]:
         """``{revision id: commit}`` for every revision tag."""
         _code, out = await self._git(

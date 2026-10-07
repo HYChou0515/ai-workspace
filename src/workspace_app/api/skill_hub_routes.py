@@ -27,7 +27,9 @@ from specstar import SpecStar
 from ..apps.skill_hub import (
     SkillHubEntry,
     SkillHubStore,
+    UnknownRevision,
     UpstreamState,
+    VersionMoved,
     matches_query,
     missing_tools_for,
     nest_forks,
@@ -125,6 +127,19 @@ class SkillTransferRequest(BaseModel):
 class SkillTransferred(BaseModel):
     id: str
     owner: str
+
+
+class SkillRollbackRequest(BaseModel):
+    #: The revision to go back to — one row of the history timeline.
+    revision: str
+    #: The commit the page showed as current when the owner chose. Master moves
+    #: only from it, so a version published since is refused, not discarded.
+    expected: str
+
+
+class SkillRolledBack(BaseModel):
+    id: str
+    commit: str
 
 
 class SkillEditTarget(BaseModel):
@@ -343,6 +358,22 @@ def register_skill_hub_routes(
             )
         await hub.transfer(entry_id, new_owner)
         return SkillTransferred(id=entry_id, owner=new_owner)
+
+    @app.post("/skill-hub/entries/{entry_id}/rollback")
+    async def rollback_skill_hub_entry(
+        entry_id: str, body: SkillRollbackRequest
+    ) -> SkillRolledBack:
+        """Make an earlier version the current one (plan-skill-hub-history
+        §4.3). The same owner check as every edit (G19); no new review (G20).
+        409 when the current version is no longer the one the owner saw."""
+        _owned(entry_id, get_user_id())
+        try:
+            commit = await hub.rollback(entry_id, body.revision, expected=body.expected)
+        except UnknownRevision:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+        except VersionMoved:
+            raise HTTPException(status_code=409, detail={"error": "version_moved"}) from None
+        return SkillRolledBack(id=entry_id, commit=commit)
 
     @app.post("/skill-hub/entries/{entry_id}/edit")
     async def edit_skill_hub_entry(entry_id: str) -> SkillEditTarget:
