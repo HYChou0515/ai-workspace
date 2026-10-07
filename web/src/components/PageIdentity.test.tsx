@@ -35,6 +35,7 @@ function open({
   mine = {},
   auto = {},
   personal = {} as Record<string, string>,
+  personalGet = vi.fn(async () => ({ values: personal, updated: {} })),
   providers = [] as EnvProvider[],
   rows = [] as BindingRow[],
 } = {}) {
@@ -61,13 +62,13 @@ function open({
         clear: vi.fn(async () => {}),
       }}
       personalClient={{
-        get: vi.fn(async () => ({ values: personal, updated: {} })),
+        get: personalGet,
         put: vi.fn(async (values: Record<string, string>) => ({ values, updated: {} })),
       }}
       bindingsClient={bindings}
     />,
   );
-  return { bindings };
+  return { bindings, personalGet };
 }
 
 describe("PageIdentityBar", () => {
@@ -102,6 +103,15 @@ describe("PageIdentityBar", () => {
     // `plan-personal-env`: signed in once, on any page that asks for it.
     open({ policy: { ERP_TOKEN: "private_only" }, providers: [ERP_LOGIN], personal: { ERP_TOKEN: "t" } });
     expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
+  });
+
+  it("on a page that asks nothing personal, neither asks for nor waits on my environment variables", async () => {
+    // Round 2 (R1): the bar waited on `/me/env` on every page, though only a
+    // Private first / Private only name can use it.
+    const { personalGet } = open({ providers: [ERP_LOGIN], personalGet: vi.fn(() => new Promise<never>(() => {})) });
+
+    expect(await screen.findByTestId("page-identity-key")).toHaveTextContent("ERP");
+    expect(personalGet).not.toHaveBeenCalled();
   });
 
   it("counts a value the deploy filled in as the viewer's own", async () => {

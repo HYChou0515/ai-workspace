@@ -9,10 +9,12 @@ every item they were left in — the person signs in again and the item keeps
 failing with the expired one. Nothing removes them automatically; run this when
 you choose.
 
-What it removes: from every person's values for every single item, the names
-some loaded sign-in (`server.env_providers`) produces. Nothing else — values a
-person typed under other names, their values for every item, the shared values,
-and what the deploy's SSO said about them all stay. Values are never printed.
+What it removes: from every person's values for a single item, the names
+some loaded sign-in (`server.env_providers`) produces — only where that item's
+policy for the name is Private first / Private only. Nothing else — those names
+in Shared items, values a person typed under other names, their values for
+every item, the shared values, and what the deploy's SSO said about them all
+stay. Values are never printed.
 
 It runs inside the API (`POST /api/admin/env/clear-item-sign-ins`), which uses
 the API's own store and the sign-ins it actually loaded, so the names are this
@@ -51,7 +53,11 @@ PATH = "/api/admin/env/clear-item-sign-ins"
 def run(client: httpx.Client, base: str, *, apply: bool) -> int:
     resp = client.post(f"{base.rstrip('/')}{PATH}", json={"apply": apply})
     if resp.status_code == 403:
-        print("refused: the identity this runs as is not in server.superusers", file=sys.stderr)
+        print(
+            "refused (HTTP 403): the identity this runs as is not in server.superusers"
+            " — or a gateway in front of the API refused it (see --header)",
+            file=sys.stderr,
+        )
         return 1
     if resp.status_code != 200:
         print(f"failed: HTTP {resp.status_code}: {resp.text[:300]}", file=sys.stderr)

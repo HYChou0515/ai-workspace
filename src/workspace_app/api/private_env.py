@@ -466,11 +466,13 @@ def register_private_env_routes(
 
     @app.post("/admin/env/clear-item-sign-ins", response_model=CleanupOut)
     async def clear_item_sign_ins(body: CleanupBody, request: Request) -> CleanupOut:
-        """`plan-personal-env` D10: remove, from every person's values for single
-        items, the names a deploy sign-in produces. Before "my environment
-        variables" a sign-in wrote its token into that one item, and an item's
-        own value wins a name — so those old tokens would shadow a new sign-in
-        everywhere they were left. Run when the operator chooses
+        """`plan-personal-env` D10/A9: remove, from every person's values for
+        single items, the names a deploy sign-in produces — in items whose
+        policy for the name is Private first / Private only. Before "my
+        environment variables" a sign-in wrote its token into that one item,
+        and an item's own value wins a name — so there those old tokens would
+        shadow a new sign-in. A Shared item reads only its own value, so it
+        keeps it. Run when the operator chooses
         (`scripts/clear_item_sign_ins.py`); dry run unless ``apply``.
 
         The names come from the providers this API loaded — the deploy's list,

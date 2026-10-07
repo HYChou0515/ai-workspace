@@ -1021,6 +1021,61 @@ describe("AgentPanel env vars", () => {
     vi.restoreAllMocks();
   });
 
+  it("in an item that never reads my environment variables, neither asks for them nor counts them", async () => {
+    // `plan-personal-env` D2 + round 2 (R1): a Shared name never reads them, so
+    // holding the token there does not satisfy this item, and nothing fetches them.
+    const { privateEnvApi } = await import("../../api/privateEnv");
+    const { personalEnvApi } = await import("../../api/personalEnv");
+    const { api } = await import("../../api");
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
+    const personal = vi
+      .spyOn(personalEnvApi, "get")
+      .mockResolvedValue({ values: { ERP_TOKEN: "t" }, updated: {} });
+    vi.spyOn(api, "getItemTools").mockResolvedValue({
+      tools: [
+        {
+          key: "erp",
+          group: "erp",
+          label: "erp",
+          description: "",
+          default_on: true,
+          pref: "follow",
+          effective: true,
+          env_needs: [{ name: "ERP_TOKEN", description: "", required: true }],
+        },
+      ],
+      updateNeedsClose: false,
+      canClose: false,
+    });
+    vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
+    const { WorkspaceSlugProvider } = await import("../../hooks/useWorkspaceSlug");
+    renderWithQuery(
+      <WorkspaceSlugProvider value="rca">
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            chatId="chat-1"
+            agent={stubAgent()}
+            picker={[]}
+            suggestions={[]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+            envVars={{}}
+            envPolicy={{}}
+            canOpenEnv
+          />
+        </DialogProvider>
+      </WorkspaceSlugProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("env-button")).toHaveAttribute("data-attention", "true"),
+    );
+    expect(personal).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
   it("offers the panel to someone who may keep their own values but not store shared ones", () => {
     // `plan-wui-viewer-login`: a person's OWN values need no `write_meta`, so
     // the button follows `canOpenEnv`; the shared half is read-only for them.

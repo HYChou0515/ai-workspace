@@ -1519,8 +1519,8 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
     本來就不讀「我的環境變數」，留在裡面的值正是它在用的，所以不動。名單是「某個系統登入會產生的變數名」，取自 API 實際載入的
     `server.env_providers`，不是手抄的。手打的其他變數、「我的環境變數」、共用值、SSO 自動帶入的值都不動。
   - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值）。不帶 header 時，身分是部署給「沒帶身分的請求」的那個
-    （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。身分不對時腳本印出 `refused`、
-    結束碼 1；被閘道擋下時是 `failed: HTTP <碼>`。`--apply` 之後再跑會是 0 筆。
+    （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。被拒絕（HTTP 403，不在 superusers
+    或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後再跑會是 0 筆。
   - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
     「只有我」會顯示「使用中：你的（這個 item）」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
 

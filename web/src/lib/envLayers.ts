@@ -17,6 +17,12 @@ export function policyOf(name: string, policy: Record<string, string>): EnvPolic
   return p === "private_first" || p === "private_only" ? p : "shared_first";
 }
 
+/** Whether any name here reads "my environment variables" — the only case
+ * where it is worth asking for them (`plan-personal-env` D2). */
+export function asksPersonal(policy: Record<string, string>): boolean {
+  return Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
+}
+
 /** `private` = the person's value for THIS item; `personal` = their value for
  * every item ("my environment variables", `docs/plan-personal-env.md`). */
 export type Layer = "shared" | "private" | "personal" | "none";

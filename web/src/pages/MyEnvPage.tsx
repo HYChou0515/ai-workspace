@@ -4,8 +4,9 @@
  *
  * An item uses a name from here only when its policy asks for a personal value
  * (Private first / Private only); its own value for that item wins. So this is
- * where a token goes once: sign in here, or in any item, and every item that
- * asks for it gets the new one on its next run.
+ * where a token goes once: sign in here, or on "Only me" in an item that asks
+ * for the name, and every item that asks for it gets the new one on its next
+ * run. A sign-in in a Shared item stays in that item (`plan-personal-env` A8).
  *
  * A sign-in saves at once — it is the deliberate act, and a token waiting for a
  * second button is a token the next run does not have. A typed value is added

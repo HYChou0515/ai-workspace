@@ -31,7 +31,7 @@ import {
   type ScheduleBindingsClient,
 } from "../api/scheduleBindings";
 import type { ApiClient } from "../api/types";
-import { ownLayer } from "../lib/envLayers";
+import { asksPersonal, ownLayer } from "../lib/envLayers";
 import { identityState, keyLabelParts, type Missing } from "../lib/identityState";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -83,8 +83,16 @@ export function usePageIdentity({
     queryKey: qk.scheduleBindings(slug, itemId, path),
     queryFn: () => bindingsClient.list(slug, itemId, path),
   });
-  const personal = useQuery({ queryKey: qk.personalEnv(), queryFn: () => personalClient.get() });
-  const settled = [layers, tools, providers, mine, rows, personal].every((q) => !q.isPending);
+  // Only a Private first / Private only name reads my environment variables;
+  // a page with none neither asks for them nor waits on them (round 2, R1).
+  const asks = asksPersonal(layers.data?.policy ?? {});
+  const personal = useQuery({
+    queryKey: qk.personalEnv(),
+    queryFn: () => personalClient.get(),
+    enabled: asks,
+  });
+  const settled =
+    [layers, tools, providers, mine, rows].every((q) => !q.isPending) && (!asks || !personal.isPending);
   const state = identityState({
     tools: tools.data?.tools ?? [],
     shared: layers.data?.shared ?? {},
@@ -409,7 +417,7 @@ export function useEnvMissing({
   const personal = useQuery({
     queryKey: qk.personalEnv(),
     queryFn: () => personalClient.get(),
-    enabled: on,
+    enabled: on && asksPersonal(policy),
   });
   if (!on) return [];
   return identityState({

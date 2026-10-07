@@ -190,9 +190,11 @@ export function EnvVarsModal({
       afterSave("shared", sharedDirty);
     },
   });
-  // A sign-in on "Only me" is the person's, for every item (`plan-personal-env`
-  // D3/D6): it goes straight to my environment variables — the item's form is
-  // not touched, and nothing waits for this tab's Save.
+  // A sign-in on "Only me" for a name this item reads from my environment
+  // variables (Private first / Private only — `plan-personal-env` A8) is the
+  // person's, for every such item: it goes straight there, and nothing waits
+  // for this tab's Save. A Shared name never reads it, so `onFilled` fills this
+  // item's form instead.
   const signIn = useMutation({
     mutationFn: async (env: Record<string, string>) => {
       const current = (
