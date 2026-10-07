@@ -39,7 +39,12 @@ from typing import TYPE_CHECKING, Literal
 import msgspec
 from msgspec import Struct, field
 from specstar import QB, SpecStar
-from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError, RevisionNotFoundError
+from specstar.types import (
+    PreconditionFailedError,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+    RevisionNotFoundError,
+)
 
 from ..perm import Actor, Permission, authorize
 from ..resources.groups import groups_of
@@ -77,6 +82,8 @@ _FIRST_PUBLISH_TRIES = 5
 #: A pending draft older than this is a dead publisher's, not one in flight
 #: (§7 Q3): far longer than a publish takes.
 _DRAFT_TTL = dt.timedelta(minutes=10)
+#: How many times a row write re-reads after losing its compare-and-swap.
+_WRITE_TRIES = 5
 # Versions whose sha256 map `file_sha256s` keeps; a version never changes, so
 # an entry only ever needs its current one — the bound is entries, not versions.
 _SHA256_CACHE = 256
@@ -625,19 +632,44 @@ class SkillHubStore:
 
     # ── write ────────────────────────────────────────────────────────────
 
-    def _update(self, entry_id: str, row: SkillHubEntry) -> str:
-        """Write a revision; return its id (what the version's tag is named after)."""
-        return self._rm().update(entry_id, row).revision_id
+    async def _change(
+        self,
+        entry_id: str,
+        change: Callable[[SkillHubEntry], SkillHubEntry | None],
+        *,
+        current_commit: str | None = None,
+    ) -> SkillHubEntry | None:
+        """Apply ONE writer's change to the row as it is now, and tag the new
+        revision at the version it records. Returns the row written, or
+        ``None`` when the change no longer applies.
 
-    async def _tag(self, entry_id: str, revision_id: str, commit: str) -> None:
-        if commit:
-            await self.repos.tag(entry_id, revision_id, commit)
-
-    async def _manage(self, entry_id: str, row: SkillHubEntry) -> None:
-        """A revision that changes who or how, not what: master does not move,
-        and the revision is tagged at the version it is current in (§4.4)."""
-        revision = self._update(entry_id, row)
-        await self._tag(entry_id, revision, row.commit)
+        Every writer goes through here (review round 1, defect #3). Reading the
+        whole row, awaiting git, and writing it back let a publish undo an
+        unpublish and two publishes leave the row behind master. So the write
+        is a compare-and-swap on the revision read: a writer that lost it
+        reads again and re-applies only its own change. `current_commit` is
+        for a writer recording a version: it records it only while that
+        version is still master — once another has moved master on, recording
+        that one is the other writer's job, and doing it here would put the
+        row behind master."""
+        rm = self._rm()
+        for _attempt in range(_WRITE_TRIES):
+            if current_commit is not None and await self.repos.master(entry_id) != current_commit:
+                return None
+            res = rm.get(entry_id)
+            row = res.data
+            assert isinstance(row, SkillHubEntry)
+            new = change(row)
+            if new is None:
+                return None
+            try:
+                info = rm.update(entry_id, new, expected_revision_id=res.info.revision_id)
+            except PreconditionFailedError:
+                continue
+            if new.commit:
+                await self.repos.tag(entry_id, info.revision_id, new.commit)
+            return new
+        raise ValueError("the skill hub entry is being changed by someone else — try again")
 
     # The management writes (plan P7). No policy here either — the route has
     # already established the caller is the owner. Each replaces ONE field
@@ -646,17 +678,15 @@ class SkillHubStore:
     async def set_permission(self, entry_id: str, permission: Permission) -> None:
         """Visibility + grant lists. Unpublish is `visibility="private"` with
         the lists kept, so a later republish loses no invite."""
-        current = self.get(entry_id)
-        assert current is not None  # the route resolved it a moment ago
-        await self._manage(entry_id, msgspec.structs.replace(current, permission=permission))
+        await self._change(
+            entry_id, lambda row: msgspec.structs.replace(row, permission=permission)
+        )
 
     async def transfer(self, entry_id: str, owner: str) -> None:
         """Move `owner` and nothing else. The id is the identity every copy's
         `.origin` and every fork's `forked_from` point at, so they all survive
         a transfer untouched. The caller has checked `(owner, name)` is free."""
-        current = self.get(entry_id)
-        assert current is not None
-        await self._manage(entry_id, msgspec.structs.replace(current, owner=owner))
+        await self._change(entry_id, lambda row: msgspec.structs.replace(row, owner=owner))
 
     # ── history (§8) ─────────────────────────────────────────────────────
 
@@ -716,7 +746,7 @@ class SkillHubStore:
         if events:
             events[-1].current = True
         if prev is not None and last_revision not in await self.repos.tagged_revisions(entry_id):
-            await self._tag(entry_id, last_revision, prev.commit)
+            await self.repos.tag(entry_id, last_revision, prev.commit)
         current = self.get(entry_id)
         if current is None or current.owner != viewer:
             events = [e for e in events if e.kind != "permission"]
@@ -794,19 +824,26 @@ class SkillHubStore:
             # A draft, or a revision written before the entry was moved into git.
             raise UnknownRevision(revision_id)
         if old.commit == current.commit:
+            # Nothing to move — but only if the version the owner saw is still
+            # the current one; otherwise they decided against a page that is gone.
+            if await self.repos.master(entry_id) != expected:
+                raise VersionMoved(entry_id)
             return current.commit
         # The lease is the one check: master is written before the row, so a
         # row never names a commit master has not reached.
         if not await self.repos.move_master(entry_id, old.commit, expected=expected):
             raise VersionMoved(entry_id)
-        row = msgspec.structs.replace(
-            current,
-            commit=old.commit,
-            description=old.description,
-            review=old.review,
-            referenced_tools=list(old.referenced_tools),
+        await self._change(
+            entry_id,
+            lambda row: msgspec.structs.replace(
+                row,
+                commit=old.commit,
+                description=old.description,
+                review=old.review,
+                referenced_tools=list(old.referenced_tools),
+            ),
+            current_commit=old.commit,
         )
-        await self._tag(entry_id, self._update(entry_id, row), old.commit)
         return old.commit
 
     async def migrate_legacy(self) -> MigrationReport:
@@ -826,31 +863,37 @@ class SkillHubStore:
             for res in self._rm().list_resources(live, returns=["info", "data"])
             if isinstance(res.data, SkillHubEntry) and not res.data.pending
         ]
-        migrated: list[str] = []
-        for entry_id, row in sorted(rows, key=lambda pair: pair[0]):
-            if row.commit:
-                continue
-            payload = await self._files(entry_id, row)
-            commit = await self.repos.write_version(
-                entry_id, payload, parent=None, author=row.owner, message="migrated"
-            )
-            if not await self.repos.move_master(entry_id, commit, expected=None):
-                adopted = await self.repos.master(entry_id)
-                assert adopted is not None  # the lease only fails when master is set
-                commit = adopted
-            # Re-read: a publish may have landed since the listing; its commit
-            # (which IS master then) wins, and its other fields are kept.
-            now = self._row(entry_id)
-            if now is None or now.commit:
-                continue
-            revision = self._update(entry_id, msgspec.structs.replace(now, commit=commit))
-            await self._tag(entry_id, revision, commit)
-            migrated.append(entry_id)
+        migrated = [
+            entry_id
+            for entry_id, row in sorted(rows, key=lambda pair: pair[0])
+            if not row.commit and await self._ensure_in_git(entry_id, row)
+        ]
         by_name: dict[tuple[str, str], list[str]] = {}
         for entry_id, row in rows:
             by_name.setdefault((row.owner, row.name), []).append(entry_id)
         duplicates = sorted(sorted(ids) for ids in by_name.values() if len(ids) > 1)
         return MigrationReport(migrated=migrated, duplicates=duplicates)
+
+    async def _ensure_in_git(self, entry_id: str, row: SkillHubEntry) -> bool:
+        """Give an entry published before the git store its first version: the
+        files its `blobs` namespace holds. A repo whose master is already set
+        (another runner, or a run that died before writing the row) is
+        adopted, never given a second first version. Returns whether this call
+        recorded it on the row."""
+        payload = await self._files(entry_id, row)
+        commit = await self.repos.write_version(
+            entry_id, payload, parent=None, author=row.owner, message="migrated"
+        )
+        if not await self.repos.move_master(entry_id, commit, expected=None):
+            adopted = await self.repos.master(entry_id)
+            assert adopted is not None  # the lease only fails when master is set
+            commit = adopted
+        # A publish may have recorded a version since: it wins, untouched.
+        written = await self._change(
+            entry_id,
+            lambda now: None if now.commit else msgspec.structs.replace(now, commit=commit),
+        )
+        return written is not None
 
     async def delete(self, entry_id: str) -> None:
         """Soft-delete the row. Final: `state_for` answers `deleted` for every
@@ -943,24 +986,36 @@ class SkillHubStore:
                 with contextlib.suppress(ResourceIDNotFoundError):
                     self._rm().permanently_delete(entry_id)
                 raise
-            final = msgspec.structs.replace(row, commit=commit)
-            await self._tag(entry_id, self._update(entry_id, final), commit)
+            # The draft is this call's own row: nobody else writes it.
+            await self._change(
+                entry_id,
+                lambda draft: msgspec.structs.replace(row, commit=commit, pending=False),
+            )
             return entry_id
 
         current = self.get(existing)
         assert current is not None  # `find` answered it
+        if not current.commit:
+            # Published before the git store and not migrated yet: its version
+            # goes in first, so the new one has it as parent (round 1,
+            # conformance #3) — otherwise the migration would skip a row that
+            # already has a commit, and the old version would be gone.
+            await self._ensure_in_git(existing, current)
         commit = await self._commit_on_master(existing, payload, author=owner, name=name)
-        final = msgspec.structs.replace(
-            row,
-            owner=current.owner,
-            # Set once, when the fork is born. A re-publish does not know (or
-            # pass) where the fork came from; the row does.
-            forked_from=current.forked_from,
-            permission=current.permission,
-            commit=commit,
-            blobs=current.blobs,
+        await self._change(
+            existing,
+            lambda now: msgspec.structs.replace(
+                now,
+                description=row.description,
+                source_item=row.source_item,
+                source_app=row.source_app,
+                source_profile=row.source_profile,
+                review=row.review,
+                referenced_tools=row.referenced_tools,
+                commit=commit,
+            ),
+            current_commit=commit,
         )
-        await self._tag(existing, self._update(existing, final), commit)
         return existing
 
     async def _commit_on_master(
