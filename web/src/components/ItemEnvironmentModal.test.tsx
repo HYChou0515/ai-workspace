@@ -11,6 +11,7 @@ import { makeQueryClient } from "../api/queryClient";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { DialogProvider } from "./Dialog";
 import { ItemEnvironmentModal } from "./ItemEnvironmentModal";
+import { qk } from "../api/queryKeys";
 import { renderWithQuery } from "../test/queryWrapper";
 
 /**
@@ -399,6 +400,18 @@ describe("ItemEnvironmentModal — what the review found unguarded", () => {
       expect(after.some((u) => u.includes("/environment"))).toBe(true);
       expect(after.some((u) => u.includes("/me/resources"))).toBe(true);
     });
+  });
+
+  it("'Close sandbox' also re-reads the tool picker, whose 'close to update' it settles", async () => {
+    // plan-tool-running-version: the picker offers a close of its own; a close
+    // from here must not leave it showing "differs from the latest" for 30 s.
+    vi.stubGlobal("fetch", route(CAPPED, RUNNING));
+    const opened = open();
+    opened.client.setQueryData(qk.itemTools("rca", "i-1"), { tools: [], updateNeedsClose: true, canClose: true });
+    fireEvent.click(await screen.findByTestId("close-environment"));
+    await waitFor(() =>
+      expect(opened.client.getQueryState(qk.itemTools("rca", "i-1"))?.isInvalidated).toBe(true),
+    );
   });
 
   it("refuses, client-side, what the server would refuse: a memory spelling it cannot parse, or a cpu of 0", async () => {

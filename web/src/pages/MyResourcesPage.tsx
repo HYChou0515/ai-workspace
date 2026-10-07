@@ -189,7 +189,15 @@ function LiveEnvironmentRow({ env, client }: { env: LiveEnvironment; client: MyR
   const qc = useQueryClient();
   const close = useMutation({
     mutationFn: () => client.closeEnvironment(env.item_id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.myResources }),
+        // The item's tool picker too: its "close to update" no longer applies
+        // (plan-tool-running-version). By item id — the row may carry no slug.
+        qc.invalidateQueries({
+          predicate: (q) => q.queryKey[0] === qk.itemTools("", "")[0] && q.queryKey[2] === env.item_id,
+        }),
+      ]),
     // This failure is reported on the row it happened to. Without the opt-out
     // the query client ALSO routes it to the app-wide write-failure toast, so
     // one press raises two messages — and the page-level one names no item,

@@ -50,7 +50,7 @@ from ..tooling.catalog import (
     picker_units,
     unit_pref,
 )
-from ..tooling.external import ExternalTools, MountedTool
+from ..tooling.external import ExternalTools, MountedTool, drift
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
 from .turn_context import resolve_item_tools
@@ -361,11 +361,11 @@ def _row(
     artifact."""
     provider = unit.name.partition(":")[0]
     prov = external.provenance.get(provider)
-    m = (mounted or {}).get(provider)
-    latest = external.shas.get(provider)
-    running = m.version if m is not None and latest is not None and m.sha != latest else None
-    # D11: known record, resolved tool, and the sandbox has none of it.
-    missing = mounted is not None and latest is not None and m is None
+    # The same rule the turn confines and describes by (`drift`), so the picker
+    # and the model can never disagree about a tool.
+    d = drift(external, mounted).get(provider)
+    running = d.running if d is not None and not d.missing else None
+    missing = d is not None and d.missing
     return ItemToolState(
         key=unit.name,
         label=unit.label,

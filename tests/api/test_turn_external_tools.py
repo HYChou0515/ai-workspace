@@ -19,14 +19,6 @@ from workspace_app.sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
 from workspace_app.tooling.external import MountedTool
 
 
-class _Session:
-    """A registry session with no sandbox yet — the cold case, where this
-    turn's create is what mounts the bundles."""
-
-    handle: SandboxHandle | None = None
-    tools: dict[str, MountedTool] | None = None
-
-
 class _Locator:
     def __init__(self, slug: str | None) -> None:
         self._slug = slug
@@ -113,7 +105,7 @@ async def test_an_app_that_declares_a_third_party_tool_gets_it_resolved(monkeypa
     )
     host = _Host()
 
-    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1", _Session())
+    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1")
 
     assert host.asked == [{"wafer-history": "https://g/m"}]
     assert external.shas == {"wafer-history": "a" * 64}
@@ -195,7 +187,7 @@ async def test_an_item_with_no_app_asks_for_nothing() -> None:
     # must not fabricate a lookup for it.
     host = _Host()
 
-    external = await _builder(slug=None, sandbox=host)._external_tools("item-1", _Session())
+    external = await _builder(slug=None, sandbox=host)._external_tools("item-1")
 
     assert host.asked == []
     assert external.shas == {}
@@ -355,7 +347,7 @@ async def test_a_turn_on_a_live_sandbox_without_the_plugin_tells_the_agent_nothi
     builder = _builder(
         slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"}, registry=_Registry({})
     )
-    got = await builder._external_tools("item-1", _Session())
+    got = await builder._external_tools("item-1")
     assert got.refused == {}
     assert got.packages == ()
 
@@ -377,12 +369,12 @@ def _line(external) -> str:
     return describe_command(pkg, pkg.commands[0])
 
 
-async def test_a_sandbox_older_than_the_release_is_described_as_what_it_runs(monkeypatch):
+async def test_a_sandbox_on_a_different_release_is_described_as_what_it_runs(monkeypatch):
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
     registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
 
     external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
-        "item-1", _Session()
+        "item-1"
     )
 
     line = _line(external)
@@ -397,12 +389,10 @@ async def test_a_sandbox_older_than_the_release_is_described_as_what_it_runs(mon
 
 async def test_a_sandbox_on_the_latest_release_says_nothing_more(monkeypatch):
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
-    fresh = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1", _Session())
+    fresh = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1")
     registry = _live({"wafer-history": MountedTool(sha=_LATEST, version="1.4.2")})
 
-    live = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
-        "item-1", _Session()
-    )
+    live = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools("item-1")
 
     assert _line(live) == _line(fresh)  # not one word added when nothing differs
 
@@ -410,7 +400,7 @@ async def test_a_sandbox_on_the_latest_release_says_nothing_more(monkeypatch):
 async def test_no_live_sandbox_reads_as_the_latest(monkeypatch):
     # D4/D7: unknown, or nothing running, is the release the next sandbox gets.
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
-    external = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1", _Session())
+    external = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1")
     assert "tool bundle 1.4.2" in _line(external)
     assert "clos" not in _line(external).lower()
 
@@ -422,7 +412,7 @@ async def test_a_peers_sandbox_is_described_from_its_address(monkeypatch):
     registry = _Registry({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
 
     external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
-        "item-1", _Session()
+        "item-1"
     )
 
     assert "tool bundle 1.3.0" in _line(external)
@@ -434,19 +424,19 @@ async def test_a_peers_sandbox_without_a_tool_refuses_it_with_the_reason(monkeyp
     registry = _Registry({})
 
     external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
-        "item-1", _Session()
+        "item-1"
     )
 
     assert "wafer-history" in external.refused
     assert not external.packages
 
 
-async def test_an_older_mount_with_no_recorded_release_is_still_called_older(monkeypatch):
+async def test_a_different_mount_with_no_recorded_release_says_unrecorded(monkeypatch):
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
     registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="")})
 
     external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
-        "item-1", _Session()
+        "item-1"
     )
 
     line = _line(external)
@@ -518,9 +508,7 @@ async def test_an_app_with_no_third_party_tools_never_asks_what_was_mounted():
     # Review round 1: the turn build used to make no sandbox call; asking for
     # an app that declares nothing would put a host probe in every turn.
     registry = _Registry()
-    await _builder(slug=None, sandbox=_Host(), registry=registry)._external_tools(
-        "item-1", _Session()
-    )
+    await _builder(slug=None, sandbox=_Host(), registry=registry)._external_tools("item-1")
     assert registry.asked == []
 
 
@@ -538,6 +526,17 @@ async def test_a_latest_release_with_no_version_is_not_given_one(monkeypatch):
     registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
     external = await _builder(
         slug="rca", sandbox=_Unversioned(), registry=registry
-    )._external_tools("item-1", _Session())
+    )._external_tools("item-1")
     line = _line(external)
     assert "runs 1.3.0, not the latest release." in line
+
+
+async def test_a_deployments_view_plugin_alone_does_not_ask_what_was_mounted(monkeypatch):
+    # Round 2: plugin shas ride in the same resolve, but they are no agent's
+    # tool — an app declaring nothing must not pay a host probe per turn.
+    _declaring(monkeypatch)
+    registry = _Registry()
+    await _builder(
+        slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"}, registry=registry
+    )._external_tools("item-1")
+    assert registry.asked == []

@@ -1795,6 +1795,10 @@ export const messages = {
     en: "Running {running} · latest {latest}",
   },
   "tools.origin.unrecorded": { "zh-TW": "未記錄的版本", en: "an unrecorded release" },
+  "tools.origin.runningNotLatest": {
+    "zh-TW": "執行中 {running}（不是最新版）",
+    en: "Running {running} (not the latest)",
+  },
   "tools.origin.notInSandbox": {
     "zh-TW": "目前的沙盒裡沒有這個工具",
     en: "Not in the current sandbox",

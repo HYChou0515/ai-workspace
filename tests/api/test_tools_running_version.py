@@ -121,7 +121,7 @@ def _row(body: dict) -> dict:
     return {r["key"]: r for r in body["tools"]}["wafer-history:trend"]
 
 
-def test_an_older_sandbox_shows_the_release_it_runs_and_the_latest(monkeypatch):
+def test_a_sandbox_on_a_different_release_shows_what_it_runs_and_the_latest(monkeypatch):
     with _app(monkeypatch) as (client, spec, registry):
         item = _item(spec)
         _running(registry, item, {"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
@@ -232,7 +232,7 @@ def test_a_host_error_never_costs_the_picker(monkeypatch):
 
     with _app(monkeypatch) as (client, spec, registry):
         item = _item(spec)
-        _running(registry, item, {"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+        # A peer's sandbox, known here only through the address.
         registry.address = _Address()
 
         async def boom(_handle, _path):

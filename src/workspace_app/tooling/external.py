@@ -73,6 +73,17 @@ class MountedTool:
 
 
 @dataclass(frozen=True)
+class Drift:
+    """How a live sandbox differs from the latest resolve for ONE tool."""
+
+    missing: bool
+    """The sandbox was created without it (D11)."""
+    running: str = ""
+    """When present but a different bundle: the release it runs (``""`` if
+    that was not recorded). Different, not "older" — a sha says no more (D13)."""
+
+
+@dataclass(frozen=True)
 class ExternalTools:
     """What one turn learned about this app's third-party tools."""
 
@@ -89,8 +100,9 @@ class ExternalTools:
     tool something eventually has to be able to describe."""
 
     def versions(self) -> dict[str, str]:
-        """`{name: release}` for `shas`, from this same answer."""
-        return {name: p.version for name, p in self.provenance.items() if name in self.shas}
+        """`{name: release}` for `shas` — read off `mounts()`, so the turn's
+        record and a turn-less wake's are one builder, not two kept alike."""
+        return {name: m.version for name, m in self.mounts().items()}
 
     def mounts(self) -> dict[str, MountedTool]:
         """What a sandbox created from THIS resolve mounts: each sha with the
@@ -189,11 +201,29 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
     )
 
 
+def drift(external: ExternalTools, mounted: Mapping[str, MountedTool] | None) -> dict[str, Drift]:
+    """THE rule for "is the live sandbox's tool the latest" — one function,
+    read by the turn's confinement, the model's description and the tool
+    picker, so the three cannot disagree (review round 2). Only the tools that
+    differ are listed; unknown mounts (`None`) list nothing (D4). Compared by
+    sha (D8)."""
+    if mounted is None:
+        return {}
+    out: dict[str, Drift] = {}
+    for name, sha in external.shas.items():
+        m = mounted.get(name)
+        if m is None:
+            out[name] = Drift(missing=True)
+        elif m.sha != sha:
+            out[name] = Drift(missing=False, running=m.version)
+    return out
+
+
 def confine_to_mounted(
     external: ExternalTools,
     *,
     live: bool,
-    mounted: Mapping[str, object] | None,
+    mounted: Mapping[str, MountedTool] | None,
 ) -> ExternalTools:
     """What this turn may offer, given a sandbox that already exists.
 
@@ -209,9 +239,10 @@ def confine_to_mounted(
     an author releasing mid-session is the documented no-op path ("they push,
     the next sandbox gets it"), and taking a working tool away for the rest of
     a live session would make routine releases hurt the people using them. The
-    schemas can then be a release ahead of the bundle for one session's life —
-    the residual of pinning at create, not something this function should
-    convert into an outage.
+    schemas can then describe a different release from the bundle for one
+    sandbox's life — the residual of pinning at create, not something this
+    function should convert into an outage; `describe_running` says so in the
+    tool's description (plan-tool-running-version D2).
 
     `mounted=None` means UNKNOWN, not empty: no live sandbox, or one whose
     address carries no record of what went in (built before the record existed,
@@ -220,7 +251,7 @@ def confine_to_mounted(
     built is no longer unknown — its address says what it mounted (D10)."""
     if not live or mounted is None or not external.shas:
         return external
-    absent = [name for name in external.shas if name not in mounted]
+    absent = [name for name, d in drift(external, mounted).items() if d.missing]
     if not absent:
         return external
     for name in absent:
@@ -233,9 +264,9 @@ def confine_to_mounted(
             **{
                 name: (
                     "this tool is not installed in this workspace's current sandbox, "
-                    "which was set up without it. Closing the sandbox makes the next "
-                    "turn get it; it is also there once the sandbox is recycled after "
-                    "being idle."
+                    "which was set up without it. Closing the sandbox lets the next "
+                    "one be set up with it (so does the sandbox being recycled after "
+                    "idling)."
                 )
                 for name in absent
             },
@@ -289,14 +320,12 @@ def describe_running(
     what `describe_command` turns into the sentence the model reads. Compared by
     sha (D8). Unknown mounts (`None`) change nothing (D4): the next sandbox is
     built from this resolve. Only the words change; what mounts does not."""
-    if not mounted:
-        return external
+    differs = drift(external, mounted)
     packages = []
     for pkg in external.packages:
-        m = mounted.get(pkg.name)
-        latest = external.shas.get(pkg.name)
-        if m is None or latest is None or m.sha == latest:
-            packages.append(pkg)
+        d = differs.get(pkg.name)
+        if d is None or d.missing:
+            packages.append(pkg)  # same release — or absent, which confinement refuses
             continue
-        packages.append(replace(pkg, version=m.version, latest_version=pkg.version))
+        packages.append(replace(pkg, version=d.running, latest_version=pkg.version))
     return replace(external, packages=tuple(packages))

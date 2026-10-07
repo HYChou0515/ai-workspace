@@ -357,10 +357,16 @@ function ToolRow({
           >
             {tool.not_in_sandbox
               ? t("tools.origin.notInSandbox")
-              : t("tools.origin.running", {
-                  running: tool.running_version || t("tools.origin.unrecorded"),
-                  latest: tool.version || t("tools.origin.unrecorded"),
-                })}
+              : tool.version
+                ? t("tools.origin.running", {
+                    running: tool.running_version || t("tools.origin.unrecorded"),
+                    latest: tool.version,
+                  })
+                : // The latest published no number: say what runs, invent nothing
+                  // for the latest (D13 — the model's line does the same).
+                  t("tools.origin.runningNotLatest", {
+                    running: tool.running_version || t("tools.origin.unrecorded"),
+                  })}
           </div>
         ) : null}
       </div>

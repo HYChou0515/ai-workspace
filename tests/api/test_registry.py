@@ -2103,33 +2103,53 @@ async def test_this_pods_record_of_a_sandbox_closed_elsewhere_is_not_reported():
     assert await a.mounted_tools("it") is None
 
 
-async def test_a_host_error_reads_as_unknown_not_as_a_failure():
+def _host_error(*_a, **_k):
     import httpx
-
-    sandbox, _, (a,) = _shared_pods(1)
-    await a.ensure_handle(await a.session("it"), tools=_V1)
 
     async def boom(_handle, _path):
         raise httpx.HTTPStatusError(
             "503", request=httpx.Request("GET", "http://h"), response=httpx.Response(503)
         )
 
-    sandbox.exists = boom  # type: ignore[method-assign]
+    return boom
+
+
+async def _hang(_handle, _path):
+    await asyncio.sleep(10)
+
+
+async def test_a_host_that_cannot_answer_does_not_cost_this_pod_what_it_built():
+    # Round 2: this pod built the sandbox and KNOWS what is in it. A host that
+    # errors or is slow says nothing about that — dropping the record un-confined
+    # the turn (a tool the sandbox lacks was offered again). Only a definite
+    # "gone" (SandboxNotFound) drops it.
+    for probe in (_host_error(), _hang):
+        sandbox, _, (a,) = _shared_pods(1)
+        await a.ensure_handle(await a.session("it"), tools=_V1)
+        a.mounted_probe_timeout_s = 0.05
+        sandbox.exists = probe  # type: ignore[method-assign]
+        started = asyncio.get_running_loop().time()
+        assert await a.mounted_tools("it") == _V1
+        assert asyncio.get_running_loop().time() - started < 5
+
+
+async def test_a_host_that_cannot_answer_is_unknown_to_a_pod_that_holds_nothing():
+    # A peer's sandbox, known here only through the address: if the host cannot
+    # say it is alive, its record may describe nothing that will run.
+    for probe in (_host_error(), _hang):
+        sandbox, _, (a, b) = _shared_pods()
+        await a.ensure_handle(await a.session("it"), tools=_V1)
+        b.mounted_probe_timeout_s = 0.05
+        sandbox.exists = probe  # type: ignore[method-assign]
+        assert await b.mounted_tools("it") is None
+
+
+async def test_a_live_address_with_no_record_is_unknown():
+    # D4 through the address (an older build wrote it): live, but no record.
+    sandbox, addr, (a,) = _shared_pods(1)
+    h = await sandbox.create(SandboxSpec(), "it")
+    await addr.claim("it", h)  # no tools= — the older build's write
     assert await a.mounted_tools("it") is None
-
-
-async def test_a_hanging_host_is_given_a_bounded_wait():
-    sandbox, _, (a,) = _shared_pods(1)
-    await a.ensure_handle(await a.session("it"), tools=_V1)
-    a.mounted_probe_timeout_s = 0.05
-
-    async def hang(_handle, _path):
-        await asyncio.sleep(10)
-
-    sandbox.exists = hang  # type: ignore[method-assign]
-    started = asyncio.get_running_loop().time()
-    assert await a.mounted_tools("it") is None
-    assert asyncio.get_running_loop().time() - started < 5
 
 
 async def test_a_lost_claim_never_pairs_the_winner_with_another_sandboxs_record():

@@ -149,10 +149,10 @@ describe("ToolsPickerModal", () => {
   });
 });
 
-// plan-tool-running-version: the live sandbox may run an older release than
+// plan-tool-running-version: the live sandbox may run a different release from
 // the row's version (the latest). The row says which; the modal says closing
 // the sandbox is what updates it, with a button for whoever may close it.
-describe("ToolsPickerModal — a sandbox older than the release", () => {
+describe("ToolsPickerModal — a sandbox on a different release from the latest", () => {
   const OUTDATED: ItemToolState[] = [
     ...TOOLS,
     {
@@ -215,7 +215,7 @@ describe("ToolsPickerModal — a sandbox older than the release", () => {
         closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
       />,
     );
-    expect(await screen.findByTestId("tools-update-note")).toBeInTheDocument();
+    expect(await screen.findByTestId("tools-update-note")).toHaveTextContent(/once the sandbox is closed|沙盒關閉後/);
     expect(screen.queryByTestId("tools-update-close")).not.toBeInTheDocument();
   });
 
@@ -244,6 +244,7 @@ describe("ToolsPickerModal — a sandbox older than the release", () => {
     );
     const running = await screen.findByTestId("tool-wafer-history:trend-running");
     expect(running).toHaveTextContent("1.4.2");
+    expect(running).toHaveTextContent(/unrecorded|未記錄/);
     expect(running).not.toHaveTextContent(/older|earlier|較早/i);
   });
 
@@ -302,7 +303,7 @@ describe("ToolsPickerModal — a sandbox older than the release", () => {
     // The app-wide write-failure toast is skipped for this mutation.
     const m = qc.getMutationCache().getAll().at(-1);
     expect(m?.meta?.silentError).toBe(true);
-    expect(await screen.findByTestId("tools-update-note")).toHaveTextContent(/close|關閉/i);
+    expect(await screen.findByTestId("tools-update-failed")).toBeInTheDocument();
   });
 
   it("closing keeps the switches someone already changed, and asks nothing", async () => {
@@ -322,9 +323,30 @@ describe("ToolsPickerModal — a sandbox older than the release", () => {
     fireEvent.click(screen.getByTestId("tools-update-close"));
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: qk.myResources }));
     expect(spy).toHaveBeenCalledWith({ queryKey: qk.itemEnvironment("rca", "i1") });
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.myBudget });
     expect(screen.getByTestId("tool-exec-off")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("tools-save")).not.toBeDisabled();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("a latest release with no number is not given one", async () => {
+    const noNumber = OUTDATED.map((r) =>
+      r.key === "wafer-history:trend" ? { ...r, version: "", running_version: "1.3.0" } : r,
+    );
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(noNumber, { updateNeedsClose: true, canClose: true })}
+        closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
+      />,
+    );
+    const running = await screen.findByTestId("tool-wafer-history:trend-running");
+    expect(running).toHaveTextContent("1.3.0");
+    expect(running).toHaveTextContent(/not the latest|不是最新版/);
+    expect(running).not.toHaveTextContent(/unrecorded|未記錄/);
   });
 });

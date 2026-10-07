@@ -30,7 +30,7 @@ import { ToolsChecklist } from "./ToolsChecklist";
  * itself; a separate section listed the same tool twice.
  *
  * plan-tool-running-version: a live sandbox keeps the bundles it was created
- * with, so a row's release can be newer than what runs. Such a row says which
+ * with, so a row's release can differ from what runs. Such a row says which
  * release runs; the modal says closing the sandbox is what updates it (D1:
  * told, never forced) and, for whoever the close route itself would let close
  * it (D9), offers that close in one button.
@@ -160,7 +160,9 @@ export function ToolsPickerModal({
                   </button>
                 ) : null}
                 {closeSandbox.isError ? (
-                  <span style={{ flexBasis: "100%", color: "var(--err)" }}>{t("tools.update.failed")}</span>
+                  <span data-testid="tools-update-failed" style={{ flexBasis: "100%", color: "var(--err)" }}>
+                    {t("tools.update.failed")}
+                  </span>
                 ) : null}
               </div>
             ) : null}

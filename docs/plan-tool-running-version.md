@@ -36,8 +36,9 @@ Grilled 2026-10-07 on master `486ce318`. 每條決定標來源：**[user]** = �
 | D9 | 按鈕只給**關得掉**的人（與 `DELETE /me/resources/live/{item}` 同一道閘：擁有者、superuser、`change_permission`）；其他人看到「沙盒關閉後就會更新」的說明，沒有按鈕。閘抽成一個函式，兩邊共用。 | [mine] |
 | D10 | 這一輪的「已掛載」改成問 registry：本 pod 的 session，否則讀共用那一列，兩者都先探活（http）。副作用：`confine_to_mounted` 對**別的 pod 建的沙盒**也知道掛了什麼了——發版後才加的新工具，會以理由拒絕，而不是交給模型一個不存在的 launcher。 | [mine] |
 | D11 | 沙盒建好之後才加進 app 的工具（沙盒裡沒有）：選單該列顯示「目前的沙盒裡沒有這個工具」，算進「關閉沙盒以更新」同一顆按鈕——關閉同樣能修好它。 | [mine，review round 1] |
-| D12 | 「已掛載」的查詢**有上限且不會失敗**：限時 3 秒（`mounted_probe_timeout_s`），主機出錯或逾時都當「查不到」（D4）。選單與 turn 的組裝以前完全不碰沙盒，不能因為這個功能變成會 500 或卡住；turn 只在 app 有宣告第三方工具時才問。 | [mine，review round 1] |
-| D13 | 用詞是「不同」不是「較舊」：比的是 sha（D8），只知道不一樣，不知道哪邊新。給 AI 的那句是「沙盒跑的是 X，不是最新版（Y）」；最新版沒有版號時不補字。 | [mine，review round 1] |
+| D12 | 「已掛載」的查詢**有上限且不會失敗**：限時 3 秒（`mounted_probe_timeout_s`）。主機出錯或逾時時，**本 pod 自己建的紀錄照用**（主機沒回答不代表沙盒變了；丟掉它會讓 turn 再交出沙盒沒有的工具——review round 2），只有確定「沙盒不在了」才放掉；只能從共用那一列得知的別人的紀錄則當「查不到」（D4）。選單與 turn 的組裝以前完全不碰沙盒，不能因為這個功能變成會 500 或卡住；turn 只在 app **自己宣告**、模型會拿到的工具存在時才問（部署的 view plugin 也掛在沙盒裡，但不是任何 agent 的工具）。 | [mine，review round 1–2] |
+| D13 | 用詞是「不同」不是「較舊」：比的是 sha（D8），只知道不一樣，不知道哪邊新。給 AI 的那句是「沙盒跑的是 X，不是最新版（Y）」；最新版沒有版號時括號整個省略、不補字，選單也只寫「執行中 X（不是最新版）」。沙盒那一版沒有記到版號時，X 寫成 "an unrecorded release" / 「未記錄的版本」——那是事實，不是代填的版號。 | [mine，review round 1–2] |
+| D14 | 「同不同、缺不缺」只有一條規則 `tooling/external.py:drift()`：turn 的限制（`confine_to_mounted`）、給模型的句子（`describe_running`）、選單（`tools_routes._row`）都讀它，不再各寫一份。`ExternalTools.versions()` 也由 `mounts()` 推導，turn 與非 turn 的紀錄是同一個 builder。 | [mine，review round 2] |
 
 **不處理**：manifest 的版本號變了但 bundle 沒換（手改 manifest、混用兩次 build 的產物）。這時實際 sha =
 最新 sha，偵測不到；`tooling/builder.py` 在同一次 build 產出兩者，正常發版不會發生。
@@ -51,7 +52,7 @@ Grilled 2026-10-07 on master `486ce318`. 每條決定標來源：**[user]** = �
   `{}` = 確定沒掛任何第三方工具——建立時解析失敗也寫 `{}`，因為那個沙盒確實什麼都沒掛。只加有預設值的欄位：
   舊列照常解碼，沒有 `Schema` 升版、沒有回填。
 - `IAddressStore.claim` / `swap` 多收 `tools`，與 `handle_id` **同一次寫入**（同一列、同一個 CAS），所以
-  讀到的掛載資訊一定屬於讀到的那個位址。新增 `mounted(item_id)`。
+  讀到的掛載資訊一定屬於讀到的那個位址。讀取是 `published(item_id) -> Published{handle, tools}`，一次讀出兩者。
 
 ### 寫入：建立沙盒時
 
@@ -92,7 +93,7 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 
 每一步 `/tdd`：先寫在未修程式碼上變紅、走真路徑的測試；一個 phase 一個 commit。
 
-- **P1** `MountedTool` + `_SandboxAddress.tools` + store 的 `claim`/`swap(tools=)`/`mounted()`；舊列（無欄位）
+- **P1** `MountedTool` + `_SandboxAddress.tools` + store 的 `claim`/`swap(tools=)` 與讀取（P6 起是 `published()`）；舊列（無欄位）
   讀成 `None`。
 - **P2** registry：`_acquire` / `ensure_handle` / `rebuild` 帶 `MountedTool` 表、寫進位址列；`tools_for`
   回 `MountedTool` 表；收斂時讀列；`mounted_tools(item)`。turn 的兩個 lambda 傳版本。
@@ -100,11 +101,19 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 - **P4** 選單：API 欄位 + 共用的關閉閘 + 前端列文字與按鈕 + i18n。
 - **P5** `docs/migrations.md`（行為改變、無開關：選單與 AI 說的版本改成沙盒實際的；跨 pod 的已掛載判斷）。
 - **P6**（review round 1）D11–D13；session 也探活；位址與紀錄一次讀；選單的錯誤只說一次並刷新資源。
+- **P7**（review round 2）D12 的「本 pod 紀錄照用」；D14 一條規則；turn 只為模型會拿到的工具查；其他關閉入口也刷新
+  選單；最新版沒有版號時不補字；文件與測試名稱的用詞。
+
+## 已知、這次不修
+
+- 被限制住的那一輪（沙盒少了某個工具）若在第一次 exec 前或中途遇到沙盒被回收而重建，新的沙盒照這一輪限制後的
+  清單建，所以也沒有那個工具，並記進紀錄；要到下一次關閉才補上。以前本 pod 建的沙盒就是這樣，D10 讓別的 pod
+  也看得到紀錄，範圍變大；需要「沙盒被回收」與「限制」剛好同一輪，罕見（review round 2，B）。
 
 ## 驗證
 
 - P1–P3：registry 探針那一組情境改寫成測試（turn 在 A、關在 B……），斷言 AI 收到的工具說明句子。
 - P4：前端單元測試（不一致 / 一致 / 未知 / 沒有權限 / 未記錄版號 / 沙盒裡沒有 / 關閉失敗 / 關閉保留未存的切換）＋
   真 Chromium 1280／390 截圖看過。
-- prod：發一版工具 → 不關沙盒開選單，看到「執行中 舊 · 最新 新」與按鈕；問 AI 版本，它說舊版並提到關閉沙盒；
+- prod：發一版工具 → 不關沙盒開選單，看到「執行中 舊 · 最新 新」與按鈕；問 AI 版本，它說沙盒裡實際的版本並提到關閉沙盒；
   按按鈕後再開選單，不一致消失。

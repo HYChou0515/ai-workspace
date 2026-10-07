@@ -584,42 +584,46 @@ class InvestigationRegistry:
         every caller on purpose: the next sandbox is built from the latest
         resolve, so there is nothing older to report (D4/D7).
 
-        Bounded and never raising: the tool picker and a turn's context build
-        ask this, and neither touched a sandbox before (review round 1). A host
-        error or a wait past `mounted_probe_timeout_s` reads as unknown — the
-        answer the caller gave before this existed — rather than failing the
-        picker (and every view sharing its query) or the turn."""
+        Bounded and never raising (D12): the tool picker and a turn's context
+        build ask this, and neither touched a sandbox before. When the host
+        cannot answer in `mounted_probe_timeout_s`, or errors, what THIS pod
+        built stays its answer — the host's silence says nothing about it, and
+        dropping it let a turn offer a tool the sandbox does not have (review
+        round 2). Only a definite "gone" drops it. A pod that holds nothing gets
+        unknown: an address's record is believed only while the host vouches
+        for the sandbox behind it."""
+        s = self._sessions.get(item)
+        own = s.tools if s is not None and s.handle is not None else None
+        gone = False
+
+        async def lookup() -> dict[str, MountedTool] | None:
+            nonlocal gone
+            if own is not None:
+                assert s is not None and s.handle is not None
+                # Probed on the backend where a sandbox can die under a held
+                # handle (http): a sandbox a peer closed must not keep being
+                # reported here (review round 1).
+                if self.address is None or await self._alive(s.handle):
+                    return own
+                gone = True
+            if self.address is None:
+                return None
+            published = await self.address.published(item)
+            if published is None or published.tools is None:
+                return None
+            # A dead address's bundles describe nothing that will run.
+            return published.tools if await self._alive(published.handle) else None
+
         try:
-            return await asyncio.wait_for(
-                self._mounted_tools(item), timeout=self.mounted_probe_timeout_s
-            )
-        except Exception:  # noqa: BLE001 — unknown, never a failure (see above)
+            return await asyncio.wait_for(lookup(), timeout=self.mounted_probe_timeout_s)
+        except Exception:  # noqa: BLE001 — a host that cannot answer, never a failure
             logger.warning(
-                "registry: could not tell what item %s's sandbox mounted; reading as unknown",
+                "registry: could not tell what item %s's sandbox mounted; %s",
                 item,
+                "reading as unknown" if gone or own is None else "keeping this pod's record",
                 exc_info=True,
             )
-            return None
-
-    async def _mounted_tools(self, item: str) -> dict[str, MountedTool] | None:
-        # This pod's own record first — but probed like the address is, on the
-        # backend where a sandbox can die under a held handle (http). Unprobed,
-        # a sandbox a peer closed kept being reported here (review round 1).
-        s = self._sessions.get(item)
-        if (
-            s is not None
-            and s.handle is not None
-            and s.tools is not None
-            and (self.address is None or await self._alive(s.handle))
-        ):
-            return s.tools
-        if self.address is None:
-            return None
-        published = await self.address.published(item)
-        if published is None or published.tools is None:
-            return None
-        # A dead address's bundles describe nothing that will run.
-        return published.tools if await self._alive(published.handle) else None
+            return None if gone else own
 
     async def has_live_sandbox(self, investigation_id: str) -> bool:
         """Whether this item is ALREADY holding a live sandbox.

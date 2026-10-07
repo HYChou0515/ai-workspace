@@ -693,7 +693,7 @@ class TurnContextBuilder:
             )
             return None
 
-    async def _external_tools(self, item_id: str, session: Any) -> ExternalTools:
+    async def _external_tools(self, item_id: str) -> ExternalTools:
         """#674: resolve this app's third-party tools, once, at the top of a turn.
 
         Before the sandbox exists, because the answer decides which tools the
@@ -702,18 +702,22 @@ class TurnContextBuilder:
 
         When one ALREADY exists, though, its bundles were fixed when it was
         created and the resolve cannot change them. So the mounted set becomes
-        the ceiling: a tool registered since, or released since, is reported as
+        the ceiling: a tool the sandbox was set up without is reported as
         unavailable with a reason rather than handed over as a launcher that
-        isn't there."""
+        isn't there, and a tool it runs at a DIFFERENT release from the latest
+        stays available, its description saying which release runs
+        (plan-tool-running-version D1/D2)."""
         external = await resolve_item_tools(
             self._sandbox, self._locator, item_id, plugin_artifacts=self._view_plugin_artifacts
         )
         # What the item's LIVE sandbox mounted, from whichever pod built it —
         # the registry's one answer, probed and bounded (D10; before, a
         # peer-built sandbox was unknown here, so the model was told the
-        # manifest's release and offered tools it did not have). Not asked
-        # when the app declares none: this build made no sandbox call before.
-        mounted = await self._registry.mounted_tools(item_id) if external.shas else None
+        # manifest's release and offered tools it did not have). Asked only
+        # when the app itself declares a tool the model would be offered — a
+        # deployment's view plugins mount too, but they are no agent's tool,
+        # and this build made no sandbox call before (review round 2).
+        mounted = await self._registry.mounted_tools(item_id) if external.packages else None
         confined = confine_to_mounted(external, live=mounted is not None, mounted=mounted)
         confined = describe_running(confined, mounted)
         # Confining refuses what the live sandbox lacks — for a view plugin that
@@ -920,7 +924,7 @@ class TurnContextBuilder:
         session = await self._registry.session(item_id)
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
-        external = await self._external_tools(item_id, session)
+        external = await self._external_tools(item_id)
         agent_config = self._finalized(agent_config, external)
         return AgentToolContext(
             **self._common(
@@ -1023,7 +1027,7 @@ class TurnContextBuilder:
         session = await self._registry.session(item_id)
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
-        external = await self._external_tools(item_id, session)
+        external = await self._external_tools(item_id)
         agent_config = self._finalized(agent_config, external, tool_subset)
         return AgentToolContext(
             **self._common(

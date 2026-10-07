@@ -203,8 +203,11 @@ export function ItemEnvironmentModal({
     mutationFn: () => myResourcesApi.closeEnvironment(itemId),
     // Both queries: closing frees the person's budget as well as this item's
     // sandbox, so leaving the total stale would show a gauge that has not
-    // noticed what the button just did.
-    onSuccess: refresh,
+    // noticed what the button just did. And the tool picker's: with no live
+    // sandbox its "close to update" no longer applies
+    // (plan-tool-running-version).
+    onSuccess: () =>
+      Promise.all([refresh(), qc.invalidateQueries({ queryKey: qk.itemTools(slug, itemId) })]),
   });
 
   const attemptClose = useDirtyClose(dirty, onClose);
