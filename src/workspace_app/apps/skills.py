@@ -770,7 +770,9 @@ async def skill_upstream(
     )
     if up is None:
         return None
-    if up.state != "live":
+    if up.state != "live" or up.origin.forked:
+        # A fork's starting point is the user's own; the entry moving on is
+        # not an update to it (G23).
         return SkillUpstream(state=up.state, update_available=False)
     if up.commit and up.origin.commit:
         # G13: one comparison of two strings — no file is read, from git or here.
@@ -843,8 +845,37 @@ async def install_hub_skill(
     entry = hub.get(entry_id)
     assert entry is not None  # the caller checked `state_for` first
     payload = await hub.payload_of(entry_id)
-    root = f"/{WORKSPACE_SKILL_DIR}/{entry.name}"
-    manifest = msgspec.json.encode(hub.copy_manifest(entry_id, entry))
+    await _write_copy(files, workspace_id, entry.name, payload, hub.copy_manifest(entry_id, entry))
+    return entry.name
+
+
+async def fork_hub_version(
+    files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, entry_id: str, revision: str
+) -> str:
+    """Copy the version `revision` names into the workspace as a fork's
+    starting point (§8, G23) and return the name: the files of that version,
+    and an `.origin` marked `forked` so it is never offered the entry's newer
+    versions. Raises :class:`UnknownRevision` for a revision that is not one
+    of the entry's versions. The caller has checked the entry is readable and
+    the name is free."""
+    entry = hub.get(entry_id)
+    assert entry is not None
+    old = await hub.version(entry_id, revision)
+    payload = await hub.repos.read(entry_id, old.commit)
+    manifest = SkillOrigin(source="hub", files={}, entry=entry_id, commit=old.commit, forked=True)
+    await _write_copy(files, workspace_id, entry.name, payload, manifest)
+    return entry.name
+
+
+async def _write_copy(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    name: str,
+    payload: Mapping[str, bytes],
+    origin: SkillOrigin,
+) -> None:
+    root = f"/{WORKSPACE_SKILL_DIR}/{name}"
+    manifest = msgspec.json.encode(origin)
     # The whole folder is one operation (#538): checked once up front, so a
     # workspace with room for the first file and not the rest refuses cleanly
     # instead of leaving half a folder with no `.origin` — which would then
@@ -858,7 +889,6 @@ async def install_hub_skill(
     for rel, data in payload.items():
         await files.write(workspace_id, f"{root}/{rel}", data)
     await files.write(workspace_id, f"{root}/{ORIGIN_FILE}", manifest)
-    return entry.name
 
 
 class SkillRefresh(msgspec.Struct, frozen=True):
@@ -921,7 +951,7 @@ async def _refresh(
     )
     # Not a copy, or an upstream that is gone / closed to this viewer: nothing
     # to bring, and nothing here is touched — the copy is the workspace's own.
-    if up is None or up.state != "live":
+    if up is None or up.state != "live" or up.origin.forked:
         return SkillRefresh(updated=[], skipped=[], removed=[])
     origin, source = up.origin, up.source
     if up.commit:

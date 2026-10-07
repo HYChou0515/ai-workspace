@@ -17,7 +17,12 @@ import pytest
 from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from workspace_app.apps.skill_hub_git import SkillHubRepos
 from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin, origin_for
-from workspace_app.apps.skills import install_hub_skill, refresh_skill, skill_upstream
+from workspace_app.apps.skills import (
+    fork_hub_version,
+    install_hub_skill,
+    refresh_skill,
+    skill_upstream,
+)
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
@@ -214,3 +219,35 @@ async def test_a_copy_installed_before_the_git_store_is_compared_by_its_hashes(
 def test_a_manifest_written_before_commit_existed_still_decodes() -> None:
     old = b'{"source":"hub","files":{"SKILL.md":"x"},"entry":"e"}'
     assert msgspec.json.decode(old, type=SkillOrigin).commit == ""
+
+
+# ── a fork from an earlier version (§8, G23) ─────────────────────────────────
+
+
+def _revision(hub: SkillHubStore, entry_id: str) -> str:
+    return hub._rm().get(entry_id).info.revision_id  # noqa: SLF001 — the test reads the row's revision
+
+
+async def test_a_fork_from_an_old_version_is_that_version_and_tracks_nothing(
+    hub: SkillHubStore, files: WorkspaceFiles, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G23: an old version is not installed — it is a starting point of your
+    own. Its files are that version's; the Skills panel never offers to bring
+    it up to the entry's current version, and a refresh leaves it alone."""
+    entry = await _publish(hub, V1)
+    first = _revision(hub, entry)
+    await _publish(hub, {**V1, "SKILL.md": _MD + b"v2\n"})
+
+    name = await fork_hub_version(files, INV, hub, entry, first)
+
+    assert name == "triage"
+    for rel, data in V1.items():
+        assert await files.read(INV, f"{ROOT}/{rel}") == data, rel
+    origin = await _origin(files)
+    v1 = await hub.version(entry, first)
+    assert (origin.entry, origin.commit, origin.forked) == (entry, v1.commit, True)
+    up = await _up(files, hub)
+    assert up is not None and (up.state, up.update_available) == ("live", False)
+    result = await _refresh(files, hub)
+    assert (result.updated, result.skipped, result.removed) == ([], [], [])
+    assert await files.read(INV, f"{ROOT}/SKILL.md") == _MD

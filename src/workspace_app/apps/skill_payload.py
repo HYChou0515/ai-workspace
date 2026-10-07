@@ -109,6 +109,11 @@ class SkillOrigin(Struct):
     #: has. "" for the shared / profile sources and for a copy made before
     #: the git store, which keep `files`.
     commit: str = ""
+    #: A fork from an earlier version (plan-skill-hub-history §8, G23): a
+    #: starting point of the user's own, not an install. It never reads as
+    #: "has an update" and a refresh leaves it alone; publishing it is what
+    #: makes it a fork of `entry`.
+    forked: bool = False
 
 
 def origin_for(

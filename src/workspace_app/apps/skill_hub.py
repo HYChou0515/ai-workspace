@@ -28,6 +28,7 @@ import ast
 import asyncio
 import contextlib
 import datetime as dt
+import difflib
 import hashlib
 import random
 import re
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
 
     from ..filestore.protocol import FileStore
-    from .skill_hub_git import SkillHubRepos
+    from .skill_hub_git import SkillHubRepos, TreeFile
 
 #: What an entry is to one viewer. `live`: readable. `unpublished`: exists but
 #: this viewer may not read it (the owner made it private / restricted them out
@@ -385,6 +386,40 @@ class VersionMoved(Exception):
     chose looking at the version they saw."""
 
 
+HistoryKind = Literal["publish", "rollback", "transfer", "permission"]
+
+
+class HistoryEvent(Struct, kw_only=True):
+    """One row of an entry's timeline (§8, G24): a revision that changed what
+    the entry ships, who owns it, or who may see it."""
+
+    revision: str
+    kind: HistoryKind
+    at: dt.datetime
+    #: Who did it: the owner at the time — only an owner can do any of these.
+    by: str
+    #: The owner after it (differs from `by` only on a transfer).
+    owner: str
+    #: The version current after this revision.
+    commit: str
+    description: str
+    review_notes: list[str]
+    #: On a rollback: the revision that first published the version brought back.
+    to_revision: str = ""
+    #: On a permission change: the visibility after it.
+    visibility: str = ""
+    current: bool = False
+
+
+class FileChange(Struct, kw_only=True):
+    """One file's difference between two versions. `patch` is a unified diff,
+    or ``None`` for a file that is not text (LFS, or not UTF-8)."""
+
+    path: str
+    status: Literal["added", "removed", "changed"]
+    patch: str | None
+
+
 class MigrationReport(Struct, kw_only=True):
     """What `SkillHubStore.migrate_legacy` did: the entries it moved into git,
     and every `owner/name` held by more than one entry (left for the operator)."""
@@ -616,6 +651,121 @@ class SkillHubStore:
         assert current is not None
         await self._manage(entry_id, msgspec.structs.replace(current, owner=owner))
 
+    # ── history (§8) ─────────────────────────────────────────────────────
+
+    async def history(self, entry_id: str, *, viewer: str) -> list[HistoryEvent]:
+        """The timeline, newest first. A version is a publish the first time
+        its commit appears and a rollback when it comes back; revisions that
+        changed nothing a person asks about (a first publish's draft, the
+        tag-only writes) are not rows. Permission changes are the owner's
+        alone (G24). Also repairs the one tag a crash between the row write
+        and the tag can leave missing — the current revision's (G8)."""
+        rm = self._rm()
+        events: list[HistoryEvent] = []
+        first_seen: dict[str, str] = {}
+        prev: SkillHubEntry | None = None
+        last_revision = ""
+        for revision_id in rm.list_revisions(entry_id):
+            res = rm.get_resource_revision(entry_id, revision_id)
+            row = res.data
+            if not isinstance(row, SkillHubEntry) or row.pending or not row.commit:
+                continue
+            last_revision = revision_id
+
+            def event(
+                kind: HistoryKind,
+                by: str,
+                *,
+                to_revision: str = "",
+                visibility: str = "",
+                revision_id: str = revision_id,
+                at: dt.datetime = res.info.created_time,
+                row: SkillHubEntry = row,
+            ) -> HistoryEvent:
+                return HistoryEvent(
+                    revision=revision_id,
+                    kind=kind,
+                    at=at,
+                    by=by,
+                    owner=row.owner,
+                    commit=row.commit,
+                    description=row.description,
+                    review_notes=list(row.review.notes),
+                    to_revision=to_revision,
+                    visibility=visibility,
+                )
+
+            if prev is None or row.commit != prev.commit:
+                if row.commit in first_seen:
+                    events.append(event("rollback", row.owner, to_revision=first_seen[row.commit]))
+                else:
+                    first_seen[row.commit] = revision_id
+                    events.append(event("publish", row.owner))
+            elif row.owner != prev.owner:
+                events.append(event("transfer", prev.owner))
+            elif row.permission != prev.permission:
+                events.append(event("permission", row.owner, visibility=row.permission.visibility))
+            prev = row
+        if events:
+            events[-1].current = True
+        if prev is not None and last_revision not in await self.repos.tagged_revisions(entry_id):
+            await self._tag(entry_id, last_revision, prev.commit)
+        current = self.get(entry_id)
+        if current is None or current.owner != viewer:
+            events = [e for e in events if e.kind != "permission"]
+        events.reverse()
+        return events
+
+    async def version(self, entry_id: str, revision_id: str) -> SkillHubEntry:
+        """The entry as it was at `revision_id`: its fields, and through
+        `commit`, its files. Only revisions that name a version."""
+        try:
+            row = self._rm().get_resource_revision(entry_id, revision_id).data
+        except (KeyError, RevisionNotFoundError) as e:
+            raise UnknownRevision(revision_id) from e
+        if not isinstance(row, SkillHubEntry) or row.pending or not row.commit:
+            raise UnknownRevision(revision_id)
+        return row
+
+    async def diff(self, entry_id: str, from_revision: str, to_revision: str) -> list[FileChange]:
+        """What changed from one version to another, per file. Trees are
+        listed, and only the changed text files are read."""
+        a = (await self.version(entry_id, from_revision)).commit
+        b = (await self.version(entry_id, to_revision)).commit
+        old, new = await self.repos.tree(entry_id, a), await self.repos.tree(entry_id, b)
+        changed = sorted(
+            p
+            for p in old.keys() | new.keys()
+            if p not in old or p not in new or old[p].blob_id != new[p].blob_id
+        )
+        texts_a = (
+            await self.repos.read(
+                entry_id, a, paths=[p for p in changed if p in old and old[p].lfs is None]
+            )
+            if changed
+            else {}
+        )
+        texts_b = (
+            await self.repos.read(
+                entry_id, b, paths=[p for p in changed if p in new and new[p].lfs is None]
+            )
+            if changed
+            else {}
+        )
+        out: list[FileChange] = []
+        for path in changed:
+            status: Literal["added", "removed", "changed"] = (
+                "added" if path not in old else "removed" if path not in new else "changed"
+            )
+            out.append(
+                FileChange(
+                    path=path,
+                    status=status,
+                    patch=_patch(path, old.get(path), new.get(path), texts_a, texts_b),
+                )
+            )
+        return out
+
     async def rollback(self, entry_id: str, revision_id: str, *, expected: str) -> str:
         """Make the version `revision_id` was current in the current one (§4.3).
 
@@ -821,3 +971,28 @@ class SkillHubStore:
         raise ValueError(
             f"{name!r} is being published by someone else right now — try again in a moment"
         )
+
+
+def _patch(
+    path: str,
+    old: TreeFile | None,
+    new: TreeFile | None,
+    texts_a: Mapping[str, bytes],
+    texts_b: Mapping[str, bytes],
+) -> str | None:
+    """A unified diff of one file, or ``None`` when either side is not text."""
+    if (old is not None and old.lfs is not None) or (new is not None and new.lfs is not None):
+        return None
+    try:
+        a = texts_a[path].decode() if old is not None else ""
+        b = texts_b[path].decode() if new is not None else ""
+    except UnicodeDecodeError:
+        return None
+    return "".join(
+        difflib.unified_diff(
+            a.splitlines(keepends=True),
+            b.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )

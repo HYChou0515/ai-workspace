@@ -16,11 +16,12 @@ who can read the entry gets 403 on every one of them.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from typing import Literal
 
 import msgspec
-from fastapi import APIRouter, FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -34,7 +35,12 @@ from ..apps.skill_hub import (
     missing_tools_for,
     nest_forks,
 )
-from ..apps.skills import install_hub_skill, skill_folder_in_the_way, workspace_skill_payload
+from ..apps.skills import (
+    fork_hub_version,
+    install_hub_skill,
+    skill_folder_in_the_way,
+    workspace_skill_payload,
+)
 from ..files import WorkspaceFiles
 from ..resources.groups import groups_of
 from .item_authz import check_access, load_access_facts
@@ -140,6 +146,59 @@ class SkillRollbackRequest(BaseModel):
 class SkillRolledBack(BaseModel):
     id: str
     commit: str
+
+
+class SkillHubHistoryEvent(BaseModel):
+    revision: str
+    kind: Literal["publish", "rollback", "transfer", "permission"]
+    at: dt.datetime
+    by: str
+    owner: str
+    commit: str
+    description: str
+    review_notes: list[str]
+    to_revision: str
+    visibility: str
+    current: bool
+
+
+class SkillHubHistory(BaseModel):
+    """The timeline, newest first (plan-skill-hub-history §8)."""
+
+    events: list[SkillHubHistoryEvent]
+
+
+class SkillHubVersion(BaseModel):
+    """One earlier (or the current) version: its fields, its file names and
+    its SKILL.md — what the detail page shows for the entry itself."""
+
+    revision: str
+    commit: str
+    description: str
+    files: list[str]
+    skill_md: str
+
+
+class SkillHubVersionFile(BaseModel):
+    path: str
+    #: ``None`` when the file is not text.
+    text: str | None
+    size: int
+
+
+class SkillHubFileChange(BaseModel):
+    path: str
+    status: Literal["added", "removed", "changed"]
+    patch: str | None
+
+
+class SkillHubDiff(BaseModel):
+    files: list[SkillHubFileChange]
+
+
+class SkillForkRequest(BaseModel):
+    entry_id: str
+    revision: str
 
 
 class SkillEditTarget(BaseModel):
@@ -359,6 +418,70 @@ def register_skill_hub_routes(
         await hub.transfer(entry_id, new_owner)
         return SkillTransferred(id=entry_id, owner=new_owner)
 
+    @app.get("/skill-hub/entries/{entry_id}/history")
+    async def skill_hub_history(entry_id: str) -> SkillHubHistory:
+        """Every revision that changed the version, the owner or who may see
+        it; the last kind for the owner alone (G24)."""
+        viewer = get_user_id()
+        _readable(entry_id, viewer)
+        events = await hub.history(entry_id, viewer=viewer)
+        return SkillHubHistory(
+            events=[SkillHubHistoryEvent(**msgspec.structs.asdict(e)) for e in events]
+        )
+
+    async def _version(entry_id: str, revision: str) -> SkillHubEntry:
+        try:
+            return await hub.version(entry_id, revision)
+        except UnknownRevision:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+
+    @app.get("/skill-hub/entries/{entry_id}/versions/{revision}")
+    async def skill_hub_version(entry_id: str, revision: str) -> SkillHubVersion:
+        """Any version, readable by whoever may read the entry — read, not
+        installed (G23). One file read: the names come from the tree."""
+        _readable(entry_id, get_user_id())
+        old = await _version(entry_id, revision)
+        names = sorted(await hub.repos.tree(entry_id, old.commit))
+        skill_md = (await hub.repos.read(entry_id, old.commit, paths=["SKILL.md"]))["SKILL.md"]
+        return SkillHubVersion(
+            revision=revision,
+            commit=old.commit,
+            description=old.description,
+            files=names,
+            skill_md=skill_md.decode("utf-8", errors="replace"),
+        )
+
+    @app.get("/skill-hub/entries/{entry_id}/versions/{revision}/file")
+    async def skill_hub_version_file(
+        entry_id: str, revision: str, path: str
+    ) -> SkillHubVersionFile:
+        _readable(entry_id, get_user_id())
+        old = await _version(entry_id, revision)
+        tree = await hub.repos.tree(entry_id, old.commit)
+        if path not in tree:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND)
+        data = (await hub.repos.read(entry_id, old.commit, paths=[path]))[path]
+        try:
+            text: str | None = data.decode()
+        except UnicodeDecodeError:
+            text = None
+        return SkillHubVersionFile(path=path, text=text, size=len(data))
+
+    @app.get("/skill-hub/entries/{entry_id}/diff")
+    async def skill_hub_diff(
+        entry_id: str,
+        from_revision: str = Query(alias="from"),
+        to_revision: str = Query(alias="to"),
+    ) -> SkillHubDiff:
+        _readable(entry_id, get_user_id())
+        try:
+            changes = await hub.diff(entry_id, from_revision, to_revision)
+        except UnknownRevision:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+        return SkillHubDiff(
+            files=[SkillHubFileChange(path=c.path, status=c.status, patch=c.patch) for c in changes]
+        )
+
     @app.post("/skill-hub/entries/{entry_id}/rollback")
     async def rollback_skill_hub_entry(
         entry_id: str, body: SkillRollbackRequest
@@ -428,6 +551,26 @@ def register_skill_hub_routes(
             raise HTTPException(status_code=404, detail="Not Found")
         report = await hub.migrate_legacy()
         return SkillHubMigration(migrated=report.migrated, duplicates=report.duplicates)
+
+    @app.post("/a/{slug}/items/{item_id}/skills/fork")
+    async def fork_skill_version_into_item(
+        slug: str, item_id: str, body: SkillForkRequest
+    ) -> SkillInstalled:
+        """〔從這一版 fork〕: an earlier version copied into the item as a
+        starting point of the viewer's own — never offered the entry's newer
+        versions (G23). The same refusals as install: 404 for an entry or a
+        revision the viewer may not read, 409 for a folder already there."""
+        viewer = get_user_id()
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
+        entry = _readable(body.entry_id, viewer)
+        old = await _version(body.entry_id, body.revision)
+        if taken := await skill_folder_in_the_way(files, investigation_id, hub, entry.name, viewer):
+            raise HTTPException(status_code=409, detail=taken.code())
+        name = await fork_hub_version(files, investigation_id, hub, body.entry_id, body.revision)
+        # The tools of the version copied, not of the entry's current one.
+        return SkillInstalled(
+            name=name, missing_tools=missing_tools_for(old.referenced_tools, slug)
+        )
 
     @app.post("/a/{slug}/items/{item_id}/skills/install")
     async def install_skill_into_item(
