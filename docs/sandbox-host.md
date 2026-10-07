@@ -55,6 +55,8 @@ Host 端——**環境變數**(`SANDBOX_HOST_*`),設在 host pod 上
 | `SANDBOX_HOST_CGROUP_ROOT` | _(未設)_ | 委派的 cgroup v2 子樹;未設 = 自動偵測 |
 | `SANDBOX_HOST_TOOLS_DIR` | _(未設)_ | 預建工具目錄,bind-mount 在 `/.tools`;未設 = 無工具 |
 | `SANDBOX_HOST_IDLE_TTL` | `1800` | 回收因 app-pod crash 而成孤兒的 sandbox;0 = 關閉 |
+| `SANDBOX_HOST_ARCHIVE_PACK` | `1` | 回收時在 NFS 樹旁多寫一個打包檔,再開時讀它而不是逐檔複製;`0` = 不打包也不讀。只認 1/0、true/false、yes/no、on/off,其他值開不了機([設計](plan-archive-pack.md)) |
+| `SANDBOX_HOST_PACK_DRAIN_S` | `300` | 回收要打包時,等沙盒上已經在跑的請求(checkpoint、exec)結束的上限秒數;等不到就不打包並印 warning |
 
 (`SANDBOX_HOST_ROOT`、`_EXEC_TIMEOUT`、`_LOG_TIMEOUT` 也存在——見
 `sandbox-host/src/sandbox_host/config.py`。)

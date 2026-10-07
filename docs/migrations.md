@@ -1315,6 +1315,128 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
+### 2026-10-01 · 24e951d8 · #867 沙盒 chown 不再跟著 symlink 走：有斷掉連結的 item 打得開了 {#pr-867}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**：沙盒把 workspace 裡的檔案交給沙盒使用者時（sandbox-host 還原後的
+`reown` 與 `_own`；app 在 `sandbox.isolation` 開啟時的 `_own`），路徑**最後一段**是 symlink 的話，改的是連結本身，
+不再是連結指到的東西。
+
+- 修的是：workspace 裡有一個**斷掉的 symlink**，這個 item 的沙盒被回收之後就再也建不起來，檔案樹回 500、使用者看起來
+  像是資料不見了。prod 遇到的是 pnpm 的 `node_modules/.pnpm/node_modules/fsevents`（只在 macOS 安裝的套件，在 Linux
+  上指向不存在的目錄）。資料一直在備份裡：還原失敗發生在標記 ready 之前，備份不會被覆寫。
+- 同時關掉的：以 root 執行的 chown 跟著「最後一段就是連結」的路徑，把 workspace **外面**的檔案改成沙盒使用者所有。
+  路徑**中間**的資料夾是連結時仍會被解析——那是寫入路徑本身的舊缺口，不在這次修正範圍。
+
+**資料** — 沒有 `Schema` 升版，也沒有要跑的指令。已經打不開的 item，新版上線後重新開啟就會恢復。
+
+**k8s · CI 側**
+
+- **合併時 `sandbox-host/src/sandbox_host/isolated_process.py` 要一起進，`rollout 前`。**
+  - 為什麼：prod 的 `kind: http` 由 sandbox-host 做還原後的 chown；API 這邊只改了 `kind: local` 用的那一份。
+    `sandbox-host/` 是根目錄旁的獨立 uv 專案，fork 合併時最容易漏或解錯衝突。
+  - 確認：`git diff <合併前> <合併後> -- sandbox-host/src/sandbox_host/isolated_process.py` 看得到
+    `os.chown(path, uid, -1, follow_symlinks=False)`。
+  - 漏做的症狀：有斷掉連結的 item 仍然打不開。
+- 等不及上線的止血（可選，`rollout 前`，不做的話這些 item 一直打不開到新版上線）：在 sandbox-host pod 裡刪掉**所有 item**
+  備份裡斷掉的連結，包含使用者自己建的。「斷掉」是從 sandbox-host pod 看備份路徑判定的，所以一個絕對路徑的連結
+  在沙盒裡指得到、從備份位置指不到時也會被刪。先看清單再刪：
+  ```bash
+  find "$SANDBOX_HOST_NFS_ROOT" -xtype l -print          # 先看會刪哪些
+  find "$SANDBOX_HOST_NFS_ROOT" -xtype l -print -delete  # 確認後再刪
+  ```
+
+**確認做完**
+
+- 打開原本打不開的 item：檔案樹正常載入。
+- 該時段的 **API pod** log 沒有 `sandbox-http: create refused for item <id> -> FileNotFoundError`
+  （`kubectl logs <api-pod> --since=15m | grep "create refused"`）。sandbox-host 自己的 log 在修正前後都只有一行
+  `POST /sandboxes` 的存取紀錄（修正前是 404），看它分不出有沒有修好。
+
+> [#872](#pr-872) 上線之後再跑上面的止血：刪完連結要接著刪打包檔，否則被回收的 item 會從打包檔把刪掉的連結還原回來。命令在 #872。
+
+---
+
+### 2026-10-07 · bdb3f43a · #872 沙盒回收時多存一個打包檔：再開時讀一個檔，不再逐檔複製 {#pr-872}
+
+**設定** — sandbox-host 新 env **`SANDBOX_HOST_ARCHIVE_PACK`，預設開**。只認 `1`/`0`、`true`/`false`、`yes`/`no`、
+`on`/`off`；其他值 host **開不了機**（`ValueError` 會點名這個 key）。`0` = 不打包，也不讀已經存在的打包檔。
+另一個新 env **`SANDBOX_HOST_PACK_DRAIN_S`，預設 `300`**：回收要打包時，等沙盒上已經在跑的請求結束的上限秒數（見下）；
+host log 常出現 `no pack for … still running` 時再調大。兩個值都印在 host 開機那行 echo 裡。app 端沒有新 key。
+
+行為改變（預設開）：
+
+- app 判定一個 item **全域閒置**（8 小時，`create_app` 的預設，沒有設定 key）、要回收它的沙盒時，送給 host 的 `persist`
+  多帶 `pack: true`。turn 結束、回合中的 checkpoint、關機、使用者關閉環境都**不**帶。
+- host 收到之後：照舊把沙盒 rsync 回 `$SANDBOX_HOST_NFS_ROOT/<item>/`，並記下這個沙盒「砍的時候要打包」；
+  app 緊接著送的 kill（`DELETE /sandboxes/{rid}`）在拆掉沙盒之前，在樹旁邊寫
+  `<item>.pack.<gen>-<位元組數>.tar`（整個 workspace 的一個 tar）。下次開這個 item 時，host 解開這一個檔，
+  不再逐個路徑從 NFS 複製——還原的成本從「路徑數 × 一次 NFS 往返」變成「一次讀一個大檔」。
+  回報的那個 item 有 88,889 個路徑，逐路徑複製花了 58 秒，壓在 ingress 預設的 60 秒上。
+- 每一次 `persist`（不論有沒有打包）**先**把 `$SANDBOX_HOST_NFS_ROOT/<item>.gen` 換成新的值，並刪掉這個 item
+  舊的打包檔。打包檔名字裡的 `<gen>` 不等於現在的 `.gen`、或檔案大小不等於名字上的位元組數，就不會被用——
+  所以打包檔只會在「回收之後、下次寫回之前」那段時間存在並被讀到。
+- 要打包的那次 kill 期間這個沙盒**不接任何請求**：host 先把它關起來，之後進來的請求（任何 app pod 的 checkpoint、
+  檔案寫入、exec）直接得到「沙盒不見了」——它本來就要不見了。關起來之前就在跑的請求（例如一個 checkpoint 的 rsync）
+  會等它跑完，最多 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒）；等不到（例如一個還在跑的長 exec）就不打包，host log 會有 `no pack for … still running` 的 warning。
+  不打包的 kill（開關關著、沒有 NFS、不是回收）和以前一樣，砍完之前照常回應。
+  打包失敗只印 warning，沙盒照砍；下次開就照舊逐檔複製。這個 PR 自己的失敗都只會「慢」，不會「錯」：樹永遠是真相。
+  會「錯」的只有下面兩條規則沒做到的情況。
+
+**資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。NFS 上多兩種檔，都在 item 目錄**旁邊**，不在裡面：
+`<item>.gen`（幾十個位元組，每個寫過的 item 都有，開關關掉也會寫）與 `<item>.pack.*.tar`。
+
+- **空間**：每個「已回收、還沒再開過」的 item 多一份大約等於它 workspace 大小的 tar（不壓縮）——最壞約 2×。
+  再開之後的第一次寫回就會刪掉它；刪除 item 時也會一起刪掉它的 `.gen` 與打包檔。
+  - 量現在用了多少：`du -ch "$SANDBOX_HOST_NFS_ROOT"/*.pack.*.tar | tail -1`
+  - 不想要這份空間（任何時候，可選）：設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，滾完再
+    `find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -delete`。順序反過來的話，還開著的 pod 會在你刪完之後再打新的包；
+    不做只是多佔空間。
+- **從今以後的規則：不經過 host、直接改 `$SANDBOX_HOST_NFS_ROOT/<item>/` 的任何操作，做完都要刪那個 item 的打包檔。**
+  包括手動 rsync、[#867](#pr-867) 那條 `find -delete`、從備份還原 NFS 樹。
+  ```bash
+  rm -f "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar                                # 一個 item
+  find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete   # 全部
+  ```
+  - 為什麼：host 只看名字判斷打包檔還有沒有效，而名字只有經過 host 的寫入才會作廢。逐一比對打包檔和樹是否一致，
+    本身就是逐路徑的 NFS 往返，等於沒做——所以這一條擋不了，只能靠規則。
+  - 漏做的症狀：那個 item 下次打開時是**改之前**的內容，而且 turn 結束的寫回會把樹也對齊成改之前的樣子——你的修改被**無聲地撤銷**。
+    刪打包檔永遠安全：最壞是下次開回到逐檔複製的速度。
+- **沒有這個 PR 的 sandbox-host 也算「不經過 host」**：它寫樹不換 `.gen`、也不刪打包檔。所以新舊版本的 host 同時在跑的期間
+  （rollout 途中、回滾之後），新版打的包可能被舊版的寫入繞過。處理方式在下面「k8s · CI 側」的第二項。
+
+**k8s · CI 側**
+
+- **sandbox-host 要重 build、重 deploy 才有效果**（`sandbox-host/` 是獨立的 uv 專案和 image）。
+  - 什麼時候：照下一項的三步驟滾（**第一次滾上時開關要設 `0`**）；和 app 誰先上都可以：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
+  - 不需要新權限、新 volume、新 manifest：`tar` 是 base image（Debian bookworm）本來就有的 GNU tar 1.34，打包檔寫在既有的 NFS 掛載上。
+  - 漏做的症狀：沒有壞處，只是還原照舊逐檔複製。
+- **新舊版 sandbox-host 同時在跑的期間，打包必須是關的。** 每次從「沒有這個 PR 的版本」滾到「有的版本」（第一次上線、
+  回滾之後再上線）分三步：
+  1. **rollout 前**：在 sandbox-host 的 env 設 `SANDBOX_HOST_ARCHIVE_PACK=0`，用它滾上新 image。
+  2. **rollout 完成**（`kubectl rollout status` 說所有 sandbox-host pod 都是新版）**後**：刪掉所有打包檔
+     ```bash
+     find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete
+     ```
+  3. 把 `SANDBOX_HOST_ARCHIVE_PACK` 拿掉（或設 `1`），再滾一次。
+  - 為什麼：舊版 host 寫樹不換 `.gen`。新舊並存時，新版 pod 回收某個 item 時打的包，可能接著被舊版 pod 重開、修改、
+    寫回而**不作廢**；舊 pod 被輪替掉之後，新 pod 從那個過期的打包檔還原。這整串都可能發生在 rollout 途中，所以「事後刪」
+    擋不住，只能讓新版在並存期間不打包、不讀打包檔（開關關著時仍然照樣換 `.gen`，所以第 3 步之後不會撿到舊的）。
+    第 2 步清掉的是回滾前留下、gen 又沒被舊版換掉的打包檔；第一次上線時它什麼都不會刪。
+  - 漏做的症狀：在新舊並存期間被回收又被重開的 item，下次打開時回到修改前的內容，修改被無聲地撤銷。
+  - **回滾**（滾回沒有這個 PR 的版本）反過來：先設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，再換回舊 image。
+    舊版不讀打包檔，但回滾途中還在跑的新版 pod 會讀。漏做的症狀同上：回滾途中被回收又被重開的 item 回到修改前的內容。
+
+**確認做完**
+
+- host 開機那一行 echo 帶 `archive_pack=1`，**而且同一行的 `nfs_root=` 不是 `None`**（沒有 NFS 封存就什麼都不打包）：
+  `kubectl logs <sandbox-host-pod> | grep archive_pack`。
+- 一個 item 被回收（閒置 8 小時）之後：`ls -la "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar` 有一個檔。
+- 再打開那個 item：等待時間比之前短；host log 裡**沒有** `did not extract`
+  （`kubectl logs <sandbox-host-pod> --since=15m | grep "did not extract"`）。有的話 host 退回逐檔複製，訊息裡有 tar 的錯誤。
+- 打開後跑一個 turn：那個打包檔不見了（寫回把它作廢並刪除）。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

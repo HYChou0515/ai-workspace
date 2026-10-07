@@ -62,7 +62,7 @@ class _PersistingSandbox(MockSandbox):
         self.handle = await super().create(*args, **kwargs)
         return self.handle
 
-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
         self.persist_calls += 1
 
 

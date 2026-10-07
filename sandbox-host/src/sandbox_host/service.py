@@ -86,7 +86,9 @@ def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
 def build_archive(settings: SandboxHostSettings) -> NfsArchive | None:
     """#492: the durable NFS archive, or None when `nfs_root` is unset (the
     transitional / local-dev default — no restore-on-create, no persist)."""
-    return NfsArchive(settings.nfs_root) if settings.nfs_root else None
+    if not settings.nfs_root:
+        return None
+    return NfsArchive(settings.nfs_root, pack=settings.archive_pack)
 
 
 def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> FastAPI:
@@ -99,4 +101,5 @@ def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> Fast
         readiness=lambda: check_cgroup_ready(cgroup_root),
         archive=build_archive(settings),
         tool_resolver=build_tool_resolver(settings),
+        pack_drain_s=settings.pack_drain_s,
     )

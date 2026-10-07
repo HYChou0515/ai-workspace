@@ -530,14 +530,18 @@ class HttpSandbox:
         resp.raise_for_status()
         return resp.json()
 
-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
         # #492: ask the host to rsync this sandbox's live working dir → the
         # durable NFS archive. Host-local, so the bulk copy never crosses this
         # app↔host connection (it can't hang the way the old per-file mirror
         # did). `delete` ⇒ --delete reconcile at a quiesced turn-end / reap;
-        # False ⇒ additive-only mid-turn checkpoint.
-        logger.info("sandbox-http: persist sandbox %s delete=%s", handle.id, delete)
-        await self._request(handle, "POST", "/persist", json={"delete": delete})
+        # False ⇒ additive-only mid-turn checkpoint. `pack` (reap only,
+        # docs/plan-archive-pack.md) asks the host to also leave, when the kill
+        # that follows tears the sandbox down, a single-file copy the next
+        # restore reads instead of walking every path; an older host ignores
+        # the field and simply does not pack.
+        logger.info("sandbox-http: persist sandbox %s delete=%s pack=%s", handle.id, delete, pack)
+        await self._request(handle, "POST", "/persist", json={"delete": delete, "pack": pack})
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         # The HTTP host owns its own per-sandbox lifecycle and mints handles

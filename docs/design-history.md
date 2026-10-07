@@ -98,6 +98,7 @@
 | [plan-skills-and-tools.md](plan-skills-and-tools.md) | Skills 與 tools 套件設計 |
 | [plan-skill-hub.md](plan-skill-hub.md) | skill hub：使用者之間分享 skill，不經過 dev 的版本庫——在 item 裡發布（結構擋、AI 審掛意見）、在 item 裡裝（副本 + `.origin`，告知目標 App 缺的 tool）、非 owner 只能 fork、owner 在詳情頁管理；十個 grill 決策的原文 |
 | [plan-skill-hub-ui-polish.md](plan-skill-hub-ui-polish.md) | skill hub 的 UI 打磨（#826）：九段 demo 錄影抓到的 22 個問題，每一項對照教科書做法（Material 3 / Apple HIG / NN/g / Polaris / GOV.UK / MUI）決定 D1–D17——對話框預設留白、搜尋框不失焦、錯誤只報一次、成功提示、安裝前先標「已有同名 skill」、圖示各自專用＋tooltip、可見範圍對話框走 i18n、伺服器拒絕句改 code、工具回話分段、窄寬的頂欄與麵包屑；版面一律真 Chromium 量 1280／390 |
+| [plan-skill-hub-history.md](plan-skill-hub-history.md) | skill hub 的歷史與回溯、下載/使用次數、問 AI 該裝哪個(grill 進行中):一個 skill 一個 bare git repo(自己的 `skill_hub.git_root`)、`master` = 目前版本、push `--force-with-lease` 搶鎖、回復 = `master` 指回舊 commit、每個 revision 打 tag `r-<revision id>`、hub 副本 `.origin` 記 commit、LFS 以路徑模式、檔案數上限 1000 |
 | [plan-chat-video.md](plan-chat-video.md) | **PR #817(script 版 P1–P5 已做)**。把一段對話紀錄做成影片：吃 `.chat.json`、一條指令、不打 LLM；純 HTML/CSS 的 zoom 推進輸入框、指定長寬；核心是純函式 + msgspec options，為之後的前端按鈕 + 獨立 job / worker pod 鋪路 |
 | [plan-headless-env.md](plan-headless-env.md) | 沒有人按送出的 turn（item 排程、goal driver、event trigger、整條 workflow）也拿得到環境變數：`IRequestEnv` 多一個 `env_without_request(user_id, item_id)`，預設 `{}`，部署的 impl 決定回 service account 還是什麼都不給；平台仍不認得 service account 這個詞；改變 #714「workflow 整條不接」的定案並寫明為何原顧慮不再成立 |
 | [plan-wui-viewer-login.md](plan-wui-viewer-login.md) | 看頁面的人用自己的登入：環境變數分 shared（item 上，不動）與 private（每人每 item 一份，只有本人讀得到）兩層，每個 key 一種政策（`shared > private` 預設=今天的行為 / `private > shared` / `private only`）；callTool、聊天、頁面起的 run 用按的人，排程要本人按「用我的身分執行」才綁定、內容一改就失效；Env 面板分「只有我／所有參與者」兩分頁、tool 下拉換成可收合分段；`/w/` 在 iframe 上方加平台列（line of death） |
@@ -119,6 +120,7 @@
 | [plan-graceful-shutdown.md](plan-graceful-shutdown.md) | pod 離開時不能帶走使用者的對話（graceful shutdown、turn 換 pod） |
 | [plan-blob-gc-job.md](plan-blob-gc-job.md) | Blob GC 改成 job：API 只負責提出要求 |
 | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
+| [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
 
 ## 前端與介面
 

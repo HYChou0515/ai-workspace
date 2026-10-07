@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from sandbox_host.config import SandboxHostSettings, load_settings
 
 
@@ -69,8 +71,10 @@ def test_every_setting_is_reachable_from_its_env_var():
     suite green and the test's own name asserting otherwise. Deriving the keys
     from the dataclass covers the next field the day it is added, or says so.
     """
-    sample = {"str": "sample", "int": "424242", "float": "42.5"}
-    cast = {"str": str, "int": int, "float": float}
+    # A bool is sampled as the value that is NOT its default, or a key that is
+    # never read would still compare equal.
+    sample = {"str": "sample", "int": "424242", "float": "42.5", "bool": "0"}
+    cast = {"str": str, "int": int, "float": float, "bool": lambda _raw: False}
 
     env: dict[str, str] = {}
     want: dict[str, object] = {}
@@ -89,3 +93,40 @@ def test_ignores_unrelated_env_keys():
     s = load_settings({"PATH": "/usr/bin", "SANDBOX_HOST_BIND": "0.0.0.0:1234"})
     assert s.bind == "0.0.0.0:1234"
     assert s.uid_min == 100000  # untouched default
+
+
+@pytest.mark.parametrize(
+    ("raw", "want"),
+    [
+        ("1", True),
+        ("true", True),
+        ("Yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("No", False),
+        ("OFF", False),
+    ],
+)
+def test_archive_pack_reads_the_usual_spellings(raw: str, want: bool) -> None:
+    assert load_settings({"SANDBOX_HOST_ARCHIVE_PACK": raw}).archive_pack is want
+
+
+def test_archive_pack_is_on_by_default() -> None:
+    assert load_settings({}).archive_pack is True
+
+
+@pytest.mark.parametrize("raw", ["", "flase", "2", "disabled"])
+def test_archive_pack_refuses_a_value_it_cannot_read(raw: str) -> None:
+    """A string is not a bool: `"false"` read as truthy turned a pure producer
+    into a consumer once (run_consumers). An unreadable value stops the boot
+    with the key named, rather than silently meaning on."""
+    with pytest.raises(ValueError, match="SANDBOX_HOST_ARCHIVE_PACK"):
+        load_settings({"SANDBOX_HOST_ARCHIVE_PACK": raw})
+
+
+def test_a_packing_kill_waits_five_minutes_by_default() -> None:
+    """Long enough for a checkpoint already running on an item the pack is for
+    (one walk of ~89k paths took ~a minute) to finish, with room for a few
+    pods' walks contending."""
+    assert load_settings({}).pack_drain_s == 300.0

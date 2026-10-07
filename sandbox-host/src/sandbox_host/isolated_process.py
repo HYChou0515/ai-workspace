@@ -181,8 +181,18 @@ def _run_setfacl(argv: list[str]) -> None:
 
 def _run_chown(path: Path, uid: int) -> None:
     """Chown `path` to `uid`, leaving the gid unchanged (-1). The host runs as
-    root (or with CAP_CHOWN) — the same power `_provision` already uses."""
-    os.chown(path, uid, -1)
+    root (or with CAP_CHOWN) — the same power `_provision` already uses.
+
+    Never follows a symlink that IS `path` (the final component): every path
+    here is inside a USER's workspace, so it may be a link they made. Following
+    it chowned the target as root — a link to a file outside the workspace
+    handed it to the sandbox uid — and a dangling one (pnpm's macOS-only
+    `fsevents`) raised, failing every restore of the item. A symlinked DIRECTORY
+    earlier in the path is still resolved by the kernel (`reown`'s `rglob` never
+    descends into one; `_own` after an upload through one can reach outside —
+    `_resolve` is lexical, a separate and older gap). Same rule as
+    `tool_cache`'s `lchown`."""
+    os.chown(path, uid, -1, follow_symlinks=False)
 
 
 @dataclass(frozen=True)

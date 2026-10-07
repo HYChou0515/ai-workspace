@@ -13,10 +13,18 @@ from sandbox_host.config import SandboxHostSettings
 from sandbox_host.isolated_process import IsolatedProcessSandbox
 from sandbox_host.service import (
     advertise_url,
+    build_archive,
     build_host_app,
     build_sandbox,
     resolve_tools_dir,
 )
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_build_archive_threads_the_pack_switch(tmp_path, on: bool):
+    """`SANDBOX_HOST_ARCHIVE_PACK` reaches the archive the host actually runs."""
+    archive = build_archive(SandboxHostSettings(nfs_root=str(tmp_path), archive_pack=on))
+    assert archive is not None and archive._pack is on
 
 
 def test_advertise_url_prefers_pod_ip():
@@ -90,3 +98,10 @@ def test_build_host_app_advertise_url_uses_pod_ip(tmp_path, pod_ip):
         SandboxHostSettings(bind="0.0.0.0:8123", cgroup_root=str(tmp_path / "cg")), pod_ip=pod_ip
     )
     assert isinstance(app, FastAPI)
+
+
+def test_build_host_app_threads_the_pack_drain_bound(tmp_path):
+    app = build_host_app(
+        SandboxHostSettings(cgroup_root=str(tmp_path / "cg"), pack_drain_s=12.5), pod_ip=None
+    )
+    assert app.state.controller._pack_drain_s == 12.5

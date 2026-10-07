@@ -145,22 +145,30 @@ class InvestigationRegistry:
         app-side sync wired (the write-back routes through `sandbox.persist`)."""
         return self.sync is not None or self.host_managed_durable
 
-    async def _writeback(self, inv_id: str, handle: SandboxHandle, *, delete: bool) -> None:
+    async def _writeback(
+        self, inv_id: str, handle: SandboxHandle, *, delete: bool, pack: bool = False
+    ) -> None:
         """#492: persist an item's live sandbox to durable. Host-managed ⇒ ask the
         host to rsync its own dir to the NFS archive (`delete` reconciles at a
         quiesced point; False is the additive mid-turn checkpoint). Else the
-        app-side SandboxSync mirrors it, as before."""
+        app-side SandboxSync mirrors it, as before.
+
+        `pack` is for `kill_idle` alone (docs/plan-archive-pack.md): reap is the
+        one write-back where the item is globally idle, the sandbox is about to
+        go and nobody waits — packing costs time in proportion to bytes. The
+        app-side mirror has no pack; the flag means nothing there."""
         logger.debug(
-            "registry: writeback item=%s handle=%s delete=%s host_managed=%s",
+            "registry: writeback item=%s handle=%s delete=%s pack=%s host_managed=%s",
             inv_id,
             handle.id,
             delete,
+            pack,
             self.host_managed_durable,
         )
         if self.host_managed_durable:
             persist = getattr(self.sandbox, "persist", None)
             if persist is not None:
-                await persist(handle, delete=delete)
+                await persist(handle, delete=delete, pack=pack)
             return
         # Every non-host-managed caller gates on `_has_durable`, which in this
         # branch (host_managed_durable False) means the app-side sync IS wired.
@@ -753,8 +761,10 @@ class InvestigationRegistry:
                     continue
                 if s.handle is not None:
                     if self._has_durable:
-                        # write-back before rmtree (reconcile — the dir is settled)
-                        await self._writeback(inv_id, s.handle, delete=True)
+                        # write-back before rmtree (reconcile — the dir is settled),
+                        # and the ONE write-back that asks for a pack: globally idle,
+                        # about to go, nobody waiting (docs/plan-archive-pack.md).
+                        await self._writeback(inv_id, s.handle, delete=True, pack=True)
                     # #366: a handle the host already reaped (idle TTL) raises
                     # SandboxNotFound — that IS the goal, so still drop the session.
                     with contextlib.suppress(SandboxNotFound):
