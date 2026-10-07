@@ -80,6 +80,8 @@ export const qk = {
   // The `/wui` overview: every Deployed page the viewer may open. One key for
   // the whole listing — it is per viewer, and Remove invalidates all of it.
   wuiOverview: ["wuiOverview"] as const,
+  /** Every schedule the viewer may read (docs/plan-schedule-overview.md). */
+  schedulesOverview: ["schedulesOverview"] as const,
   // The skill hub (docs/plan-skill-hub.md): the listing per search + 「我的」,
   // and one entry (with the tool diff for an App when asked). Both are per
   // viewer; a management write invalidates the whole family.

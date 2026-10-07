@@ -2675,6 +2675,7 @@ def create_app(
         policy=schedule_policy,
         get_user_id=get_user_id,
         start_run=_start_page_schedule,
+        deployed_pages=DeployedPages(spec).newest_first,
     )
 
     register_private_env_routes(

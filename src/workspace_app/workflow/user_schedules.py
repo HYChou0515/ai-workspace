@@ -515,6 +515,21 @@ def next_run_at(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
     return "" if when is None else f"{when:%Y-%m-%d %H:%M}"
 
 
+def next_run_ms(row: UserSchedule, at: str, now_utc: datetime) -> int:
+    """`next_run_at`'s answer as one instant (epoch ms) — what a list of rows in
+    different zones sorts on, since "09:00" in two zones is two instants. Due
+    now (`at == ""`) is now. The zone is resolved the way `in_zone` resolves
+    it, unusable → UTC, so the instant matches the wall clock shown."""
+    if not at:
+        return int(now_utc.replace(tzinfo=UTC).timestamp() * 1000)
+    local = datetime.strptime(at, "%Y-%m-%d %H:%M")
+    try:
+        zone = ZoneInfo(row.tz) if row.tz else UTC
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        zone = UTC
+    return int(local.replace(tzinfo=zone).timestamp() * 1000)
+
+
 def describe_next_run(row: UserSchedule, at: str) -> str:
     """`next_run_at`'s answer as the sentence the agent relays."""
     if not at:
@@ -559,6 +574,8 @@ class ScheduleView(Struct):
     `known` (there is no such workflow): the fix is to the workflow, and a person
     told "no such workflow" would hunt for a typo in the schedule instead."""
     payload: dict[str, Any] = {}
+    next_ms: int | None = None
+    """`next_at` as one instant (epoch ms; now when due now) — `next_run_ms`."""
     trigger_id: str = ""
     """The row's schedule identity (`trigger_id_for`) — what its window ledger,
     its own chat and its "run as me" binding are keyed on. Filled when the
@@ -646,6 +663,7 @@ def schedule_views(
                 next_run=describe_next_run(row, at) if runnable else "",
                 next_at=at,
                 due_now=runnable and not at,
+                next_ms=next_run_ms(row, at, now_utc) if runnable else None,
                 tz=row.tz or "UTC",
                 known=known,
                 run_problem=run_problem,

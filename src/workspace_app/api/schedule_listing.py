@@ -40,6 +40,7 @@ from ..workflow.offered import (
 from ..workflow.orchestrator import ActiveRunExists
 from ..workflow.run import WorkflowRun
 from ..workflow.user_schedules import (
+    ITEM_SCHEDULES_PATH,
     SchedulePolicy,
     ScheduleView,
     UserSchedule,
@@ -53,6 +54,7 @@ from ..workflow.user_schedules import (
 from .file_routes import _workspace_path
 from .locator import ItemLocator
 from .schedule_index import ScheduleIndex, is_schedule_file
+from .wui_deploy import DeployedWui
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,7 @@ class OverviewRow(BaseModel):
     describe: str = ""
     runnable: bool = False
     next_at: str = ""
+    next_ms: int | None = None
     due_now: bool = False
     tz: str = "UTC"
     known: bool = False
@@ -150,6 +153,10 @@ class OverviewRow(BaseModel):
     last_run: LastRun | None = None
     can_edit: bool = False
     can_run: bool = False
+    page_path: str = ""
+    """The Deployed view file in this schedules file's folder — where Open
+    goes for a page's row (the WUI overview's address). "" for the item's own
+    schedules or a page never Deployed: Open goes to the item."""
 
 
 class OverviewFile(BaseModel):
@@ -227,6 +234,7 @@ def register_schedule_overview_routes(
     policy: SchedulePolicy,
     get_user_id: Callable[[], str],
     start_run: Callable[..., Awaitable[str | None]],
+    deployed_pages: Callable[[], list[DeployedWui]] = list,
 ) -> None:
     """``start_run`` is the sweep's own start (`start_page_schedule`, bound in
     `create_app`): "run now" goes through exactly what a fire goes through —
@@ -365,6 +373,11 @@ def register_schedule_overview_routes(
         """
         rows: list[OverviewRow] = []
         problem_files: list[OverviewFile] = []
+        # Deployed pages by (item, folder): one listing for the whole page.
+        pages = {
+            (page.item_id, page.path.rsplit("/", 1)[0]): page.path
+            for page in await asyncio.to_thread(deployed_pages)
+        }
         for item_id, paths, landed in await asyncio.to_thread(index.entries):
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
@@ -418,6 +431,9 @@ def register_schedule_overview_routes(
                             last_run=last,
                             can_edit=can_edit,
                             can_run=can_run,
+                            page_path=pages.get((item_id, path.rsplit("/", 1)[0]), "")
+                            if path != ITEM_SCHEDULES_PATH
+                            else "",
                         )
                     )
         return ScheduleOverview(enabled=policy.sweep_enabled, rows=rows, files=problem_files)

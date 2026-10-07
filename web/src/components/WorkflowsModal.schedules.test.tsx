@@ -57,6 +57,7 @@ const NIGHTLY = {
   run_problem: "",
   runnable: true,
   payload: {},
+  trigger_id: "wui:it:nightly",
 };
 
 function schedules(over: Partial<ItemSchedules> = {}): ItemSchedules {

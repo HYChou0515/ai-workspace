@@ -30,6 +30,7 @@ import "./styles/chat-rail.css";
 import "./styles/sheet.css";
 import "./styles/gauge.css";
 import "./styles/my-resources.css";
+import "./styles/schedule-overview.css";
 import "./styles/item-environment.css";
 import "./styles/skill-hub.css";
 import "./styles/export-dialog.css";

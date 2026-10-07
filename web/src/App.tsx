@@ -11,6 +11,7 @@ import { GroupsPage } from "./pages/GroupsPage";
 import { MyResourcesPage } from "./pages/MyResourcesPage";
 import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
 import { SkillHubPage } from "./pages/SkillHubPage";
+import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { HelpPage } from "./pages/HelpPage";
@@ -78,6 +79,9 @@ export function AppRoutes() {
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}
         <Route path="/wui" element={<WuiOverviewPage />} />
+        {/* Every schedule the viewer may read, with its last run and its next
+            (docs/plan-schedule-overview.md). */}
+        <Route path="/schedules" element={<SchedulesOverviewPage />} />
         {/* The skill hub (docs/plan-skill-hub.md): skills people published, for
             everyone to find; an entry's page holds its owner's actions. Installing
             is the item's (its Skills panel), never the page's. */}

@@ -626,6 +626,23 @@ describe("run-in-this-chat lives in the bar", () => {
       expect(start).toHaveBeenCalledWith("topic-hub", "it", "memory", "conversation:c1"),
     );
   });
+  it("opens the chat the address names (?chat=), not the most recent one", async () => {
+    // The schedules overview links a schedule's last run to its own chat
+    // (docs/plan-schedule-overview.md); without this the link landed on
+    // whichever chat was most recent.
+    stubChatApi([
+      summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
+      summary({ chat_id: "wui:it:sched", is_default: false, title: "B" }),
+    ]);
+    window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
+    try {
+      render();
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
   it("closes the launch dialog when the active chat changes, and never starts in the other chat", async () => {
     // The dialog used to live in the per-chat panel under `key={chat_id}`, so a
     // switch unmounted it and nothing could launch. In the shell it survived

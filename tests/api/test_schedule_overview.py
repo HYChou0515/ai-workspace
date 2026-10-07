@@ -221,6 +221,49 @@ def test_a_schedule_chat_with_no_run_linked_or_a_run_since_deleted_reads_as_neve
     assert last_run_of(spec, "wui:i1:never") is None
 
 
+def test_a_page_schedule_names_its_deployed_page_so_open_can_go_there():
+    """A row of a page's schedules opens that page — the Deployed view file in
+    the same folder, the address the WUI overview opens. An item-level row, or
+    a page never Deployed, has none: Open goes to the item."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    view = "/reports/scrap/page.ai.yaml"
+    _put(client, iid, view, "view: wui\ntitle: Scrap\n")
+    assert client.post(_wp(iid, "/wui/deploy"), json={"path": view}).status_code == 200
+
+    pages = {r["path"]: r["page_path"] for r in _rows(client)}
+
+    assert pages == {PAGE_SCHEDULES: view, ITEM_SCHEDULES: ""}
+
+
+def test_next_runs_in_different_zones_are_comparable_as_one_instant():
+    """`next_at` is each row's own wall clock — "09:00" in Taipei is eight hours
+    before "09:00" in UTC — so the page sorts on `next_ms`, the same instant in
+    epoch milliseconds."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, "/.workflows/w1.json", _workflow("w1"))
+    _put(
+        client,
+        iid,
+        ITEM_SCHEDULES,
+        _schedules(
+            {"every": "daily", "at": "09:00", "run": "w0", "tz": "Asia/Taipei"},
+            {"every": "daily", "at": "09:00", "run": "w1"},
+        ),
+    )
+
+    rows = {r["run"]: r for r in _rows(client)}
+
+    assert rows["w0"]["next_at"][-5:] == rows["w1"]["next_at"][-5:] == "09:00"
+    gap = (rows["w1"]["next_ms"] - rows["w0"]["next_ms"]) % (24 * 3600 * 1000)
+    assert gap == 8 * 3600 * 1000
+
+
 # ── acting on one row ────────────────────────────────────────────────────────
 
 

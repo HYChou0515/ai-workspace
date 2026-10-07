@@ -78,6 +78,12 @@ type AgentChrome = {
   uploadDir: string;
 };
 
+/** The chat the address asks for (`?chat=`), or null. Read from `window`
+ * rather than the router so the shell keeps working wherever it is mounted. */
+function chatFromAddress(): string | null {
+  return new URLSearchParams(window.location.search).get("chat") || null;
+}
+
 /**
  * The per-item multi-chat shell (topic-hub §3, redesigned in #132): a compact chat
  * switcher dropdown + a single `+ New` picker ([Free chat] + the seed profile's
@@ -146,7 +152,11 @@ export function ItemChatShell({
       if (!w.problem) byId.set(w.id, { input_json: "", ...w });
     return [...byId.values()];
   }, [profilesQ.data, wsWorkflowsQ.data, profile]);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  // `?chat=<id>` opens that chat — the schedules overview links a schedule's
+  // last run to its own conversation this way (docs/plan-schedule-overview.md).
+  // Read once, from the address the item was opened with; an id the item has
+  // no chat for falls back to the most recent one like any other.
+  const [activeChatId, setActiveChatId] = useState<string | null>(chatFromAddress);
   const [managing, setManaging] = useState(false);
   // #283: a workflow launch opens the pre-flight dialog first; the real start (which
   // opens a workflow chat) happens only on confirm.
