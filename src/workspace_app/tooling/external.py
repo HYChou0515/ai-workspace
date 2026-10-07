@@ -59,6 +59,20 @@ class ToolProvenance:
 
 
 @dataclass(frozen=True)
+class MountedTool:
+    """One third-party bundle a sandbox was CREATED with (plan-tool-running-version).
+
+    A sandbox mounts its bundles once, at create, and keeps them; the resolve a
+    later turn does describes the author's LATEST release. This is the other
+    half — what is actually under `/.tools/<name>` — written at the moment the
+    two are the same thing, so it can be compared with the latest afterwards.
+    Compared by `sha` (D8): one version string published twice is two releases."""
+
+    sha: str
+    version: str
+
+
+@dataclass(frozen=True)
 class ExternalTools:
     """What one turn learned about this app's third-party tools."""
 
@@ -73,6 +87,17 @@ class ExternalTools:
     """`{name: provenance}` for the tools that resolved. Keyed the same as
     `shas`, and always the same set: a tool that is going to be mounted is a
     tool something eventually has to be able to describe."""
+
+    def mounts(self) -> dict[str, MountedTool]:
+        """What a sandbox created from THIS resolve mounts: each sha with the
+        version the same answer gave it, so the record cannot pair a sha with
+        another release's number."""
+        return {
+            name: MountedTool(
+                sha=sha, version=p.version if (p := self.provenance.get(name)) else ""
+            )
+            for name, sha in self.shas.items()
+        }
 
 
 def _package(name: str, described: dict[str, Any]) -> PackageInfo:

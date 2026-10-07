@@ -872,13 +872,16 @@ async def test_ensure_handle_kills_orphan_when_it_loses_the_claim_race_366():
         async def get(self, item_id: str) -> SandboxHandle | None:
             return None  # nothing claimed yet → this pod will create
 
-        async def claim(self, item_id: str, handle: SandboxHandle) -> SandboxHandle:
+        async def claim(self, item_id: str, handle: SandboxHandle, *, tools=None) -> SandboxHandle:
             return winner  # ...but a peer won the race between our get and claim
 
         async def swap(  # pragma: no cover - unused (no stale address in this path)
-            self, item_id: str, expected: SandboxHandle, new: SandboxHandle
+            self, item_id: str, expected: SandboxHandle, new: SandboxHandle, *, tools=None
         ) -> SandboxHandle:
             return winner
+
+        async def mounted(self, item_id: str):
+            return None
 
         async def forget(self, item_id: str) -> None:  # pragma: no cover - unused here
             return None

@@ -90,3 +90,70 @@ async def test_swap_on_a_released_slot_claims_fresh():
     await store.forget("item-1")  # slot released mid-flight
     assert await store.swap("item-1", expected=dead, new=fresh) == fresh
     assert await store.get("item-1") == fresh
+
+
+# ── plan-tool-running-version P1: what the live sandbox MOUNTED rides on its address ──
+
+from workspace_app.tooling.external import MountedTool  # noqa: E402
+
+V1 = {"t": MountedTool(sha="s1", version="1.0")}
+V2 = {"t": MountedTool(sha="s2", version="2.0")}
+
+
+async def test_claim_records_what_the_sandbox_mounted():
+    store = _store()
+    await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
+    assert await store.mounted("item-1") == V1
+
+
+async def test_a_losing_claim_reads_the_winners_mounts_not_its_own():
+    # The row is ONE write: a pod that lost the claim must not see its own
+    # bundles reported for the winner's sandbox.
+    store = _store()
+    await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
+    assert await store.claim("item-1", SandboxHandle(id="h2"), tools=V2) == SandboxHandle(id="h1")
+    assert await store.mounted("item-1") == V1
+
+
+async def test_swap_replaces_the_mounts_with_the_new_sandboxs():
+    store = _store()
+    h1, h2 = SandboxHandle(id="h1"), SandboxHandle(id="h2")
+    await store.claim("item-1", h1, tools=V1)
+    assert await store.swap("item-1", expected=h1, new=h2, tools=V2) == h2
+    assert await store.mounted("item-1") == V2
+
+
+async def test_a_lost_swap_leaves_the_peers_mounts():
+    store = _store()
+    h1, h2, h3 = SandboxHandle(id="h1"), SandboxHandle(id="h2"), SandboxHandle(id="h3")
+    await store.claim("item-1", h1, tools=V1)
+    await store.swap("item-1", expected=h1, new=h2, tools=V2)
+    # A pod that also found h1 dead lost the race: it converges and changes nothing.
+    assert await store.swap("item-1", expected=h1, new=h3, tools=V1) == h2
+    assert await store.mounted("item-1") == V2
+
+
+async def test_reclaiming_a_released_slot_records_the_new_mounts():
+    store = _store()
+    await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
+    await store.forget("item-1")
+    await store.claim("item-1", SandboxHandle(id="h2"), tools=V2)
+    assert await store.mounted("item-1") == V2
+
+
+async def test_mounts_are_unknown_when_not_recorded():
+    # `None` is "unknown", distinct from `{}` ("mounted nothing"): an address
+    # written by an older build, or a create whose resolve failed.
+    store = _store()
+    assert await store.mounted("nobody") is None
+    await store.claim("item-1", SandboxHandle(id="h1"))
+    assert await store.mounted("item-1") is None
+    await store.claim("item-2", SandboxHandle(id="h2"), tools={})
+    assert await store.mounted("item-2") == {}
+
+
+async def test_mounts_of_a_forgotten_address_are_unknown():
+    store = _store()
+    await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
+    await store.forget("item-1")
+    assert await store.mounted("item-1") is None
