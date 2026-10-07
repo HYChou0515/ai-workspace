@@ -345,6 +345,29 @@ async def test_warm_write_rebuilds_a_reaped_sandbox_instead_of_cold_writing_492(
     assert await files.read(WS, "/x.txt") == b"warm"
 
 
+async def test_a_read_that_must_not_wake_reads_a_reaped_item_from_the_durable_copy():
+    """`wake=False` (docs/plan-schedule-overview.md, review round 1): a listing
+    that reads many items — the schedules overview — must not rebuild every
+    reaped sandbox it touches. A reaped item's work was written back when it
+    was reaped, so the durable copy is the answer; the default `wake=True`
+    keeps rebuilding, as above."""
+    fs = MemoryFileStore()
+    await fs.write(WS, "/x.txt", b"durable")
+    sb = MockSandbox()
+    dead = SandboxHandle(id="reaped")
+
+    async def _resolve(_ws):
+        return dead
+
+    async def _rebuild(_ws):  # pragma: no cover — must NOT be called without wake
+        raise AssertionError("a non-waking read rebuilt the sandbox")
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, rebuild=_rebuild)
+
+    assert await files.read(WS, "/x.txt", wake=False) == b"durable"
+    assert await files.ls(WS, "/", wake=False) == ["/x.txt"]
+
+
 async def test_warm_op_propagates_busy_and_never_cold_writes_or_rebuilds_492():
     """#492: a BUSY host (SandboxBusy — reachable but slow, already retried by the
     http client) must fail loud, NOT cold-write (the item is warm, a cold write is

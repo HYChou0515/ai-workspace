@@ -124,6 +124,17 @@ export type ScheduleOverview = {
   files: OverviewFile[];
 };
 
+/** Whether a row offers Run now — ONE rule for the overview and the item's
+ * panel (decision 9): the viewer may run work in the item, the row has an
+ * identity (the sweep reads it), its workflow exists and parses. The server
+ * refuses the rest anyway; this keeps the button off rows it would refuse. */
+export function mayRunNow(
+  row: Pick<ScheduleRow, "trigger_id" | "known" | "run_problem">,
+  canRun: boolean,
+): boolean {
+  return canRun && row.trigger_id !== "" && row.known && !row.run_problem;
+}
+
 /** Which row: the file and the row's identity in it. A row the sweep refuses
  * has no identity (`trigger_id: ""`); Remove finds it by `raw`, its value as
  * written. */

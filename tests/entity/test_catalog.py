@@ -215,8 +215,8 @@ async def test_a_type_that_vanishes_after_the_listing_does_not_empty_the_catalog
     from workspace_app.filestore.memory import MemoryFileStore
 
     class _GhostListing(WorkspaceFiles):
-        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
-            got = await super().ls(workspace_id, prefix)
+        async def ls(self, workspace_id: str, prefix: str = "", *, wake: bool = True) -> list[str]:
+            got = await super().ls(workspace_id, prefix, wake=wake)
             return [*got, "/.entity/ghost/schema.yaml"]  # listed, never written
 
     files = _GhostListing(MemoryFileStore())

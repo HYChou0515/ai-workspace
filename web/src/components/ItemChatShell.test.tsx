@@ -9,7 +9,8 @@ import { kbApi } from "../api/kb";
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
 import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
 import type { FileContent } from "../api/types";
-import { renderWithQuery } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
 import { ItemChatShell } from "./ItemChatShell";
 
 // The active chat now renders the real RCA AgentPanel (model picker, kbApi, dialogs
@@ -637,6 +638,41 @@ describe("run-in-this-chat lives in the bar", () => {
     window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
     try {
       render();
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("keeps the chat the address names while a cached list is being refreshed", async () => {
+    // Review round 1: the item was visited earlier, so its chat list is cached
+    // from before the schedule's chat existed. The fallback effect ran against
+    // that stale list, did not find the id and picked the newest chat — and
+    // the refetch that brought the schedule's chat arrived too late.
+    const a = summary({ chat_id: "conversation:c1", is_default: true, title: "A" });
+    const b = summary({ chat_id: "wui:it:sched", is_default: false, title: "B" });
+    stubChatApi([a, b]);
+    const client = makeTestQueryClient();
+    client.setQueryData(qk.itemChats("topic-hub", "it"), [a], { updatedAt: Date.now() - 60_000 });
+    window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
+    try {
+      renderWithQuery(
+        <ItemChatShell
+          slug="topic-hub"
+          itemId="it"
+          profile="default"
+          picker={[]}
+          suggestions={[]}
+          appTitle="Topic Hub"
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          chatSwitcher="always"
+          showCollections={false}
+        />,
+        client,
+      );
+      await waitFor(() => expect(itemChatApi.listChats).toHaveBeenCalled());
       await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
     } finally {
       window.history.pushState({}, "", "/");

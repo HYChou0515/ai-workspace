@@ -21,6 +21,7 @@ import {
   type OverviewRow,
   ScheduleActionError,
   type SchedulesApi,
+  mayRunNow,
   schedulesApi,
 } from "../api/schedules";
 import { wuiAddress } from "../api/wui";
@@ -242,7 +243,14 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
     trigger_id: row.trigger_id,
     raw: row.trigger_id ? undefined : row.raw,
   };
-  const refresh = () => qc.invalidateQueries({ queryKey: qk.schedulesOverview });
+  // Both entrances' caches: the item's panel lists this row too (decision 9),
+  // and the file tree shows the file just rewritten.
+  const refresh = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: qk.schedulesOverview }),
+      qc.invalidateQueries({ queryKey: qk.itemSchedules(row.slug, row.item_id) }),
+      qc.invalidateQueries({ queryKey: qk.files(row.item_id) }),
+    ]);
   const fail = (e: unknown) =>
     setSaid({ ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });
 
@@ -277,7 +285,7 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
   // A row the sweep refuses has no identity: it has no time to move and
   // nothing that would run, so only Remove (by its value) applies.
   const identified = row.trigger_id !== "";
-  const mayRun = row.can_run && identified && row.known && !row.run_problem;
+  const mayRun = mayRunNow(row, row.can_run);
 
   return (
     <tr data-testid={`schedule-${row.item_id}${row.path}#${row.index}`}>

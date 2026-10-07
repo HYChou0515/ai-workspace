@@ -102,7 +102,7 @@ from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
 from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
-from .events import AgentEvent
+from .events import AgentEvent, FileChanged
 from .file_routes import register_file_routes
 from .goal_offhours import register_stretch_claims
 from .health_routes import (
@@ -1194,7 +1194,10 @@ def create_app(
             schedule_index.record(item_id, path)
             # When it landed, for the birth rule (docs/plan-schedule-overview.md
             # §1): a schedule only fires windows whose moment came after it was
-            # written. Stamped HERE so every door that indexes also stamps.
+            # written. Every facade write and the local-sandbox mirror land
+            # here. NOT a host-managed deploy's `exec` write: the turn-end
+            # reconcile indexes it without a stamp, so such a file keeps the
+            # old catch-up (or an older stamp) — the plan says so.
             schedule_index.stamp(item_id, path, int(datetime.now(UTC).timestamp() * 1000))
 
     files = WorkspaceFiles(
@@ -2668,6 +2671,18 @@ def create_app(
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
     )
+
+    def _schedule_saved(item_id: str, path: str) -> None:
+        # What the file PUT does after a save (`file_routes.write_file`): an
+        # activity entry, and a FileChanged so another viewer of the file
+        # refetches instead of saving the old rows back.
+        activity.record(
+            "file_written",
+            f"Wrote {rel_path(path)}",
+            {"investigation_id": item_id, "path": path},
+        )
+        turn_engine.publish(item_id, FileChanged(path=path, by=get_user_id(), kind="written"))
+
     # docs/plan-schedule-overview.md: every schedule a viewer may see.
     register_schedule_overview_routes(
         api,
@@ -2680,6 +2695,7 @@ def create_app(
         start_run=_start_page_schedule,
         deployed_pages=DeployedPages(spec).newest_first,
         durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
+        on_saved=_schedule_saved,
     )
 
     register_private_env_routes(

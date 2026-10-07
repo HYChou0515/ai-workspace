@@ -169,8 +169,8 @@ async def test_a_workflow_that_vanishes_after_the_listing_does_not_break_the_pan
         """A listing that names a file the reads can no longer find — the race,
         as the store sees it."""
 
-        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
-            got = await super().ls(workspace_id, prefix)
+        async def ls(self, workspace_id: str, prefix: str = "", *, wake: bool = True) -> list[str]:
+            got = await super().ls(workspace_id, prefix, wake=wake)
             return [*got, "/.workflows/ghost.json"]  # listed, but never written
 
     files = _GhostListing(MemoryFileStore())

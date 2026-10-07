@@ -315,7 +315,9 @@ class WorkspaceFiles:
         # writes raced (a `gather` over several artifacts, say).
         self._walk_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    async def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
+    async def _warm(
+        self, workspace_id: str, *, wake: bool = True
+    ) -> tuple[Sandbox, SandboxHandle] | None:
         """The item's ONE live sandbox, or None when it is globally cold (so the
         op uses the durable store). Reads AND writes route through here, so both
         hit the SAME source (#492) — a write never lands somewhere a later read
@@ -351,7 +353,12 @@ class WorkspaceFiles:
         try:
             await self._sb.exists(handle, "/")  # SandboxNotFound = gone; SandboxBusy propagates
         except SandboxNotFound:
-            if self._rebuild is None:
+            # `wake=False`: a READ that lists many items (the schedules
+            # overview) must not rebuild every reaped sandbox it touches. A
+            # reaped item's work was written back when it was reaped, so the
+            # durable copy is the answer. Never for a write — the rebuild is
+            # what stops a cold write the host would reconcile away (#492).
+            if self._rebuild is None or not wake:
                 return None  # local shared-vol cold dir → durable snapshot (#345)
             handle = await self._rebuild(workspace_id)  # http: reaped but warm → rebuild
         return (self._sb, handle)
@@ -360,8 +367,10 @@ class WorkspaceFiles:
     #: as the module-level one the free functions use — one number, two names.
     _BATCH_PATHS = BATCH_PATHS
 
-    async def read(self, workspace_id: str, path: str) -> bytes:
-        return await self._read_with(workspace_id, path, await self._warm(workspace_id))
+    async def read(self, workspace_id: str, path: str, *, wake: bool = True) -> bytes:
+        """``wake=False``: do not rebuild a reaped sandbox to answer — read the
+        durable copy instead (`_warm`)."""
+        return await self._read_with(workspace_id, path, await self._warm(workspace_id, wake=wake))
 
     # NOTE: `read_all` (filestore/batch.py, re-exported here) is how callers reach this — it
     # degrades for stores that do not have it. Do not duck-type it a second
@@ -1071,9 +1080,9 @@ class WorkspaceFiles:
         if self._on_usage is not None:
             await self._publish_usage(workspace_id, 0)
 
-    async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
+    async def ls(self, workspace_id: str, prefix: str = "", *, wake: bool = True) -> list[str]:
         prefix = abs_path(prefix) if prefix else prefix
-        warm = await self._warm(workspace_id)
+        warm = await self._warm(workspace_id, wake=wake)
         if warm is not None:
             sb, h = warm
             return [e.path for e in (await sb.walk(h, prefix or "/")).files]

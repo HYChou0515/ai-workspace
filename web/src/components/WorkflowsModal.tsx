@@ -9,6 +9,7 @@ import {
   SCHEDULES_PATH,
   ScheduleActionError,
   type ScheduleRow,
+  mayRunNow,
   schedulesApi,
 } from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
@@ -357,7 +358,7 @@ export function WorkflowsModal({
                       )}
                     </div>
                   </div>
-                  {sched.can_run && row.trigger_id && row.known && !row.run_problem ? (
+                  {mayRunNow(row, sched.can_run) ? (
                     <button
                       type="button"
                       data-testid={`schedule-run-${row.index}`}

@@ -12,6 +12,9 @@ import { qk } from "../api/queryKeys";
 export type UseItemChats = {
   chats: ItemChatSummary[];
   isLoading: boolean;
+  /** A fetch is in flight — the list shown may be a cached one about to be
+   * replaced (a chat made since it was cached is not in it yet). */
+  isFetching: boolean;
   /** Open a new free chat; resolves to its summary. */
   createFreeChat: (title?: string) => Promise<ItemChatSummary>;
   /** Rename a chat from the manage modal (#132). */
@@ -47,6 +50,7 @@ export function useItemChats(
   return {
     chats: query.data ?? [],
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
     createFreeChat: (title = "") => create.mutateAsync(title),
     renameChat: (chatId, title) => rename.mutateAsync({ chatId, title }),
     deleteChat: (chatId) => remove.mutateAsync(chatId),

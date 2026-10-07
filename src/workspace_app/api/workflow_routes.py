@@ -232,6 +232,18 @@ def register_workflow_routes(
             return False
         return True
 
+    def _row_out(view: Any, can_read: bool) -> ScheduleRowOut:
+        """One row for the panel; its `with` only for who may read the files
+        (`schedule_listing.without_payload` says why)."""
+        from .schedule_listing import without_payload
+
+        fields = msgspec.to_builtins(view)
+        assert isinstance(fields, dict)  # narrow for ty
+        if not can_read:
+            fields["raw"] = without_payload(fields["raw"])
+            fields["payload"] = {}
+        return ScheduleRowOut(**fields)
+
     @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
     async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
         """The item's own `.workflows/schedules.json`, read the way the SWEEP reads
@@ -262,6 +274,8 @@ def register_workflow_routes(
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         can_edit = _may(slug, item_id, "edit_content")
         can_run = _may(slug, item_id, "execute")
+        # A row's `with` is file content: shown only to who may read the files.
+        can_read = _may(slug, item_id, "read_content")
         # Live first, the durable copy when the live workspace is still
         # restoring (`read_schedules_file` says why) — the overview's read.
         found = await read_schedules_file(
@@ -313,7 +327,7 @@ def register_workflow_routes(
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,
             indexed=indexed,
-            rows=[ScheduleRowOut(**msgspec.to_builtins(v)) for v in views],
+            rows=[_row_out(v, can_read) for v in views],
             problems=problems,
             can_edit=can_edit,
             can_run=can_run,

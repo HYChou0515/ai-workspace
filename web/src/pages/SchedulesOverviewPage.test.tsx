@@ -21,6 +21,7 @@ vi.mock("../api", () => ({
   },
 }));
 
+import { qk } from "../api/queryKeys";
 import { ScheduleActionError } from "../api/schedules";
 import { translate } from "../lib/i18n";
 import { readScheduleOverviewPrefs } from "../lib/scheduleOverviewPrefs";
@@ -286,6 +287,32 @@ describe("SchedulesOverviewPage", () => {
         raw: { every: "fortnightly", run: "report" },
       }),
     );
+  });
+
+  it("refreshes the item's panel and file list too, not only this page", async () => {
+    // Review round 1: the panel lists the same row from a 30s cache; left
+    // alone it showed the removed row, and pressing it was a 409.
+    const { QueryClient } = await import("@tanstack/react-query");
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    const c = client();
+    render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+    const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+    fireEvent.click(within(tr).getByRole("button", { name: new RegExp(`^${word("schedules.remove")}`) }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("schedules.remove") }));
+
+    await waitFor(() => expect(c.remove).toHaveBeenCalled());
+    await waitFor(() => {
+      const keys = spy.mock.calls.map((call) => JSON.stringify(call[0]?.queryKey));
+      expect(keys).toEqual(
+        expect.arrayContaining([
+          JSON.stringify(qk.schedulesOverview),
+          JSON.stringify(qk.itemSchedules("rca", "i-1")),
+          JSON.stringify(qk.files("i-1")),
+        ]),
+      );
+    });
+    spy.mockRestore();
   });
 
   it("moves a schedule to a new time", async () => {

@@ -464,9 +464,12 @@ def _wake(client, iid: str) -> None:
 
 
 def test_run_now_runs_the_schedule_in_its_own_chat_as_the_presser_and_keeps_its_time():
+    # The presser is NOT the owner (review round 1): a fire runs as the owner,
+    # so a test where the two are one person cannot tell them apart.
+    runner = Permission(visibility="restricted", read_meta=["user:alice"], execute=["user:alice"])
     holder = {"id": "bob"}
     client, spec, _ = _client_and_spec(holder)
-    iid = _item(spec, by="bob")
+    iid = _item(spec, by="bob", permission=runner)
     with client:
         _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
         _put(
@@ -478,10 +481,12 @@ def test_run_now_runs_the_schedule_in_its_own_chat_as_the_presser_and_keeps_its_
         _wake(client, iid)
         before = _row_of(client, ITEM_SCHEDULES)
 
+        holder["id"] = "alice"
         r = client.post(
             _wp(iid, "/schedules/run"),
             json={"path": ITEM_SCHEDULES, "trigger_id": before["trigger_id"]},
         )
+        holder["id"] = "bob"
         (run,) = client.get(_wp(iid, "/runs")).json()
         after = _row_of(client, ITEM_SCHEDULES)
 
@@ -489,7 +494,7 @@ def test_run_now_runs_the_schedule_in_its_own_chat_as_the_presser_and_keeps_its_
     assert r.json()["run_id"] == run["run_id"]
     assert (run["chat_id"], run["captured_user"], run["trigger_payload"]) == (
         before["trigger_id"],
-        "bob",
+        "alice",
         {"line": "A"},
     )
     assert after["last_run"]["run_id"] == run["run_id"]
@@ -665,7 +670,7 @@ def _restoring(monkeypatch) -> None:
     from workspace_app.files import WorkspaceFiles
     from workspace_app.filestore.protocol import FileNotFound
 
-    async def _missing(self, workspace_id: str, path: str) -> bytes:
+    async def _missing(self, workspace_id: str, path: str, **kw) -> bytes:
         raise FileNotFound(path)
 
     async def _empty(self, workspace_id: str, prefix: str = "", **kw):
@@ -699,6 +704,131 @@ def test_the_item_panel_reads_a_restoring_workspace_from_the_durable_copy_too(mo
     body = client.get(_wp(iid, "/schedules")).json()
 
     assert [(r["run"], r["known"]) for r in body["rows"]] == [("w0", True)]
+
+
+def test_listing_schedules_never_wakes_a_sandbox(monkeypatch):
+    """Opening the page reads every listed item; on a host-managed deploy a
+    read that may wake would rebuild every idle-reaped sandbox it touched
+    (`WorkspaceFiles._warm`). Every listing read asks not to."""
+    from workspace_app.files import WorkspaceFiles
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    asked: list[bool] = []
+    real_read, real_ls = WorkspaceFiles.read, WorkspaceFiles.ls
+
+    async def _read(self, workspace_id, path, *, wake=True):
+        asked.append(wake)
+        return await real_read(self, workspace_id, path, wake=wake)
+
+    async def _ls(self, workspace_id, prefix="", *, wake=True):
+        asked.append(wake)
+        return await real_ls(self, workspace_id, prefix, wake=wake)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _read)
+    monkeypatch.setattr(WorkspaceFiles, "ls", _ls)
+
+    assert len(_rows(client)) == 2
+    assert client.get(_wp(iid, "/schedules")).status_code == 200
+
+    assert asked and not any(asked), asked
+
+
+def test_one_items_failure_does_not_take_the_page_down(monkeypatch):
+    """Review round 1: a read that raises anything but "not there" on one item
+    500'd the whole page for every viewer of that item. The item is reported
+    with a sentence; every other item still lists."""
+    from workspace_app.files import WorkspaceFiles
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    broken = _item(spec, by="bob", title="Broken")
+    fine = _item(spec, by="bob", title="Fine")
+    _seed(client, broken)
+    _seed(client, fine)
+    real_read = WorkspaceFiles.read
+
+    async def _read(self, workspace_id, path, **kw):
+        if workspace_id == broken:
+            raise IsADirectoryError(path)
+        return await real_read(self, workspace_id, path, **kw)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _read)
+    body = client.get("/schedules").json()
+
+    assert {r["item_id"] for r in body["rows"]} == {fine}
+    assert {f["item_id"] for f in body["files"]} == {broken}
+    assert all(f["problems"] for f in body["files"])
+
+
+def test_a_viewer_who_may_not_read_the_files_does_not_get_what_a_row_sends(monkeypatch):
+    """Review round 1: `read_meta` lists a schedule; the row's `with` is file
+    content, which `read_content` guards (`GET /files/...` is a 403 for this
+    viewer). The time, the workflow and the identity are still there."""
+    meta_only = Permission(visibility="restricted", read_meta=["user:alice"])
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=meta_only)
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    secret = _schedules({"every": "hourly", "run": "w0", "with": {"token": "s3cret"}})
+    # Both files: the overview lists both, the item's panel reads the item's own.
+    _put(client, iid, PAGE_SCHEDULES, secret)
+    _put(client, iid, ITEM_SCHEDULES, secret)
+    holder["id"] = "alice"
+
+    rows = _rows(client)
+    panel = client.get(_wp(iid, "/schedules"))
+
+    assert len(rows) == 2 and "s3cret" not in json.dumps(rows)
+    assert all(r["raw"] == {"every": "hourly", "run": "w0"} and r["trigger_id"] for r in rows)
+    assert panel.status_code == 200 and panel.json()["rows"], panel.text
+    assert "s3cret" not in panel.text
+
+
+def test_saving_keeps_text_readable_and_tells_other_viewers(monkeypatch):
+    """Review round 1: the rewrite turned 品管課 into \\u54c1…, and — unlike the
+    file PUT the panel used before — told nobody: an open tab of the file kept
+    the old rows and could save them back."""
+    from workspace_app.api.events import FileChanged
+
+    holder = {"id": "bob"}
+    client, spec, app = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    neighbour = {"every": "hourly", "run": "w0", "with": {"to": "品管課"}}
+    _put(
+        client,
+        iid,
+        ITEM_SCHEDULES,
+        _schedules({"every": "daily", "at": "09:00", "run": "w0"}, neighbour),
+    )
+    seen: list[tuple[str, object]] = []
+    monkeypatch.setattr(app.state.turn_engine, "publish", lambda key, ev: seen.append((key, ev)))
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": _row_of(client, ITEM_SCHEDULES)["trigger_id"]}
+
+    r = client.post(_wp(iid, "/schedules/remove"), json=ref)
+
+    assert r.status_code == 204, r.text
+    assert "品管課" in client.get(_wp(iid, f"/files{ITEM_SCHEDULES}")).text
+    changed = [ev for key, ev in seen if key == iid and isinstance(ev, FileChanged)]
+    assert [(ev.path, ev.kind, ev.by) for ev in changed] == [(ITEM_SCHEDULES, "written", "bob")]
+
+
+def test_a_folder_with_two_deployed_pages_opens_the_latest_deploy():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    for name in ("old", "new"):
+        view = f"/reports/scrap/{name}.ai.yaml"
+        _put(client, iid, view, "view: wui\n")
+        assert client.post(_wp(iid, "/wui/deploy"), json={"path": view}).status_code == 200
+
+    pages = {r["path"]: r["page_path"] for r in _rows(client)}
+
+    assert pages[PAGE_SCHEDULES] == "/reports/scrap/new.ai.yaml"
 
 
 def test_a_file_the_index_still_names_but_that_is_gone_is_skipped():

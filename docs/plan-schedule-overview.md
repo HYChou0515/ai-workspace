@@ -19,7 +19,7 @@ implementation choice I made and listed for overturning.
 | # | Question | Decision | Source |
 |---|---|---|---|
 | 1 | Which "scheduler"? | **Item / page schedules** (`schedules.json`), as a product page like `/wui`. Not profile `triggers.json`, not the lifecycle sweepers. | user |
-| 2 | Who sees what? | **`read_meta` per item, denied → skipped** — the gate of `/wui` and of the per-item schedules route. No admin "see everything". | user |
+| 2 | Who sees what? | **`read_meta` per item, denied → skipped** — the gate of `/wui` and of the per-item schedules route. No admin "see everything" *mode* — a superuser passes `read_meta` on every item, as everywhere, so they do see every schedule; that is the gate, not a second rule. | user |
 | 3 | Columns that matter | **Last run time + last run status, and next run.** | user |
 | 4 | "Last run" when no run exists | **Has a run → show it; none → "never run".** Nothing extra is recorded for a window that did not start (start errors stay in the log; an overrun shows as the previous run still running / awaiting review). | user |
 | 5 | Row actions | **Open**, **Remove**, **Edit time**, **Run now**. | user |
@@ -47,8 +47,8 @@ was written at 14:00. The missing fact is **when the row appeared**.
 - **Record it at the one door every write shares.** `_note_schedule_file`
   (`api/app.py` ~1191) runs on every landing of a `schedules.json` — facade
   writes (file PUT, `write_file`, `save_schedules`, the new edit route) and the
-  mirror's upload of `exec` writes. It now also stamps
-  `_ScheduleIndex.landed_at[path] = now_ms` (additive field, default `{}`; no
+  local-sandbox mirror's upload of `exec` writes. It now also stamps
+  `_ScheduleIndex.landed[path] = now_ms` (read back with `landed_at`) (additive field, default `{}`; no
   migration — a missing stamp means "unknown", which keeps today's behaviour).
 - **Apply it in the sweep.** For an identity with **no ledger row**, if this
   period's target ≤ `landed_at[path]`, claim the current window without firing
@@ -63,12 +63,29 @@ was written at 14:00. The missing fact is **when the row appeared**.
 - Profile `triggers.json` is untouched: operator config, static, not born by a
   write.
 
-Known gaps (rare; both lose one run, never add one):
-- Host-managed deploys index an `exec`-written file at turn end
-  (`schedule_reconcile`), so its stamp is the turn's end, not the write.
+Known gaps (corrected after review round 1 — the first version of this list
+was wrong about the first item):
+- **Host-managed `exec` writes are not stamped.** On a host-managed deploy the
+  mirror never runs the hook; an `exec`-written (or workflow-step-written)
+  `schedules.json` is indexed by the turn-end reconcile (`schedule_reconcile`),
+  which records the path but does not stamp. A new file has no stamp and keeps
+  the old catch-up; an existing file keeps its previous facade stamp, so a time
+  changed by `exec` can fire at once. That is the behaviour before this plan —
+  the rule covers the doors people and the agent's tools use (`save_schedules`,
+  file PUT / a page's `writeFile`, `write_file`, the edit route).
+- **A re-upload moves the stamp (kind: local only).** The local-sandbox mirror
+  remembers what it uploaded per pod; a pod that attaches to a live shared dir
+  without restoring it (pod restart, rollout, a second pod) re-uploads every
+  file once, and that re-stamps `schedules.json` with nobody having written it.
+  A schedule that has never fired, whose moment passed while the sweep was not
+  ticking, then waits for its next period. Host-managed deploys do not run the
+  hook from the mirror, so they are not affected.
 - An old identity that has never fired, whose file is re-saved for another row
   after this period's target while the sweep was also down, is treated as new
   for that period.
+- Milliseconds: the bytes land before the stamp is written, so a tick in that
+  gap reads the old stamp; a writer pod whose clock runs ahead stamps late.
+  Both need sub-second luck or clock drift.
 
 ### 2. Listing — `GET /schedules`
 
@@ -96,7 +113,7 @@ never a write against stale bytes. The panel's current FE-side rewrite for
 Remove moves onto the same route.
 
 - `POST .../schedules/edit` — new time fields → validated with the sweep's
-  linter → file rewritten with that row replaced (other rows byte-preserved,
+  linter → file rewritten with that row replaced (other rows kept by value — the file is re-serialised, readable UTF-8 —
   including ones the linter refuses).
 - `POST .../schedules/remove` — the row dropped.
 - `POST .../schedules/run` — `chat_for_schedule(item, workflow, trigger_id)`
@@ -196,3 +213,38 @@ reddened first:
   an *action* pressed inside that window gets "this schedule has changed —
   reload" (409): actions re-read the live file before writing it back, and a
   write must not be built from the durable copy while a restore is landing.
+
+## Review round 1 (2026-10-07, four lenses on `1601cf2a`)
+
+What the round found and what was done, each fix with a test that reddened
+first or a mutation that reddens it:
+
+| Finding | Lens | Done |
+|---|---|---|
+| Three unchanged tests (`test_offered_workflows`, `test_schedule_binding_routes`, `test_shutdown_with_run_in_flight`) wrote a minute schedule and ticked at once — the birth rule now holds that row, so they never reached what they guard | regression | Stamped `landed=0` in each, as the parity test does; the class was swept (every test that ticks the app's sweep: five files, all now stamp) |
+| Opening `/schedules` rebuilt every idle-reaped sandbox it listed (host-managed) | veracity | `WorkspaceFiles.read/ls(..., wake=False)`; every listing read asks not to wake (pinned) |
+| One item's read error 500'd the page | defect | Each file is guarded; a failure lists that file with a sentence |
+| `read_meta` alone received a page row's `with` | defect | Without `read_content`, rows (overview and panel) carry no `with` / `payload` |
+| Edit/Remove told nobody, and turned 品管課 into `\u…` | regression, defect | `on_saved` records `file_written` and publishes `FileChanged`, as the file PUT does; `ensure_ascii=False` |
+| A folder with two Deployed pages opened the oldest | defect | newest Deploy wins |
+| `?chat=` lost to a stale cached chat list | defect | the address id is held while the list refetches |
+| The overview's actions left the panel's cache stale | conformance | also invalidates `itemSchedules` and `files` |
+| The Run-now test could not tell the presser from the owner | conformance | presser alice ≠ owner bob |
+| The Run-now rule was written twice | conformance | `mayRunNow` in `api/schedules.ts` |
+| False sentences: stamp doors, wake cost, Run now and overruns, `landed_at` naming, "byte-preserved", superuser wording | veracity, conformance | corrected here, in `docs/workflows.md`, the migrations entry and the comments |
+
+Not changed, and why:
+
+- **The stamp mechanism stays.** Its two holes (host-managed `exec` writes are
+  not stamped; a kind:local re-upload moves the stamp) are written up under
+  Known gaps. The first falls back to the behaviour before this plan; the
+  second needs kind:local, a never-fired row and the sweep down across its
+  moment. Replacing the mechanism would be the third design of the rule.
+- **`plan-wui.md` is not marked overturned.** Its line about an edited row
+  running again the same day is a review round's correction of a fact, not a
+  decision of that plan.
+- **Actions read the live file only.** While a sandbox is still restoring an
+  action is a 409 (see P7); building a write from the durable copy could put
+  back what a restore is about to land.
+- Server sentences (409s, parse problems) reach the zh-TW UI in English, as the
+  panel's parse problems always have.

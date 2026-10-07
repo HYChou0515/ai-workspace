@@ -7,12 +7,15 @@ landing stamp. The per-item route and the overview both call it, so the two
 pages cannot disagree about a row; `tests/api/test_schedules_route_parity.py`
 holds the per-item route — and so this — to the sweep.
 
-The overview reads through the facade, as the per-item route does: a time just
-changed shows on the next fetch, not one mirror interval later. That costs one
-liveness probe per WARM item listed (a globally cold item is read from the
-durable snapshot and woken by nothing), the price of opening the item's panel.
-A file the live workspace cannot see is looked for in the durable copy before
-it is skipped (`read_schedules_file`).
+Listing reads go through the facade WITHOUT waking (`wake=False`): a live
+sandbox answers, so a time just changed shows on the next fetch; an item with
+no live sandbox — never given one, or idle-reaped (written back when it was
+reaped) — is read from the durable copy and rebuilt by nothing. A file the live
+workspace cannot see (still restoring) is looked for in the durable copy before
+it is skipped (`read_schedules_file`). Each file op against a live sandbox
+costs a liveness probe (the facade probes every op): the schedules file, the
+`.workflows/` listing, each workflow the file names. Actions (edit, remove, run
+now) are about one item somebody pressed, and use ordinary reads.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ from .wui_deploy import DeployedWui
 logger = logging.getLogger(__name__)
 
 _CHANGED = "This schedule has changed since it was listed — reload and try again."
+_UNREADABLE = "This schedules file could not be read just now."
 
 
 ReadFile = Callable[[str, str], Awaitable[bytes]]
@@ -89,9 +93,20 @@ async def read_schedules_file(
     an item there. Without this, the refetch after Run now landed in that window
     and the overview said nothing was scheduled.
     """
-    live = Source(read=files.read, ls=files.ls)
+
+    # Never waking: a listing reads many items, and on a host-managed deploy a
+    # read that may wake rebuilds every idle-reaped sandbox it touches. A
+    # reaped item was written back when it was reaped, so its durable copy is
+    # the answer (`WorkspaceFiles._warm`, `wake=False`).
+    async def _read(workspace_id: str, rel: str) -> bytes:
+        return await files.read(workspace_id, rel, wake=False)
+
+    async def _ls(workspace_id: str, prefix: str = "") -> list[str]:
+        return await files.ls(workspace_id, prefix, wake=False)
+
+    live = Source(read=_read, ls=_ls)
     try:
-        return await files.read(item_id, path), live
+        return await _read(item_id, path), live
     except FileNotFound:
         pass
     try:
@@ -140,6 +155,17 @@ async def grade_file(
         landed_ms=landed,
         key_of=schedule_key(item_id, path),
     )
+
+
+def without_payload(raw: Any) -> Any:
+    """A row as a viewer who may not read the item's files sees it: everything
+    but `with`. `read_meta` lists a schedule; what it sends to its workflow is
+    file content, which `read_content` guards (`GET /files/...` refuses that
+    viewer). The time, the workflow and the identity stay — the row is still
+    described, still removable by its value by someone who may edit."""
+    if isinstance(raw, dict):
+        return {k: v for k, v in raw.items() if k != "with"}
+    return raw
 
 
 class LastRun(BaseModel):
@@ -279,12 +305,15 @@ def register_schedule_overview_routes(
     get_user_id: Callable[[], str],
     start_run: Callable[..., Awaitable[str | None]],
     durable: Source,
+    on_saved: Callable[[str, str], None],
     deployed_pages: Callable[[], list[DeployedWui]] = list,
 ) -> None:
     """``start_run`` is the sweep's own start (`start_page_schedule`, bound in
     `create_app`): "run now" goes through exactly what a fire goes through —
     the schedule's chat, its one-run-at-a-time rule — only now, as the
-    presser."""
+    presser. ``on_saved(item, path)`` runs after an edit or remove lands: what
+    the file PUT does after a save (an activity entry, a `FileChanged` so other
+    viewers of the file refetch rather than save the old rows back)."""
 
     def _may(slug: str, item_id: str, verb: Verb) -> bool:
         """The locator's gate as a yes/no — any refusal is "no", as on the WUI
@@ -295,7 +324,7 @@ def register_schedule_overview_routes(
             return False
         return True
 
-    def _decide(item_id: str) -> tuple[str, str, str, bool, bool, str] | None:
+    def _decide(item_id: str) -> tuple[str, str, str, bool, bool, bool, str] | None:
         """Everything the listing needs to know about an item before reading
         its files, or None when the viewer may not see it. Blocking."""
         slug = locator.slug_of(item_id)
@@ -308,6 +337,7 @@ def register_schedule_overview_routes(
             owner,
             _may(slug, item_id, "edit_content"),
             _may(slug, item_id, "execute"),
+            _may(slug, item_id, "read_content"),
             locator.profile_of(item_id),
         )
 
@@ -345,7 +375,10 @@ def register_schedule_overview_routes(
     async def _save(item_id: str, path: str, doc: dict[str, Any]) -> None:
         # Through the facade: indexed and stamped by the write hook like every
         # other save, so the birth rule sees the edit (no catch-up for it).
-        await files.write(item_id, path, json.dumps(doc, indent=2).encode())
+        # `ensure_ascii=False`: a neighbouring row's 品管課 stays 品管課, not
+        # `\\u54c1…` — the file is read by people and agents too.
+        await files.write(item_id, path, json.dumps(doc, indent=2, ensure_ascii=False).encode())
+        on_saved(item_id, path)
 
     @app.post("/a/{slug}/items/{item_id}/schedules/edit", response_model=ScheduleAction)
     async def edit_schedule_time(slug: str, item_id: str, body: EditTime) -> ScheduleAction:
@@ -393,8 +426,10 @@ def register_schedule_overview_routes(
         """Run one schedule now (decision 6): its workflow and its `with`, in its
         own chat, as the presser; the ledger is not touched, so its next time is
         unchanged. Refused while its previous run is still going — the rule a
-        fire obeys. `execute`, the verb of the other run that carries a payload
-        (`wui/run`) and of the schedule's "run as me" binding."""
+        fire obeys, both ways: if THIS run is still going when the next time
+        comes, that fire is skipped as an overrun (`UserScheduleSweeper`).
+        `execute`, the verb of the other run that carries a payload (`wui/run`)
+        and of the schedule's "run as me" binding."""
         workspace_id = locator.require_access(slug, item_id, "execute")
         _path, _doc, _i, row = await _locate(workspace_id, body)
         offered = await offered_workflow_ids(
@@ -435,52 +470,69 @@ def register_schedule_overview_routes(
         rows: list[OverviewRow] = []
         problem_files: list[OverviewFile] = []
         # Deployed pages by (item, folder): one listing for the whole page.
-        pages = {
-            (page.item_id, page.path.rsplit("/", 1)[0]): page.path
-            for page in await asyncio.to_thread(deployed_pages)
-        }
+        # Newest Deploy first, so the first page seen for a folder is the one
+        # kept when a folder holds two Deployed view files.
+        pages: dict[tuple[str, str], str] = {}
+        for page in await asyncio.to_thread(deployed_pages):
+            pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page.path)
         for item_id, paths, landed in await asyncio.to_thread(index.entries):
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
                 continue
-            slug, title, owner, can_edit, can_run, profile = decided
-            for path in paths:
-                found = await read_schedules_file(files, durable, item_id, path)
-                if found is None:
-                    continue
-                data, source = found
-                views, problems = await grade_file(
-                    source,
-                    spec=spec,
-                    policy=policy,
-                    item_id=item_id,
-                    slug=slug,
-                    profile=profile,
-                    path=path,
-                    raw=data.decode("utf-8", "replace"),
-                    indexed=True,
-                    landed=landed.get(path),
+            slug, title, owner, can_edit, can_run, can_read, profile = decided
+
+            def _file(
+                path: str, problems: list[str], slug=slug, item_id=item_id, title=title
+            ) -> OverviewFile:
+                return OverviewFile(
+                    slug=slug, item_id=item_id, item_title=title, path=path, problems=problems
                 )
-                if problems:
-                    problem_files.append(
-                        OverviewFile(
-                            slug=slug,
-                            item_id=item_id,
-                            item_title=title,
-                            path=path,
-                            problems=problems,
-                        )
+
+            for path in paths:
+                try:
+                    found = await read_schedules_file(files, durable, item_id, path)
+                    if found is None:
+                        continue
+                    data, source = found
+                    views, problems = await grade_file(
+                        source,
+                        spec=spec,
+                        policy=policy,
+                        item_id=item_id,
+                        slug=slug,
+                        profile=profile,
+                        path=path,
+                        raw=data.decode("utf-8", "replace"),
+                        indexed=True,
+                        landed=landed.get(path),
                     )
-                for view in views:
-                    last = (
+                    lasts = [
                         await asyncio.to_thread(last_run_of, spec, view.trigger_id)
                         if view.trigger_id
                         else None
-                    )
+                        for view in views
+                    ]
+                except Exception:  # noqa: BLE001 — one file must not take the page down
+                    # Anything but "not there", which `read_schedules_file`
+                    # already answers: a path that became a folder, a host
+                    # error. Said for that file; every other file still lists.
+                    logger.exception("schedules overview: %s %s could not be read", item_id, path)
+                    problem_files.append(_file(path, [_UNREADABLE]))
+                    continue
+                if problems:
+                    problem_files.append(_file(path, problems))
+                page_path = (
+                    pages.get((item_id, path.rsplit("/", 1)[0]), "")
+                    if path != ITEM_SCHEDULES_PATH
+                    else ""
+                )
+                for view, last in zip(views, lasts, strict=True):
                     fields = msgspec.to_builtins(view)
                     assert isinstance(fields, dict)  # narrow for ty
                     fields.pop("next_run", None)
                     fields.pop("payload", None)
+                    if not can_read:
+                        fields["raw"] = without_payload(fields["raw"])
                     rows.append(
                         OverviewRow(
                             **fields,
@@ -492,9 +544,7 @@ def register_schedule_overview_routes(
                             last_run=last,
                             can_edit=can_edit,
                             can_run=can_run,
-                            page_path=pages.get((item_id, path.rsplit("/", 1)[0]), "")
-                            if path != ITEM_SCHEDULES_PATH
-                            else "",
+                            page_path=page_path,
                         )
                     )
         return ScheduleOverview(enabled=policy.sweep_enabled, rows=rows, files=problem_files)
