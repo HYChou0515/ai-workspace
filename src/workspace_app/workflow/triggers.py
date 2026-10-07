@@ -368,10 +368,11 @@ def next_run(s: Schedule, now: datetime, last_window: str) -> datetime | None:
     and the window has not fired), i.e. the next sweep tick, whenever that is.
 
     The ``None`` case is the one worth stating rather than rounding away: a
-    daily 09:00 row saved at 10:00 runs within the minute, not tomorrow, because a
-    missed window fires late (the catch-up rule). Reporting "tomorrow 09:00" for
-    it would be the sweep's own reference manual contradicted by the tool that
-    is supposed to read it.
+    missed window fires late (the catch-up rule) — a sweep that was down at nine
+    still runs a daily 09:00 at ten, and reporting "tomorrow 09:00" for it would
+    contradict the sweep. (A page/item schedule WRITTEN after its moment is not
+    a missed window; its caller hands in the window the birth rule counts as
+    handled — `user_schedules.born_after_target`.)
     """
     target = period_target(s, now)
     if now < target:

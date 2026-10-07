@@ -55,6 +55,12 @@ class _ScheduleIndex(Struct):
     listing is the whole (short) table."""
 
     paths: list[str] = []
+    landed: dict[str, int] = {}
+    """When each path last LANDED (epoch ms), stamped by the write hook — the
+    birth rule's evidence (`docs/plan-schedule-overview.md` §1): a schedule
+    only fires windows whose moment came after it was written. Additive; a
+    row written before this field has `{}`, read as "unknown", which keeps the
+    old catch-up behaviour for it."""
 
 
 #: Bounded like the trigger ledger's: a loop that cannot end is worse than a
@@ -202,7 +208,7 @@ class ScheduleIndex:
             try:
                 rm.modify(
                     item_id,
-                    _ScheduleIndex(paths=sorted({*row.paths, path})),
+                    _ScheduleIndex(paths=sorted({*row.paths, path}), landed=row.landed),
                     status=RevisionStatus.draft,
                     expected_etag=etag,  # ty: ignore[unknown-argument]
                 )
@@ -216,6 +222,43 @@ class ScheduleIndex:
         raise RuntimeError(  # pragma: no cover - only under pathological churn
             f"schedule index CAS exhausted retries for {item_id!r}"
         )
+
+    def stamp(self, item_id: str, path: str, at_ms: int) -> None:
+        """Note that ``path`` just landed, at ``at_ms``.
+
+        Called by the write hook after :meth:`record`, on every landing — the
+        birth rule compares a never-fired schedule's moment with the LAST write
+        of its file, so the stamp moves with every save. Quiet when there is no
+        row: `record` runs first and makes one, and a row a peer emptied in
+        between is one the sweep no longer reads.
+        """
+        rm = self._spec.get_resource_manager(_ScheduleIndex)
+        for _ in range(_MAX_CAS_RETRIES):
+            res = self._res(item_id)
+            if res is None:
+                return
+            row, etag = res
+            if row.landed.get(path) == at_ms:
+                return
+            try:
+                rm.modify(
+                    item_id,
+                    _ScheduleIndex(paths=row.paths, landed={**row.landed, path: at_ms}),
+                    status=RevisionStatus.draft,
+                    expected_etag=etag,  # ty: ignore[unknown-argument]
+                )
+                return
+            except PreconditionFailedError:
+                continue  # a peer changed the row — re-read and stamp again
+        raise RuntimeError(  # pragma: no cover - only under pathological churn
+            f"schedule index CAS exhausted retries stamping {path!r} of {item_id!r}"
+        )
+
+    def landed_at(self, item_id: str, path: str) -> int | None:
+        """When ``path`` last landed, or ``None`` when nothing was stamped (a
+        file written before the stamp existed) — "unknown", not "long ago"."""
+        row = self._row(item_id)
+        return None if row is None else row.landed.get(path)
 
     def forget(self, item_id: str, path: str) -> None:
         """Drop a path the sweep could not read. Quiet when the row is already
@@ -246,7 +289,10 @@ class ScheduleIndex:
                     # a set bounded by design.
                     rm.modify(
                         item_id,
-                        _ScheduleIndex(paths=[p for p in row.paths if p != path]),
+                        _ScheduleIndex(
+                            paths=[p for p in row.paths if p != path],
+                            landed={p: t for p, t in row.landed.items() if p != path},
+                        ),
                         status=RevisionStatus.draft,
                         expected_etag=etag,  # ty: ignore[unknown-argument]
                     )
@@ -265,13 +311,23 @@ class ScheduleIndex:
         each item for its paths afterwards re-reads what is in hand — a round
         trip per item, per tick, per pod, for a number that only grows.
         """
+        return [(item_id, list(row.paths)) for item_id, row in self._live_rows()]
+
+    def entries(self) -> list[tuple[str, list[str], dict[str, int]]]:
+        """:meth:`items_with_paths` with each path's landing stamp — the one
+        listing the schedules overview needs, so "next run" applies the birth
+        rule without a point read per file."""
+        return [(item_id, list(row.paths), dict(row.landed)) for item_id, row in self._live_rows()]
+
+    def _live_rows(self) -> list[tuple[str, _ScheduleIndex]]:
+        """Every row with at least one path, sorted by item id."""
         rm = self._spec.get_resource_manager(_ScheduleIndex)
         # `is_deleted() == False` because `list_resources` happily returns
         # soft-deleted rows. Without it an item whose last schedule was removed
         # keeps being read on every sweep, forever — which is the one cost this
         # index exists to avoid.
         query = (QB.is_deleted() == False).build()  # noqa: E712
-        out: list[tuple[str, list[str]]] = []
+        out: list[tuple[str, _ScheduleIndex]] = []
         for res in rm.list_resources(query, returns=["data", "info"]):
             data = res.data
             # An EMPTIED row is not an item to sweep. `forget` empties rather
@@ -287,10 +343,8 @@ class ScheduleIndex:
             # hold — but nothing reclaims it, and if it ever stops being small
             # the answer is an indexed flag to filter on, not a racy delete.
             if isinstance(data, _ScheduleIndex) and data.paths:
-                out.append(
-                    (res.info.resource_id, list(data.paths))  # ty: ignore[unresolved-attribute]
-                )
-        return sorted(out)
+                out.append((res.info.resource_id, data))  # ty: ignore[unresolved-attribute]
+        return sorted(out, key=lambda pair: pair[0])
 
     def items(self) -> list[str]:
         """Every item with at least one schedule file.

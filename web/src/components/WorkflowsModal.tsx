@@ -5,17 +5,25 @@ import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
-import { SCHEDULES_PATH, type ScheduleRow, schedulesApi } from "../api/schedules";
+import {
+  SCHEDULES_PATH,
+  ScheduleActionError,
+  type ScheduleRow,
+  mayRunNow,
+  schedulesApi,
+} from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
 import { useItemSchedules } from "../hooks/useItemSchedules";
 import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
-import { type MsgKey, useT } from "../lib/i18n";
+import { useT } from "../lib/i18n";
+import { describeSchedule } from "../lib/describeSchedule";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
+import { ScheduleTimeModal } from "./ScheduleTimeModal";
 
 /**
  * The Workflows panel (#323) — lists the workflows the user co-created with the agent in
@@ -79,6 +87,8 @@ export function WorkflowsModal({
       // and a copied template is one way the workflow comes to exist.
       await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+      // …and on the schedules overview, which lists the same rows (decision 9).
+      await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
     } finally {
       setBusy(false);
     }
@@ -116,23 +126,39 @@ export function WorkflowsModal({
       // same folder — so the schedules section must not show the old rows.
       await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+      // …and on the schedules overview, which lists the same rows (decision 9).
+      await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
     } finally {
       setBusy(false);
     }
   };
 
-  /** Cancel one schedule: rewrite the file minus that row, through the ordinary
-   * file write so it lands on the path the platform indexes. Every OTHER row is
-   * kept exactly as written — the refused ones included — because a rewrite that
-   * dropped them would cancel schedules nobody asked to cancel.
-   *
-   * From the file AS IT IS NOW, not from what this panel loaded: the query is a
-   * cache with a 30s staleTime, and between the load and the click the agent's
-   * `save_schedules` may have added a row. Rewriting from the cache would write
-   * that row out of existence, silently — the exact failure the sentence above
-   * promises to avoid. So: fetch, find the clicked row by what it SAYS (the
-   * index may have shifted), and rewrite from that. A row that is already gone
-   * means nothing to write. */
+  /** One row's acts go through the row routes (docs/plan-schedule-overview.md
+   * §3), shared with the schedules overview: the server re-reads the file and
+   * finds the row — by its identity, or for a row the sweep refuses by its
+   * value as written — so every OTHER row stays exactly as written, and a row
+   * somebody changed since this panel loaded is refused with a sentence rather
+   * than rewritten from a stale copy. */
+  const rowRef = (row: ScheduleRow) => ({
+    path: schedules.data?.path ?? SCHEDULES_PATH,
+    trigger_id: row.trigger_id,
+    raw: row.trigger_id ? undefined : row.raw,
+    index: row.trigger_id ? undefined : row.index,
+  });
+  /** What the panel last said about a row (started, or why not), by index. */
+  const [said, setSaid] = useState<{ index: number; ok: boolean; text: string } | null>(null);
+  const [editing, setEditing] = useState<ScheduleRow | null>(null);
+  const refreshSchedules = async () => {
+    await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
+    await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+    await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
+    // Run now may have just made the schedule's own chat — the chat switcher
+    // of this very item lists it (decision 9: as the overview refreshes).
+    await qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
+  };
+  const failed = (row: ScheduleRow, e: unknown) =>
+    setSaid({ index: row.index, ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });
+
   const removeSchedule = async (row: ScheduleRow) => {
     const choice = await dialog.confirm({
       title: t("schedules.removeTitle"),
@@ -146,19 +172,26 @@ export function WorkflowsModal({
     });
     if (choice !== "remove") return;
     setBusy(true);
+    setSaid(null);
     try {
-      const fresh = await qc.fetchQuery({
-        queryKey: qk.itemSchedules(slug, itemId),
-        queryFn: () => schedulesApi.list(slug, itemId),
-        staleTime: 0,
-      });
-      const target = fresh.rows.find((r) => sameJson(r.raw, row.raw));
-      if (target) {
-        const kept = fresh.rows.filter((r) => r !== target).map((r) => r.raw);
-        await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
-        await qc.invalidateQueries({ queryKey: qk.files(itemId) });
-      }
-      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
+      await schedulesApi.remove(slug, itemId, rowRef(row));
+    } catch (e) {
+      failed(row, e);
+    } finally {
+      await refreshSchedules();
+      setBusy(false);
+    }
+  };
+
+  const runScheduleNow = async (row: ScheduleRow) => {
+    setBusy(true);
+    setSaid(null);
+    try {
+      await schedulesApi.runNow(slug, itemId, rowRef(row));
+      setSaid({ index: row.index, ok: true, text: t("schedules.started") });
+      await refreshSchedules();
+    } catch (e) {
+      failed(row, e);
     } finally {
       setBusy(false);
     }
@@ -333,19 +366,67 @@ export function WorkflowsModal({
                       )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    data-testid={`schedule-remove-${row.index}`}
-                    aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
-                    disabled={busy}
-                    onClick={() => void removeSchedule(row)}
-                    style={pillBtn}
-                  >
-                    <Icon name="x" size={12} /> {t("schedules.remove")}
-                  </button>
+                  {mayRunNow(row, sched.can_run) ? (
+                    <button
+                      type="button"
+                      data-testid={`schedule-run-${row.index}`}
+                      disabled={busy}
+                      onClick={() => void runScheduleNow(row)}
+                      style={pillBtn}
+                    >
+                      <Icon name="play" size={12} /> {t("schedules.runNow")}
+                    </button>
+                  ) : null}
+                  {sched.can_edit && row.trigger_id ? (
+                    <button
+                      type="button"
+                      data-testid={`schedule-edit-${row.index}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setSaid(null);
+                        setEditing(row);
+                      }}
+                      style={pillBtn}
+                    >
+                      <Icon name="clock" size={12} /> {t("schedules.editTime")}
+                    </button>
+                  ) : null}
+                  {sched.can_edit ? (
+                    <button
+                      type="button"
+                      data-testid={`schedule-remove-${row.index}`}
+                      aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
+                      disabled={busy}
+                      onClick={() => void removeSchedule(row)}
+                      style={pillBtn}
+                    >
+                      <Icon name="x" size={12} /> {t("schedules.remove")}
+                    </button>
+                  ) : null}
+                  {said?.index === row.index ? (
+                    <span
+                      data-testid={`schedule-said-${row.index}`}
+                      role={said.ok ? "status" : "alert"}
+                      style={{ fontSize: pxToRem(11), color: said.ok ? "var(--text-paper-d)" : "var(--err)" }}
+                    >
+                      {said.text}
+                    </span>
+                  ) : null}
                 </div>
               );
             })}
+            {editing ? (
+              <ScheduleTimeModal
+                raw={editing.raw}
+                rowRef={rowRef(editing)}
+                onSave={(ref, time) => schedulesApi.editTime(slug, itemId, ref, time)}
+                onSaved={() => {
+                  setEditing(null);
+                  void refreshSchedules();
+                }}
+                onClose={() => setEditing(null)}
+              />
+            ) : null}
           </div>
         )}
 
@@ -441,93 +522,6 @@ export function WorkflowsModal({
   );
 }
 
-/** The recurrence in the reader's words, from the row as written (`every`, `at`,
- * `dow`, `dom`, `n`, `tz`). Only vocabulary: when a row fires NEXT is computed on
- * the backend, by the same rule the sweep fires it by, and arrives as `next_at`. */
-function describeSchedule(value: unknown, t: ReturnType<typeof useT>): string {
-  // A row that is not an object has no fields to read; the backend has already
-  // said so in `problems`, and the rewrite still carries the value as written.
-  const raw: Record<string, unknown> =
-    value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  // The parser's rule for every one of these is Python's `or`: a falsy value
-  // is the default. Python's falsy JSON values are null, false, 0, "", [] and
-  // {} — the last two are truthy to `||`, so `||` is not the mirror.
-  const at = typeof raw.at === "string" && raw.at ? raw.at : "00:00";
-  const tz = typeof raw.tz === "string" && raw.tz ? raw.tz : "UTC";
-  const every = pyFalsy(raw.every) ? "daily" : raw.every;
-  let words: string;
-  switch (every) {
-    case "minutes":
-      words = t("schedules.every.minutes", { n: Number(raw.n) || 0 });
-      break;
-    case "hourly":
-      words = t("schedules.every.hourly");
-      break;
-    case "weekly": {
-      const dow = typeof raw.dow === "string" ? raw.dow : "";
-      const key = DOW_KEYS[dow];
-      words = t("schedules.every.weekly", { dow: key ? t(key) : dow, at });
-      break;
-    }
-    case "monthly":
-      words = t("schedules.every.monthly", { dom: Number(raw.dom) || 0, at });
-      break;
-    case "daily":
-      words = t("schedules.every.daily", { at });
-      break;
-    default:
-      words = String(every);
-  }
-  return `${words} (${tz})`;
-}
-
-/** Python's truth test over a decoded JSON value: `null`, `false`, `0`, `""`,
- * `[]` and `{}` are falsy; everything else is truthy. */
-function pyFalsy(value: unknown): boolean {
-  if (value === null || value === undefined || value === false || value === 0 || value === "") {
-    return true;
-  }
-  if (Array.isArray(value)) return value.length === 0;
-  if (typeof value === "object") return Object.keys(value).length === 0;
-  return false;
-}
-
-/**
- * Order-preserving JSON equality — the identity of a schedule row. NOT
- * `sameShape`: that one compares arrays as sets (right for grant lists, whose
- * order nobody arranges), and two rows that differ only in the order of an array
- * inside `with` are two DIFFERENT schedules to the sweep (`trigger_id_for`
- * fingerprints the payload with keys sorted and lists as they are), so Remove
- * must tell them apart. Object key order is not identity (the file was parsed,
- * not diffed as text).
- */
-function sameJson(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return (
-      Array.isArray(a) &&
-      Array.isArray(b) &&
-      a.length === b.length &&
-      a.every((x, i) => sameJson(x, b[i]))
-    );
-  }
-  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
-    const ka = Object.keys(a).sort();
-    const kb = Object.keys(b).sort();
-    return (
-      ka.length === kb.length &&
-      ka.every(
-        (k, i) =>
-          k === kb[i] &&
-          sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-      )
-    );
-  }
-  return false;
-}
-
 /** What a refused row SAID it would run, for the line that shows it. */
 function rawRun(value: unknown): string {
   if (value !== null && typeof value === "object" && "run" in value) {
@@ -536,15 +530,6 @@ function rawRun(value: unknown): string {
   return "?";
 }
 
-const DOW_KEYS: Record<string, MsgKey> = {
-  mon: "schedules.dow.mon",
-  tue: "schedules.dow.tue",
-  wed: "schedules.dow.wed",
-  thu: "schedules.dow.thu",
-  fri: "schedules.dow.fri",
-  sat: "schedules.dow.sat",
-  sun: "schedules.dow.sun",
-};
 
 const pillBtn: React.CSSProperties = {
   display: "inline-flex",

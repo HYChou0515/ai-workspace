@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
+from workspace_app.api.schedule_index import ScheduleIndex
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
@@ -166,11 +167,15 @@ def test_a_schedule_can_name_a_workflow_the_item_authored() -> None:
     with client:
         put = client.put(f"{_base(item_id)}/files/.workflows/nightly.json", content=_NIGHTLY)
         assert put.status_code == 204
-        # Every minute: due on the very first tick, whatever the clock says.
+        # Every minute, landed long ago (below): due on the very first tick.
         rows = json.dumps({"schedules": [{"every": "minutes", "n": 1, "run": "nightly"}]})
         put = client.put(f"{_base(item_id)}/files/.workflows/schedules.json", content=rows)
         assert put.status_code == 204
 
+        # Landed long ago: this test is about which offered list create_app wires in —
+        # not the birth rule (docs/plan-schedule-overview.md §1), which would
+        # hold a row written inside its own minute until the next one.
+        ScheduleIndex(app.state.spec).stamp(item_id, "/.workflows/schedules.json", 0)
         assert client.portal is not None  # inside `with client:` — the app's own loop
         fired = client.portal.call(app.state.user_schedule_sweeper.tick)
 

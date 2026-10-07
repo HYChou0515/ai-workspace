@@ -102,7 +102,7 @@ from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
 from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
-from .events import AgentEvent
+from .events import AgentEvent, FileChanged
 from .file_routes import register_file_routes
 from .goal_offhours import register_stretch_claims
 from .health_routes import (
@@ -138,6 +138,8 @@ from .schedule_index import (
     is_schedule_file,
     register_schedule_index,
 )
+from .schedule_listing import Source as ScheduleSource
+from .schedule_listing import register_schedule_overview_routes
 from .schedule_reconcile import reconcile_item_schedules
 from .skill_hub_routes import register_skill_hub_routes
 from .skill_review import review_skill
@@ -1190,6 +1192,14 @@ def create_app(
         """
         if is_schedule_file(path):
             schedule_index.record(item_id, path)
+            # When it landed, for the birth rule (docs/plan-schedule-overview.md
+            # §1): a schedule only fires windows whose moment came after it was
+            # written. Every facade write and the app's own mirror (every
+            # deploy that is not host-managed) land here. NOT a host-managed
+            # deploy's `exec` write: the turn-end reconcile indexes it without
+            # a stamp, so such a file keeps the old catch-up (or an older
+            # stamp) — the plan says so.
+            schedule_index.stamp(item_id, path, int(datetime.now(UTC).timestamp() * 1000))
 
     files = WorkspaceFiles(
         filestore,
@@ -2384,6 +2394,9 @@ def create_app(
         # Whether the sweep will read the item's own schedules file at all — the
         # same index the sweep iterates, asked the same way.
         schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
+        schedule_landed=lambda item_id: schedule_index.landed_at(item_id, ITEM_SCHEDULES_PATH),
+        # The sweep's own copy, read when the live workspace is still restoring.
+        schedules_durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         packages=packages or [],
     )
 
@@ -2658,6 +2671,32 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+    )
+
+    def _schedule_saved(item_id: str, path: str) -> None:
+        # What the file PUT does after a save (`file_routes.write_file`): an
+        # activity entry, and a FileChanged so another viewer of the file
+        # refetches instead of saving the old rows back.
+        activity.record(
+            "file_written",
+            f"Wrote {rel_path(path)}",
+            {"investigation_id": item_id, "path": path},
+        )
+        turn_engine.publish(item_id, FileChanged(path=path, by=get_user_id(), kind="written"))
+
+    # docs/plan-schedule-overview.md: every schedule a viewer may see.
+    register_schedule_overview_routes(
+        api,
+        spec=spec,
+        files=files,
+        locator=locator,
+        index=schedule_index,
+        policy=schedule_policy,
+        get_user_id=get_user_id,
+        start_run=_start_page_schedule,
+        deployed_pages=DeployedPages(spec).newest_first,
+        durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
+        on_saved=_schedule_saved,
     )
 
     register_private_env_routes(

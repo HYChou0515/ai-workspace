@@ -13,6 +13,7 @@ from typing import cast
 from fastapi import FastAPI
 
 from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.api.schedule_index import ScheduleIndex
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.perm import Permission
@@ -245,6 +246,10 @@ def test_the_app_drops_a_binding_whose_binder_was_removed_and_says_why():
             item.permission = Permission(visibility="restricted")  # carol removed
             rm.update(rid, item)
 
+        # Landed long ago: this test is about dropping a removed binder's binding —
+        # not the birth rule (docs/plan-schedule-overview.md §1), which would
+        # hold a row written inside its own minute until the next one.
+        ScheduleIndex(spec).stamp(rid, FILE, 0)
         assert client.portal is not None
         client.portal.call(client.app.state.user_schedule_sweeper.tick)
 

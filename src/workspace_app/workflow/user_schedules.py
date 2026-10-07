@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from msgspec import Struct
 
-from .triggers import Schedule, _valid_tz, next_run
+from .triggers import Schedule, _valid_tz, fire_window, next_run, period_target
 from .workspace_store import SCHEDULES_FILE, WORKSPACE_WORKFLOW_DIR
 
 logger = logging.getLogger(__name__)
@@ -193,7 +193,11 @@ def validate_user_schedules(raw: str) -> list[str]:
         with_raw = row.get("with")
         if with_raw is not None and not isinstance(with_raw, dict):
             problems.append(
-                f"{where}: `with` must be an object of values for the workflow, got {with_raw!r}."
+                # The TYPE, not the value: the value is what the row sends its
+                # workflow, file content a viewer without `read_content` is not
+                # shown (docs/plan-schedule-overview.md, review round 2).
+                f"{where}: `with` must be an object of values for the workflow, "
+                f"got {type(with_raw).__name__}."
             )
         # `or`, not a `.get` default: a JSON `null` has to mean what an omitted
         # key means. A page generator writes nulls for the fields it left
@@ -476,17 +480,58 @@ def describe_row(row: UserSchedule) -> str:
     return f"daily at {row.at} {zone}"
 
 
+def born_after_target(row: UserSchedule, now_utc: datetime, landed_ms: int | None) -> str:
+    """The current window when this row's file landed AFTER the current
+    period's moment, else ``""`` — the birth rule
+    (`docs/plan-schedule-overview.md` §1).
+
+    Asked only of a schedule the ledger has never fired. The catch-up rule
+    fires a window whose moment has passed; that is right for a window the
+    schedule was alive for (a sweep down at nine) and wrong for one that passed
+    before it existed (a daily 09:00 saved at 14:00 is not a nine o'clock run
+    that was missed). ``None`` — a file stamped before stamps existed — is
+    "unknown", and keeps catch-up.
+
+    ONE function for the sweep that fires a row and every reader that reports
+    when it fires next, so they cannot disagree.
+    """
+    if landed_ms is None:
+        return ""
+    schedule = row.as_schedule()
+    now = in_zone(now_utc, row.tz)
+    landed = in_zone(datetime.fromtimestamp(landed_ms / 1000, UTC).replace(tzinfo=None), row.tz)
+    if period_target(schedule, now) <= landed:
+        return fire_window(schedule, now)
+    return ""
+
+
 def next_run_at(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
     """When this row fires next as `YYYY-MM-DD HH:MM` in ITS zone, on the rule
     the sweep fires by — or `""` when it is due right now (the next sweep).
 
     The empty case is the one worth keeping distinct rather than rounding away:
-    a missed window fires late, so a daily 09:00 saved at 10:00 runs within the
-    minute (the catch-up rule the sweep's reference documents), and a reply or a
-    panel that said "tomorrow" would contradict the manual it stands in for.
+    a missed window fires late (the catch-up rule), and a reply or a panel that
+    said "tomorrow" for it would contradict the sweep. A row written after its
+    moment never reaches that case — `schedule_views` hands in the window the
+    birth rule counts as handled, so it reads as next period.
     """
     when = next_run(row.as_schedule(), in_zone(now_utc, row.tz), last_window)
     return "" if when is None else f"{when:%Y-%m-%d %H:%M}"
+
+
+def next_run_ms(row: UserSchedule, at: str, now_utc: datetime) -> int:
+    """`next_run_at`'s answer as one instant (epoch ms) — what a list of rows in
+    different zones sorts on, since "09:00" in two zones is two instants. Due
+    now (`at == ""`) is now. The zone is resolved the way `in_zone` resolves
+    it, unusable → UTC, so the instant matches the wall clock shown."""
+    if not at:
+        return int(now_utc.replace(tzinfo=UTC).timestamp() * 1000)
+    local = datetime.strptime(at, "%Y-%m-%d %H:%M")
+    try:
+        zone = ZoneInfo(row.tz) if row.tz else UTC
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        zone = UTC
+    return int(local.replace(tzinfo=zone).timestamp() * 1000)
 
 
 def describe_next_run(row: UserSchedule, at: str) -> str:
@@ -533,6 +578,24 @@ class ScheduleView(Struct):
     `known` (there is no such workflow): the fix is to the workflow, and a person
     told "no such workflow" would hunt for a typo in the schedule instead."""
     payload: dict[str, Any] = {}
+    next_ms: int | None = None
+    """`next_at` as one instant (epoch ms; now when due now) — `next_run_ms`."""
+    trigger_id: str = ""
+    """The row's schedule identity (`trigger_id_for`) — what its window ledger,
+    its own chat and its "run as me" binding are keyed on. Filled when the
+    caller says where the file lives (`key_of`); "" for a row that does not
+    parse, which has no identity because the sweep never fires it."""
+
+
+def _last_or_born(
+    row: UserSchedule,
+    now_utc: datetime,
+    last_window: Callable[[UserSchedule], str],
+    landed_ms: int | None,
+) -> str:
+    """The ledger's window, or — for a row it has never fired — the window the
+    birth rule counts as handled. What the sweep would see after its claim."""
+    return last_window(row) or born_after_target(row, now_utc, landed_ms)
 
 
 def schedule_views(
@@ -545,6 +608,8 @@ def schedule_views(
     enabled: bool = True,
     indexed: bool = True,
     broken: Mapping[str, str] | None = None,
+    landed_ms: int | None = None,
+    key_of: Callable[[UserSchedule], str] | None = None,
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of a schedules file, described the way the sweep reads it —
     same parser, same cap, same next-run rule, same ledger (`last_window`) —
@@ -561,6 +626,10 @@ def schedule_views(
     `offered.unparsable_workflow`'s answer, the sweep's own check). Each of
     those is a way a row silently never fires, so each is said here rather
     than rounded away.
+
+    `landed_ms` is when the file last landed (the index's stamp): a row the
+    ledger has never fired, written after this period's moment, is not due now
+    but next period — `born_after_target`, the sweep's own rule.
     """
     rows = file_rows(raw_text)
     if rows is None:
@@ -580,7 +649,11 @@ def schedule_views(
         known = row.run in offered
         run_problem = (broken or {}).get(row.run, "")
         runnable = known and not run_problem and capped is None and enabled and indexed
-        at = next_run_at(row, now_utc, last_window(row)) if runnable else ""
+        at = (
+            next_run_at(row, now_utc, _last_or_born(row, now_utc, last_window, landed_ms))
+            if runnable
+            else ""
+        )
         views.append(
             ScheduleView(
                 index=i,
@@ -594,18 +667,31 @@ def schedule_views(
                 next_run=describe_next_run(row, at) if runnable else "",
                 next_at=at,
                 due_now=runnable and not at,
+                next_ms=next_run_ms(row, at, now_utc) if runnable else None,
                 tz=row.tz or "UTC",
                 known=known,
                 run_problem=run_problem,
                 payload=row.payload,
+                trigger_id=key_of(row) if key_of is not None else "",
             )
         )
     return views, file_problems
 
 
-def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]:
-    """A `last_window` resolver over the sweep's ledger for THIS item's own
-    schedules file, or one that answers "never" when there is no ledger to ask
+def schedule_key(item_id: str, path: str) -> Callable[[UserSchedule], str]:
+    """Each row's identity in the schedules file at ``path`` — the sweep's own
+    derivation (`_one_file`: the folder is the path's parent)."""
+    folder = path.rsplit("/", 1)[0]
+    return lambda row: trigger_id_for(item_id, folder, row)
+
+
+def last_window_lookup(
+    spec: Any, item_id: str, path: str = ITEM_SCHEDULES_PATH
+) -> Callable[[UserSchedule], str]:
+    """A `last_window` resolver over the sweep's ledger for the schedules file
+    at ``path`` (the item's own by default; a page's folder keys its rows
+    differently, so a page file asked under the item's path would read as never
+    fired), or one that answers "never" when there is no ledger to ask
     (no spec, or a deploy whose sweep is off never registered the store).
 
     The lookup is a BLOCKING specstar read per distinct row. `schedule_views`
@@ -618,11 +704,11 @@ def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]
     from .triggers import SpecstarTriggerStore
 
     store = SpecstarTriggerStore(spec)
-    folder = ITEM_SCHEDULES_PATH.rsplit("/", 1)[0]
+    key_of = schedule_key(item_id, path)
     cache: dict[str, str] = {}
 
     def _lookup(row: UserSchedule) -> str:
-        key = trigger_id_for(item_id, folder, row)
+        key = key_of(row)
         if key not in cache:
             try:
                 cache[key] = store.last_window(key)

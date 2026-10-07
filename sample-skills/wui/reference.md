@@ -311,12 +311,13 @@ What the platform guarantees, so you do not build it yourself:
   wakes.
 - **A missed window fires late** rather than being dropped — a machine that was
   down at 09:00 still sends the report at 10:30.
+- **A row starts at its next time, not at once.** A daily 09:00 row written at
+  14:00 first runs tomorrow at 09:00: that morning's window passed before the
+  row existed, so there is nothing to catch up on.
 - **Re-saving an unchanged row does not re-fire it.** The identity is derived
   from what the row SAYS, so saving five times is one schedule.
-  ⚠️ **Changing a row makes it a new schedule**, and the new one may fire again
-  in the same period — so edit a daily 09:00 row at 10:00 and it can run a
-  second time today. Change them when the period is not yet due if that
-  matters.
+  ⚠️ **Changing a row makes it a new schedule** — by the rule above it starts
+  at its next time, and its run history (its conversation) starts over.
 
 ⚠️ **A bad row is skipped, not shouted about.** Get `every` or `n` wrong and that
 one row silently never fires while the others keep working. Show the file back to

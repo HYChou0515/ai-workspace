@@ -594,6 +594,99 @@ def test_a_page_saving_its_schedules_through_the_file_route_is_indexed(
     assert ScheduleIndex(harness.spec).items() == [harness.iid]
 
 
+def test_saving_a_schedules_file_stamps_when_it_landed(harness: Harness) -> None:
+    """The birth rule's evidence (docs/plan-schedule-overview.md §1), written
+    by the same hook that indexes the file — so every door that indexes also
+    stamps, through the entrance a page uses."""
+    import time
+
+    before = int(time.time() * 1000)
+    with harness.client:
+        r = harness.client.put(
+            harness.wpath(f"/files/scrap-review/{SCHEDULES_FILE}"), content=b"[]"
+        )
+    after = int(time.time() * 1000)
+
+    assert r.status_code < 300, r.text
+    landed = ScheduleIndex(harness.spec).landed_at(harness.iid, f"/scrap-review/{SCHEDULES_FILE}")
+    assert landed is not None and before <= landed <= after
+
+
+def test_recording_and_forgetting_other_paths_keep_the_stamps(index: ScheduleIndex) -> None:
+    """`record` and `forget` rebuild the row; a rebuild that forgot `landed`
+    would turn every stamped schedule back into "unknown" — catch-up again —
+    the moment a second page saved."""
+    a, b = f"/a/{SCHEDULES_FILE}", f"/b/{SCHEDULES_FILE}"
+    index.record("i1", a)
+    index.stamp("i1", a, 111)
+    index.record("i1", b)
+    index.stamp("i1", b, 222)
+    index.forget("i1", b)
+
+    assert index.landed_at("i1", a) == 111
+    assert index.landed_at("i1", b) is None
+
+
+def test_stamping_an_item_with_no_row_is_quiet(index: ScheduleIndex) -> None:
+    """`record` runs first and makes the row; a row a peer emptied in between
+    is one the sweep no longer reads, so there is nothing to stamp."""
+    index.stamp("i1", f"/a/{SCHEDULES_FILE}", 5)
+
+    assert index.landed_at("i1", f"/a/{SCHEDULES_FILE}") is None
+
+
+def test_stamping_the_same_instant_again_writes_nothing(index: ScheduleIndex) -> None:
+    path = f"/a/{SCHEDULES_FILE}"
+    index.record("i1", path)
+    index.stamp("i1", path, 5)
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_modify = rm.modify
+    writes: list[str] = []
+
+    def _counted(resource_id, data, /, **kw):
+        writes.append(resource_id)
+        return real_modify(resource_id, data, **kw)
+
+    rm.modify = _counted  # ty: ignore[invalid-assignment]
+    try:
+        index.stamp("i1", path, 5)
+    finally:
+        rm.modify = real_modify  # ty: ignore[invalid-assignment]
+
+    assert writes == []
+
+
+def test_a_stamp_racing_a_peer_is_retried_not_lost(index: ScheduleIndex) -> None:
+    """A peer recording another page between our read and our write: the stamp
+    is a compare-and-swap like every other write here, and it goes round."""
+    a, b = f"/a/{SCHEDULES_FILE}", f"/b/{SCHEDULES_FILE}"
+    index.record("i1", a)
+    rm = index._spec.get_resource_manager(_ScheduleIndex)
+    real_modify = rm.modify
+    raced = {"done": False}
+
+    def _peer_first(resource_id, data, /, **kw):
+        if not raced["done"]:
+            raced["done"] = True
+            rm.modify = real_modify  # ty: ignore[invalid-assignment]
+            index.record("i1", b)  # the peer lands first
+            rm.modify = _peer_first  # ty: ignore[invalid-assignment]
+        etag = kw.get("expected_etag")
+        current = rm.get(resource_id).info.etag
+        if etag != current:
+            raise PreconditionFailedError(resource_id, etag or "<none>", current)
+        return real_modify(resource_id, data, **kw)
+
+    rm.modify = _peer_first  # ty: ignore[invalid-assignment]
+    try:
+        index.stamp("i1", a, 7)
+    finally:
+        rm.modify = real_modify  # ty: ignore[invalid-assignment]
+
+    assert index.landed_at("i1", a) == 7
+    assert index.paths("i1") == [a, b]
+
+
 def test_adding_an_ignore_pattern_cannot_silently_switch_schedules_off() -> None:
     """`DEFAULT_IGNORES` is the mirror's list, and it now gates schedules too.
 

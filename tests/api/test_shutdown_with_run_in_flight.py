@@ -21,6 +21,7 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 
 from workspace_app.api import MessageDelta, RunDone, create_app
+from workspace_app.api.schedule_index import ScheduleIndex
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
@@ -71,6 +72,10 @@ def test_shutdown_with_a_scheduled_run_in_flight_returns() -> None:
         assert (
             client.put(f"{base}/files/.workflows/schedules.json", content=rows).status_code == 204
         )
+        # Landed long ago: this test is about shutdown with a scheduled run in flight —
+        # not the birth rule (docs/plan-schedule-overview.md §1), which would
+        # hold a row written inside its own minute until the next one.
+        ScheduleIndex(spec).stamp(item_id, "/.workflows/schedules.json", 0)
         assert client.portal is not None
         assert client.portal.call(app.state.user_schedule_sweeper.tick) == 1
         runs = client.get(f"{base}/runs").json()

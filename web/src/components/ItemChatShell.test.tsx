@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api";
@@ -9,7 +10,9 @@ import { kbApi } from "../api/kb";
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
 import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
 import type { FileContent } from "../api/types";
-import { renderWithQuery } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
+import { DialogProvider } from "./Dialog";
 import { ItemChatShell } from "./ItemChatShell";
 
 // The active chat now renders the real RCA AgentPanel (model picker, kbApi, dialogs
@@ -626,6 +629,142 @@ describe("run-in-this-chat lives in the bar", () => {
       expect(start).toHaveBeenCalledWith("topic-hub", "it", "memory", "conversation:c1"),
     );
   });
+  it("opens the chat the address names (?chat=), not the most recent one", async () => {
+    // The schedules overview links a schedule's last run to its own chat
+    // (docs/plan-schedule-overview.md); without this the link landed on
+    // whichever chat was most recent.
+    stubChatApi([
+      summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
+      summary({ chat_id: "wui:it:sched", is_default: false, title: "B" }),
+    ]);
+    window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
+    try {
+      render();
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("keeps the chat the address names while a cached list is being refreshed", async () => {
+    // Review round 1: the item was visited earlier, so its chat list is cached
+    // from before the schedule's chat existed. The fallback effect ran against
+    // that stale list, did not find the id and picked the newest chat — and
+    // the refetch that brought the schedule's chat arrived too late.
+    const a = summary({ chat_id: "conversation:c1", is_default: true, title: "A" });
+    const b = summary({ chat_id: "wui:it:sched", is_default: false, title: "B" });
+    stubChatApi([a, b]);
+    const client = makeTestQueryClient();
+    client.setQueryData(qk.itemChats("topic-hub", "it"), [a], { updatedAt: Date.now() - 60_000 });
+    window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
+    try {
+      renderWithQuery(
+        <ItemChatShell
+          slug="topic-hub"
+          itemId="it"
+          profile="default"
+          picker={[]}
+          suggestions={[]}
+          appTitle="Topic Hub"
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          chatSwitcher="always"
+          showCollections={false}
+        />,
+        client,
+      );
+      await waitFor(() => expect(itemChatApi.listChats).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("finds the chat the address names even in a list cached seconds ago (production staleTime)", async () => {
+    // Review round 2: with the app's 30s staleTime a list cached moments ago is
+    // FRESH — no refetch on mount, `isFetching` never true — so the hold above
+    // never engaged: Run now on /schedules made the chat, the item's list was
+    // cached just before, and the last-run link opened the newest chat.
+    const { makeQueryClient } = await import("../api/queryClient");
+    const a = summary({ chat_id: "conversation:c1", is_default: true, title: "A" });
+    const b = summary({ chat_id: "wui:it:sched", is_default: false, title: "B" });
+    stubChatApi([a, b]);
+    const client = makeQueryClient();
+    client.setQueryData(qk.itemChats("topic-hub", "it"), [a]); // cached just now
+    window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
+    try {
+      renderWithQuery(
+        <ItemChatShell
+          slug="topic-hub"
+          itemId="it"
+          profile="default"
+          picker={[]}
+          suggestions={[]}
+          appTitle="Topic Hub"
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          chatSwitcher="always"
+          showCollections={false}
+        />,
+        client,
+      );
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("a ?chat= read for one item holds nothing on the next item the shell shows", async () => {
+    // Review round 3: the shell is not remounted between items, so the chat the
+    // address named for item A was still held when it showed item B — whose
+    // fresh cached list starts no fetch — and B opened with no chat at all.
+    const { makeQueryClient } = await import("../api/queryClient");
+    const lists: Record<string, ItemChatSummary[]> = {
+      A: [
+        summary({ chat_id: "conversation:a0", is_default: true, title: "A0" }),
+        summary({ chat_id: "wui:A:sched", is_default: false, title: "A-sched" }),
+      ],
+      B: [summary({ chat_id: "conversation:b0", is_default: true, title: "B0" })],
+    };
+    stubChatApi([]);
+    vi.spyOn(itemChatApi, "listChats").mockImplementation(async (_slug, itemId) => lists[itemId]);
+    const client = makeQueryClient();
+    client.setQueryData(qk.itemChats("topic-hub", "B"), lists.B); // fresh in the cache
+    const shell = (itemId: string) => (
+      <ItemChatShell
+        slug="topic-hub"
+        itemId={itemId}
+        profile="default"
+        picker={[]}
+        suggestions={[]}
+        appTitle="Topic Hub"
+        attachedPreset=""
+        onAttachPreset={() => {}}
+        uploadDir="uploads"
+        chatSwitcher="always"
+        showCollections={false}
+      />
+    );
+    window.history.pushState({}, "", "/a/topic-hub/A?chat=wui%3AA%3Asched");
+    try {
+      const { rerender } = renderWithQuery(shell("A"), client);
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("A-sched"));
+
+      window.history.pushState({}, "", "/a/topic-hub/B");
+      rerender(
+        <QueryClientProvider client={client}>
+          <DialogProvider>{shell("B")}</DialogProvider>
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B0"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
   it("closes the launch dialog when the active chat changes, and never starts in the other chat", async () => {
     // The dialog used to live in the per-chat panel under `key={chat_id}`, so a
     // switch unmounted it and nothing could launch. In the shell it survived

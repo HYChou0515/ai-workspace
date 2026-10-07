@@ -885,8 +885,26 @@ interactive profile 的 item（候選是空集合）上，AI 用 `save_workflow`
 **AI 用 `save_schedules` 寫，不直接寫檔。** 工具先驗（同 sweep 的 linter）、拒絕 item 沒有的
 `run`（並列出它有的）、套用列數上限，才走 façade 寫檔（所以會被索引）；參數是**整份**清單
 （覆蓋，不是追加——同頁面 `writeFile` 的規則），空清單即取消全部。回覆是**查過的事**：每列下次
-何時跑，含租約帳本——所以 10:00 存一條 daily 09:00 會說「下一輪 sweep」（漏掉的視窗補跑，
-reference.md 明文），而同一列跑過之後再存會說明天；sweep 沒開的部署會**照存但大聲警告**。
+何時跑，含租約帳本與落地時間——所以 10:00 存一條 daily 09:00 會說明天 09:00（這一期的時間點在
+這一列存在之前就過了，不算漏掉，不補跑；見下方「新排程不補跑」），同一列跑過之後再存也說明天；
+sweep 沒開的部署會**照存但大聲警告**。
+
+**新排程不補跑**（[`plan-schedule-overview.md`](plan-schedule-overview.md) §1）。sweep 的補跑規則
+（時間點過了、這一期還沒跑 → 跑）只適用於排程**存在時**錯過的時間窗。透過 façade 寫入 `schedules.json`
+（`save_schedules`、檔案 PUT／頁面的 `writeFile`、`write_file`、改時間）以及 app 自己的 mirror（host-managed 以外的部署），
+都會經過 `_note_schedule_file`，它同時記下落地時間（`_ScheduleIndex.landed`）；一個帳本上
+從沒跑過的排程，若這一期的時間點早於它的落地時間，sweep 把這一期記成已處理、不開火。改時間等於換一個
+排程身分（`trigger_id` 含時間），所以改完也是從下一個時間點開始，不會當場補跑。
+例外：host-managed 部署上由 `exec`（或 workflow 的 sandbox 步驟）寫的檔，是在對話結束時由
+`schedule_reconcile` 登記的，**不記落地時間**——這種檔照舊補跑（或沿用之前一次 façade 寫入的時間）。
+
+**排程總表 `/schedules`**（全域導覽「排程」）列出使用者讀得到（`read_meta`）的每個 item 的排程——
+item 自己的與頁面資料夾的——每列有下一次、上一次（狀態＋時間，點進去是那條排程自己的對話），以及
+「現在執行」（`execute`，跑進排程自己的對話、用按的人的身分、不動帳本；它還沒跑完時到點的那次會被當成
+重疊而跳過，跟排程自己撞上時同一條規則）、「改時間」與「移除」
+（`edit_content`）。三個動作走 `POST /a/{slug}/items/{id}/schedules/{run,edit,remove}`，由伺服器
+重讀檔案、用 `trigger_id` 找那一列（被 linter 拒絕的列只能移除、用它寫的值找），找不到就 409；
+Workflows 面板的排程區用同一組路由。
 教它的地方在 `author-workflow` skill（每個 app 都授權）、`save_workflow` 的成功回覆句、以及工具
 自己的說明（`every` 的字從 `EVERY` 產生，測試釘住不會漂移）。
 
