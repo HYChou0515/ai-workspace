@@ -21,6 +21,7 @@ import { qk } from "../api/queryKeys";
 import {
   type SkillHubApi,
   type SkillHubCard,
+  type SkillHubSort,
   skillHubApi,
 } from "../api/skillHub";
 import { AppTag } from "../components/AppTag";
@@ -58,6 +59,7 @@ export function SkillHubPage({
   }, []);
   const [query, setQuery] = useState("");
   const [mine, setMine] = useState(false);
+  const [sort, setSort] = useState<SkillHubSort>("name");
   // The search is the server's (it matches what the agent's search tool
   // matches), so the box is debounced rather than sent per keystroke — the
   // review inbox's idiom.
@@ -68,8 +70,8 @@ export function SkillHubPage({
   }, [query]);
   const { data, isPending, isError, isFetching, isPlaceholderData, errorUpdateCount, refetch } =
     useQuery({
-      queryKey: qk.skillHub(q, mine),
-      queryFn: () => client.list(q, mine),
+      queryKey: qk.skillHubBrowse(q, mine, sort),
+      queryFn: () => client.browse(q, mine, sort),
       // A new (q, mine) is a new query key, and without this every keystroke's
       // debounce made the page `isPending` — the whole tree, search box
       // included, was swapped for 載入中…, the box remounted, and the caret
@@ -81,10 +83,13 @@ export function SkillHubPage({
   // "Nothing published at all" and "nothing matches the tools" are different
   // states: the first gets the empty state (no tools, they would filter
   // nothing); the second keeps the tools, because they are what to change.
-  const { data: everything } = useQuery({
-    queryKey: qk.skillHub("", false),
-    queryFn: () => client.list("", false),
+  // The same key as the untouched page's own listing, so opening the page
+  // sends one request, not two.
+  const { data: everythingListing } = useQuery({
+    queryKey: qk.skillHubBrowse("", false, "name"),
+    queryFn: () => client.browse("", false, "name"),
   });
+  const everything = everythingListing?.entries;
 
   // Only the UNTOUCHED page's first load has nothing to show. Once the tools
   // were used they stay mounted whatever the list does — loading and failure
@@ -97,7 +102,8 @@ export function SkillHubPage({
   const untouched = !q && !mine;
   const neverSettled = isPending && !isError && errorUpdateCount === 0;
   if (neverSettled && untouched) return <p>{t("skillHub.loading")}</p>;
-  const rows = data ?? [];
+  const rows = data?.entries ?? [];
+  const countedSince = data?.counted_since ?? "";
 
   // Not while an error is shown: the two share a key, and a failed refetch of
   // an empty hub kept `[]` as data — the empty state hid the error and Retry.
@@ -159,6 +165,26 @@ export function SkillHubPage({
                 {t("skillHub.mine")}
               </button>
             </div>
+            <div className="skill-hub-scope" role="group" aria-label={t("skillHub.sort")}>
+              {(["name", "popular"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className="btn"
+                  data-size="sm"
+                  data-variant={sort === s ? "primary" : "secondary"}
+                  aria-pressed={sort === s}
+                  onClick={() => setSort(s)}
+                >
+                  {t(s === "name" ? "skillHub.sort.name" : "skillHub.sort.popular")}
+                </button>
+              ))}
+            </div>
+            {countedSince ? (
+              <span className="muted small skill-hub-since">
+                {t("skillHub.countedSince", { day: countedSince })}
+              </span>
+            ) : null}
           </div>
           {/* The results area: busy while the next list is on its way (the
               previous one stays visible, dimmed), the error with Retry when
@@ -250,6 +276,9 @@ function SkillRow({
       ) : null}
       <div className="skill-hub-row-meta">
         <UserChip userId={entry.owner} size={18} nameOnly />
+        <span className="muted small skill-hub-counts">
+          {t("skillHub.counts", { installs: entry.installs ?? 0, uses: entry.uses ?? 0 })}
+        </span>
       </div>
       {forks > 0 ? (
         <ul className="skill-hub-forks">

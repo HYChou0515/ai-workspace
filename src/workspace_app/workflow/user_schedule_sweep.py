@@ -37,6 +37,7 @@ from .orchestrator import ActiveRunExists
 from .schedule_bindings import ScheduleBinding, ScheduleBindings, workflow_digest
 from .triggers import ScanLease, SpecstarTriggerStore, fire_window, is_due
 from .user_schedules import (
+    born_after_target,
     file_rows,
     in_zone,
     over_cap,
@@ -566,6 +567,18 @@ class UserScheduleSweeper:
             last = await asyncio.to_thread(self._store.last_window, trigger_id)
             if not is_due(schedule, now, last):
                 continue
+            # The birth rule (docs/plan-schedule-overview.md §1): a schedule the
+            # ledger has never fired, whose file landed after this period's
+            # moment, did not MISS this window — it did not exist yet. Claimed
+            # without firing, so the ledger says "handled" and a later save of
+            # the same file cannot make it look newborn again. Read only here —
+            # due AND never fired — so an ordinary tick reads no stamp at all.
+            if not last:
+                landed = await asyncio.to_thread(self._index.landed_at, item_id, path)
+                born = born_after_target(row, now_utc, landed)
+                if born:
+                    await asyncio.to_thread(self._store.try_claim, trigger_id, born)
+                    continue
             # The item HAS the file — will it run? Asked only for a row that is
             # DUE (a tick with nothing due costs only the one read of the
             # schedules file — #804's test holds that) and BEFORE the claim, so

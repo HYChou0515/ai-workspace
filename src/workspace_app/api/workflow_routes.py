@@ -23,6 +23,7 @@ from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
 
 from ..files import WorkspaceFiles, rel_path
+from ..perm.model import Verb
 from ..tooling.registry import PackageInfo
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
@@ -41,6 +42,7 @@ from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
 from .locator import ItemLocator
+from .schedule_listing import Source
 from .schemas import (
     _DecisionBody,
     _PhaseOut,
@@ -73,6 +75,7 @@ class ScheduleRowOut(BaseModel):
     known: bool = False
     run_problem: str = ""
     payload: dict[str, Any] = {}
+    trigger_id: str = ""
 
 
 class SchedulesOut(BaseModel):
@@ -84,6 +87,14 @@ class SchedulesOut(BaseModel):
     path: str = ".workflows/schedules.json"
     rows: list[ScheduleRowOut]
     problems: list[str]
+    #: What THIS viewer may do with a row — the row routes' own gates
+    #: (`edit_content` to edit or remove, `execute` to run now), so the panel
+    #: offers only what will be allowed (docs/plan-schedule-overview.md).
+    can_edit: bool = False
+    can_run: bool = False
+    #: Whether the viewer may read the item's files (rows come without `with`
+    #: otherwise, and a refused row is matched for Remove against that value).
+    can_read: bool = False
 
 
 async def _staged_run_uploads(
@@ -139,6 +150,8 @@ def register_workflow_routes(
     event_dispatcher: EventTriggerDispatcher,
     schedule_policy: SchedulePolicy,
     schedule_indexed: Callable[[str], bool],
+    schedule_landed: Callable[[str], int | None] = lambda _item_id: None,
+    schedules_durable: Source,
     packages: Sequence[PackageInfo] = (),
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
@@ -214,6 +227,26 @@ def register_workflow_routes(
             ),
         ]
 
+    def _may(slug: str, item_id: str, verb: Verb) -> bool:
+        """The locator's gate as a yes/no, for saying what a viewer may do."""
+        try:
+            locator.require_access(slug, item_id, verb)
+        except HTTPException:
+            return False
+        return True
+
+    def _row_out(view: Any, can_read: bool) -> ScheduleRowOut:
+        """One row for the panel; its `with` only for who may read the files
+        (`schedule_listing.without_payload` says why)."""
+        from .schedule_listing import without_payload
+
+        fields = msgspec.to_builtins(view)
+        assert isinstance(fields, dict)  # narrow for ty
+        if not can_read:
+            fields["raw"] = without_payload(fields["raw"])
+            fields["payload"] = {}
+        return ScheduleRowOut(**fields)
+
     @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
     async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
         """The item's own `.workflows/schedules.json`, read the way the SWEEP reads
@@ -238,37 +271,29 @@ def register_workflow_routes(
         the turn that made it. The parity test does not cover that window;
         `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
         """
-        from ..filestore.protocol import FileNotFound
-        from ..workflow.offered import offered_workflow_ids, unparsable_workflow
-        from ..workflow.user_schedules import (
-            ITEM_SCHEDULES_PATH,
-            last_window_lookup,
-            schedule_views,
-            usable_rows,
-            utc_now,
-        )
+        from ..workflow.user_schedules import ITEM_SCHEDULES_PATH
+        from .schedule_listing import grade_file, read_schedules_file
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
-        try:
-            data = await files.read(investigation_id, ITEM_SCHEDULES_PATH)
-        except FileNotFound:
+        can_edit = _may(slug, item_id, "edit_content")
+        can_run = _may(slug, item_id, "execute")
+        # A row's `with` is file content: shown only to who may read the files.
+        can_read = _may(slug, item_id, "read_content")
+        # Live first, the durable copy when the live workspace is still
+        # restoring (`read_schedules_file` says why) — the overview's read.
+        found = await read_schedules_file(
+            files, schedules_durable, investigation_id, ITEM_SCHEDULES_PATH
+        )
+        if found is None:
             return SchedulesOut(
-                enabled=schedule_policy.sweep_enabled, indexed=False, rows=[], problems=[]
+                enabled=schedule_policy.sweep_enabled,
+                indexed=False,
+                rows=[],
+                problems=[],
+                can_edit=can_edit,
+                can_run=can_run,
+                can_read=can_read,
             )
-        # The sweep's own decode (`user_schedule_sweep._one_file`): a stray byte
-        # costs its character, not the whole file — and never a 500 here while
-        # the sweep goes on running the rows.
-        raw = data.decode("utf-8", "replace")
-        profile = locator.profile_of(investigation_id)
-        offered = await offered_workflow_ids(files.ls, investigation_id, slug=slug, profile=profile)
-        # Which of the workflows the rows name will not run because their own
-        # file does not parse — asked per distinct `run`, the sweep's own check
-        # (`unparsable_workflow`), through the facade like every other read here.
-        broken: dict[str, str] = {}
-        for run in {row.run for row in usable_rows(raw)[0]} & set(offered):
-            problem = await unparsable_workflow(files.read, investigation_id, run)
-            if problem is not None:
-                broken[run] = problem
         # The sweep reads only the items its index names. A file that reached
         # the store past every hook is invisible to it until the next turn's
         # reconcile, and its rows must not be shown as if they will fire.
@@ -280,25 +305,37 @@ def register_workflow_routes(
             # listing must not 500 over it while the file itself is fine.
             logger.exception("schedules: could not read the index for %s", investigation_id)
             indexed = False
-        # One hop off the loop: the ledger reads inside are blocking specstar I/O.
-        views, problems = await asyncio.to_thread(
-            schedule_views,
-            raw,
-            offered=offered,
-            now_utc=utc_now(),
-            last_window=last_window_lookup(
-                spec if schedule_policy.sweep_enabled else None, investigation_id
-            ),
-            max_rows=schedule_policy.max_rows,
-            enabled=schedule_policy.sweep_enabled,
+        # When the file landed — the birth rule's evidence, the stamp the sweep
+        # compares against (docs/plan-schedule-overview.md §1).
+        try:
+            landed = await asyncio.to_thread(schedule_landed, investigation_id)
+        except Exception:  # noqa: BLE001 — a listing, not a run
+            logger.exception("schedules: could not read the landing stamp for %s", investigation_id)
+            landed = None
+        data, source = found
+        views, problems = await grade_file(
+            source,
+            spec=spec,
+            policy=schedule_policy,
+            item_id=investigation_id,
+            slug=slug,
+            profile=locator.profile_of(investigation_id),
+            path=ITEM_SCHEDULES_PATH,
+            # The sweep's own decode (`user_schedule_sweep._one_file`): a stray
+            # byte costs its character, not the whole file — and never a 500
+            # here while the sweep goes on running the rows.
+            raw=data.decode("utf-8", "replace"),
             indexed=indexed,
-            broken=broken,
+            landed=landed,
         )
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,
             indexed=indexed,
-            rows=[ScheduleRowOut(**msgspec.to_builtins(v)) for v in views],
+            rows=[_row_out(v, can_read) for v in views],
             problems=problems,
+            can_edit=can_edit,
+            can_run=can_run,
+            can_read=can_read,
         )
 
     @app.get("/a/{slug}/items/{item_id}/workflow-templates")

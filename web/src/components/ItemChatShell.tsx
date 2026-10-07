@@ -78,6 +78,12 @@ type AgentChrome = {
   uploadDir: string;
 };
 
+/** The chat the address asks for (`?chat=`), or null. Read from `window`
+ * rather than the router so the shell keeps working wherever it is mounted. */
+function chatFromAddress(): string | null {
+  return new URLSearchParams(window.location.search).get("chat") || null;
+}
+
 /**
  * The per-item multi-chat shell (topic-hub §3, redesigned in #132): a compact chat
  * switcher dropdown + a single `+ New` picker ([Free chat] + the seed profile's
@@ -128,7 +134,21 @@ export function ItemChatShell({
   showCollections: boolean;
 } & AgentChrome) {
   const qc = useQueryClient();
-  const { chats, isLoading, createFreeChat, renameChat, deleteChat } = useItemChats(slug, itemId);
+  // The chat the address names (`?chat=`), read once — the schedules overview
+  // links a schedule's last run to its own chat this way. Tied to the item it
+  // was read for: the shell is not remounted between items, and an id held
+  // for another item left the next one with no chat selected (review round 3).
+  const [address] = useState(() => ({ itemId, chat: chatFromAddress() }));
+  const addressChat = address.itemId === itemId ? address.chat : null;
+  const { chats, isLoading, isFetchedAfterMount, createFreeChat, renameChat, deleteChat } =
+    useItemChats(
+      slug,
+      itemId,
+      undefined,
+      // A list cached moments ago is fresh to the cache but may predate that
+      // chat (Run now just made it): fetch it on mount when the address asks.
+      addressChat ? "always" : undefined,
+    );
   const profilesQ = useWorkflowProfiles(slug);
   const wsWorkflowsQ = useWorkspaceWorkflows(slug, itemId);
   // The launch list = the profile's package workflows PLUS the ones the user
@@ -146,7 +166,11 @@ export function ItemChatShell({
       if (!w.problem) byId.set(w.id, { input_json: "", ...w });
     return [...byId.values()];
   }, [profilesQ.data, wsWorkflowsQ.data, profile]);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  // `?chat=<id>` opens that chat — the schedules overview links a schedule's
+  // last run to its own conversation this way (docs/plan-schedule-overview.md).
+  // Read once, from the address the item was opened with; an id the item has
+  // no chat for falls back to the most recent one like any other.
+  const [activeChatId, setActiveChatId] = useState<string | null>(addressChat);
   const [managing, setManaging] = useState(false);
   // #283: a workflow launch opens the pre-flight dialog first; the real start (which
   // opens a workflow chat) happens only on confirm.
@@ -164,12 +188,18 @@ export function ItemChatShell({
 
   // Keep a valid selection: when nothing is active, or the active chat was just
   // deleted, fall back to the most-recent chat (chats are activity-sorted, §132).
+  //
+  // Not for the chat the ADDRESS named until the list has been fetched since
+  // mount: a cached list (fresh or not) can predate a schedule's chat made
+  // since, and falling back against it threw the `?chat=` choice away. An id
+  // still absent from the fetched list falls back as before.
   useEffect(() => {
     if (!chats.length) return;
     if (activeChatId == null || !chats.some((c) => c.chat_id === activeChatId)) {
+      if (!isFetchedAfterMount && activeChatId != null && activeChatId === addressChat) return;
       setActiveChatId(chats[0].chat_id);
     }
-  }, [chats, activeChatId]);
+  }, [chats, activeChatId, isFetchedAfterMount, addressChat]);
 
   // A Hub with no chats (brand-new, or every chat deleted, §132) auto-opens one so
   // the item lands on a usable composer instead of an empty placeholder. `reopening`

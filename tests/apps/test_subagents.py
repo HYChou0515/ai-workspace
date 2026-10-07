@@ -245,8 +245,8 @@ async def test_a_definition_that_vanishes_mid_listing_still_raises():
     from workspace_app.filestore.protocol import FileNotFound
 
     class _GhostListing(WorkspaceFiles):
-        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
-            got = await super().ls(workspace_id, prefix)
+        async def ls(self, workspace_id: str, prefix: str = "", *, wake: bool = True) -> list[str]:
+            got = await super().ls(workspace_id, prefix, wake=wake)
             return [*got, "/.agent/ghost/AGENT.md"]  # listed, never written
 
     files = _GhostListing(MemoryFileStore())

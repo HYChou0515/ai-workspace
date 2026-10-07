@@ -30,6 +30,7 @@ from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
 from .shown_files import (
     PATH_OR_LAYOUT,
+    SKILL_HUB_ENTRY_MARKER,
     LayoutError,
     PaneLayout,
     declare_shown_files,
@@ -2429,8 +2430,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     from ..apps.skills import (
         SkillError,
         load_skill,
-        load_workspace_skill,
         merged_profile_skills,
+        read_workspace_skill,
         workspace_skill_metas,
     )
 
@@ -2468,9 +2469,22 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             files, inv, ctx.context.app_slug, ctx.context.template_profile, name
         )
         try:
-            body = await load_workspace_skill(files, inv, name)
+            body, origin = await read_workspace_skill(files, inv, name)
         except SkillError as e:
             return f"error: {e}"
+        hub = ctx.context.skill_hub
+        # A use of a skill hub entry (plan-skill-hub-history U1): counted in
+        # memory; `.origin` came in the same read as the body.
+        if (
+            hub is not None
+            and body is not None
+            and origin is not None
+            and origin.source == "hub"
+            and origin.entry
+            # A fork's starting point is the user's own skill now (G23).
+            and not origin.forked
+        ):
+            hub.usage.use(origin.entry, user=ctx.context.acting_user, item=inv)
         if body is not None:
             # #589: the derived reference is appended to a body from ANY source.
             # It used to hang off the shared branch below, which was fine while a
@@ -2605,7 +2619,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         skill_size_problem,
         validate_skill_payload,
     )
-    from ..apps.skill_payload import ORIGIN_FILE, origin_for
+    from ..apps.skill_payload import ORIGIN_FILE, SkillOrigin
     from ..apps.skills import (
         WORKSPACE_SKILL_DIR,
         workspace_skill_metas,
@@ -2690,9 +2704,11 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         # already there (a re-publish replaces one of the same length, which
         # passes on a full workspace), asking rather than charging
         # (`record=False` — nothing is written yet). The size does not depend
-        # on which id the manifest names (`mint_entry_id` mints them all one
-        # length).
-        probe = origin_for("hub", payload, entry=existed or mint_entry_id())
+        # on which id or commit the manifest names (`mint_entry_id` mints them
+        # all one length; a commit is always a 40-hex sha1).
+        probe = SkillOrigin(
+            source="hub", files={}, entry=existed or mint_entry_id(), commit="0" * 40
+        )
         growth = len(msgspec.json.encode(probe)) - manifest_size
         for refusal in await files.room_refusals(inv, growth, record=False):
             raise refusal
@@ -2727,7 +2743,9 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     # and Refresh brings it. A package copy keeps tracking the package.
     manifest_unwritten = False
     if tracks_entry:
-        manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
+        published = hub.get(entry_id)
+        assert published is not None  # it was just written
+        manifest = msgspec.json.encode(hub.copy_manifest(entry_id, published))
         try:
             await files.write(inv, manifest_path, manifest)
         except WorkspaceFull:
@@ -2823,6 +2841,7 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
     if taken := await skill_folder_in_the_way(files, inv, hub, name, c.acting_user):
         return f"error: {taken.sentence()}."
     await install_hub_skill(files, inv, hub, entry_id)
+    hub.usage.install(entry_id, user=c.acting_user, item=inv)
     lines = [
         f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "
         f"into .skill/{name}/. It is in the skill index from the next turn on; load it any "
@@ -2846,18 +2865,53 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
 SEARCH_SKILL_HUB_LIMIT = 25
 
 
+async def show_skill_hub_entry_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:
+    """Show one skill hub entry to the user as a live card in the chat: its
+    name, who published it, what it does, how often it has been installed and
+    used, which of its tools this App lacks, what its review said, and an
+    Install button. Use it when you recommend a skill — after
+    `search_skill_hub` — so the user decides from the card rather than from
+    your summary. `entry_id` is the id a search hit shows."""
+    import json
+
+    c = ctx.context
+    hub = c.skill_hub
+    if hub is None or c.app_slug is None:
+        return "error: show_skill_hub_entry is only available in an App workspace turn"
+    _state, entry = hub.state_for(entry_id, c.acting_user)
+    if entry is None:
+        return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
+    said = (
+        f"{entry.owner}/{entry.name} is now displayed in the chat as a card — the user can "
+        "read it there and install it with one press."
+    )
+    return f"{said}{SKILL_HUB_ENTRY_MARKER}{json.dumps({'entry_id': entry_id})}"
+
+
+def _times(n: int) -> str:
+    return f"{n} time{'' if n == 1 else 's'}"
+
+
 async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     """Find skills other users have published to the skill hub. Use it when the
     user asks whether a skill for some task exists, or wants to install one.
 
     `query` matches the skill's name and description (case-insensitive); an
     empty query lists everything. Each hit shows `owner/name`, the description,
-    which App it was written in, and the ENTRY ID that `install_skill` takes.
-    Forks are listed under the skill they were forked from. A hit also says
-    which of the tools it mentions this App does not have — tell the user
-    before installing such a skill; parts of it may not be followable here.
+    which App it was written in, and the ENTRY ID that `install_skill` and
+    `show_skill_hub_entry` take. Forks are listed under the skill they were
+    forked from. Each hit also says how often it was installed and used,
+    whether this item already has it, when its current version was published,
+    and what its review said — what to weigh when the user asks which one to
+    install. A hit also says which of the tools it mentions this App does not
+    have — tell the user before installing such a skill; parts of it may not
+    be followable here.
     """
+    import datetime
+
     from ..apps.skill_hub import matches_query, missing_tools_for, nest_forks
+    from ..apps.skill_hub_git import GitError
+    from ..apps.skills import hub_entries_here
 
     c = ctx.context
     hub = c.skill_hub
@@ -2876,8 +2930,31 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     for root, forks in nest_forks(by_id):
         ordered.append((root, by_id[root], False))
         ordered += [(j, by_id[j], True) for j in forks]
+    shown = ordered[:SEARCH_SKILL_HUB_LIMIT]
+    # What the user weighs in choosing one (plan-skill-hub-history A2): how much
+    # it is used, whether this item already has it, how recent its version is,
+    # and what its review said.
+    counts = await asyncio.to_thread(hub.usage.totals, [i for i, _e, _f in shown])
+    # "Already installed here" reads the item's `.skill/` folders — item
+    # content, so only for a speaker who may read it (round 2); the hits
+    # themselves are the skill hub's, scoped to the speaker already.
+    here = (
+        await hub_entries_here(c.files, c.investigation_id)
+        if c.files and c.investigation_id and authorize_tool(c, "read_content") is None
+        else set()
+    )
+
+    async def published(entry_id: str, commit: str) -> tuple[str, datetime.date | None]:
+        # One entry's broken repo costs that hit its date, not the whole search.
+        try:
+            return entry_id, (await hub.repos.committed_at(entry_id, commit)).date()
+        except GitError:
+            return entry_id, None
+
+    found = await asyncio.gather(*(published(i, e.commit) for i, e, _f in shown if e.commit))
+    dates = dict(found)
     lines = [f"{len(hits)} skill hub entr{'y' if len(hits) == 1 else 'ies'} match {query!r}:"]
-    for i, e, is_fork in ordered[:SEARCH_SKILL_HUB_LIMIT]:
+    for i, e, is_fork in shown:
         lineage = ""
         if e.forked_from:
             # As the SPEAKER may know the root: a root taken private reads
@@ -2889,6 +2966,15 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
             f"{indent}{e.owner}/{e.name}{lineage} — {e.description} "
             f"[written in {e.source_app}; id {i}]"
         )
+        installs, uses = counts[i]
+        updated = dates.get(i)
+        facts = [
+            f"installed {_times(installs)}, used {_times(uses)}",
+            *(["already installed in this item"] if i in here else []),
+            *([f"last updated {updated.isoformat()}"] if updated else []),
+            f"review notes: {'; '.join(e.review.notes)}" if e.review.notes else "review: no notes",
+        ]
+        lines.append("    " + " · ".join(facts))
         if missing := missing_tools_for(e.referenced_tools, c.app_slug):
             lines.append(f"    mentions {', '.join(missing)}, which this App lacks")
     if len(ordered) > SEARCH_SKILL_HUB_LIMIT:
@@ -3189,6 +3275,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     for verb in TOOL_VERBS["save_schedules"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
+    from ..api.schedule_index import ScheduleIndex
     from ..workflow.offered import (
         no_such_workflow,
         offered_workflow_ids,
@@ -3251,12 +3338,24 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     )
 
     # "Next run" as the sweep will actually compute it — the same views the
-    # Workflows panel lists, ledger included, so an unchanged row re-saved after
-    # today's run says tomorrow and a new one says "now". Without a ledger (no
+    # Workflows panel lists, ledger AND landing stamp included, so an unchanged
+    # row re-saved after today's run says tomorrow, and a new row whose moment
+    # has already passed today says its next period too (the birth rule, docs/
+    # plan-schedule-overview.md §1) — not "now". Without a ledger (no
     # spec, or the sweep is off and never registered its store) every row reads
     # as never fired, which is the truth for a file that cannot run. Off the
     # loop as one hop: the ledger reads inside are blocking specstar I/O.
     last = last_window_lookup(ctx.context.spec if policy.sweep_enabled else None, inv)
+    # Asked of the index the write hook just stamped — the value the sweep will
+    # compare against, not a clock read here that could disagree with it.
+    landed: int | None = None
+    if policy.sweep_enabled and ctx.context.spec is not None:
+        try:
+            landed = await asyncio.to_thread(
+                ScheduleIndex(ctx.context.spec).landed_at, inv, ITEM_SCHEDULES_PATH
+            )
+        except Exception:  # noqa: BLE001 — the file is saved; only the reply's "next" degrades
+            _LOGGER.exception("save_schedules: could not read the landing stamp for %s", inv)
     views, _ = await asyncio.to_thread(
         schedule_views,
         schedules_json,
@@ -3265,6 +3364,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         last_window=last,
         max_rows=policy.max_rows,
         enabled=policy.sweep_enabled,
+        landed_ms=landed,
     )
     # The returns above leave the switch as the only gate a row here can fail
     # (`run` is offered, the file is within the cap, and `indexed` is left at
@@ -3884,9 +3984,13 @@ _IMPLS = {
     # `install_skill` — the skill hub's read door into a workspace: a copy with
     # an `.origin`, same shape `read_skill` materializes. Opt-in per App.
     "install_skill": install_skill_impl,
-    # `search_skill_hub` — reads the hub, never the item, so it has no row in
-    # `TOOL_VERBS` (see that module's docstring). Opt-in per App.
+    # `search_skill_hub` — reads the skill hub as the speaker may; it reads the
+    # item (its `.skill/` folders, for "already installed") only under its own
+    # `read_content` check, so it has no row in `TOOL_VERBS`. Opt-in per App.
     "search_skill_hub": search_skill_hub_impl,
+    # plan-skill-hub-history A3: one entry as a live card with an Install
+    # button. Reads the skill hub as the speaker may; touches nothing here.
+    "show_skill_hub_entry": show_skill_hub_entry_impl,
     # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
     # AGENT.md write, so a sub-agent the agent authors is always one it can call.
     "save_subagent": save_subagent_impl,

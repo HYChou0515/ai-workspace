@@ -787,3 +787,48 @@ async def test_no_tool_demands_more_than_its_row_says():
         ctx.context.sandbox = MockSandbox()
         out = str(await _CALLS[name](ctx))
         assert "don't have permission" not in out, (name, out)
+
+
+async def test_search_skill_hub_says_what_is_installed_only_to_someone_who_may_read_the_item():
+    """Review round 2 (veracity #3): the search reads the item's `.skill/`
+    folders to say "already installed in this item" — item content, so only
+    for a speaker with `read_content`. Without it the hits are the same, the
+    item's contents are not described."""
+    import tempfile
+
+    from workspace_app.agent.tools import search_skill_hub_impl
+    from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
+    from workspace_app.apps.skills import install_hub_skill
+
+    spec, iid = _spec_with_item(
+        Permission(visibility="restricted", read_meta=["user:mallory"], converse=["user:mallory"])
+    )
+    register_skill_hub(spec)  # ty: ignore[invalid-argument-type]
+    hub = SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))  # ty: ignore[invalid-argument-type]
+    entry = await hub.publish(
+        owner="carol",
+        name="triage",
+        description="Reflow triage.",
+        source_item="i",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": b"---\nname: triage\ndescription: Reflow triage.\n---\nx"},
+        referenced_tools=[],
+        review=SkillHubReview(verdict="ok"),
+    )
+
+    def ctx(user: str) -> RunContextWrapper:
+        c = _ctx(spec, iid, acting_user=user)
+        c.context.skill_hub = hub
+        return c
+
+    owner = ctx("bob")
+    assert owner.context.files is not None
+    await install_hub_skill(owner.context.files, iid, hub, entry)
+    mallory = ctx("mallory")
+    mallory.context.files = owner.context.files
+
+    assert "already installed in this item" in await search_skill_hub_impl(owner, "reflow")
+    told = await search_skill_hub_impl(mallory, "reflow")
+    assert entry in told and "already installed" not in told

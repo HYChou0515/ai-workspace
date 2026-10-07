@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
+from workspace_app.api.schedule_index import ScheduleIndex
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
@@ -129,6 +130,9 @@ def test_the_route_marks_runnable_exactly_the_rows_the_sweep_fires(
             assert r.status_code == 204
         r = client.put(f"{_base(item_id)}/files/.workflows/schedules.json", content=content)
         assert r.status_code == 204
+        # Landed long before this period: these cases are about every OTHER
+        # gate. The birth rule has its own case below.
+        ScheduleIndex(app.state.spec).stamp(item_id, "/.workflows/schedules.json", 0)
 
         listed = client.get(f"{_base(item_id)}/schedules")
         assert listed.status_code == 200, listed.text
@@ -153,6 +157,32 @@ def test_the_route_marks_runnable_exactly_the_rows_the_sweep_fires(
     # will not fire must not carry one.
     for row in body["rows"]:
         assert bool(row["next_run"]) == row["runnable"], (name, row)
+
+
+def test_a_row_written_after_its_moment_is_not_due_now_on_either_side() -> None:
+    """The birth rule (docs/plan-schedule-overview.md §1), same oracle. An
+    hourly row saved mid-hour: this hour's moment (the top of the hour) passed
+    before the row existed, so the sweep fires nothing — and the route must
+    not say "on the next sweep" for it, but the next hour."""
+    client, app, _, item_id = _app()
+    with client:
+        r = client.put(f"{_base(item_id)}/files/.workflows/w0.json", content=_workflow("w0"))
+        assert r.status_code == 204
+        r = client.put(
+            f"{_base(item_id)}/files/.workflows/schedules.json",
+            content=_rows({"every": "hourly", "run": "w0"}),
+        )
+        assert r.status_code == 204
+
+        row = client.get(f"{_base(item_id)}/schedules").json()["rows"][0]
+        assert client.portal is not None
+        client.portal.call(app.state.user_schedule_sweeper.tick)
+        runs = client.get(f"{_base(item_id)}/runs").json()
+
+    assert runs == []
+    assert row["runnable"] is True
+    assert row["due_now"] is False
+    assert row["next_at"], row
 
 
 def test_a_row_naming_a_workflow_that_wont_parse_is_not_runnable_and_not_fired() -> None:

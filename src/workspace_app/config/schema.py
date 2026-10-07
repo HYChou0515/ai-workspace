@@ -1490,6 +1490,20 @@ class ViewPluginsSettings:
     dir: str = ""
 
 
+# ─── skill_hub (docs/plan-skill-hub-history.md G2) ──────────────────────
+@dataclass(frozen=True)
+class SkillHubSettings:
+    """Where the skill hub keeps one bare git repo per published skill.
+
+    ``git_root`` is its own directory, never shared with the sandbox's stores:
+    put it on durable storage every API pod mounts, and back it up. Empty is
+    allowed only where nothing else is durable either (``filestore.kind:
+    memory``) — there a throwaway dir is used; any other deploy refuses to boot
+    naming this key (``skill_hub_git.resolve_git_root``)."""
+
+    git_root: str = ""
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1519,3 +1533,4 @@ class Settings:
     failover: FailoverSettings = field(default_factory=FailoverSettings)
     chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)
     view_plugins: ViewPluginsSettings = field(default_factory=ViewPluginsSettings)
+    skill_hub: SkillHubSettings = field(default_factory=SkillHubSettings)

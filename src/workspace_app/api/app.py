@@ -22,6 +22,7 @@ from specstar.types import ResourceIsDeletedError
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
+from ..apps.skill_hub_git import SkillHubRepos, resolve_git_root
 from ..apps.subagents import SubagentDef
 from ..config.schema import (
     ChatVideoSettings,
@@ -102,7 +103,7 @@ from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
 from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
-from .events import AgentEvent
+from .events import AgentEvent, FileChanged
 from .file_routes import register_file_routes
 from .goal_offhours import register_stretch_claims
 from .health_routes import (
@@ -138,6 +139,8 @@ from .schedule_index import (
     is_schedule_file,
     register_schedule_index,
 )
+from .schedule_listing import Source as ScheduleSource
+from .schedule_listing import register_schedule_overview_routes
 from .schedule_reconcile import reconcile_item_schedules
 from .skill_hub_routes import register_skill_hub_routes
 from .skill_review import review_skill
@@ -456,6 +459,11 @@ def create_app(
     # (which feeds the storage-layer access_scope + write checker) — both come from
     # `settings.server.superusers`.
     superusers: frozenset[str] = frozenset(),
+    # plan-skill-hub-history G2: where the skill hub keeps one bare git repo
+    # per entry. None ⇒ a throwaway dir (tests, a memory deploy); `__main__`
+    # passes `resolve_git_root(settings.skill_hub.git_root, …)`, which refuses
+    # a durable deploy that left it unset.
+    skill_hub_git_root: str | Path | None = None,
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,
     spa_dist: Path | None = None,
@@ -486,6 +494,9 @@ def create_app(
     uv_cache_max_bytes: int | None = None,
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
+    # plan-skill-hub-history U4: how often this pod writes its skill hub counts
+    # (also written when it stops).
+    skill_hub_flush_interval: timedelta = timedelta(hours=2),
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -1190,6 +1201,14 @@ def create_app(
         """
         if is_schedule_file(path):
             schedule_index.record(item_id, path)
+            # When it landed, for the birth rule (docs/plan-schedule-overview.md
+            # §1): a schedule only fires windows whose moment came after it was
+            # written. Every facade write and the app's own mirror (every
+            # deploy that is not host-managed) land here. NOT a host-managed
+            # deploy's `exec` write: the turn-end reconcile indexes it without
+            # a stamp, so such a file keeps the old catch-up (or an older
+            # stamp) — the plan says so.
+            schedule_index.stamp(item_id, path, int(datetime.now(UTC).timestamp() * 1000))
 
     files = WorkspaceFiles(
         filestore,
@@ -1384,6 +1403,7 @@ def create_app(
         idle_check_interval=idle_check_interval,
         uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
+        skill_hub_flush_interval=skill_hub_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -1754,7 +1774,13 @@ def create_app(
     # Skill hub entries (docs/plan-skill-hub.md): post-apply like the two
     # sandbox stores, so no CRUD route can PUT an entry around the review.
     register_skill_hub(spec)
-    skill_hub = SkillHubStore(spec, filestore)
+    skill_hub = SkillHubStore(
+        spec,
+        SkillHubRepos(resolve_git_root(str(skill_hub_git_root or ""), durable=False)),
+        # Entries published before the git store keep their files where they
+        # were written, until migrated (plan-skill-hub-history §6).
+        legacy=filestore,
+    )
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
@@ -1955,6 +1981,7 @@ def create_app(
     # Skill hub (docs/plan-skill-hub.md): the one store the tools, the panel and
     # the hub routes share — exposed so a test can publish through the app's own.
     app.state.skill_hub = skill_hub
+    app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the
@@ -2384,6 +2411,9 @@ def create_app(
         # Whether the sweep will read the item's own schedules file at all — the
         # same index the sweep iterates, asked the same way.
         schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
+        schedule_landed=lambda item_id: schedule_index.landed_at(item_id, ITEM_SCHEDULES_PATH),
+        # The sweep's own copy, read when the live workspace is still restoring.
+        schedules_durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         packages=packages or [],
     )
 
@@ -2658,6 +2688,32 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+    )
+
+    def _schedule_saved(item_id: str, path: str) -> None:
+        # What the file PUT does after a save (`file_routes.write_file`): an
+        # activity entry, and a FileChanged so another viewer of the file
+        # refetches instead of saving the old rows back.
+        activity.record(
+            "file_written",
+            f"Wrote {rel_path(path)}",
+            {"investigation_id": item_id, "path": path},
+        )
+        turn_engine.publish(item_id, FileChanged(path=path, by=get_user_id(), kind="written"))
+
+    # docs/plan-schedule-overview.md: every schedule a viewer may see.
+    register_schedule_overview_routes(
+        api,
+        spec=spec,
+        files=files,
+        locator=locator,
+        index=schedule_index,
+        policy=schedule_policy,
+        get_user_id=get_user_id,
+        start_run=_start_page_schedule,
+        deployed_pages=DeployedPages(spec).newest_first,
+        durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
+        on_saved=_schedule_saved,
     )
 
     register_private_env_routes(

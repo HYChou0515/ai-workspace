@@ -66,6 +66,12 @@ describe("skillHubApi refusals", () => {
     ],
     ["list", () => skillHubApi.list()],
     ["get", () => skillHubApi.get("e1")],
+    ["history", () => skillHubApi.history("e1")],
+    ["version", () => skillHubApi.version("e1", "e1:2")],
+    ["versionFile", () => skillHubApi.versionFile("e1", "e1:2", "a.md")],
+    ["diff", () => skillHubApi.diff("e1", "e1:1", "e1:2")],
+    ["rollback", () => skillHubApi.rollback("e1", "e1:1", "c2")],
+    ["fork", () => skillHubApi.fork("rca", "i1", "e1", "e1:1")],
   ])("%s: a refusal's sentence is the message", async (_name, call) => {
     answering(403, { detail: "only the owner may manage this entry" });
     const err = await call().catch((e: unknown) => e);
@@ -99,5 +105,80 @@ describe("skillHubApi refusals", () => {
     answering(500, {});
     const err = await skillHubApi.install("rca", "i1", "e1").catch((e: unknown) => e);
     expect((err as HttpError).message).toMatch(/install.*500/);
+  });
+});
+
+describe("skillHubApi history (plan-skill-hub-history §8)", () => {
+  function recording(body: unknown) {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+    return calls;
+  }
+
+  it("browses with the sort only when it is not the default, and keeps the counting day", async () => {
+    const calls = recording({ entries: [], counted_since: "2026-10-07" });
+    const page = await skillHubApi.browse("deck", true, "popular");
+    await skillHubApi.browse();
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/skill-hub/entries?q=deck&mine=true&sort=popular",
+      "/api/skill-hub/entries",
+    ]);
+    expect(page).toEqual({ entries: [], counted_since: "2026-10-07" });
+  });
+
+  it("asks for each history read at its route, the revision in the path encoded", async () => {
+    const calls = recording({ events: [], files: [] });
+    await skillHubApi.history("e1");
+    await skillHubApi.version("e1", "e1:2");
+    await skillHubApi.versionFile("e1", "e1:2", "references/a b.md");
+    await skillHubApi.diff("e1", "e1:1", "e1:2");
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/skill-hub/entries/e1/history",
+      "/api/skill-hub/entries/e1/versions/e1%3A2",
+      "/api/skill-hub/entries/e1/versions/e1%3A2/file?path=references%2Fa+b.md",
+      "/api/skill-hub/entries/e1/diff?from=e1%3A1&to=e1%3A2",
+    ]);
+  });
+
+  it("rolls back against the version the page showed, and forks into an item", async () => {
+    const calls = recording({ id: "e1", commit: "c1", name: "triage", missing_tools: [] });
+    await skillHubApi.rollback("e1", "e1:1", "c2");
+    await skillHubApi.fork("rca", "i1", "e1", "e1:1");
+    expect(calls.map((c) => [c.url, c.init?.method, c.init?.body])).toEqual([
+      [
+        "/api/skill-hub/entries/e1/rollback",
+        "POST",
+        JSON.stringify({ revision: "e1:1", expected: "c2" }),
+      ],
+      [
+        "/api/a/rca/items/i1/skills/fork",
+        "POST",
+        JSON.stringify({ entry_id: "e1", revision: "e1:1" }),
+      ],
+    ]);
+  });
+});
+
+
+describe("refreshItemSkill refusals (review round 1)", () => {
+  it("a 409's sentence is the error's message, not the raw body", async () => {
+    const { realApi } = await import("./real");
+    const sentence = "this copy of 'triage' no longer records which version it came from — reset it instead";
+    answering(409, { detail: sentence });
+    const err = await realApi
+      .refreshItemSkill("rca", "i1", "triage", { force: false })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(409);
+    expect((err as HttpError).message).toBe(sentence);
   });
 });

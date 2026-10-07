@@ -23,6 +23,9 @@ const SRC = join(new URL(".", import.meta.url).pathname, "..");
 /** Sites that want the shell's own padding. Listed, not inferred. */
 const TAKES_DEFAULT: Record<string, number> = {
   "pages/SkillHubEntryPage.tsx": 2, // the transfer and the new-item dialogs
+  // A version, a comparison, the fork dialog: title + content + actions, the
+  // same shape as the transfer dialog beside them (plan-skill-hub-history P7).
+  "components/SkillHubHistory.tsx": 3,
 };
 
 function tsxFiles(dir: string, out: string[] = []): string[] {

@@ -146,3 +146,20 @@ def test_a_deployment_with_the_sweep_off_makes_no_row_runnable() -> None:
 
     assert views[0].runnable is False
     assert views[0].next_run == "" and views[0].next_at == "" and views[0].due_now is False
+
+
+def test_next_ms_is_now_when_due_and_reads_an_unusable_zone_as_utc() -> None:
+    """The instant a list sorts on: "now" for a row due on the next sweep, and
+    the wall clock read in UTC for a zone that cannot be resolved — the same
+    fallback `in_zone` applies, so the instant matches the time shown."""
+    from datetime import UTC
+
+    from workspace_app.workflow.user_schedules import next_run_ms
+
+    now = datetime(2026, 9, 5, 9, 30)
+    assert next_run_ms(UserSchedule(run="x"), "", now) == int(
+        now.replace(tzinfo=UTC).timestamp() * 1000
+    )
+    assert next_run_ms(UserSchedule(run="x", tz="Not/AZone"), "2026-09-06 09:00", now) == int(
+        datetime(2026, 9, 6, 9, 0, tzinfo=UTC).timestamp() * 1000
+    )

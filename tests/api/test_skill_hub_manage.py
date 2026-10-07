@@ -73,9 +73,13 @@ async def test_every_management_route_is_403_for_a_non_owner_and_changes_nothing
         harness.client.put(
             f"/skill-hub/entries/{theirs}/permission", json={"visibility": "private"}
         ),
+        harness.client.post(
+            f"/skill-hub/entries/{theirs}/rollback",
+            json={"revision": f"{theirs}:1", "expected": before.commit},
+        ),
     ]
 
-    assert [c.status_code for c in calls] == [403] * 5, [c.text for c in calls]
+    assert [c.status_code for c in calls] == [403] * 6, [c.text for c in calls]
     assert _entry_row(harness, theirs) == before
     assert hub.get(theirs) is not None
 
@@ -205,14 +209,17 @@ async def test_deleting_twice_is_404_the_second_time(harness: Harness):
     assert harness.client.delete(f"/skill-hub/entries/{mine}").status_code == 404
 
 
-async def test_delete_frees_the_entrys_files(harness: Harness):
+async def test_delete_ends_the_entry_and_keeps_its_version_history(harness: Harness):
+    """plan-skill-hub-history §7 Q2: delete is the row only; the repo stays."""
     hub = _hub(harness)
     mine = await _entry(hub, VIEWER)
-    assert await hub.payload_of(mine) != {}
+    row = hub.get(mine)
+    assert row is not None and row.commit
 
-    harness.client.delete(f"/skill-hub/entries/{mine}")
+    assert harness.client.delete(f"/skill-hub/entries/{mine}").status_code == 204
 
-    assert await hub.payload_of(mine) == {}
+    assert hub.get(mine) is None
+    assert await hub.repos.master(mine) == row.commit
 
 
 # ── transfer ─────────────────────────────────────────────────────────────────
@@ -297,3 +304,63 @@ async def test_permission_put_rejects_a_bad_visibility(harness: Harness):
     res = harness.client.put(f"/skill-hub/entries/{mine}/permission", json={"visibility": "secret"})
 
     assert res.status_code == 400
+
+
+# ── rollback (plan-skill-hub-history §4.3) ───────────────────────────────────
+
+
+def _revision(harness: Harness, entry_id: str) -> str:
+    return harness.spec.get_resource_manager(SkillHubEntry).get(entry_id).info.revision_id
+
+
+async def test_the_owner_rolls_back_to_an_earlier_version(harness: Harness):
+    hub = _hub(harness)
+    entry = await _entry(hub, VIEWER)
+    first = _revision(harness, entry)
+    v1 = _entry_row(harness, entry).commit
+    await hub.publish(
+        owner=VIEWER,
+        name="triage",
+        description="d2",
+        source_item="inv-src",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": _md("triage") + b"v2\n"},
+        referenced_tools=[],
+        review=SkillHubReview(verdict="ok"),
+    )
+    seen = _entry_row(harness, entry).commit
+
+    res = harness.client.post(
+        f"/skill-hub/entries/{entry}/rollback", json={"revision": first, "expected": seen}
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json() == {"id": entry, "commit": v1}
+    assert _entry_row(harness, entry).commit == v1
+    # Again, against the version the page showed before: someone (here, this
+    # very rollback) moved it since, so the owner is told instead of retried.
+    again = harness.client.post(
+        f"/skill-hub/entries/{entry}/rollback", json={"revision": first, "expected": seen}
+    )
+    assert again.status_code == 409, again.text
+    assert again.json()["detail"]["error"] == "version_moved"
+    unknown = harness.client.post(
+        f"/skill-hub/entries/{entry}/rollback", json={"revision": "nope", "expected": v1}
+    )
+    assert unknown.status_code == 404, unknown.text
+
+
+async def test_a_transfer_onto_a_first_publish_in_flight_is_refused(harness: Harness):
+    """Round 2 (defect #4): the route's check was `find`, which skips drafts."""
+    hub = _hub(harness)
+    mine = await _entry(hub, VIEWER, "triage")
+    harness.spec.get_resource_manager(SkillHubEntry).create(
+        msgspec.structs.replace(_entry_row(harness, mine), owner="bob", pending=True),
+        resource_id="bobsdraft",
+    )
+
+    res = harness.client.post(f"/skill-hub/entries/{mine}/transfer", json={"owner": "bob"})
+
+    assert res.status_code == 409, res.text
+    assert _entry_row(harness, mine).owner == VIEWER

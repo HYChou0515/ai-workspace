@@ -102,6 +102,18 @@ class SkillOrigin(Struct):
     #: turning every materialized skill into "update available" over a schema
     #: change would be the exact silent failure the manifest exists to prevent.
     entry: str = ""
+    #: The skill hub version this copy was installed (or last refreshed)
+    #: from — a git commit (plan-skill-hub-history G12). When set, `files` is
+    #: empty: what was shipped is that commit's tree, read from git when a
+    #: refresh needs it, so a copy carries no map however many files the skill
+    #: has. "" for the shared / profile sources and for a copy made before
+    #: the git store, which keep `files`.
+    commit: str = ""
+    #: A fork from an earlier version (plan-skill-hub-history §8, G23): a
+    #: starting point of the user's own, not an install. It never reads as
+    #: "has an update" and a refresh leaves it alone; publishing it is what
+    #: makes it a fork of `entry`.
+    forked: bool = False
 
 
 def origin_for(

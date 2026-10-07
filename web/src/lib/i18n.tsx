@@ -218,6 +218,7 @@ export const messages = {
   // isn't mistaken for the final result.
   "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "tool.show_file": { "zh-TW": "顯示檔案", en: "Show a file" },
+  "tool.show_skill_hub_entry": { "zh-TW": "顯示 skill hub 上的 skill", en: "Show a skill hub skill" },
   // The affordance on a file the agent showed. "openHere" = a workspace shell is
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
@@ -605,20 +606,20 @@ export const messages = {
   "skills.refresh": { "zh-TW": "更新為出貨版本", en: "Update to the shipped version" },
   "skills.refreshDone": { "zh-TW": "已更新到出貨版本。", en: "Updated to the shipped version." },
   // plan-skill-hub-ui-polish D4: a copy installed from the skill hub has no
-  // "shipped version" — it updates to what is on the hub now.
+  // "shipped version" — it updates to what is on the skill hub now. Always
+  // "skill hub", never "hub" alone (plan-skill-hub-history G22).
   "skills.reset.hub": {
-    "zh-TW": "還原成 hub 上的版本",
-    en: "Reset to the version on the hub",
+    "zh-TW": "還原成 skill hub 上的版本",
+    en: "Reset to the version on the skill hub",
   },
-  "skills.refresh.hub": {
-    "zh-TW": "更新為 hub 上的新版",
-    en: "Update to the version on the hub",
-  },
+  // G21: a skill hub copy whose entry moved says 「skill 已變更」〔同步〕.
+  "skills.refresh.hub": { "zh-TW": "同步", en: "Sync" },
   "skills.refreshDone.hub": {
-    "zh-TW": "已更新到 hub 上的新版。",
-    en: "Updated to the version on the hub.",
+    "zh-TW": "已同步成 skill hub 上的版本。",
+    en: "Synced with the version on the skill hub.",
   },
   "skills.updateAvailable": { "zh-TW": "有新版", en: "Update available" },
+  "skills.updateAvailable.hub": { "zh-TW": "skill 已變更", en: "Skill changed" },
   "skills.refreshKept": {
     "zh-TW": "這些檔案你改過，所以保持原樣",
     en: "Edited here, so left as they are",
@@ -725,6 +726,70 @@ export const messages = {
     "zh-TW": "這份排程檔還沒被登記，下一次對話之後才會開始自動執行。",
     en: "This schedules file is not registered yet; it starts running on its own after the next conversation turn.",
   },
+  // One row's actions (docs/plan-schedule-overview.md) — the overview and the
+  // item's panel share them.
+  "schedules.runNow": { "zh-TW": "現在執行", en: "Run now" },
+  "schedules.started": { "zh-TW": "已開始執行", en: "Started" },
+  "schedules.editTime": { "zh-TW": "改時間", en: "Edit time" },
+  "schedules.edit.title": { "zh-TW": "改時間", en: "Edit time" },
+  "schedules.edit.every": { "zh-TW": "頻率", en: "Repeats" },
+  "schedules.edit.period.minutes": { "zh-TW": "每幾分鐘", en: "Every few minutes" },
+  "schedules.edit.period.hourly": { "zh-TW": "每小時", en: "Hourly" },
+  "schedules.edit.period.daily": { "zh-TW": "每天", en: "Daily" },
+  "schedules.edit.period.weekly": { "zh-TW": "每週", en: "Weekly" },
+  "schedules.edit.period.monthly": { "zh-TW": "每月", en: "Monthly" },
+  "schedules.edit.n": { "zh-TW": "間隔（分鐘）", en: "Every (minutes)" },
+  "schedules.edit.at": { "zh-TW": "時間", en: "Time" },
+  "schedules.edit.dow": { "zh-TW": "星期", en: "Day of week" },
+  "schedules.edit.dom": { "zh-TW": "每月幾號", en: "Day of month" },
+  "schedules.edit.tz": { "zh-TW": "時區", en: "Time zone" },
+  "schedules.edit.note": {
+    "zh-TW":
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，「用我的身分執行」要重新按一次。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and “Run as me” has to be pressed again.",
+  },
+  "schedules.edit.save": { "zh-TW": "存檔", en: "Save" },
+  "schedules.edit.saving": { "zh-TW": "存檔中…", en: "Saving…" },
+  // The overview of every schedule the viewer may read.
+  "scheduleOverview.title": { "zh-TW": "排程", en: "Schedules" },
+  "scheduleOverview.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "scheduleOverview.error": {
+    "zh-TW": "讀不到排程清單。",
+    en: "Could not load the schedules.",
+  },
+  "scheduleOverview.retry": { "zh-TW": "再試一次", en: "Try again" },
+  "scheduleOverview.empty": {
+    "zh-TW": "你看得到的項目裡，還沒有任何排程。",
+    en: "Nothing you can see is on a schedule yet.",
+  },
+  "scheduleOverview.empty.what": {
+    "zh-TW": "請 AI 把一個工作流程排上時間，或在頁面上設定定時執行，就會出現在這裡。",
+    en: "Ask the assistant to put a workflow on a clock, or set one up from a page, and it shows here.",
+  },
+  "scheduleOverview.nomatch": { "zh-TW": "沒有符合條件的排程。", en: "No schedule matches." },
+  "scheduleOverview.col.where": { "zh-TW": "位置", en: "Where" },
+  "scheduleOverview.col.workflow": { "zh-TW": "工作流程", en: "Workflow" },
+  "scheduleOverview.col.when": { "zh-TW": "週期", en: "Repeats" },
+  "scheduleOverview.col.next": { "zh-TW": "下一次", en: "Next" },
+  "scheduleOverview.col.last": { "zh-TW": "上一次", en: "Last run" },
+  "scheduleOverview.col.actions": { "zh-TW": "動作", en: "Actions" },
+  "scheduleOverview.page": { "zh-TW": "頁面 {folder}", en: "Page {folder}" },
+  "scheduleOverview.nextSweep": { "zh-TW": "馬上就會執行", en: "Any moment now" },
+  "scheduleOverview.never": { "zh-TW": "還沒跑過", en: "Never run" },
+  "scheduleOverview.status.pending": { "zh-TW": "準備中", en: "Starting" },
+  "scheduleOverview.status.running": { "zh-TW": "執行中", en: "Running" },
+  "scheduleOverview.status.awaiting_human": { "zh-TW": "等待審核", en: "Waiting for review" },
+  "scheduleOverview.status.done": { "zh-TW": "完成", en: "Done" },
+  "scheduleOverview.status.error": { "zh-TW": "失敗", en: "Failed" },
+  "scheduleOverview.status.cancelled": { "zh-TW": "已取消", en: "Cancelled" },
+  "scheduleOverview.group": { "zh-TW": "分組", en: "Group" },
+  "scheduleOverview.group.none": { "zh-TW": "不分組", en: "None" },
+  "scheduleOverview.group.app": { "zh-TW": "依 App", en: "By app" },
+  "scheduleOverview.sort": { "zh-TW": "排序", en: "Sort" },
+  "scheduleOverview.sort.next": { "zh-TW": "下一次最近", en: "Next run" },
+  "scheduleOverview.sort.trouble": { "zh-TW": "需要處理的在前", en: "Needs attention first" },
+  "scheduleOverview.filter.app": { "zh-TW": "App", en: "App" },
+  "scheduleOverview.filter.all": { "zh-TW": "全部", en: "All" },
   // #520: shipped starter templates. Copy speaks in outcomes ("copy one to edit"),
   // never in internals like `.workflows/` or tool ceilings.
   "templates.heading": { "zh-TW": "現成範本", en: "Ready-made templates" },
@@ -2063,6 +2128,24 @@ export const messages = {
   "skillHub.noMatch": { "zh-TW": "沒有符合的 skill。", en: "No skill matches." },
   "skillHub.forks": { "zh-TW": "{count} 個 fork", en: "{count} forks" },
   "skillHub.fork.one": { "zh-TW": "1 個 fork", en: "1 fork" },
+  // plan-skill-hub-history U6/U7: the counts, never who; counting starts on the
+  // day the feature went live, so the number says since when.
+  "skillHub.counts": {
+    "zh-TW": "安裝 {installs} 次 · 使用 {uses} 次",
+    en: "Installed {installs} times · used {uses} times",
+  },
+  "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
+  "skillHub.sort": { "zh-TW": "排序", en: "Sort" },
+  // plan-skill-hub-history A3: the card `show_skill_hub_entry` draws in a chat.
+  "skillHub.card.install": { "zh-TW": "安裝", en: "Install" },
+  "skillHub.card.installed": { "zh-TW": "已安裝", en: "Installed" },
+  "skillHub.card.reviewOk": { "zh-TW": "審查沒有意見", en: "The review had no notes" },
+  "skillHub.card.gone": {
+    "zh-TW": "這個 skill 已不在 skill hub 上",
+    en: "This skill is no longer on the skill hub",
+  },
+  "skillHub.sort.name": { "zh-TW": "名稱", en: "Name" },
+  "skillHub.sort.popular": { "zh-TW": "最常使用", en: "Most used" },
   "skillHub.forkOf": { "zh-TW": "fork 自 {origin}", en: "fork of {origin}" },
   "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
   "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },
@@ -2191,6 +2274,76 @@ export const messages = {
     en: "Create a new {app} item, install this skill from its Skills panel, edit, and publish from there — Edit will open that item from then on.",
   },
   "skillHub.edit.newItem.go": { "zh-TW": "開新 item", en: "Create the item" },
+  // plan-skill-hub-history §8: the detail page's timeline. No internals on
+  // screen — a version is named by when it was published, never by its id.
+  "skillHub.history": { "zh-TW": "版本紀錄", en: "History" },
+  "skillHub.history.current": { "zh-TW": "目前版本", en: "Current" },
+  "skillHub.history.kind.publish": { "zh-TW": "發布", en: "Published" },
+  "skillHub.history.kind.rollback": {
+    "zh-TW": "回復到 {when} 的版本",
+    en: "Rolled back to the version of {when}",
+  },
+  "skillHub.history.kind.transfer": { "zh-TW": "轉移給 {owner}", en: "Transferred to {owner}" },
+  "skillHub.history.audience": { "zh-TW": "開放給：{who}", en: "Open to: {who}" },
+  "skillHub.history.audience.everyone": { "zh-TW": "所有人", en: "everyone" },
+  "skillHub.history.audience.group": { "zh-TW": "一個群組", en: "a group" },
+  "skillHub.history.kind.permission": {
+    "zh-TW": "可見範圍改為「{visibility}」",
+    en: "Visibility set to “{visibility}”",
+  },
+  "skillHub.history.view": { "zh-TW": "查看", en: "View" },
+  "skillHub.history.compare": { "zh-TW": "比對其他版本", en: "Compare with another version" },
+  "skillHub.history.fork": { "zh-TW": "從這一版 fork", en: "Fork from this version" },
+  "skillHub.history.rollback": { "zh-TW": "回復到這一版", en: "Roll back to this version" },
+  "skillHub.history.rollback.title": {
+    "zh-TW": "回復到 {when} 的版本？",
+    en: "Roll back to the version of {when}?",
+  },
+  "skillHub.history.rollback.body": {
+    "zh-TW": "這一版會成為目前版本，裝過這個 skill 的人會看到「skill 已變更」。之後的版本仍留在紀錄裡，隨時可以再回復。",
+    en: "This version becomes the current one; everyone who installed this skill sees “Skill changed”. Later versions stay in the history and can be brought back.",
+  },
+  "skillHub.history.rollback.confirm": { "zh-TW": "回復", en: "Roll back" },
+  "skillHub.history.moved": {
+    "zh-TW": "版本剛被別人改過，請重新確認。",
+    en: "The skill changed meanwhile — check the history again.",
+  },
+  "skillHub.history.version.title": { "zh-TW": "{when} 的版本", en: "The version of {when}" },
+  "skillHub.history.diff.title": {
+    "zh-TW": "比對 {when} 的版本",
+    en: "Compare the version of {when}",
+  },
+  "skillHub.history.diff.against": { "zh-TW": "和這一版比", en: "Compare with" },
+  "skillHub.history.notText": { "zh-TW": "不是文字檔", en: "Not a text file" },
+  "skillHub.history.binaryChanged": {
+    "zh-TW": "這個檔案不顯示逐行差異（不是文字檔，或檔案太大），只比對是否相同",
+    en: "No line-by-line difference for this file (not text, or too large) — compared only for being the same",
+  },
+  "skillHub.history.noChanges": { "zh-TW": "兩版內容相同。", en: "The two versions are identical." },
+  "skillHub.history.status.added": { "zh-TW": "新增", en: "Added" },
+  "skillHub.history.status.removed": { "zh-TW": "刪除", en: "Removed" },
+  "skillHub.history.status.changed": { "zh-TW": "修改", en: "Changed" },
+  "skillHub.history.close": { "zh-TW": "關閉", en: "Close" },
+  "skillHub.history.fork.title": {
+    "zh-TW": "從 {when} 的版本 fork",
+    en: "Fork from the version of {when}",
+  },
+  "skillHub.history.fork.body": {
+    "zh-TW": "這一版會複製進你選的 item，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
+    en: "This version is copied into the item you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there: someone else's skill becomes your fork, your own becomes its next version.",
+  },
+  "skillHub.history.fork.app": { "zh-TW": "App", en: "App" },
+  "skillHub.history.fork.items": { "zh-TW": "複製進哪個 item", en: "Copy into which item" },
+  "skillHub.history.fork.noItems": {
+    "zh-TW": "這個 App 裡還沒有你看得到的 item。",
+    en: "No items you can see in this App yet.",
+  },
+  "skillHub.history.fork.confirm": { "zh-TW": "複製進這個 item", en: "Copy into this item" },
+  "skillHub.history.fork.done": {
+    "zh-TW": "已複製「{name}」，下一輪就能用。",
+    en: "Copied “{name}” — usable from the next turn.",
+  },
+  "skillHub.history.fork.open": { "zh-TW": "打開 item", en: "Open the item" },
   // plan-skill-hub-ui-polish D11: the new-item form, opened from a hub entry.
   "newItem.skillHint": {
     "zh-TW": "建好後，到「技能」面板把 {skill} 裝進來再修改。",

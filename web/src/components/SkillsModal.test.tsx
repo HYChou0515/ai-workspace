@@ -298,6 +298,20 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     expect(await screen.findByText(/scripts\/tuned\.py/)).toBeInTheDocument();
   });
 
+  it("says why a refresh was refused, in the server's own sentence (review round 1)", async () => {
+    const { HttpError } = await import("../api/http");
+    const sentence =
+      "this copy of 'triage' no longer records which version it came from — reset it instead";
+    const refreshItemSkill = vi.fn(async () => {
+      throw new HttpError(409, sentence);
+    });
+    renderModal({ client: { ...fakeClient(COPIED), refreshItemSkill } as never });
+
+    fireEvent.click(await screen.findByTestId("skill-refresh-triage"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(sentence);
+  });
+
   it("offers reset-to-factory even when there is nothing new upstream", async () => {
     const refreshItemSkill = vi.fn(async () => ({ updated: [], skipped: [], removed: [] }));
     renderModal({ client: { ...fakeClient(NO_UPDATE), refreshItemSkill } as never });
@@ -332,6 +346,31 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
       word("skills.updateAvailable"),
     );
     expect(screen.queryByTestId("skill-update-settled")).toBeNull();
+  });
+
+  it("says 「skill 已變更」 and offers 〔同步〕 on a skill hub copy, and keeps the package's words (G21)", async () => {
+    const skills: ItemSkillState[] = [
+      { ...COPIED[0], copy_of: "profile" },
+      { ...COPIED[0], name: "from-hub", source: "workspace", upstream: "live", copy_of: "hub" },
+    ];
+    renderModal({ client: fakeClient(skills) as never });
+    await screen.findByTestId("skill-row-from-hub");
+
+    expect(screen.getByTestId("skill-update-from-hub")).toHaveTextContent("skill 已變更");
+    expect(screen.getByTestId("skill-refresh-from-hub")).toHaveAttribute("title", "同步");
+    expect(screen.getByTestId("skill-update-triage")).toHaveTextContent("有新版");
+  });
+
+  it("names the skill hub in full, never as just 'hub' (G22)", () => {
+    for (const key of ["skills.reset.hub", "skills.refreshDone.hub"] as const) {
+      for (const locale of ["zh-TW", "en"] as const) {
+        const text = translate(locale, key);
+        expect(text, `${locale} ${key}`).toMatch(/skill hub/i);
+        expect(text.replace(/skill hub/gi, ""), `${locale} ${key}`).not.toMatch(/\bhub\b/i);
+      }
+    }
+    expect(translate("en", "skills.refresh.hub")).toBe("Sync");
+    expect(translate("en", "skills.updateAvailable.hub")).toBe("Skill changed");
   });
 
   it("words Update / Reset and the note by where the copy came from — the package or the hub (D4)", async () => {
@@ -492,6 +531,8 @@ const hubCard = (over: Partial<SkillHubCard>): SkillHubCard => ({
   review_verdict: "ok",
   is_mine: false,
   missing_tools: ["query_entity"],
+  installs: 0,
+  uses: 0,
   forks: [],
   ...over,
 });

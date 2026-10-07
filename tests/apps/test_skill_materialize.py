@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -373,11 +374,12 @@ async def test_a_shared_skill_is_found_even_when_the_profile_ships_others(
 
 def _hub():
     from workspace_app.apps.skill_hub import SkillHubStore, register_skill_hub
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
     from workspace_app.resources import make_spec
 
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
-    return spec, SkillHubStore(spec, MemoryFileStore())
+    return spec, SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
 
 
 async def _published(hub, body: str = "v1\n") -> str:
@@ -402,7 +404,7 @@ async def _published(hub, body: str = "v1\n") -> str:
 async def test_a_hub_copy_records_its_entry_and_reads_as_live_with_nothing_to_update():
     import msgspec
 
-    from workspace_app.apps.skill_payload import SkillOrigin, origin_for
+    from workspace_app.apps.skill_payload import SkillOrigin
 
     _spec, hub = _hub()
     entry = await _published(hub)
@@ -411,7 +413,9 @@ async def test_a_hub_copy_records_its_entry_and_reads_as_live_with_nothing_to_up
     await install_hub_skill(files, inv, hub, entry)
 
     origin = msgspec.json.decode(await files.read(inv, "/.skill/triage/.origin"), type=SkillOrigin)
-    assert origin == origin_for("hub", await hub.payload_of(entry), entry=entry)
+    row = hub.get(entry)
+    assert row is not None
+    assert origin == hub.copy_manifest(entry, row)
     assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
     upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
     assert upstream is not None
@@ -555,12 +559,13 @@ async def test_has_an_update_for_a_hub_copy_reads_no_blobs():
             return await super().read(workspace_id, path)
 
     from workspace_app.apps.skill_hub import SkillHubStore, register_skill_hub
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
     from workspace_app.resources import make_spec
 
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
     blobs = _CountsReads()
-    hub = SkillHubStore(spec, blobs)
+    hub = SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()), legacy=blobs)
     entry = await _published(hub)
     files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
     await install_hub_skill(files, inv, hub, entry)
@@ -606,13 +611,14 @@ async def test_install_counts_the_manifest_in_its_room_check_so_a_refusal_writes
     The manifest is part of the operation; its bytes are in the check."""
     import msgspec
 
-    from workspace_app.apps.skill_payload import origin_for
     from workspace_app.files import WorkspaceFull
 
     _spec, hub = _hub()
     entry = await _published(hub)
     payload = await hub.payload_of(entry)
-    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry))
+    row = hub.get(entry)
+    assert row is not None
+    manifest = msgspec.json.encode(hub.copy_manifest(entry, row))
     need = sum(len(b) for b in payload.values()) + len(manifest)
 
     short = WorkspaceFiles(MemoryFileStore(), quota=need - 1)

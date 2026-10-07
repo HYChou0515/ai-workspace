@@ -16,23 +16,32 @@ who can read the entry gets 403 on every one of them.
 
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 from collections.abc import Callable
 from typing import Literal
 
 import msgspec
-from fastapi import APIRouter, FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
 from specstar import SpecStar
 
 from ..apps.skill_hub import (
     SkillHubEntry,
     SkillHubStore,
+    UnknownRevision,
     UpstreamState,
+    VersionMoved,
     matches_query,
     missing_tools_for,
     nest_forks,
 )
-from ..apps.skills import install_hub_skill, skill_folder_in_the_way, workspace_skill_payload
+from ..apps.skills import (
+    fork_hub_version,
+    install_hub_skill,
+    skill_folder_in_the_way,
+    workspace_skill_payload,
+)
 from ..files import WorkspaceFiles
 from ..resources.groups import groups_of
 from .item_authz import check_access, load_access_facts
@@ -69,11 +78,18 @@ class SkillHubCard(BaseModel):
     #: (`?app=`) — the install告知 the Skills panel's picker shows per row.
     #: Empty when no App was asked about.
     missing_tools: list[str] = []
+    #: Installs and `read_skill` uses, summed over every pod's flushed rows
+    #: (plan-skill-hub-history §4.8). A fork counts its own.
+    installs: int = 0
+    uses: int = 0
     forks: list[SkillHubCard] = []
 
 
 class SkillHubList(BaseModel):
     entries: list[SkillHubCard]
+    #: The day counting began (`YYYY-MM-DD`), for 「自 … 起」; "" before the
+    #: first flush anywhere.
+    counted_since: str = ""
 
 
 class SkillHubLineage(BaseModel):
@@ -116,6 +132,9 @@ class SkillHubDetail(BaseModel):
     #: `referenced_tools` minus the ceiling of the App asked about (`?app=`);
     #: empty when no App was asked about.
     missing_tools: list[str]
+    installs: int = 0
+    uses: int = 0
+    counted_since: str = ""
 
 
 class SkillTransferRequest(BaseModel):
@@ -125,6 +144,73 @@ class SkillTransferRequest(BaseModel):
 class SkillTransferred(BaseModel):
     id: str
     owner: str
+
+
+class SkillRollbackRequest(BaseModel):
+    #: The revision to go back to — one row of the history timeline.
+    revision: str
+    #: The commit the page showed as current when the owner chose. Master moves
+    #: only from it, so a version published since is refused, not discarded.
+    expected: str
+
+
+class SkillRolledBack(BaseModel):
+    id: str
+    commit: str
+
+
+class SkillHubHistoryEvent(BaseModel):
+    revision: str
+    kind: Literal["publish", "rollback", "transfer", "permission"]
+    at: dt.datetime
+    by: str
+    owner: str
+    commit: str
+    description: str
+    review_notes: list[str]
+    to_revision: str
+    visibility: str
+    audience: list[str] = []
+    current: bool
+
+
+class SkillHubHistory(BaseModel):
+    """The timeline, newest first (plan-skill-hub-history §8)."""
+
+    events: list[SkillHubHistoryEvent]
+
+
+class SkillHubVersion(BaseModel):
+    """One earlier (or the current) version: its fields, its file names and
+    its SKILL.md — what the detail page shows for the entry itself."""
+
+    revision: str
+    commit: str
+    description: str
+    files: list[str]
+    skill_md: str
+
+
+class SkillHubVersionFile(BaseModel):
+    path: str
+    #: ``None`` when the file is not text.
+    text: str | None
+    size: int
+
+
+class SkillHubFileChange(BaseModel):
+    path: str
+    status: Literal["added", "removed", "changed"]
+    patch: str | None
+
+
+class SkillHubDiff(BaseModel):
+    files: list[SkillHubFileChange]
+
+
+class SkillForkRequest(BaseModel):
+    entry_id: str
+    revision: str
 
 
 class SkillEditTarget(BaseModel):
@@ -151,6 +237,16 @@ class SkillInstalled(BaseModel):
     missing_tools: list[str]
 
 
+class SkillHubMigration(BaseModel):
+    """What the move into git did: the entries moved, and each `owner/name`
+    held by more than one entry — left for the operator, never merged."""
+
+    migrated: list[str]
+    duplicates: list[list[str]]
+    #: Entries moved in without their own top-level `.gitattributes`.
+    gitattributes_dropped: list[str] = []
+
+
 def register_skill_hub_routes(
     app: FastAPI | APIRouter,
     *,
@@ -164,7 +260,13 @@ def register_skill_hub_routes(
     """Mount the skill hub routes (reads, owner management, the edit resolver)
     + the item install route onto ``app``."""
 
-    def _card(entry_id: str, entry: SkillHubEntry, viewer: str, app: str = "") -> SkillHubCard:
+    def _card(
+        entry_id: str,
+        entry: SkillHubEntry,
+        viewer: str,
+        app: str = "",
+        counts: tuple[int, int] = (0, 0),
+    ) -> SkillHubCard:
         return SkillHubCard(
             id=entry_id,
             owner=entry.owner,
@@ -176,6 +278,8 @@ def register_skill_hub_routes(
             review_verdict=entry.review.verdict,
             is_mine=entry.owner == viewer,
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
+            installs=counts[0],
+            uses=counts[1],
         )
 
     def _readable(entry_id: str, viewer: str) -> SkillHubEntry:
@@ -194,26 +298,37 @@ def register_skill_hub_routes(
         return out
 
     @app.get("/skill-hub/entries")
-    async def list_skill_hub(q: str = "", mine: bool = False, app: str = "") -> SkillHubList:
+    async def list_skill_hub(
+        q: str = "",
+        mine: bool = False,
+        app: str = "",
+        sort: Literal["name", "popular"] = "name",
+    ) -> SkillHubList:
         """The page's list: roots with their forks beneath, in name order.
         `q` matches name and description (case-insensitive); `mine` keeps the
         viewer's own. A fork whose root is out of view — filtered by `q`,
         private to the viewer, or deleted — is listed on its own, so a skill is
         never hidden by what it was forked from. `app` (a slug) adds each
         row's `missing_tools` against that App's ceiling — the Skills panel's
-        picker asks for the item's App, so the告知 is on the row it picks from."""
+        picker asks for the item's App, so the告知 is on the row it picks from.
+        `sort=popular` puts the most used first (U6); forks stay under their root."""
         viewer = get_user_id()
         hits = {
             i: e
             for i, e in hub.visible(viewer)
             if (not mine or e.owner == viewer) and matches_query(e, q)
         }
+        counts = await asyncio.to_thread(hub.usage.totals, hits)
         roots: list[SkillHubCard] = []
         for root, forks in nest_forks(hits):
-            card = _card(root, hits[root], viewer, app)
-            card.forks = [_card(j, hits[j], viewer, app) for j in forks]
+            card = _card(root, hits[root], viewer, app, counts[root])
+            card.forks = [_card(j, hits[j], viewer, app, counts[j]) for j in forks]
             roots.append(card)
-        return SkillHubList(entries=roots)
+        if sort == "popular":
+            # Stable on the name order `nest_forks` gave: ties stay alphabetical.
+            roots.sort(key=lambda c: (-c.uses, -c.installs))
+        since = await asyncio.to_thread(hub.usage.counted_since)
+        return SkillHubList(entries=roots, counted_since=since)
 
     @app.get("/skill-hub/entries/{entry_id}")
     async def skill_hub_detail(entry_id: str, app: str = "") -> SkillHubDetail:
@@ -221,9 +336,9 @@ def register_skill_hub_routes(
         App's ceiling — what the install告知 shows before the person decides."""
         viewer = get_user_id()
         entry = _readable(entry_id, viewer)
-        # One read: the file names are on the row (`origin.files`, the same
-        # map an installed copy carries). Reading the folder to list it cost
-        # up to the cap per page view (review round 2).
+        # The file names are the version's tree (`ls-tree`; only the small
+        # files on LFS paths are read, to tell a pointer). Reading the folder
+        # to list it cost up to the cap per page view (review round 2).
         skill_md = await hub.skill_md_of(entry_id)
         lineage: SkillHubLineage | None = None
         if entry.forked_from:
@@ -235,6 +350,7 @@ def register_skill_hub_routes(
                 name=root.name if root is not None else "",
             )
         is_owner = entry.owner == viewer
+        installs, uses = (await asyncio.to_thread(hub.usage.totals, [entry_id]))[entry_id]
         return SkillHubDetail(
             id=entry_id,
             owner=entry.owner,
@@ -251,7 +367,7 @@ def register_skill_hub_routes(
             ),
             forked_from=lineage,
             forks=_visible_forks(entry_id, viewer),
-            files=sorted(entry.origin.files),
+            files=await hub.file_names(entry_id),
             skill_md=skill_md.decode("utf-8", errors="replace"),
             is_owner=is_owner,
             visibility=entry.permission.visibility,
@@ -259,6 +375,9 @@ def register_skill_hub_routes(
             if is_owner
             else None,
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
+            installs=installs,
+            uses=uses,
+            counted_since=await asyncio.to_thread(hub.usage.counted_since),
         )
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────
@@ -280,7 +399,7 @@ def register_skill_hub_routes(
         `unpublished`; the grant lists are kept for a later republish."""
         viewer = get_user_id()
         entry = _owned(entry_id, viewer)
-        hub.set_permission(
+        await hub.set_permission(
             entry_id, msgspec.structs.replace(entry.permission, visibility="private")
         )
         return PermissionOut(resource_id=entry_id, visibility="private", notified=[])
@@ -290,7 +409,9 @@ def register_skill_hub_routes(
         """Back up, public. A restricted republish is a `permission` PUT."""
         viewer = get_user_id()
         entry = _owned(entry_id, viewer)
-        hub.set_permission(entry_id, msgspec.structs.replace(entry.permission, visibility="public"))
+        await hub.set_permission(
+            entry_id, msgspec.structs.replace(entry.permission, visibility="public")
+        )
         return PermissionOut(resource_id=entry_id, visibility="public", notified=[])
 
     @app.put("/skill-hub/entries/{entry_id}/permission")
@@ -301,7 +422,7 @@ def register_skill_hub_routes(
         untouched so the shared UI round-trips."""
         viewer = get_user_id()
         _owned(entry_id, viewer)
-        hub.set_permission(entry_id, build_permission(body))
+        await hub.set_permission(entry_id, build_permission(body))
         return PermissionOut(resource_id=entry_id, visibility=body.visibility, notified=[])
 
     @app.delete("/skill-hub/entries/{entry_id}", status_code=204)
@@ -326,13 +447,96 @@ def register_skill_hub_routes(
         new_owner = body.owner.strip()
         if not new_owner or new_owner == entry.owner:
             raise HTTPException(status_code=400, detail=_TRANSFER_OWNER_REQUIRED)
-        if hub.find(new_owner, entry.name) is not None:
+        if hub.name_taken(new_owner, entry.name):
             raise HTTPException(
                 status_code=409,
                 detail={"error": "transfer_name_taken", "owner": new_owner, "name": entry.name},
             )
-        hub.transfer(entry_id, new_owner)
+        await hub.transfer(entry_id, new_owner)
         return SkillTransferred(id=entry_id, owner=new_owner)
+
+    @app.get("/skill-hub/entries/{entry_id}/history")
+    async def skill_hub_history(entry_id: str) -> SkillHubHistory:
+        """Every revision that changed the version, the owner or who may see
+        it; the last kind for the owner alone (G24)."""
+        viewer = get_user_id()
+        _readable(entry_id, viewer)
+        events = await hub.history(entry_id, viewer=viewer)
+        return SkillHubHistory(
+            events=[SkillHubHistoryEvent(**msgspec.structs.asdict(e)) for e in events]
+        )
+
+    async def _version(entry_id: str, revision: str) -> SkillHubEntry:
+        try:
+            return await hub.version(entry_id, revision)
+        except UnknownRevision:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+
+    @app.get("/skill-hub/entries/{entry_id}/versions/{revision}")
+    async def skill_hub_version(entry_id: str, revision: str) -> SkillHubVersion:
+        """Any version, readable by whoever may read the entry — read, not
+        installed (G23). The names come from the tree; SKILL.md is the one
+        file read in full."""
+        _readable(entry_id, get_user_id())
+        old = await _version(entry_id, revision)
+        names = sorted(await hub.repos.tree(entry_id, old.commit))
+        read = await hub.repos.read(entry_id, old.commit, paths=["SKILL.md"])
+        # A version migrated from an empty namespace has none; show nothing.
+        skill_md = read.get("SKILL.md", b"")
+        return SkillHubVersion(
+            revision=revision,
+            commit=old.commit,
+            description=old.description,
+            files=names,
+            skill_md=skill_md.decode("utf-8", errors="replace"),
+        )
+
+    @app.get("/skill-hub/entries/{entry_id}/versions/{revision}/file")
+    async def skill_hub_version_file(
+        entry_id: str, revision: str, path: str
+    ) -> SkillHubVersionFile:
+        _readable(entry_id, get_user_id())
+        old = await _version(entry_id, revision)
+        tree = await hub.repos.tree(entry_id, old.commit)
+        if path not in tree:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND)
+        data = (await hub.repos.read(entry_id, old.commit, paths=[path]))[path]
+        try:
+            text: str | None = data.decode()
+        except UnicodeDecodeError:
+            text = None
+        return SkillHubVersionFile(path=path, text=text, size=len(data))
+
+    @app.get("/skill-hub/entries/{entry_id}/diff")
+    async def skill_hub_diff(
+        entry_id: str,
+        from_revision: str = Query(alias="from"),
+        to_revision: str = Query(alias="to"),
+    ) -> SkillHubDiff:
+        _readable(entry_id, get_user_id())
+        try:
+            changes = await hub.diff(entry_id, from_revision, to_revision)
+        except UnknownRevision:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+        return SkillHubDiff(
+            files=[SkillHubFileChange(path=c.path, status=c.status, patch=c.patch) for c in changes]
+        )
+
+    @app.post("/skill-hub/entries/{entry_id}/rollback")
+    async def rollback_skill_hub_entry(
+        entry_id: str, body: SkillRollbackRequest
+    ) -> SkillRolledBack:
+        """Make an earlier version the current one (plan-skill-hub-history
+        §4.3). The same owner check as every edit (G19); no new review (G20).
+        409 when the current version is no longer the one the owner saw."""
+        _owned(entry_id, get_user_id())
+        try:
+            commit = await hub.rollback(entry_id, body.revision, expected=body.expected)
+        except UnknownRevision:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+        except VersionMoved:
+            raise HTTPException(status_code=409, detail={"error": "version_moved"}) from None
+        return SkillRolledBack(id=entry_id, commit=commit)
 
     @app.post("/skill-hub/entries/{entry_id}/edit")
     async def edit_skill_hub_entry(entry_id: str) -> SkillEditTarget:
@@ -377,6 +581,41 @@ def register_skill_hub_routes(
             await install_hub_skill(files, entry.source_item, hub, entry_id)
         return target.model_copy(update={"action": "open", "item_id": entry.source_item})
 
+    @app.post("/admin/skill-hub/migrate")
+    async def skill_hub_migrate() -> SkillHubMigration:
+        """Move every entry published before the git store into it — the
+        operator's one-off step after the rollout (docs/migrations.md). Safe to
+        repeat. 404, not 403, for anyone but a superuser: whether this route
+        exists is not for a user to probe."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=404, detail="Not Found")
+        report = await hub.migrate_legacy()
+        return SkillHubMigration(
+            migrated=report.migrated,
+            duplicates=report.duplicates,
+            gitattributes_dropped=report.gitattributes_dropped,
+        )
+
+    @app.post("/a/{slug}/items/{item_id}/skills/fork")
+    async def fork_skill_version_into_item(
+        slug: str, item_id: str, body: SkillForkRequest
+    ) -> SkillInstalled:
+        """〔從這一版 fork〕: an earlier version copied into the item as a
+        starting point of the viewer's own — never offered the entry's newer
+        versions (G23). The same refusals as install: 404 for an entry or a
+        revision the viewer may not read, 409 for a folder already there."""
+        viewer = get_user_id()
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
+        entry = _readable(body.entry_id, viewer)
+        old = await _version(body.entry_id, body.revision)
+        if taken := await skill_folder_in_the_way(files, investigation_id, hub, entry.name, viewer):
+            raise HTTPException(status_code=409, detail=taken.code())
+        name = await fork_hub_version(files, investigation_id, hub, body.entry_id, body.revision)
+        # The tools of the version copied, not of the entry's current one.
+        return SkillInstalled(
+            name=name, missing_tools=missing_tools_for(old.referenced_tools, slug)
+        )
+
     @app.post("/a/{slug}/items/{item_id}/skills/install")
     async def install_skill_into_item(
         slug: str, item_id: str, body: SkillInstallRequest
@@ -392,6 +631,7 @@ def register_skill_hub_routes(
         if taken := await skill_folder_in_the_way(files, investigation_id, hub, entry.name, viewer):
             raise HTTPException(status_code=409, detail=taken.code())
         name = await install_hub_skill(files, investigation_id, hub, body.entry_id)
+        hub.usage.install(body.entry_id, user=viewer, item=investigation_id)
         return SkillInstalled(
             name=name, missing_tools=missing_tools_for(entry.referenced_tools, slug)
         )

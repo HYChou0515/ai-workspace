@@ -42,6 +42,8 @@ const card = (over: Partial<SkillHubCard>): SkillHubCard => ({
   review_verdict: "ok",
   is_mine: false,
   missing_tools: [],
+  installs: 0,
+  uses: 0,
   forks: [],
   ...over,
 });
@@ -51,7 +53,7 @@ const ROOT_WITH_FORK = card({
 });
 const OTHER = card({ id: "e-other", owner: "carol", name: "deck-maker", description: "Slides." });
 
-function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER]) {
+function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER], since = "2026-10-07") {
   // The server's shape (`nest_forks`): a hit nests under its root only when
   // the root is a hit too; otherwise it is a root of its own — so 「我的」
   // lifts a fork of somebody else's entry out to the top level.
@@ -70,8 +72,16 @@ function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER]) {
       .map((f) => ({ ...f, forks: [] }));
     return [...roots, ...lifted];
   });
+  // The page's own listing: the same rows, plus the day counting began. A
+  // popular sort is the server's (uses, then installs; name order on ties).
+  const browse = vi.fn<SkillHubApi["browse"]>(async (q = "", mine = false, sort = "name") => {
+    const rows = await list(q, mine);
+    if (sort === "popular") rows.sort((a, b) => b.uses - a.uses || b.installs - a.installs);
+    return { entries: rows, counted_since: since };
+  });
   return {
     list,
+    browse,
     get: vi.fn<SkillHubApi["get"]>(),
     install: vi.fn<SkillHubApi["install"]>(),
     unpublish: vi.fn<SkillHubApi["unpublish"]>(),
@@ -80,6 +90,12 @@ function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER]) {
     remove: vi.fn<SkillHubApi["remove"]>(),
     transfer: vi.fn<SkillHubApi["transfer"]>(),
     edit: vi.fn<SkillHubApi["edit"]>(),
+    history: vi.fn<SkillHubApi["history"]>(async () => []),
+    version: vi.fn<SkillHubApi["version"]>(),
+    versionFile: vi.fn<SkillHubApi["versionFile"]>(),
+    diff: vi.fn<SkillHubApi["diff"]>(async () => []),
+    rollback: vi.fn<SkillHubApi["rollback"]>(),
+    fork: vi.fn<SkillHubApi["fork"]>(),
   } satisfies SkillHubApi;
 }
 
@@ -116,6 +132,60 @@ describe("SkillHubPage", () => {
     // The other root is NOT under the first.
     expect(within(root).queryByTestId("entry-e-other")).toBeNull();
     expect(screen.getByTestId("entry-e-other")).toBeInTheDocument();
+  });
+
+  it("shows each card's installs and uses, since when they were counted (plan-skill-hub-history U6)", async () => {
+    const busy = card({ id: "e-busy", name: "busy", installs: 3, uses: 12 });
+    const forked = card({
+      id: "e-root2",
+      name: "rooted",
+      installs: 1,
+      uses: 0,
+      forks: [card({ id: "e-f2", owner: "bob", forked_from: "e-root2", installs: 0, uses: 5 })],
+    });
+    render(<SkillHubPage client={client([busy, forked])} />, { wrapper: Wrap });
+
+    const row = await screen.findByTestId("entry-e-busy");
+    expect(
+      within(row).getByText(word("skillHub.counts", { installs: 3, uses: 12 })),
+    ).toBeInTheDocument();
+    // A fork counts its own.
+    const fork = screen.getByTestId("entry-e-f2");
+    expect(
+      within(fork).getByText(word("skillHub.counts", { installs: 0, uses: 5 })),
+    ).toBeInTheDocument();
+    expect(screen.getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
+  });
+
+  it("opening the page sends one listing request, not one per query", async () => {
+    const c = client();
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-root");
+    expect(c.browse).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing about since when before anything was counted", async () => {
+    render(<SkillHubPage client={client([OTHER], "")} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-other");
+    expect(screen.queryByText(word("skillHub.countedSince", { day: "" }))).toBeNull();
+    expect(screen.queryByText(/自 .* 起|since/)).toBeNull();
+  });
+
+  it("sorts by most used on request — name order stays the default (U6)", async () => {
+    const quiet = card({ id: "e-a", name: "aaa", uses: 1 });
+    const busy = card({ id: "e-z", name: "zzz", uses: 9 });
+    const c = client([quiet, busy]);
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-a");
+    const order = () =>
+      screen.getAllByTestId(/^entry-e-[az]$/).map((el) => el.getAttribute("data-testid"));
+    expect(order()).toEqual(["entry-e-a", "entry-e-z"]);
+    expect(c.browse).toHaveBeenLastCalledWith("", false, "name");
+
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.sort.popular") }));
+
+    await waitFor(() => expect(c.browse).toHaveBeenLastCalledWith("", false, "popular"));
+    await waitFor(() => expect(order()).toEqual(["entry-e-z", "entry-e-a"]));
   });
 
   it("sends the search to the server, debounced, and 「我的」 as a parameter", async () => {

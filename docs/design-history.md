@@ -80,6 +80,7 @@
 | [plan-workflow-language-alignment.md](plan-workflow-language-alignment.md) | Workflow 可靠性：node contract、verify、authoring（維持 JSON DSL） |
 | [plan-cache-required.md](plan-cache-required.md) | DSL 每一步都必須有 `cache`；解析不了的 workflow 到處都說清楚 |
 | [plan-item-schedules.md](plan-item-schedules.md) | item 層級的排程：讓 AI 把自己做的 workflow 放上時鐘 |
+| [plan-schedule-overview.md](plan-schedule-overview.md) | 排程總表：跨 item 列出看得到的排程，上次／下次、改時間、現在執行；新排程不補跑 |
 
 ## Sandbox 與基礎設施
 
