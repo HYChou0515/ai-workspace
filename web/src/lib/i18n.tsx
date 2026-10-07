@@ -2145,6 +2145,7 @@ export const messages = {
     en: "Rolled back to the version of {when}",
   },
   "skillHub.history.kind.transfer": { "zh-TW": "轉移給 {owner}", en: "Transferred to {owner}" },
+  "skillHub.history.audience": { "zh-TW": "開放給：{who}", en: "Open to: {who}" },
   "skillHub.history.kind.permission": {
     "zh-TW": "可見範圍改為「{visibility}」",
     en: "Visibility set to “{visibility}”",
@@ -2187,8 +2188,8 @@ export const messages = {
     en: "Fork from the version of {when}",
   },
   "skillHub.history.fork.body": {
-    "zh-TW": "這一版會複製進你選的 item，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布，就成為你的 fork。",
-    en: "This version is copied into the item you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there to make it your fork.",
+    "zh-TW": "這一版會複製進你選的 item，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
+    en: "This version is copied into the item you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there: someone else's skill becomes your fork, your own becomes its next version.",
   },
   "skillHub.history.fork.app": { "zh-TW": "App", en: "App" },
   "skillHub.history.fork.items": { "zh-TW": "複製進哪個 item", en: "Copy into which item" },

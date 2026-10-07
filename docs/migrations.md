@@ -1457,7 +1457,8 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 - **要做的事（`rollout 後`）**：用 superuser 帳號打一次 `POST /api/admin/skill-hub/migrate`。
   - 做什麼：把這個 PR 之前發布的條目搬進 git——每個條目建 repo，第一個 commit 是它現在的檔案，列寫上 `commit`。
-    回傳 `{"migrated": [...], "duplicates": [[...], ...]}`。可重跑，已搬過的跳過；多個 pod 同時打也只會有一個第一版。
+    回傳 `{"migrated": [...], "duplicates": [[...], ...], "gitattributes_dropped": [...]}`。可重跑，已搬過的跳過；
+    多個 pod 同時打也只會有一個第一版。
   - 為什麼：沒搬的條目照舊能看、能裝（從舊的檔案位置讀），但沒有版本紀錄可看、可回復。沒搬就重新發布的條目，
     發布時會先把舊版搬進去當第一版，不會遺失。
   - 漏做的症狀：舊條目的版本紀錄是空的、不能回復。
@@ -1466,11 +1467,21 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
     在 skill hub 頁面刪掉另一個（刪除只有擁有者能按）。
   - 舊的檔案位置（FileStore 裡 `skill-hub:<id>:…` 的 namespace）**不再刪除**：搬完、重新發布、刪除條目都不刪
     （以前重新發布與刪除會釋放舊版的檔案）。佔的空間停在上線那天的大小，不再增加——新版本都進 git。
-- **rollout 期間（新舊 pod 同時在跑）**：舊 pod 讀不到新 pod 發布的版本（詳情頁 500、安裝出一個只有 `.origin` 的資料夾），
-  舊 pod 改權限 / 轉移 / 下架時會把列寫回沒有 `commit` 的樣子（之後新 pod 讀那個條目也 500）。
+- **rollout 期間（新舊 pod 同時在跑）**：
+  - 舊 pod 讀不到新 pod **首次發布**的條目（詳情頁 500、安裝出一個只有 `.origin` 的資料夾）；搬過的條目，舊 pod 讀到的是
+    搬移前的版本（舊檔案位置還在）。
+  - 舊 pod 改權限 / 轉移 / 下架時會把列寫回沒有 `commit` 的樣子：首次發布在 git 的條目之後新 pod 也 500；搬過的條目
+    新 pod 讀到的是搬移前的版本。
+  - 舊 pod **重新發布**一個已在 git 的條目：它把檔案寫到舊的檔案位置、列上沒有 `commit`；之後的 migrate 會把列指回
+    repo 的 master——**那次發布的內容不會進 git**（列上的說明與審查意見是那次的，檔案是之前的版本）。只能請擁有者再發布一次。
+  - 也看得到：聊天裡的 skill hub 卡片若是新版前端配上舊 pod 的回應，已安裝的 skill 會顯示「已有同名 skill」而不是「已安裝」。
   - **要做的事（`rollout 前`）**：請大家在 rollout 期間別在 skill hub 發布或管理條目；或用一次換完的 rollout。
-  - 漏做的症狀：上面那些 500；**rollout 後**跑一次上面的 migrate 就修回來（它把沒有 `commit` 的列指回 repo 的 master）。
-  - 降版（回到這個 PR 之前的 image）讀不到任何進了 git 的條目——搬過的、新發布的都是。
+  - 漏做的症狀：上面那些 500 與錯的版本；**rollout 後**跑一次上面的 migrate，沒有 `commit` 的列都會指回 repo 的
+    master（500 與搬移前的版本就修回來了；舊 pod 重新發布的內容除外，見上）。
+  - 降版（回到這個 PR 之前的 image）：首次發布在 git 的條目讀不到（500）；搬過的條目讀得到，但是是搬移前的版本——之後在
+    git 裡發布的版本都看不到。
+  - `gitattributes_dropped` 不是空的：那些舊條目最上層有自己的 `.gitattributes`，搬進 git 時拿掉了（那個位置是
+    skill hub 的 LFS 規則）。舊檔案位置裡的原件還在；需要的話請擁有者把它移到子資料夾後重新發布。
 - 不是 superuser 打這條路由回 404。
 
 **k8s · CI 側** — API image 多裝 `git`（`docker/Dockerfile`）；不需要 `git-lfs`（大檔由平台自己寫成 LFS 格式）。
@@ -1496,9 +1507,10 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 已安裝副本的 `.origin` 改成記來源的 commit（`files` 留空），不再記每個檔案的雜湊。舊副本照舊能比對「有沒有更新」，
   條目搬進 git 之後同步一次就換成新格式。
 - 成本（沒有要做的事，在 API pod 上量的 git 子行程數）：首次發布 6 個、重新發布 7 個、改權限 / 轉移 / 下架 1 個、
-  詳情頁 5 個（列樹，並讀 SKILL.md 與 LFS 路徑上的小檔來辨認指標）、版本紀錄 1 個加上每個 revision 一次資料庫讀取。
+  詳情頁 3 個（skill 裡有圖片 / PDF / 壓縮檔等 LFS 路徑上的檔案時 5 個：多讀那些小檔來辨認指標）、版本紀錄 1 個加上每個
+  revision 一次資料庫讀取。
   `read_skill` 讀 `SKILL.md` 時同一批多讀那個資料夾的 `.origin`。每個 API pod 每 2 小時、以及關機時（算在關機預算內），
-  對有累積次數的條目各寫一列（讀一次、寫一次、刪舊 revision）。查看大小與整理見 [deployment.md](deployment.md) §16。
+  對有累積次數的條目各寫一列（讀一次條目確認它還在、讀一次計數列、寫一次、刪舊 revision；第一次是建立，不用刪）。查看大小與整理見 [deployment.md](deployment.md) §16。
 
 **確認做完**
 

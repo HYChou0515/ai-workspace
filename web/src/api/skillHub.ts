@@ -112,6 +112,8 @@ export type SkillHubHistoryEvent = {
   to_revision: string;
   /** On a permission change: the visibility after it. */
   visibility: string;
+  /** On a permission change: who may read it — `user:<id>` / `group:<id>`. */
+  audience: string[];
   current: boolean;
 };
 

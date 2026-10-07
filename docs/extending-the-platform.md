@@ -665,15 +665,16 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
   （既有的權限對話框）、轉移、刪除。
 - **四個 tool 都是薄殼**:`publish_skill` / `install_skill` 在 `TOOL_VERBS` 裡吃 `edit_content`
   （和 `save_skill` 同）;`search_skill_hub`(每筆多回次數、這個 item 是否已裝、最後更新日、審查意見)
-  與 `show_skill_hub_entry`(在聊天裡畫一張可以按安裝的卡片,列在 `## Available views`)只讀 skill hub、
-  不碰 item,所以不在表裡。`skill-hub` 這個 shared skill 教 agent 什麼時候該找、該推薦、該裝、該發布,
+  與 `show_skill_hub_entry`(在聊天裡畫一張可以按安裝的卡片,列在 `## Available views`)讀的是 skill hub,
+  所以不在表裡;`search_skill_hub` 判斷「這個 item 已裝」要讀 item 的 `.skill/`,那一步自己檢查 `read_content`。`skill-hub` 這個 shared skill 教 agent 什麼時候該找、該推薦、該裝、該發布,
   以及每種回覆要對使用者說什麼;情境在 `sample-scenarios/skill-hub/`。
 - **路由**:`GET /skill-hub/entries`（`q` / `mine` / `app` 給差集）、`GET /skill-hub/entries/{id}`、
   `POST /a/{slug}/items/{id}/skills/install`（面板的門,和 tool 共用同一個核心與同一個拒絕事實——tool 給模型英文句,路由給前端 code,前端翻成使用者的語言）,
   `POST /a/{slug}/items/{id}/skills/fork`(從某一版 fork)、讀者的 `history` / `versions/{revision}` /
   `versions/{revision}/file` / `diff`,owner 限定的 `unpublish` / `republish` / `permission` / `transfer` /
   `edit` / `rollback` / `DELETE`,以及 superuser 的 `POST /admin/skill-hub/migrate`。
-  skill hub 條目本身沒有 auto-CRUD route——寫入只能走會先審查的 tool。
+  skill hub 條目本身沒有 auto-CRUD route:新版本只能走會先審查的 `publish_skill`;其餘寫入是上面那些路由
+  (回復帶回的是當初已經審過的版本,G20)。
 
 ### 調校 skill 的 guidance（第二方）
 

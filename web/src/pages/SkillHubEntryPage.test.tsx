@@ -36,7 +36,11 @@ vi.mock("../api", () => ({
   },
 }));
 vi.mock("../api/groups", () => ({
-  groupsApi: { listPickableGroups: vi.fn(async () => []) },
+  groupsApi: {
+    listPickableGroups: vi.fn(async () => [
+      { resource_id: "g-qa", name: "QA", description: "", member_count: 3 },
+    ]),
+  },
 }));
 
 import { DialogProvider } from "../components/Dialog";
@@ -102,6 +106,7 @@ const ev = (over: Partial<SkillHubHistoryEvent>): SkillHubHistoryEvent => ({
   review_notes: [],
   to_revision: "",
   visibility: "",
+  audience: [],
   current: false,
   ...over,
 });
@@ -541,6 +546,24 @@ describe("SkillHubEntryPage", () => {
 
 describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
   const timeline = () => screen.findByRole("list", { name: word("skillHub.history") });
+
+  it("says who a visibility change opened the skill to, by name (G24 「含名單」)", async () => {
+    const history = [
+      ev({
+        revision: "e-1:3",
+        kind: "permission",
+        visibility: "restricted",
+        audience: ["user:alice", "group:g-qa"],
+        current: true,
+      }),
+      ev({ revision: "e-1:1" }),
+    ];
+    mount(client(OWNED, OPEN, history));
+
+    const rows = within(await timeline()).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent(word("skillHub.history.audience", { who: "Alice Wu, QA" }));
+    expect(rows[0]).not.toHaveTextContent("user:");
+  });
 
   it("lists every row newest first, says what each did, and marks the current one", async () => {
     mount(client(detail({}), OPEN, HISTORY));

@@ -4,7 +4,7 @@
  * One row per event the server reports, newest first: a publish, a rollback,
  * a transfer, and — for the owner alone, the server's call — a visibility
  * change. A row that names a version (publish / rollback) can be read,
- * compared with the current one and forked by anyone who may read the entry;
+ * compared with any other version and forked by anyone who may read the entry;
  * only the owner can roll back to it. An old version is never installed
  * (G23): 〔從這一版 fork〕 copies it into an item as a starting point of the
  * viewer's own, which is never offered the entry's newer versions.
@@ -20,10 +20,12 @@ import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import type { SkillHubApi, SkillHubDetail, SkillHubHistoryEvent } from "../api/skillHub";
+import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
 import { useUsers } from "../hooks/useUsers";
 import { ymd } from "../lib/date";
 import { useT } from "../lib/i18n";
+import { subjectGroup, subjectUser } from "../lib/permission";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { skillBody } from "../lib/skillBody";
 import { useDialog } from "./Dialog";
@@ -51,6 +53,14 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
   const { confirm } = useDialog();
   const users = useUsers();
   const personName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
+  const groups = usePickableGroups();
+  // A grant by the name people know it by — never the `user:` / `group:` subject.
+  const subjectName = (subject: string) => {
+    const user = subjectUser(subject);
+    if (user !== null) return personName(user);
+    const group = subjectGroup(subject);
+    return group !== null ? (groups.find((g) => g.resource_id === group)?.name ?? group) : subject;
+  };
   const { data: events, isPending, isError } = useQuery({
     queryKey: qk.skillHubHistory(entry.id),
     queryFn: () => client.history(entry.id),
@@ -161,6 +171,12 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
               </div>
               {namesAVersion(e) ? (
                 <p className="skill-hub-history-desc">{e.description}</p>
+              ) : null}
+              {e.kind === "permission" && e.audience.length > 0 ? (
+                // G24: the owner sees who it was opened to, not only the word.
+                <p className="skill-hub-history-desc">
+                  {t("skillHub.history.audience", { who: e.audience.map(subjectName).join(", ") })}
+                </p>
               ) : null}
               {namesAVersion(e) && e.review_notes.length > 0 ? (
                 // What the review said about this version (§8) — the one a
