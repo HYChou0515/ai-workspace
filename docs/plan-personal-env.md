@@ -192,3 +192,10 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 | A5 | `notify_failure(run)` | `notify_failure(run, run_id)`；orchestrator 兩條把 run 結束成 error 的路都傳 run id | `WorkflowRun` 本身不帶 id，而代理人記在以 run id 為鍵的 `RunIdentity` |
 | A6 | 「需要登入」的判斷只寫了 `/w/` 平台列 | 聊天的 Env 按鈕（`useEnvMissing`）也算進通用個人值 | 同一個判斷有兩個入口；只改一個，聊天裡會繼續叫已經在「我的環境變數」登入的人去登入 |
 | A7 | 入口在「我的資源」的下一個 | 同上，圖示用 Env 鈕的 `tag` | 和 item 裡 Env 鈕同一個圖示，看得出是同一件事 |
+| A8 | D3、D6：item 裡的登入一律寫進「我的環境變數」 | 寫到「這個 item 會讀的地方」：「只有我」分頁裡，這個 item 把那個變數設成 Private first／Private only → 存進「我的環境變數」；設成 Shared（沒設）→ 和以前一樣填進這個 item 的表單、按儲存才存。「我的環境變數」頁的登入不變。〔假設，待 user 確認〕 | 第一輪 review（F1）：D2 規定 Shared 的 item 不讀「我的環境變數」，照 D3 寫過去，在 Shared item 登入後 tool 拿不到，畫面卻顯示已登入。要「登入一處、全部更新」，擁有者要把變數設成 Private first／Private only——這寫在 runbook |
+| A9 | 清理腳本清掉所有 item 裡的登入產物名稱 | 只清那個名稱設成 Private first／Private only 的 item | 跟著 A8：Shared item 裡留著的值就是它在用的，清掉會讓它壞掉；只有 Private 的 item 裡，舊值才會蓋過「我的環境變數」 |
+| A10 | 「有人在場的失敗不另外通知」 | workflow 面板按 Run 的失敗也通知代理人 | 按下 Run 之後 run 在背景跑，按的人可能已經離開畫面；和排程、頁面按鈕是同一條路（orchestrator 結束成 error），分不出來也不該分 |
+| A11 | 給代理人的那一封另外發 | 代理人就是擁有者時不另外發，擁有者原本那一封內文帶上「登入過期就到『我的環境變數』重新登入」；代理人已被移出這個 item（`store.may` 不過）就不發 | 同一人收兩封是噪音；被移出的人收到的連結點進去也看不到 item。去重的「同一天」是 UTC 日 |
+| A12 | P8 寫到 `configuration.md` | 沒改 | 這次沒有新設定鍵；`server.env_providers` 沒變 |
+| A13 | 腳本只有 `--base-url` | 加 `--header "Name: value"`（可重複） | 前面有 SSO 閘道時，superuser 的身分要靠閘道讀的 header 或 cookie；不帶就只能以 `server.default_user` 執行 |
+| A14 | 鍵的順序（`SANDBOX_USER_ENV_KEYS`）照所有個人值 | 只算這個 item 要的那些名稱（Private first／Private only） | 第一輪 review（N1）：Shared 的 item 從鍵的排列看得出我在「我的環境變數」有哪些名稱 |

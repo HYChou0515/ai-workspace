@@ -1492,26 +1492,37 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 每個人多一份「我的環境變數」（新頁面 `/my-env`，平台選單裡「我的資源」的下一個）：所有 item 通用的個人值。
 - 一個變數只有在 item 把它的提供方式設成 **Private first** 或 **Private only** 時，才會拿到這裡的值；設成
   Shared 或沒設的 item 拿不到。某個 item 裡另外填的值仍然優先。
-- **系統登入（部署設定的 `server.env_providers`）在 item 的 Env 面板「只有我」分頁按下去，現在是寫進「我的環境變數」，
-  不再寫進那個 item。** 在共用值分頁的登入不變（仍是填共用值的表單）。
+- **系統登入（部署設定的 `server.env_providers`）寫到「這個 item 會讀的地方」：**
+  - 在「我的環境變數」頁登入，或在 item 的 Env 面板「只有我」分頁登入、而這個 item 把那個變數設成 Private first／Private only
+    → **立刻存進「我的環境變數」**，所有這樣設定的 item 都用它。
+  - 在「只有我」分頁登入、而這個 item 是 Shared（沒設）→ 和以前一樣填進這個 item 的表單、按儲存才存，只給這個 item。
+  - 在共用值分頁的登入不變（填共用值的表單）。
+  - 所以**想讓某個 item 跟著「登入一處、全部更新」，item 擁有者要把那個變數的提供方式設成 Private first 或 Private only。**
+    沒設的 item 照舊：token 過期時要在那個 item 重新登入。
 - 提供方式的三個選項文字改成 **Shared／Private first／Private only**（中英文介面都是），意思不變。
-- 無人在場的 workflow run（排程、頁面按鈕、按 Run）失敗時，除了 item 擁有者，也通知這次 run 代理的那個人，連到
-  「我的環境變數」；同一人、同 item、同 workflow、同一天只發一封。
+- 一個用了某人憑證的 workflow run（綁定的排程、頁面按鈕、workflow 面板的 Run）失敗時：
+  - 代理的人不是 item 擁有者 → 另外通知他，連到「我的環境變數」，提示若是登入過期就去那裡重新登入；這一封同人、同 item、
+    同 workflow、同一個 UTC 日只發一封。他若已被移出這個 item，就不通知。
+  - 代理的人就是擁有者 → 只有原本那一封，但內文帶上同樣的提示。
+  - 擁有者原本那一封照舊，每次失敗一封。
 
 **資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。新的資料表 `PersonalEnv` 隨程式建立，沒有 auto-CRUD 路由。
 
-- **#869 時期在各 item 登入留下的 token，要不要清，由你決定（可選，任何時候）**：
+- **#869 時期在各 item 登入留下的 token，要不要清，由你決定（可選，rollout 之後任何時候；腳本打的路由這一版才有）**：
   ```bash
   uv run python scripts/clear_item_sign_ins.py                 # 先 dry run：列出（人、item、變數名），不印值、不改任何東西
   uv run python scripts/clear_item_sign_ins.py --apply         # 確認後才刪
-  uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API>   # 不在本機時
+  uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API> --header "<你的閘道讀的身分 header>: <值>"
   ```
-  - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。依規則 item 裡的值優先，所以這些舊 token 會蓋過使用者
-    之後在「我的環境變數」重新登入的新值。這支腳本只刪「某個系統登入會產生的變數名」——名單取自 API 實際載入的
+  - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。在把變數設成 Private first／Private only 的 item 裡，
+    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清這種 item**；Shared 的 item
+    本來就不讀「我的環境變數」，留在裡面的值正是它在用的，所以不動。名單是「某個系統登入會產生的變數名」，取自 API 實際載入的
     `server.env_providers`，不是手抄的。手打的其他變數、「我的環境變數」、共用值、SSO 自動帶入的值都不動。
-  - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值），否則腳本印出 `refused` 並結束碼 1。可以重複跑，第二次會是 0 筆。
-  - 不做的症狀：使用者在「我的環境變數」重新登入了，某些 item 還是用過期的 token 失敗；那些 item 的 Env 面板「只有我」會顯示
-    「使用中：你的（這個 item）」。不清也可以讓使用者自己在那個 item 清掉。
+  - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值）。不帶 header 時，身分是部署給「沒帶身分的請求」的那個
+    （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。身分不對時腳本印出 `refused`、
+    結束碼 1；被閘道擋下時是 `failed: HTTP <碼>`。`--apply` 之後再跑會是 0 筆。
+  - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
+    「只有我」會顯示「使用中：你的（這個 item）」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
 
 **k8s · CI 側** — 沒有新的 manifest、probe、env、JobType。
 
@@ -1520,7 +1531,8 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 打開 `/my-env`：新增一個值，列表出現、值是遮蔽的、標示「今天設定」。
 - 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「只有我」那一列顯示
   「使用中：你的（所有 item）」；在 item 裡另外填值後變成「使用中：你的（這個 item）」。
-- 部署有 `server.env_providers` 時：在「我的環境變數」或任一 item 的「只有我」登入一次，`GET /api/me/env` 裡出現那個變數。
+- 部署有 `server.env_providers` 時：在「我的環境變數」，或在把那個變數設成 Private first 的 item 的「只有我」登入一次，
+  `GET /api/me/env` 裡出現那個變數。
 - 清理腳本 dry run 跑得動（以 superuser 身分），列出的是你預期的人與 item。
 
 ---
