@@ -42,6 +42,7 @@ from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
 from .locator import ItemLocator
+from .schedule_listing import Source
 from .schemas import (
     _DecisionBody,
     _PhaseOut,
@@ -147,6 +148,7 @@ def register_workflow_routes(
     schedule_policy: SchedulePolicy,
     schedule_indexed: Callable[[str], bool],
     schedule_landed: Callable[[str], int | None] = lambda _item_id: None,
+    schedules_durable: Source,
     packages: Sequence[PackageInfo] = (),
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
@@ -254,16 +256,18 @@ def register_workflow_routes(
         the turn that made it. The parity test does not cover that window;
         `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
         """
-        from ..filestore.protocol import FileNotFound
         from ..workflow.user_schedules import ITEM_SCHEDULES_PATH
-        from .schedule_listing import grade_file
+        from .schedule_listing import grade_file, read_schedules_file
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         can_edit = _may(slug, item_id, "edit_content")
         can_run = _may(slug, item_id, "execute")
-        try:
-            data = await files.read(investigation_id, ITEM_SCHEDULES_PATH)
-        except FileNotFound:
+        # Live first, the durable copy when the live workspace is still
+        # restoring (`read_schedules_file` says why) — the overview's read.
+        found = await read_schedules_file(
+            files, schedules_durable, investigation_id, ITEM_SCHEDULES_PATH
+        )
+        if found is None:
             return SchedulesOut(
                 enabled=schedule_policy.sweep_enabled,
                 indexed=False,
@@ -290,8 +294,9 @@ def register_workflow_routes(
         except Exception:  # noqa: BLE001 — a listing, not a run
             logger.exception("schedules: could not read the landing stamp for %s", investigation_id)
             landed = None
+        data, source = found
         views, problems = await grade_file(
-            files,
+            source,
             spec=spec,
             policy=schedule_policy,
             item_id=investigation_id,

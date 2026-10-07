@@ -306,7 +306,7 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
             <span className="schedule-status" data-status={row.last_run.status}>
               {t(`scheduleOverview.status.${row.last_run.status}` as MsgKey)}
             </span>{" "}
-            {timeOf(row.last_run.ended ?? row.last_run.started)}
+            {timeOf(row.last_run.ended ?? row.last_run.started, row.tz)}
           </Link>
         ) : (
           t("scheduleOverview.never")
@@ -396,6 +396,29 @@ function NextCell({ row }: { row: OverviewRow }) {
   return <>{`${row.next_at} ${row.tz}`}</>;
 }
 
-function timeOf(ms: number | null): string {
-  return ms ? new Date(ms).toLocaleString() : "";
+/** An instant as `YYYY-MM-DD HH:MM <zone>` in the SCHEDULE's zone — the shape
+ * and zone of its next run beside it, so the two read as one clock. Built from
+ * parts, not a locale's format, so it reads the same on every machine. A zone
+ * the browser cannot resolve reads as UTC, the server's own fallback. */
+export function timeOf(ms: number | null, tz: string): string {
+  if (!ms) return "";
+  let zone = tz || "UTC";
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, ...PARTS });
+  } catch {
+    zone = "UTC";
+    fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, ...PARTS });
+  }
+  const p = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${zone}`;
 }
+
+const PARTS: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+};

@@ -138,6 +138,7 @@ from .schedule_index import (
     is_schedule_file,
     register_schedule_index,
 )
+from .schedule_listing import Source as ScheduleSource
 from .schedule_listing import register_schedule_overview_routes
 from .schedule_reconcile import reconcile_item_schedules
 from .skill_hub_routes import register_skill_hub_routes
@@ -2390,6 +2391,8 @@ def create_app(
         # same index the sweep iterates, asked the same way.
         schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
         schedule_landed=lambda item_id: schedule_index.landed_at(item_id, ITEM_SCHEDULES_PATH),
+        # The sweep's own copy, read when the live workspace is still restoring.
+        schedules_durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         packages=packages or [],
     )
 
@@ -2676,6 +2679,7 @@ def create_app(
         get_user_id=get_user_id,
         start_run=_start_page_schedule,
         deployed_pages=DeployedPages(spec).newest_first,
+        durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
     )
 
     register_private_env_routes(

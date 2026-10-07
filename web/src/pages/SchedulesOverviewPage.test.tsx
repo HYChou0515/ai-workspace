@@ -25,7 +25,7 @@ import { ScheduleActionError } from "../api/schedules";
 import { translate } from "../lib/i18n";
 import { readScheduleOverviewPrefs } from "../lib/scheduleOverviewPrefs";
 import { QueryWrap } from "../test/queryWrapper";
-import { SchedulesOverviewPage, orderRows } from "./SchedulesOverviewPage";
+import { SchedulesOverviewPage, orderRows, timeOf } from "./SchedulesOverviewPage";
 
 const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
   translate("zh-TW", key, vars);
@@ -77,6 +77,16 @@ function Wrap({ children }: { children: React.ReactNode }) {
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
+
+describe("timeOf", () => {
+  it("reads an instant in the zone given, and an unusable zone as UTC like the server", () => {
+    const at = Date.UTC(2026, 9, 7, 11, 2);
+    expect(timeOf(at, "Asia/Taipei")).toBe("2026-10-07 19:02 Asia/Taipei");
+    expect(timeOf(at, "")).toBe("2026-10-07 11:02 UTC");
+    expect(timeOf(at, "Not/AZone")).toBe("2026-10-07 11:02 UTC");
+    expect(timeOf(null, "UTC")).toBe("");
+  });
+});
 
 describe("orderRows", () => {
   const taipei = row({ run: "tw", next_at: "2026-10-08 09:00", tz: "Asia/Taipei", next_ms: 1_000 });
@@ -137,6 +147,28 @@ describe("SchedulesOverviewPage", () => {
 
     const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.error")) });
     expect(link).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa");
+  });
+
+  it("shows the last run in the schedule's own zone, like the next one", async () => {
+    // 2026-10-07 11:02 UTC is 19:02 in Taipei; a row that says "next 09:00 UTC"
+    // beside "last 下午7:02" (the viewer's clock, unlabelled) reads as if the
+    // last run came after the next.
+    const ran = row({
+      tz: "UTC",
+      last_run: { run_id: "r1", status: "done", started: Date.UTC(2026, 9, 7, 11, 1), ended: Date.UTC(2026, 9, 7, 11, 2) },
+    });
+    const taipei = row({
+      item_id: "i-2",
+      trigger_id: "wui:i-2:bbbb",
+      tz: "Asia/Taipei",
+      last_run: { run_id: "r2", status: "done", started: null, ended: Date.UTC(2026, 9, 7, 11, 2) },
+    });
+    render(<SchedulesOverviewPage client={client({ rows: [ran, taipei] })} />, { wrapper: Wrap });
+
+    const first = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+    expect(within(first).getByRole("link", { name: /2026-10-07 11:02 UTC/ })).toBeInTheDocument();
+    const second = screen.getByTestId("schedule-i-2/.workflows/schedules.json#0");
+    expect(within(second).getByRole("link", { name: /2026-10-07 19:02 Asia\/Taipei/ })).toBeInTheDocument();
   });
 
   it("says why a schedule will not run where its next run would be", async () => {

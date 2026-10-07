@@ -11,6 +11,8 @@ The overview reads through the facade, as the per-item route does: a time just
 changed shows on the next fetch, not one mirror interval later. That costs one
 liveness probe per WARM item listed (a globally cold item is read from the
 durable snapshot and woken by nothing), the price of opening the item's panel.
+A file the live workspace cannot see is looked for in the durable copy before
+it is skipped (`read_schedules_file`).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
@@ -61,8 +63,45 @@ logger = logging.getLogger(__name__)
 _CHANGED = "This schedule has changed since it was listed — reload and try again."
 
 
+ReadFile = Callable[[str, str], Awaitable[bytes]]
+ListFiles = Callable[..., Awaitable[list[str]]]
+
+
+class Source(NamedTuple):
+    """Where a schedules file was read from — and so where everything graded
+    against it is read from too, one copy for the whole verdict."""
+
+    read: ReadFile
+    ls: ListFiles
+
+
+async def read_schedules_file(
+    files: WorkspaceFiles, durable: Source, item_id: str, path: str
+) -> tuple[bytes, Source] | None:
+    """The schedules file at ``path`` and the copy it came from, or None when
+    neither copy has it.
+
+    The live workspace first, so a time just changed shows at once. When the
+    live workspace says "not there", the DURABLE copy — the one the sweep reads
+    — before believing it: a sandbox that exists but has not finished restoring
+    answers "not there" for every file (`WorkspaceFiles._warm` asks whether the
+    sandbox exists, never whether it is ready), and starting a run is what puts
+    an item there. Without this, the refetch after Run now landed in that window
+    and the overview said nothing was scheduled.
+    """
+    live = Source(read=files.read, ls=files.ls)
+    try:
+        return await files.read(item_id, path), live
+    except FileNotFound:
+        pass
+    try:
+        return await durable.read(item_id, path), durable
+    except (FileNotFound, FileNotFoundError):
+        return None
+
+
 async def grade_file(
-    files: WorkspaceFiles,
+    source: Source,
     *,
     spec: SpecStar,
     policy: SchedulePolicy,
@@ -76,14 +115,15 @@ async def grade_file(
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of the schedules file at ``path``, as the sweep will treat it,
     plus the file's own problems. ``raw`` is the file already decoded the
-    sweep's way (`utf-8`, `replace`); ``indexed`` / ``landed`` are the index's
-    answers, which the caller holds."""
-    offered = await offered_workflow_ids(files.ls, item_id, slug=slug, profile=profile)
+    sweep's way (`utf-8`, `replace`); ``source`` is the copy it was read from,
+    which the workflows it names are read from too; ``indexed`` / ``landed``
+    are the index's answers, which the caller holds."""
+    offered = await offered_workflow_ids(source.ls, item_id, slug=slug, profile=profile)
     # Which of the workflows the rows name will not run because their own file
     # does not parse — asked per distinct `run`, the sweep's own check.
     broken: dict[str, str] = {}
     for run in {row.run for row in usable_rows(raw)[0]} & set(offered):
-        problem = await unparsable_workflow(files.read, item_id, run)
+        problem = await unparsable_workflow(source.read, item_id, run)
         if problem is not None:
             broken[run] = problem
     # One hop off the loop: the ledger reads inside are blocking specstar I/O.
@@ -238,6 +278,7 @@ def register_schedule_overview_routes(
     policy: SchedulePolicy,
     get_user_id: Callable[[], str],
     start_run: Callable[..., Awaitable[str | None]],
+    durable: Source,
     deployed_pages: Callable[[], list[DeployedWui]] = list,
 ) -> None:
     """``start_run`` is the sweep's own start (`start_page_schedule`, bound in
@@ -404,12 +445,12 @@ def register_schedule_overview_routes(
                 continue
             slug, title, owner, can_edit, can_run, profile = decided
             for path in paths:
-                try:
-                    data = await files.read(item_id, path)
-                except FileNotFound:
+                found = await read_schedules_file(files, durable, item_id, path)
+                if found is None:
                     continue
+                data, source = found
                 views, problems = await grade_file(
-                    files,
+                    source,
                     spec=spec,
                     policy=policy,
                     item_id=item_id,

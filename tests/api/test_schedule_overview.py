@@ -655,6 +655,52 @@ def test_the_item_panel_says_what_the_viewer_may_do():
     assert (reader["can_edit"], reader["can_run"]) == (False, False)
 
 
+def _restoring(monkeypatch) -> None:
+    """The live workspace mid-restore: every read answers "not there" and the
+    listing is empty, while the durable copy is whole — what `_warm` does today
+    for a sandbox that exists but has not finished restoring (it never asks
+    `is_ready`). Starting a run is what puts an item in this window, so the
+    refetch right after Run now landed in it and the page said "nothing is
+    scheduled"."""
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.protocol import FileNotFound
+
+    async def _missing(self, workspace_id: str, path: str) -> bytes:
+        raise FileNotFound(path)
+
+    async def _empty(self, workspace_id: str, prefix: str = "", **kw):
+        return []
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _missing)
+    monkeypatch.setattr(WorkspaceFiles, "ls", _empty)
+
+
+def test_a_workspace_still_restoring_is_read_from_the_durable_copy(monkeypatch):
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    _restoring(monkeypatch)
+
+    rows = _rows(client)
+
+    assert sorted(r["path"] for r in rows) == sorted([ITEM_SCHEDULES, PAGE_SCHEDULES])
+    # Graded against the same copy: its workflow is known, so the rows run.
+    assert all(r["known"] and r["runnable"] for r in rows)
+
+
+def test_the_item_panel_reads_a_restoring_workspace_from_the_durable_copy_too(monkeypatch):
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    _restoring(monkeypatch)
+
+    body = client.get(_wp(iid, "/schedules")).json()
+
+    assert [(r["run"], r["known"]) for r in body["rows"]] == [("w0", True)]
+
+
 def test_a_file_the_index_still_names_but_that_is_gone_is_skipped():
     """The index may name a deleted file (it is stale in that direction only);
     the listing skips it rather than failing the page."""

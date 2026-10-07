@@ -163,3 +163,36 @@ Written after the phases, each line checked against the code it names.
 - **Copy that had to change** beyond §5: `sample-skills/author-workflow/SKILL.md`
   told the agent "a row whose time has already passed today runs on the next
   sweep" — the opposite of decision 12.
+
+## P7 live check (2026-10-07, real app on :8237, real Chromium)
+
+Seeded through the API: a workflow, an item schedule "daily 09:00 UTC" saved at
+11:00 UTC, and a Deployed page's schedule "every minute".
+
+- The daily row listed as next **2026-10-08 09:00**, not due — and did not fire;
+  the minute row fired at **11:01** (its first window after landing), its run
+  `done`, its payload carried, in its own chat (`wui:…`).
+- `/schedules` at 1280px and 390px: no sideways page scroll at 390
+  (`scrollWidth == innerWidth == 390`); the table scrolls in its own box.
+- Run now → 「已開始執行」; Edit time to 23:30 → the row reads 每天 23:30, next
+  today 23:30, last 「還沒跑過」 (a new identity, decision 16), nothing ran;
+  Remove on the page row → gone. The last-run link opened
+  `/a/playground/<item>?chat=wui:…` with that schedule's chat selected.
+
+Two defects only the live check could show, both fixed with a test that
+reddened first:
+
+- **Last run in the viewer's clock, next run in the schedule's.** A row read
+  "next 09:00 UTC · last 下午7:02" — the last run looked later than the next.
+  Both are now `YYYY-MM-DD HH:MM <zone>` in the schedule's zone (`timeOf`).
+- **The page emptied right after Run now.** Starting a run wakes or rebuilds
+  the item's sandbox, and `WorkspaceFiles._warm` routes reads to a sandbox that
+  exists but has not finished restoring (it never asks `is_ready` — memory
+  `project_warm_read_ignores_ready`, third sighting). The refetch landed in that
+  window, every read said "not there", and the page said nothing was scheduled.
+  Reads now fall back to the durable copy (`read_schedules_file`), and the
+  workflows a file names are graded against the same copy. The root cause is
+  untouched — it is on every file path and wants its own PR. **Known residue:**
+  an *action* pressed inside that window gets "this schedule has changed —
+  reload" (409): actions re-read the live file before writing it back, and a
+  write must not be built from the durable copy while a restore is landing.
