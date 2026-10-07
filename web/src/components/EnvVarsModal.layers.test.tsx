@@ -284,6 +284,8 @@ describe("Private", () => {
     await toolsLoaded();
 
     fireEvent.click(screen.getByTestId("env-mine-logout"));
+    // Destructive, so it asks first (A22).
+    fireEvent.click(await screen.findByTestId("dialog-action-clear"));
 
     await waitFor(() => expect(privateClient.clear).toHaveBeenCalledWith("rca", "i1"));
   });

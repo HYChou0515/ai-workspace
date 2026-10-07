@@ -82,12 +82,38 @@ describe("MyEnvPage", () => {
     expect(client.put).not.toHaveBeenCalled();
   });
 
-  it("removes one value and keeps the rest", async () => {
+  it("removes one value and keeps the rest, once asked", async () => {
     const client = open({ values: { A: "1", B: "2" } });
 
     fireEvent.click(within(await screen.findByTestId("my-env-row-A")).getByTestId("my-env-remove"));
+    fireEvent.click(await screen.findByTestId("dialog-action-remove"));
 
     await waitFor(() => expect(client.put).toHaveBeenCalledWith({ B: "2" }));
+  });
+
+  it("marks removing as destructive and asks first, naming what it does", async () => {
+    // A22 — NN/g "Confirmation Dialogs": confirm what cannot be undone, the
+    // choice labelled with its outcome; GOV.UK "Warning button".
+    const client = open({ values: { A: "1" } });
+    const remove = within(await screen.findByTestId("my-env-row-A")).getByTestId("my-env-remove");
+    expect(remove).toHaveAttribute("data-variant", "danger");
+
+    fireEvent.click(remove);
+    const confirm = await screen.findByTestId("dialog-action-remove");
+    expect(confirm).toHaveTextContent("移除");
+    expect(confirm).toHaveAttribute("data-variant", "danger");
+    fireEvent.click(screen.getByTestId("dialog-action-cancel"));
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(client.put).not.toHaveBeenCalled();
+  });
+
+  it("does not explain itself in settings its reader may not be able to change", async () => {
+    // A22: whoever reads this page may not be able to set a variable's policy.
+    open();
+    await screen.findByTestId("my-env-empty");
+    expect(document.body).not.toHaveTextContent("Private first");
+    expect(document.body).not.toHaveTextContent("Private only");
   });
 
   it("builds every save on what the server holds now, not on what this page loaded", async () => {
@@ -120,7 +146,9 @@ describe("MyEnvPage", () => {
     await screen.findByTestId("my-env-row-A");
 
     fireEvent.click(within(screen.getByTestId("my-env-row-A")).getByTestId("my-env-remove"));
+    fireEvent.click(await screen.findByTestId("dialog-action-remove"));
     fireEvent.click(within(screen.getByTestId("my-env-row-B")).getByTestId("my-env-remove"));
+    fireEvent.click(await screen.findByTestId("dialog-action-remove"));
 
     await waitFor(() => expect(client.put).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(stored).toEqual({}));
@@ -146,6 +174,7 @@ describe("MyEnvPage", () => {
     client.get.mockRejectedValue(new Error("down"));
 
     fireEvent.click(within(screen.getByTestId("my-env-row-A")).getByTestId("my-env-remove"));
+    fireEvent.click(await screen.findByTestId("dialog-action-remove"));
 
     await waitFor(() => expect(client.get).toHaveBeenCalledTimes(3), { timeout: 3000 });
     await new Promise((r) => setTimeout(r, 20));

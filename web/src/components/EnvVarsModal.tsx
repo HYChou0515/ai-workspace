@@ -58,10 +58,14 @@ import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } f
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
+import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
+import { ShareTabs } from "./ShareTabs";
 
 type Tab = "shared" | "mine" | "personal";
 const TABS: Tab[] = ["shared", "mine", "personal"];
+/** The tab each layer is edited on: "in use" names the tab, not the layer. */
+const TAB_OF = { shared: "shared", private: "mine", personal: "personal" } as const;
 
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) };
 const MUTED = { fontSize: pxToRem(11), color: "var(--text-paper-d)" } as const;
@@ -131,9 +135,25 @@ export function EnvVarsModal({
     enabled: hasItem,
   });
   const personal = personalQ.data?.values ?? {};
-  // Only the names typed on the cross-workspace tab: the rest of the row is
-  // the server's, so a save writes these and nothing it did not touch.
-  const [personalEdits, setPersonalEdits] = useState<Record<string, string>>({});
+  // The cross-workspace tab, like Shared: its `.env` box is the one copy, and
+  // every field edits it. A save writes only what differs from `personalBase`
+  // — what the box was seeded from — so a value saved elsewhere meanwhile
+  // survives (round 1, F2).
+  const [personalText, setPersonalText] = useState<string | null>(null);
+  const [personalBase, setPersonalBase] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (personalQ.data && personalText === null) {
+      setPersonalText(toEnvText(personalQ.data.values));
+      setPersonalBase({ ...personalQ.data.values });
+    }
+  }, [personalQ.data, personalText]);
+  const personalValues = personalText === null ? {} : parseEnvText(personalText);
+  const personalChange = () => {
+    const change: Record<string, string> = {};
+    for (const [n, v] of Object.entries(personalValues)) if (personalBase[n] !== v) change[n] = v;
+    for (const n of Object.keys(personalBase)) if (!(n in personalValues)) change[n] = "";
+    return change;
+  };
 
   // ── the SHARED layer: the box's text is the one copy of the values ────────
   const [text, setText] = useState(() => toEnvText(envVars));
@@ -151,21 +171,25 @@ export function EnvVarsModal({
     });
 
   // ── the PRIVATE layer ─────────────────────────────────────────────────────
-  const [mine, setMine] = useState<Record<string, string> | null>(null);
+  // Like Shared, the `.env` box's text is the one copy (A22). Seeded once from
+  // the server; afterwards it is what the person is editing, and a background
+  // refetch must not overwrite it.
+  const [mineText, setMineText] = useState<string | null>(null);
   useEffect(() => {
-    // Seeded once from the server; afterwards the form is what the person is
-    // editing, and a background refetch must not overwrite it.
-    if (mineQ.data && mine === null) setMine({ ...mineQ.data.values });
-  }, [mineQ.data, mine]);
-  const mineValues = mine ?? {};
+    if (mineQ.data && mineText === null) setMineText(toEnvText(mineQ.data.values));
+  }, [mineQ.data, mineText]);
+  const mineValues = mineText === null ? {} : parseEnvText(mineText);
+  const setMineVars = (env: Record<string, string>) =>
+    setMineText((prev) => Object.entries(env).reduce((acc, [n, v]) => setEnvValue(acc, n, v), prev ?? ""));
   // What the deploy filled in at their last request — shown, not editable, and
   // it wins a name (the server's `unattended_layer` / `private_layer`).
   const auto = mineQ.data?.auto ?? {};
 
   const [creds, setCreds] = useState<Record<string, string>>({});
   const sharedDirty = text !== toEnvText(envVars) || !sameShape(policy, envPolicy);
-  const mineDirty = mine !== null && mineQ.data !== undefined && !sameShape(mine, mineQ.data.values);
-  const personalDirty = Object.entries(personalEdits).some(([n, v]) => v !== (personal[n] ?? ""));
+  const mineDirty =
+    mineText !== null && mineQ.data !== undefined && !sameShape(mineValues, mineQ.data.values);
+  const personalDirty = personalText !== null && Object.keys(personalChange()).length > 0;
   const dirty =
     sharedDirty || mineDirty || personalDirty || Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
@@ -177,7 +201,7 @@ export function EnvVarsModal({
   // variables", then jumps under its tool, and a section unfolded for a missing
   // value folds again the moment the person's own value loads.
   const toolsSettled = !hasItem || toolsQ.isSuccess || toolsQ.isError;
-  const mineSettled = !hasItem || mine !== null || mineQ.isError;
+  const mineSettled = !hasItem || mineText !== null || mineQ.isError;
 
   /** After one tab saves: close only if no OTHER tab has anything unsaved;
    * otherwise stay, on the first that does (#779 — a Save is a deliberate exit,
@@ -199,7 +223,7 @@ export function EnvVarsModal({
       return kept;
     },
     onSuccess: async (kept) => {
-      setMine(kept);
+      setMineText(toEnvText(kept));
       queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: kept, auto });
       afterSave("mine");
     },
@@ -233,25 +257,44 @@ export function EnvVarsModal({
     mutationFn: writePersonal,
     onSuccess: (saved, env) => {
       queryClient.setQueryData(qk.personalEnv(), saved);
-      setPersonalEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([n]) => !(n in env))));
+      // Stored: shown, and no longer an unsaved edit — whatever was typed for
+      // those names before.
+      setPersonalText((prev) => Object.entries(env).reduce((acc, [n, v]) => setEnvValue(acc, n, v), prev ?? ""));
+      setPersonalBase((prev) => ({ ...prev, ...env }));
     },
   });
   const savePersonal = useMutation({
     scope: PERSONAL_ENV_WRITES,
-    mutationFn: () => writePersonal(personalEdits),
+    mutationFn: () => writePersonal(personalChange()),
     onSuccess: (saved) => {
       queryClient.setQueryData(qk.personalEnv(), saved);
-      setPersonalEdits({});
+      setPersonalText(toEnvText(saved.values));
+      setPersonalBase({ ...saved.values });
       afterSave("personal");
     },
   });
   const logout = useMutation({
     mutationFn: () => privateClient.clear(slug!, itemId!),
     onSuccess: async () => {
-      setMine({});
+      setMineText("");
       await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
     },
   });
+  // Clearing cannot be undone (a signed-in token must be signed in for
+  // again), so it is marked destructive and asks first, the choice named by
+  // its outcome — NN/g "Confirmation Dialogs"; GOV.UK "Warning button" (A22).
+  const dialog = useDialog();
+  const askToClear = async () => {
+    const choice = await dialog.confirm({
+      title: t("env.clearTitle"),
+      body: t("env.clearBody"),
+      actions: [
+        { id: "cancel", label: t("env.cancel") },
+        { id: "clear", label: t("env.clearConfirm"), variant: "danger" },
+      ],
+    });
+    if (choice === "clear") logout.mutate();
+  };
   const saveShared = async () => {
     if (!onSave) return;
     // `false` = the write failed (the app's write-failure notice says so):
@@ -280,23 +323,16 @@ export function EnvVarsModal({
       <strong style={{ fontSize: pxToRem(14) }}>{t("env.title")}</strong>
 
       {hasItem && (
-        <div role="tablist" aria-label={t("env.title")} style={{ display: "flex", gap: 6 }}>
-          {TABS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              className="btn"
-              data-size="sm"
-              data-variant={tab === id ? "primary" : "secondary"}
-              data-testid={`env-tab-${id}`}
-              aria-selected={tab === id}
-              onClick={() => setTab(id)}
-            >
-              {t(`env.tab.${id}`)}
-            </button>
-          ))}
-        </div>
+        // The share dialog's strip: a filled button is how this app draws its
+        // primary ACTION, so a selected tab drawn that way read as "press me"
+        // (A22). One component, so the two dialogs' tabs never drift apart.
+        <ShareTabs
+          tabs={TABS.map((id) => ({ id, label: t(`env.tab.${id}`), count: 0 }))}
+          value={tab}
+          onChange={(id) => setTab(id as Tab)}
+          idPrefix="env-tab"
+          ariaLabel={t("env.title")}
+        />
       )}
 
       {hasItem && (
@@ -341,19 +377,16 @@ export function EnvVarsModal({
           />
         ) : tab === "personal" ? (
           <PersonalTab
-            // This item's own values too: one, once read, wins the name (D4),
-            // so "this item uses it" is not known before (review A20, D3).
-            settled={toolsSettled && mineSettled && (personalQ.isSuccess || personalQ.isError)}
+            settled={toolsSettled && (personalQ.isSuccess || personalQ.isError)}
             tools={tools}
             query={query}
             policy={policy}
-            own={ownLayer(mineValues, auto)}
-            // A failed read is not "no own value" (review A20 round 2, F2).
-            ownKnown={!mineQ.isError}
-            values={{ ...personal, ...personalEdits }}
+            values={personalValues}
             failed={personalQ.isError}
             saving={savePersonal.isPending}
-            onEdit={(name, value) => setPersonalEdits((prev) => ({ ...prev, [name]: value }))}
+            onEdit={(name, value) => setPersonalText((prev) => setEnvValue(prev ?? "", name, value))}
+            text={personalText ?? ""}
+            setText={setPersonalText}
             login={
               <Logins
                 offered={offered}
@@ -377,7 +410,9 @@ export function EnvVarsModal({
             auto={auto}
             personal={personal}
             failed={mineQ.isError}
-            setMine={(name, value) => setMine((prev) => ({ ...(prev ?? {}), [name]: value }))}
+            setMine={(name, value) => setMineVars({ [name]: value })}
+            text={mineText ?? ""}
+            setText={setMineText}
             login={
               <Logins
                 offered={offered}
@@ -386,7 +421,7 @@ export function EnvVarsModal({
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
                 // This tab is my values for THIS item, so that is where its
                 // sign-in lands — saved with this tab (A20).
-                onFilled={(env) => setMine((prev) => ({ ...(prev ?? {}), ...env }))}
+                onFilled={(env) => setMineVars(env)}
               />
             }
           />
@@ -456,11 +491,11 @@ export function EnvVarsModal({
             <button
               type="button"
               className="btn"
-              data-variant="secondary"
+              data-variant="danger"
               data-size="sm"
               data-testid="env-mine-logout"
               style={{ marginRight: "auto" }}
-              onClick={() => logout.mutate()}
+              onClick={() => void askToClear()}
             >
               {t("env.logout")}
             </button>
@@ -481,7 +516,7 @@ export function EnvVarsModal({
               data-testid="env-mine-save"
               // Not until the person's values have loaded: Save replaces the
               // whole set, and saving over a failed read erased it (F5).
-              disabled={mine === null || saveMine.isPending}
+              disabled={mineText === null || saveMine.isPending}
               onClick={() => saveMine.mutate()}
             >
               {t("env.save")}
@@ -688,26 +723,6 @@ function SharedTab({
     (n) => !declared.has(n),
   );
   const [newName, setNewName] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const importFile = async (file: File) => {
-    // MERGES into what is in the box — the thing the person is looking at.
-    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))));
-  };
-  const exportFile = () => {
-    // What is in the box, unsaved edits included; to the browser, never into
-    // the workspace (a file there is one the agent can read).
-    const url = URL.createObjectURL(
-      new Blob([toEnvText(parseEnvText(text))], { type: "text/plain" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = ".env";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <>
@@ -781,65 +796,105 @@ function SharedTab({
       />
       )}
       {login}
-      <details data-testid="env-text-details">
-        <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>{t("env.editAsText")}</summary>
-        <textarea
-          data-testid="env-text"
-          aria-label={t("env.title")}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          readOnly={!canEdit}
-          placeholder={"FOO=BAR\nBAZ=HOO"}
-          spellCheck={false}
-          rows={8}
-          className="input input--block"
-          style={{
-            ...MONO,
-            marginTop: 6,
-            lineHeight: 1.6,
-            whiteSpace: "pre",
-            overflowWrap: "normal",
-            overflowX: "auto",
+      <EnvTextBox prefix="env" text={text} setText={setText} readOnly={!canEdit} />
+    </>
+  );
+}
+
+// ── the `.env` box ────────────────────────────────────────────────────────
+
+/** Each tab's values as `.env` text — the tab's ONE copy, which its fields
+ * edit in place (`setEnvValue`, so a keystroke in a field never costs the
+ * comments written in the box). Folded: it is for what people do with these,
+ * paste a block from elsewhere. One component for every tab (A22). */
+function EnvTextBox({
+  prefix,
+  text,
+  setText,
+  readOnly,
+}: {
+  prefix: string;
+  text: string;
+  setText: (next: string) => void;
+  readOnly: boolean;
+}) {
+  const t = useT();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const importFile = async (file: File) => {
+    // MERGES into what is in the box — the thing the person is looking at.
+    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))));
+  };
+  const exportFile = () => {
+    // What is in the box, unsaved edits included; to the browser, never into
+    // the workspace (a file there is one the agent can read).
+    const url = URL.createObjectURL(new Blob([toEnvText(parseEnvText(text))], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ".env";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <details data-testid={`${prefix}-text-details`}>
+      <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>{t("env.editAsText")}</summary>
+      <textarea
+        data-testid={`${prefix}-text`}
+        aria-label={t("env.editAsText")}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        readOnly={readOnly}
+        placeholder={"FOO=BAR\nBAZ=HOO"}
+        spellCheck={false}
+        rows={8}
+        className="input input--block"
+        style={{
+          ...MONO,
+          marginTop: 6,
+          lineHeight: 1.6,
+          whiteSpace: "pre",
+          overflowWrap: "normal",
+          overflowX: "auto",
+        }}
+      />
+      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".env,text/plain"
+          data-testid={`${prefix}-import`}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void importFile(f);
+            e.target.value = ""; // so re-picking the same file fires again
           }}
         />
-        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".env,text/plain"
-            data-testid="env-import"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void importFile(f);
-              e.target.value = ""; // so re-picking the same file fires again
-            }}
-          />
-          {canEdit && (
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              data-testid="env-import-button"
-              onClick={() => fileRef.current?.click()}
-            >
-              {t("env.import")}
-            </button>
-          )}
+        {!readOnly && (
           <button
             type="button"
             className="btn"
             data-variant="secondary"
             data-size="sm"
-            data-testid="env-export"
-            onClick={exportFile}
+            data-testid={`${prefix}-import-button`}
+            onClick={() => fileRef.current?.click()}
           >
-            {t("env.export")}
+            {t("env.import")}
           </button>
-        </div>
-      </details>
-    </>
+        )}
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid={`${prefix}-export`}
+          onClick={exportFile}
+        >
+          {t("env.export")}
+        </button>
+      </div>
+    </details>
   );
 }
 
@@ -932,6 +987,8 @@ function MineTab({
   personal,
   failed,
   setMine,
+  text,
+  setText,
   login,
 }: {
   settled: boolean;
@@ -944,6 +1001,8 @@ function MineTab({
   personal: Record<string, string>;
   failed: boolean;
   setMine: (name: string, value: string) => void;
+  text: string;
+  setText: (next: string) => void;
   login: ReactNode;
 }) {
   const t = useT();
@@ -1014,6 +1073,7 @@ function MineTab({
       />
       )}
       {login}
+      <EnvTextBox prefix="env-mine" text={text} setText={setText} readOnly={false} />
     </>
   );
 }
@@ -1088,11 +1148,24 @@ function MineRow({
           </button>
         </div>
       )}
-      <span style={{ ...MUTED, display: "flex", gap: 8 }}>
-        {!pinned && p !== "shared_first" && <span>{t(`env.hint.${p}`)}</span>}
-        <span style={{ marginLeft: "auto" }}>
-          {inUse === "mine" || inUse === "personal" ? "✓ " : ""}
-          {t(`env.inUse.${layer}`)}
+      {/* Each phrase whole: at phone width the two used to break mid-name side
+          by side ("Private(跨 / workspace)"); now the second wraps under. */}
+      <span style={{ ...MUTED, display: "flex", flexWrap: "wrap", columnGap: 8 }}>
+        {/* What typing here would take over from — named by its tab, so the
+            words are the ones on the tabs above (A22). Nothing when this tab
+            already holds the value, or when nothing is in use to take over. */}
+        {!pinned && !automatic && p !== "shared_first" && (layer === "shared" || layer === "personal") && (
+          <span style={{ whiteSpace: "nowrap" }}>{t("env.override", { tab: t(`env.tab.${TAB_OF[layer]}`) })}</span>
+        )}
+        <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
+          {layer === "none" ? (
+            t("env.inUse.none")
+          ) : (
+            <>
+              {inUse === "mine" || inUse === "personal" ? "✓ " : ""}
+              {t("env.inUse", { tab: t(`env.tab.${TAB_OF[layer]}`) })}
+            </>
+          )}
         </span>
       </span>
     </div>
@@ -1106,28 +1179,26 @@ function PersonalTab({
   tools,
   query,
   policy,
-  own,
-  ownKnown,
   values,
   failed,
   saving,
   onEdit,
+  text,
+  setText,
   login,
 }: {
   settled: boolean;
   tools: Parameters<typeof deriveEnvNeeds>[0];
   query: string;
   policy: Record<string, string>;
-  /** My values for THIS item: where one is set, it wins the name (D4). */
-  own: Record<string, string>;
-  /** False when they could not be read: which value wins is then unknown. */
-  ownKnown: boolean;
-  /** My values for every item, with what was typed here on top. */
+  /** My values for every item, as the box holds them now. */
   values: Record<string, string>;
   failed: boolean;
   /** A save is on its way: what is typed now would be dropped as it lands. */
   saving: boolean;
   onEdit: (name: string, value: string) => void;
+  text: string;
+  setText: (next: string) => void;
   login: ReactNode;
 }) {
   const t = useT();
@@ -1148,16 +1219,19 @@ function PersonalTab({
   return (
     <>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-        {t("env.personalDesc")}{" "}
-        {/* Styled as the docs' inline links (`.md-body a`): the base `a` rule
-            inherits the text colour, which left this reading as plain text. */}
+        {t("env.personalDesc")}
+        {/* The way to the page that holds them is the sentence's own link, so
+            it reads as one thing (A22). Styled as the docs' inline links
+            (`.md-body a`): the base `a` rule inherits the text colour. */}
+        （
         <a
           href="/my-env"
           data-testid="env-personal-page"
-          style={{ color: "var(--accent-h)", textDecoration: "underline" }}
+          style={{ color: "var(--accent-h)", textDecoration: "underline", whiteSpace: "nowrap" }}
         >
           {t("env.personalPage")}
         </a>
+        ）
       </p>
       {failed && (
         <p role="alert" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--err)" }}>
@@ -1179,9 +1253,6 @@ function PersonalTab({
             key={name}
             name={name}
             description={needed.get(name) ?? ""}
-            used={policyOf(name, policy) !== "shared_first"}
-            shadowed={Object.hasOwn(own, name)}
-            ownKnown={ownKnown}
             value={values[name] ?? ""}
             disabled={saving}
             onEdit={onEdit}
@@ -1189,6 +1260,7 @@ function PersonalTab({
         ))
       )}
       {login}
+      <EnvTextBox prefix="env-personal" text={text} setText={setText} readOnly={saving} />
     </>
   );
 }
@@ -1196,18 +1268,12 @@ function PersonalTab({
 function PersonalRow({
   name,
   description,
-  used,
-  shadowed,
-  ownKnown,
   value,
   disabled,
   onEdit,
 }: {
   name: string;
   description: string;
-  used: boolean;
-  shadowed: boolean;
-  ownKnown: boolean;
   value: string;
   disabled: boolean;
   onEdit: (name: string, value: string) => void;
@@ -1215,7 +1281,7 @@ function PersonalRow({
   const t = useT();
   const [revealed, setRevealed] = useState(false);
   return (
-    <div data-testid={`env-personal-row-${name}`} data-used={used} style={{ display: "grid", gap: 3 }}>
+    <div data-testid={`env-personal-row-${name}`} style={{ display: "grid", gap: 3 }}>
       <span style={MONO}>{name}</span>
       {description && <span style={MUTED}>{description}</span>}
       <div style={{ display: "flex", gap: 6 }}>
@@ -1241,15 +1307,6 @@ function PersonalRow({
           {t(revealed ? "env.hide" : "env.reveal")}
         </button>
       </div>
-      <span style={MUTED}>
-        {!used
-          ? t("env.personal.unused")
-          : !ownKnown
-            ? t("env.personal.unknown")
-            : shadowed
-              ? t("env.personal.shadowed")
-              : t("env.personal.used")}
-      </span>
     </div>
   );
 }

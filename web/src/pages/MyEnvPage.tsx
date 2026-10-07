@@ -20,6 +20,7 @@ import { useState } from "react";
 
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { qk } from "../api/queryKeys";
+import { useDialog } from "../components/Dialog";
 import { Logins } from "../components/EnvVarsModal";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -67,6 +68,23 @@ export function MyEnvPage({
     onSuccess: (saved) => queryClient.setQueryData(qk.personalEnv(), saved),
   });
 
+  // Removing cannot be undone (a signed-in token must be signed in for again),
+  // so it is marked destructive and asks first, the choice named by its
+  // outcome — NN/g "Confirmation Dialogs"; GOV.UK "Warning button" (A22).
+  const dialog = useDialog();
+  const askToRemove = async (n: string) => {
+    const choice = await dialog.confirm({
+      title: t("myEnv.removeTitle", { name: n }),
+      body: t("myEnv.removeBody"),
+      actions: [
+        { id: "cancel", label: t("env.cancel") },
+        { id: "remove", label: t("myEnv.remove"), variant: "danger" },
+      ],
+    });
+    if (choice === "remove")
+      save.mutate((current) => Object.fromEntries(Object.entries(current).filter(([k]) => k !== n)));
+  };
+
   const when = (n: string) => {
     const at = updated[n];
     if (!at) return "";
@@ -103,9 +121,7 @@ export function MyEnvPage({
               name={n}
               value={values[n]}
               when={when(n)}
-              onRemove={() =>
-                save.mutate((current) => Object.fromEntries(Object.entries(current).filter(([k]) => k !== n)))
-              }
+              onRemove={() => void askToRemove(n)}
             />
           ))
         )}
@@ -210,7 +226,7 @@ function Row({
         <button
           type="button"
           className="btn"
-          data-variant="secondary"
+          data-variant="danger"
           data-size="sm"
           data-testid="my-env-remove"
           onClick={onRemove}

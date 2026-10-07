@@ -126,7 +126,7 @@ describe("my environment variables in an item's Env panel", () => {
     await readyThenUnfold();
 
     expect(await row()).toHaveAttribute("data-in-use", "personal");
-    expect(await row()).toHaveTextContent("所有 item");
+    expect(await row()).toHaveTextContent("使用中：Private(跨workspace)");
   });
 
   it("puts this item's own value above it", async () => {
@@ -134,7 +134,7 @@ describe("my environment variables in an item's Env panel", () => {
     await readyThenUnfold();
 
     expect(await row()).toHaveAttribute("data-in-use", "mine");
-    expect(await row()).toHaveTextContent("這個 item");
+    expect(await row()).toHaveTextContent("使用中：Private");
   });
 
   it("does not use it for an item that uses the shared value", async () => {
@@ -172,23 +172,6 @@ describe("the Private(跨workspace) tab", () => {
     expect(tabs.map((x) => x.textContent)).toEqual(["Shared", "Private", "Private(跨workspace)"]);
     // Private stays the tab the panel opens on.
     expect(screen.getByTestId("env-tab-mine")).toHaveAttribute("aria-selected", "true");
-  });
-
-  it("lists what this item's tools need, and says whether this item uses it", async () => {
-    open({ envPolicy: { ERP_TOKEN: "private_first" }, personal: { ERP_TOKEN: "t" } });
-    await personalTab();
-
-    const used = await screen.findByTestId("env-personal-row-ERP_TOKEN");
-    expect(used).toHaveAttribute("data-used", "true");
-    cleanup();
-
-    open({ envPolicy: {}, personal: { ERP_TOKEN: "t" } });
-    await personalTab();
-    const unused = await screen.findByTestId("env-personal-row-ERP_TOKEN");
-    // D2: a Shared name never reads it — said on the row, so a sign-in here
-    // that this item then ignores is not a mystery.
-    expect(unused).toHaveAttribute("data-used", "false");
-    expect(unused).toHaveTextContent("Shared");
   });
 
   it("stores a sign-in at once, keeping my other values, and leaves this item's alone", async () => {
@@ -343,16 +326,6 @@ describe("the Private(跨workspace) tab", () => {
     expect(screen.queryByText("沒有符合的工具或變數")).toBeNull();
   });
 
-  it("does not claim this item uses the value before it knows this item's own", async () => {
-    // Review A20, D3: with the Private read still out, the row said "uses this
-    // value" — and an own value, once read, wins (D4).
-    open({ personal: { ERP_TOKEN: "t" }, mineHangs: true });
-    await personalTab();
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(screen.queryByText("這個 item 會用這個值")).toBeNull();
-  });
-
   it("does not take typing while a save is on its way", async () => {
     // Review A20, D4: what was typed during the save was dropped as it landed.
     const { personalClient } = open({ personal: { ERP_TOKEN: "old" } });
@@ -384,17 +357,6 @@ describe("the Private(跨workspace) tab", () => {
     // Said once, where it happened — not again in the app-wide notice
     // (review A20 round 2, F1; `meta.silentError`, api/queryClient.ts).
     expect(currentWriteFailure()).toBeNull();
-  });
-
-  it("does not claim this item uses the value when it could not read this item's own", async () => {
-    // Review A20 round 2, F2: a failed Private read counted as "no own value".
-    open({ personal: { ERP_TOKEN: "t" }, mineFails: true });
-    await personalTab();
-
-    expect(await screen.findByTestId("env-personal-row-ERP_TOKEN", {}, { timeout: 3000 })).toHaveTextContent(
-      "不確定",
-    );
-    expect(screen.queryByText("這個 item 會用這個值")).toBeNull();
   });
 
   it("writes nothing when Save is pressed with nothing typed", async () => {

@@ -15,13 +15,19 @@ export function ShareTabs({
   tabs,
   value,
   onChange,
+  idPrefix = "share-tab",
+  ariaLabel = "Share with",
 }: {
   tabs: ShareTab[];
   value: string;
   onChange: (id: string) => void;
+  /** The tab ids and test ids: `{idPrefix}-{tab id}`. The Env panel uses the
+   * same strip, so the two dialogs' tabs look alike (plan-personal-env A22). */
+  idPrefix?: string;
+  ariaLabel?: string;
 }) {
   return (
-    <div role="tablist" aria-label="Share with" style={strip}>
+    <div role="tablist" aria-label={ariaLabel} style={strip}>
       {tabs.map((t) => {
         const on = t.id === value;
         return (
@@ -29,10 +35,10 @@ export function ShareTabs({
             key={t.id}
             type="button"
             role="tab"
-            id={`share-tab-${t.id}`}
+            id={`${idPrefix}-${t.id}`}
             aria-selected={on}
-            aria-controls={`share-panel-${t.id}`}
-            data-testid={`share-tab-${t.id}`}
+            aria-controls={idPrefix === "share-tab" ? `share-panel-${t.id}` : undefined}
+            data-testid={`${idPrefix}-${t.id}`}
             onClick={() => onChange(t.id)}
             style={{
               ...tab,

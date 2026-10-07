@@ -23,7 +23,7 @@
 |---|---|---|---|
 | **共用值** | item 上的一份，看得到 item 的人都讀得到 | `env_vars`（shared layer） | Env 面板「Shared」分頁（A20） |
 | **個人值** | 只屬於某個人的值，是下面三種合起來（= private layer） | | |
-| ├ **項目個人值** | 這個人在這個 item 自己填的 | `PrivateEnv` | Env 面板「Private」分頁（A20） |
+| ├ **項目個人值** | 這個人在這個 item 自己填的 | `PrivateEnv` | Env 面板「Private」分頁（A20）；文字說「你在這個 workspace 的值」（A22） |
 | ├ **通用個人值**（新） | 這個人在所有 item 都適用的 | `PersonalEnv` | 「我的環境變數」頁；Env 面板「Private(跨workspace)」分頁（A20） |
 | └ **自動帶入值** | 部署從 SSO 的 request 算出的 | `PrivateSeam`（`IRequestEnv`） | 「由你的登入狀態自動帶入」 |
 | **提供方式** | item 對每個變數名稱的設定 | `env_policy` | Shared／Private first／Private only |
@@ -158,7 +158,7 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 | 兩個分頁同時系統登入同一個名稱 | 最後寫的那份留下 | 整份取代，沒有半寫的狀態 |
 | run 跑到一半 token 換了 | 下一個節點起用新的 | 每個節點重讀 |
 | 被移出 item 的人 | 他綁的排程下一次觸發就不帶他的任何個人值 | `store.may` |
-| #869 時期留在 item 裡的舊 token | 依 D4 蓋過新登入的通用個人值 | D10 腳本；介面上「使用中：你的（這個 item）」看得出來 |
+| #869 時期留在 item 裡的舊 token | 依 D4 蓋過新登入的通用個人值 | D10 腳本；介面上「使用中：Private」看得出來 |
 
 ## 不做
 
@@ -207,3 +207,4 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 | A19 | （未寫）已知不修。**A20 之後不會再發生**：登入落在哪一層由分頁決定，不看 policy | 先在共用值分頁改了某名稱的 policy（還沒存）、再到「只有我」登入、最後放棄 policy 的修改：token 照「看到的」policy 落地，可能留在和最後存下的 policy 不一致的地方（例如 Private first 的 item 裡留一份 item 值） | 第三輪 review F2：要「改 policy、登入、放棄」三步都發生才會遇到；離開時的未存提醒會先問一次。遇到時在那個 item 按「清除我在這個 item 的值」，或跑清理腳本 |
 | A20 | D3、D6：item 裡的登入一律寫進「我的環境變數」；介面文字「所有參與者」「只有我（這個 item）」 | Env 面板一層一個分頁，名字用 user 定的：**Shared**（共用值）、**Private**（項目個人值，預設打開）、**Private(跨workspace)**（通用個人值，和「我的環境變數」頁同一份）。**在哪個分頁登入或填值，就寫進哪一層**，不看 policy：Shared、Private 填表單、按儲存才存；Private(跨workspace) 登入立刻存，手打的按這個分頁的儲存才存，只寫改過的名稱。Private(跨workspace) 列出這個 item 的工具要的名稱、以及這個 item 設成 Private first／Private only 的名稱，每列寫這個 item 用不用它（設成 Shared 的不用），附連到 `/my-env` 的連結。英文介面的分頁名是 Shared／Private／Private (all workspaces)〔預設，可推翻〕 | 〔user〕「只有我」登入卻改到所有 item，和分頁的範圍不一致；分頁名稱也沒照說好的用語。一層一個分頁，範圍就是看到的範圍。代價：在 Private 分頁替一個設成 Private first／Private only 的名稱登入，會在這個 item 留一份值，依 D4 蓋過 Private(跨workspace) 的值——那一列的「使用中」會寫出來，「清除我在這個 item 的值」可以拿掉。這種值也是清理腳本會清的（那個人在「我的環境變數」也有同名值時），所以 runbook 要營運方先看 dry run |
 | A21 | （未寫）已知不修 | (1) 任一分頁按儲存時，若登入框裡打了帳密還沒送出，面板直接關、不先問（master 上本來就這樣，不是這次造成的）。(2) `/my-env` 頁登入後值存不進去時，登入框裡說一次、app 的寫入失敗通知又說一次——那頁的儲存和新增／移除共用一個 mutation，關掉全域通知會連那些一起關。Env 面板的 Private(跨workspace) 分頁已只說一次 | A20 第二輪 review F3、F1：都要先打了東西又走特定路徑才遇到，修法要動共用的關閉判斷或拆 mutation，比問題本身大 |
+| A22 | A20 的面板樣子與文字 | 〔user 2026-10-08 看過 demo〕(1) 分頁改成底線式，用分享視窗的同一個元件 `ShareTabs`（原本是三顆按鈕，選中的那顆和主要動作同一種實心橘色，看起來像「按我」）；(2) Private、Private(跨workspace) 也有 `.env` 文字框，和 Shared 同一個元件、同一個模式：文字框是那一層的唯一一份，欄位改的是它；(3) 這個面板與「我的環境變數」頁統一說 workspace（原本混用 item、工作區），D1 的介面欄跟著改；「使用中」直接寫分頁名；Private first 一類的提示改成「覆蓋 {現在在用的那個分頁}」；(4) Private(跨workspace) 每列不再寫「這個 workspace 會用／不會用」：Private 分頁的「使用中」已經說了，而那句一定要提到 policy；「我的環境變數」頁也不提 Private first——讀的人不一定能改 policy；(5) 「清除我在這個 workspace 的值」與 `/my-env` 的「移除」改成紅色（`data-variant="danger"`）並先確認，確認鈕寫「清除」「移除」 | user：「tab 為什麼長這樣」「env 格式的輸入怎麼沒了」「wording 很怪」，逐句定了文字；清除要紅、要查 UI/UX guidance：NN/g〈Confirmation Dialogs〉——救不回來的動作先確認、選項寫結果不寫「是／否」；GOV.UK Design System〈Button: warning button〉——紅色只給嚴重且難回復的動作、加一步確認、不能只靠紅色表達 |
