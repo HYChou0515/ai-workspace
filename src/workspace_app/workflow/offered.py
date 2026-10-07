@@ -34,6 +34,7 @@ Two shapes, because the callers ask two questions:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection
+from typing import NamedTuple
 
 from ..apps.profiles import load_profile_workflow, profile_workflows
 from ..files import WorkspaceFiles
@@ -44,7 +45,7 @@ from .workspace_store import (
     WORKSPACE_WORKFLOW_DIR,
     is_workspace_workflow_path,
     load_workspace_workflow,
-    workflow_problem,
+    parse_workflow,
     workspace_workflow_path,
 )
 
@@ -78,6 +79,45 @@ async def workspace_workflow_ids(ls: ListFiles, item_id: str) -> list[str]:
 ReadFile = Callable[[str, str], Awaitable[bytes]]
 
 
+class WorkflowFile(NamedTuple):
+    """What an item's own workflow file says, from one read: why it will not
+    run (None when it parses) and its title ("" when it has none, or when it
+    does not parse)."""
+
+    problem: str | None
+    title: str
+
+
+async def read_workflow_file(read: ReadFile, item_id: str, workflow_id: str) -> WorkflowFile | None:
+    """The item's own `.workflows/<workflow_id>.json`, or None when there is no
+    such file — `unparsable_workflow`'s read, with the title kept: the schedules
+    listing names a row's workflow by its title and must not read the file a
+    second time to do it (`docs/plan-schedule-overview-polish.md`)."""
+    path = workspace_workflow_path(workflow_id)
+    if (
+        not workflow_id  # the loader's own refusals first …
+        or workflow_id == RESERVED_WORKFLOW_ID
+        or not is_workspace_workflow_path(path)  # … then "is this a workflow file at all"
+    ):
+        return None
+    try:
+        raw = await read(item_id, path)
+    except (FileNotFound, FileNotFoundError):
+        return None
+    parsed = parse_workflow(raw)
+    if isinstance(parsed, str):
+        return WorkflowFile(problem=parsed, title="")
+    return WorkflowFile(problem=None, title=parsed.title)
+
+
+def profile_workflow_titles(slug: str, profile: str) -> dict[str, str]:
+    """`{id: title}` for the workflows the item's profile declares — the names
+    of the ones it has no file of its own for."""
+    if not slug:
+        return {}
+    return {w.id: w.title for w in profile_workflows(slug, profile)}
+
+
 async def unparsable_workflow(read: ReadFile, item_id: str, workflow_id: str) -> str | None:
     """Why the item's own `.workflows/<workflow_id>.json` will not run, or None
     when it parses or there is no such file (a profile workflow, or nothing at
@@ -90,18 +130,8 @@ async def unparsable_workflow(read: ReadFile, item_id: str, workflow_id: str) ->
     or the reserved `schedules` id (which the loader refuses "so no reader can
     run it") is answered here without a read: the NFS store raised out of the
     route on `../../x` and a warm sandbox would have read the file it named."""
-    path = workspace_workflow_path(workflow_id)
-    if (
-        not workflow_id  # the loader's own refusals first …
-        or workflow_id == RESERVED_WORKFLOW_ID
-        or not is_workspace_workflow_path(path)  # … then "is this a workflow file at all"
-    ):
-        return None
-    try:
-        raw = await read(item_id, path)
-    except (FileNotFound, FileNotFoundError):
-        return None
-    return workflow_problem(raw)
+    found = await read_workflow_file(read, item_id, workflow_id)
+    return found.problem if found is not None else None
 
 
 def wont_parse(workflow_id: str, problem: str) -> str:

@@ -585,6 +585,10 @@ class ScheduleView(Struct):
     its own chat and its "run as me" binding are keyed on. Filled when the
     caller says where the file lives (`key_of`); "" for a row that does not
     parse, which has no identity because the sweep never fires it."""
+    run_title: str = ""
+    """The title of the workflow `run` names — the one that runs (the item's
+    own file shadows the profile's) — or "" when it has none or the caller did
+    not say (`titles`). A person reads this; `run` stays the identity."""
 
 
 def _last_or_born(
@@ -610,6 +614,7 @@ def schedule_views(
     broken: Mapping[str, str] | None = None,
     landed_ms: int | None = None,
     key_of: Callable[[UserSchedule], str] | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of a schedules file, described the way the sweep reads it —
     same parser, same cap, same next-run rule, same ledger (`last_window`) —
@@ -630,6 +635,9 @@ def schedule_views(
     `landed_ms` is when the file last landed (the index's stamp): a row the
     ledger has never fired, written after this period's moment, is not due now
     but next period — `born_after_target`, the sweep's own rule.
+
+    `titles` (`{workflow_id: title}`) names each row's workflow for a person;
+    it decides nothing.
     """
     rows = file_rows(raw_text)
     if rows is None:
@@ -673,6 +681,7 @@ def schedule_views(
                 run_problem=run_problem,
                 payload=row.payload,
                 trigger_id=key_of(row) if key_of is not None else "",
+                run_title=(titles or {}).get(row.run, ""),
             )
         )
     return views, file_problems

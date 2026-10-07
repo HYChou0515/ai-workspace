@@ -159,6 +159,10 @@ class WorkflowRun(Struct):
     """This run's depth in the event-trigger chain (#429 P9). A first-level (human / schedule)
     run is 0; each event-triggered hop adds one. Its entity writes carry it so an indirect
     cycle hits the global depth cap (recursion guard 2)."""
+    by_hand: bool = False
+    """Started by a schedule's "run now", not by its time — what the schedules
+    overview tags "手動" (`docs/plan-schedule-overview-polish.md`). Additive: a
+    run written before this reads False, as a scheduled one."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None
