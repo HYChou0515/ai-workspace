@@ -878,11 +878,7 @@ class SkillHubStore:
                     return path, None
 
         patches: dict[str, str | None] = dict.fromkeys(changed)
-        # A TaskGroup, not gather: a cancelled comparison cancels every
-        # running `git diff` with it, and each is killed (`_finish`).
-        async with asyncio.TaskGroup() as group:
-            running = [group.create_task(patch_of(p)) for p in textual]
-        patches.update(task.result() for task in running)
+        patches.update(dict(await asyncio.gather(*(patch_of(p) for p in textual))))
         out: list[FileChange] = []
         for path in changed:
             status: Literal["added", "removed", "changed"] = (

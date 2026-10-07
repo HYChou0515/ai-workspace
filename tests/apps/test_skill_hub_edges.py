@@ -286,3 +286,48 @@ async def test_one_file_git_cannot_diff_costs_that_file_only(
     changes = {c.path: c.patch for c in await store.diff(entry, first, second)}
 
     assert changes["a.md"] is None and "+2" in (changes["b.md"] or "")
+
+
+async def test_a_file_replaced_by_a_folder_of_its_name_diffs_as_that_file_only(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    """A literal pathspec `foo` also matches the folder `foo/`, and git printed
+    that folder's files after `foo`'s own hunks (round 4)."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    entry = await _publish(store, {"SKILL.md": _MD, "foo": b"x\n"})
+    first = rm.get(entry).info.revision_id
+    await _publish(store, {"SKILL.md": _MD, "foo/bar.md": b"y\n"})
+    second = rm.get(entry).info.revision_id
+
+    changes = {c.path: c.patch for c in await store.diff(entry, first, second)}
+
+    assert changes["foo"] == "--- a/foo\n+++ b/foo\n@@ -1 +0,0 @@\n-x\n"
+    assert changes["foo/bar.md"] == "--- a/foo/bar.md\n+++ b/foo/bar.md\n@@ -0,0 +1 @@\n+y\n"
+
+
+def _git_version() -> tuple[int, ...]:
+    import subprocess
+
+    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
+    return tuple(int(x) for x in out.split()[2].split(".")[:2])
+
+
+@pytest.mark.skipif(_git_version() < (2, 32), reason="GIT_CONFIG_GLOBAL arrived in git 2.32")
+async def test_a_global_git_config_does_not_reach_a_diff(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`color.diff = always` in the pod's `~/.gitconfig` put escape codes in
+    every patch; no global config is read at all."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    entry = await _publish(store, {"SKILL.md": _MD, "t.md": b"1\n"})
+    first = rm.get(entry).info.revision_id
+    await _publish(store, {"SKILL.md": _MD, "t.md": b"2\n"})
+    second = rm.get(entry).info.revision_id
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[color]\n\tdiff = always\n\tui = always\n")
+    monkeypatch.setenv("HOME", str(home))
+
+    (change,) = [c for c in await store.diff(entry, first, second) if c.path == "t.md"]
+
+    assert change.patch == "--- a/t.md\n+++ b/t.md\n@@ -1 +1 @@\n-1\n+2\n"

@@ -17,7 +17,6 @@ files, trees and commits; nothing above it knows a command line.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime as dt
 import fnmatch
 import hashlib
@@ -169,10 +168,6 @@ class SkillHubRepos:
     async def _git(
         self, entry_id: str, *args: str, stdin: bytes | None = None, check: bool = True
     ) -> tuple[int, bytes]:
-        # Only the repo's own config: a `~/.gitconfig` or `GIT_DIFF_OPTS` on the
-        # pod would change what these commands print (diff context, quoting).
-        env = {k: v for k, v in os.environ.items() if k != "GIT_DIFF_OPTS"}
-        env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
         proc = await asyncio.create_subprocess_exec(
             "git",
             "-C",
@@ -181,9 +176,9 @@ class SkillHubRepos:
             stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
+            env=_git_env(),
         )
-        out, err = await _finish(proc, stdin)
+        out, err = await proc.communicate(stdin)
         code = proc.returncode or 0
         if check and code != 0:
             raise GitError(f"git {args[0]} failed ({code}): {err.decode(errors='replace').strip()}")
@@ -197,9 +192,9 @@ class SkillHubRepos:
         # `init` on a repo another pod just made re-initializes it harmlessly.
         proc = await asyncio.create_subprocess_exec(
             "git", "init", "--bare", "-q", str(repo),
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, env=_git_env(),
         )  # fmt: skip
-        _out, err = await _finish(proc, None)
+        _out, err = await proc.communicate()
         if proc.returncode:
             raise GitError(f"git init failed: {err.decode(errors='replace').strip()}")
 
@@ -333,7 +328,13 @@ class SkillHubRepos:
         at = text.find("\n@@ ")
         if at < 0:
             return ""  # no hunks: an empty file added or removed
-        hunks = _HUNK_CONTEXT.sub(r"\1", text[at + 1 :])
+        body = text[at + 1 :]
+        # A literal pathspec also matches a DIRECTORY of that name (a file
+        # replaced by a folder): git then prints that folder's files after
+        # this one's hunks. Only this file's are ours.
+        if (other := body.find("\ndiff --git ")) >= 0:
+            body = body[: other + 1]
+        hunks = _HUNK_CONTEXT.sub(r"\1", body)
         return f"--- a/{path}\n+++ b/{path}\n{hunks}"
 
     async def parent(self, entry_id: str, commit: str) -> str | None:
@@ -425,17 +426,15 @@ class SkillHubRepos:
         return out
 
 
-async def _finish(proc: asyncio.subprocess.Process, stdin: bytes | None) -> tuple[bytes, bytes]:
-    """`proc.communicate`, except that a cancelled caller (the client went
-    away, a sibling failed) takes the process with it: killed and reaped, not
-    left running with nobody reading its output."""
-    try:
-        return await proc.communicate(stdin)
-    except asyncio.CancelledError:
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        await proc.wait()
-        raise
+def _git_env() -> dict[str, str]:
+    """The environment every git command here runs in: only the repo's own
+    config. A `~/.gitconfig` (or system config, or `GIT_DIFF_OPTS`) on the pod
+    would change what the commands print (colour, diff context) or do (an
+    `init.templateDir` with hooks). `GIT_CONFIG_GLOBAL` needs git 2.32+; the
+    image's git is 2.39."""
+    env = {k: v for k, v in os.environ.items() if k != "GIT_DIFF_OPTS"}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return env
 
 
 def resolve_git_root(git_root: str, *, durable: bool) -> Path:
