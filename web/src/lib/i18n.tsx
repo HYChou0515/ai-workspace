@@ -1790,6 +1790,24 @@ export const messages = {
     en: "From the cached copy — may not be the latest",
   },
   "tools.origin.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
+  "tools.origin.running": {
+    "zh-TW": "執行中 {running} · 最新 {latest}",
+    en: "Running {running} · latest {latest}",
+  },
+  "tools.origin.runningEarlier": { "zh-TW": "較早的版本", en: "an earlier release" },
+  "tools.update.note": {
+    "zh-TW": "沙盒仍在使用較早的工具版本。關閉沙盒後，下一次對話就會使用最新版。",
+    en: "The sandbox still runs an earlier release of a tool. Close the sandbox and the next turn uses the latest.",
+  },
+  "tools.update.noteOthers": {
+    "zh-TW": "沙盒仍在使用較早的工具版本，沙盒關閉後就會使用最新版。",
+    en: "The sandbox still runs an earlier release of a tool; it updates once the sandbox is closed.",
+  },
+  "tools.update.close": { "zh-TW": "關閉沙盒以更新", en: "Close sandbox to update" },
+  "tools.update.failed": {
+    "zh-TW": "沒能關閉沙盒，請稍後再試。",
+    en: "The sandbox could not be closed. Try again shortly.",
+  },
 
   // Diagnostics page (#465) — AI health checks + model sanity + activity.
   "diag.crumb": { "zh-TW": "診斷", en: "Diagnostics" },

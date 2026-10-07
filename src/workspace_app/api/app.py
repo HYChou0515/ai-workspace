@@ -124,7 +124,7 @@ from .meta_routes import register_meta_routes
 from .notification_delivery import INotificationChannel
 from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
-from .quota_routes import register_quota_routes
+from .quota_routes import may_close_environment, register_quota_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .request_env import IRequestEnv
@@ -2540,6 +2540,17 @@ def create_app(
         packages=packages,
         locator=locator,
         sandbox=sandbox,
+        mounted_tools=registry.mounted_tools,
+        # The close route's own gate (plan-tool-running-version D9), so the
+        # picker's button and the route it calls cannot disagree.
+        can_close=lambda item_id: may_close_environment(
+            spec=spec,
+            locator=locator,
+            activity=activity_store,
+            item_id=item_id,
+            user=get_user_id(),
+            superusers=superusers,
+        ),
     )
 
     class _LateOrchestrator:

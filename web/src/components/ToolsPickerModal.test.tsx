@@ -22,8 +22,14 @@ const TOOLS: ItemToolState[] = [
   },
 ];
 
-function fakeClient(tools = TOOLS) {
-  return { getItemTools: vi.fn(async () => tools) };
+function fakeClient(tools = TOOLS, over: { updateNeedsClose?: boolean; canClose?: boolean } = {}) {
+  return {
+    getItemTools: vi.fn(async () => ({
+      tools,
+      updateNeedsClose: over.updateNeedsClose ?? false,
+      canClose: over.canClose ?? false,
+    })),
+  };
 }
 
 describe("ToolsPickerModal", () => {
@@ -139,5 +145,85 @@ describe("ToolsPickerModal", () => {
     await screen.findByTestId("dialog-action-discard");
     fireEvent.click(screen.getByTestId("dialog-action-discard"));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+});
+
+// plan-tool-running-version: the live sandbox may run an older release than
+// the row's version (the latest). The row says which; the modal says closing
+// the sandbox is what updates it, with a button for whoever may close it.
+describe("ToolsPickerModal — a sandbox older than the release", () => {
+  const OUTDATED: ItemToolState[] = [
+    ...TOOLS,
+    {
+      key: "wafer-history:trend",
+      group: "wafer-history",
+      label: "Trend",
+      description: "Yield trend.",
+      default_on: true,
+      pref: "follow",
+      effective: true,
+      external: true,
+      version: "1.4.2",
+      running_version: "1.3.0",
+    },
+  ];
+
+  it("names the release that runs beside the latest on its row", async () => {
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(OUTDATED, { updateNeedsClose: true, canClose: true })}
+        closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
+      />,
+    );
+    const running = await screen.findByTestId("tool-wafer-history:trend-running");
+    expect(running).toHaveTextContent("1.3.0");
+    expect(running).toHaveTextContent("1.4.2");
+  });
+
+  it("closes the item's sandbox from one button, then reads the picker again", async () => {
+    const closeEnvironment = vi.fn(async () => undefined);
+    const client = fakeClient(OUTDATED, { updateNeedsClose: true, canClose: true });
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={client}
+        closeClient={{ closeEnvironment }}
+      />,
+    );
+    expect(await screen.findByTestId("tools-update-note")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tools-update-close"));
+    await waitFor(() => expect(closeEnvironment).toHaveBeenCalledWith("i1"));
+    await waitFor(() => expect(client.getItemTools).toHaveBeenCalledTimes(2));
+  });
+
+  it("tells someone who may not close it, without a button that would do nothing", async () => {
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(OUTDATED, { updateNeedsClose: true, canClose: false })}
+        closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
+      />,
+    );
+    expect(await screen.findByTestId("tools-update-note")).toBeInTheDocument();
+    expect(screen.queryByTestId("tools-update-close")).not.toBeInTheDocument();
+  });
+
+  it("says nothing when the sandbox runs the latest", async () => {
+    renderWithQuery(
+      <ToolsPickerModal slug="rca" itemId="i1" onSave={vi.fn()} onClose={vi.fn()} client={fakeClient()} />,
+    );
+    await screen.findByTestId("tools-save");
+    expect(screen.queryByTestId("tools-update-note")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tools-update-close")).not.toBeInTheDocument();
   });
 });

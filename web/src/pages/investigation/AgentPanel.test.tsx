@@ -881,7 +881,7 @@ describe("AgentPanel env vars", () => {
     const { privateEnvApi } = await import("../../api/privateEnv");
     const { api } = await import("../../api");
     vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
-    vi.spyOn(api, "getItemTools").mockResolvedValue([]);
+    vi.spyOn(api, "getItemTools").mockResolvedValue({ tools: [], updateNeedsClose: false, canClose: false });
     vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
     const onSave = vi.fn();
     const { WorkspaceSlugProvider } = await import("../../hooks/useWorkspaceSlug");
@@ -922,18 +922,22 @@ describe("AgentPanel env vars", () => {
     const { privateEnvApi } = await import("../../api/privateEnv");
     const { api } = await import("../../api");
     vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
-    vi.spyOn(api, "getItemTools").mockResolvedValue([
-      {
-        key: "erp",
-        group: "erp",
-        label: "erp",
-        description: "",
-        default_on: true,
-        pref: "follow",
-        effective: true,
-        env_needs: [{ name: "ERP_TOKEN", description: "", required: true }],
-      },
-    ]);
+    vi.spyOn(api, "getItemTools").mockResolvedValue({
+      tools: [
+        {
+          key: "erp",
+          group: "erp",
+          label: "erp",
+          description: "",
+          default_on: true,
+          pref: "follow",
+          effective: true,
+          env_needs: [{ name: "ERP_TOKEN", description: "", required: true }],
+        },
+      ],
+      updateNeedsClose: false,
+      canClose: false,
+    });
     vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
     const { WorkspaceSlugProvider } = await import("../../hooks/useWorkspaceSlug");
     renderWithQuery(

@@ -1,7 +1,8 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
+import { type MyResourcesApi, myResourcesApi } from "../api/myResources";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, ItemToolState } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
@@ -27,6 +28,12 @@ import { ToolsChecklist } from "./ToolsChecklist";
  * `external_tools` key is an `app.json` `tools[]` entry, so they already have a
  * switch. What they carry extra (release, author, cached-copy) rides on the row
  * itself; a separate section listed the same tool twice.
+ *
+ * plan-tool-running-version: a live sandbox keeps the bundles it was created
+ * with, so a row's release can be newer than what runs. Such a row says which
+ * release runs; the modal says closing the sandbox is what updates it (D1:
+ * told, never forced) and, for whoever the close route itself would let close
+ * it (D9), offers that close in one button.
  */
 export function ToolsPickerModal({
   slug,
@@ -34,18 +41,27 @@ export function ToolsPickerModal({
   onSave,
   onClose,
   client = api,
+  closeClient = myResourcesApi,
 }: {
   slug: string;
   itemId: string;
   onSave: (prefs: Record<string, boolean>) => void | Promise<void>;
   onClose: () => void;
   client?: Pick<ApiClient, "getItemTools">;
+  closeClient?: Pick<MyResourcesApi, "closeEnvironment">;
 }) {
   const t = useT();
   const qc = useQueryClient();
   const toolsQ = useQuery({
     queryKey: qk.itemTools(slug, itemId),
     queryFn: () => client.getItemTools(slug, itemId),
+  });
+
+  // The existing close (the resources page's), then read the picker again:
+  // with no live sandbox the rows describe the release the next one mounts.
+  const closeSandbox = useMutation({
+    mutationFn: () => closeClient.closeEnvironment(itemId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.itemTools(slug, itemId) }),
   });
 
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
@@ -55,7 +71,7 @@ export function ToolsPickerModal({
   // Seed the editable override once the resolved state has loaded.
   useEffect(() => {
     if (prefs === null && toolsQ.data) {
-      const seeded = overrideFromTools(toolsQ.data);
+      const seeded = overrideFromTools(toolsQ.data.tools);
       setPrefs(seeded);
       setInitial(seeded);
     }
@@ -101,7 +117,44 @@ export function ToolsPickerModal({
             )}
           </div>
         ) : (
-          <ToolsChecklist tools={toolsQ.data!} prefs={prefs!} onChange={setPrefs} />
+          <>
+            {toolsQ.data!.updateNeedsClose ? (
+              <div
+                role="status"
+                data-testid="tools-update-note"
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: pxToRem(12),
+                  color: "var(--text-paper-d)",
+                  lineHeight: 1.5,
+                }}
+              >
+                <span style={{ flex: "1 1 200px", minWidth: 0 }}>
+                  {toolsQ.data!.canClose ? t("tools.update.note") : t("tools.update.noteOthers")}
+                </span>
+                {toolsQ.data!.canClose ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="secondary"
+                    data-size="sm"
+                    data-testid="tools-update-close"
+                    disabled={closeSandbox.isPending}
+                    onClick={() => closeSandbox.mutate()}
+                  >
+                    {t("tools.update.close")}
+                  </button>
+                ) : null}
+                {closeSandbox.isError ? (
+                  <span style={{ flexBasis: "100%", color: "var(--err)" }}>{t("tools.update.failed")}</span>
+                ) : null}
+              </div>
+            ) : null}
+            <ToolsChecklist tools={toolsQ.data!.tools} prefs={prefs!} onChange={setPrefs} />
+          </>
         )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
