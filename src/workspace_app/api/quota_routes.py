@@ -311,48 +311,21 @@ def register_quota_routes(
         The machine resource is one thing, and a panel that freed the tally
         without freeing the machine would be lying about what it did — and would
         make the next person's limit meaningless."""
-        # The item record first, the LEDGER when it is gone. A soft-deleted
-        # item still holds its sandbox and still owes for it — the row is on
-        # this page for exactly that reason — so resolving the debtor only
-        # through the record made the one row that most needs closing the one
-        # row that could not be.
-        owner = locator.owner_of(item_id)
-        if owner is None and activity is not None:
-            owner = await activity.owner_of(item_id)
-
-        # The debtor, a superuser, or someone the owner made a manager of this
-        # item. That last one is not generosity: `change_permission` is what
-        # lets a person resize the environment, §1.4 makes closing the ONLY way
-        # to resize a live one, and the panel draws them the button. Requiring
-        # the `owner` FIELD here handed them a 404 — a visible no-op, since the
-        # mutation has no error branch — for the one action their grant is for.
+        # The gate is `may_close_environment`, shared with the tool picker's
+        # "close the sandbox to update" (plan-tool-running-version D9): a button
+        # offered by one rule and refused by another is a visible no-op.
         #
         # Still 404 rather than 403 for everyone else: whether a given item has
         # an environment running is not a fact a bystander is owed.
-        if owner != get_user_id() and get_user_id() not in superusers:
-            # THE shared gate, with the two differences stated as arguments.
-            # `ANY_APP` because this route addresses the item by id alone —
-            # fabricating one from a lookup that reports a deleted item as
-            # absent is what refused a manager on the one row this page argues
-            # hardest for. `allow_deleted` because closing is a BILLING action:
-            # the machine is running and somebody is paying for it, so "the item
-            # is deleted" is not a reason to refuse.
-            #
-            # Inlining this gate's body to get those two was the first fix, and
-            # it was the same defect it had just repaired one file over: a copy
-            # the next rule added to the shared gate would never reach.
-            try:
-                require_item_access(
-                    spec,
-                    ANY_APP,
-                    item_id,
-                    "change_permission",
-                    user=get_user_id(),
-                    superusers=superusers,
-                    allow_deleted=True,
-                )
-            except Exception as exc:  # noqa: BLE001 — any refusal reads the same
-                raise HTTPException(status_code=404, detail="unknown environment") from exc
+        if not await may_close_environment(
+            spec=spec,
+            locator=locator,
+            activity=activity,
+            item_id=item_id,
+            user=get_user_id(),
+            superusers=superusers,
+        ):
+            raise HTTPException(status_code=404, detail="unknown environment")
         # `close_session` owns the whole teardown, INCLUDING clearing the
         # heartbeat. Clearing it here as well was the shape of the bug: the close
         # could quietly do nothing — no session on this replica — and this line
@@ -419,3 +392,59 @@ def _require_admin(me: str, superusers: frozenset[str]) -> None:
         # 404, not 403: whether a given person has an override is not something
         # a non-admin should be able to probe for.
         raise HTTPException(status_code=404, detail="not found")
+
+
+async def may_close_environment(
+    *,
+    spec: SpecStar,
+    locator: ItemLocator,
+    activity: IActivityStore | None,
+    item_id: str,
+    user: str,
+    superusers: frozenset[str],
+) -> bool:
+    """Whether ``user`` may shut down ``item_id``'s live environment.
+
+    ONE rule for every door that closes one — the resources page's Close and
+    the tool picker's "close the sandbox to update" (plan-tool-running-version
+    D9) — so a button is never drawn by one rule and refused by another.
+
+    The item record first, the LEDGER when it is gone. A soft-deleted item still
+    holds its sandbox and still owes for it — the row is on the resources page
+    for exactly that reason — so resolving the debtor only through the record
+    made the one row that most needs closing the one row that could not be.
+
+    The debtor, a superuser, or someone the owner made a manager of this item.
+    That last one is not generosity: `change_permission` is what lets a person
+    resize the environment, §1.4 makes closing the ONLY way to resize a live
+    one, and the panel draws them the button. Requiring the `owner` FIELD here
+    handed them a 404 — a visible no-op, since the mutation has no error branch
+    — for the one action their grant is for.
+
+    THE shared item gate, with two differences stated as arguments. `ANY_APP`
+    because this addresses the item by id alone — fabricating one from a lookup
+    that reports a deleted item as absent is what refused a manager on the one
+    row the resources page argues hardest for. `allow_deleted` because closing
+    is a BILLING action: the machine is running and somebody is paying for it,
+    so "the item is deleted" is not a reason to refuse. Inlining the gate's body
+    to get those two was the first fix, and it was the same defect it had just
+    repaired one file over: a copy the next rule added to the shared gate would
+    never reach."""
+    owner = locator.owner_of(item_id)
+    if owner is None and activity is not None:
+        owner = await activity.owner_of(item_id)
+    if owner == user or user in superusers:
+        return True
+    try:
+        require_item_access(
+            spec,
+            ANY_APP,
+            item_id,
+            "change_permission",
+            user=user,
+            superusers=superusers,
+            allow_deleted=True,
+        )
+    except Exception:  # noqa: BLE001 — any refusal reads the same
+        return False
+    return True

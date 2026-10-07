@@ -185,12 +185,16 @@ export const realApi: ApiClient = {
   },
 
   async getItemTools(slug: string, itemId: string) {
-    const r = await json<{ tools: ItemToolState[] }>(
+    const r = await json<{ tools: ItemToolState[]; update_needs_close?: boolean; can_close?: boolean }>(
       await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/tools`,
       ),
     );
-    return r.tools;
+    return {
+      tools: r.tools,
+      updateNeedsClose: r.update_needs_close ?? false,
+      canClose: r.can_close ?? false,
+    };
   },
 
   async getEnvProviders(slug: string, itemId: string) {

@@ -81,7 +81,7 @@ export function usePageIdentity({
   });
   const settled = [layers, tools, providers, mine, rows].every((q) => !q.isPending);
   const state = identityState({
-    tools: tools.data ?? [],
+    tools: tools.data?.tools ?? [],
     shared: layers.data?.shared ?? {},
     policy: layers.data?.policy ?? {},
     // What the deploy filled in wins a name over what they typed.
@@ -392,7 +392,7 @@ export function useEnvMissing({
   });
   if (!on) return [];
   return identityState({
-    tools: tools.data ?? [],
+    tools: tools.data?.tools ?? [],
     shared,
     policy,
     mine: ownLayer(mine.data?.values ?? {}, mine.data?.auto ?? {}),

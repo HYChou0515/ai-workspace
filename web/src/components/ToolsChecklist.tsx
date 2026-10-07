@@ -345,6 +345,30 @@ function ToolRow({
             </span>
           ) : null}
         </div>
+        {(tool.running_version != null || tool.not_in_sandbox) && !tool.unavailable ? (
+          // plan-tool-running-version: the live sandbox runs a DIFFERENT bundle
+          // from `version` (the latest), or none of it (D11). Its own line,
+          // allowed to wrap: on a phone the ellipsised line above cut it to
+          // "Runnin…" (measured at 390px), and this is the one fact the row
+          // exists to say here.
+          <div
+            data-testid={`tool-${tool.key}-running`}
+            style={{ fontSize: pxToRem(11), color: "var(--text-paper)" }}
+          >
+            {tool.not_in_sandbox
+              ? t("tools.origin.notInSandbox")
+              : tool.version
+                ? t("tools.origin.running", {
+                    running: tool.running_version || t("tools.origin.unrecorded"),
+                    latest: tool.version,
+                  })
+                : // The latest published no number: say what runs, invent nothing
+                  // for the latest (D13 — the model's line does the same).
+                  t("tools.origin.runningNotLatest", {
+                    running: tool.running_version || t("tools.origin.unrecorded"),
+                  })}
+          </div>
+        ) : null}
       </div>
       <TriState
         aria={t("tools.state.aria", { tool: tool.label })}

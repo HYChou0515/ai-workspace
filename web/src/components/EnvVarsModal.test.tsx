@@ -71,7 +71,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => tools),
+          getItemTools: vi.fn(async () => ({ tools: tools, updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -258,7 +258,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => SAP),
+          getItemTools: vi.fn(async () => ({ tools: SAP, updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => [
             {
               id: "sap-login",
@@ -321,7 +321,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => SAP),
+          getItemTools: vi.fn(async () => ({ tools: SAP, updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => [
             {
               id: "sap-login",
@@ -360,7 +360,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => SAP),
+          getItemTools: vi.fn(async () => ({ tools: SAP, updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => [
             {
               id: "sap-login",
@@ -412,7 +412,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => SAP),
+          getItemTools: vi.fn(async () => ({ tools: SAP, updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}

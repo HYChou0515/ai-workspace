@@ -619,7 +619,7 @@ export const mockApi: ApiClient = {
 
   async getItemTools(_slug: string, _itemId: string) {
     await delay(10);
-    return [
+    const tools = [
       {
         key: "exec",
         group: "builtin",
@@ -670,6 +670,7 @@ export const mockApi: ApiClient = {
         author: "Wafer Team <wafer@example.com>",
       },
     ];
+    return { tools, updateNeedsClose: false, canClose: false };
   },
 
   // #750. A deploy with no credential->variable implementations is the

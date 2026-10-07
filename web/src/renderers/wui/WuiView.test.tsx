@@ -3256,7 +3256,7 @@ describe("WuiView — sign-in in the workspace pane's toolbar (plan-wui-viewer-l
     vi.spyOn(privateEnvApi, "layers").mockResolvedValue({ shared: {}, policy });
     vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
     vi.spyOn(scheduleBindingsApi, "list").mockResolvedValue([]);
-    vi.spyOn(api, "getItemTools").mockResolvedValue([]);
+    vi.spyOn(api, "getItemTools").mockResolvedValue({ tools: [], updateNeedsClose: false, canClose: false });
     vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
     render(
       <QueryWrap>

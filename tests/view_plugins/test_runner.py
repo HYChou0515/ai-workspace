@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from workspace_app.api.view_plugin_routes import ARGV_MAX, register_view_plugin_runner
 from workspace_app.sandbox.protocol import ExecResult, Sandbox, SandboxHandle
-from workspace_app.tooling.external import ExternalTools
+from workspace_app.tooling.external import ExternalTools, MountedTool, ToolProvenance
 from workspace_app.view_plugins import discover_view_plugins
 
 
@@ -93,7 +93,9 @@ def _client(tmp_path, *, sandbox=None, registry=None, external=None, locator=Non
     loc = locator or _Locator()
 
     async def resolve_tools(item_id: str) -> ExternalTools:
-        return external or ExternalTools(shas={"app-tool": "a" * 64})
+        return external or ExternalTools(
+            shas={"app-tool": "a" * 64}, provenance={"app-tool": ToolProvenance(version="4.2")}
+        )
 
     register_view_plugin_runner(
         app,
@@ -118,7 +120,9 @@ def test_runs_the_plugin_launch_in_the_items_sandbox(tmp_path):
     # Reading a view is reading the item.
     assert loc.verbs == ["read_content"]
     # The sandbox it wakes is created with what a turn would mount.
-    assert reg.tools == [{"app-tool": "a" * 64}]
+    # ...with the release each sha is (plan-tool-running-version), so the
+    # sandbox it creates records what it mounted.
+    assert reg.tools == [{"app-tool": MountedTool(sha="a" * 64, version="4.2")}]
     # NOT the item's variables: this route is open to anyone who may READ the
     # item, and the variables are the owner's credentials for their own tools.
     assert "API_KEY" not in sb.envs[0]
@@ -197,7 +201,7 @@ def test_an_artifact_plugin_runs_when_resolved_and_mounted(tmp_path):
         chart={"artifact": "https://g/chart"},
     )
     assert client.post(URL, json={"args": {}}).status_code == 200
-    assert reg.tools == [{"chart": "c" * 64}]
+    assert reg.tools == [{"chart": MountedTool(sha="c" * 64, version="")}]
 
 
 def test_a_live_sandbox_started_before_the_plugin_was_installed_says_so(tmp_path):

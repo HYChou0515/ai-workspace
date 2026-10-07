@@ -49,7 +49,12 @@ from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
 from ..tooling.catalog import narrow_entries
-from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
+from ..tooling.external import (
+    ExternalTools,
+    confine_to_mounted,
+    describe_running,
+    resolve_external_tools,
+)
 from ..workflow.user_schedules import SchedulePolicy
 from .env_layers import resolve_env
 from .locator import TurnFacts
@@ -688,7 +693,7 @@ class TurnContextBuilder:
             )
             return None
 
-    async def _external_tools(self, item_id: str, session: Any) -> ExternalTools:
+    async def _external_tools(self, item_id: str) -> ExternalTools:
         """#674: resolve this app's third-party tools, once, at the top of a turn.
 
         Before the sandbox exists, because the answer decides which tools the
@@ -697,15 +702,25 @@ class TurnContextBuilder:
 
         When one ALREADY exists, though, its bundles were fixed when it was
         created and the resolve cannot change them. So the mounted set becomes
-        the ceiling: a tool registered since, or released since, is reported as
+        the ceiling: a tool the sandbox was set up without is reported as
         unavailable with a reason rather than handed over as a launcher that
-        isn't there."""
+        isn't there, and a tool it runs at a DIFFERENT release from the latest
+        stays available, its description saying which release runs
+        (plan-tool-running-version D1/D2)."""
         external = await resolve_item_tools(
             self._sandbox, self._locator, item_id, plugin_artifacts=self._view_plugin_artifacts
         )
-        confined = confine_to_mounted(
-            external, live=session.handle is not None, mounted=session.tools
-        )
+        # What the item's LIVE sandbox mounted, from whichever pod built it —
+        # the registry's one answer, probed and bounded (D10; before, a
+        # peer-built sandbox was unknown here, so the model was told the
+        # manifest's release and offered tools it did not have). Asked only
+        # when the app itself declares a tool that resolved (one a turn can be
+        # granted) — a
+        # deployment's view plugins mount too, but they are no agent's tool,
+        # and this build made no sandbox call before (review round 2).
+        mounted = await self._registry.mounted_tools(item_id) if external.packages else None
+        confined = confine_to_mounted(external, live=mounted is not None, mounted=mounted)
+        confined = describe_running(confined, mounted)
         # Confining refuses what the live sandbox lacks — for a view plugin that
         # is the runner's to say, never the agent's to read.
         return _mount_plugins_only(confined, set(self._view_plugin_artifacts))
@@ -771,6 +786,7 @@ class TurnContextBuilder:
             # `create`, so the sandbox mounts the very shas whose schemas the
             # model was handed a moment ago.
             sandbox_spec=SandboxSpec(tools=external.shas),
+            tool_versions=external.versions(),
             # The item's user env, read fresh per turn — which is what makes an
             # edit between turns take effect. NOT folded into `sandbox_spec`:
             # that is create-time infra env, and the launcher's own exports run
@@ -909,7 +925,7 @@ class TurnContextBuilder:
         session = await self._registry.session(item_id)
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
-        external = await self._external_tools(item_id, session)
+        external = await self._external_tools(item_id)
         agent_config = self._finalized(agent_config, external)
         return AgentToolContext(
             **self._common(
@@ -1012,7 +1028,7 @@ class TurnContextBuilder:
         session = await self._registry.session(item_id)
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
-        external = await self._external_tools(item_id, session)
+        external = await self._external_tools(item_id)
         agent_config = self._finalized(agent_config, external, tool_subset)
         return AgentToolContext(
             **self._common(

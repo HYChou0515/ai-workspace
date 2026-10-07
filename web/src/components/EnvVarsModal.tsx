@@ -143,7 +143,7 @@ export function EnvVarsModal({
   const dirty = sharedDirty || mineDirty || Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
 
-  const tools = toolsQ.data ?? [];
+  const tools = toolsQ.data?.tools ?? [];
   const canEdit = onSave !== undefined;
   // Sections are drawn once what decides their grouping and default fold has
   // arrived — otherwise a declared variable first appears under "Other

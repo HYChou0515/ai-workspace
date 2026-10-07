@@ -49,7 +49,7 @@ function open({
       folder="/report"
       title="Weekly report"
       client={{
-        getItemTools: vi.fn(async () => [ERP_TOOL]),
+        getItemTools: vi.fn(async () => ({ tools: [ERP_TOOL], updateNeedsClose: false, canClose: false })),
         getEnvProviders: vi.fn(async () => providers),
         resolveEnvProvider: vi.fn(),
       }}

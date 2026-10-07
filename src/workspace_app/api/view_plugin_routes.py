@@ -214,6 +214,7 @@ def register_view_plugin_runner(
             investigation_id=investigation_id,
             sandbox=sandbox,
             sandbox_spec=SandboxSpec(tools=external.shas),
+            tool_versions=external.versions(),
             # No item variables: this route is open to anyone who may READ the
             # item, and those are the owner's credentials for their own tools. A
             # plugin command reads workspace files, which a reader may see anyway.
