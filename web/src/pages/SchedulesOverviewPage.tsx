@@ -295,9 +295,12 @@ function ScheduleRowView({
   const dialog = useDialog();
   const [editing, setEditing] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  // The run Run now just started, until the row's last run IS that run — then
-  // the last-run cell says everything this note would.
-  const [started, setStarted] = useState<string | null>(null);
+  // After Run now: the run the row showed as its last when it was pressed.
+  // The note stays until the row shows any other run — that one is the press's
+  // (or a fire that overtook it), and the last-run cell then says everything
+  // the note would. Not "until it shows the run id the press got back": a
+  // reply without one, or an overtaking fire, left the note up for good.
+  const [started, setStarted] = useState<{ before: string | null } | null>(null);
   // A row the sweep refuses has no identity; Remove finds it by its value.
   const ref = {
     path: row.path,
@@ -318,9 +321,9 @@ function ScheduleRowView({
   const fail = (e: unknown) => setFailed(e instanceof ScheduleActionError ? e.message : String(e));
 
   const runNow = useMutation({
-    mutationFn: () => client.runNow(row.slug, row.item_id, ref),
-    onSuccess: (runId) => {
-      setStarted(runId || "?");
+    mutationFn: (_before: string | null) => client.runNow(row.slug, row.item_id, ref),
+    onSuccess: (_runId, before) => {
+      setStarted({ before });
       return refresh();
     },
     onError: fail,
@@ -359,7 +362,7 @@ function ScheduleRowView({
   const mayRun = mayRunNow(row, row.can_run);
   const last = row.last_run;
   const lastAt = last ? (last.ended ?? last.started) : null;
-  const showStarted = started !== null && last?.run_id !== started;
+  const showStarted = started !== null && (last?.run_id ?? null) === started.before;
 
   return (
     <tr data-testid={`schedule-${row.item_id}${row.path}#${row.index}`}>
@@ -410,7 +413,7 @@ function ScheduleRowView({
               disabled={runNow.isPending}
               onClick={() => {
                 setFailed(null);
-                runNow.mutate();
+                runNow.mutate(row.last_run?.run_id ?? null);
               }}
             >
               {t("schedules.runNow")}
@@ -437,7 +440,7 @@ function ScheduleRowView({
               data-variant="danger"
               data-size="sm"
               disabled={remove.isPending}
-              aria-label={`${t("schedules.remove")} ${period.text} → ${workflow}`}
+              aria-label={`${t("schedules.remove")} ${placeOf(row, t)} · ${period.text} → ${workflow}`}
               onClick={() => {
                 setFailed(null);
                 void askRemove();

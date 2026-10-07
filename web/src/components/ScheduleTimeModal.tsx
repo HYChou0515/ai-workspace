@@ -27,7 +27,7 @@ import { useDirtyClose } from "../hooks/useDirtyClose";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
-import { DOWS, moveTime, rowTime, validZone, zoneName } from "../lib/scheduleTime";
+import { DOWS, moveTime, rowTime, subDailyMoves, validZone, zoneName } from "../lib/scheduleTime";
 import { useViewerClock } from "../lib/viewerClock";
 import { ModalShell } from "./ModalShell";
 
@@ -39,7 +39,8 @@ const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"))
  * parser's defaults (`daily`, `00:00`, UTC) for what it leaves out. A daily /
  * weekly / monthly time is moved into `viewer` through its next occurrence
  * (`refMs`) when it moves cleanly; one that does not stays in its own zone. A
- * minutes / hourly row reads the same in any zone and opens in the viewer's. */
+ * minutes / hourly row opens in the viewer's zone when it fires on the same
+ * minutes there (`subDailyMoves`), else in its own. */
 export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTime {
   const r: Record<string, unknown> =
     raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
@@ -53,7 +54,9 @@ export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTim
     dom: typeof r.dom === "number" ? r.dom : 1,
     tz: written.tz,
   };
-  if (every === "minutes" || every === "hourly") return { ...form, tz: viewer };
+  if (every === "minutes" || every === "hourly") {
+    return subDailyMoves({ every, n: form.n ?? 0, tz: written.tz }, viewer, refMs) ? { ...form, tz: viewer } : form;
+  }
   const moved = moveTime({ ...written, every, at: form.at ?? "00:00", dow: form.dow ?? "mon", dom: form.dom ?? 1 }, viewer, refMs);
   if (moved === null) return form;
   // Only a weekly row's weekday moves; a daily one's occurrence has a weekday

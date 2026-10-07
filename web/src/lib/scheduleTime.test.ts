@@ -74,6 +74,19 @@ describe("periodText — a row's period on the viewer's clock", () => {
     expect(periodText({ every: "hourly", tz: TPE }, at("UTC"), t)).toEqual({ text: "每小時", set: "" });
   });
 
+  it("an hourly or minutes row whose firing minute would move keeps its zone", () => {
+    // Hourly fires at the top of the hour in the row's zone: a UTC hourly runs
+    // at :30 in Kolkata (+05:30), so "每小時" there would be a different rule.
+    const kolkata = { viewer: "Asia/Kolkata", now: NOW, locale: "zh-TW" };
+    expect(periodText({ every: "hourly" }, kolkata, t)).toEqual({
+      text: "每小時（世界標準時間）",
+      set: "設定為：每小時（世界標準時間）",
+    });
+    // Every 15 minutes is the same set of minutes 5h30m away; every 20 is not.
+    expect(periodText({ every: "minutes", n: 15 }, kolkata, t).text).toBe("每 15 分鐘");
+    expect(periodText({ every: "minutes", n: 20 }, kolkata, t).text).toBe("每 20 分鐘（世界標準時間）");
+  });
+
   it("a zone the browser cannot read stays as written", () => {
     expect(periodText({ every: "daily", at: "09:00", tz: "Mars/Base" }, at(TPE), t).text).toBe(
       "每天 09:00（Mars/Base）",
@@ -94,8 +107,17 @@ describe("the clock arithmetic", () => {
     expect(wallOf(ms, TPE)).toMatchObject({ y: 2026, mo: 10, d: 8, dow: 3, hh: 9, mm: 0 });
   });
 
-  it("a wall time a fall-back repeats is its first reading", () => {
-    expect(zonedMs(2026, 11, 1, 1, 30, "America/New_York")).toBe(Date.UTC(2026, 10, 1, 5, 30));
+  // The sweep's answer for each — Python's `datetime(..., tzinfo=ZoneInfo(z))`,
+  // fold=0, the rule `next_run_ms` places a row's next run by: a repeated wall
+  // time is its first reading, a skipped one is read with the offset before
+  // the jump (so it lands after it).
+  it.each([
+    ["America/New_York", [2026, 11, 1, 1, 30], Date.UTC(2026, 10, 1, 5, 30)],
+    ["Europe/London", [2026, 10, 25, 1, 30], Date.UTC(2026, 9, 25, 0, 30)],
+    ["Australia/Sydney", [2026, 4, 5, 2, 30], Date.UTC(2026, 3, 4, 15, 30)],
+    ["America/New_York", [2026, 3, 8, 2, 30], Date.UTC(2026, 2, 8, 7, 30)],
+  ] as const)("a DST edge in %s %j is the instant the sweep uses", (zone, [y, mo, d, hh, mm], ms) => {
+    expect(zonedMs(y, mo, d, hh, mm, zone)).toBe(ms);
   });
 
   it("moveTime carries a weekly across the date line onto the next day", () => {

@@ -400,7 +400,11 @@ describe("WorkflowsModal — schedules", () => {
     removeMock.mockResolvedValue(undefined);
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    const button = await screen.findByTestId("schedule-remove-0");
+    // The destructive act looks like one (the overview's Remove does too).
+    // (happy-dom drops `var()` from computed style, so read the attribute.)
+    expect(button.getAttribute("style")).toContain("color: var(--err)");
+    fireEvent.click(button);
     fireEvent.click(await screen.findByRole("button", { name: "移除" }));
 
     await waitFor(() =>

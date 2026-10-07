@@ -69,17 +69,27 @@ export function wallOf(ms: number, zone: string): Wall {
   };
 }
 
-/** The instant a clock in `zone` reads `y-mo-d hh:mm`. A wall time a DST jump
- * skips lands just after the jump; one it repeats, on its first reading. */
+/** The instant a clock in `zone` reads `y-mo-d hh:mm` — the sweep's own
+ * answer (Python's `datetime(..., tzinfo=ZoneInfo(zone))`, fold=0, which is how
+ * `next_run_ms` places a row): a wall time a DST change repeats is its FIRST
+ * reading; one it skips is read with the offset in force before the change, so
+ * it lands that much after it (02:30 on a New York spring-forward day is 03:30
+ * EDT). The two candidate offsets are the ones a day either side. */
 export function zonedMs(y: number, mo: number, d: number, hh: number, mm: number, zone: string): number {
   const asUtc = Date.UTC(y, mo - 1, d, hh, mm);
   const offset = (ms: number) => {
     const w = wallOf(ms, zone);
     return Date.UTC(w.y, w.mo - 1, w.d, w.hh, w.mm) - Math.floor(ms / 60000) * 60000;
   };
-  const first = asUtc - offset(asUtc);
-  const second = asUtc - offset(first);
-  return Math.min(first, second);
+  const before = asUtc - offset(asUtc - 86400000);
+  const after = asUtc - offset(asUtc + 86400000);
+  const reads = (ms: number) => {
+    const w = wallOf(ms, zone);
+    return w.y === y && w.mo === mo && w.d === d && w.hh === hh && w.mm === mm;
+  };
+  const real = [before, after].filter(reads);
+  if (real.length > 0) return Math.min(...real);
+  return before;
 }
 
 /** A zone's name as a person says it — "世界標準時間", "台北標準時間",
@@ -211,6 +221,23 @@ export function moveTime(
   return { at: hm(there), dow: DOWS[there.dow], dom: time.dom };
 }
 
+/** Whether a minutes / hourly row fires on the same minutes on `to`'s clock
+ * as on its own. They fire at the minutes of the hour their zone's clock reads
+ * (hourly at :00, every 15 at :00/:15/:30/:45), so a zone a whole hour away
+ * reads the same — and Kolkata (+05:30) does not: a UTC hourly runs at :30
+ * there. The offsets are the ones in force at `refMs`. */
+export function subDailyMoves(time: Pick<RowTime, "every" | "n" | "tz">, to: string, refMs: number): boolean {
+  if (!validZone(time.tz) || !validZone(to)) return false;
+  const offset = (zone: string) => {
+    const w = wallOf(refMs, zone);
+    return (Date.UTC(w.y, w.mo - 1, w.d, w.hh, w.mm) - Math.floor(refMs / 60000) * 60000) / 60000;
+  };
+  const apart = Math.abs(offset(time.tz) - offset(to));
+  if (apart % 60 === 0) return true;
+  const width = time.every === "hourly" ? 60 : time.n;
+  return width > 0 && 60 % width === 0 && apart % width === 0;
+}
+
 /** How often, in words, from fields already on the clock they are read on. */
 function periodWords(time: RowTime, t: T): string {
   switch (time.every) {
@@ -240,11 +267,16 @@ export function periodText(
 ): { text: string; set: string } {
   const time = rowTime(value);
   const asWritten = periodWords(time, t);
+  const where = validZone(time.tz) ? zoneName(time.tz, opts.locale) : time.tz;
+  const set = t("schedules.setAs", { what: asWritten, zone: where });
+  if (time.every === "minutes" || time.every === "hourly") {
+    // The same minutes on the viewer's clock: nothing to say about a zone.
+    if (subDailyMoves(time, opts.viewer, opts.nextMs ?? opts.now)) return { text: asWritten, set: "" };
+    return { text: t("schedules.inZone", { what: asWritten, zone: where }), set };
+  }
   if (time.every !== "daily" && time.every !== "weekly" && time.every !== "monthly") {
     return { text: asWritten, set: "" };
   }
-  const where = validZone(time.tz) ? zoneName(time.tz, opts.locale) : time.tz;
-  const set = t("schedules.setAs", { what: asWritten, zone: where });
   const moved = moveTime(time, opts.viewer, opts.nextMs ?? opts.now);
   if (moved === null) return { text: t("schedules.inZone", { what: asWritten, zone: where }), set };
   return { text: periodWords({ ...time, ...moved }, t), set };

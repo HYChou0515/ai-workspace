@@ -408,7 +408,7 @@ export function WorkflowsModal({
                       aria-label={`${t("schedules.remove")} ${describeSchedule(row, clock, t).text}`}
                       disabled={busy}
                       onClick={() => void removeSchedule(row)}
-                      style={pillBtn}
+                      style={{ ...pillBtn, color: "var(--err)" }}
                     >
                       <Icon name="x" size={12} /> {t("schedules.remove")}
                     </button>

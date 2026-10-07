@@ -319,6 +319,31 @@ describe("SchedulesOverviewPage", () => {
     await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
   });
 
+  it("drops the note once the row shows any newer run — even with no run id back", async () => {
+    // Review round 1: the note waited for the row to show THE run Run now
+    // started, so a reply without a run id, or a fire that overtook it, left
+    // it on screen for good.
+    const before = { enabled: true, rows: [row({})], files: [] };
+    const after = {
+      ...before,
+      rows: [row({ last_run: { run_id: "fired", status: "running", started: NOW, ended: null, by_hand: false } })],
+    };
+    const c = client(
+      {},
+      {
+        overview: vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after),
+        runNow: vi.fn(async () => ""),
+      },
+    );
+    render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+    const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+    fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
+
+    await within(tr).findByRole("link", { name: new RegExp(word("scheduleOverview.status.running")) });
+    await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
+  });
+
   it("links the note to the run while the row does not show it yet", async () => {
     const c = client();
     render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
@@ -365,6 +390,9 @@ describe("SchedulesOverviewPage", () => {
 
     const button = within(tr).getByRole("button", { name: new RegExp(`^${word("schedules.remove")}`) });
     expect(button).toHaveAttribute("data-variant", "danger");
+    // Named with its place: two rows with the same period and workflow on
+    // different items must not read the same to a screen reader.
+    expect(button).toHaveAccessibleName(`${word("schedules.remove")} Line 3 · 每天 17:00 → report`);
     fireEvent.click(button);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(

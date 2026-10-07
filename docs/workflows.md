@@ -905,6 +905,16 @@ item 自己的與頁面資料夾的——每列有下一次、上一次（狀態
 （`edit_content`）。三個動作走 `POST /a/{slug}/items/{id}/schedules/{run,edit,remove}`，由伺服器
 重讀檔案、用 `trigger_id` 找那一列（被 linter 拒絕的列只能移除、用它寫的值找），找不到就 409；
 Workflows 面板的排程區用同一組路由。
+
+**兩個地方的時間都寫在看的人的時鐘上，不標時區**（`docs/plan-schedule-overview-polish.md`，
+`web/src/lib/scheduleTime.ts`）：下一次／上一次寫成「15 分鐘後」「今天 23:34」，週期透過一次真的發生點換算
+（沒寫 `tz` 的列照 sweep 當 UTC），換算後規則會不一樣的——跨到別天的每月、在差半小時的時區裡的每小時／每 N 分鐘——
+照原設定寫，加上時區的名稱。DST 的邊界用 sweep 的同一條規則（Python `ZoneInfo` fold=0）。**「改時間」存檔時把
+`tz` 改寫成表單選的時區**（換算得乾淨的列預設是看的人的時區），因為表單用他的時鐘顯示與輸入。列名用標題：
+`ScheduleView.run_title`（item 自己的 workflow 檔的標題，與解析檢查同一次讀取；否則 profile 的）、
+總表的 `page_title`（那個資料夾裡 Deploy 的頁面）。「現在執行」啟動的 run 記 `WorkflowRun.by_hand`，
+總表的「上一次」標「手動」。總表的「上一次」連到 `?chat=<trigger_id>&from=schedules`，對話上方顯示那條排程
+與「回到排程」、進度展開（只這一次，不寫回記住的偏好）。
 教它的地方在 `author-workflow` skill（每個 app 都授權）、`save_workflow` 的成功回覆句、以及工具
 自己的說明（`every` 的字從 `EVERY` 產生，測試釘住不會漂移）。
 
@@ -921,7 +931,7 @@ item 有這個檔）、sweep 在到期要開火前跳過並 say-once WARNING、`
 item 有的 ∧ 那個 workflow 檔解析得過 ∧ 整檔沒超上限 ∧ sweep 開著 ∧ 檔案已被索引），只有 runnable 的列才有「下次」——
 `tests/api/test_schedules_route_parity.py` 把同一份檔餵路由和 sweep，斷言兩邊一致。前端只渲染：
 `run` 已不存在標紅、到期顯示「下一輪」、sweep 沒開顯示警告、檔案還沒被索引（直接寫進 store、
-還沒有下一次 turn）顯示告示、「移除」把整份檔案少那一列寫回（其他列原樣保留，壞列也保留）。
+還沒有下一次 turn）顯示告示、「移除」「改時間」「現在執行」走上面那組列路由（其他列原樣保留，壞列也保留）。
 匯入 `schedules.json` 是合法的匯入。已知的一個窗口：façade 是熱優先、sweep 讀 durable 快照，
 sandbox 熱著時的改動要等一個 mirror 週期（預設 5 秒）或那個 turn 結束才到 sweep。
 

@@ -136,5 +136,9 @@ describe("ScheduleTimeModal", () => {
     });
     expect(timeOf({ run: "r" }, TPE, NOW)).toMatchObject({ at: "08:00", tz: TPE });
     expect(timeOf("not a row", TPE, NOW).every).toBe("daily");
+    // An hourly row moves to the viewer's zone only when its firing minute
+    // stays put: not from UTC to Kolkata (+05:30).
+    expect(timeOf({ every: "hourly", run: "r" }, TPE, NOW).tz).toBe(TPE);
+    expect(timeOf({ every: "hourly", run: "r" }, "Asia/Kolkata", NOW).tz).toBe("UTC");
   });
 });
