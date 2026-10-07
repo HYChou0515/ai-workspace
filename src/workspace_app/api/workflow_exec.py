@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from specstar import SpecStar
@@ -670,8 +671,10 @@ class WorkflowExecutor:
         await self._turn_engine.forget(chat_key)
         self._run_baseline.pop(chat_key, None)
 
-    def notify_failure(self, run: WorkflowRun) -> None:
-        """In-app failure notification to the item's owner (manual §17)."""
+    def notify_failure(self, run: WorkflowRun, run_id: str) -> None:
+        """In-app failure notification to the item's owner (manual §17) — and to
+        the person the run ran as, when that is somebody else
+        (`plan-personal-env` D11)."""
         from ..apps.resolve import debtor_of, find_work_item
 
         found = find_work_item(self._spec, run.item_id)
@@ -697,4 +700,27 @@ class WorkflowExecutor:
             title=f"Workflow run failed at “{phase}”",
             link=f"/a/{slug}/items/{run.item_id}",
             actor=run.captured_user,
+        )
+        # The person whose credentials it used (the presser, the binder of the
+        # schedule) is the one who can sign in again — and the only one who
+        # can. The platform cannot tell an expired token from any other
+        # failure, so the notice says what to do IF it was the sign-in.
+        acting = RunIdentities(self._spec).env_user(run_id) if run_id else ""
+        if not acting or acting == recipient:
+            return
+        # One per person, item, workflow and UTC day: a schedule failing every
+        # hour must not bury them.
+        day = datetime.fromtimestamp(now_ms() / 1000, UTC).date().isoformat()
+        key = f"run-failed-as:{acting}:{run.item_id}:{run.workflow_id}:{day}"
+        if notification_sent(self._spec, key):
+            return
+        notify(
+            self._spec,
+            recipient=acting,
+            kind="status",
+            title=f"A workflow run as you failed at “{phase}”",
+            body="If your sign-in has expired, sign in again under My environment variables.",
+            link="/my-env",
+            actor=run.captured_user,
+            dedup_key=key,
         )

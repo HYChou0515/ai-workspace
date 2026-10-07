@@ -189,7 +189,7 @@ class WorkflowOrchestrator:
     # ⇒ no cross-pod signal (tests / single-pod fall back to the local task cancel).
     on_stop: Callable[[str], Awaitable[None]] | None = None
     # In-app failure notification (manual §17). Injected by the API layer.
-    notify_failure: Callable[[WorkflowRun], None] | None = None
+    notify_failure: Callable[[WorkflowRun, str], None] | None = None
     # Run-scoped credentials (manual §15): minted per run, injected into the
     # handle's ``credential`` for sandbox capability calls, revoked on terminal.
     # None ⇒ no credential (the in-process capability path uses the captured user).
@@ -330,7 +330,7 @@ class WorkflowOrchestrator:
             self.credentials.revoke(run_id)
         await self._release(data.item_id, terminal=True, key=data.chat_id or data.item_id)
         if self.notify_failure is not None:
-            self.notify_failure(self._get(run_id))
+            self.notify_failure(self._get(run_id), run_id)
 
     async def _resolve_manifest(
         self, slug: str, profile: str, workflow_id: str, item_id: str
@@ -732,7 +732,7 @@ class WorkflowOrchestrator:
             await self._release(item_id, terminal, key)
         if status is RunStatus.ERROR and self.notify_failure is not None:
             logger.warning("run %s errored, firing failure notification", run_id)
-            self.notify_failure(self._get(run_id))
+            self.notify_failure(self._get(run_id), run_id)
 
     async def _release(self, item_id: str, terminal: bool, key: str) -> None:
         if self.release is not None:
