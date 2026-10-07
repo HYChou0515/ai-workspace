@@ -559,6 +559,11 @@ class ScheduleView(Struct):
     `known` (there is no such workflow): the fix is to the workflow, and a person
     told "no such workflow" would hunt for a typo in the schedule instead."""
     payload: dict[str, Any] = {}
+    trigger_id: str = ""
+    """The row's schedule identity (`trigger_id_for`) — what its window ledger,
+    its own chat and its "run as me" binding are keyed on. Filled when the
+    caller says where the file lives (`key_of`); "" for a row that does not
+    parse, which has no identity because the sweep never fires it."""
 
 
 def _last_or_born(
@@ -583,6 +588,7 @@ def schedule_views(
     indexed: bool = True,
     broken: Mapping[str, str] | None = None,
     landed_ms: int | None = None,
+    key_of: Callable[[UserSchedule], str] | None = None,
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of a schedules file, described the way the sweep reads it —
     same parser, same cap, same next-run rule, same ledger (`last_window`) —
@@ -644,14 +650,26 @@ def schedule_views(
                 known=known,
                 run_problem=run_problem,
                 payload=row.payload,
+                trigger_id=key_of(row) if key_of is not None else "",
             )
         )
     return views, file_problems
 
 
-def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]:
-    """A `last_window` resolver over the sweep's ledger for THIS item's own
-    schedules file, or one that answers "never" when there is no ledger to ask
+def schedule_key(item_id: str, path: str) -> Callable[[UserSchedule], str]:
+    """Each row's identity in the schedules file at ``path`` — the sweep's own
+    derivation (`_one_file`: the folder is the path's parent)."""
+    folder = path.rsplit("/", 1)[0]
+    return lambda row: trigger_id_for(item_id, folder, row)
+
+
+def last_window_lookup(
+    spec: Any, item_id: str, path: str = ITEM_SCHEDULES_PATH
+) -> Callable[[UserSchedule], str]:
+    """A `last_window` resolver over the sweep's ledger for the schedules file
+    at ``path`` (the item's own by default; a page's folder keys its rows
+    differently, so a page file asked under the item's path would read as never
+    fired), or one that answers "never" when there is no ledger to ask
     (no spec, or a deploy whose sweep is off never registered the store).
 
     The lookup is a BLOCKING specstar read per distinct row. `schedule_views`
@@ -664,11 +682,11 @@ def last_window_lookup(spec: Any, item_id: str) -> Callable[[UserSchedule], str]
     from .triggers import SpecstarTriggerStore
 
     store = SpecstarTriggerStore(spec)
-    folder = ITEM_SCHEDULES_PATH.rsplit("/", 1)[0]
+    key_of = schedule_key(item_id, path)
     cache: dict[str, str] = {}
 
     def _lookup(row: UserSchedule) -> str:
-        key = trigger_id_for(item_id, folder, row)
+        key = key_of(row)
         if key not in cache:
             try:
                 cache[key] = store.last_window(key)

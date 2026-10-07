@@ -138,6 +138,7 @@ from .schedule_index import (
     is_schedule_file,
     register_schedule_index,
 )
+from .schedule_listing import register_schedule_overview_routes
 from .schedule_reconcile import reconcile_item_schedules
 from .skill_hub_routes import register_skill_hub_routes
 from .skill_review import review_skill
@@ -2663,6 +2664,15 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+    )
+    # docs/plan-schedule-overview.md: every schedule a viewer may see.
+    register_schedule_overview_routes(
+        api,
+        spec=spec,
+        files=files,
+        locator=locator,
+        index=schedule_index,
+        policy=schedule_policy,
     )
 
     register_private_env_routes(

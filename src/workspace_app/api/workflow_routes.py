@@ -73,6 +73,7 @@ class ScheduleRowOut(BaseModel):
     known: bool = False
     run_problem: str = ""
     payload: dict[str, Any] = {}
+    trigger_id: str = ""
 
 
 class SchedulesOut(BaseModel):
@@ -240,14 +241,8 @@ def register_workflow_routes(
         `UserScheduleSweeper._one_file` carries the sweep's side of the same note.
         """
         from ..filestore.protocol import FileNotFound
-        from ..workflow.offered import offered_workflow_ids, unparsable_workflow
-        from ..workflow.user_schedules import (
-            ITEM_SCHEDULES_PATH,
-            last_window_lookup,
-            schedule_views,
-            usable_rows,
-            utc_now,
-        )
+        from ..workflow.user_schedules import ITEM_SCHEDULES_PATH
+        from .schedule_listing import grade_file
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         try:
@@ -256,20 +251,6 @@ def register_workflow_routes(
             return SchedulesOut(
                 enabled=schedule_policy.sweep_enabled, indexed=False, rows=[], problems=[]
             )
-        # The sweep's own decode (`user_schedule_sweep._one_file`): a stray byte
-        # costs its character, not the whole file — and never a 500 here while
-        # the sweep goes on running the rows.
-        raw = data.decode("utf-8", "replace")
-        profile = locator.profile_of(investigation_id)
-        offered = await offered_workflow_ids(files.ls, investigation_id, slug=slug, profile=profile)
-        # Which of the workflows the rows name will not run because their own
-        # file does not parse — asked per distinct `run`, the sweep's own check
-        # (`unparsable_workflow`), through the facade like every other read here.
-        broken: dict[str, str] = {}
-        for run in {row.run for row in usable_rows(raw)[0]} & set(offered):
-            problem = await unparsable_workflow(files.read, investigation_id, run)
-            if problem is not None:
-                broken[run] = problem
         # The sweep reads only the items its index names. A file that reached
         # the store past every hook is invisible to it until the next turn's
         # reconcile, and its rows must not be shown as if they will fire.
@@ -288,20 +269,20 @@ def register_workflow_routes(
         except Exception:  # noqa: BLE001 — a listing, not a run
             logger.exception("schedules: could not read the landing stamp for %s", investigation_id)
             landed = None
-        # One hop off the loop: the ledger reads inside are blocking specstar I/O.
-        views, problems = await asyncio.to_thread(
-            schedule_views,
-            raw,
-            offered=offered,
-            now_utc=utc_now(),
-            last_window=last_window_lookup(
-                spec if schedule_policy.sweep_enabled else None, investigation_id
-            ),
-            max_rows=schedule_policy.max_rows,
-            enabled=schedule_policy.sweep_enabled,
+        views, problems = await grade_file(
+            files,
+            spec=spec,
+            policy=schedule_policy,
+            item_id=investigation_id,
+            slug=slug,
+            profile=locator.profile_of(investigation_id),
+            path=ITEM_SCHEDULES_PATH,
+            # The sweep's own decode (`user_schedule_sweep._one_file`): a stray
+            # byte costs its character, not the whole file — and never a 500
+            # here while the sweep goes on running the rows.
+            raw=data.decode("utf-8", "replace"),
             indexed=indexed,
-            broken=broken,
-            landed_ms=landed,
+            landed=landed,
         )
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,
