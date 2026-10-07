@@ -39,6 +39,8 @@ function Probe() {
 const NOT_THE_SANDBOX = new Set([
   "env.button", // 環境變數 / Env — the variables handed to tools
   "env.title",
+  "myEnv.title", // 我的環境變數 — the same variables, the person's for every item
+  "myEnv.heading",
 ]);
 
 // NOT `import.meta.url`: this file runs under happy-dom, where that is a

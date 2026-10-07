@@ -973,6 +973,26 @@ export const messages = {
     en: "Not run — this item's workspace is full. Delete files you no longer need first.",
   },
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
+  // `plan-personal-env`: a person's values for every item.
+  "myEnv.title": { "zh-TW": "我的環境變數", en: "My environment variables" },
+  "myEnv.heading": { "zh-TW": "我的環境變數", en: "My environment variables" },
+  "myEnv.desc": {
+    "zh-TW":
+      "這裡的值所有 item 都能用,但只有把變數設成 Private first 或 Private only 的 item 會拿到。某個 item 裡另外填的值會優先。登入過期時,在這裡重新登入一次就好。",
+    en: "Every item can use these values, but only an item that sets the variable to Private first or Private only gets it. A value you set inside an item comes first. When a sign-in expires, sign in again here once.",
+  },
+  "myEnv.values": { "zh-TW": "值", en: "Values" },
+  "myEnv.empty": {
+    "zh-TW": "還沒有值。登入下面的系統,或自己新增一個。",
+    en: "Nothing yet. Sign in to a system below, or add a value yourself.",
+  },
+  "myEnv.name": { "zh-TW": "變數名稱", en: "Variable name" },
+  "myEnv.value": { "zh-TW": "值", en: "Value" },
+  "myEnv.add": { "zh-TW": "新增", en: "Add" },
+  "myEnv.remove": { "zh-TW": "移除", en: "Remove" },
+  "myEnv.updatedToday": { "zh-TW": "今天設定", en: "set today" },
+  "myEnv.updatedDays": { "zh-TW": "{days} 天前設定", en: "set {days} days ago" },
+  "myEnv.signIns": { "zh-TW": "登入", en: "Sign in" },
   "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
   "resources.loading": { "zh-TW": "載入中…", en: "Loading…" },
   // 「執行中的」 is not decoration: the storage list further down the same page
@@ -1628,9 +1648,11 @@ export const messages = {
     en: "Affects everyone in this workspace",
   },
   // The three policies, in words a person decides by.
-  "env.policy.shared_first": { "zh-TW": "用共用值", en: "Use the shared value" },
-  "env.policy.private_first": { "zh-TW": "各人可改用自己的", en: "Each person may use their own" },
-  "env.policy.private_only": { "zh-TW": "各人自己填", en: "Each person fills it in" },
+  // `plan-personal-env` D9 (user): the three choices are named by these words,
+  // in both languages, with no sentence beside them.
+  "env.policy.shared_first": { "zh-TW": "Shared", en: "Shared" },
+  "env.policy.private_first": { "zh-TW": "Private first", en: "Private first" },
+  "env.policy.private_only": { "zh-TW": "Private only", en: "Private only" },
   "env.policyLabel": { "zh-TW": "{name} 由誰提供", en: "Who provides {name}" },
   "env.sharedUnused": {
     "zh-TW": "共用值不會被使用",
@@ -1643,7 +1665,11 @@ export const messages = {
     en: "Edit as .env text (paste, import, export)",
   },
   // "Only me" rows: whose value a tool gets, and why this row looks as it does.
-  "env.inUse.private": { "zh-TW": "使用中:你的", en: "In use: yours" },
+  "env.inUse.private": { "zh-TW": "使用中:你的(這個 item)", en: "In use: yours (this item)" },
+  "env.inUse.personal": {
+    "zh-TW": "使用中:你的(所有 item)",
+    en: "In use: yours (all items)",
+  },
   "env.inUse.shared": { "zh-TW": "使用中:共用值", en: "In use: the shared value" },
   "env.inUse.none": { "zh-TW": "未設定", en: "Not set" },
   "env.pinned": {

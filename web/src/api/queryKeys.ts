@@ -102,6 +102,10 @@ export const qk = {
   envProviders: (slug: string, itemId: string) => ["envProviders", slug, itemId] as const,
   // `plan-wui-viewer-login`: the CALLER's private env values for one item.
   privateEnv: (slug: string, itemId: string) => ["privateEnv", slug, itemId] as const,
+  // `plan-personal-env`: the CALLER's values for every item.
+  personalEnv: () => ["personalEnv"] as const,
+  // The deploy's sign-ins, asked with no item (the "My environment variables" page).
+  myEnvProviders: () => ["myEnvProviders"] as const,
   // The item's shared values + policy, for a page that has only its id.
   envLayers: (slug: string, itemId: string) => ["envLayers", slug, itemId] as const,
   // One schedules file's rows with who each runs as ("run as me").

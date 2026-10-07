@@ -124,6 +124,25 @@ describe("identityState", () => {
   });
 });
 
+describe("my environment variables (`plan-personal-env`)", () => {
+  it("is satisfied by my value for every item where the item asks for a personal one", () => {
+    const s = identityState({
+      ...base,
+      tools: [tool([req("A")])],
+      policy: { A: "private_only" },
+      personal: { A: "v" },
+    });
+    expect(s.missing).toEqual([]);
+    expect(s.holdsOwn).toBe(true);
+  });
+
+  it("does not count it for an item that uses the shared value (D2)", () => {
+    const s = identityState({ ...base, tools: [tool([req("A")])], personal: { A: "v" } });
+    expect(s.missing).toEqual([{ kind: "set", name: "A" }]);
+    expect(s.holdsOwn).toBe(false);
+  });
+});
+
 describe("keyLabel (review round 1, V7)", () => {
   it("calls three sign-ins systems, but never calls plain variables systems", async () => {
     const { keyLabelParts } = await import("./identityState");

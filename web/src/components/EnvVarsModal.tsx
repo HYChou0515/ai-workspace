@@ -37,6 +37,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
+import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
@@ -71,6 +72,7 @@ export function EnvVarsModal({
   itemId,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
 }: {
   envVars: Record<string, string>;
   envPolicy?: Record<string, string>;
@@ -87,6 +89,9 @@ export function EnvVarsModal({
   itemId?: string;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
   privateClient?: Pick<PrivateEnvClient, "get" | "put" | "clear">;
+  /** My environment variables (`plan-personal-env`): read to say whose value
+   * is in use, and where a sign-in on "Only me" is stored. */
+  personalClient?: Pick<PersonalEnvClient, "get" | "put">;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -109,6 +114,12 @@ export function EnvVarsModal({
     queryFn: () => privateClient.get(slug!, itemId!),
     enabled: hasItem,
   });
+  const personalQ = useQuery({
+    queryKey: qk.personalEnv(),
+    queryFn: () => personalClient.get(),
+    enabled: hasItem,
+  });
+  const personal = personalQ.data?.values ?? {};
 
   // ── the SHARED layer: the box's text is the one copy of the values ────────
   const [text, setText] = useState(() => toEnvText(envVars));
@@ -174,6 +185,18 @@ export function EnvVarsModal({
       queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: kept, auto });
       afterSave("shared", sharedDirty);
     },
+  });
+  // A sign-in on "Only me" is the person's, for every item (`plan-personal-env`
+  // D3/D6): it goes straight to my environment variables — the item's form is
+  // not touched, and nothing waits for this tab's Save.
+  const signIn = useMutation({
+    mutationFn: async (env: Record<string, string>) => {
+      const current = (
+        await queryClient.fetchQuery({ queryKey: qk.personalEnv(), queryFn: () => personalClient.get() })
+      ).values;
+      return personalClient.put({ ...current, ...env });
+    },
+    onSuccess: (saved) => queryClient.setQueryData(qk.personalEnv(), saved),
   });
   const logout = useMutation({
     mutationFn: () => privateClient.clear(slug!, itemId!),
@@ -278,6 +301,7 @@ export function EnvVarsModal({
             policy={policy}
             mine={mineValues}
             auto={auto}
+            personal={personal}
             failed={mineQ.isError}
             setMine={(name, value) => setMine((prev) => ({ ...(prev ?? {}), [name]: value }))}
             login={
@@ -286,7 +310,7 @@ export function EnvVarsModal({
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
-                onFilled={(env) => setMine((prev) => ({ ...(prev ?? {}), ...env }))}
+                onFilled={(env) => signIn.mutate(env)}
               />
             }
           />
@@ -802,6 +826,7 @@ function MineTab({
   policy,
   mine,
   auto,
+  personal,
   failed,
   setMine,
   login,
@@ -813,6 +838,7 @@ function MineTab({
   policy: Record<string, string>;
   mine: Record<string, string>;
   auto: Record<string, string>;
+  personal: Record<string, string>;
   failed: boolean;
   setMine: (name: string, value: string) => void;
   login: ReactNode;
@@ -830,8 +856,9 @@ function MineTab({
   ]);
   const effective: Record<string, string> = {};
   for (const n of names) {
-    const layer = layerInUse(n, shared, own, policy);
-    if (layer !== "none") effective[n] = (layer === "private" ? own : shared)[n];
+    const layer = layerInUse(n, shared, own, policy, personal);
+    if (layer !== "none")
+      effective[n] = (layer === "private" ? own : layer === "personal" ? personal : shared)[n];
   }
   const view = deriveEnvNeeds(tools, effective);
   const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
@@ -865,7 +892,9 @@ function MineTab({
         other={other}
         // What only THEY can fill and have not: unfold it, or a person who
         // opened this from a page finds it folded below every tool.
-        otherOpen={other.some((n) => policyOf(n, policy) === "private_only" && !own[n])}
+        otherOpen={other.some(
+          (n) => policyOf(n, policy) === "private_only" && !own[n] && !personal[n],
+        )}
         row={(field, section) => (
           <MineRow
             key={`${section.key}:${field.name}`}
@@ -875,6 +904,7 @@ function MineTab({
             policy={policy}
             mine={mine}
             auto={auto}
+            personal={personal}
             setMine={setMine}
           />
         )}
@@ -892,6 +922,7 @@ function MineRow({
   policy,
   mine,
   auto,
+  personal,
   setMine,
 }: {
   name: string;
@@ -900,12 +931,13 @@ function MineRow({
   policy: Record<string, string>;
   mine: Record<string, string>;
   auto: Record<string, string>;
+  personal: Record<string, string>;
   setMine: (name: string, value: string) => void;
 }) {
   const t = useT();
   const [revealed, setRevealed] = useState(false);
   const p = policyOf(name, policy);
-  const layer = layerInUse(name, shared, ownLayer(mine, auto), policy);
+  const layer = layerInUse(name, shared, ownLayer(mine, auto), policy, personal);
   // Filled in by the deploy at the person's last request: it wins over
   // anything typed, and their next request rewrites it — a box here would
   // edit nothing.
@@ -956,7 +988,7 @@ function MineRow({
       <span style={{ ...MUTED, display: "flex", gap: 8 }}>
         {!pinned && p !== "shared_first" && <span>{t(`env.hint.${p}`)}</span>}
         <span style={{ marginLeft: "auto" }}>
-          {inUse === "mine" ? "✓ " : ""}
+          {inUse === "mine" || inUse === "personal" ? "✓ " : ""}
           {t(`env.inUse.${layer}`)}
         </span>
       </span>
@@ -969,7 +1001,7 @@ function MineRow({
 /** The deploy's "log in, get the variables" buttons. The exchange result goes
  * into the FORM of whichever tab is open — never stored until that tab's Save.
  * The credential typed here reaches the deploy's implementation and stops. */
-function Logins({
+export function Logins({
   offered,
   disabled = false,
   creds,

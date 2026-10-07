@@ -1,41 +1,17 @@
 {
- "_comment": "plan-wui-viewer-login: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows.",
+ "_comment": "plan-wui-viewer-login + plan-personal-env: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows. `private` is the person's values for this item, `personal` their values for every item.",
  "cases": [
   {
    "shared": {},
    "private": {},
+   "personal": {},
    "policy": {},
    "expected": "none"
   },
   {
    "shared": {},
-   "private": {
-    "K": "p"
-   },
-   "policy": {},
-   "expected": "private"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
    "private": {},
-   "policy": {},
-   "expected": "shared"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
-   "private": {
-    "K": "p"
-   },
-   "policy": {},
-   "expected": "shared"
-  },
-  {
-   "shared": {},
-   "private": {},
+   "personal": {},
    "policy": {
     "K": "shared_first"
    },
@@ -43,39 +19,8 @@
   },
   {
    "shared": {},
-   "private": {
-    "K": "p"
-   },
-   "policy": {
-    "K": "shared_first"
-   },
-   "expected": "private"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
    "private": {},
-   "policy": {
-    "K": "shared_first"
-   },
-   "expected": "shared"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
-   "private": {
-    "K": "p"
-   },
-   "policy": {
-    "K": "shared_first"
-   },
-   "expected": "shared"
-  },
-  {
-   "shared": {},
-   "private": {},
+   "personal": {},
    "policy": {
     "K": "private_first"
    },
@@ -83,39 +28,8 @@
   },
   {
    "shared": {},
-   "private": {
-    "K": "p"
-   },
-   "policy": {
-    "K": "private_first"
-   },
-   "expected": "private"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
    "private": {},
-   "policy": {
-    "K": "private_first"
-   },
-   "expected": "shared"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
-   "private": {
-    "K": "p"
-   },
-   "policy": {
-    "K": "private_first"
-   },
-   "expected": "private"
-  },
-  {
-   "shared": {},
-   "private": {},
+   "personal": {},
    "policy": {
     "K": "private_only"
    },
@@ -123,39 +37,61 @@
   },
   {
    "shared": {},
-   "private": {
-    "K": "p"
-   },
-   "policy": {
-    "K": "private_only"
-   },
-   "expected": "private"
-  },
-  {
-   "shared": {
-    "K": "s"
-   },
    "private": {},
+   "personal": {},
    "policy": {
-    "K": "private_only"
+    "K": "bogus"
    },
    "expected": "none"
   },
   {
-   "shared": {
-    "K": "s"
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": "v"
    },
-   "private": {
-    "K": "p"
-   },
-   "policy": {
-    "K": "private_only"
-   },
-   "expected": "private"
+   "policy": {},
+   "expected": "none"
   },
   {
    "shared": {},
    "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
    "policy": {
     "K": "bogus"
    },
@@ -166,6 +102,112 @@
    "private": {
     "K": "p"
    },
+   "personal": {},
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
    "policy": {
     "K": "bogus"
    },
@@ -176,6 +218,112 @@
     "K": "s"
    },
    "private": {},
+   "personal": {},
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
    "policy": {
     "K": "bogus"
    },
@@ -187,6 +335,130 @@
    },
    "private": {
     "K": "p"
+   },
+   "personal": {},
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
    },
    "policy": {
     "K": "bogus"

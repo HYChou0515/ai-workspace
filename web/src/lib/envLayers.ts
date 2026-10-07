@@ -17,21 +17,25 @@ export function policyOf(name: string, policy: Record<string, string>): EnvPolic
   return p === "private_first" || p === "private_only" ? p : "shared_first";
 }
 
-export type Layer = "shared" | "private" | "none";
+/** `private` = the person's value for THIS item; `personal` = their value for
+ * every item ("my environment variables", `docs/plan-personal-env.md`). */
+export type Layer = "shared" | "private" | "personal" | "none";
 
 export function layerInUse(
   name: string,
   shared: Record<string, string>,
   mine: Record<string, string>,
   policy: Record<string, string>,
+  personal: Record<string, string> = {},
 ): Layer {
   const has = (layer: Record<string, string>) => Object.hasOwn(layer, name);
   switch (policyOf(name, policy)) {
     case "private_only":
-      return has(mine) ? "private" : "none";
+      return has(mine) ? "private" : has(personal) ? "personal" : "none";
     case "private_first":
-      return has(mine) ? "private" : has(shared) ? "shared" : "none";
+      return has(mine) ? "private" : has(personal) ? "personal" : has(shared) ? "shared" : "none";
     default:
+      // Shared never reads the person's values for every item (D2).
       return has(shared) ? "shared" : has(mine) ? "private" : "none";
   }
 }

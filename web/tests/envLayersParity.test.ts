@@ -17,13 +17,14 @@ import { layerInUse } from "../src/lib/envLayers";
 type Case = {
   shared: Record<string, string>;
   private: Record<string, string>;
+  personal: Record<string, string>;
   policy: Record<string, string>;
   expected: string;
 };
 
 describe("layerInUse", () => {
   it.each(table.cases as Case[])("agrees with resolve_env: %j", (c) => {
-    expect(layerInUse("K", c.shared, c.private, c.policy)).toBe(c.expected);
+    expect(layerInUse("K", c.shared, c.private, c.policy, c.personal)).toBe(c.expected);
   });
 });
 

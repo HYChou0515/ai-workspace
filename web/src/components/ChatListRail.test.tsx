@@ -101,6 +101,8 @@ describe("ChatListRail", () => {
     expect(hrefs).toEqual(
       expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/wui", "/help"]),
     );
+    // `plan-personal-env`: my environment variables sit right after my resources.
+    expect(hrefs[hrefs.indexOf("/my-resources") + 1]).toBe("/my-env");
   });
 
   it("draws every menu entry's icon, in both sections, as the global switcher does", () => {

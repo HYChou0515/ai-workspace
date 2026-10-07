@@ -34,6 +34,7 @@ function open({
   shared = {},
   mine = {},
   auto = {},
+  personal = {} as Record<string, string>,
   providers = [] as EnvProvider[],
   rows = [] as BindingRow[],
 } = {}) {
@@ -58,6 +59,10 @@ function open({
         get: vi.fn(async () => ({ values: mine, auto })),
         put: vi.fn(async () => {}),
         clear: vi.fn(async () => {}),
+      }}
+      personalClient={{
+        get: vi.fn(async () => ({ values: personal, updated: {} })),
+        put: vi.fn(async (values: Record<string, string>) => ({ values, updated: {} })),
       }}
       bindingsClient={bindings}
     />,
@@ -90,6 +95,12 @@ describe("PageIdentityBar", () => {
 
   it("says signed in once they do", async () => {
     open({ shared: { ERP_TOKEN: "x" }, policy: { VPN_KEY: "private_only" }, mine: { VPN_KEY: "v" } });
+    expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
+  });
+
+  it("is signed in by my environment variables where the page asks for a personal value", async () => {
+    // `plan-personal-env`: signed in once, on any page that asks for it.
+    open({ policy: { ERP_TOKEN: "private_only" }, providers: [ERP_LOGIN], personal: { ERP_TOKEN: "t" } });
     expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
   });
 

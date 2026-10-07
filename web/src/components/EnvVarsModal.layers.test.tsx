@@ -321,12 +321,19 @@ describe("Only me: the variables that are each person's to fill", () => {
 });
 
 describe("signing in from Only me", () => {
-  it("puts what the login returned into the person's own values, not the shared ones", async () => {
+  // `plan-personal-env` D3: a sign-in is the person's for EVERY item — it goes to
+  // my environment variables, not to this item's values, and never to the
+  // shared ones.
+  it("puts what the login returned into my environment variables, not the shared ones", async () => {
     const onSave = vi.fn();
     const privateClient = {
       get: vi.fn(async () => ({ values: {}, auto: {} })),
       put: vi.fn(async () => {}),
       clear: vi.fn(async () => {}),
+    };
+    const personalClient = {
+      get: vi.fn(async () => ({ values: {}, updated: {} })),
+      put: vi.fn(async (values: Record<string, string>) => ({ values, updated: {} })),
     };
     renderWithQuery(
       <EnvVarsModal
@@ -349,22 +356,18 @@ describe("signing in from Only me", () => {
           resolveEnvProvider: vi.fn(async () => ({ ERP_TOKEN: "from-login" })),
         }}
         privateClient={privateClient}
+        personalClient={personalClient}
       />,
     );
 
     fireEvent.click(await screen.findByTestId("env-provider-erp-login"));
     fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "pw" } });
     fireEvent.click(screen.getByTestId("env-cred-submit"));
-    await waitFor(() =>
-      expect((screen.getByTestId("env-mine-ERP_TOKEN") as HTMLInputElement).value).toBe(
-        "from-login",
-      ),
-    );
-    fireEvent.click(screen.getByTestId("env-mine-save"));
 
     await waitFor(() =>
-      expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "from-login" }),
+      expect(personalClient.put).toHaveBeenCalledWith({ ERP_TOKEN: "from-login" }),
     );
+    expect(privateClient.put).not.toHaveBeenCalled();
     expect(onSave).not.toHaveBeenCalled();
   });
 });

@@ -114,10 +114,17 @@ def test_the_shared_case_table_still_says_what_resolve_env_does():
     table = json.loads(
         (Path(__file__).parents[1] / "fixtures" / "env_layers_cases.json").read_text()
     )
-    assert len(table["cases"]) == 20
+    # Every combination of K in shared / this item's / every item's, under no
+    # policy, each of the three, and an unknown one (`plan-personal-env`).
+    assert len(table["cases"]) == 2 * 2 * 2 * 5
     for case in table["cases"]:
-        got = resolve_env(shared=case["shared"], private=case["private"], policy=case["policy"])
-        layer = {"s": "shared", "p": "private"}.get(got.get("K", ""), "none")
+        got = resolve_env(
+            shared=case["shared"],
+            private=case["private"],
+            personal=case["personal"],
+            policy=case["policy"],
+        )
+        layer = {"s": "shared", "p": "private", "v": "personal"}.get(got.get("K", ""), "none")
         assert layer == case["expected"], case
 
 
