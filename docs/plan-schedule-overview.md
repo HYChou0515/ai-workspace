@@ -47,7 +47,8 @@ was written at 14:00. The missing fact is **when the row appeared**.
 - **Record it at the one door every write shares.** `_note_schedule_file`
   (`api/app.py` ~1191) runs on every landing of a `schedules.json` — facade
   writes (file PUT, `write_file`, `save_schedules`, the new edit route) and the
-  local-sandbox mirror's upload of `exec` writes. It now also stamps
+  app's own mirror's upload of `exec` writes (every deploy that is not
+  host-managed). It now also stamps
   `_ScheduleIndex.landed[path] = now_ms` (read back with `landed_at`) (additive field, default `{}`; no
   migration — a missing stamp means "unknown", which keeps today's behaviour).
 - **Apply it in the sweep.** For an identity with **no ledger row**, if this
@@ -73,13 +74,17 @@ was wrong about the first item):
   changed by `exec` can fire at once. That is the behaviour before this plan —
   the rule covers the doors people and the agent's tools use (`save_schedules`,
   file PUT / a page's `writeFile`, `write_file`, the edit route).
-- **A re-upload moves the stamp (kind: local only).** The local-sandbox mirror
-  remembers what it uploaded per pod; a pod that attaches to a live shared dir
+- **A re-upload moves the stamp (deploys the app mirrors: kind: local, or http
+  without `host_managed_durable`).** The app's mirror remembers what it uploaded
+  per pod; a pod that attaches to a live shared dir
   without restoring it (pod restart, rollout, a second pod) re-uploads every
   file once, and that re-stamps `schedules.json` with nobody having written it.
   A schedule that has never fired, whose moment passed while the sweep was not
   ticking, then waits for its next period. Host-managed deploys do not run the
   hook from the mirror, so they are not affected.
+- A workflow's sandbox step that writes `schedules.json` is registered at the
+  item's next chat turn end (the reconcile runs only from a chat send), not
+  when the step finishes.
 - An old identity that has never fired, whose file is re-saved for another row
   after this period's target while the sweep was also down, is treated as new
   for that period.
@@ -221,7 +226,7 @@ first or a mutation that reddens it:
 
 | Finding | Lens | Done |
 |---|---|---|
-| Three unchanged tests (`test_offered_workflows`, `test_schedule_binding_routes`, `test_shutdown_with_run_in_flight`) wrote a minute schedule and ticked at once — the birth rule now holds that row, so they never reached what they guard | regression | Stamped `landed=0` in each, as the parity test does; the class was swept (every test that ticks the app's sweep: five files, all now stamp) |
+| Three unchanged tests (`test_offered_workflows`, `test_schedule_binding_routes`, `test_shutdown_with_run_in_flight`) failed at `1601cf2a`: they wrote a minute schedule and ticked at once, and the birth rule held that row | regression | Stamped `landed=0` in each, as the parity test does; the class was swept — every test that ticks the app's sweep to make it FIRE now stamps (five files). Two parity tests tick unstamped: the birth-rule case on purpose, and the won't-parse case, whose sweep half reddens on nothing either way — on master too |
 | Opening `/schedules` rebuilt every idle-reaped sandbox it listed (host-managed) | veracity | `WorkspaceFiles.read/ls(..., wake=False)`; every listing read asks not to wake (pinned) |
 | One item's read error 500'd the page | defect | Each file is guarded; a failure lists that file with a sentence |
 | `read_meta` alone received a page row's `with` | defect | Without `read_content`, rows (overview and panel) carry no `with` / `payload` |
@@ -238,8 +243,8 @@ Not changed, and why:
 - **The stamp mechanism stays.** Its two holes (host-managed `exec` writes are
   not stamped; a kind:local re-upload moves the stamp) are written up under
   Known gaps. The first falls back to the behaviour before this plan; the
-  second needs kind:local, a never-fired row and the sweep down across its
-  moment. Replacing the mechanism would be the third design of the rule.
+  second needs a deploy the app mirrors, a never-fired row and the sweep down
+  across its moment. Replacing the mechanism would be the third design of the rule.
 - **`plan-wui.md` is not marked overturned.** Its line about an edited row
   running again the same day is a review round's correction of a fact, not a
   decision of that plan.
@@ -248,3 +253,21 @@ Not changed, and why:
   back what a restore is about to land.
 - Server sentences (409s, parse problems) reach the zh-TW UI in English, as the
   panel's parse problems always have.
+
+## Review round 2 (2026-10-07, four lenses on `efb7fb94`)
+
+| Finding | Lens | Done |
+|---|---|---|
+| Round 1's redaction broke Remove-by-value for a viewer with `edit_content` but not `read_content` (the verbs are independent): the redacted value matched nothing (409 forever) — or matched a *different* row that looks the same without `with`, and deleted it | defect, regression, conformance | A refused row is named by its **position and** the value as this viewer was shown it (`RowRef.index`): the row at that position is compared — redacted for a viewer who may not read — and anything else is a 409. Both entrances send `index` |
+| The `?chat=` hold only engaged for a cache older than the 30s staleTime: Run now, then the last-run link within 30s, opened the newest chat | defect | When the address names a chat the list is fetched on mount (`refetchOnMount: "always"`) and the choice is held until it has been (`isFetchedAfterMount`); pinned with the production query client. The overview's actions also invalidate the item's chat list |
+| A malformed `with` was quoted back in the row's problem to a viewer without `read_content` | defect, conformance | The sentence names the type, not the value |
+| The panel's import and template copy did not refresh `/schedules` | conformance | they do; all three panel sites pinned |
+| Two round-1 lines reddened nothing when mutated: the `file_written` activity entry, and `mayRunNow`'s "workflow exists" | veracity | pinned (the activity test counts entries before and after — the file PUT that seeds the file writes one too) |
+| Sentences: why a reaped item's durable copy is the answer (a host-side reap does not write back — it leaves the last checkpoint, which is all a rebuild restores), which deploys the app mirrors (not only kind:local), the read cost (an address read per op, the index read per page), rollout (an old pod's `forget` and reconcile also drop stamps), the round-1 test count | veracity | corrected in the comments, this plan and the migrations entry |
+
+Accepted, said here: **redaction hides `with` only.** It is what a row sends
+its workflow and the field that can hold a recipient or a token; the rest of a
+row (its time, its `run`, an unknown key) is how a viewer recognises the
+schedule at all. A row's `trigger_id` is a hash over its folder, `run`, `with`
+and time, so a viewer who may list it could confirm a *guess* at a low-entropy
+`with` — the identity is what every action names a row by, so it stays.

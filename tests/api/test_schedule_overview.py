@@ -579,7 +579,7 @@ def test_a_row_the_sweep_refuses_can_still_be_removed_by_what_it_says():
     reordered = {"with": {"ids": [1, 2]}, "run": "w0", "every": "fortnightly"}
     r = client.post(
         _wp(iid, "/schedules/remove"),
-        json={"path": ITEM_SCHEDULES, "trigger_id": "", "raw": reordered},
+        json={"path": ITEM_SCHEDULES, "trigger_id": "", "raw": reordered, "index": 0},
     )
 
     assert r.status_code == 204, r.text
@@ -787,6 +787,98 @@ def test_a_viewer_who_may_not_read_the_files_does_not_get_what_a_row_sends(monke
     assert "s3cret" not in panel.text
 
 
+def test_a_malformed_with_is_not_repeated_back_in_the_rows_problem():
+    """Review round 2: the problem sentence quoted the `with` value — the very
+    file content a viewer without `read_content` is not sent. It names the
+    type instead, which is what the author needs to fix it."""
+    meta_only = Permission(visibility="restricted", read_meta=["user:alice"])
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=meta_only)
+    _put(
+        client, iid, ITEM_SCHEDULES, _schedules({"every": "hourly", "run": "w0", "with": "s3cret"})
+    )
+    holder["id"] = "alice"
+
+    overview = client.get("/schedules").text
+    panel = client.get(_wp(iid, "/schedules")).text
+
+    assert "s3cret" not in overview and "s3cret" not in panel
+    assert "`with` must be an object" in panel
+
+
+@pytest.mark.parametrize(("pick", "left"), [(0, 1), (1, 0)])
+def test_who_may_not_read_the_file_removes_exactly_the_row_they_picked(pick: int, left: int):
+    """Review round 2: with `edit_content` but not `read_content` a viewer sees
+    a refused row without its `with`. Removing "by value" with that redacted
+    value matched a DIFFERENT row — one that looks the same without `with` —
+    and deleted it. The row is named by its position AND its value as this
+    viewer was shown it, so the row picked is the row removed."""
+    editor = Permission(
+        visibility="restricted", read_meta=["user:alice"], edit_content=["user:alice"]
+    )
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=editor)
+    rows = [
+        {"every": "fortnightly", "run": "w0", "with": {"to": "x"}},
+        {"every": "fortnightly", "run": "w0"},
+    ]
+    _put(client, iid, ITEM_SCHEDULES, _schedules(*rows))
+    holder["id"] = "alice"
+    listed = sorted(_rows(client), key=lambda r: r["index"])
+    assert [r["can_read"] for r in listed] == [False, False]
+    assert listed[0]["raw"] == listed[1]["raw"]  # what makes the old match ambiguous
+
+    r = client.post(
+        _wp(iid, "/schedules/remove"),
+        json={
+            "path": ITEM_SCHEDULES,
+            "trigger_id": "",
+            "raw": listed[pick]["raw"],
+            "index": listed[pick]["index"],
+        },
+    )
+
+    assert r.status_code == 204, r.text
+    holder["id"] = "bob"
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [rows[left]]
+
+
+def test_a_reader_removing_by_a_value_that_changed_since_listing_gets_a_conflict():
+    """A viewer who may read is matched on the whole value, `with` included: a
+    row whose `with` changed since it was listed is not the row they saw."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    seen = {"every": "fortnightly", "run": "w0", "with": {"to": "x"}}
+    now = {"every": "fortnightly", "run": "w0", "with": {"to": "y"}}
+    _put(client, iid, ITEM_SCHEDULES, _schedules(now))
+
+    r = client.post(
+        _wp(iid, "/schedules/remove"),
+        json={"path": ITEM_SCHEDULES, "trigger_id": "", "raw": seen, "index": 0},
+    )
+
+    assert r.status_code == 409, r.text
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [now]
+
+
+def test_removing_by_value_needs_the_rows_position_and_it_must_still_match():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    bad = {"every": "fortnightly", "run": "w0"}
+    _put(client, iid, ITEM_SCHEDULES, _schedules(bad))
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": "", "raw": bad}
+
+    no_index = client.post(_wp(iid, "/schedules/remove"), json=ref)
+    moved = client.post(_wp(iid, "/schedules/remove"), json={**ref, "index": 1})
+
+    assert (no_index.status_code, moved.status_code) == (409, 409)
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [bad]
+
+
 def test_saving_keeps_text_readable_and_tells_other_viewers(monkeypatch):
     """Review round 1: the rewrite turned 品管課 into \\u54c1…, and — unlike the
     file PUT the panel used before — told nobody: an open tab of the file kept
@@ -808,12 +900,22 @@ def test_saving_keeps_text_readable_and_tells_other_viewers(monkeypatch):
     monkeypatch.setattr(app.state.turn_engine, "publish", lambda key, ev: seen.append((key, ev)))
     ref = {"path": ITEM_SCHEDULES, "trigger_id": _row_of(client, ITEM_SCHEDULES)["trigger_id"]}
 
+    def written_now() -> int:
+        return sum(
+            e["kind"] == "file_written" and e["ref"].get("path") == ITEM_SCHEDULES
+            for e in client.get("/activity").json()
+        )
+
+    written_before = written_now()
     r = client.post(_wp(iid, "/schedules/remove"), json=ref)
 
     assert r.status_code == 204, r.text
     assert "品管課" in client.get(_wp(iid, f"/files{ITEM_SCHEDULES}")).text
     changed = [ev for key, ev in seen if key == iid and isinstance(ev, FileChanged)]
     assert [(ev.path, ev.kind, ev.by) for ev in changed] == [(ITEM_SCHEDULES, "written", "bob")]
+    # …and the activity log says so, as it does for the file PUT: one more
+    # `file_written` for this path than before the press.
+    assert written_now() == written_before + 1
 
 
 def test_a_folder_with_two_deployed_pages_opens_the_latest_deploy():

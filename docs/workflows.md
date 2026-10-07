@@ -891,7 +891,7 @@ sweep 沒開的部署會**照存但大聲警告**。
 
 **新排程不補跑**（[`plan-schedule-overview.md`](plan-schedule-overview.md) §1）。sweep 的補跑規則
 （時間點過了、這一期還沒跑 → 跑）只適用於排程**存在時**錯過的時間窗。透過 façade 寫入 `schedules.json`
-（`save_schedules`、檔案 PUT／頁面的 `writeFile`、`write_file`、改時間）以及本機 sandbox 的 mirror，
+（`save_schedules`、檔案 PUT／頁面的 `writeFile`、`write_file`、改時間）以及 app 自己的 mirror（host-managed 以外的部署），
 都會經過 `_note_schedule_file`，它同時記下落地時間（`_ScheduleIndex.landed`）；一個帳本上
 從沒跑過的排程，若這一期的時間點早於它的落地時間，sweep 把這一期記成已處理、不開火。改時間等於換一個
 排程身分（`trigger_id` 含時間），所以改完也是從下一個時間點開始，不會當場補跑。

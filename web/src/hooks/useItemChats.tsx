@@ -12,9 +12,10 @@ import { qk } from "../api/queryKeys";
 export type UseItemChats = {
   chats: ItemChatSummary[];
   isLoading: boolean;
-  /** A fetch is in flight — the list shown may be a cached one about to be
-   * replaced (a chat made since it was cached is not in it yet). */
-  isFetching: boolean;
+  /** The list has been fetched since this component mounted — before that,
+   * what it shows may be a cache from an earlier visit (a chat made since,
+   * e.g. a schedule's, is not in it yet). */
+  isFetchedAfterMount: boolean;
   /** Open a new free chat; resolves to its summary. */
   createFreeChat: (title?: string) => Promise<ItemChatSummary>;
   /** Rename a chat from the manage modal (#132). */
@@ -27,12 +28,16 @@ export function useItemChats(
   slug: string,
   itemId: string,
   client: ItemChatApi = itemChatApi,
+  /** `always`: fetch on mount even when the cache is fresh — for a caller that
+   * must see a chat that may have been made since the list was cached. */
+  refetchOnMount: "always" | undefined = undefined,
 ): UseItemChats {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
   const query = useQuery({
     queryKey: qk.itemChats(slug, itemId),
     queryFn: () => client.listChats(slug, itemId),
+    ...(refetchOnMount ? { refetchOnMount } : {}),
   });
   const create = useMutation({
     mutationFn: (title: string = "") => client.createChat(slug, itemId, title),
@@ -50,7 +55,7 @@ export function useItemChats(
   return {
     chats: query.data ?? [],
     isLoading: query.isLoading,
-    isFetching: query.isFetching,
+    isFetchedAfterMount: query.isFetchedAfterMount,
     createFreeChat: (title = "") => create.mutateAsync(title),
     renameChat: (chatId, title) => rename.mutateAsync({ chatId, title }),
     deleteChat: (chatId) => remove.mutateAsync(chatId),

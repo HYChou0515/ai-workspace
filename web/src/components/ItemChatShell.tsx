@@ -134,10 +134,18 @@ export function ItemChatShell({
   showCollections: boolean;
 } & AgentChrome) {
   const qc = useQueryClient();
-  const { chats, isLoading, isFetching, createFreeChat, renameChat, deleteChat } = useItemChats(
-    slug,
-    itemId,
-  );
+  // The chat the address names (`?chat=`), read once — the schedules overview
+  // links a schedule's last run to its own chat this way.
+  const [addressChat] = useState(chatFromAddress);
+  const { chats, isLoading, isFetchedAfterMount, createFreeChat, renameChat, deleteChat } =
+    useItemChats(
+      slug,
+      itemId,
+      undefined,
+      // A list cached moments ago is fresh to the cache but may predate that
+      // chat (Run now just made it): fetch it on mount when the address asks.
+      addressChat ? "always" : undefined,
+    );
   const profilesQ = useWorkflowProfiles(slug);
   const wsWorkflowsQ = useWorkspaceWorkflows(slug, itemId);
   // The launch list = the profile's package workflows PLUS the ones the user
@@ -159,7 +167,7 @@ export function ItemChatShell({
   // last run to its own conversation this way (docs/plan-schedule-overview.md).
   // Read once, from the address the item was opened with; an id the item has
   // no chat for falls back to the most recent one like any other.
-  const [activeChatId, setActiveChatId] = useState<string | null>(chatFromAddress);
+  const [activeChatId, setActiveChatId] = useState<string | null>(addressChat);
   const [managing, setManaging] = useState(false);
   // #283: a workflow launch opens the pre-flight dialog first; the real start (which
   // opens a workflow chat) happens only on confirm.
@@ -178,17 +186,17 @@ export function ItemChatShell({
   // Keep a valid selection: when nothing is active, or the active chat was just
   // deleted, fall back to the most-recent chat (chats are activity-sorted, §132).
   //
-  // Not while the list is being refetched for a chat the ADDRESS named: a list
-  // cached from an earlier visit predates a schedule's chat made since, and
-  // falling back against it threw the `?chat=` choice away before the fresh
-  // list arrived. An id still absent after the fetch falls back as before.
+  // Not for the chat the ADDRESS named until the list has been fetched since
+  // mount: a cached list (fresh or not) can predate a schedule's chat made
+  // since, and falling back against it threw the `?chat=` choice away. An id
+  // still absent from the fetched list falls back as before.
   useEffect(() => {
     if (!chats.length) return;
     if (activeChatId == null || !chats.some((c) => c.chat_id === activeChatId)) {
-      if (isFetching && activeChatId != null && activeChatId === chatFromAddress()) return;
+      if (!isFetchedAfterMount && activeChatId != null && activeChatId === addressChat) return;
       setActiveChatId(chats[0].chat_id);
     }
-  }, [chats, activeChatId, isFetching]);
+  }, [chats, activeChatId, isFetchedAfterMount, addressChat]);
 
   // A Hub with no chats (brand-new, or every chat deleted, §132) auto-opens one so
   // the item lands on a usable composer instead of an empty placeholder. `reopening`

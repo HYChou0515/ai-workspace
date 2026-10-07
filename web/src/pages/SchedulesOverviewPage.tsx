@@ -242,6 +242,7 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
     path: row.path,
     trigger_id: row.trigger_id,
     raw: row.trigger_id ? undefined : row.raw,
+    index: row.trigger_id ? undefined : row.index,
   };
   // Both entrances' caches: the item's panel lists this row too (decision 9),
   // and the file tree shows the file just rewritten.
@@ -250,6 +251,8 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
       qc.invalidateQueries({ queryKey: qk.schedulesOverview }),
       qc.invalidateQueries({ queryKey: qk.itemSchedules(row.slug, row.item_id) }),
       qc.invalidateQueries({ queryKey: qk.files(row.item_id) }),
+      // Run now may have just made the schedule's own chat.
+      qc.invalidateQueries({ queryKey: qk.itemChats(row.slug, row.item_id) }),
     ]);
   const fail = (e: unknown) =>
     setSaid({ ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });

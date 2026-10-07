@@ -193,7 +193,11 @@ def validate_user_schedules(raw: str) -> list[str]:
         with_raw = row.get("with")
         if with_raw is not None and not isinstance(with_raw, dict):
             problems.append(
-                f"{where}: `with` must be an object of values for the workflow, got {with_raw!r}."
+                # The TYPE, not the value: the value is what the row sends its
+                # workflow, file content a viewer without `read_content` is not
+                # shown (docs/plan-schedule-overview.md, review round 2).
+                f"{where}: `with` must be an object of values for the workflow, "
+                f"got {type(with_raw).__name__}."
             )
         # `or`, not a `.get` default: a JSON `null` has to mean what an omitted
         # key means. A page generator writes nulls for the fields it left

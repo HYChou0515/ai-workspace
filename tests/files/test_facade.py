@@ -348,9 +348,10 @@ async def test_warm_write_rebuilds_a_reaped_sandbox_instead_of_cold_writing_492(
 async def test_a_read_that_must_not_wake_reads_a_reaped_item_from_the_durable_copy():
     """`wake=False` (docs/plan-schedule-overview.md, review round 1): a listing
     that reads many items — the schedules overview — must not rebuild every
-    reaped sandbox it touches. A reaped item's work was written back when it
-    was reaped, so the durable copy is the answer; the default `wake=True`
-    keeps rebuilding, as above."""
+    reaped sandbox it touches. A sandbox that is gone has nothing newer than
+    its durable copy — the app's reap writes back first; a host-side reap
+    leaves the last checkpoint, which is all a rebuild would restore — so the
+    durable copy is the answer; the default `wake=True` keeps rebuilding."""
     fs = MemoryFileStore()
     await fs.write(WS, "/x.txt", b"durable")
     sb = MockSandbox()

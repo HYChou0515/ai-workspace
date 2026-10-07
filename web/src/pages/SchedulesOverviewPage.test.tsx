@@ -177,6 +177,8 @@ describe("SchedulesOverviewPage", () => {
     render(<SchedulesOverviewPage client={client({ rows: [gone] })} />, { wrapper: Wrap });
 
     expect(await screen.findByText(word("schedules.unknownWorkflow"))).toBeInTheDocument();
+    // …and offers no Run now on it: there is nothing to run (`mayRunNow`).
+    expect(screen.queryByRole("button", { name: word("schedules.runNow") })).toBeNull();
   });
 
   it("says when this system runs no schedules at all", async () => {
@@ -285,6 +287,7 @@ describe("SchedulesOverviewPage", () => {
         path: "/.workflows/schedules.json",
         trigger_id: "",
         raw: { every: "fortnightly", run: "report" },
+        index: 0,
       }),
     );
   });

@@ -136,9 +136,9 @@ export function mayRunNow(
 }
 
 /** Which row: the file and the row's identity in it. A row the sweep refuses
- * has no identity (`trigger_id: ""`); Remove finds it by `raw`, its value as
- * written. */
-export type RowRef = { path: string; trigger_id: string; raw?: unknown };
+ * has no identity (`trigger_id: ""`); Remove names it by its position
+ * (`index`) and the value it was listed with (`raw`). */
+export type RowRef = { path: string; trigger_id: string; raw?: unknown; index?: number };
 
 export type Period = "minutes" | "hourly" | "daily" | "weekly" | "monthly";
 

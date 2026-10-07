@@ -355,8 +355,10 @@ class WorkspaceFiles:
         except SandboxNotFound:
             # `wake=False`: a READ that lists many items (the schedules
             # overview) must not rebuild every reaped sandbox it touches. A
-            # reaped item's work was written back when it was reaped, so the
-            # durable copy is the answer. Never for a write — the rebuild is
+            # sandbox that is gone has nothing newer than its durable copy —
+            # the app's reap writes back first; a host-side reap or a lost host
+            # pod leaves the last checkpoint, which is all a rebuild would
+            # restore. Never for a write — the rebuild is
             # what stops a cold write the host would reconcile away (#492).
             if self._rebuild is None or not wake:
                 return None  # local shared-vol cold dir → durable snapshot (#345)

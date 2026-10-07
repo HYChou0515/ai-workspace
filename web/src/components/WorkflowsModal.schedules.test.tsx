@@ -238,6 +238,9 @@ describe("WorkflowsModal — schedules", () => {
   });
 
   it("importing a file refreshes the schedules too — a schedules.json is a legitimate import", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { qk } = await import("../api/queryKeys");
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(schedules());
     const { svc } = fakeService();
@@ -250,6 +253,12 @@ describe("WorkflowsModal — schedules", () => {
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() => expect(schedulesMock.mock.calls.length).toBeGreaterThan(before));
+    // …and the schedules overview, which lists the same rows (decision 9).
+    await waitFor(() =>
+      expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(
+        JSON.stringify(qk.schedulesOverview),
+      ),
+    );
   });
 
   it("says when the sweep has not been told about the file yet", async () => {
@@ -294,6 +303,9 @@ describe("WorkflowsModal — schedules", () => {
     // Same door as import, one button over: a row whose `run` names a
     // workflow the item lacks reads red until the workflow exists, and Copy is
     // one way it comes to exist.
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { qk } = await import("../api/queryKeys");
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(schedules());
     vi.mocked(workflowTemplatesApi.list).mockResolvedValue([
@@ -315,6 +327,12 @@ describe("WorkflowsModal — schedules", () => {
     fireEvent.click(await screen.findByTestId("workflow-template-copy-nightly"));
 
     await waitFor(() => expect(schedulesMock.mock.calls.length).toBeGreaterThan(before));
+    // …and the schedules overview, which lists the same rows (decision 9).
+    await waitFor(() =>
+      expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(
+        JSON.stringify(qk.schedulesOverview),
+      ),
+    );
   });
 
   it("an empty object or list for `every` reads as daily — Python's `or`, not JavaScript's", async () => {
@@ -377,6 +395,7 @@ describe("WorkflowsModal — schedules", () => {
         path: ".workflows/schedules.json",
         trigger_id: "wui:it:nightly",
         raw: undefined,
+        index: undefined,
       }),
     );
   });
@@ -396,11 +415,32 @@ describe("WorkflowsModal — schedules", () => {
         path: ".workflows/schedules.json",
         trigger_id: "",
         raw: 5,
+        index: 0,
       }),
     );
     // Nothing to move or run on a row that never fires.
     expect(screen.queryByTestId("schedule-edit-0")).toBeNull();
     expect(screen.queryByTestId("schedule-run-0")).toBeNull();
+  });
+
+  it("a row removed here also refreshes the schedules overview", async () => {
+    // Decision 9: the two entrances list the same rows; each refreshes the other.
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { qk } = await import("../api/queryKeys");
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    removeMock.mockResolvedValue(undefined);
+    render(fakeService().svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() =>
+      expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(
+        JSON.stringify(qk.schedulesOverview),
+      ),
+    );
   });
 
   it("removing asks once, and a cancel sends nothing", async () => {
@@ -451,6 +491,7 @@ describe("WorkflowsModal — schedules", () => {
       path: ".workflows/schedules.json",
       trigger_id: "wui:it:nightly",
       raw: undefined,
+      index: undefined,
     });
   });
 
@@ -469,7 +510,7 @@ describe("WorkflowsModal — schedules", () => {
     expect(editTimeMock).toHaveBeenCalledWith(
       "playground",
       "inv1",
-      { path: ".workflows/schedules.json", trigger_id: "wui:it:nightly", raw: undefined },
+      { path: ".workflows/schedules.json", trigger_id: "wui:it:nightly", raw: undefined, index: undefined },
       expect.objectContaining({ every: "daily", at: "07:15", tz: "Asia/Taipei" }),
     );
   });

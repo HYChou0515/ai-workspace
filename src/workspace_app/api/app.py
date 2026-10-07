@@ -1194,10 +1194,11 @@ def create_app(
             schedule_index.record(item_id, path)
             # When it landed, for the birth rule (docs/plan-schedule-overview.md
             # §1): a schedule only fires windows whose moment came after it was
-            # written. Every facade write and the local-sandbox mirror land
-            # here. NOT a host-managed deploy's `exec` write: the turn-end
-            # reconcile indexes it without a stamp, so such a file keeps the
-            # old catch-up (or an older stamp) — the plan says so.
+            # written. Every facade write and the app's own mirror (every
+            # deploy that is not host-managed) land here. NOT a host-managed
+            # deploy's `exec` write: the turn-end reconcile indexes it without
+            # a stamp, so such a file keeps the old catch-up (or an older
+            # stamp) — the plan says so.
             schedule_index.stamp(item_id, path, int(datetime.now(UTC).timestamp() * 1000))
 
     files = WorkspaceFiles(

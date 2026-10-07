@@ -92,6 +92,9 @@ class SchedulesOut(BaseModel):
     #: offers only what will be allowed (docs/plan-schedule-overview.md).
     can_edit: bool = False
     can_run: bool = False
+    #: Whether the viewer may read the item's files (rows come without `with`
+    #: otherwise, and a refused row cannot be removed by its value).
+    can_read: bool = False
 
 
 async def _staged_run_uploads(
@@ -289,6 +292,7 @@ def register_workflow_routes(
                 problems=[],
                 can_edit=can_edit,
                 can_run=can_run,
+                can_read=can_read,
             )
         # The sweep reads only the items its index names. A file that reached
         # the store past every hook is invisible to it until the next turn's
@@ -331,6 +335,7 @@ def register_workflow_routes(
             problems=problems,
             can_edit=can_edit,
             can_run=can_run,
+            can_read=can_read,
         )
 
     @app.get("/a/{slug}/items/{item_id}/workflow-templates")

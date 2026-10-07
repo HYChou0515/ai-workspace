@@ -87,6 +87,8 @@ export function WorkflowsModal({
       // and a copied template is one way the workflow comes to exist.
       await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+      // …and on the schedules overview, which lists the same rows (decision 9).
+      await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
     } finally {
       setBusy(false);
     }
@@ -124,6 +126,8 @@ export function WorkflowsModal({
       // same folder — so the schedules section must not show the old rows.
       await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+      // …and on the schedules overview, which lists the same rows (decision 9).
+      await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
     } finally {
       setBusy(false);
     }
@@ -139,6 +143,7 @@ export function WorkflowsModal({
     path: schedules.data?.path ?? SCHEDULES_PATH,
     trigger_id: row.trigger_id,
     raw: row.trigger_id ? undefined : row.raw,
+    index: row.trigger_id ? undefined : row.index,
   });
   /** What the panel last said about a row (started, or why not), by index. */
   const [said, setSaid] = useState<{ index: number; ok: boolean; text: string } | null>(null);

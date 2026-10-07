@@ -679,6 +679,41 @@ describe("run-in-this-chat lives in the bar", () => {
     }
   });
 
+  it("finds the chat the address names even in a list cached seconds ago (production staleTime)", async () => {
+    // Review round 2: with the app's 30s staleTime a list cached moments ago is
+    // FRESH — no refetch on mount, `isFetching` never true — so the hold above
+    // never engaged: Run now on /schedules made the chat, the item's list was
+    // cached just before, and the last-run link opened the newest chat.
+    const { makeQueryClient } = await import("../api/queryClient");
+    const a = summary({ chat_id: "conversation:c1", is_default: true, title: "A" });
+    const b = summary({ chat_id: "wui:it:sched", is_default: false, title: "B" });
+    stubChatApi([a, b]);
+    const client = makeQueryClient();
+    client.setQueryData(qk.itemChats("topic-hub", "it"), [a]); // cached just now
+    window.history.pushState({}, "", "/a/topic-hub/it?chat=wui%3Ait%3Asched");
+    try {
+      renderWithQuery(
+        <ItemChatShell
+          slug="topic-hub"
+          itemId="it"
+          profile="default"
+          picker={[]}
+          suggestions={[]}
+          appTitle="Topic Hub"
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          chatSwitcher="always"
+          showCollections={false}
+        />,
+        client,
+      );
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
   it("closes the launch dialog when the active chat changes, and never starts in the other chat", async () => {
     // The dialog used to live in the per-chat panel under `key={chat_id}`, so a
     // switch unmounted it and nothing could launch. In the shell it survived

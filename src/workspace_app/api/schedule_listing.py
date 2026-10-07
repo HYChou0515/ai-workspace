@@ -9,12 +9,14 @@ holds the per-item route — and so this — to the sweep.
 
 Listing reads go through the facade WITHOUT waking (`wake=False`): a live
 sandbox answers, so a time just changed shows on the next fetch; an item with
-no live sandbox — never given one, or idle-reaped (written back when it was
-reaped) — is read from the durable copy and rebuilt by nothing. A file the live
+no live sandbox — never given one, or reaped (nothing newer than its durable
+copy: the app's reap writes back first, a host-side reap leaves the last
+checkpoint) — is read from the durable copy and rebuilt by nothing. A file the live
 workspace cannot see (still restoring) is looked for in the durable copy before
-it is skipped (`read_schedules_file`). Each file op against a live sandbox
-costs a liveness probe (the facade probes every op): the schedules file, the
-`.workflows/` listing, each workflow the file names. Actions (edit, remove, run
+it is skipped (`read_schedules_file`). Each file op for an item with a
+published address (a live sandbox, or a reaped one whose address remains)
+costs an address read and a liveness probe (the facade probes every op): the
+schedules file, the `.workflows/` listing, each workflow the file names. Actions (edit, remove, run
 now) are about one item somebody pressed, and use ordinary reads.
 """
 
@@ -96,8 +98,9 @@ async def read_schedules_file(
 
     # Never waking: a listing reads many items, and on a host-managed deploy a
     # read that may wake rebuilds every idle-reaped sandbox it touches. A
-    # reaped item was written back when it was reaped, so its durable copy is
-    # the answer (`WorkspaceFiles._warm`, `wake=False`).
+    # sandbox that is gone has nothing newer than its durable copy (the app's
+    # reap writes back first; a host-side reap leaves the last checkpoint,
+    # which is all a rebuild would restore) — `WorkspaceFiles._warm`.
     async def _read(workspace_id: str, rel: str) -> bytes:
         return await files.read(workspace_id, rel, wake=False)
 
@@ -162,7 +165,8 @@ def without_payload(raw: Any) -> Any:
     but `with`. `read_meta` lists a schedule; what it sends to its workflow is
     file content, which `read_content` guards (`GET /files/...` refuses that
     viewer). The time, the workflow and the identity stay — the row is still
-    described, still removable by its value by someone who may edit."""
+    described, and still removable — by its position and this value — by
+    someone who may edit (`RowRef.index`)."""
     if isinstance(raw, dict):
         return {k: v for k, v in raw.items() if k != "with"}
     return raw
@@ -219,6 +223,9 @@ class OverviewRow(BaseModel):
     last_run: LastRun | None = None
     can_edit: bool = False
     can_run: bool = False
+    can_read: bool = False
+    """Whether the viewer may read the item's files: without it a row comes
+    without its `with`, and a refused row cannot be removed by its value."""
     page_path: str = ""
     """The Deployed view file in this schedules file's folder — where Open
     goes for a page's row (the WUI overview's address). "" for the item's own
@@ -258,9 +265,15 @@ class RowRef(BaseModel):
     path: str
     trigger_id: str
     raw: Any = None
-    """For Remove only, and only when `trigger_id` is "": the row's value as
-    written. A row the sweep refuses has no identity — it never fires — but a
+    """For Remove only, and only when `trigger_id` is "": the row's value AS
+    THIS VIEWER WAS SHOWN IT (without `with` for one who may not read the
+    files). A row the sweep refuses has no identity — it never fires — but a
     person must still be able to take it out of the file."""
+    index: int | None = None
+    """With `raw`: the row's position when it was listed. Values alone are not
+    unique — two refused rows can differ only in their `with`, which a viewer
+    without `read_content` cannot see — so the row is named by position and
+    checked against the value, and a mismatch is "changed since listed"."""
 
 
 class EditTime(RowRef):
@@ -410,12 +423,17 @@ def register_schedule_overview_routes(
         if body.trigger_id:
             path, doc, i, _row = await _locate(workspace_id, body)
         else:
-            # A row the sweep refuses has no identity; it is found by its value
-            # as written — JSON equality, so the order of an object's keys does
-            # not matter and the order inside a list does.
+            # A row the sweep refuses has no identity: it is named by its
+            # position and checked against its value as this viewer was shown
+            # it (review round 2 — by value alone, a viewer who sees rows
+            # without `with` matched, and deleted, a different row). JSON
+            # equality: an object's key order does not matter, a list's does.
             path, doc, rows = await _read_doc(workspace_id, body)
-            i = next((n for n, value in enumerate(rows) if value == body.raw), -1)
-            if i < 0:
+            i = body.index if body.index is not None else -1
+            shown = _may(slug, item_id, "read_content")
+            if not 0 <= i < len(rows):
+                raise HTTPException(status_code=409, detail=_CHANGED)
+            if (rows[i] if shown else without_payload(rows[i])) != body.raw:
                 raise HTTPException(status_code=409, detail=_CHANGED)
         del doc["schedules"][i]
         await _save(workspace_id, path, doc)
@@ -544,6 +562,7 @@ def register_schedule_overview_routes(
                             last_run=last,
                             can_edit=can_edit,
                             can_run=can_run,
+                            can_read=can_read,
                             page_path=page_path,
                         )
                     )
