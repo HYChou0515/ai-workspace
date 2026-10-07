@@ -16,7 +16,13 @@ and what the deploy's SSO said about them all stay. Values are never printed.
 
 It runs inside the API (`POST /api/admin/env/clear-item-sign-ins`), which uses
 the API's own store and the sign-ins it actually loaded, so the names are this
-deploy's. The identity it runs as must be in `server.superusers`.
+deploy's. Only items whose policy for a name is Private first / Private only are
+touched: there the old value shadows the person's values for every item. A
+Shared item reads only its own value, so that one stays.
+
+The identity it runs as must be in `server.superusers`. With no header it is
+whatever the deploy gives a request that carries none (`server.default_user` on
+a plain deploy); behind a gateway, pass what the gateway reads with `--header`.
 
 Usage:
     # dry run first — lists (person, item, names) and changes nothing:
@@ -27,6 +33,9 @@ Usage:
 
     # non-default host / a mounted root_path:
     uv run python scripts/clear_item_sign_ins.py --base-url https://kb.example.com
+
+    # behind a gateway that reads the identity from a header or a cookie:
+    uv run python scripts/clear_item_sign_ins.py --header "X-Forwarded-User: admin"
 """
 
 from __future__ import annotations
@@ -59,6 +68,17 @@ def run(client: httpx.Client, base: str, *, apply: bool) -> int:
     return 0
 
 
+def parse_headers(raw: list[str]) -> dict[str, str]:
+    """`Name: value` pairs, as typed on the command line."""
+    out: dict[str, str] = {}
+    for item in raw:
+        name, sep, value = item.partition(":")
+        if not sep or not name.strip():
+            raise SystemExit(f"--header expects 'Name: value', got {item!r}")
+        out[name.strip()] = value.strip()
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Clear the sign-ins people left in single items.")
     ap.add_argument(
@@ -66,8 +86,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--apply", action="store_true", help="remove them (default: dry run)")
     ap.add_argument("--timeout", type=float, default=600.0, help="request timeout (s)")
+    ap.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        help="'Name: value' sent with the request — the identity, behind a gateway (repeatable)",
+    )
     args = ap.parse_args(argv)
-    with httpx.Client(timeout=args.timeout) as client:
+    headers = parse_headers(args.header)
+    with httpx.Client(timeout=args.timeout, headers=headers) as client:
         return run(client, args.base_url, apply=args.apply)
 
 

@@ -12,6 +12,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemToolState } from "../api/types";
+import { makeQueryClient } from "../api/queryClient";
 import { renderWithQuery } from "../test/queryWrapper";
 import { EnvVarsModal } from "./EnvVarsModal";
 
@@ -67,6 +68,8 @@ function open({
       privateClient={privateClient}
       personalClient={personalClient}
     />,
+    // The app's own client: its 30s staleTime is what a stale re-read would hit.
+    makeQueryClient(),
   );
   return { privateClient, personalClient, resolveEnvProvider };
 }
@@ -120,6 +123,39 @@ describe("my environment variables in an item's Env panel", () => {
     );
     expect(resolveEnvProvider).toHaveBeenCalled();
     expect(privateClient.put).not.toHaveBeenCalled();
+  });
+
+  it("in an item that uses the shared value, fills this item's own value as before", async () => {
+    // Round 1, F1: a Shared item never reads my environment variables, so a
+    // sign-in stored there would leave the tool without its token. It goes
+    // where THIS item reads it: the item's own form, saved with this tab.
+    const { privateClient, personalClient } = open({ envPolicy: {} });
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap"));
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    await waitFor(() =>
+      expect((screen.getByTestId("env-mine-ERP_TOKEN") as HTMLInputElement).value).toBe("fresh"),
+    );
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+    await waitFor(() =>
+      expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "fresh" }),
+    );
+    expect(personalClient.put).not.toHaveBeenCalled();
+  });
+
+  it("keeps a value saved from another tab since the panel opened", async () => {
+    // Round 1, F2: the sign-in re-reads the row before writing the whole of it.
+    const { personalClient } = open({ personal: { OTHER: "kept" } });
+    fireEvent.click(await screen.findByTestId("env-provider-sap"));
+    await waitFor(() => expect(personalClient.get).toHaveBeenCalled());
+    personalClient.get.mockResolvedValue({ values: { OTHER: "kept", LATER: "l" }, updated: {} });
+
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    await waitFor(() =>
+      expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept", LATER: "l", ERP_TOKEN: "fresh" }),
+    );
   });
 });
 

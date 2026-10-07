@@ -10,6 +10,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { makeQueryClient } from "../api/queryClient";
 import { renderWithQuery } from "../test/queryWrapper";
 import { MyEnvPage } from "./MyEnvPage";
 
@@ -35,7 +36,8 @@ function open({
     providers: vi.fn(async () => providers),
     resolve: vi.fn(async () => ({ ERP_TOKEN: "fresh" })),
   };
-  renderWithQuery(<MyEnvPage client={client} />);
+  // The app's own client: its 30s staleTime is what a stale re-read would hit.
+  renderWithQuery(<MyEnvPage client={client} />, makeQueryClient());
   return client;
 }
 
@@ -86,6 +88,22 @@ describe("MyEnvPage", () => {
     fireEvent.click(within(await screen.findByTestId("my-env-row-A")).getByTestId("my-env-remove"));
 
     await waitFor(() => expect(client.put).toHaveBeenCalledWith({ B: "2" }));
+  });
+
+  it("builds every save on what the server holds now, not on what this page loaded", async () => {
+    // Round 1, F2: a value saved from another tab since this page loaded must
+    // survive — the save re-reads the row, it does not trust a cached copy.
+    const client = open({ values: { A: "1" } });
+    await screen.findByTestId("my-env-row-A");
+    client.get.mockResolvedValue({ values: { A: "1", FROM_OTHER_TAB: "x" }, updated: {} });
+
+    fireEvent.change(screen.getByTestId("my-env-new-name"), { target: { value: "NEW" } });
+    fireEvent.change(screen.getByTestId("my-env-new-value"), { target: { value: "n" } });
+    fireEvent.click(screen.getByTestId("my-env-add"));
+
+    await waitFor(() =>
+      expect(client.put).toHaveBeenCalledWith({ A: "1", FROM_OTHER_TAB: "x", NEW: "n" }),
+    );
   });
 
   it("saves what a sign-in returns at once, and never the credential", async () => {

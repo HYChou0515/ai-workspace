@@ -3,8 +3,12 @@
  * (`docs/plan-wui-viewer-login.md`).
  *
  * * **Only me** (the default tab) — the viewer's PRIVATE values for this item:
- *   typed, filled by a login, or written for them by the deploy's seam. Only
- *   they can read them (`api/privateEnv.ts`), so they are masked until asked.
+ *   typed, or written for them by the deploy's seam — plus, where the item asks
+ *   for a personal value, their values for every item ("my environment
+ *   variables", `docs/plan-personal-env.md`). A sign-in here goes where this
+ *   item reads each name: a personal-policy name to my environment variables at
+ *   once, any other into this item's own form. Only they can read these
+ *   (`api/privateEnv.ts`, `api/personalEnv.ts`), so they are masked until asked.
  * * **Everyone** — the item's SHARED `env_vars` plus a per-variable POLICY
  *   saying which layer a tool gets: `shared_first` (the default, and what every
  *   item did before), `private_first`, `private_only`. Written by whoever holds
@@ -192,7 +196,12 @@ export function EnvVarsModal({
   const signIn = useMutation({
     mutationFn: async (env: Record<string, string>) => {
       const current = (
-        await queryClient.fetchQuery({ queryKey: qk.personalEnv(), queryFn: () => personalClient.get() })
+        // `staleTime: 0`: re-read, never the cached row (round 1, F2).
+        await queryClient.fetchQuery({
+          queryKey: qk.personalEnv(),
+          queryFn: () => personalClient.get(),
+          staleTime: 0,
+        })
       ).values;
       return personalClient.put({ ...current, ...env });
     },
@@ -310,7 +319,20 @@ export function EnvVarsModal({
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
-                onFilled={(env) => signIn.mutate(env)}
+                onFilled={(env) => {
+                  // Where THIS item reads each name (round 1, F1): a name it
+                  // asks for as personal goes to my environment variables, at
+                  // once, for every item; any other name it reads from its own
+                  // values, so that is where the form puts it (saved with this
+                  // tab), exactly as before.
+                  const everywhere: Record<string, string> = {};
+                  const here: Record<string, string> = {};
+                  for (const [n, v] of Object.entries(env)) {
+                    (policyOf(n, envPolicy) === "shared_first" ? here : everywhere)[n] = v;
+                  }
+                  if (Object.keys(everywhere).length > 0) signIn.mutate(everywhere);
+                  if (Object.keys(here).length > 0) setMine((prev) => ({ ...(prev ?? {}), ...here }));
+                }}
               />
             }
           />
@@ -999,7 +1021,9 @@ function MineRow({
 // ── logins (`IEnvProvider`, #750) ─────────────────────────────────────────
 
 /** The deploy's "log in, get the variables" buttons. The exchange result goes
- * into the FORM of whichever tab is open — never stored until that tab's Save.
+ * to the caller's `onFilled`, which decides where it lands: the Everyone tab
+ * fills its form (saved with Save); "Only me" and My environment variables
+ * store a name meant for every item at once (`docs/plan-personal-env.md`).
  * The credential typed here reaches the deploy's implementation and stops. */
 export function Logins({
   offered,

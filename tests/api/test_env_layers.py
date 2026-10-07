@@ -171,6 +171,18 @@ def test_a_name_only_in_my_variables_does_not_appear_without_a_private_policy():
     assert got == {}
 
 
+def test_an_item_that_never_asked_cannot_tell_from_the_order_that_i_hold_a_name():
+    """The names' ORDER reaches a tool (`SANDBOX_USER_ENV_KEYS`). A name in my
+    variables that this item does not ask for must not move the others: that
+    would tell the item's tools I hold such a name (review round 1, N1)."""
+    shared = {"A": "a", "B": "b"}
+
+    without = resolve_env(shared=shared, private={}, policy={})
+    with_mine = resolve_env(shared=shared, private={}, personal={"B": "mine"}, policy={})
+
+    assert list(with_mine) == list(without) == ["A", "B"]
+
+
 def test_splitting_the_service_account_out_changes_nothing_without_my_variables():
     """Parity, with the old composition as the oracle: the service account used
     to ride at the bottom of the private dict (`{**service, **own}`). Every

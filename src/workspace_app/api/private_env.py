@@ -55,7 +55,7 @@ from specstar import QB, SpecStar
 from specstar.types import DuplicateResourceError, ResourceIDNotFoundError
 
 from ..perm import Verb
-from .env_layers import PersonEnv
+from .env_layers import PRIVATE_FIRST, PRIVATE_ONLY, PersonEnv
 from .locator import ItemLocator
 from .timeutil import now_ms
 
@@ -479,10 +479,19 @@ def register_private_env_routes(
         if get_user_id() not in superusers:
             raise HTTPException(status_code=403, detail="superusers only")
         names = _sign_in_names(getattr(request.app.state, "env_providers", ()) or ())
-        found = await asyncio.to_thread(store.item_values_named, names)
+        held = await asyncio.to_thread(store.item_values_named, names)
+        # Only where the item asks for a personal value: there the old value
+        # shadows my environment variables. A Shared item never reads those, so
+        # the value stored in it is the one its tools USE (round 1, F1).
+        found = []
+        for user_id, item_id, held_names in held:
+            policy = (await asyncio.to_thread(locator.env_layers_of, item_id)).policy
+            shadowing = [n for n in held_names if policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)]
+            if shadowing:
+                found.append((user_id, item_id, shadowing))
         if body.apply:
-            for user_id, item_id, held in found:
-                await asyncio.to_thread(store.drop_names, user_id, item_id, held)
+            for user_id, item_id, shadowing in found:
+                await asyncio.to_thread(store.drop_names, user_id, item_id, shadowing)
         return CleanupOut(
             applied=body.apply,
             rows=[CleanupRow(user_id=u, item_id=i, names=n) for u, i, n in found],

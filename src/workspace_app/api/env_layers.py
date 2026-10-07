@@ -85,8 +85,12 @@ def resolve_env(
     env: dict[str, str] = {}
     # Walked in the old merge's key order (the service account sat at the bottom
     # of the private dict): `_tool_env` joins the names into
-    # `SANDBOX_USER_ENV_KEYS`, so order is something a tool can see.
-    for name in {**service, **personal, **private, **shared}:
+    # `SANDBOX_USER_ENV_KEYS`, so order is something a tool can see. Only the
+    # personal names this item could use take part in the walk — one it never
+    # asked for must not move the others, or the order would tell its tools I
+    # hold such a name (round 1, N1).
+    asked = {n: v for n, v in personal.items() if policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)}
+    for name in {**service, **asked, **private, **shared}:
         rule = policy.get(name, SHARED_FIRST)
         if rule == PRIVATE_ONLY:
             order = (private, personal, service)

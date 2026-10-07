@@ -62,18 +62,54 @@ def test_the_person_a_failed_run_ran_as_is_told_where_to_sign_in_again():
     ]
 
 
-def test_the_owner_running_their_own_workflow_is_told_once():
+def test_the_owner_running_their_own_workflow_is_told_once_with_the_hint():
+    """One notice, not two — but it still says where to sign in again: the owner
+    of a bound schedule is the person most likely to need it (round 1)."""
     executor, item_id, spec, _runner, _client = _executor_app(None, owner="owner-o")
     _run_as(spec, "run-1", item_id, "owner-o")
+
+    executor.notify_failure(_failed(item_id), "run-1")
+
+    rm = spec.get_resource_manager(Notification)
+    (only,) = [r.data for r in rm.list_resources()]
+    assert isinstance(only, Notification)
+    assert only.recipient == "owner-o"
+    assert "My environment variables" in only.body
+
+
+def test_the_owner_is_not_told_to_sign_in_again_for_someone_else():
+    """Bob's run failed: only Bob can renew Bob's sign-in, so the hint goes to
+    him — on the owner's notice it would send them to a page that fixes nothing."""
+    executor, item_id, spec, _runner, _client = _executor_app(None, owner="owner-o")
+    _run_as(spec, "run-1", item_id, "bob")
+
+    executor.notify_failure(_failed(item_id), "run-1")
+
+    rm = spec.get_resource_manager(Notification)
+    bodies = {r.data.recipient: r.data.body for r in rm.list_resources()}
+    assert "My environment variables" in bodies["bob"]
+    assert bodies["owner-o"] == ""
+
+
+def test_a_run_nobody_ran_as_tells_only_the_owner():
+    """An unbound schedule or an entity trigger used nobody's credentials."""
+    executor, item_id, spec, _runner, _client = _executor_app(None, owner="owner-o")
 
     executor.notify_failure(_failed(item_id), "run-1")
 
     assert [who for who, _ in _inbox(spec)] == ["owner-o"]
 
 
-def test_a_run_nobody_ran_as_tells_only_the_owner():
-    """An unbound schedule or an entity trigger used nobody's credentials."""
+def test_someone_removed_from_the_item_is_not_told(monkeypatch):
+    """Their values were not lent (the same gate refused them), and the notice
+    would name a phase of an item they can no longer open (round 1, N2)."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
     executor, item_id, spec, _runner, _client = _executor_app(None, owner="owner-o")
+    monkeypatch.setattr(
+        executor, "_private_env", PrivateEnvStore(spec, may=lambda u, _i, _v: u != "bob")
+    )
+    _run_as(spec, "run-1", item_id, "bob")
 
     executor.notify_failure(_failed(item_id), "run-1")
 

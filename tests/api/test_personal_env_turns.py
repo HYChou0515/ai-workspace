@@ -117,6 +117,23 @@ def test_a_page_tool_call_carries_the_pressers_variables():
     assert "NOT_ASKED" not in sandbox.envs[-1]
 
 
+def test_a_page_build_gets_nobodys_variables():
+    """A build's output is a shared artifact served to everyone: it runs as
+    nobody, so not even the presser's values for every item reach it."""
+    from .test_wui_routes import BUILD_URL, _BuildSandbox, _private_store, build
+
+    store = _private_store()
+    store.replace_personal("default-user", {"ERP_TOKEN": "mine"})
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(
+        sandbox=sandbox, env_policy={"ERP_TOKEN": "private_first"}, private_env=store
+    )
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert "ERP_TOKEN" not in sandbox.envs[0]
+
+
 # ─── nobody at the request: still the same person (D7) ──────────────────────
 
 

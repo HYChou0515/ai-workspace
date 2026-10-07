@@ -1688,7 +1688,9 @@ export const messages = {
   "env.hide": { "zh-TW": "隱藏", en: "Hide" },
   // Clears what the person KEEPS; what their sign-in fills in comes back at
   // their next request — so not "sign out", which it cannot promise.
-  "env.logout": { "zh-TW": "清除我的值", en: "Clear my values" },
+  // Clears this item's values only — my environment variables are cleared on
+  // their own page (`plan-personal-env`, round 1).
+  "env.logout": { "zh-TW": "清除我在這個 item 的值", en: "Clear my values for this item" },
   // The `/w/` page's platform bar (`plan-wui-viewer-login` Q11): WHAT to do,
   // by name — never "N missing", which says nothing about what to press.
   "env.bar.signedIn": { "zh-TW": "已登入", en: "Signed in" },

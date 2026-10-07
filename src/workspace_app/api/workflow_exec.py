@@ -61,6 +61,9 @@ RunSubagent = Callable[..., Awaitable[tuple[str, list]]]
 
 logger = logging.getLogger(__name__)
 
+#: What a failed run that used someone's credentials tells them (`plan-personal-env` D11).
+_SIGN_IN_HINT = "If your sign-in has expired, sign in again under My environment variables."
+
 
 def _reply_text(produced: list[TurnMessage]) -> str:
     """The model's ANSWER for a workflow node: the LAST assistant message carrying text.
@@ -693,20 +696,31 @@ class WorkflowExecutor:
             run.item_id,
             recipient,
         )
+        # The person whose credentials it used (the presser, the binder of the
+        # schedule) is the one who can sign in again — and the only one who
+        # can. The platform cannot tell an expired token from any other
+        # failure, so the notice says what to do IF it was the sign-in.
+        identity = RunIdentities(self._spec).get(run_id) if run_id else None
+        acting = identity.env_user if identity is not None else ""
         notify(
             self._spec,
             recipient=recipient,
             kind="status",
             title=f"Workflow run failed at “{phase}”",
+            # The owner ran it as themselves: one notice, carrying the hint the
+            # second one would have — they are the likeliest to need it.
+            body=_SIGN_IN_HINT if acting == recipient else "",
             link=f"/a/{slug}/items/{run.item_id}",
             actor=run.captured_user,
         )
-        # The person whose credentials it used (the presser, the binder of the
-        # schedule) is the one who can sign in again — and the only one who
-        # can. The platform cannot tell an expired token from any other
-        # failure, so the notice says what to do IF it was the sign-in.
-        acting = RunIdentities(self._spec).env_user(run_id) if run_id else ""
-        if not acting or acting == recipient:
+        if identity is None or not acting or acting == recipient:
+            return
+        # The gate that decided whether their values were lent: someone removed
+        # from the item lent nothing, and the notice would name a phase of an
+        # item they can no longer open (round 1, N2).
+        if self._private_env is not None and not self._private_env.may(
+            acting, run.item_id, cast("Verb", identity.verb)
+        ):
             return
         # One per person, item, workflow and UTC day: a schedule failing every
         # hour must not bury them.
@@ -719,7 +733,7 @@ class WorkflowExecutor:
             recipient=acting,
             kind="status",
             title=f"A workflow run as you failed at “{phase}”",
-            body="If your sign-in has expired, sign in again under My environment variables.",
+            body=_SIGN_IN_HINT,
             link="/my-env",
             actor=run.captured_user,
             dedup_key=key,

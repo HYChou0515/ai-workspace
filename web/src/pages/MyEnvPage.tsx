@@ -50,7 +50,14 @@ export function MyEnvPage({
   const save = useMutation({
     mutationFn: async (change: (current: Record<string, string>) => Record<string, string>) => {
       const current = (
-        await queryClient.fetchQuery({ queryKey: qk.personalEnv(), queryFn: () => client.get() })
+        // `staleTime: 0`: a re-read inside the app's 30s window would otherwise
+        // return the cached row, and a whole-row PUT would drop what another
+        // tab saved meanwhile (round 1, F2).
+        await queryClient.fetchQuery({
+          queryKey: qk.personalEnv(),
+          queryFn: () => client.get(),
+          staleTime: 0,
+        })
       ).values;
       return client.put(change(current));
     },

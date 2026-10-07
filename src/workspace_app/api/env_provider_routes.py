@@ -180,10 +180,11 @@ def register_env_provider_routes(
     async def _exchange(
         request: Request, provider_id: str, body: ResolveBody, where: str
     ) -> ResolvedEnv:
-        """Run one provider and hand its product back. Stores nothing: the
-        product goes to a form, and pressing Save is what writes it — to the
-        item, to the person's values for it, or to their values for every item
-        (`plan-personal-env`). ``where`` only names the place for the log."""
+        """Run one provider and hand its product back. Stores nothing here:
+        the caller decides where the product goes — the item's shared form or
+        the person's values for it (saved with that form), or their values for
+        every item, stored at once (`plan-personal-env`). ``where`` only names
+        the place for the log."""
         provider = _find(_providers(request), provider_id)
         if provider is None:
             raise HTTPException(status_code=404, detail=f"unknown env provider: {provider_id!r}")
