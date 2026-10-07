@@ -1,0 +1,2480 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 0ac64e1f..a17c9032 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -83,7 +83,7 @@ React SPA (web/) ─► FastAPI app (api/) ─► OpenAI Agents SDK (api/litellm
+ Key conventions:
+ 
+ - **The workspace quota: the SANDBOX measures, the facade enforces (#245/#538).** `filestore.workspace_quota` (0 ⇒ unlimited) bounds ONE workspace. The size comes from asking the sandbox — `disk_usage` for the total, `size_of` for the file being overwritten — NOT from the durable snapshot (the periodic mirror is deliberately additive, `_writeback(delete=False)`, so a snapshot-based number misses bytes the agent just created AND keeps charging for ones it deleted: that was #538) and NOT from a `path -> size` map in app memory (that made the figure a property of whichever pod answered, so two pods disagreed and the overshoot multiplied by pod count; it also leaked, twice). `WorkspaceFiles` caches only the total, for `usage_window` (5s), and the **mirror sweep publishes it** (`SandboxSync.on_measured` → `record_measurement`) so the traversal never lands on a user's request; measuring on request survives only as the cold-start fallback for a pod with no session, and an unreachable sandbox DEGRADES to the durable number rather than 500ing. It counts everything the file tree shows — including `node_modules/`/`.venv/`, which really occupy the disk even though the mirror declines to persist them (filtering them out left the file tree and the usage bar disagreeing, i.e. #538 in reverse) — but NOT the infra area beside the workspace (`.ready`, the per-sandbox `.home`), which never appears in the file tree and which `delete_file` cannot address — charging for those would mean telling a user their workspace is full of bytes they have no way to remove. Enforcement lives in `WorkspaceFiles._ensure_headroom`, the chokepoint EVERY write shares, and one `WorkspaceFull` handler in `create_app` makes it a **507** everywhere — do NOT re-check the quota per route (that is how copy/move stayed ungated, and how the route's own stale rule later refused shrinks on a full workspace). The rule is **growth**, not "already over": shrinks, same-size replaces and deletes always pass, so an over-quota workspace can be tidied up. Gate WHOLE operations at their boundary — a folder copy, `replace`, staging a run's inputs all check once up front (`ensure_room_for`) because a gate in the middle of a loop leaves half of it applied; `move` is exempt (net-zero) and `write_record` is exempt (it records an effect that ALREADY happened — refusing it only makes the re-run repeat the side effects). There is no second size cap — a size-based reaper was capacity management dressed as a policy limit, and idle reap already reclaims the whole item dir, `.home` included. A turn is refused OUTRIGHT when the workspace is already full (`chat_send.send` / `workflow_exec.drive_turn`, before the user's message is persisted): gating each write still let the agent burn a turn rediscovering it, and clearing space needs no agent because deleting is never gated.
+-- **The file tree is a PRUNED preload plus lazy folders; pruned is not hidden (`docs/plan-lazy-file-tree.md`).** `GET /tree` walks with `sync/ignore.py:TREE_PRUNE` (the directory patterns of `DEFAULT_IGNORES` + `dist/`, `build/`) and `TREE_MAX_ENTRIES`: a pruned folder is LISTED and not entered, and comes back in `unwalked`; the FE draws it collapsed and asks `?prefix=<dir>&depth=1` on expand (one TanStack query per open lazy folder, `qk.treeDir`). A workspace with `node_modules/` had 12k entries at ~3 NFS round trips each (measured: 2.81 stat/entry), and the whole tree was refetched on every turn end — 50 s, per turn. The one traversal is `sandbox/walk.py:walk_tree` (breadth-first, budget checked BETWEEN directories, `os.scandir` for the real sandbox and `NfsTreeFileStore.tree`; a byte-identical copy lives in `sandbox-host`), driven by three optional `walk` kwargs that every existing caller omits — the mirror and the quota still see everything. **`TREE_PRUNE` is a THIRD meaning of the ignore list and a separate constant on purpose**: `DEFAULT_IGNORES` also decides what is backed up and what the schedule index takes instructions from, so `dist/` in it would stop backing up build outputs and silence their schedules. Two rules follow the pruned listing: "not in the list" no longer means "gone" — `fileTree.ts:presenceOf` answers `present | absent | unknown` (unknown under any unwalked ancestor) and the shell closes tabs / drops recents only on `absent`; and one path is one question — `GET /files/exists?path=` (`FileService.exists`) instead of listing the workspace to scan for it. The production idle-then-reopen cost has a SECOND part this does not touch: the host's rsync restore of the whole archive (no excludes, and locked that way — a reaped environment must come back whole).
++- **The file tree is a PRUNED preload plus lazy folders; pruned is not hidden (`docs/plan-lazy-file-tree.md`).** `GET /tree` walks with `sync/ignore.py:TREE_PRUNE` (the directory patterns of `DEFAULT_IGNORES` + `dist/`, `build/`) and `TREE_MAX_ENTRIES`: a pruned folder is LISTED and not entered, and comes back in `unwalked`; the FE draws it collapsed and asks `?prefix=<dir>&depth=1` on expand (one TanStack query per open lazy folder, `qk.treeDir`). A workspace with `node_modules/` had 12k entries at ~3 NFS round trips each (measured: 2.81 stat/entry), and the whole tree was refetched on every turn end — 50 s, per turn. The one traversal is `sandbox/walk.py:walk_tree` (breadth-first, budget checked BETWEEN directories, `os.scandir` for the real sandbox and `NfsTreeFileStore.tree`; a byte-identical copy lives in `sandbox-host`), driven by three optional `walk` kwargs that every existing caller omits — the mirror and the quota still see everything. **`TREE_PRUNE` is a THIRD meaning of the ignore list and a separate constant on purpose**: `DEFAULT_IGNORES` also decides what is backed up and what the schedule index takes instructions from, so `dist/` in it would stop backing up build outputs and silence their schedules. Two rules follow the pruned listing: "not in the list" no longer means "gone" — `fileTree.ts:presenceOf` answers `present | absent | unknown` (unknown under any unwalked ancestor) and the shell closes tabs / drops recents only on `absent`; and one path is one question — `GET /files/exists?path=` (`FileService.exists`) instead of listing the workspace to scan for it. The production idle-then-reopen cost has a SECOND part this does not touch: the host's restore of the whole archive (no excludes, and locked that way — a reaped environment must come back whole); a reap leaves one packed copy beside the tree that the next reopen extracts instead of copying path by path, valid only until the next write-back (`docs/plan-archive-pack.md`).
+ - **A lifecycle sweeper is pod-local or a pure producer — never the work itself (#804).** `api/lifecycle.py` loops may touch only THIS pod's sandbox sessions / scratch (`idle_killer`, `mirror_sweeper`) or list what to ask for and enqueue it for a worker (`cluster_sweeper`, `code_sync_sweeper`, `reflect_sweeper` — each lists the `Collection` table, small by construction, and touches nothing heavier). Whole-table reads of anything that grows with content, model calls, or a walk of every collection/page are a job on a worker — the OOM this convention comes from was `cluster_sweeper` reading every `ClusterMember` and embedding every candidate on EVERY API pod's timer, with zero traffic, until the pod died. "Idempotent, so every pod can run it" is N× the full read, not free: when N pods must not all scan (or all ask), take a per-window `ScanLease` on the trigger ledger (`workflow/triggers.py`) so one pod does it and the rest skip the tick — its window is an epoch-millisecond START, never `now // interval`, because the ledger outlives the config and a raised interval would otherwise lock every pod out for good; and a timer that enqueues forever must bound its own rows (`_prune_finished_sweeps`). Boot-time seeds `store` and hand the doc to the index queue; they do not chunk + embed on the API. A pure-producer pod (`run_consumers=False`) also does NOT `aclose()` the coordinators at shutdown — `aclose` starts a consumer "so it still flushes", which on that pod would run every pending job as it exits. Three loops are neither and stay for a stated reason: `goal_offhours_sweeper` (it starts turns, and the turn engine only exists here), `notification_delivery_sweeper` (an indexed, batched relay to the outbound channel), and `turn_reclaim_sweeper` (plan-graceful-shutdown P3; app chat only — the KB send opens no claim), which runs TURNS — it lists the open `turn-claim` rows (bounded by turns in flight), judges them per conversation key, takes the orphaned ones by CAS and re-runs them through `ChatSendService.rerun` on this pod, because a turn can only run on an API pod. The claim is the only evidence of "owed" — it is deleted when the reply persists, and reading the thread's shape instead dropped owed claims on a queued Q1/Q2, the #624 notice and a peer-answered follow-up; `RECLAIM_MAX_RERUNS` bounds the re-runs. A turn checks `turn_claims.is_mine` before persisting so a copy the epoch cancelled after a takeover writes nothing and broadcasts no cancel. `blob_gc_sweeper` used to be one too — "specstar's reconcile builds the live set from the REGISTERED models only, and only the API's spec registers all of them" — until it OOMed an API pod right after `blob-gc: won lease`; it is a pure producer now (`ScanLease` → `BlobGcCoordinator.enqueue_reconcile`) and the registry problem is solved the other way round: the `blob-gc` worker boots the API's OWN composition (`__main__.build_app`, never served; `worker.API_REGISTRY_JOBTYPES`), so the registries are equal by construction, and every ask carries the asker's model names so a runner that lacks any REFUSES the pass (`_check_registry` — FAILED + a log naming them) rather than deleting their blobs. The scanned set is NOT "the models with a `Binary` field": specstar compiles a runtime collector for any `list` / `dict` / union / `Optional` field whatever its value type (only an all-scalar struct is skipped), so it is nearly every model, registered all over `create_app` — never hand-mirror it into `build_bundle`.
+ - **Sandbox is created lazily** by the agent's `exec` tool on first use (grill-me Q10 "a2+" policy). Pure file operations go through FileStore and never spin one up.
+ - **Workspace files are SHARED-DIR, not affinity-bound (#345).** The local sandbox keys each item to a FIXED dir `{sandbox.root}/{item_id}/root/` on a shared RWX scratch volume, so any replica resolves the same live files by id (`create(spec, sandbox_id=item)` is idempotent; `handle_for_id`/`peek_handle` derive the handle WITHOUT a session; `WorkspaceFiles._warm` PROBES the dir and falls back to the durable FileStore snapshot only when cold). This is what cures "data appears/disappears" on multi-pod — correctness no longer depends on nginx sticky routing (now just a warm-cache optimisation). The FileStore is the durable archive (recycle write-back + blob GC). Recycle (`registry.kill_idle`) rmtrees a shared dir ONLY when GLOBALLY idle — gated by a cross-pod activity heartbeat (`api/sandbox_activity.py`, an opaque `_SandboxActivity` row per item); a pod-locally-idle-but-globally-active item just drops its local session. `mirror`'s deletion is `_versions`-gated AND now reads the globally-consistent shared dir, so it no longer deletes another pod's live files. Two vols: `sandbox.root` (scratch RWX) vs `filestore.disk_root` (durable). Cross-pod **turn cancel** is still pod-local → #349. Only `kind: local`; http/mock unaffected.
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 15b06965..88ca9d11 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -801,8 +801,8 @@ observability:
+ 
+ `SANDBOX_HOST_BIND`、`SANDBOX_HOST_UID_MIN` / `_UID_MAX`、`SANDBOX_HOST_MEMORY_MAX`、
+ `SANDBOX_HOST_CPU_CORES`、`SANDBOX_HOST_PIDS_MAX`、`SANDBOX_HOST_CGROUP_ROOT`、`SANDBOX_HOST_ROOT`、
+-`SANDBOX_HOST_EXEC_TIMEOUT`、`SANDBOX_HOST_LOG_TIMEOUT`、`SANDBOX_HOST_TOOLS_DIR`、`SANDBOX_HOST_IDLE_TTL`
+-（＋ host 綁定用的 `POD_IP` / `PORT`）。
++`SANDBOX_HOST_EXEC_TIMEOUT`、`SANDBOX_HOST_LOG_TIMEOUT`、`SANDBOX_HOST_TOOLS_DIR`、`SANDBOX_HOST_IDLE_TTL`、
++`SANDBOX_HOST_ARCHIVE_PACK`、`SANDBOX_HOST_PACK_DRAIN_S`（＋ host 綁定用的 `POD_IP` / `PORT`）。
+ 
+ ---
+ 
+diff --git a/docs/design-history.md b/docs/design-history.md
+index 221136ee..1e06c7b6 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -98,7 +98,7 @@
+ | [plan-skills-and-tools.md](plan-skills-and-tools.md) | Skills 與 tools 套件設計 |
+ | [plan-skill-hub.md](plan-skill-hub.md) | skill hub：使用者之間分享 skill，不經過 dev 的版本庫——在 item 裡發布（結構擋、AI 審掛意見）、在 item 裡裝（副本 + `.origin`，告知目標 App 缺的 tool）、非 owner 只能 fork、owner 在詳情頁管理；十個 grill 決策的原文 |
+ | [plan-skill-hub-ui-polish.md](plan-skill-hub-ui-polish.md) | skill hub 的 UI 打磨（#826）：九段 demo 錄影抓到的 22 個問題，每一項對照教科書做法（Material 3 / Apple HIG / NN/g / Polaris / GOV.UK / MUI）決定 D1–D17——對話框預設留白、搜尋框不失焦、錯誤只報一次、成功提示、安裝前先標「已有同名 skill」、圖示各自專用＋tooltip、可見範圍對話框走 i18n、伺服器拒絕句改 code、工具回話分段、窄寬的頂欄與麵包屑；版面一律真 Chromium 量 1280／390 |
+-| [plan-skill-hub-history.md](plan-skill-hub-history.md) | skill hub 的歷史與回溯、下載/使用次數、問 AI 該裝哪個(grill 進行中):不用 git、檔案搬進 `SkillHubEntry.files`(每次發布 = 一個 revision)、`prune_revisions` 保留 1000 版、舊資料雙讀相容不需 migrate |
++| [plan-skill-hub-history.md](plan-skill-hub-history.md) | skill hub 的歷史與回溯、下載/使用次數、問 AI 該裝哪個(grill 進行中):一個 skill 一個 bare git repo(自己的 `skill_hub.git_root`)、`master` = 目前版本、push `--force-with-lease` 搶鎖、回復 = `master` 指回舊 commit、每個 revision 打 tag `r-<revision id>`、hub 副本 `.origin` 記 commit、LFS 以路徑模式、檔案數上限 1000 |
+ | [plan-chat-video.md](plan-chat-video.md) | **PR #817(script 版 P1–P5 已做)**。把一段對話紀錄做成影片：吃 `.chat.json`、一條指令、不打 LLM；純 HTML/CSS 的 zoom 推進輸入框、指定長寬；核心是純函式 + msgspec options，為之後的前端按鈕 + 獨立 job / worker pod 鋪路 |
+ | [plan-headless-env.md](plan-headless-env.md) | 沒有人按送出的 turn（item 排程、goal driver、event trigger、整條 workflow）也拿得到環境變數：`IRequestEnv` 多一個 `env_without_request(user_id, item_id)`，預設 `{}`，部署的 impl 決定回 service account 還是什麼都不給；平台仍不認得 service account 這個詞；改變 #714「workflow 整條不接」的定案並寫明為何原顧慮不再成立 |
+ | [plan-wui-viewer-login.md](plan-wui-viewer-login.md) | 看頁面的人用自己的登入：環境變數分 shared（item 上，不動）與 private（每人每 item 一份，只有本人讀得到）兩層，每個 key 一種政策（`shared > private` 預設=今天的行為 / `private > shared` / `private only`）；callTool、聊天、頁面起的 run 用按的人，排程要本人按「用我的身分執行」才綁定、內容一改就失效；Env 面板分「只有我／所有參與者」兩分頁、tool 下拉換成可收合分段；`/w/` 在 iframe 上方加平台列（line of death） |
+@@ -120,6 +120,7 @@
+ | [plan-graceful-shutdown.md](plan-graceful-shutdown.md) | pod 離開時不能帶走使用者的對話（graceful shutdown、turn 換 pod） |
+ | [plan-blob-gc-job.md](plan-blob-gc-job.md) | Blob GC 改成 job：API 只負責提出要求 |
+ | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
++| [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
+ 
+ ## 前端與介面
+ 
+diff --git a/docs/migrations.md b/docs/migrations.md
+index ae9ad4b0..9aec7aa7 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -1270,6 +1270,89 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
+   （`kubectl logs <api-pod> --since=15m | grep "create refused"`）。sandbox-host 自己的 log 在修正前後都只有一行
+   `POST /sandboxes` 的存取紀錄（修正前是 404），看它分不出有沒有修好。
+ 
++> [#872](#pr-872) 上線之後再跑上面的止血：刪完連結要接著刪打包檔，否則被回收的 item 會從打包檔把刪掉的連結還原回來。命令在 #872。
++
++---
++
++### 2026-10-06 · #872 沙盒回收時多存一個打包檔：再開時讀一個檔，不再逐檔複製 {#pr-872}
++
++**設定** — sandbox-host 新 env **`SANDBOX_HOST_ARCHIVE_PACK`，預設開**。只認 `1`/`0`、`true`/`false`、`yes`/`no`、
++`on`/`off`；其他值 host **開不了機**（`ValueError` 會點名這個 key）。`0` = 不打包，也不讀已經存在的打包檔。
++另一個新 env **`SANDBOX_HOST_PACK_DRAIN_S`，預設 `300`**：回收要打包時，等沙盒上已經在跑的請求結束的上限秒數（見下）；
++host log 常出現 `no pack for … still running` 時再調大。兩個值都印在 host 開機那行 echo 裡。app 端沒有新 key。
++
++行為改變（預設開）：
++
++- app 判定一個 item **全域閒置**（8 小時，`create_app` 的預設，沒有設定 key）、要回收它的沙盒時，送給 host 的 `persist`
++  多帶 `pack: true`。turn 結束、回合中的 checkpoint、關機、使用者關閉環境都**不**帶。
++- host 收到之後：照舊把沙盒 rsync 回 `$SANDBOX_HOST_NFS_ROOT/<item>/`，並記下這個沙盒「砍的時候要打包」；
++  app 緊接著送的 kill（`DELETE /sandboxes/{rid}`）在拆掉沙盒之前，在樹旁邊寫
++  `<item>.pack.<gen>-<位元組數>.tar`（整個 workspace 的一個 tar）。下次開這個 item 時，host 解開這一個檔，
++  不再逐個路徑從 NFS 複製——還原的成本從「路徑數 × 一次 NFS 往返」變成「一次讀一個大檔」。
++  回報的那個 item 有 88,889 個路徑，逐路徑複製花了 58 秒，壓在 ingress 預設的 60 秒上。
++- 每一次 `persist`（不論有沒有打包）**先**把 `$SANDBOX_HOST_NFS_ROOT/<item>.gen` 換成新的值，並刪掉這個 item
++  舊的打包檔。打包檔名字裡的 `<gen>` 不等於現在的 `.gen`、或檔案大小不等於名字上的位元組數，就不會被用——
++  所以打包檔只會在「回收之後、下次寫回之前」那段時間存在並被讀到。
++- 要打包的那次 kill 期間這個沙盒**不接任何請求**：host 先把它關起來，之後進來的請求（任何 app pod 的 checkpoint、
++  檔案寫入、exec）直接得到「沙盒不見了」——它本來就要不見了。關起來之前就在跑的請求（例如一個 checkpoint 的 rsync）
++  會等它跑完，最多 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒）；等不到（例如一個還在跑的長 exec）就不打包，host log 會有 `no pack for … still running` 的 warning。
++  不打包的 kill（開關關著、沒有 NFS、不是回收）和以前一樣，砍完之前照常回應。
++  打包失敗只印 warning，沙盒照砍；下次開就照舊逐檔複製。這個 PR 自己的失敗都只會「慢」，不會「錯」：樹永遠是真相。
++  會「錯」的只有下面兩條規則沒做到的情況。
++
++**資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。NFS 上多兩種檔，都在 item 目錄**旁邊**，不在裡面：
++`<item>.gen`（幾十個位元組，每個寫過的 item 都有，開關關掉也會寫）與 `<item>.pack.*.tar`。
++
++- **空間**：每個「已回收、還沒再開過」的 item 多一份大約等於它 workspace 大小的 tar（不壓縮）——最壞約 2×。
++  再開之後的第一次寫回就會刪掉它；刪除 item 時也會一起刪掉它的 `.gen` 與打包檔。
++  - 量現在用了多少：`du -ch "$SANDBOX_HOST_NFS_ROOT"/*.pack.*.tar | tail -1`
++  - 不想要這份空間（任何時候，可選）：設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，滾完再
++    `find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -delete`。順序反過來的話，還開著的 pod 會在你刪完之後再打新的包；
++    不做只是多佔空間。
++- **從今以後的規則：不經過 host、直接改 `$SANDBOX_HOST_NFS_ROOT/<item>/` 的任何操作，做完都要刪那個 item 的打包檔。**
++  包括手動 rsync、[#867](#pr-867) 那條 `find -delete`、從備份還原 NFS 樹。
++  ```bash
++  rm -f "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar                                # 一個 item
++  find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete   # 全部
++  ```
++  - 為什麼：host 只看名字判斷打包檔還有沒有效，而名字只有經過 host 的寫入才會作廢。逐一比對打包檔和樹是否一致，
++    本身就是逐路徑的 NFS 往返，等於沒做——所以這一條擋不了，只能靠規則。
++  - 漏做的症狀：那個 item 下次打開時是**改之前**的內容，而且 turn 結束的寫回會把樹也對齊成改之前的樣子——你的修改被**無聲地撤銷**。
++    刪打包檔永遠安全：最壞是下次開回到逐檔複製的速度。
++- **沒有這個 PR 的 sandbox-host 也算「不經過 host」**：它寫樹不換 `.gen`、也不刪打包檔。所以新舊版本的 host 同時在跑的期間
++  （rollout 途中、回滾之後），新版打的包可能被舊版的寫入繞過。處理方式在下面「k8s · CI 側」的第二項。
++
++**k8s · CI 側**
++
++- **sandbox-host 要重 build、重 deploy 才有效果**（`sandbox-host/` 是獨立的 uv 專案和 image）。
++  - 什麼時候：照下一項的三步驟滾（**第一次滾上時開關要設 `0`**）；和 app 誰先上都可以：舊 host 不認得 `pack` 欄位、照舊 204；舊 app 從來不送。
++  - 不需要新權限、新 volume、新 manifest：`tar` 是 base image（Debian bookworm）本來就有的 GNU tar 1.34，打包檔寫在既有的 NFS 掛載上。
++  - 漏做的症狀：沒有壞處，只是還原照舊逐檔複製。
++- **新舊版 sandbox-host 同時在跑的期間，打包必須是關的。** 每次從「沒有這個 PR 的版本」滾到「有的版本」（第一次上線、
++  回滾之後再上線）分三步：
++  1. **rollout 前**：在 sandbox-host 的 env 設 `SANDBOX_HOST_ARCHIVE_PACK=0`，用它滾上新 image。
++  2. **rollout 完成**（`kubectl rollout status` 說所有 sandbox-host pod 都是新版）**後**：刪掉所有打包檔
++     ```bash
++     find "$SANDBOX_HOST_NFS_ROOT" -maxdepth 1 -name '*.pack.*.tar' -print -delete
++     ```
++  3. 把 `SANDBOX_HOST_ARCHIVE_PACK` 拿掉（或設 `1`），再滾一次。
++  - 為什麼：舊版 host 寫樹不換 `.gen`。新舊並存時，新版 pod 回收某個 item 時打的包，可能接著被舊版 pod 重開、修改、
++    寫回而**不作廢**；舊 pod 被輪替掉之後，新 pod 從那個過期的打包檔還原。這整串都可能發生在 rollout 途中，所以「事後刪」
++    擋不住，只能讓新版在並存期間不打包、不讀打包檔（開關關著時仍然照樣換 `.gen`，所以第 3 步之後不會撿到舊的）。
++    第 2 步清掉的是回滾前留下、gen 又沒被舊版換掉的打包檔；第一次上線時它什麼都不會刪。
++  - 漏做的症狀：在新舊並存期間被回收又被重開的 item，下次打開時回到修改前的內容，修改被無聲地撤銷。
++  - **回滾**（滾回沒有這個 PR 的版本）反過來：先設 `SANDBOX_HOST_ARCHIVE_PACK=0` 滾一次，再換回舊 image。
++    舊版不讀打包檔，但回滾途中還在跑的新版 pod 會讀。漏做的症狀同上：回滾途中被回收又被重開的 item 回到修改前的內容。
++
++**確認做完**
++
++- host 開機那一行 echo 帶 `archive_pack=1`，**而且同一行的 `nfs_root=` 不是 `None`**（沒有 NFS 封存就什麼都不打包）：
++  `kubectl logs <sandbox-host-pod> | grep archive_pack`。
++- 一個 item 被回收（閒置 8 小時）之後：`ls -la "$SANDBOX_HOST_NFS_ROOT/<item>".pack.*.tar` 有一個檔。
++- 再打開那個 item：等待時間比之前短；host log 裡**沒有** `did not extract`
++  （`kubectl logs <sandbox-host-pod> --since=15m | grep "did not extract"`）。有的話 host 退回逐檔複製，訊息裡有 tar 的錯誤。
++- 打開後跑一個 turn：那個打包檔不見了（寫回把它作廢並刪除）。
++
+ ---
+ 
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+diff --git a/docs/plan-archive-pack.md b/docs/plan-archive-pack.md
+new file mode 100644
+index 00000000..f28a3a15
+--- /dev/null
++++ b/docs/plan-archive-pack.md
+@@ -0,0 +1,140 @@
++# Plan: a packed copy of the archive for the reopen path (`<item>.pack.<gen>-<bytes>.tar`)
++
++## 問題（2026-10-06，master `2364e23d`）
++
++user 回報：一個 item 的沙盒被回收之後再開，「開不起來」。查下來是**慢**，不是壞：
++
++| 事實 | 數字 | 來源 |
++|---|---|---|
++| workspace 路徑數 | **88,889**（51,911 個檔），**幾乎全是使用者檔案**，不是 `node_modules` | user |
++| host 從 NFS rsync 進 pod | **58 秒** | user 在 host pod 實測 |
++| `reown`（每路徑一次 `os.chown` + `rglob`） | 約 1 秒 | 本機量 44,310 路徑 0.49 秒，線性外推 |
++| `POST /sandboxes` 全程 | 約 60 秒 | 上兩列相加 |
++| ingress-nginx `proxy-read-timeout` 預設 | 60 秒 | 文件；**線上實值我看不到** |
++| host idle reaper `SANDBOX_HOST_IDLE_TTL` | 1800 秒 | `config.py:48`；碰不到 |
++
++所以是**剛好壓在線上**：再多幾千個檔或 NFS 慢一點就 504。而 504 會自己惡化——`.ready` 是 restore 做完才寫，
++位址也是那時才發佈；使用者重新整理、請求落到另一顆 API pod，它看不到位址就**再開一次完整的 58 秒 restore**。
++跨 pod 沒有互斥，4–16 顆可以疊成好幾份同時 rsync 同一個備份。
++
++**成本模型**：58 秒 ÷ 88,889 ≈ **0.65 ms／路徑**，是 NFS 一次往返的量級；若是位元組主導，58 秒要搬好幾 GB。
++所以瓶頸是**路徑數**，而路徑數沒有任何上限（`workspace_quota` 管位元組；CLAUDE.md 明文拒絕第二個尺寸上限）。
++任何「複製」的還原都是 O(路徑)；要讓 NFS 那側變成 O(1) 往返，只能讓備份有一個**單一檔**的形態。
++
++## 走過的死路（記下來，免得下次再走）
++
++| 想法 | 為什麼不 |
++|---|---|
++| rsync 換 tar／cp 直接複製樹 | 還是每檔一次 NFS 往返；本機 bench 的倍數（2.6×／1.75×）不能外推到 NFS；不封頂 |
++| 在每個對齊點（含 **turn 結束**）打包 | 打包 ∝ 位元組、位元組未知，放在有人等的路徑上 |
++| 慢速還原完順手在背景打包 | 那時沙盒已經活了，tar 讀到一半 agent 在寫 → 一半新一半舊；`.gen` 只看得到樹的寫入，看不到本機 |
++| 回收時不刪本機目錄、下次重用 | 每顆 pod 自己的、rollout 就消失的快取，而且要把 create 導回那顆 pod＝把 #345/#366 拆掉的 affinity 裝回去 |
++| 備份排除 `node_modules` 等可重建目錄 | 違反 SRP（備份的契約「原樣回來」≠ app 端 `DEFAULT_IGNORES` 的「使用者檔案有哪些」）；而且這次檔案全是使用者的，排了也沒用 |
++| overlay（NFS 當唯讀底層）／沙盒直接跑在共用卷上 | scalable 且保住契約，但要 `CAP_SYS_ADMIN`、lower 在掛載中被改是核心層未定義行為、root_squash 下的讀取要驗——是專案不是票；留作下一步 |
++| pack 先發佈再驗 `.gen` | host 死在「發佈後、驗之前」留下舊 pack；改成**名字帶 gen**後這個窗口不存在 |
++| 在回收的 `persist` 請求裡打包，用「in-flight 計數 + 沒有人在我之後開始」當 guard（P2–P6 的做法，第一輪 review 推翻） | app 的 `mirror_warm` 每 5 秒對**每一個**有 handle 的 session 送 checkpoint——閒置 8 小時的也送，每顆 pod 各送各的。打包要的時間和位元組成正比，大 item 的 rsync + tar 遠超過 5 秒，所以 guard 幾乎必定被 checkpoint 打斷：功能要服務的 item 恰好永遠拿不到打包檔。guard 也補了兩次洞（`t0` 讀得太晚、時鐘值可能相同）——第三次就換機制 |
++
++## 決定
++
++| # | 問題 | 決定 | 為什麼 |
++|---|---|---|---|
++| 1 | 真相是誰 | **樹**（`<nfs_root>/<item>/`）永遠是真相；pack 是加速用的快取。任何失敗的結果都是「沒有 pack → 走樹」，**只會慢，不會錯** | #492 的設計不變；`_would_wipe`、`.ready` gate、`reown` 順序全不動 |
++| 2 | pack 怎麼知道自己還有效 | **名字帶 gen 和位元組數**：`<item>.pack.<gen>-<bytes>.tar`。`<item>.gen` 是一個 uuid，每個要寫樹的人**寫之前先換掉**（tmp + rename）。還原讀現在的 gen、只找那個名字；舊 pack 因為名字過期而自然作廢，**不需要刪、不需要事後驗**。還原時檔案大小 ≠ 名字上的位元組數 → 當作沒有 pack | 消掉「刪 pack 和 rename 誰先」與「發佈了來不及驗」兩個窗口；NFS 沒有鎖，靠不可變的名字比靠順序可靠。位元組數是 P2 才加的：**GNU tar 對剛好在檔案邊界被截斷的 archive 回 0**——解出前半、當成結尾——所以「tar 成功」不等於「workspace 完整」（`test_a_truncated_pack_is_never_extracted` 先紅過） |
++| 3 | 誰、何時打包 | **只有 `kill_idle` 的回收**要求打包：它的 `persist(delete=True, pack=True)` 在 rsync 對齊**真的跑了**之後，讓 host 記下這個沙盒「砍的時候要打包」（`_would_wipe` 把對齊降成非刪除的複製時不記——那時本機是空的，打包等於把空 workspace 發佈成快路）。**打包發生在接著的 `DELETE /sandboxes/{rid}` 裡**，沙盒拆掉之前。`flush`（turn 結束）、`close_all`（關機）、`_teardown`（關閉／CAS 輸家砍孤兒）、mid-turn checkpoint 一律 `pack=False`；之後的 checkpoint（`delete: false`）不會取消這個要求（P8）；之後每一次**對齊**都重新決定：沒帶 `pack`（turn 結束——回收的 kill 沒來、沙盒又被用了）或被 `_would_wipe` 擋下，都會取消它（第二、三輪 review） | 回收是「全域閒置、沙盒要拆掉、沒人等」唯一同時成立的時刻；關機有預算而打包 ∝ 位元組；孤兒的本機目錄不是真相。放在 kill 而不是 persist：見死路表最後一列 |
++| 4 | 本機那側怎麼知道沒人在寫 | **要打包的** kill **先封鎖**這個 rid（其他 kill——沒要求、開關關著、沒有 NFS——和以前一樣，砍完之前照常回應）：純 ASGI middleware（`_InFlight`）對封鎖中的 rid 一律直接回 `SandboxNotFound`，任何 pod 的 checkpoint、檔案寫入、exec 都進不來。封鎖之前就開始、還在跑的請求由同一個 middleware 的 **per-sandbox in-flight 計數**看見（進 +1、出 −1，含例外；必須是純 ASGI，因為 exec 是 streaming response，`@app.middleware` 的 `call_next` 在 response **開始**時就回來了）：**等**它們跑完（封鎖之後不會有新的，所以一定會結束），上限 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒：一次 checkpoint 走完約 8.9 萬個路徑約一分鐘，幾顆 pod 同時走會更久——第三輪 review），等不到就不打包。「只剩自己」的份額看呼叫者：DELETE 路由自己算 1，host 自己的 idle reaper 不經過 HTTP、算 0。kill 失敗 → 解除封鎖（沙盒還活著，要能重試） | 第二輪 review：大 item 的 checkpoint rsync 本身就很長，DELETE 到達時幾乎總有一個在跑——「計數 > 1 就放棄」又讓打包落空；封鎖之後沒有新請求，所以等待有終點，不需要時間戳或序號。上限是給跑很久的 exec 的；`kill` 走的是沒有讀取期限的 HTTP（app 的 `read_timeout` 預設 0），回收的 sweep 逐 item 等；被擋下的 checkpoint 得到的答案（沙盒不見了）正是它在這次拆除結束後會得到的（封鎖最長是等待上限加打包的時間）。打包失敗只記 warning，不擋 kill：回收是沙盒消失，打包只是讓下次快 |
++| 5 | tar 怎麼打、怎麼解 | `tar --format=posix -cf`；解 `tar -xf --no-same-owner`，之後照舊 `reown`、`mark_ready` | rsync 刻意不碰擁有者（NFS root_squash，#492 Q3），tar 用 root 解開預設會照檔頭設回去；posix 格式帶次秒 mtime |
++| 6 | 解開壞掉怎麼辦 | 解進剛建好的（空的）本機目錄；非零結束 → 清空目錄 → 走樹。截斷的 pack 在解之前就被決定 2 的大小檢查擋掉 | 半個目錄絕不能被 `mark_ready`，否則下一次 `persist --delete` 把備份對齊成那半個 |
++| 7 | 空間 | 閒置的 item 多一份 pack，最多約 2× | 可之後再加「路徑數超過門檻才打包」或壓縮；都不影響對錯 |
++| 8 | 開關 | host env `SANDBOX_HOST_ARCHIVE_PACK`（預設 `1`）；`0` = 不打包也不讀 pack | 空間是營運方的事，要有退路；記進 migrations.md |
++| 9 | 不經 persist 改樹的人 | **規則**：任何直接動 `<item>/` 的**人工**操作（#867 runbook 的 `find … -delete`、從備份還原 NFS 樹、手動 rsync）做完要刪掉 `<item>.pack.*.tar`。**app 自己的程式路徑查過，沒有一條會在打包檔存在時繞過 host 寫樹**（下表）。刪除 item 的 `purge` 原本會把打包檔留成孤兒，P5 補上 | 機制上關不掉：還原時驗 pack 等不等於樹就是 O(路徑)，等於沒做。這是整份設計**最弱**的一點，靠 runbook 不靠碼；漏做的方向**不是慢，是修改被撤銷**（還原出改之前的內容，turn 結束的對齊再把樹改回去） |
++| 10 | 相容 | `_PersistBody.pack: bool = False`；舊 host 忽略多的欄位，舊 app 從不送 → rollout 順序自由。**但新舊版 host 並存時打包必須是關的**：舊 host 寫樹不換 `.gen`，並存期間新版打的包可能被舊版的寫入繞過、又在 rollout 途中被新版讀到——所以滾上這一版時先以開關 `0` 滾、全部換新後刪所有打包檔、再打開；回滾時先關開關再換 image（migrations.md） | 和 `tools` / `cpu_cores` 欄位同一套慣例。回滾那條是第一輪 review 的 defect 鏡頭用 master 的 rsync argv 重現的；「事後刪擋不住並存期間本身」是第二輪 veracity 鏡頭指出的 |
++| 11 | 舊 pack／tmp 的清理 | 每次 persist 的第 1 步刪掉這個 item 的所有 pack 和殘留的 pack tmp。比對用 regex 全名比對，不是前綴——item id 是自由文字，`a.pack.x` 是別的 item 的東西。tmp 名字一律帶 uuid（`<item>.gen.<uuid>.tmp`、`<item>.pack.<uuid>.tmp`）：同一個 item 的兩個 persist 沒有任何東西在排序，共用的 tmp 名讓後一個 rename 找不到檔、persist 失敗（P7） | 懶清；host 死在寫到一半時留下的 tmp 由下一次 persist 或刪除 item 清掉 |
++
++## 機制
++
++檔案（全在 item 目錄**外面**，`persist --delete` 對齊那棵樹時碰不到）：
++```
++<nfs_root>/<item>/                          樹，真相
++<nfs_root>/<item>.gen                       uuid；寫樹之前先換
++<nfs_root>/<item>.gen.<uuid>.tmp            換 .gen 時的 tmp
++<nfs_root>/<item>.pack.<gen>-<bytes>.tar    快取；只在「已回收」期間存在
++<nfs_root>/<item>.pack.<uuid>.tmp           寫一半的，永遠不會被當成快取
++```
++
++回收：
++```
++app  kill_idle 判定全域閒置
++ └─► host  POST /sandboxes/{rid}/persist {delete: true, pack: true}
++        1. .gen ← g0 = uuid4()（寫 <item>.gen.<uuid>.tmp 再 rename）；刪掉這個 item 的 pack 與 pack tmp
++        2. rsync 本機 → 樹，--delete（_would_wipe 擋下 → 到此為止，不記）
++        3. 記下：rid 砍的時候要打包；回 204（之後每一次對齊都重新決定：沒帶 pack 或被擋下都撤銷這個記錄；checkpoint 不動它）
++     （這裡到第 4 步之間，任何 pod 的 checkpoint 照常寫樹、換 gen——不影響，打包時才讀 gen）
++ └─► host  DELETE /sandboxes/{rid}
++        4. 有記第 3 步才做 4–5（第 3 步只在開關開著時記）：封鎖 rid——之後所有 /sandboxes/{rid}/… 請求直接回 SandboxNotFound
++        5. 等 in-flight 降到 1（只剩這個 DELETE；host 自己的 reaper 是 0），最多 `SANDBOX_HOST_PACK_DRAIN_S`（預設 300 秒），等不到 → warning、不打包；
++           沙盒 ready → 打包：
++             g = 讀現在的 .gen（沒有 → 不打包）
++             tar --format=posix 本機 → <item>.pack.<uuid>.tmp（讀本機；寫 NFS 一條串流）
++             tar 非零、或 tmp 已被別人清掉 → 不發佈
++             os.replace(tmp → <item>.pack.<g>-<tmp 的位元組數>.tar)
++           任何例外 → warning，照樣往下
++        6. 砍沙盒、刪本機目錄、清 .ready
++        7. 解除封鎖、忘掉第 3 步的記錄（第 6 步失敗也一樣：沙盒還活著，要能回應、能重試）
++```
++
++其他寫樹的人（`delete: false` 的 checkpoint、`flush`、`close_all`、`_teardown`）：只做第 1–2 步（對齊的那幾個還會撤銷第 3 步的記錄）。
++一寫樹，現有 pack 的名字就過期；打包途中有人寫樹，打包讀的是寫之前的 gen，發佈出來就已經過期。
++
++還原（`_HostController.create` 不變，只是 `NfsArchive.restore` 多一條分支）：
++```
++g = 讀 .gen；<item>.pack.<g>-<n>.tar 在、且大小 == n → tar -xf --no-same-owner 進新目錄 → reown → mark_ready
++不在（或 .gen 不在、或大小不符）→ rsync 樹（今天的路）
++解開失敗 → 清空目錄 → rsync 樹
++```
++
++開關 `SANDBOX_HOST_ARCHIVE_PACK=0`：第 3 步不記，所以 4–5 都不做（kill 不封鎖）、還原不找 pack（第 1 步照樣換 gen，所以之後再打開不會撿到舊 pack）。
++
++### 決定 9 的依據：app 端直接寫樹的每一條路（P5 時逐條查）
++
++host-managed 模式下 app 的 durable store 就是那棵樹（`NfsTreeFileStore`），所以「誰會不經 host 寫樹」要一條一條看：
++
++| 寫入者 | 會不會在打包檔存在時寫樹 | 依據 |
++|---|---|---|
++| `WorkspaceFiles` 冷寫（`files/facade.py` 的 `self._fs.write/delete`） | 不會 | 冷寫只在 `resolve_io_handle` 回 None 時發生；http 的位址列在回收時**不清**（`kill_idle` 不呼叫 `address.forget`）、也沒有過期，所以回收過的 item 一律探到舊位址 → `SandboxNotFound` → `rebuild_io_handle` 經 host 建沙盒，寫進活的沙盒 |
++| `seed_item` / `/collections.json`（`item_routes.py` 建 item） | 不會 | 只寫還沒有 row 的新 item；新 item 沒被回收過，沒有打包檔 |
++| #492 M2 drain（`MigratingFileStore.backfill_workspace`，create 前） | 會寫，但結果是對的 | 它只補「舊 store 有、樹沒有」的檔；舊 store 凍結，而任何打包檔存在之前這個 item 的 drain 至少成功過一次（失敗就拒絕建沙盒），所以回收後還能補的只有使用者自己刪掉的檔——從打包檔還原時不帶回它們、turn 結束再從樹刪掉，比今天（把刪掉的檔復活）更對 |
++| 刪除 item（`item_routes.py` 的 cascade → `filestore.purge`） | 刪樹，打包檔原本留著 | P5：`NfsTreeFileStore.purge` 一併刪掉 host 放在旁邊的 `.gen`／打包檔；測試用 host 真正的 `NfsArchive` 產生那些檔當 oracle |
++
++## 還留著的洞
++
++除了 1，失敗方向都是「慢」。
++
++1. **人工不經 persist 改樹**（決定 9）——規則，不是碼；漏做的方向是**修改被撤銷**。
++2. **3–4 之間（兩個請求之間）有人寫本機**：打包讀的是第 5 步當下的本機，所以 pack **比樹新**（含那筆寫入）；樹要到下次開、第一次寫回才跟上。方向是保住使用者最後的狀態——今天這筆寫入會被第 6 步砍掉。
++3. **host 在第 5 步中途死掉**：`<item>.pack.<uuid>.tmp` 留在 NFS 到下次 persist（或刪除 item）。永遠不再被碰的 item 留一個死檔。
++4. **封鎖期間（含等待在飛請求的最多 `SANDBOX_HOST_PACK_DRAIN_S`）的請求一律被當成沙盒不見了**：本來就要砍了，差別是封鎖的長度（最多 `SANDBOX_HOST_PACK_DRAIN_S` 的等待加打包時間，打包時間和位元組成正比）；這段時間裡重開這個 item，app 會從樹 rebuild；app 對 `SandboxNotFound` 的反應（rebuild）和砍完之後一樣。
++5. **兩個 host 上同一個 item 的沙盒（#366 CAS 輸家）**：另一個沙盒在我讀 gen **之前**寫了樹，pack 會是我這邊的本機——比樹少了它的寫入。這是 #366 split-brain 的同一類，今天它的寫入也會被我的對齊 `--delete` 蓋掉。
++6. **成本，不是對錯**：每次 persist 的清理 glob 一次 `<nfs_root>`，而那個目錄每個 item 一筆、現在每個寫過的 item 還多一個 `.gen`。每顆 pod 每 5 秒對每個 warm 沙盒 checkpoint 一次，所以這是一個新的、每次 checkpoint 都付的目錄列舉。和 rsync 本身逐檔 stat 的成本比起來小；沒有量過，量到才改（例如「`.gen` 已存在且沒有打包檔」時跳過）。
++7. **既有、沒變**：#366 CAS 輸家的陳舊 persist 覆蓋樹——pack 跟著樹走，不更好也不更壞；回收砍到正在用的沙盒那個 TOCTOU 也還在（in-flight 計數其實是比心跳更準的「有人在用」訊號，照理整個回收都該中止，但那是改回收的行為，另一題）。
++
++## Phases
++
++| phase | 內容 | 驗收（先紅後綠；突變各紅一條） |
++|---|---|---|
++| P1 | 這份 plan + design-history 一行 | `tests/docs/test_docs_index.py` 綠 |
++| P2 | **host**：`NfsArchive` 加 `_new_generation` / `_pack_dir` / 清理 / `restore` 的 pack 分支；`_HostController.persist(rid, delete, pack)`；middleware 的 in-flight 計數；`_PersistBody.pack`；env `SANDBOX_HOST_ARCHIVE_PACK` | 紅：pack 名字帶 gen、還原只認現在 gen 的名字（舊名字在也不用）、寫樹換 gen 後既有 pack 不被用、有別的請求在跑就不打包、**截斷在檔案邊界的 pack 不被用**、tar 期間 in-flight／last_active 變了就刪 tmp（這兩條 guard 在 P8 被「kill 時封鎖再打包」取代）、tmp 永遠不被用、解開失敗清目錄走樹、`delete=False` 永不打包、解開用 `--no-same-owner`、**pack 還原後 `rsync --dry-run -i` 重傳 0 個檔**（本機已驗兩種格式都 0）、開關 0 時不打包不讀。`Runner` 接縫照舊（tar 的 create／extract 都是單一 argv） |
++| P3 | **app**：`HttpSandbox.persist(handle, *, delete, pack=False)`；`registry._writeback(..., pack=False)`；**只有 `kill_idle`** 傳 `pack=True`；`flush` / mid-turn checkpoint / `close_all` / `_teardown` 不傳 | 紅：`kill_idle` 的 persist 帶 `pack: true`；其餘四條帶 `false`（各一條；五個呼叫點逐一突變，各恰好紅一條）；HTTP body 兩個方向的突變紅 `test_persist_sends_pack_only_when_asked`。舊 host 不認 `pack`：master 的 `_PersistBody` 是沒設 `extra` 的 pydantic model，預設忽略多的欄位（用同一個 model 形狀驗過，不是測試） |
++| P4 | **host 的可見性**：host 沒設 log level（root 預設 WARNING，`logger.info` 在 pod 上看不到），所以解開失敗、退回走樹印一條 **warning**（帶 item、pack 名、tar 的 stderr）；開機 echo 帶 `archive_pack=`。補兩條沒走到的分支：名字只是長得像（`<gen>-*.tar` 的 `*` 不是數字）、列出之後 stat 之前 pack 被刪 | warning 降成 info → 紅那一條；兩條分支各自的突變各紅一條 |
++| P5 | **刪除 item 帶走打包檔**：`NfsTreeFileStore.purge` 一併刪 `<item>.gen`、`.gen.tmp`、`<item>.pack.<gen>-<bytes>.tar`、`.pack.tmp`（regex 全名比對，不是前綴）。測試從原始碼載入 host 的 `NfsArchive` 產生檔案當 oracle | 先紅（`.gen` 與 pack 留著）；拿掉前綴檢查、拿掉 regex、拿掉 `.gen.tmp`、拿掉 `.pack.tmp`、root 不存在的 `return`——五個突變各紅一條 |
++| P6 | **docs**：`migrations.md` 一條（空間 ≈2×、開關、**決定 9 的規則**、確認做完的命令）；#867 條目補一行指過來；`configuration.md` §C、`sandbox-host.md` 的 env 表、`sandbox-host-wire.md` 的 persist body；CLAUDE.md 檔案樹那條的最後一句補「pack 快路」半句。#842（備份）還是 draft、它的 runbook 不在 master 上：規則先寫進這條 migrations（「從備份還原 NFS 樹」在列），**後合的那一個 PR** 在備份 runbook 補「load 之後刪 `*.pack.*.tar`」 | 每句對著碼；mkdocs `--strict` 綠 |
++| P7 | **第一輪 review（regression／defect）**：`.gen` 的 tmp 共用一個名字，同一個 item 兩個 persist 重疊時後一個 rename 找不到檔 → 帶 uuid；purge 的 regex 跟著改，測試讓 host 自己留下 tmp | 紅：在 `os.replace` 前插入同 item 的另一次換 gen（重現回報的 `FileNotFoundError`）；改回固定名字 → 紅，而且 purge 的 parity 測試一起紅 |
++| P8 | **第一輪 review（defect blocker）：打包從 persist 搬到 kill**（決定 3、4 與機制段改寫；死路表最後一列）。`NfsArchive.persist` 回傳「對齊有沒有真的跑」、`NfsArchive.pack` 獨立；controller 的 `pack_on_kill` / `closing`；`_InFlight` 擋封鎖中的 rid；pack tmp 也帶 uuid | 紅：寫回和砍之間來一次 checkpoint 仍然打包；封鎖期間的寫入回 404 `SandboxNotFound`；砍時還有 exec 在跑不打包（P10 改成等，等不到才不打包）；對齊被拒不打包；沒要求的砍不打包；沙盒沒 ready 不打包；打包失敗照砍；砍失敗解除封鎖；請求結束後什麼都不留；打包途中寫樹 → pack 一發佈就過期；tar 失敗、tmp 被清掉不發佈；兩次打包不共用 tmp。每個判準各做一條突變（檔案備份還原），每條都有測試紅 |
++| P9 | 推、draft PR（點名動到 `sandbox-host/`；k8s 側**沒有**新項——tar 是 base image 的 GNU tar 1.34，不需要權限）、第二輪 review | PR body 含「prod 怎麼驗證」：回收一次後 `ls $SANDBOX_HOST_NFS_ROOT/<item>.pack.*.tar`；再開的等待時間；host log 沒有 `did not extract` |
++| P10 | **第二輪 review 的修正**：(a) defect：DELETE 到達時已經在跑的 checkpoint 讓打包落空 → 封鎖後**等**在飛請求（上限 `pack_drain_s`），呼叫者自己的份額由呼叫者給（路由 1、host reaper 0——原本 reaper 少算一個）；(b) regression：只有要打包的 kill 才封鎖，`NfsArchive.packing` 讓開關關著時不記、不封鎖；(c) conformance：回收的 kill 沒來、沙盒又被用了 → 下一次沒帶 pack 的對齊撤銷記錄；(d) veracity：rollout 程序改成「先以開關 0 滾、全部換新後刪打包檔、再打開」，回滾先關開關（事後刪擋不住並存期間本身） | 紅：在跑的 checkpoint 被等到、打包；等不到不打包（快速失敗，不吊住）；reaper 不把自己算進去；不打包的 kill 不封鎖（沒要求、開關關）；沒帶 pack 的對齊撤銷、checkpoint 不撤銷。每個判準各一條突變，卡住的也改成快速失敗 |
++| P11 | 第三輪 review（P10 的等待是新機制）。修正：被擋下的對齊也撤銷記錄（conformance：前一次回收的 kill 沒來、目錄後來空了，會把空目錄打成包）；「kill 失敗解除封鎖」的測試補上 `pack: true`（P10 之後它從沒封鎖過，突變不紅）；runbook 第一項的 WHEN 指向三步驟；計劃的措辭（封鎖的長度不是「幾秒」） | 紅：被擋下的對齊撤銷記錄；把 `finally` 裡的解除封鎖拿掉 → 紅 |
++| P12 | **第三輪 review（defect）：等待上限可設定**。寫死的 60 秒和一次大 item checkpoint 同量級，幾顆 pod 一起走就等不到，偏偏落在目標 item；改成 env `SANDBOX_HOST_PACK_DRAIN_S`，預設 300 秒，開機 echo 印出來 | 紅：預設 300；`build_host_app` 把設定傳進 controller（拿掉 → 紅）；env 名拼錯 → 衍生式 config 測試紅 |
++| P13 | CI 對最終 sha | 同 P9 |
++
++**不做**：關機時打包、在 `close`（使用者關閉環境）時打包（可之後：那也是靜止點，但使用者在等回應）、路徑數門檻、壓縮、overlay。
++
++**我不知道、但不影響對錯的**：那個備份的位元組數——決定打包要幾秒、空間吃多少，和這份設計成不成立無關。
+diff --git a/docs/plan-skill-hub-history.md b/docs/plan-skill-hub-history.md
+index 59d474e3..45ceddee 100644
+--- a/docs/plan-skill-hub-history.md
++++ b/docs/plan-skill-hub-history.md
+@@ -1,6 +1,6 @@
+ # Skill hub:歷史與回溯、下載/使用次數、問 AI 該裝哪個
+ 
+-**狀態:** grill 進行中(2026-10-06 起)。下面「已定案」的每一條都問過、答過;「還沒定」的是我的建議,**不是**前提。
++**狀態:** grill 進行中(2026-10-06 起)。「已定案」的每一條都問過、答過;「還沒定」的是我的建議,**不是**前提。
+ 來源標記:〔user〕= user 的原話或明確選擇;〔查證〕= 讀程式碼確認的事實;〔建議〕= 我提的、尚未確認。
+ 
+ ## 要做的三件事〔user〕
+@@ -12,53 +12,62 @@
+ ## 現況〔查證,master `24e951d8`〕
+ 
+ - 重新發布 = `SkillHubEntry` 的一個新 specstar revision;轉移 owner、改可見範圍也各是一個 revision,沒有被 prune。
+-  revision 帶 `updated_by` / 時間,所以「誰、何時做了什麼」的資料已經在,只是沒有 API、沒有畫面。
+-  fork 記在 fork 那一條的 `forked_from`。
+-- skill 的**檔案不在 revision 裡**:每版寫進 `create_app` 收到的 `filestore`(= `sandbox_filestore`,
+-  `factories.py:get_sandbox_filestore`)底下一個新的命名空間 `skill-hub:<id>:<uuid>`,`SkillHubEntry.blobs`
+-  記它在哪;發布完 `purge(previous)` 把上一版刪掉。所以舊版內容拿不回來。
+-  依 `sandbox.durable.kind`,這個位置可能是 specstar `WorkspaceFile`、NFS 檔案樹,或兩者雙讀。
+-- item 裡的 agent 已經有 `search_skill_hub` / `install_skill`,但只在 item 聊天裡;skill hub 頁面本身不能問 AI。
+-- 既有缺陷(不是這次造成的):`publish` 先 `find(owner, name)` 再 `mint_entry_id()`,同一個人同時發布兩次
+-  同名的**新** skill 會建出兩條同 `owner/name` 的條目。
++  revision 帶 `updated_by` / 時間;fork 記在 fork 那一條的 `forked_from`。資料在,沒有 API、沒有畫面。
++- skill 的檔案每版寫進 `create_app` 收到的 `filestore`(= `sandbox_filestore`,`factories.py:get_sandbox_filestore`)
++  底下一個新的命名空間 `skill-hub:<id>:<uuid>`,`SkillHubEntry.blobs` 記它;發布完 `purge(previous)` 刪掉上一版,
++  所以舊版內容拿不回來。依 `sandbox.durable.kind`,這個位置可能是 specstar `WorkspaceFile`、NFS 檔案樹或兩者雙讀。
++- 已安裝副本的 `.skill/<name>/.origin`(`SkillOrigin`:`source` / `files` = 每檔 sha256 / `entry`)有四個寫入者:
++  `materialize_skill`、`install_hub_skill`、`refresh_skill`、`publish_skill`;讀它的是 skill 索引(每個 turn,只用
++  `source`)、`skill_upstream`(「有新版」= `origin.files` ≠ 上游的 map)、`refresh_skill`(逐檔三方比對:沒改過的換、
++  改過的跳過並回報、上游刪掉的只在沒改過時刪)、`skill_folder_in_the_way`、`publish_skill`(指向別人條目就拒絕)。
++- 單一條目只有總大小上限 `SKILL_HUB_MAX_BYTES` = 20 MB,**沒有檔案數上限**。
++- API image(`docker/Dockerfile`)沒有 `git`,Python 依賴裡也沒有 git 套件。
++- item 裡的 agent 已經有 `search_skill_hub` / `install_skill`,只在 item 聊天裡;skill hub 頁面本身不能問 AI。
++- 既有缺陷:`publish` 先 `find(owner, name)` 再 `mint_entry_id()`,同一個人同時發布兩次同名的**新** skill 會建出
++  兩條同 `owner/name` 的條目。
+ 
+-## 已定案
+-
+-### 功能 1:歷史與回溯 —— 儲存
++## 已定案:功能 1(歷史與回溯)
+ 
+ | # | 決定 | 來源 |
+ |---|---|---|
+-| H1 | 不用 git,維持 specstar | 〔user〕「如果要維持 specstar…」「用 specstar 的 purge 就好」 |
+-| H2 | 保留上限預設 **N = 1000** 版,用 specstar `prune_revisions(keep_last_n=N)`;排序、目前版本永不刪、並發保護、blob 引用計數都交給它,沒人引用的 blob 由 blob GC 回收 | 〔user〕 |
+-| H3 | 檔案搬進 `SkillHubEntry` 本身:新欄位 `files: dict[str, Binary]`,每次發布就是一個 revision;內容相同的檔案在 revision 之間共用同一個 blob。不再經過 `sandbox_filestore`,也不再有每版一個命名空間 / 發布後 purge 那一套 | 〔user〕(「為什麼那麼複雜」之後同意的形狀) |
+-
+-### H3 的相容做法〔user:「寫進計劃」〕
+-
+-- **舊資料:** 新欄位有預設值,舊的列直接讀得出來(`files` 是空的),**不需要 Schema 升版,也不用跑 migrate**。
+-- **讀取:** `files` 有東西就用 `files`;是空的就照現在的方式從 `blobs` 指的 FileStore 位置讀。NFS、specstar、
+-  雙讀模式都走同一個 FileStore 介面,所以三種部署都相容。
+-- **寫入:** 新的發布一律寫進 `files`。舊條目只要重新發布一次,就自然轉成新格式。
+-- **歷史:** 改版之前的舊版本本來就被刪掉了,所以歷史從「改版後第一次發布」開始。舊格式的那一版在歷史裡還看得到,
+-  內容照樣從舊位置讀。
+-- **清理舊位置:** 條目被刪除時,連同舊位置一起清掉,跟現在一樣。舊格式的那一版被 `prune_revisions` 擠出 1000 版
+-  時也要一起清,但實際上不太可能發生。
++| G1 | 版本用 **git** 管理 | 〔user〕「直接在 skillhubentry 裡面放檔案路徑和 git commit…使用 git 管理」 |
++| G2 | git 放在**自己設定的目錄**(新設定 `skill_hub.git_root`),不跟 sandbox 共用 | 〔user〕 |
++| G3 | API image 裝 `git` | 〔user〕 |
++| G4 | 一個 skill 一個 bare repo:`{git_root}/<entry id>.git` | 〔建議,實作細節〕 |
++| G5 | **`master` = 目前版本**;搶鎖用 push:`git push --force-with-lease=master:<讀到的舊 master>`,被拒就是沒搶到。發布被拒 → 重讀、重做 commit、再推(有上限);回復被拒 → 告訴 owner「版本剛被別人改過」,不自動重試 | 〔user〕「搶鎖還是用 push 因為爭的是 master 的位置」 |
++| G6 | 回復 = `master` 指回舊 commit(git 層的 switch);之後的發布**接在目前版本後面**,被退掉的版本成為旁支 | 〔user〕「Switch 比較好」、選 A |
++| G7 | `SkillHubEntry` 加 `commit`(這個 revision 當下 `master` 的 commit);**每個 revision 打一個 tag `r-<revision id>`** 指向它的 commit,revision ↔ commit 雙向可查;tag 也讓旁支 commit 不被 gc | 〔user〕「直接放 revision 做 tag 比較好,雙向 link 得到」 |
++| G8 | 寫入順序:push 成功(搶到)→ `update` `SkillHubEntry` → 打 tag。push 成功但後兩步沒做完 → 下次讀到 `master` 的 commit 沒有 `r-` tag 就補做 | 〔建議〕 |
++| G9 | 不設保留上限,超過再說 | 〔user〕「不需要了,要超過再說」 |
++| G10 | 要備份 git 目錄,也要把**已發布的條目**搬進 git(每條建 repo,目前內容做成第一個 commit) | 〔user〕 |
++| G11 | 單一條目**檔案數上限 1000**,和 20 MB 上限放在同一個檢查 | 〔user〕「1000 個檔案算是很鬆了」 |
++| G12 | hub 副本的 `.origin` 改記 `{source: "hub", entry, commit}`;shared / profile 副本維持 `files` map(它們沒有 git,基準只能存在副本裡);`SkillHubEntry` 不再存 `origin` map,檔案清單從 `git ls-tree` 讀 | 〔user〕「好 ok」 |
++| G13 | 「有沒有變」= 副本的 `commit` ≠ hub 的 `master`,不碰檔案 | 〔user〕(同 G12) |
++| G14 | 同步(refresh)的逐檔三方比對:基準 = `git ls-tree -r -l <副本的 commit>`,上游 = `git ls-tree -r -l master`,副本 = 自己用 git blob 公式算。**不 clone、不 checkout**;只有要寫進副本的檔案才 `git cat-file` 讀內容 | 〔user〕「ok」(比 clone+checkout+diff 兩個資料夾省掉全部的暫存寫入) |
++| G15 | **LFS 第一天就有**,用 LFS 的正規方式:`.gitattributes` 以**路徑模式**決定,清單由平台固定(圖片 `*.png *.jpg *.jpeg *.gif *.webp`、文件 `*.pdf *.docx *.xlsx *.pptx`、壓縮檔 `*.zip *.gz *.tar`),發布者不能改。不用檔案大小決定 | 〔user〕「Day 1 就要有 lfs 比較規則」「Lfs 就不能用大小做門檻」 |
++| G16 | 比對順序:先全部用 blob id 比;對不上、而 repo 那邊是小 blob 的,用一次 `git cat-file --batch` 讀出來看是不是 LFS 指標(`version https://git-lfs`),是的話改比指標裡的 `size` 與 `oid sha256`。不靠解析 `.gitattributes` 判斷 | 〔user〕「Ok」 |
++| G17 | 舊的 hub 副本(`.origin` 只有 sha256 map、沒有 `commit`)照舊比對,按一次同步後換成新格式 | 〔建議〕 |
+ 
+-`blobs` 欄位保留,只用來讀舊資料。之後若要完全拿掉雙讀,另做一次性搬移 job,不在這次範圍。
++### 推翻的決定
+ 
+-**推翻舊計畫:** `plan-skill-hub.md` 寫「payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名空間),
+-不塞進 struct」,H3 推翻它。依 CLAUDE.md,實作的 PR 要在 `plan-skill-hub.md` 標題下加
+-`> 被 #<那個 PR>（plan-skill-hub-history.md）推翻`。
++- 本計畫前一版的 H1(不用 git)、H2(保留 1000 版,用 specstar `prune_revisions`)、H3(檔案搬進
++  `SkillHubEntry.files`,舊資料雙讀)與其相容做法,被 G1–G10 取代〔user 後來改走 git〕。
++- `plan-skill-hub.md` 寫「payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名空間),不塞進 struct」、
++  「重新發布 = specstar 原生 revision」:G1 / G7 推翻其儲存方式。依 CLAUDE.md,實作的 PR 要在 `plan-skill-hub.md`
++  標題下加 `> 被 #<那個 PR>（plan-skill-hub-history.md）推翻`。
+ 
+ ## 還沒定(建議,等 user 確認)
+ 
+ | # | 問題 | 建議 |
+ |---|---|---|
+-| O1 | 回溯怎麼做 | **加一版**:把 v2 的內容發布成 v4,歷史維持一條直線、不改寫;已安裝的人照常看到「有新版」。不用 specstar `switch()`——那會讓 v3 變旁支、prune 時優先被刪,而且已安裝副本看到的「有新版」其實是退回 〔建議〕 |
+-| O2 | 誰能回溯 | 只有 owner,和修改 / 下架 / 轉移一樣 〔建議〕 |
+-| O3 | 回溯要不要重新 AI 審查 | 不用:內容和當初審過的那一版完全相同,沿用那一版的審查結果 〔建議〕 |
+-| O4 | 其他人能不能直接裝舊版 | 第一版**不能**;能看舊版、比對兩版、從某一版 fork。理由:舊版常是有理由被換掉的(要做就得配「撤回某一版」);「有新版」提示會一直催故意用舊版的人(要做就得配「固定在這版」)。已安裝的副本本來就停在安裝時那一版 〔建議〕 |
+-| O5 | 事件歷史(轉移、下架、改可見範圍、被 fork)要不要和版本放在同一條時間軸 | 同一條,放 skill 詳情頁 〔建議〕 |
+-| O6 | 運營方要不要看得到 hub 總用量 | 要,方便發現濫用 〔建議〕 |
++| O1 | 回復時,跟著內容走的欄位(`description`、`review`、`referenced_tools`)怎麼辦 | 從那個舊 commit 當時的 revision 讀回來(`review` 是當時 AI 的意見,從檔案算不回來) |
++| O2 | 回復要用 specstar `switch` 嗎 | 不用:`switch` 會把 owner / 可見範圍一起換回舊值。改成 `update` 只改 `commit`(與 O1 的欄位) |
++| O3 | 誰能回復 | 只有 owner |
++| O4 | 回復要不要重新 AI 審查 | 不用,內容和當初審過的那一版相同 |
++| O5 | 已安裝副本在 hub 變更後看到什麼 | 中性的「hub 上的這個 skill 已變更」+〔同步〕,不分新版或回復;詳情頁寫「目前版本 vN(由 vM 回復)」 |
++| O6 | 其他人能不能直接裝舊版 | 第一版不能;能看舊版、比對兩版、從某一版 fork |
++| O7 | 事件歷史(轉移、下架、改可見範圍、回復)要不要和版本放同一條時間軸 | 同一條,放 skill 詳情頁 |
++| O8 | 運營方要不要看得到每個 skill 的 repo 大小 | 要 |
+ | — | 功能 2(下載 / 使用次數) | 還沒討論 |
+ | — | 功能 3(問 AI 該裝哪個) | 還沒討論 |
+ | — | 既有缺陷:同時首次發布同名 skill 產生兩條 | 還沒討論要不要順手修 |
+diff --git a/docs/sandbox-host-wire.md b/docs/sandbox-host-wire.md
+index 5091cab5..11ad5bca 100644
+--- a/docs/sandbox-host-wire.md
++++ b/docs/sandbox-host-wire.md
+@@ -34,7 +34,7 @@ sandbox。
+ | `POST /sandboxes` | `{image?, env?, exposed_ports?, item_id?}` | `200 {pod_url, remote_id}` | 建立 |
+ | `DELETE /sandboxes/{rid}` | — | `204` | 終止 |
+ | `POST /sandboxes/{rid}/exec` | `{cmd: [str], env?: {str: str}}` | `200` NDJSON stream | exec(見下) |
+-| `POST /sandboxes/{rid}/persist` | `{delete: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492) |
++| `POST /sandboxes/{rid}/persist` | `{delete: bool, pack: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492);`pack` 見下 |
+ | `PUT /sandboxes/{rid}/file?path=` | raw octet-stream body | `204` | 上傳 |
+ | `GET /sandboxes/{rid}/file?path=` | — | `200` octet-stream | 下載 |
+ | `POST /sandboxes/{rid}/files` | `{paths: [str]}` | `200 {files: [base64\|null]}` | 一次下載多個檔(#781)。順序同 `paths`;**某個路徑不存在回 `null` 而不是整批失敗** —— 那是「這個路徑沒有」的答案,呼叫端才能為它要的檔案報錯、為列表順手略過。其他錯誤照常往上拋(目錄不是「檔案不存在」)。app 端分塊送,一次上限 200 個路徑 |
+@@ -89,6 +89,15 @@ host 公告它實際會套的天花板,由 **enforcer 自己回答**(問 sandbox
+ 時**執行(半還原的目錄絕不能覆蓋封存)。沒有 archive 或沒帶 `item_id` ⇒ 兩者都是 no-op,舊
+ client 因此照舊可用。
+ 
++**`pack`([設計](plan-archive-pack.md))**:預設 `false`;app 只在回收(全域閒置、沙盒要拆)時送 `true`。
++`SANDBOX_HOST_ARCHIVE_PACK` 開著、`delete: true` 的對齊真的跑了,host 就記下這個沙盒(之後每一次對齊都重新決定:沒帶 `pack`、
++或被空來源保護擋下,都會撤銷)。接著的 `DELETE /sandboxes/{rid}` 先把它關起來(之後對這個 `rid` 的請求一律回 404 `SandboxNotFound`),
++等關起來之前就在跑的請求結束(最多 `SANDBOX_HOST_PACK_DRAIN_S`,預設 300 秒,等不到就不打包),沙盒 ready 就在樹旁邊寫
++`{nfs_root}/{item_id}.pack.<gen>-<位元組數>.tar`,然後才砍沙盒;kill 失敗就重新開放。沒有被記下的 kill 不關。之後的 `create` 在名字對得上現在的 `.gen`、大小對得上名字時解開它,不再逐檔 rsync;
++對不上、或解開失敗(清空目錄、印 warning)就照舊逐檔 rsync。
++每一次 `persist` 都會先換掉 `{item_id}.gen`,所以打包檔只在下一次寫回之前有效。舊 host 不認得這個
++欄位、忽略它(pydantic 預設);舊 app 從不送。
++
+ ### `POST /tools/resolve` —— 為什麼回應是「部分成功」
+ 
+ 回應**刻意不是全有全無**:每個工具各自成功或被拒(`refused` 逐項給原因),
+diff --git a/docs/sandbox-host.md b/docs/sandbox-host.md
+index 30dc8a9b..37cf8ccc 100644
+--- a/docs/sandbox-host.md
++++ b/docs/sandbox-host.md
+@@ -55,6 +55,8 @@ Host 端——**環境變數**(`SANDBOX_HOST_*`),設在 host pod 上
+ | `SANDBOX_HOST_CGROUP_ROOT` | _(未設)_ | 委派的 cgroup v2 子樹;未設 = 自動偵測 |
+ | `SANDBOX_HOST_TOOLS_DIR` | _(未設)_ | 預建工具目錄,bind-mount 在 `/.tools`;未設 = 無工具 |
+ | `SANDBOX_HOST_IDLE_TTL` | `1800` | 回收因 app-pod crash 而成孤兒的 sandbox;0 = 關閉 |
++| `SANDBOX_HOST_ARCHIVE_PACK` | `1` | 回收時在 NFS 樹旁多寫一個打包檔,再開時讀它而不是逐檔複製;`0` = 不打包也不讀。只認 1/0、true/false、yes/no、on/off,其他值開不了機([設計](plan-archive-pack.md)) |
++| `SANDBOX_HOST_PACK_DRAIN_S` | `300` | 回收要打包時,等沙盒上已經在跑的請求(checkpoint、exec)結束的上限秒數;等不到就不打包並印 warning |
+ 
+ (`SANDBOX_HOST_ROOT`、`_EXEC_TIMEOUT`、`_LOG_TIMEOUT` 也存在——見
+ `sandbox-host/src/sandbox_host/config.py`。)
+diff --git a/sandbox-host/src/sandbox_host/__main__.py b/sandbox-host/src/sandbox_host/__main__.py
+index 77e74de0..4c6e2cf8 100644
+--- a/sandbox-host/src/sandbox_host/__main__.py
++++ b/sandbox-host/src/sandbox_host/__main__.py
+@@ -134,7 +134,8 @@ def main() -> None:
+     print(
+         f"→ timeouts: exec_timeout={settings.exec_timeout:g}s "
+         f"log_timeout={settings.log_timeout:g}s idle_ttl={settings.idle_ttl:g}s "
+-        f"| nfs_root={settings.nfs_root}",
++        f"| nfs_root={settings.nfs_root} archive_pack={int(settings.archive_pack)} "
++        f"pack_drain_s={settings.pack_drain_s:g}",
+         flush=True,
+     )
+     check_cgroup_ready(cgroup_root)  # fail loud: isolation needs cgroup v2
+diff --git a/sandbox-host/src/sandbox_host/app.py b/sandbox-host/src/sandbox_host/app.py
+index 06a5af29..b78eaa3d 100644
+--- a/sandbox-host/src/sandbox_host/app.py
++++ b/sandbox-host/src/sandbox_host/app.py
+@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
+ from pydantic import BaseModel
+ 
+ from .artifact import ArtifactError
++from .config import SandboxHostSettings
+ from .nfs_archive import NfsArchive
+ from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+ from .tool_cache import ToolCache
+@@ -110,6 +111,12 @@ class _PersistBody(BaseModel):
+     # #492: `delete` ⇒ rsync --delete (turn-end / reap reconcile, at a quiesced
+     # ready sandbox); False ⇒ additive-only mid-turn durability checkpoint.
+     delete: bool = False
++    # docs/plan-archive-pack.md: the app sets this on REAP only — the one moment
++    # the item is globally idle and the sandbox is about to go. The persist only
++    # records the request; the kill that follows packs, with the sandbox closed
++    # to every other request. Defaults off, so an app that never sends it gets
++    # today's persist.
++    pack: bool = False
+ 
+ 
+ class _CreateReply(BaseModel):
+@@ -300,6 +307,44 @@ def check_cgroup_ready(cgroup_root: Path, *, controllers_marker: Path = _CGROUP_
+         )
+ 
+ 
++class _InFlight:
++    """Counts the requests to each sandbox that have started and not finished,
++    and turns away every request to a sandbox that is being torn down.
++
++    Pure ASGI, not `@app.middleware("http")`: that one's `call_next` returns as
++    soon as a response STARTS, and `exec` is a streaming response — the command
++    is still writing the sandbox long after. Here the count is held across the
++    whole `await self.app(...)`, which returns only once the last byte is sent,
++    and released in `finally`, so a request that raises does not leave the
++    sandbox looking busy forever."""
++
++    def __init__(self, app: Any, controller: _HostController) -> None:
++        self.app = app
++        self.controller = controller
++
++    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
++        parts = scope.get("path", "").split("/") if scope["type"] == "http" else []
++        if len(parts) <= 2 or parts[1] != "sandboxes":
++            await self.app(scope, receive, send)
++            return
++        rid = parts[2]
++        if rid in self.controller.closing:
++            # Answered here, before the count: it never touches the sandbox.
++            gone = SandboxNotFound(f"sandbox {rid} is being torn down")
++            await _error(gone)(scope, receive, send)
++            return
++        counts = self.controller.in_flight
++        counts[rid] = counts.get(rid, 0) + 1
++        try:
++            await self.app(scope, receive, send)
++        finally:
++            left = counts.get(rid, 1) - 1
++            if left:
++                counts[rid] = left
++            else:
++                counts.pop(rid, None)
++
++
+ class _HostController:
+     """Owns the host's operational state: which sandboxes are live (for the
+     idle-reaper), whether we're draining, and the activity clock. Create/kill
+@@ -313,8 +358,14 @@ class _HostController:
+         tool_cache: ToolCache | None = None,
+         clock: Callable[[], float],
+         archive: NfsArchive | None = None,
++        pack_drain_s: float = SandboxHostSettings.pack_drain_s,
+     ) -> None:
+         self.sandbox = sandbox
++        # How long a packing kill waits for requests that began before it (a
++        # checkpoint's rsync, an exec) to finish. Nothing new can start once the
++        # sandbox is closed, so the wait ends on its own; the bound is for an
++        # exec that would outlast it, and then the sandbox goes without a pack.
++        self._pack_drain_s = pack_drain_s
+         self.idle_ttl = idle_ttl
+         self._tool_cache = tool_cache
+         self.clock = clock
+@@ -326,6 +377,19 @@ class _HostController:
+         # know which archive dir to write.
+         self._archive = archive
+         self._item_of: dict[str, str] = {}
++        # Requests to each sandbox that have STARTED and not FINISHED — counted
++        # by `_InFlight` around the whole ASGI call, so a streaming `exec` stays
++        # counted until its last byte, not until its handler returns. The pack
++        # guard reads it: `_last_active` is stamped when a request begins and
++        # cannot tell "began a minute ago and still writing" from "done".
++        self.in_flight: dict[str, int] = {}
++        # Sandboxes a reap's write-back asked to pack, packed as they are torn
++        # down (docs/plan-archive-pack.md) — not inside the write-back, where
++        # every app pod's periodic checkpoint of the same sandbox interrupted it.
++        self.pack_on_kill: set[str] = set()
++        # Sandboxes being torn down: `_InFlight` turns their requests away, so
++        # nothing writes the dir while it is packed.
++        self.closing: set[str] = set()
+ 
+     def start_draining(self) -> None:
+         self.draining = True
+@@ -374,21 +438,38 @@ class _HostController:
+         # field a reader cannot interpret is worse than an absent one.
+         return [{"remote_id": rid, "item_id": self._item_of.get(rid)} for rid in self._last_active]
+ 
+-    async def persist(self, rid: str, *, delete: bool) -> None:
++    async def persist(self, rid: str, *, delete: bool, pack: bool = False) -> None:
+         """#492: rsync the sandbox's live working dir → its durable NFS archive.
+         A no-op when no archive is wired, this handle has no item mapping, or the
+         sandbox is not ready (a half-restored dir must never overwrite the
+         archive — the #492 Q9 `.ready` gate on persist, so `--delete` can't wipe
+-        durable data)."""
++        durable data).
++
++        ``pack`` (a reap's write-back) asks for a pack when the sandbox is torn
++        down — remembered only if the reconcile RAN, since only then is the tree
++        a copy of the dir. A later checkpoint (``delete`` off) leaves the request
++        standing — checkpoints are what made packing here impossible; every later
++        reconcile decides afresh, so one without ``pack`` (a turn ending: the
++        sandbox is in use again) or one the archive refused withdraws it."""
+         item = self._item_of.get(rid)
+         if self._archive is None or item is None:
+             return
+         handle = SandboxHandle(id=rid)
+         if not await self.sandbox.is_ready(handle):
+             return
+-        await self._archive.persist(item, self.sandbox.workspace_dir(handle), delete=delete)
+-
+-    async def kill(self, rid: str) -> None:
++        reconciled = await self._archive.persist(
++            item, self.sandbox.workspace_dir(handle), delete=delete
++        )
++        if pack and reconciled and self._archive.packing:
++            self.pack_on_kill.add(rid)
++        elif delete:
++            # Every reconciling write-back decides afresh. Without `pack` it is a
++            # turn end — the sandbox is in use again (the reap's kill never came);
++            # with `pack` but refused (the empty-source valve) the dir is not the
++            # item's workspace, and an earlier request must not pack it.
++            self.pack_on_kill.discard(rid)
++
++    async def kill(self, rid: str, *, own: int = 0) -> None:
+         """Forget it only once it is really gone.
+ 
+         Popping first meant a kill that raised left a sandbox still running and
+@@ -396,11 +477,54 @@ class _HostController:
+         — so nothing would ever retry it and nothing could report it, which
+         defeats the one mechanism the app has for finding an orphan. An
+         already-unknown handle raises `SandboxNotFound` from the backend before
+-        anything is dropped, which is the same answer as before."""
+-        await self.sandbox.kill(SandboxHandle(id=rid))
++        anything is dropped, which is the same answer as before.
++
++        A kill a reap asked to pack is closed to requests FIRST, then packed,
++        then killed; every other kill serves requests until the sandbox is gone,
++        as it always did. A kill that raises reopens the sandbox: it is still
++        running, and a closed one could never be retried. ``own`` is how many of
++        the in-flight requests are the caller's — 1 for the DELETE route, 0 for
++        the host's own reaper."""
++        handle = SandboxHandle(id=rid)
++        packing = rid in self.pack_on_kill
++        if packing:
++            self.closing.add(rid)
++        try:
++            if packing:
++                await self._pack(rid, handle, own)
++            await self.sandbox.kill(handle)
++        finally:
++            self.closing.discard(rid)
++            self.pack_on_kill.discard(rid)
+         self._last_active.pop(rid, None)
+         self._item_of.pop(rid, None)
+ 
++    async def _pack(self, rid: str, handle: SandboxHandle, own: int) -> None:
++        """Best effort: the reap is the sandbox going away, the pack only makes
++        the next reopen fast. Closing turns new requests away; ones that began
++        before (a checkpoint's rsync — on a big item, nearly always one — or an
++        exec) are waited for, up to the bound, and then it is no pack."""
++        item = self._item_of.get(rid)
++        if self._archive is None or item is None:
++            return
++        loop = asyncio.get_running_loop()
++        deadline = loop.time() + self._pack_drain_s
++        while self.in_flight.get(rid, 0) > own:
++            if loop.time() >= deadline:
++                logger.warning(
++                    "host: no pack for %s (item %s): a request was still running after %gs",
++                    rid,
++                    item,
++                    self._pack_drain_s,
++                )
++                return
++            await asyncio.sleep(0.05)
++        try:
++            if await self.sandbox.is_ready(handle):
++                await self._archive.pack(item, self.sandbox.workspace_dir(handle))
++        except Exception:  # noqa: BLE001 - a failed pack must not keep a sandbox alive
++            logger.warning("host: pack of %s for item %s failed", rid, item, exc_info=True)
++
+     async def sweep_tool_cache(self, *, max_bytes: int | None = None) -> list[str]:
+         """#674: reclaim third-party bundles nothing is running any more.
+ 
+@@ -462,6 +586,7 @@ def make_host_app(
+     readiness: ReadinessCheck | None = None,
+     archive: NfsArchive | None = None,
+     tool_resolver: ToolResolver | None = None,
++    pack_drain_s: float = SandboxHostSettings.pack_drain_s,
+ ) -> FastAPI:
+     app = FastAPI()
+     controller = _HostController(
+@@ -469,9 +594,11 @@ def make_host_app(
+         idle_ttl=idle_ttl,
+         clock=clock,
+         archive=archive,
++        pack_drain_s=pack_drain_s,
+         tool_cache=tool_resolver.cache if tool_resolver is not None else None,
+     )
+     app.state.controller = controller
++    app.add_middleware(_InFlight, controller=controller)
+ 
+     @app.middleware("http")
+     async def _track_activity(request: Request, call_next):
+@@ -634,11 +761,11 @@ def make_host_app(
+     async def persist(rid: str, body: _PersistBody) -> None:
+         # #492: rsync the sandbox's live working dir → its durable NFS archive.
+         # Host-local, so no app↔host network in the bulk path (can't hang).
+-        await controller.persist(rid, delete=body.delete)
++        await controller.persist(rid, delete=body.delete, pack=body.pack)
+ 
+     @app.delete("/sandboxes/{rid}", status_code=204)
+     async def kill(rid: str) -> None:
+-        await controller.kill(rid)
++        await controller.kill(rid, own=1)  # this DELETE is one of the in-flight
+ 
+     @app.put("/sandboxes/{rid}/file", status_code=204)
+     async def upload(rid: str, path: str, request: Request) -> None:
+diff --git a/sandbox-host/src/sandbox_host/config.py b/sandbox-host/src/sandbox_host/config.py
+index 201daf25..0e808703 100644
+--- a/sandbox-host/src/sandbox_host/config.py
++++ b/sandbox-host/src/sandbox_host/config.py
+@@ -51,6 +51,16 @@ class SandboxHostSettings:
+     # it back via rsync (host-local, so no app↔host network in the bulk path).
+     # None = no archive (the transitional / local-dev default).
+     nfs_root: str | None = None
++    # docs/plan-archive-pack.md: on reap, also leave `<item>.pack.<gen>-<bytes>.tar`
++    # beside the tree so the reopen reads ONE file instead of walking every path.
++    # Costs up to ~2× archive space for idle items. Off ⇒ never pack, never read
++    # a pack: restore is exactly the tree walk.
++    archive_pack: bool = True
++    # How long a packing kill waits for requests already running on the sandbox
++    # (a checkpoint's rsync, an exec) before giving up on the pack. A checkpoint
++    # of an item the pack is for walks every path on NFS — about a minute for
++    # ~89k paths — and several pods may be walking it at once.
++    pack_drain_s: float = 300.0
+ 
+ 
+ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
+@@ -71,6 +81,20 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
+     def opt(name: str) -> str | None:
+         return env.get(name)
+ 
++    def b(name: str, default: bool) -> bool:
++        # A string is not a bool — `bool("false")` is True. Read the spellings
++        # people write; refuse anything else with the key named, instead of
++        # letting a typo silently mean the default.
++        raw = env.get(name)
++        if raw is None:
++            return default
++        word = raw.strip().lower()
++        if word in ("1", "true", "yes", "on"):
++            return True
++        if word in ("0", "false", "no", "off"):
++            return False
++        raise ValueError(f"{name}={raw!r}: expected one of 1/0, true/false, yes/no, on/off")
++
+     return SandboxHostSettings(
+         bind=s("SANDBOX_HOST_BIND", "0.0.0.0:8000"),
+         uid_min=i("SANDBOX_HOST_UID_MIN", 100000),
+@@ -89,4 +113,6 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
+         uv_cache_max_bytes=(int(raw) if (raw := opt("SANDBOX_HOST_UV_CACHE_MAX_BYTES")) else None),
+         idle_ttl=f("SANDBOX_HOST_IDLE_TTL", 1800.0),
+         nfs_root=opt("SANDBOX_HOST_NFS_ROOT"),
++        archive_pack=b("SANDBOX_HOST_ARCHIVE_PACK", True),
++        pack_drain_s=f("SANDBOX_HOST_PACK_DRAIN_S", 300.0),
+     )
+diff --git a/sandbox-host/src/sandbox_host/nfs_archive.py b/sandbox-host/src/sandbox_host/nfs_archive.py
+index 5d58e49d..fad091f2 100644
+--- a/sandbox-host/src/sandbox_host/nfs_archive.py
++++ b/sandbox-host/src/sandbox_host/nfs_archive.py
+@@ -15,14 +15,34 @@ set foreign uids on the NFS side. ``restore`` likewise rsyncs files in as root
+ (no ``-o``); per-uid ownership is re-applied on the LOCAL copy right after, by
+ the sandbox's ``reown`` (the controller calls it post-restore, pre-mark_ready),
+ never here (#492 Q3 / #504).
++
++The packed copy (docs/plan-archive-pack.md). Restoring the tree costs one NFS
++round trip per path — 88,889 paths took 58 s, at the ingress timeout — so a
++reap may also leave ``<root>/<item>.pack.<gen>-<bytes>.tar`` (``pack``, which the
++host calls while tearing the sandbox down), a single file the reopen path reads
++in one sequential stream. The TREE stays the
++truth; the pack is a cache whose validity is its NAME: every write to the tree
++first replaces ``<root>/<item>.gen``, so a pack made before that write is named
++after a generation that is no longer current and is never chosen. No delete has
++to win a race and nothing has to be verified after publishing. Every failure —
++a stale name, a half-written tmp, a tar that does not extract — ends as "walk
++the tree": slow, never wrong. Every name it writes sits BESIDE the item dir, where a
++``--delete`` reconcile of the tree cannot reach them.
+ """
+ 
+ from __future__ import annotations
+ 
+ import asyncio
++import logging
++import os
++import re
++import shutil
++import uuid
+ from collections.abc import Awaitable, Callable
+ from pathlib import Path
+ 
++logger = logging.getLogger(__name__)
++
+ # A runner takes the rsync argv and returns (returncode, stderr) — the seam that
+ # lets tests assert the command without shelling out.
+ Runner = Callable[[list[str]], Awaitable[tuple[int, bytes]]]
+@@ -42,6 +62,14 @@ def _check_item(item_id: str) -> str:
+ # devices/specials — but deliberately NOT owner/group (see module docstring).
+ _RSYNC_FLAGS = "-rlptD"
+ 
++_GEN_RE = re.compile(r"[0-9a-f]{32}")
++# `<item>.pack.<uuid>.tmp`: one per pack being written, so two never share one.
++_PACK_TMP_RE = re.compile(r"[0-9a-f]{32}\.tmp")
++# `<gen>-<bytes>.tar`: the byte count is part of the promise. GNU tar exits 0 on
++# an archive cut at an entry boundary — it extracts the first half and calls it
++# the end — so "tar succeeded" does not mean "the workspace is whole".
++_PACK_RE = re.compile(r"([0-9a-f]{32})-([0-9]+)\.tar")
++
+ 
+ class NfsArchive:
+     def __init__(
+@@ -49,22 +77,46 @@ class NfsArchive:
+         nfs_root: Path | str,
+         *,
+         rsync: str = "rsync",
++        tar: str = "tar",
+         runner: Runner | None = None,
++        pack: bool = True,
+     ) -> None:
+         self._root = Path(nfs_root)
+         self._rsync = rsync
++        self._tar = tar
+         self._run: Runner = runner or self._default_run
++        # `SANDBOX_HOST_ARCHIVE_PACK`: off ⇒ never pack and never read a pack —
++        # the restore is exactly the tree walk it was before.
++        self._pack = pack
++
++    @property
++    def packing(self) -> bool:
++        """Whether a pack would be made (``SANDBOX_HOST_ARCHIVE_PACK``) — so the
++        host closes a sandbox for one only when it would."""
++        return self._pack
+ 
+     def _item_dir(self, item_id: str) -> Path:
+         return self._root / _check_item(item_id)
+ 
+-    async def persist(self, item_id: str, workspace_dir: Path, *, delete: bool) -> None:
++    async def persist(
++        self,
++        item_id: str,
++        workspace_dir: Path,
++        *,
++        delete: bool,
++    ) -> bool:
+         """rsync the sandbox's local working dir → the item's NFS archive. With
+         ``delete`` the archive is reconciled to match exactly (turn-end / reap /
+         shutdown, at a quiesced ``.ready`` sandbox); without it the copy is
+-        additive only (the 30 s mid-turn durability checkpoint)."""
++        additive only (the 30 s mid-turn durability checkpoint).
++
++        Every call first moves the item to a new generation, so any pack made
++        before it stops being chosen. Returns whether a reconcile RAN — the one
++        state after which the tree is a copy of the dir, and so the only one a
++        pack may follow."""
+         dst = self._item_dir(item_id)
+         await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
++        await asyncio.to_thread(self._new_generation, item_id)
+         # #492 safety valve: a ``--delete`` from an EMPTY source over a NON-empty
+         # archive wipes durable data — the exact disaster this feature exists to
+         # prevent. An empty source is indistinguishable here from a silently-failed
+@@ -83,6 +135,102 @@ class NfsArchive:
+         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
+         argv += [f"{workspace_dir}/", f"{dst}/"]
+         await self._invoke(argv)
++        return reconcile
++
++    async def pack(self, item_id: str, workspace_dir: Path) -> bool:
++        """tar the local dir into ``<item>.pack.<gen>-<bytes>.tar``, named after
++        the generation current BEFORE the tar. Returns whether one was published.
++
++        The caller's job is that nothing writes the DIR meanwhile (the host packs
++        only while tearing a sandbox down, with the sandbox closed to requests).
++        The generation covers the TREE: a write to it during the tar changes the
++        generation first, so the pack is stale the moment it is published — slow
++        on the next reopen, never wrong."""
++        if not self._pack:
++            return False
++        gen = await asyncio.to_thread(self._current_generation, item_id)
++        if gen is None:
++            return False
++        tmp = self._root / f"{item_id}.pack.{uuid.uuid4().hex}.tmp"
++        rc, err = await self._run(
++            [self._tar, "--format=posix", "-C", str(workspace_dir), "-cf", str(tmp), "."]
++        )
++        try:
++            if rc != 0:
++                logger.warning(
++                    "archive: pack of item %s failed (tar exited %d: %s)",
++                    item_id,
++                    rc,
++                    err.decode(errors="replace").strip(),
++                )
++                return False
++            size = (await asyncio.to_thread(tmp.stat)).st_size
++            await asyncio.to_thread(os.replace, tmp, self._pack_path(item_id, gen, size))
++            return True
++        except FileNotFoundError:
++            # A writer's generation change cleared this item's tmps, ours among
++            # them: that writer has already made any pack of the old tree stale.
++            return False
++        finally:
++            await asyncio.to_thread(tmp.unlink, missing_ok=True)
++
++    def _new_generation(self, item_id: str) -> str:
++        """Move the item to a fresh generation and clear what the old one left.
++
++        Written before the tree is touched: a pack whose name carries the old
++        generation must already be stale when the first byte of the new tree
++        lands. Replaced atomically (tmp + rename), so a reader sees one value or
++        the other. The tmp is named after the generation it carries: nothing
++        serialises two persists of one item (a turn-end flush and another pod's
++        checkpoint), and a shared tmp name made the second rename find nothing.
++        The cleanup is housekeeping, not correctness — the name already makes
++        those files unusable."""
++        gen = uuid.uuid4().hex
++        tmp = self._root / f"{_check_item(item_id)}.gen.{gen}.tmp"
++        tmp.write_text(gen)
++        os.replace(tmp, self._root / f"{item_id}.gen")
++        for path in self._pack_files(item_id):
++            path.unlink(missing_ok=True)
++        return gen
++
++    def _pack_files(self, item_id: str) -> list[Path]:
++        """This item's packs and pack tmps — and nothing else. Item ids are free
++        text, so `a`'s files are not told apart by prefix alone: `a.pack.x` is
++        another item, and `a.pack.notes.txt` is nobody's pack."""
++        prefix = f"{item_id}.pack."
++        out = []
++        for path in self._root.glob(f"{_glob_escape(prefix)}*"):
++            rest = path.name[len(prefix) :]
++            if _PACK_TMP_RE.fullmatch(rest) or _PACK_RE.fullmatch(rest):
++                out.append(path)
++        return out
++
++    def _pack_path(self, item_id: str, gen: str, size: int) -> Path:
++        return self._root / f"{item_id}.pack.{gen}-{size}.tar"
++
++    def _whole_pack(self, item_id: str, gen: str) -> Path | None:
++        """The current generation's pack, if its size is the size its name
++        promises. A short (or long) one is treated as absent."""
++        prefix = f"{item_id}.pack."
++        # The glob is the generation check: `gen` is 32 hex digits, so it is
++        # literal inside the pattern.
++        for path in self._root.glob(f"{_glob_escape(prefix)}{gen}-*.tar"):
++            match = _PACK_RE.fullmatch(path.name[len(prefix) :])
++            if match is None:
++                continue
++            try:
++                if path.stat().st_size == int(match.group(2)):
++                    return path
++            except FileNotFoundError:
++                continue
++        return None
++
++    def _current_generation(self, item_id: str) -> str | None:
++        try:
++            gen = (self._root / f"{item_id}.gen").read_text().strip()
++        except FileNotFoundError:
++            return None
++        return gen if _GEN_RE.fullmatch(gen) else None
+ 
+     async def _would_wipe(self, src: Path, dst: Path) -> bool:
+         """True when a ``--delete`` reconcile would WIPE durable data: the source
+@@ -108,10 +256,44 @@ class NfsArchive:
+         src = self._item_dir(item_id)
+         if not await asyncio.to_thread(src.is_dir):
+             return False
+-        await asyncio.to_thread(Path(workspace_dir).mkdir, parents=True, exist_ok=True)
+-        await self._invoke([self._rsync, _RSYNC_FLAGS, f"{src}/", f"{workspace_dir}/"])
++        target = Path(workspace_dir)
++        await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
++        if self._pack and await self._restore_from_pack(item_id, target):
++            return True
++        await self._invoke([self._rsync, _RSYNC_FLAGS, f"{src}/", f"{target}/"])
+         return True
+ 
++    async def _restore_from_pack(self, item_id: str, target: Path) -> bool:
++        """Extract the CURRENT generation's pack, if there is one. A pack named
++        after any other generation is not looked at. One that fails to extract
++        leaves the dir emptied, never half-filled: the caller then walks the
++        tree, and a half dir marked ready would be reconciled INTO the archive.
++        ``--no-same-owner`` because rsync never sets owners (root_squash) and
++        tar run as root would, from the headers; ``reown`` follows either way."""
++        gen = await asyncio.to_thread(self._current_generation, item_id)
++        if gen is None:
++            return False
++        pack = await asyncio.to_thread(self._whole_pack, item_id, gen)
++        if pack is None:
++            return False
++        rc, err = await self._run(
++            [self._tar, "-C", str(target), "-xf", str(pack), "--no-same-owner"]
++        )
++        if rc == 0:
++            return True
++        # Nobody else sees this: the reopen is just slow again. The host sets no
++        # log level, so anything quieter than a warning never reaches the pod log.
++        logger.warning(
++            "archive: pack %s for item %s did not extract (tar exited %d: %s); "
++            "walking the tree instead",
++            pack.name,
++            item_id,
++            rc,
++            err.decode(errors="replace").strip(),
++        )
++        await asyncio.to_thread(_empty_dir, target)
++        return False
++
+     async def _invoke(self, argv: list[str]) -> None:
+         rc, stderr = await self._run(argv)
+         if rc != 0:
+@@ -125,3 +307,16 @@ class NfsArchive:
+         )
+         _out, err = await proc.communicate()
+         return proc.returncode or 0, err
++
++
++def _glob_escape(text: str) -> str:
++    """`text` as a literal inside a glob pattern (item ids are free text)."""
++    return re.sub(r"([*?\[])", r"[\1]", text)
++
++
++def _empty_dir(path: Path) -> None:
++    for child in path.iterdir():
++        if child.is_dir() and not child.is_symlink():
++            shutil.rmtree(child)
++        else:
++            child.unlink()
+diff --git a/sandbox-host/src/sandbox_host/service.py b/sandbox-host/src/sandbox_host/service.py
+index 26ab88a4..680d9c28 100644
+--- a/sandbox-host/src/sandbox_host/service.py
++++ b/sandbox-host/src/sandbox_host/service.py
+@@ -86,7 +86,9 @@ def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
+ def build_archive(settings: SandboxHostSettings) -> NfsArchive | None:
+     """#492: the durable NFS archive, or None when `nfs_root` is unset (the
+     transitional / local-dev default — no restore-on-create, no persist)."""
+-    return NfsArchive(settings.nfs_root) if settings.nfs_root else None
++    if not settings.nfs_root:
++        return None
++    return NfsArchive(settings.nfs_root, pack=settings.archive_pack)
+ 
+ 
+ def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> FastAPI:
+@@ -99,4 +101,5 @@ def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> Fast
+         readiness=lambda: check_cgroup_ready(cgroup_root),
+         archive=build_archive(settings),
+         tool_resolver=build_tool_resolver(settings),
++        pack_drain_s=settings.pack_drain_s,
+     )
+diff --git a/sandbox-host/tests/test_archive_pack.py b/sandbox-host/tests/test_archive_pack.py
+new file mode 100644
+index 00000000..22df3dc6
+--- /dev/null
++++ b/sandbox-host/tests/test_archive_pack.py
+@@ -0,0 +1,497 @@
++"""The packed copy of an item's archive (docs/plan-archive-pack.md).
++
++The tree `<root>/<item>/` stays the truth; `<root>/<item>.pack.<gen>-<bytes>.tar` is a
++cache the reopen path can read in ONE sequential NFS read instead of one round
++trip per path (88,889 paths took 58 s in production). Its validity is carried
++by its NAME: every writer of the tree replaces `<root>/<item>.gen` first, so a
++pack made before that write is named after a gen that is no longer current and
++is simply never chosen. Every failure must end as "no pack → walk the tree":
++slow, never wrong.
++
++tar runs for real (it is userland and takes milliseconds here); rsync is a
++recorder, because what is pinned is which path restore took, not rsync itself.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import logging
++import os
++from pathlib import Path
++
++import pytest
++
++from sandbox_host.nfs_archive import NfsArchive
++
++
++class _Runner:
++    """Records every argv; runs `tar` for real, answers rsync with success."""
++
++    def __init__(self) -> None:
++        self.calls: list[list[str]] = []
++
++    async def __call__(self, argv: list[str]) -> tuple[int, bytes]:
++        self.calls.append(argv)
++        if Path(argv[0]).name != "tar":
++            return 0, b""
++        proc = await asyncio.create_subprocess_exec(
++            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
++        )
++        _out, err = await proc.communicate()
++        return proc.returncode or 0, err
++
++    def rsyncs(self) -> list[list[str]]:
++        return [a for a in self.calls if Path(a[0]).name == "rsync"]
++
++    def tars(self) -> list[list[str]]:
++        return [a for a in self.calls if Path(a[0]).name == "tar"]
++
++
++async def _reap(archive: NfsArchive, item: str, ws: Path) -> None:
++    """What the host does on reap: the reconciling write-back, then — as the
++    sandbox is torn down — the pack."""
++    assert await archive.persist(item, ws, delete=True)
++    await archive.pack(item, ws)
++
++
++@pytest.fixture
++def runner() -> _Runner:
++    return _Runner()
++
++
++@pytest.fixture
++def root(tmp_path: Path) -> Path:
++    return tmp_path / "nfs"
++
++
++@pytest.fixture
++def archive(root: Path, runner: _Runner) -> NfsArchive:
++    return NfsArchive(root, runner=runner)
++
++
++@pytest.fixture
++def ws(tmp_path: Path) -> Path:
++    w = tmp_path / "ws"
++    (w / "sub").mkdir(parents=True)
++    (w / "a.txt").write_bytes(b"alpha")
++    (w / "sub" / "b.txt").write_bytes(b"beta")
++    return w
++
++
++def _gen(root: Path, item: str) -> str:
++    return (root / f"{item}.gen").read_text().strip()
++
++
++def _packs(root: Path, item: str) -> list[str]:
++    return sorted(p.name for p in root.glob(f"{item}.pack.*"))
++
++
++# ── every write to the tree changes the generation first ─────────────────────
++
++
++@pytest.mark.parametrize("delete", [False, True])
++async def test_every_persist_replaces_the_generation(
++    archive: NfsArchive, root: Path, ws: Path, delete: bool
++) -> None:
++    await archive.persist("item-1", ws, delete=delete)
++    first = _gen(root, "item-1")
++    await archive.persist("item-1", ws, delete=delete)
++    assert _gen(root, "item-1") != first, "a write to the tree left the generation as it was"
++
++
++async def test_the_generation_changes_before_the_tree_is_written(root: Path, ws: Path) -> None:
++    """Order is the whole guarantee: a pack named after the old generation must
++    already be stale by the time the first byte of the new tree lands."""
++    seen: list[str] = []
++
++    async def run(argv: list[str]) -> tuple[int, bytes]:
++        if Path(argv[0]).name == "rsync":
++            gen = root / "item-1.gen"
++            seen.append(gen.read_text().strip() if gen.exists() else "")
++        return 0, b""
++
++    archive = NfsArchive(root, runner=run)
++    await archive.persist("item-1", ws, delete=False)
++    first = _gen(root, "item-1")
++    await archive.persist("item-1", ws, delete=False)
++    assert seen[1] == _gen(root, "item-1") != first, (
++        "rsync ran while the generation still named the previous tree"
++    )
++
++
++async def test_two_persists_of_one_item_can_change_the_generation_at_once(
++    archive: NfsArchive, root: Path, ws: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """Nothing serialises persists of one item: a turn-end flush and another
++    pod's checkpoint sweep can arrive together, each changing the generation on
++    its own thread. Overlapping persists were harmless before there was a
++    generation, and must stay so — a shared tmp name made the second rename
++    find nothing and the persist fail."""
++    import sandbox_host.nfs_archive as module
++
++    real_replace = os.replace
++    entered: list[int] = []
++
++    def replace(src, dst):
++        if not entered:  # the other persist's whole swap lands in between
++            entered.append(1)
++            archive._new_generation("item-1")
++        real_replace(src, dst)
++
++    monkeypatch.setattr(module.os, "replace", replace)
++    await archive.persist("item-1", ws, delete=False)
++    assert entered and _gen(root, "item-1")
++
++
++# ── who packs ────────────────────────────────────────────────────────────────
++
++
++async def test_a_pack_is_named_after_the_current_generation_and_its_size(
++    archive: NfsArchive, root: Path, ws: Path
++) -> None:
++    await _reap(archive, "item-1", ws)
++    (name,) = _packs(root, "item-1")
++    size = (root / name).stat().st_size
++    assert name == f"item-1.pack.{_gen(root, 'item-1')}-{size}.tar", (
++        "the pack is not named after its generation and its size"
++    )
++
++
++async def test_a_pack_is_made_from_the_local_dir_in_posix_format(
++    archive: NfsArchive, runner: _Runner, ws: Path
++) -> None:
++    await _reap(archive, "item-1", ws)
++    (argv,) = runner.tars()
++    assert "--format=posix" in argv and "-cf" in argv
++    assert str(ws) in argv
++
++
++@pytest.mark.parametrize("delete", [False, True])
++async def test_persist_says_whether_it_reconciled(
++    archive: NfsArchive, ws: Path, delete: bool
++) -> None:
++    """The host packs only after a reconcile that ran: an additive checkpoint
++    leaves the tree a superset of the dir, not a copy of it."""
++    assert await archive.persist("item-1", ws, delete=delete) is delete
++
++
++async def test_a_refused_reconcile_says_so(
++    archive: NfsArchive, root: Path, tmp_path: Path, ws: Path
++) -> None:
++    """An empty source over a non-empty archive is downgraded to an additive
++    copy (the #492 safety valve). Packing that empty dir would publish an empty
++    workspace as the fast path back."""
++    await archive.persist("item-1", ws, delete=True)  # archive dir now exists…
++    (root / "item-1" / "kept.txt").write_bytes(b"x")  # …and is not empty
++    empty = tmp_path / "empty"
++    empty.mkdir()
++    assert await archive.persist("item-1", empty, delete=True) is False
++
++
++async def test_an_item_never_written_back_is_not_packed(
++    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
++) -> None:
++    """No generation, no name to give a pack."""
++    assert await archive.pack("item-1", ws) is False
++    assert runner.tars() == [] and _packs(root, "item-1") == []
++
++
++async def test_a_write_during_the_tar_leaves_a_pack_nobody_will_choose(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    """The pack is named after the generation read BEFORE the tar. A tree write
++    that lands meanwhile changes the generation first, so the pack is already
++    stale when it is published."""
++    await archive.persist("item-1", ws, delete=True)
++
++    async def tar_while_somebody_writes(argv: list[str]) -> tuple[int, bytes]:
++        if Path(argv[0]).name == "tar" and "-cf" in argv:
++            await archive.persist("item-1", ws, delete=False)
++        return await runner(argv)
++
++    archive._run = tar_while_somebody_writes  # type: ignore[method-assign]
++    await archive.pack("item-1", ws)
++    archive._run = runner  # type: ignore[method-assign]
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++async def test_a_tar_that_fails_publishes_nothing_and_leaves_no_tmp(root: Path, ws: Path) -> None:
++    async def failing(argv: list[str]) -> tuple[int, bytes]:
++        if Path(argv[0]).name != "tar":
++            return 0, b""
++        # Like a real tar that fails part-way: the output exists, half written.
++        Path(argv[argv.index("-cf") + 1]).write_bytes(b"half a pack")
++        return 2, b"tar: boom"
++
++    archive = NfsArchive(root, runner=failing)
++    await archive.persist("item-1", ws, delete=True)
++    assert await archive.pack("item-1", ws) is False
++    assert _packs(root, "item-1") == []
++
++
++async def test_a_tmp_cleared_under_the_tar_publishes_nothing(
++    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
++) -> None:
++    """Another writer's generation change clears this item's tmps — including
++    one still being written. That is a pack not made, not a failed teardown."""
++    await archive.persist("item-1", ws, delete=True)
++
++    async def tar_then_cleared(argv: list[str]) -> tuple[int, bytes]:
++        result = await runner(argv)
++        if Path(argv[0]).name == "tar" and "-cf" in argv:
++            archive._new_generation("item-1")
++        return result
++
++    archive._run = tar_then_cleared  # type: ignore[method-assign]
++    assert await archive.pack("item-1", ws) is False
++    assert _packs(root, "item-1") == []
++
++
++async def test_two_packs_of_one_item_do_not_share_a_tmp(
++    archive: NfsArchive, root: Path, runner: _Runner, ws: Path
++) -> None:
++    await archive.persist("item-1", ws, delete=True)
++    tmps: list[str] = []
++
++    async def recording(argv: list[str]) -> tuple[int, bytes]:
++        if Path(argv[0]).name == "tar" and "-cf" in argv:
++            tmps.append(argv[argv.index("-cf") + 1])
++        return await runner(argv)
++
++    archive._run = recording  # type: ignore[method-assign]
++    await archive.pack("item-1", ws)
++    await archive.pack("item-1", ws)
++    assert len(set(tmps)) == 2, tmps
++
++
++async def test_packing_disabled_packs_nothing(root: Path, runner: _Runner, ws: Path) -> None:
++    archive = NfsArchive(root, runner=runner, pack=False)
++    assert archive.packing is False, "the host would close sandboxes for packs never made"
++    assert NfsArchive(root, runner=runner).packing is True
++    await archive.persist("item-1", ws, delete=True)
++    assert await archive.pack("item-1", ws) is False
++    assert _packs(root, "item-1") == [] and runner.tars() == []
++
++
++# ── restore ──────────────────────────────────────────────────────────────────
++
++
++async def test_restore_reads_the_current_pack_instead_of_the_tree(
++    archive: NfsArchive, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    await _reap(archive, "item-1", ws)
++    runner.calls.clear()
++    out = tmp_path / "out"
++    assert await archive.restore("item-1", out) is True
++    assert runner.rsyncs() == [], "restore walked the tree although a current pack was there"
++    assert (out / "a.txt").read_bytes() == b"alpha"
++    assert (out / "sub" / "b.txt").read_bytes() == b"beta"
++
++
++async def test_restore_extracts_without_restoring_owners(
++    archive: NfsArchive, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    """rsync never sets owners (NFS root_squash); tar run as root would, from the
++    headers. `reown` re-applies the sandbox uid afterwards either way."""
++    await _reap(archive, "item-1", ws)
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    (argv,) = runner.tars()
++    assert "-xf" in argv and "--no-same-owner" in argv
++
++
++async def test_a_write_after_the_pack_makes_restore_walk_the_tree(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    await _reap(archive, "item-1", ws)
++    await archive.persist("item-1", ws, delete=False)  # a later checkpoint
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++async def test_a_pack_named_after_another_generation_is_never_used(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    """Even if the cleanup never ran (a host that died between the generation
++    change and the cleanup), the NAME decides — not the file's existence."""
++    await _reap(archive, "item-1", ws)
++    (pack,) = root.glob("item-1.pack.*.tar")
++    (root / "item-1.gen").write_text("0" * 32)  # a writer moved on; pack left behind
++    assert pack.exists()
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++async def test_a_file_that_only_looks_like_the_current_pack_is_never_used(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    """The lookup globs `<gen>-*.tar`; the `*` must still be a byte count."""
++    await _reap(archive, "item-1", ws)
++    (pack,) = root.glob("item-1.pack.*.tar")
++    gen = _gen(root, "item-1")
++    pack.rename(pack.with_name(pack.name.replace(f"{gen}-", f"{gen}-copy-")))
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++async def test_a_pack_removed_while_restore_looks_at_it_walks_the_tree(
++    archive: NfsArchive,
++    root: Path,
++    runner: _Runner,
++    tmp_path: Path,
++    ws: Path,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Another pod's persist clears the old generation's pack between this
++    restore's listing and its size check. That is a missing pack, not a failed
++    reopen."""
++    await _reap(archive, "item-1", ws)
++    (pack,) = root.glob("item-1.pack.*.tar")
++    real_stat = Path.stat
++
++    def stat(self: Path, **kwargs):
++        if self.name == pack.name:
++            raise FileNotFoundError(self)
++        return real_stat(self, **kwargs)
++
++    monkeypatch.setattr(Path, "stat", stat)
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++async def test_a_half_written_pack_is_never_used(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    await archive.persist("item-1", ws, delete=False)
++    (root / f"item-1.pack.{'0' * 32}.tmp").write_bytes(b"not a tar")
++    runner.calls.clear()
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++def _watch_rsync(archive: NfsArchive, runner: _Runner, out: Path) -> list[list[str]]:
++    """What `out` held at the moment each rsync started."""
++    seen: list[list[str]] = []
++
++    async def watching(argv: list[str]) -> tuple[int, bytes]:
++        if Path(argv[0]).name == "rsync":
++            seen.append(sorted(p.name for p in out.iterdir()))
++        return await runner(argv)
++
++    archive._run = watching  # type: ignore[method-assign]
++    return seen
++
++
++async def test_a_truncated_pack_is_never_extracted(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    """GNU tar exits 0 on an archive cut at an entry boundary: it extracts the
++    first half and calls that the end. Half a workspace restored as success
++    would be marked ready and the next reconciling persist would make the
++    ARCHIVE match it. The byte count is in the name, so a short pack is not
++    the pack the name promises."""
++    for n in range(40):
++        (ws / f"f{n}.txt").write_bytes(b"x" * 600)
++    await _reap(archive, "item-1", ws)
++    (pack,) = root.glob("item-1.pack.*.tar")
++    data = pack.read_bytes()
++    pack.write_bytes(data[: (len(data) // 2) // 512 * 512])  # at a block boundary
++    out = tmp_path / "out"
++    out.mkdir()
++    runner.calls.clear()
++    seen = _watch_rsync(archive, runner, out)
++
++    assert await archive.restore("item-1", out) is True
++    assert runner.tars() == [], "a short pack was extracted"
++    assert seen == [[]]
++
++
++async def test_a_pack_that_fails_mid_extract_leaves_nothing_behind_and_walks_the_tree(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    """Right size, damaged inside: tar extracts the entries before the damage
++    and then fails. Half a directory must never be marked ready."""
++    for n in range(40):
++        (ws / f"f{n}.txt").write_bytes(b"x" * 600)
++    await _reap(archive, "item-1", ws)
++    (pack,) = root.glob("item-1.pack.*.tar")
++    data = bytearray(pack.read_bytes())
++    mid = (len(data) // 2) // 512 * 512
++    data[mid : mid + 2048] = b"\xff" * 2048  # garbage where headers are expected
++    pack.write_bytes(bytes(data))
++    out = tmp_path / "out"
++    out.mkdir()
++    runner.calls.clear()
++    seen = _watch_rsync(archive, runner, out)
++
++    assert await archive.restore("item-1", out) is True
++    assert len(runner.tars()) == 1, "the pack was never tried — the test proves nothing"
++    assert seen == [[]], "the tree was copied over a half-extracted pack"
++
++
++async def test_a_pack_that_fails_to_extract_is_reported(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path, ws: Path, caplog
++) -> None:
++    """The fallback is silent to the user — the reopen is just slow again — so
++    the operator's only way to learn that packs are being made and not used is
++    the host log. The host sets no log level, so it has to be a warning."""
++    await _reap(archive, "item-1", ws)
++    (pack,) = root.glob("item-1.pack.*.tar")
++    pack.write_bytes(b"\xff" * pack.stat().st_size)  # right size, not a tar
++
++    with caplog.at_level(logging.WARNING, logger="sandbox_host.nfs_archive"):
++        await archive.restore("item-1", tmp_path / "out")
++
++    (record,) = caplog.records
++    assert record.levelno == logging.WARNING
++    assert "item-1" in record.getMessage() and pack.name in record.getMessage()
++
++
++async def test_restore_without_a_generation_walks_the_tree(
++    archive: NfsArchive, root: Path, runner: _Runner, tmp_path: Path
++) -> None:
++    """An item archived before this change has a tree and no `.gen`."""
++    (root / "item-1").mkdir(parents=True)
++    await archive.restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++async def test_packing_disabled_ignores_an_existing_pack(
++    root: Path, runner: _Runner, tmp_path: Path, ws: Path
++) -> None:
++    await _reap(NfsArchive(root, runner=runner), "item-1", ws)
++    runner.calls.clear()
++    await NfsArchive(root, runner=runner, pack=False).restore("item-1", tmp_path / "out")
++    assert len(runner.rsyncs()) == 1 and runner.tars() == []
++
++
++# ── cleanup ──────────────────────────────────────────────────────────────────
++
++
++async def test_a_write_removes_the_items_old_packs_and_its_tmp(
++    archive: NfsArchive, root: Path, ws: Path
++) -> None:
++    await _reap(archive, "item-1", ws)
++    (root / f"item-1.pack.{'0' * 32}.tmp").write_bytes(b"left by a host that died mid-tar")
++    await archive.persist("item-1", ws, delete=False)
++    assert _packs(root, "item-1") == []
++
++
++async def test_cleanup_touches_only_this_items_files(
++    archive: NfsArchive, root: Path, ws: Path
++) -> None:
++    """Item ids are free text: `a`'s cleanup must not take `a.pack.x`'s files,
++    nor anything that merely starts with `a.pack.`."""
++    await _reap(archive, "a.pack.x", ws)
++    theirs = _packs(root, "a.pack.x")
++    assert theirs
++    (root / "a.pack.notes.txt").write_bytes(b"someone else's")
++    await archive.persist("a", ws, delete=False)
++    assert _packs(root, "a.pack.x") == theirs
++    assert (root / "a.pack.notes.txt").exists()
+diff --git a/sandbox-host/tests/test_archive_pack_wiring.py b/sandbox-host/tests/test_archive_pack_wiring.py
+new file mode 100644
+index 00000000..ec7b07ce
+--- /dev/null
++++ b/sandbox-host/tests/test_archive_pack_wiring.py
+@@ -0,0 +1,376 @@
++"""The host half of the pack decision (docs/plan-archive-pack.md).
++
++A reap's write-back asks for a pack (`persist {pack: true}`); the host makes it
++while it TEARS THE SANDBOX DOWN, with the sandbox already closed to every other
++request. Packing inside the write-back instead could not work: every app pod
++checkpoints every warm sandbox every few seconds, idle ones included, so a pack
++long enough to matter was always interrupted — and nothing a guard could do
++would stop the next checkpoint from arriving.
++
++Closing first is what makes "nobody writes the dir during the tar" true rather
++than hoped for: a request that is already running (an `exec` still streaming)
++is seen by the in-flight count, and one that arrives later is turned away.
++"""
++
++from __future__ import annotations
++
++import asyncio
++from pathlib import Path
++
++import httpx
++import pytest
++from httpx import ASGITransport
++
++from sandbox_host.app import make_host_app
++from sandbox_host.mock import MockSandbox
++from sandbox_host.protocol import ExecResult, SandboxHandle
++
++
++class _Archive:
++    """Records persists and packs; `during` runs inside the pack, standing in
++    for the tar, so a test can put a request exactly there."""
++
++    def __init__(self, *, reconciles: bool = True, packs: bool = True) -> None:
++        self.reconciles = reconciles
++        self.packs_enabled = packs
++        self.persists: list[bool] = []
++        self.packs: list[str] = []
++        self.during = None
++        self.fails = False
++        # A checkpoint (`delete` off) waits here when set — one still running.
++        self.checkpoint_gate: asyncio.Event | None = None
++        self.checkpoint_entered = asyncio.Event()
++
++    @property
++    def packing(self) -> bool:
++        return self.packs_enabled
++
++    async def restore(self, item_id: str, workspace_dir: Path) -> bool:
++        return False
++
++    async def persist(self, item_id, workspace_dir, *, delete) -> bool:
++        self.persists.append(delete)
++        if not delete and self.checkpoint_gate is not None:
++            self.checkpoint_entered.set()
++            await self.checkpoint_gate.wait()
++        return delete and self.reconciles
++
++    async def pack(self, item_id, workspace_dir) -> bool:
++        if self.during is not None:
++            await self.during()
++        if self.fails:
++            raise OSError("NFS went away")
++        self.packs.append(item_id)
++        return True
++
++
++class _BlockingExec(MockSandbox):
++    """An exec that stays open until released — the shape of a long command."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.entered = asyncio.Event()
++        self.release = asyncio.Event()
++
++    async def exec(self, handle: SandboxHandle, cmd, on_output=None, env=None, exec_timeout=None):
++        self.entered.set()
++        await self.release.wait()
++        return ExecResult(exit_code=0, stdout=b"", stderr=b"")
++
++
++# Short, so a teardown that waits on the wrong count fails a test in a second
++# instead of hanging the suite for the production default.
++_DRAIN = 1.0
++
++
++def _client(app) -> httpx.AsyncClient:
++    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h")
++
++
++async def _new(c: httpx.AsyncClient) -> str:
++    return (await c.post("/sandboxes", json={"item_id": "i"})).json()["remote_id"]
++
++
++async def _reap(c: httpx.AsyncClient, rid: str) -> None:
++    """What the app's `kill_idle` sends."""
++    r = await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++    assert r.status_code == 204
++    r = await c.delete(f"/sandboxes/{rid}")
++    assert r.status_code == 204
++
++
++async def test_a_reap_packs_when_the_sandbox_is_torn_down():
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        assert archive.packs == [], "packed during the write-back, where checkpoints interrupt it"
++        await c.delete(f"/sandboxes/{rid}")
++    assert archive.packs == ["i"]
++
++
++async def test_a_checkpoint_between_the_write_back_and_the_teardown_does_not_cancel_the_pack():
++    """The case that sank packing inside the write-back: another pod's sweep
++    checkpoints the sandbox while the reap is under way."""
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
++        await c.delete(f"/sandboxes/{rid}")
++    assert archive.packs == ["i"]
++
++
++async def test_a_reconciling_write_back_without_pack_withdraws_the_request():
++    """The reap's kill never arrived (the app pod died in between) and the
++    sandbox went back into use: its next turn-end reconcile does not ask, so a
++    later close is a plain teardown again. A checkpoint (above) does not
++    withdraw it — that is what made packing in the write-back fail."""
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True})
++        await c.delete(f"/sandboxes/{rid}")
++    assert archive.packs == []
++
++
++async def test_a_teardown_nobody_asked_to_pack_does_not():
++    """Shutdown, an explicit close, a CAS loser's orphan: their write-backs do
++    not ask, and an orphan's dir is not the item's truth."""
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True})
++        await c.delete(f"/sandboxes/{rid}")
++    assert archive.packs == []
++
++
++async def test_a_reconcile_the_archive_refused_is_not_followed_by_a_pack():
++    archive = _Archive(reconciles=False)
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        await _reap(c, await _new(c))
++    assert archive.packs == []
++
++
++async def test_a_refused_reconcile_withdraws_an_earlier_request():
++    """An earlier reap's kill never came; the dir has since emptied, and the
++    next reap's reconcile is refused (the empty-source valve). Packing now would
++    publish an empty workspace as the way back."""
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        archive.reconciles = False
++        await _reap(c, rid)
++    assert archive.packs == []
++
++
++async def test_a_checkpoint_still_running_at_teardown_is_waited_for():
++    """Round 2: closing turns away what starts LATER; a checkpoint already
++    running when the kill arrives — on a big item, almost always one — must be
++    let finish, not counted as a reason to give up."""
++    archive = _Archive()
++    archive.checkpoint_gate = asyncio.Event()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        checkpoint = asyncio.create_task(
++            c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
++        )
++        await asyncio.wait_for(archive.checkpoint_entered.wait(), 5)
++        kill = asyncio.create_task(c.delete(f"/sandboxes/{rid}"))
++        await asyncio.sleep(0.1)
++        assert archive.packs == [] and not kill.done(), "packed under a running checkpoint"
++        archive.checkpoint_gate.set()
++        await checkpoint
++        assert (await kill).status_code == 204
++    assert archive.packs == ["i"]
++
++
++async def test_a_request_that_outlasts_the_wait_means_no_pack():
++    """Began before the teardown and still writing when the wait runs out: the
++    sandbox goes without a pack rather than the sweep waiting on it."""
++    backend = _BlockingExec()
++    archive = _Archive()
++    app = make_host_app(backend, advertise_url="http://h", archive=archive, pack_drain_s=0.2)
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        running = asyncio.create_task(c.post(f"/sandboxes/{rid}/exec", json={"cmd": ["w"]}))
++        await asyncio.wait_for(backend.entered.wait(), 5)
++        try:
++            await asyncio.wait_for(c.delete(f"/sandboxes/{rid}"), 5)  # gives up, not hangs
++        finally:
++            backend.release.set()
++            await running
++    assert archive.packs == [], "packed while an exec was writing the sandbox"
++
++
++async def test_the_hosts_own_reaper_does_not_count_itself():
++    """`reap_idle` kills from inside the host, not as a request: one exec still
++    running is one too many, not the reaper's own share of the count."""
++    backend = _BlockingExec()
++    archive = _Archive()
++    clock = {"t": 0.0}
++    app = make_host_app(
++        backend,
++        advertise_url="http://h",
++        archive=archive,
++        idle_ttl=10.0,
++        clock=lambda: clock["t"],
++        pack_drain_s=0.2,
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        running = asyncio.create_task(c.post(f"/sandboxes/{rid}/exec", json={"cmd": ["w"]}))
++        await asyncio.wait_for(backend.entered.wait(), 5)
++        clock["t"] = 100.0
++        try:
++            assert await asyncio.wait_for(app.state.controller.reap_idle(), 5) == [rid]
++        finally:
++            backend.release.set()
++            await running
++    assert archive.packs == []
++
++
++async def test_a_kill_with_no_pack_to_make_is_not_closed():
++    """Only a teardown that packs closes the sandbox: every other kill — and
++    every kill with packing switched off — serves requests until it is gone,
++    exactly as before."""
++
++    class _SlowKill(MockSandbox):
++        def __init__(self) -> None:
++            super().__init__()
++            self.killing = asyncio.Event()
++            self.finish = asyncio.Event()
++
++        async def kill(self, handle: SandboxHandle) -> None:
++            self.killing.set()
++            await self.finish.wait()
++            await super().kill(handle)
++
++    for archive, pack in ((_Archive(), False), (_Archive(packs=False), True)):
++        backend = _SlowKill()
++        app = make_host_app(backend, advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive)
++        async with _client(app) as c:
++            rid = await _new(c)
++            await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": pack})
++            kill = asyncio.create_task(c.delete(f"/sandboxes/{rid}"))
++            await asyncio.wait_for(backend.killing.wait(), 5)
++            r = await c.get(f"/sandboxes/{rid}/ready")
++            backend.finish.set()
++            await kill
++        assert r.status_code == 200, (archive.packs_enabled, pack, r.json())
++
++
++async def test_a_request_during_the_pack_is_turned_away():
++    """Closed BEFORE the tar: a checkpoint, a file write, an exec that arrives
++    meanwhile is told the sandbox is gone — what it is about to be."""
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    answers: list[tuple[int, str]] = []
++    async with _client(app) as c:
++        rid = await _new(c)
++
++        async def somebody_writes() -> None:
++            r = await c.put(f"/sandboxes/{rid}/file", params={"path": "/x"}, content=b"x")
++            answers.append((r.status_code, r.json()["error"]))
++
++        archive.during = somebody_writes
++        await _reap(c, rid)
++    assert answers == [(404, "SandboxNotFound")]
++    assert archive.packs == ["i"]
++
++
++async def test_a_pack_that_fails_does_not_stop_the_teardown():
++    """The pack is an optimisation; the sandbox going away is the reap."""
++    backend = MockSandbox()
++    archive = _Archive()
++    archive.fails = True
++    app = make_host_app(backend, advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive)
++    async with _client(app) as c:
++        rid = await _new(c)
++        await _reap(c, rid)
++        assert (await c.get(f"/sandboxes/{rid}/ready")).status_code == 404
++
++
++async def test_a_teardown_that_fails_reopens_the_sandbox():
++    """A sandbox whose kill raised is still running — and must still answer, or
++    nothing could ever retry the kill."""
++
++    class _Stuck(MockSandbox):
++        async def kill(self, handle: SandboxHandle) -> None:
++            raise RuntimeError("cgroup busy")
++
++    app = make_host_app(_Stuck(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=_Archive())
++    async with _client(app) as c:
++        rid = await _new(c)
++        # A reap's write-back: only a kill that packs closes the sandbox.
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        with pytest.raises(RuntimeError):
++            await c.delete(f"/sandboxes/{rid}")
++        assert (await c.get(f"/sandboxes/{rid}/ready")).status_code == 200
++
++
++async def test_a_sandbox_that_is_not_ready_is_not_packed():
++    """Half restored: not the item's workspace."""
++    backend = MockSandbox()
++    archive = _Archive()
++    app = make_host_app(backend, advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive)
++    async with _client(app) as c:
++        rid = await _new(c)
++        await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
++        backend._ready.discard(rid)
++        await c.delete(f"/sandboxes/{rid}")
++    assert archive.packs == []
++
++
++async def test_a_failed_request_does_not_leave_the_sandbox_counted_as_busy():
++    archive = _Archive()
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=archive
++    )
++    async with _client(app) as c:
++        rid = await _new(c)
++        r = await c.get(f"/sandboxes/{rid}/file", params={"path": "/missing"})
++        assert r.status_code == 404
++        await _reap(c, rid)
++    assert archive.packs == ["i"]
++
++
++async def test_nothing_is_kept_for_a_sandbox_once_it_is_gone():
++    """Sandboxes come and go for the life of the host: the count, the request to
++    pack and the closed mark are all dropped."""
++    app = make_host_app(
++        MockSandbox(), advertise_url="http://h", pack_drain_s=_DRAIN, archive=_Archive()
++    )
++    async with _client(app) as c:
++        await _reap(c, await _new(c))
++    controller = app.state.controller
++    assert controller.in_flight == {}
++    assert controller.closing == set() and controller.pack_on_kill == set()
+diff --git a/sandbox-host/tests/test_archive_wiring.py b/sandbox-host/tests/test_archive_wiring.py
+index ce61e490..f2f33418 100644
+--- a/sandbox-host/tests/test_archive_wiring.py
++++ b/sandbox-host/tests/test_archive_wiring.py
+@@ -26,8 +26,9 @@ class _FakeArchive:
+         self.restored.append((item_id, str(workspace_dir)))
+         return item_id in self.has_archive_for
+ 
+-    async def persist(self, item_id: str, workspace_dir: Path, *, delete: bool) -> None:
++    async def persist(self, item_id: str, workspace_dir: Path, *, delete: bool) -> bool:
+         self.persisted.append((item_id, str(workspace_dir), delete))
++        return delete
+ 
+ 
+ def _client(app) -> httpx.AsyncClient:
+diff --git a/sandbox-host/tests/test_config.py b/sandbox-host/tests/test_config.py
+index 218545a8..894ee010 100644
+--- a/sandbox-host/tests/test_config.py
++++ b/sandbox-host/tests/test_config.py
+@@ -4,6 +4,8 @@ from __future__ import annotations
+ 
+ import dataclasses
+ 
++import pytest
++
+ from sandbox_host.config import SandboxHostSettings, load_settings
+ 
+ 
+@@ -69,8 +71,10 @@ def test_every_setting_is_reachable_from_its_env_var():
+     suite green and the test's own name asserting otherwise. Deriving the keys
+     from the dataclass covers the next field the day it is added, or says so.
+     """
+-    sample = {"str": "sample", "int": "424242", "float": "42.5"}
+-    cast = {"str": str, "int": int, "float": float}
++    # A bool is sampled as the value that is NOT its default, or a key that is
++    # never read would still compare equal.
++    sample = {"str": "sample", "int": "424242", "float": "42.5", "bool": "0"}
++    cast = {"str": str, "int": int, "float": float, "bool": lambda _raw: False}
+ 
+     env: dict[str, str] = {}
+     want: dict[str, object] = {}
+@@ -89,3 +93,40 @@ def test_ignores_unrelated_env_keys():
+     s = load_settings({"PATH": "/usr/bin", "SANDBOX_HOST_BIND": "0.0.0.0:1234"})
+     assert s.bind == "0.0.0.0:1234"
+     assert s.uid_min == 100000  # untouched default
++
++
++@pytest.mark.parametrize(
++    ("raw", "want"),
++    [
++        ("1", True),
++        ("true", True),
++        ("Yes", True),
++        ("on", True),
++        ("0", False),
++        ("false", False),
++        ("No", False),
++        ("OFF", False),
++    ],
++)
++def test_archive_pack_reads_the_usual_spellings(raw: str, want: bool) -> None:
++    assert load_settings({"SANDBOX_HOST_ARCHIVE_PACK": raw}).archive_pack is want
++
++
++def test_archive_pack_is_on_by_default() -> None:
++    assert load_settings({}).archive_pack is True
++
++
++@pytest.mark.parametrize("raw", ["", "flase", "2", "disabled"])
++def test_archive_pack_refuses_a_value_it_cannot_read(raw: str) -> None:
++    """A string is not a bool: `"false"` read as truthy turned a pure producer
++    into a consumer once (run_consumers). An unreadable value stops the boot
++    with the key named, rather than silently meaning on."""
++    with pytest.raises(ValueError, match="SANDBOX_HOST_ARCHIVE_PACK"):
++        load_settings({"SANDBOX_HOST_ARCHIVE_PACK": raw})
++
++
++def test_a_packing_kill_waits_five_minutes_by_default() -> None:
++    """Long enough for a checkpoint already running on an item the pack is for
++    (one walk of ~89k paths took ~a minute) to finish, with room for a few
++    pods' walks contending."""
++    assert load_settings({}).pack_drain_s == 300.0
+diff --git a/sandbox-host/tests/test_nfs_archive_integration.py b/sandbox-host/tests/test_nfs_archive_integration.py
+index 682e56be..258ee90d 100644
+--- a/sandbox-host/tests/test_nfs_archive_integration.py
++++ b/sandbox-host/tests/test_nfs_archive_integration.py
+@@ -67,3 +67,42 @@ async def test_upload_only_persist_does_not_delete(tmp_path: Path):
+     (ws / "f").unlink()
+     await archive.persist("item-1", ws, delete=False)
+     assert (tmp_path / "nfs" / "item-1" / "f").exists()
++
++
++@skip_no_rsync
++async def test_a_workspace_restored_from_the_pack_costs_the_next_persist_nothing(tmp_path: Path):
++    """docs/plan-archive-pack.md, with rsync as its own oracle. rsync decides
++    what to send by size and mtime; if the tar round trip moved an mtime, the
++    first persist after a pack restore would re-send the whole tree to NFS —
++    the cost moved, not saved."""
++    import os
++    import subprocess
++
++    ws = tmp_path / "ws"
++    for a in range(20):
++        d = ws / f"d{a}"
++        d.mkdir(parents=True)
++        for b in range(10):
++            f = d / f"f{b}.txt"
++            f.write_bytes(f"{a}-{b}".encode())
++            # Years back: rsync compares mtimes to the SECOND, and this whole
++            # test runs inside one — an extract that stamped "now" on every
++            # file would still compare equal and the oracle would see nothing.
++            os.utime(f, (1_600_000_000, 1_600_000_000))
++
++    archive = NfsArchive(tmp_path / "nfs")
++    await archive.persist("item-1", ws, delete=True)
++    await archive.pack("item-1", ws)
++    assert list((tmp_path / "nfs").glob("item-1.pack.*.tar")), "no pack was made"
++
++    out = tmp_path / "restored"
++    assert await archive.restore("item-1", out) is True
++
++    sent = subprocess.run(
++        ["rsync", "-rlptD", "--dry-run", "-i", f"{out}/", f"{tmp_path / 'nfs' / 'item-1'}/"],
++        check=True,
++        capture_output=True,
++        text=True,
++    ).stdout
++    files = [line for line in sent.splitlines() if line[:2] in (">f", "<f")]
++    assert files == [], f"rsync would re-send {len(files)} files after a pack restore"
+diff --git a/sandbox-host/tests/test_service.py b/sandbox-host/tests/test_service.py
+index 9afe7e7f..f65db3ad 100644
+--- a/sandbox-host/tests/test_service.py
++++ b/sandbox-host/tests/test_service.py
+@@ -13,12 +13,20 @@ from sandbox_host.config import SandboxHostSettings
+ from sandbox_host.isolated_process import IsolatedProcessSandbox
+ from sandbox_host.service import (
+     advertise_url,
++    build_archive,
+     build_host_app,
+     build_sandbox,
+     resolve_tools_dir,
+ )
+ 
+ 
++@pytest.mark.parametrize("on", [True, False])
++def test_build_archive_threads_the_pack_switch(tmp_path, on: bool):
++    """`SANDBOX_HOST_ARCHIVE_PACK` reaches the archive the host actually runs."""
++    archive = build_archive(SandboxHostSettings(nfs_root=str(tmp_path), archive_pack=on))
++    assert archive is not None and archive._pack is on
++
++
+ def test_advertise_url_prefers_pod_ip():
+     assert advertise_url("0.0.0.0:8000", "10.1.2.3") == "http://10.1.2.3:8000"
+ 
+@@ -90,3 +98,10 @@ def test_build_host_app_advertise_url_uses_pod_ip(tmp_path, pod_ip):
+         SandboxHostSettings(bind="0.0.0.0:8123", cgroup_root=str(tmp_path / "cg")), pod_ip=pod_ip
+     )
+     assert isinstance(app, FastAPI)
++
++
++def test_build_host_app_threads_the_pack_drain_bound(tmp_path):
++    app = build_host_app(
++        SandboxHostSettings(cgroup_root=str(tmp_path / "cg"), pack_drain_s=12.5), pod_ip=None
++    )
++    assert app.state.controller._pack_drain_s == 12.5
+diff --git a/src/workspace_app/api/registry.py b/src/workspace_app/api/registry.py
+index c6ee16cf..ee5e56d6 100644
+--- a/src/workspace_app/api/registry.py
++++ b/src/workspace_app/api/registry.py
+@@ -145,22 +145,30 @@ class InvestigationRegistry:
+         app-side sync wired (the write-back routes through `sandbox.persist`)."""
+         return self.sync is not None or self.host_managed_durable
+ 
+-    async def _writeback(self, inv_id: str, handle: SandboxHandle, *, delete: bool) -> None:
++    async def _writeback(
++        self, inv_id: str, handle: SandboxHandle, *, delete: bool, pack: bool = False
++    ) -> None:
+         """#492: persist an item's live sandbox to durable. Host-managed ⇒ ask the
+         host to rsync its own dir to the NFS archive (`delete` reconciles at a
+         quiesced point; False is the additive mid-turn checkpoint). Else the
+-        app-side SandboxSync mirrors it, as before."""
++        app-side SandboxSync mirrors it, as before.
++
++        `pack` is for `kill_idle` alone (docs/plan-archive-pack.md): reap is the
++        one write-back where the item is globally idle, the sandbox is about to
++        go and nobody waits — packing costs time in proportion to bytes. The
++        app-side mirror has no pack; the flag means nothing there."""
+         logger.debug(
+-            "registry: writeback item=%s handle=%s delete=%s host_managed=%s",
++            "registry: writeback item=%s handle=%s delete=%s pack=%s host_managed=%s",
+             inv_id,
+             handle.id,
+             delete,
++            pack,
+             self.host_managed_durable,
+         )
+         if self.host_managed_durable:
+             persist = getattr(self.sandbox, "persist", None)
+             if persist is not None:
+-                await persist(handle, delete=delete)
++                await persist(handle, delete=delete, pack=pack)
+             return
+         # Every non-host-managed caller gates on `_has_durable`, which in this
+         # branch (host_managed_durable False) means the app-side sync IS wired.
+@@ -753,8 +761,10 @@ class InvestigationRegistry:
+                     continue
+                 if s.handle is not None:
+                     if self._has_durable:
+-                        # write-back before rmtree (reconcile — the dir is settled)
+-                        await self._writeback(inv_id, s.handle, delete=True)
++                        # write-back before rmtree (reconcile — the dir is settled),
++                        # and the ONE write-back that asks for a pack: globally idle,
++                        # about to go, nobody waiting (docs/plan-archive-pack.md).
++                        await self._writeback(inv_id, s.handle, delete=True, pack=True)
+                     # #366: a handle the host already reaped (idle TTL) raises
+                     # SandboxNotFound — that IS the goal, so still drop the session.
+                     with contextlib.suppress(SandboxNotFound):
+diff --git a/src/workspace_app/filestore/nfs_tree.py b/src/workspace_app/filestore/nfs_tree.py
+index 9adf05d7..e3bddf9a 100644
+--- a/src/workspace_app/filestore/nfs_tree.py
++++ b/src/workspace_app/filestore/nfs_tree.py
+@@ -23,6 +23,7 @@ import asyncio
+ import contextlib
+ import logging
+ import os
++import re
+ import shutil
+ import tempfile
+ from collections.abc import Sequence
+@@ -34,6 +35,14 @@ from .protocol import FileExists, FileNotFound
+ 
+ logger = logging.getLogger(__name__)
+ 
++# What sandbox-host leaves BESIDE an item's tree (docs/plan-archive-pack.md):
++# `<item>.gen`, its `.gen.<uuid>.tmp`, `<item>.pack.<gen>-<bytes>.tar` and the
++# pack's `.pack.<uuid>.tmp`. Matched whole, after the item's own prefix — item
++# ids are free text, so `a.pack.x/` is another item and `a.pack.notes.txt`
++# nobody's pack. The host's `NfsArchive` is the oracle
++# (tests/filestore/test_nfs_tree_purge_pack.py).
++_BESIDE_RE = re.compile(r"\.gen(\.[0-9a-f]{32}\.tmp)?|\.pack\.[0-9a-f]{32}(-[0-9]+\.tar|\.tmp)")
++
+ 
+ def _check_ws(workspace_id: str) -> str:
+     """A workspace id names ONE directory segment under the root — reject
+@@ -269,6 +278,18 @@ class NfsTreeFileStore:
+         def _rm() -> None:
+             with contextlib.suppress(FileNotFoundError):
+                 shutil.rmtree(item_root)
++            # The host's packed copy is a whole workspace's worth of bytes; left
++            # here it belongs to no item and nothing would ever remove it.
++            prefix = item_root.name
++            try:
++                beside = list(os.scandir(self._root))
++            except FileNotFoundError:
++                return
++            for entry in beside:
++                rest = entry.name[len(prefix) :]
++                if entry.name.startswith(prefix) and _BESIDE_RE.fullmatch(rest):
++                    with contextlib.suppress(FileNotFoundError):
++                        os.unlink(entry.path)
+ 
+         await asyncio.to_thread(_rm)
+ 
+diff --git a/src/workspace_app/sandbox/http_client.py b/src/workspace_app/sandbox/http_client.py
+index a6ef5909..554ac801 100644
+--- a/src/workspace_app/sandbox/http_client.py
++++ b/src/workspace_app/sandbox/http_client.py
+@@ -530,14 +530,18 @@ class HttpSandbox:
+         resp.raise_for_status()
+         return resp.json()
+ 
+-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
++    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+         # #492: ask the host to rsync this sandbox's live working dir → the
+         # durable NFS archive. Host-local, so the bulk copy never crosses this
+         # app↔host connection (it can't hang the way the old per-file mirror
+         # did). `delete` ⇒ --delete reconcile at a quiesced turn-end / reap;
+-        # False ⇒ additive-only mid-turn checkpoint.
+-        logger.info("sandbox-http: persist sandbox %s delete=%s", handle.id, delete)
+-        await self._request(handle, "POST", "/persist", json={"delete": delete})
++        # False ⇒ additive-only mid-turn checkpoint. `pack` (reap only,
++        # docs/plan-archive-pack.md) asks the host to also leave, when the kill
++        # that follows tears the sandbox down, a single-file copy the next
++        # restore reads instead of walking every path; an older host ignores
++        # the field and simply does not pack.
++        logger.info("sandbox-http: persist sandbox %s delete=%s pack=%s", handle.id, delete, pack)
++        await self._request(handle, "POST", "/persist", json={"delete": delete, "pack": pack})
+ 
+     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+         # The HTTP host owns its own per-sandbox lifecycle and mints handles
+diff --git a/tests/api/test_host_managed_boot.py b/tests/api/test_host_managed_boot.py
+index 1bf57a07..cc5719e8 100644
+--- a/tests/api/test_host_managed_boot.py
++++ b/tests/api/test_host_managed_boot.py
+@@ -34,7 +34,9 @@ def test_host_managed_without_persist_op_fails_loud_at_boot():
+ 
+ def test_host_managed_with_a_persist_op_boots():
+     class _PersistMock(MockSandbox):
+-        async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:  # pragma: no cover
++        async def persist(  # pragma: no cover
++            self, handle: SandboxHandle, *, delete: bool, pack: bool = False
++        ) -> None:
+             return None
+ 
+     app = create_app(
+diff --git a/tests/api/test_registry.py b/tests/api/test_registry.py
+index 74ed1ebd..fe9c482d 100644
+--- a/tests/api/test_registry.py
++++ b/tests/api/test_registry.py
+@@ -931,9 +931,11 @@ class _PersistSandbox(_HttpStyleSandbox):
+     def __init__(self) -> None:
+         super().__init__()
+         self.persisted: list[tuple[str, bool]] = []
++        self.packs: list[bool] = []
+ 
+-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
++    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+         self.persisted.append((handle.id, delete))
++        self.packs.append(pack)
+ 
+ 
+ async def test_host_managed_ensure_handle_skips_app_side_restore_492():
+@@ -996,6 +998,56 @@ async def test_host_managed_kill_idle_persists_before_reap_492():
+     assert sandbox.persisted == [(h.id, True)]  # reconcile (host-side) before rmtree
+ 
+ 
++# docs/plan-archive-pack.md decision 3: the pack is asked for on REAP only — the
++# one write-back at which the item is globally idle and the sandbox is about to
++# go. One test per caller, so a pack=True at any other site reddens one test.
++
++
++async def test_reap_asks_the_host_to_pack():
++    sandbox = _PersistSandbox()
++    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
++    s = await registry.session("ws-1")
++    await registry.ensure_handle(s)
++    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
++    await registry.kill_idle(threshold=timedelta(minutes=15))
++    assert sandbox.packs == [True]
++
++
++async def test_the_turn_end_reconcile_does_not_pack():
++    """Someone is waiting on a turn end, and packing costs time in bytes."""
++    sandbox = _PersistSandbox()
++    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
++    await registry.ensure_handle(await registry.session("ws-1"))
++    await registry.flush("ws-1")
++    assert sandbox.packs == [False]
++
++
++async def test_the_periodic_checkpoint_does_not_pack():
++    sandbox = _PersistSandbox()
++    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
++    await registry.ensure_handle(await registry.session("ws-1"))
++    await registry.mirror_warm()
++    assert sandbox.packs == [False]
++
++
++async def test_shutdown_does_not_pack():
++    """Shutdown has a budget; a pack the size of the workspace does not fit it."""
++    sandbox = _PersistSandbox()
++    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
++    await registry.ensure_handle(await registry.session("ws-1"))
++    await registry.close_all()
++    assert sandbox.packs and not any(sandbox.packs)
++
++
++async def test_closing_an_environment_does_not_pack():
++    """A person pressed Close and is waiting for the answer."""
++    sandbox = _PersistSandbox()
++    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
++    await registry.ensure_handle(await registry.session("ws-1"))
++    await registry.close_session("ws-1")
++    assert sandbox.packs and not any(sandbox.packs)
++
++
+ async def test_host_managed_without_persist_method_is_a_noop_492():
+     # Defensive: host-managed is set but the backend exposes no `persist`
+     # (misconfig / non-http double) — write-back silently no-ops, never raises.
+@@ -1059,7 +1111,7 @@ class _HostManagedSandbox(MockSandbox):
+             await self.mark_ready(handle)
+         return handle
+ 
+-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
++    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+         self.persisted.append((handle.id, delete))
+ 
+ 
+diff --git a/tests/api/test_usage_host_managed_durable.py b/tests/api/test_usage_host_managed_durable.py
+index 3559e1f2..af3f2257 100644
+--- a/tests/api/test_usage_host_managed_durable.py
++++ b/tests/api/test_usage_host_managed_durable.py
+@@ -62,7 +62,7 @@ class _PersistingSandbox(MockSandbox):
+         self.handle = await super().create(*args, **kwargs)
+         return self.handle
+ 
+-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
++    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+         self.persist_calls += 1
+ 
+ 
+diff --git a/tests/filestore/test_nfs_tree_purge_pack.py b/tests/filestore/test_nfs_tree_purge_pack.py
+new file mode 100644
+index 00000000..56885e09
+--- /dev/null
++++ b/tests/filestore/test_nfs_tree_purge_pack.py
+@@ -0,0 +1,117 @@
++"""Deleting an item takes the host's packed copy with it (docs/plan-archive-pack.md).
++
++The host leaves two kinds of file BESIDE an item's tree, never inside it:
++`<item>.gen` and `<item>.pack.<gen>-<bytes>.tar`. `purge` is the item-delete
++cascade's removal of the tree; a pack it left behind is a whole workspace's
++worth of bytes on NFS with no item to belong to and nothing that would ever
++remove it.
++
++The files are made by the host's own `NfsArchive`, not written by hand here:
++sandbox-host ships as its own project and the root environment does not install
++it, so its module is loaded from source (it imports only the standard library).
++The host is the oracle for what those files are called.
++"""
++
++from __future__ import annotations
++
++import importlib.util
++import os
++import shutil
++from pathlib import Path
++
++import pytest
++
++from workspace_app.filestore.nfs_tree import NfsTreeFileStore
++
++_HOST_ARCHIVE = Path(__file__).resolve().parents[2] / "sandbox-host/src/sandbox_host/nfs_archive.py"
++
++pytestmark = pytest.mark.skipif(shutil.which("tar") is None, reason="needs GNU tar")
++
++
++def _host_archive_class():
++    spec = importlib.util.spec_from_file_location("_host_nfs_archive", _HOST_ARCHIVE)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module.NfsArchive
++
++
++async def _rsync_free(argv: list[str]) -> tuple[int, bytes]:
++    """The host's runner: tar runs for real, rsync is answered (the tree's
++    contents do not matter here, only the files beside it)."""
++    import asyncio
++
++    if Path(argv[0]).name != "tar":
++        return 0, b""
++    proc = await asyncio.create_subprocess_exec(
++        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
++    )
++    _out, err = await proc.communicate()
++    return proc.returncode or 0, err
++
++
++async def _reap(root: Path, item: str, tmp_path: Path) -> None:
++    ws = tmp_path / f"ws-{item}"
++    ws.mkdir()
++    (ws / "a.txt").write_text("alpha")
++    archive = _host_archive_class()(root, runner=_rsync_free)
++    await archive.persist(item, ws, delete=True)
++    assert await archive.pack(item, ws)
++
++
++async def test_purge_removes_the_items_pack_and_generation(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    root = tmp_path / "nfs"
++    fs = NfsTreeFileStore(root)
++    await fs.write("work-item:1", "/a.txt", b"alpha")
++    await _reap(root, "work-item:1", tmp_path)
++    beside = sorted(p.name for p in root.iterdir() if p.name != "work-item:1")
++    assert any(".pack." in n for n in beside) and "work-item:1.gen" in beside, beside
++
++    # What a host that died mid-write leaves, made by the host itself: the
++    # generation's tmp, stopped before its rename, and a pack's tmp, stopped
++    # while tar was writing it.
++    def died(src, dst):
++        raise SystemExit("host died before the rename")
++
++    monkeypatch.setattr("os.replace", died)
++    with pytest.raises(SystemExit):
++        _host_archive_class()(root, runner=_rsync_free)._new_generation("work-item:1")
++    monkeypatch.undo()
++
++    async def tar_dies(argv: list[str]) -> tuple[int, bytes]:
++        Path(argv[argv.index("-cf") + 1]).write_bytes(b"half")
++        raise SystemExit("host died mid-tar")
++
++    with pytest.raises(SystemExit):
++        await _host_archive_class()(root, runner=tar_dies).pack("work-item:1", tmp_path)
++    tmps = [n for n in os.listdir(root) if n.endswith(".tmp")]
++    assert len(tmps) == 2, os.listdir(root)
++
++    await fs.purge("work-item:1")
++
++    assert sorted(p.name for p in root.iterdir()) == []
++
++
++async def test_purge_leaves_every_other_items_files(tmp_path: Path) -> None:
++    """Item ids are free text: `a`'s purge must not take `a.pack.x`'s files,
++    nor a file under `a.pack.` that is nobody's pack."""
++    root = tmp_path / "nfs"
++    fs = NfsTreeFileStore(root)
++    for item in ("a", "a.pack.x", "ab", "b"):
++        await fs.write(item, "/f", b"x")
++        await _reap(root, item, tmp_path)
++    (root / "a.pack.notes.txt").write_text("not a pack")
++    before = {p.name for p in root.iterdir()}
++
++    await fs.purge("a")
++
++    gone = before - {p.name for p in root.iterdir()}
++    assert all(n == "a" or n == "a.gen" or n.startswith("a.pack.") for n in gone), gone
++    assert "a.pack.notes.txt" not in gone
++    assert not any(n.startswith(("a.pack.x", "ab", "b")) for n in gone), gone
++
++
++async def test_purge_before_anything_was_ever_written_is_a_no_op(tmp_path: Path) -> None:
++    await NfsTreeFileStore(tmp_path / "never-made").purge("work-item:1")
+diff --git a/tests/sandbox/test_http.py b/tests/sandbox/test_http.py
+index cef66a65..3dacc776 100644
+--- a/tests/sandbox/test_http.py
++++ b/tests/sandbox/test_http.py
+@@ -51,6 +51,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
+     app = FastAPI()
+     app.state.created_item_ids = []  # #492: item_ids seen by create
+     app.state.persisted = []  # #492: (rid, delete) seen by persist
++    app.state.packs = []  # plan-archive-pack: the `pack` field as sent
+     app.state.created_tools = []  # #674: `{name: sha}` seen by create
+     # The resource ceilings the host reads off a create. Modelled here because a
+     # test that only asserted "our side sent something" would be immune to the
+@@ -109,6 +110,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
+         # #492: record (rid, delete) so the client's persist call can be asserted.
+         backend._require(SandboxHandle(id=rid))  # raise SandboxNotFound for a dead handle
+         app.state.persisted.append((rid, bool(body.get("delete", False))))
++        app.state.packs.append(body.get("pack"))
+ 
+     @app.delete("/sandboxes/{rid}", status_code=204)
+     async def kill(rid: str) -> None:
+@@ -349,6 +351,14 @@ async def test_persist_posts_delete_flag(host_and_client):
+     assert app.state.persisted == [(remote_id, True), (remote_id, False)]
+ 
+ 
++async def test_persist_sends_pack_only_when_asked(host_and_client):
++    sandbox, app = host_and_client
++    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
++    await sandbox.persist(h, delete=True, pack=True)
++    await sandbox.persist(h, delete=True)
++    assert app.state.packs == [True, False]
++
++
+ async def test_persist_on_dead_handle_raises_sandbox_not_found(host_and_client):
+     sandbox, app = host_and_client
+     h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
