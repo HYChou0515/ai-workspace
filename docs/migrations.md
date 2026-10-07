@@ -1536,6 +1536,89 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
+### 2026-10-07 · #875 skill hub 有版本歷史：每個條目一個 git repo，可回到舊版、看差異 {#pr-875}
+
+**設定** — 新 key **`skill_hub.git_root`**：skill hub 版本歷史放的目錄（每個條目一個 bare git repo，
+`<git_root>/<條目 id>.git`）。
+
+- **要做的事（`rollout 前`）**：設成一個**所有 API pod 都掛得到的持久目錄**，並納入備份。`kubernetes/base/configmap.yaml`
+  的範例是 `SKILL_HUB_GIT_ROOT: "/data/skill-hub-git"`（`rca-data`，RWX），在 config.yaml 對應成
+  `skill_hub: { git_root: ${SKILL_HUB_GIT_ROOT} }`。`blob-gc` 與 `chat-video` worker 用的是 API 的同一份組裝，
+  也要讀得到這個設定（同一份 config.yaml / configmap）。
+  - 為什麼：每個條目的列只記一個 commit，檔案在 repo 裡；目錄不在了，列就指向不存在的版本。
+  - 漏做的症狀：`filestore.kind` 不是 `memory` 時**開不了機**，`ValueError` 點名 `skill_hub.git_root`。設了但不是
+    共用目錄：在 A pod 發布的版本，B pod 讀不到（安裝、詳情頁出錯）。沒備份：還原 DB 後條目指向不存在的 commit。
+- `filestore.kind: memory` 且沒設時用一個暫存目錄（重開就沒了，和其他資料一樣）。
+
+**資料** — 沒有 `Schema` 升版。`SkillHubEntry` 多了 `commit`、`pending` 兩個欄位（有預設值，舊列照讀）。
+新 model `SkillHubUsage`（安裝 / 使用次數，每個條目每天每個 pod 一列，沒有 CRUD 路由），從零開始，不補算。
+
+- **要做的事（`rollout 後`）**：用 superuser 帳號打一次 `POST /api/admin/skill-hub/migrate`。
+  - 做什麼：把這個 PR 之前發布的條目搬進 git——每個條目建 repo，第一個 commit 是它現在的檔案，列寫上 `commit`。
+    回傳 `{"migrated": [...], "duplicates": [[...], ...], "gitattributes_dropped": [...]}`。可重跑，已搬過的跳過；
+    多個 pod 同時打也只會有一個第一版。
+  - 為什麼：沒搬的條目照舊能看、能裝（從舊的檔案位置讀），但沒有版本紀錄可看、可回復。沒搬就重新發布的條目，
+    發布時會先把舊版搬進去當第一版，不會遺失。
+  - 漏做的症狀：舊條目的版本紀錄是空的、不能回復。
+  - 也修得好 rollout 期間舊 pod 寫壞的列（見下面「rollout 期間」）：跑完之後那些條目指回 repo 裡的版本。
+  - `duplicates` 不是空的：同一個人有兩個同名條目（以前的競態留下的）。這個指令**不合併**，兩個都搬；請那位擁有者決定留哪一個，
+    在 skill hub 頁面刪掉另一個（刪除只有擁有者能按）。
+  - `gitattributes_dropped` 不是空的：那些舊條目最上層有自己的 `.gitattributes`，搬進 git 時拿掉了（rollout 後才第一次重新發布、順帶搬進去的條目不在回報裡，只在 API pod 的 warning log：`moved into git without its own top-level .gitattributes`）（那個位置是
+    skill hub 的 LFS 規則）。舊檔案位置裡的原件還在；需要的話請擁有者把它移到子資料夾後重新發布。
+  - 舊的檔案位置（FileStore 裡 `skill-hub:<id>:…` 的 namespace）**不再刪除**：搬完、重新發布、刪除條目都不刪
+    （以前重新發布與刪除會釋放舊版的檔案）。新 pod 寫的新版本都進 git，所以佔的空間在 rollout 結束後就不再增加（rollout 期間舊 pod 重新發布仍會寫進新的舊位置）。
+- **rollout 期間（新舊 pod 同時在跑）**：
+  - 舊 pod 讀不到新 pod **首次發布**的條目（詳情頁 500、安裝出一個只有 `.origin` 的資料夾）；搬過的條目，舊 pod 讀到的是
+    搬移前的版本（舊檔案位置還在）。
+  - 舊 pod 改權限 / 轉移 / 下架時會把列寫回沒有 `commit` 的樣子：首次發布在 git 的條目之後新 pod 也 500；搬過的條目
+    新 pod 讀到的是搬移前的版本。
+  - 舊 pod **重新發布**一個已在 git 的條目：它把檔案寫到舊的檔案位置、列上沒有 `commit`；之後的 migrate 會把列指回
+    repo 的 master——**那次發布的內容不會進 git**（列上的說明與審查意見是那次的，檔案是之前的版本）。只能請擁有者再發布一次。
+  - 也看得到：聊天裡的 skill hub 卡片若是新版前端配上舊 pod 的回應，已安裝的 skill 會顯示「已有同名 skill」而不是「已安裝」。
+  - **要做的事（`rollout 前`）**：請大家在 rollout 期間別在 skill hub 發布或管理條目；或用一次換完的 rollout。
+  - 漏做的症狀：上面那些 500 與錯的版本；**rollout 後**跑一次上面的 migrate，沒有 `commit` 的列都會指回 repo 的
+    master（500 與搬移前的版本就修回來了；舊 pod 重新發布的內容除外，見上）。
+  - 降版（回到這個 PR 之前的 image）：首次發布在 git 的條目讀不到（500）；搬過的條目讀得到，但是是搬移前的版本——之後在
+    git 裡發布的版本都看不到。
+- 不是 superuser 打這條路由回 404。
+
+**k8s · CI 側** — API image 多裝 `git`（`docker/Dockerfile`）；不需要 `git-lfs`（大檔由平台自己寫成 LFS 格式）。
+沒有新 JobType、probe 或 manifest；configmap 多一個 `SKILL_HUB_GIT_ROOT`。
+
+行為改變，沒有開關：
+
+- 一個 skill 最多 **1000 個檔案**，超過就發布不了（原本的大小上限不變）。最上層放了自己的 `.gitattributes` 的 skill
+  也發布不了（那個位置是 skill hub 自己用的；放在子資料夾裡可以）。
+- 比對兩版時，任一邊超過 256 KiB 的文字檔只比對是否相同，不顯示逐行差異。逐行差異由 git 算：每個有變的文字檔
+  一個 `git diff` 子行程，每次比對同時最多 8 個（兩個人同時比對就是 16 個）。檔案結尾沒有換行時，差異裡多一行
+  `\ No newline at end of file`（以前兩行會黏在一起）；git 對齊 hunk 的方式和以前不完全一樣，差異內容一樣正確。
+- skill hub 詳情頁多「版本紀錄」：看得到這個 skill 的人能看任一版、和另一版比對、〔從這一版 fork〕到自己的 item；
+  owner 能〔回復到這一版〕（不重新 AI 審查）。改可見範圍的紀錄只有 owner 看得到。
+- 列表與詳情頁顯示「安裝 N 次 · 使用 M 次」與「自 <第一次寫出那天> 起」，列表多「最常使用」排序。安裝 = Skills 面板或
+  `install_skill` 裝進 item；使用 = `read_skill` 讀到 skill hub 副本。owner 編輯時補回資料夾、從舊版 fork 都不算。
+- `rca` / `pm` / `playground` / `topic-hub` 的 agent 多一個 tool **`show_skill_hub_entry`**（聊天裡一張可以按安裝的卡片），
+  `search_skill_hub` 每筆多回次數、這個 item 是否已裝、最後更新日、審查意見。
+  - 成本（沒有要做的事）：這四個 App 每個 turn 的 tool 清單多一個 tool 的說明，系統提示的 `## Available views` 多一段
+    （沒有裝 view plugin 時是整個段落）；每次 `search_skill_hub` 多一次次數查詢、讀一次這個 item 的 `.skill/` 索引與
+    `.origin`，每筆 hit 多一次 `git show`（同時跑）。
+  - 「最後更新」是目前版本的 commit 時間：搬移進來的條目，在下一次發布前顯示的是搬移那天。
+- Skills 面板裡 skill hub 副本的「有新版」改成「skill 已變更」，更新鈕叫〔同步〕。
+- 刪除條目後 repo **保留**（只有列被 soft delete）；同名再發布是新條目、新 repo。
+- 已安裝副本的 `.origin` 改成記來源的 commit（`files` 留空），不再記每個檔案的雜湊。舊副本照舊能比對「有沒有更新」，
+  條目搬進 git 之後同步一次就換成新格式。
+- 成本（沒有要做的事，在 API pod 上量的 git 子行程數）：首次發布 6 個、重新發布 7 個、改權限 / 轉移 / 下架 1 個、
+  詳情頁 3 個（skill 裡有圖片 / PDF / 壓縮檔等 LFS 路徑上的檔案時 5 個：多讀那些小檔來辨認指標）、版本紀錄 1 個加上每個
+  revision 一次資料庫讀取。
+  `read_skill` 讀 `SKILL.md` 時同一批多讀那個資料夾的 `.origin`。每個 API pod 每 2 小時、以及關機時（算在關機預算內），
+  對有累積次數的條目各寫一列（讀一次條目確認它還在、讀一次計數列、寫一次、刪舊 revision；第一次是建立，不用刪）。查看大小與整理見 [deployment.md](deployment.md) §16。
+
+**確認做完**
+
+- `POST /api/admin/skill-hub/migrate` 回 200，`migrated` 列出舊條目；再打一次 `migrated` 是 `[]`。
+- skill hub 上每個條目在 `<git_root>` 都有 `<條目 id>.git`（反過來不成立：刪掉的條目、發布失敗留下的 repo 也在）。
+- 在一個 pod 發布新版，從另一個 pod（或重開後）打開詳情頁，看得到新版的檔案。
+
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

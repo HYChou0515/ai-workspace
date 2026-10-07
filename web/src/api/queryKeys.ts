@@ -86,7 +86,14 @@ export const qk = {
   // and one entry (with the tool diff for an App when asked). Both are per
   // viewer; a management write invalidates the whole family.
   skillHub: (q: string, mine: boolean, app = "") => ["skillHub", q, mine, app] as const,
+  skillHubBrowse: (q: string, mine: boolean, sort: string) =>
+    ["skillHub", "browse", q, mine, sort] as const,
   skillHubEntry: (id: string, app: string) => ["skillHub", "entry", id, app] as const,
+  skillHubHistory: (id: string) => ["skillHub", "history", id] as const,
+  skillHubVersion: (id: string, revision: string) => ["skillHub", "version", id, revision] as const,
+  skillHubVersionFile: (id: string, revision: string, path: string) =>
+    ["skillHub", "versionFile", id, revision, path] as const,
+  skillHubDiff: (id: string, from: string, to: string) => ["skillHub", "diff", id, from, to] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 

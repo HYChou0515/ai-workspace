@@ -266,7 +266,7 @@ async def test_install_puts_the_copy_in_the_item_and_names_the_missing_tools(har
         for s in harness.client.get(harness.wpath("/skills")).json()["skills"]
         if s["name"] == "triage"
     )
-    assert (row["is_copy"], row["upstream"]) == (True, "live")
+    assert (row["is_copy"], row["upstream"], row["hub_entry"]) == (True, "live", entry)
 
 
 async def test_install_refuses_to_overwrite_and_says_whose_copy_is_there(harness: Harness):
@@ -375,7 +375,7 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ):
     """Review round 2: the detail read every blob (up to 20 MiB) to list file
-    names and show one file. The names are on the row; one read for SKILL.md."""
+    names and show one file. One read, for SKILL.md alone."""
     hub = _hub(harness)
     entry = await hub.publish(
         owner="alice",
@@ -388,18 +388,82 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
         referenced_tools=[],
         review=SkillHubReview(verdict="ok"),
     )
-    reads: list[str] = []
-    blobs = hub._blobs  # noqa: SLF001 — counting the store's reads
-    real_read = blobs.read
+    reads: list[list[str] | None] = []
+    real_read = hub.repos.read
 
-    async def counting(ws: str, path: str) -> bytes:
-        reads.append(path)
-        return await real_read(ws, path)
+    async def counting(entry_id: str, commit: str, *, paths=None) -> dict[str, bytes]:  # noqa: ANN001
+        reads.append(sorted(paths) if paths is not None else None)
+        return await real_read(entry_id, commit, paths=paths)
 
-    monkeypatch.setattr(blobs, "read", counting)
+    monkeypatch.setattr(hub.repos, "read", counting)
 
     d = harness.client.get(f"/skill-hub/entries/{entry}").json()
 
     assert d["files"] == ["SKILL.md", "assets/big.bin"]
     assert d["skill_md"].startswith("---\nname: triage")
-    assert reads == ["/SKILL.md"]
+    assert reads == [["SKILL.md"]]
+
+
+# ── counts (plan-skill-hub-history §4.8, U6) ─────────────────────────────────
+
+
+async def test_the_list_and_the_detail_show_the_counts_and_sort_by_most_used(harness: Harness):
+    hub = _hub(harness)
+    quiet = await _entry(hub, "alice", "aaa")
+    busy = await _entry(hub, "alice", "zzz")
+    hub.usage.install(busy, user="bob", item="i1")
+    hub.usage.use(busy, user="bob", item="i1")
+    hub.usage.use(busy, user="carol", item="i2")
+    hub.usage.install(quiet, user="bob", item="i1")
+    await hub.usage.flush()
+
+    listed = harness.client.get("/skill-hub/entries").json()
+    by_name = {c["name"]: c for c in listed["entries"]}
+    assert (by_name["zzz"]["installs"], by_name["zzz"]["uses"]) == (1, 2)
+    assert (by_name["aaa"]["installs"], by_name["aaa"]["uses"]) == (1, 0)
+    assert listed["counted_since"], "the counts say since when"
+    assert [c["name"] for c in listed["entries"]] == ["aaa", "zzz"]
+    popular = harness.client.get("/skill-hub/entries", params={"sort": "popular"}).json()
+    assert [c["name"] for c in popular["entries"]] == ["zzz", "aaa"]
+
+    detail = harness.client.get(f"/skill-hub/entries/{busy}").json()
+    assert (detail["installs"], detail["uses"]) == (1, 2)
+    assert detail["counted_since"] == listed["counted_since"]
+
+
+async def test_installing_from_the_skills_panel_counts(
+    harness: Harness,
+):
+    hub = _hub(harness)
+    entry = await _entry(hub, "alice", "triage")
+
+    assert (
+        harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry}).status_code
+        == 200
+    )
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (1, 0)}
+
+
+async def test_refreshing_a_copy_that_lost_its_version_record_is_a_409_with_the_way_out(
+    harness: Harness,
+):
+    """Review round 1 (defect #9): a `.origin` naming a version the repo does
+    not have raised out of the refresh route as a 500."""
+    hub = _hub(harness)
+    entry = await _entry(hub, "alice", "triage")
+    assert (
+        harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry}).status_code
+        == 200
+    )
+    path = "/.skill/triage/.origin"
+    origin = msgspec.json.decode(await harness.filestore.read(harness.iid, path))
+    origin["commit"] = "0" * 40
+    await harness.filestore.write(harness.iid, path, msgspec.json.encode(origin))
+    await _entry(hub, "alice", "triage", description="v2")
+
+    res = harness.client.post(harness.wpath("/skills/triage/refresh"), json={"force": False})
+
+    assert res.status_code == 409, res.text
+    assert "reset" in res.json()["detail"]

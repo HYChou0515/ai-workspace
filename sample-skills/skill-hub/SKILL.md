@@ -1,15 +1,15 @@
 ---
 name: skill-hub
-description: Share a skill with everyone, or find one somebody else published — the skill hub. Use when the user wants to publish / share / upload a skill, asks whether a skill for some task already exists, or wants to install one another person made.
+description: Share a skill with everyone, or find one somebody else published — the skill hub. Use when the user wants to publish / share / upload a skill, asks whether a skill for some task already exists, asks which skill to install, or wants to install one another person made.
 ---
 
 # The skill hub
 
 The **skill hub** is where people publish the skills they made in their own
-items, so others can install them into theirs. Three tools do the work —
-`search_skill_hub`, `install_skill`, `publish_skill` — and this skill is about
-*when* to reach for each and *what to tell the user* around it. Write in the
-user's language.
+items, so others can install them into theirs. Four tools do the work —
+`search_skill_hub`, `show_skill_hub_entry`, `install_skill`, `publish_skill` —
+and this skill is about *when* to reach for each and *what to tell the user*
+around it. Write in the user's language.
 
 ## Finding one: `search_skill_hub`
 
@@ -22,6 +22,26 @@ A hit may say it *mentions tools this App lacks*. That is not a refusal —
 **tell the user before installing**, in one sentence: which tools, and that
 the steps needing them may not be followable in this item. Then let them
 decide. Never install a skill the user has not picked.
+
+## Recommending one: `show_skill_hub_entry(entry_id)`
+
+When the user asks **which** skill to install for a task, search first, then
+pick from the hits with what each one carries:
+
+- **Fit**: the name and description against what the user is doing.
+- **Already installed in this item**: say so — it is ready to use; recommend
+  something else only if it does not fit.
+- **Installed / used counts**: how much others rely on it. A fork with fewer
+  uses can still be the better fit; say why you chose it.
+- **Last updated**: a recent version is more likely to match today's tools.
+- **Review notes**: pass them on; they are what to watch for.
+- **Tools this App lacks**: a skill that needs them may not be followable here.
+
+Then call `show_skill_hub_entry` on the one you recommend (on two or three
+when they are close, one call each). The user sees a live card — what it
+does, its counts, its review, the missing tools — with an Install button, and
+decides from the card. Say in a sentence or two why you picked it. Installing
+is the user's press on the card, or `install_skill` once they say "install it".
 
 ## Installing one: `install_skill(entry_id)`
 

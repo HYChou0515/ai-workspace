@@ -127,6 +127,10 @@ class _ItemSkillState(BaseModel):
     #: a copy. The panel words Reset / Update by it: "the shipped version" is
     #: the package's phrase, a hub copy updates to what is on the hub.
     copy_of: Literal["shared", "profile", "hub", ""] = ""
+    #: The skill hub entry this folder is an installed copy of, or ``""`` (a
+    #: fork's starting point is the user's own). What the chat card reads to
+    #: say 「已安裝」, the same rule `search_skill_hub` answers by.
+    hub_entry: str = ""
     #: #589 — the package ships something this copy does not have. The refresh
     #: control appears on this, not merely on being a copy: a button whose only
     #: honest outcome is "nothing changed" reads as broken.

@@ -22,12 +22,14 @@ import {
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
+import { parseShownSkillHubEntry } from "../renderers/skillHubEntry";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
 import { ShownFiles } from "./ShownFiles";
 import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
+import { SkillHubEntryCard } from "./SkillHubEntryCard";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
@@ -112,6 +114,7 @@ const TOOL_LABEL: Record<string, MsgKey> = {
   read_file: "tool.read_file",
   read_image: "tool.read_image",
   show_file: "tool.show_file",
+  show_skill_hub_entry: "tool.show_skill_hub_entry",
   write_file: "tool.write_file",
   edit_file: "tool.edit_file",
   delete_file: "tool.delete_file",
@@ -307,6 +310,11 @@ export function EntryView({
     if (entry.call.name === "show_file" && shown.length > 0) {
       return <ShownFiles files={shown} fileUrl={fileUrl} />;
     }
+    // plan-skill-hub-history A3: the declared entry IS the rendering; a call
+    // that declared nothing (an id it could not read) stays a visible card.
+    const hubEntry =
+      entry.call.name === "show_skill_hub_entry" ? parseShownSkillHubEntry(entry.call.output) : null;
+    if (hubEntry) return <SkillHubEntryCard entryId={hubEntry} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
         // 28 = the avatar column every assistant block is indented past. Flush

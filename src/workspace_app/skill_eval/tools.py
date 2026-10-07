@@ -152,6 +152,15 @@ def schemas() -> list[dict]:
             ["query"],
         ),
         fn(
+            "show_skill_hub_entry",
+            "Show one skill hub entry to the user as a live card in the chat (what it "
+            "does, how often it is installed and used, the tools this App lacks, its "
+            "review, an Install button). Use it when you recommend a skill, after "
+            "`search_skill_hub`. `entry_id` is the id a search hit shows.",
+            {"entry_id": s},
+            ["entry_id"],
+        ),
+        fn(
             "install_skill",
             "Install a skill from the skill hub into THIS workspace, as `.skill/<name>/`, "
             "so it is loadable with `read_skill` from the next turn on. Use it after the "
@@ -230,7 +239,14 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
             f"1 skill hub entry matches {args['query']!r}:\n"
             "- alice/reflow-triage — Triage reflow defects from the log. "
             "[written in pm; id 0123456789abcdef0123456789abcdef]\n"
+            "    installed 12 times, used 40 times · last updated 2026-09-30 · review: no notes\n"
             "    mentions query_entity, which this App lacks"
+        )
+    if name == "show_skill_hub_entry":
+        return (
+            "alice/reflow-triage is now displayed in the chat as a card — the user can read "
+            "it there and install it with one press."
+            f'\n[skill-hub-entry]{{"entry_id": "{args["entry_id"]}"}}'
         )
     if name == "install_skill":
         return (

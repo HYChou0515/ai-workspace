@@ -196,6 +196,8 @@ def test_the_chat_video_worker_is_built_from_the_apis_composition(tmp_path, monk
               kind: specstar
             sandbox:
               root: {tmp_path / "sandbox"}
+            skill_hub:
+              git_root: {tmp_path / "skill-hub-git"}   # a durable deploy refuses to boot without it
             chat_video:
               max_output_bytes: 12345
             kb:
@@ -254,6 +256,8 @@ def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monke
               gc_interval_sec: 0.05
             sandbox:
               root: {tmp_path / "sandbox"}   # the local sandbox mkdirs its root at boot
+            skill_hub:
+              git_root: {tmp_path / "skill-hub-git"}   # a durable deploy refuses to boot without it
             goal:
               offhours:
                 window: "22:00-06:00"   # the once-conditional registration

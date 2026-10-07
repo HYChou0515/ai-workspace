@@ -123,6 +123,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | `failover` | 忙碌時的 LLM 備援全域門檻 | 有多模型才改 |
 | `chat_video` | Export ▾ → 影片的伺服端上限（像素、秒數、輸出大小、進度心跳）；worker pod 的 memory limit 是照它們量的；五個值要正整數、`stale_after_seconds` > `heartbeat_seconds`（否則開不了機）。`chromium_path`（預設空）：改用這個 Chromium 錄影而不是 `playwright install` 抓的那顆——斷網 image 用 apt 的 `/usr/bin/chromium`（[deployment.md §11](deployment.md#11-生產環境注意事項)） | 少改（改了要重量 [chat-video.md](chat-video.md#要多少資源量的41-秒的範例1080p)） |
 | `view_plugins` | runtime view plugin 的安裝目錄 `dir`（空 ⇒ `$WORKSPACE_VIEW_PLUGINS_DIR` ⇒ `<repo>/.view-plugins`，映像裡是 `/app/.view-plugins`，內含 `csv-table`）。目錄不存在 = 沒有 plugin；有任何一個壞掉就拒絕開機並點名。怎麼寫 plugin 見 [view-kind-authoring.md](view-kind-authoring.md) | 自己掛 plugin 目錄時改（記得把 `csv-table` 一起帶上） |
+| `skill_hub` | `git_root`：skill hub 放版本的目錄，每個發布出去的 skill 一個 bare git repo（`<條目 id>.git`，LFS 物件在 repo 裡的 `lfs/objects/`）。要放在**每個 API pod 都掛得到的持久儲存**上，並納入備份；不和 sandbox 的儲存共用。空字串只在 `filestore.kind: memory` 時允許（改用暫存目錄，重啟就沒了）；其他部署留空會**拒絕開機**並點名這個 key。查看大小與整理見 [deployment.md](deployment.md) | 正式部署一定要設 |
 | `llm` | preset 沒寫 `llm.*` 時的預設 endpoint ＋ 抑制重複的取樣參數 | 少改 |
 | `read_file` / `exec` | sandbox 工具的輸出上限 | 少改 |
 | `history` | 跨回合記憶的訊息數 / token 預算 | 換大 context 模型時改 |

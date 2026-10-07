@@ -61,6 +61,7 @@ export function SkillsModal({
   // What the last refresh left alone. Shown because "we did not touch these" is
   // the only part of the result the user has to act on.
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 「從 skill hub 裝」 (plan D2): the picker over this panel.
   const [picking, setPicking] = useState(false);
@@ -121,7 +122,17 @@ export function SkillsModal({
   };
 
   const refresh = async (name: string, force: boolean) => {
-    const res = await client.refreshItemSkill(slug, itemId, name, { force });
+    setRefreshError(null);
+    let res: Awaited<ReturnType<typeof client.refreshItemSkill>>;
+    try {
+      res = await client.refreshItemSkill(slug, itemId, name, { force });
+    } catch (e) {
+      // A refusal is the server's sentence for the person (a copy that can
+      // only be reset, say); shown, never swallowed.
+      setRefreshNote(null);
+      setRefreshError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     const skill = list.find((s) => s.name === name);
     setRefreshNote(
       res.skipped.length > 0
@@ -218,6 +229,11 @@ export function SkillsModal({
           {t("skills.intro")}
         </p>
 
+        {refreshError && (
+          <p className="error" role="alert" style={{ margin: 0, fontSize: pxToRem(11) }}>
+            {refreshError}
+          </p>
+        )}
         {refreshNote && (
           <p
             data-testid="skills-refresh-note"
@@ -471,7 +487,7 @@ function SkillRow({
                 whiteSpace: "nowrap",
               }}
             >
-              {t("skills.updateAvailable")}
+              {t(fromHub ? "skills.updateAvailable.hub" : "skills.updateAvailable")}
             </span>
           )}
           {(skill.upstream === "unpublished" || skill.upstream === "deleted") && (

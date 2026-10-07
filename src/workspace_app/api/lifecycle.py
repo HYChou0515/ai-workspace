@@ -102,6 +102,7 @@ def build_lifespan(
     idle_check_interval: timedelta,
     uv_cache_max_bytes: int | None,
     mirror_interval: timedelta,
+    skill_hub_flush_interval: timedelta = timedelta(hours=2),
     code_sync_check_interval: timedelta | None,
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
@@ -350,6 +351,23 @@ def build_lifespan(
                 for item in mirrored:
                     with contextlib.suppress(Exception):
                         await publish(item)
+        except asyncio.CancelledError:
+            return
+
+    async def skill_hub_usage_flusher(app: FastAPI) -> None:
+        """Pod-local: writes THIS pod's skill hub counts to its own rows
+        (plan-skill-hub-history §4.8, U4). A failed flush keeps the counts for
+        the next one, so it is logged, not fatal."""
+        counter = getattr(app.state, "skill_hub_usage", None)
+        if counter is None:
+            return
+        try:
+            while True:
+                await asyncio.sleep(skill_hub_flush_interval.total_seconds())
+                try:
+                    await counter.flush()
+                except Exception:  # noqa: BLE001 — kept for the next flush
+                    logger.exception("skill hub usage: flush failed; kept for the next one")
         except asyncio.CancelledError:
             return
 
@@ -625,6 +643,7 @@ def build_lifespan(
             # on an async route, independent of any request's self-reporting.
             bg.append(perf_trace.start_loop_watchdog())
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
+        bg.append(asyncio.create_task(skill_hub_usage_flusher(app)))  # skill hub counts (U4)
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
         if turn_reclaim_interval is not None:
             bg.append(asyncio.create_task(turn_reclaim_sweeper(app)))  # plan-graceful-shutdown P3
@@ -747,6 +766,19 @@ def build_lifespan(
             # a SIGKILL nobody can explain afterwards, so each step says what it
             # cost (the boot narrates the same way, `boot_step`).
             logger.debug("lifespan: coordinators drained in %.1fs", time.monotonic() - t_coord)
+            # After the turns: a turn drained above may still have read a skill.
+            # Inside the same shutdown budget as the drains above: a slow store
+            # costs at most what is left of it (and a second at the floor),
+            # never the grace period.
+            if (usage := getattr(app.state, "skill_hub_usage", None)) is not None:
+                try:
+                    await asyncio.wait_for(
+                        usage.flush(), timeout=max(deadline - time.monotonic(), 1.0)
+                    )
+                except TimeoutError:
+                    logger.warning("lifespan: skill hub usage flush ran out of shutdown budget")
+                except Exception:  # noqa: BLE001 — one failing step must not stop the rest
+                    logger.exception("lifespan: skill hub usage flush failed")
             t0 = time.monotonic()
             await kernels.shutdown_all()
             t1 = time.monotonic()

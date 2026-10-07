@@ -257,3 +257,200 @@
   opacity: 0.6;
   transition: opacity 150ms ease-out;
 }
+
+/* ── the history (plan-skill-hub-history §8) ───────────────────────────── */
+
+.page .skill-hub-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.page .skill-hub-history > li {
+  display: block;
+  min-width: 0;
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+}
+
+.page .skill-hub-history > li[data-current] {
+  border-color: var(--accent-h);
+}
+
+.page .skill-hub-history-head,
+.page .skill-hub-history-meta,
+.page .skill-hub-history-actions,
+.page .skill-hub-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.page .skill-hub-history-kind {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.page .skill-hub-history-desc {
+  margin: var(--space-4) 0;
+  overflow-wrap: anywhere;
+}
+
+.page .skill-hub-history-actions {
+  margin-top: var(--space-4);
+}
+
+/* What the review said about a version (§8): the entry page's notes list,
+   smaller, under the row's description. */
+.page .skill-hub-history-notes {
+  margin: var(--space-4) 0;
+  padding-left: var(--space-24);
+  list-style: disc;
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.page .skill-hub-history-notes > li {
+  display: list-item;
+  padding: 0;
+  border: 0;
+}
+
+/* 「和這一版比」 above the per-file list; wraps under the label on a phone. */
+.page .skill-hub-diff-against {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
+.page .skill-hub-diff-against select {
+  max-width: 100%;
+}
+
+.page .skill-hub-diff {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.page .skill-hub-diff > li {
+  display: block;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.page .skill-hub-diff code {
+  overflow-wrap: anywhere;
+}
+
+.page .skill-hub-pre {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-8);
+  max-height: 24rem;
+  overflow: auto;
+  border-radius: var(--radius-btn);
+  background: var(--paper-2);
+  font-size: var(--text-small);
+  white-space: pre;
+}
+
+.page .skill-hub-fork-items {
+  border: 0;
+  margin: var(--space-12) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.page .skill-hub-fork-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  overflow-wrap: anywhere;
+}
+
+.page .skill-hub-fork-app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-12);
+}
+
+/* ── a skill hub entry in a chat (plan-skill-hub-history A3) ───────────────
+   Not under `.page` (a chat log is not one), so its own unscoped classes —
+   borrowing the page's would give it no styles at all. */
+.skill-hub-card {
+  margin-left: 28px; /* the avatar column every assistant block is indented past */
+  padding: var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  font-size: var(--text-small);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-hub-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.skill-hub-card-title {
+  font-weight: 600;
+  min-width: 0;
+}
+
+.skill-hub-card-owner,
+.skill-hub-card-muted {
+  color: var(--text-paper-d);
+}
+
+.skill-hub-card-desc,
+.skill-hub-card-muted,
+.skill-hub-card-warn {
+  margin: var(--space-4) 0 0;
+}
+
+.skill-hub-card-warn {
+  color: var(--warn);
+}
+
+.skill-hub-card-notes {
+  margin: var(--space-4) 0 0;
+  padding-left: var(--space-16);
+}
+
+.skill-hub-card-actions {
+  margin-top: var(--space-8);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.skill-hub-card-error {
+  color: var(--err);
+}
+
+/* The counts beside the owner on a list row, and the 「自 … 起」 note. */
+.page .skill-hub-row-meta {
+  flex-wrap: wrap;
+}

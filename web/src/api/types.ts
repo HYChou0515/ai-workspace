@@ -448,6 +448,11 @@ export type ItemSkillState = {
    * Reset / Update are worded by it (an older API pod mid-rollout sends none,
    * which reads as the package's words — what every copy read before). */
   copy_of?: "shared" | "profile" | "hub" | "";
+  /** The skill hub entry this folder is an installed copy of, or `""` — not a
+   * copy, a package copy, or a fork's starting point (the user's own). The one
+   * rule for "this item has that entry installed": `search_skill_hub` answers
+   * by the same field. Absent from an older API pod. */
+  hub_entry?: string;
   /** #589 — the package ships something this copy does not have. The update
    * control appears on THIS, not merely on being a copy: a button whose only
    * honest outcome is "nothing changed" reads as broken. */

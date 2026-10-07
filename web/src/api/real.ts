@@ -14,7 +14,15 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo, httpErrorFrom } from "./http";
+import {
+  API_PREFIX,
+  apiFetch,
+  detailSentence,
+  HttpError,
+  errorCode,
+  errorInfo,
+  httpErrorFrom,
+} from "./http";
 import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
 import type {
@@ -333,6 +341,12 @@ export const realApi: ApiClient = {
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/skills/${encodeURIComponent(name)}/refresh`,
       { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
     );
+    if (!resp.ok) {
+      // A refusal is a sentence the server composed for the person (a copy
+      // that can only be reset, say) — that is the message, not the body.
+      const sentence = await detailSentence(resp.clone());
+      if (sentence) throw new HttpError(resp.status, sentence);
+    }
     return json<{ updated: string[]; skipped: string[]; removed: string[] }>(resp);
   },
 

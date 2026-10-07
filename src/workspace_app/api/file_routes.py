@@ -286,20 +286,24 @@ def register_file_routes(
         reserved path and is closer to restoring a snapshot than to authoring;
         this one is a person deliberately rewriting workspace content, possibly
         over someone else's edits."""
-        from ..apps.skills import refresh_skill
+        from ..apps.skills import SkillError, refresh_skill
 
         investigation_id = locator.require_access(slug, item_id, "edit_content")
         profile = locator.profile_of(investigation_id)
-        result = await refresh_skill(
-            files,
-            investigation_id,
-            slug,
-            profile,
-            name,
-            force=body.force,
-            hub=skill_hub,
-            viewer=get_user_id(),
-        )
+        try:
+            result = await refresh_skill(
+                files,
+                investigation_id,
+                slug,
+                profile,
+                name,
+                force=body.force,
+                hub=skill_hub,
+                viewer=get_user_id(),
+            )
+        except SkillError as e:
+            # A copy that cannot be refreshed as asked, with the way out named.
+            raise HTTPException(status_code=409, detail=str(e)) from None
         return _SkillRefreshResult(
             updated=result.updated, skipped=result.skipped, removed=result.removed
         )
@@ -348,6 +352,7 @@ def register_file_routes(
                     default_on=s.default_on,
                     is_copy=s.is_copy,
                     copy_of=s.copy_of,
+                    hub_entry=s.hub_entry,
                     update_available=(up := upstreams.get(s.name)) is not None
                     and up.update_available,
                     upstream=up.state if up is not None else None,

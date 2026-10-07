@@ -16,7 +16,12 @@ from typing import Any
 
 import msgspec
 
-from ..agent.shown_files import SHOWN_FILES_KEY, SHOWN_FILES_MARKER, split_declaration
+from ..agent.shown_files import (
+    SHOWN_FILES_KEY,
+    SHOWN_FILES_MARKER,
+    split_declaration,
+    without_card_declaration,
+)
 from . import markdown as md
 from .options import VideoOptions
 
@@ -131,6 +136,8 @@ def shown_files_in(result: str) -> tuple[str, list[ShownFile]]:
     needs a non-empty ``path`` and ``mime`` and a finite numeric ``size``
     (rounded down here), ``caption`` is optional, a malformed entry is
     skipped and the rest kept."""
+    # A skill hub card is drawn only by the chat; here it reads as its sentence.
+    result = without_card_declaration(result)
     body, declaration = split_declaration(result)
     if not declaration:
         return result, []

@@ -22,6 +22,7 @@ from specstar.types import ResourceIsDeletedError
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
+from ..apps.skill_hub_git import SkillHubRepos, resolve_git_root
 from ..apps.subagents import SubagentDef
 from ..config.schema import (
     ChatVideoSettings,
@@ -458,6 +459,11 @@ def create_app(
     # (which feeds the storage-layer access_scope + write checker) — both come from
     # `settings.server.superusers`.
     superusers: frozenset[str] = frozenset(),
+    # plan-skill-hub-history G2: where the skill hub keeps one bare git repo
+    # per entry. None ⇒ a throwaway dir (tests, a memory deploy); `__main__`
+    # passes `resolve_git_root(settings.skill_hub.git_root, …)`, which refuses
+    # a durable deploy that left it unset.
+    skill_hub_git_root: str | Path | None = None,
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,
     spa_dist: Path | None = None,
@@ -488,6 +494,9 @@ def create_app(
     uv_cache_max_bytes: int | None = None,
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
+    # plan-skill-hub-history U4: how often this pod writes its skill hub counts
+    # (also written when it stops).
+    skill_hub_flush_interval: timedelta = timedelta(hours=2),
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -1394,6 +1403,7 @@ def create_app(
         idle_check_interval=idle_check_interval,
         uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
+        skill_hub_flush_interval=skill_hub_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -1764,7 +1774,13 @@ def create_app(
     # Skill hub entries (docs/plan-skill-hub.md): post-apply like the two
     # sandbox stores, so no CRUD route can PUT an entry around the review.
     register_skill_hub(spec)
-    skill_hub = SkillHubStore(spec, filestore)
+    skill_hub = SkillHubStore(
+        spec,
+        SkillHubRepos(resolve_git_root(str(skill_hub_git_root or ""), durable=False)),
+        # Entries published before the git store keep their files where they
+        # were written, until migrated (plan-skill-hub-history §6).
+        legacy=filestore,
+    )
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
@@ -1965,6 +1981,7 @@ def create_app(
     # Skill hub (docs/plan-skill-hub.md): the one store the tools, the panel and
     # the hub routes share — exposed so a test can publish through the app's own.
     app.state.skill_hub = skill_hub
+    app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the

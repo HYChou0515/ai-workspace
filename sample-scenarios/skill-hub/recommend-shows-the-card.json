@@ -1,0 +1,15 @@
+{
+  "name": "recommend-shows-the-card",
+  "note": "Asked which skill to install, the model searches and shows its pick as a card for the user to decide from; it does not install on its own.",
+  "prompt": "Which skill should I install to help me triage reflow defects in this item?",
+  "expect": {
+    "must_call": [
+      "search_skill_hub",
+      "show_skill_hub_entry"
+    ],
+    "must_not_call": [
+      "install_skill",
+      "publish_skill"
+    ]
+  }
+}

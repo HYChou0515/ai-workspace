@@ -60,8 +60,11 @@ ENV UV_COMPILE_BYTECODE=1 \
 # fonts-noto-cjk + fonts-liberation: the slim base ships no fonts; without
 #   them converted slides render CJK/Latin text as tofu — which also
 #   poisons what the VLM sees.
+# git: the skill hub keeps one bare repo per published skill under
+#   `skill_hub.git_root` (docs/plan-skill-hub-history.md G3).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        git \
         libmagic1 \
         libreoffice-impress \
         fonts-noto-cjk \

@@ -11,6 +11,8 @@ overwritten (plan install step 4).
 
 from __future__ import annotations
 
+import tempfile
+
 import msgspec
 from agents import RunContextWrapper
 
@@ -22,7 +24,8 @@ from workspace_app.apps.skill_hub import (
     SkillHubStore,
     register_skill_hub,
 )
-from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin, origin_for
+from workspace_app.apps.skill_hub_git import SkillHubRepos
+from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
 from workspace_app.apps.skills import WORKSPACE_SKILL_DIR, workspace_skill_metas
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
@@ -38,7 +41,7 @@ PAYLOAD = {
 def _hub():
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
-    return spec, SkillHubStore(spec, MemoryFileStore())
+    return spec, SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
 
 
 async def _alices(hub: SkillHubStore, *, tools: list[str] | None = None) -> str:
@@ -89,7 +92,9 @@ async def test_an_installed_entry_is_a_copy_the_next_turn_can_load():
         await files.read(inv, f"/{WORKSPACE_SKILL_DIR}/triage-reflow/{ORIGIN_FILE}"),
         type=SkillOrigin,
     )
-    assert origin == origin_for("hub", PAYLOAD, entry=entry)
+    row = hub.get(entry)
+    assert row is not None
+    assert origin == SkillOrigin(source="hub", files={}, entry=entry, commit=row.commit)
 
 
 async def test_tools_this_app_lacks_are_named_not_hidden():
@@ -273,3 +278,54 @@ def _blocks(text: str) -> list[tuple[str, list[str]]]:
             i = close
         i += 1
     return out
+
+
+# ── counting (plan-skill-hub-history §4.8, U1) ───────────────────────────────
+
+
+async def test_an_install_and_each_read_of_the_copy_are_counted():
+    """U1: installs = installs; uses = `read_skill` reading a skill hub copy.
+    Counted in memory; the total moves on the flush."""
+    _spec, hub = _hub()
+    entry = await _alices(hub)
+    ctx = _ctx(hub)
+
+    await install_skill_impl(ctx, entry)
+    await read_skill_impl(ctx, "triage-reflow")
+    await read_skill_impl(ctx, "triage-reflow")
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (1, 2)}
+
+
+async def test_reading_a_skill_that_is_not_a_skill_hub_copy_counts_nothing():
+    _spec, hub = _hub()
+    entry = await _alices(hub)
+    ctx = _ctx(hub)
+    files, inv = ctx.context.files, ctx.context.investigation_id
+    assert files is not None and inv is not None
+    await files.write(
+        inv, f"/{WORKSPACE_SKILL_DIR}/mine/SKILL.md", b"---\nname: mine\ndescription: d\n---\nx\n"
+    )
+
+    await read_skill_impl(ctx, "mine")
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (0, 0)}
+
+
+async def test_reading_a_fork_started_from_an_old_version_is_not_a_use_of_the_entry():
+    from workspace_app.apps.skills import fork_hub_version
+
+    spec, hub = _hub()
+    entry = await _alices(hub)
+    revision = spec.get_resource_manager(SkillHubEntry).get(entry).info.revision_id
+    ctx = _ctx(hub)
+    files, inv = ctx.context.files, ctx.context.investigation_id
+    assert files is not None and inv is not None
+    await fork_hub_version(files, inv, hub, entry, revision)
+
+    assert (await read_skill_impl(ctx, "triage-reflow")).strip() == "# How"
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (0, 0)}

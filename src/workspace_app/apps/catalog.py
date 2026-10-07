@@ -17,7 +17,7 @@ via ``factories.get_app_catalog`` and ``validate_all_apps`` runs at startup
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from importlib import resources
 from typing import TYPE_CHECKING
 
@@ -239,6 +239,23 @@ def _read_sandbox_preamble() -> str:
     return (resources.files(_APPS_PKG) / "_sandbox.md").read_text("utf-8")
 
 
+#: Cards an agent tool draws in the chat by itself, keyed by the tool that
+#: draws them — listed under `## Available views` for a turn holding the tool.
+_TOOL_VIEWS: dict[str, tuple[str, str]] = {
+    "show_skill_hub_entry": (
+        "show_skill_hub_entry(entry_id)",
+        "one skill hub entry with its usage, review and an Install button — when you "
+        "recommend a skill, show it so the user decides from the card",
+    ),
+}
+
+
+def tool_views_for(tools: Collection[str] | None) -> list[tuple[str, str]]:
+    """The tool-drawn cards a turn with this RESOLVED tool set may show
+    (``None`` holds every tool)."""
+    return [line for name, line in _TOOL_VIEWS.items() if tools is None or name in tools]
+
+
 def _compose_prompt(
     base: str,
     appendix: str,
@@ -247,6 +264,7 @@ def _compose_prompt(
     preamble: str = "",
     sandbox_preamble: str = "",
     views: Sequence[tuple[str, str]] = (),
+    tool_views: Sequence[tuple[str, str]] = (),
 ) -> str:
     parts = [base.rstrip()] if base else []
     # #241: the shared workspace preamble sits after the App's identity (base)
@@ -272,15 +290,20 @@ def _compose_prompt(
         parts.append("\n".join(lines))
     # #847/#848: the view kinds the installed view plugins draw. Beside the
     # skill index, and only for an item that can write a file and show it.
-    if views:
-        lines = [
-            "## Available views",
-            "",
-            "Write a `*.ai.yaml` file whose `view:` is one of these kinds, then call "
-            "`show_file` on it to show it as a live view.",
-            "",
-        ]
-        lines += [f"- `{kind}`: {when}" for kind, when in views]
+    if views or tool_views:
+        lines = ["## Available views"]
+        if views:
+            lines += [
+                "",
+                "Write a `*.ai.yaml` file whose `view:` is one of these kinds, then call "
+                "`show_file` on it to show it as a live view.",
+                "",
+            ]
+            lines += [f"- `{kind}`: {when}" for kind, when in views]
+        if tool_views:
+            # plan-skill-hub-history A3: a card a tool shows directly, no file.
+            lines += ["", "These tools show a live card in the chat directly:", ""]
+            lines += [f"- `{call}`: {when}" for call, when in tool_views]
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -371,6 +394,7 @@ class AppCatalog:
             # one prompt disagreeing, with nothing to raise.
             sandbox_preamble=_read_sandbox_preamble() if _SANDBOX_TOOLS & set(tools) else "",
             views=plugin_views_for(tools),
+            tool_views=tool_views_for(tools),
         )
         suggestions = list(prof.suggestions or manifest.agent.suggestions)
         name = next((p.name for p in manifest.agent.picker if p.preset == chosen), chosen)

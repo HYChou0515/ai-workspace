@@ -86,6 +86,10 @@ async def test_a_readable_item_that_lost_the_folder_gets_it_back_then_opens(harn
     assert res.json()["action"] == "open" and res.json()["item_id"] == harness.iid
     assert await harness.filestore.read(harness.iid, "/.skill/triage/references/g.md") == b"g"
     assert await harness.filestore.exists(harness.iid, "/.skill/triage/.origin")
+    # The owner getting their own folder back is not someone installing it
+    # (plan-skill-hub-history U1).
+    await hub.usage.flush()
+    assert hub.usage.totals([entry]) == {entry: (0, 0)}
 
 
 @pytest.mark.parametrize("state", list(Status))

@@ -26,6 +26,7 @@ import { missingLabel, useEnvMissing } from "../../components/PageIdentity";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { type ChatItem, ChatItemProvider } from "../../hooks/chatItem";
 import { HeaderActions, type HeaderTier, useHeaderTier } from "./HeaderActions";
 import { UsageBar } from "./UsageBar";
 import { ContextBar } from "../../components/ContextBar";
@@ -246,6 +247,12 @@ export function AgentPanel({
   const agent = agentProp ?? ctxAgent;
   if (!agent) throw new Error("AgentPanel needs an agent (prop or <AgentProvider>)");
   const { log, connection, send, mention, cancel, undo } = agent;
+  // plan-skill-hub-history A3: the item a card in this log acts on (the
+  // `show_skill_hub_entry` card's install). None for a read-only viewer.
+  const chatItem = useMemo<ChatItem | null>(
+    () => (readOnly || !slug ? null : { slug, itemId: investigationId }),
+    [readOnly, slug, investigationId],
+  );
   // A one-line answer to "I just did something and nothing happened" — the
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
@@ -773,6 +780,7 @@ export function AgentPanel({
             {chatEmptyHint(chips.length > 0)}
           </div>
         )}
+        <ChatItemProvider value={chatItem}>
         {log.entries.map((e, i) => (
           <EntryView
             key={i}
@@ -829,6 +837,7 @@ export function AgentPanel({
             fileUrl={(p) => api.fileContentUrl(slug, investigationId, p)}
           />
         ))}
+        </ChatItemProvider>
         <ConnectionNotice connection={connection} />
         <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} alive={turnAlive} />
         {log.error && (

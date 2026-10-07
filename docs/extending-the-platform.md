@@ -627,12 +627,25 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
 ### user 之間：skill hub（不經過 dev 的 git）
 
 上面三個來源都要經過 dev 的 git 才能讓別人用到;**skill hub** 是第四個來源,使用者自己填
-（設計與十個決策:[`plan-skill-hub.md`](plan-skill-hub.md)）。一個 workspace skill 在 item 裡
+（設計與十個決策:[`plan-skill-hub.md`](plan-skill-hub.md);版本歷史、回復、次數與問 AI:
+[`plan-skill-hub-history.md`](plan-skill-hub-history.md)）。一個 workspace skill 在 item 裡
 發布（Skills 面板的「發布到 skill hub」把一句話放進對話框,agent 呼叫 `publish_skill(name)`）,
 之後任何人在自己 item 的 Skills 面板「從 skill hub 裝」（或 agent 呼叫 `install_skill`）,
-它就以**副本**（`.skill/<name>/` + `.origin` 記 entry id）落地——和 package skill 的副本同一套
-機制,所以 index、`read_skill`、Refresh、「有新版」全部照舊;多出來的是上游可以**下架**
-（owner 改成 private）或**刪除**（soft），副本那一列會顯示狀態而不是壞掉。
+它就以**副本**（`.skill/<name>/` + `.origin` 記 entry id 與它來自的 commit）落地——和 package skill
+的副本同一套機制,所以 index、`read_skill`、同步全部照舊;skill hub 副本的條目換了版,那一列寫
+「skill 已變更」〔同步〕。多出來的是上游可以**下架**（owner 改成 private）或**刪除**（soft），副本那一列
+會顯示狀態而不是壞掉。
+
+- **版本存在 git**（`apps/skill_hub_git.py`）:每個條目是 `skill_hub.git_root` 底下一個 bare repo,
+  `master` = 目前版本,發布 = 新 commit 再用 push-to-self 的 `--force-with-lease` 搶 master;每個
+  revision 打 tag `r-<revision id>`。圖片、PDF、Office、壓縮檔以 LFS 格式存(固定路徑模式)。副本
+  「有沒有變」只比兩個 commit 字串;同步用 `ls-tree` 當基準,只讀要寫進副本的檔。運營方的指令
+  (大小、整理、看歷史)在 [`deployment.md`](deployment.md) §16。
+- **歷史與回復**:詳情頁「版本紀錄」每個 revision 一列;看得到這個 skill 的人能看任一版、和另一版
+  比對、〔從這一版 fork〕到自己的 item(不提示同步、不算安裝);owner 能〔回復到這一版〕——master
+  指回那個 commit,內容欄位取那一版,owner 與可見範圍維持現在的,不重新審查。
+- **次數**:Skills 面板或 `install_skill` 裝進 item 算安裝,`read_skill` 讀到 skill hub 副本算使用;
+  先在 pod 記憶體累積,每 2 小時與關機時寫進 `SkillHubUsage`。
 
 - **發布前的檢查**（`apps/skill_hub.py`）:先用 `stat_all` 量資料夾大小,超過 `SKILL_HUB_MAX_BYTES`
   （20 MiB）就擋、一個 byte 都不讀;然後才讀進來做結構性的**擋**——名字不是 `.skill/` 底下一層資料夾
@@ -650,14 +663,18 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
 - **owner 的管理都在 skill hub 詳情頁**（`/skill-hub/:id`,owner 之外的人**沒有任何按鈕**）:
   修改（回到當時發布的 item;item 已刪／已完成／進不去 → 開新 item）、下架／上架、可見範圍
   （既有的權限對話框）、轉移、刪除。
-- **三個 tool 都是薄殼**:`publish_skill` / `install_skill` 在 `TOOL_VERBS` 裡吃 `edit_content`
-  （和 `save_skill` 同）;`search_skill_hub` 只讀 hub、不碰 item,所以不在表裡。`skill-hub` 這個
-  shared skill 教 agent 什麼時候該找、該裝、該發布,以及每種回覆要對使用者說什麼;情境在
-  `sample-scenarios/skill-hub/`。
+- **四個 tool 都是薄殼**:`publish_skill` / `install_skill` 在 `TOOL_VERBS` 裡吃 `edit_content`
+  （和 `save_skill` 同）;`search_skill_hub`(每筆多回次數、這個 item 是否已裝、最後更新日、審查意見)
+  與 `show_skill_hub_entry`(在聊天裡畫一張可以按安裝的卡片,列在 `## Available views`)讀的是 skill hub,
+  所以不在表裡;`search_skill_hub` 判斷「這個 item 已裝」要讀 item 的 `.skill/`,那一步自己檢查 `read_content`。`skill-hub` 這個 shared skill 教 agent 什麼時候該找、該推薦、該裝、該發布,
+  以及每種回覆要對使用者說什麼;情境在 `sample-scenarios/skill-hub/`。
 - **路由**:`GET /skill-hub/entries`（`q` / `mine` / `app` 給差集）、`GET /skill-hub/entries/{id}`、
   `POST /a/{slug}/items/{id}/skills/install`（面板的門,和 tool 共用同一個核心與同一個拒絕事實——tool 給模型英文句,路由給前端 code,前端翻成使用者的語言）,
-  以及 owner 限定的 `unpublish` / `republish` / `permission` / `transfer` / `edit` / `DELETE`。
-  hub 條目本身沒有 auto-CRUD route——寫入只能走會先審查的 tool。
+  `POST /a/{slug}/items/{id}/skills/fork`(從某一版 fork)、讀者的 `history` / `versions/{revision}` /
+  `versions/{revision}/file` / `diff`,owner 限定的 `unpublish` / `republish` / `permission` / `transfer` /
+  `edit` / `rollback` / `DELETE`,以及 superuser 的 `POST /admin/skill-hub/migrate`。
+  skill hub 條目本身沒有 auto-CRUD route:新版本只能走會先審查的 `publish_skill`;其餘寫入是上面那些路由
+  (回復帶回的是當初已經審過的版本,G20)。
 
 ### 調校 skill 的 guidance（第二方）
 
