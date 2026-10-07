@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from ..resources.conversation import Citation
     from ..resources.conversation_todos import TodoItem
     from ..resources.kb import RetrievedPassage
+    from ..tooling.external import MountedTool
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
     from ..workflow.user_schedules import SchedulePolicy
@@ -151,6 +152,10 @@ class AgentToolContext:
     files: WorkspaceFiles | None = None
     sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
+    #: plan-tool-running-version: the release each of `sandbox_spec.tools` is,
+    #: from the SAME resolve (`ExternalTools.versions()`), so a sandbox this ctx
+    #: creates records which version it mounted, not only which sha.
+    tool_versions: dict[str, str] = field(default_factory=dict)
     # The environment variables this turn's tools are given, already resolved.
     # Two sources are merged here by `TurnContextBuilder`: the item's own
     # `WorkItemBase.env_vars` (#673 — one shared copy, every participant can read
@@ -175,14 +180,14 @@ class AgentToolContext:
     # wake's snapshot restore can stream (done, total) back to the turn. Callers
     # that don't care (tests) accept it and ignore it.
     #
-    # #674: and this turn's third-party bundles, `{name: sha}`, because the hook
-    # owner (the registry) builds the spec from the ITEM and cannot know what
-    # this turn resolved. It is a parameter rather than something the hook reads
-    # off the ctx so that the two create paths below cannot drift: whichever one
-    # runs, the bundles mounted are `sandbox_spec.tools`.
+    # #674: and this turn's third-party bundles, `{name: MountedTool}` (sha +
+    # release), because the hook owner (the registry) builds the spec from the
+    # ITEM and cannot know what this turn resolved. It is a parameter rather than
+    # something the hook reads off the ctx so that the two create paths below
+    # cannot drift: whichever one runs, the bundles mounted are `_mounts()`.
     ensure_sandbox_via: (
         Callable[
-            [Callable[[int, int], None] | None, dict[str, str] | None],
+            [Callable[[int, int], None] | None, dict[str, MountedTool] | None],
             Awaitable[SandboxHandle],
         ]
         | None
@@ -199,7 +204,9 @@ class AgentToolContext:
     #: None ⇒ not wired (tests, any context with no registry): the fallback is
     #: to clear the local handle and wake normally, which is right for a backend
     #: whose handles are minted per create.
-    rebuild_sandbox_via: Callable[[dict[str, str] | None], Awaitable[SandboxHandle]] | None = None
+    rebuild_sandbox_via: (
+        Callable[[dict[str, MountedTool] | None], Awaitable[SandboxHandle]] | None
+    ) = None
     # The investigation's attached AgentConfig (model + prompt) for this
     # turn; when set, LitellmAgentRunner uses it instead of its default.
     agent_config: AgentConfig | None = None
@@ -677,6 +684,19 @@ class AgentToolContext:
             self._speaker_groups = groups_of(self.spec, self.acting_user)
         return self._speaker_groups
 
+    def _mounts(self) -> dict[str, MountedTool] | None:
+        """`sandbox_spec.tools` with the release each sha is. `None` stays
+        `None`: it means "this wake says nothing — ask the item", which an
+        empty map ("mount nothing") must not be confused with."""
+        from ..tooling.external import MountedTool
+
+        shas = self.sandbox_spec.tools
+        if shas is None:
+            return None
+        return {
+            n: MountedTool(sha=s, version=self.tool_versions.get(n, "")) for n, s in shas.items()
+        }
+
     async def ensure_sandbox(
         self, *, prepare_env: bool = True, rebuild: bool = False
     ) -> SandboxHandle:
@@ -714,7 +734,7 @@ class AgentToolContext:
                 self._project_env_ready = False
             if self.handle is None:
                 if rebuild and self.rebuild_sandbox_via is not None:
-                    self.handle = await self.rebuild_sandbox_via(self.sandbox_spec.tools)
+                    self.handle = await self.rebuild_sandbox_via(self._mounts())
                 elif self.ensure_sandbox_via is not None:
                     # #492 P11: hand the wake hook the restore-progress sink so a slow
                     # cold-wake restore streams "還原中 N/M" to the turn.
@@ -723,7 +743,7 @@ class AgentToolContext:
                     # (rather than passing them in separately) is what keeps this
                     # branch and the one below mounting the same thing.
                     self.handle = await self.ensure_sandbox_via(
-                        self.on_restore_progress, self.sandbox_spec.tools
+                        self.on_restore_progress, self._mounts()
                     )
                 else:
                     self.handle = await self.sandbox.create(self.sandbox_spec)

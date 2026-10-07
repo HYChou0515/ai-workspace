@@ -771,6 +771,7 @@ class TurnContextBuilder:
             # `create`, so the sandbox mounts the very shas whose schemas the
             # model was handed a moment ago.
             sandbox_spec=SandboxSpec(tools=external.shas),
+            tool_versions=external.versions(),
             # The item's user env, read fresh per turn — which is what makes an
             # edit between turns take effect. NOT folded into `sandbox_spec`:
             # that is create-time infra env, and the launcher's own exports run

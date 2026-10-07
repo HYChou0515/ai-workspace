@@ -63,7 +63,7 @@ from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
-from ..tooling.external import ExternalTools, prewarm_external_tools
+from ..tooling.external import ExternalTools, MountedTool, prewarm_external_tools
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
@@ -2154,14 +2154,14 @@ def create_app(
     # wirings below. A sandbox mounts once, at create, so a turn-less wake that
     # mounted nothing would silently cost the item its tools until that sandbox
     # is recycled.
-    async def _item_tool_shas(item_id: str) -> dict[str, str]:
+    async def _item_tool_mounts(item_id: str) -> dict[str, MountedTool]:
         return (
             await resolve_item_tools(
                 sandbox, locator, item_id, plugin_artifacts=artifact_plugins(view_plugins)
             )
-        ).shas
+        ).mounts()
 
-    registry.tools_for = _item_tool_shas
+    registry.tools_for = _item_tool_mounts
 
     mention_svc = MentionService(spec=spec, locator=locator)
 

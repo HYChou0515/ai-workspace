@@ -16,6 +16,7 @@ from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.api.turn_context import TurnContextBuilder
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
+from workspace_app.tooling.external import MountedTool
 
 
 class _Session:
@@ -249,8 +250,10 @@ async def test_a_sandbox_woken_without_a_turn_still_mounts_the_items_tools() -> 
     sandbox = _RecordingSandbox()
     shas = {"wafer-history": "a" * 64}
 
-    async def declared(_item_id: str) -> dict[str, str]:
-        return dict(shas)
+    mounts = {"wafer-history": MountedTool(sha="a" * 64, version="1.2")}
+
+    async def declared(_item_id: str) -> dict[str, MountedTool]:
+        return dict(mounts)
 
     registry = InvestigationRegistry(
         sandbox=sandbox,
@@ -264,7 +267,7 @@ async def test_a_sandbox_woken_without_a_turn_still_mounts_the_items_tools() -> 
     await registry.ensure_handle(session)
 
     assert sandbox.specs[-1].tools == shas, "a turn-less wake mounted no tools"
-    assert session.tools == shas
+    assert session.tools == mounts
     assert sandbox.specs[-1].cpu_cores == 2.0
 
 
@@ -274,9 +277,9 @@ async def test_a_turn_that_states_its_tools_is_not_second_guessed() -> None:
     sandbox = _RecordingSandbox()
     asked: list[str] = []
 
-    async def declared(item_id: str) -> dict[str, str]:
+    async def declared(item_id: str) -> dict[str, MountedTool]:
         asked.append(item_id)
-        return {"surprise": "b" * 64}
+        return {"surprise": MountedTool(sha="b" * 64, version="9")}
 
     registry = InvestigationRegistry(sandbox=sandbox, tools_for=declared)
     session = await registry.session("item-1")

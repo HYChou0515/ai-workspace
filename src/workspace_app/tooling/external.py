@@ -88,6 +88,10 @@ class ExternalTools:
     `shas`, and always the same set: a tool that is going to be mounted is a
     tool something eventually has to be able to describe."""
 
+    def versions(self) -> dict[str, str]:
+        """`{name: release}` for `shas`, from this same answer."""
+        return {name: p.version for name, p in self.provenance.items() if name in self.shas}
+
     def mounts(self) -> dict[str, MountedTool]:
         """What a sandbox created from THIS resolve mounts: each sha with the
         version the same answer gave it, so the record cannot pair a sha with

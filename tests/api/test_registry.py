@@ -2007,3 +2007,87 @@ async def test_one_item_prepares_its_environment_once_at_a_time():
         await asyncio.gather(*(registry.prepare_project_env(session, handle) for _ in range(8)))
 
     assert peak == 1, f"eight callers, one item, one directory: peaked at {peak}"
+
+
+# ── plan-tool-running-version P2: the registry records and reports what a sandbox mounted ──
+
+from workspace_app.tooling.external import MountedTool  # noqa: E402
+
+_V1 = {"t": MountedTool(sha="s1", version="1.0")}
+_V2 = {"t": MountedTool(sha="s2", version="2.0")}
+
+
+class _SpecRecordingSandbox(_HttpStyleSandbox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.specs: list[dict[str, str] | None] = []
+
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        self.specs.append(spec.tools)
+        return await super().create(spec, sandbox_id)
+
+
+def _shared_pods(n: int = 2):
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _SpecRecordingSandbox()
+    return sandbox, addr, [InvestigationRegistry(sandbox=sandbox, address=addr) for _ in range(n)]
+
+
+async def test_a_turns_create_mounts_the_shas_and_records_the_versions_on_the_address():
+    sandbox, addr, (a,) = _shared_pods(1)
+    await a.ensure_handle(await a.session("it"), tools=_V1)
+    assert sandbox.specs == [{"t": "s1"}]  # the host still receives {name: sha}
+    assert await addr.mounted("it") == _V1
+    assert (await a.session("it")).tools == _V1
+
+
+async def test_a_wake_with_no_turn_records_what_the_item_declares():
+    sandbox, addr, (a,) = _shared_pods(1)
+
+    async def declared(item: str) -> dict[str, MountedTool]:
+        return _V2
+
+    a.tools_for = declared
+    await a.rebuild_io_handle("it")
+    assert sandbox.specs == [{"t": "s2"}]
+    assert await addr.mounted("it") == _V2
+
+
+async def test_a_pod_converging_on_a_peers_sandbox_learns_what_it_mounted():
+    # Before: `None` (unknown) — so only the pod that built a sandbox could ever
+    # say which release is in it.
+    _, _, (a, b) = _shared_pods()
+    await a.ensure_handle(await a.session("it"), tools=_V1)
+    await b.ensure_handle(await b.session("it"), tools=_V2)
+    assert (await b.session("it")).tools == _V1
+
+
+async def test_mounted_tools_answers_on_any_pod_while_the_sandbox_lives():
+    sandbox, _, (a, b) = _shared_pods()
+    h = await a.ensure_handle(await a.session("it"), tools=_V1)
+    assert await a.mounted_tools("it") == _V1  # the pod that built it
+    assert await b.mounted_tools("it") == _V1  # a pod with no session of its own
+    await sandbox.kill(h)  # the host reaped it
+    # The next sandbox is built from the latest resolve, so a dead one's mounts
+    # describe nothing that will run.
+    assert await b.mounted_tools("it") is None
+
+
+async def test_mounted_tools_is_unknown_with_no_sandbox_at_all():
+    _, _, (a,) = _shared_pods(1)
+    assert await a.mounted_tools("it") is None
+
+
+async def test_close_then_a_turn_records_the_new_release():
+    _, addr, (a, b) = _shared_pods()
+    await a.ensure_handle(await a.session("it"), tools=_V1)
+    await b.close_session("it")
+    await a.ensure_handle(await a.session("it"), tools=_V2)
+    assert await addr.mounted("it") == _V2
+    assert await b.mounted_tools("it") == _V2
