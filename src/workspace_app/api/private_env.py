@@ -76,6 +76,21 @@ class PrivateSeam(Struct):
     names: list[str] = []
 
 
+class PersonalEnv(Struct):
+    """A person's values for EVERY item — "my environment variables"
+    (`docs/plan-personal-env.md`). One row per person, keyed by them alone. An
+    item uses a name from here only when its policy asks for a personal value
+    (Private first / Private only), so a token set here does not reach the
+    tools of an item that never asked for it."""
+
+    user_id: str
+    values: dict[str, str]
+    #: When each name was last given a NEW value (epoch ms): the page shows
+    #: "signed in 3 days ago", which a rewrite of the whole row must not reset.
+    updated: dict[str, int]
+    names: list[str] = []
+
+
 #: specstar ids cannot hold `/`; U+2215 is what `wui_deploy` uses in its place.
 #: Both halves are percent-quoted, which turns a U+2215 inside either into
 #: `%E2%88%95`, so the one bare separator is unambiguous.
@@ -90,6 +105,8 @@ def register_private_env(spec: SpecStar) -> None:
     for model in (PrivateEnv, PrivateSeam):
         with contextlib.suppress(ValueError):
             spec.add_model(model, indexed_fields=["item_id"])
+    with contextlib.suppress(ValueError):
+        spec.add_model(PersonalEnv)
 
 
 class PrivateEnvStore:
@@ -187,6 +204,58 @@ class PrivateEnvStore:
                     private_env_id(user_id, item_id)
                 )
 
+    # ── my environment variables (`docs/plan-personal-env.md`) ───────────────
+
+    def _personal_row(self, user_id: str) -> PersonalEnv | None:
+        try:
+            data = self._spec.get_resource_manager(PersonalEnv).get(quote(user_id, safe="")).data
+        except ResourceIDNotFoundError:
+            return None
+        assert isinstance(data, PersonalEnv)
+        return data
+
+    def personal(self, user_id: str) -> dict[str, str]:
+        """The person's values for every item, in the order they were given."""
+        row = self._personal_row(user_id)
+        if row is None:
+            return {}
+        ordered = [n for n in row.names if n in row.values]
+        rest = [n for n in row.values if n not in ordered]
+        return {n: row.values[n] for n in [*ordered, *rest]}
+
+    def personal_updated(self, user_id: str) -> dict[str, int]:
+        row = self._personal_row(user_id)
+        return {} if row is None else {n: row.updated[n] for n in row.values if n in row.updated}
+
+    def replace_personal(self, user_id: str, values: dict[str, str]) -> None:
+        """The whole row, written the way the per-item rows are: one replace,
+        then the older revisions pruned, so a rotated token leaves nothing
+        readable behind. A name keeps its time unless its value changed."""
+        rm = self._spec.get_resource_manager(PersonalEnv)
+        rid = quote(user_id, safe="")
+        if not values:
+            with contextlib.suppress(ResourceIDNotFoundError):
+                rm.permanently_delete(rid)
+            return
+        before = self._personal_row(user_id)
+        now = self._now()
+        updated = {
+            n: before.updated[n]
+            if before is not None and before.values.get(n) == v and n in before.updated
+            else now
+            for n, v in values.items()
+        }
+        row = PersonalEnv(user_id=user_id, values=values, updated=updated, names=list(values))
+        try:
+            rm.update(rid, row)
+        except ResourceIDNotFoundError:
+            try:
+                rm.create(row, resource_id=rid)
+            except DuplicateResourceError:  # a concurrent first write got there
+                rm.update(rid, row)
+        with contextlib.suppress(ResourceIDNotFoundError):
+            rm.prune_revisions(rid, keep_last_n=1)
+
     def purge_item(self, item_id: str) -> None:
         """Every person's rows for one item, permanently — the item-delete
         cascade's step. Nobody else could reach these rows to remove them."""
@@ -281,6 +350,12 @@ class ItemLayers(BaseModel):
     policy: dict[str, str]
 
 
+class PersonalOut(BaseModel):
+    values: dict[str, str]
+    #: When each name last got a new value (epoch ms).
+    updated: dict[str, int]
+
+
 def register_private_env_routes(
     app: FastAPI | APIRouter,
     *,
@@ -317,4 +392,26 @@ def register_private_env_routes(
         and someone who has lost access must still be able to take their
         credential back out."""
         await asyncio.to_thread(store.clear, get_user_id(), item_id)
+        return Response(status_code=204)
+
+    # My environment variables: no item, no user parameter — always the caller's.
+
+    async def _personal_out(me: str) -> PersonalOut:
+        values = await asyncio.to_thread(store.personal, me)
+        updated = await asyncio.to_thread(store.personal_updated, me)
+        return PersonalOut(values=values, updated=updated)
+
+    @app.get("/me/env", response_model=PersonalOut)
+    async def get_personal_env() -> PersonalOut:
+        return await _personal_out(get_user_id())
+
+    @app.put("/me/env", response_model=PersonalOut)
+    async def put_personal_env(body: PrivateValues) -> PersonalOut:
+        me = get_user_id()
+        await asyncio.to_thread(store.replace_personal, me, dict(body.values))
+        return await _personal_out(me)
+
+    @app.delete("/me/env", status_code=204)
+    async def delete_personal_env() -> Response:
+        await asyncio.to_thread(store.replace_personal, get_user_id(), {})
         return Response(status_code=204)
