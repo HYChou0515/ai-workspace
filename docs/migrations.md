@@ -1628,10 +1628,10 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 一個變數只有在 item 把它的提供方式設成 **Private first** 或 **Private only** 時，才會拿到這裡的值；設成
   Shared 或沒設的 item 拿不到。某個 item 裡另外填的值仍然優先。
 - **item 的環境變數面板改成三個分頁**：原本的「所有參與者」改名 **Shared**、「只有我」改名 **Private**（仍是預設打開的那個），
-  另外多一個 **Private(跨workspace)**：就是「我的環境變數」，列出這個 item 的工具要的、以及這個 item 設成 Private 的名稱。
-  分頁畫成底線式（和分享視窗同一個元件），三個分頁都有可展開的 `.env` 文字框（貼上、匯入、匯出）。
+  另外多一個 **Private(跨workspace)**：就是「我的環境變數」，列出這個 item 的工具要的、以及這個 item 設成 Private first／Private only 的名稱。
+  分頁畫成底線式（和分享視窗同一個元件），三個分頁都有可展開的 `.env` 文字框（貼上、匯入、匯出；Private 兩個分頁的框不保留註解）。
 - 面板與「我的環境變數」頁的文字統一說 **workspace**（原本混用 item、工作區）；「使用中」直接寫分頁名，例如「使用中：Shared」。
-- 「清除我在這個 workspace 的值」與「我的環境變數」頁的「移除」改成紅色，按下去先問一次，確認了才刪。
+- 「清除我在這個 workspace 的值」改成紅色、沒有值時不能按；它和「我的環境變數」頁的「移除」按下去都先問一次，確認鈕是紅色，確認了才刪。
 - **在哪個分頁登入（部署設定的 `server.env_providers`）或填值，就寫進哪一層：**
   - 「我的環境變數」頁、「Private(跨workspace)」分頁 → 登入**立刻存進「我的環境變數」**，所有把那個變數設成
     Private first／Private only 的 item 都用它。
@@ -1665,7 +1665,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值）。不帶 header 時，身分是部署給「沒帶身分的請求」的那個
     （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。被拒絕（HTTP 403，不在 superusers
     或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後馬上再跑會是 0 筆。
-  - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
+  - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private first／Private only 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
     「Private」分頁會顯示「使用中：Private」。不清也可以讓使用者自己在那個 workspace 按「清除我在這個 workspace 的值」。
 
 **k8s · CI 側** — 沒有新的 manifest、probe、env、JobType。
@@ -1674,7 +1674,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 - 打開 `/my-env`：新增一個值，列表出現、值是遮蔽的、標示「今天設定」。
 - 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「Private」分頁那一列顯示
-  「使用中：Private(跨workspace)」；在 Private 分頁另外填值後變成「使用中：Private」。
+  「✓ 使用中：Private(跨workspace)」（在 `/my-env` 新增的值要和那個變數同名）；在 Private 分頁另外填值後變成「✓ 使用中：Private」。
 - 「清除我在這個 workspace 的值」是紅色，按下去先跳確認，按「取消」值還在。
 - 部署有 `server.env_providers` 時：在「Private(跨workspace)」分頁登入一次，`GET /api/me/env` 裡出現那個變數；在「Private」
   分頁登入，值出現在表單裡、按儲存後只存進這個 item，`/api/me/env` 不變。

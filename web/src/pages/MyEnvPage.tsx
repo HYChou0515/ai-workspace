@@ -226,7 +226,9 @@ function Row({
         <button
           type="button"
           className="btn"
-          data-variant="danger"
+          // Not red here: a red button on every row is N warning buttons
+          // (GOV.UK "use sparingly"); the red one is the confirm's (A22).
+          data-variant="secondary"
           data-size="sm"
           data-testid="my-env-remove"
           onClick={onRemove}

@@ -1041,14 +1041,14 @@ export const messages = {
   // `plan-personal-env`: a person's values for every item.
   "myEnv.title": { "zh-TW": "我的環境變數", en: "My environment variables" },
   "myEnv.heading": { "zh-TW": "我的環境變數", en: "My environment variables" },
-  "myEnv.desc": { "zh-TW": "你在所有 workspace 共用的值，只有你看得到。登入過期時，在這裡重新登入一次就好。", en: "Your values shared by all your workspaces. Only you can see them. When a sign-in expires, sign in again here, once." },
+  "myEnv.desc": { "zh-TW": "你在所有 workspace 共用的值，只有你看得到。登入過期時，在這裡重新登入。", en: "Your values shared by all your workspaces. Only you can see them. When a sign-in expires, sign in again here." },
   "myEnv.values": { "zh-TW": "值", en: "Values" },
   "myEnv.loadFailed": {
-    "zh-TW": "讀不到你的值,請重新整理再試一次。",
+    "zh-TW": "讀不到你的值，請重新整理再試一次。",
     en: "Couldn't load your values. Reload to try again.",
   },
   "myEnv.empty": {
-    "zh-TW": "還沒有值。登入下面的系統,或自己新增一個。",
+    "zh-TW": "還沒有值。登入下面的系統，或自己新增一個。",
     en: "Nothing yet. Sign in to a system below, or add a value yourself.",
   },
   "myEnv.name": { "zh-TW": "變數名稱", en: "Variable name" },
@@ -1699,11 +1699,11 @@ export const messages = {
   "env.tab.shared": { "zh-TW": "Shared", en: "Shared" },
   "env.tab.mine": { "zh-TW": "Private", en: "Private" },
   "env.tab.personal": { "zh-TW": "Private(跨workspace)", en: "Private (all workspaces)" },
-  "env.personalDesc": { "zh-TW": "你在所有 workspace 共用的值", en: "Your values shared by all your workspaces" },
+  "env.personalDesc": { "zh-TW": "你在所有 workspace 共用的值 （{link}）", en: "Your values shared by all your workspaces ({link})" },
   "env.personalPage": { "zh-TW": "前往我的環境變數設定", en: "set them in My environment variables" },
   "env.personalNone": { "zh-TW": "這個 workspace 的工具沒有要你填的變數。", en: "This workspace's tools don't ask you for any variable." },
   "env.signInNotSaved": {
-    "zh-TW": "登入成功,但值沒有存進去。請再試一次。",
+    "zh-TW": "登入成功，但值沒有存進去。請再試一次。",
     en: "Signed in, but the value wasn't saved. Try again.",
   },
   "env.mineDesc": { "zh-TW": "你在這個 workspace 的值", en: "Your values for this workspace" },
@@ -1717,14 +1717,11 @@ export const messages = {
   "env.policy.private_first": { "zh-TW": "Private first", en: "Private first" },
   "env.policy.private_only": { "zh-TW": "Private only", en: "Private only" },
   "env.policyLabel": { "zh-TW": "{name} 由誰提供", en: "Who provides {name}" },
-  "env.sharedUnused": {
-    "zh-TW": "共用值不會被使用",
-    en: "The shared value is not used",
-  },
+  "env.sharedUnused": { "zh-TW": "這裡的值不會被使用", en: "This value isn't used" },
   "env.addPrivate": { "zh-TW": "+ 加一個由各人自己填的變數", en: "+ Add a variable each person fills in" },
   "env.addPrivateName": { "zh-TW": "變數名稱", en: "Variable name" },
   "env.editAsText": {
-    "zh-TW": "用 .env 文字編輯(貼上、匯入、匯出)",
+    "zh-TW": "用 .env 文字編輯（貼上、匯入、匯出）",
     en: "Edit as .env text (paste, import, export)",
   },
   // Private-tab rows: whose value a tool gets, and why this row looks as it does.
@@ -1734,10 +1731,7 @@ export const messages = {
   "env.pinned": { "zh-TW": "固定用 Shared", en: "Always uses Shared" },
   // Written by the deploy from the person's own request (their SSO session):
   // rewritten at every request, so there is nothing to type.
-  "env.hint.auto": {
-    "zh-TW": "由你的登入狀態自動帶入",
-    en: "Filled in automatically from your sign-in",
-  },
+  "env.hint.auto": { "zh-TW": "登入時自動填入", en: "Filled in automatically when you sign in" },
   "env.reveal": { "zh-TW": "顯示", en: "Show" },
   "env.hide": { "zh-TW": "隱藏", en: "Hide" },
   // Clears what the person KEEPS; what their sign-in fills in comes back at
@@ -1745,7 +1739,7 @@ export const messages = {
   // Clears this item's values only — my environment variables are cleared on
   // their own page (`plan-personal-env`, round 1).
   "env.clearTitle": { "zh-TW": "清除你在這個 workspace 的值？", en: "Clear your values for this workspace?" },
-  "env.clearBody": { "zh-TW": "你在 Private 分頁的值都會刪掉，無法復原。要再用，得重新填或重新登入。", en: "Your values on the Private tab are deleted and can't be restored. To use them again, type them or sign in again." },
+  "env.clearBody": { "zh-TW": "你在 Private 分頁自己填的、登入取得的值都會刪掉，無法復原。要再用，得重新填或重新登入。", en: "What you typed or signed in for on the Private tab is deleted and can't be restored. To use it again, type it or sign in again." },
   "env.clearConfirm": { "zh-TW": "清除", en: "Clear" },
   "env.logout": { "zh-TW": "清除我在這個 workspace 的值", en: "Clear my values for this workspace" },
   // The `/w/` page's platform bar (`plan-wui-viewer-login` Q11): WHAT to do,
@@ -1786,7 +1780,7 @@ export const messages = {
     en: "Could not change it: {why}",
   },
   "env.mineFailed": {
-    "zh-TW": "讀不到你的值,請稍後再試。",
+    "zh-TW": "讀不到你的值，請稍後再試。",
     en: "Could not load your values. Try again in a moment.",
   },
   // Says what the button will FILL, beside it. Two systems can look alike,
@@ -1802,15 +1796,15 @@ export const messages = {
   // what to do, never a status code — the person did not make an HTTP request,
   // they pressed a button.
   "env.providerFailed": {
-    "zh-TW": "取得失敗,請確認輸入的內容後再試一次。",
+    "zh-TW": "取得失敗，請確認輸入的內容後再試一次。",
     en: "Could not fetch those values. Check what you entered and try again.",
   },
   "env.providerValueTooComplex": {
-    "zh-TW": "{names} 的內容含有換行,這個面板存不了。請改用其他方式設定它。",
+    "zh-TW": "{names} 的內容含有換行，這個面板存不了。請改用其他方式設定它。",
     en: "{names} came back with line breaks, which this panel cannot store. Set it another way.",
   },
   "env.stillMissing": {
-    "zh-TW": "還沒填:{names}",
+    "zh-TW": "還沒填：{names}",
     en: "Not filled yet: {names}",
   },
   // Deliberately NOT "you are all set". What is true is narrower: every

@@ -44,7 +44,7 @@
  * from the one person who may edit them and from nobody else.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
@@ -135,25 +135,19 @@ export function EnvVarsModal({
     enabled: hasItem,
   });
   const personal = personalQ.data?.values ?? {};
-  // The cross-workspace tab, like Shared: its `.env` box is the one copy, and
-  // every field edits it. A save writes only what differs from `personalBase`
-  // — what the box was seeded from — so a value saved elsewhere meanwhile
-  // survives (round 1, F2).
-  const [personalText, setPersonalText] = useState<string | null>(null);
-  const [personalBase, setPersonalBase] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (personalQ.data && personalText === null) {
-      setPersonalText(toEnvText(personalQ.data.values));
-      setPersonalBase({ ...personalQ.data.values });
-    }
-  }, [personalQ.data, personalText]);
-  const personalValues = personalText === null ? {} : parseEnvText(personalText);
-  const personalChange = () => {
-    const change: Record<string, string> = {};
-    for (const [n, v] of Object.entries(personalValues)) if (personalBase[n] !== v) change[n] = v;
-    for (const n of Object.keys(personalBase)) if (!(n in personalValues)) change[n] = "";
-    return change;
-  };
+  // Only the names edited on the cross-workspace tab, "" = remove: the rest of
+  // the row is the server's, so a save writes these and nothing it did not
+  // touch, onto a fresh read (round 1, F2). The values are the one copy —
+  // NOT the `.env` text, which trims and cannot hold a line break (review
+  // A22: making the text the copy ate typed spaces and rewrote stored values).
+  const [personalEdits, setPersonalEdits] = useState<Record<string, string>>({});
+  const personalValues = Object.fromEntries(
+    Object.entries({ ...personal, ...personalEdits }).filter(([, v]) => v !== ""),
+  );
+  // A name edited back to what is stored, or cleared when nothing is, changes
+  // nothing.
+  const personalChange = () =>
+    Object.fromEntries(Object.entries(personalEdits).filter(([n, v]) => v !== (personal[n] ?? "")));
 
   // ── the SHARED layer: the box's text is the one copy of the values ────────
   const [text, setText] = useState(() => toEnvText(envVars));
@@ -171,25 +165,24 @@ export function EnvVarsModal({
     });
 
   // ── the PRIVATE layer ─────────────────────────────────────────────────────
-  // Like Shared, the `.env` box's text is the one copy (A22). Seeded once from
-  // the server; afterwards it is what the person is editing, and a background
-  // refetch must not overwrite it.
-  const [mineText, setMineText] = useState<string | null>(null);
-  useEffect(() => {
-    if (mineQ.data && mineText === null) setMineText(toEnvText(mineQ.data.values));
-  }, [mineQ.data, mineText]);
-  const mineValues = mineText === null ? {} : parseEnvText(mineText);
-  const setMineVars = (env: Record<string, string>) =>
-    setMineText((prev) => Object.entries(env).reduce((acc, [n, v]) => setEnvValue(acc, n, v), prev ?? ""));
+  // The same shape as the cross-workspace tab: only the names edited here
+  // ("" = cleared), laid over what the server holds. Nothing is seeded, so
+  // nothing can be lost between the read landing and a seed applying — a
+  // sign-in before the read, then Save in that instant, sent the sign-in
+  // alone as the whole set (review A22). The `.env` box edits these values;
+  // it is not their copy (it trims and cannot hold a line break).
+  const [mineEdits, setMineEdits] = useState<Record<string, string>>({});
+  const mineServer = mineQ.data?.values ?? {};
+  const mineValues = { ...mineServer, ...mineEdits };
+  const setMineVars = (env: Record<string, string>) => setMineEdits((prev) => ({ ...prev, ...env }));
   // What the deploy filled in at their last request — shown, not editable, and
   // it wins a name (the server's `unattended_layer` / `private_layer`).
   const auto = mineQ.data?.auto ?? {};
 
   const [creds, setCreds] = useState<Record<string, string>>({});
   const sharedDirty = text !== toEnvText(envVars) || !sameShape(policy, envPolicy);
-  const mineDirty =
-    mineText !== null && mineQ.data !== undefined && !sameShape(mineValues, mineQ.data.values);
-  const personalDirty = personalText !== null && Object.keys(personalChange()).length > 0;
+  const mineDirty = Object.entries(mineEdits).some(([n, v]) => v !== (mineServer[n] ?? ""));
+  const personalDirty = Object.keys(personalChange()).length > 0;
   const dirty =
     sharedDirty || mineDirty || personalDirty || Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
@@ -201,7 +194,7 @@ export function EnvVarsModal({
   // variables", then jumps under its tool, and a section unfolded for a missing
   // value folds again the moment the person's own value loads.
   const toolsSettled = !hasItem || toolsQ.isSuccess || toolsQ.isError;
-  const mineSettled = !hasItem || mineText !== null || mineQ.isError;
+  const mineSettled = !hasItem || mineQ.isSuccess || mineQ.isError;
 
   /** After one tab saves: close only if no OTHER tab has anything unsaved;
    * otherwise stay, on the first that does (#779 — a Save is a deliberate exit,
@@ -223,7 +216,7 @@ export function EnvVarsModal({
       return kept;
     },
     onSuccess: async (kept) => {
-      setMineText(toEnvText(kept));
+      setMineEdits({});
       queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: kept, auto });
       afterSave("mine");
     },
@@ -259,8 +252,7 @@ export function EnvVarsModal({
       queryClient.setQueryData(qk.personalEnv(), saved);
       // Stored: shown, and no longer an unsaved edit — whatever was typed for
       // those names before.
-      setPersonalText((prev) => Object.entries(env).reduce((acc, [n, v]) => setEnvValue(acc, n, v), prev ?? ""));
-      setPersonalBase((prev) => ({ ...prev, ...env }));
+      setPersonalEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([n]) => !(n in env))));
     },
   });
   const savePersonal = useMutation({
@@ -268,15 +260,14 @@ export function EnvVarsModal({
     mutationFn: () => writePersonal(personalChange()),
     onSuccess: (saved) => {
       queryClient.setQueryData(qk.personalEnv(), saved);
-      setPersonalText(toEnvText(saved.values));
-      setPersonalBase({ ...saved.values });
+      setPersonalEdits({});
       afterSave("personal");
     },
   });
   const logout = useMutation({
     mutationFn: () => privateClient.clear(slug!, itemId!),
     onSuccess: async () => {
-      setMineText("");
+      setMineEdits({});
       await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
     },
   });
@@ -384,9 +375,17 @@ export function EnvVarsModal({
             values={personalValues}
             failed={personalQ.isError}
             saving={savePersonal.isPending}
-            onEdit={(name, value) => setPersonalText((prev) => setEnvValue(prev ?? "", name, value))}
-            text={personalText ?? ""}
-            setText={setPersonalText}
+            onEdit={(name, value) => setPersonalEdits((prev) => ({ ...prev, [name]: value }))}
+            // The box replaces the whole layer: a name taken out of it is removed.
+            onReplace={(next) =>
+              setPersonalEdits(
+                Object.fromEntries([
+                  ...Object.keys({ ...personal, ...personalEdits }).map((n) => [n, ""] as const),
+                  ...Object.entries(next),
+                ]),
+              )
+            }
+            ready={personalQ.isSuccess}
             login={
               <Logins
                 offered={offered}
@@ -411,8 +410,17 @@ export function EnvVarsModal({
             personal={personal}
             failed={mineQ.isError}
             setMine={(name, value) => setMineVars({ [name]: value })}
-            text={mineText ?? ""}
-            setText={setMineText}
+            // The box replaces the whole layer: a name taken out of it is cleared.
+            onReplace={(next) =>
+              setMineEdits(
+                Object.fromEntries([
+                  ...Object.keys(mineValues).map((n) => [n, ""] as const),
+                  ...Object.entries(next),
+                ]),
+              )
+            }
+            // Not before the read: typing here would become the whole set.
+            ready={mineQ.isSuccess}
             login={
               <Logins
                 offered={offered}
@@ -495,6 +503,8 @@ export function EnvVarsModal({
               data-size="sm"
               data-testid="env-mine-logout"
               style={{ marginRight: "auto" }}
+              // Nothing of mine stored here: nothing to clear (review A22).
+              disabled={Object.keys(mineQ.data?.values ?? {}).length === 0 && Object.keys(auto).length === 0}
               onClick={() => void askToClear()}
             >
               {t("env.logout")}
@@ -516,7 +526,7 @@ export function EnvVarsModal({
               data-testid="env-mine-save"
               // Not until the person's values have loaded: Save replaces the
               // whole set, and saving over a failed read erased it (F5).
-              disabled={mineText === null || saveMine.isPending}
+              disabled={!mineQ.isSuccess || saveMine.isPending}
               onClick={() => saveMine.mutate()}
             >
               {t("env.save")}
@@ -898,6 +908,38 @@ function EnvTextBox({
   );
 }
 
+/** The private tabs' `.env` box: an editor OF the tab's values, not their
+ * copy. It shows them as text; what is typed in it replaces the tab's values
+ * with what parses. While it is being typed in, the typed text stays as typed;
+ * otherwise it follows the fields. Comments are not kept (the Shared box,
+ * which IS its layer's copy, keeps them). */
+function DerivedEnvBox({
+  prefix,
+  values,
+  onReplace,
+  readOnly,
+}: {
+  prefix: string;
+  values: Record<string, string>;
+  onReplace: (next: Record<string, string>) => void;
+  readOnly: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <div onBlur={() => setDraft(null)}>
+      <EnvTextBox
+        prefix={prefix}
+        text={draft ?? toEnvText(values)}
+        setText={(next) => {
+          setDraft(next);
+          onReplace(parseEnvText(next));
+        }}
+        readOnly={readOnly}
+      />
+    </div>
+  );
+}
+
 function SharedRow({
   field,
   section,
@@ -987,8 +1029,8 @@ function MineTab({
   personal,
   failed,
   setMine,
-  text,
-  setText,
+  onReplace,
+  ready,
   login,
 }: {
   settled: boolean;
@@ -1001,8 +1043,8 @@ function MineTab({
   personal: Record<string, string>;
   failed: boolean;
   setMine: (name: string, value: string) => void;
-  text: string;
-  setText: (next: string) => void;
+  onReplace: (next: Record<string, string>) => void;
+  ready: boolean;
   login: ReactNode;
 }) {
   const t = useT();
@@ -1073,7 +1115,7 @@ function MineTab({
       />
       )}
       {login}
-      <EnvTextBox prefix="env-mine" text={text} setText={setText} readOnly={false} />
+      <DerivedEnvBox prefix="env-mine" values={mine} onReplace={onReplace} readOnly={!ready} />
     </>
   );
 }
@@ -1183,8 +1225,8 @@ function PersonalTab({
   failed,
   saving,
   onEdit,
-  text,
-  setText,
+  onReplace,
+  ready,
   login,
 }: {
   settled: boolean;
@@ -1197,8 +1239,8 @@ function PersonalTab({
   /** A save is on its way: what is typed now would be dropped as it lands. */
   saving: boolean;
   onEdit: (name: string, value: string) => void;
-  text: string;
-  setText: (next: string) => void;
+  onReplace: (next: Record<string, string>) => void;
+  ready: boolean;
   login: ReactNode;
 }) {
   const t = useT();
@@ -1219,19 +1261,26 @@ function PersonalTab({
   return (
     <>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-        {t("env.personalDesc")}
         {/* The way to the page that holds them is the sentence's own link, so
-            it reads as one thing (A22). Styled as the docs' inline links
-            (`.md-body a`): the base `a` rule inherits the text colour. */}
-        （
-        <a
-          href="/my-env"
-          data-testid="env-personal-page"
-          style={{ color: "var(--accent-h)", textDecoration: "underline", whiteSpace: "nowrap" }}
-        >
-          {t("env.personalPage")}
-        </a>
-        ）
+            it reads as one thing (A22) — placed by the sentence itself, so
+            each language brings its own brackets. Styled as the docs' inline
+            links (`.md-body a`): the base `a` rule inherits the text colour. */}
+        {t("env.personalDesc").split("{link}").map((part, i) =>
+          i === 0 ? (
+            part
+          ) : (
+            <span key={i}>
+              <a
+                href="/my-env"
+                data-testid="env-personal-page"
+                style={{ color: "var(--accent-h)", textDecoration: "underline", whiteSpace: "nowrap" }}
+              >
+                {t("env.personalPage")}
+              </a>
+              {part}
+            </span>
+          ),
+        )}
       </p>
       {failed && (
         <p role="alert" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--err)" }}>
@@ -1260,7 +1309,7 @@ function PersonalTab({
         ))
       )}
       {login}
-      <EnvTextBox prefix="env-personal" text={text} setText={setText} readOnly={saving} />
+      <DerivedEnvBox prefix="env-personal" values={values} onReplace={onReplace} readOnly={saving || !ready} />
     </>
   );
 }

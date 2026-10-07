@@ -96,7 +96,9 @@ describe("MyEnvPage", () => {
     // choice labelled with its outcome; GOV.UK "Warning button".
     const client = open({ values: { A: "1" } });
     const remove = within(await screen.findByTestId("my-env-row-A")).getByTestId("my-env-remove");
-    expect(remove).toHaveAttribute("data-variant", "danger");
+    // Red only on the step that does it: a red button on every row is N
+    // warning buttons — GOV.UK "use sparingly" (review A22).
+    expect(remove).not.toHaveAttribute("data-variant", "danger");
 
     fireEvent.click(remove);
     const confirm = await screen.findByTestId("dialog-action-remove");
@@ -106,6 +108,13 @@ describe("MyEnvPage", () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(client.put).not.toHaveBeenCalled();
+  });
+
+  it("does not promise that signing in again here is all it ever takes", async () => {
+    // Not true for a workspace set to Shared, or one with its own Private value.
+    open();
+    await screen.findByTestId("my-env-empty");
+    expect(document.body).not.toHaveTextContent("一次就好");
   });
 
   it("does not explain itself in settings its reader may not be able to change", async () => {
