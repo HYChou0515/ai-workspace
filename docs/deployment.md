@@ -1345,3 +1345,42 @@ specstar 自帶 CRUD route,不用自訂 endpoint：
 GET /api/graph-claim?qb=norm_metric==<指標>   # 列出某指標在所有 deck / 期別的值
 GET /api/graph-claim/{id}                      # 單筆（含 provenance:來自哪個 deck/chunk）
 ```
+
+## 16. skill hub 的版本儲存（git）
+
+skill hub 每個發布出去的 skill 是 `skill_hub.git_root` 底下的一個 bare git repo，`<條目 id>.git`
+（設計：[plan-skill-hub-history.md](plan-skill-hub-history.md)）。`master` 指向目前版本；每次發布、回復、
+轉移、改可見範圍都在 repo 裡留一個 tag `r-<revision id>`（`:` 寫成 `%3A`）。圖片、PDF、Office 檔、壓縮檔
+（固定的路徑模式，見 `skill_hub_git.LFS_PATTERNS`）以 git LFS 的格式存：樹裡是指標，內容在 repo 的
+`lfs/objects/<oid 前兩碼>/<接著兩碼>/<oid>`。
+
+**設定與備份。** `skill_hub.git_root` 要在每個 API pod 都掛得到的持久目錄上（`kubernetes/base/configmap.yaml`
+的範例是 `/data/skill-hub-git`），並和資料庫一起備份——條目列只記 commit，檔案在這裡。`blob-gc` 與
+`chat-video` worker 用的是 API 的同一份組裝，也要讀得到這個設定。`filestore.kind` 不是 `memory` 時沒設會拒絕開機。
+
+**搬移舊條目。** 這個功能上線前發布的條目，用 superuser 打一次 `POST /api/admin/skill-hub/migrate`
+（可重跑，見 [migrations.md](migrations.md#pr-875)）。
+
+**看大小、整理。** 沒有畫面，用指令：
+
+```bash
+du -sh <git_root>/*.git                        # 每個 skill 佔多少
+git -C <git_root>/<id>.git count-objects -vH   # 物件數與大小
+git -C <git_root>/<id>.git gc                  # 太大時壓縮；不會刪掉任何版本
+```
+
+`gc` 只整理 git 物件；`lfs/objects/` 裡的檔案平台從不刪除（舊版本要能回復）。
+
+**用指令看歷史。**
+
+```bash
+git -C <git_root>/<id>.git log --oneline master                 # 目前這條線上的每一版
+git -C <git_root>/<id>.git for-each-ref 'refs/tags/r-*'         # 每個 revision 指向哪一版（含被回復掉的旁支）
+git -C <git_root>/<id>.git ls-tree -r -l master                 # 目前版本的檔案
+git -C <git_root>/<id>.git show master:SKILL.md                 # 讀一個檔（LFS 檔會讀到指標）
+git -C <git_root>/<id>.git diff <commit-a> <commit-b> --stat    # 兩版之間改了哪些檔
+```
+
+**計數。** 安裝與使用次數先在每個 pod 的記憶體累積，每 2 小時、以及 pod 收到 SIGTERM 時寫進
+`SkillHubUsage`（每個條目每天每個 pod 一列，只留一個 revision）。pod 沒收到 SIGTERM 就消失時，最多少掉
+2 小時的次數。

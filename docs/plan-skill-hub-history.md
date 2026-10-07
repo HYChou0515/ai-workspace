@@ -1,7 +1,7 @@
 # Skill hub:歷史與回溯、下載/使用次數、問 AI 該裝哪個
 
-**狀態:** grill 完成(2026-10-06 → 10-07),§7 補問也已定案;依 §9 Phases 施工中。
-**來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀程式碼確認的事實;〔建議〕= 我提的、user 未明確表態。
+**狀態:** grill 完成(2026-10-06 → 10-07),§7 補問也已定案;P1–P10 施工完成(PR #875),施工時定的事與和上文不同的地方在 §11。
+**來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀程式碼確認的事實;〔建議〕= 我提的、user 未明確表態;〔施工〕= 施工時我定的,user 還沒看過。
 
 ## 1. 要做的三件事〔user〕
 
@@ -261,3 +261,21 @@ soft delete 條目;**repo 保留**(§7 Q2)。同名再發布是新條目(§7 Q4)
 - `plan-skill-hub.md` 的「payload 的每個檔案存成 blob(走既有 FileStore,一個 skill hub 命名空間)」與
   「重新發布 = specstar 原生 revision」:儲存方式被 G1 / G7 推翻。依 CLAUDE.md,實作的 PR 要在 `plan-skill-hub.md`
   標題下加 `> 被 #<那個 PR>（plan-skill-hub-history.md）推翻`。
+
+## 11. 施工時定的事(PR #875)〔施工〕
+
+都是實作細節或上文沒寫到的空隙;每一條都可以推翻。
+
+| # | 定了什麼 | 為什麼 / 和上文的差別 |
+|---|---|---|
+| W1 | **G8 的補做只補 tag,不補 `update`。** 讀者一律信條目的 `commit`;讀時間軸時,目前那個 revision 若沒有 tag 就補上。 | 寫入順序是 push → `update` → tag,所以「master 動了但 `update` 沒做」只會發生在 push 之後當掉;下一次發布用 master 當 parent,版本不會斷。要補 `update` 得在每次讀取比對 master,成本落在每個讀者身上。 |
+| W2 | **搬移是一條 superuser 路由** `POST /api/admin/skill-hub/migrate`,不是開機時自動跑。repo 的 master 已經存在(別的 pod 或上次跑一半)就採用它,不做第二個第一版。舊 FileStore 的檔案不刪。 | §6 說「運營方跑一次」;路由可重跑、多 pod 同時打也只有一個第一版(lease)。不刪舊檔是保守做法:搬錯時還有原件。 |
+| W3 | **回復的請求帶 `expected` = 頁面上顯示的目前版本**,master 只從它移動。 | §4.3 寫「lease = 目前 master」;在伺服器端讀 master 只擋得住幾毫秒內的競爭。帶頁面看到的版本,才擋得住「owner 看著舊頁面時別人發布了」。 |
+| W4 | **〔從這一版 fork〕= 把那一版複製進使用者選的 item,`.origin` 標 `forked`。** 這份副本不提示「skill 已變更」、同步不動它、不算安裝、不算使用、不算「已安裝」;發布它才成為 fork。詳情頁的對話框先選 App 再選 item。 | §8 沒寫機制。G23 說舊版只能看、比、fork,不能裝;標 `forked` 讓它和安裝在行為上分得開。 |
+| W5 | **使用次數從 `read_skill` 讀 `SKILL.md` 的同一批讀取裡拿 `.origin`。** | §4.8 寫「取自 skill 索引每個 turn 本來就讀的 `.origin`」;索引只在聊天 turn 組,workflow 的 `read_skill` 會漏算。同一批讀取不多一次往返。 |
+| W6 | **時間軸的分類:** commit 第一次出現 = 發布;再出現 = 回復;owner 變 = 轉移;權限變 = 可見範圍。搬移前(沒有 commit)的 revision 不列。 | 不必在條目上多一個「這次是什麼動作」的欄位。 |
+| W7 | **`SkillHubEntry.origin` 與 `blobs` 先留著**(只給還沒搬移的條目用),搬移完成後再另開 PR 拿掉。 | §3.2 寫要拿掉;但沒搬移的條目靠它們讀檔、比對,上線當下不能少。 |
+| W8 | **「自 <上線日> 起」的日期 = 第一筆計數列寫出那天。** 「最常使用」= 使用次數多的在前,同數再看安裝次數,再同按名稱。 | 程式不知道部署日;第一筆計數就是開始計的那天。 |
+| W9 | **`search_skill_hub` 的「最後更新」= 目前版本的 commit 時間**(不是條目列的更新時間,轉移、改可見範圍不算更新)。 | |
+| W10 | **`## Available views` 多一小段「這些 tool 直接在聊天裡顯示卡片」**,列 `show_skill_hub_entry(entry_id)`,只給拿得到這個 tool 的 turn。 | 原本的段落只講「寫 `*.ai.yaml` 再 `show_file`」;卡片不經過檔案。 |
+
