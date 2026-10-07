@@ -14,7 +14,8 @@ loaded sign-in (`server.env_providers`) produces — only where that item's
 policy for the name is Private first / Private only AND the person holds the
 name in their values for every item too, i.e. where the item's value hides one
 there (by presence, not by date: a value someone later typed into the item on
-purpose goes too, so check the dry run). Nothing else — those names in Shared
+purpose, or signed in for on the Env panel's Private tab, goes too — so check
+the dry run before every --apply). Nothing else — those names in Shared
 items, the only copy someone who has not signed in again holds, values a person
 typed under other names, their values for every item, the shared values, and
 what the deploy's SSO said about them all stay. Values are never printed. So

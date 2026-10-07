@@ -1533,7 +1533,7 @@ export function AgentHeader({
   /** Draw the Env button: the viewer may keep their OWN values here, which
    * needs no `write_meta`. */
   canOpenEnv?: boolean;
-  /** Persist the shared values + policy. Absent → the panel's Everyone tab is
+  /** Persist the shared values + policy. Absent → the panel's Shared tab is
    * read-only (and, without `canOpenEnv`, there is no button at all). */
   onSaveEnvVars?: (
     envVars: Record<string, string>,

@@ -1697,7 +1697,6 @@ export const messages = {
   "env.status.ready": { "zh-TW": "已就緒", en: "Ready" },
   "env.noMatches": { "zh-TW": "沒有符合的工具或變數", en: "No tool or variable matches" },
   "env.otherVars": { "zh-TW": "其他變數(沒有工具宣告)", en: "Other variables (no tool declared them)" },
-  // Tabs say WHO SEES the values, not the internal names of the layers.
   // The tab names are the user's (`plan-personal-env` A20): one per layer.
   "env.tab.shared": { "zh-TW": "Shared", en: "Shared" },
   "env.tab.mine": { "zh-TW": "Private", en: "Private" },
@@ -1708,6 +1707,14 @@ export const messages = {
     en: "Only you can see these. They are shared by all your workspaces — the same values as the My environment variables page — and a sign-in here is saved at once. Only an item that sets a variable to Private first or Private only uses them.",
   },
   "env.personalPage": { "zh-TW": "到「我的環境變數」看全部", en: "See them all in My environment variables" },
+  "env.personalNone": {
+    "zh-TW": "這個 item 的工具沒有要你填的變數。",
+    en: "This item's tools don't ask you for any variable.",
+  },
+  "env.signInNotSaved": {
+    "zh-TW": "登入成功,但值沒有存進去。請再試一次。",
+    en: "Signed in, but the value wasn't saved. Try again.",
+  },
   "env.personal.used": { "zh-TW": "這個 item 會用這個值", en: "This item uses this value" },
   "env.personal.unused": {
     "zh-TW": "這個 item 不用這個值:它的提供方式是 Shared",

@@ -153,6 +153,19 @@ describe("MyEnvPage", () => {
     expect(screen.queryByTestId("my-env-load-failed")).not.toBeInTheDocument();
   });
 
+  it("keeps the sign-in open and says so when its value could not be stored", async () => {
+    // Review A20, D5: the dialog closed and the token was gone.
+    const client = open();
+    client.put.mockRejectedValue(new Error("down"));
+
+    fireEvent.click(await screen.findByTestId("env-provider-erp"));
+    fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    expect(await screen.findByTestId("env-cred-error")).toBeInTheDocument();
+    expect(screen.getByTestId("env-cred-dialog")).toBeInTheDocument();
+  });
+
   it("saves what a sign-in returns at once, and never the credential", async () => {
     const client = open({ values: { OTHER: "kept" } });
 

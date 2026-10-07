@@ -1628,7 +1628,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 一個變數只有在 item 把它的提供方式設成 **Private first** 或 **Private only** 時，才會拿到這裡的值；設成
   Shared 或沒設的 item 拿不到。某個 item 裡另外填的值仍然優先。
 - **item 的環境變數面板改成三個分頁**：原本的「所有參與者」改名 **Shared**、「只有我」改名 **Private**（仍是預設打開的那個），
-  另外多一個 **Private(跨workspace)**：就是「我的環境變數」，只列這個 item 的工具要的名稱，每一列寫出這個 item 用不用它。
+  另外多一個 **Private(跨workspace)**：就是「我的環境變數」，列出這個 item 的工具要的、以及這個 item 設成 Private 的名稱，每一列寫出這個 item 用不用它。
 - **在哪個分頁登入（部署設定的 `server.env_providers`）或填值，就寫進哪一層：**
   - 「我的環境變數」頁、「Private(跨workspace)」分頁 → 登入**立刻存進「我的環境變數」**，所有把那個變數設成
     Private first／Private only 的 item 都用它。
@@ -1653,7 +1653,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API> --header "<你的閘道讀的身分 header>: <值>"
   ```
   - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。在把變數設成 Private first／Private only 的 item 裡，
-    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清真的蓋住另一個值的那些**（看有沒有，不比新舊——事後刻意在 item 裡另填的同名值也會被清，所以先看 dry run）：
+    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清真的蓋住另一個值的那些**（看有沒有，不比新舊——事後刻意在 item 裡另填的同名值、以及這一版之後在 Env 面板「Private」分頁登入留下的同名值，也都會被清，所以每次 `--apply` 前先看 dry run）：
     那個 item 把變數設成 Private first／Private only，**而且**那個人在「我的環境變數」也有同名的值。Shared 的 item 本來就不讀
     「我的環境變數」，留在裡面的值正是它在用的，所以不動；那個人還沒在「我的環境變數」登入的話，item 裡的舊值是他的 tool 唯一
     拿得到的，清掉反而壞掉，所以也不動。因此剛 rollout 時多半清不到幾筆；使用者陸續在「我的環境變數」重新登入之後再跑一次，

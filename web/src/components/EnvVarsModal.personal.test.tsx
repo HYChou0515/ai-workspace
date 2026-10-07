@@ -2,7 +2,7 @@
  * `docs/plan-personal-env.md` — my environment variables in an item's Env panel.
  *
  * Three tabs, one per layer, named the way the user named them (A20): Shared,
- * Private (my values for THIS item) and Private (跨workspace) (my values for
+ * Private (my values for THIS item) and Private(跨workspace) (my values for
  * every item — the same row as the "My environment variables" page). What you
  * do in a tab, a sign-in included, lands in that tab's layer and nowhere else.
  *
@@ -44,6 +44,7 @@ function open({
   providers = [SAP] as (typeof SAP)[],
   tools = [ERP],
   personalFails = false,
+  mineHangs = false,
 }: {
   envVars?: Record<string, string>;
   envPolicy?: Record<string, string>;
@@ -52,9 +53,14 @@ function open({
   providers?: (typeof SAP)[];
   tools?: ItemToolState[];
   personalFails?: boolean;
+  mineHangs?: boolean;
 } = {}) {
   const privateClient = {
-    get: vi.fn(async () => ({ values: mine, auto: {} })),
+    get: vi.fn(() =>
+      mineHangs
+        ? new Promise<never>(() => {})
+        : Promise.resolve({ values: mine, auto: {} as Record<string, string> }),
+    ),
     put: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
   };
@@ -151,7 +157,7 @@ describe("my environment variables in an item's Env panel", () => {
 
 const personalTab = async () => fireEvent.click(await screen.findByTestId("env-tab-personal"));
 
-describe("the Private (跨workspace) tab", () => {
+describe("the Private(跨workspace) tab", () => {
   it("sits third, after Shared and Private, under the names the user chose", async () => {
     open();
     const tabs = await screen.findAllByRole("tab");
@@ -205,17 +211,15 @@ describe("the Private (跨workspace) tab", () => {
     );
   });
 
-  it("keeps both of two sign-ins made one right after the other", async () => {
-    // Round 2, F2: each sign-in re-reads the row and writes all of it; two at
-    // once read the same row, and the second write dropped the first's token.
-    const MES = { id: "mes", label: "MES login", produces: ["MES_TOKEN"], inputs: [] };
-    const { personalClient, resolveEnvProvider } = open({
+  it("keeps both a save and a sign-in made while it was on its way", async () => {
+    // Round 2, F2: each write re-reads the row and writes all of it; two at once
+    // read the same row, and the second write dropped the first's value. A
+    // sign-in now waits for its own store (review A20, D5), so the pair that can
+    // still overlap is this tab's Save and a sign-in started during it.
+    const MES = { ...ERP, key: "mes", group: "mes", label: "mes", env_needs: [{ name: "MES_TOKEN", description: "", required: true }] };
+    const { personalClient } = open({
       envPolicy: { ERP_TOKEN: "private_first", MES_TOKEN: "private_first" },
-      providers: [SAP, MES],
-      tools: [
-        ERP,
-        { ...ERP, key: "mes", group: "mes", label: "mes", env_needs: [{ name: "MES_TOKEN", description: "", required: true }] },
-      ],
+      tools: [ERP, MES],
     });
     let stored: Record<string, string> = {};
     personalClient.get.mockImplementation(async () => ({ values: { ...stored }, updated: {} }));
@@ -224,19 +228,15 @@ describe("the Private (跨workspace) tab", () => {
       stored = next;
       return { values: next, updated: {} };
     });
-    resolveEnvProvider.mockImplementation(
-      async (_s: string, _i: string, id: string): Promise<Record<string, string>> =>
-        id === "mes" ? { MES_TOKEN: "m" } : { ERP_TOKEN: "e" },
-    );
     await personalTab();
+    fireEvent.change(await screen.findByTestId("env-personal-MES_TOKEN"), { target: { value: "m" } });
 
+    fireEvent.click(screen.getByTestId("env-personal-save"));
     fireEvent.click(await screen.findByTestId("env-provider-sap"));
-    fireEvent.click(screen.getByTestId("env-cred-submit"));
-    fireEvent.click(await screen.findByTestId("env-provider-mes"));
     fireEvent.click(screen.getByTestId("env-cred-submit"));
 
     await waitFor(() => expect(personalClient.put).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(stored).toEqual({ ERP_TOKEN: "e", MES_TOKEN: "m" }));
+    await waitFor(() => expect(stored).toEqual({ MES_TOKEN: "m", ERP_TOKEN: "fresh" }));
   });
 
   it("saves what I typed with this tab, changing only the names I edited", async () => {
@@ -317,9 +317,93 @@ describe("the Private (跨workspace) tab", () => {
     await waitFor(() => expect(screen.getByTestId("env-personal-save")).toBeDisabled(), { timeout: 3000 });
   });
 
+  it("finds a variable by the tool that needs it, as the other tabs do", async () => {
+    // Review A20, D1: searching "ledger" showed the tool on Private and nothing here.
+    open({ tools: [{ ...ERP, label: "Ledger" }] });
+    fireEvent.change(await screen.findByTestId("env-search"), { target: { value: "ledger" } });
+    await personalTab();
+
+    expect(await screen.findByTestId("env-personal-row-ERP_TOKEN")).toBeInTheDocument();
+  });
+
+  it("says there is nothing to fill, not that a search matched nothing, when nothing is needed", async () => {
+    // Review A20, D2.
+    open({ tools: [], envPolicy: {} });
+    await personalTab();
+
+    expect(await screen.findByTestId("env-personal-none")).toBeInTheDocument();
+    expect(screen.queryByText("沒有符合的工具或變數")).toBeNull();
+  });
+
+  it("does not claim this item uses the value before it knows this item's own", async () => {
+    // Review A20, D3: with the Private read still out, the row said "uses this
+    // value" — and an own value, once read, wins (D4).
+    open({ personal: { ERP_TOKEN: "t" }, mineHangs: true });
+    await personalTab();
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(screen.queryByText("這個 item 會用這個值")).toBeNull();
+  });
+
+  it("does not take typing while a save is on its way", async () => {
+    // Review A20, D4: what was typed during the save was dropped as it landed.
+    const { personalClient } = open({ personal: { ERP_TOKEN: "old" } });
+    personalClient.put.mockImplementation(async (values: Record<string, string>) => {
+      await new Promise((r) => setTimeout(r, 30));
+      return { values, updated: {} };
+    });
+    await personalTab();
+    const box = (await screen.findByTestId("env-personal-ERP_TOKEN")) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe("old"));
+    fireEvent.change(box, { target: { value: "a" } });
+
+    fireEvent.click(screen.getByTestId("env-personal-save"));
+
+    await waitFor(() => expect(screen.getByTestId("env-personal-ERP_TOKEN")).toBeDisabled());
+  });
+
+  it("keeps the sign-in open and says so when its value could not be stored", async () => {
+    // Review A20, D5: the dialog closed and the token was gone.
+    const { personalClient } = open();
+    personalClient.put.mockRejectedValue(new Error("down"));
+    await personalTab();
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap"));
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    expect(await screen.findByTestId("env-cred-error")).toBeInTheDocument();
+    expect(screen.getByTestId("env-cred-dialog")).toBeInTheDocument();
+  });
+
+  it("writes nothing when Save is pressed with nothing typed", async () => {
+    // Review A20, D6: a whole-row PUT for no change can only race another tab.
+    const { personalClient, onClose } = open({ personal: { ERP_TOKEN: "old" } });
+    await personalTab();
+    await screen.findByTestId("env-personal-ERP_TOKEN");
+
+    fireEvent.click(screen.getByTestId("env-personal-save"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(personalClient.put).not.toHaveBeenCalled();
+  });
+
   it("links to the page that holds all of them", async () => {
     open();
     await personalTab();
     expect(await screen.findByTestId("env-personal-page")).toHaveAttribute("href", "/my-env");
+  });
+});
+
+describe("the policy choices", () => {
+  it("are named Shared, Private first and Private only", async () => {
+    // D9 — restored after A20 dropped it by accident (review A20, C11).
+    open();
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
+
+    const label = async (p: string) =>
+      (await screen.findByTestId(`env-policy-ERP_TOKEN-${p}`)).closest("label");
+    expect(await label("shared_first")).toHaveTextContent("Shared");
+    expect(await label("private_first")).toHaveTextContent("Private first");
+    expect(await label("private_only")).toHaveTextContent("Private only");
   });
 });

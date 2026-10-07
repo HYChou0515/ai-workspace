@@ -2,7 +2,7 @@
  * `docs/plan-wui-viewer-login.md` — the Env panel's two layers.
  *
  * "Private" (the default) holds the person's PRIVATE values for this item;
- * "Everyone" holds the item's SHARED values plus a per-variable policy saying
+ * "Shared" holds the item's SHARED values plus a per-variable policy saying
  * which layer a tool gets. One layer is edited at a time (Postman retired
  * editing both side by side), each tab saves on its own, and every row says
  * whose value is in use and why.
@@ -105,7 +105,7 @@ describe("the two tabs", () => {
   });
 });
 
-describe("Everyone: tools as sections", () => {
+describe("Shared: tools as sections", () => {
   it("lists every tool, most urgent first, each with a status in words", async () => {
     open({ envVars: { DB_HOST: "db" } });
     everyone();

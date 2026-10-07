@@ -11,10 +11,11 @@
  * * **Private** (the default tab) — the viewer's PRIVATE values for this item:
  *   typed, signed in for, or written for them by the deploy's seam. Each row
  *   says whose value a tool gets, my values for every item included.
- * * **Private (跨workspace)** — the viewer's values for every item, the same
+ * * **Private(跨workspace)** — the viewer's values for every item, the same
  *   row as the "My environment variables" page: the names this item's tools
- *   need, each saying whether this item uses it (only a Private first /
- *   Private only name does, D2). A sign-in here is stored at once.
+ *   need and the ones it sets to Private first / Private only, each saying
+ *   whether this item uses it (only such a name does, D2). A sign-in here is
+ *   stored at once.
  *
  * Only the viewer can read the private two (`api/privateEnv.ts`,
  * `api/personalEnv.ts`), so they are masked until asked.
@@ -87,14 +88,14 @@ export function EnvVarsModal({
   envVars: Record<string, string>;
   envPolicy?: Record<string, string>;
   /** Store the SHARED values and policy. Absent ⇒ the caller may not
-   * (`write_meta`), and the Everyone tab is read-only. */
+   * (`write_meta`), and the Shared tab is read-only. */
   onSave?: (
     next: Record<string, string>,
     policy: Record<string, string>,
   ) => void | boolean | Promise<void | boolean>;
   onClose: () => void;
   /** The item. Without one there is no private layer (and no declared tools):
-   * only the Everyone tab is drawn. */
+   * only the Shared tab is drawn. */
   slug?: string;
   itemId?: string;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
@@ -337,13 +338,16 @@ export function EnvVarsModal({
           />
         ) : tab === "personal" ? (
           <PersonalTab
-            settled={toolsSettled && (personalQ.isSuccess || personalQ.isError)}
+            // This item's own values too: one, once read, wins the name (D4),
+            // so "this item uses it" is not known before (review A20, D3).
+            settled={toolsSettled && mineSettled && (personalQ.isSuccess || personalQ.isError)}
             tools={tools}
             query={query}
             policy={policy}
             own={ownLayer(mineValues, auto)}
             values={{ ...personal, ...personalEdits }}
             failed={personalQ.isError}
+            saving={savePersonal.isPending}
             onEdit={(name, value) => setPersonalEdits((prev) => ({ ...prev, [name]: value }))}
             login={
               <Logins
@@ -351,7 +355,9 @@ export function EnvVarsModal({
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
-                onFilled={(env) => signIn.mutate(env)}
+                // Awaited: a value that could not be stored keeps the sign-in
+                // open and says so (review A20, D5).
+                onFilled={(env) => signIn.mutateAsync(env)}
               />
             }
           />
@@ -433,7 +439,9 @@ export function EnvVarsModal({
               data-testid="env-personal-save"
               // Not over a failed read: the row would be written from nothing.
               disabled={!personalQ.isSuccess || savePersonal.isPending}
-              onClick={() => savePersonal.mutate()}
+              // Nothing typed: nothing to write — a whole-row PUT for no change
+              // could only race another tab (review A20, D6).
+              onClick={() => (personalDirty ? savePersonal.mutate() : afterSave("personal"))}
             >
               {t("env.save")}
             </button>
@@ -641,7 +649,7 @@ function Sections({
   );
 }
 
-// ── Everyone ──────────────────────────────────────────────────────────────
+// ── Shared ──────────────────────────────────────────────────────────────
 
 function SharedTab({
   settled,
@@ -1086,7 +1094,7 @@ function MineRow({
   );
 }
 
-// ── Private (跨workspace) ────────────────────────────────────────────────
+// ── Private(跨workspace) ────────────────────────────────────────────────
 
 function PersonalTab({
   settled,
@@ -1096,6 +1104,7 @@ function PersonalTab({
   own,
   values,
   failed,
+  saving,
   onEdit,
   login,
 }: {
@@ -1108,17 +1117,26 @@ function PersonalTab({
   /** My values for every item, with what was typed here on top. */
   values: Record<string, string>;
   failed: boolean;
+  /** A save is on its way: what is typed now would be dropped as it lands. */
+  saving: boolean;
   onEdit: (name: string, value: string) => void;
   login: ReactNode;
 }) {
   const t = useT();
+  // The tools' sections, searched by the SAME rule as the other tabs
+  // (`matching`: tool name, publisher or variable — review A20, D1).
+  const sections = deriveEnvNeeds(tools, {}).sections;
   const needed = new Map<string, string>();
-  for (const tool of tools)
-    for (const n of tool.env_needs ?? []) if (!needed.has(n.name)) needed.set(n.name, n.description);
+  for (const f of sections.flatMap((x) => x.fields)) if (!needed.has(f.name)) needed.set(f.name, f.description);
   // Names the item asks each person for without a tool declaring them.
-  for (const n of Object.keys(policy)) if (policyOf(n, policy) !== "shared_first" && !needed.has(n)) needed.set(n, "");
+  const asked = Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first" && !needed.has(n));
+  for (const n of asked) needed.set(n, "");
   const q = query.trim().toLowerCase();
-  const names = [...needed.keys()].filter((n) => !q || n.toLowerCase().includes(q));
+  const found = new Set([
+    ...matching(sections, query).flatMap((x) => x.fields.map((f) => f.name)),
+    ...asked.filter((n) => !q || n.toLowerCase().includes(q)),
+  ]);
+  const names = [...needed.keys()].filter((n) => found.has(n));
   return (
     <>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
@@ -1134,6 +1152,11 @@ function PersonalTab({
       )}
       {!settled ? (
         <p style={MUTED}>…</p>
+      ) : needed.size === 0 ? (
+        // Nothing to fill is not a search that matched nothing (review A20, D2).
+        <p data-testid="env-personal-none" style={MUTED}>
+          {t("env.personalNone")}
+        </p>
       ) : names.length === 0 ? (
         <p style={MUTED}>{t("env.noMatches")}</p>
       ) : (
@@ -1145,6 +1168,7 @@ function PersonalTab({
             used={policyOf(name, policy) !== "shared_first"}
             shadowed={Object.hasOwn(own, name)}
             value={values[name] ?? ""}
+            disabled={saving}
             onEdit={onEdit}
           />
         ))
@@ -1160,6 +1184,7 @@ function PersonalRow({
   used,
   shadowed,
   value,
+  disabled,
   onEdit,
 }: {
   name: string;
@@ -1167,6 +1192,7 @@ function PersonalRow({
   used: boolean;
   shadowed: boolean;
   value: string;
+  disabled: boolean;
   onEdit: (name: string, value: string) => void;
 }) {
   const t = useT();
@@ -1180,6 +1206,7 @@ function PersonalRow({
           data-testid={`env-personal-${name}`}
           type={revealed ? "text" : "password"}
           value={value}
+          disabled={disabled}
           onChange={(e) => onEdit(name, e.target.value)}
           autoComplete="off"
           spellCheck={false}
@@ -1224,7 +1251,8 @@ export function Logins({
   creds: Record<string, string>;
   setCreds: (next: Record<string, string>) => void;
   exchange: (providerId: string, values: Record<string, string>) => Promise<Record<string, string>>;
-  onFilled: (env: Record<string, string>) => void;
+  /** May return a promise: a rejection keeps the dialog open with a reason. */
+  onFilled: (env: Record<string, string>) => void | Promise<unknown>;
 }) {
   const t = useT();
   const [dialog, setDialog] = useState<string | null>(null);
@@ -1245,7 +1273,13 @@ export function Logins({
         setCredError(t("env.providerValueTooComplex", { names: cannotStore.join(", ") }));
         return;
       }
-      onFilled(env);
+      try {
+        await onFilled(env);
+      } catch {
+        // Signed in, but not stored: closing would lose the token in silence.
+        setCredError(t("env.signInNotSaved"));
+        return;
+      }
       setDialog(null);
       setCreds({});
     } catch (err) {

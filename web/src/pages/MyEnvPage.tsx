@@ -165,7 +165,7 @@ export function MyEnvPage({
             creds={creds}
             setCreds={setCreds}
             exchange={(id, credentials) => client.resolve(id, credentials)}
-            onFilled={(env) => save.mutate((current) => ({ ...current, ...env }))}
+            onFilled={(env) => save.mutateAsync((current) => ({ ...current, ...env }))}
           />
         </section>
       )}
