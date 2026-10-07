@@ -1536,7 +1536,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
-### 2026-10-07 · #875 skill hub 有版本歷史：每個條目一個 git repo，可回到舊版、看差異 {#pr-875}
+### 2026-10-07 · e1e1a0f9 · #875 skill hub 有版本歷史：每個條目一個 git repo，可回到舊版、看差異 {#pr-875}
 
 **設定** — 新 key **`skill_hub.git_root`**：skill hub 版本歷史放的目錄（每個條目一個 bare git repo，
 `<git_root>/<條目 id>.git`）。
