@@ -362,3 +362,66 @@
   gap: var(--space-4);
   margin-top: var(--space-12);
 }
+
+/* ── a skill hub entry in a chat (plan-skill-hub-history A3) ───────────────
+   Not under `.page` (a chat log is not one), so its own unscoped classes —
+   borrowing the page's would give it no styles at all. */
+.skill-hub-card {
+  margin-left: 28px; /* the avatar column every assistant block is indented past */
+  padding: var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  font-size: var(--text-small);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-hub-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.skill-hub-card-title {
+  font-weight: 600;
+  min-width: 0;
+}
+
+.skill-hub-card-owner,
+.skill-hub-card-muted {
+  color: var(--text-paper-d);
+}
+
+.skill-hub-card-desc,
+.skill-hub-card-muted,
+.skill-hub-card-warn {
+  margin: var(--space-4) 0 0;
+}
+
+.skill-hub-card-warn {
+  color: var(--warn);
+}
+
+.skill-hub-card-notes {
+  margin: var(--space-4) 0 0;
+  padding-left: var(--space-16);
+}
+
+.skill-hub-card-actions {
+  margin-top: var(--space-8);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.skill-hub-card-error {
+  color: var(--err);
+}
+
+/* The counts beside the owner on a list row, and the 「自 … 起」 note. */
+.page .skill-hub-row-meta {
+  flex-wrap: wrap;
+}

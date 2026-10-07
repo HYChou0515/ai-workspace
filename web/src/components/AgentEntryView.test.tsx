@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MessageCitation } from "../api/types";
 import type { AgentEntry } from "../pages/investigation/agentLog";
+import { translate } from "../lib/i18n";
 import { EntryView } from "./AgentEntryView";
 import { ToolCatalogContext } from "./toolCatalog";
 
@@ -26,6 +27,11 @@ vi.mock("../hooks/useUsers", () => ({
     email: "",
     photo_url: null,
   }),
+}));
+vi.mock("./SkillHubEntryCard", () => ({
+  SkillHubEntryCard: ({ entryId }: { entryId: string }) => (
+    <div data-testid="skill-hub-card-stub">{entryId}</div>
+  ),
 }));
 vi.mock("./RcaMark", () => ({
   RcaMark: () => <span data-rca />,
@@ -1143,5 +1149,41 @@ describe("compaction summary (#739)", () => {
     for (const jargon of ["context", "token", "compact"]) {
       expect(text.toLowerCase()).not.toContain(jargon);
     }
+  });
+});
+
+
+// plan-skill-hub-history A3: `show_skill_hub_entry` declares an entry and the
+// chat draws it as a live card — the card IS its rendering, like `show_file`.
+describe("EntryView — show_skill_hub_entry", () => {
+  const call = (output: string | undefined, status: "done" | "running" = "done") => ({
+    kind: "tool_call" as const,
+    call: {
+      call_id: "c1",
+      name: "show_skill_hub_entry",
+      status,
+      args: { entry_id: "e-1" },
+      output,
+    },
+  });
+
+  it("draws the declared entry as a card instead of a collapsed tool card", () => {
+    render(
+      <EntryView entry={call('alice/triage is shown.\n[skill-hub-entry]{"entry_id":"e-1"}')} />,
+    );
+    expect(screen.getByTestId("skill-hub-card-stub")).toHaveTextContent("e-1");
+    expect(document.querySelector("details")).toBeNull();
+  });
+
+  it("falls back to the ordinary tool card, labelled, when nothing was declared", () => {
+    render(<EntryView entry={call("error: no skill hub entry 'e-9'")} />);
+    expect(screen.queryByTestId("skill-hub-card-stub")).toBeNull();
+    expect(document.querySelector("details")).not.toBeNull();
+    expect(screen.getByText(translate("zh-TW", "tool.show_skill_hub_entry"))).toBeInTheDocument();
+  });
+
+  it("draws nothing but the running card while the call is in flight", () => {
+    render(<EntryView entry={call(undefined, "running")} />);
+    expect(screen.queryByTestId("skill-hub-card-stub")).toBeNull();
   });
 });

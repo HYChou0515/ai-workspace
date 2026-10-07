@@ -218,6 +218,7 @@ export const messages = {
   // isn't mistaken for the final result.
   "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "tool.show_file": { "zh-TW": "顯示檔案", en: "Show a file" },
+  "tool.show_skill_hub_entry": { "zh-TW": "顯示 skill hub 上的 skill", en: "Show a skill hub skill" },
   // The affordance on a file the agent showed. "openHere" = a workspace shell is
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
@@ -1988,6 +1989,24 @@ export const messages = {
   "skillHub.noMatch": { "zh-TW": "沒有符合的 skill。", en: "No skill matches." },
   "skillHub.forks": { "zh-TW": "{count} 個 fork", en: "{count} forks" },
   "skillHub.fork.one": { "zh-TW": "1 個 fork", en: "1 fork" },
+  // plan-skill-hub-history U6/U7: the counts, never who; counting starts on the
+  // day the feature went live, so the number says since when.
+  "skillHub.counts": {
+    "zh-TW": "安裝 {installs} 次 · 使用 {uses} 次",
+    en: "Installed {installs} times · used {uses} times",
+  },
+  "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
+  "skillHub.sort": { "zh-TW": "排序", en: "Sort" },
+  // plan-skill-hub-history A3: the card `show_skill_hub_entry` draws in a chat.
+  "skillHub.card.install": { "zh-TW": "安裝", en: "Install" },
+  "skillHub.card.installed": { "zh-TW": "已安裝", en: "Installed" },
+  "skillHub.card.reviewOk": { "zh-TW": "審查沒有意見", en: "The review had no notes" },
+  "skillHub.card.gone": {
+    "zh-TW": "這個 skill 已不在 skill hub 上",
+    en: "This skill is no longer on the skill hub",
+  },
+  "skillHub.sort.name": { "zh-TW": "名稱", en: "Name" },
+  "skillHub.sort.popular": { "zh-TW": "最常使用", en: "Most used" },
   "skillHub.forkOf": { "zh-TW": "fork 自 {origin}", en: "fork of {origin}" },
   "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
   "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },

@@ -107,6 +107,15 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
           </span>
         ) : null}
       </div>
+      <p className="muted small skill-hub-counts">
+        {t("skillHub.counts", { installs: entry.installs ?? 0, uses: entry.uses ?? 0 })}
+        {entry.counted_since ? (
+          <span className="skill-hub-since">
+            {" "}
+            {t("skillHub.countedSince", { day: entry.counted_since })}
+          </span>
+        ) : null}
+      </p>
       {entry.forked_from ? <Lineage lineage={entry.forked_from} /> : null}
       {entry.is_owner ? null : <p className="hint">{t("skillHub.howToInstall")}</p>}
 

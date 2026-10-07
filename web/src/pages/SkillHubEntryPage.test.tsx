@@ -64,6 +64,9 @@ const detail = (over: Partial<SkillHubDetail>): SkillHubDetail => ({
   visibility: "public",
   permission: null,
   missing_tools: [],
+  installs: 0,
+  uses: 0,
+  counted_since: "",
   ...over,
 });
 
@@ -117,6 +120,7 @@ function client(
 ) {
   return {
     list: vi.fn<SkillHubApi["list"]>(async () => []),
+    browse: vi.fn<SkillHubApi["browse"]>(async () => ({ entries: [], counted_since: "" })),
     get: vi.fn<SkillHubApi["get"]>(async () => entry),
     install: vi.fn<SkillHubApi["install"]>(),
     unpublish: vi.fn<SkillHubApi["unpublish"]>(async () => undefined),
@@ -195,6 +199,15 @@ describe("SkillHubEntryPage", () => {
     expect(screen.queryAllByRole("button").map((b) => b.textContent)).toEqual([
       word("skillHub.history.fork"),
     ]);
+  });
+
+  it("says how many times it was installed and used, and since when (U6)", async () => {
+    mount(client(detail({ installs: 4, uses: 17, counted_since: "2026-10-07" })));
+
+    expect(
+      await screen.findByText(word("skillHub.counts", { installs: 4, uses: 17 })),
+    ).toBeInTheDocument();
+    expect(screen.getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
   });
 
   it("gives the owner the five actions, and no install sentence", async () => {

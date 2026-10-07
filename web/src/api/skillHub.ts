@@ -31,8 +31,18 @@ export type SkillHubCard = {
   /** `referenced_tools` minus the ceiling of the App the list was asked for
    * (`list(q, mine, app)`); empty when no App was asked about. */
   missing_tools: string[];
+  /** Installs and uses, summed over every pod's written counts (plan-skill-hub-history
+   * §4.8). A fork counts its own; who installed or used it is never sent. */
+  installs: number;
+  uses: number;
   forks: SkillHubCard[];
 };
+
+export type SkillHubSort = "name" | "popular";
+
+/** The page's listing: the rows plus the day counting began (`YYYY-MM-DD`),
+ * "" before anything was counted. */
+export type SkillHubListing = { entries: SkillHubCard[]; counted_since: string };
 
 /** What a fork was forked from, as THIS viewer may know it: `owner` / `name`
  * only when the root is `live` for them. */
@@ -65,6 +75,9 @@ export type SkillHubDetail = {
   /** `referenced_tools` minus the ceiling of the App asked about; empty when
    * no App was asked about. */
   missing_tools: string[];
+  installs: number;
+  uses: number;
+  counted_since: string;
 };
 
 /** Where the owner goes to edit (plan P8's table). `open`: go to `item_id`;
@@ -124,6 +137,9 @@ export type SkillHubFileChange = {
 export type SkillHubApi = {
   /** `app` (a slug) adds each row's `missing_tools` against that App's ceiling. */
   list(q?: string, mine?: boolean, app?: string): Promise<SkillHubCard[]>;
+  /** The skill hub page's listing: `list` plus the counting day, in `sort` order
+   * (`popular` = most used first; forks stay under their root). */
+  browse(q?: string, mine?: boolean, sort?: SkillHubSort): Promise<SkillHubListing>;
   /** `app` (a slug) adds `missing_tools` against that App's ceiling. */
   get(entryId: string, app?: string): Promise<SkillHubDetail>;
   /** The Skills panel's install door: 409 when a folder of that name is
@@ -206,6 +222,17 @@ export const skillHubApi: SkillHubApi = {
     const resp = await apiFetch(`/skill-hub/entries${suffix}`);
     if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
     return ((await resp.json()) as { entries: SkillHubCard[] }).entries;
+  },
+  async browse(q = "", mine = false, sort = "name") {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (mine) params.set("mine", "true");
+    if (sort !== "name") params.set("sort", sort);
+    const suffix = params.size ? `?${params}` : "";
+    const resp = await apiFetch(`/skill-hub/entries${suffix}`);
+    if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
+    const body = (await resp.json()) as Partial<SkillHubListing>;
+    return { entries: body.entries ?? [], counted_since: body.counted_since ?? "" };
   },
   async get(entryId, app) {
     const suffix = app ? `?app=${encodeURIComponent(app)}` : "";

@@ -517,6 +517,8 @@ const hubCard = (over: Partial<SkillHubCard>): SkillHubCard => ({
   review_verdict: "ok",
   is_mine: false,
   missing_tools: ["query_entity"],
+  installs: 0,
+  uses: 0,
   forks: [],
   ...over,
 });

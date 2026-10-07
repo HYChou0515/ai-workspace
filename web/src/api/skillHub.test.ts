@@ -124,6 +124,17 @@ describe("skillHubApi history (plan-skill-hub-history §8)", () => {
     return calls;
   }
 
+  it("browses with the sort only when it is not the default, and keeps the counting day", async () => {
+    const calls = recording({ entries: [], counted_since: "2026-10-07" });
+    const page = await skillHubApi.browse("deck", true, "popular");
+    await skillHubApi.browse();
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/skill-hub/entries?q=deck&mine=true&sort=popular",
+      "/api/skill-hub/entries",
+    ]);
+    expect(page).toEqual({ entries: [], counted_since: "2026-10-07" });
+  });
+
   it("asks for each history read at its route, the revision in the path encoded", async () => {
     const calls = recording({ events: [], files: [] });
     await skillHubApi.history("e1");
