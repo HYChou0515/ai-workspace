@@ -121,6 +121,7 @@
 | [plan-blob-gc-job.md](plan-blob-gc-job.md) | Blob GC 改成 job：API 只負責提出要求 |
 | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
 | [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
+| [plan-tool-running-version.md](plan-tool-running-version.md) | 第三方工具「沙盒裡實際在跑哪一版」：建立沙盒時把掛的 `{sha, version}` 寫進共用位址列；AI 的工具說明與工具選單改說實際版本，不一致時只告知、選單一顆「關閉沙盒以更新」；查不到當最新 |
 
 ## 前端與介面
 
