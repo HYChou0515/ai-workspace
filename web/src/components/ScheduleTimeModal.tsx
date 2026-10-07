@@ -7,6 +7,12 @@
  * (`with`) are not here — changing those is a different act. The fields shown
  * follow the period, and the server keeps only the ones that period reads.
  *
+ * On the VIEWER's clock (`docs/plan-schedule-overview-polish.md` decision 6):
+ * the form opens on the row moved into the viewer's zone when it moves cleanly
+ * (else as written, in its own zone), the zone is picked by its name — never
+ * typed as an IANA id — and the time is two 24-hour selects, because a time
+ * input draws 上午/下午 or AM/PM in some locales while the table reads 24-hour.
+ *
  * A new time is a new schedule to the platform, so the note under the fields
  * says what that costs BEFORE the press (decision 16): it starts from the next
  * time on, its history starts over, and "Run as me" has to be pressed again.
@@ -14,36 +20,75 @@
  * Holding unsaved work, every deliberate exit goes through `useDirtyClose`;
  * `dirty` is measured against what the modal opened with (`sameShape`).
  */
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type Period, type RowRef, type ScheduleTime, ScheduleActionError } from "../api/schedules";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
+import { DOWS, moveTime, rowTime, validZone, zoneName } from "../lib/scheduleTime";
+import { useViewerClock } from "../lib/viewerClock";
 import { ModalShell } from "./ModalShell";
 
 const PERIODS: Period[] = ["minutes", "hourly", "daily", "weekly", "monthly"];
-const DOWS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
 
-/** The row as written, read into the form's shape — the parser's defaults
- * (`daily`, `00:00`) for what it leaves out. */
-export function timeOf(raw: unknown): ScheduleTime {
+/** The row as written, read into the form's shape on the viewer's clock — the
+ * parser's defaults (`daily`, `00:00`, UTC) for what it leaves out. A daily /
+ * weekly / monthly time is moved into `viewer` through its next occurrence
+ * (`refMs`) when it moves cleanly; one that does not stays in its own zone. A
+ * minutes / hourly row reads the same in any zone and opens in the viewer's. */
+export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTime {
   const r: Record<string, unknown> =
     raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const every = PERIODS.includes(r.every as Period) ? (r.every as Period) : "daily";
-  return {
+  const written = rowTime(raw);
+  const every = PERIODS.includes(written.every as Period) ? (written.every as Period) : "daily";
+  const form: ScheduleTime = {
     every,
     n: typeof r.n === "number" ? r.n : 15,
-    at: typeof r.at === "string" && r.at ? r.at : "00:00",
-    dow: typeof r.dow === "string" && r.dow ? r.dow : "mon",
+    at: /^\d{2}:\d{2}$/.test(written.at) ? written.at : "00:00",
+    dow: written.dow && (DOWS as readonly string[]).includes(written.dow) ? written.dow : "mon",
     dom: typeof r.dom === "number" ? r.dom : 1,
-    tz: typeof r.tz === "string" ? r.tz : "",
+    tz: written.tz,
   };
+  if (every === "minutes" || every === "hourly") return { ...form, tz: viewer };
+  const moved = moveTime({ ...written, every, at: form.at ?? "00:00", dow: form.dow ?? "mon", dom: form.dom ?? 1 }, viewer, refMs);
+  if (moved === null) return form;
+  // Only a weekly row's weekday moves; a daily one's occurrence has a weekday
+  // too, which is not the row's.
+  return { ...form, at: moved.at, dow: every === "weekly" ? moved.dow : form.dow, tz: viewer };
+}
+
+/** Every zone the browser knows, by name — the viewer's own first, then the
+ * one the row is in, then UTC, then the rest named with their city (several
+ * share a name: 中歐時間 is Berlin and Paris). */
+function useZoneOptions(viewer: string, current: string, locale: string, t: ReturnType<typeof useT>) {
+  return useMemo(() => {
+    const first: { value: string; label: string }[] = [
+      { value: viewer, label: t("schedules.edit.yourZone", { zone: zoneName(viewer, locale) }) },
+    ];
+    for (const zone of [current, "UTC"]) {
+      if (zone && !first.some((o) => o.value === zone)) {
+        first.push({ value: zone, label: validZone(zone) ? zoneName(zone, locale) : zone });
+      }
+    }
+    const all =
+      typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    const rest = all
+      .filter((zone) => !first.some((o) => o.value === zone))
+      .map((zone) => ({
+        value: zone,
+        label: `${zoneName(zone, locale)}（${zone.slice(zone.lastIndexOf("/") + 1).replace(/_/g, " ")}）`,
+      }));
+    return { first, rest };
+  }, [viewer, current, locale, t]);
 }
 
 export function ScheduleTimeModal({
   raw,
+  nextMs,
   rowRef,
   onSave,
   onSaved,
@@ -51,6 +96,8 @@ export function ScheduleTimeModal({
 }: {
   /** The row as written — the form opens on it. */
   raw: unknown;
+  /** When it runs next — which daylight saving its time is moved with. */
+  nextMs?: number | null;
   rowRef: RowRef;
   /** Sends the new time; rejects with the server's reason. */
   onSave: (ref: RowRef, time: ScheduleTime) => Promise<void>;
@@ -58,8 +105,10 @@ export function ScheduleTimeModal({
   onClose: () => void;
 }) {
   const t = useT();
+  const clock = useViewerClock();
   const titleId = useId();
-  const [initial] = useState(() => timeOf(raw));
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [initial] = useState(() => timeOf(raw, clock.viewer, nextMs ?? clock.now));
   const [draft, setDraft] = useState<ScheduleTime>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +116,15 @@ export function ScheduleTimeModal({
   const attemptClose = useDirtyClose(dirty, onClose);
   const set = (patch: Partial<ScheduleTime>) => setDraft((d) => ({ ...d, ...patch }));
   const usesAt = draft.every === "daily" || draft.every === "weekly" || draft.every === "monthly";
+  const [hh, mm] = (draft.at ?? "00:00").split(":");
+  const zones = useZoneOptions(clock.viewer, initial.tz ?? "", clock.locale, t);
+
+  // Focus the title, not the first field: a field's focus ring is the accent
+  // colour and read as an error on a form nobody has touched yet. ModalShell
+  // leaves focus where the content put it (it runs after this).
+  useLayoutEffect(() => {
+    titleRef.current?.focus();
+  }, []);
 
   const submit = async () => {
     setBusy(true);
@@ -90,7 +148,12 @@ export function ScheduleTimeModal({
       maxWidth="92vw"
       panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}
     >
-      <h2 id={titleId} style={{ margin: 0, fontSize: pxToRem(14), fontWeight: 600 }}>
+      <h2
+        id={titleId}
+        ref={titleRef}
+        tabIndex={-1}
+        style={{ margin: 0, fontSize: pxToRem(14), fontWeight: 600, outline: "none" }}
+      >
         {t("schedules.edit.title")}
       </h2>
       <label style={field}>
@@ -154,27 +217,60 @@ export function ScheduleTimeModal({
         </label>
       ) : null}
       {usesAt ? (
-        <label style={field}>
-          {t("schedules.edit.at")}
-          <input
-            className="input"
-            type="time"
-            value={draft.at}
-            onChange={(e) => set({ at: e.target.value })}
-            aria-label={t("schedules.edit.at")}
-          />
-        </label>
+        <fieldset style={{ ...field, border: 0, padding: 0, margin: 0 }}>
+          <legend style={{ padding: 0, marginBottom: 4 }}>{t("schedules.edit.at")}</legend>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <select
+              className="input"
+              value={hh}
+              onChange={(e) => set({ at: `${e.target.value}:${mm}` })}
+              aria-label={t("schedules.edit.hour")}
+            >
+              {HOURS.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
+            :
+            <select
+              className="input"
+              value={mm}
+              onChange={(e) => set({ at: `${hh}:${e.target.value}` })}
+              aria-label={t("schedules.edit.minute")}
+            >
+              {MINUTES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+        </fieldset>
       ) : null}
       <label style={field}>
         {t("schedules.edit.tz")}
-        <input
+        <select
           className="input"
-          type="text"
           value={draft.tz}
-          placeholder="UTC"
           onChange={(e) => set({ tz: e.target.value })}
           aria-label={t("schedules.edit.tz")}
-        />
+        >
+          {zones.first.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+          {zones.rest.length > 0 ? (
+            <optgroup label={t("schedules.edit.otherZones")}>
+              {zones.rest.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+        </select>
       </label>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
         {t("schedules.edit.note")}

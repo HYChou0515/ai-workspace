@@ -25,11 +25,18 @@ import { qk } from "../api/queryKeys";
 import { ScheduleActionError } from "../api/schedules";
 import { translate } from "../lib/i18n";
 import { readScheduleOverviewPrefs } from "../lib/scheduleOverviewPrefs";
+import { ViewerClockPin } from "../lib/viewerClock";
 import { QueryWrap } from "../test/queryWrapper";
-import { SchedulesOverviewPage, orderRows, timeOf } from "./SchedulesOverviewPage";
+import { SchedulesOverviewPage, orderRows, placeOf, refreshEvery } from "./SchedulesOverviewPage";
 
 const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
   translate("zh-TW", key, vars);
+
+// The viewer reads in Taipei on Thursday 2026-10-08 at 14:00 — pinned, because
+// the machine a test runs on has a zone of its own.
+const TPE = "Asia/Taipei";
+const NOW = Date.UTC(2026, 9, 8, 6, 0);
+const MIN = 60000;
 
 const row = (over: Partial<OverviewRow>): OverviewRow => ({
   slug: "rca",
@@ -44,7 +51,7 @@ const row = (over: Partial<OverviewRow>): OverviewRow => ({
   describe: "daily at 09:00 UTC",
   runnable: true,
   next_at: "2026-10-08 09:00",
-  next_ms: 2_000,
+  next_ms: NOW + 15 * MIN,
   due_now: false,
   tz: "UTC",
   known: true,
@@ -55,6 +62,8 @@ const row = (over: Partial<OverviewRow>): OverviewRow => ({
   can_run: true,
   can_read: true,
   page_path: "",
+  page_title: "",
+  run_title: "",
   ...over,
 });
 
@@ -72,23 +81,15 @@ function client(data: Partial<ScheduleOverview> = {}, over: Partial<SchedulesApi
 function Wrap({ children }: { children: React.ReactNode }) {
   return (
     <MemoryRouter>
-      <QueryWrap>{children}</QueryWrap>
+      <ViewerClockPin viewer={TPE} now={NOW}>
+        <QueryWrap>{children}</QueryWrap>
+      </ViewerClockPin>
     </MemoryRouter>
   );
 }
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
-
-describe("timeOf", () => {
-  it("reads an instant in the zone given, and an unusable zone as UTC like the server", () => {
-    const at = Date.UTC(2026, 9, 7, 11, 2);
-    expect(timeOf(at, "Asia/Taipei")).toBe("2026-10-07 19:02 Asia/Taipei");
-    expect(timeOf(at, "")).toBe("2026-10-07 11:02 UTC");
-    expect(timeOf(at, "Not/AZone")).toBe("2026-10-07 11:02 UTC");
-    expect(timeOf(null, "UTC")).toBe("");
-  });
-});
 
 describe("orderRows", () => {
   const taipei = row({ run: "tw", next_at: "2026-10-08 09:00", tz: "Asia/Taipei", next_ms: 1_000 });
@@ -100,12 +101,12 @@ describe("orderRows", () => {
   });
 
   it("puts last runs that need somebody first, most recent first, then the rest by next run", () => {
-    const failed = row({ run: "failed", last_run: { run_id: "r1", status: "error", started: 5, ended: 6 } });
+    const failed = row({ run: "failed", last_run: { run_id: "r1", status: "error", started: 5, ended: 6, by_hand: false } });
     const review = row({
       run: "review",
-      last_run: { run_id: "r2", status: "awaiting_human", started: 9, ended: null },
+      last_run: { run_id: "r2", status: "awaiting_human", started: 9, ended: null, by_hand: false },
     });
-    const fine = row({ run: "fine", last_run: { run_id: "r3", status: "done", started: 1, ended: 2 } });
+    const fine = row({ run: "fine", next_ms: 2_000, last_run: { run_id: "r3", status: "done", started: 1, ended: 2, by_hand: false } });
 
     expect(orderRows([fine, utc, failed, review, taipei], "trouble").map((r) => r.run)).toEqual([
       "review",
@@ -124,53 +125,84 @@ describe("SchedulesOverviewPage", () => {
     expect(await screen.findByText(word("scheduleOverview.empty"))).toBeInTheDocument();
   });
 
-  it("shows where each schedule lives, its next run and that it never ran", async () => {
+  it("links the last run to the schedule's own conversation", async () => {
+    const ran = row({ last_run: { run_id: "r1", status: "error", started: 1, ended: 2, by_hand: false } });
+    render(<SchedulesOverviewPage client={client({ rows: [ran] })} />, { wrapper: Wrap });
+
+    const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.error")) });
+    expect(link).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules");
+    expect(link).not.toHaveTextContent(word("scheduleOverview.byHand"));
+  });
+
+  it("tags a last run started by Run now", async () => {
+    const pressed = row({ last_run: { run_id: "r1", status: "done", started: NOW - 5 * MIN, ended: NOW - 4 * MIN, by_hand: true } });
+    render(<SchedulesOverviewPage client={client({ rows: [pressed] })} />, { wrapper: Wrap });
+
+    const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.done")) });
+    expect(link).toHaveTextContent(`${word("scheduleOverview.status.done")}${word("scheduleOverview.byHand")} 4 分鐘前`);
+  });
+
+  it("shows where each schedule lives, its next run and that it never ran — by the names people gave", async () => {
     const page = row({
       item_id: "i-2",
       path: "/reports/scrap/schedules.json",
       page_path: "/reports/scrap/page.ai.yaml",
+      page_title: "Scrap board",
       trigger_id: "wui:i-2:bbbb",
+      run_title: "Daily summary",
     });
-    render(<SchedulesOverviewPage client={client({ rows: [row({}), page] })} />, { wrapper: Wrap });
+    const untitled = row({
+      item_id: "i-3",
+      path: "/reports/yield/schedules.json",
+      trigger_id: "wui:i-3:cccc",
+    });
+    render(<SchedulesOverviewPage client={client({ rows: [row({}), page, untitled] })} />, { wrapper: Wrap });
 
     const first = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
     expect(within(first).getByRole("link", { name: "Line 3" })).toHaveAttribute("href", "/a/rca/i-1");
-    expect(within(first).getByText("2026-10-08 09:00 UTC")).toBeInTheDocument();
+    expect(first).toHaveTextContent(word("scheduleOverview.itemOwn"));
+    expect(within(first).getByText("15 分鐘後")).toBeInTheDocument();
     expect(within(first).getByText(word("scheduleOverview.never"))).toBeInTheDocument();
+    // A workflow with no title is named by its id.
+    expect(first).toHaveTextContent("report");
     const second = screen.getByTestId("schedule-i-2/reports/scrap/schedules.json#0");
     expect(
-      within(second).getByRole("link", { name: word("scheduleOverview.page", { folder: "/reports/scrap" }) }),
+      within(second).getByRole("link", { name: word("scheduleOverview.page", { page: "Scrap board" }) }),
     ).toHaveAttribute("href", expect.stringContaining("/w/rca/i-2/reports/scrap/page.ai.yaml"));
+    expect(second).toHaveTextContent("Daily summary");
+    expect(second).not.toHaveTextContent("report");
+    // A page never Deployed (or with no title) is named by its folder.
+    const third = screen.getByTestId("schedule-i-3/reports/yield/schedules.json#0");
+    expect(third).toHaveTextContent(word("scheduleOverview.page", { page: "/reports/yield" }));
   });
 
-  it("links the last run to the schedule's own conversation", async () => {
-    const ran = row({ last_run: { run_id: "r1", status: "error", started: 1, ended: 2 } });
-    render(<SchedulesOverviewPage client={client({ rows: [ran] })} />, { wrapper: Wrap });
-
-    const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.error")) });
-    expect(link).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa");
-  });
-
-  it("shows the last run in the schedule's own zone, like the next one", async () => {
-    // 2026-10-07 11:02 UTC is 19:02 in Taipei; a row that says "next 09:00 UTC"
-    // beside "last 下午7:02" (the viewer's clock, unlabelled) reads as if the
-    // last run came after the next.
-    const ran = row({
-      tz: "UTC",
-      last_run: { run_id: "r1", status: "done", started: Date.UTC(2026, 9, 7, 11, 1), ended: Date.UTC(2026, 9, 7, 11, 2) },
+  it("reads every time on the viewer's clock, with no zone label", async () => {
+    // A row with no zone is UTC — the sweep's — and a Taipei row beside it:
+    // the table used to label one UTC and the other Asia/Taipei.
+    const utc = row({
+      raw: { every: "daily", at: "09:00", run: "report" },
+      next_ms: Date.UTC(2026, 9, 9, 9, 0),
+      last_run: { run_id: "r1", status: "done", started: null, ended: Date.UTC(2026, 9, 8, 5, 30), by_hand: false },
     });
     const taipei = row({
       item_id: "i-2",
       trigger_id: "wui:i-2:bbbb",
-      tz: "Asia/Taipei",
-      last_run: { run_id: "r2", status: "done", started: null, ended: Date.UTC(2026, 9, 7, 11, 2) },
+      tz: TPE,
+      raw: { every: "weekly", dow: "mon", at: "08:30", tz: TPE, run: "report" },
+      next_ms: Date.UTC(2026, 9, 12, 0, 30),
     });
-    render(<SchedulesOverviewPage client={client({ rows: [ran, taipei] })} />, { wrapper: Wrap });
+    render(<SchedulesOverviewPage client={client({ rows: [utc, taipei] })} />, { wrapper: Wrap });
 
     const first = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
-    expect(within(first).getByRole("link", { name: /2026-10-07 11:02 UTC/ })).toBeInTheDocument();
+    expect(within(first).getByText("每天 17:00")).toHaveAttribute("title", "設定為：每天 09:00（世界標準時間）");
+    expect(within(first).getByText("明天 17:00")).toHaveAttribute("title", "2026/10/9（週五）17:00");
+    expect(within(first).getByRole("link", { name: /30 分鐘前/ })).toBeInTheDocument();
     const second = screen.getByTestId("schedule-i-2/.workflows/schedules.json#0");
-    expect(within(second).getByRole("link", { name: /2026-10-07 19:02 Asia\/Taipei/ })).toBeInTheDocument();
+    expect(within(second).getByText("每週一 08:30")).toBeInTheDocument();
+    expect(within(second).getByText("10/12（週一）08:30")).toBeInTheDocument();
+    const table = screen.getByRole("table");
+    expect(table).not.toHaveTextContent("UTC");
+    expect(table).not.toHaveTextContent("Asia/Taipei");
   });
 
   it("says why a schedule will not run where its next run would be", async () => {
@@ -192,12 +224,14 @@ describe("SchedulesOverviewPage", () => {
     const rows = [row({}), row({ slug: "pm", item_id: "p-1", trigger_id: "wui:p-1:cccc" })];
     render(<SchedulesOverviewPage client={client({ rows })} />, { wrapper: Wrap });
     await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
-    expect(screen.queryByRole("region")).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "根因分析" })).toBeNull();
 
     fireEvent.change(screen.getByLabelText(word("scheduleOverview.group")), { target: { value: "app" } });
 
-    expect(await screen.findByRole("region", { name: "根因分析" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "專案管理" })).toBeInTheDocument();
+    // ONE table, so the columns line up across groups; a group is a heading row.
+    expect(await screen.findByRole("columnheader", { name: "根因分析" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "專案管理" })).toBeInTheDocument();
+    expect(screen.getAllByRole("table")).toHaveLength(1);
     expect(readScheduleOverviewPrefs()).toEqual({ group: "app", sort: "next" });
   });
 
@@ -208,7 +242,7 @@ describe("SchedulesOverviewPage", () => {
       item_id: "i-9",
       next_ms: 9,
       trigger_id: "wui:i-9:dddd",
-      last_run: { run_id: "r", status: "error", started: 1, ended: 2 },
+      last_run: { run_id: "r", status: "error", started: 1, ended: 2, by_hand: false },
     });
     render(<SchedulesOverviewPage client={client({ rows: [fine, failed] })} />, { wrapper: Wrap });
     await screen.findByTestId("schedule-i-9/.workflows/schedules.json#0");
@@ -220,6 +254,17 @@ describe("SchedulesOverviewPage", () => {
       expect(rows[0]).toHaveAttribute("data-testid", "schedule-i-9/.workflows/schedules.json#0");
     });
     expect(readScheduleOverviewPrefs().sort).toBe("trouble");
+    // Something needs attention, so the order shows it — nothing to explain.
+    expect(screen.queryByText(word("scheduleOverview.sort.calm"))).toBeNull();
+  });
+
+  it("says so when nothing needs attention, instead of looking like the sort did nothing", async () => {
+    render(<SchedulesOverviewPage client={client()} />, { wrapper: Wrap });
+    await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+    fireEvent.change(screen.getByLabelText(word("scheduleOverview.sort")), { target: { value: "trouble" } });
+
+    expect(await screen.findByText(word("scheduleOverview.sort.calm"))).toBeInTheDocument();
   });
 
   it("offers a reader no way to change or run a schedule", async () => {
@@ -245,7 +290,7 @@ describe("SchedulesOverviewPage", () => {
     const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
 
     fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
-    expect(await within(tr).findByText(word("schedules.started"))).toBeInTheDocument();
+    expect(await within(tr).findByRole("status")).toHaveTextContent(word("schedules.started"));
     expect(c.runNow).toHaveBeenCalledWith("rca", "i-1", {
       path: "/.workflows/schedules.json",
       trigger_id: "wui:i-1:aaaa",
@@ -255,13 +300,81 @@ describe("SchedulesOverviewPage", () => {
     expect(await within(tr).findByRole("alert")).toHaveTextContent("still going");
   });
 
+  it("leads from Run now to the run, until the row's last run is that run", async () => {
+    const before = { enabled: true, rows: [row({})], files: [] };
+    const after = {
+      ...before,
+      rows: [row({ last_run: { run_id: "run-1", status: "running", started: NOW, ended: null, by_hand: true } })],
+    };
+    const c = client({}, { overview: vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after) });
+    render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+    const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+    fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
+
+    // The refetch after the press already carries the run: the last-run cell
+    // says it all, so the note goes.
+    const last = await within(tr).findByRole("link", { name: new RegExp(word("scheduleOverview.status.running")) });
+    expect(last).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules");
+    await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
+  });
+
+  it("links the note to the run while the row does not show it yet", async () => {
+    const c = client();
+    render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+    const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+    fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
+
+    const note = await within(tr).findByRole("status");
+    expect(within(note).getByRole("link", { name: word("scheduleOverview.seeRun") })).toHaveAttribute(
+      "href",
+      "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules",
+    );
+  });
+
+  it("asks again on its own while a run on it is going", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const going = row({ last_run: { run_id: "r", status: "running", started: 1, ended: null, by_hand: false } });
+      const c = client({ rows: [going] });
+      render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+      await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+      expect(c.overview).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5500);
+
+      expect(c.overview).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes every few seconds while a run is going, and every minute otherwise", () => {
+    const going = row({ last_run: { run_id: "r", status: "running", started: 1, ended: null, by_hand: false } });
+    const done = row({ last_run: { run_id: "r", status: "done", started: 1, ended: 2, by_hand: false } });
+    expect(refreshEvery({ enabled: true, rows: [done, going], files: [] })).toBe(5000);
+    expect(refreshEvery({ enabled: true, rows: [done, row({})], files: [] })).toBe(60000);
+    expect(refreshEvery(undefined)).toBe(60000);
+  });
+
   it("removes a schedule after asking", async () => {
     const c = client();
     render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
     const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
 
-    fireEvent.click(within(tr).getByRole("button", { name: new RegExp(`^${word("schedules.remove")}`) }));
+    const button = within(tr).getByRole("button", { name: new RegExp(`^${word("schedules.remove")}`) });
+    expect(button).toHaveAttribute("data-variant", "danger");
+    fireEvent.click(button);
     const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(
+      word("scheduleOverview.removeConfirm", { place: "Line 3", period: "每天 17:00", workflow: "report" }),
+    );
+    // The safe answer first.
+    expect(within(dialog).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      word("schedules.cancel"),
+      word("schedules.remove"),
+    ]);
     fireEvent.click(within(dialog).getByRole("button", { name: word("schedules.remove") }));
 
     await waitFor(() =>
@@ -328,7 +441,8 @@ describe("SchedulesOverviewPage", () => {
     fireEvent.click(within(tr).getByRole("button", { name: word("schedules.editTime") }));
     const modal = await screen.findByTestId("schedule-time-modal");
     expect(within(modal).getByText(word("schedules.edit.note"))).toBeInTheDocument();
-    fireEvent.change(within(modal).getByLabelText(word("schedules.edit.at")), { target: { value: "10:30" } });
+    fireEvent.change(within(modal).getByLabelText(word("schedules.edit.hour")), { target: { value: "10" } });
+    fireEvent.change(within(modal).getByLabelText(word("schedules.edit.minute")), { target: { value: "30" } });
     fireEvent.click(within(modal).getByTestId("schedule-time-save"));
 
     await waitFor(() => expect(screen.queryByTestId("schedule-time-modal")).toBeNull());
@@ -336,7 +450,7 @@ describe("SchedulesOverviewPage", () => {
       "rca",
       "i-1",
       { path: "/.workflows/schedules.json", trigger_id: "wui:i-1:aaaa" },
-      expect.objectContaining({ every: "daily", at: "10:30" }),
+      expect.objectContaining({ every: "daily", at: "10:30", tz: TPE }),
     );
   });
 
@@ -347,9 +461,18 @@ describe("SchedulesOverviewPage", () => {
 
     fireEvent.click(within(tr).getByRole("button", { name: word("schedules.editTime") }));
     const modal = await screen.findByTestId("schedule-time-modal");
-    fireEvent.change(within(modal).getByLabelText(word("schedules.edit.at")), { target: { value: "10:30" } });
+    fireEvent.change(within(modal).getByLabelText(word("schedules.edit.hour")), { target: { value: "10" } });
+    fireEvent.change(within(modal).getByLabelText(word("schedules.edit.minute")), { target: { value: "30" } });
     fireEvent.click(within(modal).getByTestId("schedule-time-save"));
 
     expect(await within(modal).findByTestId("schedule-time-error")).toHaveTextContent("at must be HH:MM");
+  });
+});
+
+describe("placeOf", () => {
+  it("names the item, and a page by its title — its folder when it has none", () => {
+    expect(placeOf(row({}), word)).toBe("Line 3");
+    expect(placeOf(row({ path: "/r/s/schedules.json", page_title: "Board" }), word)).toBe("Line 3 · 頁面「Board」");
+    expect(placeOf(row({ path: "/r/s/schedules.json" }), word)).toBe("Line 3 · 頁面「/r/s」");
   });
 });

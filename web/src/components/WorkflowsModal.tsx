@@ -18,6 +18,8 @@ import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { useT } from "../lib/i18n";
 import { describeSchedule } from "../lib/describeSchedule";
+import { fullTime, whenText } from "../lib/scheduleTime";
+import { useViewerClock } from "../lib/viewerClock";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
@@ -50,6 +52,7 @@ export function WorkflowsModal({
   onRun?: (chatId: string) => void;
 }) {
   const t = useT();
+  const clock = useViewerClock();
   const qc = useQueryClient();
   const dialog = useDialog();
   const workflows = useWorkspaceWorkflows(slug, itemId);
@@ -163,11 +166,13 @@ export function WorkflowsModal({
     const choice = await dialog.confirm({
       title: t("schedules.removeTitle"),
       body: t("schedules.removeConfirm", {
-        what: `${describeSchedule(row.raw, t)} → ${row.run || "?"}`,
+        what: `${describeSchedule(row, clock, t).text} → ${row.run_title || row.run || "?"}`,
       }),
+      // The safe answer first: the destructive one is never what a stray
+      // Enter or the first focus lands on.
       actions: [
-        { id: "remove", label: t("schedules.remove"), variant: "danger" },
         { id: "cancel", label: t("schedules.cancel") },
+        { id: "remove", label: t("schedules.remove"), variant: "danger" },
       ],
     });
     if (choice !== "remove") return;
@@ -341,8 +346,11 @@ export function WorkflowsModal({
                   }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>
-                      {describeSchedule(row.raw, t)}
+                    <div
+                      style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}
+                      title={describeSchedule(row, clock, t).set || undefined}
+                    >
+                      {describeSchedule(row, clock, t).text}
                       {" → "}
                       {invalid ? rawRun(row.raw) : titleOf(row.run)}
                     </div>
@@ -361,9 +369,11 @@ export function WorkflowsModal({
                         </span>
                       ) : !row.runnable ? null : row.due_now ? (
                         t("schedules.nextSweep")
-                      ) : (
-                        t("schedules.next", { at: `${row.next_at} ${row.tz}` })
-                      )}
+                      ) : row.next_ms !== null ? (
+                        <span title={fullTime(row.next_ms, clock.viewer, t)}>
+                          {t("schedules.next", { at: whenText(row.next_ms, clock.now, clock.viewer, t) })}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                   {mayRunNow(row, sched.can_run) ? (
@@ -395,7 +405,7 @@ export function WorkflowsModal({
                     <button
                       type="button"
                       data-testid={`schedule-remove-${row.index}`}
-                      aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
+                      aria-label={`${t("schedules.remove")} ${describeSchedule(row, clock, t).text}`}
                       disabled={busy}
                       onClick={() => void removeSchedule(row)}
                       style={pillBtn}
@@ -418,6 +428,7 @@ export function WorkflowsModal({
             {editing ? (
               <ScheduleTimeModal
                 raw={editing.raw}
+                nextMs={editing.next_ms}
                 rowRef={rowRef(editing)}
                 onSave={(ref, time) => schedulesApi.editTime(slug, itemId, ref, time)}
                 onSaved={() => {
