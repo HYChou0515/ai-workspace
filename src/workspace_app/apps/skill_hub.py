@@ -263,6 +263,12 @@ def validate_skill_payload(folder: str, payload: Mapping[str, bytes]) -> list[st
             f"body is {len(body)} characters; the loader refuses anything over {SKILL_BODY_CAP}"
         )
 
+    if ".gitattributes" in payload:
+        problems.append(
+            "a top-level `.gitattributes` is reserved — the skill hub keeps its own there "
+            "(one inside a subfolder is fine)"
+        )
+
     # The size cap is not here: it is a rule over sizes, checked by the
     # publisher BEFORE the folder is read (`skill_size_problem`) and guaranteed
     # by `SkillHubStore.publish`, where the entry is made.
@@ -700,14 +706,22 @@ class SkillHubStore:
         alone (G24). Also repairs the one tag a crash between the row write
         and the tag can leave missing — the current revision's (G8)."""
         rm = self._rm()
+
+        def revisions() -> list[tuple[str, dt.datetime, SkillHubEntry]]:
+            out = []
+            for revision_id in rm.list_revisions(entry_id):
+                res = rm.get_resource_revision(entry_id, revision_id)
+                if isinstance(res.data, SkillHubEntry):
+                    out.append((revision_id, res.info.created_time, res.data))
+            return out
+
         events: list[HistoryEvent] = []
         first_seen: dict[str, str] = {}
         prev: SkillHubEntry | None = None
         last_revision = ""
-        for revision_id in rm.list_revisions(entry_id):
-            res = rm.get_resource_revision(entry_id, revision_id)
-            row = res.data
-            if not isinstance(row, SkillHubEntry) or row.pending or not row.commit:
+        # One read per revision: off the loop, like every other store read here.
+        for revision_id, made, row in await asyncio.to_thread(revisions):
+            if row.pending or not row.commit:
                 continue
             last_revision = revision_id
 
@@ -718,7 +732,7 @@ class SkillHubStore:
                 to_revision: str = "",
                 visibility: str = "",
                 revision_id: str = revision_id,
-                at: dt.datetime = res.info.created_time,
+                at: dt.datetime = made,
                 row: SkillHubEntry = row,
             ) -> HistoryEvent:
                 return HistoryEvent(
@@ -745,13 +759,14 @@ class SkillHubStore:
             elif row.permission != prev.permission:
                 events.append(event("permission", row.owner, visibility=row.permission.visibility))
             prev = row
-        if events:
-            events[-1].current = True
         if prev is not None and last_revision not in await self.repos.tagged_revisions(entry_id):
             await self.repos.tag(entry_id, last_revision, prev.commit)
         current = self.get(entry_id)
         if current is None or current.owner != viewer:
             events = [e for e in events if e.kind != "permission"]
+        # After the owner-only rows are dropped, so every reader has one.
+        if events:
+            events[-1].current = True
         events.reverse()
         return events
 
@@ -779,30 +794,40 @@ class SkillHubStore:
         )
         texts_a = (
             await self.repos.read(
-                entry_id, a, paths=[p for p in changed if p in old and old[p].lfs is None]
+                entry_id,
+                a,
+                paths=[
+                    p
+                    for p in changed
+                    if p in old and old[p].lfs is None and old[p].size <= DIFF_TEXT_CAP
+                ],
             )
             if changed
             else {}
         )
         texts_b = (
             await self.repos.read(
-                entry_id, b, paths=[p for p in changed if p in new and new[p].lfs is None]
+                entry_id,
+                b,
+                paths=[
+                    p
+                    for p in changed
+                    if p in new and new[p].lfs is None and new[p].size <= DIFF_TEXT_CAP
+                ],
             )
             if changed
             else {}
+        )
+        # Off the loop: even capped, a line diff is CPU the requests behind it wait on.
+        patches = await asyncio.to_thread(
+            lambda: {p: _patch(p, old.get(p), new.get(p), texts_a, texts_b) for p in changed}
         )
         out: list[FileChange] = []
         for path in changed:
             status: Literal["added", "removed", "changed"] = (
                 "added" if path not in old else "removed" if path not in new else "changed"
             )
-            out.append(
-                FileChange(
-                    path=path,
-                    status=status,
-                    patch=_patch(path, old.get(path), new.get(path), texts_a, texts_b),
-                )
-            )
+            out.append(FileChange(path=path, status=status, patch=patches[path]))
         return out
 
     async def rollback(self, entry_id: str, revision_id: str, *, expected: str) -> str:
@@ -1037,6 +1062,11 @@ class SkillHubStore:
         )
 
 
+#: A text file larger than this (on either side) is compared, not diffed:
+#: a line diff is quadratic in the worst case and runs on a request.
+DIFF_TEXT_CAP = 256 * 1024
+
+
 def _patch(
     path: str,
     old: TreeFile | None,
@@ -1046,6 +1076,8 @@ def _patch(
 ) -> str | None:
     """A unified diff of one file, or ``None`` when either side is not text."""
     if (old is not None and old.lfs is not None) or (new is not None and new.lfs is not None):
+        return None
+    if any(f is not None and f.size > DIFF_TEXT_CAP for f in (old, new)):
         return None
     try:
         a = texts_a[path].decode() if old is not None else ""

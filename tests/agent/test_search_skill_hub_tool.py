@@ -283,3 +283,19 @@ def test_the_chat_parses_the_marker_the_tool_writes():
 
     fe = Path(__file__).parents[2] / "web" / "src" / "renderers" / "skillHubEntry.ts"
     assert f'"{SKILL_HUB_ENTRY_MARKER.encode("unicode_escape").decode()}"' in fe.read_text()
+
+
+async def test_one_entry_whose_repo_is_gone_costs_its_date_not_the_search():
+    """Review round 1 (regression #6): a missing repo raised out of the whole
+    search."""
+    import shutil
+
+    _spec, hub = _hub()
+    broken = await _entry(hub, "alice", "reflow-a", "Solder defects.")
+    fine = await _entry(hub, "bob", "reflow-b", "Solder defects.")
+    shutil.rmtree(hub.repos.path(broken))
+
+    out = await search_skill_hub_impl(_ctx(hub), "reflow")
+
+    assert broken in out and fine in out
+    assert out.count("last updated") == 1

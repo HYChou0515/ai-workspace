@@ -2903,7 +2903,10 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     which of the tools it mentions this App does not have — tell the user
     before installing such a skill; parts of it may not be followable here.
     """
+    import datetime
+
     from ..apps.skill_hub import matches_query, missing_tools_for, nest_forks
+    from ..apps.skill_hub_git import GitError
     from ..apps.skills import hub_entries_here
 
     c = ctx.context
@@ -2933,6 +2936,16 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
         if c.files and c.investigation_id
         else set()
     )
+
+    async def published(entry_id: str, commit: str) -> tuple[str, datetime.date | None]:
+        # One entry's broken repo costs that hit its date, not the whole search.
+        try:
+            return entry_id, (await hub.repos.committed_at(entry_id, commit)).date()
+        except GitError:
+            return entry_id, None
+
+    found = await asyncio.gather(*(published(i, e.commit) for i, e, _f in shown if e.commit))
+    dates = dict(found)
     lines = [f"{len(hits)} skill hub entr{'y' if len(hits) == 1 else 'ies'} match {query!r}:"]
     for i, e, is_fork in shown:
         lineage = ""
@@ -2947,7 +2960,7 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
             f"[written in {e.source_app}; id {i}]"
         )
         installs, uses = counts[i]
-        updated = (await hub.repos.committed_at(i, e.commit)).date() if e.commit else None
+        updated = dates.get(i)
         facts = [
             f"installed {_times(installs)}, used {_times(uses)}",
             *(["already installed in this item"] if i in here else []),

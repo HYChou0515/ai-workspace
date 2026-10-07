@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import msgspec
 
 from .frontmatter import FrontmatterError, parse_frontmatter
-from .skill_hub_git import TreeFile, same_content
+from .skill_hub_git import GitError, TreeFile, same_content
 from .skill_payload import (
     COPYING_FILE,
     ORIGIN_FILE,
@@ -84,6 +84,11 @@ class SkillMeta(msgspec.Struct, frozen=True):
     #: from the hub, so `effective_item_skills` keeps it a workspace skill
     #: (review round 2 of plan-skill-hub).
     copy_of: SkillSource | Literal[""] = ""
+    #: The skill hub entry this folder is an installed copy of (its `.origin`),
+    #: or ``""`` — not a copy, a package copy, or a fork's starting point (the
+    #: user's own, plan-skill-hub-history W4). The one rule for "this item has
+    #: that entry installed": the search tool and the chat card both read it.
+    hub_entry: str = ""
 
 
 @cache
@@ -200,26 +205,9 @@ async def read_workspace_skill(
 
 
 async def hub_entries_here(files: WorkspaceFiles, workspace_id: str) -> set[str]:
-    """The skill hub entries this workspace holds an installed copy of, read
-    off the copies' `.origin` manifests in one batch. A fork's starting point
-    (`forked`) is the user's own and does not count as an install."""
-    from ..filestore.batch import read_all_existing
-
-    prefix = f"/{WORKSPACE_SKILL_DIR}/"
-    manifests = [
-        p
-        for p in await files.ls(workspace_id, prefix)
-        if p.endswith(f"/{ORIGIN_FILE}") and p[len(prefix) :].count("/") == 1
-    ]
-    out: set[str] = set()
-    for raw in (await read_all_existing(files, workspace_id, manifests)).values():
-        try:
-            origin = msgspec.json.decode(raw, type=SkillOrigin)
-        except msgspec.DecodeError:
-            continue
-        if origin.source == "hub" and origin.entry and not origin.forked:
-            out.add(origin.entry)
-    return out
+    """The skill hub entries this workspace holds an installed copy of —
+    :attr:`SkillMeta.hub_entry`, the rule the Skills list reports too."""
+    return {m.hub_entry for m in await workspace_skill_metas(files, workspace_id) if m.hub_entry}
 
 
 async def workspace_skill_payload(
@@ -283,14 +271,19 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     # listing said before it ever read them.
     got = await read_all_existing(files, workspace_id, [*wanted, *manifests])
     copies: dict[str, SkillSource | Literal[""]] = {}
+    installed: dict[str, str] = {}
     for path in manifests:
         if (raw := got.get(path)) is None:
             continue
         dir_name = path[len(prefix) : -len(f"/{ORIGIN_FILE}")]
         try:
-            copies[dir_name] = msgspec.json.decode(raw, type=SkillOrigin).source
+            origin = msgspec.json.decode(raw, type=SkillOrigin)
         except msgspec.DecodeError:  # not JSON, or not this shape — still a copy
             copies[dir_name] = ""
+            continue
+        copies[dir_name] = origin.source
+        if origin.source == "hub" and origin.entry and not origin.forked:
+            installed[dir_name] = origin.entry
     out: list[SkillMeta] = []
     for path in wanted:
         if (raw := got.get(path)) is None:
@@ -300,7 +293,10 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
         if meta is not None:
             out.append(
                 msgspec.structs.replace(
-                    meta, is_copy=dir_name in copies, copy_of=copies.get(dir_name, "")
+                    meta,
+                    is_copy=dir_name in copies,
+                    copy_of=copies.get(dir_name, ""),
+                    hub_entry=installed.get(dir_name, ""),
                 )
             )
     return out
@@ -391,6 +387,8 @@ class SkillState(msgspec.Struct, frozen=True):
     #: like a hub copy, and the panel words Reset / Update by the origin
     #: (#826 review round 1).
     copy_of: SkillSource | Literal[""] = ""
+    #: :attr:`SkillMeta.hub_entry` of the workspace folder, carried through.
+    hub_entry: str = ""
 
 
 def effective_item_skills(
@@ -462,6 +460,7 @@ def effective_item_skills(
                 effective=effective,
                 is_copy=meta.is_copy,
                 copy_of=meta.copy_of,
+                hub_entry=meta.hub_entry,
             )
         )
     return out
@@ -892,7 +891,14 @@ async def install_hub_skill(
     """
     entry = hub.get(entry_id)
     assert entry is not None  # the caller checked `state_for` first
-    payload = await hub.payload_of(entry_id)
+    # The files and the manifest come from ONE read of the row: reading it
+    # again for the files let a publish in between give a copy that names one
+    # version and holds another (review round 1, defect #10).
+    payload = (
+        await hub.repos.read(entry_id, entry.commit)
+        if entry.commit
+        else await hub.payload_of(entry_id)
+    )
     await _write_copy(files, workspace_id, entry.name, payload, hub.copy_manifest(entry_id, entry))
     return entry.name
 
@@ -1009,17 +1015,29 @@ async def _refresh(
         # is read from git only for the files being written.
         assert hub is not None
         repos, entry_id, commit = hub.repos, up.entry, up.commit
-        base: Mapping[str, TreeFile | str] = (
-            await repos.tree(entry_id, origin.commit) if origin.commit else dict(origin.files)
-        )
+        base: Mapping[str, TreeFile | str] = dict(origin.files)
+        if origin.commit:
+            try:
+                base = await repos.tree(entry_id, origin.commit)
+            except GitError:
+                # `.origin` is the copy's own file and can name a version the
+                # repo does not have. Without what was shipped there is no
+                # telling an edit from upstream's change; only a reset (which
+                # needs no baseline) is safe to do.
+                if not force:
+                    raise SkillError(
+                        f"this copy of {name!r} no longer records which version it came from "
+                        "— reset it to the skill hub's version instead (edited files are replaced)"
+                    ) from None
+                base = {}
         current: Mapping[str, TreeFile | str] = await repos.tree(entry_id, commit)
 
         async def fetch(paths: list[str]) -> dict[str, bytes]:
             return await repos.read(entry_id, commit, paths=paths) if paths else {}
 
-        entry = hub.get(entry_id)
-        assert entry is not None  # `resolve_upstream` just found it live
-        manifest = hub.copy_manifest(entry_id, entry)
+        # The version just compared against — not the row read again, which a
+        # publish in between would move.
+        manifest = SkillOrigin(source="hub", files={}, entry=entry_id, commit=commit)
     else:
         payload = up.payload
         base = dict(origin.files)

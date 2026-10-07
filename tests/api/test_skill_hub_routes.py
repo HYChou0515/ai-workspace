@@ -266,7 +266,7 @@ async def test_install_puts_the_copy_in_the_item_and_names_the_missing_tools(har
         for s in harness.client.get(harness.wpath("/skills")).json()["skills"]
         if s["name"] == "triage"
     )
-    assert (row["is_copy"], row["upstream"]) == (True, "live")
+    assert (row["is_copy"], row["upstream"], row["hub_entry"]) == (True, "live", entry)
 
 
 async def test_install_refuses_to_overwrite_and_says_whose_copy_is_there(harness: Harness):
@@ -444,3 +444,26 @@ async def test_installing_from_the_skills_panel_counts(
     await hub.usage.flush()
 
     assert hub.usage.totals([entry]) == {entry: (1, 0)}
+
+
+async def test_refreshing_a_copy_that_lost_its_version_record_is_a_409_with_the_way_out(
+    harness: Harness,
+):
+    """Review round 1 (defect #9): a `.origin` naming a version the repo does
+    not have raised out of the refresh route as a 500."""
+    hub = _hub(harness)
+    entry = await _entry(hub, "alice", "triage")
+    assert (
+        harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry}).status_code
+        == 200
+    )
+    path = "/.skill/triage/.origin"
+    origin = msgspec.json.decode(await harness.filestore.read(harness.iid, path))
+    origin["commit"] = "0" * 40
+    await harness.filestore.write(harness.iid, path, msgspec.json.encode(origin))
+    await _entry(hub, "alice", "triage", description="v2")
+
+    res = harness.client.post(harness.wpath("/skills/triage/refresh"), json={"force": False})
+
+    assert res.status_code == 409, res.text
+    assert "reset" in res.json()["detail"]

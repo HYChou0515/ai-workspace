@@ -77,6 +77,16 @@ def lfs_pointer(data: bytes) -> bytes:
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+def _commit(commit: str) -> str:
+    """`commit`, checked to be a commit id before git sees it: some of these
+    come from a user-writable `.origin`, and anything else — a ref name, an
+    option — is not something to hand git as an argument."""
+    if not _COMMIT.fullmatch(commit):
+        raise GitError(f"not a commit id: {commit!r}")
+    return commit
 
 
 def parse_lfs_pointer(blob: bytes) -> tuple[str, int] | None:
@@ -280,13 +290,13 @@ class SkillHubRepos:
 
     async def committed_at(self, entry_id: str, commit: str) -> dt.datetime:
         """When `commit` was written — when that version was published."""
-        _code, out = await self._git(entry_id, "show", "-s", "--format=%cI", commit)
+        _code, out = await self._git(entry_id, "show", "-s", "--format=%cI", _commit(commit))
         return dt.datetime.fromisoformat(out.decode().strip())
 
     async def parent(self, entry_id: str, commit: str) -> str | None:
         """The commit `commit` was written on top of; ``None`` for a first version."""
         code, out = await self._git(
-            entry_id, "rev-parse", "--verify", "-q", f"{commit}^", check=False
+            entry_id, "rev-parse", "--verify", "-q", f"{_commit(commit)}^", check=False
         )
         return out.decode().strip() if code == 0 else None
 
@@ -323,7 +333,7 @@ class SkillHubRepos:
         """Every file of a version without reading its bytes — except the
         small blobs, read once together to tell an LFS pointer from a file
         (G16). The platform's `.gitattributes` is not the skill's and is left out."""
-        _code, out = await self._git(entry_id, "ls-tree", "-r", "-l", "-z", commit)
+        _code, out = await self._git(entry_id, "ls-tree", "-r", "-l", "-z", _commit(commit))
         listed: dict[str, tuple[str, int]] = {}
         for record in out.split(b"\0"):
             if not record:
@@ -384,6 +394,11 @@ def resolve_git_root(git_root: str, *, durable: bool) -> Path:
             "skill_hub.git_root is not set. Set it to a directory on durable storage "
             "every API pod mounts (and back it up) — it holds the skill hub's version history."
         )
+    import atexit
+    import shutil
     import tempfile
 
-    return Path(tempfile.mkdtemp(prefix="skill-hub-git-"))
+    scratch = Path(tempfile.mkdtemp(prefix="skill-hub-git-"))
+    # Throwaway by definition; one per app built, so it goes when the process does.
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    return scratch

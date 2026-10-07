@@ -117,6 +117,9 @@ async def test_a_fork_from_a_version_lands_in_the_item_as_that_version(harness: 
         if s["name"] == "triage"
     )
     assert (row["upstream"], row["update_available"]) == ("live", False)
+    # A fork's starting point is not an install of the entry (W4): the row
+    # does not name it, so the chat card does not say 「已安裝」.
+    assert row["hub_entry"] == ""
     # A second fork into the same name meets the folder already there.
     again = harness.client.post(
         harness.wpath("/skills/fork"), json={"entry_id": entry, "revision": first}

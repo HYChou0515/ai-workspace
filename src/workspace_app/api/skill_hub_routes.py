@@ -476,7 +476,9 @@ def register_skill_hub_routes(
         _readable(entry_id, get_user_id())
         old = await _version(entry_id, revision)
         names = sorted(await hub.repos.tree(entry_id, old.commit))
-        skill_md = (await hub.repos.read(entry_id, old.commit, paths=["SKILL.md"]))["SKILL.md"]
+        read = await hub.repos.read(entry_id, old.commit, paths=["SKILL.md"])
+        # A version migrated from an empty namespace has none; show nothing.
+        skill_md = read.get("SKILL.md", b"")
         return SkillHubVersion(
             revision=revision,
             commit=old.commit,

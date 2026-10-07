@@ -166,7 +166,16 @@ def without_card_declaration(text: str) -> str:
     """`text` without a trailing skill hub card declaration — what a reader
     that does not draw the card (the export, the video) shows instead."""
     at = text.rfind(SKILL_HUB_ENTRY_MARKER)
-    return text if at < 0 else text[:at]
+    if at < 0:
+        return text
+    # Only a declaration as the tool writes it — the tail, one JSON object
+    # naming an entry. Anything else that happens to carry the marker on a
+    # line (a grep of a log, say) is output, kept whole.
+    try:
+        card = json.loads(text[at + len(SKILL_HUB_ENTRY_MARKER) :])
+    except ValueError:
+        return text
+    return text[:at] if isinstance(card, dict) and isinstance(card.get("entry_id"), str) else text
 
 
 def split_declaration(text: str) -> tuple[str, str]:

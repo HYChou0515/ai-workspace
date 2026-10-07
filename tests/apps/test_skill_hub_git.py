@@ -243,3 +243,21 @@ async def test_a_well_formed_pointer_in_a_text_path_is_still_just_text(tmp_path:
     commit = await repos.write_version("e1", payload, parent=None, author="a", message="1")
 
     assert await repos.read("e1", commit) == payload
+
+
+def test_a_throwaway_root_goes_when_the_process_does() -> None:
+    """Round 1 (regression #8): every app built without a root left one behind."""
+    import sys
+
+    made = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from workspace_app.apps.skill_hub_git import resolve_git_root;"
+            "p = resolve_git_root('', durable=False); (p / 'x').write_text('y'); print(p)",
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    assert made and not Path(made).exists()
