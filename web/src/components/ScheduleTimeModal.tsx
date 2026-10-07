@@ -49,7 +49,9 @@ export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTim
   const form: ScheduleTime = {
     every,
     n: typeof r.n === "number" ? r.n : 15,
-    at: /^\d{2}:\d{2}$/.test(written.at) ? written.at : "00:00",
+    // "9:05" is a time the sweep accepts: padded, never replaced by 00:00
+    // (saving that would move the schedule — review round 1).
+    at: /^\d{1,2}:\d{2}$/.test(written.at) ? written.at.padStart(5, "0") : "00:00",
     dow: written.dow && (DOWS as readonly string[]).includes(written.dow) ? written.dow : "mon",
     dom: typeof r.dom === "number" ? r.dom : 1,
     tz: written.tz,

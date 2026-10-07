@@ -344,6 +344,37 @@ describe("SchedulesOverviewPage", () => {
     await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
   });
 
+  it("does not bring the note back when the next fire replaces the pressed run", async () => {
+    // Review round 1: the note hid while run-1 was last and came back, linking
+    // nowhere useful, when the sweep's run-2 took its place.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const at = (run_id: string) => ({
+        enabled: true,
+        files: [],
+        rows: [row({ last_run: { run_id, status: "done", started: NOW, ended: NOW, by_hand: false } })],
+      });
+      const overview = vi.fn().mockResolvedValueOnce(at("old")).mockResolvedValueOnce(at("run-1"));
+      overview.mockResolvedValue(at("run-2"));
+      const c = client({}, { overview });
+      render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+      const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+      fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
+      await waitFor(() => expect(overview).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
+
+      // The page's own minute refresh brings the next fire.
+      await vi.advanceTimersByTimeAsync(61000);
+      await waitFor(() => expect(overview).toHaveBeenCalledTimes(3));
+      await within(tr).findByText(/完成/);
+
+      expect(within(tr).queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("links the note to the run while the row does not show it yet", async () => {
     const c = client();
     render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });

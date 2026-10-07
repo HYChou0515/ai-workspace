@@ -136,6 +136,10 @@ describe("ScheduleTimeModal", () => {
     });
     expect(timeOf({ run: "r" }, TPE, NOW)).toMatchObject({ at: "08:00", tz: TPE });
     expect(timeOf("not a row", TPE, NOW).every).toBe("daily");
+    // The sweep accepts an unpadded hour (`_looks_like_time`); the form must
+    // open on that time, not on 00:00 — saving would move the schedule.
+    expect(timeOf({ every: "daily", at: "9:05", run: "r" }, "UTC", NOW).at).toBe("09:05");
+    expect(timeOf({ every: "daily", at: "9:05", tz: TPE, run: "r" }, TPE, NOW).at).toBe("09:05");
     // An hourly row moves to the viewer's zone only when its firing minute
     // stays put: not from UTC to Kolkata (+05:30).
     expect(timeOf({ every: "hourly", run: "r" }, TPE, NOW).tz).toBe(TPE);
