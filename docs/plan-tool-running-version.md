@@ -44,8 +44,9 @@ Grilled 2026-10-07 on master `486ce318`. 每條決定標來源：**[user]** = �
 ### 資料
 
 - `tooling/external.py` 新增 `MountedTool(sha: str, version: str)`。
-- `_SandboxAddress` 加 `tools: dict[str, _Mounted] | None = None`。`None` = 不知道（舊列、或建的時候解析失敗）；
-  `{}` = 確定沒掛任何第三方工具。只加有預設值的欄位：舊列照常解碼，沒有 `Schema` 升版、沒有回填。
+- `_SandboxAddress` 加 `tools: dict[str, _Mounted] | None = None`。`None` = 不知道（這個欄位出現前寫的舊列）；
+  `{}` = 確定沒掛任何第三方工具——建立時解析失敗也寫 `{}`，因為那個沙盒確實什麼都沒掛。只加有預設值的欄位：
+  舊列照常解碼，沒有 `Schema` 升版、沒有回填。
 - `IAddressStore.claim` / `swap` 多收 `tools`，與 `handle_id` **同一次寫入**（同一列、同一個 CAS），所以
   讀到的掛載資訊一定屬於讀到的那個位址。新增 `mounted(item_id)`。
 
@@ -77,7 +78,7 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
   prompt 一律英文）。掛載未知 → 不動（D4）。
 - `GET /a/{slug}/items/{id}/tools`：每列加 `running_version`（只在不一致時有值）；整體加
   `update_needs_close: bool` 與 `can_close: bool`（D9 的共用閘）。
-- `ToolsChecklist`：不一致的列顯示「執行中 v1 · 最新 v2」；`ToolsPickerModal` 在 `update_needs_close` 時於
+- `ToolsChecklist`：不一致的列另起一行顯示「執行中 v1 · 最新 v2」（可換行——放在原本那行會被省略號截掉，390px 實測只剩「Runnin…」）；`ToolsPickerModal` 在 `update_needs_close` 時於
   清單上方放一行說明，`can_close` 時加「關閉沙盒以更新」按鈕（`myResourcesApi.closeEnvironment`），成功後
   重抓選單。
 
