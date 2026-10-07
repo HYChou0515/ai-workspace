@@ -28,7 +28,6 @@ import ast
 import asyncio
 import contextlib
 import datetime as dt
-import difflib
 import hashlib
 import logging
 import random
@@ -864,10 +863,16 @@ class SkillHubStore:
             if changed
             else {}
         )
-        # Off the loop: even capped, a line diff is CPU the requests behind it wait on.
-        patches = await asyncio.to_thread(
-            lambda: {p: _patch(p, old.get(p), new.get(p), texts_a, texts_b) for p in changed}
-        )
+        textual = [p for p in changed if _is_text(old.get(p), new.get(p), texts_a, texts_b, p)]
+        # git computes them, a few at a time: one subprocess per file.
+        gate = asyncio.Semaphore(_DIFF_PARALLEL)
+
+        async def patch_of(path: str) -> tuple[str, str]:
+            async with gate:
+                return path, await self.repos.diff_text(entry_id, a, b, path)
+
+        patches: dict[str, str | None] = dict.fromkeys(changed)
+        patches.update(dict(await asyncio.gather(*(patch_of(p) for p in textual))))
         out: list[FileChange] = []
         for path in changed:
             status: Literal["added", "removed", "changed"] = (
@@ -1140,33 +1145,33 @@ class SkillHubStore:
         )
 
 
-#: A text file larger than this (on either side) is compared, not diffed:
-#: a line diff is quadratic in the worst case and runs on a request.
+#: A text file larger than this (on either side) is compared, not diffed
+#: (plan-skill-hub-history W15, the user's call): the patch is shown in a page.
 DIFF_TEXT_CAP = 256 * 1024
 
 
-def _patch(
-    path: str,
+#: How many `git diff` subprocesses one comparison runs at once.
+_DIFF_PARALLEL = 8
+
+
+def _is_text(
     old: TreeFile | None,
     new: TreeFile | None,
     texts_a: Mapping[str, bytes],
     texts_b: Mapping[str, bytes],
-) -> str | None:
-    """A unified diff of one file, or ``None`` when either side is not text."""
+    path: str,
+) -> bool:
+    """Whether a changed file gets a line diff: not LFS, within the cap on
+    both sides, and UTF-8 on both sides."""
     if (old is not None and old.lfs is not None) or (new is not None and new.lfs is not None):
-        return None
+        return False
     if any(f is not None and f.size > DIFF_TEXT_CAP for f in (old, new)):
-        return None
+        return False
     try:
-        a = texts_a[path].decode() if old is not None else ""
-        b = texts_b[path].decode() if new is not None else ""
+        if old is not None:
+            texts_a[path].decode()
+        if new is not None:
+            texts_b[path].decode()
     except UnicodeDecodeError:
-        return None
-    return "".join(
-        difflib.unified_diff(
-            a.splitlines(keepends=True),
-            b.splitlines(keepends=True),
-            fromfile=f"a/{path}",
-            tofile=f"b/{path}",
-        )
-    )
+        return False
+    return True

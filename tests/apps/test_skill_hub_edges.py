@@ -166,3 +166,56 @@ def test_only_a_real_card_declaration_is_dropped_from_tool_output() -> None:
     assert without_card_declaration(grep) == grep
     not_a_card = f'{{"x": 1}}{SKILL_HUB_ENTRY_MARKER}{{"path": "a"}}'
     assert without_card_declaration(not_a_card) == not_a_card
+
+
+async def test_the_line_diff_is_gits_and_not_quadratic(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After round 3: under the 256 KiB cap, `difflib` took 17 s on a 51 KiB
+    file built to be its worst case — on the shared thread pool, which any
+    reader could fill. The patch comes from `git diff` (C, O(ND)), and a
+    worst-case file inside the cap gets its patch."""
+    import difflib
+
+    def forbidden(*_a, **_kw):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("the line diff ran in Python")
+
+    monkeypatch.setattr(difflib, "unified_diff", forbidden)
+    rm = spec.get_resource_manager(SkillHubEntry)
+    n = 40_000  # ~200 KiB: inside the cap
+    a = "".join(f"{i % 150}\n" for i in range(n)).encode()
+    b = "".join(f"{(i * 7) % 151}\n" for i in range(n)).encode()
+    entry = await _publish(store, {"SKILL.md": _MD, "data.txt": a})
+    first = rm.get(entry).info.revision_id
+    await _publish(store, {"SKILL.md": _MD, "data.txt": b, "new.md": b"hello\n"})
+    second = rm.get(entry).info.revision_id
+
+    changes = {c.path: c for c in await store.diff(entry, first, second)}
+
+    patch = changes["data.txt"].patch
+    assert patch is not None and patch.startswith("--- a/data.txt\n+++ b/data.txt\n@@")
+    added = changes["new.md"].patch
+    assert (
+        added is not None
+        and added.startswith("--- /dev/null\n+++ b/new.md\n")
+        and "+hello" in added
+    )
+
+
+@pytest.mark.parametrize("name", ["notes with space.md", "說明.md", "-leading.md", "*.md"])
+async def test_a_diff_names_any_file_the_way_it_is_called(
+    spec: SpecStar, store: SkillHubStore, name: str
+) -> None:
+    """The path now reaches git as a pathspec: a space, CJK, a leading `-`
+    or a glob character must name exactly that file."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    entry = await _publish(store, {"SKILL.md": _MD, name: b"one\n", "other.md": b"x\n"})
+    first = rm.get(entry).info.revision_id
+    await _publish(store, {"SKILL.md": _MD, name: b"two\n", "other.md": b"y\n"})
+    second = rm.get(entry).info.revision_id
+
+    changes = {c.path: c.patch for c in await store.diff(entry, first, second)}
+
+    assert "-one\n+two\n" in (changes[name] or "")
+    assert "-x\n" not in (changes[name] or ""), "a glob in the name matched other files"
+    assert "-x\n+y\n" in (changes["other.md"] or "")

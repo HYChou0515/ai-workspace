@@ -301,6 +301,29 @@ class SkillHubRepos:
         _code, out = await self._git(entry_id, "show", "-s", "--format=%cI", _commit(commit))
         return dt.datetime.fromisoformat(out.decode().strip())
 
+    async def diff_text(self, entry_id: str, old: str, new: str, path: str) -> str:
+        """The unified diff of one text file between two commits, from its
+        `---` line on — git's own diff (C, O(ND)): Python's `difflib` was
+        quadratic on inputs built to be its worst case. The caller has
+        decided the file is text on both sides; `--text` makes git agree."""
+        _code, out = await self._git(
+            entry_id,
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--text",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            _commit(old),
+            _commit(new),
+            "--",
+            f":(literal){path}",
+        )
+        text = out.decode("utf-8", errors="replace")
+        at = text.find("\n--- ")
+        return text[at + 1 :] if at >= 0 else ""
+
     async def parent(self, entry_id: str, commit: str) -> str | None:
         """The commit `commit` was written on top of; ``None`` for a first version."""
         code, out = await self._git(
