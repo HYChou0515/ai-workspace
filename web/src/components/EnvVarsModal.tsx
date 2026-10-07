@@ -1141,7 +1141,13 @@ function PersonalTab({
     <>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
         {t("env.personalDesc")}{" "}
-        <a href="/my-env" data-testid="env-personal-page">
+        {/* Styled as the docs' inline links (`.md-body a`): the base `a` rule
+            inherits the text colour, which left this reading as plain text. */}
+        <a
+          href="/my-env"
+          data-testid="env-personal-page"
+          style={{ color: "var(--accent-h)", textDecoration: "underline" }}
+        >
           {t("env.personalPage")}
         </a>
       </p>
