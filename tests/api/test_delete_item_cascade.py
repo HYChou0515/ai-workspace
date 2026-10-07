@@ -621,3 +621,74 @@ def test_deleting_an_item_that_never_declared_a_schedule_succeeds_when_the_index
     assert resp.status_code == 204, resp.text
     with pytest.raises(ResourceIDNotFoundError):
         spec.get_resource_manager(RcaInvestigation).get(item_id)
+
+
+async def test_deleting_an_item_takes_everyones_private_env_rows_for_it():
+    """`plan-wui-viewer-login`: a person's private values for an item are
+    credentials. Once the item is gone nothing can use them, and nobody else
+    can reach them to delete — so the cascade must, for every person, while
+    leaving the same people's rows for OTHER items alone."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    app, spec, _ = _build()
+    client = TestClient(app)
+    doomed = _create_item(client)
+    kept = _create_item(client)
+    store = PrivateEnvStore(spec)
+    store.replace("alice", doomed, {"ERP_TOKEN": "a"})
+    store.replace("bob", doomed, {"ERP_TOKEN": "b"})
+    store.replace("alice", kept, {"ERP_TOKEN": "a2"})
+
+    assert client.delete(f"/a/rca/items/{doomed}").status_code == 204
+
+    assert store.get("alice", doomed) == {}
+    assert store.get("bob", doomed) == {}
+    assert store.get("alice", kept) == {"ERP_TOKEN": "a2"}
+
+
+async def test_deleting_an_item_takes_its_schedule_bindings():
+    """A binding names a person whose values a schedule runs with; the item
+    gone, it names nothing — and it is a row the cascade exists to leave none of."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    app, spec, _ = _build()
+    client = TestClient(app)
+    doomed = _create_item(client)
+    kept = _create_item(client)
+    bindings = ScheduleBindings(spec)
+    bindings.bind("k-doomed", item_id=doomed, path="/p/schedules.json", user_id="alice")
+    bindings.bind("k-kept", item_id=kept, path="/p/schedules.json", user_id="alice")
+
+    assert client.delete(f"/a/rca/items/{doomed}").status_code == 204
+
+    assert bindings.binder("k-doomed") == ""
+    assert bindings.binder("k-kept") == "alice"
+
+
+async def test_deleting_an_item_takes_whose_values_its_runs_used():
+    """The run's identity row (`workflow.run_identity`) names a person whose
+    private values the run's tools got; it goes with the run."""
+    from workspace_app.workflow.run import WorkflowRun
+    from workspace_app.workflow.run_identity import RunIdentities
+
+    app, spec, _ = _build()
+    client = TestClient(app)
+    item_id = _create_item(client)
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="default-user"))
+        .resource_id
+    )
+    RunIdentities(spec).record(
+        run_id,
+        "alice",
+        verb="execute",
+        item_id="",
+        profile="",
+        workflow_id="",
+        workflow_digest="",
+    )
+
+    assert client.delete(f"/a/rca/items/{item_id}").status_code == 204
+
+    assert RunIdentities(spec).env_user(run_id) == ""

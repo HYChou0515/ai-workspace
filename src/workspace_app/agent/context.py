@@ -155,8 +155,10 @@ class AgentToolContext:
     # Two sources are merged here by `TurnContextBuilder`: the item's own
     # `WorkItemBase.env_vars` (#673 — one shared copy, every participant can read
     # it) and, for a turn started by a chat send, whatever the deploy's
-    # `IRequestEnv` composed from THAT request (#714 — per-person, never stored).
-    # The item's value wins a name collision.
+    # `IRequestEnv` composed from THAT request (#714), with the person's own
+    # PRIVATE values (`plan-wui-viewer-login` — kept per person per item,
+    # readable by them alone). Which wins a name is the item's per-name policy
+    # (`api.env_layers.resolve_env`); with none set, the item's value wins.
     #
     # Nothing is written anywhere: the names are set on the `exec` that
     # dispatches a tool and nowhere else (`tooling.registry._exec_tool`), so the

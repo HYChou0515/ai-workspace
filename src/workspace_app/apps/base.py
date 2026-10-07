@@ -103,9 +103,24 @@ class WorkItemBase(Struct):
     Which is exactly what this field cannot be used for: a value that differs per
     PERSON (the caller's own session cookie, a header their gateway stamped on).
     That has its own source — a deploy's ``IRequestEnv`` (#714), read off the
-    request behind a chat send and never stored. The two are merged for the
-    turn's tools, and a name set in both resolves to the value here, since this
-    one was typed deliberately."""
+    request behind a chat send. That is the PRIVATE layer, this field the SHARED
+    one, and ``env_policy`` below picks per name which wins; a name with no
+    policy resolves to the value here, since this one was typed deliberately."""
+
+    env_policy: dict[str, str] = field(default_factory=dict)
+    """Tier 1 — which LAYER each name in a tool's environment comes from
+    (`docs/plan-wui-viewer-login.md`), sibling of ``env_vars`` rather than folded
+    into it so the value shape above stays ``dict[str, str]``.
+
+    ``env_vars`` is the SHARED layer; the PRIVATE one is the person the tool runs
+    for (their own values for this item, plus what the deploy's ``IRequestEnv``
+    said about them). Per name: ``shared_first`` (the default, and what a name
+    with no entry here means — the merge every turn did before), ``private_first``
+    or ``private_only``. Resolved by ``api.env_layers.resolve_env``.
+
+    Written like ``env_vars`` — ``write_meta``, riding the item PATCH — so a page
+    author (``edit_content``) cannot switch a name over to someone else's layer.
+    A policy says where a value comes from, never that it must exist."""
 
     external_refs: list[str] = field(default_factory=list)
     """Tier 1 (#700) — the external records this item has already absorbed, as

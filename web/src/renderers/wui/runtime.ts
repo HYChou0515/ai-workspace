@@ -290,6 +290,9 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     deleteFile: function (path: any) { return send("deleteFile", { path: path }); },
     openFile: function (path: any) { return send("openFile", { path: path }); },
     whoami: function () { return send("whoami"); },
+    // Asks the PLATFORM to show its own sign-in, drawn outside this frame. It
+    // takes no argument on purpose: a credential never passes through a page.
+    openLogin: function () { return send("openLogin"); },
     // The page's only way to reach anything outside itself — it has no network
     // of its own, and a credential never comes in here to be spent.
     callTool: function (name: any, args?: any) { return send("callTool", { name: name, args: args || {} }); },

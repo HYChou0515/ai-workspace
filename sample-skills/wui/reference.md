@@ -7,7 +7,7 @@ Every call returns a promise. A refusal **rejects with an `Error` whose message
 is a sentence** — show that sentence; it is written for the person looking at the
 page, and it is what they forward back to you.
 
-## The seven calls
+## The calls
 
 ```js
 await workspace.listFiles(prefix?)   // → { files: [{ path, size, read_only }] }
@@ -17,6 +17,7 @@ await workspace.writeFile(path, text)// → { path }
 await workspace.deleteFile(path)     // → { path }
 await workspace.openFile(path)       // opens it in the workspace beside the page
 await workspace.whoami()             // → { user }
+await workspace.openLogin()          // shows the PLATFORM's sign-in; → { opened: true }
 await workspace.callTool(name, args) // → { output, exit_code }
 await workspace.startRun(workflow, input, onEvent)  // resolves when it ends
 ```
@@ -227,6 +228,31 @@ A rejected `callTool` or `startRun` is a different thing again, and the message 
 Show the message as it arrives. Collapsing these into "it failed" sends the
 reader to the wrong place most of the time. `examples/external/` does this.
 
+### Signing in
+
+Some of the item's variables are **each person's own** — a token for a system
+they sign in to themselves (whoever can change the workspace's settings decides
+which, in the Env panel).
+Your page never sees them and must never ask for them: no password field, no
+token box. A credential typed into your page would pass through code anyone
+with edit rights can change.
+
+When a tool answers that the person is not authorised, call
+`workspace.openLogin()`. The platform shows ITS OWN sign-in, drawn outside your
+page, and the answer is only that it was shown — whether they signed in is
+theirs. Tell them to press your button again once they have saved it. What they
+signed in with reaches a tool unless the item has a shared value for that name
+and keeps the shared one first — the default, which whoever manages the item's
+settings can change per name.
+
+```js
+const r = await workspace.callTool("lot-status", { lot: id });
+if (r.exit_code !== 0 && /401|unauthori[sz]ed/i.test(r.output)) {
+  await workspace.openLogin();
+  show("Sign in, then press Check again.");
+}
+```
+
 ### Work that happens without anyone there
 
 The same runs, on a clock. A page declares them by WRITING A FILE — there is no
@@ -297,11 +323,13 @@ one row silently never fires while the others keep working. Show the file back t
 the reader so a typo is visible on the page instead of in a log they cannot see.
 
 ⚠️ **Do not assume a personal token is there.** When a schedule fires, nobody is
-signed in — there is no request and no personal credential. A page or tool
-written as if one is always present works perfectly while somebody is clicking
-and fails every night, which is the "it worked when I tested it" bug in its
-purest form. Anything a scheduled run needs must come from the item's own
-environment.
+signed in — there is no request. It runs with the item's SHARED values, plus
+the private values of whoever pressed **Run as me** on it (in the platform's
+bar above the page — never something your page draws). Nobody pressed it ⇒
+nobody's private values. And **changing a row drops that**: the edited row is
+a new schedule, and the person is told their name is off it. A page written as
+if a personal token is always present works while somebody is clicking and
+fails every night — the "it worked when I tested it" bug in its purest form.
 
 ## Blocked, by design
 

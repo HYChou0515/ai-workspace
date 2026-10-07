@@ -1,16 +1,14 @@
 /**
- * The per-item environment variables panel.
+ * The per-item environment variables panel — its "Everyone" tab, the item's
+ * SHARED values (`EnvVarsModal.layers.test.tsx` covers the two-layer shape).
  *
  * A text box for the whole set as `.env` text — the thing people actually do
- * with these is paste a block in from somewhere else — plus, since #750, a
- * field for each variable the item's tools said they want.
+ * with these is paste a block in from somewhere else — plus a field for each
+ * variable the item's tools said they want (#750), one section per tool.
  *
- * Storage is unchanged (`dict[str, str]`) and there is only ever one copy of a
- * value: the fields edit the box's text, the box is what Save parses.
- *
- * Values are shown in plain text rather than masked: anyone who can talk to the
- * agent on this item can have it read the delivery file anyway, so masking here
- * would buy nothing real and cost the ability to see a typo in a key.
+ * There is only ever one copy of a shared value: the fields edit the box's
+ * text, the box is what Save parses. Shared values are not masked: they are
+ * returned unredacted to anyone who can open the item.
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
@@ -79,6 +77,10 @@ describe("EnvVarsModal declared fields (#750)", () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
+    // These are about the SHARED values; with an item the panel opens on the
+    // person's own ("Only me", plan-wui-viewer-login).
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
     return { onSave };
   };
 
@@ -97,7 +99,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
     save();
     // One storage, one dict — the form is a second way to edit the text box,
     // not a second place values live.
-    expect(onSave).toHaveBeenCalledWith({ EXISTING: "1", SAP_HOST: "sap.corp" });
+    expect(onSave).toHaveBeenCalledWith({ EXISTING: "1", SAP_HOST: "sap.corp" }, {});
   });
 
   it("finds a tool by typing, and says who published which release", async () => {
@@ -133,43 +135,29 @@ describe("EnvVarsModal declared fields (#750)", () => {
     ];
     openWith(many);
 
-    // Collapsed until asked for. The panel already carries an intro, a summary
-    // line, the fields, a login button, a caveat and the text box; a list that
-    // is always open pushes all of that down for something most visits never
-    // touch. The trigger says which tool is showing, so nothing is hidden.
-    const trigger = await screen.findByTestId("env-tool-trigger");
-    expect(screen.queryByTestId("env-tool-wafer-history")).not.toBeInTheDocument();
-    fireEvent.click(trigger);
-
-    const option = await screen.findByTestId("env-tool-wafer-history");
-    expect(option).toHaveTextContent("Wafer Team");
-    expect(option).toHaveTextContent("1.4.2");
+    // Every tool is a section headed by who shipped it and which release — no
+    // dropdown to open first (`plan-wui-viewer-login`: a closed dropdown hid
+    // which tool needed attention and showed one at a time).
+    const head = await screen.findByTestId("env-section-head-wafer-history");
+    expect(head).toHaveTextContent("Wafer Team");
+    expect(head).toHaveTextContent("1.4.2");
     // What someone scanning a long list is looking for: which ones still need
-    // something.
-    expect(option).toHaveTextContent("1");
+    // something, in words beside the symbol.
+    expect(head).toHaveAttribute("data-status", "missingRequired");
 
-    // Typing narrows it, so a long list stays usable.
-    const search = screen.getByTestId("env-tool-search");
-    // A search box, not another value field: they sat next to each other looking
-    // identical, which is what made the panel unreadable.
+    // Typing narrows it, so a long list stays usable — an always-open box.
+    const search = screen.getByTestId("env-search");
     expect(search).toHaveAttribute("type", "search");
     expect(search).toHaveClass("input");
     fireEvent.change(search, { target: { value: "wafer" } });
-    expect(screen.queryByTestId("env-tool-sap-tools")).not.toBeInTheDocument();
-    expect(screen.getByTestId("env-tool-wafer-history")).toBeInTheDocument();
-
-    // And picking one shows its variables.
-    fireEvent.click(screen.getByTestId("env-tool-wafer-history"));
+    expect(screen.queryByTestId("env-section-head-sap-tools")).not.toBeInTheDocument();
     expect(screen.getByTestId("env-field-WAFER_API")).toBeInTheDocument();
-    expect(screen.queryByTestId("env-field-SAP_HOST")).not.toBeInTheDocument();
   });
 
-  it("shows one tool at a time, and the shared value is the same one", async () => {
-    // Someone who just switched a tool on wants that tool's variables, not a
-    // scroll past everything else. The picker is a FILTER over one set of
-    // values, never a second form: CORP_PROXY under either tool is one stored
-    // name with one value, so a per-tool copy would let the same variable hold
-    // two different things depending on which one was showing.
+  it("shows a variable two tools share under both, as one value", async () => {
+    // CORP_PROXY under either tool is one stored name with one value; a
+    // per-tool copy would let it hold two different things depending on which
+    // section was being read.
     const shared = { name: "CORP_PROXY", description: "", required: null };
     const tools: ItemToolState[] = [
       {
@@ -195,23 +183,18 @@ describe("EnvVarsModal declared fields (#750)", () => {
     ];
     openWith(tools);
 
-    // First tool's fields are what you land on.
-    await screen.findByTestId("env-field-SAP_HOST");
-    fireEvent.change(screen.getByTestId("env-field-CORP_PROXY"), {
-      target: { value: "proxy:3128" },
-    });
+    // Both tools are sections; CORP_PROXY appears under each, and it is ONE
+    // stored value — typed under one, it reads the same under the other.
+    await screen.findByTestId("env-section-head-sap-tools");
+    fireEvent.click(screen.getByTestId("env-section-head-wafer"));
+    const [first, second] = screen.getAllByTestId("env-field-CORP_PROXY") as HTMLInputElement[];
+    fireEvent.change(first, { target: { value: "proxy:3128" } });
 
-    fireEvent.click(screen.getByTestId("env-tool-trigger"));
-    fireEvent.click(screen.getByTestId("env-tool-wafer"));
-
-    // Picking the other tool hides what belongs to the first…
-    expect(screen.queryByTestId("env-field-SAP_HOST")).not.toBeInTheDocument();
-    // …and the variable they share carries the value typed under the other tab.
-    expect((screen.getByTestId("env-field-CORP_PROXY") as HTMLInputElement).value).toBe(
-      "proxy:3128",
-    );
-    // And it says who else is relying on it, so clearing it is an informed act.
-    expect(screen.getByTestId("env-shared-CORP_PROXY")).toHaveTextContent("SAP Tools");
+    expect(second.value).toBe("proxy:3128");
+    // And each copy says who else relies on it, so clearing it is informed.
+    const notes = screen.getAllByTestId("env-shared-CORP_PROXY");
+    expect(notes[0]).toHaveTextContent("Wafer History");
+    expect(notes[1]).toHaveTextContent("SAP Tools");
   });
 
   it("typing in a field does not eat what is written in the box", async () => {
@@ -251,9 +234,14 @@ describe("EnvVarsModal declared fields (#750)", () => {
     );
   });
 
-  it("says a tool did not declare rather than showing it as satisfied", async () => {
+  it("draws no section for a tool that declared nothing", async () => {
+    // `plan-wui-viewer-login`: the provider owes the declaration, so the PANEL
+    // takes it at its word that the tool needs nothing — and has nothing to
+    // show for it. The "did not declare" fact still exists underneath
+    // (`deriveEnvNeeds().undeclared`).
     openWith(SAP);
-    expect(await screen.findByTestId("env-undeclared")).toHaveTextContent("Legacy Tool");
+    await screen.findByTestId("env-section-head-sap-tools");
+    expect(screen.queryByTestId("env-section-head-legacy")).not.toBeInTheDocument();
   });
 
   it("offers a login for the variables it can fill, and fills them without saving", async () => {
@@ -286,6 +274,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
 
     fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
 
@@ -348,6 +337,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
 
     fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
     fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "x" } });
@@ -393,6 +383,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
 
     fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
     fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "wrong" } });
@@ -427,6 +418,7 @@ describe("EnvVarsModal declared fields (#750)", () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
     await screen.findByTestId("env-field-SAP_HOST");
     // No implementations is the absence of the feature, not a broken one: the
     // field is still there and typing into it still works.
@@ -471,7 +463,7 @@ describe("EnvVarsModal", () => {
     type("FOO=BAR\nBAZ=HOO\n");
     save();
 
-    expect(onSave).toHaveBeenCalledWith({ FOO: "BAR", BAZ: "HOO" });
+    expect(onSave).toHaveBeenCalledWith({ FOO: "BAR", BAZ: "HOO" }, {});
   });
 
   it("edits and deletes are both just editing the text", () => {
@@ -480,7 +472,7 @@ describe("EnvVarsModal", () => {
     type("API_KEY=sk-2\n"); // REGION deleted by not being there any more
     save();
 
-    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" });
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" }, {});
   });
 
   it("keeps a value exactly as typed", () => {
@@ -492,7 +484,7 @@ describe("EnvVarsModal", () => {
     type(`TOKEN=${tricky}\n`);
     save();
 
-    expect(onSave).toHaveBeenCalledWith({ TOKEN: tricky });
+    expect(onSave).toHaveBeenCalledWith({ TOKEN: tricky }, {});
   });
 
   it("ignores blank lines and comments in what was pasted", () => {
@@ -502,7 +494,7 @@ describe("EnvVarsModal", () => {
     type("# from the ops runbook\n\nAPI_KEY=sk-1\n\n");
     save();
 
-    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-1" });
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-1" }, {});
   });
 
   // #779: Cancel asks first once the box has been edited — it is a deliberate
@@ -544,7 +536,7 @@ describe("EnvVarsModal import / export", () => {
 
     save();
 
-    expect(onSave).toHaveBeenCalledWith({ API_KEY: "new", REGION: "tw", EXTRA: "1" });
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "new", REGION: "tw", EXTRA: "1" }, {});
   });
 
   it("exports what is in the box, including unsaved edits", async () => {

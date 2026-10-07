@@ -180,3 +180,38 @@ async def test_a_workflow_that_vanishes_after_the_listing_does_not_break_the_pan
     metas = await workspace_workflow_metas(files, "ws1")
 
     assert [m.id for m in metas] == ["a", "b"]
+
+
+async def test_a_consent_digest_is_what_the_build_would_run_from() -> None:
+    """Round 5 (regression 1): a binding / a press recorded the sha of any
+    bytes present, while the build — falling back to the package workflow
+    when the file will not parse — ran from "". One definition: the digest is
+    the loader's, so the three sites cannot disagree. Parity, for every shape
+    of file the loader distinguishes."""
+    from workspace_app.workflow.schedule_bindings import workflow_digest
+    from workspace_app.workflow.workspace_store import load_workspace_workflow_digested
+
+    files, ws = _files()
+    await files.write(ws, "/.workflows/good.json", _VALID.encode())
+    await files.write(ws, "/.workflows/broken.json", _BROKEN)
+    await files.write(ws, "/.workflows/sub/nested.json", _VALID.encode())
+    for wid in ("good", "broken", "missing", "sub/nested", "", "schedules"):
+        built = await load_workspace_workflow_digested(files.read, ws, wid)
+        assert await workflow_digest(files.read, ws, wid) == (built[2] if built else ""), wid
+
+
+async def test_only_a_flat_file_in_the_folder_is_a_workspace_workflow() -> None:
+    """Round 6: the loader read `/.workflows/<id>.json` for ANY id. On the NFS
+    store `../notes` built a run from `/notes.json` outside the folder and
+    `../../x` raised (a 500 on the bind route). The rule now lives in the one
+    loader every reader (build, press, binding) uses.
+
+    Only `sub/nested` is pinned here: `MemoryFileStore` does not resolve `..`,
+    so the two traversal ids read nothing with or without the rule (#870)."""
+    from workspace_app.workflow.workspace_store import load_workspace_workflow_digested
+
+    files, ws = _files()
+    await files.write(ws, "/notes.json", _VALID.encode())
+    await files.write(ws, "/.workflows/sub/nested.json", _VALID.encode())
+    for wid in ("../notes", "sub/nested", "../../x"):
+        assert await load_workspace_workflow_digested(files.read, ws, wid) is None, wid

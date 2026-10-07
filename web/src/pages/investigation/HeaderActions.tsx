@@ -36,8 +36,17 @@ export type HeaderAction = {
   tip: string;
   /** The accessible name, where it is not the label (kept as each button had it). */
   aria?: string;
+  /** Something here needs the viewer's attention (an amber dot beside the
+   * label, in every tier) — what exactly is said in `tip`. */
+  attention?: boolean;
   onClick: () => void;
 };
+
+const Dot = () => (
+  <span aria-hidden style={{ color: "var(--warn)", fontSize: pxToRem(9), marginLeft: 2 }}>
+    ●
+  </span>
+);
 
 /** The header action buttons (New chat / Tools / Skills / Workflows / Export).
  * `flexShrink: 0` + `whiteSpace: nowrap` keep each button intact so the wrapping
@@ -206,16 +215,21 @@ export function HeaderActions({
             key={a.id}
             type="button"
             data-testid={a.testid}
+            data-attention={a.attention ? "true" : undefined}
             onClick={a.onClick}
             title={a.tip}
             aria-label={a.aria ?? a.label}
             style={tier === "icons" ? hdrIconBtn : hdrBtn}
           >
             {tier === "icons" ? (
-              <Icon name={a.icon} size={16} strokeWidth={2} />
+              <>
+                <Icon name={a.icon} size={16} strokeWidth={2} />
+                {a.attention && <Dot />}
+              </>
             ) : (
               <>
                 <Icon name={a.icon} size={13} /> {a.label}
+                {a.attention && <Dot />}
               </>
             )}
           </button>
@@ -292,6 +306,7 @@ function HeaderMoreMenu({ items }: { items: HeaderAction[] }) {
             >
               <Icon name={a.icon} size={14} />
               <span>{a.label}</span>
+              {a.attention && <Dot />}
             </button>
           ))}
         </div>

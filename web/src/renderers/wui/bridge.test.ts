@@ -39,6 +39,7 @@ function ctx(over: Partial<BridgeContext> = {}, files: Record<string, string> = 
     callTool: null,
     declaredWorkflows: ["judge"],
     startRun: null,
+    openLogin: null,
     onRunEvent: () => {},
     ...over,
   };
@@ -428,5 +429,25 @@ describe("dispatchWuiRequest", () => {
 
     expect(res.id).toBe("abc");
     expect(res.proto).toBe(WUI_PROTOCOL);
+  });
+});
+
+
+describe("openLogin (plan-wui-viewer-login)", () => {
+  it("asks the platform to show its own sign-in, and takes nothing from the page", async () => {
+    const openLogin = vi.fn();
+
+    const r = await dispatchWuiRequest(req("openLogin", { password: "should-be-ignored" }), ctx({ openLogin }));
+
+    expect(r).toMatchObject({ ok: true });
+    // No argument reaches the platform: a page must never be a channel for a
+    // credential, not even one it volunteers.
+    expect(openLogin).toHaveBeenCalledWith();
+  });
+
+  it("says so where this page is shown without a way to sign in", async () => {
+    const r = await dispatchWuiRequest(req("openLogin"), ctx());
+
+    expect(r).toMatchObject({ ok: false });
   });
 });

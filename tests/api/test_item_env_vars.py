@@ -205,3 +205,66 @@ def test_a_value_may_carry_the_characters_a_key_actually_contains():
     data = client.get(f"/rca-investigation/{rid}").json()
     data = data.get("data", data)
     assert data["env_vars"]["TOKEN"] == tricky
+
+
+# ─── the per-name policy beside them (`plan-wui-viewer-login`) ─────────────
+
+
+def test_every_app_item_carries_an_env_policy_defaulting_to_none():
+    """No entry = `shared_first` = what every item did before the policy existed,
+    so an item that never set one must be indistinguishable from today's."""
+    assert "env_policy" in WorkItemBase.__struct_fields__
+    assert RcaInvestigation(title="t", owner="u").env_policy == {}
+
+
+def test_a_page_author_cannot_switch_a_name_to_another_layer():
+    """The policy decides whose credential a tool runs with, so it is written
+    under the SAME verb as the shared values — `write_meta` — and not under
+    `edit_content`. Otherwise a Collaborator could write a page and flip a name
+    to `shared_first` to run with the owner's copy."""
+    holder = {"id": "alice"}
+    client, spec = _client_as(holder)
+    rm = spec.get_resource_manager(RcaInvestigation)
+    subject = ["user:alice"]
+    with rm.using("bob"):
+        rid = rm.create(
+            RcaInvestigation(
+                title="t",
+                owner="bob",
+                env_policy={"ERP_TOKEN": "private_only"},
+                permission=Permission(
+                    visibility="restricted",
+                    read_meta=subject,
+                    read_chat=subject,
+                    read_content=subject,
+                    converse=subject,
+                    add_content=subject,
+                    edit_content=subject,
+                    execute=subject,
+                ),
+            )
+        ).resource_id
+
+    r = client.patch(
+        f"/rca-investigation/{rid}",
+        json=[{"op": "replace", "path": "/env_policy", "value": {"ERP_TOKEN": "shared_first"}}],
+    )
+    assert r.status_code == 403
+
+    holder["id"] = "bob"
+    data = client.get(f"/rca-investigation/{rid}").json()
+    assert data.get("data", data)["env_policy"] == {"ERP_TOKEN": "private_only"}
+
+
+def test_env_policy_round_trips_through_the_item_patch_route():
+    client = _client()
+    rid = client.post("/a/rca/items", json={"title": "t"}).json()["resource_id"]
+
+    r = client.patch(
+        f"/rca-investigation/{rid}",
+        json=[{"op": "replace", "path": "/env_policy", "value": {"TOKEN": "private_first"}}],
+    )
+    assert r.status_code == 200
+
+    data = client.get(f"/rca-investigation/{rid}").json()
+    assert data.get("data", data)["env_policy"] == {"TOKEN": "private_first"}

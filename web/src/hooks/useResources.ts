@@ -102,6 +102,13 @@ export function useUpdateItemField(slug: string, resourceRoute: string, item: Ap
     setField: (name: string, value: unknown) => commit({ [name]: value }),
     /** Commit several fields at once (the edit form). */
     setFields: (patch: Record<string, unknown>) => commit(patch),
+    /** Like `setFields`, but says whether the write LANDED — for a caller that
+     * must not discard the edits it sent when it did not (the Env panel). The
+     * failure still reaches the app's write-failure notice. */
+    setFieldsOk: (patch: Record<string, unknown>) =>
+      new Promise<boolean>((resolve) =>
+        mutation.mutate(patch, { onSuccess: () => resolve(true), onError: () => resolve(false) }),
+      ),
     isPending: mutation.isPending,
   };
 }

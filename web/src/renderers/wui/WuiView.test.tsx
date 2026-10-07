@@ -3201,3 +3201,83 @@ describe("WuiView: Deploy", () => {
     });
   });
 });
+
+describe("WuiView — a page asks the platform to sign the viewer in (plan-wui-viewer-login)", () => {
+  it("opens the platform's own panel, outside the frame", async () => {
+    const { privateEnvApi } = await import("../../api/privateEnv");
+    vi.spyOn(privateEnvApi, "layers").mockResolvedValue({
+      shared: {},
+      policy: { ERP_TOKEN: "private_only" },
+    });
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc({ "/sales/index.html": "<html><body>hi</body></html>" })}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} chrome="viewer" />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const win = frame()?.contentWindow as Window;
+    const replies: unknown[] = [];
+    vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "5", verb: "openLogin" },
+        source: win,
+      }),
+    );
+
+    await waitFor(() => expect(replies[0]).toMatchObject({ ok: true }));
+    const modal = await screen.findByTestId("env-modal");
+    // Not inside the page's frame: the page never sees what is typed there.
+    expect(frame()?.contains(modal)).toBe(false);
+  });
+
+  it("refuses where the pane has no item to sign in to", async () => {
+    const { say, replies } = await withFrame({ "/sales/index.html": "<html><body>hi</body></html>" });
+
+    say({ proto: WUI_PROTOCOL, id: "6", verb: "openLogin" });
+
+    await waitFor(() => expect(replies[0]).toMatchObject({ ok: false }));
+  });
+});
+
+describe("WuiView — sign-in in the workspace pane's toolbar (plan-wui-viewer-login)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function show(policy: Record<string, string>) {
+    const { privateEnvApi } = await import("../../api/privateEnv");
+    const { scheduleBindingsApi } = await import("../../api/scheduleBindings");
+    const { api } = await import("../../api");
+    vi.spyOn(privateEnvApi, "layers").mockResolvedValue({ shared: {}, policy });
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
+    vi.spyOn(scheduleBindingsApi, "list").mockResolvedValue([]);
+    vi.spyOn(api, "getItemTools").mockResolvedValue([]);
+    vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={svc({ "/sales/index.html": "<html><body>hi</body></html>" })}>
+            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+  }
+
+  it("offers it when a variable is each person's to provide", async () => {
+    await show({ VPN_KEY: "private_only" });
+    expect(await screen.findByTestId("page-identity-key")).toBeInTheDocument();
+  });
+
+  it("stays out of the toolbar otherwise", async () => {
+    await show({});
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("page-identity-key")).not.toBeInTheDocument();
+  });
+});

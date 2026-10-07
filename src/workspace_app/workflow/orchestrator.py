@@ -59,6 +59,7 @@ from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
 from .run import PhaseState, RunStatus, StepState, WorkflowRun
+from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
@@ -170,8 +171,11 @@ class WorkflowOrchestrator:
     # (the default — existing callers/tests are unchanged; resolution falls back to
     # ``load_run`` / ``load_manifest``).
     load_workspace: (
-        Callable[[str, str], Awaitable[tuple[ProfileRun, WorkflowManifest] | None]] | None
+        Callable[[str, str], Awaitable[tuple[ProfileRun, WorkflowManifest, str] | None]] | None
     ) = None
+    # `plan-wui-viewer-login`: ``digest_workflow(item_id, workflow_id)`` — what a
+    # pressed run's consent is recorded against (`run_identity`). None ⇒ "".
+    digest_workflow: Callable[[str, str], Awaitable[str]] | None = None
     # Release the run's resources (manual §16): ``release(item_id, terminal, chat_key)``.
     # ``terminal`` is True on done/error/cancelled (tear down sandbox + the run's turn
     # session), False on an ``awaiting_human`` pause (free the sandbox but keep the
@@ -220,6 +224,18 @@ class WorkflowOrchestrator:
     def _get(self, run_id: str) -> WorkflowRun:
         data = self._rm().get(run_id).data
         assert isinstance(data, WorkflowRun)
+        return data
+
+    def _get_in(self, run_id: str, item_id: str) -> WorkflowRun:
+        """The run, IF it belongs to ``item_id`` — else not found. For the entrances
+        that take the item from a URL and the run from an id (`decide`, `steer`,
+        `confirm_steer`): without it a run of item A resumed INSIDE item B through
+        B's URL, gated only on B (round 6; with private values on runs it carried
+        or stripped a person's, rounds 5–6). Cancel, the run detail and the run
+        stream take the same shape and do not go through here yet (#870)."""
+        data = self._get(run_id)
+        if data.item_id != item_id:
+            raise ResourceIDNotFoundError(run_id)
         return data
 
     def _patch(self, run_id: str, **changes: Any) -> None:
@@ -331,14 +347,36 @@ class WorkflowOrchestrator:
 
     async def _resolve_run(
         self, slug: str, profile: str, workflow_id: str, item_id: str
-    ) -> ProfileRun:
+    ) -> tuple[ProfileRun, str]:
         """The run's ``run()`` — the interpreter over a workspace ``.workflows/<id>.json``
-        if wired + present, else the package ``run.py`` / package DSL (§22/Q5)."""
+        if wired + present, else the package ``run.py`` / package DSL (§22/Q5) — and
+        the digest of the bytes it was built from ("" for a package workflow, which
+        ships with the deploy and nobody in an item can edit)."""
         if self.load_workspace is not None:
             ws = await self.load_workspace(item_id, workflow_id)
             if ws is not None:
-                return ws[0]
-        return self.load_run(slug, profile, workflow_id)
+                return ws[0], ws[2]
+        return self.load_run(slug, profile, workflow_id), ""
+
+    def _hold_identity_to(
+        self, run_id: str, item_id: str, profile: str, workflow_id: str, built_from: str
+    ) -> None:
+        """A pressed or bound run's consent is to the workflow FILE its person
+        saw (`run_identity`). Checked HERE, where the interpreter that will run
+        is built — start, gate decision, resume, steer all come through
+        `_execute` — against the digest of the very bytes it was built from.
+        Not the live file at each node: an evil body swapped in for a gate
+        decision and swapped back before the node passed that (review round 4,
+        defect 1). Not a digest of the manifest: it has no steps (round 3). And
+        in the item and profile it was given in: a decision sent through another
+        item's URL builds there, from that item's copy (round 5)."""
+        identities = RunIdentities(self.spec)
+        ident = identities.get(run_id)
+        if ident is not None and (
+            (ident.item_id, ident.profile, ident.workflow_id, ident.workflow_digest)
+            != (item_id, profile, workflow_id, built_from)
+        ):
+            identities.forget(run_id)
 
     def active_run(self, item_id: str) -> str | None:
         """The item's active run id, or None. Scoped to the item via the indexed
@@ -369,6 +407,9 @@ class WorkflowOrchestrator:
         item_id: str,
         profile: str,
         captured_user: str,
+        env_user: str = "",
+        env_verb: str = "execute",
+        env_digest: str | None = None,
         workflow_id: str = "",
         chat_id: str = "",
         origin_trigger: str = "",
@@ -400,6 +441,17 @@ class WorkflowOrchestrator:
         manifest = await self._resolve_manifest(slug, profile, workflow_id, item_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
+        # What the presser consented to: for a schedule's fire, the binding's
+        # own digest, handed in (were it read again here instead, an edit made
+        # after the sweep's check would be recorded as consented); for a press,
+        # the file as it is now. Read BEFORE the row exists: a read that raised after it left
+        # a PENDING run nothing reclaims (round 4, regression 1).
+        digest = ""
+        if env_user:
+            if env_digest is not None:
+                digest = env_digest
+            elif self.digest_workflow is not None:
+                digest = await self.digest_workflow(item_id, workflow_id)
         run_id = (
             self._rm()
             .create(
@@ -419,6 +471,18 @@ class WorkflowOrchestrator:
             )
             .resource_id
         )
+        if env_user:
+            # Whose private values the run's tools get — kept where no route
+            # reaches it (`run_identity`, review round 1 R5).
+            RunIdentities(self.spec).record(
+                run_id,
+                env_user,
+                verb=env_verb,
+                item_id=item_id,
+                profile=profile,
+                workflow_id=workflow_id,
+                workflow_digest=digest,
+            )
         self._prune_runs(item_id, keep=run_id)
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
         logger.info(
@@ -468,6 +532,7 @@ class WorkflowOrchestrator:
             if rid == keep or data.status in _ACTIVE or rid in pinned:
                 continue
             self._rm().permanently_delete(rid)
+            RunIdentities(self.spec).forget(rid)
             to_drop -= 1
             prunable -= 1
 
@@ -540,7 +605,8 @@ class WorkflowOrchestrator:
         wf = self._build_handle(
             run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
         )
-        profile_run = await self._resolve_run(slug, profile, workflow_id, item_id)
+        profile_run, built_from = await self._resolve_run(slug, profile, workflow_id, item_id)
+        self._hold_identity_to(run_id, item_id, profile, workflow_id, built_from)
         inputs = _with_trigger_payload(
             await resolve_inputs(wf, manifest), self._get(run_id).trigger_payload
         )
@@ -723,7 +789,7 @@ class WorkflowOrchestrator:
         """Record a gate decision as an artifact and resume the run (§10). Re-running
         replays completed steps (they skip, §9); the gate finds the decision and
         continues. Rejects a decision on a run that isn't paused at a gate."""
-        data = self._get(run_id)
+        data = self._get_in(run_id, item_id)
         if data.status is not RunStatus.AWAITING_HUMAN or data.pending_decision is None:
             raise NotAwaitingDecision(run_id)
         phase = data.pending_decision.phase
@@ -763,7 +829,7 @@ class WorkflowOrchestrator:
         steerer in the background. It streams into the run's chat and, when it has a
         plan, suspends the run ``awaiting_human`` with ``pending_steer`` set for the
         human to confirm. A failed proposal leaves the run ``cancelled``."""
-        data = self._get(run_id)
+        data = self._get_in(run_id, item_id)
         if data.status in (RunStatus.RUNNING, RunStatus.PENDING):
             await self.cancel(run_id, item_id)
         else:
@@ -845,7 +911,7 @@ class WorkflowOrchestrator:
         the steps (deterministically), then **resume the same run** (§9 re-run skips the
         valid prefix). **Reject** → discard the plan; the run returns to its gate (if it
         was paused at one) or to a stopped state. Rejects a confirm with no plan pending."""
-        data = self._get(run_id)
+        data = self._get_in(run_id, item_id)
         if data.pending_steer is None:
             raise NotAwaitingSteer(run_id)
         key = data.chat_id or item_id
@@ -871,6 +937,9 @@ class WorkflowOrchestrator:
             self.load_upload_dir(slug, profile),
         )
         await apply_steer(wf, data.pending_steer, decided_by=decided_by)
+        # The steer rewrote the plan, and anyone who may converse can propose and
+        # approve one — the presser never consented to it (round 2, D1).
+        RunIdentities(self.spec).forget(run_id)
         self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
         logger.info("confirm_steer: run %s steer approved, resuming", run_id)
         self._spawn(

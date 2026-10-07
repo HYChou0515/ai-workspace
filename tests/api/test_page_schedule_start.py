@@ -59,7 +59,9 @@ class _Orchestrator:
         return self.run_id
 
 
-async def _fire(loc: _Locator, orch: _Orchestrator) -> str | None:
+async def _fire(
+    loc: _Locator, orch: _Orchestrator, *, env_user: str = "", env_digest: str | None = None
+) -> str | None:
     return await start_page_schedule(
         locator=loc,
         orchestrator=orch,
@@ -68,7 +70,23 @@ async def _fire(loc: _Locator, orch: _Orchestrator) -> str | None:
         acting_user="alice",
         payload={"line": "A"},
         key="wui:i1:abcd",
+        env_user=env_user,
+        env_digest=env_digest,
     )
+
+
+async def test_the_run_carries_the_binder_as_whose_private_values_it_uses() -> None:
+    """`plan-wui-viewer-login` Q7: captured as the owner (alice) for billing, but
+    RUN WITH the binder's (bob's) private layer — the two are different fields
+    on the run, and the sweep's answer must reach the second."""
+    orch = _Orchestrator()
+
+    await _fire(_Locator(), orch, env_user="bob", env_digest="d-consented")
+
+    assert orch.starts[0]["captured_user"] == "alice"
+    assert orch.starts[0]["env_user"] == "bob"
+    # Round 3: and what bob consented to, which the run must still be running.
+    assert orch.starts[0]["env_digest"] == "d-consented"
 
 
 async def test_a_started_run_is_never_reported_as_not_started() -> None:
@@ -194,3 +212,17 @@ async def test_the_fire_path_does_not_hold_the_event_loop() -> None:
         f"takes {BLOCK * 1000:.0f}ms — so at least one is still running on it, "
         "inside the sweep's tick, on every pod"
     )
+
+
+def test_the_launcher_takes_every_argument_the_sweep_passes() -> None:
+    """`create_app` forwards the sweep's arguments with `**fire`, which `ty`
+    cannot see through (round 4, defect 2): a parameter added to the sweep's
+    start protocol and not here would raise `TypeError` at fire time, inside
+    the sweep's generic handler, with no static signal. This is that signal."""
+    import inspect
+
+    from workspace_app.workflow.user_schedule_sweep import StartRun
+
+    wanted = set(inspect.signature(StartRun.__call__).parameters) - {"self"}
+    taken = set(inspect.signature(start_page_schedule).parameters)
+    assert wanted <= taken, f"start_page_schedule is missing {sorted(wanted - taken)}"

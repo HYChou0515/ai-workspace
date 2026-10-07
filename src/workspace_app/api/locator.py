@@ -72,6 +72,15 @@ class TurnFacts(NamedTuple):
     profile: str
     skill_prefs: dict[str, bool]
     env_vars: dict[str, str]
+    env_policy: dict[str, str]
+
+
+class ItemEnv(NamedTuple):
+    """An item's SHARED environment layer and the per-name policy beside it — the
+    two things `env_layers.resolve_env` needs from the item, read together."""
+
+    shared: dict[str, str]
+    policy: dict[str, str]
 
 
 class ItemLocator:
@@ -118,12 +127,15 @@ class ItemLocator:
         differently."""
         found = find_work_item(self._spec, item_id)
         if found is None:
-            return TurnFacts(slug=None, profile="default", skill_prefs={}, env_vars={})
+            return TurnFacts(
+                slug=None, profile="default", skill_prefs={}, env_vars={}, env_policy={}
+            )
         return TurnFacts(
             slug=found[0],
             profile=found[1].profile,
             skill_prefs=dict(found[1].attached_skill_prefs),
             env_vars=dict(found[1].env_vars),
+            env_policy=dict(found[1].env_policy),
         )
 
     def title_of(self, item_id: str) -> str | None:
@@ -165,6 +177,15 @@ class ItemLocator:
         anywhere for a stale copy to survive in."""
         found = find_work_item(self._spec, item_id)
         return dict(found[1].env_vars) if found is not None else {}
+
+    def env_layers_of(self, item_id: str) -> ItemEnv:
+        """``env_vars`` and ``env_policy`` in ONE resolve — for a caller that
+        composes a tool's env outside a turn (a page's `callTool`). Empty for an
+        id no App owns, like ``env_vars_of``."""
+        found = find_work_item(self._spec, item_id)
+        if found is None:
+            return ItemEnv(shared={}, policy={})
+        return ItemEnv(shared=dict(found[1].env_vars), policy=dict(found[1].env_policy))
 
     def owner_of(self, item_id: str) -> str | None:
         """Who this item's resources are charged to — `owner`, falling back to

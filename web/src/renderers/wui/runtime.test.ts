@@ -137,6 +137,11 @@ describe("the WUI runtime", () => {
       "listFiles",
       "onFileChanged", // a subscription, not a verb
       "openFile",
+      // `plan-wui-viewer-login`: the second primitive. It cannot be a
+      // `callTool` target because its whole point is that the credential NEVER
+      // passes through the page — the platform opens its own sign-in, drawn
+      // outside the frame, and the page only asks for it to be shown.
+      "openLogin",
       "readFile",
       "startRun",
       "whoami",

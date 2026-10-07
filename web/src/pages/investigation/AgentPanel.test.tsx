@@ -863,15 +863,130 @@ describe("AgentPanel env vars", () => {
     expect((screen.getByTestId("env-text") as HTMLTextAreaElement).value).toBe("API_KEY=sk-1\n");
   });
 
-  it("hands an edit back to the parent to persist", () => {
+  it("hands an edit back to the parent to persist", async () => {
     const onSave = renderWithEnv({ API_KEY: "sk-1" });
 
     fireEvent.click(screen.getByTestId("env-button"));
     fireEvent.change(screen.getByTestId("env-text"), { target: { value: "API_KEY=sk-2\n" } });
     fireEvent.click(screen.getByTestId("env-save"));
 
-    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" });
-    expect(screen.queryByTestId("env-modal")).toBeNull(); // and it closes
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" }, {});
+    // And it closes — itself, once the save has gone through.
+    await waitFor(() => expect(screen.queryByTestId("env-modal")).toBeNull());
+  });
+
+  it("does not close the panel over the other tab's unsaved values", async () => {
+    // Review round 1 (C5/F6): the header closed the panel on every shared Save,
+    // overriding the panel's own "stay open, the other tab has edits".
+    const { privateEnvApi } = await import("../../api/privateEnv");
+    const { api } = await import("../../api");
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
+    vi.spyOn(api, "getItemTools").mockResolvedValue([]);
+    vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
+    const onSave = vi.fn();
+    const { WorkspaceSlugProvider } = await import("../../hooks/useWorkspaceSlug");
+    renderWithQuery(
+      <WorkspaceSlugProvider value="rca">
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          chatId="chat-1"
+          agent={stubAgent()}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          envVars={{}}
+          envPolicy={{ VPN: "private_only" }}
+          canOpenEnv
+          onSaveEnvVars={onSave}
+        />
+      </DialogProvider>
+      </WorkspaceSlugProvider>,
+    );
+    fireEvent.click(screen.getByTestId("env-button"));
+    fireEvent.change(await screen.findByTestId("env-mine-VPN"), { target: { value: "v" } });
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
+
+    fireEvent.click(screen.getByTestId("env-save"));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(screen.getByTestId("env-modal")).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it("says on the Env button what the viewer still has to provide", async () => {
+    // `plan-wui-viewer-login`: "Env 入口在有 required 缺值時提示" — by name, not
+    // a count (review round 1, C6).
+    const { privateEnvApi } = await import("../../api/privateEnv");
+    const { api } = await import("../../api");
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
+    vi.spyOn(api, "getItemTools").mockResolvedValue([
+      {
+        key: "erp",
+        group: "erp",
+        label: "erp",
+        description: "",
+        default_on: true,
+        pref: "follow",
+        effective: true,
+        env_needs: [{ name: "ERP_TOKEN", description: "", required: true }],
+      },
+    ]);
+    vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
+    const { WorkspaceSlugProvider } = await import("../../hooks/useWorkspaceSlug");
+    renderWithQuery(
+      <WorkspaceSlugProvider value="rca">
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            chatId="chat-1"
+            agent={stubAgent()}
+            picker={[]}
+            suggestions={[]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+            envVars={{}}
+            envPolicy={{ ERP_TOKEN: "private_only" }}
+            canOpenEnv
+          />
+        </DialogProvider>
+      </WorkspaceSlugProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("env-button")).toHaveAttribute("data-attention", "true"),
+    );
+    expect(screen.getByTestId("env-button").getAttribute("title")).toContain("ERP_TOKEN");
+    vi.restoreAllMocks();
+  });
+
+  it("offers the panel to someone who may keep their own values but not store shared ones", () => {
+    // `plan-wui-viewer-login`: a person's OWN values need no `write_meta`, so
+    // the button follows `canOpenEnv`; the shared half is read-only for them.
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          chatId="chat-1"
+          agent={stubAgent()}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          envVars={{ API_KEY: "sk-1" }}
+          canOpenEnv
+        />
+      </DialogProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("env-button"));
+
+    expect(screen.getByTestId("env-readonly")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-save")).toBeNull();
   });
 });
 
