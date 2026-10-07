@@ -41,12 +41,21 @@
 | G9 | 不設保留上限,超過再說 | 〔user〕「不需要了,要超過再說」 |
 | G10 | 要備份 git 目錄,也要把**已發布的條目**搬進 git(每條建 repo,目前內容做成第一個 commit) | 〔user〕 |
 | G11 | 單一條目**檔案數上限 1000**,和 20 MB 上限放在同一個檢查 | 〔user〕「1000 個檔案算是很鬆了」 |
-| G12 | hub 副本的 `.origin` 改記 `{source: "hub", entry, commit}`;shared / profile 副本維持 `files` map(它們沒有 git,基準只能存在副本裡);`SkillHubEntry` 不再存 `origin` map,檔案清單從 `git ls-tree` 讀 | 〔user〕「好 ok」 |
-| G13 | 「有沒有變」= 副本的 `commit` ≠ hub 的 `master`,不碰檔案 | 〔user〕(同 G12) |
+| G12 | skill hub 副本的 `.origin` 改記 `{source: "hub", entry, commit}`;shared / profile 副本維持 `files` map(它們沒有 git,基準只能存在副本裡);`SkillHubEntry` 不再存 `origin` map,檔案清單從 `git ls-tree` 讀 | 〔user〕「好 ok」 |
+| G13 | 「有沒有變」= 副本的 `commit` ≠ skill hub 的 `master`,不碰檔案 | 〔user〕(同 G12) |
 | G14 | 同步(refresh)的逐檔三方比對:基準 = `git ls-tree -r -l <副本的 commit>`,上游 = `git ls-tree -r -l master`,副本 = 自己用 git blob 公式算。**不 clone、不 checkout**;只有要寫進副本的檔案才 `git cat-file` 讀內容 | 〔user〕「ok」(比 clone+checkout+diff 兩個資料夾省掉全部的暫存寫入) |
 | G15 | **LFS 第一天就有**,用 LFS 的正規方式:`.gitattributes` 以**路徑模式**決定,清單由平台固定(圖片 `*.png *.jpg *.jpeg *.gif *.webp`、文件 `*.pdf *.docx *.xlsx *.pptx`、壓縮檔 `*.zip *.gz *.tar`),發布者不能改。不用檔案大小決定 | 〔user〕「Day 1 就要有 lfs 比較規則」「Lfs 就不能用大小做門檻」 |
 | G16 | 比對順序:先全部用 blob id 比;對不上、而 repo 那邊是小 blob 的,用一次 `git cat-file --batch` 讀出來看是不是 LFS 指標(`version https://git-lfs`),是的話改比指標裡的 `size` 與 `oid sha256`。不靠解析 `.gitattributes` 判斷 | 〔user〕「Ok」 |
-| G17 | 舊的 hub 副本(`.origin` 只有 sha256 map、沒有 `commit`)照舊比對,按一次同步後換成新格式 | 〔建議〕 |
+| G17 | 舊的 skill hub 副本(`.origin` 只有 sha256 map、沒有 `commit`)照舊比對,按一次同步後換成新格式 | 〔建議〕 |
+| G18 | 回復 = `update` 只改跟內容走的欄位:`commit`、`description`、`review`、`referenced_tools`,值從那個舊 commit 當時的 revision 讀回來(`review` 是當時 AI 的意見,算不回來);owner、可見範圍維持現值。**不用** specstar `switch`(它會把 owner / 可見範圍一起換回舊值) | 〔user〕「可以」 |
+| G19 | 回復的權限**和「修改」相同**:同一個檢查(現在是 `skill_hub_routes._owned`,= owner);「修改」日後放寬,回復跟著放寬 | 〔user〕「回覆跟修改權限一樣」 |
+| G20 | 回復**不重新** AI 審查 | 〔user〕「對 不用」 |
+| G21 | 已安裝副本在 skill hub 上的條目變更後(新發布或回復都一樣)顯示「**skill 已變更**」+〔**同步**〕;想知道原因到 skill hub 詳情頁看時間軸 | 〔user〕「提示:skill 已變更(同步)」 |
+| G22 | 一律寫「skill hub」,不簡寫成「hub」(介面、文件、註解) | 〔user〕(重申 `plan-skill-hub.md` D8) |
+| G23 | 其他人**不能**直接安裝舊版;能看任一版內容、比對兩版、從某一版 fork | 〔user〕「對 不能」 |
+| G24 | skill hub 詳情頁一條時間軸,每個 revision 一筆:發布(誰、時間、說明、審查意見)、回復、轉移 owner —— 看得到這個 skill 的人都看得到;下架 / 重新上架 / 改可見範圍(含名單)**只有 owner 看得到**。被 fork 不進時間軸(詳情頁已有 fork 清單) | 〔user〕「好」 |
+| G25 | 不做 repo 大小的畫面;在 `docs/deployment.md` 寫運營方查看與整理的指令(`du -sh {git_root}/*.git`、`count-objects -vH`、`gc`),`git_root` 寫進 `docs/configuration.md` | 〔user〕「不用 在文檔說明我要怎麼用指令看就好了」 |
+| G26 | 修掉「同時首次發布同名 skill 產生兩條」:**建立條目 → 用 `find(owner, name)` 檢查 → 看到別人就刪掉自己,隨機等待後重試(上限 5 次,超過回報請稍後再試)**。不看時間(各 pod 時鐘有誤差,時間規則會兩條都留下);不加 pending 狀態、不加名字登記。後建立的那一方的檢查一定看得到對方,所以不會留下兩條;最壞是兩條都刪,靠重試補回。**git repo、push、tag、回報成功都在檢查通過之後才做**,被刪的只是一筆列 | 〔user〕「可以」(規則 1) |
 
 ### 推翻的決定
 
@@ -56,18 +65,9 @@
   「重新發布 = specstar 原生 revision」:G1 / G7 推翻其儲存方式。依 CLAUDE.md,實作的 PR 要在 `plan-skill-hub.md`
   標題下加 `> 被 #<那個 PR>（plan-skill-hub-history.md）推翻`。
 
-## 還沒定(建議,等 user 確認)
+## 還沒定
 
-| # | 問題 | 建議 |
+| # | 問題 | 狀態 |
 |---|---|---|
-| O1 | 回復時,跟著內容走的欄位(`description`、`review`、`referenced_tools`)怎麼辦 | 從那個舊 commit 當時的 revision 讀回來(`review` 是當時 AI 的意見,從檔案算不回來) |
-| O2 | 回復要用 specstar `switch` 嗎 | 不用:`switch` 會把 owner / 可見範圍一起換回舊值。改成 `update` 只改 `commit`(與 O1 的欄位) |
-| O3 | 誰能回復 | 只有 owner |
-| O4 | 回復要不要重新 AI 審查 | 不用,內容和當初審過的那一版相同 |
-| O5 | 已安裝副本在 hub 變更後看到什麼 | 中性的「hub 上的這個 skill 已變更」+〔同步〕,不分新版或回復;詳情頁寫「目前版本 vN(由 vM 回復)」 |
-| O6 | 其他人能不能直接裝舊版 | 第一版不能;能看舊版、比對兩版、從某一版 fork |
-| O7 | 事件歷史(轉移、下架、改可見範圍、回復)要不要和版本放同一條時間軸 | 同一條,放 skill 詳情頁 |
-| O8 | 運營方要不要看得到每個 skill 的 repo 大小 | 要 |
 | — | 功能 2(下載 / 使用次數) | 還沒討論 |
 | — | 功能 3(問 AI 該裝哪個) | 還沒討論 |
-| — | 既有缺陷:同時首次發布同名 skill 產生兩條 | 還沒討論要不要順手修 |
