@@ -1648,8 +1648,9 @@ export function AgentHeader({
           onClose={() => setShowEnv(false)}
           // #750: which item, so the panel can offer a field per variable this
           // item's own tools declared. The header's missing-value hint already
-          // holds the same three queries (`useEnvMissing`), so opening the panel
-          // adds no request of its own.
+          // holds the tools, sign-ins and my-values-here queries
+          // (`useEnvMissing`), so opening the panel re-asks none of them; it
+          // adds my environment variables where the hint did not need them.
           slug={slug}
           itemId={investigationId}
         />

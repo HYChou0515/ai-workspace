@@ -9,15 +9,16 @@ every item they were left in — the person signs in again and the item keeps
 failing with the expired one. Nothing removes them automatically; run this when
 you choose.
 
-What it removes: from every person's values for a single item, the names
-some loaded sign-in (`server.env_providers`) produces — only where that item's
+What it removes: from every person's values for a single item, the names some
+loaded sign-in (`server.env_providers`) produces — only where that item's
 policy for the name is Private first / Private only AND the person holds the
-name in their values for every item too, i.e. where the old value hides a newer
-one. Nothing else — those names in Shared items, the only copy someone who has
-not signed in again holds, values a person typed under other names, their
-values for every item, the shared values, and what the deploy's SSO said about
-them all stay. Values are never printed. So it finds more as people sign in
-again on their page: run it again later.
+name in their values for every item too, i.e. where the item's value hides one
+there (by presence, not by date: a value someone later typed into the item on
+purpose goes too, so check the dry run). Nothing else — those names in Shared
+items, the only copy someone who has not signed in again holds, values a person
+typed under other names, their values for every item, the shared values, and
+what the deploy's SSO said about them all stay. Values are never printed. So
+it finds more as people sign in again on their page: run it again later.
 
 It runs inside the API (`POST /api/admin/env/clear-item-sign-ins`), which uses
 the API's own store and the sign-ins it actually loaded, so the names are this

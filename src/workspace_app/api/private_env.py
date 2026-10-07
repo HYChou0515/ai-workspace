@@ -210,7 +210,8 @@ class PrivateEnvStore:
 
     def item_values_named(self, names: frozenset[str]) -> list[tuple[str, str, list[str]]]:
         """(person, item, the names held) for every per-item row holding any of
-        ``names`` — what the sign-in cleanup would remove. Values stay here."""
+        ``names`` — the candidates the sign-in cleanup then narrows to what
+        hides one in my environment variables. Values stay here."""
         out: list[tuple[str, str, list[str]]] = []
         for res in self._spec.get_resource_manager(PrivateEnv).list_resources():
             data = res.data
@@ -468,7 +469,7 @@ def register_private_env_routes(
     async def clear_item_sign_ins(body: CleanupBody, request: Request) -> CleanupOut:
         """`plan-personal-env` D10/A9: remove, from every person's values for
         single items, the names a deploy sign-in produces — where the old value
-        hides a newer one: the item's policy for the name is Private first /
+        hides one there: the item's policy for the name is Private first /
         Private only and the person holds it in my environment variables too.
         Before "my environment variables" a sign-in wrote its token into that
         one item, and an item's own value wins a name — so there those old
@@ -484,9 +485,10 @@ def register_private_env_routes(
             raise HTTPException(status_code=403, detail="superusers only")
         names = _sign_in_names(getattr(request.app.state, "env_providers", ()) or ())
         held = await asyncio.to_thread(store.item_values_named, names)
-        # Only a value that HIDES one: where the item asks for a personal value
-        # (a Shared item never reads my environment variables, so the value
-        # stored in it is the one its tools USE — round 1, F1) and the person
+        # Only a value that HIDES one (by presence, not by date): where the
+        # item asks for a personal value (a Shared item never reads my
+        # environment variables, so the value stored in it is the one its
+        # tools USE — round 1, F1) and the person
         # holds that name there too (until they sign in on their page, the
         # item's value is the only one their tools have — round 2, F1).
         found = []

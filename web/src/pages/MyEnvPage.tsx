@@ -84,8 +84,10 @@ export function MyEnvPage({
         <h2 id="my-env-values">{t("myEnv.values")}</h2>
         {mine.isPending ? (
           <p style={MUTED}>…</p>
-        ) : mine.isError ? (
+        ) : mine.isLoadingError ? (
           // Not "nothing yet": a row it could not read is not an empty one.
+          // Only when it never read one — a save's re-read that fails keeps
+          // what was already shown (round 3, F1).
           <p data-testid="my-env-load-failed" role="alert" style={MUTED}>
             {t("myEnv.loadFailed")}
           </p>

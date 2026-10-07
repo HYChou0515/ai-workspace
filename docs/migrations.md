@@ -1515,7 +1515,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API> --header "<你的閘道讀的身分 header>: <值>"
   ```
   - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。在把變數設成 Private first／Private only 的 item 裡，
-    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清真的蓋住新值的那些**：
+    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清真的蓋住另一個值的那些**（看有沒有，不比新舊——事後刻意在 item 裡另填的同名值也會被清，所以先看 dry run）：
     那個 item 把變數設成 Private first／Private only，**而且**那個人在「我的環境變數」也有同名的值。Shared 的 item 本來就不讀
     「我的環境變數」，留在裡面的值正是它在用的，所以不動；那個人還沒在「我的環境變數」登入的話，item 裡的舊值是他的 tool 唯一
     拿得到的，清掉反而壞掉，所以也不動。因此剛 rollout 時多半清不到幾筆；使用者陸續在「我的環境變數」重新登入之後再跑一次，
@@ -1525,7 +1525,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
     （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。被拒絕（HTTP 403，不在 superusers
     或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後馬上再跑會是 0 筆。
   - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
-    「只有我」會顯示「使用中：你的（這個 item）」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
+    「只有我」會顯示「使用中:你的(這個 item)」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
 
 **k8s · CI 側** — 沒有新的 manifest、probe、env、JobType。
 
@@ -1533,7 +1533,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 - 打開 `/my-env`：新增一個值，列表出現、值是遮蔽的、標示「今天設定」。
 - 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「只有我」那一列顯示
-  「使用中：你的（所有 item）」；在 item 裡另外填值後變成「使用中：你的（這個 item）」。
+  「使用中:你的(所有 item)」；在 item 裡另外填值後變成「使用中:你的(這個 item)」。
 - 部署有 `server.env_providers` 時：在「我的環境變數」，或在把那個變數設成 Private first 的 item 的「只有我」登入一次，
   `GET /api/me/env` 裡出現那個變數。
 - 清理腳本 dry run 跑得動（以 superuser 身分），列出的是你預期的人與 item。

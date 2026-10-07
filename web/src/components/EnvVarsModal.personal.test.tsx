@@ -55,7 +55,11 @@ function open({
     get: vi.fn(async () => ({ values: personal, updated: {} })),
     put: vi.fn(async (values: Record<string, string>) => ({ values, updated: {} })),
   };
-  const resolveEnvProvider = vi.fn(async () => ({ ERP_TOKEN: "fresh" }));
+  const resolveEnvProvider = vi.fn(
+    async (_slug: string, _item: string, _id: string): Promise<Record<string, string>> => ({
+      ERP_TOKEN: "fresh",
+    }),
+  );
   renderWithQuery(
     <EnvVarsModal
       envVars={envVars}
@@ -184,8 +188,9 @@ describe("my environment variables in an item's Env panel", () => {
       stored = next;
       return { values: next, updated: {} };
     });
-    resolveEnvProvider.mockImplementation(async (_s: string, _i: string, id: string) =>
-      id === "mes" ? { MES_TOKEN: "m" } : { ERP_TOKEN: "e" },
+    resolveEnvProvider.mockImplementation(
+      async (_s: string, _i: string, id: string): Promise<Record<string, string>> =>
+        id === "mes" ? { MES_TOKEN: "m" } : { ERP_TOKEN: "e" },
     );
 
     fireEvent.click(await screen.findByTestId("env-provider-sap"));

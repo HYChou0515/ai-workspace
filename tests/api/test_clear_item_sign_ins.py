@@ -9,8 +9,11 @@ automatically (D5); the operator runs this when they choose.
 It removes only names a deploy sign-in produces — read from the providers the
 API actually loaded, not a hand-kept list — and only in items whose policy for
 that name is Private first / Private only, where the old value shadows my
-environment variables. In a Shared item the old value is the one the item USES
-(it never reads my environment variables), so it stays (review round 1, F1).
+environment variables — and only for a person who holds that name there too,
+since until they sign in again the item's value is the only one their tools
+have (review round 2, F1). In a Shared item the old value is the one the item
+USES (it never reads my environment variables), so it stays (review round 1,
+F1).
 Never shows a value. Dry run by default. Superusers only: it writes everyone's
 rows.
 """

@@ -137,6 +137,22 @@ describe("MyEnvPage", () => {
     expect(screen.queryByTestId("my-env-empty")).not.toBeInTheDocument();
   });
 
+  it("keeps showing what it read when a later re-read fails", async () => {
+    // Round 3, F1: a save's re-read that failed turned the query to "error"
+    // with its data intact, and the page swapped the whole list for "could
+    // not read" — taking every Remove button with it.
+    const client = open({ values: { A: "1", B: "2" } });
+    await screen.findByTestId("my-env-row-A");
+    client.get.mockRejectedValue(new Error("down"));
+
+    fireEvent.click(within(screen.getByTestId("my-env-row-A")).getByTestId("my-env-remove"));
+
+    await waitFor(() => expect(client.get).toHaveBeenCalledTimes(3), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("my-env-row-B")).toBeInTheDocument();
+    expect(screen.queryByTestId("my-env-load-failed")).not.toBeInTheDocument();
+  });
+
   it("saves what a sign-in returns at once, and never the credential", async () => {
     const client = open({ values: { OTHER: "kept" } });
 
