@@ -1485,6 +1485,46 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
+### 2026-10-07 · #878 我的環境變數：登入一次，所有 item 都用到新的 token {#pr-878}
+
+**設定** — 沒有新 key、沒有要改的設定。**行為改變，沒有開關**（設計：[plan-personal-env](plan-personal-env.md)）：
+
+- 每個人多一份「我的環境變數」（新頁面 `/my-env`，平台選單裡「我的資源」的下一個）：所有 item 通用的個人值。
+- 一個變數只有在 item 把它的提供方式設成 **Private first** 或 **Private only** 時，才會拿到這裡的值；設成
+  Shared 或沒設的 item 拿不到。某個 item 裡另外填的值仍然優先。
+- **系統登入（部署設定的 `server.env_providers`）在 item 的 Env 面板「只有我」分頁按下去，現在是寫進「我的環境變數」，
+  不再寫進那個 item。** 在共用值分頁的登入不變（仍是填共用值的表單）。
+- 提供方式的三個選項文字改成 **Shared／Private first／Private only**（中英文介面都是），意思不變。
+- 無人在場的 workflow run（排程、頁面按鈕、按 Run）失敗時，除了 item 擁有者，也通知這次 run 代理的那個人，連到
+  「我的環境變數」；同一人、同 item、同 workflow、同一天只發一封。
+
+**資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。新的資料表 `PersonalEnv` 隨程式建立，沒有 auto-CRUD 路由。
+
+- **#869 時期在各 item 登入留下的 token，要不要清，由你決定（可選，任何時候）**：
+  ```bash
+  uv run python scripts/clear_item_sign_ins.py                 # 先 dry run：列出（人、item、變數名），不印值、不改任何東西
+  uv run python scripts/clear_item_sign_ins.py --apply         # 確認後才刪
+  uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API>   # 不在本機時
+  ```
+  - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。依規則 item 裡的值優先，所以這些舊 token 會蓋過使用者
+    之後在「我的環境變數」重新登入的新值。這支腳本只刪「某個系統登入會產生的變數名」——名單取自 API 實際載入的
+    `server.env_providers`，不是手抄的。手打的其他變數、「我的環境變數」、共用值、SSO 自動帶入的值都不動。
+  - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值），否則腳本印出 `refused` 並結束碼 1。可以重複跑，第二次會是 0 筆。
+  - 不做的症狀：使用者在「我的環境變數」重新登入了，某些 item 還是用過期的 token 失敗；那些 item 的 Env 面板「只有我」會顯示
+    「使用中：你的（這個 item）」。不清也可以讓使用者自己在那個 item 清掉。
+
+**k8s · CI 側** — 沒有新的 manifest、probe、env、JobType。
+
+**確認做完**
+
+- 打開 `/my-env`：新增一個值，列表出現、值是遮蔽的、標示「今天設定」。
+- 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「只有我」那一列顯示
+  「使用中：你的（所有 item）」；在 item 裡另外填值後變成「使用中：你的（這個 item）」。
+- 部署有 `server.env_providers` 時：在「我的環境變數」或任一 item 的「只有我」登入一次，`GET /api/me/env` 裡出現那個變數。
+- 清理腳本 dry run 跑得動（以 superuser 身分），列出的是你預期的人與 item。
+
+---
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

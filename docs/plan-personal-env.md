@@ -179,3 +179,16 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 | P7 | 清理腳本（D10） | dry-run 不刪、不印值；`--apply` 只刪產物名稱；第二次跑零筆；名單取自設定（突變名單來源 → 紅） |
 | P8 | 文件：`migrations.md` 一條（行為改變：系統登入改寫到「我的環境變數」；清理腳本何時跑、為什麼、不跑的症狀）、`plan-wui-viewer-login.md` 推翻標記、`configuration.md` | mkdocs `--strict` 綠 |
 | P9 | 推、draft PR、review 鏡頭、CI | PR body 含「prod 怎麼驗證」 |
+
+
+## 實作後與上面不同的地方（2026-10-07，實作時決定）
+
+| # | 計劃寫的 | 實際做的 | 為什麼 |
+|---|---|---|---|
+| A1 | 清理腳本自己載入部署設定、走過每一列 `PrivateEnv` | 工作在 API 裡做：superuser 才能打的 `POST /api/admin/env/clear-item-sign-ins`；腳本 `scripts/clear_item_sign_ins.py` 只透過 HTTP 呼叫它（和 `scripts/run_migrate.py` 同一個做法）。腳本名字也從 `clear_item_signin_values.py` 改成這個 | 獨立腳本要自己重組 API 的 model registry 與 backend，對 Postgres 不保證對；在 API 裡做，用的就是線上那份 store，名單就是 API **實際載入**的 `server.env_providers`（`app.state.env_providers`），比讀設定檔更貼近線上 |
+| A2 | 系統登入的值「由前端寫進 `/me/env`」 | item 的「只有我」分頁與「我的環境變數」頁的登入都是**按下就存**，不等儲存鈕；共用值分頁的登入照舊是填表單 | token 是要給下一次執行用的；登入本身就是刻意的動作，再要一個儲存鈕只會讓「登入了但沒存」的狀態出現。共用值那邊的登入填的是擁有者的共用 token，不屬於 D3 |
+| A3 | `resolve_env` 多一個 `personal` 參數 | 個人那一側用 `PersonEnv(own, personal, service)` 一路帶到 `resolve_env`；服務帳號（`env_without_request`）從個人值 dict 裡拆出來成為獨立的 `service` | D7 要求通用個人值排在服務帳號之上；服務帳號原本合在個人值 dict 的最底下，不拆出來就排不進去。parity 測試以舊的合併方式為 oracle，證明個人值為空時結果不變 |
+| A4 | （未寫）D2 擋在哪裡 | 只擋在 `resolve_env` 的順序表：Shared 的順序裡沒有通用個人值 | 第一版同時用名稱過濾和順序表擋，突變任一個都被另一個蓋住；留一處，突變才會紅 |
+| A5 | `notify_failure(run)` | `notify_failure(run, run_id)`；orchestrator 兩條把 run 結束成 error 的路都傳 run id | `WorkflowRun` 本身不帶 id，而代理人記在以 run id 為鍵的 `RunIdentity` |
+| A6 | 「需要登入」的判斷只寫了 `/w/` 平台列 | 聊天的 Env 按鈕（`useEnvMissing`）也算進通用個人值 | 同一個判斷有兩個入口；只改一個，聊天裡會繼續叫已經在「我的環境變數」登入的人去登入 |
+| A7 | 入口在「我的資源」的下一個 | 同上，圖示用 Env 鈕的 `tag` | 和 item 裡 Env 鈕同一個圖示，看得出是同一件事 |
