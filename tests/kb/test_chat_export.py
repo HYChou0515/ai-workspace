@@ -285,3 +285,55 @@ def test_the_download_name_carries_the_format_and_the_range():
         chat_export_filename("MX-7 voids", fmt="md", start=1, end=3) == "MX-7-voids (2–3).chat.md"
     )
     assert chat_export_filename("MX-7 voids", start=0, end=4) == "MX-7-voids (1–4).chat.json"
+
+
+async def test_a_skill_hub_card_is_exported_as_its_sentence_not_its_marker():
+    """plan-skill-hub-history A3: `show_skill_hub_entry` ends its reply with a
+    card declaration the chat draws. The export (and the video, which reads
+    tool output through the same `shown_files_in`) keeps the sentence and
+    drops the declaration — a person pasting it into a report never meant
+    `[skill-hub-entry]{…}`. Built with the REAL tool so the marker is the
+    one the chat parses."""
+    import tempfile
+
+    from agents import RunContextWrapper
+
+    from workspace_app.agent.context import AgentToolContext
+    from workspace_app.agent.tools import show_skill_hub_entry_impl
+    from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
+    from workspace_app.chat_video.timeline import shown_files_in
+    from workspace_app.kb.chat_export import build_chat_markdown
+    from workspace_app.resources import make_spec
+
+    spec = make_spec(default_user="system")
+    register_skill_hub(spec)
+    hub = SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
+    entry = await hub.publish(
+        owner="alice",
+        name="triage",
+        description="d",
+        source_item="i",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": b"---\nname: triage\ndescription: d\n---\nx"},
+        referenced_tools=[],
+        review=SkillHubReview(verdict="ok"),
+    )
+    out = await show_skill_hub_entry_impl(
+        RunContextWrapper(
+            AgentToolContext(investigation_id="i", app_slug="rca", acting_user="bob", skill_hub=hub)
+        ),
+        entry,
+    )
+
+    body, files = shown_files_in(out)
+    md = build_chat_markdown(
+        title="t",
+        messages=[
+            {"role": "tool", "tool_name": "show_skill_hub_entry", "tool_args": {}, "content": out}
+        ],
+    )
+
+    assert files == [] and "alice/triage" in body and "[skill-hub-entry]" not in body
+    assert "alice/triage" in md and "[skill-hub-entry]" not in md

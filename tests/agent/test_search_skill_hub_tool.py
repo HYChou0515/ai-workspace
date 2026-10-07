@@ -272,3 +272,14 @@ async def test_a_fork_started_from_an_old_version_is_not_already_installed():
     out = await search_skill_hub_impl(ctx, "reflow")
 
     assert "already installed" not in out
+
+
+def test_the_chat_parses_the_marker_the_tool_writes():
+    """The card's parser (`web/src/renderers/skillHubEntry.ts`) and the tool
+    must name one marker; a drift draws no card and prints the declaration."""
+    from pathlib import Path
+
+    from workspace_app.agent.shown_files import SKILL_HUB_ENTRY_MARKER
+
+    fe = Path(__file__).parents[2] / "web" / "src" / "renderers" / "skillHubEntry.ts"
+    assert f'"{SKILL_HUB_ENTRY_MARKER.encode("unicode_escape").decode()}"' in fe.read_text()

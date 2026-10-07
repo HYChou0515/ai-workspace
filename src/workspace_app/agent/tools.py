@@ -30,6 +30,7 @@ from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
 from .shown_files import (
     PATH_OR_LAYOUT,
+    SKILL_HUB_ENTRY_MARKER,
     LayoutError,
     PaneLayout,
     declare_shown_files,
@@ -2480,6 +2481,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             and origin is not None
             and origin.source == "hub"
             and origin.entry
+            # A fork's starting point is the user's own skill now (G23).
+            and not origin.forked
         ):
             hub.usage.use(origin.entry, user=ctx.context.acting_user, item=inv)
         if body is not None:
@@ -2860,11 +2863,6 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
 #: query. A skill's whole listing is a few lines; 25 keeps a bare `search("")`
 #: on a busy hub inside a screen rather than a tool-output cap.
 SEARCH_SKILL_HUB_LIMIT = 25
-
-
-#: Ends a `show_skill_hub_entry` reply: the entry the chat draws a live card
-#: for. Mirrored by the card's parser in `web/src` — keep them in sync.
-SKILL_HUB_ENTRY_MARKER = "\n[skill-hub-entry]"
 
 
 async def show_skill_hub_entry_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:

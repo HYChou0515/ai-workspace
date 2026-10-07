@@ -312,3 +312,20 @@ async def test_reading_a_skill_that_is_not_a_skill_hub_copy_counts_nothing():
     await hub.usage.flush()
 
     assert hub.usage.totals([entry]) == {entry: (0, 0)}
+
+
+async def test_reading_a_fork_started_from_an_old_version_is_not_a_use_of_the_entry():
+    from workspace_app.apps.skills import fork_hub_version
+
+    spec, hub = _hub()
+    entry = await _alices(hub)
+    revision = spec.get_resource_manager(SkillHubEntry).get(entry).info.revision_id
+    ctx = _ctx(hub)
+    files, inv = ctx.context.files, ctx.context.investigation_id
+    assert files is not None and inv is not None
+    await fork_hub_version(files, inv, hub, entry, revision)
+
+    assert (await read_skill_impl(ctx, "triage-reflow")).strip() == "# How"
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (0, 0)}

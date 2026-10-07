@@ -157,6 +157,18 @@ def layout_paths(tree: dict[str, Any]) -> list[str]:
     return [*layout_paths(tree["a"]), *layout_paths(tree["b"])]
 
 
+#: Ends a `show_skill_hub_entry` reply: the entry the chat draws a live card
+#: for (plan-skill-hub-history A3). Mirrored by `web/src/renderers/skillHubEntry.ts`.
+SKILL_HUB_ENTRY_MARKER = "\n[skill-hub-entry]"
+
+
+def without_card_declaration(text: str) -> str:
+    """`text` without a trailing skill hub card declaration — what a reader
+    that does not draw the card (the export, the video) shows instead."""
+    at = text.rfind(SKILL_HUB_ENTRY_MARKER)
+    return text if at < 0 else text[:at]
+
+
 def split_declaration(text: str) -> tuple[str, str]:
     """`(body, declaration)` — the declaration includes its marker, or is `""`.
 
