@@ -13,6 +13,8 @@
  * which is gone now that every App runs through the multi-chat `ItemChatShell` (#200).
  */
 
+import { useState } from "react";
+
 import type { ChipTone } from "../api/types";
 import {
   fmtElapsed,
@@ -135,6 +137,7 @@ export function WorkflowProgress({
   disconnected,
   onStop,
   stopping = false,
+  expandedAtFirst = false,
 }: {
   run: WorkflowRunDTO | undefined;
   declaredPhases: PhaseDef[];
@@ -143,10 +146,18 @@ export function WorkflowProgress({
   /** Stop the whole run (run-level cancel), not just the current turn. */
   onStop: () => void;
   stopping?: boolean;
+  /** Open on this mount whatever the remembered choice — for a reader who came
+   * to see what a run did (the schedules overview's last-run link). Never
+   * written back: the remembered choice is the reader's, not this link's. */
+  expandedAtFirst?: boolean;
 }) {
   const t = useT();
   // Collapsed by default: most of the time the bar is enough; expand to drill in.
-  const [expanded, setExpanded] = usePersistentBoolean("wf.progress.expanded", false);
+  const [remembered, setRemembered] = usePersistentBoolean("wf.progress.expanded", false);
+  const [pinned, setPinned] = useState<boolean | null>(expandedAtFirst ? true : null);
+  const expanded = pinned ?? remembered;
+  const setExpanded = (next: (v: boolean) => boolean) =>
+    pinned === null ? setRemembered(next) : setPinned(next(pinned));
   // #283: the step board stays the default; the timeline is the opt-in second view,
   // the choice remembered across runs/reloads (shared key with the old panel).
   const [timeline, setTimeline] = usePersistentBoolean("wf.view.timeline", false);

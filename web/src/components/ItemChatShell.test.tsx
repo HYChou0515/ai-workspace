@@ -12,6 +12,8 @@ import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
 import type { FileContent } from "../api/types";
 import { qk } from "../api/queryKeys";
 import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
+import { MemoryRouter } from "react-router-dom";
+
 import { DialogProvider } from "./Dialog";
 import { ItemChatShell } from "./ItemChatShell";
 
@@ -798,5 +800,75 @@ describe("run-in-this-chat lives in the bar", () => {
 
     await waitFor(() => expect(screen.queryByTestId("wf-launch-dialog")).toBeNull());
     expect(start).not.toHaveBeenCalled();
+  });
+
+  describe("arriving from the schedules overview", () => {
+    const schedRun: WorkflowRunDTO = {
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "done",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: 2,
+      result: null,
+      pending_decision: null,
+      workflow_id: "memory",
+    } as WorkflowRunDTO;
+
+    const renderAt = (address: string) => {
+      stubChatApi([
+        summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
+        summary({ chat_id: "wui:it:sched", run_id: "r1", is_default: false, title: "memory" }),
+      ]);
+      vi.spyOn(workflowApi, "getRun").mockResolvedValue(schedRun);
+      window.history.pushState({}, "", address);
+      renderWithQuery(
+        <MemoryRouter>
+          <ItemChatShell
+            slug="topic-hub"
+            itemId="it"
+            profile="default"
+            picker={[]}
+            suggestions={[]}
+            appTitle="Topic Hub"
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+            chatSwitcher="always"
+            showCollections={false}
+          />
+        </MemoryRouter>,
+      );
+    };
+
+    it("says whose runs these are, leads back, and opens the run's progress", async () => {
+      try {
+        renderAt("/a/topic-hub/it?chat=wui%3Ait%3Asched&from=schedules");
+        const banner = await screen.findByTestId("schedule-chat-banner");
+        // The workflow's title, from the profile — not the chat's raw name.
+        await waitFor(() => expect(banner).toHaveTextContent("這是排程「Digest uploads into memory」的執行紀錄"));
+        expect(screen.getByRole("link", { name: "回到排程" })).toHaveAttribute("href", "/schedules");
+        await waitFor(() =>
+          expect(screen.getByTestId("wf-progress-toggle")).toHaveAttribute("aria-expanded", "true"),
+        );
+      } finally {
+        window.history.pushState({}, "", "/");
+      }
+    });
+
+    it("says nothing when the chat was opened any other way", async () => {
+      try {
+        renderAt("/a/topic-hub/it?chat=wui%3Ait%3Asched");
+        await screen.findByTestId("wf-progress-toggle");
+        expect(screen.queryByTestId("schedule-chat-banner")).toBeNull();
+        expect(screen.getByTestId("wf-progress-toggle")).toHaveAttribute("aria-expanded", "false");
+      } finally {
+        window.history.pushState({}, "", "/");
+      }
+    });
   });
 });

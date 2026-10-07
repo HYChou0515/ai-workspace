@@ -446,3 +446,17 @@
 .item-chat-panel__gate button:hover {
   background: var(--paper);
 }
+
+/* A schedule's own conversation, reached from /schedules' last-run link
+ * (docs/plan-schedule-overview-polish.md decision 9): what it is, and the way
+ * back. */
+.item-chat-panel__schedule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  align-items: baseline;
+  padding: var(--space-8) var(--space-12);
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--paper-3);
+  font-size: var(--text-body-sm);
+}

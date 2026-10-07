@@ -771,6 +771,9 @@ export const messages = {
   "schedules.edit.saving": { "zh-TW": "存檔中…", en: "Saving…" },
   // The overview of every schedule the viewer may read.
   "scheduleOverview.title": { "zh-TW": "排程", en: "Schedules" },
+  // A schedule's own conversation, reached from the overview's last-run link.
+  "scheduleChat.banner": { "zh-TW": "這是排程「{title}」的執行紀錄", en: "The runs of the schedule “{title}”" },
+  "scheduleChat.back": { "zh-TW": "回到排程", en: "Back to schedules" },
   "scheduleOverview.loading": { "zh-TW": "載入中…", en: "Loading…" },
   "scheduleOverview.error": {
     "zh-TW": "讀不到排程清單。",
