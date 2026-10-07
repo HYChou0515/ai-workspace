@@ -236,6 +236,26 @@ describe("SchedulesOverviewPage", () => {
     );
   });
 
+  it("offers only Remove on a row the sweep refuses, and sends what it says", async () => {
+    const refused = row({ raw: { every: "fortnightly", run: "report" }, trigger_id: "", runnable: false, problems: ["bad"] });
+    const c = client({ rows: [refused] });
+    render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
+    const tr = await screen.findByTestId("schedule-i-1/.workflows/schedules.json#0");
+
+    expect(within(tr).queryByRole("button", { name: word("schedules.runNow") })).toBeNull();
+    expect(within(tr).queryByRole("button", { name: word("schedules.editTime") })).toBeNull();
+    fireEvent.click(within(tr).getByRole("button", { name: new RegExp(`^${word("schedules.remove")}`) }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("schedules.remove") }));
+
+    await waitFor(() =>
+      expect(c.remove).toHaveBeenCalledWith("rca", "i-1", {
+        path: "/.workflows/schedules.json",
+        trigger_id: "",
+        raw: { every: "fortnightly", run: "report" },
+      }),
+    );
+  });
+
   it("moves a schedule to a new time", async () => {
     const c = client();
     render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });

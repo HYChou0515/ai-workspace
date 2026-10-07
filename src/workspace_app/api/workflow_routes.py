@@ -23,6 +23,7 @@ from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
 
 from ..files import WorkspaceFiles, rel_path
+from ..perm.model import Verb
 from ..tooling.registry import PackageInfo
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
@@ -85,6 +86,11 @@ class SchedulesOut(BaseModel):
     path: str = ".workflows/schedules.json"
     rows: list[ScheduleRowOut]
     problems: list[str]
+    #: What THIS viewer may do with a row — the row routes' own gates
+    #: (`edit_content` to edit or remove, `execute` to run now), so the panel
+    #: offers only what will be allowed (docs/plan-schedule-overview.md).
+    can_edit: bool = False
+    can_run: bool = False
 
 
 async def _staged_run_uploads(
@@ -216,6 +222,14 @@ def register_workflow_routes(
             ),
         ]
 
+    def _may(slug: str, item_id: str, verb: Verb) -> bool:
+        """The locator's gate as a yes/no, for saying what a viewer may do."""
+        try:
+            locator.require_access(slug, item_id, verb)
+        except HTTPException:
+            return False
+        return True
+
     @app.get("/a/{slug}/items/{item_id}/schedules", response_model=SchedulesOut)
     async def list_item_schedules(slug: str, item_id: str) -> SchedulesOut:
         """The item's own `.workflows/schedules.json`, read the way the SWEEP reads
@@ -245,11 +259,18 @@ def register_workflow_routes(
         from .schedule_listing import grade_file
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
+        can_edit = _may(slug, item_id, "edit_content")
+        can_run = _may(slug, item_id, "execute")
         try:
             data = await files.read(investigation_id, ITEM_SCHEDULES_PATH)
         except FileNotFound:
             return SchedulesOut(
-                enabled=schedule_policy.sweep_enabled, indexed=False, rows=[], problems=[]
+                enabled=schedule_policy.sweep_enabled,
+                indexed=False,
+                rows=[],
+                problems=[],
+                can_edit=can_edit,
+                can_run=can_run,
             )
         # The sweep reads only the items its index names. A file that reached
         # the store past every hook is invisible to it until the next turn's
@@ -289,6 +310,8 @@ def register_workflow_routes(
             indexed=indexed,
             rows=[ScheduleRowOut(**msgspec.to_builtins(v)) for v in views],
             problems=problems,
+            can_edit=can_edit,
+            can_run=can_run,
         )
 
     @app.get("/a/{slug}/items/{item_id}/workflow-templates")

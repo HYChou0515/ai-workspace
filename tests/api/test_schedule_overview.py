@@ -556,6 +556,105 @@ def test_run_now_names_a_workflow_the_item_lacks_or_that_will_not_parse():
     assert broken.status_code == 422 and "`cache` is required" in broken.json()["detail"]
 
 
+def test_a_row_the_sweep_refuses_can_still_be_removed_by_what_it_says():
+    """A malformed row has no identity — it never fires — but it can still be
+    removed: found by its value as written (order inside a list matters, the
+    order of an object's keys does not)."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    malformed = {"every": "fortnightly", "run": "w0", "with": {"ids": [1, 2]}}
+    keep = {"every": "fortnightly", "run": "w0", "with": {"ids": [2, 1]}}
+    good = {"every": "hourly", "run": "w0"}
+    _put(client, iid, ITEM_SCHEDULES, _schedules(malformed, keep, good))
+    bad = next(r for r in _rows(client) if r["index"] == 0)
+    assert bad["trigger_id"] == ""
+
+    reordered = {"with": {"ids": [1, 2]}, "run": "w0", "every": "fortnightly"}
+    r = client.post(
+        _wp(iid, "/schedules/remove"),
+        json={"path": ITEM_SCHEDULES, "trigger_id": "", "raw": reordered},
+    )
+
+    assert r.status_code == 204, r.text
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [keep, good]
+
+
+def test_two_schedules_differing_only_in_the_order_of_a_list_are_two_rows():
+    """`with: {ids: [1, 2]}` and `[2, 1]` are two schedules to the sweep (its
+    key fingerprints the payload as written), so removing one keeps the other —
+    the rule the panel used to hold itself, now held where the write happens."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    a = {"every": "hourly", "run": "w0", "with": {"ids": [1, 2]}}
+    b = {"every": "hourly", "run": "w0", "with": {"ids": [2, 1]}}
+    _put(client, iid, ITEM_SCHEDULES, _schedules(a, b))
+    second = next(r for r in _rows(client) if r["index"] == 1)
+
+    r = client.post(
+        _wp(iid, "/schedules/remove"),
+        json={"path": ITEM_SCHEDULES, "trigger_id": second["trigger_id"]},
+    )
+
+    assert r.status_code == 204, r.text
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [a]
+
+
+def test_a_row_that_is_not_an_object_is_written_back_exactly_as_it_was():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(
+        client,
+        iid,
+        ITEM_SCHEDULES,
+        json.dumps({"schedules": [5, {"every": "hourly", "run": "w0"}]}),
+    )
+    good = next(r for r in _rows(client) if r["index"] == 1)
+
+    r = client.post(
+        _wp(iid, "/schedules/remove"),
+        json={"path": ITEM_SCHEDULES, "trigger_id": good["trigger_id"]},
+    )
+
+    assert r.status_code == 204, r.text
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [5]
+
+
+def test_only_remove_finds_a_row_by_its_value():
+    """Edit and Run need a row the sweep would read: a malformed row has no
+    time to move and nothing that would run."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    malformed = {"every": "fortnightly", "run": "w0"}
+    _put(client, iid, ITEM_SCHEDULES, _schedules(malformed))
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": "", "raw": malformed}
+
+    edit = client.post(_wp(iid, "/schedules/edit"), json={**ref, "every": "hourly"})
+    run = client.post(_wp(iid, "/schedules/run"), json=ref)
+
+    assert (edit.status_code, run.status_code) == (409, 409)
+
+
+def test_the_item_panel_says_what_the_viewer_may_do():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=READER)
+    _seed(client, iid)
+
+    owner = client.get(_wp(iid, "/schedules")).json()
+    holder["id"] = "alice"
+    reader = client.get(_wp(iid, "/schedules")).json()
+
+    assert (owner["can_edit"], owner["can_run"]) == (True, True)
+    assert (reader["can_edit"], reader["can_run"]) == (False, False)
+
+
 def test_a_file_the_index_still_names_but_that_is_gone_is_skipped():
     """The index may name a deleted file (it is stale in that direction only);
     the listing skips it rather than failing the page."""

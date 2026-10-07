@@ -191,6 +191,10 @@ class RowRef(BaseModel):
 
     path: str
     trigger_id: str
+    raw: Any = None
+    """For Remove only, and only when `trigger_id` is "": the row's value as
+    written. A row the sweep refuses has no identity — it never fires — but a
+    person must still be able to take it out of the file."""
 
 
 class EditTime(RowRef):
@@ -266,11 +270,10 @@ def register_schedule_overview_routes(
             locator.profile_of(item_id),
         )
 
-    async def _locate(item_id: str, ref: RowRef) -> tuple[str, dict[str, Any], int, UserSchedule]:
-        """The file at ``ref.path`` and the row whose identity is
-        ``ref.trigger_id``: (path, document, row index, parsed row). 400 for a
-        path that is not a schedules file, 409 when no row has that identity
-        any more — the file changed since the viewer saw it."""
+    async def _read_doc(item_id: str, ref: RowRef) -> tuple[str, dict[str, Any], list[Any]]:
+        """The file at ``ref.path`` as (path, document, its rows). 400 for a
+        path that is not a schedules file; 409 for one that is gone or no
+        longer a schedules document — it changed since the viewer saw it."""
         path = _workspace_path(ref.path)
         if not is_schedule_file(path):
             raise HTTPException(status_code=400, detail=f"not a schedules file: {path}")
@@ -283,12 +286,19 @@ def register_schedule_overview_routes(
         except ValueError:
             raise HTTPException(status_code=409, detail=_CHANGED) from None
         rows = doc.get("schedules") if isinstance(doc, dict) else None
-        if isinstance(rows, list):
-            key_of = schedule_key(item_id, path)
-            for i, raw_row in enumerate(rows):
-                row, _ = parse_row(i, raw_row)
-                if row is not None and key_of(row) == ref.trigger_id:
-                    return path, doc, i, row
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=409, detail=_CHANGED)
+        return path, doc, rows
+
+    async def _locate(item_id: str, ref: RowRef) -> tuple[str, dict[str, Any], int, UserSchedule]:
+        """The row whose identity is ``ref.trigger_id``: (path, document, row
+        index, parsed row); 409 when no row has that identity any more."""
+        path, doc, rows = await _read_doc(item_id, ref)
+        key_of = schedule_key(item_id, path)
+        for i, raw_row in enumerate(rows):
+            row, _ = parse_row(i, raw_row)
+            if row is not None and key_of(row) == ref.trigger_id:
+                return path, doc, i, row
         raise HTTPException(status_code=409, detail=_CHANGED)
 
     async def _save(item_id: str, path: str, doc: dict[str, Any]) -> None:
@@ -319,10 +329,20 @@ def register_schedule_overview_routes(
 
     @app.post("/a/{slug}/items/{item_id}/schedules/remove", status_code=204)
     async def remove_schedule(slug: str, item_id: str, body: RowRef) -> Response:
-        """Drop one schedule from its file; every other row stays as written,
-        the ones the linter refuses included."""
+        """Drop one schedule from its file — by identity, or by its value as
+        written for a row the sweep refuses; every other row stays as written,
+        the refused ones included."""
         workspace_id = locator.require_access(slug, item_id, "edit_content")
-        path, doc, i, _row = await _locate(workspace_id, body)
+        if body.trigger_id:
+            path, doc, i, _row = await _locate(workspace_id, body)
+        else:
+            # A row the sweep refuses has no identity; it is found by its value
+            # as written — JSON equality, so the order of an object's keys does
+            # not matter and the order inside a list does.
+            path, doc, rows = await _read_doc(workspace_id, body)
+            i = next((n for n, value in enumerate(rows) if value == body.raw), -1)
+            if i < 0:
+                raise HTTPException(status_code=409, detail=_CHANGED)
         del doc["schedules"][i]
         await _save(workspace_id, path, doc)
         return Response(status_code=204)

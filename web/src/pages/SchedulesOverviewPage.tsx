@@ -236,7 +236,12 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
   const dialog = useDialog();
   const [editing, setEditing] = useState(false);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
-  const ref = { path: row.path, trigger_id: row.trigger_id };
+  // A row the sweep refuses has no identity; Remove finds it by its value.
+  const ref = {
+    path: row.path,
+    trigger_id: row.trigger_id,
+    raw: row.trigger_id ? undefined : row.raw,
+  };
   const refresh = () => qc.invalidateQueries({ queryKey: qk.schedulesOverview });
   const fail = (e: unknown) =>
     setSaid({ ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });
@@ -269,7 +274,8 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
 
   const itemHref = `/a/${encodeURIComponent(row.slug)}/${encodeURIComponent(row.item_id)}`;
   const folder = row.path === ITEM_SCHEDULES ? "" : row.path.slice(0, row.path.lastIndexOf("/"));
-  // A row the sweep refuses has no identity, so nothing can act on it.
+  // A row the sweep refuses has no identity: it has no time to move and
+  // nothing that would run, so only Remove (by its value) applies.
   const identified = row.trigger_id !== "";
   const mayRun = row.can_run && identified && row.known && !row.run_problem;
 
@@ -324,19 +330,21 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
             </button>
           ) : null}
           {row.can_edit && identified ? (
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              onClick={() => {
+                setSaid(null);
+                setEditing(true);
+              }}
+            >
+              {t("schedules.editTime")}
+            </button>
+          ) : null}
+          {row.can_edit ? (
             <>
-              <button
-                type="button"
-                className="btn"
-                data-variant="secondary"
-                data-size="sm"
-                onClick={() => {
-                  setSaid(null);
-                  setEditing(true);
-                }}
-              >
-                {t("schedules.editTime")}
-              </button>
               <button
                 type="button"
                 className="btn"

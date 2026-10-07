@@ -74,6 +74,8 @@ def test_an_item_with_no_schedules_file_answers_an_empty_list() -> None:
         "path": ".workflows/schedules.json",
         "rows": [],
         "problems": [],
+        "can_edit": True,
+        "can_run": True,
     }
 
 

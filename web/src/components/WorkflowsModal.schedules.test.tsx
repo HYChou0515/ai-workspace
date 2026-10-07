@@ -5,12 +5,12 @@
  * IDE tree hides: the agent said "set up" and the person could only believe it.
  *
  * The rows come from the backend already interpreted (same parser and next-run
- * rule as the sweep); this file renders and removes. Removing rewrites the file
- * minus one row through the ordinary file write, so it lands on the path the
- * platform indexes — no schedule-specific write route.
+ * rule as the sweep); this file renders them and their acts — Run now, Edit
+ * time, Remove — which go through the row routes the schedules overview
+ * shares (docs/plan-schedule-overview.md §3).
  */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
@@ -18,6 +18,7 @@ import { workflowTemplatesApi } from "../api/workflowTemplates";
 import type { ItemSchedules } from "../api/schedules";
 import { renderWithQuery } from "../test/queryWrapper";
 import { DialogProvider } from "./Dialog";
+import { ScheduleActionError } from "../api/schedules";
 import { WorkflowsModal } from "./WorkflowsModal";
 
 const listMock = vi.fn();
@@ -26,9 +27,20 @@ vi.mock("../api/workspaceWorkflows", async (orig) => {
   return { ...actual, workspaceWorkflowsApi: { list: (...a: unknown[]) => listMock(...a) } };
 });
 const schedulesMock = vi.fn();
+const removeMock = vi.fn();
+const runNowMock = vi.fn();
+const editTimeMock = vi.fn();
 vi.mock("../api/schedules", async (orig) => {
   const actual = await orig<typeof import("../api/schedules")>();
-  return { ...actual, schedulesApi: { list: (...a: unknown[]) => schedulesMock(...a) } };
+  return {
+    ...actual,
+    schedulesApi: {
+      list: (...a: unknown[]) => schedulesMock(...a),
+      remove: (...a: unknown[]) => removeMock(...a),
+      runNow: (...a: unknown[]) => runNowMock(...a),
+      editTime: (...a: unknown[]) => editTimeMock(...a),
+    },
+  };
 });
 vi.mock("../api/workflows", () => ({ workflowApi: { startRun: vi.fn() } }));
 vi.mock("../api/workflowTemplates", () => ({
@@ -41,6 +53,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   listMock.mockReset();
   schedulesMock.mockReset();
+  removeMock.mockReset();
+  runNowMock.mockReset();
+  editTimeMock.mockReset();
 });
 
 const NIGHTLY = {
@@ -67,6 +82,8 @@ function schedules(over: Partial<ItemSchedules> = {}): ItemSchedules {
     path: ".workflows/schedules.json",
     rows: [NIGHTLY],
     problems: [],
+    can_edit: true,
+    can_run: true,
     ...over,
   };
 }
@@ -167,64 +184,6 @@ describe("WorkflowsModal — schedules", () => {
     expect(await screen.findByTestId("schedules-disabled")).toBeInTheDocument();
   });
 
-  it("removing a row rewrites the file without it — and keeps the rows it did not touch, refused ones included", async () => {
-    listMock.mockResolvedValue([]);
-    const bad = {
-      ...NIGHTLY,
-      index: 1,
-      raw: { every: "day", run: "nightly" },
-      run: "",
-      problems: ["schedules[1]: `every` must be one of minutes, hourly, daily, weekly, monthly."],
-    };
-    const hourly = { ...NIGHTLY, index: 2, raw: { every: "hourly", run: "nightly" } };
-    schedulesMock.mockResolvedValue(schedules({ rows: [NIGHTLY, bad, hourly] }));
-    const { svc, writes } = fakeService();
-    render(svc);
-
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
-    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
-
-    await waitFor(() => expect(writes).toHaveLength(1));
-    expect(writes[0].path).toBe(".workflows/schedules.json");
-    expect(JSON.parse(writes[0].body)).toEqual({
-      schedules: [{ every: "day", run: "nightly" }, { every: "hourly", run: "nightly" }],
-    });
-  });
-
-  it("removing rewrites from the FILE AS IT IS NOW, not from what the panel loaded earlier", async () => {
-    // The panel opened with [A]. Meanwhile the agent's save_schedules added B.
-    // Removing A from the loaded list would write [] — cancelling B, which
-    // nobody asked to cancel. The rewrite must start from a fresh read.
-    listMock.mockResolvedValue([]);
-    const b = { ...NIGHTLY, index: 1, raw: { every: "hourly", run: "nightly" } };
-    schedulesMock.mockResolvedValueOnce(schedules({ rows: [NIGHTLY] }));
-    schedulesMock.mockResolvedValue(schedules({ rows: [NIGHTLY, b] }));
-    const { svc, writes } = fakeService();
-    render(svc);
-
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
-    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
-
-    await waitFor(() => expect(writes).toHaveLength(1));
-    expect(JSON.parse(writes[0].body)).toEqual({
-      schedules: [{ every: "hourly", run: "nightly" }],
-    });
-  });
-
-  it("removing a row that is already gone writes nothing", async () => {
-    listMock.mockResolvedValue([]);
-    schedulesMock.mockResolvedValueOnce(schedules({ rows: [NIGHTLY] }));
-    schedulesMock.mockResolvedValue(schedules({ rows: [] })); // the agent removed it first
-    const { svc, writes } = fakeService();
-    render(svc);
-
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
-    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
-
-    await waitFor(() => expect(screen.queryByTestId("schedule-row-0")).toBeNull());
-    expect(writes).toHaveLength(0);
-  });
-
   it("a row without `every` reads as daily, the way the sweep reads it", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
@@ -235,24 +194,6 @@ describe("WorkflowsModal — schedules", () => {
     const row = await screen.findByTestId("schedule-row-0");
     expect(row).toHaveTextContent("每天 09:00");
     expect(row).not.toHaveTextContent("?");
-  });
-
-  it("a row that is not an object is written back exactly as it was", async () => {
-    // `5` is refused ("must be an object") — and stays `5` in the file after a
-    // rewrite, not a substitute the author never typed.
-    listMock.mockResolvedValue([]);
-    const notAnObject = { ...NIGHTLY, index: 0, raw: 5, run: "", problems: ["schedules[0]: each schedule must be an object."] };
-    const nightly = { ...NIGHTLY, index: 1 };
-    schedulesMock.mockResolvedValue(schedules({ rows: [notAnObject, nightly] }));
-    const { svc, writes } = fakeService();
-    render(svc);
-
-    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent("must be an object");
-    fireEvent.click(screen.getByTestId("schedule-remove-1"));
-    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
-
-    await waitFor(() => expect(writes).toHaveLength(1));
-    expect(JSON.parse(writes[0].body)).toEqual({ schedules: [5] });
   });
 
   it("over the cap: the file says why, each row keeps its name and gets no next time", async () => {
@@ -332,27 +273,6 @@ describe("WorkflowsModal — schedules", () => {
     const row = await screen.findByTestId("schedule-row-0");
     expect(row).toHaveTextContent("每天 09:00");
     expect(row).not.toHaveTextContent("null");
-  });
-
-  it("removing tells apart two rows that differ only in the order of a list", async () => {
-    // `with: {ids: [1, 2]}` and `with: {ids: [2, 1]}` are two schedules to the
-    // sweep (the trigger key fingerprints the payload as written). A set-wise
-    // comparison would call them one and remove the first when the second was
-    // clicked.
-    listMock.mockResolvedValue([]);
-    const a = { ...NIGHTLY, index: 0, raw: { every: "hourly", run: "nightly", with: { ids: [1, 2] } } };
-    const b = { ...NIGHTLY, index: 1, raw: { every: "hourly", run: "nightly", with: { ids: [2, 1] } } };
-    schedulesMock.mockResolvedValue(schedules({ rows: [a, b] }));
-    const { svc, writes } = fakeService();
-    render(svc);
-
-    fireEvent.click(await screen.findByTestId("schedule-remove-1"));
-    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
-
-    await waitFor(() => expect(writes).toHaveLength(1));
-    expect(JSON.parse(writes[0].body)).toEqual({
-      schedules: [{ every: "hourly", run: "nightly", with: { ids: [1, 2] } }],
-    });
   });
 
   it("a deployment with the sweep off gets ONE notice — not also 'starts after the next turn'", async () => {
@@ -439,16 +359,118 @@ describe("WorkflowsModal — schedules", () => {
     expect(screen.queryByTestId("schedule-unknown-0")).toBeNull();
   });
 
-  it("removing asks once, and a cancel writes nothing", async () => {
+  // One row's acts go through the row routes (docs/plan-schedule-overview.md
+  // §3); what the panel used to guarantee itself — every other row kept as
+  // written, a fresh read, list order as identity — is held by the server
+  // now and tested there (tests/api/test_schedule_overview.py).
+  it("removing a row asks the server to drop exactly that row, by its identity", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(schedules());
-    const { svc, writes } = fakeService();
-    render(svc);
+    removeMock.mockResolvedValue(undefined);
+    render(fakeService().svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() =>
+      expect(removeMock).toHaveBeenCalledWith("playground", "inv1", {
+        path: ".workflows/schedules.json",
+        trigger_id: "wui:it:nightly",
+        raw: undefined,
+      }),
+    );
+  });
+
+  it("a refused row has no identity, so it is removed by what it says", async () => {
+    listMock.mockResolvedValue([]);
+    const notAnObject = { ...NIGHTLY, raw: 5, run: "", trigger_id: "", problems: ["must be an object"] };
+    schedulesMock.mockResolvedValue(schedules({ rows: [notAnObject] }));
+    removeMock.mockResolvedValue(undefined);
+    render(fakeService().svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    await waitFor(() =>
+      expect(removeMock).toHaveBeenCalledWith("playground", "inv1", {
+        path: ".workflows/schedules.json",
+        trigger_id: "",
+        raw: 5,
+      }),
+    );
+    // Nothing to move or run on a row that never fires.
+    expect(screen.queryByTestId("schedule-edit-0")).toBeNull();
+    expect(screen.queryByTestId("schedule-run-0")).toBeNull();
+  });
+
+  it("removing asks once, and a cancel sends nothing", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    render(fakeService().svc);
 
     fireEvent.click(await screen.findByTestId("schedule-remove-0"));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "移除排程" })).toBeNull());
-    expect(writes).toHaveLength(0);
+    expect(removeMock).not.toHaveBeenCalled();
+  });
+
+  it("a row changed meanwhile is not rewritten — the server's sentence is shown", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    removeMock.mockRejectedValue(new ScheduleActionError(409, "This schedule has changed"));
+    render(fakeService().svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+
+    expect(await screen.findByTestId("schedule-said-0")).toHaveTextContent("This schedule has changed");
+  });
+
+  it("offers a reader no way to change or run a schedule", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules({ can_edit: false, can_run: false }));
+    render(fakeService().svc);
+
+    await screen.findByTestId("schedule-row-0");
+    expect(screen.queryByTestId("schedule-remove-0")).toBeNull();
+    expect(screen.queryByTestId("schedule-edit-0")).toBeNull();
+    expect(screen.queryByTestId("schedule-run-0")).toBeNull();
+  });
+
+  it("runs a schedule now and says so", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    runNowMock.mockResolvedValue("run-1");
+    render(fakeService().svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-run-0"));
+
+    expect(await screen.findByTestId("schedule-said-0")).toHaveTextContent("已開始執行");
+    expect(runNowMock).toHaveBeenCalledWith("playground", "inv1", {
+      path: ".workflows/schedules.json",
+      trigger_id: "wui:it:nightly",
+      raw: undefined,
+    });
+  });
+
+  it("moves a schedule to a new time with the editor the overview uses", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    editTimeMock.mockResolvedValue(undefined);
+    render(fakeService().svc);
+
+    fireEvent.click(await screen.findByTestId("schedule-edit-0"));
+    const modal = await screen.findByTestId("schedule-time-modal");
+    fireEvent.change(within(modal).getByLabelText("時間"), { target: { value: "07:15" } });
+    fireEvent.click(within(modal).getByTestId("schedule-time-save"));
+
+    await waitFor(() => expect(screen.queryByTestId("schedule-time-modal")).toBeNull());
+    expect(editTimeMock).toHaveBeenCalledWith(
+      "playground",
+      "inv1",
+      { path: ".workflows/schedules.json", trigger_id: "wui:it:nightly", raw: undefined },
+      expect.objectContaining({ every: "daily", at: "07:15", tz: "Asia/Taipei" }),
+    );
   });
 });

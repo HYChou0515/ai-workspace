@@ -5,7 +5,12 @@ import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
-import { SCHEDULES_PATH, type ScheduleRow, schedulesApi } from "../api/schedules";
+import {
+  SCHEDULES_PATH,
+  ScheduleActionError,
+  type ScheduleRow,
+  schedulesApi,
+} from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
 import { useItemSchedules } from "../hooks/useItemSchedules";
 import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
@@ -17,6 +22,7 @@ import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
+import { ScheduleTimeModal } from "./ScheduleTimeModal";
 
 /**
  * The Workflows panel (#323) — lists the workflows the user co-created with the agent in
@@ -122,18 +128,28 @@ export function WorkflowsModal({
     }
   };
 
-  /** Cancel one schedule: rewrite the file minus that row, through the ordinary
-   * file write so it lands on the path the platform indexes. Every OTHER row is
-   * kept exactly as written — the refused ones included — because a rewrite that
-   * dropped them would cancel schedules nobody asked to cancel.
-   *
-   * From the file AS IT IS NOW, not from what this panel loaded: the query is a
-   * cache with a 30s staleTime, and between the load and the click the agent's
-   * `save_schedules` may have added a row. Rewriting from the cache would write
-   * that row out of existence, silently — the exact failure the sentence above
-   * promises to avoid. So: fetch, find the clicked row by what it SAYS (the
-   * index may have shifted), and rewrite from that. A row that is already gone
-   * means nothing to write. */
+  /** One row's acts go through the row routes (docs/plan-schedule-overview.md
+   * §3), shared with the schedules overview: the server re-reads the file and
+   * finds the row — by its identity, or for a row the sweep refuses by its
+   * value as written — so every OTHER row stays exactly as written, and a row
+   * somebody changed since this panel loaded is refused with a sentence rather
+   * than rewritten from a stale copy. */
+  const rowRef = (row: ScheduleRow) => ({
+    path: schedules.data?.path ?? SCHEDULES_PATH,
+    trigger_id: row.trigger_id,
+    raw: row.trigger_id ? undefined : row.raw,
+  });
+  /** What the panel last said about a row (started, or why not), by index. */
+  const [said, setSaid] = useState<{ index: number; ok: boolean; text: string } | null>(null);
+  const [editing, setEditing] = useState<ScheduleRow | null>(null);
+  const refreshSchedules = async () => {
+    await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
+    await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+    await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
+  };
+  const failed = (row: ScheduleRow, e: unknown) =>
+    setSaid({ index: row.index, ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });
+
   const removeSchedule = async (row: ScheduleRow) => {
     const choice = await dialog.confirm({
       title: t("schedules.removeTitle"),
@@ -147,19 +163,26 @@ export function WorkflowsModal({
     });
     if (choice !== "remove") return;
     setBusy(true);
+    setSaid(null);
     try {
-      const fresh = await qc.fetchQuery({
-        queryKey: qk.itemSchedules(slug, itemId),
-        queryFn: () => schedulesApi.list(slug, itemId),
-        staleTime: 0,
-      });
-      const target = fresh.rows.find((r) => sameJson(r.raw, row.raw));
-      if (target) {
-        const kept = fresh.rows.filter((r) => r !== target).map((r) => r.raw);
-        await fileService.writeFile(SCHEDULES_PATH, JSON.stringify({ schedules: kept }, null, 2));
-        await qc.invalidateQueries({ queryKey: qk.files(itemId) });
-      }
-      await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
+      await schedulesApi.remove(slug, itemId, rowRef(row));
+    } catch (e) {
+      failed(row, e);
+    } finally {
+      await refreshSchedules();
+      setBusy(false);
+    }
+  };
+
+  const runScheduleNow = async (row: ScheduleRow) => {
+    setBusy(true);
+    setSaid(null);
+    try {
+      await schedulesApi.runNow(slug, itemId, rowRef(row));
+      setSaid({ index: row.index, ok: true, text: t("schedules.started") });
+      await refreshSchedules();
+    } catch (e) {
+      failed(row, e);
     } finally {
       setBusy(false);
     }
@@ -334,19 +357,67 @@ export function WorkflowsModal({
                       )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    data-testid={`schedule-remove-${row.index}`}
-                    aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
-                    disabled={busy}
-                    onClick={() => void removeSchedule(row)}
-                    style={pillBtn}
-                  >
-                    <Icon name="x" size={12} /> {t("schedules.remove")}
-                  </button>
+                  {sched.can_run && row.trigger_id && row.known && !row.run_problem ? (
+                    <button
+                      type="button"
+                      data-testid={`schedule-run-${row.index}`}
+                      disabled={busy}
+                      onClick={() => void runScheduleNow(row)}
+                      style={pillBtn}
+                    >
+                      <Icon name="play" size={12} /> {t("schedules.runNow")}
+                    </button>
+                  ) : null}
+                  {sched.can_edit && row.trigger_id ? (
+                    <button
+                      type="button"
+                      data-testid={`schedule-edit-${row.index}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setSaid(null);
+                        setEditing(row);
+                      }}
+                      style={pillBtn}
+                    >
+                      <Icon name="clock" size={12} /> {t("schedules.editTime")}
+                    </button>
+                  ) : null}
+                  {sched.can_edit ? (
+                    <button
+                      type="button"
+                      data-testid={`schedule-remove-${row.index}`}
+                      aria-label={`${t("schedules.remove")} ${describeSchedule(row.raw, t)}`}
+                      disabled={busy}
+                      onClick={() => void removeSchedule(row)}
+                      style={pillBtn}
+                    >
+                      <Icon name="x" size={12} /> {t("schedules.remove")}
+                    </button>
+                  ) : null}
+                  {said?.index === row.index ? (
+                    <span
+                      data-testid={`schedule-said-${row.index}`}
+                      role={said.ok ? "status" : "alert"}
+                      style={{ fontSize: pxToRem(11), color: said.ok ? "var(--text-paper-d)" : "var(--err)" }}
+                    >
+                      {said.text}
+                    </span>
+                  ) : null}
                 </div>
               );
             })}
+            {editing ? (
+              <ScheduleTimeModal
+                raw={editing.raw}
+                rowRef={rowRef(editing)}
+                onSave={(ref, time) => schedulesApi.editTime(slug, itemId, ref, time)}
+                onSaved={() => {
+                  setEditing(null);
+                  void refreshSchedules();
+                }}
+                onClose={() => setEditing(null)}
+              />
+            ) : null}
           </div>
         )}
 
@@ -440,40 +511,6 @@ export function WorkflowsModal({
         </div>
     </ModalShell>
   );
-}
-
-/**
- * Order-preserving JSON equality — the identity of a schedule row. NOT
- * `sameShape`: that one compares arrays as sets (right for grant lists, whose
- * order nobody arranges), and two rows that differ only in the order of an array
- * inside `with` are two DIFFERENT schedules to the sweep (`trigger_id_for`
- * fingerprints the payload with keys sorted and lists as they are), so Remove
- * must tell them apart. Object key order is not identity (the file was parsed,
- * not diffed as text).
- */
-function sameJson(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return (
-      Array.isArray(a) &&
-      Array.isArray(b) &&
-      a.length === b.length &&
-      a.every((x, i) => sameJson(x, b[i]))
-    );
-  }
-  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
-    const ka = Object.keys(a).sort();
-    const kb = Object.keys(b).sort();
-    return (
-      ka.length === kb.length &&
-      ka.every(
-        (k, i) =>
-          k === kb[i] &&
-          sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-      )
-    );
-  }
-  return false;
 }
 
 /** What a refused row SAID it would run, for the line that shows it. */

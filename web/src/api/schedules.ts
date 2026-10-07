@@ -59,6 +59,10 @@ export type ItemSchedules = {
   rows: ScheduleRow[];
   /** File-level problems (the file itself could not be read). */
   problems: string[];
+  /** What THIS viewer may do with a row: edit its time or remove it, and run
+   * it now — the row routes' own gates, so the panel offers only those. */
+  can_edit: boolean;
+  can_run: boolean;
 };
 
 /** The newest run of a schedule — fired or run now. */
@@ -120,8 +124,10 @@ export type ScheduleOverview = {
   files: OverviewFile[];
 };
 
-/** Which row: the file and the row's identity in it. */
-export type RowRef = { path: string; trigger_id: string };
+/** Which row: the file and the row's identity in it. A row the sweep refuses
+ * has no identity (`trigger_id: ""`); Remove finds it by `raw`, its value as
+ * written. */
+export type RowRef = { path: string; trigger_id: string; raw?: unknown };
 
 export type Period = "minutes" | "hourly" | "daily" | "weekly" | "monthly";
 
