@@ -931,9 +931,11 @@ class _PersistSandbox(_HttpStyleSandbox):
     def __init__(self) -> None:
         super().__init__()
         self.persisted: list[tuple[str, bool]] = []
+        self.packs: list[bool] = []
 
-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
         self.persisted.append((handle.id, delete))
+        self.packs.append(pack)
 
 
 async def test_host_managed_ensure_handle_skips_app_side_restore_492():
@@ -994,6 +996,56 @@ async def test_host_managed_kill_idle_persists_before_reap_492():
     killed = await registry.kill_idle(threshold=timedelta(minutes=15))
     assert killed == ["ws-1"]
     assert sandbox.persisted == [(h.id, True)]  # reconcile (host-side) before rmtree
+
+
+# docs/plan-archive-pack.md decision 3: the pack is asked for on REAP only — the
+# one write-back at which the item is globally idle and the sandbox is about to
+# go. One test per caller, so a pack=True at any other site reddens one test.
+
+
+async def test_reap_asks_the_host_to_pack():
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert sandbox.packs == [True]
+
+
+async def test_the_turn_end_reconcile_does_not_pack():
+    """Someone is waiting on a turn end, and packing costs time in bytes."""
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.flush("ws-1")
+    assert sandbox.packs == [False]
+
+
+async def test_the_periodic_checkpoint_does_not_pack():
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.mirror_warm()
+    assert sandbox.packs == [False]
+
+
+async def test_shutdown_does_not_pack():
+    """Shutdown has a budget; a pack the size of the workspace does not fit it."""
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.close_all()
+    assert sandbox.packs and not any(sandbox.packs)
+
+
+async def test_closing_an_environment_does_not_pack():
+    """A person pressed Close and is waiting for the answer."""
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.close_session("ws-1")
+    assert sandbox.packs and not any(sandbox.packs)
 
 
 async def test_host_managed_without_persist_method_is_a_noop_492():
@@ -1059,7 +1111,7 @@ class _HostManagedSandbox(MockSandbox):
             await self.mark_ready(handle)
         return handle
 
-    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
         self.persisted.append((handle.id, delete))
 
 
