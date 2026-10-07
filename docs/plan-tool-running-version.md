@@ -36,7 +36,7 @@ Grilled 2026-10-07 on master `486ce318`. 每條決定標來源：**[user]** = �
 | D9 | 按鈕只給**關得掉**的人（與 `DELETE /me/resources/live/{item}` 同一道閘：擁有者、superuser、`change_permission`）；其他人看到「沙盒關閉後就會更新」的說明，沒有按鈕。閘抽成一個函式，兩邊共用。 | [mine] |
 | D10 | 這一輪的「已掛載」改成問 registry：本 pod 的 session，否則讀共用那一列，兩者都先探活（http）。副作用：`confine_to_mounted` 對**別的 pod 建的沙盒**也知道掛了什麼了——發版後才加的新工具，會以理由拒絕，而不是交給模型一個不存在的 launcher。 | [mine] |
 | D11 | 沙盒建好之後才加進 app 的工具（沙盒裡沒有）：選單該列顯示「目前的沙盒裡沒有這個工具」，算進「關閉沙盒以更新」同一顆按鈕——關閉同樣能修好它。 | [mine，review round 1] |
-| D12 | 「已掛載」的查詢**有上限且不會失敗**：限時 3 秒（`mounted_probe_timeout_s`）。主機出錯或逾時時，**本 pod 自己建的紀錄照用**（主機沒回答不代表沙盒變了；丟掉它會讓 turn 再交出沙盒沒有的工具——review round 2），只有確定「沙盒不在了」才放掉；只能從共用那一列得知的別人的紀錄則當「查不到」（D4）。選單與 turn 的組裝以前完全不碰沙盒，不能因為這個功能變成會 500 或卡住；turn 只在 app **自己宣告**、模型會拿到的工具存在時才問（部署的 view plugin 也掛在沙盒裡，但不是任何 agent 的工具）。 | [mine，review round 1–2] |
+| D12 | 「已掛載」的查詢**有上限且不會失敗**：限時 3 秒（`mounted_probe_timeout_s`）。主機出錯或逾時時，**本 pod 自己建的紀錄照用**（主機沒回答不代表沙盒變了；丟掉它會讓 turn 再交出沙盒沒有的工具——review round 2），只有確定「沙盒不在了」才放掉；只能從共用那一列得知的別人的紀錄則當「查不到」（D4）。選單與 turn 的組裝以前完全不碰沙盒，不能因為這個功能變成會 500 或卡住；turn 只在 app **自己宣告**、而且解析成功的工具存在時才問（不看這一輪是否授權）（部署的 view plugin 也掛在沙盒裡，但不是任何 agent 的工具）。 | [mine，review round 1–2] |
 | D13 | 用詞是「不同」不是「較舊」：比的是 sha（D8），只知道不一樣，不知道哪邊新。給 AI 的那句是「沙盒跑的是 X，不是最新版（Y）」；最新版沒有版號時括號整個省略、不補字，選單也只寫「執行中 X（不是最新版）」。沙盒那一版沒有記到版號時，X 寫成 "an unrecorded release" / 「未記錄的版本」——那是事實，不是代填的版號。 | [mine，review round 1–2] |
 | D14 | 「同不同、缺不缺」只有一條規則 `tooling/external.py:drift()`：turn 的限制（`confine_to_mounted`）、給模型的句子（`describe_running`）、選單（`tools_routes._row`）都讀它，不再各寫一份。`ExternalTools.versions()` 也由 `mounts()` 推導，turn 與非 turn 的紀錄是同一個 builder。 | [mine，review round 2] |
 
@@ -70,7 +70,7 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 
 ### 讀取：每一輪、每次開選單
 
-`registry.mounted_tools(item)`（整段限時 `mounted_probe_timeout_s`，任何錯誤或逾時 → `None`，D12）：
+`registry.mounted_tools(item)`（整段限時 `mounted_probe_timeout_s`；逾時或出錯時本 pod 自己的紀錄照用，其餘 → `None`，D12）：
 
 1. 本 pod 的 session 有 handle 且 `session.tools` 已知 → http 時先探活，活著才用它（別的 pod 關掉的沙盒不能
    一直被這個 pod 回報）；
@@ -101,7 +101,7 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 - **P4** 選單：API 欄位 + 共用的關閉閘 + 前端列文字與按鈕 + i18n。
 - **P5** `docs/migrations.md`（行為改變、無開關：選單與 AI 說的版本改成沙盒實際的；跨 pod 的已掛載判斷）。
 - **P6**（review round 1）D11–D13；session 也探活；位址與紀錄一次讀；選單的錯誤只說一次並刷新資源。
-- **P7**（review round 2）D12 的「本 pod 紀錄照用」；D14 一條規則；turn 只為模型會拿到的工具查；其他關閉入口也刷新
+- **P7**（review round 2）D12 的「本 pod 紀錄照用」；D14 一條規則；turn 只為 app 自己宣告的工具查；其他關閉入口也刷新
   選單；最新版沒有版號時不補字；文件與測試名稱的用詞。
 
 ## 已知、這次不修
@@ -109,6 +109,18 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 - 被限制住的那一輪（沙盒少了某個工具）若在第一次 exec 前或中途遇到沙盒被回收而重建，新的沙盒照這一輪限制後的
   清單建，所以也沒有那個工具，並記進紀錄；要到下一次關閉才補上。以前本 pod 建的沙盒就是這樣，D10 讓別的 pod
   也看得到紀錄，範圍變大；需要「沙盒被回收」與「限制」剛好同一輪，罕見（review round 2，B）。
+- 以下是 review round 3 記下的 B（罕見或外觀），不修：
+  - 從 quota 拒絕訊息裡的「關閉」或「關閉調查」關掉沙盒，不會刷新工具選單（最多 30 秒顯示舊的提示；選單和那些入口
+    不會同時開著）。
+  - 主機回的是快取副本（last-known-good）時，「最新」寫的是那份快取的版本，它本身可能也不是最新。
+  - 同一個版本號重發一次（新 sha）會顯示「跑的是 1.4，不是最新版（1.4）」——D8 照 sha 比的必然結果。
+  - 建立時解析失敗而記下的 `{}` 現在透過位址讓每個 pod 都看到：那個沙盒存在期間每個工具都被拒絕、選單一直提示
+    關閉。拒絕的內容是對的（沙盒裡確實沒有）。
+  - 選單、WUI 頁首與 Env 面板的查詢會經過沙盒主機的 `exists`，也就會刷新主機那邊的閒置計時。
+  - view plugin 的 409（「這個環境建立時還沒有這個 plugin」）仍只看本 pod 的 session，別的 pod 建的沙盒走到
+    launcher 錯誤。
+  - 別的 pod 剛關掉沙盒、這個 pod 的探測又剛好逾時，這一次請求仍照用本 pod 的舊紀錄（D12 的取捨）。
+  - `mounted_probe_timeout_s` 不是 config 旋鈕，只是 registry 的屬性。
 
 ## 驗證
 

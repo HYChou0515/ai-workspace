@@ -714,7 +714,8 @@ class TurnContextBuilder:
         # the registry's one answer, probed and bounded (D10; before, a
         # peer-built sandbox was unknown here, so the model was told the
         # manifest's release and offered tools it did not have). Asked only
-        # when the app itself declares a tool the model would be offered — a
+        # when the app itself declares a tool that resolved (one a turn can be
+        # granted) — a
         # deployment's view plugins mount too, but they are no agent's tool,
         # and this build made no sandbox call before (review round 2).
         mounted = await self._registry.mounted_tools(item_id) if external.packages else None

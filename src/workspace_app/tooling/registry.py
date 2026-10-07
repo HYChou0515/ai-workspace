@@ -582,7 +582,7 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
         latest = f" ({pkg.latest_version})" if pkg.latest_version else ""
         line += (
             f" This workspace's sandbox runs {running}, not the latest release{latest}."
-            " Closing the sandbox makes the next turn use the latest release."
+            " Closing the sandbox lets the next one be set up with the latest release."
         )
     return line
 

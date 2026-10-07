@@ -109,10 +109,11 @@ class InvestigationRegistry:
     # states its own — those are pinned to the resolve whose schemas the model
     # was handed. None ⇒ not wired (tests / no apps), and nothing is mounted.
     tools_for: Callable[[str], Awaitable[dict[str, MountedTool]]] | None = None
-    # plan-tool-running-version: how long `mounted_tools` may wait on the host
-    # before reading as unknown. Its callers (the tool picker, a turn's context
-    # build) did not wait on a sandbox at all before; a busy host's escalating
-    # retry ladder must not become their latency.
+    # plan-tool-running-version: how long `mounted_tools` may wait on the host.
+    # Past it, this pod's own record stands and anything else reads as unknown
+    # (D12). Its callers (the tool picker, a turn's context build) did not wait
+    # on a sandbox at all before; a busy host's escalating retry ladder must not
+    # become their latency.
     mounted_probe_timeout_s: float = 3.0
     # Who a live sandbox is charged to (the item's `owner` field). Wired for the
     # per-person limits; None ⇒ nothing is charged, and the heartbeat row stays
