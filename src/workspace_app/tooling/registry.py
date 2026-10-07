@@ -120,6 +120,12 @@ class PackageInfo:
     field. Never "unknown" — that would be the platform putting words in an
     author's mouth."""
 
+    latest_version: str = ""
+    """plan-tool-running-version: set only when the live sandbox runs an OLDER
+    bundle than the latest release — ``version`` is then the mounted release
+    (``""`` when it was not recorded) and this is the latest. ``""`` whenever
+    the two are the same, so the description gains nothing in the usual case."""
+
 
 def _read_env_needs(pkg_dir: Path) -> tuple[EnvNeed, ...] | None:
     """This package's `env.json`, or ``None`` when it shipped none (#750).
@@ -565,7 +571,18 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
     release = f" {pkg.version}" if pkg.version else ""
     by = f", by {pkg.author}" if pkg.author else ""
     said = f" — {pkg.description.strip()}" if pkg.description.strip() else "."
-    return f"{cmd.description}\n\nFrom the `{pkg.name}` tool bundle{release}{by}{said}"
+    line = f"{cmd.description}\n\nFrom the `{pkg.name}` tool bundle{release}{by}{said}"
+    if pkg.latest_version:
+        # plan-tool-running-version D2: the release that RUNS is the one this
+        # sandbox was created with; say so, and how the latest is reached, so
+        # "which version is this?" gets the true answer (D1: told, not forced).
+        running = pkg.version or "an earlier release"
+        line += (
+            f" This workspace's sandbox runs {running}; {pkg.latest_version} has been"
+            f" released since. Closing the sandbox makes the next turn use"
+            f" {pkg.latest_version}."
+        )
+    return line
 
 
 def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:

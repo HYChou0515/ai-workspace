@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 from .registry import CommandInfo, EnvNeed, PackageInfo
@@ -193,7 +193,7 @@ def confine_to_mounted(
     external: ExternalTools,
     *,
     live: bool,
-    mounted: dict[str, str] | None,
+    mounted: Mapping[str, object] | None,
 ) -> ExternalTools:
     """What this turn may offer, given a sandbox that already exists.
 
@@ -272,3 +272,30 @@ async def prewarm_external_tools(
         for name in external.refused:
             logger.warning("tool prewarm: %s unavailable (%s)", name, external.refused[name])
     return unwarmed
+
+
+def describe_running(
+    external: ExternalTools, mounted: Mapping[str, MountedTool] | None
+) -> ExternalTools:
+    """Describe each tool as the release the live sandbox RUNS
+    (plan-tool-running-version D2).
+
+    A sandbox keeps the bundle it was created with while the resolve describes
+    the latest release, so where the two shas differ the package's `version`
+    becomes the mounted one and `latest_version` names the latest — which is
+    what `describe_command` turns into the sentence the model reads. Compared by
+    sha (D8). Unknown mounts (`None`) change nothing (D4): the next sandbox is
+    built from this resolve. Only the words change; what mounts does not."""
+    if not mounted:
+        return external
+    packages = []
+    for pkg in external.packages:
+        m = mounted.get(pkg.name)
+        latest = external.shas.get(pkg.name)
+        if m is None or latest is None or m.sha == latest:
+            packages.append(pkg)
+            continue
+        packages.append(
+            replace(pkg, version=m.version, latest_version=pkg.version or "a newer release")
+        )
+    return replace(external, packages=tuple(packages))
