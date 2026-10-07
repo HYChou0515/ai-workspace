@@ -44,10 +44,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Callable
 from urllib.parse import quote
 
-from fastapi import APIRouter, FastAPI, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from msgspec import Struct
 from pydantic import BaseModel
 from specstar import QB, SpecStar
@@ -57,6 +58,8 @@ from ..perm import Verb
 from .env_layers import PersonEnv
 from .locator import ItemLocator
 from .timeutil import now_ms
+
+logger = logging.getLogger(__name__)
 
 
 class PrivateEnv(Struct):
@@ -204,6 +207,24 @@ class PrivateEnvStore:
                 self._spec.get_resource_manager(model).permanently_delete(
                     private_env_id(user_id, item_id)
                 )
+
+    def item_values_named(self, names: frozenset[str]) -> list[tuple[str, str, list[str]]]:
+        """(person, item, the names held) for every per-item row holding any of
+        ``names`` — what the sign-in cleanup would remove. Values stay here."""
+        out: list[tuple[str, str, list[str]]] = []
+        for res in self._spec.get_resource_manager(PrivateEnv).list_resources():
+            data = res.data
+            assert isinstance(data, PrivateEnv)
+            held = [n for n in data.values if n in names]
+            if held:
+                out.append((data.user_id, data.item_id, held))
+        return out
+
+    def drop_names(self, user_id: str, item_id: str, names: list[str]) -> None:
+        """Take these names out of one person's values for one item, keeping
+        the rest in their order."""
+        kept = {n: v for n, v in self.get(user_id, item_id).items() if n not in names}
+        self.replace(user_id, item_id, kept)
 
     # ── my environment variables (`docs/plan-personal-env.md`) ───────────────
 
@@ -360,6 +381,22 @@ class ItemLayers(BaseModel):
     policy: dict[str, str]
 
 
+class CleanupBody(BaseModel):
+    apply: bool = False
+
+
+class CleanupRow(BaseModel):
+    user_id: str
+    item_id: str
+    #: The names that go — never their values.
+    names: list[str]
+
+
+class CleanupOut(BaseModel):
+    applied: bool
+    rows: list[CleanupRow]
+
+
 class PersonalOut(BaseModel):
     values: dict[str, str]
     #: When each name last got a new value (epoch ms).
@@ -372,6 +409,7 @@ def register_private_env_routes(
     store: PrivateEnvStore,
     locator: ItemLocator,
     get_user_id: Callable[[], str],
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     @app.get("/a/{slug}/items/{item_id}/env/layers", response_model=ItemLayers)
     async def get_env_layers(slug: str, item_id: str) -> ItemLayers:
@@ -425,3 +463,44 @@ def register_private_env_routes(
     async def delete_personal_env() -> Response:
         await asyncio.to_thread(store.replace_personal, get_user_id(), {})
         return Response(status_code=204)
+
+    @app.post("/admin/env/clear-item-sign-ins", response_model=CleanupOut)
+    async def clear_item_sign_ins(body: CleanupBody, request: Request) -> CleanupOut:
+        """`plan-personal-env` D10: remove, from every person's values for single
+        items, the names a deploy sign-in produces. Before "my environment
+        variables" a sign-in wrote its token into that one item, and an item's
+        own value wins a name — so those old tokens would shadow a new sign-in
+        everywhere they were left. Run when the operator chooses
+        (`scripts/clear_item_sign_ins.py`); dry run unless ``apply``.
+
+        The names come from the providers this API loaded — the deploy's list,
+        not one kept by hand. Values are never returned. Superusers only: it
+        writes everyone's rows."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="superusers only")
+        names = _sign_in_names(getattr(request.app.state, "env_providers", ()) or ())
+        found = await asyncio.to_thread(store.item_values_named, names)
+        if body.apply:
+            for user_id, item_id, held in found:
+                await asyncio.to_thread(store.drop_names, user_id, item_id, held)
+        return CleanupOut(
+            applied=body.apply,
+            rows=[CleanupRow(user_id=u, item_id=i, names=n) for u, i, n in found],
+        )
+
+
+def _sign_in_names(providers) -> frozenset[str]:  # noqa: ANN001 — IEnvProvider list
+    """Every name some loaded provider produces. One that cannot say what it
+    produces is skipped and named in the log — the same posture as the list of
+    sign-in buttons — rather than failing the whole cleanup."""
+    out: set[str] = set()
+    for p in providers:
+        try:
+            out |= set(p.produces)
+        except Exception:  # noqa: BLE001 — second-party code
+            logger.warning(
+                "env provider %s could not say what it produces; its names are not cleared",
+                type(p).__name__,
+                exc_info=True,
+            )
+    return frozenset(out)
