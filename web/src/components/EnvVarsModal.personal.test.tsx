@@ -18,10 +18,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemToolState } from "../api/types";
 import { makeQueryClient } from "../api/queryClient";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import { renderWithQuery } from "../test/queryWrapper";
 import { EnvVarsModal } from "./EnvVarsModal";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetWriteFailures();
+});
 
 const ERP: ItemToolState = {
   key: "erp",
@@ -45,6 +49,7 @@ function open({
   tools = [ERP],
   personalFails = false,
   mineHangs = false,
+  mineFails = false,
 }: {
   envVars?: Record<string, string>;
   envPolicy?: Record<string, string>;
@@ -54,12 +59,15 @@ function open({
   tools?: ItemToolState[];
   personalFails?: boolean;
   mineHangs?: boolean;
+  mineFails?: boolean;
 } = {}) {
   const privateClient = {
     get: vi.fn(() =>
       mineHangs
         ? new Promise<never>(() => {})
-        : Promise.resolve({ values: mine, auto: {} as Record<string, string> }),
+        : mineFails
+          ? Promise.reject(new Error("down"))
+          : Promise.resolve({ values: mine, auto: {} as Record<string, string> }),
     ),
     put: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
@@ -373,6 +381,20 @@ describe("the Private(跨workspace) tab", () => {
 
     expect(await screen.findByTestId("env-cred-error")).toBeInTheDocument();
     expect(screen.getByTestId("env-cred-dialog")).toBeInTheDocument();
+    // Said once, where it happened — not again in the app-wide notice
+    // (review A20 round 2, F1; `meta.silentError`, api/queryClient.ts).
+    expect(currentWriteFailure()).toBeNull();
+  });
+
+  it("does not claim this item uses the value when it could not read this item's own", async () => {
+    // Review A20 round 2, F2: a failed Private read counted as "no own value".
+    open({ personal: { ERP_TOKEN: "t" }, mineFails: true });
+    await personalTab();
+
+    expect(await screen.findByTestId("env-personal-row-ERP_TOKEN", {}, { timeout: 3000 })).toHaveTextContent(
+      "不確定",
+    );
+    expect(screen.queryByText("這個 item 會用這個值")).toBeNull();
   });
 
   it("writes nothing when Save is pressed with nothing typed", async () => {

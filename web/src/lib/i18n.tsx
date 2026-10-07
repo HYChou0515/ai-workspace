@@ -1720,6 +1720,10 @@ export const messages = {
     "zh-TW": "這個 item 不用這個值:它的提供方式是 Shared",
     en: "This item doesn't use this value: its setting is Shared",
   },
+  "env.personal.unknown": {
+    "zh-TW": "不確定這個 item 用不用:讀不到你在 Private 分頁的值,那邊有值的話會先用那個",
+    en: "Not sure this item uses it: your values on the Private tab couldn't be read, and one there would come first",
+  },
   "env.personal.shadowed": {
     "zh-TW": "這個 item 先用你在 Private 分頁的值",
     en: "This item uses your value on the Private tab first",

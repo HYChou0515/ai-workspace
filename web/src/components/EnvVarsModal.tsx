@@ -227,6 +227,9 @@ export function EnvVarsModal({
   // deliberate act, and a token waiting for a Save is one the next run lacks.
   const signIn = useMutation({
     scope: PERSONAL_ENV_WRITES,
+    // Its failure is said in the sign-in dialog, which stays open; the
+    // app-wide notice would say it twice (review A20 round 2, F1).
+    meta: { silentError: true },
     mutationFn: writePersonal,
     onSuccess: (saved, env) => {
       queryClient.setQueryData(qk.personalEnv(), saved);
@@ -345,6 +348,8 @@ export function EnvVarsModal({
             query={query}
             policy={policy}
             own={ownLayer(mineValues, auto)}
+            // A failed read is not "no own value" (review A20 round 2, F2).
+            ownKnown={!mineQ.isError}
             values={{ ...personal, ...personalEdits }}
             failed={personalQ.isError}
             saving={savePersonal.isPending}
@@ -1102,6 +1107,7 @@ function PersonalTab({
   query,
   policy,
   own,
+  ownKnown,
   values,
   failed,
   saving,
@@ -1114,6 +1120,8 @@ function PersonalTab({
   policy: Record<string, string>;
   /** My values for THIS item: where one is set, it wins the name (D4). */
   own: Record<string, string>;
+  /** False when they could not be read: which value wins is then unknown. */
+  ownKnown: boolean;
   /** My values for every item, with what was typed here on top. */
   values: Record<string, string>;
   failed: boolean;
@@ -1173,6 +1181,7 @@ function PersonalTab({
             description={needed.get(name) ?? ""}
             used={policyOf(name, policy) !== "shared_first"}
             shadowed={Object.hasOwn(own, name)}
+            ownKnown={ownKnown}
             value={values[name] ?? ""}
             disabled={saving}
             onEdit={onEdit}
@@ -1189,6 +1198,7 @@ function PersonalRow({
   description,
   used,
   shadowed,
+  ownKnown,
   value,
   disabled,
   onEdit,
@@ -1197,6 +1207,7 @@ function PersonalRow({
   description: string;
   used: boolean;
   shadowed: boolean;
+  ownKnown: boolean;
   value: string;
   disabled: boolean;
   onEdit: (name: string, value: string) => void;
@@ -1231,7 +1242,13 @@ function PersonalRow({
         </button>
       </div>
       <span style={MUTED}>
-        {!used ? t("env.personal.unused") : shadowed ? t("env.personal.shadowed") : t("env.personal.used")}
+        {!used
+          ? t("env.personal.unused")
+          : !ownKnown
+            ? t("env.personal.unknown")
+            : shadowed
+              ? t("env.personal.shadowed")
+              : t("env.personal.used")}
       </span>
     </div>
   );
