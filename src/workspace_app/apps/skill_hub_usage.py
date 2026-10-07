@@ -10,9 +10,10 @@ counter that kept every revision would grow by one per flush (U3). The
 total is a `Sum` over the entry's rows. Who and in which item are recorded
 on the row and never shown (U5).
 
-What a pod that dies without a SIGTERM had not flushed is lost — at most one
-interval's counts. Rows are never shared between pods (the id carries the
-pod), so no write here races another pod's.
+What a pod that dies without a SIGTERM had not flushed is lost — what
+accumulated since its last successful flush (one interval, unless flushes were
+failing). Rows are not shared between pods: the id carries the pod's
+``HOSTNAME``, so two processes without one on the same host would share rows.
 """
 
 from __future__ import annotations

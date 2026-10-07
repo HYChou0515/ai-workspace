@@ -268,7 +268,7 @@ soft delete 條目;**repo 保留**(§7 Q2)。同名再發布是新條目(§7 Q4)
 
 | # | 定了什麼 | 為什麼 / 和上文的差別 |
 |---|---|---|
-| W1 | **G8 的補做只補 tag,不補 `update`。** 讀者一律信條目的 `commit`;讀時間軸時,目前那個 revision 若沒有 tag 就補上。 | 寫入順序是 push → `update` → tag,所以「master 動了但 `update` 沒做」只會發生在 push 之後當掉;下一次發布用 master 當 parent,版本不會斷。要補 `update` 得在每次讀取比對 master,成本落在每個讀者身上。 |
+| W1 | **G8 的補做只補 tag,不補 `update`。** 讀者一律信條目的 `commit`;讀時間軸時,目前那個 revision 若沒有 tag 就補上。**已知限制:** push 之後、寫列之前當掉,master 會領先列;下一次發布會接在 master 上把列補齊,但在那之前回復一律回「版本剛被別人改過」。 | 要補 `update` 得在每次讀取比對 master,成本落在每個讀者身上;而且當掉的那次發布的說明、審查意見只在那個請求裡,補不回來。這個窗口只有一次 push 到一次寫列之間。 |
 | W2 | **搬移是一條 superuser 路由** `POST /api/admin/skill-hub/migrate`,不是開機時自動跑。repo 的 master 已經存在(別的 pod 或上次跑一半)就採用它,不做第二個第一版。舊 FileStore 的檔案不刪。 | §6 說「運營方跑一次」;路由可重跑、多 pod 同時打也只有一個第一版(lease)。不刪舊檔是保守做法:搬錯時還有原件。 |
 | W3 | **回復的請求帶 `expected` = 頁面上顯示的目前版本**,master 只從它移動。 | §4.3 寫「lease = 目前 master」;在伺服器端讀 master 只擋得住幾毫秒內的競爭。帶頁面看到的版本,才擋得住「owner 看著舊頁面時別人發布了」。 |
 | W4 | **〔從這一版 fork〕= 把那一版複製進使用者選的 item,`.origin` 標 `forked`。** 這份副本不提示「skill 已變更」、同步不動它、不算安裝、不算使用、不算「已安裝」;發布它才成為 fork。詳情頁的對話框先選 App 再選 item。 | §8 沒寫機制。G23 說舊版只能看、比、fork,不能裝;標 `forked` 讓它和安裝在行為上分得開。 |
@@ -278,4 +278,13 @@ soft delete 條目;**repo 保留**(§7 Q2)。同名再發布是新條目(§7 Q4)
 | W8 | **「自 <上線日> 起」的日期 = 第一筆計數列寫出那天。** 「最常使用」= 使用次數多的在前,同數再看安裝次數,再同按名稱。 | 程式不知道部署日;第一筆計數就是開始計的那天。 |
 | W9 | **`search_skill_hub` 的「最後更新」= 目前版本的 commit 時間**(不是條目列的更新時間,轉移、改可見範圍不算更新)。 | |
 | W10 | **`## Available views` 多一小段「這些 tool 直接在聊天裡顯示卡片」**,列 `show_skill_hub_entry(entry_id)`,只給拿得到這個 tool 的 turn。 | 原本的段落只講「寫 `*.ai.yaml` 再 `show_file`」;卡片不經過檔案。 |
+| W11 | **真模型實測(本機 ollama、App 預設 preset `qwen3:14b`、CPU):** `recommend-shows-the-card` 有 skill **過**、沒 skill(對照組)**也過**——這顆模型問「我該裝哪個」時,不需要指引就會先 `search_skill_hub` 再 `show_skill_hub_entry`、不自己安裝;所以這個情境在它身上量不到指引的效果。部署方要用自己的模型跑 `skill_eval --control`。 | 2026-10-07 實跑,報表 `skill-hub × default (ollama_chat/qwen3:14b)`:`recommend-shows-the-card  pass  pass`。 |
+| W12 | **首次發布的草稿用 `pending` 欄位標,不用 `commit == ""`。** §7 Q3 的「殘骸」= `pending` 且建立超過 10 分鐘。 | 搬移前的條目也是 `commit == ""`,用它當草稿標記會把它們當成殘骸刪掉。 |
+| W13 | **條目列只有一條寫入路徑**(review 第一輪):讀列與 revision → 只套用這個寫入者自己的變更 → 帶 `expected_revision_id` 寫;衝突就重讀重套。發布、回復、搬移只在自己的 commit 仍是 master 時才寫進列。 | 原本每個寫入者讀整列、等 git、寫回整列,發布會蓋掉下架、兩次發布會讓列落後 master(之後每次回復都被拒)。 |
+| W14 | **「這個 item 已裝」只有一個判準**:資料夾的 `.origin` 指向那個條目且不是 fork 起點(`SkillMeta.hub_entry`)。`search_skill_hub` 與聊天卡片讀的是同一個欄位;同名但不是那個條目的資料夾,卡片顯示「已有同名 skill」、不給安裝。 | review 第一輪:卡片原本看名字、tool 看條目,同一個聊天裡兩者說法相反。 |
+| W15 | **比對時任一邊超過 256 KiB 的文字檔只比是否相同。** 逐行差異在執行緒上算。 | 逐行 diff 最壞是平方時間,一個請求就能讓 API pod 卡好幾秒。 |
+| W16 | **skill 最上層的 `.gitattributes` 發布時就擋**(子資料夾裡的可以)。 | 那個位置是平台寫 LFS 規則的地方;原本會被默默換掉,安裝的人永遠拿不到使用者的版本。 |
+| W17 | **LFS 指標只在 LFS 路徑上認,oid 必須是 sha256;交給 git 的 commit 必須是 40 碼 hex。** | review 第一輪:一個長得像指標的文字檔能讓 API pod 讀出任意檔案;`.origin.commit` 是使用者能改的檔案。 |
+| W18 | **舊的 FileStore 檔案永不刪除**(搬移、重新發布、刪除條目都不刪)。 | 它們是搬移前版本唯一的原件;空間停在上線那天,不再增加。 |
+| W19 | **〔從這一版 fork〕的對話框不用 `useDirtyClose`。** | 裡面只有「選 App、選 item」,沒有要保護的輸入;點背景不關(表單的預設)。 |
 

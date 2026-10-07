@@ -289,7 +289,9 @@ class SkillHubRepos:
         return out.decode().strip() if code == 0 else None
 
     async def committed_at(self, entry_id: str, commit: str) -> dt.datetime:
-        """When `commit` was written — when that version was published."""
+        """When `commit` was written: when that version was published, or —
+        for an entry's first version moved in from before the git store — when
+        it was moved in."""
         _code, out = await self._git(entry_id, "show", "-s", "--format=%cI", _commit(commit))
         return dt.datetime.fromisoformat(out.decode().strip())
 

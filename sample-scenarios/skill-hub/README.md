@@ -8,7 +8,7 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
     --scenarios sample-scenarios/skill-hub --control -o ./tune/run-1
 ```
 
-What these measure is not whether the three tools work — their own tests do —
+What these measure is not whether the four tools work — their own tests do —
 but whether the model reaches for the RIGHT one on the user's words, and holds
 back where it should: "is there a skill for X" is a search, not a publish;
 "which skill should I install" is a search and then a card

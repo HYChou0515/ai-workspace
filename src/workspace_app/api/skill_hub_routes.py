@@ -333,9 +333,9 @@ def register_skill_hub_routes(
         App's ceiling — what the install告知 shows before the person decides."""
         viewer = get_user_id()
         entry = _readable(entry_id, viewer)
-        # One read: the file names are the version's tree (`ls-tree`), never
-        # its files. Reading the folder to list it cost up to the cap per page
-        # view (review round 2).
+        # The file names are the version's tree (`ls-tree`; only the small
+        # files on LFS paths are read, to tell a pointer). Reading the folder
+        # to list it cost up to the cap per page view (review round 2).
         skill_md = await hub.skill_md_of(entry_id)
         lineage: SkillHubLineage | None = None
         if entry.forked_from:
@@ -472,7 +472,8 @@ def register_skill_hub_routes(
     @app.get("/skill-hub/entries/{entry_id}/versions/{revision}")
     async def skill_hub_version(entry_id: str, revision: str) -> SkillHubVersion:
         """Any version, readable by whoever may read the entry — read, not
-        installed (G23). One file read: the names come from the tree."""
+        installed (G23). The names come from the tree; SKILL.md is the one
+        file read in full."""
         _readable(entry_id, get_user_id())
         old = await _version(entry_id, revision)
         names = sorted(await hub.repos.tree(entry_id, old.commit))

@@ -1382,5 +1382,6 @@ git -C <git_root>/<id>.git diff <commit-a> <commit-b> --stat    # 兩版之間�
 ```
 
 **計數。** 安裝與使用次數先在每個 pod 的記憶體累積，每 2 小時、以及 pod 收到 SIGTERM 時寫進
-`SkillHubUsage`（每個條目每天每個 pod 一列，只留一個 revision）。pod 沒收到 SIGTERM 就消失時，最多少掉
-2 小時的次數。
+`SkillHubUsage`（每個條目每天每個 pod 一列，只留一個 revision；pod 以 `HOSTNAME` 區分，同一台機器跑兩個
+沒有 `HOSTNAME` 的行程會寫到同一列）。pod 沒收到 SIGTERM 就消失時，少掉的是上一次寫出成功之後累積的次數——
+平常最多 2 小時；寫出一直失敗（例如資料庫連不上）時會更多，log 每次都會記。

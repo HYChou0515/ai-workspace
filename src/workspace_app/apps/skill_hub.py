@@ -409,7 +409,8 @@ class HistoryEvent(Struct, kw_only=True):
     revision: str
     kind: HistoryKind
     at: dt.datetime
-    #: Who did it: the owner at the time — only an owner can do any of these.
+    #: Who did it: the owner at the time — only an owner can do any of these
+    #: (a first version moved in by the migration is the owner's too).
     by: str
     #: The owner after it (differs from `by` only on a transfer).
     owner: str

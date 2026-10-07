@@ -185,8 +185,9 @@ async def read_workspace_skill(
     """:func:`load_workspace_skill` plus the folder's ``.origin`` — read in ONE
     batch, so knowing where a copy came from costs no extra round trip
     (`read_skill` counts a use of a skill hub copy from it). ``(None, None)``
-    when there is no such skill; the origin is ``None`` for the person's own
-    skill or a manifest that does not decode."""
+    when there is no such skill; the origin is ``None`` when the folder has no
+    `.origin` (written here and never published) or one that does not decode.
+    A published folder tracks its own entry, so reading it counts as a use."""
     from ..filestore.batch import read_all_existing
 
     folder = f"/{WORKSPACE_SKILL_DIR}/{name}/"
