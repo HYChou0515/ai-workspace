@@ -14,6 +14,9 @@ const KEY: Record<string, MsgKey> = {
   transfer_owner_required: "skillHub.refused.transfer_owner_required",
   transfer_name_taken: "skillHub.refused.transfer_name_taken",
   folder_in_the_way: "skillHub.refused.folder_in_the_way",
+  // A rollback against a version that is no longer current
+  // (plan-skill-hub-history §4.3): not retried, the owner looks again.
+  version_moved: "skillHub.history.moved",
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");

@@ -12,12 +12,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../api/http";
 import { makeQueryClient } from "../api/queryClient";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
-import type { SkillEditTarget, SkillHubApi, SkillHubDetail } from "../api/skillHub";
+import type {
+  SkillEditTarget,
+  SkillHubApi,
+  SkillHubDetail,
+  SkillHubHistoryEvent,
+} from "../api/skillHub";
 
 vi.mock("../api", () => ({
   api: {
     listApps: vi.fn(async () => [
       { slug: "rca", title: "根因分析", description: "", icon: "flame", color: "#F0502E" },
+    ]),
+    getAppManifest: vi.fn(async () => ({ resource_route: "/rca-item" })),
+    listAppItems: vi.fn(async () => [
+      { resource_id: "i-9", title: "Line 3 reflow", owner: "bob", created_time: "", created_by: "bob" },
     ]),
     getUsers: vi.fn(async () => [
       { id: "alice", name: "Alice Wu", section: "", email: "", photo_url: null },
@@ -78,7 +87,34 @@ const OWNED = detail({
 
 const OPEN: SkillEditTarget = { action: "open", app: "rca", profile: "default", item_id: "i-1", reason: "" };
 
-function client(entry: SkillHubDetail, edit: SkillEditTarget = OPEN) {
+const ev = (over: Partial<SkillHubHistoryEvent>): SkillHubHistoryEvent => ({
+  revision: "e-1:1",
+  kind: "publish",
+  at: "2026-10-01T12:00:00Z",
+  by: "alice",
+  owner: "alice",
+  commit: "c1",
+  description: "Triage reflow defects.",
+  review_notes: [],
+  to_revision: "",
+  visibility: "",
+  current: false,
+  ...over,
+});
+
+/** Newest first: a transfer on top of a rollback to v1, over v2 and v1. */
+const HISTORY: SkillHubHistoryEvent[] = [
+  ev({ revision: "e-1:5", kind: "transfer", by: "bob", owner: "alice", commit: "c1", current: true }),
+  ev({ revision: "e-1:4", kind: "rollback", by: "bob", owner: "bob", commit: "c1", to_revision: "e-1:1" }),
+  ev({ revision: "e-1:2", kind: "publish", by: "bob", owner: "bob", commit: "c2", description: "v2 notes" }),
+  ev({ revision: "e-1:1", kind: "publish", by: "bob", owner: "bob", commit: "c1" }),
+];
+
+function client(
+  entry: SkillHubDetail,
+  edit: SkillEditTarget = OPEN,
+  history: SkillHubHistoryEvent[] = [ev({ current: true })],
+) {
   return {
     list: vi.fn<SkillHubApi["list"]>(async () => []),
     get: vi.fn<SkillHubApi["get"]>(async () => entry),
@@ -89,6 +125,23 @@ function client(entry: SkillHubDetail, edit: SkillEditTarget = OPEN) {
     remove: vi.fn<SkillHubApi["remove"]>(async () => undefined),
     transfer: vi.fn<SkillHubApi["transfer"]>(async () => undefined),
     edit: vi.fn<SkillHubApi["edit"]>(async () => edit),
+    history: vi.fn<SkillHubApi["history"]>(async () => history),
+    version: vi.fn<SkillHubApi["version"]>(async (_id, revision) => ({
+      revision,
+      commit: "c2",
+      description: "v2 notes",
+      files: ["SKILL.md", "shot.png", "notes.md"],
+      skill_md: "---\nname: triage-reflow\ndescription: d\n---\n\n# The second way\n",
+    })),
+    versionFile: vi.fn<SkillHubApi["versionFile"]>(async (_id, _rev, path) =>
+      path === "shot.png" ? { path, text: null, size: 9 } : { path, text: "old notes body", size: 14 },
+    ),
+    diff: vi.fn<SkillHubApi["diff"]>(async () => [
+      { path: "SKILL.md", status: "changed", patch: "@@ -1 +1 @@\n-old line\n+new line\n" },
+      { path: "shot.png", status: "changed", patch: null },
+    ]),
+    rollback: vi.fn<SkillHubApi["rollback"]>(async () => undefined),
+    fork: vi.fn<SkillHubApi["fork"]>(async () => ({ name: "triage-reflow", missing_tools: [] })),
   } satisfies SkillHubApi;
 }
 
@@ -136,14 +189,20 @@ describe("SkillHubEntryPage", () => {
     expect(screen.getByText("references/glossary.md")).toBeInTheDocument();
     // Installing is the item's (D2): a sentence, never a control.
     expect(screen.getByText(word("skillHub.howToInstall"))).toBeInTheDocument();
-    expect(screen.queryAllByRole("button")).toEqual([]);
+    // None of the owner's actions; the history's own controls are everyone's
+    // (plan-skill-hub-history §8) — on a one-version entry, just the fork.
+    await screen.findByText(word("skillHub.history.current"));
+    expect(screen.queryAllByRole("button").map((b) => b.textContent)).toEqual([
+      word("skillHub.history.fork"),
+    ]);
   });
 
   it("gives the owner the five actions, and no install sentence", async () => {
     mount(client(OWNED));
 
     await screen.findByRole("heading", { level: 1, name: /alice/ });
-    const names = screen.getAllByRole("button").map((b) => b.textContent);
+    const actions = screen.getByRole("group", { name: word("skillHub.edit") });
+    const names = within(actions).getAllByRole("button").map((b) => b.textContent);
     expect(names).toEqual([
       word("skillHub.edit"),
       word("skillHub.unpublish"),
@@ -465,3 +524,121 @@ describe("SkillHubEntryPage", () => {
     );
   });
 });
+
+describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
+  const timeline = () => screen.findByRole("list", { name: word("skillHub.history") });
+
+  it("lists every row newest first, says what each did, and marks the current one", async () => {
+    mount(client(detail({}), OPEN, HISTORY));
+
+    const rows = within(await timeline()).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toHaveTextContent(word("skillHub.history.kind.transfer", { owner: "Alice Wu" }));
+    expect(rows[0]).toHaveTextContent(word("skillHub.history.current"));
+    expect(rows[1]).toHaveTextContent(word("skillHub.history.kind.rollback", { when: "2026/10/01" }));
+    expect(rows[2]).toHaveTextContent(word("skillHub.history.kind.publish"));
+    expect(rows[2]).toHaveTextContent("v2 notes");
+    // A transfer row changes no content: nothing to read, compare or fork.
+    expect(within(rows[0]).queryAllByRole("button")).toEqual([]);
+    // No internals on screen: the version's id is never printed.
+    expect(screen.queryByText(/e-1:2|c2/)).toBeNull();
+    // A non-owner may read, compare and fork an old version — never roll back.
+    expect(within(rows[2]).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      word("skillHub.history.view"),
+      word("skillHub.history.compare"),
+      word("skillHub.history.fork"),
+    ]);
+  });
+
+  it("offers no compare and no rollback on a row whose version is the current one", async () => {
+    // The rollback (row 1) brought v1 back, so v1's own row (row 3) holds the
+    // same content as now: comparing shows nothing, rolling back does nothing.
+    mount(client(OWNED, OPEN, HISTORY));
+    const rows = within(await timeline()).getAllByRole("listitem");
+    for (const row of [rows[1], rows[3]]) {
+      expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual([
+        word("skillHub.history.view"),
+        word("skillHub.history.fork"),
+      ]);
+    }
+    expect(within(rows[2]).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      word("skillHub.history.view"),
+      word("skillHub.history.compare"),
+      word("skillHub.history.fork"),
+      word("skillHub.history.rollback"),
+    ]);
+  });
+
+  it("shows an old version's SKILL.md and files, and one file's text or that it is not text", async () => {
+    const c = client(detail({}), OPEN, HISTORY);
+    mount(c);
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.view") }));
+
+    const modal = await screen.findByTestId("skill-hub-version");
+    expect(await within(modal).findByRole("heading", { name: "The second way" })).toBeInTheDocument();
+    expect(c.version).toHaveBeenCalledWith("e-1", "e-1:2");
+    fireEvent.click(within(modal).getByRole("button", { name: "notes.md" }));
+    expect(await within(modal).findByText("old notes body")).toBeInTheDocument();
+    fireEvent.click(within(modal).getByRole("button", { name: "shot.png" }));
+    expect(await within(modal).findByText(word("skillHub.history.notText"))).toBeInTheDocument();
+  });
+
+  it("compares an old version with the current one, file by file", async () => {
+    const c = client(detail({}), OPEN, HISTORY);
+    mount(c);
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
+
+    const modal = await screen.findByTestId("skill-hub-diff");
+    expect(await within(modal).findByText(/\+new line/)).toBeInTheDocument();
+    expect(within(modal).getByText(word("skillHub.history.binaryChanged"))).toBeInTheDocument();
+    expect(c.diff).toHaveBeenCalledWith("e-1", "e-1:2", "e-1:5");
+  });
+
+  it("lets the owner roll back, against the version the page showed", async () => {
+    const c = client(OWNED, OPEN, HISTORY);
+    mount(c);
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.rollback") }));
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.history.rollback.confirm") }));
+
+    await waitFor(() => expect(c.rollback).toHaveBeenCalledWith("e-1", "e-1:2", "c1"));
+  });
+
+  it("says the version moved when someone changed it meanwhile, and reloads the history", async () => {
+    const c = client(OWNED, OPEN, HISTORY);
+    c.rollback.mockRejectedValueOnce(
+      new HttpError(409, "rollback failed (409)", "version_moved", [], {}),
+    );
+    mount(c);
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.rollback") }));
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.history.rollback.confirm") }));
+
+    expect(
+      await screen.findByText(word("skillHub.failed", { reason: word("skillHub.history.moved") })),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(c.history).toHaveBeenCalledTimes(2));
+  });
+
+  it("forks a version into one of the viewer's items", async () => {
+    const c = client(detail({}), OPEN, HISTORY);
+    mount(c);
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.fork") }));
+
+    const dialog = await screen.findByTestId("skill-hub-fork");
+    const go = within(dialog).getByRole("button", { name: word("skillHub.history.fork.confirm") });
+    expect(go).toBeDisabled();
+    fireEvent.click(await within(dialog).findByRole("radio", { name: /Line 3 reflow/ }));
+    fireEvent.click(go);
+
+    await waitFor(() => expect(c.fork).toHaveBeenCalledWith("rca", "i-9", "e-1", "e-1:2"));
+    expect(await within(dialog).findByRole("link", { name: word("skillHub.history.fork.open") })).toHaveAttribute(
+      "href",
+      "/a/rca/i-9",
+    );
+  });
+});
+

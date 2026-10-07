@@ -80,6 +80,47 @@ export type SkillEditTarget = {
 
 export type SkillInstalled = { name: string; missing_tools: string[] };
 
+/** One row of an entry's timeline (`docs/plan-skill-hub-history.md` §8),
+ * newest first. `permission` rows reach the owner only — the server's call. */
+export type SkillHubHistoryEvent = {
+  revision: string;
+  kind: "publish" | "rollback" | "transfer" | "permission";
+  /** ISO time the revision was written. */
+  at: string;
+  /** Who did it (the owner at the time). */
+  by: string;
+  /** The owner after it — differs from `by` only on a transfer. */
+  owner: string;
+  /** The version current after it — compared, never shown. */
+  commit: string;
+  description: string;
+  review_notes: string[];
+  /** On a rollback: the revision that first published the version brought back. */
+  to_revision: string;
+  /** On a permission change: the visibility after it. */
+  visibility: string;
+  current: boolean;
+};
+
+/** One version, read (never installed — G23). */
+export type SkillHubVersion = {
+  revision: string;
+  commit: string;
+  description: string;
+  files: string[];
+  skill_md: string;
+};
+
+/** One file of a version; `text` is `null` when the file is not text. */
+export type SkillHubVersionFile = { path: string; text: string | null; size: number };
+
+/** One file's difference; `patch` is `null` for a file that is not text. */
+export type SkillHubFileChange = {
+  path: string;
+  status: "added" | "removed" | "changed";
+  patch: string | null;
+};
+
 export type SkillHubApi = {
   /** `app` (a slug) adds each row's `missing_tools` against that App's ceiling. */
   list(q?: string, mine?: boolean, app?: string): Promise<SkillHubCard[]>;
@@ -95,9 +136,28 @@ export type SkillHubApi = {
   remove(entryId: string): Promise<void>;
   transfer(entryId: string, owner: string): Promise<void>;
   edit(entryId: string): Promise<SkillEditTarget>;
+  /** The timeline, newest first. */
+  history(entryId: string): Promise<SkillHubHistoryEvent[]>;
+  version(entryId: string, revision: string): Promise<SkillHubVersion>;
+  versionFile(entryId: string, revision: string, path: string): Promise<SkillHubVersionFile>;
+  /** What changed from `from` to `to`, per file. */
+  diff(entryId: string, from: string, to: string): Promise<SkillHubFileChange[]>;
+  /** Owner only. `expected` is the commit the page showed as current: a 409
+   * `version_moved` when someone published or rolled back since. */
+  rollback(entryId: string, revision: string, expected: string): Promise<void>;
+  /** 〔從這一版 fork〕: that version copied into an item; install's refusals. */
+  fork(slug: string, itemId: string, entryId: string, revision: string): Promise<SkillInstalled>;
 };
 
 const entryBase = (entryId: string) => `/skill-hub/entries/${encodeURIComponent(entryId)}`;
+const versionBase = (entryId: string, revision: string) =>
+  `${entryBase(entryId)}/versions/${encodeURIComponent(revision)}`;
+
+async function getJson<T>(path: string, failed: string): Promise<T> {
+  const resp = await apiFetch(path);
+  if (!resp.ok) throw await refused(resp, failed);
+  return (await resp.json()) as T;
+}
 
 /**
  * A refusal, as the page will word it. The hub's routes refuse with a CODE
@@ -185,5 +245,41 @@ export const skillHubApi: SkillHubApi = {
   async edit(entryId) {
     const resp = await post(`${entryBase(entryId)}/edit`, undefined, "edit failed");
     return (await resp.json()) as SkillEditTarget;
+  },
+  async history(entryId) {
+    const body = await getJson<{ events: SkillHubHistoryEvent[] }>(
+      `${entryBase(entryId)}/history`,
+      "the history could not be read",
+    );
+    return body.events;
+  },
+  version(entryId, revision) {
+    return getJson<SkillHubVersion>(versionBase(entryId, revision), "the version could not be read");
+  },
+  versionFile(entryId, revision, path) {
+    const q = new URLSearchParams({ path });
+    return getJson<SkillHubVersionFile>(
+      `${versionBase(entryId, revision)}/file?${q}`,
+      "the file could not be read",
+    );
+  },
+  async diff(entryId, from, to) {
+    const q = new URLSearchParams({ from, to });
+    const body = await getJson<{ files: SkillHubFileChange[] }>(
+      `${entryBase(entryId)}/diff?${q}`,
+      "the comparison failed",
+    );
+    return body.files;
+  },
+  async rollback(entryId, revision, expected) {
+    await post(`${entryBase(entryId)}/rollback`, { revision, expected }, "rollback failed");
+  },
+  async fork(slug, itemId, entryId, revision) {
+    const resp = await post(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/skills/fork`,
+      { entry_id: entryId, revision },
+      "fork failed",
+    );
+    return (await resp.json()) as SkillInstalled;
   },
 };

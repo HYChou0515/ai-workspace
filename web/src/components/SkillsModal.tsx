@@ -471,7 +471,7 @@ function SkillRow({
                 whiteSpace: "nowrap",
               }}
             >
-              {t("skills.updateAvailable")}
+              {t(fromHub ? "skills.updateAvailable.hub" : "skills.updateAvailable")}
             </span>
           )}
           {(skill.upstream === "unpublished" || skill.upstream === "deleted") && (

@@ -334,6 +334,31 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     expect(screen.queryByTestId("skill-update-settled")).toBeNull();
   });
 
+  it("says 「skill 已變更」 and offers 〔同步〕 on a skill hub copy, and keeps the package's words (G21)", async () => {
+    const skills: ItemSkillState[] = [
+      { ...COPIED[0], copy_of: "profile" },
+      { ...COPIED[0], name: "from-hub", source: "workspace", upstream: "live", copy_of: "hub" },
+    ];
+    renderModal({ client: fakeClient(skills) as never });
+    await screen.findByTestId("skill-row-from-hub");
+
+    expect(screen.getByTestId("skill-update-from-hub")).toHaveTextContent("skill 已變更");
+    expect(screen.getByTestId("skill-refresh-from-hub")).toHaveAttribute("title", "同步");
+    expect(screen.getByTestId("skill-update-triage")).toHaveTextContent("有新版");
+  });
+
+  it("names the skill hub in full, never as just 'hub' (G22)", () => {
+    for (const key of ["skills.reset.hub", "skills.refreshDone.hub"] as const) {
+      for (const locale of ["zh-TW", "en"] as const) {
+        const text = translate(locale, key);
+        expect(text, `${locale} ${key}`).toMatch(/skill hub/i);
+        expect(text.replace(/skill hub/gi, ""), `${locale} ${key}`).not.toMatch(/\bhub\b/i);
+      }
+    }
+    expect(translate("en", "skills.refresh.hub")).toBe("Sync");
+    expect(translate("en", "skills.updateAvailable.hub")).toBe("Skill changed");
+  });
+
   it("words Update / Reset and the note by where the copy came from — the package or the hub (D4)", async () => {
     // The listing says what a copy is OF (`copy_of`). `source` alone cannot:
     // a copy of a package skill this App does not declare lists as

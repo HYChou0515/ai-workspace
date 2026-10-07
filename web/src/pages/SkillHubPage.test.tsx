@@ -80,6 +80,12 @@ function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER]) {
     remove: vi.fn<SkillHubApi["remove"]>(),
     transfer: vi.fn<SkillHubApi["transfer"]>(),
     edit: vi.fn<SkillHubApi["edit"]>(),
+    history: vi.fn<SkillHubApi["history"]>(async () => []),
+    version: vi.fn<SkillHubApi["version"]>(),
+    versionFile: vi.fn<SkillHubApi["versionFile"]>(),
+    diff: vi.fn<SkillHubApi["diff"]>(async () => []),
+    rollback: vi.fn<SkillHubApi["rollback"]>(),
+    fork: vi.fn<SkillHubApi["fork"]>(),
   } satisfies SkillHubApi;
 }
 

@@ -27,6 +27,7 @@ import { useDialog } from "../components/Dialog";
 import { ModalActions } from "../components/ModalActions";
 import { ModalShell } from "../components/ModalShell";
 import { PermissionDialog } from "../components/PermissionDialog";
+import { SkillHubHistory } from "../components/SkillHubHistory";
 import { UserChip } from "../components/UserChip";
 import { UserPicker } from "../components/UserPicker";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
@@ -34,6 +35,7 @@ import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useApps } from "../hooks/useResources";
 import { useUsers } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
+import { skillBody } from "../lib/skillBody";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { DOC_ROLES } from "../lib/permission";
 
@@ -157,6 +159,8 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
         </ul>
       </section>
 
+      <SkillHubHistory entry={entry} client={client} />
+
       <section>
         <h2>{t("skillHub.forksOf")}</h2>
         {entry.forks.length === 0 ? (
@@ -180,15 +184,6 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
       </section>
     </div>
   );
-}
-
-/** The SKILL.md without its frontmatter. The name and description are already
- * on the page, and rendered as Markdown a `---` fence under a line of text
- * reads as a setext heading — measured: "name: triage-reflow" drawn as an h1
- * over the real one. Display only; the file itself ships whole. */
-export function skillBody(md: string): string {
-  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(md);
-  return m ? md.slice(m[0].length).replace(/^\s+/, "") : md;
 }
 
 /** What this entry was forked from, as the viewer may know it. A root that
