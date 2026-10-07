@@ -8,6 +8,8 @@ the day and keeps one revision of it; the total is a sum over the entry's rows.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from specstar import SpecStar
 
@@ -96,3 +98,55 @@ async def test_a_flush_that_fails_keeps_the_counts_for_the_next(spec: SpecStar) 
     await a.flush()
 
     assert a.totals(["e1"]) == {"e1": (1, 0)}
+
+
+# ── review round 1 (defect #4, #5) ───────────────────────────────────────────
+
+
+async def test_a_flush_cancelled_midway_still_writes_everything_once(
+    spec: SpecStar, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shutdown cancels the periodic flusher, maybe mid-flush, then flushes
+    again. Nothing is lost and nothing is written twice."""
+    import threading
+
+    c = _counter(spec, "pod-a")
+    c.use("e1", user="u", item="i")
+    c.use("e2", user="u", item="i")
+    real = c._add  # noqa: SLF001 — the write a slow store makes slow
+    started, release = threading.Event(), threading.Event()
+
+    def slow_add(entry_id, day, per):  # noqa: ANN001, ANN202
+        if entry_id == "e1":
+            started.set()
+            release.wait(5)
+        real(entry_id, day, per)
+
+    monkeypatch.setattr(c, "_add", slow_add)
+    periodic = asyncio.create_task(c.flush())
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    periodic.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await periodic
+    await c.flush()  # the shutdown flush
+
+    assert c.totals(["e1", "e2"]) == {"e1": (0, 1), "e2": (0, 1)}
+
+
+async def test_an_id_that_is_not_a_live_entry_is_dropped_not_retried_forever(
+    spec: SpecStar,
+) -> None:
+    """The entry id comes from a user-writable `.origin`: one naming no live
+    entry (or no valid id at all) is dropped at the flush, so it can neither
+    fail every flush nor inflate a count."""
+    c = UsageCounter(spec, pod="p", today=lambda: "2026-10-07", exists=lambda e: e == "good")
+    c.use("a/b", user="u", item="i")
+    c.use("nope", user="u", item="i")
+    c.use("good", user="u", item="i")
+
+    await c.flush()
+    await c.flush()
+
+    assert c.totals(["good", "nope"]) == {"good": (0, 1), "nope": (0, 0)}

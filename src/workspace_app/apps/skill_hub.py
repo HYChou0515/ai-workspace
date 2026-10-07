@@ -464,7 +464,9 @@ class SkillHubStore:
         # Post-apply, like the entries: the counts have no CRUD route (§3.2).
         register_skill_hub_usage(spec)
         #: Installs and uses, counted in this pod's memory (§4.8).
-        self.usage = UsageCounter(spec, pod=pod or pod_name())
+        self.usage = UsageCounter(
+            spec, pod=pod or pod_name(), exists=lambda entry_id: self.get(entry_id) is not None
+        )
         #: Where entries published before the git store keep their files.
         self._legacy = legacy
         self._sleep = sleep

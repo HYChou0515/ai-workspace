@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import datetime as dt
 import os
+import re
 from collections.abc import Callable, Iterable
 from urllib.parse import quote
 
@@ -62,6 +63,10 @@ def pod_name() -> str:
     return os.environ.get("HOSTNAME") or "local"
 
 
+#: What an entry id can be (`SkillHubRepos.path`'s rule): anything else is not one.
+_ENTRY_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
 def _row_id(entry_id: str, day: str, pod: str) -> str:
     # A specstar id holds no `/`; the pod name is the only part that is not
     # already a safe token.
@@ -75,10 +80,16 @@ class UsageCounter:
         *,
         pod: str,
         today: Callable[[], str] = lambda: dt.datetime.now(dt.UTC).date().isoformat(),
+        exists: Callable[[str], bool] = lambda _entry_id: True,
     ) -> None:
         self._spec = spec
         self._pod = pod
         self._today = today
+        #: Whether an entry id names a live entry. Ids come from user-writable
+        #: `.origin` files, so one that does not is dropped at the flush.
+        self._exists = exists
+        # One flush at a time: the shutdown flush waits for a periodic one.
+        self._flushing = asyncio.Lock()
         # entry id → "<user>∕<item>" → counts not yet written.
         self._pending: dict[str, dict[str, UserItemUsage]] = {}
         self._since = ""
@@ -99,21 +110,34 @@ class UsageCounter:
     async def flush(self) -> None:
         """Add what this pod counted to its rows for today. An entry whose
         write fails keeps its counts for the next flush, and the failure is
-        raised once every other entry has been written."""
-        pending, self._pending = self._pending, {}
-        day = self._today()
-        failure: Exception | None = None
-        for entry_id, per in pending.items():
-            try:
-                await asyncio.to_thread(self._add, entry_id, day, per)
-            except Exception as e:  # noqa: BLE001 — kept, re-raised below
-                failure = failure or e
-                for key, counts in per.items():
-                    again = self._bump(entry_id, *key.split("∕", 1))
-                    again.installs += counts.installs
-                    again.uses += counts.uses
-        if failure is not None:
-            raise failure
+        raised once every other entry has been written.
+
+        Shielded: cancelling the caller (the lifespan stopping the periodic
+        flusher) does not cancel a flush half done — its writes run on a
+        thread that a cancel cannot stop, and dropping the rest would lose
+        them. The shutdown flush waits for it on the lock instead."""
+        await asyncio.shield(self._flush())
+
+    async def _flush(self) -> None:
+        async with self._flushing:
+            pending, self._pending = self._pending, {}
+            day = self._today()
+            failure: Exception | None = None
+            for entry_id, per in pending.items():
+                try:
+                    if not _ENTRY_ID.fullmatch(entry_id) or not await asyncio.to_thread(
+                        self._exists, entry_id
+                    ):
+                        continue
+                    await asyncio.to_thread(self._add, entry_id, day, per)
+                except Exception as e:  # noqa: BLE001 — kept, re-raised below
+                    failure = failure or e
+                    for key, counts in per.items():
+                        again = self._bump(entry_id, *key.split("∕", 1))
+                        again.installs += counts.installs
+                        again.uses += counts.uses
+            if failure is not None:
+                raise failure
 
     def _add(self, entry_id: str, day: str, per: dict[str, UserItemUsage]) -> None:
         rm = self._rm()

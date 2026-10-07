@@ -767,9 +767,16 @@ def build_lifespan(
             # cost (the boot narrates the same way, `boot_step`).
             logger.debug("lifespan: coordinators drained in %.1fs", time.monotonic() - t_coord)
             # After the turns: a turn drained above may still have read a skill.
+            # Inside the same shutdown budget as the drains above: a slow store
+            # costs at most what is left of it (and a second at the floor),
+            # never the grace period.
             if (usage := getattr(app.state, "skill_hub_usage", None)) is not None:
                 try:
-                    await usage.flush()
+                    await asyncio.wait_for(
+                        usage.flush(), timeout=max(deadline - time.monotonic(), 1.0)
+                    )
+                except TimeoutError:
+                    logger.warning("lifespan: skill hub usage flush ran out of shutdown budget")
                 except Exception:  # noqa: BLE001 — one failing step must not stop the rest
                     logger.exception("lifespan: skill hub usage flush failed")
             t0 = time.monotonic()
