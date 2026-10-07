@@ -151,6 +151,14 @@ class SkillInstalled(BaseModel):
     missing_tools: list[str]
 
 
+class SkillHubMigration(BaseModel):
+    """What the move into git did: the entries moved, and each `owner/name`
+    held by more than one entry — left for the operator, never merged."""
+
+    migrated: list[str]
+    duplicates: list[list[str]]
+
+
 def register_skill_hub_routes(
     app: FastAPI | APIRouter,
     *,
@@ -378,6 +386,17 @@ def register_skill_hub_routes(
             # latest published version, so it goes back in as a copy.
             await install_hub_skill(files, entry.source_item, hub, entry_id)
         return target.model_copy(update={"action": "open", "item_id": entry.source_item})
+
+    @app.post("/admin/skill-hub/migrate")
+    async def skill_hub_migrate() -> SkillHubMigration:
+        """Move every entry published before the git store into it — the
+        operator's one-off step after the rollout (docs/migrations.md). Safe to
+        repeat. 404, not 403, for anyone but a superuser: whether this route
+        exists is not for a user to probe."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=404, detail="Not Found")
+        report = await hub.migrate_legacy()
+        return SkillHubMigration(migrated=report.migrated, duplicates=report.duplicates)
 
     @app.post("/a/{slug}/items/{item_id}/skills/install")
     async def install_skill_into_item(

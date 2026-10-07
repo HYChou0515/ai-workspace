@@ -1438,6 +1438,50 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
+### 2026-10-07 · #875 skill hub 有版本歷史：每個條目一個 git repo，可回到舊版、看差異 {#pr-875}
+
+**設定** — 新 key **`skill_hub.git_root`**：skill hub 版本歷史放的目錄（每個條目一個 bare git repo，
+`<git_root>/<條目 id>.git`）。
+
+- **要做的事（`rollout 前`）**：設成一個**所有 API pod 都掛得到的持久目錄**，並納入備份。`kubernetes/base/configmap.yaml`
+  的範例是 `SKILL_HUB_GIT_ROOT: "/data/skill-hub-git"`（`rca-data`，RWX），在 config.yaml 對應成
+  `skill_hub: { git_root: ${SKILL_HUB_GIT_ROOT} }`。blob-gc worker 用的是 API 的同一份組裝，也要讀得到這個設定。
+  - 為什麼：每個條目的列只記一個 commit，檔案在 repo 裡；目錄不在了，列就指向不存在的版本。
+  - 漏做的症狀：`filestore.kind` 不是 `memory` 時**開不了機**，`ValueError` 點名 `skill_hub.git_root`。設了但不是
+    共用目錄：在 A pod 發布的版本，B pod 讀不到（安裝、詳情頁出錯）。沒備份：還原 DB 後條目指向不存在的 commit。
+- `filestore.kind: memory` 且沒設時用一個暫存目錄（重開就沒了，和其他資料一樣）。
+
+**資料** — 沒有 `Schema` 升版。`SkillHubEntry` 多了 `commit`、`pending` 兩個欄位（有預設值，舊列照讀）。
+
+- **要做的事（`rollout 後`）**：用 superuser 帳號打一次 `POST /api/admin/skill-hub/migrate`。
+  - 做什麼：把這個 PR 之前發布的條目搬進 git——每個條目建 repo，第一個 commit 是它現在的檔案，列寫上 `commit`。
+    回傳 `{"migrated": [...], "duplicates": [[...], ...]}`。可重跑，已搬過的跳過；多個 pod 同時打也只會有一個第一版。
+  - 為什麼：沒搬的條目照舊能看、能裝（從舊的檔案位置讀），但沒有歷史可回溯，往後的版本也接不上第一版。
+  - 漏做的症狀：舊條目的歷史頁是空的、不能回復。
+  - `duplicates` 不是空的：同一個人有兩個同名條目（以前的競態留下的）。這個指令**不合併**，兩個都搬；請那位擁有者決定留哪一個，
+    在 skill hub 頁面刪掉另一個（刪除只有擁有者能按）。
+  - 舊的檔案位置（FileStore 裡 `skill-hub:<id>:…` 的 namespace）搬完後**不會刪**，佔的空間和以前一樣。
+- 不是 superuser 打這條路由回 404。
+
+**k8s · CI 側** — API image 多裝 `git`（`docker/Dockerfile`）；不需要 `git-lfs`（大檔由平台自己寫成 LFS 格式）。
+沒有新 JobType、probe 或 manifest；configmap 多一個 `SKILL_HUB_GIT_ROOT`。
+
+行為改變，沒有開關：
+
+- 一個 skill 最多 **1000 個檔案**，超過就發布不了（原本的大小上限不變）。
+- 刪除條目後 repo **保留**（只有列被 soft delete）；同名再發布是新條目、新 repo。
+- 已安裝副本的 `.origin` 改成只記 `{source, entry, commit}`，不再記每個檔案的雜湊。舊副本照舊能比對「有沒有更新」，
+  同步一次後換成新格式。
+- 成本（沒有要做的事）：每次發布多一次 `git fast-import` 與一次 push 到自己（都在 API pod 上）；詳情頁的
+  檔案清單改用 `ls-tree`，不讀檔案內容。查看大小：`du -sh <git_root>/*.git`、
+  `git -C <git_root>/<id>.git count-objects -vH`；太大時 `git -C <repo> gc`。
+
+**確認做完**
+
+- `POST /api/admin/skill-hub/migrate` 回 200，`migrated` 列出舊條目；再打一次 `migrated` 是 `[]`。
+- `ls <git_root>` 看得到 `<條目 id>.git`，數量等於 skill hub 上的條目數。
+- 在一個 pod 發布新版，從另一個 pod（或重開後）打開詳情頁，看得到新版的檔案。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

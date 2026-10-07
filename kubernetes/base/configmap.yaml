@@ -72,6 +72,14 @@ data:
   #                           migrate_from: ${SANDBOX_DURABLE_MIGRATE_FROM} } }
   # and mount the `workspaces` PVC on this Deployment (see deployment.yaml + pvc.yaml).
 
+  # Skill hub version history (docs/plan-skill-hub-history.md): one bare git repo
+  # per entry. On the durable RWX data volume every API pod (and the blob-gc
+  # worker, which boots the API's composition) mounts, and in its backup. Unset
+  # with a durable FILESTORE_KIND refuses to boot. Map in config.yaml as
+  #   skill_hub:
+  #     git_root: ${SKILL_HUB_GIT_ROOT}
+  SKILL_HUB_GIT_ROOT: "/data/skill-hub-git"
+
   # litellm fetches its model-price map from GitHub over HTTPS at import — every
   # pod hits that handshake at startup and, on a locked-down network, fails it
   # ("SSL getting model settings"). The bundled backup is what it falls back to

@@ -375,6 +375,14 @@ def register_skill_hub(spec: SpecStar) -> None:
         spec.add_model(SkillHubEntry, indexed_fields=["owner", "name", "forked_from"])
 
 
+class MigrationReport(Struct, kw_only=True):
+    """What `SkillHubStore.migrate_legacy` did: the entries it moved into git,
+    and every `owner/name` held by more than one entry (left for the operator)."""
+
+    migrated: list[str]
+    duplicates: list[list[str]]
+
+
 def mint_entry_id() -> str:
     """A new entry's id. One function so the id's LENGTH is one fact: the
     publisher sizes the folder's `.origin` before the entry exists (a room
@@ -597,6 +605,49 @@ class SkillHubStore:
         current = self.get(entry_id)
         assert current is not None
         await self._manage(entry_id, msgspec.structs.replace(current, owner=owner))
+
+    async def migrate_legacy(self) -> MigrationReport:
+        """Move every entry published before the git store into it (§6, G10):
+        its own repo, a first commit of the files its `blobs` namespace holds,
+        the row naming that commit, its revision tagged.
+
+        Safe to run again and on several pods at once: an entry with a commit
+        is skipped, and the first version goes in through the same lease a
+        publish uses — a repo whose master is already set (another runner, or
+        a run that died before writing the row) is ADOPTED, never given a
+        second first version. Two live entries with one `owner/name` are
+        reported for the operator; nothing is merged."""
+        live = (QB.is_deleted() == False).build()  # noqa: E712 — specstar's meta predicate
+        rows = [
+            (res.info.resource_id, res.data)
+            for res in self._rm().list_resources(live, returns=["info", "data"])
+            if isinstance(res.data, SkillHubEntry) and not res.data.pending
+        ]
+        migrated: list[str] = []
+        for entry_id, row in sorted(rows, key=lambda pair: pair[0]):
+            if row.commit:
+                continue
+            payload = await self._files(entry_id, row)
+            commit = await self.repos.write_version(
+                entry_id, payload, parent=None, author=row.owner, message="migrated"
+            )
+            if not await self.repos.move_master(entry_id, commit, expected=None):
+                adopted = await self.repos.master(entry_id)
+                assert adopted is not None  # the lease only fails when master is set
+                commit = adopted
+            # Re-read: a publish may have landed since the listing; its commit
+            # (which IS master then) wins, and its other fields are kept.
+            now = self._row(entry_id)
+            if now is None or now.commit:
+                continue
+            revision = self._update(entry_id, msgspec.structs.replace(now, commit=commit))
+            await self._tag(entry_id, revision, commit)
+            migrated.append(entry_id)
+        by_name: dict[tuple[str, str], list[str]] = {}
+        for entry_id, row in rows:
+            by_name.setdefault((row.owner, row.name), []).append(entry_id)
+        duplicates = sorted(sorted(ids) for ids in by_name.values() if len(ids) > 1)
+        return MigrationReport(migrated=migrated, duplicates=duplicates)
 
     async def delete(self, entry_id: str) -> None:
         """Soft-delete the row. Final: `state_for` answers `deleted` for every
