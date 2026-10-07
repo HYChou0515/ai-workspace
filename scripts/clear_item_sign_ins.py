@@ -60,7 +60,7 @@ def run(client: httpx.Client, base: str, *, apply: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(description="Clear the sign-ins people left in single items.")
     ap.add_argument(
         "--base-url", default="http://localhost:8000", help="app base URL (routes live under /api)"
     )
