@@ -174,6 +174,31 @@ async def load_workspace_skill(files: WorkspaceFiles, workspace_id: str, name: s
     return _enforce_cap(name, body)
 
 
+async def read_workspace_skill(
+    files: WorkspaceFiles, workspace_id: str, name: str
+) -> tuple[str | None, SkillOrigin | None]:
+    """:func:`load_workspace_skill` plus the folder's ``.origin`` — read in ONE
+    batch, so knowing where a copy came from costs no extra round trip
+    (`read_skill` counts a use of a skill hub copy from it). ``(None, None)``
+    when there is no such skill; the origin is ``None`` for the person's own
+    skill or a manifest that does not decode."""
+    from ..filestore.batch import read_all_existing
+
+    folder = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+    md, manifest = folder + "SKILL.md", folder + ORIGIN_FILE
+    got = await read_all_existing(files, workspace_id, [md, manifest])
+    if (raw := got.get(md)) is None:
+        return None, None
+    _front, body = _parse_frontmatter(raw)
+    origin: SkillOrigin | None = None
+    if (data := got.get(manifest)) is not None:
+        try:
+            origin = msgspec.json.decode(data, type=SkillOrigin)
+        except msgspec.DecodeError:
+            origin = None
+    return _enforce_cap(name, body), origin
+
+
 async def workspace_skill_payload(
     files: WorkspaceFiles, workspace_id: str, name: str
 ) -> dict[str, bytes]:

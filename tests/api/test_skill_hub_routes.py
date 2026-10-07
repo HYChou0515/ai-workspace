@@ -402,3 +402,45 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
     assert d["files"] == ["SKILL.md", "assets/big.bin"]
     assert d["skill_md"].startswith("---\nname: triage")
     assert reads == [["SKILL.md"]]
+
+
+# ── counts (plan-skill-hub-history §4.8, U6) ─────────────────────────────────
+
+
+async def test_the_list_and_the_detail_show_the_counts_and_sort_by_most_used(harness: Harness):
+    hub = _hub(harness)
+    quiet = await _entry(hub, "alice", "aaa")
+    busy = await _entry(hub, "alice", "zzz")
+    hub.usage.install(busy, user="bob", item="i1")
+    hub.usage.use(busy, user="bob", item="i1")
+    hub.usage.use(busy, user="carol", item="i2")
+    hub.usage.install(quiet, user="bob", item="i1")
+    await hub.usage.flush()
+
+    listed = harness.client.get("/skill-hub/entries").json()
+    by_name = {c["name"]: c for c in listed["entries"]}
+    assert (by_name["zzz"]["installs"], by_name["zzz"]["uses"]) == (1, 2)
+    assert (by_name["aaa"]["installs"], by_name["aaa"]["uses"]) == (1, 0)
+    assert listed["counted_since"], "the counts say since when"
+    assert [c["name"] for c in listed["entries"]] == ["aaa", "zzz"]
+    popular = harness.client.get("/skill-hub/entries", params={"sort": "popular"}).json()
+    assert [c["name"] for c in popular["entries"]] == ["zzz", "aaa"]
+
+    detail = harness.client.get(f"/skill-hub/entries/{busy}").json()
+    assert (detail["installs"], detail["uses"]) == (1, 2)
+    assert detail["counted_since"] == listed["counted_since"]
+
+
+async def test_installing_from_the_skills_panel_counts(
+    harness: Harness,
+):
+    hub = _hub(harness)
+    entry = await _entry(hub, "alice", "triage")
+
+    assert (
+        harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry}).status_code
+        == 200
+    )
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (1, 0)}

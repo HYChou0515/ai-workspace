@@ -2429,8 +2429,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     from ..apps.skills import (
         SkillError,
         load_skill,
-        load_workspace_skill,
         merged_profile_skills,
+        read_workspace_skill,
         workspace_skill_metas,
     )
 
@@ -2468,9 +2468,20 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             files, inv, ctx.context.app_slug, ctx.context.template_profile, name
         )
         try:
-            body = await load_workspace_skill(files, inv, name)
+            body, origin = await read_workspace_skill(files, inv, name)
         except SkillError as e:
             return f"error: {e}"
+        hub = ctx.context.skill_hub
+        # A use of a skill hub entry (plan-skill-hub-history U1): counted in
+        # memory; `.origin` came in the same read as the body.
+        if (
+            hub is not None
+            and body is not None
+            and origin is not None
+            and origin.source == "hub"
+            and origin.entry
+        ):
+            hub.usage.use(origin.entry, user=ctx.context.acting_user, item=inv)
         if body is not None:
             # #589: the derived reference is appended to a body from ANY source.
             # It used to hang off the shared branch below, which was fine while a
@@ -2827,6 +2838,7 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
     if taken := await skill_folder_in_the_way(files, inv, hub, name, c.acting_user):
         return f"error: {taken.sentence()}."
     await install_hub_skill(files, inv, hub, entry_id)
+    hub.usage.install(entry_id, user=c.acting_user, item=inv)
     lines = [
         f"installed skill '{name}' (by {entry.owner}, written in the {entry.source_app} App) "
         f"into .skill/{name}/. It is in the skill index from the next turn on; load it any "

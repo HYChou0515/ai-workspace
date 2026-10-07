@@ -16,6 +16,7 @@ who can read the entry gets 403 on every one of them.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from collections.abc import Callable
 from typing import Literal
@@ -77,11 +78,18 @@ class SkillHubCard(BaseModel):
     #: (`?app=`) — the install告知 the Skills panel's picker shows per row.
     #: Empty when no App was asked about.
     missing_tools: list[str] = []
+    #: Installs and `read_skill` uses, summed over every pod's flushed rows
+    #: (plan-skill-hub-history §4.8). A fork counts its own.
+    installs: int = 0
+    uses: int = 0
     forks: list[SkillHubCard] = []
 
 
 class SkillHubList(BaseModel):
     entries: list[SkillHubCard]
+    #: The day counting began (`YYYY-MM-DD`), for 「自 … 起」; "" before the
+    #: first flush anywhere.
+    counted_since: str = ""
 
 
 class SkillHubLineage(BaseModel):
@@ -124,6 +132,9 @@ class SkillHubDetail(BaseModel):
     #: `referenced_tools` minus the ceiling of the App asked about (`?app=`);
     #: empty when no App was asked about.
     missing_tools: list[str]
+    installs: int = 0
+    uses: int = 0
+    counted_since: str = ""
 
 
 class SkillTransferRequest(BaseModel):
@@ -246,7 +257,13 @@ def register_skill_hub_routes(
     """Mount the skill hub routes (reads, owner management, the edit resolver)
     + the item install route onto ``app``."""
 
-    def _card(entry_id: str, entry: SkillHubEntry, viewer: str, app: str = "") -> SkillHubCard:
+    def _card(
+        entry_id: str,
+        entry: SkillHubEntry,
+        viewer: str,
+        app: str = "",
+        counts: tuple[int, int] = (0, 0),
+    ) -> SkillHubCard:
         return SkillHubCard(
             id=entry_id,
             owner=entry.owner,
@@ -258,6 +275,8 @@ def register_skill_hub_routes(
             review_verdict=entry.review.verdict,
             is_mine=entry.owner == viewer,
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
+            installs=counts[0],
+            uses=counts[1],
         )
 
     def _readable(entry_id: str, viewer: str) -> SkillHubEntry:
@@ -276,26 +295,37 @@ def register_skill_hub_routes(
         return out
 
     @app.get("/skill-hub/entries")
-    async def list_skill_hub(q: str = "", mine: bool = False, app: str = "") -> SkillHubList:
+    async def list_skill_hub(
+        q: str = "",
+        mine: bool = False,
+        app: str = "",
+        sort: Literal["name", "popular"] = "name",
+    ) -> SkillHubList:
         """The page's list: roots with their forks beneath, in name order.
         `q` matches name and description (case-insensitive); `mine` keeps the
         viewer's own. A fork whose root is out of view — filtered by `q`,
         private to the viewer, or deleted — is listed on its own, so a skill is
         never hidden by what it was forked from. `app` (a slug) adds each
         row's `missing_tools` against that App's ceiling — the Skills panel's
-        picker asks for the item's App, so the告知 is on the row it picks from."""
+        picker asks for the item's App, so the告知 is on the row it picks from.
+        `sort=popular` puts the most used first (U6); forks stay under their root."""
         viewer = get_user_id()
         hits = {
             i: e
             for i, e in hub.visible(viewer)
             if (not mine or e.owner == viewer) and matches_query(e, q)
         }
+        counts = await asyncio.to_thread(hub.usage.totals, hits)
         roots: list[SkillHubCard] = []
         for root, forks in nest_forks(hits):
-            card = _card(root, hits[root], viewer, app)
-            card.forks = [_card(j, hits[j], viewer, app) for j in forks]
+            card = _card(root, hits[root], viewer, app, counts[root])
+            card.forks = [_card(j, hits[j], viewer, app, counts[j]) for j in forks]
             roots.append(card)
-        return SkillHubList(entries=roots)
+        if sort == "popular":
+            # Stable on the name order `nest_forks` gave: ties stay alphabetical.
+            roots.sort(key=lambda c: (-c.uses, -c.installs))
+        since = await asyncio.to_thread(hub.usage.counted_since)
+        return SkillHubList(entries=roots, counted_since=since)
 
     @app.get("/skill-hub/entries/{entry_id}")
     async def skill_hub_detail(entry_id: str, app: str = "") -> SkillHubDetail:
@@ -317,6 +347,7 @@ def register_skill_hub_routes(
                 name=root.name if root is not None else "",
             )
         is_owner = entry.owner == viewer
+        installs, uses = (await asyncio.to_thread(hub.usage.totals, [entry_id]))[entry_id]
         return SkillHubDetail(
             id=entry_id,
             owner=entry.owner,
@@ -341,6 +372,9 @@ def register_skill_hub_routes(
             if is_owner
             else None,
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
+            installs=installs,
+            uses=uses,
+            counted_since=await asyncio.to_thread(hub.usage.counted_since),
         )
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────
@@ -587,6 +621,7 @@ def register_skill_hub_routes(
         if taken := await skill_folder_in_the_way(files, investigation_id, hub, entry.name, viewer):
             raise HTTPException(status_code=409, detail=taken.code())
         name = await install_hub_skill(files, investigation_id, hub, body.entry_id)
+        hub.usage.install(body.entry_id, user=viewer, item=investigation_id)
         return SkillInstalled(
             name=name, missing_tools=missing_tools_for(entry.referenced_tools, slug)
         )

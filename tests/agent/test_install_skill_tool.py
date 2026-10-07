@@ -278,3 +278,37 @@ def _blocks(text: str) -> list[tuple[str, list[str]]]:
             i = close
         i += 1
     return out
+
+
+# ── counting (plan-skill-hub-history §4.8, U1) ───────────────────────────────
+
+
+async def test_an_install_and_each_read_of_the_copy_are_counted():
+    """U1: installs = installs; uses = `read_skill` reading a skill hub copy.
+    Counted in memory; the total moves on the flush."""
+    _spec, hub = _hub()
+    entry = await _alices(hub)
+    ctx = _ctx(hub)
+
+    await install_skill_impl(ctx, entry)
+    await read_skill_impl(ctx, "triage-reflow")
+    await read_skill_impl(ctx, "triage-reflow")
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (1, 2)}
+
+
+async def test_reading_a_skill_that_is_not_a_skill_hub_copy_counts_nothing():
+    _spec, hub = _hub()
+    entry = await _alices(hub)
+    ctx = _ctx(hub)
+    files, inv = ctx.context.files, ctx.context.investigation_id
+    assert files is not None and inv is not None
+    await files.write(
+        inv, f"/{WORKSPACE_SKILL_DIR}/mine/SKILL.md", b"---\nname: mine\ndescription: d\n---\nx\n"
+    )
+
+    await read_skill_impl(ctx, "mine")
+    await hub.usage.flush()
+
+    assert hub.usage.totals([entry]) == {entry: (0, 0)}

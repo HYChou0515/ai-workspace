@@ -492,6 +492,9 @@ def create_app(
     uv_cache_max_bytes: int | None = None,
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
+    # plan-skill-hub-history U4: how often this pod writes its skill hub counts
+    # (also written when it stops).
+    skill_hub_flush_interval: timedelta = timedelta(hours=2),
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -1390,6 +1393,7 @@ def create_app(
         idle_check_interval=idle_check_interval,
         uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
+        skill_hub_flush_interval=skill_hub_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -1967,6 +1971,7 @@ def create_app(
     # Skill hub (docs/plan-skill-hub.md): the one store the tools, the panel and
     # the hub routes share — exposed so a test can publish through the app's own.
     app.state.skill_hub = skill_hub
+    app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the

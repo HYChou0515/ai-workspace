@@ -448,9 +448,16 @@ class SkillHubStore:
         legacy: FileStore | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
+        pod: str | None = None,
     ) -> None:
+        from .skill_hub_usage import UsageCounter, pod_name, register_skill_hub_usage
+
         self._spec = spec
         self.repos = repos
+        # Post-apply, like the entries: the counts have no CRUD route (§3.2).
+        register_skill_hub_usage(spec)
+        #: Installs and uses, counted in this pod's memory (§4.8).
+        self.usage = UsageCounter(spec, pod=pod or pod_name())
         #: Where entries published before the git store keep their files.
         self._legacy = legacy
         self._sleep = sleep
