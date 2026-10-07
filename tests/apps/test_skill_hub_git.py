@@ -261,3 +261,34 @@ def test_a_throwaway_root_goes_when_the_process_does() -> None:
         text=True,
     ).stdout.strip()
     assert made and not Path(made).exists()
+
+
+async def test_a_cancelled_git_command_does_not_outlive_its_request(tmp_path: Path) -> None:
+    """A request cancelled mid-command (the client went away) left its git
+    process running with nobody reading its output. Cancelling now kills and
+    reaps it."""
+    import asyncio
+
+    repos = SkillHubRepos(tmp_path)
+    await repos.write_version("e1", _PAYLOAD, parent=None, author="a", message="1")
+    started: list[asyncio.subprocess.Process] = []
+    real = asyncio.create_subprocess_exec
+
+    async def spawn(*args, **kw):  # noqa: ANN002, ANN003, ANN202
+        # A git that would run for a minute — standing in for a slow diff.
+        proc = await real("sleep", "60", **kw)
+        started.append(proc)
+        return proc
+
+    asyncio.create_subprocess_exec = spawn  # ty: ignore[invalid-assignment]
+    try:
+        task = asyncio.create_task(repos.master("e1"))
+        while not started:
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        asyncio.create_subprocess_exec = real
+
+    assert started[0].returncode is not None, "the git process outlived the cancelled call"

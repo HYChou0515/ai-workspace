@@ -17,6 +17,7 @@ files, trees and commits; nothing above it knows a command line.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 import fnmatch
 import hashlib
@@ -78,6 +79,8 @@ def lfs_pointer(data: bytes) -> bytes:
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
+#: A hunk header and whatever git appended after it.
+_HUNK_CONTEXT = re.compile(r"^(@@ -[0-9,]+ \+[0-9,]+ @@).*$", re.MULTILINE)
 
 
 def _commit(commit: str) -> str:
@@ -166,7 +169,10 @@ class SkillHubRepos:
     async def _git(
         self, entry_id: str, *args: str, stdin: bytes | None = None, check: bool = True
     ) -> tuple[int, bytes]:
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
+        # Only the repo's own config: a `~/.gitconfig` or `GIT_DIFF_OPTS` on the
+        # pod would change what these commands print (diff context, quoting).
+        env = {k: v for k, v in os.environ.items() if k != "GIT_DIFF_OPTS"}
+        env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
         proc = await asyncio.create_subprocess_exec(
             "git",
             "-C",
@@ -177,7 +183,7 @@ class SkillHubRepos:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        out, err = await proc.communicate(stdin)
+        out, err = await _finish(proc, stdin)
         code = proc.returncode or 0
         if check and code != 0:
             raise GitError(f"git {args[0]} failed ({code}): {err.decode(errors='replace').strip()}")
@@ -193,7 +199,7 @@ class SkillHubRepos:
             "git", "init", "--bare", "-q", str(repo),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )  # fmt: skip
-        _out, err = await proc.communicate()
+        _out, err = await _finish(proc, None)
         if proc.returncode:
             raise GitError(f"git init failed: {err.decode(errors='replace').strip()}")
 
@@ -302,10 +308,14 @@ class SkillHubRepos:
         return dt.datetime.fromisoformat(out.decode().strip())
 
     async def diff_text(self, entry_id: str, old: str, new: str, path: str) -> str:
-        """The unified diff of one text file between two commits, from its
-        `---` line on — git's own diff (C, O(ND)): Python's `difflib` was
-        quadratic on inputs built to be its worst case. The caller has
-        decided the file is text on both sides; `--text` makes git agree."""
+        """The unified diff of one text file between two commits — git's own
+        diff (C, O(ND)): Python's `difflib` was quadratic on inputs built to
+        be its worst case. Printed the way it always was: `--- a/<path>` /
+        `+++ b/<path>` with the path as it is called (git quotes non-ASCII
+        names in octal), 3 lines of context, and bare `@@ … @@` hunk headers
+        (git appends a guessed "function" line, which in Markdown is any
+        prose line). The caller has decided the file is text on both sides;
+        `--text` makes git agree."""
         _code, out = await self._git(
             entry_id,
             "diff",
@@ -313,16 +323,18 @@ class SkillHubRepos:
             "--no-ext-diff",
             "--no-textconv",
             "--text",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
+            "-U3",
             _commit(old),
             _commit(new),
             "--",
             f":(literal){path}",
         )
         text = out.decode("utf-8", errors="replace")
-        at = text.find("\n--- ")
-        return text[at + 1 :] if at >= 0 else ""
+        at = text.find("\n@@ ")
+        if at < 0:
+            return ""  # no hunks: an empty file added or removed
+        hunks = _HUNK_CONTEXT.sub(r"\1", text[at + 1 :])
+        return f"--- a/{path}\n+++ b/{path}\n{hunks}"
 
     async def parent(self, entry_id: str, commit: str) -> str | None:
         """The commit `commit` was written on top of; ``None`` for a first version."""
@@ -411,6 +423,19 @@ class SkillHubRepos:
                     self._lfs_object(entry_id, file.lfs[0]).read_bytes
                 )
         return out
+
+
+async def _finish(proc: asyncio.subprocess.Process, stdin: bytes | None) -> tuple[bytes, bytes]:
+    """`proc.communicate`, except that a cancelled caller (the client went
+    away, a sibling failed) takes the process with it: killed and reaped, not
+    left running with nobody reading its output."""
+    try:
+        return await proc.communicate(stdin)
+    except asyncio.CancelledError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+        raise
 
 
 def resolve_git_root(git_root: str, *, durable: bool) -> Path:

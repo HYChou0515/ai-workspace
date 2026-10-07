@@ -867,12 +867,22 @@ class SkillHubStore:
         # git computes them, a few at a time: one subprocess per file.
         gate = asyncio.Semaphore(_DIFF_PARALLEL)
 
-        async def patch_of(path: str) -> tuple[str, str]:
+        async def patch_of(path: str) -> tuple[str, str | None]:
             async with gate:
-                return path, await self.repos.diff_text(entry_id, a, b, path)
+                try:
+                    return path, await self.repos.diff_text(entry_id, a, b, path)
+                except GitError:
+                    # One file git could not diff shows no lines; the rest
+                    # of the comparison still answers.
+                    logger.warning("skill hub: no diff for %s in %s", path, entry_id)
+                    return path, None
 
         patches: dict[str, str | None] = dict.fromkeys(changed)
-        patches.update(dict(await asyncio.gather(*(patch_of(p) for p in textual))))
+        # A TaskGroup, not gather: a cancelled comparison cancels every
+        # running `git diff` with it, and each is killed (`_finish`).
+        async with asyncio.TaskGroup() as group:
+            running = [group.create_task(patch_of(p)) for p in textual]
+        patches.update(task.result() for task in running)
         out: list[FileChange] = []
         for path in changed:
             status: Literal["added", "removed", "changed"] = (

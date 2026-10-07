@@ -182,7 +182,7 @@ async def test_the_line_diff_is_gits_and_not_quadratic(
 
     monkeypatch.setattr(difflib, "unified_diff", forbidden)
     rm = spec.get_resource_manager(SkillHubEntry)
-    n = 40_000  # ~200 KiB: inside the cap
+    n = 40_000  # ~128 KiB: inside the cap
     a = "".join(f"{i % 150}\n" for i in range(n)).encode()
     b = "".join(f"{(i * 7) % 151}\n" for i in range(n)).encode()
     entry = await _publish(store, {"SKILL.md": _MD, "data.txt": a})
@@ -195,11 +195,10 @@ async def test_the_line_diff_is_gits_and_not_quadratic(
     patch = changes["data.txt"].patch
     assert patch is not None and patch.startswith("--- a/data.txt\n+++ b/data.txt\n@@")
     added = changes["new.md"].patch
-    assert (
-        added is not None
-        and added.startswith("--- /dev/null\n+++ b/new.md\n")
-        and "+hello" in added
-    )
+    # The headers read as before (difflib's): a/ and b/ plus the path, even
+    # for a file only one side has.
+    assert added is not None and added.startswith("--- a/new.md\n+++ b/new.md\n@@")
+    assert "+hello" in added
 
 
 @pytest.mark.parametrize("name", ["notes with space.md", "說明.md", "-leading.md", "*.md"])
@@ -216,6 +215,74 @@ async def test_a_diff_names_any_file_the_way_it_is_called(
 
     changes = {c.path: c.patch for c in await store.diff(entry, first, second)}
 
-    assert "-one\n+two\n" in (changes[name] or "")
-    assert "-x\n" not in (changes[name] or ""), "a glob in the name matched other files"
+    patch = changes[name] or ""
+    # The name as it is called — not git's quoted octal for CJK, no tab.
+    assert patch.startswith(f"--- a/{name}\n+++ b/{name}\n@@ ")
+    assert "-one\n+two\n" in patch
+    assert "-x\n" not in patch, "a glob in the name matched other files"
     assert "-x\n+y\n" in (changes["other.md"] or "")
+
+
+async def test_a_hunk_header_carries_no_guessed_function_context(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    """git puts the nearest line that "looks like a function" after `@@` —
+    in Markdown that is any line starting with a letter. The header is the
+    line numbers only, as before."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    body = "".join(f"Step {i}\n" for i in range(20))
+    entry = await _publish(store, {"SKILL.md": _MD, "guide.md": body.encode()})
+    first = rm.get(entry).info.revision_id
+    changed = body.replace("Step 15", "Done").encode()
+    await _publish(store, {"SKILL.md": _MD, "guide.md": changed})
+    second = rm.get(entry).info.revision_id
+
+    (change,) = [c for c in await store.diff(entry, first, second) if c.path == "guide.md"]
+
+    hunks = [ln for ln in (change.patch or "").splitlines() if ln.startswith("@@")]
+    assert hunks and all(ln.endswith("@@") for ln in hunks), hunks
+
+
+async def test_the_pods_own_git_settings_do_not_reshape_a_diff(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A `~/.gitconfig` with `diff.context=0` or `GIT_DIFF_OPTS=--unified=0` on
+    the pod used to strip the context lines from every comparison."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    body = "".join(f"{i}\n" for i in range(10)).encode()
+    entry = await _publish(store, {"SKILL.md": _MD, "t.md": body})
+    first = rm.get(entry).info.revision_id
+    await _publish(store, {"SKILL.md": _MD, "t.md": body.replace(b"5\n", b"X\n")})
+    second = rm.get(entry).info.revision_id
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[diff]\n\tcontext = 0\n[core]\n\tquotePath = true\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_DIFF_OPTS", "--unified=0")
+
+    (change,) = [c for c in await store.diff(entry, first, second) if c.path == "t.md"]
+
+    assert change.patch is not None and " 4\n-5\n+X\n 6\n" in change.patch
+
+
+async def test_one_file_git_cannot_diff_costs_that_file_only(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from workspace_app.apps.skill_hub_git import GitError
+
+    rm = spec.get_resource_manager(SkillHubEntry)
+    entry = await _publish(store, {"SKILL.md": _MD, "a.md": b"1\n", "b.md": b"1\n"})
+    first = rm.get(entry).info.revision_id
+    await _publish(store, {"SKILL.md": _MD, "a.md": b"2\n", "b.md": b"2\n"})
+    second = rm.get(entry).info.revision_id
+    real = store.repos.diff_text
+
+    async def flaky(entry_id, old, new, path):  # noqa: ANN001, ANN202
+        if path == "a.md":
+            raise GitError("broken object")
+        return await real(entry_id, old, new, path)
+
+    monkeypatch.setattr(store.repos, "diff_text", flaky)
+    changes = {c.path: c.patch for c in await store.diff(entry, first, second)}
+
+    assert changes["a.md"] is None and "+2" in (changes["b.md"] or "")
