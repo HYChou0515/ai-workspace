@@ -1,0 +1,181 @@
+# 我的環境變數：登入一次，所有 item 都用到新的 token
+
+> grill 2026-10-07。每條決定標了來源：**〔user〕** = user 逐題定案；**〔預設〕** = 我自己定、列出來給推翻的
+> 實作層決定。沒有標的是推論，後面附理由。
+>
+> 這份推翻 [`plan-wui-viewer-login.md`](plan-wui-viewer-login.md) 的兩條：「private 的鍵是 (user, item)，
+> 不是全站一份」（那份的 Q9）與「private 層同名最後寫的贏」（Q5）。實作的 PR 要在那份的標題下加推翻標記。
+
+## 問題
+
+#869 之後，系統登入（`IEnvProvider`）換到的 token 寫進**那一個 item** 的個人值
+（`PrivateEnv(user, item)`，`api/private_env.py`）。所以：
+
+1. 使用者在每個用到這個 token 的 item 都要登入一次。
+2. token 過期時，要回到每一個 item 再登入一次；沒回去的 item 繼續用舊 token，失敗。
+3. 綁定「用我的身分執行」的排程用的是那個 item 裡存的值，沒人會為了排程回去那個 item 重新登入。
+
+要的是：**token 過期時，在一個地方登入，所有用到它的 item 都拿到新的。**
+
+## 用語〔user，D1〕
+
+| 用語 | 指的是 | 程式碼 | 介面 |
+|---|---|---|---|
+| **共用值** | item 上的一份，看得到 item 的人都讀得到 | `env_vars`（shared layer） | 「所有參與者」 |
+| **個人值** | 只屬於某個人的值，是下面三種合起來（= private layer） | | |
+| ├ **項目個人值** | 這個人在這個 item 自己填的 | `PrivateEnv` | 「只有我（這個 item）」 |
+| ├ **通用個人值**（新） | 這個人在所有 item 都適用的 | `PersonalEnv` | 「我的環境變數」頁 |
+| └ **自動帶入值** | 部署從 SSO 的 request 算出的 | `PrivateSeam`（`IRequestEnv`） | 「由你的登入狀態自動帶入」 |
+| **提供方式** | item 對每個變數名稱的設定 | `env_policy` | Shared／Private first／Private only |
+| **系統登入** | 按部署提供的登入按鈕，向外部系統換 token | `IEnvProvider` | 「登入 {名稱}」 |
+| **無人在場的執行** | 排程、goal、重跑 | `unattended` | |
+
+## 決定
+
+| # | 決定 | 來源 |
+|---|---|---|
+| D1 | 用語照上表 | 〔user〕「你建議吧」 |
+| D2 | 通用個人值**只**進到提供方式把那個名稱設成 Private first 或 Private only 的 item。Shared 或沒設的 item 拿不到，即使共用值裡沒有那個名稱。不做 per-item 的授權 | 〔user〕「就是 policy 定義即可，不是授權」 |
+| D3 | 系統登入一律寫進通用個人值，不再寫進項目個人值 | 〔user〕 |
+| D4 | 同名時項目個人值贏過通用個人值 | 〔user〕 |
+| D5 | **不清**：手打或系統登入都不會動到任何 item 裡的值 | 〔user〕「不清，登入也不要清吧」（推翻了我原本「登入時清掉同名項目個人值」的提議） |
+| D6 | 個人頁叫「我的環境變數」；任何 item 裡的登入按鈕也寫進通用個人值；SSO 自動帶入值不在範圍 | 〔user〕 |
+| D7 | 無人在場的執行：代理誰不變；組法在項目個人值底下、服務帳號上面多墊通用個人值；接受「綁定之後提供方式被改」會讓不在場的人的值進到那個排程 | 〔user〕 |
+| D8 | 「我的環境變數」可以手打值，和系統登入的值同地方、同規則 | 〔user〕 |
+| D9 | 提供方式的三個選項顯示為 **Shared／Private first／Private only**（中英文介面都用這三個字），不加說明句 | 〔user〕 |
+| D10 | 提供一支一次性清理腳本，由營運方決定何時跑：刪掉每個人在各 item 裡、名稱屬於系統登入產物的項目個人值 | 〔user〕「可以提供 script 讓我去清」 |
+| D11 | 無人在場的 workflow run 失敗時，除了 item 擁有者，也通知這次 run 代理的那個人；用現有的 `notify()` | 〔user〕「通知用我們的 send notify 不就好了」 |
+
+D2 的理由：通用個人值的範圍是「所有 item」，所以只在 item 明講要的時候才給。不明講也給的話，你打開的
+任何 item 的任何 tool（包括別人上架的第三方 tool）都拿得到。這和 #869 Q9 擋的是同一件事，只是改成由
+提供方式決定，而不是由「你有沒有在這個 item 登入」決定。代價：item 擁有者把某個名稱設成 Private 後，
+打開頁面的人的通用個人值就會進到這個 item 的 tool，不需要那個人同意。自動帶入值（SSO）今天就是這樣，
+所以這是平台已經接受的信任模型。〔user〕
+
+D5 的後果：#869 時期在各 item 系統登入留下的項目個人值，依 D4 會一直蓋過通用個人值，直到它被清掉。
+D10 的腳本就是處理這批舊值的方式。
+
+## 機制
+
+### 資料
+
+```
+PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 auto-CRUD 路由）
+  user_id: str
+  values:  dict[str, str]
+  names:   list[str]          名稱的順序（store 會重排 dict 的 key，順序會變成 SANDBOX_USER_ENV_KEYS）
+  updated: dict[str, int]     每個名稱最後一次寫入的時間（epoch ms），「我的環境變數」顯示用
+```
+
+寫入方式照 `PrivateEnv`：整份取代、刪掉舊 revision。理由相同：不留歷史 token；沒有「先刪後建」中間
+沒有列的那一瞬間。
+
+### 一個名稱怎麼解析
+
+`resolve_env` 多收一個參數 `personal`（通用個人值；只在有「替誰跑」的時候有值），三種提供方式各自的順序：
+
+| 提供方式 | 順序（左邊先） |
+|---|---|
+| Shared（`shared_first`，預設） | 共用值 → 項目個人值（含自動帶入值） → 服務帳號 |
+| Private first | 項目個人值（含自動帶入值） → **通用個人值** → 服務帳號 → 共用值 |
+| Private only | 項目個人值（含自動帶入值） → **通用個人值** → 服務帳號 |
+
+- Shared 的那一列和今天完全一樣：通用個人值不在裡面（D2）。
+- 「服務帳號」是無人在場時部署的 `env_without_request`。今天它被合在 private dict 的最底下；這裡要把它
+  拆出來當一個獨立參數，才放得進通用個人值下面（D7）。有人在場時它是空的。
+- 項目個人值內部的順序不變：自動帶入值蓋過自己填的（#869 Q5 / D12）。
+
+### 誰的通用個人值：沿用「替誰跑」
+
+| 入口 | 用誰的 | 程式位置（今天組 private 的地方） |
+|---|---|---|
+| 聊天送出 | 送出的人 | `chat_send.py` → `private_layer` |
+| 頁面 `callTool` | 按的人 | `wui_routes.py:557` |
+| 頁面按鈕的 `wui/run`、workflow 面板的 Run | 按的人（`RunIdentity`） | `workflow_exec.py:304` → `unattended_layer` |
+| 排程 | 綁定的人；沒人綁定 → 沒有人 | 同上 |
+| goal 每一輪、換 pod 重跑 | 原作者 | `chat_send.py:476`、`:1070` |
+| WUI build | 沒有人：`personal` 為空 | `wui_routes.py:313` |
+
+兩道關卡不改，對通用個人值同樣適用：
+
+- 無人在場時，每次用之前確認那個人**現在**還有這個 item 的權限（`store.may`）。沒有 → 他的通用個人值和
+  項目個人值都不給。
+- run 的 workflow 檔 digest 對不上 → 身分丟掉，通用個人值也不給（`orchestrator._hold_identity_to`）。
+
+每個 workflow 節點、每一輪都重讀，所以 token 換了之後，還在跑的 run 從下一個節點起就用新的。
+
+### 系統登入寫到哪
+
+- 新路由 `GET/PUT/DELETE /me/env`：只能讀寫自己的那一列，路由不收 user 參數（照 `PrivateEnv` 的「只能
+  指名自己」）。〔預設〕
+- 新路由 `GET /me/env-providers`、`POST /me/env-providers/{id}`：部署設定的 provider 清單，不綁 item，只要
+  登入就能用。換到的值由前端寫進 `/me/env`，和今天 item 裡的流程同一個形狀。〔預設〕
+- 既有的 item 裡的登入按鈕（Env 面板、`/w/` 頁面上方的平台列）：換到的值改寫進 `/me/env`，不再寫進那個
+  item 的項目個人值（D3、D6）。
+
+### 通知（D11）
+
+`workflow_exec.notify_failure`（`:674`）今天只通知 item 擁有者。改成：
+
+- 收件人 = {擁有者, `RunIdentity.env_user`}，同一個人只發一次。
+- 給代理人的那一封：「以你的身分執行的〔workflow〕失敗了；如果是登入過期，到『我的環境變數』重新登入」，
+  連到「我的環境變數」。平台分不出失敗原因，所以不寫「token 過期」。
+- 去重：同一個人、同一個 item、同一個 workflow、同一天只發一封（`notify(dedup_key=...)`）。〔預設〕
+- 有人在場的失敗不另外通知：錯誤已經在畫面上。
+
+### 清理腳本（D10）
+
+`scripts/clear_item_signin_values.py`〔預設：名稱與參數〕
+
+1. 從部署設定（`server.env_providers`）載入 provider，取每個的 `produces`，聯集成「系統登入產物的名稱」。
+   和線上用同一份設定，所以名單是線上的名單，不是手抄的。
+2. 走過每一列 `PrivateEnv`，找出值裡屬於那個名單的名稱。
+3. 預設 dry-run：印出（user、item、名稱），**不印值**，加上總數。
+4. `--apply` 才刪：照 store 的寫入方式（整份取代、刪舊 revision），只拿掉那些名稱，其他名稱不動。
+5. 可重複跑；第二次跑不會刪到東西。
+
+不碰 `PrivateSeam`（自動帶入值每次 request 會重寫），不碰共用值。
+
+### 介面
+
+- **「我的環境變數」頁**（`/my-env`〔預設〕）：列出自己的每個通用個人值（名稱、最後更新時間、顯示／隱藏、
+  清除）、手打新增（D8）、部署提供的登入按鈕。入口加在平台目的地清單（`hooks/usePlatformDestinations.ts`，
+  上方導覽與聊天欄選單共用的那份）裡「我的資源」的下一個。〔預設〕
+- **item 的 Env 面板**：「使用中」標示加上來源——「你的（這個 item）」或「你的（所有 item）」，看得出是不是
+  被項目個人值蓋掉了。〔預設〕
+- **提供方式選單**：三個選項的文字換成 Shared／Private first／Private only（D9），中英文都用這三個字。
+- **`/w/` 平台列**：登入按鈕寫進「我的環境變數」；「需要登入」的判斷把通用個人值算進去（依 D2：只算提供
+  方式是 Private 的名稱）。
+
+## 每個窗口誰擋
+
+| 情境 | 會發生什麼 | 誰擋 / 接受的理由 |
+|---|---|---|
+| 綁定排程之後，擁有者把某名稱改成 Private | 綁定人的通用個人值在他不在場時進到這個排程 | 不擋，D7〔user〕 |
+| item 擁有者設 Private、把頁面分享出去 | 打開頁面的人跑 tool 時，tool 拿到他的通用個人值 | 不擋，D2〔user〕；和今天的自動帶入值同一個信任模型 |
+| 同 item 有 `execute` 的人讀 `/proc/<pid>/environ` | 別人的 tool 跑的那幾秒，讀得到他的通用個人值 | 不擋；#869「知情不擋」〔user，Q13〕延伸到通用個人值，寫進文件 |
+| 兩個分頁同時系統登入同一個名稱 | 最後寫的那份留下 | 整份取代，沒有半寫的狀態 |
+| run 跑到一半 token 換了 | 下一個節點起用新的 | 每個節點重讀 |
+| 被移出 item 的人 | 他綁的排程下一次觸發就不帶他的任何個人值 | `store.may` |
+| #869 時期留在 item 裡的舊 token | 依 D4 蓋過新登入的通用個人值 | D10 腳本；介面上「使用中：你的（這個 item）」看得出來 |
+
+## 不做
+
+- 過期偵測、到期前提醒（`IEnvProvider` 回報 `expires_at`；#869 D9 也沒做）。D11 的失敗通知是替代。
+- SSO 自動帶入值改成 per user（今天 per item；無人在場時用的是那個 item 最後一次記下的值）。
+- 終端機的 `exec`（`file_routes.py:870`）帶 env：今天 shared 和 private 都不帶，這份也不改。
+- 授權（per item 同意讀通用個人值）：D2 否決。
+
+## Phases
+
+| phase | 內容 | 驗收（先紅後綠；每個判準突變各紅一條） |
+|---|---|---|
+| P1 | 這份 plan + design-history 一行 | `tests/docs/test_docs_index.py` 綠 |
+| P2 | `PersonalEnv` model + store + `/me/env` 路由 | 只能讀寫自己的；整份取代不留 revision；`updated` 每個名稱各自記；名稱順序保留 |
+| P3 | `resolve_env` 加 `personal`、服務帳號拆成獨立參數；所有入口（上表）帶入「替誰跑」的通用個人值；WUI build 為空 | 三種提供方式各自的順序（Shared 不含通用個人值）；每個入口用對的人（parity：一個共用的組法函式，入口只給「誰」）；無人在場時 `store.may` 失敗 → 不給；digest 對不上 → 不給 |
+| P4 | 系統登入寫進通用個人值：`/me/env-providers` 路由；item 裡的登入按鈕改寫 `/me/env` | 登入後 item 的項目個人值沒有被寫；另一個 Private item 下一次執行拿到新值 |
+| P5 | 通知（D11） | 代理人收到、擁有者收到、同一人只一封、同天去重 |
+| P6 | 前端：「我的環境變數」頁、Env 面板的來源標示、提供方式選項文字、`/w/` 平台列 | 各頁的 FE 測試；真瀏覽器量 390px 與桌面寬度 |
+| P7 | 清理腳本（D10） | dry-run 不刪、不印值；`--apply` 只刪產物名稱；第二次跑零筆；名單取自設定（突變名單來源 → 紅） |
+| P8 | 文件：`migrations.md` 一條（行為改變：系統登入改寫到「我的環境變數」；清理腳本何時跑、為什麼、不跑的症狀）、`plan-wui-viewer-login.md` 推翻標記、`configuration.md` | mkdocs `--strict` 綠 |
+| P9 | 推、draft PR、review 鏡頭、CI | PR body 含「prod 怎麼驗證」 |
