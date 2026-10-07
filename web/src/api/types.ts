@@ -358,8 +358,16 @@ export type ItemToolState = {
    * Distinct from `author` being null — "whose code is this" and "did they fill
    * their name in" are different questions. */
   external?: boolean;
-  /** The release that resolved for this item (third-party tools only). */
+  /** The release that resolved for this item (third-party tools only) — the
+   * latest, which is what the next sandbox mounts. */
   version?: string | null;
+  /** plan-tool-running-version: the release the item's LIVE sandbox runs, set
+   * only when it differs from `version` (compared by sha — different, not
+   * necessarily older). `""` when the sandbox recorded the bundle but not its
+   * release number. */
+  running_version?: string | null;
+  /** D11: the live sandbox was created without this tool. */
+  not_in_sandbox?: boolean;
   /** Who published it, as they wrote it themselves. Shown, never trusted. */
   author?: string | null;
   /** Served from the host's cached copy — usable, but maybe a release behind. */
@@ -373,6 +381,17 @@ export type ItemToolState = {
    * every tool predates the declaration, so reading silence as `[]` would tell
    * someone hunting a missing variable that there is nothing to find. */
   env_needs?: EnvNeedDecl[] | null;
+};
+
+/** GET /a/{slug}/items/{id}/tools — the picker rows, and what the item's live
+ * sandbox needs to catch up with them (plan-tool-running-version). */
+export type ItemTools = {
+  tools: ItemToolState[];
+  /** Some row's `running_version` is set or `not_in_sandbox` holds: closing
+   * the sandbox updates it. */
+  updateNeedsClose: boolean;
+  /** Whether the viewer may close it — the close route's own gate. */
+  canClose: boolean;
 };
 
 /** #750: one environment variable a tool's author says it wants. A hint, not a
@@ -607,7 +626,7 @@ export interface ApiClient {
   getToolsCatalog(): Promise<ToolCatalogEntry[]>;
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
-  getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
+  getItemTools(slug: string, itemId: string): Promise<ItemTools>;
   /** #750: GET /a/{slug}/items/{id}/env-providers — this deploy's ways of
    * turning something a person types into environment variables. Empty is the
    * ordinary case: no buttons, and every variable is still typeable by hand. */

@@ -50,12 +50,44 @@ describe("getItemTools", () => {
       ],
     });
     try {
-      const rows = await realApi.getItemTools("rca", "item1");
+      const got = await realApi.getItemTools("rca", "item1");
+      const rows = got.tools;
       expect(rows).toHaveLength(2);
-      expect(rows[0].key).toBe("exec");
-      expect(rows[0].pref).toBe("off");
-      expect(rows[1].version).toBe("1.4.2");
-      expect(rows[1].author).toBe("W <w@x>");
+      expect(rows[0]!.key).toBe("exec");
+      expect(rows[0]!.pref).toBe("off");
+      expect(rows[1]!.version).toBe("1.4.2");
+      expect(rows[1]!.author).toBe("W <w@x>");
+      // A server that says nothing about the sandbox: nothing to update.
+      expect(got.updateNeedsClose).toBe(false);
+      expect(got.canClose).toBe(false);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("carries the running release and the close flags from the wire (plan-tool-running-version)", async () => {
+    const orig = globalThis.fetch;
+    globalThis.fetch = stubFetch({
+      tools: [
+        {
+          key: "wafer-history",
+          label: "Wafer History",
+          description: "",
+          default_on: true,
+          pref: "follow",
+          effective: true,
+          version: "1.4.2",
+          running_version: "1.3.0",
+        },
+      ],
+      update_needs_close: true,
+      can_close: true,
+    });
+    try {
+      const got = await realApi.getItemTools("rca", "item1");
+      expect(got.tools[0]!.running_version).toBe("1.3.0");
+      expect(got.updateNeedsClose).toBe(true);
+      expect(got.canClose).toBe(true);
     } finally {
       globalThis.fetch = orig;
     }

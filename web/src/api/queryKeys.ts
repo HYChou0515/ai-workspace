@@ -23,6 +23,11 @@ export const qk = {
   // Invalidate after closing an environment, and after any 507 — being refused
   // is precisely when the panel's numbers are what the user needs.
   myResources: ["myResources"] as const,
+  // The environment modal's own reads (plan-tool-running-version shares them
+  // with the tool picker, which closes the same sandbox): the item's sandbox
+  // status, and the budget the modal sizes it against.
+  itemEnvironment: (slug: string, itemId: string) => ["item-environment", slug, itemId] as const,
+  myBudget: ["my-resources"] as const,
   // Who is above the deploy default (superuser only). Separate from
   // `myResources`: it answers a different question, for a different person.
   userOverrides: ["userOverrides"] as const,

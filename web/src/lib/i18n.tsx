@@ -1790,6 +1790,32 @@ export const messages = {
     en: "From the cached copy — may not be the latest",
   },
   "tools.origin.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
+  "tools.origin.running": {
+    "zh-TW": "執行中 {running} · 最新 {latest}",
+    en: "Running {running} · latest {latest}",
+  },
+  "tools.origin.unrecorded": { "zh-TW": "未記錄的版本", en: "an unrecorded release" },
+  "tools.origin.runningNotLatest": {
+    "zh-TW": "執行中 {running}（不是最新版）",
+    en: "Running {running} (not the latest)",
+  },
+  "tools.origin.notInSandbox": {
+    "zh-TW": "目前的沙盒裡沒有這個工具",
+    en: "Not in the current sandbox",
+  },
+  "tools.update.note": {
+    "zh-TW": "沙盒裡的工具和最新版不一樣。關閉沙盒後，下一次對話就會使用最新版。",
+    en: "The sandbox's tools differ from the latest. Close the sandbox and the next turn uses the latest.",
+  },
+  "tools.update.noteOthers": {
+    "zh-TW": "沙盒裡的工具和最新版不一樣，沙盒關閉後就會使用最新版。",
+    en: "The sandbox's tools differ from the latest; they update once the sandbox is closed.",
+  },
+  "tools.update.close": { "zh-TW": "關閉沙盒以更新", en: "Close sandbox to update" },
+  "tools.update.failed": {
+    "zh-TW": "沒能關閉沙盒，請稍後再試。",
+    en: "The sandbox could not be closed. Try again shortly.",
+  },
 
   // Diagnostics page (#465) — AI health checks + model sanity + activity.
   "diag.crumb": { "zh-TW": "診斷", en: "Diagnostics" },

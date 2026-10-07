@@ -16,14 +16,7 @@ from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.api.turn_context import TurnContextBuilder
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
-
-
-class _Session:
-    """A registry session with no sandbox yet — the cold case, where this
-    turn's create is what mounts the bundles."""
-
-    handle = None
-    tools: dict[str, str] | None = None
+from workspace_app.tooling.external import MountedTool
 
 
 class _Locator:
@@ -58,13 +51,32 @@ class _Host:
         }
 
 
+class _Registry:
+    """What `_external_tools` asks of the registry: what the item's live
+    sandbox was created with (this pod's or a peer's — the registry decides,
+    probes and bounds it; see `test_registry.py`)."""
+
+    def __init__(self, mounted: dict[str, MountedTool] | None = None) -> None:
+        self.mounted = mounted
+        self.asked: list[str] = []
+
+    async def mounted_tools(self, item: str) -> dict[str, MountedTool] | None:
+        self.asked.append(item)
+        return self.mounted
+
+
 def _builder(
-    *, slug: str | None, sandbox: object, plugins: dict[str, str] | None = None
+    *,
+    slug: str | None,
+    sandbox: object,
+    plugins: dict[str, str] | None = None,
+    registry: _Registry | None = None,
 ) -> TurnContextBuilder:
     builder = object.__new__(TurnContextBuilder)
     builder._locator = _Locator(slug)  # type: ignore[attr-defined]
     builder._sandbox = sandbox  # type: ignore[attr-defined]
     builder._view_plugin_artifacts = dict(plugins or {})  # type: ignore[attr-defined]
+    builder._registry = registry or _Registry()  # type: ignore[attr-defined]
     return builder
 
 
@@ -93,7 +105,7 @@ async def test_an_app_that_declares_a_third_party_tool_gets_it_resolved(monkeypa
     )
     host = _Host()
 
-    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1", _Session())
+    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1")
 
     assert host.asked == [{"wafer-history": "https://g/m"}]
     assert external.shas == {"wafer-history": "a" * 64}
@@ -175,7 +187,7 @@ async def test_an_item_with_no_app_asks_for_nothing() -> None:
     # must not fabricate a lookup for it.
     host = _Host()
 
-    external = await _builder(slug=None, sandbox=host)._external_tools("item-1", _Session())
+    external = await _builder(slug=None, sandbox=host)._external_tools("item-1")
 
     assert host.asked == []
     assert external.shas == {}
@@ -249,8 +261,10 @@ async def test_a_sandbox_woken_without_a_turn_still_mounts_the_items_tools() -> 
     sandbox = _RecordingSandbox()
     shas = {"wafer-history": "a" * 64}
 
-    async def declared(_item_id: str) -> dict[str, str]:
-        return dict(shas)
+    mounts = {"wafer-history": MountedTool(sha="a" * 64, version="1.2")}
+
+    async def declared(_item_id: str) -> dict[str, MountedTool]:
+        return dict(mounts)
 
     registry = InvestigationRegistry(
         sandbox=sandbox,
@@ -264,7 +278,7 @@ async def test_a_sandbox_woken_without_a_turn_still_mounts_the_items_tools() -> 
     await registry.ensure_handle(session)
 
     assert sandbox.specs[-1].tools == shas, "a turn-less wake mounted no tools"
-    assert session.tools == shas
+    assert session.tools == mounts
     assert sandbox.specs[-1].cpu_cores == 2.0
 
 
@@ -274,9 +288,9 @@ async def test_a_turn_that_states_its_tools_is_not_second_guessed() -> None:
     sandbox = _RecordingSandbox()
     asked: list[str] = []
 
-    async def declared(item_id: str) -> dict[str, str]:
+    async def declared(item_id: str) -> dict[str, MountedTool]:
         asked.append(item_id)
-        return {"surprise": "b" * 64}
+        return {"surprise": MountedTool(sha="b" * 64, version="9")}
 
     registry = InvestigationRegistry(sandbox=sandbox, tools_for=declared)
     session = await registry.session("item-1")
@@ -330,8 +344,199 @@ async def test_a_turn_on_a_live_sandbox_without_the_plugin_tells_the_agent_nothi
     """`confine_to_mounted` refuses what the live sandbox lacks; for a view
     plugin that refusal is the runner's to report, not the agent's to read."""
     _declaring(monkeypatch)
-    builder = _builder(slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"})
-    session = type("S", (), {"handle": object(), "tools": {}})()
-    got = await builder._external_tools("item-1", session)
+    builder = _builder(
+        slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"}, registry=_Registry({})
+    )
+    got = await builder._external_tools("item-1")
     assert got.refused == {}
     assert got.packages == ()
+
+
+# ── plan-tool-running-version P3: the model is told the release that RUNS ──
+
+from workspace_app.tooling.registry import describe_command  # noqa: E402
+
+_LATEST = "a" * 64  # what `_Host` resolves, as release 1.4.2
+
+
+def _live(tools: dict[str, MountedTool]) -> _Registry:
+    """A live sandbox created with `tools`, as the registry reports it."""
+    return _Registry(tools)
+
+
+def _line(external) -> str:
+    pkg = next(p for p in external.packages if p.name == "wafer-history")
+    return describe_command(pkg, pkg.commands[0])
+
+
+async def test_a_sandbox_on_a_different_release_is_described_as_what_it_runs(monkeypatch):
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+
+    external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1"
+    )
+
+    line = _line(external)
+    assert "tool bundle 1.3.0" in line  # the release under /.tools, not the manifest's
+    assert "1.4.2" in line  # ...and the latest is named
+    assert "clos" in line.lower()  # ...with the way to get it
+    # A sha says "different", not "older" (review round 1): no claim of order.
+    assert "older" not in line and "since" not in line
+    # The sandbox still mounts what it mounts: only the words change.
+    assert external.shas == {"wafer-history": _LATEST}
+
+
+async def test_a_sandbox_on_the_latest_release_says_nothing_more(monkeypatch):
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    fresh = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1")
+    registry = _live({"wafer-history": MountedTool(sha=_LATEST, version="1.4.2")})
+
+    live = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools("item-1")
+
+    assert _line(live) == _line(fresh)  # not one word added when nothing differs
+
+
+async def test_no_live_sandbox_reads_as_the_latest(monkeypatch):
+    # D4/D7: unknown, or nothing running, is the release the next sandbox gets.
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    external = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1")
+    assert "tool bundle 1.4.2" in _line(external)
+    assert "clos" not in _line(external).lower()
+
+
+async def test_a_peers_sandbox_is_described_from_its_address(monkeypatch):
+    # D10: this pod holds no handle, a peer's sandbox is live — before, its
+    # mounts were unknown here and the model was told the manifest's release.
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    registry = _Registry({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+
+    external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1"
+    )
+
+    assert "tool bundle 1.3.0" in _line(external)
+
+
+async def test_a_peers_sandbox_without_a_tool_refuses_it_with_the_reason(monkeypatch):
+    # The other half of D10: the mounted set is the ceiling on every pod now.
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    registry = _Registry({})
+
+    external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1"
+    )
+
+    assert "wafer-history" in external.refused
+    assert not external.packages
+
+
+async def test_a_different_mount_with_no_recorded_release_says_unrecorded(monkeypatch):
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+    registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="")})
+
+    external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1"
+    )
+
+    line = _line(external)
+    assert "an unrecorded release" in line and "1.4.2" in line
+
+
+async def test_a_real_chat_turn_carries_each_shas_release_to_the_sandbox_it_creates(monkeypatch):
+    """Through the REAL wired builder (`create_app` → `build_chat_turn`): the
+    ctx a turn runs with knows which release each sha is, so the sandbox it
+    wakes records it (P2) — and the model is told the same release (P3)."""
+    import workspace_app.api.app as app_mod
+    from workspace_app.api import create_app, turn_context
+    from workspace_app.api.events import RunDone
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.apps.playground.model import PlaygroundItem
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.tooling.external import ExternalTools, ToolProvenance
+
+    async def resolved(*_a, **_k) -> ExternalTools:
+        return ExternalTools(shas={"t": "s2"}, provenance={"t": ToolProvenance(version="2.0")})
+
+    monkeypatch.setattr(turn_context, "resolve_item_tools", resolved)
+    captured: dict[str, Any] = {}
+    real = app_mod.WorkflowExecutor
+
+    def _capture(**kw):
+        captured["ex"] = real(**kw)
+        return captured["ex"]
+
+    monkeypatch.setattr(app_mod, "WorkflowExecutor", _capture)
+    spec = make_spec()
+    create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([RunDone()]),
+    )
+    item = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="u", profile="echo"))
+        .resource_id
+    )
+
+    async def _no_subagent(*_a, **_k):
+        return "", []
+
+    ctx = await captured["ex"]._turn_ctx.build_chat_turn(
+        item,
+        agent_config=None,
+        run_subagent=_no_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+        conversation_id="c",
+    )
+
+    assert ctx.tool_versions == {"t": "2.0"}
+    await ctx.ensure_sandbox(prepare_env=False)
+    registry = captured["ex"]._turn_ctx._registry
+    assert (await registry.session(item)).tools == {"t": MountedTool(sha="s2", version="2.0")}
+
+
+async def test_an_app_with_no_third_party_tools_never_asks_what_was_mounted():
+    # Review round 1: the turn build used to make no sandbox call; asking for
+    # an app that declares nothing would put a host probe in every turn.
+    registry = _Registry()
+    await _builder(slug=None, sandbox=_Host(), registry=registry)._external_tools("item-1")
+    assert registry.asked == []
+
+
+async def test_a_latest_release_with_no_version_is_not_given_one(monkeypatch):
+    # Nothing is invented in the latest's place (no "a newer release").
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+
+    class _Unversioned(_Host):
+        async def resolve_tools(self, declared):
+            answer = await super().resolve_tools(declared)
+            for described in answer["tools"].values():
+                described["version"] = ""
+            return answer
+
+    registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+    external = await _builder(
+        slug="rca", sandbox=_Unversioned(), registry=registry
+    )._external_tools("item-1")
+    line = _line(external)
+    assert "runs 1.3.0, not the latest release." in line
+
+
+async def test_a_deployments_view_plugin_alone_does_not_ask_what_was_mounted(monkeypatch):
+    # Round 2: plugin shas ride in the same resolve, but they are no agent's
+    # tool — an app declaring nothing must not pay a host probe per turn.
+    _declaring(monkeypatch)
+    registry = _Registry()
+    await _builder(
+        slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"}, registry=registry
+    )._external_tools("item-1")
+    assert registry.asked == []

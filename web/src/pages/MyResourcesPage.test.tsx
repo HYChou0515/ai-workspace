@@ -158,6 +158,24 @@ describe("MyResourcesPage", () => {
     await waitFor(() => expect(screen.getByText(/目前沒有執行中的沙盒/)).toBeTruthy());
   });
 
+  it("a close also re-reads that item's tool picker (plan-tool-running-version)", async () => {
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { qk } = await import("../api/queryKeys");
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(qk.itemTools("rca", "i-1"), { tools: [], updateNeedsClose: true, canClose: true });
+    qc.setQueryData(qk.itemTools("rca", "other"), { tools: [], updateNeedsClose: true, canClose: true });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <MyResourcesPage client={client({ closeEnvironment: vi.fn(async () => {}) })} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "關閉" }));
+    await waitFor(() => expect(qc.getQueryState(qk.itemTools("rca", "i-1"))?.isInvalidated).toBe(true));
+    expect(qc.getQueryState(qk.itemTools("rca", "other"))?.isInvalidated).toBe(false);
+  });
+
   // Any of the three can refuse a turn on its own, so each needs its own
   // reading. They used to share one line and ONE bar — and that bar tracked
   // `count`, so it could sit at 50% while cpu was at 25% and mean neither.

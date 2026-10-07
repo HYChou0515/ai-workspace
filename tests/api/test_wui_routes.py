@@ -25,7 +25,7 @@ from workspace_app.sandbox.protocol import (
     SandboxHandle,
     SandboxNotFound,
 )
-from workspace_app.tooling.external import ExternalTools
+from workspace_app.tooling.external import ExternalTools, MountedTool, ToolProvenance
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
 PKG = PackageInfo(
@@ -288,13 +288,18 @@ def test_shares_the_items_one_sandbox_rather_than_starting_a_second():
 
 def test_mounts_the_bundles_the_item_resolved():
     client, _, registry, _ = build(
-        external=ExternalTools(packages=(PKG,), shas={"mes": "abc123"}),
+        external=ExternalTools(
+            packages=(PKG,),
+            shas={"mes": "abc123"},
+            provenance={"mes": ToolProvenance(version="1.4")},
+        ),
         packages=[],
     )
 
     client.post(URL, json={})
 
-    assert registry.tools == [{"mes": "abc123"}]
+    # The sha AND the release it is (plan-tool-running-version).
+    assert registry.tools == [{"mes": MountedTool(sha="abc123", version="1.4")}]
 
 
 def test_a_failing_tool_is_a_result_not_an_error():

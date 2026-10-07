@@ -17,6 +17,7 @@ import abc
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 
 from msgspec import Struct
 from specstar import SpecStar
@@ -29,6 +30,7 @@ from specstar.types import (
 )
 
 from ..sandbox.protocol import SandboxHandle
+from ..tooling.external import MountedTool
 
 # Real contention is a handful of pods racing one item's address for a few
 # microseconds when its sandbox dies, so a generous cap is only brushed under
@@ -46,24 +48,61 @@ class IAddressStore(abc.ABC):
         """The item's current address, or None when unclaimed."""
 
     @abc.abstractmethod
-    async def claim(self, item_id: str, handle: SandboxHandle) -> SandboxHandle:
+    async def claim(
+        self,
+        item_id: str,
+        handle: SandboxHandle,
+        *,
+        tools: dict[str, MountedTool] | None = None,
+    ) -> SandboxHandle:
         """Store ``handle`` as the item's address iff none is set; return the
         EFFECTIVE address — the existing one when another pod already claimed it
-        (so callers converge on ONE sandbox), else ``handle``."""
+        (so callers converge on ONE sandbox), else ``handle``.
+
+        ``tools`` is what that sandbox mounted (plan-tool-running-version), kept
+        in the SAME write as the handle so a reader can never pair one sandbox's
+        address with another's bundles. A losing claim writes nothing."""
 
     @abc.abstractmethod
     async def swap(
-        self, item_id: str, expected: SandboxHandle, new: SandboxHandle
+        self,
+        item_id: str,
+        expected: SandboxHandle,
+        new: SandboxHandle,
+        *,
+        tools: dict[str, MountedTool] | None = None,
     ) -> SandboxHandle:
         """CAS-replace the address: set it to ``new`` only if it currently equals
         ``expected`` (the address a pod found dead). Return the EFFECTIVE address —
         ``new`` when we won, else whatever a peer already swapped in (so the loser
-        converges instead of forcing its own rebuild)."""
+        converges instead of forcing its own rebuild). ``tools`` as in `claim`."""
+
+    @abc.abstractmethod
+    async def published(self, item_id: str) -> Published | None:
+        """The item's address AND what the sandbox there was created with, from
+        ONE read — so a caller can never pair a handle with the bundles of a
+        sandbox a peer swapped in between two reads. ``None`` when unclaimed.
+        ``Published.tools`` is ``None`` for a row written without the record (an
+        older build) and never means "mounted nothing" (that is ``{}`` — what a
+        create whose resolve failed really mounted)."""
 
     @abc.abstractmethod
     async def forget(self, item_id: str) -> None:
         """Release the item's address slot (its sandbox was torn down / closed),
         so the next freshly-created sandbox can claim it. Idempotent."""
+
+
+@dataclass(frozen=True)
+class Published:
+    """One item's published sandbox: where it is, and what it mounted."""
+
+    handle: SandboxHandle
+    tools: dict[str, MountedTool] | None
+
+
+class _Mounted(Struct):
+    sha: str
+    version: str = ""
 
 
 class _SandboxAddress(Struct):
@@ -72,6 +111,19 @@ class _SandboxAddress(Struct):
 
     item_id: str
     handle_id: str
+    #: plan-tool-running-version: the bundles that sandbox mounted at create.
+    #: Defaulted, so a row written before the field decodes as UNKNOWN.
+    tools: dict[str, _Mounted] | None = None
+
+
+def _row(item_id: str, handle: SandboxHandle, tools: dict[str, MountedTool] | None):
+    return _SandboxAddress(
+        item_id=item_id,
+        handle_id=handle.id,
+        tools=None
+        if tools is None
+        else {n: _Mounted(sha=m.sha, version=m.version) for n, m in tools.items()},
+    )
 
 
 def register_sandbox_address(spec: SpecStar) -> None:
@@ -101,12 +153,23 @@ class SpecstarAddressStore(IAddressStore):
         assert isinstance(data, _SandboxAddress)
         return SandboxHandle(id=data.handle_id)
 
-    async def claim(self, item_id: str, handle: SandboxHandle) -> SandboxHandle:
-        return await asyncio.to_thread(self._claim_sync, item_id, handle)
+    async def claim(
+        self,
+        item_id: str,
+        handle: SandboxHandle,
+        *,
+        tools: dict[str, MountedTool] | None = None,
+    ) -> SandboxHandle:
+        return await asyncio.to_thread(self._claim_sync, item_id, handle, tools)
 
-    def _claim_sync(self, item_id: str, handle: SandboxHandle) -> SandboxHandle:
+    def _claim_sync(
+        self,
+        item_id: str,
+        handle: SandboxHandle,
+        tools: dict[str, MountedTool] | None = None,
+    ) -> SandboxHandle:
         rm = self._spec.get_resource_manager(_SandboxAddress)
-        rec = _SandboxAddress(item_id=item_id, handle_id=handle.id)
+        rec = _row(item_id, handle, tools)
         try:
             # Atomic first-writer-wins: `if_not_exists` makes concurrent claimers
             # race for the one slot; the loser gets DuplicateResourceError and
@@ -136,12 +199,21 @@ class SpecstarAddressStore(IAddressStore):
         return SandboxHandle(id=data.handle_id)  # live → converge on the winner
 
     async def swap(
-        self, item_id: str, expected: SandboxHandle, new: SandboxHandle
+        self,
+        item_id: str,
+        expected: SandboxHandle,
+        new: SandboxHandle,
+        *,
+        tools: dict[str, MountedTool] | None = None,
     ) -> SandboxHandle:
-        return await asyncio.to_thread(self._swap_sync, item_id, expected, new)
+        return await asyncio.to_thread(self._swap_sync, item_id, expected, new, tools)
 
     def _swap_sync(
-        self, item_id: str, expected: SandboxHandle, new: SandboxHandle
+        self,
+        item_id: str,
+        expected: SandboxHandle,
+        new: SandboxHandle,
+        tools: dict[str, MountedTool] | None = None,
     ) -> SandboxHandle:
         rm = self._spec.get_resource_manager(_SandboxAddress)
         for _ in range(_MAX_CAS_RETRIES):
@@ -149,7 +221,7 @@ class SpecstarAddressStore(IAddressStore):
                 res = rm.get(item_id)
             except (ResourceIDNotFoundError, ResourceIsDeletedError):
                 logger.debug("address: swap item %s slot freed, claiming fresh", item_id)
-                return self._claim_sync(item_id, new)  # slot freed mid-flight → claim fresh
+                return self._claim_sync(item_id, new, tools)  # slot freed mid-flight → claim fresh
             data = res.data
             assert isinstance(data, _SandboxAddress)
             current = SandboxHandle(id=data.handle_id)
@@ -163,7 +235,7 @@ class SpecstarAddressStore(IAddressStore):
             try:
                 rm.modify(
                     item_id,
-                    _SandboxAddress(item_id=item_id, handle_id=new.id),
+                    _row(item_id, new, tools),
                     status=RevisionStatus.draft,
                     expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
                 )
@@ -174,6 +246,23 @@ class SpecstarAddressStore(IAddressStore):
         raise RuntimeError(  # pragma: no cover - only under pathological churn
             f"address swap CAS exhausted retries for {item_id!r}"
         )
+
+    async def published(self, item_id: str) -> Published | None:
+        return await asyncio.to_thread(self._published_sync, item_id)
+
+    def _published_sync(self, item_id: str) -> Published | None:
+        rm = self._spec.get_resource_manager(_SandboxAddress)
+        try:
+            data = rm.get(item_id).data
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return None
+        assert isinstance(data, _SandboxAddress)
+        tools = (
+            None
+            if data.tools is None
+            else {n: MountedTool(sha=m.sha, version=m.version) for n, m in data.tools.items()}
+        )
+        return Published(handle=SandboxHandle(id=data.handle_id), tools=tools)
 
     async def forget(self, item_id: str) -> None:
         await asyncio.to_thread(self._forget_sync, item_id)

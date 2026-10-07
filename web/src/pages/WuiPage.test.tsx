@@ -528,7 +528,7 @@ describe("WuiPage — the platform strip above the page (plan-wui-viewer-login Q
     vi.spyOn(privateEnvApi, "layers").mockResolvedValue({ shared: {}, policy });
     vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
     vi.spyOn(scheduleBindingsApi, "list").mockResolvedValue([]);
-    vi.spyOn(api, "getItemTools").mockResolvedValue([]);
+    vi.spyOn(api, "getItemTools").mockResolvedValue({ tools: [], updateNeedsClose: false, canClose: false });
     vi.spyOn(api, "getEnvProviders").mockResolvedValue([]);
   }
 

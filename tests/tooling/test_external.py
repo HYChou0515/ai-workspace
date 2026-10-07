@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from workspace_app.tooling.external import (
     ExternalTools,
+    MountedTool,
     confine_to_mounted,
     prewarm_external_tools,
     resolve_external_tools,
@@ -314,7 +315,9 @@ def test_a_sandbox_that_predates_a_tool_does_not_get_it_offered() -> None:
 def test_a_mounted_tool_is_offered_normally() -> None:
     external = _resolved(wafer="a" * 64)
 
-    confined = confine_to_mounted(external, live=True, mounted={"wafer": "a" * 64})
+    confined = confine_to_mounted(
+        external, live=True, mounted={"wafer": MountedTool(sha="a" * 64, version="")}
+    )
 
     assert confined.shas == {"wafer": "a" * 64}
     assert [p.name for p in confined.packages] == ["wafer"]
@@ -329,7 +332,9 @@ def test_a_sandbox_holding_an_older_build_keeps_the_tool() -> None:
     exist, not about being a release behind."""
     external = _resolved(wafer="b" * 64)
 
-    confined = confine_to_mounted(external, live=True, mounted={"wafer": "a" * 64})
+    confined = confine_to_mounted(
+        external, live=True, mounted={"wafer": MountedTool(sha="a" * 64, version="")}
+    )
 
     assert confined is external
     assert confined.refused == {}
@@ -386,3 +391,17 @@ async def test_a_tool_that_describes_nothing_leaves_the_fields_empty() -> None:
 
     (pkg,) = external.packages
     assert pkg.description == ""
+
+
+def test_drift_is_the_one_rule_for_same_different_missing_and_unknown() -> None:
+    """plan-tool-running-version: the turn's confinement, the model's line and
+    the picker all read this, so one table pins all three (round 2)."""
+    from workspace_app.tooling.external import Drift, ExternalTools, drift
+
+    ext = ExternalTools(shas={"same": "s", "moved": "new", "absent": "x"})
+    mounted = {"same": MountedTool("s", "1"), "moved": MountedTool("old", "0.9")}
+    assert drift(ext, mounted) == {
+        "moved": Drift(missing=False, running="0.9"),
+        "absent": Drift(missing=True),
+    }
+    assert drift(ext, None) == {}  # unknown lists nothing (D4)

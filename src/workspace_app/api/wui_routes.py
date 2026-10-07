@@ -547,6 +547,7 @@ def register_wui_routes(
             investigation_id=investigation_id,
             sandbox=sandbox,
             sandbox_spec=SandboxSpec(tools=external.shas),
+            tool_versions=external.versions(),
             packages=list(available),
             agent_config=config,
             prebuilt_dir=prebuilt_dir,

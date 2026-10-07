@@ -66,7 +66,7 @@ function open({
       slug="rca"
       itemId="i1"
       client={{
-        getItemTools: vi.fn(async () => tools),
+        getItemTools: vi.fn(async () => ({ tools: tools, updateNeedsClose: false, canClose: false })),
         getEnvProviders: vi.fn(async () => []),
         resolveEnvProvider: vi.fn(),
       }}
@@ -337,7 +337,7 @@ describe("signing in from Only me", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => [
             {
               id: "erp-login",
@@ -389,7 +389,7 @@ describe("review round 1: saving and leaving", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -435,7 +435,7 @@ describe("review round 1: saving and leaving", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -471,7 +471,7 @@ describe("review round 1: saving and leaving", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -499,7 +499,7 @@ describe("review round 1: saving and leaving", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -531,7 +531,7 @@ describe("review round 1: saving and leaving", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -564,7 +564,7 @@ describe("review round 1: saving and leaving", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}
@@ -606,7 +606,7 @@ describe("review round 2", () => {
         slug="rca"
         itemId="i1"
         client={{
-          getItemTools: vi.fn(async () => [ERP]),
+          getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}

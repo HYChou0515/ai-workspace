@@ -29,7 +29,7 @@ describe("ItemEnvModal", () => {
         onClose={vi.fn()}
         privateClient={privateClient}
         client={{
-          getItemTools: vi.fn(async () => []),
+          getItemTools: vi.fn(async () => ({ tools: [], updateNeedsClose: false, canClose: false })),
           getEnvProviders: vi.fn(async () => []),
           resolveEnvProvider: vi.fn(),
         }}

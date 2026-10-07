@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 from .registry import CommandInfo, EnvNeed, PackageInfo
@@ -59,6 +59,31 @@ class ToolProvenance:
 
 
 @dataclass(frozen=True)
+class MountedTool:
+    """One third-party bundle a sandbox was CREATED with (plan-tool-running-version).
+
+    A sandbox mounts its bundles once, at create, and keeps them; the resolve a
+    later turn does describes the author's LATEST release. This is the other
+    half — what is actually under `/.tools/<name>` — written at the moment the
+    two are the same thing, so it can be compared with the latest afterwards.
+    Compared by `sha` (D8): one version string published twice is two releases."""
+
+    sha: str
+    version: str
+
+
+@dataclass(frozen=True)
+class Drift:
+    """How a live sandbox differs from the latest resolve for ONE tool."""
+
+    missing: bool
+    """The sandbox was created without it (D11)."""
+    running: str = ""
+    """When present but a different bundle: the release it runs (``""`` if
+    that was not recorded). Different, not "older" — a sha says no more (D13)."""
+
+
+@dataclass(frozen=True)
 class ExternalTools:
     """What one turn learned about this app's third-party tools."""
 
@@ -73,6 +98,22 @@ class ExternalTools:
     """`{name: provenance}` for the tools that resolved. Keyed the same as
     `shas`, and always the same set: a tool that is going to be mounted is a
     tool something eventually has to be able to describe."""
+
+    def versions(self) -> dict[str, str]:
+        """`{name: release}` for `shas` — read off `mounts()`, so the turn's
+        record and a turn-less wake's are one builder, not two kept alike."""
+        return {name: m.version for name, m in self.mounts().items()}
+
+    def mounts(self) -> dict[str, MountedTool]:
+        """What a sandbox created from THIS resolve mounts: each sha with the
+        version the same answer gave it, so the record cannot pair a sha with
+        another release's number."""
+        return {
+            name: MountedTool(
+                sha=sha, version=p.version if (p := self.provenance.get(name)) else ""
+            )
+            for name, sha in self.shas.items()
+        }
 
 
 def _package(name: str, described: dict[str, Any]) -> PackageInfo:
@@ -160,11 +201,29 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
     )
 
 
+def drift(external: ExternalTools, mounted: Mapping[str, MountedTool] | None) -> dict[str, Drift]:
+    """THE rule for "is the live sandbox's tool the latest" — one function,
+    read by the turn's confinement, the model's description and the tool
+    picker, so the three cannot disagree (review round 2). Only the tools that
+    differ are listed; unknown mounts (`None`) list nothing (D4). Compared by
+    sha (D8)."""
+    if mounted is None:
+        return {}
+    out: dict[str, Drift] = {}
+    for name, sha in external.shas.items():
+        m = mounted.get(name)
+        if m is None:
+            out[name] = Drift(missing=True)
+        elif m.sha != sha:
+            out[name] = Drift(missing=False, running=m.version)
+    return out
+
+
 def confine_to_mounted(
     external: ExternalTools,
     *,
     live: bool,
-    mounted: dict[str, str] | None,
+    mounted: Mapping[str, MountedTool] | None,
 ) -> ExternalTools:
     """What this turn may offer, given a sandbox that already exists.
 
@@ -180,17 +239,19 @@ def confine_to_mounted(
     an author releasing mid-session is the documented no-op path ("they push,
     the next sandbox gets it"), and taking a working tool away for the rest of
     a live session would make routine releases hurt the people using them. The
-    schemas can then be a release ahead of the bundle for one session's life —
-    the residual of pinning at create, not something this function should
-    convert into an outage.
+    schemas can then describe a different release from the bundle for one
+    sandbox's life — the residual of pinning at create, not something this
+    function should convert into an outage; `describe_running` says so in the
+    tool's description (plan-tool-running-version D2).
 
-    `mounted=None` means UNKNOWN, not empty: another pod created this sandbox
-    (#366) and this one never learned what went into it. Guessing "empty" there
-    would take working tools away from every multi-pod deployment, so the
-    unknown case is left exactly as resolved."""
+    `mounted=None` means UNKNOWN, not empty: no live sandbox, or one whose
+    address carries no record of what went in (built before the record existed,
+    plan-tool-running-version). Guessing "empty" there would take working tools
+    away, so the unknown case is left exactly as resolved. A sandbox another pod
+    built is no longer unknown — its address says what it mounted (D10)."""
     if not live or mounted is None or not external.shas:
         return external
-    absent = [name for name in external.shas if name not in mounted]
+    absent = [name for name, d in drift(external, mounted).items() if d.missing]
     if not absent:
         return external
     for name in absent:
@@ -202,9 +263,10 @@ def confine_to_mounted(
             **external.refused,
             **{
                 name: (
-                    "this workspace was started before this tool was available, so "
-                    "it is not installed here. It works in a new workspace, or in "
-                    "this one once it has been idle long enough to be recycled."
+                    "this tool is not installed in this workspace's current sandbox, "
+                    "which was set up without it. Closing the sandbox lets the next "
+                    "one be set up with it (so does the sandbox being recycled after "
+                    "idling)."
                 )
                 for name in absent
             },
@@ -243,3 +305,27 @@ async def prewarm_external_tools(
         for name in external.refused:
             logger.warning("tool prewarm: %s unavailable (%s)", name, external.refused[name])
     return unwarmed
+
+
+def describe_running(
+    external: ExternalTools, mounted: Mapping[str, MountedTool] | None
+) -> ExternalTools:
+    """Describe each tool as the release the live sandbox RUNS
+    (plan-tool-running-version D2).
+
+    A sandbox keeps the bundle it was created with while the resolve describes
+    the latest release, so where the two shas differ the package's `version`
+    becomes the mounted one and `latest_version` names the latest (`""` if it
+    published none — nothing is invented in its place) — which is
+    what `describe_command` turns into the sentence the model reads. Compared by
+    sha (D8). Unknown mounts (`None`) change nothing (D4): the next sandbox is
+    built from this resolve. Only the words change; what mounts does not."""
+    differs = drift(external, mounted)
+    packages = []
+    for pkg in external.packages:
+        d = differs.get(pkg.name)
+        if d is None or d.missing:
+            packages.append(pkg)  # same release — or absent, which confinement refuses
+            continue
+        packages.append(replace(pkg, version=d.running, latest_version=pkg.version))
+    return replace(external, packages=tuple(packages))

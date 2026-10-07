@@ -27,6 +27,7 @@ from ..sandbox.protocol import (
     SandboxNotFound,
     SandboxSpec,
 )
+from ..tooling.external import MountedTool
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
 
@@ -60,11 +61,12 @@ def _utcnow() -> datetime:
 class InvestigationSession:
     investigation_id: str
     handle: SandboxHandle | None = None
-    # #674: the third-party bundles `handle` was CREATED with, `{name: sha}`.
-    # `None` means UNKNOWN — this pod converged on a sandbox another pod built
-    # (#366), so it never saw what went in. Known-empty (`{}`) and unknown are
-    # deliberately different: only the first can say "that tool is not in here".
-    tools: dict[str, str] | None = None
+    # #674: the third-party bundles `handle` was CREATED with, each with the
+    # release it was (plan-tool-running-version). `None` means UNKNOWN — this
+    # pod converged on a sandbox whose address carries no record (built by an
+    # older build). Known-empty (`{}`) and unknown are deliberately different:
+    # only the first can say "that tool is not in here".
+    tools: dict[str, MountedTool] | None = None
     last_active: datetime = field(default_factory=_utcnow)
     # Serializes sandbox creation (ensure_handle) for this investigation. Turn
     # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
@@ -106,7 +108,13 @@ class InvestigationRegistry:
     # decide the item has no tools for that sandbox's whole life. A turn still
     # states its own — those are pinned to the resolve whose schemas the model
     # was handed. None ⇒ not wired (tests / no apps), and nothing is mounted.
-    tools_for: Callable[[str], Awaitable[dict[str, str]]] | None = None
+    tools_for: Callable[[str], Awaitable[dict[str, MountedTool]]] | None = None
+    # plan-tool-running-version: how long `mounted_tools` may wait on the host.
+    # Past it, this pod's own record stands and anything else reads as unknown
+    # (D12). Its callers (the tool picker, a turn's context build) did not wait
+    # on a sandbox at all before; a busy host's escalating retry ladder must not
+    # become their latency.
+    mounted_probe_timeout_s: float = 3.0
     # Who a live sandbox is charged to (the item's `owner` field). Wired for the
     # per-person limits; None ⇒ nothing is charged, and the heartbeat row stays
     # the plain liveness signal it was before.
@@ -238,7 +246,7 @@ class InvestigationRegistry:
         self,
         session: InvestigationSession,
         *,
-        tools: dict[str, str] | None = None,
+        tools: dict[str, MountedTool] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
         force: bool = False,
     ) -> SandboxHandle:
@@ -387,7 +395,7 @@ class InvestigationRegistry:
             memory_bytes=enforced.memory_bytes or 0,
         )
 
-    async def _declared_tools(self, item: str) -> dict[str, str] | None:
+    async def _declared_tools(self, item: str) -> dict[str, MountedTool] | None:
         """What this item's App declares, for a wake with no turn to ask.
 
         Best effort: an artifact store that is down must not stop a person
@@ -429,13 +437,14 @@ class InvestigationRegistry:
         self,
         item: str,
         *,
-        tools: dict[str, str] | None = None,
+        tools: dict[str, MountedTool] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
-    ) -> tuple[SandboxHandle, dict[str, str] | None]:
+    ) -> tuple[SandboxHandle, dict[str, MountedTool] | None]:
         """Materialise (or converge on) the item's single live sandbox handle.
 
         Returns the handle AND the third-party bundles it was created with —
-        `None` when we converged on someone else's sandbox and so cannot know
+        read off the address when we converged on someone else's sandbox
+        (plan-tool-running-version), `None` when that address carries no record
         (#674). The caller keeps that on the session because a sandbox mounts
         its bundles once, at create, and a later turn has to be able to tell
         "not in there" from "no idea".
@@ -453,7 +462,10 @@ class InvestigationRegistry:
         (local shared-vol / single-process) this is exactly that prior path."""
         stale: SandboxHandle | None = None
         if self.address is not None:
-            existing = await self.address.get(item)
+            # One read for the address AND its record, so a converging pod can
+            # never pair this handle with a peer's later sandbox's bundles.
+            published = await self.address.published(item)
+            existing = published.handle if published is not None else None
             if existing is not None:
                 if await self._alive(existing):
                     logger.info(
@@ -462,8 +474,10 @@ class InvestigationRegistry:
                         existing.id,
                     )
                     # A live shared sandbox → converge on ONE. Another pod built
-                    # it, so what it mounted is not ours to state.
-                    return existing, None
+                    # it; what it mounted rides on its address (plan-tool-running-
+                    # version), `None` when the address carries no record.
+                    assert published is not None
+                    return existing, published.tools
                 logger.info(
                     "registry: acquire item %s -> address %s dead, rebuilding",
                     item,
@@ -504,7 +518,11 @@ class InvestigationRegistry:
         # not pay for a resolve on every wake.
         mounted = tools if tools is not None else await self._declared_tools(item)
         handle = await self.sandbox.create(
-            replace(await self.spec_for(item), tools=mounted), sandbox_id=item
+            replace(
+                await self.spec_for(item),
+                tools=None if mounted is None else {n: m.sha for n, m in mounted.items()},
+            ),
+            sandbox_id=item,
         )
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",
@@ -527,10 +545,14 @@ class InvestigationRegistry:
             # Publish the fresh address AFTER restore. Swap (CAS on the dead one)
             # when replacing a reaped address, else claim the empty slot; either
             # way the loser of a concurrent rebuild converges on the winner.
+            # What it mounted goes in the SAME write as the address, so no
+            # reader can pair this handle with another sandbox's bundles.
+            # `{}` when nothing resolved: the sandbox really mounted nothing.
+            record = dict(mounted or {})
             winner = (
-                await self.address.swap(item, expected=stale, new=handle)
+                await self.address.swap(item, expected=stale, new=handle, tools=record)
                 if stale is not None
-                else await self.address.claim(item, handle)
+                else await self.address.claim(item, handle, tools=record)
             )
             if winner != handle:
                 logger.info(
@@ -540,7 +562,11 @@ class InvestigationRegistry:
                     handle.id,
                 )
                 await self.sandbox.kill(handle)  # lost the race — drop our orphan
-                return winner, None  # the winner is someone else's build
+                # The winner is someone else's build; its address says what is in
+                # it — but only while the address still IS the winner: a record
+                # read after a peer replaced it describes another sandbox.
+                now = await self.address.published(item)
+                return winner, now.tools if now is not None and now.handle == winner else None
             logger.info(
                 "registry: won address CAS for item %s -> published handle %s",
                 item,
@@ -550,6 +576,55 @@ class InvestigationRegistry:
         # what lets a later turn say "that tool is not in here" rather than
         # offering the model a launcher that does not exist.
         return handle, dict(mounted or {})
+
+    async def mounted_tools(self, item: str) -> dict[str, MountedTool] | None:
+        """What the item's LIVE sandbox was created with, asked from any pod
+        (plan-tool-running-version).
+
+        `None` is unknown, or no live sandbox — and both read the same way to
+        every caller on purpose: the next sandbox is built from the latest
+        resolve, so there is nothing older to report (D4/D7).
+
+        Bounded and never raising (D12): the tool picker and a turn's context
+        build ask this, and neither touched a sandbox before. When the host
+        cannot answer in `mounted_probe_timeout_s`, or errors, what THIS pod
+        built stays its answer — the host's silence says nothing about it, and
+        dropping it let a turn offer a tool the sandbox does not have (review
+        round 2). Only a definite "gone" drops it. A pod that holds nothing gets
+        unknown: an address's record is believed only while the host vouches
+        for the sandbox behind it."""
+        s = self._sessions.get(item)
+        own = s.tools if s is not None and s.handle is not None else None
+        gone = False
+
+        async def lookup() -> dict[str, MountedTool] | None:
+            nonlocal gone
+            if own is not None:
+                assert s is not None and s.handle is not None
+                # Probed on the backend where a sandbox can die under a held
+                # handle (http): a sandbox a peer closed must not keep being
+                # reported here (review round 1).
+                if self.address is None or await self._alive(s.handle):
+                    return own
+                gone = True
+            if self.address is None:
+                return None
+            published = await self.address.published(item)
+            if published is None or published.tools is None:
+                return None
+            # A dead address's bundles describe nothing that will run.
+            return published.tools if await self._alive(published.handle) else None
+
+        try:
+            return await asyncio.wait_for(lookup(), timeout=self.mounted_probe_timeout_s)
+        except Exception:  # noqa: BLE001 — a host that cannot answer, never a failure
+            logger.warning(
+                "registry: could not tell what item %s's sandbox mounted; %s",
+                item,
+                "reading as unknown" if gone or own is None else "keeping this pod's record",
+                exc_info=True,
+            )
+            return None if gone else own
 
     async def has_live_sandbox(self, investigation_id: str) -> bool:
         """Whether this item is ALREADY holding a live sandbox.
