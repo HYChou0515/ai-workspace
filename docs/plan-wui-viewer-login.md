@@ -67,13 +67,15 @@ item 上一份、所有參與者明文讀得到、只有 `write_meta` 打得開�
 | 頁面按鈕起的 `wui/run` | **按的人**;帳照舊記 owner(#805) | 〔user,Q6〕 |
 | goal driver 續跑、`turn_reclaim` 重跑 | 原本那一輪的作者 | 〔預設〕 |
 | 排程 | **綁定的人**;沒人綁定 → shared + `env_without_request` | 〔user,Q7/Q8〕 |
-| WUI build | **沒有人的**,只拿 shared | 〔#788 沿用〕 |
+| WUI build | **沒有人的**:私人層是空的,照政策解析 shared(`private_only` 拿不到) | 〔#788 沿用;照政策:user 2026-10-07,D11〕 |
 
 `wui/run` 今天是 `captured_user=owner`(`wui_routes.py:441`)。「帳記在誰名下」和「用誰的身分」拆開:
 記帳不動,身分換成按的人——否則按一下別人頁面的按鈕就用了別人存的 private。
 
 build 只拿 shared:`dist/` 會進永久儲存、組進每個看這頁的人拿到的文件,bundler 會把 env 烤進產出物
 (Vite `VITE_*`)。判準:**產出回給一個人 → 可用他的 private;變成共用成品 → 只能 shared。**
+shared 也照政策走(和其他入口同一個 `resolve_env`,私人層傳空的):`private_only` 的名字只會以「替誰跑
+的那個人」的值出現,build 不替任何人跑,所以拿不到,即使 shared 有值。
 
 ### 排程:本人按了才算
 
@@ -198,8 +200,11 @@ build 只拿 shared:`dist/` 會進永久儲存、組進每個看這頁的人拿�
 
 **user 確認(2026-10-01):** D1–D3 同意。D5:面板的「執行」用按的人的值,哪一層照 policy(與 chat 同一個
 `resolve_env`)。D13:符合「有 `write_meta` 才能設定共用值、沒有的只能設定私人值」,存共用值的權限沒放寬,只是
-換 token 的那條 API 降到 `read_meta`。D15:照現在的做法——被移出的人的值留在 DB 但不再被使用。其餘各條已實作,
-user 沒有要求更動。
+換 token 的那條 API 降到 `read_meta`。D15:照現在的做法——被移出的人的值留在 DB 但不再被使用。
+**user 決定(2026-10-07):** D11 改成 build 也照政策,私人層為空——`private_only` 的名字建頁面時拿不到。
+
+**沒有逐條確認過的:** D4、D7、D8、D12、D14、D16 只確認了「有實作、沒略過」,做法本身沒有討論;D6 解釋過、
+user 沒有回覆;D9、D10 沒有拿出來討論過。
 
 | # | 計畫寫的 | 實作做的 | 為什麼 |
 |---|---|---|---|
@@ -212,7 +217,7 @@ user 沒有要求更動。
 | D7 | (未寫) | 新增 `GET …/env/layers`(`read_meta`)回 item 的 shared 值與政策 | `/w/` 頁面只有 item id、沒有 item 記錄;這兩個欄位 `read_meta` 本來就回得到 |
 | D9 | 〔預設〕`IEnvProvider` 可選擇回傳 `expires_at` | **沒做** | 目前沒有任何 provider 回過期時間;過期的 token 會在 tool 那端失敗,重新登入就好。有需要時再加(介面是加欄位,不破壞既有 impl) |
 | D10 | 平台列:有 private 政策或有 `IEnvProvider` 才畫 | 另外**頁面有排程**也畫;`IEnvProvider` 只算「產出的名字有 tool 宣告」的 | 「用我的身分執行」的鈕要有地方放;一個跟這頁 tool 無關的 provider 沒有東西可登入 |
-| D11 | WUI build 只拿 shared | 同上,而且**不看政策**:`private_only` 的名字若有共用值,build 照樣拿到 | 共用值本來就是所有參與者讀得到的東西,烤進 `dist/` 不會多洩漏什麼;政策管的是 tool 替誰跑,build 不替任何人跑 |
+| D11 | WUI build 只拿 shared | **照政策,私人層為空**:和其他入口同一個 `resolve_env(shared, {}, policy)`;`shared_first` / `private_first` 拿到共用值,`private_only` 拿不到(即使 shared 有值) | 第一版是「不看政策」,理由是共用值本來大家讀得到;user(2026-10-07)決定 build 也照政策——`private_only` 的意思是「只用那個人自己的」,在任何入口都該成立。測試 `test_the_build_follows_the_items_policy_with_nobody_as_the_private_layer`,突變 `wui_routes` 那一行回 `dict(layers.shared)` 只有它變紅 |
 | D12 | `env_for` 的值寫進 private,最後寫的贏 | 存在**另一列**(`PrivateSeam`),每次**整份取代**;同名時它贏過手 key 的;沒人在場的 turn 用 `{**服務帳號, **手 key, **seam}` | review round 1 R2/R3/R4/F8:合在一列時,seam 不再回的名字(登出 SSO)會一直留著、tool 看到的名字順序從第二次起就變、每個輪換過的 token 都留成 revision、seam 寫入和「清除我的值」賽跑會把剛清掉的值寫回來。拆開後四個都不成立;「自動的贏過手 key」這條 user 的決定不變。部署拿掉 seam 後,留下的 seam 列不再被讀(round 2)。寫入是**取代後刪舊 revision**(round 2 D4/D5:先刪再建有一瞬間沒有列;round 3:刪舊 revision 前本人剛好登出,列已不在,不再往外丟錯),名字順序另存一欄照原樣還原(R3)。**「最新」只到本人上一次在這個 item 聊天或按頁面工具為止**:只有這兩條路問 `env_for`,登出 SSO 不是這個 app 看得到的請求,所以之前替他跑的背景工作仍用舊值(round 2 veracity V2) |
 | D13 | (#750:`IEnvProvider` 要 `write_meta`) | 改成 `read_meta` | review round 1 C1:看頁面的人要能登入進自己的 private 層,這是這份計畫的主要目的;換出的值只進本人的 private,存成共用值仍要 `write_meta` |
 | D14 | run 用按的人的 private | 「按的人」存在 `RunIdentity`(沒有 API 路由),不是 `WorkflowRun` 的欄位 | review round 1 R5:`WorkflowRun` 的 auto-CRUD 沒有寫入閘,放在它上面等於讓任何人 PATCH 一個暫停中的 run 去用別人的值。這只保護了「替誰跑」;`workflow_id` 仍改得到,所以 `RunIdentity` 另記 run 開始時的 `workflow_id` 與 workflow **檔**的 digest(和排程綁定同一個函式),**每次組出要跑的 workflow 時**(`_execute`:開始、gate 決定、續跑、steer)拿「這次讀進來組 interpreter 的那份位元組」的 digest、`workflow_id`、item 與 profile 比,對不上就丟掉身分(round 5:gate 決定走別的 item 的網址時會在那個 item 組,既有的缺口,身分不能跟過去);三處 digest 都由同一個 loader 定義(round 5:壞檔在綁定時算位元組、組的時候算 "");round 6:gate 決定 / steer / steer 確認只接受 run 自己 item 的網址(404;同一類的取消、讀 run、看串流三條沒改,見 #870;身分比對 item 仍留著當第二道),「用我的身分執行」拒絕解析不了的 workflow(422,否則同意記成 "",檔案刪掉後就讓同名 profile workflow 帶著值跑),loader 只認資料夾裡平的 `<id>.json`(和 `unparsable_workflow` 同樣的規則,目前是手抄的兩份,見 #870);組的時候讀檔失敗,run 不會被標成錯誤——新開的停在 pending,gate 決定 / steer 確認之後的停在 running(之後才可能被清理程式標成錯誤);這個 PR 之前就是如此,不會走到身分判斷;已知不修:gate 決定 / 續跑時 manifest 是另一次讀取(輸入預設值、`config` 取自它),digest 只涵蓋組 interpreter 的那份——DSL interpreter 用的是檔案自己的 `config`,換的窗口也只在同一個請求內(round 5 veracity);steer 核准也丟(round 2 D1、veracity V5;round 3:第一版比的是 manifest 的 digest,manifest 不含 steps;round 4 defect 1:改成每個節點讀即時檔案後,「換成惡意檔 → 決定 gate → 換回來」照樣過,因為節點看的是檔案不是正在跑的 interpreter) |

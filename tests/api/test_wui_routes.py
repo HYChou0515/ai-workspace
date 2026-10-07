@@ -794,6 +794,30 @@ def test_the_build_never_sees_anyones_private_values():
     assert sandbox.envs[0]["NPM_TOKEN"] == "s"
 
 
+def test_the_build_follows_the_items_policy_with_nobody_as_the_private_layer():
+    """`plan-wui-viewer-login` D11 (user, 2026-10-07): the build follows the
+    policy like every other path, and nobody is the private layer. So a
+    `private_only` name is left out even when the shared layer holds a value —
+    it reaches a tool only as the person it runs for — while `private_first`
+    falls back to the shared value and an unmarked name is the shared value,
+    as before. The presser's own stored value stays out either way."""
+    store = _private_store()
+    store.replace("default-user", "i1", {"ERP_TOKEN": "mine", "MES_HOST": "mine"})
+    sandbox = _BuildSandbox([b"ok\n"])
+    client, _, _, _ = build(
+        sandbox=sandbox,
+        env={"ERP_TOKEN": "shared", "MES_HOST": "shared", "NPM_TOKEN": "s"},
+        env_policy={"ERP_TOKEN": "private_only", "MES_HOST": "private_first"},
+        private_env=store,
+    )
+
+    client.post(BUILD_URL, json={"folder": "/page"})
+
+    assert "ERP_TOKEN" not in sandbox.envs[0]
+    assert sandbox.envs[0]["MES_HOST"] == "shared"
+    assert sandbox.envs[0]["NPM_TOKEN"] == "s"
+
+
 def test_a_page_tool_call_carries_the_pressers_own_stored_values():
     """`plan-wui-viewer-login`: what the person typed or logged in for this item
     is their PRIVATE layer, whether or not the deploy has a request seam."""

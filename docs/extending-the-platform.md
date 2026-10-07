@@ -400,7 +400,7 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
 | goal driver 續跑、pod 死掉後被接手重跑的 turn | 那一輪的作者 |
 | 頁面排程 | **本人按了「用我的身分執行」才有**;沒人按 → 誰的都沒有(shared + `env_without_request`)。排程內容一改,綁定就失效並通知那個人 |
 | event trigger、profile 層級排程 | 誰的都沒有 |
-| WUI build | **誰的都沒有**,只拿 shared(`dist/` 是大家共用的成品) |
+| WUI build | **誰的都沒有**:私人層是空的,shared 照政策解析,所以 `private_only` 的名字拿不到(`dist/` 是大家共用的成品) |
 
 - **沒有人在場時,每次使用前都重新確認那個人還能用這個 item**(goal / 重跑要 `converse`,run 要
   `execute`)。被移出 item 的人,他的值從下一個 turn 起就不再被使用;他綁定的排程會取消綁定並通知他

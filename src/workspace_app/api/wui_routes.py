@@ -293,7 +293,12 @@ def register_wui_routes(
         # reaching here would be baked into a file other people download —
         # one person's credential in everybody's copy. The same holds for a
         # person's stored PRIVATE values (`plan-wui-viewer-login`): the build
-        # reads the shared layer only.
+        # runs as NOBODY, so its private layer is empty.
+        #
+        # It still follows the item's policy, through the same `resolve_env`
+        # every other path uses (D11, user 2026-10-07): a `private_only` name
+        # reaches a tool only as the person it runs for, so a build — which runs
+        # for nobody — gets none, even when the shared layer holds one.
         #
         # A tool call is the opposite shape: its output goes to the one person
         # who asked, and dies with the exec. That is why `wui_call_tool` DOES
@@ -304,7 +309,8 @@ def register_wui_routes(
         # A registry credential a build genuinely needs belongs on the item,
         # where everyone the page is shared with is already entitled to what it
         # builds.
-        env = locator.env_vars_of(investigation_id)
+        layers = locator.env_layers_of(investigation_id)
+        env = resolve_env(shared=layers.shared, private={}, policy=layers.policy)
 
         session = await registry.session(investigation_id)
         handle = await registry.ensure_handle(session)
