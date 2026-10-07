@@ -189,3 +189,101 @@ async def test_republishing_an_entry_not_yet_moved_into_git_keeps_its_old_versio
     assert await store.repos.read("old1", parent) == old
     kinds = [e.kind for e in await store.history("old1", viewer="alice")]
     assert kinds == ["publish", "publish"]
+
+
+async def test_a_whole_publish_from_another_pod_inside_the_check_window_still_wins(
+    spec: SpecStar, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review round 2 (defect #1): pod A checked "my commit is still master",
+    then pod B published entirely, then A's CAS landed — on B's row — and the
+    row went back behind master for good. The check now comes after the row
+    is read, so anything B writes in between fails A's CAS."""
+    a = SkillHubStore(spec, SkillHubRepos(tmp_path / "git"))
+    b = SkillHubStore(spec, SkillHubRepos(tmp_path / "git"))  # another pod: same repos, same DB
+    entry = await _publish(a, "one")
+    real_master = a.repos.master
+    armed = fired = False
+
+    async def master(entry_id):  # noqa: ANN001, ANN202
+        nonlocal fired
+        seen = await real_master(entry_id)
+        if armed and not fired:
+            fired = True
+            await _publish(b, "three")  # B, start to finish, after A's read of master
+        return seen
+
+    real_move = a.repos.move_master
+
+    async def move(entry_id, commit, *, expected):  # noqa: ANN001, ANN202
+        nonlocal armed
+        moved = await real_move(entry_id, commit, expected=expected)
+        armed = True  # from here on A is recording its version
+        return moved
+
+    monkeypatch.setattr(a.repos, "master", master)
+    monkeypatch.setattr(a.repos, "move_master", move)
+    await _publish(a, "two")
+
+    row = a.get(entry)
+    assert row is not None and fired
+    assert (row.commit, row.description) == (await real_master(entry), "three")
+
+
+async def test_a_write_to_an_entry_deleted_meanwhile_records_nothing(
+    spec: SpecStar, store: SkillHubStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 2 (defect #3): the delete landed between the read and the CAS,
+    and the CAS raised out as a 500."""
+    entry = await _publish(store, "one")
+    rm = spec.get_resource_manager(SkillHubEntry)
+    real_update = rm.update
+
+    def update(resource_id, data, **kw):  # noqa: ANN001, ANN003, ANN202
+        rm.delete(entry)  # another pod, between this writer's read and its CAS
+        return real_update(resource_id, data, **kw)
+
+    monkeypatch.setattr(rm, "update", update)
+    await store.set_permission(entry, Permission(visibility="private"))
+
+    assert store.get(entry) is None
+
+
+async def test_a_rollback_lease_is_a_commit_never_a_ref(store: SkillHubStore) -> None:
+    """Round 2 (defect #2): `expected` came from the request and git read it
+    as a rev — `refs/heads/master` always matched, bypassing the lease."""
+    from workspace_app.apps.skill_hub import VersionMoved
+    from workspace_app.apps.skill_hub_git import GitError
+
+    entry = await _publish(store, "one")
+    first = store._rm().get(entry).info.revision_id  # noqa: SLF001
+    await _publish(store, "two")
+
+    with pytest.raises((VersionMoved, GitError)):
+        await store.rollback(entry, first, expected="refs/heads/master")
+    row = store.get(entry)
+    assert row is not None and row.description == "two"
+
+
+async def test_a_transfer_onto_someone_mid_first_publish_is_refused(
+    store: SkillHubStore,
+) -> None:
+    """Round 2 (defect #4): `find` skips drafts, so a transfer to bob landed
+    beside bob's in-flight first publish of the same name — two live rows."""
+    alices = await _publish(store, "alice's")
+    store._rm().create(  # noqa: SLF001 — bob's draft, mid-publish
+        SkillHubEntry(
+            owner="bob",
+            name="triage",
+            description="d",
+            source_item="i",
+            source_app="rca",
+            source_profile="p",
+            review=SkillHubReview(verdict="ok"),
+            pending=True,
+        ),
+        resource_id="bobsdraft",
+    )
+
+    assert store.name_taken("bob", "triage")
+    assert not store.name_taken("carol", "triage")
+    del alices

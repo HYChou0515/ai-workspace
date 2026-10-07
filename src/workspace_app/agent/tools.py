@@ -2898,10 +2898,14 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
 
     `query` matches the skill's name and description (case-insensitive); an
     empty query lists everything. Each hit shows `owner/name`, the description,
-    which App it was written in, and the ENTRY ID that `install_skill` takes.
-    Forks are listed under the skill they were forked from. A hit also says
-    which of the tools it mentions this App does not have — tell the user
-    before installing such a skill; parts of it may not be followable here.
+    which App it was written in, and the ENTRY ID that `install_skill` and
+    `show_skill_hub_entry` take. Forks are listed under the skill they were
+    forked from. Each hit also says how often it was installed and used,
+    whether this item already has it, when its current version was published,
+    and what its review said — what to weigh when the user asks which one to
+    install. A hit also says which of the tools it mentions this App does not
+    have — tell the user before installing such a skill; parts of it may not
+    be followable here.
     """
     import datetime
 
@@ -2931,9 +2935,12 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     # it is used, whether this item already has it, how recent its version is,
     # and what its review said.
     counts = await asyncio.to_thread(hub.usage.totals, [i for i, _e, _f in shown])
+    # "Already installed here" reads the item's `.skill/` folders — item
+    # content, so only for a speaker who may read it (round 2); the hits
+    # themselves are the skill hub's, scoped to the speaker already.
     here = (
         await hub_entries_here(c.files, c.investigation_id)
-        if c.files and c.investigation_id
+        if c.files and c.investigation_id and authorize_tool(c, "read_content") is None
         else set()
     )
 
@@ -3963,8 +3970,9 @@ _IMPLS = {
     # `install_skill` — the skill hub's read door into a workspace: a copy with
     # an `.origin`, same shape `read_skill` materializes. Opt-in per App.
     "install_skill": install_skill_impl,
-    # `search_skill_hub` — reads the hub, never the item, so it has no row in
-    # `TOOL_VERBS` (see that module's docstring). Opt-in per App.
+    # `search_skill_hub` — reads the skill hub as the speaker may; it reads the
+    # item (its `.skill/` folders, for "already installed") only under its own
+    # `read_content` check, so it has no row in `TOOL_VERBS`. Opt-in per App.
     "search_skill_hub": search_skill_hub_impl,
     # plan-skill-hub-history A3: one entry as a live card with an Install
     # button. Reads the skill hub as the speaker may; touches nothing here.

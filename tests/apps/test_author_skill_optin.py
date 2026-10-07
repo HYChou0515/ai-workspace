@@ -120,6 +120,8 @@ def test_skills_endpoint_returns_picker_state_across_sources():
         "is_copy": False,
         # …nor anything it is a copy OF (#826 P14).
         "copy_of": "",
+        # …nor a skill hub entry it is an installed copy of (#875).
+        "hub_entry": "",
         "update_available": False,
         # …and no upstream STATE either (plan-skill-hub P5): only a copy has one.
         "upstream": None,

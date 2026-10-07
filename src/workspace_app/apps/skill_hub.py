@@ -48,6 +48,7 @@ from specstar.types import (
 
 from ..perm import Actor, Permission, authorize
 from ..resources.groups import groups_of
+from .skill_hub_git import GitError
 from .skill_payload import SkillOrigin
 from .skills import SKILL_BODY_CAP, SkillError, _parse_frontmatter
 
@@ -63,10 +64,10 @@ if TYPE_CHECKING:
 #: difference (Q10).
 UpstreamState = Literal["live", "unpublished", "deleted"]
 
-#: The FileStore namespace an entry's files live under: a synthetic workspace
-#: id per PUBLISHED VERSION (`skill-hub:<entry id>:<version>`), so `purge` on a
-#: version takes exactly its files, and a version being written never shares a
-#: namespace with the one the row still points at (review round 1, finding A).
+#: Where an entry published BEFORE the git store kept its files: a synthetic
+#: workspace id per version (`skill-hub:<entry id>:<version>`). Read until the
+#: entry is moved into git, and never deleted (plan-skill-hub-history W18) —
+#: they are the only original of that version.
 _BLOB_PREFIX = "skill-hub:"
 
 #: The most one entry may hold, all files together. Publishing reads the folder
@@ -105,7 +106,9 @@ class SkillHubReview(Struct):
 
 
 class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
-    """One published skill. Files live beside it as blobs; see module docstring."""
+    """One published skill. Its versions live in git (`commit` = the current
+    one); an entry published before the git store also names its old files
+    (`blobs`). See the module docstring."""
 
     #: Explicit and mutable — NOT `created_by`. Ownership transfers (people
     #: leave, teams reorganise), and the transfer must not change the entry's
@@ -134,11 +137,9 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: The platform's own permission model, reused whole. `visibility` defaults
     #: to `public` (plan Q6); `private` is what "unpublish" means (plan Q5).
     permission: Permission = field(default_factory=Permission)
-    #: The FileStore namespace holding THIS version's files. Per version, not
-    #: per entry: a re-publish writes the next version into a fresh namespace,
-    #: moves the row here, and only then drops the previous one — so the row
-    #: never points at a namespace being emptied or half-filled. `""` is the
-    #: pre-versioned layout (`skill-hub:<id>`), kept decodable.
+    #: For an entry published before the git store: the FileStore namespace
+    #: holding its files (`""` = the pre-versioned `skill-hub:<id>`). Read
+    #: until the entry is in git; a version in git never sets it.
     blobs: str = ""
     #: The git commit this revision's version is (plan-skill-hub-history G7):
     #: master when the revision was written, and the commit its `r-` tag
@@ -420,8 +421,10 @@ class HistoryEvent(Struct, kw_only=True):
     review_notes: list[str]
     #: On a rollback: the revision that first published the version brought back.
     to_revision: str = ""
-    #: On a permission change: the visibility after it.
+    #: On a permission change: the visibility after it, and who may read it
+    #: (`read_content`'s `user:` / `group:` subjects) — G24's 「含名單」.
     visibility: str = ""
+    audience: list[str] = field(default_factory=list)
     current: bool = False
 
 
@@ -440,6 +443,9 @@ class MigrationReport(Struct, kw_only=True):
 
     migrated: list[str]
     duplicates: list[list[str]]
+    #: Entries whose own top-level `.gitattributes` could not go into git
+    #: (the skill hub's is there, W16): moved in without it.
+    gitattributes_dropped: list[str] = field(default_factory=list)
 
 
 def mint_entry_id() -> str:
@@ -562,6 +568,16 @@ class SkillHubStore:
             out.append((res.info.resource_id, res.data, res.meta.created_time))
         return out
 
+    def name_taken(self, owner: str, name: str) -> bool:
+        """Whether `(owner, name)` is held — by an entry, or by a first publish
+        in flight (a draft younger than `_DRAFT_TTL`). What a transfer must
+        check: `find` skips drafts, and a transfer landing beside one left two
+        live rows for one name (review round 2)."""
+        return any(
+            not row.pending or self._now() - made <= _DRAFT_TTL
+            for _id, row, made in self._same_name(owner, name)
+        )
+
     def find(self, owner: str, name: str) -> str | None:
         """The entry id for an identity, or ``None``. Scoped by both indexed
         fields, so this is a point lookup rather than a scan."""
@@ -663,11 +679,17 @@ class SkillHubStore:
         row behind master."""
         rm = self._rm()
         for _attempt in range(_WRITE_TRIES):
-            if current_commit is not None and await self.repos.master(entry_id) != current_commit:
-                return None
-            res = rm.get(entry_id)
+            try:
+                res = rm.get(entry_id)
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                return None  # deleted meanwhile: nothing left to record on
             row = res.data
             assert isinstance(row, SkillHubEntry)
+            # AFTER the read (review round 2): a writer that finishes between
+            # this check and the CAS below changed the revision just read, so
+            # the CAS fails and the next attempt sees its master.
+            if current_commit is not None and await self.repos.master(entry_id) != current_commit:
+                return None
             new = change(row)
             if new is None:
                 return None
@@ -675,6 +697,8 @@ class SkillHubStore:
                 info = rm.update(entry_id, new, expected_revision_id=res.info.revision_id)
             except PreconditionFailedError:
                 continue
+            except ResourceIsDeletedError:
+                return None
             if new.commit:
                 await self.repos.tag(entry_id, info.revision_id, new.commit)
             return new
@@ -732,6 +756,7 @@ class SkillHubStore:
                 *,
                 to_revision: str = "",
                 visibility: str = "",
+                audience: list[str] | None = None,
                 revision_id: str = revision_id,
                 at: dt.datetime = made,
                 row: SkillHubEntry = row,
@@ -747,6 +772,7 @@ class SkillHubStore:
                     review_notes=list(row.review.notes),
                     to_revision=to_revision,
                     visibility=visibility,
+                    audience=list(audience or []),
                 )
 
             if prev is None or row.commit != prev.commit:
@@ -758,7 +784,14 @@ class SkillHubStore:
             elif row.owner != prev.owner:
                 events.append(event("transfer", prev.owner))
             elif row.permission != prev.permission:
-                events.append(event("permission", row.owner, visibility=row.permission.visibility))
+                events.append(
+                    event(
+                        "permission",
+                        row.owner,
+                        visibility=row.permission.visibility,
+                        audience=list(row.permission.read_content),
+                    )
+                )
             prev = row
         if prev is not None and last_revision not in await self.repos.tagged_revisions(entry_id):
             await self.repos.tag(entry_id, last_revision, prev.commit)
@@ -859,7 +892,11 @@ class SkillHubStore:
             return current.commit
         # The lease is the one check: master is written before the row, so a
         # row never names a commit master has not reached.
-        if not await self.repos.move_master(entry_id, old.commit, expected=expected):
+        try:
+            moved = await self.repos.move_master(entry_id, old.commit, expected=expected)
+        except GitError:  # not a commit id at all: not the version the page showed
+            raise VersionMoved(entry_id) from None
+        if not moved:
             raise VersionMoved(entry_id)
         await self._change(
             entry_id,
@@ -891,24 +928,31 @@ class SkillHubStore:
             for res in self._rm().list_resources(live, returns=["info", "data"])
             if isinstance(res.data, SkillHubEntry) and not res.data.pending
         ]
+        dropped: list[str] = []
         migrated = [
             entry_id
             for entry_id, row in sorted(rows, key=lambda pair: pair[0])
-            if not row.commit and await self._ensure_in_git(entry_id, row)
+            if not row.commit and await self._ensure_in_git(entry_id, row, dropped=dropped)
         ]
         by_name: dict[tuple[str, str], list[str]] = {}
         for entry_id, row in rows:
             by_name.setdefault((row.owner, row.name), []).append(entry_id)
         duplicates = sorted(sorted(ids) for ids in by_name.values() if len(ids) > 1)
-        return MigrationReport(migrated=migrated, duplicates=duplicates)
+        return MigrationReport(
+            migrated=migrated, duplicates=duplicates, gitattributes_dropped=dropped
+        )
 
-    async def _ensure_in_git(self, entry_id: str, row: SkillHubEntry) -> bool:
+    async def _ensure_in_git(
+        self, entry_id: str, row: SkillHubEntry, *, dropped: list[str] | None = None
+    ) -> bool:
         """Give an entry published before the git store its first version: the
         files its `blobs` namespace holds. A repo whose master is already set
         (another runner, or a run that died before writing the row) is
         adopted, never given a second first version. Returns whether this call
         recorded it on the row."""
         payload = await self._files(entry_id, row)
+        if payload.pop(".gitattributes", None) is not None and dropped is not None:
+            dropped.append(entry_id)
         commit = await self.repos.write_version(
             entry_id, payload, parent=None, author=row.owner, message="migrated"
         )

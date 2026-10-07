@@ -175,3 +175,21 @@ async def test_reading_the_history_puts_back_a_tag_a_crash_left_out(
     row = store.get(entry)
     assert row is not None
     assert (await store.repos.tagged_revisions(entry))[current] == row.commit
+
+
+async def test_a_visibility_row_says_who_it_was_opened_to(store: SkillHubStore) -> None:
+    """Round 2 (conformance L5): G24 — the owner sees visibility changes
+    「含名單」; the row carried only the visibility word."""
+    entry = await _publish(store, V1, "one")
+    await store.set_permission(
+        entry,
+        Permission(visibility="restricted", read_content=["user:bob", "group:qa"]),
+    )
+
+    (perm, _pub) = await store.history(entry, viewer="alice")
+
+    assert (perm.kind, perm.visibility, perm.audience) == (
+        "permission",
+        "restricted",
+        ["user:bob", "group:qa"],
+    )

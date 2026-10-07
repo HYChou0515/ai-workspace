@@ -170,6 +170,7 @@ class SkillHubHistoryEvent(BaseModel):
     review_notes: list[str]
     to_revision: str
     visibility: str
+    audience: list[str] = []
     current: bool
 
 
@@ -242,6 +243,8 @@ class SkillHubMigration(BaseModel):
 
     migrated: list[str]
     duplicates: list[list[str]]
+    #: Entries moved in without their own top-level `.gitattributes`.
+    gitattributes_dropped: list[str] = []
 
 
 def register_skill_hub_routes(
@@ -444,7 +447,7 @@ def register_skill_hub_routes(
         new_owner = body.owner.strip()
         if not new_owner or new_owner == entry.owner:
             raise HTTPException(status_code=400, detail=_TRANSFER_OWNER_REQUIRED)
-        if hub.find(new_owner, entry.name) is not None:
+        if hub.name_taken(new_owner, entry.name):
             raise HTTPException(
                 status_code=409,
                 detail={"error": "transfer_name_taken", "owner": new_owner, "name": entry.name},
@@ -587,7 +590,11 @@ def register_skill_hub_routes(
         if get_user_id() not in superusers:
             raise HTTPException(status_code=404, detail="Not Found")
         report = await hub.migrate_legacy()
-        return SkillHubMigration(migrated=report.migrated, duplicates=report.duplicates)
+        return SkillHubMigration(
+            migrated=report.migrated,
+            duplicates=report.duplicates,
+            gitattributes_dropped=report.gitattributes_dropped,
+        )
 
     @app.post("/a/{slug}/items/{item_id}/skills/fork")
     async def fork_skill_version_into_item(

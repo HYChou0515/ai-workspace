@@ -13,7 +13,7 @@ on the row and never shown (U5).
 What a pod that dies without a SIGTERM had not flushed is lost — what
 accumulated since its last successful flush (one interval, unless flushes were
 failing). Rows are not shared between pods: the id carries the pod's
-``HOSTNAME``, so two processes without one on the same host would share rows.
+``HOSTNAME`` — any two processes without one are both ``local`` and share rows.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import logging
 import os
 import re
 from collections.abc import Callable, Iterable
@@ -29,6 +30,8 @@ from urllib.parse import quote
 from msgspec import Struct, field
 from specstar import QB, SpecStar, Sum
 from specstar.types import ResourceIDNotFoundError
+
+logger = logging.getLogger(__name__)
 
 #: How often a pod writes what it counted (U4).
 FLUSH_INTERVAL_S = 2 * 60 * 60
@@ -155,11 +158,16 @@ class UsageCounter:
             mine.uses += counts.uses
             row.installs += counts.installs
             row.uses += counts.uses
-        if exists:
-            rm.update(row_id, row)
-            rm.prune_revisions(row_id, keep_last_n=1)
-        else:
+        if not exists:
             rm.create(row, resource_id=row_id)
+            return
+        rm.update(row_id, row)
+        # The counts are written: a prune that fails must not put them back to
+        # be added twice (round 2). The next write prunes this revision too.
+        try:
+            rm.prune_revisions(row_id, keep_last_n=1)
+        except Exception:  # noqa: BLE001 — logged; only an extra revision is left
+            logger.exception("skill hub usage: prune of %s failed", row_id)
 
     def totals(self, entry_ids: Iterable[str]) -> dict[str, tuple[int, int]]:
         """``{entry id: (installs, uses)}`` as written so far — one grouped

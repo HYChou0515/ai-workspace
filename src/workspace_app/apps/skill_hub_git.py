@@ -224,6 +224,10 @@ class SkillHubRepos:
         """Write `payload` as one commit on top of `parent` and return its id.
         Replace, not merge: a file the payload lacks is not in the commit.
         Master does NOT move — that is `move_master`, the lock (G5)."""
+        if ".gitattributes" in payload:
+            # The platform's LFS rules live there; a skill's own would replace
+            # them in the commit and then be hidden from every reader (W16).
+            raise ValueError("a top-level .gitattributes is reserved for the skill hub")
         await self._ensure(entry_id)
         staging = f"refs/skill-hub-staging/{uuid.uuid4().hex}"
         stream = bytearray()
@@ -259,14 +263,16 @@ class SkillHubRepos:
         """Point master at `commit` IF it still is `expected` (``None``: master
         must not exist yet). ``False`` means someone moved it first — the lock
         was lost (G5). A push to the repo itself, with a lease."""
-        lease = f"refs/heads/master:{expected or ''}"
+        # Both are commits, checked: git reads a lease value as a rev, so a
+        # ref name there ("refs/heads/master") would always match (round 2).
+        lease = f"refs/heads/master:{_commit(expected) if expected is not None else ''}"
         code, _out = await self._git(
             entry_id,
             "push",
             "--quiet",
             f"--force-with-lease={lease}",
             ".",
-            f"{commit}:refs/heads/master",
+            f"{_commit(commit)}:refs/heads/master",
             check=False,
         )
         return code == 0

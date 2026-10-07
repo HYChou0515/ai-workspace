@@ -150,3 +150,25 @@ async def test_an_id_that_is_not_a_live_entry_is_dropped_not_retried_forever(
     await c.flush()
 
     assert c.totals(["good", "nope"]) == {"good": (0, 1), "nope": (0, 0)}
+
+
+async def test_a_prune_that_fails_after_the_write_does_not_count_twice(
+    spec: SpecStar, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 2 (defect #5): the counts were written, the prune raised, and
+    the counts went back into memory to be added again."""
+    c = _counter(spec, "pod-a")
+    c.use("e1", user="u", item="i")
+    await c.flush()
+    rm = spec.get_resource_manager(SkillHubUsage)
+
+    def broken(*_a, **_kw):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("prune failed")
+
+    monkeypatch.setattr(rm, "prune_revisions", broken)
+    c.use("e1", user="u", item="i")
+    await c.flush()
+    monkeypatch.undo()
+    await c.flush()
+
+    assert c.totals(["e1"]) == {"e1": (0, 2)}

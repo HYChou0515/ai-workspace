@@ -162,3 +162,26 @@ async def test_an_entry_already_in_git_is_left_alone(store: SkillHubStore) -> No
     assert report.migrated == []
     after = store.get(entry_id)
     assert after is not None and after.commit == row.commit
+
+
+async def test_an_old_entrys_own_top_level_gitattributes_is_reported_not_silently_lost(
+    spec: SpecStar, legacy: MemoryFileStore, store: SkillHubStore
+) -> None:
+    """Round 2 (conformance L1): publish refuses it (W16), but a pre-git
+    entry may hold one; the migration used to let the platform's replace it
+    without a word."""
+    await _legacy_row(spec, legacy, "old1", payload={**PAYLOAD, ".gitattributes": b"* text\n"})
+
+    report = await store.migrate_legacy()
+
+    assert report.migrated == ["old1"]
+    assert report.gitattributes_dropped == ["old1"]
+    assert await store.payload_of("old1") == PAYLOAD
+
+
+async def test_no_version_is_written_with_a_top_level_gitattributes(store: SkillHubStore) -> None:
+    """The rule sits where the commit is made, so no writer can skip it."""
+    with pytest.raises(ValueError, match=".gitattributes"):
+        await store.repos.write_version(
+            "e1", {**PAYLOAD, ".gitattributes": b"x"}, parent=None, author="a", message="m"
+        )

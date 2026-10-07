@@ -30,8 +30,10 @@ how five separate tools hid behind an argument that fitted two of them:
   it writes a specstar ``ConversationTodos`` row keyed by conversation. It was
   listed for rounds under a reason that was simply untrue.
 * ``search_skill_hub`` — the same shape: it reads skill hub entries, scoped to
-  what the SPEAKER may read (``SkillHubStore.visible``), and touches nothing on
-  the item. Its two siblings that do touch the item (``publish_skill`` reads
+  what the SPEAKER may read (``SkillHubStore.visible``). It reads the item only
+  to say which hits are already installed there, and only after its own
+  ``authorize_tool(…, "read_content")`` — without it the hits come back without
+  that line. Its two siblings that do touch the item (``publish_skill`` reads
   ``.skill/`` out, ``install_skill`` writes it in) are in the table.
 * ``show_skill_hub_entry`` — the same again: it reads ONE entry, refused
   unless the speaker may read it (``SkillHubStore.state_for``), and declares a

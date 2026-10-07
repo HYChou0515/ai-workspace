@@ -349,3 +349,18 @@ async def test_the_owner_rolls_back_to_an_earlier_version(harness: Harness):
         f"/skill-hub/entries/{entry}/rollback", json={"revision": "nope", "expected": v1}
     )
     assert unknown.status_code == 404, unknown.text
+
+
+async def test_a_transfer_onto_a_first_publish_in_flight_is_refused(harness: Harness):
+    """Round 2 (defect #4): the route's check was `find`, which skips drafts."""
+    hub = _hub(harness)
+    mine = await _entry(hub, VIEWER, "triage")
+    harness.spec.get_resource_manager(SkillHubEntry).create(
+        msgspec.structs.replace(_entry_row(harness, mine), owner="bob", pending=True),
+        resource_id="bobsdraft",
+    )
+
+    res = harness.client.post(f"/skill-hub/entries/{mine}/transfer", json={"owner": "bob"})
+
+    assert res.status_code == 409, res.text
+    assert _entry_row(harness, mine).owner == VIEWER

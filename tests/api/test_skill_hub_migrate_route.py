@@ -55,6 +55,6 @@ async def test_only_a_superuser_runs_the_migration_and_gets_its_report() -> None
     holder["id"] = "root"
     done = client.post("/admin/skill-hub/migrate")
     assert done.status_code == 200, done.text
-    assert done.json() == {"migrated": ["old1"], "duplicates": []}
+    assert done.json() == {"migrated": ["old1"], "duplicates": [], "gitattributes_dropped": []}
     row = hub.get("old1")
     assert row is not None and row.commit
