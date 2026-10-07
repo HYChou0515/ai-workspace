@@ -1,6 +1,6 @@
 # Skill hub:歷史與回溯、下載/使用次數、問 AI 該裝哪個
 
-**狀態:** grill 進行中(2026-10-06 起)。「已定案」的每一條都問過、答過;「還沒定」的是我的建議,**不是**前提。
+**狀態:** grill 完成(2026-10-06 → 10-07),三個功能都已定案,等 user 點頭後依 Phases 施工。
 來源標記:〔user〕= user 的原話或明確選擇;〔查證〕= 讀程式碼確認的事實;〔建議〕= 我提的、尚未確認。
 
 ## 要做的三件事〔user〕
@@ -65,9 +65,39 @@
   「重新發布 = specstar 原生 revision」:G1 / G7 推翻其儲存方式。依 CLAUDE.md,實作的 PR 要在 `plan-skill-hub.md`
   標題下加 `> 被 #<那個 PR>（plan-skill-hub-history.md）推翻`。
 
-## 還沒定
+## 已定案:功能 2(下載 / 使用次數)
 
-| # | 問題 | 狀態 |
+| # | 決定 | 來源 |
 |---|---|---|
-| — | 功能 2(下載 / 使用次數) | 還沒討論 |
-| — | 功能 3(問 AI 該裝哪個) | 還沒討論 |
+| U1 | 「下載數」= **安裝次數**(每裝進一個 item 算一次);「使用數」= 已安裝副本被 `read_skill` 讀一次算一次;zip 下載、同步都不算 | 〔建議〕,user 追問延遲後接受 |
+| U2 | 不在請求路徑上寫資料庫:`read_skill` / 安裝只在**這個 pod 的記憶體**加一;條目 id 取自 skill 索引每個 turn 本來就讀的 `.origin`,不多讀檔 | 〔user〕「會不會造成延遲」之後的形狀 |
+| U3 | 計數**不放在 `SkillHubEntry`**(會灌爆 revision、時間軸與 tag);新 resource `SkillHubUsage`,id = `<entry id>∕<日期>∕<pod>`,一個 pod、一個 skill、一天一筆,原地 `update` 後立刻 `prune_revisions(keep_last_n=1)`;id 含 pod,所以每筆只有一個寫入者 | 〔user〕「update 這個計數器可能會讓計數器 revision 數量暴漲」 |
+| U4 | 每 **2 小時**寫出一次;pod 收到 SIGTERM 時先寫出再結束(掛在既有 graceful shutdown)。只有 pod 直接當掉才會掉最多 2 小時;畫面數字最多落後 2 小時 | 〔user〕「也許 2 小時一次」 |
+| U5 | 每筆記 `installs` / `uses` 總數,外加依「**人 + item**」分開的次數;**只記不顯示**,沒有 API 回傳 | 〔user〕「紀錄上可以放 只是顯示不用」「Ok」 |
+| U6 | skill hub 列表卡片與詳情頁顯示「安裝 N 次 · 使用 M 次」,看得到這個 skill 的人都看得到;列表多「最常使用」排序;fork 各自計數 | 〔user〕「對」 |
+| U7 | **不補算**上線前的安裝;數字旁寫「自 <上線日> 起」 | 〔user〕「不補」 |
+
+## 已定案:功能 3(問 AI 該裝哪個)
+
+| # | 決定 | 來源 |
+|---|---|---|
+| A1 | 只在 **item 聊天**裡問;skill hub 頁面本身**不放任何 AI 入口** | 〔user〕「Item 聊天即可 skillhub 頁面本身不讓碰 ai」 |
+| A2 | `search_skill_hub` 每筆多回:安裝 / 使用次數、這個 item 是否已裝、最後更新時間、AI 審查有沒有意見;比對方式維持關鍵字(不做語意搜尋) | 〔user〕「Ok」 |
+| A3 | 新 tool `show_skill_hub_entry(entry_id)`:聊天裡出現一張**即時**卡片(名稱、owner、說明、次數、這個 App 缺的 tool、審查意見、〔安裝〕),〔安裝〕走 Skills 面板同一條安裝流程;已裝則顯示「已安裝」;列進系統提示的 `## Available views` 索引 | 〔user〕「Ok」 |
+
+## Phases
+
+每個 phase 先寫會在未修碼上變紅的測試(`/tdd`)。
+
+| P | 做什麼 |
+|---|---|
+| P1 | git 儲存核心:設定 `skill_hub.git_root`、image 裝 `git`;每個條目一個 bare repo;寫 commit(一般檔 + LFS 指標 + 平台固定的 `.gitattributes`)、讀 `ls-tree` / `cat-file`;blob id 與 LFS 指標的比對(G14–G16)。純函式為主,真 git 跑在 tmp 目錄 |
+| P2 | 發布改走 git:`master` push lease 搶鎖(G5)、`SkillHubEntry.commit` + 每個 revision 的 `r-` tag(G7)、寫入順序與補做(G8)、檔案數上限 1000(G11)、首次發布同名的檢查後刪除重試(G26) |
+| P3 | 讀取改走 git:安裝、同步(三方比對)、「有沒有變」;skill hub 副本 `.origin` 記 `commit`(G12、G13);舊格式副本照舊比對(G17);詳情頁檔案清單改用 `ls-tree`;`SkillHubEntry.origin` 拿掉 |
+| P4 | 既有條目搬進 git(G10):每條建 repo、目前內容做成第一個 commit;`docs/migrations.md` 一條(設定 `git_root`、備份、搬移指令、確認做完) |
+| P5 | 回復:路由與權限(與「修改」同一個檢查,G19)、`master` 指回舊 commit、`update` 只改內容欄位並從舊 revision 讀回(G18)、不重新審查(G20)、lease 被拒時的說明 |
+| P6 | 歷史 API:時間軸(可見範圍事件只給 owner,G24)、看任一版內容、比對兩版、從某一版 fork(G23) |
+| P7 | 前端:詳情頁時間軸、看舊版 / 比對、〔回復〕、〔從這一版 fork〕;副本提示「skill 已變更」〔同步〕(G21);一律寫「skill hub」(G22)。真 Chromium 量 1280 / 390 |
+| P8 | 使用次數:記憶體計數、2 小時與 SIGTERM 寫出、`SkillHubUsage`(U2–U5);列表與詳情頁顯示、「最常使用」排序、「自 <日期> 起」(U6、U7) |
+| P9 | AI:`search_skill_hub` 多回的欄位(A2)、`show_skill_hub_entry` 與聊天卡片、`## Available views`(A3);`skill-hub` 這個 skill 的指引與 `sample-scenarios/` 情境 |
+| P10 | 文件:`docs/deployment.md` 的查看 / 整理指令(G25)、`docs/configuration.md` 的 `git_root`、`docs/extending-the-platform.md`;在 `plan-skill-hub.md` 加「被 #<PR> 推翻」 |
