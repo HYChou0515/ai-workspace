@@ -201,3 +201,45 @@ def test_an_unset_root_refuses_to_boot_a_durable_deploy() -> None:
 
     with pytest.raises(ValueError, match="skill_hub.git_root"):
         resolve_git_root("", durable=True)
+
+
+# ── a file that only LOOKS like a pointer (review round 1, defect #1 / #8) ────
+
+
+def _forged(oid: str) -> bytes:
+    return f"version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize 11\n".encode()
+
+
+@pytest.mark.parametrize("path", ["notes.txt", "references/lfs-howto.md"])
+async def test_a_text_file_shaped_like_a_pointer_is_read_as_the_text_it_is(
+    tmp_path: Path, path: str
+) -> None:
+    """Only a path the platform stores in LFS holds a pointer — the platform
+    wrote it. Anywhere else the bytes are the user's, read back as written,
+    never followed: following them read any file the API pod could see."""
+    secret = tmp_path / "secret"
+    secret.write_text("HOST-SECRET")
+    repos = SkillHubRepos(tmp_path / "git")
+    payload = {"SKILL.md": b"x", path: _forged(f"../.{secret}")}
+    commit = await repos.write_version("e1", payload, parent=None, author="a", message="1")
+
+    assert (await repos.tree("e1", commit))[path].lfs is None
+    assert await repos.read("e1", commit) == payload
+
+
+def test_a_pointer_names_its_content_by_a_sha256_and_nothing_else() -> None:
+    assert parse_lfs_pointer(_forged("../../etc/passwd")) is None
+    assert parse_lfs_pointer(_forged("A" * 64)) is None
+    assert parse_lfs_pointer(_forged("a" * 64)) == ("a" * 64, 11)
+
+
+async def test_a_well_formed_pointer_in_a_text_path_is_still_just_text(tmp_path: Path) -> None:
+    """The oid check alone is not the guard: a valid sha256 naming another
+    file's LFS object is a well-formed pointer, and a text path holding one
+    must read back as the text, not as that other file."""
+    repos = SkillHubRepos(tmp_path / "git")
+    real = hashlib.sha256(_PNG).hexdigest()
+    payload = {"SKILL.md": b"x", "shot.png": _PNG, "notes.txt": _forged(real)}
+    commit = await repos.write_version("e1", payload, parent=None, author="a", message="1")
+
+    assert await repos.read("e1", commit) == payload

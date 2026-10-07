@@ -76,6 +76,9 @@ def lfs_pointer(data: bytes) -> bytes:
     return _POINTER_VERSION + f"oid sha256:{oid}\nsize {len(data)}\n".encode()
 
 
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
 def parse_lfs_pointer(blob: bytes) -> tuple[str, int] | None:
     """``(sha256, size)`` when `blob` is an LFS pointer, else ``None``."""
     if not blob.startswith(_POINTER_VERSION):
@@ -85,9 +88,11 @@ def parse_lfs_pointer(blob: bytes) -> tuple[str, int] | None:
         key, _, value = line.partition(" ")
         fields[key] = value
     oid, size = fields.get("oid", ""), fields.get("size", "")
-    if not oid.startswith("sha256:") or not size.isdigit():
+    sha = oid.removeprefix("sha256:")
+    # The oid becomes a file path under `lfs/objects/`: only a sha256 may.
+    if not oid.startswith("sha256:") or not _SHA256.fullmatch(sha) or not size.isdigit():
         return None
-    return oid.removeprefix("sha256:"), int(size)
+    return sha, int(size)
 
 
 # ── the repos ────────────────────────────────────────────────────────────────
@@ -328,8 +333,16 @@ class SkillHubRepos:
             path = raw_path.decode()
             if kind == "blob" and path != ".gitattributes":
                 listed[path] = (blob_id, int(size))
+        # Only a path stored in LFS holds a pointer — the platform wrote every
+        # one of them (`write_version`). Anywhere else a pointer-shaped file is
+        # the user's text: following it would read a file the user named.
         small = await self._cat(
-            entry_id, [blob for blob, size in listed.values() if size <= _POINTER_MAX]
+            entry_id,
+            [
+                blob
+                for path, (blob, size) in listed.items()
+                if size <= _POINTER_MAX and is_lfs_path(path)
+            ],
         )
         return {
             path: TreeFile(
