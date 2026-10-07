@@ -268,6 +268,9 @@ export function EnvVarsModal({
     mutationFn: () => privateClient.clear(slug!, itemId!),
     onSuccess: async () => {
       setMineEdits({});
+      // Gone now, not when the refetch lands: until then the old row showed
+      // and Save wrote it back (review of P19, F1).
+      queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: {}, auto: {} });
       await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
     },
   });
@@ -503,8 +506,15 @@ export function EnvVarsModal({
               data-size="sm"
               data-testid="env-mine-logout"
               style={{ marginRight: "auto" }}
-              // Nothing of mine stored here: nothing to clear (review A22).
-              disabled={Object.keys(mineQ.data?.values ?? {}).length === 0 && Object.keys(auto).length === 0}
+              // Nothing of mine stored here: nothing to clear (review A22). Only
+              // when that is KNOWN: clearing is deliberately allowed without
+              // read access, so someone who lost it can still take their
+              // credential back out (`private_env.py`, the DELETE route).
+              disabled={
+                mineQ.isSuccess &&
+                Object.keys(mineQ.data?.values ?? {}).length === 0 &&
+                Object.keys(auto).length === 0
+              }
               onClick={() => void askToClear()}
             >
               {t("env.logout")}
@@ -825,14 +835,15 @@ function EnvTextBox({
 }: {
   prefix: string;
   text: string;
-  setText: (next: string) => void;
+  /** `imported`: the text came from a file, not from typing in the box. */
+  setText: (next: string, imported?: boolean) => void;
   readOnly: boolean;
 }) {
   const t = useT();
   const fileRef = useRef<HTMLInputElement>(null);
   const importFile = async (file: File) => {
     // MERGES into what is in the box — the thing the person is looking at.
-    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))));
+    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))), true);
   };
   const exportFile = () => {
     // What is in the box, unsaved edits included; to the browser, never into
@@ -925,14 +936,29 @@ function DerivedEnvBox({
   readOnly: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  // A cleared field is "no value", not a `NAME=` line to show or export.
+  const shown = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== ""));
   return (
     <div onBlur={() => setDraft(null)}>
       <EnvTextBox
         prefix={prefix}
-        text={draft ?? toEnvText(values)}
-        setText={(next) => {
-          setDraft(next);
-          onReplace(parseEnvText(next));
+        text={draft ?? toEnvText(shown)}
+        setText={(next, imported) => {
+          // Only typing keeps a draft; after an import the box follows the
+          // fields again (review of P19, F3).
+          setDraft(imported ? null : next);
+          // A line nobody touched keeps its stored value: the text format
+          // trims and cannot hold a line break, so a value it shows can parse
+          // back different (review of P19, F4).
+          const parsed = parseEnvText(next);
+          onReplace(
+            Object.fromEntries(
+              Object.entries(parsed).map(([n, v]) => {
+                const was = shown[n];
+                return [n, was !== undefined && parseEnvText(toEnvText({ [n]: was }))[n] === v ? was : v];
+              }),
+            ),
+          );
         }}
         readOnly={readOnly}
       />

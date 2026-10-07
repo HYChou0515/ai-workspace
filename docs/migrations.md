@@ -1631,7 +1631,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   另外多一個 **Private(跨workspace)**：就是「我的環境變數」，列出這個 item 的工具要的、以及這個 item 設成 Private first／Private only 的名稱。
   分頁畫成底線式（和分享視窗同一個元件），三個分頁都有可展開的 `.env` 文字框（貼上、匯入、匯出；Private 兩個分頁的框不保留註解）。
 - 面板與「我的環境變數」頁的文字統一說 **workspace**（原本混用 item、工作區）；「使用中」直接寫分頁名，例如「使用中：Shared」。
-- 「清除我在這個 workspace 的值」改成紅色、沒有值時不能按；它和「我的環境變數」頁的「移除」按下去都先問一次，確認鈕是紅色，確認了才刪。
+- 「清除我在這個 workspace 的值」改成紅色、確定沒有值時不能按（讀不到值時仍可按）；它和「我的環境變數」頁的「移除」按下去都先問一次，確認鈕是紅色，確認了才刪。
 - **在哪個分頁登入（部署設定的 `server.env_providers`）或填值，就寫進哪一層：**
   - 「我的環境變數」頁、「Private(跨workspace)」分頁 → 登入**立刻存進「我的環境變數」**，所有把那個變數設成
     Private first／Private only 的 item 都用它。

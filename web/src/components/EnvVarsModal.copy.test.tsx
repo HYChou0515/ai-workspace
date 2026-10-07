@@ -240,7 +240,7 @@ describe("the .env box on the private tabs", () => {
     expect(box.value).toBe("ERP_TOKEN=old\nNEW_KE");
   });
 
-  it("on Private: a field and the box are one copy", async () => {
+  it("on Private: the box follows a field edit", async () => {
     open({ mine: { ERP_TOKEN: "old" } });
     await unfold();
     fireEvent.change(await screen.findByTestId("env-mine-ERP_TOKEN"), { target: { value: "typed" } });
@@ -364,5 +364,67 @@ describe("the private tabs keep what was typed, exactly (review A22: the box as 
     await waitFor(() =>
       expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { KEEP: "k", ERP_TOKEN: "fresh" }),
     );
+  });
+});
+
+describe("review of P19", () => {
+  it("shows nothing after Clear, and Save cannot write the cleared values back", async () => {
+    // F1: the old row stayed on screen until the refetch landed, and Save PUT it.
+    let calls = 0;
+    const { privateClient } = open({
+      mineRead: () => (++calls === 1 ? Promise.resolve({ values: { ERP_TOKEN: "old" }, auto: {} }) : new Promise(() => {})),
+    });
+    fireEvent.click(await enabled("env-mine-logout"));
+    fireEvent.click(await screen.findByTestId("dialog-action-clear"));
+    await waitFor(() => expect(privateClient.clear).toHaveBeenCalled());
+    await unfold();
+
+    await waitFor(() =>
+      expect((screen.getByTestId("env-mine-ERP_TOKEN") as HTMLInputElement).value).toBe(""),
+    );
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(privateClient.put).not.toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "old" });
+  });
+
+  it("lets Clear be pressed when the values could not be read", async () => {
+    // F2: clearing is deliberately ungated on the server — someone who lost
+    // access must still be able to take their credential back out.
+    open({ mineRead: () => Promise.reject(new Error("forbidden")) });
+    await waitFor(() => expect(screen.getByTestId("env-mine-logout")).not.toBeDisabled(), { timeout: 3000 });
+  });
+
+  it("keeps lines nobody touched exactly as stored when another line is edited in the box", async () => {
+    // F4: one keystroke trimmed a trailing space and cut a multi-line value.
+    const { privateClient } = open({ mine: { ERP_TOKEN: "x", PEM: "line1\nline2", SP: "v " } });
+    const box = (await screen.findByTestId("env-mine-text")) as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toContain("ERP_TOKEN=x"));
+    fireEvent.change(box, { target: { value: box.value.replace("ERP_TOKEN=x", "ERP_TOKEN=y") } });
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+    await waitFor(() =>
+      expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "y", PEM: "line1\nline2", SP: "v " }),
+    );
+  });
+
+  it("does not show a cleared field in the box", async () => {
+    // F5: it read `ERP_TOKEN=`, and Export would have written that line.
+    open({ mine: { ERP_TOKEN: "old" } });
+    await unfold();
+    fireEvent.change(await screen.findByTestId("env-mine-ERP_TOKEN"), { target: { value: "" } });
+    expect(((await screen.findByTestId("env-mine-text")) as HTMLTextAreaElement).value).not.toContain("ERP_TOKEN");
+  });
+
+  it("follows a field edit made after an import", async () => {
+    // F3: the import left a draft behind that later reverted the field.
+    open({ mine: { ERP_TOKEN: "old" } });
+    const input = (await screen.findByTestId("env-mine-import")) as HTMLInputElement;
+    await waitFor(() => expect(screen.getByTestId("env-mine-text")).not.toHaveAttribute("readonly"));
+    const file = new File(["X=1\n"], ".env", { type: "text/plain" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect((screen.getByTestId("env-mine-text") as HTMLTextAreaElement).value).toContain("X=1"));
+    await unfold();
+
+    fireEvent.change(await screen.findByTestId("env-mine-ERP_TOKEN"), { target: { value: "fieldedit" } });
+    expect((screen.getByTestId("env-mine-text") as HTMLTextAreaElement).value).toContain("ERP_TOKEN=fieldedit");
   });
 });

@@ -1731,7 +1731,7 @@ export const messages = {
   "env.pinned": { "zh-TW": "固定用 Shared", en: "Always uses Shared" },
   // Written by the deploy from the person's own request (their SSO session):
   // rewritten at every request, so there is nothing to type.
-  "env.hint.auto": { "zh-TW": "登入時自動填入", en: "Filled in automatically when you sign in" },
+  "env.hint.auto": { "zh-TW": "自動填入，每次使用時更新", en: "Filled in automatically, updated each time you use it" },
   "env.reveal": { "zh-TW": "顯示", en: "Show" },
   "env.hide": { "zh-TW": "隱藏", en: "Hide" },
   // Clears what the person KEEPS; what their sign-in fills in comes back at
