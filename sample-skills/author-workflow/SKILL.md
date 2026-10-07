@@ -96,8 +96,10 @@ Four things to get right, because each one is a report that quietly never arrive
 - **The file is replaced, not appended.** To add a second schedule, `read_file` the current
   `.workflows/schedules.json` and pass every row you want to keep.
 - **Relay what the tool answers** — when each row runs next, and the WARNING if this
-  deployment has scheduled work switched off. A row whose time has already passed today runs
-  on the next sweep, not tomorrow; say so rather than promising tomorrow.
+  deployment has scheduled work switched off. A new row whose time has already passed today
+  first runs at its NEXT time (a daily 09:00 saved at 14:00 runs tomorrow at 09:00) — say
+  so, and if the user wants a run now as well, tell them the Schedules page and the
+  Workflows panel have **Run now**.
 
 When a schedule fires, nobody is signed in: there is no request and no personal token.
 Anything the run needs comes from the item's own environment. A schedule's runs share

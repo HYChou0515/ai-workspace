@@ -142,12 +142,44 @@ async def test_more_rows_than_the_deployment_allows_is_refused(clock) -> None:
     assert not await ctx.context.files.exists(ctx.context.investigation_id, SCHEDULES)
 
 
-async def test_a_row_already_due_today_says_it_runs_on_the_next_sweep(clock) -> None:
-    """The catch-up rule, stated rather than rounded away: a daily 09:00 saved
-    at 10:00 fires within the minute, because a missed window fires late. A
-    reply that said "tomorrow 09:00" would be the sweep's own manual contradicted
-    by the tool standing in for it — and the report would land while the agent
-    was still promising it for tomorrow."""
+def _stamped_spec(at: datetime):
+    """A spec whose schedule index says the item's file landed at ``at`` (naive
+    UTC) — what the write hook records when the tool's write lands
+    (docs/plan-schedule-overview.md §1)."""
+    from datetime import UTC
+
+    from workspace_app.api.schedule_index import ScheduleIndex, register_schedule_index
+    from workspace_app.resources import make_spec
+    from workspace_app.workflow.triggers import register_trigger_store
+
+    spec = make_spec()
+    register_trigger_store(spec)
+    register_schedule_index(spec)
+    index = ScheduleIndex(spec)
+    index.record("inv-1", SCHEDULES)
+    index.stamp("inv-1", SCHEDULES, int(at.replace(tzinfo=UTC).timestamp() * 1000))
+    return spec
+
+
+async def test_a_row_saved_after_its_time_today_says_it_runs_at_its_next_time(clock) -> None:
+    """The birth rule, stated rather than rounded away: a daily 09:00 saved at
+    10:00 did not MISS this morning — it did not exist yet — so the sweep first
+    fires it tomorrow at 09:00, and the reply must say that rather than "now"."""
+    ctx = _ctx()
+    ctx.context.spec = _stamped_spec(datetime(2026, 9, 15, 2, 0))
+    await _with_workflow(ctx)
+    clock(datetime(2026, 9, 15, 2, 0))  # 10:00 Taipei
+
+    out = await save_schedules_impl(
+        ctx, _rows({"every": "daily", "at": "09:00", "tz": "Asia/Taipei", "run": "nightly"})
+    )
+
+    assert "next run 2026-09-16 09:00 Asia/Taipei" in out
+
+
+async def test_a_file_with_no_landing_stamp_keeps_the_catch_up_reading(clock) -> None:
+    """A file written before stamps existed has no landing time: unknown, not
+    "long ago" — the sweep keeps catching it up, and the reply says so."""
     ctx = _ctx()
     await _with_workflow(ctx)
     clock(datetime(2026, 9, 15, 2, 0))  # 10:00 Taipei

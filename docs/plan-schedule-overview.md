@@ -130,3 +130,36 @@ behaviour), `workflow/user_schedules.py:484`, `docs/workflows.md:888`,
 - **P5** Panel: Edit time + Run now.
 - **P6** Wording (§5), `docs/migrations.md` entry, `docs/workflows.md` §22.11.
 - **P7** Live check in a fresh worktree: create / edit / run-now / remove, and a row saved after its target that does not fire.
+
+## As built (2026-10-07) — where the code differs from the design above
+
+Written after the phases, each line checked against the code it names.
+
+- **Statuses.** A run's states are `pending` / `running` / `awaiting_human` /
+  `done` / `error` / `cancelled` (`workflow/run.py:RunStatus`); there is no
+  `failed`. "Needs attention first" (decision 14) puts `error`, `cancelled` and
+  `awaiting_human` first — labelled 「需要處理的在前」, since waiting for a
+  review is not a failure.
+- **§2, "used by all three" is two.** `grade_file` serves the item route and the
+  overview. `save_schedules` keeps its own sequence: it *refuses* before it
+  writes (unknown `run`, a workflow that will not parse, over the cap), while
+  `grade_file` *describes* a file already written; it reads the landing stamp
+  the same way for its "next run" sentence.
+- **§3, Remove also finds a row by its value.** A row the sweep refuses has no
+  identity (`trigger_id: ""`), and the panel could remove those before. So
+  `RowRef.raw` — Remove only — finds the first row equal to it as JSON (object
+  key order ignored, list order kept: the old panel's `sameJson` rule). The
+  rules the panel used to hold itself moved to the server with their tests
+  (P5), and the overview offers Remove on refused rows too. The item route now
+  returns `can_edit` / `can_run` so the panel offers only what is allowed.
+- **§4, Open on a page row.** `WuiPage` opens a *view file*, not a folder, so a
+  page row opens the **Deployed** page in its folder (`page_path`, from the WUI
+  overview's own store); a page never Deployed opens the item.
+- **§4, sorting across zones.** `next_at` is each row's wall clock; rows carry
+  `next_ms` (one instant) and the page sorts on that.
+- **§4, the deep link** is read from `window.location` inside `ItemChatShell`
+  (its tests mount no router); an id the item has no chat for falls back to the
+  most recent chat.
+- **Copy that had to change** beyond §5: `sample-skills/author-workflow/SKILL.md`
+  told the agent "a row whose time has already passed today runs on the next
+  sweep" — the opposite of decision 12.
