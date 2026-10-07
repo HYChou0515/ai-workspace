@@ -199,6 +199,29 @@ async def read_workspace_skill(
     return _enforce_cap(name, body), origin
 
 
+async def hub_entries_here(files: WorkspaceFiles, workspace_id: str) -> set[str]:
+    """The skill hub entries this workspace holds an installed copy of, read
+    off the copies' `.origin` manifests in one batch. A fork's starting point
+    (`forked`) is the user's own and does not count as an install."""
+    from ..filestore.batch import read_all_existing
+
+    prefix = f"/{WORKSPACE_SKILL_DIR}/"
+    manifests = [
+        p
+        for p in await files.ls(workspace_id, prefix)
+        if p.endswith(f"/{ORIGIN_FILE}") and p[len(prefix) :].count("/") == 1
+    ]
+    out: set[str] = set()
+    for raw in (await read_all_existing(files, workspace_id, manifests)).values():
+        try:
+            origin = msgspec.json.decode(raw, type=SkillOrigin)
+        except msgspec.DecodeError:
+            continue
+        if origin.source == "hub" and origin.entry and not origin.forked:
+            out.add(origin.entry)
+    return out
+
+
 async def workspace_skill_payload(
     files: WorkspaceFiles, workspace_id: str, name: str
 ) -> dict[str, bytes]:

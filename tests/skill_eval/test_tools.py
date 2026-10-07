@@ -110,6 +110,7 @@ def test_every_tool_the_runner_can_dispatch_has_a_schema(tmp_path):
         "save_schedules",
         "search_skill_hub",
         "install_skill",
+        "show_skill_hub_entry",
         "publish_skill",
     }
     assert all(s["function"]["description"] for s in schemas())
@@ -216,6 +217,7 @@ def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path
     assert (tmp_path / ".workflows" / "schedules.json").read_text() == "[]"
     assert "id 0123456789abcdef" in run("search_skill_hub", {"query": "reflow"}, tmp_path, events)
     assert "installed skill" in run("install_skill", {"entry_id": "x"}, tmp_path, events)
+    assert "[skill-hub-entry]" in run("show_skill_hub_entry", {"entry_id": "x"}, tmp_path, events)
     assert "published skill 'mine'" in run("publish_skill", {"name": "mine"}, tmp_path, events)
 
 
@@ -240,6 +242,7 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
         "save_schedules",
         "search_skill_hub",
         "install_skill",
+        "show_skill_hub_entry",
         "publish_skill",
     }
     for schema in schemas():

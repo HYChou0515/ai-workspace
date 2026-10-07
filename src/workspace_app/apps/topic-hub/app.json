@@ -38,6 +38,7 @@
       "publish_skill",
       "install_skill",
       "search_skill_hub",
+      "show_skill_hub_entry",
       "save_workflow",
       "save_schedules"
     ],

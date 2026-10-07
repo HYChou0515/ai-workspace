@@ -167,3 +167,108 @@ async def test_a_forks_lineage_never_names_a_root_the_viewer_may_not_read():
     assert fork in out and root not in out
     assert "alice" not in out
     assert "(fork)" in out
+
+
+# ── what the AI needs to recommend one (plan-skill-hub-history §8, A2) ───────
+
+
+async def test_each_hit_says_how_used_it_is_whether_it_is_here_when_it_changed_and_the_review():
+    from workspace_app.apps.skills import install_hub_skill
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    _spec, hub = _hub()
+    here = await _entry(hub, "alice", "reflow-triage", "Solder defects.")
+    noted = await hub.publish(
+        owner="carol",
+        name="reflow-notes",
+        description="Reflow notes.",
+        source_item="i",
+        source_app="rca",
+        source_profile="default",
+        payload={"SKILL.md": b"---\nname: reflow-notes\ndescription: Reflow notes.\n---\nx"},
+        referenced_tools=[],
+        review=SkillHubReview(verdict="notes", notes=["names a path that is not shipped"]),
+    )
+    hub.usage.install(here, user="dan", item="i9")
+    hub.usage.use(here, user="dan", item="i9")
+    hub.usage.use(here, user="dan", item="i9")
+    await hub.usage.flush()
+    files = WorkspaceFiles(MemoryFileStore())
+    await install_hub_skill(files, "inv-1", hub, here)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", app_slug="rca", acting_user="bob", skill_hub=hub, files=files
+        )
+    )
+
+    out = await search_skill_hub_impl(ctx, "reflow")
+
+    hits: dict[str, str] = {}
+    for line in out.splitlines()[1:]:
+        if line.startswith("- "):
+            current = line[2:].split(" — ")[0]
+            hits[current] = line
+        else:
+            hits[current] += "\n" + line
+    mine, theirs = hits["alice/reflow-triage"], hits["carol/reflow-notes"]
+    assert "installed 1 time, used 2 times" in mine
+    assert "already installed in this item" in mine
+    assert "already installed" not in theirs
+    assert "last updated 20" in mine, "the date its current version was published"
+    assert "review: no notes" in mine
+    assert "review notes: names a path that is not shipped" in theirs
+    assert noted in theirs
+
+
+# ── show_skill_hub_entry (plan-skill-hub-history §8, A3) ─────────────────────
+
+
+async def test_showing_an_entry_declares_a_card_for_the_chat_to_draw():
+    import json
+
+    from workspace_app.agent.tools import SKILL_HUB_ENTRY_MARKER, show_skill_hub_entry_impl
+
+    _spec, hub = _hub()
+    entry = await _entry(hub, "alice", "reflow-triage", "Solder defects.")
+
+    out = await show_skill_hub_entry_impl(_ctx(hub), entry)
+
+    said, _, card = out.partition(SKILL_HUB_ENTRY_MARKER)
+    assert "alice/reflow-triage" in said and "displayed" in said
+    assert json.loads(card) == {"entry_id": entry}
+
+
+async def test_an_entry_the_viewer_may_not_read_is_not_shown():
+    """Q10: what the speaker may not read does not exist — and nothing is declared."""
+    from workspace_app.agent.tools import SKILL_HUB_ENTRY_MARKER, show_skill_hub_entry_impl
+
+    _spec, hub = _hub()
+    entry = await _entry(hub, "alice", "reflow-triage", "Solder defects.")
+    await hub.set_permission(entry, Permission(visibility="private"))
+
+    for missing in (entry, "nope"):
+        out = await show_skill_hub_entry_impl(_ctx(hub), missing)
+        assert out.startswith("error:") and SKILL_HUB_ENTRY_MARKER not in out
+
+
+async def test_a_fork_started_from_an_old_version_is_not_already_installed():
+    """A fork's starting point is the user's own work (G23), not an install."""
+    from workspace_app.apps.skills import fork_hub_version
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    spec, hub = _hub()
+    entry = await _entry(hub, "alice", "reflow-triage", "Solder defects.")
+    revision = spec.get_resource_manager(SkillHubEntry).get(entry).info.revision_id
+    files = WorkspaceFiles(MemoryFileStore())
+    await fork_hub_version(files, "inv-1", hub, entry, revision)
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", app_slug="rca", acting_user="bob", skill_hub=hub, files=files
+        )
+    )
+
+    out = await search_skill_hub_impl(ctx, "reflow")
+
+    assert "already installed" not in out

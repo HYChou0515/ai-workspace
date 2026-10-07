@@ -33,6 +33,10 @@ how five separate tools hid behind an argument that fitted two of them:
   what the SPEAKER may read (``SkillHubStore.visible``), and touches nothing on
   the item. Its two siblings that do touch the item (``publish_skill`` reads
   ``.skill/`` out, ``install_skill`` writes it in) are in the table.
+* ``show_skill_hub_entry`` — the same again: it reads ONE entry, refused
+  unless the speaker may read it (``SkillHubStore.state_for``), and declares a
+  card. The card's Install button is the Skills panel's own route, which
+  checks ``edit_content`` on the item when it is pressed.
 
 This enumeration has been short FIVE times — ``list_files``/``exists``, then
 ``infer_modules``, then ``make_deck``, then the entity tools, then

@@ -11,6 +11,8 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 What these measure is not whether the three tools work — their own tests do —
 but whether the model reaches for the RIGHT one on the user's words, and holds
 back where it should: "is there a skill for X" is a search, not a publish;
+"which skill should I install" is a search and then a card
+(`show_skill_hub_entry`) for the user to press, not an install;
 "save this skill" is `save_skill`, not `publish_skill`; and installing needs a
 picked entry, never a guess. `--control` reruns each scenario with no skill
 loaded, so a scenario the bare model also passes is reported as measuring

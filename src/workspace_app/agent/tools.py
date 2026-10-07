@@ -2862,6 +2862,38 @@ async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id:
 SEARCH_SKILL_HUB_LIMIT = 25
 
 
+#: Ends a `show_skill_hub_entry` reply: the entry the chat draws a live card
+#: for. Mirrored by the card's parser in `web/src` — keep them in sync.
+SKILL_HUB_ENTRY_MARKER = "\n[skill-hub-entry]"
+
+
+async def show_skill_hub_entry_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:
+    """Show one skill hub entry to the user as a live card in the chat: its
+    name, who published it, what it does, how often it has been installed and
+    used, which of its tools this App lacks, what its review said, and an
+    Install button. Use it when you recommend a skill — after
+    `search_skill_hub` — so the user decides from the card rather than from
+    your summary. `entry_id` is the id a search hit shows."""
+    import json
+
+    c = ctx.context
+    hub = c.skill_hub
+    if hub is None or c.app_slug is None:
+        return "error: show_skill_hub_entry is only available in an App workspace turn"
+    _state, entry = hub.state_for(entry_id, c.acting_user)
+    if entry is None:
+        return f"error: no skill hub entry {entry_id!r} — check the id, or search again."
+    said = (
+        f"{entry.owner}/{entry.name} is now displayed in the chat as a card — the user can "
+        "read it there and install it with one press."
+    )
+    return f"{said}{SKILL_HUB_ENTRY_MARKER}{json.dumps({'entry_id': entry_id})}"
+
+
+def _times(n: int) -> str:
+    return f"{n} time{'' if n == 1 else 's'}"
+
+
 async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     """Find skills other users have published to the skill hub. Use it when the
     user asks whether a skill for some task exists, or wants to install one.
@@ -2874,6 +2906,7 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     before installing such a skill; parts of it may not be followable here.
     """
     from ..apps.skill_hub import matches_query, missing_tools_for, nest_forks
+    from ..apps.skills import hub_entries_here
 
     c = ctx.context
     hub = c.skill_hub
@@ -2892,8 +2925,18 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     for root, forks in nest_forks(by_id):
         ordered.append((root, by_id[root], False))
         ordered += [(j, by_id[j], True) for j in forks]
+    shown = ordered[:SEARCH_SKILL_HUB_LIMIT]
+    # What the user weighs in choosing one (plan-skill-hub-history A2): how much
+    # it is used, whether this item already has it, how recent its version is,
+    # and what its review said.
+    counts = await asyncio.to_thread(hub.usage.totals, [i for i, _e, _f in shown])
+    here = (
+        await hub_entries_here(c.files, c.investigation_id)
+        if c.files and c.investigation_id
+        else set()
+    )
     lines = [f"{len(hits)} skill hub entr{'y' if len(hits) == 1 else 'ies'} match {query!r}:"]
-    for i, e, is_fork in ordered[:SEARCH_SKILL_HUB_LIMIT]:
+    for i, e, is_fork in shown:
         lineage = ""
         if e.forked_from:
             # As the SPEAKER may know the root: a root taken private reads
@@ -2905,6 +2948,15 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
             f"{indent}{e.owner}/{e.name}{lineage} — {e.description} "
             f"[written in {e.source_app}; id {i}]"
         )
+        installs, uses = counts[i]
+        updated = (await hub.repos.committed_at(i, e.commit)).date() if e.commit else None
+        facts = [
+            f"installed {_times(installs)}, used {_times(uses)}",
+            *(["already installed in this item"] if i in here else []),
+            *([f"last updated {updated.isoformat()}"] if updated else []),
+            f"review notes: {'; '.join(e.review.notes)}" if e.review.notes else "review: no notes",
+        ]
+        lines.append("    " + " · ".join(facts))
         if missing := missing_tools_for(e.referenced_tools, c.app_slug):
             lines.append(f"    mentions {', '.join(missing)}, which this App lacks")
     if len(ordered) > SEARCH_SKILL_HUB_LIMIT:
@@ -3903,6 +3955,9 @@ _IMPLS = {
     # `search_skill_hub` — reads the hub, never the item, so it has no row in
     # `TOOL_VERBS` (see that module's docstring). Opt-in per App.
     "search_skill_hub": search_skill_hub_impl,
+    # plan-skill-hub-history A3: one entry as a live card with an Install
+    # button. Reads the skill hub as the speaker may; touches nothing here.
+    "show_skill_hub_entry": show_skill_hub_entry_impl,
     # `save_subagent` (#738) — same shape again: an opt-in tool that owns the
     # AGENT.md write, so a sub-agent the agent authors is always one it can call.
     "save_subagent": save_subagent_impl,

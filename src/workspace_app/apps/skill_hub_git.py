@@ -17,6 +17,7 @@ files, trees and commits; nothing above it knows a command line.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import fnmatch
 import hashlib
 import os
@@ -271,6 +272,11 @@ class SkillHubRepos:
             entry_id, "rev-parse", "--verify", "-q", "refs/heads/master", check=False
         )
         return out.decode().strip() if code == 0 else None
+
+    async def committed_at(self, entry_id: str, commit: str) -> dt.datetime:
+        """When `commit` was written — when that version was published."""
+        _code, out = await self._git(entry_id, "show", "-s", "--format=%cI", commit)
+        return dt.datetime.fromisoformat(out.decode().strip())
 
     async def parent(self, entry_id: str, commit: str) -> str | None:
         """The commit `commit` was written on top of; ``None`` for a first version."""
