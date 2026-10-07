@@ -1274,7 +1274,7 @@ log 最後一行是 traceback 的 `workspace_app.view_plugins.discovery.ViewPlug
 
 ---
 
-### 2026-10-06 · #872 沙盒回收時多存一個打包檔：再開時讀一個檔，不再逐檔複製 {#pr-872}
+### 2026-10-07 · bdb3f43a · #872 沙盒回收時多存一個打包檔：再開時讀一個檔，不再逐檔複製 {#pr-872}
 
 **設定** — sandbox-host 新 env **`SANDBOX_HOST_ARCHIVE_PACK`，預設開**。只認 `1`/`0`、`true`/`false`、`yes`/`no`、
 `on`/`off`；其他值 host **開不了機**（`ValueError` 會點名這個 key）。`0` = 不打包，也不讀已經存在的打包檔。
