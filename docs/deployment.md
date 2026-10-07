@@ -929,13 +929,13 @@ server:
 ```
 
 實作長怎樣見[擴充平台](extending-the-platform.md)。掛上之後,環境變數視窗與「我的環境變數」頁
-(`/my-env`)會出現登入表單,帳號密碼本身不落地。換出來的值去哪裡,看這個 item 讀哪裡
+(`/my-env`)會出現登入表單,帳號密碼本身不落地。換出來的值去哪裡,看你在哪裡登入
 ([plan-personal-env](plan-personal-env.md)):
 
-- 在「我的環境變數」頁,或在 item 的「只有我」分頁、而這個 item 把那個變數設成 Private first／Private only →
-  **立刻存進「我的環境變數」**,所有這樣設定的 item 都用它;token 過期時在一處重新登入就好。
-- 在「只有我」分頁、而這個 item 是 Shared(沒設) → 填進這個 item 的表單,按儲存才存,只給這個 item。
-- 在「所有參與者」分頁 → 填進共用值的表單,按儲存才存。
+- 在「我的環境變數」頁,或 item 環境變數面板的「Private(跨workspace)」分頁 →
+  **立刻存進「我的環境變數」**,所有把那個變數設成 Private first／Private only 的 item 都用它;token 過期時在一處重新登入就好。
+- 在「Private」分頁 → 填進這個 item 的個人值表單,按儲存才存,只給這個 item。
+- 在「Shared」分頁 → 填進共用值的表單,按儲存才存。
 
 **沒設 = 完全沒有這顆按鈕**,每個變數仍然可以手動填——那條路永遠有效。
 

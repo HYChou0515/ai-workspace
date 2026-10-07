@@ -1,7 +1,7 @@
 /**
  * `docs/plan-wui-viewer-login.md` — the Env panel's two layers.
  *
- * "Only me" (the default) holds the person's PRIVATE values for this item;
+ * "Private" (the default) holds the person's PRIVATE values for this item;
  * "Everyone" holds the item's SHARED values plus a per-variable policy saying
  * which layer a tool gets. One layer is edited at a time (Postman retired
  * editing both side by side), each tab saves on its own, and every row says
@@ -223,7 +223,7 @@ describe("Everyone: tools as sections", () => {
   });
 });
 
-describe("Only me", () => {
+describe("Private", () => {
   it("says whose value each variable uses", async () => {
     open({
       envVars: { DB_HOST: "db", ERP_TOKEN: "shared-t" },
@@ -297,7 +297,7 @@ describe("Only me", () => {
   });
 });
 
-describe("Only me: the variables that are each person's to fill", () => {
+describe("Private: the variables that are each person's to fill", () => {
   it("unfolds them even when tools have sections of their own", async () => {
     // Seen in a real browser: opened from a page, the variables the viewer came
     // to fill sat folded under "Other variables" below every tool.
@@ -320,20 +320,16 @@ describe("Only me: the variables that are each person's to fill", () => {
   });
 });
 
-describe("signing in from Only me", () => {
-  // `plan-personal-env` D3: a sign-in is the person's for EVERY item — it goes to
-  // my environment variables, not to this item's values, and never to the
-  // shared ones.
-  it("puts what the login returned into my environment variables, not the shared ones", async () => {
+describe("signing in from Private", () => {
+  // `plan-personal-env` A20: the Private tab is my values for THIS item, so
+  // its sign-in fills this item's form — as before the branch, whatever the
+  // policy. My environment variables have their own tab.
+  it("puts what the login returned into the person's own values, not the shared ones", async () => {
     const onSave = vi.fn();
     const privateClient = {
       get: vi.fn(async () => ({ values: {}, auto: {} })),
       put: vi.fn(async () => {}),
       clear: vi.fn(async () => {}),
-    };
-    const personalClient = {
-      get: vi.fn(async () => ({ values: {}, updated: {} })),
-      put: vi.fn(async (values: Record<string, string>) => ({ values, updated: {} })),
     };
     renderWithQuery(
       <EnvVarsModal
@@ -356,24 +352,28 @@ describe("signing in from Only me", () => {
           resolveEnvProvider: vi.fn(async () => ({ ERP_TOKEN: "from-login" })),
         }}
         privateClient={privateClient}
-        personalClient={personalClient}
       />,
     );
 
     fireEvent.click(await screen.findByTestId("env-provider-erp-login"));
     fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "pw" } });
     fireEvent.click(screen.getByTestId("env-cred-submit"));
+    await waitFor(() =>
+      expect((screen.getByTestId("env-mine-ERP_TOKEN") as HTMLInputElement).value).toBe(
+        "from-login",
+      ),
+    );
+    fireEvent.click(screen.getByTestId("env-mine-save"));
 
     await waitFor(() =>
-      expect(personalClient.put).toHaveBeenCalledWith({ ERP_TOKEN: "from-login" }),
+      expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "from-login" }),
     );
-    expect(privateClient.put).not.toHaveBeenCalled();
     expect(onSave).not.toHaveBeenCalled();
   });
 });
 
 describe("review round 1: saving and leaving", () => {
-  it("does not let Only-me save over values it failed to load", async () => {
+  it("does not let Private save over values it failed to load", async () => {
     // F5: the fallback was {} and PUT replaces the whole set — a transient
     // read failure, one typed value, Save, and every stored value was gone.
     const onSave = vi.fn();
@@ -421,7 +421,7 @@ describe("review round 1: saving and leaving", () => {
     await waitFor(() => expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", {}));
   });
 
-  it("saving Only-me keeps the panel open while Everyone has unsaved edits", async () => {
+  it("saving Private keeps the panel open while Shared has unsaved edits", async () => {
     // C5/F6: one tab's Save closed the modal and dropped the other tab's work,
     // without asking — #779 says every deliberate exit goes through the guard.
     const onClose = vi.fn();
@@ -457,7 +457,7 @@ describe("review round 1: saving and leaving", () => {
     expect(screen.getByTestId("env-tab-shared")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("saving Everyone keeps the panel open while Only-me has unsaved edits", async () => {
+  it("saving Shared keeps the panel open while Private has unsaved edits", async () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
     const privateClient = {

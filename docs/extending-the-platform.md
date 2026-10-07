@@ -363,7 +363,7 @@ server:
 - **沒有設定任何方法 = 沒有鈕**,不是壞掉:每個變數都還是能手打,那條路永遠可用。
 - **能打開 item 的人都按得到(`read_meta`)。** #750 原本要 `write_meta`,理由是換出來的值只有
   「共用」一個去處,只能讀的人會換出一個存不進去的 token;`plan-wui-viewer-login` 之後它有了
-  **只屬於他自己**的去處(Env 面板「只有我」),換的是他自己輸入的帳密,你的 impl 也拿不到
+  **只屬於他自己**的去處(Env 面板「Private」與「Private(跨workspace)」分頁),換的是他自己輸入的帳密,你的 impl 也拿不到
   item 的任何資訊——所以換出來不會多給他什麼。把結果存成**共用**值仍然要 `write_meta`。
 
 ### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
@@ -372,9 +372,9 @@ server:
 **private**:只有本人讀得到(連 superuser 也不行——路由只認「我的」,沒有指定別人的參數)。
 它有兩種範圍:**這個 item 的**(每個人、每個 item 一份),以及**所有 item 通用的**「我的環境變數」
 (每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。後者只給把那個變數設成
-Private first／Private only 的 item;同名時這個 item 的值優先。這個 item 的值來源有三個:本人在 Env
-面板「只有我」分頁手 key、本人在這個 item 按登入(`IEnvProvider`,只限這個 item 沒把那個變數設成
-Private 時——設成 Private 的話登入存進「我的環境變數」)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
+Private first／Private only 的 item;同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
+item 的)「Private(跨workspace)」(和 `/my-env` 同一份),在哪個分頁手 key 或按登入就寫進哪一層。這個 item
+的值來源有三個:本人在「Private」分頁手 key、本人在那個分頁按登入(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
 或頁面 `callTool` 時問它(其他請求不問)。後者存在**另一列**、值變了就**整份取代**:它沒再回的名字
 從那一次起就不再傳給 tool,同名時它贏過手 key 的。**登出 SSO 不是這個 app 看得到的請求**:在本人
 下一次於這裡聊天或按頁面工具之前,替他跑的工作(goal 續跑、重跑、他按下的 run、他綁定的排程)

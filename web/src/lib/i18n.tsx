@@ -1633,8 +1633,25 @@ export const messages = {
   "env.noMatches": { "zh-TW": "沒有符合的工具或變數", en: "No tool or variable matches" },
   "env.otherVars": { "zh-TW": "其他變數(沒有工具宣告)", en: "Other variables (no tool declared them)" },
   // Tabs say WHO SEES the values, not the internal names of the layers.
-  "env.tab.mine": { "zh-TW": "只有我", en: "Only me" },
-  "env.tab.shared": { "zh-TW": "所有參與者", en: "Everyone" },
+  // The tab names are the user's (`plan-personal-env` A20): one per layer.
+  "env.tab.shared": { "zh-TW": "Shared", en: "Shared" },
+  "env.tab.mine": { "zh-TW": "Private", en: "Private" },
+  "env.tab.personal": { "zh-TW": "Private(跨workspace)", en: "Private (all workspaces)" },
+  "env.personalDesc": {
+    "zh-TW":
+      "只有你看得到。這裡的值所有 workspace 共用,和「我的環境變數」頁是同一份;在這裡登入會立刻存。只有把變數設成 Private first 或 Private only 的 item 會用它。",
+    en: "Only you can see these. They are shared by all your workspaces — the same values as the My environment variables page — and a sign-in here is saved at once. Only an item that sets a variable to Private first or Private only uses them.",
+  },
+  "env.personalPage": { "zh-TW": "到「我的環境變數」看全部", en: "See them all in My environment variables" },
+  "env.personal.used": { "zh-TW": "這個 item 會用這個值", en: "This item uses this value" },
+  "env.personal.unused": {
+    "zh-TW": "這個 item 不用這個值:它的提供方式是 Shared",
+    en: "This item doesn't use this value: its setting is Shared",
+  },
+  "env.personal.shadowed": {
+    "zh-TW": "這個 item 先用你在 Private 分頁的值",
+    en: "This item uses your value on the Private tab first",
+  },
   "env.mineDesc": {
     "zh-TW": "只有你看得到這裡的值。登入換到的值也存在這裡;由你的登入狀態自動帶入的值,在你每次於這裡聊天或使用頁面工具時更新。",
     en: "Only you can see these values. Values from signing in are kept here too; ones filled in from your sign-in are updated each time you chat or use a page tool here.",
@@ -1668,7 +1685,7 @@ export const messages = {
     "zh-TW": "用 .env 文字編輯(貼上、匯入、匯出)",
     en: "Edit as .env text (paste, import, export)",
   },
-  // "Only me" rows: whose value a tool gets, and why this row looks as it does.
+  // Private-tab rows: whose value a tool gets, and why this row looks as it does.
   "env.inUse.private": { "zh-TW": "使用中:你的(這個 item)", en: "In use: yours (this item)" },
   "env.inUse.personal": {
     "zh-TW": "使用中:你的(所有 item)",

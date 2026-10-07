@@ -1492,13 +1492,16 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 每個人多一份「我的環境變數」（新頁面 `/my-env`，平台選單裡「我的資源」的下一個）：所有 item 通用的個人值。
 - 一個變數只有在 item 把它的提供方式設成 **Private first** 或 **Private only** 時，才會拿到這裡的值；設成
   Shared 或沒設的 item 拿不到。某個 item 裡另外填的值仍然優先。
-- **系統登入（部署設定的 `server.env_providers`）寫到「這個 item 會讀的地方」：**
-  - 在「我的環境變數」頁登入，或在 item 的 Env 面板「只有我」分頁登入、而這個 item 把那個變數設成 Private first／Private only
-    → **立刻存進「我的環境變數」**，所有這樣設定的 item 都用它。
-  - 在「只有我」分頁登入、而這個 item 是 Shared（沒設）→ 和以前一樣填進這個 item 的表單、按儲存才存，只給這個 item。
-  - 在共用值分頁的登入不變（填共用值的表單）。
-  - 所以**想讓某個 item 跟著「登入一處、全部更新」，item 擁有者要把那個變數的提供方式設成 Private first 或 Private only。**
-    沒設的 item 照舊：token 過期時要在那個 item 重新登入。
+- **item 的環境變數面板改成三個分頁**：原本的「所有參與者」改名 **Shared**、「只有我」改名 **Private**（仍是預設打開的那個），
+  另外多一個 **Private(跨workspace)**：就是「我的環境變數」，只列這個 item 的工具要的名稱，每一列寫出這個 item 用不用它。
+- **在哪個分頁登入（部署設定的 `server.env_providers`）或填值，就寫進哪一層：**
+  - 「我的環境變數」頁、「Private(跨workspace)」分頁 → 登入**立刻存進「我的環境變數」**，所有把那個變數設成
+    Private first／Private only 的 item 都用它。
+  - 「Private」分頁 → 和以前一樣填進這個 item 的表單、按儲存才存，只給這個 item。
+  - 「Shared」分頁 → 不變（填共用值的表單）。
+  - 所以**要「登入一處、全部更新」，兩件事都要做到：item 擁有者把那個變數的提供方式設成 Private first 或 Private only；
+    使用者在「我的環境變數」或「Private(跨workspace)」登入。** 在「Private」分頁登入的值只給那個 item，而且會蓋過
+    「我的環境變數」（那一列會顯示「使用中:你的(這個 item)」）。
 - 提供方式的三個選項文字改成 **Shared／Private first／Private only**（中英文介面都是），意思不變。
 - 一個用了某人憑證的 workflow run（綁定的排程、頁面按鈕、workflow 面板的 Run）失敗時：
   - 代理的人不是 item 擁有者 → 另外通知他，連到「我的環境變數」，提示若是登入過期就去那裡重新登入；這一封同人、同 item、
@@ -1525,17 +1528,19 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
     （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。被拒絕（HTTP 403，不在 superusers
     或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後馬上再跑會是 0 筆。
   - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
-    「只有我」會顯示「使用中:你的(這個 item)」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
+    「Private」分頁會顯示「使用中:你的(這個 item)」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
 
 **k8s · CI 側** — 沒有新的 manifest、probe、env、JobType。
 
 **確認做完**
 
 - 打開 `/my-env`：新增一個值，列表出現、值是遮蔽的、標示「今天設定」。
-- 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「只有我」那一列顯示
+- 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「Private」分頁那一列顯示
   「使用中:你的(所有 item)」；在 item 裡另外填值後變成「使用中:你的(這個 item)」。
-- 部署有 `server.env_providers` 時：在「我的環境變數」，或在把那個變數設成 Private first 的 item 的「只有我」登入一次，
-  `GET /api/me/env` 裡出現那個變數。
+- 同一個 item 的「Private(跨workspace)」分頁：那一列寫「這個 item 會用這個值」；把提供方式改回 Shared 存檔後，寫
+  「這個 item 不用這個值」。
+- 部署有 `server.env_providers` 時：在「Private(跨workspace)」分頁登入一次，`GET /api/me/env` 裡出現那個變數；在「Private」
+  分頁登入，值出現在表單裡、按儲存後只存進這個 item，`/api/me/env` 不變。
 - 清理腳本 dry run 跑得動（以 superuser 身分），列出的是你預期的人與 item。
 
 ---

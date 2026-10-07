@@ -2,7 +2,7 @@
 
 Per (person, item), two rows:
 
-* ``PrivateEnv`` — what the person put there themselves: typed in "Only me", or
+* ``PrivateEnv`` — what the person put there themselves: typed on the Env panel's Private tab, or
   filled by a sign-in (``IEnvProvider``). Changed only by them.
 * ``PrivateSeam`` — the deploy's ``IRequestEnv.env_for`` answer about them, as of
   their last chat send or page ``callTool`` in this item (the only two paths
@@ -370,7 +370,7 @@ class PrivateValues(BaseModel):
 
 
 class MineOut(BaseModel):
-    #: What the person put there themselves — editable in "Only me".
+    #: What the person put there themselves — editable on the Private tab.
     values: dict[str, str]
     #: What the deploy's seam said about them at their last request — shown,
     #: not editable: it is rewritten by their next request anyway.

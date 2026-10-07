@@ -1,22 +1,27 @@
 /**
- * The per-item environment variables panel — two layers
- * (`docs/plan-wui-viewer-login.md`).
+ * The per-item environment variables panel — one tab per layer, named as the
+ * user named them (`docs/plan-wui-viewer-login.md`, `docs/plan-personal-env.md`
+ * A20). What is done in a tab, a sign-in included, lands in that tab's layer
+ * and nowhere else:
  *
- * * **Only me** (the default tab) — the viewer's PRIVATE values for this item:
- *   typed, or written for them by the deploy's seam — plus, where the item asks
- *   for a personal value, their values for every item ("my environment
- *   variables", `docs/plan-personal-env.md`). A sign-in here goes where this
- *   item reads each name: a personal-policy name to my environment variables at
- *   once, any other into this item's own form. Only they can read these
- *   (`api/privateEnv.ts`, `api/personalEnv.ts`), so they are masked until asked.
- * * **Everyone** — the item's SHARED `env_vars` plus a per-variable POLICY
+ * * **Shared** — the item's SHARED `env_vars` plus a per-variable POLICY
  *   saying which layer a tool gets: `shared_first` (the default, and what every
  *   item did before), `private_first`, `private_only`. Written by whoever holds
  *   `write_meta`; everyone else sees it read-only, with the reason.
+ * * **Private** (the default tab) — the viewer's PRIVATE values for this item:
+ *   typed, signed in for, or written for them by the deploy's seam. Each row
+ *   says whose value a tool gets, my values for every item included.
+ * * **Private (跨workspace)** — the viewer's values for every item, the same
+ *   row as the "My environment variables" page: the names this item's tools
+ *   need, each saying whether this item uses it (only a Private first /
+ *   Private only name does, D2). A sign-in here is stored at once.
+ *
+ * Only the viewer can read the private two (`api/privateEnv.ts`,
+ * `api/personalEnv.ts`), so they are masked until asked.
  *
  * One layer is edited at a time, each tab saving on its own: Postman retired
  * editing a shared and a local value side by side in one row, and VS Code
- * separates User / Workspace the same way. Every "Only me" row says whose value
+ * separates User / Workspace the same way. Every Private row says whose value
  * is in use and why (`lib/envLayers.ts`, held to the backend's rule by a shared
  * table).
  *
@@ -54,7 +59,8 @@ import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
 import { ModalShell } from "./ModalShell";
 
-type Tab = "mine" | "shared";
+type Tab = "shared" | "mine" | "personal";
+const TABS: Tab[] = ["shared", "mine", "personal"];
 
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) };
 const MUTED = { fontSize: pxToRem(11), color: "var(--text-paper-d)" } as const;
@@ -94,7 +100,7 @@ export function EnvVarsModal({
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
   privateClient?: Pick<PrivateEnvClient, "get" | "put" | "clear">;
   /** My environment variables (`plan-personal-env`): read to say whose value
-   * is in use, and where a sign-in on "Only me" is stored. */
+   * is in use, and edited on the cross-workspace tab. */
   personalClient?: Pick<PersonalEnvClient, "get" | "put">;
 }) {
   const t = useT();
@@ -124,6 +130,9 @@ export function EnvVarsModal({
     enabled: hasItem,
   });
   const personal = personalQ.data?.values ?? {};
+  // Only the names typed on the cross-workspace tab: the rest of the row is
+  // the server's, so a save writes these and nothing it did not touch.
+  const [personalEdits, setPersonalEdits] = useState<Record<string, string>>({});
 
   // ── the SHARED layer: the box's text is the one copy of the values ────────
   const [text, setText] = useState(() => toEnvText(envVars));
@@ -155,7 +164,9 @@ export function EnvVarsModal({
   const [creds, setCreds] = useState<Record<string, string>>({});
   const sharedDirty = text !== toEnvText(envVars) || !sameShape(policy, envPolicy);
   const mineDirty = mine !== null && mineQ.data !== undefined && !sameShape(mine, mineQ.data.values);
-  const dirty = sharedDirty || mineDirty || Object.values(creds).some((v) => v.trim() !== "");
+  const personalDirty = Object.entries(personalEdits).some(([n, v]) => v !== (personal[n] ?? ""));
+  const dirty =
+    sharedDirty || mineDirty || personalDirty || Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
 
   const tools = toolsQ.data?.tools ?? [];
@@ -167,11 +178,13 @@ export function EnvVarsModal({
   const toolsSettled = !hasItem || toolsQ.isSuccess || toolsQ.isError;
   const mineSettled = !hasItem || mine !== null || mineQ.isError;
 
-  /** After one tab saves: close only if the OTHER tab has nothing unsaved;
-   * otherwise stay, on that tab (#779 — a Save is a deliberate exit, and it
-   * must not throw away the other tab's work without asking). */
-  const afterSave = (other: Tab, otherDirty: boolean) => {
-    if (otherDirty) setTab(other);
+  /** After one tab saves: close only if no OTHER tab has anything unsaved;
+   * otherwise stay, on the first that does (#779 — a Save is a deliberate exit,
+   * and it must not throw away another tab's work without asking). */
+  const afterSave = (saved: Tab) => {
+    const waiting = { shared: sharedDirty, mine: mineDirty, personal: personalDirty };
+    const next = TABS.find((x) => x !== saved && waiting[x]);
+    if (next) setTab(next);
     else onClose();
   };
   // Mutations, not bare awaits: a failed write reaches the app's one write-
@@ -187,28 +200,46 @@ export function EnvVarsModal({
     onSuccess: async (kept) => {
       setMine(kept);
       queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: kept, auto });
-      afterSave("shared", sharedDirty);
+      afterSave("mine");
     },
   });
-  // A sign-in on "Only me" for a name this item reads from my environment
-  // variables (Private first / Private only — `plan-personal-env` A8) is the
-  // person's, for every such item: it goes straight there, and nothing waits
-  // for this tab's Save. A Shared name never reads it, so `onFilled` fills this
-  // item's form instead.
+  // Every write to my environment variables: re-read the row (`staleTime: 0`,
+  // never the cached copy — round 1, F2), change only the names given, write
+  // it whole. One queue with the page's writes (round 2, F2).
+  const writePersonal = async (change: Record<string, string>) => {
+    const current = (
+      await queryClient.fetchQuery({
+        queryKey: qk.personalEnv(),
+        queryFn: () => personalClient.get(),
+        staleTime: 0,
+      })
+    ).values;
+    const next = { ...current };
+    // A cleared field is "no value of mine", as on the Private tab.
+    for (const [n, v] of Object.entries(change)) {
+      if (v === "") delete next[n];
+      else next[n] = v;
+    }
+    return personalClient.put(next);
+  };
+  // A sign-in on the cross-workspace tab is stored at once: it is the
+  // deliberate act, and a token waiting for a Save is one the next run lacks.
   const signIn = useMutation({
     scope: PERSONAL_ENV_WRITES,
-    mutationFn: async (env: Record<string, string>) => {
-      const current = (
-        // `staleTime: 0`: re-read, never the cached row (round 1, F2).
-        await queryClient.fetchQuery({
-          queryKey: qk.personalEnv(),
-          queryFn: () => personalClient.get(),
-          staleTime: 0,
-        })
-      ).values;
-      return personalClient.put({ ...current, ...env });
+    mutationFn: writePersonal,
+    onSuccess: (saved, env) => {
+      queryClient.setQueryData(qk.personalEnv(), saved);
+      setPersonalEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([n]) => !(n in env))));
     },
-    onSuccess: (saved) => queryClient.setQueryData(qk.personalEnv(), saved),
+  });
+  const savePersonal = useMutation({
+    scope: PERSONAL_ENV_WRITES,
+    mutationFn: () => writePersonal(personalEdits),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(qk.personalEnv(), saved);
+      setPersonalEdits({});
+      afterSave("personal");
+    },
   });
   const logout = useMutation({
     mutationFn: () => privateClient.clear(slug!, itemId!),
@@ -224,7 +255,7 @@ export function EnvVarsModal({
     if ((await onSave(parseEnvText(text), policy)) === false) return;
     // A page's platform strip reads these through its own query.
     if (hasItem) await queryClient.invalidateQueries({ queryKey: qk.envLayers(slug!, itemId!) });
-    afterSave("mine", mineDirty);
+    afterSave("shared");
   };
 
   // A provider is offered when it produces a name some tool asked for — the
@@ -246,7 +277,7 @@ export function EnvVarsModal({
 
       {hasItem && (
         <div role="tablist" aria-label={t("env.title")} style={{ display: "flex", gap: 6 }}>
-          {(["mine", "shared"] as const).map((id) => (
+          {TABS.map((id) => (
             <button
               key={id}
               type="button"
@@ -258,7 +289,7 @@ export function EnvVarsModal({
               aria-selected={tab === id}
               onClick={() => setTab(id)}
             >
-              {t(id === "mine" ? "env.tab.mine" : "env.tab.shared")}
+              {t(`env.tab.${id}`)}
             </button>
           ))}
         </div>
@@ -304,6 +335,26 @@ export function EnvVarsModal({
               />
             }
           />
+        ) : tab === "personal" ? (
+          <PersonalTab
+            settled={toolsSettled && (personalQ.isSuccess || personalQ.isError)}
+            tools={tools}
+            query={query}
+            policy={policy}
+            own={ownLayer(mineValues, auto)}
+            values={{ ...personal, ...personalEdits }}
+            failed={personalQ.isError}
+            onEdit={(name, value) => setPersonalEdits((prev) => ({ ...prev, [name]: value }))}
+            login={
+              <Logins
+                offered={offered}
+                creds={creds}
+                setCreds={setCreds}
+                exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
+                onFilled={(env) => signIn.mutate(env)}
+              />
+            }
+          />
         ) : (
           <MineTab
             settled={toolsSettled && mineSettled}
@@ -322,22 +373,9 @@ export function EnvVarsModal({
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
-                onFilled={(env) => {
-                  // Where THIS item reads each name (round 1, F1): a name it
-                  // asks for as personal goes to my environment variables, at
-                  // once, for every item; any other name it reads from its own
-                  // values, so that is where the form puts it (saved with this
-                  // tab), exactly as before. By the policy this panel SHOWS —
-                  // an unsaved edit included — so where the token lands agrees
-                  // with what the tab says is in use (round 2, F3).
-                  const everywhere: Record<string, string> = {};
-                  const here: Record<string, string> = {};
-                  for (const [n, v] of Object.entries(env)) {
-                    (policyOf(n, policy) === "shared_first" ? here : everywhere)[n] = v;
-                  }
-                  if (Object.keys(everywhere).length > 0) signIn.mutate(everywhere);
-                  if (Object.keys(here).length > 0) setMine((prev) => ({ ...(prev ?? {}), ...here }));
-                }}
+                // This tab is my values for THIS item, so that is where its
+                // sign-in lands — saved with this tab (A20).
+                onFilled={(env) => setMine((prev) => ({ ...(prev ?? {}), ...env }))}
               />
             }
           />
@@ -374,6 +412,31 @@ export function EnvVarsModal({
                 {t("env.save")}
               </button>
             )}
+          </>
+        ) : tab === "personal" ? (
+          <>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="env-cancel"
+              style={{ marginLeft: "auto" }}
+              onClick={attemptClose}
+            >
+              {t("env.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-size="sm"
+              data-testid="env-personal-save"
+              // Not over a failed read: the row would be written from nothing.
+              disabled={!personalQ.isSuccess || savePersonal.isPending}
+              onClick={() => savePersonal.mutate()}
+            >
+              {t("env.save")}
+            </button>
           </>
         ) : (
           <>
@@ -843,7 +906,7 @@ function SharedRow({
   );
 }
 
-// ── Only me ───────────────────────────────────────────────────────────────
+// ── Private ───────────────────────────────────────────────────────────────
 
 function MineTab({
   settled,
@@ -1023,12 +1086,130 @@ function MineRow({
   );
 }
 
+// ── Private (跨workspace) ────────────────────────────────────────────────
+
+function PersonalTab({
+  settled,
+  tools,
+  query,
+  policy,
+  own,
+  values,
+  failed,
+  onEdit,
+  login,
+}: {
+  settled: boolean;
+  tools: Parameters<typeof deriveEnvNeeds>[0];
+  query: string;
+  policy: Record<string, string>;
+  /** My values for THIS item: where one is set, it wins the name (D4). */
+  own: Record<string, string>;
+  /** My values for every item, with what was typed here on top. */
+  values: Record<string, string>;
+  failed: boolean;
+  onEdit: (name: string, value: string) => void;
+  login: ReactNode;
+}) {
+  const t = useT();
+  const needed = new Map<string, string>();
+  for (const tool of tools)
+    for (const n of tool.env_needs ?? []) if (!needed.has(n.name)) needed.set(n.name, n.description);
+  // Names the item asks each person for without a tool declaring them.
+  for (const n of Object.keys(policy)) if (policyOf(n, policy) !== "shared_first" && !needed.has(n)) needed.set(n, "");
+  const q = query.trim().toLowerCase();
+  const names = [...needed.keys()].filter((n) => !q || n.toLowerCase().includes(q));
+  return (
+    <>
+      <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+        {t("env.personalDesc")}{" "}
+        <a href="/my-env" data-testid="env-personal-page">
+          {t("env.personalPage")}
+        </a>
+      </p>
+      {failed && (
+        <p role="alert" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--err)" }}>
+          {t("myEnv.loadFailed")}
+        </p>
+      )}
+      {!settled ? (
+        <p style={MUTED}>…</p>
+      ) : names.length === 0 ? (
+        <p style={MUTED}>{t("env.noMatches")}</p>
+      ) : (
+        names.map((name) => (
+          <PersonalRow
+            key={name}
+            name={name}
+            description={needed.get(name) ?? ""}
+            used={policyOf(name, policy) !== "shared_first"}
+            shadowed={Object.hasOwn(own, name)}
+            value={values[name] ?? ""}
+            onEdit={onEdit}
+          />
+        ))
+      )}
+      {login}
+    </>
+  );
+}
+
+function PersonalRow({
+  name,
+  description,
+  used,
+  shadowed,
+  value,
+  onEdit,
+}: {
+  name: string;
+  description: string;
+  used: boolean;
+  shadowed: boolean;
+  value: string;
+  onEdit: (name: string, value: string) => void;
+}) {
+  const t = useT();
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <div data-testid={`env-personal-row-${name}`} data-used={used} style={{ display: "grid", gap: 3 }}>
+      <span style={MONO}>{name}</span>
+      {description && <span style={MUTED}>{description}</span>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          data-testid={`env-personal-${name}`}
+          type={revealed ? "text" : "password"}
+          value={value}
+          onChange={(e) => onEdit(name, e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          className="input input--block"
+          style={MONO}
+        />
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          aria-pressed={revealed}
+          onClick={() => setRevealed((r) => !r)}
+        >
+          {t(revealed ? "env.hide" : "env.reveal")}
+        </button>
+      </div>
+      <span style={MUTED}>
+        {!used ? t("env.personal.unused") : shadowed ? t("env.personal.shadowed") : t("env.personal.used")}
+      </span>
+    </div>
+  );
+}
+
 // ── logins (`IEnvProvider`, #750) ─────────────────────────────────────────
 
 /** The deploy's "log in, get the variables" buttons. The exchange result goes
- * to the caller's `onFilled`, which decides where it lands: the Everyone tab
- * fills its form (saved with Save); "Only me" and My environment variables
- * store a name meant for every item at once (`docs/plan-personal-env.md`).
+ * to the caller's `onFilled`, which puts it in that tab's own layer: Shared and
+ * Private fill their form (saved with Save); the cross-workspace tab and the
+ * My environment variables page store it at once (`docs/plan-personal-env.md`).
  * The credential typed here reaches the deploy's implementation and stops. */
 export function Logins({
   offered,

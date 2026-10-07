@@ -1,10 +1,15 @@
 /**
  * `docs/plan-personal-env.md` — my environment variables in an item's Env panel.
  *
- * A person's values for every item fill a name only where the item asks for a
- * personal value (Private first / Private only, D2), below their value for this
- * item (D4). The "Only me" tab says which one is in use. Signing in there writes
- * my environment variables (D3, D6), not this item's values.
+ * Three tabs, one per layer, named the way the user named them (A20): Shared,
+ * Private (my values for THIS item) and Private (跨workspace) (my values for
+ * every item — the same row as the "My environment variables" page). What you
+ * do in a tab, a sign-in included, lands in that tab's layer and nowhere else.
+ *
+ * A value for every item fills a name only where the item asks for a personal
+ * value (Private first / Private only, D2), below my value for this item (D4).
+ * The Private tab says which one is in use; the cross-workspace tab says, per
+ * name, whether this item uses it at all.
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
@@ -38,6 +43,7 @@ function open({
   personal = {},
   providers = [SAP] as (typeof SAP)[],
   tools = [ERP],
+  personalFails = false,
 }: {
   envVars?: Record<string, string>;
   envPolicy?: Record<string, string>;
@@ -45,6 +51,7 @@ function open({
   personal?: Record<string, string>;
   providers?: (typeof SAP)[];
   tools?: ItemToolState[];
+  personalFails?: boolean;
 } = {}) {
   const privateClient = {
     get: vi.fn(async () => ({ values: mine, auto: {} })),
@@ -52,9 +59,13 @@ function open({
     clear: vi.fn(async () => {}),
   };
   const personalClient = {
-    get: vi.fn(async () => ({ values: personal, updated: {} })),
+    get: vi.fn(async () => {
+      if (personalFails) throw new Error("down");
+      return { values: personal, updated: {} as Record<string, number> };
+    }),
     put: vi.fn(async (values: Record<string, string>) => ({ values, updated: {} })),
   };
+  const onClose = vi.fn();
   const resolveEnvProvider = vi.fn(
     async (_slug: string, _item: string, _id: string): Promise<Record<string, string>> => ({
       ERP_TOKEN: "fresh",
@@ -65,7 +76,7 @@ function open({
       envVars={envVars}
       envPolicy={envPolicy}
       onSave={vi.fn()}
-      onClose={vi.fn()}
+      onClose={onClose}
       slug="rca"
       itemId="i1"
       client={{
@@ -79,7 +90,7 @@ function open({
     // The app's own client: its 30s staleTime is what a stale re-read would hit.
     makeQueryClient(),
   );
-  return { privateClient, personalClient, resolveEnvProvider };
+  return { privateClient, personalClient, resolveEnvProvider, onClose };
 }
 
 const row = () => screen.findByTestId("env-mine-row-ERP_TOKEN");
@@ -118,26 +129,11 @@ describe("my environment variables in an item's Env panel", () => {
     await waitFor(async () => expect(await row()).toHaveAttribute("data-in-use", "none"));
   });
 
-  it("signs in to my environment variables, not to this item", async () => {
-    const { privateClient, personalClient, resolveEnvProvider } = open({
-      personal: { OTHER: "kept" },
-    });
-
-    fireEvent.click(await screen.findByTestId("env-provider-sap"));
-    fireEvent.click(screen.getByTestId("env-cred-submit"));
-
-    await waitFor(() =>
-      expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept", ERP_TOKEN: "fresh" }),
-    );
-    expect(resolveEnvProvider).toHaveBeenCalled();
-    expect(privateClient.put).not.toHaveBeenCalled();
-  });
-
-  it("in an item that uses the shared value, fills this item's own value as before", async () => {
-    // Round 1, F1: a Shared item never reads my environment variables, so a
-    // sign-in stored there would leave the tool without its token. It goes
-    // where THIS item reads it: the item's own form, saved with this tab.
-    const { privateClient, personalClient } = open({ envPolicy: {} });
+  it("on Private, a sign-in fills this item's own value, saved with this tab — whatever the policy", async () => {
+    // A20: the tab is my values for THIS item, so that is where its sign-in
+    // lands, even for a name this item reads from my environment variables
+    // (the round-1/2 split by policy, A8, is gone).
+    const { privateClient, personalClient } = open({ envPolicy: { ERP_TOKEN: "private_first" } });
 
     fireEvent.click(await screen.findByTestId("env-provider-sap"));
     fireEvent.click(screen.getByTestId("env-cred-submit"));
@@ -151,22 +147,62 @@ describe("my environment variables in an item's Env panel", () => {
     );
     expect(personalClient.put).not.toHaveBeenCalled();
   });
+});
 
-  it("routes a sign-in by the policy the panel shows, saved or not", async () => {
-    // Round 2, F3: routed by the SAVED policy, a token signed in after the
-    // owner switched a name to Private first (not yet saved) went into this
-    // item's own values — where, once saved, it would hide my environment
-    // variables for good.
-    const { privateClient, personalClient } = open({ envPolicy: {} });
-    fireEvent.click(screen.getByTestId("env-tab-shared"));
-    fireEvent.click(await screen.findByTestId("env-policy-ERP_TOKEN-private_first"));
-    fireEvent.click(screen.getByTestId("env-tab-mine"));
+const personalTab = async () => fireEvent.click(await screen.findByTestId("env-tab-personal"));
+
+describe("the Private (跨workspace) tab", () => {
+  it("sits third, after Shared and Private, under the names the user chose", async () => {
+    open();
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((x) => x.textContent)).toEqual(["Shared", "Private", "Private(跨workspace)"]);
+    // Private stays the tab the panel opens on.
+    expect(screen.getByTestId("env-tab-mine")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("lists what this item's tools need, and says whether this item uses it", async () => {
+    open({ envPolicy: { ERP_TOKEN: "private_first" }, personal: { ERP_TOKEN: "t" } });
+    await personalTab();
+
+    const used = await screen.findByTestId("env-personal-row-ERP_TOKEN");
+    expect(used).toHaveAttribute("data-used", "true");
+    cleanup();
+
+    open({ envPolicy: {}, personal: { ERP_TOKEN: "t" } });
+    await personalTab();
+    const unused = await screen.findByTestId("env-personal-row-ERP_TOKEN");
+    // D2: a Shared name never reads it — said on the row, so a sign-in here
+    // that this item then ignores is not a mystery.
+    expect(unused).toHaveAttribute("data-used", "false");
+    expect(unused).toHaveTextContent("Shared");
+  });
+
+  it("stores a sign-in at once, keeping my other values, and leaves this item's alone", async () => {
+    const { privateClient, personalClient } = open({ personal: { OTHER: "kept" } });
+    await personalTab();
 
     fireEvent.click(await screen.findByTestId("env-provider-sap"));
     fireEvent.click(screen.getByTestId("env-cred-submit"));
 
-    await waitFor(() => expect(personalClient.put).toHaveBeenCalledWith({ ERP_TOKEN: "fresh" }));
+    await waitFor(() =>
+      expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept", ERP_TOKEN: "fresh" }),
+    );
     expect(privateClient.put).not.toHaveBeenCalled();
+  });
+
+  it("keeps a value saved from another tab since the panel opened", async () => {
+    // Round 1, F2: the write re-reads the row before writing the whole of it.
+    const { personalClient } = open({ personal: { OTHER: "kept" } });
+    await personalTab();
+    fireEvent.click(await screen.findByTestId("env-provider-sap"));
+    await waitFor(() => expect(personalClient.get).toHaveBeenCalled());
+    personalClient.get.mockResolvedValue({ values: { OTHER: "kept", LATER: "l" }, updated: {} });
+
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    await waitFor(() =>
+      expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept", LATER: "l", ERP_TOKEN: "fresh" }),
+    );
   });
 
   it("keeps both of two sign-ins made one right after the other", async () => {
@@ -192,6 +228,7 @@ describe("my environment variables in an item's Env panel", () => {
       async (_s: string, _i: string, id: string): Promise<Record<string, string>> =>
         id === "mes" ? { MES_TOKEN: "m" } : { ERP_TOKEN: "e" },
     );
+    await personalTab();
 
     fireEvent.click(await screen.findByTestId("env-provider-sap"));
     fireEvent.click(screen.getByTestId("env-cred-submit"));
@@ -202,30 +239,87 @@ describe("my environment variables in an item's Env panel", () => {
     await waitFor(() => expect(stored).toEqual({ ERP_TOKEN: "e", MES_TOKEN: "m" }));
   });
 
-  it("keeps a value saved from another tab since the panel opened", async () => {
-    // Round 1, F2: the sign-in re-reads the row before writing the whole of it.
-    const { personalClient } = open({ personal: { OTHER: "kept" } });
-    fireEvent.click(await screen.findByTestId("env-provider-sap"));
-    await waitFor(() => expect(personalClient.get).toHaveBeenCalled());
-    personalClient.get.mockResolvedValue({ values: { OTHER: "kept", LATER: "l" }, updated: {} });
+  it("saves what I typed with this tab, changing only the names I edited", async () => {
+    const { personalClient, privateClient } = open({ personal: { OTHER: "kept", ERP_TOKEN: "old" } });
+    await personalTab();
+    const box = (await screen.findByTestId("env-personal-ERP_TOKEN")) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe("old"));
+    fireEvent.change(box, { target: { value: "new" } });
+    // Saved elsewhere meanwhile: kept, because only the edited name is written.
+    personalClient.get.mockResolvedValue({ values: { OTHER: "kept", ERP_TOKEN: "old", LATER: "l" }, updated: {} });
 
-    fireEvent.click(screen.getByTestId("env-cred-submit"));
+    fireEvent.click(screen.getByTestId("env-personal-save"));
 
     await waitFor(() =>
-      expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept", LATER: "l", ERP_TOKEN: "fresh" }),
+      expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept", ERP_TOKEN: "new", LATER: "l" }),
     );
+    expect(privateClient.put).not.toHaveBeenCalled();
   });
-});
 
-describe("the policy choices", () => {
-  it("are named Shared, Private first and Private only", async () => {
+  it("shows the signed-in value over what I had typed for that name, and no longer counts it unsaved", async () => {
+    const { onClose } = open({ personal: { ERP_TOKEN: "old" } });
+    await personalTab();
+    const box = (await screen.findByTestId("env-personal-ERP_TOKEN")) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe("old"));
+    fireEvent.change(box, { target: { value: "typed" } });
+
+    fireEvent.click(screen.getByTestId("env-provider-sap"));
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    await waitFor(() => expect((screen.getByTestId("env-personal-ERP_TOKEN") as HTMLInputElement).value).toBe("fresh"));
+    fireEvent.click(screen.getByTestId("env-cancel"));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("removes a value I cleared", async () => {
+    const { personalClient } = open({ personal: { OTHER: "kept", ERP_TOKEN: "old" } });
+    await personalTab();
+    const box = (await screen.findByTestId("env-personal-ERP_TOKEN")) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe("old"));
+    fireEvent.change(box, { target: { value: "" } });
+
+    fireEvent.click(screen.getByTestId("env-personal-save"));
+
+    await waitFor(() => expect(personalClient.put).toHaveBeenCalledWith({ OTHER: "kept" }));
+  });
+
+  it("asks before Cancel drops a value typed here", async () => {
+    const { onClose, personalClient } = open({ personal: { ERP_TOKEN: "old" } });
+    await personalTab();
+    const box = (await screen.findByTestId("env-personal-ERP_TOKEN")) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe("old"));
+    fireEvent.change(box, { target: { value: "typed" } });
+
+    fireEvent.click(screen.getByTestId("env-cancel"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("dialog-action-discard"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(personalClient.put).not.toHaveBeenCalled();
+  });
+
+  it("closes on Cancel without asking when nothing was typed here", async () => {
+    const { onClose } = open({ personal: { ERP_TOKEN: "old" } });
+    await personalTab();
+    await screen.findByTestId("env-personal-ERP_TOKEN");
+
+    fireEvent.click(screen.getByTestId("env-cancel"));
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("does not let Save write the row over a read that failed", async () => {
+    // A save re-reads, but a person who never saw their values would be
+    // editing blind: the button waits for a successful read.
+    open({ personalFails: true });
+    await personalTab();
+
+    await waitFor(() => expect(screen.getByTestId("env-personal-save")).toBeDisabled(), { timeout: 3000 });
+  });
+
+  it("links to the page that holds all of them", async () => {
     open();
-    fireEvent.click(screen.getByTestId("env-tab-shared"));
-
-    const label = async (p: string) =>
-      (await screen.findByTestId(`env-policy-ERP_TOKEN-${p}`)).closest("label");
-    expect(await label("shared_first")).toHaveTextContent("Shared");
-    expect(await label("private_first")).toHaveTextContent("Private first");
-    expect(await label("private_only")).toHaveTextContent("Private only");
+    await personalTab();
+    expect(await screen.findByTestId("env-personal-page")).toHaveAttribute("href", "/my-env");
   });
 });
