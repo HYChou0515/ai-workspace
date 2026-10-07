@@ -41,7 +41,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
-import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
+import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
@@ -196,6 +196,7 @@ export function EnvVarsModal({
   // for this tab's Save. A Shared name never reads it, so `onFilled` fills this
   // item's form instead.
   const signIn = useMutation({
+    scope: PERSONAL_ENV_WRITES,
     mutationFn: async (env: Record<string, string>) => {
       const current = (
         // `staleTime: 0`: re-read, never the cached row (round 1, F2).
@@ -326,11 +327,13 @@ export function EnvVarsModal({
                   // asks for as personal goes to my environment variables, at
                   // once, for every item; any other name it reads from its own
                   // values, so that is where the form puts it (saved with this
-                  // tab), exactly as before.
+                  // tab), exactly as before. By the policy this panel SHOWS —
+                  // an unsaved edit included — so where the token lands agrees
+                  // with what the tab says is in use (round 2, F3).
                   const everywhere: Record<string, string> = {};
                   const here: Record<string, string> = {};
                   for (const [n, v] of Object.entries(env)) {
-                    (policyOf(n, envPolicy) === "shared_first" ? here : everywhere)[n] = v;
+                    (policyOf(n, policy) === "shared_first" ? here : everywhere)[n] = v;
                   }
                   if (Object.keys(everywhere).length > 0) signIn.mutate(everywhere);
                   if (Object.keys(here).length > 0) setMine((prev) => ({ ...(prev ?? {}), ...here }));

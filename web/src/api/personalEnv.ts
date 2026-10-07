@@ -58,3 +58,9 @@ export const personalEnvApi = {
 };
 
 export type PersonalEnvClient = typeof personalEnvApi;
+
+/** Every write is "read the row, PUT the whole row", so two at once would read
+ * the same row and the second would undo the first. Mutations sharing this
+ * scope run one after another — the page's and the Env panel's alike (round 2,
+ * F2). */
+export const PERSONAL_ENV_WRITES = { id: "personal-env-writes" } as const;

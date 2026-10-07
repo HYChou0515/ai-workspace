@@ -193,7 +193,11 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 | A6 | 「需要登入」的判斷只寫了 `/w/` 平台列 | 聊天的 Env 按鈕（`useEnvMissing`）也算進通用個人值 | 同一個判斷有兩個入口；只改一個，聊天裡會繼續叫已經在「我的環境變數」登入的人去登入 |
 | A7 | 入口在「我的資源」的下一個 | 同上，圖示用 Env 鈕的 `tag` | 和 item 裡 Env 鈕同一個圖示，看得出是同一件事 |
 | A8 | D3、D6：item 裡的登入一律寫進「我的環境變數」 | 寫到「這個 item 會讀的地方」：「只有我」分頁裡，這個 item 把那個變數設成 Private first／Private only → 存進「我的環境變數」；設成 Shared（沒設）→ 和以前一樣填進這個 item 的表單、按儲存才存。「我的環境變數」頁的登入不變。〔假設，待 user 確認〕 | 第一輪 review（F1）：D2 規定 Shared 的 item 不讀「我的環境變數」，照 D3 寫過去，在 Shared item 登入後 tool 拿不到，畫面卻顯示已登入。要「登入一處、全部更新」，擁有者要把變數設成 Private first／Private only——這寫在 runbook |
-| A9 | 清理腳本清掉所有 item 裡的登入產物名稱 | 只清那個名稱設成 Private first／Private only 的 item | 跟著 A8：Shared item 裡留著的值就是它在用的，清掉會讓它壞掉；只有 Private 的 item 裡，舊值才會蓋過「我的環境變數」 |
+| A9 | 清理腳本清掉所有 item 裡的登入產物名稱 | 只清「那個名稱設成 Private first／Private only 的 item」**而且**「那個人在我的環境變數也有同名值」的 | 跟著 A8：Shared item 裡留著的值就是它在用的，清掉會讓它壞掉；只有 Private 的 item 裡，舊值才會蓋過「我的環境變數」——而且只在那裡真的有一個新值可蓋時（第二輪 review F1：那個人還沒重新登入的話，item 裡的值是他唯一的值） |
+| A15 | （未寫）同時兩個寫入 | 「我的環境變數」的每個寫入（頁面上的新增／移除／登入、Env 面板的登入）排同一條隊，一個做完才做下一個 | 每個寫入都是「讀整列、寫整列」；同時兩個會讀到同一列，後寫的把先寫的蓋掉（第二輪 review F2） |
+| A16 | （未寫）登入時 policy 還沒存 | 依面板上「看到的」policy 分流，包括還沒存的修改 | 第二輪 review F3：依已存的分流，token 落點和分頁上顯示的「使用中」不一致 |
+| A17 | （未寫）讀不到「我的環境變數」 | 頁面顯示讀取失敗，不顯示「還沒有值」 | 第二輪 review F4 |
+| A18 | （未寫）`/w/` 平台列與聊天 Env 鈕 | 只有在 item 有 Private first／Private only 的名稱時才去讀「我的環境變數」 | 第二輪 review R1：每一頁的平台列都多等一個請求，而 Shared 的頁面根本用不到 |
 | A10 | 「有人在場的失敗不另外通知」 | workflow 面板按 Run 的失敗也通知代理人 | 按下 Run 之後 run 在背景跑，按的人可能已經離開畫面；和排程、頁面按鈕是同一條路（orchestrator 結束成 error），分不出來也不該分 |
 | A11 | 給代理人的那一封另外發 | 代理人就是擁有者時不另外發，擁有者原本那一封內文帶上「登入過期就到『我的環境變數』重新登入」；代理人已被移出這個 item（`store.may` 不過）就不發 | 同一人收兩封是噪音；被移出的人收到的連結點進去也看不到 item。去重的「同一天」是 UTC 日 |
 | A12 | P8 寫到 `configuration.md` | 沒改 | 這次沒有新設定鍵；`server.env_providers` 沒變 |

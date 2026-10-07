@@ -58,6 +58,10 @@ def _world():
     store.replace("alice", b, {"SAP_HOST": "h"})
     store.replace("bob", a, {"OTHER": "o"})
     store.record_seam("alice", a, {"SAP_TOKEN": "from-sso"})
+    # Alice has signed in again on her page — so the old item value hides it.
+    store.replace_personal("alice", {"SAP_TOKEN": "fresh", "SAP_HOST": "fresh-h"})
+    # Carol has not: the value in the item is the only one her tools have.
+    store.replace("carol", a, {"SAP_TOKEN": "only-copy"})
     return TestClient(app), holder, store, a, b
 
 
@@ -95,6 +99,16 @@ def test_a_shared_item_keeps_the_value_it_uses():
     client.post(URL, json={"apply": True})
 
     assert store.get("alice", b) == {"SAP_HOST": "h"}
+
+
+def test_a_value_that_hides_nothing_stays():
+    """Round 2 (F1): until a person signs in on their page, the value in the
+    item is the only one their tools have — removing it would break them."""
+    client, _, store, a, b = _world()
+
+    client.post(URL, json={"apply": True})
+
+    assert store.get("carol", a) == {"SAP_TOKEN": "only-copy"}
 
 
 def test_a_second_run_finds_nothing():

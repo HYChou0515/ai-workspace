@@ -11,16 +11,17 @@ you choose.
 
 What it removes: from every person's values for a single item, the names
 some loaded sign-in (`server.env_providers`) produces — only where that item's
-policy for the name is Private first / Private only. Nothing else — those names
-in Shared items, values a person typed under other names, their values for
-every item, the shared values, and what the deploy's SSO said about them all
-stay. Values are never printed.
+policy for the name is Private first / Private only AND the person holds the
+name in their values for every item too, i.e. where the old value hides a newer
+one. Nothing else — those names in Shared items, the only copy someone who has
+not signed in again holds, values a person typed under other names, their
+values for every item, the shared values, and what the deploy's SSO said about
+them all stay. Values are never printed. So it finds more as people sign in
+again on their page: run it again later.
 
 It runs inside the API (`POST /api/admin/env/clear-item-sign-ins`), which uses
 the API's own store and the sign-ins it actually loaded, so the names are this
-deploy's. Only items whose policy for a name is Private first / Private only are
-touched: there the old value shadows the person's values for every item. A
-Shared item reads only its own value, so that one stays.
+deploy's.
 
 The identity it runs as must be in `server.superusers`. With no header it is
 whatever the deploy gives a request that carries none (`server.default_user` on

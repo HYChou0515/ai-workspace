@@ -467,12 +467,14 @@ def register_private_env_routes(
     @app.post("/admin/env/clear-item-sign-ins", response_model=CleanupOut)
     async def clear_item_sign_ins(body: CleanupBody, request: Request) -> CleanupOut:
         """`plan-personal-env` D10/A9: remove, from every person's values for
-        single items, the names a deploy sign-in produces — in items whose
-        policy for the name is Private first / Private only. Before "my
-        environment variables" a sign-in wrote its token into that one item,
-        and an item's own value wins a name — so there those old tokens would
-        shadow a new sign-in. A Shared item reads only its own value, so it
-        keeps it. Run when the operator chooses
+        single items, the names a deploy sign-in produces — where the old value
+        hides a newer one: the item's policy for the name is Private first /
+        Private only and the person holds it in my environment variables too.
+        Before "my environment variables" a sign-in wrote its token into that
+        one item, and an item's own value wins a name — so there those old
+        tokens would shadow a new sign-in. A Shared item reads only its own
+        value, and someone who has not signed in again has no other, so both
+        keep theirs. Run when the operator chooses
         (`scripts/clear_item_sign_ins.py`); dry run unless ``apply``.
 
         The names come from the providers this API loaded — the deploy's list,
@@ -482,13 +484,20 @@ def register_private_env_routes(
             raise HTTPException(status_code=403, detail="superusers only")
         names = _sign_in_names(getattr(request.app.state, "env_providers", ()) or ())
         held = await asyncio.to_thread(store.item_values_named, names)
-        # Only where the item asks for a personal value: there the old value
-        # shadows my environment variables. A Shared item never reads those, so
-        # the value stored in it is the one its tools USE (round 1, F1).
+        # Only a value that HIDES one: where the item asks for a personal value
+        # (a Shared item never reads my environment variables, so the value
+        # stored in it is the one its tools USE — round 1, F1) and the person
+        # holds that name there too (until they sign in on their page, the
+        # item's value is the only one their tools have — round 2, F1).
         found = []
         for user_id, item_id, held_names in held:
             policy = (await asyncio.to_thread(locator.env_layers_of, item_id)).policy
-            shadowing = [n for n in held_names if policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)]
+            mine = await asyncio.to_thread(store.personal, user_id)
+            shadowing = [
+                n
+                for n in held_names
+                if policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY) and n in mine
+            ]
             if shadowing:
                 found.append((user_id, item_id, shadowing))
         if body.apply:

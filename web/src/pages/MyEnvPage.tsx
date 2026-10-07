@@ -17,7 +17,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
+import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { qk } from "../api/queryKeys";
 import { Logins } from "../components/EnvVarsModal";
 import { useT } from "../lib/i18n";
@@ -49,6 +49,7 @@ export function MyEnvPage({
   // Every write is the whole set, built on what the server last said — a write
   // is never based on a form that could be stale.
   const save = useMutation({
+    scope: PERSONAL_ENV_WRITES,
     mutationFn: async (change: (current: Record<string, string>) => Record<string, string>) => {
       const current = (
         // `staleTime: 0`: a re-read inside the app's 30s window would otherwise
@@ -83,6 +84,11 @@ export function MyEnvPage({
         <h2 id="my-env-values">{t("myEnv.values")}</h2>
         {mine.isPending ? (
           <p style={MUTED}>…</p>
+        ) : mine.isError ? (
+          // Not "nothing yet": a row it could not read is not an empty one.
+          <p data-testid="my-env-load-failed" role="alert" style={MUTED}>
+            {t("myEnv.loadFailed")}
+          </p>
         ) : Object.keys(values).length === 0 ? (
           <p data-testid="my-env-empty" style={MUTED}>
             {t("myEnv.empty")}

@@ -982,6 +982,10 @@ export const messages = {
     en: "Every item can use these values, but only an item that sets the variable to Private first or Private only gets it. A value you set inside an item comes first. When a sign-in expires, sign in again here once.",
   },
   "myEnv.values": { "zh-TW": "值", en: "Values" },
+  "myEnv.loadFailed": {
+    "zh-TW": "讀不到你的值,請重新整理再試一次。",
+    en: "Couldn't load your values. Reload to try again.",
+  },
   "myEnv.empty": {
     "zh-TW": "還沒有值。登入下面的系統,或自己新增一個。",
     en: "Nothing yet. Sign in to a system below, or add a value yourself.",

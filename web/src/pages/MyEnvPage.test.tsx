@@ -106,6 +106,37 @@ describe("MyEnvPage", () => {
     );
   });
 
+  it("keeps both of two quick removals", async () => {
+    // Round 2, F2: each save re-reads then writes the whole row; two at once
+    // read the same row, and the second write put back what the first removed.
+    let stored: Record<string, string> = { A: "1", B: "2" };
+    const client = open({ values: { ...stored } });
+    client.get.mockImplementation(async () => ({ values: { ...stored }, updated: {} }));
+    client.put.mockImplementation(async (next: Record<string, string>) => {
+      await new Promise((r) => setTimeout(r, 20));
+      stored = next;
+      return { values: next, updated: {} };
+    });
+    await screen.findByTestId("my-env-row-A");
+
+    fireEvent.click(within(screen.getByTestId("my-env-row-A")).getByTestId("my-env-remove"));
+    fireEvent.click(within(screen.getByTestId("my-env-row-B")).getByTestId("my-env-remove"));
+
+    await waitFor(() => expect(client.put).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(stored).toEqual({}));
+  });
+
+  it("does not call a row it could not read empty", async () => {
+    // Round 2, F4: a failed read showed "nothing yet".
+    const client = open();
+    client.get.mockRejectedValue(new Error("down"));
+    cleanup();
+    renderWithQuery(<MyEnvPage client={client} />, makeQueryClient());
+
+    expect(await screen.findByTestId("my-env-load-failed", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByTestId("my-env-empty")).not.toBeInTheDocument();
+  });
+
   it("saves what a sign-in returns at once, and never the credential", async () => {
     const client = open({ values: { OTHER: "kept" } });
 

@@ -36,11 +36,15 @@ function open({
   envPolicy = { ERP_TOKEN: "private_first" },
   mine = {},
   personal = {},
+  providers = [SAP] as (typeof SAP)[],
+  tools = [ERP],
 }: {
   envVars?: Record<string, string>;
   envPolicy?: Record<string, string>;
   mine?: Record<string, string>;
   personal?: Record<string, string>;
+  providers?: (typeof SAP)[];
+  tools?: ItemToolState[];
 } = {}) {
   const privateClient = {
     get: vi.fn(async () => ({ values: mine, auto: {} })),
@@ -61,8 +65,8 @@ function open({
       slug="rca"
       itemId="i1"
       client={{
-        getItemTools: vi.fn(async () => ({ tools: [ERP], updateNeedsClose: false, canClose: false })),
-        getEnvProviders: vi.fn(async () => [SAP]),
+        getItemTools: vi.fn(async () => ({ tools, updateNeedsClose: false, canClose: false })),
+        getEnvProviders: vi.fn(async () => providers),
         resolveEnvProvider,
       }}
       privateClient={privateClient}
@@ -142,6 +146,55 @@ describe("my environment variables in an item's Env panel", () => {
       expect(privateClient.put).toHaveBeenCalledWith("rca", "i1", { ERP_TOKEN: "fresh" }),
     );
     expect(personalClient.put).not.toHaveBeenCalled();
+  });
+
+  it("routes a sign-in by the policy the panel shows, saved or not", async () => {
+    // Round 2, F3: routed by the SAVED policy, a token signed in after the
+    // owner switched a name to Private first (not yet saved) went into this
+    // item's own values — where, once saved, it would hide my environment
+    // variables for good.
+    const { privateClient, personalClient } = open({ envPolicy: {} });
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
+    fireEvent.click(await screen.findByTestId("env-policy-ERP_TOKEN-private_first"));
+    fireEvent.click(screen.getByTestId("env-tab-mine"));
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap"));
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    await waitFor(() => expect(personalClient.put).toHaveBeenCalledWith({ ERP_TOKEN: "fresh" }));
+    expect(privateClient.put).not.toHaveBeenCalled();
+  });
+
+  it("keeps both of two sign-ins made one right after the other", async () => {
+    // Round 2, F2: each sign-in re-reads the row and writes all of it; two at
+    // once read the same row, and the second write dropped the first's token.
+    const MES = { id: "mes", label: "MES login", produces: ["MES_TOKEN"], inputs: [] };
+    const { personalClient, resolveEnvProvider } = open({
+      envPolicy: { ERP_TOKEN: "private_first", MES_TOKEN: "private_first" },
+      providers: [SAP, MES],
+      tools: [
+        ERP,
+        { ...ERP, key: "mes", group: "mes", label: "mes", env_needs: [{ name: "MES_TOKEN", description: "", required: true }] },
+      ],
+    });
+    let stored: Record<string, string> = {};
+    personalClient.get.mockImplementation(async () => ({ values: { ...stored }, updated: {} }));
+    personalClient.put.mockImplementation(async (next: Record<string, string>) => {
+      await new Promise((r) => setTimeout(r, 20));
+      stored = next;
+      return { values: next, updated: {} };
+    });
+    resolveEnvProvider.mockImplementation(async (_s: string, _i: string, id: string) =>
+      id === "mes" ? { MES_TOKEN: "m" } : { ERP_TOKEN: "e" },
+    );
+
+    fireEvent.click(await screen.findByTestId("env-provider-sap"));
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+    fireEvent.click(await screen.findByTestId("env-provider-mes"));
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    await waitFor(() => expect(personalClient.put).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(stored).toEqual({ ERP_TOKEN: "e", MES_TOKEN: "m" }));
   });
 
   it("keeps a value saved from another tab since the panel opened", async () => {

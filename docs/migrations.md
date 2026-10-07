@@ -1508,19 +1508,22 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 **資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。新的資料表 `PersonalEnv` 隨程式建立，沒有 auto-CRUD 路由。
 
-- **#869 時期在各 item 登入留下的 token，要不要清，由你決定（可選，rollout 之後任何時候；腳本打的路由這一版才有）**：
+- **#869 時期在各 item 登入留下的 token，要不要清，由你決定（可選，rollout 之後；可以隔一段時間再跑一次）**：
   ```bash
   uv run python scripts/clear_item_sign_ins.py                 # 先 dry run：列出（人、item、變數名），不印值、不改任何東西
   uv run python scripts/clear_item_sign_ins.py --apply         # 確認後才刪
   uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API> --header "<你的閘道讀的身分 header>: <值>"
   ```
   - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。在把變數設成 Private first／Private only 的 item 裡，
-    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清這種 item**；Shared 的 item
-    本來就不讀「我的環境變數」，留在裡面的值正是它在用的，所以不動。名單是「某個系統登入會產生的變數名」，取自 API 實際載入的
+    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清真的蓋住新值的那些**：
+    那個 item 把變數設成 Private first／Private only，**而且**那個人在「我的環境變數」也有同名的值。Shared 的 item 本來就不讀
+    「我的環境變數」，留在裡面的值正是它在用的，所以不動；那個人還沒在「我的環境變數」登入的話，item 裡的舊值是他的 tool 唯一
+    拿得到的，清掉反而壞掉，所以也不動。因此剛 rollout 時多半清不到幾筆；使用者陸續在「我的環境變數」重新登入之後再跑一次，
+    才會清到他們的。腳本打的路由這一版才有，所以要在 rollout 之後跑。名單是「某個系統登入會產生的變數名」，取自 API 實際載入的
     `server.env_providers`，不是手抄的。手打的其他變數、「我的環境變數」、共用值、SSO 自動帶入的值都不動。
   - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值）。不帶 header 時，身分是部署給「沒帶身分的請求」的那個
     （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。被拒絕（HTTP 403，不在 superusers
-    或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後再跑會是 0 筆。
+    或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後馬上再跑會是 0 筆。
   - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
     「只有我」會顯示「使用中：你的（這個 item）」。不清也可以讓使用者自己在那個 item 按「清除我在這個 item 的值」。
 

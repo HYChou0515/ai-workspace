@@ -86,7 +86,9 @@ def test_the_owner_is_not_told_to_sign_in_again_for_someone_else():
     executor.notify_failure(_failed(item_id), "run-1")
 
     rm = spec.get_resource_manager(Notification)
-    bodies = {r.data.recipient: r.data.body for r in rm.list_resources()}
+    notices = [r.data for r in rm.list_resources()]
+    assert all(isinstance(n, Notification) for n in notices)
+    bodies = {n.recipient: n.body for n in notices if isinstance(n, Notification)}
     assert "My environment variables" in bodies["bob"]
     assert bodies["owner-o"] == ""
 
