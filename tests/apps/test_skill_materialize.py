@@ -404,7 +404,7 @@ async def _published(hub, body: str = "v1\n") -> str:
 async def test_a_hub_copy_records_its_entry_and_reads_as_live_with_nothing_to_update():
     import msgspec
 
-    from workspace_app.apps.skill_payload import SkillOrigin, origin_for
+    from workspace_app.apps.skill_payload import SkillOrigin
 
     _spec, hub = _hub()
     entry = await _published(hub)
@@ -413,7 +413,9 @@ async def test_a_hub_copy_records_its_entry_and_reads_as_live_with_nothing_to_up
     await install_hub_skill(files, inv, hub, entry)
 
     origin = msgspec.json.decode(await files.read(inv, "/.skill/triage/.origin"), type=SkillOrigin)
-    assert origin == origin_for("hub", await hub.payload_of(entry), entry=entry)
+    row = hub.get(entry)
+    assert row is not None
+    assert origin == hub.copy_manifest(entry, row)
     assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
     upstream = await skill_upstream(files, inv, "rca", "local-lab", "triage", hub=hub, viewer="bob")
     assert upstream is not None
@@ -609,13 +611,14 @@ async def test_install_counts_the_manifest_in_its_room_check_so_a_refusal_writes
     The manifest is part of the operation; its bytes are in the check."""
     import msgspec
 
-    from workspace_app.apps.skill_payload import origin_for
     from workspace_app.files import WorkspaceFull
 
     _spec, hub = _hub()
     entry = await _published(hub)
     payload = await hub.payload_of(entry)
-    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry))
+    row = hub.get(entry)
+    assert row is not None
+    manifest = msgspec.json.encode(hub.copy_manifest(entry, row))
     need = sum(len(b) for b in payload.values()) + len(manifest)
 
     short = WorkspaceFiles(MemoryFileStore(), quota=need - 1)

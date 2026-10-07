@@ -532,7 +532,7 @@ async def test_a_publish_that_cannot_write_its_manifest_is_refused_before_anythi
     checked first — and the reviewer is not spent on a publish that cannot
     finish."""
     from workspace_app.apps.skill_hub import mint_entry_id
-    from workspace_app.apps.skill_payload import origin_for
+    from workspace_app.apps.skill_payload import SkillOrigin
     from workspace_app.files.facade import WorkspaceFull
 
     hub, reviewer = _hub(), _Reviewer()
@@ -541,7 +541,10 @@ async def test_a_publish_that_cannot_write_its_manifest_is_refused_before_anythi
     # the manifest EXACTLY (round 3: a probe naming a shorter id than the one
     # `publish` mints under-counted by 32 bytes, passed here, and the write
     # then failed after the reviewer was spent).
-    manifest = msgspec.json.encode(origin_for("hub", {"SKILL.md": md}, entry=mint_entry_id()))
+    # `publish` mints, and of the commit (a git sha1 is always 40 hex).
+    manifest = msgspec.json.encode(
+        SkillOrigin(source="hub", files={}, entry=mint_entry_id(), commit="0" * 40)
+    )
     ctx = RunContextWrapper(
         AgentToolContext(
             investigation_id="inv-1",

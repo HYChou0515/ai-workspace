@@ -2605,7 +2605,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         skill_size_problem,
         validate_skill_payload,
     )
-    from ..apps.skill_payload import ORIGIN_FILE, origin_for
+    from ..apps.skill_payload import ORIGIN_FILE, SkillOrigin
     from ..apps.skills import (
         WORKSPACE_SKILL_DIR,
         workspace_skill_metas,
@@ -2690,9 +2690,11 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         # already there (a re-publish replaces one of the same length, which
         # passes on a full workspace), asking rather than charging
         # (`record=False` — nothing is written yet). The size does not depend
-        # on which id the manifest names (`mint_entry_id` mints them all one
-        # length).
-        probe = origin_for("hub", payload, entry=existed or mint_entry_id())
+        # on which id or commit the manifest names (`mint_entry_id` mints them
+        # all one length; a commit is always a 40-hex sha1).
+        probe = SkillOrigin(
+            source="hub", files={}, entry=existed or mint_entry_id(), commit="0" * 40
+        )
         growth = len(msgspec.json.encode(probe)) - manifest_size
         for refusal in await files.room_refusals(inv, growth, record=False):
             raise refusal
@@ -2727,7 +2729,9 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
     # and Refresh brings it. A package copy keeps tracking the package.
     manifest_unwritten = False
     if tracks_entry:
-        manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
+        published = hub.get(entry_id)
+        assert published is not None  # it was just written
+        manifest = msgspec.json.encode(hub.copy_manifest(entry_id, published))
         try:
             await files.write(inv, manifest_path, manifest)
         except WorkspaceFull:

@@ -86,25 +86,22 @@ async def test_a_published_skill_can_be_read_back_with_its_files(store: SkillHub
     assert await store.payload_of(entry_id) == PAYLOAD
 
 
-async def test_the_entrys_origin_is_exactly_what_origin_for_computes(
+async def test_a_copys_manifest_names_the_entry_and_the_commit_and_no_file(
     store: SkillHubStore,
 ) -> None:
-    """PARITY, with `origin_for` as the oracle.
-
-    An installed copy's `.origin` and the hub entry's `origin` must be the same
-    manifest, computed by the same function — `skill_upstream` compares
-    the two, and two implementations of "the hash of these files" kept alike by
-    hand diverge the moment one is edited. So the entry does not compute a hash;
-    it stores the one `origin_for` gives it.
-    """
+    """G12: a copy records WHICH version it came from, not a hash per file —
+    the files' identities are in git, so the manifest stays one line however
+    many files the skill has."""
     entry_id = await _publish(store)
 
     got = store.get(entry_id)
-    assert got is not None
-    assert got.origin == origin_for("hub", PAYLOAD, entry=entry_id)
-    assert got.origin.source == "hub"
-    assert got.origin.entry == entry_id, (
-        "the manifest must name the entry a copy will point back at"
+    assert got is not None and len(got.commit) == 40
+    manifest = store.copy_manifest(entry_id, got)
+    assert (manifest.source, manifest.entry, manifest.commit, manifest.files) == (
+        "hub",
+        entry_id,
+        got.commit,
+        {},
     )
 
 

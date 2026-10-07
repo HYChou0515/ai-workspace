@@ -102,6 +102,13 @@ class SkillOrigin(Struct):
     #: turning every materialized skill into "update available" over a schema
     #: change would be the exact silent failure the manifest exists to prevent.
     entry: str = ""
+    #: The skill hub version this copy was installed (or last refreshed)
+    #: from — a git commit (plan-skill-hub-history G12). When set, `files` is
+    #: empty: what was shipped is that commit's tree, read from git when a
+    #: refresh needs it, so a copy carries no map however many files the skill
+    #: has. "" for the shared / profile sources and for a copy made before
+    #: the git store, which keep `files`.
+    commit: str = ""
 
 
 def origin_for(

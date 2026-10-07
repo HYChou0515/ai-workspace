@@ -28,6 +28,7 @@ import ast
 import asyncio
 import contextlib
 import datetime as dt
+import hashlib
 import random
 import re
 import uuid
@@ -41,7 +42,7 @@ from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..perm import Actor, Permission, authorize
 from ..resources.groups import groups_of
-from .skill_payload import SkillOrigin, origin_for
+from .skill_payload import SkillOrigin
 from .skills import SKILL_BODY_CAP, SkillError, _parse_frontmatter
 
 if TYPE_CHECKING:
@@ -75,6 +76,9 @@ _FIRST_PUBLISH_TRIES = 5
 #: A pending draft older than this is a dead publisher's, not one in flight
 #: (§7 Q3): far longer than a publish takes.
 _DRAFT_TTL = dt.timedelta(minutes=10)
+# Versions whose sha256 map `file_sha256s` keeps; a version never changes, so
+# an entry only ever needs its current one — the bound is entries, not versions.
+_SHA256_CACHE = 256
 
 
 class SkillHubReview(Struct):
@@ -109,12 +113,6 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     source_item: str
     source_app: str
     source_profile: str
-    #: `origin_for("hub", payload, entry=<this id>)` — the SAME manifest an
-    #: installed copy writes to its `.origin`, computed by the same function.
-    #: `skill_upstream` compares the two, hash for hash, WITHOUT reading the
-    #: files back; two hash implementations kept alike by hand would diverge
-    #: the moment one was edited.
-    origin: SkillOrigin
     #: The AI reviewer's verdict at publish time. Required: no review, no row.
     review: SkillHubReview
     #: The original's entry id when this is a fork; "" for a root. A string
@@ -143,6 +141,11 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: invisible to every reader until the version is in git. Distinct from a
     #: pre-git entry, which also has no `commit` but is live.
     pending: bool = False
+    #: An entry published before the git store: `origin_for("hub", payload)`,
+    #: the per-file sha256 of what it ships — how its copies are compared until
+    #: it is migrated. Not written for a version in git: that version's files
+    #: are its commit's tree (plan-skill-hub-history G12).
+    origin: SkillOrigin = field(default_factory=lambda: SkillOrigin(source="hub", files={}))
 
 
 # ── what publishing checks ───────────────────────────────────────────────────
@@ -399,6 +402,7 @@ class SkillHubStore:
         self._legacy = legacy
         self._sleep = sleep
         self._now = now
+        self._sha256s: dict[tuple[str, str], dict[str, str]] = {}
 
     def _rm(self):  # noqa: ANN202 — specstar's manager type is not exported
         return self._spec.get_resource_manager(SkillHubEntry)
@@ -516,6 +520,40 @@ class SkillHubStore:
         entry = self.get(entry_id)
         assert entry is not None  # the caller resolved it a moment ago
         return (await self._files(entry_id, entry, ["SKILL.md"]))["SKILL.md"]
+
+    async def file_names(self, entry_id: str) -> list[str]:
+        """The files of the current version, without reading them."""
+        entry = self.get(entry_id)
+        assert entry is not None
+        if entry.commit:
+            return sorted(await self.repos.tree(entry_id, entry.commit))
+        return sorted(entry.origin.files)
+
+    def copy_manifest(self, entry_id: str, entry: SkillHubEntry) -> SkillOrigin:
+        """What a copy of the entry's current version records in its `.origin`
+        (G12): the commit — or, for an entry not yet in git, the per-file
+        sha256 it was published with."""
+        if entry.commit:
+            return SkillOrigin(source="hub", files={}, entry=entry_id, commit=entry.commit)
+        return SkillOrigin(source="hub", files=dict(entry.origin.files), entry=entry_id)
+
+    async def file_sha256s(self, entry_id: str) -> dict[str, str]:
+        """The current version as the per-file sha256 map a copy made before the
+        git store carries (G17) — computed once per version, since a Skills
+        panel asks it for every such copy on every open."""
+        entry = self.get(entry_id)
+        assert entry is not None and entry.commit
+        key = (entry_id, entry.commit)
+        if key not in self._sha256s:
+            tree = await self.repos.tree(entry_id, entry.commit)
+            plain = [p for p, f in tree.items() if f.lfs is None]
+            data = await self.repos.read(entry_id, entry.commit, paths=plain) if plain else {}
+            shas = {p: f.lfs[0] for p, f in tree.items() if f.lfs is not None}
+            shas.update({p: hashlib.sha256(b).hexdigest() for p, b in data.items()})
+            if len(self._sha256s) >= _SHA256_CACHE:
+                self._sha256s.pop(next(iter(self._sha256s)))
+            self._sha256s[key] = shas
+        return dict(self._sha256s[key])
 
     async def payload_of(self, entry_id: str) -> dict[str, bytes]:
         """Every file of the version the ROW points at, keyed like
@@ -635,7 +673,6 @@ class SkillHubStore:
             source_item=source_item,
             source_app=source_app,
             source_profile=source_profile,
-            origin=origin_for("hub", payload, entry=""),
             review=review,
             forked_from=forked_from,
             referenced_tools=list(referenced_tools),
@@ -652,9 +689,7 @@ class SkillHubStore:
                 with contextlib.suppress(ResourceIDNotFoundError):
                     self._rm().permanently_delete(entry_id)
                 raise
-            final = msgspec.structs.replace(
-                row, origin=origin_for("hub", payload, entry=entry_id), commit=commit
-            )
+            final = msgspec.structs.replace(row, commit=commit)
             await self._tag(entry_id, self._update(entry_id, final), commit)
             return entry_id
 
@@ -664,7 +699,6 @@ class SkillHubStore:
         final = msgspec.structs.replace(
             row,
             owner=current.owner,
-            origin=origin_for("hub", payload, entry=existing),
             # Set once, when the fork is born. A re-publish does not know (or
             # pass) where the fork came from; the row does.
             forked_from=current.forked_from,

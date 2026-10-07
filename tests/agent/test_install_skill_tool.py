@@ -25,7 +25,7 @@ from workspace_app.apps.skill_hub import (
     register_skill_hub,
 )
 from workspace_app.apps.skill_hub_git import SkillHubRepos
-from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin, origin_for
+from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
 from workspace_app.apps.skills import WORKSPACE_SKILL_DIR, workspace_skill_metas
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
@@ -92,7 +92,9 @@ async def test_an_installed_entry_is_a_copy_the_next_turn_can_load():
         await files.read(inv, f"/{WORKSPACE_SKILL_DIR}/triage-reflow/{ORIGIN_FILE}"),
         type=SkillOrigin,
     )
-    assert origin == origin_for("hub", PAYLOAD, entry=entry)
+    row = hub.get(entry)
+    assert row is not None
+    assert origin == SkillOrigin(source="hub", files={}, entry=entry, commit=row.commit)
 
 
 async def test_tools_this_app_lacks_are_named_not_hidden():

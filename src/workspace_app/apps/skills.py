@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import msgspec
 
 from .frontmatter import FrontmatterError, parse_frontmatter
+from .skill_hub_git import TreeFile, same_content
 from .skill_payload import (
     COPYING_FILE,
     ORIGIN_FILE,
@@ -666,6 +667,10 @@ class Upstream(msgspec.Struct, frozen=True):
     files: dict[str, str]
     payload: dict[str, bytes]
     entry: str = ""
+    #: For a skill hub entry in git: the commit of its current version. Its
+    #: files are then read from git when needed, and `files` / `payload` stay
+    #: empty (plan-skill-hub-history G12–G14).
+    commit: str = ""
 
 
 async def resolve_upstream(
@@ -700,6 +705,17 @@ async def resolve_upstream(
         state, entry = hub.state_for(origin.entry, viewer)
         if entry is None:
             return Upstream(source="hub", state=state, origin=origin, files={}, payload={})
+        if entry.commit:
+            return Upstream(
+                source="hub",
+                state="live",
+                origin=origin,
+                files={},
+                payload={},
+                entry=origin.entry,
+                commit=entry.commit,
+            )
+        # Not migrated into git yet: its per-file hashes are on the row.
         payload = await hub.payload_of(origin.entry) if with_payload else {}
         return Upstream(
             source="hub",
@@ -756,6 +772,15 @@ async def skill_upstream(
         return None
     if up.state != "live":
         return SkillUpstream(state=up.state, update_available=False)
+    if up.commit and up.origin.commit:
+        # G13: one comparison of two strings — no file is read, from git or here.
+        return SkillUpstream(state="live", update_available=up.origin.commit != up.commit)
+    if up.commit:
+        # A copy made before the git store (G17): its sha256 map against the
+        # current version's, computed from git once per version.
+        assert hub is not None  # `resolve_upstream` raises for a hub copy without one
+        current = await hub.file_sha256s(up.entry)
+        return SkillUpstream(state="live", update_available=up.origin.files != current)
     return SkillUpstream(state="live", update_available=up.origin.files != up.files)
 
 
@@ -819,7 +844,7 @@ async def install_hub_skill(
     assert entry is not None  # the caller checked `state_for` first
     payload = await hub.payload_of(entry_id)
     root = f"/{WORKSPACE_SKILL_DIR}/{entry.name}"
-    manifest = msgspec.json.encode(origin_for("hub", payload, entry=entry_id))
+    manifest = msgspec.json.encode(hub.copy_manifest(entry_id, entry))
     # The whole folder is one operation (#538): checked once up front, so a
     # workspace with room for the first file and not the rest refuses cleanly
     # instead of leaving half a folder with no `.origin` — which would then
@@ -890,8 +915,6 @@ async def _refresh(
     viewer: str,
 ) -> SkillRefresh:
     """`refresh_skill`'s work, run under `system_writes`."""
-    from ..filestore.protocol import FileNotFound
-
     root = f"/{WORKSPACE_SKILL_DIR}/{name}"
     up = await resolve_upstream(
         files, workspace_id, app_slug, profile, name, hub=hub, viewer=viewer, with_payload=True
@@ -900,52 +923,128 @@ async def _refresh(
     # to bring, and nothing here is touched — the copy is the workspace's own.
     if up is None or up.state != "live":
         return SkillRefresh(updated=[], skipped=[], removed=[])
-    origin, source, payload = up.origin, up.source, up.payload
+    origin, source = up.origin, up.source
+    if up.commit:
+        # A skill hub entry in git (G14): the baseline is the tree of the commit
+        # this copy came from (or, for a copy made before the git store, its
+        # sha256 map), the upstream is the current commit's tree, and content
+        # is read from git only for the files being written.
+        assert hub is not None
+        repos, entry_id, commit = hub.repos, up.entry, up.commit
+        base: Mapping[str, TreeFile | str] = (
+            await repos.tree(entry_id, origin.commit) if origin.commit else dict(origin.files)
+        )
+        current: Mapping[str, TreeFile | str] = await repos.tree(entry_id, commit)
 
-    async def _unchanged(rel: str) -> bool:
-        """Whether the workspace copy still holds the bytes we shipped. Only ever
-        asked about a file the manifest records, so the lookup cannot miss."""
-        shipped = origin.files[rel]
+        async def fetch(paths: list[str]) -> dict[str, bytes]:
+            return await repos.read(entry_id, commit, paths=paths) if paths else {}
+
+        entry = hub.get(entry_id)
+        assert entry is not None  # `resolve_upstream` just found it live
+        manifest = hub.copy_manifest(entry_id, entry)
+    else:
+        payload = up.payload
+        base = dict(origin.files)
+        current = origin_for(source, payload).files
+
+        async def fetch(paths: list[str]) -> dict[str, bytes]:
+            return {p: payload[p] for p in paths}
+
+        manifest = origin_for(source, payload, entry=up.entry)
+    updated, skipped, removed = await _three_way(
+        files, workspace_id, root, base=base, current=current, fetch=fetch, force=force
+    )
+    await files.write(workspace_id, f"{root}/{ORIGIN_FILE}", msgspec.json.encode(manifest))
+    return SkillRefresh(updated=updated, skipped=skipped, removed=removed)
+
+
+def _shipped_matches(shipped: TreeFile | str, data: bytes) -> bool:
+    """Whether `data` is what was shipped as `shipped` — a git tree file
+    (blob id, or sha256 for LFS) or a manifest's sha256."""
+    if isinstance(shipped, str):
+        return hashlib.sha256(data).hexdigest() == shipped
+    return same_content(shipped, data)
+
+
+async def _three_way(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    root: str,
+    *,
+    base: Mapping[str, TreeFile | str],
+    current: Mapping[str, TreeFile | str],
+    fetch: Callable[[list[str]], Awaitable[dict[str, bytes]]],
+    force: bool,
+) -> tuple[list[str], list[str], list[str]]:
+    """The refresh rule, per file, never wholesale, with `base` = what this copy
+    was shipped and `current` = what upstream ships now (each a git tree or a
+    sha256 map): upstream did not change it → nothing to bring; it changed and
+    the copy still holds what was shipped → replaced; the copy was edited →
+    left alone and reported; upstream dropped it → removed only when the copy
+    still holds what was shipped. `force` restores every shipped file."""
+    from ..filestore.protocol import FileNotFound
+
+    # A sha256 baseline against a git file that is not LFS needs that file's
+    # bytes to compare; read once, together, and reused if it is written.
+    mixed = [
+        p
+        for p, cur in current.items()
+        if isinstance(base.get(p), str) and isinstance(cur, TreeFile) and cur.lfs is None
+    ]
+    fetched = await fetch(mixed) if mixed and not force else {}
+
+    def changed_upstream(rel: str) -> bool:
+        shipped, now = base.get(rel), current[rel]
+        if shipped is None:
+            return True
+        if isinstance(shipped, str) and isinstance(now, str):
+            return shipped != now
+        if isinstance(shipped, TreeFile) and isinstance(now, TreeFile):
+            return shipped.blob_id != now.blob_id
+        if isinstance(shipped, str) and isinstance(now, TreeFile):
+            sha = now.lfs[0] if now.lfs is not None else hashlib.sha256(fetched[rel]).hexdigest()
+            return sha != shipped
+        raise AssertionError(f"a git baseline against a non-git upstream: {rel}")
+
+    async def unchanged_here(rel: str) -> bool:
+        """Whether the copy still holds the bytes shipped as `base[rel]`."""
         try:
             here = await files.read(workspace_id, f"{root}/{rel}")
         except FileNotFound:
             return False
-        return hashlib.sha256(here).hexdigest() == shipped
+        return _shipped_matches(base[rel], here)
 
-    updated: list[str] = []
+    to_write: list[str] = []
     skipped: list[str] = []
-    for rel, data in payload.items():
-        if not force and origin.files.get(rel) == hashlib.sha256(data).hexdigest():
+    for rel in sorted(current):
+        if not force and not changed_upstream(rel):
             # Upstream did not touch this file, so there is nothing to bring —
             # regardless of what happened to it here. "Nothing to bring" is not
             # the same as "skipped": reporting it would bury the files the user
             # actually needs to know about among every unchanged one.
             continue
-        if not force and rel in origin.files and not await _unchanged(rel):
+        if not force and rel in base and not await unchanged_here(rel):
             skipped.append(rel)
             continue
-        await files.write(workspace_id, f"{root}/{rel}", data)
-        updated.append(rel)
+        to_write.append(rel)
+    data = {**fetched, **(await fetch([p for p in to_write if p not in fetched]))}
+    for rel in to_write:
+        await files.write(workspace_id, f"{root}/{rel}", data[rel])
     removed: list[str] = []
-    for rel in origin.files:
-        if rel in payload:
+    for rel in sorted(base):
+        if rel in current:
             continue
         # Retired upstream. Dropping follows the same rule as changing: a file the
         # AI edited is its work now, and upstream removing the original is not a
         # licence to delete it.
-        if not force and not await _unchanged(rel):
+        if not force and not await unchanged_here(rel):
             skipped.append(rel)
             continue
         # A refresh cut short after this delete keeps the old `.origin`, which
         # still lists the file, so the next one meets it gone (review #865 round 3).
         await _delete_if_there(files, workspace_id, f"{root}/{rel}")
         removed.append(rel)
-    await files.write(
-        workspace_id,
-        f"{root}/{ORIGIN_FILE}",
-        msgspec.json.encode(origin_for(source, payload, entry=up.entry)),
-    )
-    return SkillRefresh(updated=sorted(updated), skipped=sorted(skipped), removed=sorted(removed))
+    return sorted(to_write), sorted(skipped), sorted(removed)
 
 
 async def resolve_skill_body(
