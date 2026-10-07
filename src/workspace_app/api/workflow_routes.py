@@ -93,7 +93,7 @@ class SchedulesOut(BaseModel):
     can_edit: bool = False
     can_run: bool = False
     #: Whether the viewer may read the item's files (rows come without `with`
-    #: otherwise, and a refused row cannot be removed by its value).
+    #: otherwise, and a refused row is matched for Remove against that value).
     can_read: bool = False
 
 

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api";
@@ -11,6 +12,7 @@ import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
 import type { FileContent } from "../api/types";
 import { qk } from "../api/queryKeys";
 import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
+import { DialogProvider } from "./Dialog";
 import { ItemChatShell } from "./ItemChatShell";
 
 // The active chat now renders the real RCA AgentPanel (model picker, kbApi, dialogs
@@ -709,6 +711,55 @@ describe("run-in-this-chat lives in the bar", () => {
         client,
       );
       await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B"));
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("a ?chat= read for one item holds nothing on the next item the shell shows", async () => {
+    // Review round 3: the shell is not remounted between items, so the chat the
+    // address named for item A was still held when it showed item B — whose
+    // fresh cached list starts no fetch — and B opened with no chat at all.
+    const { makeQueryClient } = await import("../api/queryClient");
+    const lists: Record<string, ItemChatSummary[]> = {
+      A: [
+        summary({ chat_id: "conversation:a0", is_default: true, title: "A0" }),
+        summary({ chat_id: "wui:A:sched", is_default: false, title: "A-sched" }),
+      ],
+      B: [summary({ chat_id: "conversation:b0", is_default: true, title: "B0" })],
+    };
+    stubChatApi([]);
+    vi.spyOn(itemChatApi, "listChats").mockImplementation(async (_slug, itemId) => lists[itemId]);
+    const client = makeQueryClient();
+    client.setQueryData(qk.itemChats("topic-hub", "B"), lists.B); // fresh in the cache
+    const shell = (itemId: string) => (
+      <ItemChatShell
+        slug="topic-hub"
+        itemId={itemId}
+        profile="default"
+        picker={[]}
+        suggestions={[]}
+        appTitle="Topic Hub"
+        attachedPreset=""
+        onAttachPreset={() => {}}
+        uploadDir="uploads"
+        chatSwitcher="always"
+        showCollections={false}
+      />
+    );
+    window.history.pushState({}, "", "/a/topic-hub/A?chat=wui%3AA%3Asched");
+    try {
+      const { rerender } = renderWithQuery(shell("A"), client);
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("A-sched"));
+
+      window.history.pushState({}, "", "/a/topic-hub/B");
+      rerender(
+        <QueryClientProvider client={client}>
+          <DialogProvider>{shell("B")}</DialogProvider>
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toHaveTextContent("B0"));
     } finally {
       window.history.pushState({}, "", "/");
     }

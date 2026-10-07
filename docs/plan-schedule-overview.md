@@ -82,8 +82,8 @@ was wrong about the first item):
   A schedule that has never fired, whose moment passed while the sweep was not
   ticking, then waits for its next period. Host-managed deploys do not run the
   hook from the mirror, so they are not affected.
-- A workflow's sandbox step that writes `schedules.json` is registered at the
-  item's next chat turn end (the reconcile runs only from a chat send), not
+- On a host-managed deploy, a workflow's sandbox step that writes
+  `schedules.json` is registered at the item's next chat turn end (the reconcile runs only from a chat send), not
   when the step finishes.
 - An old identity that has never fired, whose file is re-saved for another row
   after this period's target while the sweep was also down, is treated as new
@@ -169,8 +169,10 @@ Written after the phases, each line checked against the code it names.
   the same way for its "next run" sentence.
 - **§3, Remove also finds a row by its value.** A row the sweep refuses has no
   identity (`trigger_id: ""`), and the panel could remove those before. So
-  `RowRef.raw` — Remove only — finds the first row equal to it as JSON (object
-  key order ignored, list order kept: the old panel's `sameJson` rule). The
+  `RowRef.raw` — Remove only — with its position `RowRef.index` (review round
+  2) names the row; it must equal the row there as JSON (object key order
+  ignored, list order kept: the old panel's `sameJson` rule), compared without
+  `with` for a viewer who may not read the files. The
   rules the panel used to hold itself moved to the server with their tests
   (P5), and the overview offers Remove on refused rows too. The item route now
   returns `can_edit` / `can_run` so the panel offers only what is allowed.
@@ -226,7 +228,7 @@ first or a mutation that reddens it:
 
 | Finding | Lens | Done |
 |---|---|---|
-| Three unchanged tests (`test_offered_workflows`, `test_schedule_binding_routes`, `test_shutdown_with_run_in_flight`) failed at `1601cf2a`: they wrote a minute schedule and ticked at once, and the birth rule held that row | regression | Stamped `landed=0` in each, as the parity test does; the class was swept — every test that ticks the app's sweep to make it FIRE now stamps (five files). Two parity tests tick unstamped: the birth-rule case on purpose, and the won't-parse case, whose sweep half reddens on nothing either way — on master too |
+| Three unchanged tests (`test_offered_workflows`, `test_schedule_binding_routes`, `test_shutdown_with_run_in_flight`) failed at `1601cf2a`: they wrote a minute schedule and ticked at once, and the birth rule held that row | regression | Stamped `landed=0` in each, as the parity test does; the class was swept — every test that ticks the app's sweep to make it FIRE now stamps (five files). Three parity tests tick unstamped: the birth-rule case on purpose, the won't-parse case (whose sweep half reddens on nothing either way — on master too), and the not-indexed case (no index row, so no stamp applies) |
 | Opening `/schedules` rebuilt every idle-reaped sandbox it listed (host-managed) | veracity | `WorkspaceFiles.read/ls(..., wake=False)`; every listing read asks not to wake (pinned) |
 | One item's read error 500'd the page | defect | Each file is guarded; a failure lists that file with a sentence |
 | `read_meta` alone received a page row's `with` | defect | Without `read_content`, rows (overview and panel) carry no `with` / `payload` |
@@ -241,7 +243,7 @@ first or a mutation that reddens it:
 Not changed, and why:
 
 - **The stamp mechanism stays.** Its two holes (host-managed `exec` writes are
-  not stamped; a kind:local re-upload moves the stamp) are written up under
+  not stamped; a re-upload by the app's mirror moves the stamp) are written up under
   Known gaps. The first falls back to the behaviour before this plan; the
   second needs a deploy the app mirrors, a never-fired row and the sweep down
   across its moment. Replacing the mechanism would be the third design of the rule.
@@ -271,3 +273,30 @@ row (its time, its `run`, an unknown key) is how a viewer recognises the
 schedule at all. A row's `trigger_id` is a hash over its folder, `run`, `with`
 and time, so a viewer who may list it could confirm a *guess* at a low-entropy
 `with` — the identity is what every action names a row by, so it stays.
+
+## Review round 3 (2026-10-07, four lenses on `c270c440`) — the last round
+
+No blocker; no fix replaced a mechanism, so no fourth round (CLAUDE.md).
+
+| Finding | Lens | Done |
+|---|---|---|
+| Round 2's address hold outlived its item: the shell is not remounted between items, so an item opened through `?chat=` left the next item (fresh cached list, no fetch) with no chat selected | regression | The address chat is tied to the item it was read for; a two-item test, red on `c270c440` |
+| The panel's Run now did not refresh the item's chat list, as the overview's does (decision 9); the overview's line was unpinned | conformance, veracity | Both refresh it; both pinned |
+| `can_read` docstrings and the `remove_schedule` docstring still described round 1's Remove; the FE types lacked `can_read` | conformance, veracity, regression | corrected; typed |
+| The read cost again: on http every item without a session costs an address read (published or not); on kind: local every item a probe | veracity | corrected in the migrations entry and the module docstring |
+| Counts and scopes: three unstamped parity tests, not two; the sandbox-step registration gap is host-managed only; one stale "kind:local" | veracity | corrected |
+
+Recorded, not fixed (rare; the alternative is a new mechanism after the review
+budget):
+
+- **A redacted viewer and a concurrent shift.** A viewer without
+  `read_content` sees two refused rows that differ only in `with` as the same
+  value; if someone rewrites the file between their listing and their Remove
+  so that the other row sits at the position they picked, it matches and is
+  removed. Only refused rows (which never fire), only within the listing's
+  staleness, and only for a viewer who could not tell the two apart. A digest
+  of the whole row would close it.
+- **A refused row whose value does not survive JSON** (`NaN`, an integer past
+  2^53) lists, but its Remove is a 409 until the file is edited by hand — the
+  old panel rewrote such a value silently instead.
+

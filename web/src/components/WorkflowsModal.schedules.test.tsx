@@ -84,6 +84,7 @@ function schedules(over: Partial<ItemSchedules> = {}): ItemSchedules {
     problems: [],
     can_edit: true,
     can_run: true,
+    can_read: true,
     ...over,
   };
 }
@@ -484,9 +485,18 @@ describe("WorkflowsModal — schedules", () => {
     runNowMock.mockResolvedValue("run-1");
     render(fakeService().svc);
 
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { qk } = await import("../api/queryKeys");
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     fireEvent.click(await screen.findByTestId("schedule-run-0"));
 
     expect(await screen.findByTestId("schedule-said-0")).toHaveTextContent("已開始執行");
+    // The run may have made the schedule's own chat: this item's chat list refreshes.
+    await waitFor(() =>
+      expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(
+        JSON.stringify(qk.itemChats("playground", "inv1")),
+      ),
+    );
     expect(runNowMock).toHaveBeenCalledWith("playground", "inv1", {
       path: ".workflows/schedules.json",
       trigger_id: "wui:it:nightly",

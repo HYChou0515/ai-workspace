@@ -63,6 +63,8 @@ export type ItemSchedules = {
    * it now — the row routes' own gates, so the panel offers only those. */
   can_edit: boolean;
   can_run: boolean;
+  /** May read the item's files — without it rows come without their `with`. */
+  can_read: boolean;
 };
 
 /** The newest run of a schedule — fired or run now. */
@@ -103,6 +105,8 @@ export type OverviewRow = {
   last_run: LastRun | null;
   can_edit: boolean;
   can_run: boolean;
+  /** May read the item's files — without it `raw` comes without its `with`. */
+  can_read: boolean;
   /** The Deployed page in the file's folder — where Open goes for a page's
    * row; `""` sends Open to the item. */
   page_path: string;

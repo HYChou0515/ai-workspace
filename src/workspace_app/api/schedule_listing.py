@@ -13,10 +13,11 @@ no live sandbox — never given one, or reaped (nothing newer than its durable
 copy: the app's reap writes back first, a host-side reap leaves the last
 checkpoint) — is read from the durable copy and rebuilt by nothing. A file the live
 workspace cannot see (still restoring) is looked for in the durable copy before
-it is skipped (`read_schedules_file`). Each file op for an item with a
-published address (a live sandbox, or a reaped one whose address remains)
-costs an address read and a liveness probe (the facade probes every op): the
-schedules file, the `.workflows/` listing, each workflow the file names. Actions (edit, remove, run
+it is skipped (`read_schedules_file`). Every file op — the schedules file,
+the `.workflows/` listing, each workflow the file names — resolves the item's
+sandbox first: on http, an address read when this pod holds no session for
+the item (published or not), then a liveness probe when there is an address or
+a session; on kind: local, a liveness probe for every item. Actions (edit, remove, run
 now) are about one item somebody pressed, and use ordinary reads.
 """
 
@@ -225,7 +226,8 @@ class OverviewRow(BaseModel):
     can_run: bool = False
     can_read: bool = False
     """Whether the viewer may read the item's files: without it a row comes
-    without its `with`, and a refused row cannot be removed by its value."""
+    without its `with`, and a refused row is matched for Remove against the
+    value as shown — without `with` (`RowRef.index`)."""
     page_path: str = ""
     """The Deployed view file in this schedules file's folder — where Open
     goes for a page's row (the WUI overview's address). "" for the item's own
@@ -416,9 +418,10 @@ def register_schedule_overview_routes(
 
     @app.post("/a/{slug}/items/{item_id}/schedules/remove", status_code=204)
     async def remove_schedule(slug: str, item_id: str, body: RowRef) -> Response:
-        """Drop one schedule from its file — by identity, or by its value as
-        written for a row the sweep refuses; every other row stays as written,
-        the refused ones included."""
+        """Drop one schedule from its file — by identity, or, for a row the
+        sweep refuses, by its position and its value as this viewer was shown it
+        (`RowRef.index`); every other row stays as written, the refused ones
+        included."""
         workspace_id = locator.require_access(slug, item_id, "edit_content")
         if body.trigger_id:
             path, doc, i, _row = await _locate(workspace_id, body)

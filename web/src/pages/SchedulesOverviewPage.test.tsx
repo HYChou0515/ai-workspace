@@ -53,6 +53,7 @@ const row = (over: Partial<OverviewRow>): OverviewRow => ({
   last_run: null,
   can_edit: true,
   can_run: true,
+  can_read: true,
   page_path: "",
   ...over,
 });
@@ -312,6 +313,7 @@ describe("SchedulesOverviewPage", () => {
           JSON.stringify(qk.schedulesOverview),
           JSON.stringify(qk.itemSchedules("rca", "i-1")),
           JSON.stringify(qk.files("i-1")),
+          JSON.stringify(qk.itemChats("rca", "i-1")),
         ]),
       );
     });

@@ -135,8 +135,11 @@ export function ItemChatShell({
 } & AgentChrome) {
   const qc = useQueryClient();
   // The chat the address names (`?chat=`), read once — the schedules overview
-  // links a schedule's last run to its own chat this way.
-  const [addressChat] = useState(chatFromAddress);
+  // links a schedule's last run to its own chat this way. Tied to the item it
+  // was read for: the shell is not remounted between items, and an id held
+  // for another item left the next one with no chat selected (review round 3).
+  const [address] = useState(() => ({ itemId, chat: chatFromAddress() }));
+  const addressChat = address.itemId === itemId ? address.chat : null;
   const { chats, isLoading, isFetchedAfterMount, createFreeChat, renameChat, deleteChat } =
     useItemChats(
       slug,
