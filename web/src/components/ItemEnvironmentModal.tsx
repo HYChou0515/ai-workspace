@@ -64,6 +64,7 @@ import { useId, useRef, useState } from "react";
 
 import { itemEnvironmentApi, type ItemEnvironment } from "../api/itemEnvironment";
 import { myResourcesApi } from "../api/myResources";
+import { qk } from "../api/queryKeys";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -98,11 +99,11 @@ export function ItemEnvironmentModal({
   const qc = useQueryClient();
   const titleId = useId();
   const env = useQuery({
-    queryKey: ["item-environment", slug, itemId],
+    queryKey: qk.itemEnvironment(slug, itemId),
     queryFn: () => itemEnvironmentApi.get(slug, itemId),
   });
   const resources = useQuery({
-    queryKey: ["my-resources"],
+    queryKey: qk.myBudget,
     queryFn: () => myResourcesApi.get(),
     // A person without a budget is the normal case, not an error state.
     retry: false,
@@ -143,11 +144,11 @@ export function ItemEnvironmentModal({
         }
       : { cpu: null, memory: null };
 
-  const envKey = ["item-environment", slug, itemId];
+  const envKey = qk.itemEnvironment(slug, itemId);
   const refresh = () =>
     Promise.all([
       qc.invalidateQueries({ queryKey: envKey }),
-      qc.invalidateQueries({ queryKey: ["my-resources"] }),
+      qc.invalidateQueries({ queryKey: qk.myBudget }),
     ]);
 
   const save = useMutation({

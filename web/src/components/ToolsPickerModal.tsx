@@ -61,7 +61,18 @@ export function ToolsPickerModal({
   // with no live sandbox the rows describe the release the next one mounts.
   const closeSandbox = useMutation({
     mutationFn: () => closeClient.closeEnvironment(itemId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.itemTools(slug, itemId) }),
+    // Everything else that shows this sandbox reads it again too, as the
+    // other close doors do — or the resources gauge keeps a sandbox that is gone.
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.itemTools(slug, itemId) }),
+        qc.invalidateQueries({ queryKey: qk.itemEnvironment(slug, itemId) }),
+        qc.invalidateQueries({ queryKey: qk.myBudget }),
+        qc.invalidateQueries({ queryKey: qk.myResources }),
+      ]),
+    // Reported here, beside the button: without the opt-out the query client
+    // also raises the app-wide write-failure toast — two messages for one press.
+    meta: { silentError: true },
   });
 
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);

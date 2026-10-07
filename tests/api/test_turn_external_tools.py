@@ -60,13 +60,16 @@ class _Host:
 
 
 class _Registry:
-    """What `_external_tools` asks of the registry: what a live sandbox the
-    session does not hold (a peer pod built it) was created with."""
+    """What `_external_tools` asks of the registry: what the item's live
+    sandbox was created with (this pod's or a peer's — the registry decides,
+    probes and bounds it; see `test_registry.py`)."""
 
     def __init__(self, mounted: dict[str, MountedTool] | None = None) -> None:
         self.mounted = mounted
+        self.asked: list[str] = []
 
-    async def mounted_tools(self, _item: str) -> dict[str, MountedTool] | None:
+    async def mounted_tools(self, item: str) -> dict[str, MountedTool] | None:
+        self.asked.append(item)
         return self.mounted
 
 
@@ -349,9 +352,10 @@ async def test_a_turn_on_a_live_sandbox_without_the_plugin_tells_the_agent_nothi
     """`confine_to_mounted` refuses what the live sandbox lacks; for a view
     plugin that refusal is the runner's to report, not the agent's to read."""
     _declaring(monkeypatch)
-    builder = _builder(slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"})
-    session = type("S", (), {"handle": object(), "tools": {}})()
-    got = await builder._external_tools("item-1", session)
+    builder = _builder(
+        slug="rca", sandbox=_Host(), plugins={"chart": "https://g/chart"}, registry=_Registry({})
+    )
+    got = await builder._external_tools("item-1", _Session())
     assert got.refused == {}
     assert got.packages == ()
 
@@ -363,11 +367,9 @@ from workspace_app.tooling.registry import describe_command  # noqa: E402
 _LATEST = "a" * 64  # what `_Host` resolves, as release 1.4.2
 
 
-def _live(tools: dict[str, MountedTool]) -> _Session:
-    s = _Session()
-    s.handle = SandboxHandle(id="live")
-    s.tools = tools
-    return s
+def _live(tools: dict[str, MountedTool]) -> _Registry:
+    """A live sandbox created with `tools`, as the registry reports it."""
+    return _Registry(tools)
 
 
 def _line(external) -> str:
@@ -377,14 +379,18 @@ def _line(external) -> str:
 
 async def test_a_sandbox_older_than_the_release_is_described_as_what_it_runs(monkeypatch):
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
-    session = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+    registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
 
-    external = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1", session)
+    external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1", _Session()
+    )
 
     line = _line(external)
     assert "tool bundle 1.3.0" in line  # the release under /.tools, not the manifest's
     assert "1.4.2" in line  # ...and the latest is named
     assert "clos" in line.lower()  # ...with the way to get it
+    # A sha says "different", not "older" (review round 1): no claim of order.
+    assert "older" not in line and "since" not in line
     # The sandbox still mounts what it mounts: only the words change.
     assert external.shas == {"wafer-history": _LATEST}
 
@@ -392,9 +398,11 @@ async def test_a_sandbox_older_than_the_release_is_described_as_what_it_runs(mon
 async def test_a_sandbox_on_the_latest_release_says_nothing_more(monkeypatch):
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
     fresh = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1", _Session())
-    session = _live({"wafer-history": MountedTool(sha=_LATEST, version="1.4.2")})
+    registry = _live({"wafer-history": MountedTool(sha=_LATEST, version="1.4.2")})
 
-    live = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1", session)
+    live = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1", _Session()
+    )
 
     assert _line(live) == _line(fresh)  # not one word added when nothing differs
 
@@ -435,12 +443,14 @@ async def test_a_peers_sandbox_without_a_tool_refuses_it_with_the_reason(monkeyp
 
 async def test_an_older_mount_with_no_recorded_release_is_still_called_older(monkeypatch):
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
-    session = _live({"wafer-history": MountedTool(sha="b" * 64, version="")})
+    registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="")})
 
-    external = await _builder(slug="rca", sandbox=_Host())._external_tools("item-1", session)
+    external = await _builder(slug="rca", sandbox=_Host(), registry=registry)._external_tools(
+        "item-1", _Session()
+    )
 
     line = _line(external)
-    assert "earlier release" in line and "1.4.2" in line
+    assert "an unrecorded release" in line and "1.4.2" in line
 
 
 async def test_a_real_chat_turn_carries_each_shas_release_to_the_sandbox_it_creates(monkeypatch):
@@ -502,3 +512,32 @@ async def test_a_real_chat_turn_carries_each_shas_release_to_the_sandbox_it_crea
     await ctx.ensure_sandbox(prepare_env=False)
     registry = captured["ex"]._turn_ctx._registry
     assert (await registry.session(item)).tools == {"t": MountedTool(sha="s2", version="2.0")}
+
+
+async def test_an_app_with_no_third_party_tools_never_asks_what_was_mounted():
+    # Review round 1: the turn build used to make no sandbox call; asking for
+    # an app that declares nothing would put a host probe in every turn.
+    registry = _Registry()
+    await _builder(slug=None, sandbox=_Host(), registry=registry)._external_tools(
+        "item-1", _Session()
+    )
+    assert registry.asked == []
+
+
+async def test_a_latest_release_with_no_version_is_not_given_one(monkeypatch):
+    # Nothing is invented in the latest's place (no "a newer release").
+    _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
+
+    class _Unversioned(_Host):
+        async def resolve_tools(self, declared):
+            answer = await super().resolve_tools(declared)
+            for described in answer["tools"].values():
+                described["version"] = ""
+            return answer
+
+    registry = _live({"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+    external = await _builder(
+        slug="rca", sandbox=_Unversioned(), registry=registry
+    )._external_tools("item-1", _Session())
+    line = _line(external)
+    assert "runs 1.3.0, not the latest release." in line

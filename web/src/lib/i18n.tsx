@@ -1794,14 +1794,18 @@ export const messages = {
     "zh-TW": "執行中 {running} · 最新 {latest}",
     en: "Running {running} · latest {latest}",
   },
-  "tools.origin.runningEarlier": { "zh-TW": "較早的版本", en: "an earlier release" },
+  "tools.origin.unrecorded": { "zh-TW": "未記錄的版本", en: "an unrecorded release" },
+  "tools.origin.notInSandbox": {
+    "zh-TW": "目前的沙盒裡沒有這個工具",
+    en: "Not in the current sandbox",
+  },
   "tools.update.note": {
-    "zh-TW": "沙盒仍在使用較早的工具版本。關閉沙盒後，下一次對話就會使用最新版。",
-    en: "The sandbox still runs an earlier release of a tool. Close the sandbox and the next turn uses the latest.",
+    "zh-TW": "沙盒裡的工具和最新版不一樣。關閉沙盒後，下一次對話就會使用最新版。",
+    en: "The sandbox's tools differ from the latest. Close the sandbox and the next turn uses the latest.",
   },
   "tools.update.noteOthers": {
-    "zh-TW": "沙盒仍在使用較早的工具版本，沙盒關閉後就會使用最新版。",
-    en: "The sandbox still runs an earlier release of a tool; it updates once the sandbox is closed.",
+    "zh-TW": "沙盒裡的工具和最新版不一樣，沙盒關閉後就會使用最新版。",
+    en: "The sandbox's tools differ from the latest; they update once the sandbox is closed.",
   },
   "tools.update.close": { "zh-TW": "關閉沙盒以更新", en: "Close sandbox to update" },
   "tools.update.failed": {

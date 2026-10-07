@@ -186,3 +186,63 @@ def test_a_manager_may_close_it_here_as_on_the_resources_page(monkeypatch):
         WHO["id"] = "bob"
 
         assert _picker(client, item)["can_close"] is True
+
+
+def test_a_live_sandbox_with_no_record_reads_as_the_latest(monkeypatch):
+    # D4 with a sandbox running: built before the record existed — unknown.
+    with _app(monkeypatch) as (client, spec, registry):
+        item = _item(spec)
+        session = asyncio.run(registry.session(item))
+        session.handle = SandboxHandle(id="live")
+        session.tools = None
+
+        body = _picker(client, item)
+
+        assert _row(body)["running_version"] is None
+        assert body["update_needs_close"] is False
+
+
+def test_a_tool_the_sandbox_was_built_without_offers_the_same_close(monkeypatch):
+    # D11: a tool added to the app after the sandbox was created is not in it;
+    # closing the sandbox is what fixes that too (review round 1).
+    with _app(monkeypatch) as (client, spec, registry):
+        item = _item(spec)
+        _running(registry, item, {})
+
+        body = _picker(client, item)
+
+        assert _row(body)["not_in_sandbox"] is True
+        assert _row(body)["running_version"] is None
+        assert body["update_needs_close"] is True
+
+
+def test_a_host_error_never_costs_the_picker(monkeypatch):
+    # Review round 1: the picker made no sandbox call before; a host that
+    # errors (or hangs) must read as unknown, not 500 the picker and every
+    # view that shares its query.
+    import httpx
+
+    class _Published:
+        handle = SandboxHandle(id="live")
+        tools = {"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")}
+
+    class _Address:
+        async def published(self, _item):
+            return _Published()
+
+    with _app(monkeypatch) as (client, spec, registry):
+        item = _item(spec)
+        _running(registry, item, {"wafer-history": MountedTool(sha="b" * 64, version="1.3.0")})
+        registry.address = _Address()
+
+        async def boom(_handle, _path):
+            raise httpx.HTTPStatusError(
+                "503", request=httpx.Request("GET", "http://h"), response=httpx.Response(503)
+            )
+
+        registry.sandbox.exists = boom
+
+        body = _picker(client, item)
+
+        assert _row(body)["running_version"] is None
+        assert body["update_needs_close"] is False

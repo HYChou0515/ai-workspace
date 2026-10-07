@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { qk } from "../api/queryKeys";
 import type { ItemToolState } from "../api/types";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ToolsPickerModal } from "./ToolsPickerModal";
@@ -225,5 +226,105 @@ describe("ToolsPickerModal — a sandbox older than the release", () => {
     await screen.findByTestId("tools-save");
     expect(screen.queryByTestId("tools-update-note")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tools-update-close")).not.toBeInTheDocument();
+  });
+
+  it("a row whose release was not recorded says so rather than inventing one", async () => {
+    const unrecorded = OUTDATED.map((r) =>
+      r.key === "wafer-history:trend" ? { ...r, running_version: "" } : r,
+    );
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(unrecorded, { updateNeedsClose: true, canClose: true })}
+        closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
+      />,
+    );
+    const running = await screen.findByTestId("tool-wafer-history:trend-running");
+    expect(running).toHaveTextContent("1.4.2");
+    expect(running).not.toHaveTextContent(/older|earlier|較早/i);
+  });
+
+  it("a tool the sandbox was built without is named as missing (D11)", async () => {
+    const missing = OUTDATED.map((r) =>
+      r.key === "wafer-history:trend" ? { ...r, running_version: null, not_in_sandbox: true } : r,
+    );
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(missing, { updateNeedsClose: true, canClose: true })}
+        closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
+      />,
+    );
+    expect(await screen.findByTestId("tool-wafer-history:trend-running")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-update-close")).toBeInTheDocument();
+  });
+
+  it("an unknown sandbox reads as the latest: no line, no note (D4)", async () => {
+    const unknown = OUTDATED.map((r) =>
+      r.key === "wafer-history:trend" ? { ...r, running_version: null } : r,
+    );
+    renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(unknown)}
+      />,
+    );
+    await screen.findByTestId("tools-save");
+    expect(screen.queryByTestId("tool-wafer-history:trend-running")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tools-update-note")).not.toBeInTheDocument();
+  });
+
+  it("a failed close is said once, beside the button", async () => {
+    const closeEnvironment = vi.fn(async () => {
+      throw new Error("503");
+    });
+    const { client: qc } = renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        client={fakeClient(OUTDATED, { updateNeedsClose: true, canClose: true })}
+        closeClient={{ closeEnvironment }}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId("tools-update-close"));
+    await waitFor(() => expect(closeEnvironment).toHaveBeenCalled());
+    // The app-wide write-failure toast is skipped for this mutation.
+    const m = qc.getMutationCache().getAll().at(-1);
+    expect(m?.meta?.silentError).toBe(true);
+    expect(await screen.findByTestId("tools-update-note")).toHaveTextContent(/close|關閉/i);
+  });
+
+  it("closing keeps the switches someone already changed, and asks nothing", async () => {
+    const onClose = vi.fn();
+    const { client: qc } = renderWithQuery(
+      <ToolsPickerModal
+        slug="rca"
+        itemId="i1"
+        onSave={vi.fn()}
+        onClose={onClose}
+        client={fakeClient(OUTDATED, { updateNeedsClose: true, canClose: true })}
+        closeClient={{ closeEnvironment: vi.fn(async () => undefined) }}
+      />,
+    );
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    fireEvent.click(await screen.findByTestId("tool-exec-off"));
+    fireEvent.click(screen.getByTestId("tools-update-close"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: qk.myResources }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.itemEnvironment("rca", "i1") });
+    expect(screen.getByTestId("tool-exec-off")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("tools-save")).not.toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 });

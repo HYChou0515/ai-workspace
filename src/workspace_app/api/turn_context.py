@@ -708,17 +708,13 @@ class TurnContextBuilder:
         external = await resolve_item_tools(
             self._sandbox, self._locator, item_id, plugin_artifacts=self._view_plugin_artifacts
         )
-        # What the live sandbox mounted: this pod's session when it holds one,
-        # else whatever a peer's live sandbox recorded on the shared address
-        # (D10 — before, a peer-built sandbox was unknown here, so the model
-        # was told the manifest's release and offered tools it did not have).
-        if session.handle is not None and session.tools is not None:
-            mounted = session.tools
-        else:
-            mounted = await self._registry.mounted_tools(item_id)
-        confined = confine_to_mounted(
-            external, live=session.handle is not None or mounted is not None, mounted=mounted
-        )
+        # What the item's LIVE sandbox mounted, from whichever pod built it —
+        # the registry's one answer, probed and bounded (D10; before, a
+        # peer-built sandbox was unknown here, so the model was told the
+        # manifest's release and offered tools it did not have). Not asked
+        # when the app declares none: this build made no sandbox call before.
+        mounted = await self._registry.mounted_tools(item_id) if external.shas else None
+        confined = confine_to_mounted(external, live=mounted is not None, mounted=mounted)
         confined = describe_running(confined, mounted)
         # Confining refuses what the live sandbox lacks — for a view plugin that
         # is the runner's to say, never the agent's to read.

@@ -17,6 +17,7 @@ import abc
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 
 from msgspec import Struct
 from specstar import SpecStar
@@ -77,16 +78,26 @@ class IAddressStore(abc.ABC):
         converges instead of forcing its own rebuild). ``tools`` as in `claim`."""
 
     @abc.abstractmethod
-    async def mounted(self, item_id: str) -> dict[str, MountedTool] | None:
-        """What the sandbox at the item's address was created with. ``None`` is
-        UNKNOWN — no address, or one written without the record (an older build,
-        a create whose resolve failed) — and never means "mounted nothing"
-        (that is ``{}``)."""
+    async def published(self, item_id: str) -> Published | None:
+        """The item's address AND what the sandbox there was created with, from
+        ONE read — so a caller can never pair a handle with the bundles of a
+        sandbox a peer swapped in between two reads. ``None`` when unclaimed.
+        ``Published.tools`` is ``None`` for a row written without the record (an
+        older build) and never means "mounted nothing" (that is ``{}`` — what a
+        create whose resolve failed really mounted)."""
 
     @abc.abstractmethod
     async def forget(self, item_id: str) -> None:
         """Release the item's address slot (its sandbox was torn down / closed),
         so the next freshly-created sandbox can claim it. Idempotent."""
+
+
+@dataclass(frozen=True)
+class Published:
+    """One item's published sandbox: where it is, and what it mounted."""
+
+    handle: SandboxHandle
+    tools: dict[str, MountedTool] | None
 
 
 class _Mounted(Struct):
@@ -236,19 +247,22 @@ class SpecstarAddressStore(IAddressStore):
             f"address swap CAS exhausted retries for {item_id!r}"
         )
 
-    async def mounted(self, item_id: str) -> dict[str, MountedTool] | None:
-        return await asyncio.to_thread(self._mounted_sync, item_id)
+    async def published(self, item_id: str) -> Published | None:
+        return await asyncio.to_thread(self._published_sync, item_id)
 
-    def _mounted_sync(self, item_id: str) -> dict[str, MountedTool] | None:
+    def _published_sync(self, item_id: str) -> Published | None:
         rm = self._spec.get_resource_manager(_SandboxAddress)
         try:
             data = rm.get(item_id).data
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return None
         assert isinstance(data, _SandboxAddress)
-        if data.tools is None:
-            return None
-        return {n: MountedTool(sha=m.sha, version=m.version) for n, m in data.tools.items()}
+        tools = (
+            None
+            if data.tools is None
+            else {n: MountedTool(sha=m.sha, version=m.version) for n, m in data.tools.items()}
+        )
+        return Published(handle=SandboxHandle(id=data.handle_id), tools=tools)
 
     async def forget(self, item_id: str) -> None:
         await asyncio.to_thread(self._forget_sync, item_id)

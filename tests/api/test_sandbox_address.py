@@ -97,13 +97,21 @@ async def test_swap_on_a_released_slot_claims_fresh():
 from workspace_app.tooling.external import MountedTool  # noqa: E402
 
 V1 = {"t": MountedTool(sha="s1", version="1.0")}
+
+
+async def _tools(store, item: str):
+    """The record, or None when there is no address at all."""
+    pub = await store.published(item)
+    return None if pub is None else pub.tools
+
+
 V2 = {"t": MountedTool(sha="s2", version="2.0")}
 
 
 async def test_claim_records_what_the_sandbox_mounted():
     store = _store()
     await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
-    assert await store.mounted("item-1") == V1
+    assert await _tools(store, "item-1") == V1
 
 
 async def test_a_losing_claim_reads_the_winners_mounts_not_its_own():
@@ -112,7 +120,7 @@ async def test_a_losing_claim_reads_the_winners_mounts_not_its_own():
     store = _store()
     await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
     assert await store.claim("item-1", SandboxHandle(id="h2"), tools=V2) == SandboxHandle(id="h1")
-    assert await store.mounted("item-1") == V1
+    assert await _tools(store, "item-1") == V1
 
 
 async def test_swap_replaces_the_mounts_with_the_new_sandboxs():
@@ -120,7 +128,7 @@ async def test_swap_replaces_the_mounts_with_the_new_sandboxs():
     h1, h2 = SandboxHandle(id="h1"), SandboxHandle(id="h2")
     await store.claim("item-1", h1, tools=V1)
     assert await store.swap("item-1", expected=h1, new=h2, tools=V2) == h2
-    assert await store.mounted("item-1") == V2
+    assert await _tools(store, "item-1") == V2
 
 
 async def test_a_lost_swap_leaves_the_peers_mounts():
@@ -130,7 +138,7 @@ async def test_a_lost_swap_leaves_the_peers_mounts():
     await store.swap("item-1", expected=h1, new=h2, tools=V2)
     # A pod that also found h1 dead lost the race: it converges and changes nothing.
     assert await store.swap("item-1", expected=h1, new=h3, tools=V1) == h2
-    assert await store.mounted("item-1") == V2
+    assert await _tools(store, "item-1") == V2
 
 
 async def test_reclaiming_a_released_slot_records_the_new_mounts():
@@ -138,22 +146,33 @@ async def test_reclaiming_a_released_slot_records_the_new_mounts():
     await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
     await store.forget("item-1")
     await store.claim("item-1", SandboxHandle(id="h2"), tools=V2)
-    assert await store.mounted("item-1") == V2
+    assert await _tools(store, "item-1") == V2
 
 
 async def test_mounts_are_unknown_when_not_recorded():
     # `None` is "unknown", distinct from `{}` ("mounted nothing"): an address
     # written by an older build, or a create whose resolve failed.
     store = _store()
-    assert await store.mounted("nobody") is None
+    assert await _tools(store, "nobody") is None
     await store.claim("item-1", SandboxHandle(id="h1"))
-    assert await store.mounted("item-1") is None
+    assert await _tools(store, "item-1") is None
     await store.claim("item-2", SandboxHandle(id="h2"), tools={})
-    assert await store.mounted("item-2") == {}
+    assert await _tools(store, "item-2") == {}
 
 
 async def test_mounts_of_a_forgotten_address_are_unknown():
     store = _store()
     await store.claim("item-1", SandboxHandle(id="h1"), tools=V1)
     await store.forget("item-1")
-    assert await store.mounted("item-1") is None
+    assert await _tools(store, "item-1") is None
+
+
+async def test_the_record_is_read_with_the_address_it_belongs_to():
+    # One read answers both, so a caller can never pair a handle with the
+    # bundles of the sandbox a peer swapped in between two reads.
+    store = _store()
+    h1, h2 = SandboxHandle(id="h1"), SandboxHandle(id="h2")
+    await store.claim("item-1", h1, tools=V1)
+    await store.swap("item-1", expected=h1, new=h2, tools=V2)
+    pub = await store.published("item-1")
+    assert pub is not None and (pub.handle, pub.tools) == (h2, V2)

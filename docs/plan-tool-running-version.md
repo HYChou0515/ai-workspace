@@ -34,7 +34,10 @@ Grilled 2026-10-07 on master `486ce318`. 每條決定標來源：**[user]** = �
 | D7 | 沒有活著的沙盒時，只顯示版本號、不放按鈕——下一次建的就是最新版。 | [mine] |
 | D8 | 「一不一致」比 **sha**，不比版本字串：同一個版本號重發一次也算新的一版。 | [mine] |
 | D9 | 按鈕只給**關得掉**的人（與 `DELETE /me/resources/live/{item}` 同一道閘：擁有者、superuser、`change_permission`）；其他人看到「沙盒關閉後就會更新」的說明，沒有按鈕。閘抽成一個函式，兩邊共用。 | [mine] |
-| D10 | 這一輪的「已掛載」改成問 registry：本 pod 的 session，否則讀共用那一列（先探活）。副作用：`confine_to_mounted` 對**別的 pod 建的沙盒**也知道掛了什麼了——發版後才加的新工具，會以理由拒絕，而不是交給模型一個不存在的 launcher。 | [mine] |
+| D10 | 這一輪的「已掛載」改成問 registry：本 pod 的 session，否則讀共用那一列，兩者都先探活（http）。副作用：`confine_to_mounted` 對**別的 pod 建的沙盒**也知道掛了什麼了——發版後才加的新工具，會以理由拒絕，而不是交給模型一個不存在的 launcher。 | [mine] |
+| D11 | 沙盒建好之後才加進 app 的工具（沙盒裡沒有）：選單該列顯示「目前的沙盒裡沒有這個工具」，算進「關閉沙盒以更新」同一顆按鈕——關閉同樣能修好它。 | [mine，review round 1] |
+| D12 | 「已掛載」的查詢**有上限且不會失敗**：限時 3 秒（`mounted_probe_timeout_s`），主機出錯或逾時都當「查不到」（D4）。選單與 turn 的組裝以前完全不碰沙盒，不能因為這個功能變成會 500 或卡住；turn 只在 app 有宣告第三方工具時才問。 | [mine，review round 1] |
+| D13 | 用詞是「不同」不是「較舊」：比的是 sha（D8），只知道不一樣，不知道哪邊新。給 AI 的那句是「沙盒跑的是 X，不是最新版（Y）」；最新版沒有版號時不補字。 | [mine，review round 1] |
 
 **不處理**：manifest 的版本號變了但 bundle 沒換（手改 manifest、混用兩次 build 的產物）。這時實際 sha =
 最新 sha，偵測不到；`tooling/builder.py` 在同一次 build 產出兩者，正常發版不會發生。
@@ -60,27 +63,30 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 兩者 →     _acquire: sandbox.create(spec.tools = {name: sha})
                     → address.claim/swap(item, handle, tools=MountedTool 表)
                     → session.tools = MountedTool 表
-收斂到別人的沙盒 → session.tools = address.mounted(item)（以前是 None）
+收斂到別人的沙盒 → session.tools = address.published(item).tools（與位址同一次讀；以前是 None）
+搶輸 CAS        → 只有讀到的位址仍是贏家時才採用它的紀錄，否則 None
 ```
 
 ### 讀取：每一輪、每次開選單
 
-`registry.mounted_tools(item)`：
+`registry.mounted_tools(item)`（整段限時 `mounted_probe_timeout_s`，任何錯誤或逾時 → `None`，D12）：
 
-1. 本 pod 的 session 有 handle 且 `session.tools` 已知 → 用它；
-2. 否則有位址：讀那一列，`_alive` 探活；活著才回它的 `tools`，死了回 `None`（下一次建的就是最新版，D7）；
+1. 本 pod 的 session 有 handle 且 `session.tools` 已知 → http 時先探活，活著才用它（別的 pod 關掉的沙盒不能
+   一直被這個 pod 回報）；
+2. 否則有位址：`published(item)` 一次讀出位址與紀錄，`_alive` 探活；活著才回它的 `tools`，死了回 `None`
+   （下一次建的就是最新版，D7）；
 3. 其餘 → `None`。
 
 ### 呈現
 
 - `turn_context._external_tools`：對每個已解析的工具，掛載 sha ≠ 最新 sha → 該 `PackageInfo` 的 `version`
-  換成掛載的版本，`latest_version` 填最新版。`describe_command` 在有 `latest_version` 時加一句（英文，
-  prompt 一律英文）。掛載未知 → 不動（D4）。
-- `GET /a/{slug}/items/{id}/tools`：每列加 `running_version`（只在不一致時有值）；整體加
-  `update_needs_close: bool` 與 `can_close: bool`（D9 的共用閘）。
+  換成掛載的版本，`latest_version` 填最新版（`None` = 一致；`""` = 不一致但最新版沒有版號）。
+  `describe_command` 在 `latest_version` 不是 `None` 時加一句（英文，prompt 一律英文，D13）。掛載未知 → 不動（D4）。
+- `GET /a/{slug}/items/{id}/tools`：每列加 `running_version`（只在不一致時有值）與 `not_in_sandbox`（D11）；
+  整體加 `update_needs_close: bool` 與 `can_close: bool`（D9 的共用閘；出錯時當 `False`）。
 - `ToolsChecklist`：不一致的列另起一行顯示「執行中 v1 · 最新 v2」（可換行——放在原本那行會被省略號截掉，390px 實測只剩「Runnin…」）；`ToolsPickerModal` 在 `update_needs_close` 時於
   清單上方放一行說明，`can_close` 時加「關閉沙盒以更新」按鈕（`myResourcesApi.closeEnvironment`），成功後
-  重抓選單。
+  重抓選單、沙盒狀態與資源用量；失敗只在按鈕旁說一次（`silentError`）。
 
 ## Phases
 
@@ -93,10 +99,12 @@ turn:      resolve_item_tools → ExternalTools{shas, provenance}
 - **P3** turn：`_external_tools` 改用 `mounted_tools`，套 D2；`describe_command` 加句。
 - **P4** 選單：API 欄位 + 共用的關閉閘 + 前端列文字與按鈕 + i18n。
 - **P5** `docs/migrations.md`（行為改變、無開關：選單與 AI 說的版本改成沙盒實際的；跨 pod 的已掛載判斷）。
+- **P6**（review round 1）D11–D13；session 也探活；位址與紀錄一次讀；選單的錯誤只說一次並刷新資源。
 
 ## 驗證
 
 - P1–P3：registry 探針那一組情境改寫成測試（turn 在 A、關在 B……），斷言 AI 收到的工具說明句子。
-- P4：前端單元測試（不一致 / 一致 / 未知 / 沒有權限）＋ 真 Chromium 1280／390 截圖看過。
+- P4：前端單元測試（不一致 / 一致 / 未知 / 沒有權限 / 未記錄版號 / 沙盒裡沒有 / 關閉失敗 / 關閉保留未存的切換）＋
+  真 Chromium 1280／390 截圖看過。
 - prod：發一版工具 → 不關沙盒開選單，看到「執行中 舊 · 最新 新」與按鈕；問 AI 版本，它說舊版並提到關閉沙盒；
   按按鈕後再開選單，不一致消失。

@@ -880,7 +880,7 @@ async def test_ensure_handle_kills_orphan_when_it_loses_the_claim_race_366():
         ) -> SandboxHandle:
             return winner
 
-        async def mounted(self, item_id: str):
+        async def published(self, item_id: str):
             return None
 
         async def forget(self, item_id: str) -> None:  # pragma: no cover - unused here
@@ -2043,7 +2043,7 @@ async def test_a_turns_create_mounts_the_shas_and_records_the_versions_on_the_ad
     sandbox, addr, (a,) = _shared_pods(1)
     await a.ensure_handle(await a.session("it"), tools=_V1)
     assert sandbox.specs == [{"t": "s1"}]  # the host still receives {name: sha}
-    assert await addr.mounted("it") == _V1
+    assert (await addr.published("it")).tools == _V1  # type: ignore[union-attr]
     assert (await a.session("it")).tools == _V1
 
 
@@ -2056,7 +2056,7 @@ async def test_a_wake_with_no_turn_records_what_the_item_declares():
     a.tools_for = declared
     await a.rebuild_io_handle("it")
     assert sandbox.specs == [{"t": "s2"}]
-    assert await addr.mounted("it") == _V2
+    assert (await addr.published("it")).tools == _V2  # type: ignore[union-attr]
 
 
 async def test_a_pod_converging_on_a_peers_sandbox_learns_what_it_mounted():
@@ -2089,5 +2089,72 @@ async def test_close_then_a_turn_records_the_new_release():
     await a.ensure_handle(await a.session("it"), tools=_V1)
     await b.close_session("it")
     await a.ensure_handle(await a.session("it"), tools=_V2)
-    assert await addr.mounted("it") == _V2
+    assert (await addr.published("it")).tools == _V2  # type: ignore[union-attr]
     assert await b.mounted_tools("it") == _V2
+
+
+async def test_this_pods_record_of_a_sandbox_closed_elsewhere_is_not_reported():
+    # A peer closed it; this pod's session still holds the old handle. The
+    # record must be probed like the address is, or the picker keeps offering
+    # "close to update" for a sandbox that is gone (review round 1).
+    _, _, (a, b) = _shared_pods()
+    await a.ensure_handle(await a.session("it"), tools=_V1)
+    await b.close_session("it")
+    assert await a.mounted_tools("it") is None
+
+
+async def test_a_host_error_reads_as_unknown_not_as_a_failure():
+    import httpx
+
+    sandbox, _, (a,) = _shared_pods(1)
+    await a.ensure_handle(await a.session("it"), tools=_V1)
+
+    async def boom(_handle, _path):
+        raise httpx.HTTPStatusError(
+            "503", request=httpx.Request("GET", "http://h"), response=httpx.Response(503)
+        )
+
+    sandbox.exists = boom  # type: ignore[method-assign]
+    assert await a.mounted_tools("it") is None
+
+
+async def test_a_hanging_host_is_given_a_bounded_wait():
+    sandbox, _, (a,) = _shared_pods(1)
+    await a.ensure_handle(await a.session("it"), tools=_V1)
+    a.mounted_probe_timeout_s = 0.05
+
+    async def hang(_handle, _path):
+        await asyncio.sleep(10)
+
+    sandbox.exists = hang  # type: ignore[method-assign]
+    started = asyncio.get_running_loop().time()
+    assert await a.mounted_tools("it") is None
+    assert asyncio.get_running_loop().time() - started < 5
+
+
+async def test_a_lost_claim_never_pairs_the_winner_with_another_sandboxs_record():
+    from workspace_app.api.sandbox_address import IAddressStore, Published
+
+    winner = SandboxHandle(id="winner")
+
+    class _SwappedBetween(IAddressStore):
+        async def get(self, item_id: str) -> SandboxHandle | None:
+            return None
+
+        async def claim(self, item_id, handle, *, tools=None):
+            return winner
+
+        async def swap(self, item_id, expected, new, *, tools=None):  # pragma: no cover
+            return winner
+
+        async def published(self, item_id: str):
+            # A peer replaced the winner before this read.
+            return Published(handle=SandboxHandle(id="newer"), tools=_V2)
+
+        async def forget(self, item_id: str) -> None:  # pragma: no cover
+            return None
+
+    registry = InvestigationRegistry(sandbox=_SpecRecordingSandbox(), address=_SwappedBetween())
+    session = await registry.session("it")
+    assert await registry.ensure_handle(session, tools=_V1) == winner
+    assert session.tools is None  # unknown — not "newer"'s bundles under "winner"

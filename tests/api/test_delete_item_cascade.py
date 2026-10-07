@@ -239,7 +239,7 @@ async def test_deleting_an_item_tears_down_its_environment_and_forgets_the_addre
         async def swap(self, item_id: str, expected, new, *, tools=None):
             return new
 
-        async def mounted(self, item_id: str):  # pragma: no cover - unused here
+        async def published(self, item_id: str):  # pragma: no cover - unused here
             return None
 
         async def forget(self, item_id: str) -> None:

@@ -362,9 +362,12 @@ export type ItemToolState = {
    * latest, which is what the next sandbox mounts. */
   version?: string | null;
   /** plan-tool-running-version: the release the item's LIVE sandbox runs, set
-   * only when it is older than `version`. `""` when the sandbox recorded the
-   * bundle but not its release number. */
+   * only when it differs from `version` (compared by sha — different, not
+   * necessarily older). `""` when the sandbox recorded the bundle but not its
+   * release number. */
   running_version?: string | null;
+  /** D11: the live sandbox was created without this tool. */
+  not_in_sandbox?: boolean;
   /** Who published it, as they wrote it themselves. Shown, never trusted. */
   author?: string | null;
   /** Served from the host's cached copy — usable, but maybe a release behind. */
@@ -384,7 +387,8 @@ export type ItemToolState = {
  * sandbox needs to catch up with them (plan-tool-running-version). */
 export type ItemTools = {
   tools: ItemToolState[];
-  /** Some row's `running_version` is set: closing the sandbox updates it. */
+  /** Some row's `running_version` is set or `not_in_sandbox` holds: closing
+   * the sandbox updates it. */
   updateNeedsClose: boolean;
   /** Whether the viewer may close it — the close route's own gate. */
   canClose: boolean;

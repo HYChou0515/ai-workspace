@@ -120,10 +120,14 @@ class ItemToolState(BaseModel):
     LATEST, which is what the next sandbox mounts."""
     running_version: str | None = None
     """plan-tool-running-version: the release the item's LIVE sandbox runs, set
-    only when it differs from ``version`` (compared by sha, D8). ``""`` when the
-    sandbox recorded the sha but not its release. ``None`` in the usual case —
-    same release, no live sandbox, or unknown (D4) — so the row says nothing
-    more than it did."""
+    only when it differs from ``version`` (compared by sha, D8 — different, not
+    necessarily older). ``""`` when the sandbox recorded the sha but not its
+    release. ``None`` in the usual case — same release, no live sandbox, or
+    unknown (D4) — so the row says nothing more than it did."""
+    not_in_sandbox: bool = False
+    """D11: the item's live sandbox was created without this tool (it was added
+    to the app afterwards), so a turn refuses it until the sandbox is closed or
+    recycled. Known only when the sandbox's record is."""
     author: str | None = None
     """Who published it, as they wrote it in their own ``pyproject``. Shown,
     never trusted: identity is the certificate the platform signed."""
@@ -154,8 +158,9 @@ class ItemToolState(BaseModel):
 class ItemTools(BaseModel):
     tools: list[ItemToolState]
     update_needs_close: bool = False
-    """Some row's ``running_version`` is set: the live sandbox runs an older
-    release than the latest, and closing it is what changes that (D1/D3)."""
+    """Some row's ``running_version`` is set or ``not_in_sandbox`` holds: the
+    live sandbox's tools differ from the latest, and closing it is what changes
+    that (D1/D3/D11)."""
     can_close: bool = False
     """Whether the viewer may close this item's environment — the close route's
     own gate (`may_close_environment`, D9), so the picker never offers a button
@@ -281,14 +286,24 @@ def register_tools_routes(
         # Rows are per command; the declaration is per package, so compare by
         # the unit's package — `wafer-history:trend` IS `wafer-history` offered.
         _warn_undeclared(item_id, declared, {u.name.partition(":")[0] for u in units})
-        outdated = any(r.running_version is not None for r in rows)
+        outdated = any(r.running_version is not None or r.not_in_sandbox for r in rows)
         return ItemTools(
             tools=rows,
             update_needs_close=outdated,
             # Asked only when there is something to close for: the gate reads
             # the item's grants, and the usual picker has no button to draw.
-            can_close=await can_close(item_id) if outdated else False,
+            can_close=await _may_close(item_id) if outdated else False,
         )
+
+    async def _may_close(item_id: str) -> bool:
+        """The close gate, or no button: a store error while drawing the picker
+        must not take the picker (and every view sharing its query) with it —
+        the close route itself still applies the gate when pressed."""
+        try:
+            return await can_close(item_id)
+        except Exception:  # noqa: BLE001 - no button is the safe answer
+            logger.warning("item %s: could not tell who may close it", item_id, exc_info=True)
+            return False
 
     async def _resolve_external(item_id: str, declared: dict[str, str]) -> ExternalTools:
         """This item's third-party tools, or an empty answer.
@@ -349,6 +364,8 @@ def _row(
     m = (mounted or {}).get(provider)
     latest = external.shas.get(provider)
     running = m.version if m is not None and latest is not None and m.sha != latest else None
+    # D11: known record, resolved tool, and the sandbox has none of it.
+    missing = mounted is not None and latest is not None and m is None
     return ItemToolState(
         key=unit.name,
         label=unit.label,
@@ -361,6 +378,7 @@ def _row(
         external=provider in declared,
         version=prov.version if prov else None,
         running_version=running,
+        not_in_sandbox=missing,
         author=prov.author if prov else None,
         stale=bool(prov and prov.stale),
         unavailable=external.refused.get(provider),

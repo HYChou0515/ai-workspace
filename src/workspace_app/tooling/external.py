@@ -213,10 +213,11 @@ def confine_to_mounted(
     the residual of pinning at create, not something this function should
     convert into an outage.
 
-    `mounted=None` means UNKNOWN, not empty: another pod created this sandbox
-    (#366) and this one never learned what went into it. Guessing "empty" there
-    would take working tools away from every multi-pod deployment, so the
-    unknown case is left exactly as resolved."""
+    `mounted=None` means UNKNOWN, not empty: no live sandbox, or one whose
+    address carries no record of what went in (built before the record existed,
+    plan-tool-running-version). Guessing "empty" there would take working tools
+    away, so the unknown case is left exactly as resolved. A sandbox another pod
+    built is no longer unknown — its address says what it mounted (D10)."""
     if not live or mounted is None or not external.shas:
         return external
     absent = [name for name in external.shas if name not in mounted]
@@ -231,9 +232,10 @@ def confine_to_mounted(
             **external.refused,
             **{
                 name: (
-                    "this workspace was started before this tool was available, so "
-                    "it is not installed here. It works in a new workspace, or in "
-                    "this one once it has been idle long enough to be recycled."
+                    "this tool is not installed in this workspace's current sandbox, "
+                    "which was set up without it. Closing the sandbox makes the next "
+                    "turn get it; it is also there once the sandbox is recycled after "
+                    "being idle."
                 )
                 for name in absent
             },
@@ -282,7 +284,8 @@ def describe_running(
 
     A sandbox keeps the bundle it was created with while the resolve describes
     the latest release, so where the two shas differ the package's `version`
-    becomes the mounted one and `latest_version` names the latest — which is
+    becomes the mounted one and `latest_version` names the latest (`""` if it
+    published none — nothing is invented in its place) — which is
     what `describe_command` turns into the sentence the model reads. Compared by
     sha (D8). Unknown mounts (`None`) change nothing (D4): the next sandbox is
     built from this resolve. Only the words change; what mounts does not."""
@@ -295,7 +298,5 @@ def describe_running(
         if m is None or latest is None or m.sha == latest:
             packages.append(pkg)
             continue
-        packages.append(
-            replace(pkg, version=m.version, latest_version=pkg.version or "a newer release")
-        )
+        packages.append(replace(pkg, version=m.version, latest_version=pkg.version))
     return replace(external, packages=tuple(packages))
