@@ -139,6 +139,7 @@ def register_workflow_routes(
     event_dispatcher: EventTriggerDispatcher,
     schedule_policy: SchedulePolicy,
     schedule_indexed: Callable[[str], bool],
+    schedule_landed: Callable[[str], int | None] = lambda _item_id: None,
     packages: Sequence[PackageInfo] = (),
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
@@ -280,6 +281,13 @@ def register_workflow_routes(
             # listing must not 500 over it while the file itself is fine.
             logger.exception("schedules: could not read the index for %s", investigation_id)
             indexed = False
+        # When the file landed — the birth rule's evidence, the stamp the sweep
+        # compares against (docs/plan-schedule-overview.md §1).
+        try:
+            landed = await asyncio.to_thread(schedule_landed, investigation_id)
+        except Exception:  # noqa: BLE001 — a listing, not a run
+            logger.exception("schedules: could not read the landing stamp for %s", investigation_id)
+            landed = None
         # One hop off the loop: the ledger reads inside are blocking specstar I/O.
         views, problems = await asyncio.to_thread(
             schedule_views,
@@ -293,6 +301,7 @@ def register_workflow_routes(
             enabled=schedule_policy.sweep_enabled,
             indexed=indexed,
             broken=broken,
+            landed_ms=landed,
         )
         return SchedulesOut(
             enabled=schedule_policy.sweep_enabled,

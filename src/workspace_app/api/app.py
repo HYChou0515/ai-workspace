@@ -1190,6 +1190,10 @@ def create_app(
         """
         if is_schedule_file(path):
             schedule_index.record(item_id, path)
+            # When it landed, for the birth rule (docs/plan-schedule-overview.md
+            # §1): a schedule only fires windows whose moment came after it was
+            # written. Stamped HERE so every door that indexes also stamps.
+            schedule_index.stamp(item_id, path, int(datetime.now(UTC).timestamp() * 1000))
 
     files = WorkspaceFiles(
         filestore,
@@ -2384,6 +2388,7 @@ def create_app(
         # Whether the sweep will read the item's own schedules file at all — the
         # same index the sweep iterates, asked the same way.
         schedule_indexed=lambda item_id: ITEM_SCHEDULES_PATH in schedule_index.paths(item_id),
+        schedule_landed=lambda item_id: schedule_index.landed_at(item_id, ITEM_SCHEDULES_PATH),
         packages=packages or [],
     )
 

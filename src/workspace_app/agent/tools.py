@@ -3189,6 +3189,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     for verb in TOOL_VERBS["save_schedules"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
+    from ..api.schedule_index import ScheduleIndex
     from ..workflow.offered import (
         no_such_workflow,
         offered_workflow_ids,
@@ -3251,12 +3252,24 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     )
 
     # "Next run" as the sweep will actually compute it — the same views the
-    # Workflows panel lists, ledger included, so an unchanged row re-saved after
-    # today's run says tomorrow and a new one says "now". Without a ledger (no
+    # Workflows panel lists, ledger AND landing stamp included, so an unchanged
+    # row re-saved after today's run says tomorrow, and a new row whose moment
+    # has already passed today says its next period too (the birth rule, docs/
+    # plan-schedule-overview.md §1) — not "now". Without a ledger (no
     # spec, or the sweep is off and never registered its store) every row reads
     # as never fired, which is the truth for a file that cannot run. Off the
     # loop as one hop: the ledger reads inside are blocking specstar I/O.
     last = last_window_lookup(ctx.context.spec if policy.sweep_enabled else None, inv)
+    # Asked of the index the write hook just stamped — the value the sweep will
+    # compare against, not a clock read here that could disagree with it.
+    landed: int | None = None
+    if policy.sweep_enabled and ctx.context.spec is not None:
+        try:
+            landed = await asyncio.to_thread(
+                ScheduleIndex(ctx.context.spec).landed_at, inv, ITEM_SCHEDULES_PATH
+            )
+        except Exception:  # noqa: BLE001 — the file is saved; only the reply's "next" degrades
+            _LOGGER.exception("save_schedules: could not read the landing stamp for %s", inv)
     views, _ = await asyncio.to_thread(
         schedule_views,
         schedules_json,
@@ -3265,6 +3278,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         last_window=last,
         max_rows=policy.max_rows,
         enabled=policy.sweep_enabled,
+        landed_ms=landed,
     )
     # The returns above leave the switch as the only gate a row here can fail
     # (`run` is offered, the file is within the cap, and `indexed` is left at

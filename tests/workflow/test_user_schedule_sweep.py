@@ -19,7 +19,7 @@ import inspect
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from specstar import SpecStar
@@ -363,6 +363,66 @@ def test_a_missed_window_fires_late_rather_than_being_dropped():
             spec, _Files(**{f"{ITEM}{PATH}": _file(DAILY)}), started, datetime(2026, 9, 5, 10, 30)
         ).tick()
     )
+
+    assert len(started.runs) == 1
+
+
+def _ms(at: datetime) -> int:
+    """A naive test instant (UTC, like every `now` here) as the epoch-ms stamp
+    the write hook records."""
+    return int(at.replace(tzinfo=UTC).timestamp() * 1000)
+
+
+def test_a_schedule_written_after_its_moment_waits_for_the_next_period():
+    """docs/plan-schedule-overview.md decision 11: a daily 09:00 saved at 14:00
+    first runs TOMORROW at nine. The window it would have caught up on passed
+    before the schedule existed, so there is nothing to catch up on."""
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+    index.stamp(ITEM, PATH, _ms(datetime(2026, 9, 5, 14, 0)))
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 14, 1)).tick())
+    assert started.runs == []
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 6, 9, 1)).tick())
+    assert len(started.runs) == 1
+
+
+def test_a_schedule_written_before_its_moment_still_catches_up():
+    """The control: written at 08:59, the sweep down until 10:30. That nine
+    o'clock window passed while the schedule EXISTED — it was missed, and the
+    catch-up rule still sends it late."""
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+    index.stamp(ITEM, PATH, _ms(datetime(2026, 9, 5, 8, 59)))
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 10, 30)).tick())
+
+    assert len(started.runs) == 1
+
+
+def test_a_later_save_of_the_file_does_not_make_the_schedule_newborn_again():
+    """Saved at 14:00 on day one; on day two the sweep is down at nine, and the
+    page saves the same file again at ten (another row edited). Day two's nine
+    o'clock was missed by a schedule that has existed since yesterday, so it
+    catches up — which needs the ledger to remember the first period was
+    handled, not just the stamp: the stamp has moved to ten."""
+    spec = _spec()
+    index = ScheduleIndex(spec)
+    index.record(ITEM, PATH)
+    index.stamp(ITEM, PATH, _ms(datetime(2026, 9, 5, 14, 0)))
+    started = _Started()
+    files = _Files(**{f"{ITEM}{PATH}": _file(DAILY)})
+
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 5, 14, 1)).tick())
+    index.stamp(ITEM, PATH, _ms(datetime(2026, 9, 6, 10, 0)))
+    asyncio.run(_sweeper(spec, files, started, datetime(2026, 9, 6, 10, 30)).tick())
 
     assert len(started.runs) == 1
 

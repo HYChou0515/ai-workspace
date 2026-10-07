@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from msgspec import Struct
 
-from .triggers import Schedule, _valid_tz, next_run
+from .triggers import Schedule, _valid_tz, fire_window, next_run, period_target
 from .workspace_store import SCHEDULES_FILE, WORKSPACE_WORKFLOW_DIR
 
 logger = logging.getLogger(__name__)
@@ -476,14 +476,40 @@ def describe_row(row: UserSchedule) -> str:
     return f"daily at {row.at} {zone}"
 
 
+def born_after_target(row: UserSchedule, now_utc: datetime, landed_ms: int | None) -> str:
+    """The current window when this row's file landed AFTER the current
+    period's moment, else ``""`` — the birth rule
+    (`docs/plan-schedule-overview.md` §1).
+
+    Asked only of a schedule the ledger has never fired. The catch-up rule
+    fires a window whose moment has passed; that is right for a window the
+    schedule was alive for (a sweep down at nine) and wrong for one that passed
+    before it existed (a daily 09:00 saved at 14:00 is not a nine o'clock run
+    that was missed). ``None`` — a file stamped before stamps existed — is
+    "unknown", and keeps catch-up.
+
+    ONE function for the sweep that fires a row and every reader that reports
+    when it fires next, so they cannot disagree.
+    """
+    if landed_ms is None:
+        return ""
+    schedule = row.as_schedule()
+    now = in_zone(now_utc, row.tz)
+    landed = in_zone(datetime.fromtimestamp(landed_ms / 1000, UTC).replace(tzinfo=None), row.tz)
+    if period_target(schedule, now) <= landed:
+        return fire_window(schedule, now)
+    return ""
+
+
 def next_run_at(row: UserSchedule, now_utc: datetime, last_window: str) -> str:
     """When this row fires next as `YYYY-MM-DD HH:MM` in ITS zone, on the rule
     the sweep fires by — or `""` when it is due right now (the next sweep).
 
     The empty case is the one worth keeping distinct rather than rounding away:
-    a missed window fires late, so a daily 09:00 saved at 10:00 runs within the
-    minute (the catch-up rule the sweep's reference documents), and a reply or a
-    panel that said "tomorrow" would contradict the manual it stands in for.
+    a missed window fires late (the catch-up rule), and a reply or a panel that
+    said "tomorrow" for it would contradict the sweep. A row written after its
+    moment never reaches that case — `schedule_views` hands in the window the
+    birth rule counts as handled, so it reads as next period.
     """
     when = next_run(row.as_schedule(), in_zone(now_utc, row.tz), last_window)
     return "" if when is None else f"{when:%Y-%m-%d %H:%M}"
@@ -535,6 +561,17 @@ class ScheduleView(Struct):
     payload: dict[str, Any] = {}
 
 
+def _last_or_born(
+    row: UserSchedule,
+    now_utc: datetime,
+    last_window: Callable[[UserSchedule], str],
+    landed_ms: int | None,
+) -> str:
+    """The ledger's window, or — for a row it has never fired — the window the
+    birth rule counts as handled. What the sweep would see after its claim."""
+    return last_window(row) or born_after_target(row, now_utc, landed_ms)
+
+
 def schedule_views(
     raw_text: str,
     *,
@@ -545,6 +582,7 @@ def schedule_views(
     enabled: bool = True,
     indexed: bool = True,
     broken: Mapping[str, str] | None = None,
+    landed_ms: int | None = None,
 ) -> tuple[list[ScheduleView], list[str]]:
     """Every row of a schedules file, described the way the sweep reads it —
     same parser, same cap, same next-run rule, same ledger (`last_window`) —
@@ -561,6 +599,10 @@ def schedule_views(
     `offered.unparsable_workflow`'s answer, the sweep's own check). Each of
     those is a way a row silently never fires, so each is said here rather
     than rounded away.
+
+    `landed_ms` is when the file last landed (the index's stamp): a row the
+    ledger has never fired, written after this period's moment, is not due now
+    but next period — `born_after_target`, the sweep's own rule.
     """
     rows = file_rows(raw_text)
     if rows is None:
@@ -580,7 +622,11 @@ def schedule_views(
         known = row.run in offered
         run_problem = (broken or {}).get(row.run, "")
         runnable = known and not run_problem and capped is None and enabled and indexed
-        at = next_run_at(row, now_utc, last_window(row)) if runnable else ""
+        at = (
+            next_run_at(row, now_utc, _last_or_born(row, now_utc, last_window, landed_ms))
+            if runnable
+            else ""
+        )
         views.append(
             ScheduleView(
                 index=i,

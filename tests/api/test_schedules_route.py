@@ -188,6 +188,33 @@ def test_an_index_the_route_cannot_read_is_not_indexed_and_not_a_500(monkeypatch
     assert r.json()["rows"][0]["runnable"] is False
 
 
+def test_a_landing_stamp_the_route_cannot_read_is_unknown_and_not_a_500(monkeypatch) -> None:
+    """The stamp only refines "next run" (the birth rule). Unreadable, it is
+    unknown — the row still lists, still runnable, on the catch-up reading."""
+    from workspace_app.api import schedule_index
+
+    client, _, item_id = _app()
+    with client:
+        _put(client, item_id, ".workflows/nightly.json", _NIGHTLY)
+        _put(
+            client,
+            item_id,
+            ".workflows/schedules.json",
+            json.dumps({"schedules": [{"every": "hourly", "run": "nightly"}]}),
+        )
+
+        def _down(self, item_id: str, path: str) -> int | None:
+            raise RuntimeError("index down")
+
+        monkeypatch.setattr(schedule_index.ScheduleIndex, "landed_at", _down)
+        r = client.get(f"{_base(item_id)}/schedules")
+
+    assert r.status_code == 200, r.text
+    row = r.json()["rows"][0]
+    assert row["runnable"] is True
+    assert row["due_now"] is True
+
+
 def test_a_file_over_the_deployments_cap_is_reported_as_the_sweep_treats_it() -> None:
     """The sweep refuses the WHOLE file over `max_page_schedules` — none of its
     rows run — with one log line nobody reads. The tool refuses at save, but it
