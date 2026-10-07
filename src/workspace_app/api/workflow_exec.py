@@ -33,6 +33,7 @@ from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
+from .env_layers import PersonEnv
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
@@ -256,9 +257,7 @@ class WorkflowExecutor:
             raise asyncio.CancelledError
         return answer
 
-    async def _headless_env(
-        self, captured_user: str, item_id: str, run_id: str = ""
-    ) -> dict[str, str]:
+    async def _headless_env(self, captured_user: str, item_id: str, run_id: str = "") -> PersonEnv:
         """What this node's tools get from the deploy's seam, given that no
         request is behind it: the seam's answer for ``captured_user`` — the item
         owner for an item schedule and for a page-button run, the trigger's

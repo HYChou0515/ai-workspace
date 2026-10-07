@@ -54,6 +54,7 @@ from specstar import QB, SpecStar
 from specstar.types import DuplicateResourceError, ResourceIDNotFoundError
 
 from ..perm import Verb
+from .env_layers import PersonEnv
 from .locator import ItemLocator
 from .timeutil import now_ms
 
@@ -279,7 +280,7 @@ def own_layer(typed: dict[str, str], seam: dict[str, str]) -> dict[str, str]:
 
 async def private_layer(
     store: PrivateEnvStore | None, *, user_id: str, item_id: str, fresh: dict[str, str] | None
-) -> dict[str, str]:
+) -> PersonEnv:
     """A person's PRIVATE layer for a turn or tool call WITH a request behind it:
     what they put there themselves, with what the deploy's seam just said about
     them over it (``fresh``; ``None`` = no seam configured). The seam's answer is
@@ -291,14 +292,18 @@ async def private_layer(
     ``store`` None (a composition that wired none) ⇒ exactly the seam's answer,
     as before this plan. Order: typed names, then the seam's in ITS order — with
     nothing typed that is the seam's order, as before (the names become
-    ``SANDBOX_USER_ENV_KEYS``, which a tool can see)."""
+    ``SANDBOX_USER_ENV_KEYS``, which a tool can see).
+
+    Their values for every item ride beside it (`plan-personal-env`): which of
+    those a tool gets is the item's policy, decided in ``resolve_env``."""
     seam = fresh or {}
     if store is None:
-        return dict(seam)
+        return PersonEnv(own=dict(seam))
     if fresh is not None:
         await asyncio.to_thread(store.record_seam, user_id, item_id, fresh)
     typed = await asyncio.to_thread(store.get, user_id, item_id)
-    return own_layer(typed, seam)
+    personal = await asyncio.to_thread(store.personal, user_id)
+    return PersonEnv(own=own_layer(typed, seam), personal=personal)
 
 
 async def unattended_layer(
@@ -308,7 +313,7 @@ async def unattended_layer(
     acting_for: str,
     item_id: str,
     verb: Verb,
-) -> dict[str, str]:
+) -> PersonEnv:
     """The PRIVATE layer of a turn with no request behind it: the seam's
     request-less answer (``env_without_request`` — a service account, or
     nothing), with ``acting_for``'s own values over it — what they put there,
@@ -323,14 +328,19 @@ async def unattended_layer(
 
     ``verb`` is what ``acting_for`` must STILL hold on the item — asked here,
     at use, because nobody is at the request to be gated: a person removed from
-    the item stops lending their values at the next turn (review round 1)."""
+    the item stops lending their values at the next turn (review round 1) — the
+    ones for this item and the ones for every item alike (`plan-personal-env`).
+
+    The service account is kept apart (``service``) rather than merged under
+    their values, so their values for every item can rank above it too."""
     if store is None or not acting_for:
-        return headless
+        return PersonEnv(service=dict(headless))
     if not await asyncio.to_thread(store.may, acting_for, item_id, verb):
-        return headless
+        return PersonEnv(service=dict(headless))
     typed = await asyncio.to_thread(store.get, acting_for, item_id)
     seam = await asyncio.to_thread(store.seam, acting_for, item_id)
-    return {**headless, **own_layer(typed, seam)}
+    personal = await asyncio.to_thread(store.personal, acting_for)
+    return PersonEnv(own=own_layer(typed, seam), personal=personal, service=dict(headless))
 
 
 class PrivateValues(BaseModel):

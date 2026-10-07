@@ -12,7 +12,7 @@ import itertools
 
 import pytest
 
-from workspace_app.api.env_layers import resolve_env
+from workspace_app.api.env_layers import PersonEnv, resolve_env
 
 S, P = {"K": "shared"}, {"K": "private"}
 
@@ -79,7 +79,9 @@ async def test_a_chat_turn_hands_its_tools_the_layer_the_items_policy_names():
         {"TOKEN": "shared", "HOST": "db"}, env_policy={"TOKEN": "private_first"}
     )
 
-    ctx = await _chat_turn(builder, item_id, caller_env={"TOKEN": "mine", "HOST": "mine"})
+    ctx = await _chat_turn(
+        builder, item_id, caller_env=PersonEnv(own={"TOKEN": "mine", "HOST": "mine"})
+    )
 
     assert ctx.user_env == {"TOKEN": "mine", "HOST": "db"}
 
@@ -94,7 +96,7 @@ async def test_a_workflow_turn_honours_the_policy_too():
         agent_config=None,
         run_subagent=_dummy_subagent,
         history_messages=[],
-        caller_env={},
+        caller_env=PersonEnv(),
     )
 
     assert ctx.user_env == {}
@@ -117,3 +119,64 @@ def test_the_shared_case_table_still_says_what_resolve_env_does():
         got = resolve_env(shared=case["shared"], private=case["private"], policy=case["policy"])
         layer = {"s": "shared", "p": "private"}.get(got.get("K", ""), "none")
         assert layer == case["expected"], case
+
+
+# ─── my environment variables (`docs/plan-personal-env.md`) ─────────────────
+
+V = {"K": "personal"}
+SVC = {"K": "service"}
+
+
+@pytest.mark.parametrize(
+    ("policy", "shared", "private", "personal", "service", "expected"),
+    [
+        # Shared never reads my environment variables (D2), even with nothing else.
+        ("shared_first", {}, {}, V, {}, None),
+        ("shared_first", S, P, V, SVC, "shared"),
+        ("shared_first", {}, P, V, SVC, "private"),
+        ("shared_first", {}, {}, V, SVC, "service"),
+        # Private first: this item's own value, then mine, then the service
+        # account, then the shared copy (D4, D7).
+        ("private_first", S, P, V, SVC, "private"),
+        ("private_first", S, {}, V, SVC, "personal"),
+        ("private_first", S, {}, {}, SVC, "service"),
+        ("private_first", S, {}, {}, {}, "shared"),
+        # Private only: the same, without the shared copy.
+        ("private_only", S, P, V, SVC, "private"),
+        ("private_only", S, {}, V, SVC, "personal"),
+        ("private_only", S, {}, {}, SVC, "service"),
+        ("private_only", S, {}, {}, {}, None),
+    ],
+)
+def test_each_policy_orders_the_four_sources(policy, shared, private, personal, service, expected):
+    got = resolve_env(
+        shared=shared, private=private, personal=personal, service=service, policy={"K": policy}
+    )
+    assert got.get("K") == expected
+
+
+def test_a_name_only_in_my_variables_does_not_appear_without_a_private_policy():
+    """D2: the item must ask. A name it never set a policy for is not passed,
+    and neither is one it set to Shared."""
+    got = resolve_env(
+        shared={}, private={}, personal={"A": "1", "B": "2"}, policy={"B": "shared_first"}
+    )
+    assert got == {}
+
+
+def test_splitting_the_service_account_out_changes_nothing_without_my_variables():
+    """Parity, with the old composition as the oracle: the service account used
+    to ride at the bottom of the private dict (`{**service, **own}`). Every
+    placement of three names over the three sources, under every policy."""
+    names = ("A", "B", "C")
+    policies = ("shared_first", "private_first", "private_only")
+    for placement in itertools.product(range(8), repeat=3):
+        where = dict(zip(names, placement, strict=True))
+        shared = {n: f"s{n}" for n, w in where.items() if w & 1}
+        own = {n: f"p{n}" for n, w in where.items() if w & 2}
+        service = {n: f"v{n}" for n, w in where.items() if w & 4}
+        for pol in itertools.product(policies, repeat=3):
+            policy = dict(zip(names, pol, strict=True))
+            old = resolve_env(shared=shared, private={**service, **own}, policy=policy)
+            new = resolve_env(shared=shared, private=own, service=service, policy=policy)
+            assert list(new.items()) == list(old.items()), (shared, own, service, policy)

@@ -24,6 +24,7 @@ import workspace_app.api.app as app_mod
 import workspace_app.api.chat_send as chat_send
 from workspace_app.agent import AgentToolContext
 from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.api.env_layers import PersonEnv
 from workspace_app.api.events import RunDone
 from workspace_app.api.request_env import IRequestEnv
 from workspace_app.api.schemas import _MessageBody
@@ -124,7 +125,7 @@ async def _chat_turn(builder: TurnContextBuilder, item_id: str, **kw) -> AgentTo
 async def test_request_values_reach_the_turn_alongside_the_items_own():
     builder, item_id = _app_with_item({"FROM_ITEM": "i"})
 
-    ctx = await _chat_turn(builder, item_id, caller_env={"FROM_REQUEST": "r"})
+    ctx = await _chat_turn(builder, item_id, caller_env=PersonEnv(own={"FROM_REQUEST": "r"}))
 
     assert ctx.user_env == {"FROM_REQUEST": "r", "FROM_ITEM": "i"}
 
@@ -134,7 +135,7 @@ async def test_the_items_value_wins_a_name_collision():
     with no notice — so an operator can pin a value for testing."""
     builder, item_id = _app_with_item({"TOKEN": "from-item"})
 
-    ctx = await _chat_turn(builder, item_id, caller_env={"TOKEN": "from-request"})
+    ctx = await _chat_turn(builder, item_id, caller_env=PersonEnv(own={"TOKEN": "from-request"}))
 
     assert ctx.user_env == {"TOKEN": "from-item"}
 
@@ -164,7 +165,7 @@ async def test_a_workflow_turn_carries_what_its_executor_resolved_under_the_item
         agent_config=None,
         run_subagent=_dummy_subagent,
         history_messages=[],
-        caller_env={"TOKEN": "from-seam", "SA": "x"},
+        caller_env=PersonEnv(own={"TOKEN": "from-seam", "SA": "x"}),
     )
 
     assert ctx.user_env == {"TOKEN": "from-item", "FROM_ITEM": "i", "SA": "x"}

@@ -45,6 +45,7 @@ from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
+from .env_layers import PersonEnv
 from .events import GoalUpdated, RunError, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
@@ -423,7 +424,7 @@ class ChatSendService:
         user_id: str,
         item_id: str,
         driven_by: str | None = None,
-    ) -> dict[str, str]:
+    ) -> PersonEnv:
         """What the caller behind this send contributes to the turn's tool env.
 
         Empty whenever there is no seam. With one, a send that holds a request
@@ -461,7 +462,7 @@ class ChatSendService:
                 # Neither a request nor the platform's own driver: the safe
                 # side, as before this plan (review round 1, R6) — nothing of
                 # anybody's.
-                return {}
+                return PersonEnv()
             # The goal driver continues ONE person's chat: the seam's
             # request-less answer, with their own values over it — if they may
             # still talk to the agent here.
@@ -888,7 +889,7 @@ class ChatSendService:
         author: str,
         lane: CallLane = "background",
         driven_by: str | None = None,
-        caller_env: dict[str, str] | None = None,
+        caller_env: PersonEnv | None = None,
     ) -> None:
         """Append the user message to conversation ``rid``, open its claim, then
         build the RCA turn ctx from ITS history and enqueue the turn on
@@ -1052,7 +1053,7 @@ class ChatSendService:
             return
         seam = self._request_env
 
-        async def headless_env() -> dict[str, str] | None:
+        async def headless_env() -> PersonEnv | None:
             # Resolved INSIDE the preparation window (`_start_turn`), under its
             # heartbeat: the claim is this pod's from `take` on, and a policy
             # that takes its time with no beat behind it read as a dead owner
@@ -1178,12 +1179,12 @@ class ChatSendService:
         *,
         lane: CallLane,
         driven_by: str | None,
-        caller_env: dict[str, str] | None,
+        caller_env: PersonEnv | None,
         created: int,
         claim: str | None,
         announce: bool,
         await_reply: bool = True,
-        resolve_env: Callable[[], Awaitable[dict[str, str] | None]] | None = None,
+        resolve_env: Callable[[], Awaitable[PersonEnv | None]] | None = None,
     ) -> None:
         """Build the turn ctx from the conversation's history and enqueue the
         turn. `created` is the persisted user message's timestamp; `claim` the

@@ -41,7 +41,7 @@ from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
 from ..workflow.offered import no_such_workflow, wont_parse
-from .env_layers import resolve_env
+from .env_layers import PersonEnv, resolve, resolve_env
 from .locator import ItemLocator
 from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
@@ -211,7 +211,7 @@ def register_wui_routes(
     # themselves into the opposite rule.
     bundled: Sequence[PackageInfo] = packages or []
 
-    async def _request_env(request: Request, item_id: str) -> dict[str, str]:
+    async def _request_env(request: Request, item_id: str) -> PersonEnv:
         """What the request behind this click contributes to the tool env.
 
         Empty when the deploy named no impl — the seam ships unimplemented, and
@@ -555,9 +555,9 @@ def register_wui_routes(
             # person who pressed the button is the PRIVATE layer, the item's
             # copy the SHARED one, and the item's per-name policy picks — so a
             # page cannot reach a different system from the one the agent does.
-            user_env=resolve_env(
+            user_env=resolve(
                 shared=layers.shared,
-                private=await _request_env(request, investigation_id),
+                person=await _request_env(request, investigation_id),
                 policy=layers.policy,
             ),
             # The registry's own wake path, so this shares the item's ONE
