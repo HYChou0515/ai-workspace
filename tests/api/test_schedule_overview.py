@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+import pytest
+
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.filestore.memory import MemoryFileStore
@@ -217,6 +219,298 @@ def test_a_schedule_chat_with_no_run_linked_or_a_run_since_deleted_reads_as_neve
     assert last_run_of(spec, "wui:i1:aaaa") is None
     assert last_run_of(spec, "wui:i1:bbbb") is None
     assert last_run_of(spec, "wui:i1:never") is None
+
+
+# ── acting on one row ────────────────────────────────────────────────────────
+
+
+def _row_of(client, path: str, run: str = "w0") -> dict:
+    return next(r for r in _rows(client) if r["path"] == path and r["run"] == run)
+
+
+def _file_rows(client, iid: str, path: str) -> list:
+    r = client.get(_wp(iid, f"/files{path}"))
+    assert r.status_code == 200, r.text
+    return json.loads(r.content)["schedules"]
+
+
+def test_editing_the_time_rewrites_that_row_and_keeps_the_others_as_written():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, "/.workflows/w1.json", _workflow("w1"))
+    malformed = {"every": "fortnightly", "run": "w1"}
+    _put(
+        client,
+        iid,
+        PAGE_SCHEDULES,
+        _schedules(
+            {"every": "daily", "at": "09:00", "run": "w0", "with": {"line": "A"}},
+            malformed,
+            {"every": "hourly", "run": "w1"},
+        ),
+    )
+    before = _row_of(client, PAGE_SCHEDULES)
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={
+            "path": PAGE_SCHEDULES,
+            "trigger_id": before["trigger_id"],
+            "every": "weekly",
+            "dow": "fri",
+            "at": "17:30",
+            "tz": "Asia/Taipei",
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    rows = _file_rows(client, iid, PAGE_SCHEDULES)
+    assert rows[0] == {
+        "every": "weekly",
+        "dow": "fri",
+        "at": "17:30",
+        "tz": "Asia/Taipei",
+        "run": "w0",
+        "with": {"line": "A"},
+    }
+    assert rows[1:] == [malformed, {"every": "hourly", "run": "w1"}]
+    after = _row_of(client, PAGE_SCHEDULES)
+    assert after["trigger_id"] != before["trigger_id"]
+    assert after["describe"] == "weekly on fri at 17:30 Asia/Taipei"
+
+
+@pytest.mark.parametrize(
+    ("asked", "written"),
+    [
+        # Only the fields the new `every` reads are written — a stray `dom` on a
+        # weekly row is a field nothing consults and a reader has to puzzle over.
+        ({"every": "minutes", "n": 15, "at": "09:00", "dom": 3}, {"every": "minutes", "n": 15}),
+        ({"every": "hourly", "at": "09:00"}, {"every": "hourly"}),
+        (
+            {"every": "monthly", "dom": 1, "at": "06:00", "dow": "mon"},
+            {"every": "monthly", "dom": 1, "at": "06:00"},
+        ),
+    ],
+)
+def test_each_period_writes_only_the_fields_it_reads(asked: dict, written: dict):
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": _row_of(client, ITEM_SCHEDULES)["trigger_id"]}
+
+    r = client.post(_wp(iid, "/schedules/edit"), json={**ref, **asked})
+
+    assert r.status_code == 200, r.text
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [{**written, "run": "w0"}]
+
+
+def test_an_invalid_time_is_refused_with_the_sweeps_reason_and_the_file_is_untouched():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    before = _file_rows(client, iid, ITEM_SCHEDULES)
+    row = _row_of(client, ITEM_SCHEDULES)
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={
+            "path": ITEM_SCHEDULES,
+            "trigger_id": row["trigger_id"],
+            "every": "daily",
+            "at": "25:00",
+        },
+    )
+
+    assert r.status_code == 422, r.text
+    assert "25:00" in r.json()["detail"]
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == before
+
+
+def test_acting_on_a_row_that_changed_meanwhile_is_a_conflict_not_a_guess():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    stale = _row_of(client, ITEM_SCHEDULES)["trigger_id"]
+    # Somebody (the AI, the page) moves it first.
+    _put(client, iid, ITEM_SCHEDULES, _schedules({"every": "daily", "at": "07:00", "run": "w0"}))
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": stale}
+
+    edit = client.post(_wp(iid, "/schedules/edit"), json={**ref, "every": "hourly"})
+    remove = client.post(_wp(iid, "/schedules/remove"), json=ref)
+    run = client.post(_wp(iid, "/schedules/run"), json=ref)
+
+    assert (edit.status_code, remove.status_code, run.status_code) == (409, 409, 409)
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [
+        {"every": "daily", "at": "07:00", "run": "w0"}
+    ]
+
+
+@pytest.mark.parametrize("now", [None, "{not json", '{"schedules": 5}'])
+def test_a_file_deleted_or_broken_meanwhile_is_a_conflict(now: str | None):
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    ref = {"path": PAGE_SCHEDULES, "trigger_id": _row_of(client, PAGE_SCHEDULES)["trigger_id"]}
+    if now is None:
+        assert client.delete(_wp(iid, f"/files{PAGE_SCHEDULES}")).status_code in (200, 204)
+    else:
+        _put(client, iid, PAGE_SCHEDULES, now)
+
+    assert client.post(_wp(iid, "/schedules/remove"), json=ref).status_code == 409
+
+
+def test_only_a_schedules_file_can_be_acted_on():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    r = client.post(
+        _wp(iid, "/schedules/remove"), json={"path": "/reports/scrap/data.json", "trigger_id": "x"}
+    )
+
+    assert r.status_code == 400
+
+
+def test_a_reader_may_neither_change_nor_run_a_schedule():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=READER)
+    _seed(client, iid)
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": _row_of(client, ITEM_SCHEDULES)["trigger_id"]}
+    holder["id"] = "alice"
+
+    edit = client.post(_wp(iid, "/schedules/edit"), json={**ref, "every": "hourly"})
+    remove = client.post(_wp(iid, "/schedules/remove"), json=ref)
+    run = client.post(_wp(iid, "/schedules/run"), json=ref)
+
+    assert (edit.status_code, remove.status_code, run.status_code) == (403, 403, 403)
+
+
+def test_remove_drops_that_row_and_keeps_the_others_as_written():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, "/.workflows/w1.json", _workflow("w1"))
+    malformed = {"every": "fortnightly", "run": "w1"}
+    keep = {"every": "hourly", "run": "w1"}
+    _put(
+        client,
+        iid,
+        PAGE_SCHEDULES,
+        _schedules({"every": "daily", "at": "09:00", "run": "w0"}, malformed, keep),
+    )
+    ref = {"path": PAGE_SCHEDULES, "trigger_id": _row_of(client, PAGE_SCHEDULES)["trigger_id"]}
+
+    r = client.post(_wp(iid, "/schedules/remove"), json=ref)
+
+    assert r.status_code == 204, r.text
+    assert _file_rows(client, iid, PAGE_SCHEDULES) == [malformed, keep]
+
+
+def _wake(client, iid: str) -> None:
+    woke = client.post(_wp(iid, "/exec"), json={"cmd": ["echo", "hi"]})
+    assert woke.status_code == 200, woke.text
+
+
+def test_run_now_runs_the_schedule_in_its_own_chat_as_the_presser_and_keeps_its_time():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    with client:
+        _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+        _put(
+            client,
+            iid,
+            ITEM_SCHEDULES,
+            _schedules({"every": "daily", "at": "09:00", "run": "w0", "with": {"line": "A"}}),
+        )
+        _wake(client, iid)
+        before = _row_of(client, ITEM_SCHEDULES)
+
+        r = client.post(
+            _wp(iid, "/schedules/run"),
+            json={"path": ITEM_SCHEDULES, "trigger_id": before["trigger_id"]},
+        )
+        (run,) = client.get(_wp(iid, "/runs")).json()
+        after = _row_of(client, ITEM_SCHEDULES)
+
+    assert r.status_code == 202, r.text
+    assert r.json()["run_id"] == run["run_id"]
+    assert (run["chat_id"], run["captured_user"], run["trigger_payload"]) == (
+        before["trigger_id"],
+        "bob",
+        {"line": "A"},
+    )
+    assert after["last_run"]["run_id"] == run["run_id"]
+    assert (after["next_at"], after["due_now"]) == (before["next_at"], before["due_now"])
+
+
+def test_run_now_is_refused_while_the_previous_run_is_still_going():
+    gated = json.dumps(
+        {
+            "id": "ignored",
+            "title": "Gated",
+            "phases": [{"id": "p"}],
+            "steps": [
+                {"type": "gate", "phase": "p", "title": "go on?"},
+                {"type": "sandbox", "run": "echo ok", "phase": "p", "cache": False},
+            ],
+        }
+    )
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    with client:
+        _put(client, iid, "/.workflows/w0.json", gated)
+        _put(client, iid, ITEM_SCHEDULES, _schedules({"every": "hourly", "run": "w0"}))
+        _wake(client, iid)
+        ref = {"path": ITEM_SCHEDULES, "trigger_id": _row_of(client, ITEM_SCHEDULES)["trigger_id"]}
+
+        first = client.post(_wp(iid, "/schedules/run"), json=ref)
+        second = client.post(_wp(iid, "/schedules/run"), json=ref)
+
+    assert first.status_code == 202, first.text
+    assert second.status_code == 409, second.text
+    assert "still going" in second.json()["detail"]
+
+
+def test_run_now_names_a_workflow_the_item_lacks_or_that_will_not_parse():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(
+        client,
+        iid,
+        "/.workflows/bad.json",
+        '{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}',
+    )
+    _put(
+        client,
+        iid,
+        ITEM_SCHEDULES,
+        _schedules({"every": "hourly", "run": "gone"}, {"every": "hourly", "run": "bad"}),
+    )
+    rows = {r["run"]: r for r in _rows(client)}
+
+    missing = client.post(
+        _wp(iid, "/schedules/run"),
+        json={"path": ITEM_SCHEDULES, "trigger_id": rows["gone"]["trigger_id"]},
+    )
+    broken = client.post(
+        _wp(iid, "/schedules/run"),
+        json={"path": ITEM_SCHEDULES, "trigger_id": rows["bad"]["trigger_id"]},
+    )
+
+    assert missing.status_code == 403 and "gone" in missing.json()["detail"]
+    assert broken.status_code == 422 and "`cache` is required" in broken.json()["detail"]
 
 
 def test_a_file_the_index_still_names_but_that_is_gone_is_skipped():

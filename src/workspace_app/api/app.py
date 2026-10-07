@@ -2673,6 +2673,8 @@ def create_app(
         locator=locator,
         index=schedule_index,
         policy=schedule_policy,
+        get_user_id=get_user_id,
+        start_run=_start_page_schedule,
     )
 
     register_private_env_routes(
