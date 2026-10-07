@@ -168,3 +168,17 @@ describe("skillHubApi history (plan-skill-hub-history §8)", () => {
   });
 });
 
+
+describe("refreshItemSkill refusals (review round 1)", () => {
+  it("a 409's sentence is the error's message, not the raw body", async () => {
+    const { realApi } = await import("./real");
+    const sentence = "this copy of 'triage' no longer records which version it came from — reset it instead";
+    answering(409, { detail: sentence });
+    const err = await realApi
+      .refreshItemSkill("rca", "i1", "triage", { force: false })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(409);
+    expect((err as HttpError).message).toBe(sentence);
+  });
+});

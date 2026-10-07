@@ -74,7 +74,10 @@ function setup({
     install: vi.fn<SkillHubApi["install"]>(
       install ??
         (async () => {
-          have = [...have, skill({ name: entry.name, copy_of: "hub", is_copy: false })];
+          have = [
+            ...have,
+            skill({ name: entry.name, copy_of: "hub", is_copy: false, hub_entry: entry.id }),
+          ];
           return { name: entry.name, missing_tools: [] };
         }),
     ),
@@ -125,10 +128,27 @@ describe("SkillHubEntryCard", () => {
     expect(items.getItemSkills).toHaveBeenCalledTimes(2);
   });
 
-  it("reads as installed when a folder of that name is already here — the picker's rule", async () => {
-    setup({ skills: [skill({ name: "triage-reflow", source: "workspace" })] });
+  it("reads as installed when this item holds a copy of THIS entry — search_skill_hub's rule", async () => {
+    setup({
+      skills: [skill({ name: "triage-reflow", copy_of: "hub", hub_entry: "e-1" })],
+    });
     expect(await screen.findByText(word("skillHub.card.installed"))).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: word("skillHub.card.install") })).toBeNull();
+  });
+
+  it.each([
+    ["the user's own skill", skill({ name: "triage-reflow", source: "workspace" })],
+    [
+      "a fork's starting point",
+      skill({ name: "triage-reflow", copy_of: "hub", is_copy: false, hub_entry: "" }),
+    ],
+    ["another entry's copy", skill({ name: "triage-reflow", copy_of: "hub", hub_entry: "e-2" })],
+  ])("a same-name folder that is %s is not 「已安裝」: install is held, the picker says why", async (_what, row) => {
+    setup({ skills: [row] });
+    const button = await screen.findByRole("button", { name: word("skillHub.card.install") });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(word("skills.fromHub.taken"))).toBeInTheDocument();
+    expect(screen.queryByText(word("skillHub.card.installed"))).toBeNull();
   });
 
   it("does not count a package skill of that name as installed — its files are not here", async () => {

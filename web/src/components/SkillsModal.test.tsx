@@ -298,6 +298,20 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     expect(await screen.findByText(/scripts\/tuned\.py/)).toBeInTheDocument();
   });
 
+  it("says why a refresh was refused, in the server's own sentence (review round 1)", async () => {
+    const { HttpError } = await import("../api/http");
+    const sentence =
+      "this copy of 'triage' no longer records which version it came from — reset it instead";
+    const refreshItemSkill = vi.fn(async () => {
+      throw new HttpError(409, sentence);
+    });
+    renderModal({ client: { ...fakeClient(COPIED), refreshItemSkill } as never });
+
+    fireEvent.click(await screen.findByTestId("skill-refresh-triage"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(sentence);
+  });
+
   it("offers reset-to-factory even when there is nothing new upstream", async () => {
     const refreshItemSkill = vi.fn(async () => ({ updated: [], skipped: [], removed: [] }));
     renderModal({ client: { ...fakeClient(NO_UPDATE), refreshItemSkill } as never });

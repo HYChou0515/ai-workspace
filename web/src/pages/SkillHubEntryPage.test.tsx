@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
 import { makeQueryClient } from "../api/queryClient";
+import { qk } from "../api/queryKeys";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import type {
   SkillEditTarget,
@@ -652,6 +653,63 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
       "href",
       "/a/rca/i-9",
     );
+  });
+
+  it("shows what the review said about each version on its row (§8)", async () => {
+    const history = HISTORY.map((e) =>
+      e.revision === "e-1:2" ? { ...e, review_notes: ["names a path it does not ship"] } : e,
+    );
+    mount(client(detail({}), OPEN, history));
+    const list = await timeline();
+    // The rows themselves — a row's notes are list items of their own list.
+    const rows = within(list).getAllByRole("listitem").filter((li) => li.parentElement === list);
+    expect(rows).toHaveLength(4);
+    expect(rows[2]).toHaveTextContent("names a path it does not ship");
+    expect(rows[3]).not.toHaveTextContent("names a path");
+  });
+
+  it("compares a version with any other one, the current by default (§8 「能和另一版比對」)", async () => {
+    const three: SkillHubHistoryEvent[] = [
+      ev({ revision: "e-1:3", commit: "c3", at: "2026-10-03T12:00:00Z", current: true }),
+      ev({ revision: "e-1:2", commit: "c2", at: "2026-10-02T12:00:00Z" }),
+      ev({ revision: "e-1:1", commit: "c1", at: "2026-10-01T12:00:00Z" }),
+    ];
+    const c = client(detail({}), OPEN, three);
+    mount(c);
+    const row = within(await timeline()).getAllByRole("listitem")[1];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
+
+    const modal = await screen.findByTestId("skill-hub-diff");
+    await waitFor(() => expect(c.diff).toHaveBeenCalledWith("e-1", "e-1:2", "e-1:3"));
+    const against = within(modal).getByRole("combobox", { name: word("skillHub.history.diff.against") });
+    // The other versions, by when they were published; never the version itself.
+    expect(within(against).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      `2026/10/03 · ${word("skillHub.history.current")}`,
+      "2026/10/01",
+    ]);
+    fireEvent.change(against, { target: { value: "e-1:1" } });
+    await waitFor(() => expect(c.diff).toHaveBeenCalledWith("e-1", "e-1:2", "e-1:1"));
+  });
+
+  it("says what a compare without a line diff means, for both causes", () => {
+    expect(word("skillHub.history.binaryChanged")).toMatch(/太大/);
+    expect(word("skillHub.history.binaryChanged")).toMatch(/不是文字檔/);
+    expect(translate("en", "skillHub.history.binaryChanged")).toMatch(/too large/i);
+  });
+
+  it("a fork refreshes the item's skills, as an install does", async () => {
+    const qc = makeQueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const c = client(detail({}), OPEN, HISTORY);
+    mount(c, qc);
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.fork") }));
+    const dialog = await screen.findByTestId("skill-hub-fork");
+    fireEvent.click(await within(dialog).findByRole("radio", { name: /Line 3 reflow/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.history.fork.confirm") }));
+
+    await within(dialog).findByRole("link", { name: word("skillHub.history.fork.open") });
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.itemSkills("rca", "i-9") });
   });
 });
 

@@ -69,6 +69,26 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
   };
   const versionDay = (e: SkillHubHistoryEvent) =>
     ymd(e.kind === "rollback" ? (events?.find((x) => x.revision === e.to_revision)?.at ?? e.at) : e.at);
+  // Every version once, newest first, as something to compare against: the
+  // current one through the current row, any other through its newest row.
+  // Named by the day it was first published (the oldest row with its commit).
+  const versions = (() => {
+    const seen = new Set<string>();
+    const out: { revision: string; commit: string; label: string }[] = [];
+    for (const e of events ?? []) {
+      if (seen.has(e.commit) || !(namesAVersion(e) || e.current)) continue;
+      seen.add(e.commit);
+      const isCurrent = current !== undefined && e.commit === current.commit;
+      const first = [...(events ?? [])].reverse().find((x) => x.commit === e.commit && namesAVersion(x));
+      const day = ymd(first?.at ?? e.at);
+      out.push({
+        revision: isCurrent && current ? current.revision : e.revision,
+        commit: e.commit,
+        label: isCurrent ? `${day} · ${t("skillHub.history.current")}` : day,
+      });
+    }
+    return out;
+  })();
 
   const rollback = useMutation({
     mutationFn: (e: SkillHubHistoryEvent) =>
@@ -141,6 +161,15 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
               </div>
               {namesAVersion(e) ? (
                 <p className="skill-hub-history-desc">{e.description}</p>
+              ) : null}
+              {namesAVersion(e) && e.review_notes.length > 0 ? (
+                // What the review said about this version (§8) — the one a
+                // rollback brings back is not reviewed again (G20).
+                <ul className="skill-hub-history-notes" aria-label={t("skillHub.review")}>
+                  {e.review_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
               ) : null}
               {namesAVersion(e) ? (
                 <div className="skill-hub-history-actions">
@@ -215,7 +244,8 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
         <DiffModal
           entryId={entry.id}
           from={open.event}
-          to={current}
+          others={versions.filter((v) => v.commit !== open.event.commit)}
+          initial={current.revision}
           day={versionDay(open.event)}
           client={client}
           onClose={() => setOpen(null)}
@@ -312,27 +342,33 @@ function VersionModal({
   );
 }
 
-/** An old version against the current one, per file. */
+/** One version against another, per file — the current one unless the
+ * viewer picks a different one (§8 「能和另一版比對」). */
 function DiffModal({
   entryId,
   from,
-  to,
+  others,
+  initial,
   day,
   client,
   onClose,
 }: {
   entryId: string;
   from: SkillHubHistoryEvent;
-  to: SkillHubHistoryEvent;
+  /** The versions it can be compared with — never itself. */
+  others: { revision: string; label: string }[];
+  initial: string;
   day: string;
   client: SkillHubApi;
   onClose: () => void;
 }) {
   const t = useT();
   const titleId = useId();
+  const againstId = useId();
+  const [to, setTo] = useState(initial);
   const diff = useQuery({
-    queryKey: qk.skillHubDiff(entryId, from.revision, to.revision),
-    queryFn: () => client.diff(entryId, from.revision, to.revision),
+    queryKey: qk.skillHubDiff(entryId, from.revision, to),
+    queryFn: () => client.diff(entryId, from.revision, to),
   });
   const status = { added: "skillHub.history.status.added", removed: "skillHub.history.status.removed", changed: "skillHub.history.status.changed" } as const;
   return (
@@ -341,6 +377,16 @@ function DiffModal({
       <h2 id={titleId} className="modal-title">
         {t("skillHub.history.diff.title", { when: day })}
       </h2>
+      <label className="skill-hub-diff-against" htmlFor={againstId}>
+        <span>{t("skillHub.history.diff.against")}</span>
+        <select id={againstId} className="input" value={to} onChange={(e) => setTo(e.target.value)}>
+          {others.map((v) => (
+            <option key={v.revision} value={v.revision}>
+              {v.label}
+            </option>
+          ))}
+        </select>
+      </label>
       {diff.isError ? (
         <p className="error" role="alert">
           {t("skillHub.error")}
@@ -401,8 +447,12 @@ function ForkDialog({
   const manifest = useAppManifest(slug);
   const { items, isPending } = useAppItems(slug, manifest?.resource_route);
   const [itemId, setItemId] = useState<string | null>(null);
+  const qc = useQueryClient();
   const fork = useMutation({
     mutationFn: () => client.fork(slug, itemId as string, entry.id, event.revision),
+    // The item now holds the copy: its Skills list (and any chat card reading
+    // it) re-reads, as after an install.
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId as string) }),
     meta: { silentError: true },
   });
   const done = fork.data;

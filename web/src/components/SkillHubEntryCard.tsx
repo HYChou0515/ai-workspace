@@ -6,9 +6,11 @@
  * item's App sees it (`missing_tools`), so a reload shows today's counts and
  * an entry since taken down says so. 〔安裝〕 is the Skills panel's own door
  * (`POST …/skills/install`) and its refusals are worded the same way.
- * "Installed" is the picker's rule — a skill of that name whose files are
- * here (`filesHere`) — read off the panel's own skills query, which an
- * install invalidates so the card flips. Drawn where there is no item (the
+ * "Installed" is `search_skill_hub`'s rule — a folder whose `hub_entry` is
+ * THIS entry — read off the panel's own skills query, which an install
+ * invalidates so the card flips. Any other folder of that name (the user's
+ * own, a fork's starting point, another entry's copy) is the picker's
+ * 「已有同名 skill」: the install route would refuse it, so 〔安裝〕 is held. Drawn where there is no item (the
  * knowledge-base chat), it shows the entry with no action.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -80,7 +82,9 @@ export function SkillHubEntryCard({
       </div>
     );
   }
-  const installed = (skillsQ.data ?? []).some((s) => s.name === entry.name && filesHere(s));
+  const rows = skillsQ.data ?? [];
+  const installed = rows.some((s) => s.hub_entry === entry.id);
+  const taken = !installed && rows.some((s) => s.name === entry.name && filesHere(s));
   return (
     <div className="skill-hub-card" data-testid="skill-hub-card">
       <div className="skill-hub-card-head">
@@ -113,16 +117,21 @@ export function SkillHubEntryCard({
           {installed ? (
             <span className="skill-hub-card-muted">{t("skillHub.card.installed")}</span>
           ) : (
-            <button
-              type="button"
-              className="btn"
-              data-size="sm"
-              data-variant="primary"
-              disabled={install.isPending || !skillsQ.isSuccess}
-              onClick={() => install.mutate()}
-            >
-              {t("skillHub.card.install")}
-            </button>
+            <>
+              {taken ? (
+                <span className="skill-hub-card-muted">{t("skills.fromHub.taken")}</span>
+              ) : null}
+              <button
+                type="button"
+                className="btn"
+                data-size="sm"
+                data-variant="primary"
+                disabled={install.isPending || !skillsQ.isSuccess || taken}
+                onClick={() => install.mutate()}
+              >
+                {t("skillHub.card.install")}
+              </button>
+            </>
           )}
           {refusal ? (
             <span className="skill-hub-card-error" role="alert">

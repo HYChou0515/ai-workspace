@@ -2150,7 +2150,7 @@ export const messages = {
     en: "Visibility set to “{visibility}”",
   },
   "skillHub.history.view": { "zh-TW": "查看", en: "View" },
-  "skillHub.history.compare": { "zh-TW": "與目前版本比對", en: "Compare with current" },
+  "skillHub.history.compare": { "zh-TW": "比對其他版本", en: "Compare with another version" },
   "skillHub.history.fork": { "zh-TW": "從這一版 fork", en: "Fork from this version" },
   "skillHub.history.rollback": { "zh-TW": "回復到這一版", en: "Roll back to this version" },
   "skillHub.history.rollback.title": {
@@ -2168,13 +2168,14 @@ export const messages = {
   },
   "skillHub.history.version.title": { "zh-TW": "{when} 的版本", en: "The version of {when}" },
   "skillHub.history.diff.title": {
-    "zh-TW": "{when} 的版本 → 目前版本",
-    en: "The version of {when} → current",
+    "zh-TW": "比對 {when} 的版本",
+    en: "Compare the version of {when}",
   },
+  "skillHub.history.diff.against": { "zh-TW": "和這一版比", en: "Compare with" },
   "skillHub.history.notText": { "zh-TW": "不是文字檔", en: "Not a text file" },
   "skillHub.history.binaryChanged": {
-    "zh-TW": "不是文字檔，只比對是否相同",
-    en: "Not a text file — compared only for being the same",
+    "zh-TW": "這個檔案不顯示逐行差異（不是文字檔，或檔案太大），只比對是否相同",
+    en: "No line-by-line difference for this file (not text, or too large) — compared only for being the same",
   },
   "skillHub.history.noChanges": { "zh-TW": "兩版內容相同。", en: "The two versions are identical." },
   "skillHub.history.status.added": { "zh-TW": "新增", en: "Added" },
@@ -2193,7 +2194,7 @@ export const messages = {
   "skillHub.history.fork.items": { "zh-TW": "複製進哪個 item", en: "Copy into which item" },
   "skillHub.history.fork.noItems": {
     "zh-TW": "這個 App 裡還沒有你看得到的 item。",
-    en: "No items of yours in this App yet.",
+    en: "No items you can see in this App yet.",
   },
   "skillHub.history.fork.confirm": { "zh-TW": "複製進這個 item", en: "Copy into this item" },
   "skillHub.history.fork.done": {
