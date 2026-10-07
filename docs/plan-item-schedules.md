@@ -1,5 +1,7 @@
 # Plan — item 層級的排程:讓 AI 把自己做的 workflow 放上時鐘
 
+> 被 #879（plan-schedule-overview.md）推翻
+
 一個一般聊天 item 裡,使用者跟 AI 說「每天九點跑這個」,AI 能把它做出來、
 說得出下一次什麼時候跑,而且真的會跑。
 
