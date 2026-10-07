@@ -205,14 +205,17 @@ async def test_deleting_twice_is_404_the_second_time(harness: Harness):
     assert harness.client.delete(f"/skill-hub/entries/{mine}").status_code == 404
 
 
-async def test_delete_frees_the_entrys_files(harness: Harness):
+async def test_delete_ends_the_entry_and_keeps_its_version_history(harness: Harness):
+    """plan-skill-hub-history §7 Q2: delete is the row only; the repo stays."""
     hub = _hub(harness)
     mine = await _entry(hub, VIEWER)
-    assert await hub.payload_of(mine) != {}
+    row = hub.get(mine)
+    assert row is not None and row.commit
 
-    harness.client.delete(f"/skill-hub/entries/{mine}")
+    assert harness.client.delete(f"/skill-hub/entries/{mine}").status_code == 204
 
-    assert await hub.payload_of(mine) == {}
+    assert hub.get(mine) is None
+    assert await hub.repos.master(mine) == row.commit
 
 
 # ── transfer ─────────────────────────────────────────────────────────────────

@@ -375,7 +375,7 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ):
     """Review round 2: the detail read every blob (up to 20 MiB) to list file
-    names and show one file. The names are on the row; one read for SKILL.md."""
+    names and show one file. One read, for SKILL.md alone."""
     hub = _hub(harness)
     entry = await hub.publish(
         owner="alice",
@@ -388,18 +388,17 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
         referenced_tools=[],
         review=SkillHubReview(verdict="ok"),
     )
-    reads: list[str] = []
-    blobs = hub._blobs  # noqa: SLF001 — counting the store's reads
-    real_read = blobs.read
+    reads: list[list[str] | None] = []
+    real_read = hub.repos.read
 
-    async def counting(ws: str, path: str) -> bytes:
-        reads.append(path)
-        return await real_read(ws, path)
+    async def counting(entry_id: str, commit: str, *, paths=None) -> dict[str, bytes]:  # noqa: ANN001
+        reads.append(sorted(paths) if paths is not None else None)
+        return await real_read(entry_id, commit, paths=paths)
 
-    monkeypatch.setattr(blobs, "read", counting)
+    monkeypatch.setattr(hub.repos, "read", counting)
 
     d = harness.client.get(f"/skill-hub/entries/{entry}").json()
 
     assert d["files"] == ["SKILL.md", "assets/big.bin"]
     assert d["skill_md"].startswith("---\nname: triage")
-    assert reads == ["/SKILL.md"]
+    assert reads == [["SKILL.md"]]

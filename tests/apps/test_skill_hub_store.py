@@ -1,4 +1,5 @@
-"""The skill hub's storage — an entry per published skill, its files as blobs.
+"""The skill hub's storage — an entry per published skill, its versions in git
+(docs/plan-skill-hub-history.md §3–§5).
 
 Identity is ``(owner, name)`` over a stable resource id: the id is what installed
 copies and forks point at, so an owner transfer must not change it, and a
@@ -7,6 +8,9 @@ same row rather than a second row.
 """
 
 from __future__ import annotations
+
+import datetime as dt
+from pathlib import Path
 
 import msgspec
 import pytest
@@ -18,6 +22,7 @@ from workspace_app.apps.skill_hub import (
     SkillHubStore,
     register_skill_hub,
 )
+from workspace_app.apps.skill_hub_git import SkillHubRepos
 from workspace_app.apps.skill_payload import SkillOrigin, origin_for
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
@@ -37,8 +42,13 @@ def spec() -> SpecStar:
 
 
 @pytest.fixture
-def store(spec: SpecStar) -> SkillHubStore:
-    return SkillHubStore(spec, MemoryFileStore())
+def repos(tmp_path: Path) -> SkillHubRepos:
+    return SkillHubRepos(tmp_path / "git")
+
+
+@pytest.fixture
+def store(spec: SpecStar, repos: SkillHubRepos) -> SkillHubStore:
+    return SkillHubStore(spec, repos)
 
 
 async def _publish(
@@ -181,35 +191,27 @@ async def test_republishing_a_fork_keeps_its_lineage(store: SkillHubStore) -> No
     assert got is not None and got.forked_from == original, "the re-publish lost the lineage"
 
 
-async def test_a_publish_that_dies_writing_files_leaves_no_row(spec: SpecStar) -> None:
-    """Files before the row, so a row that exists always describes files that
-    exist. The other order leaves a row pointing at nothing — an entry the
-    listing shows, `install_skill` accepts, and `materialize_skill` then writes
-    zero files for.
+class _BrokenRepos(SkillHubRepos):
+    """A git that fails writing the version — the disk filling up mid-publish."""
 
-    Driven by a blob store that fails mid-write; the assertion is on what the
-    row store holds afterwards, which is the only thing a crash leaves behind.
-    """
+    async def write_version(self, *a, **kw):  # noqa: ANN002, ANN003, ANN202
+        raise OSError("disk full")
 
-    class _DiesOnSecondWrite(MemoryFileStore):
-        def __init__(self) -> None:
-            super().__init__()
-            self.writes = 0
 
-        async def write(self, workspace_id: str, path: str, data: bytes) -> None:
-            self.writes += 1
-            if self.writes == 2:
-                raise OSError("disk full")
-            await super().write(workspace_id, path, data)
-
-    store = SkillHubStore(spec, _DiesOnSecondWrite())
+async def test_a_publish_that_dies_writing_the_version_leaves_no_row(
+    spec: SpecStar, tmp_path: Path
+) -> None:
+    """§4.1: the row is made first (as a pending draft) so the name can be
+    checked; a publish that fails after that removes its own draft, and a
+    pending draft is never visible, findable or installable."""
+    store = SkillHubStore(spec, _BrokenRepos(tmp_path / "git"))
 
     with pytest.raises(OSError):
         await _publish(store)
 
-    assert store.find("alice", "triage-reflow") is None, (
-        "the row was created before its files were, and now points at nothing"
-    )
+    assert store.find("alice", "triage-reflow") is None
+    assert store.visible("alice") == []
+    assert _row_ids(spec) == [], "the draft was left behind"
 
 
 # ── listing for a viewer (plan P6) ───────────────────────────────────────────
@@ -337,75 +339,210 @@ async def test_nest_forks_keeps_the_hits_order_so_visible_decides_it(store: Skil
 # ── review round 1 (A): a re-publish that dies mid-write ─────────────────────
 
 
-class _DiesOnNthWrite(MemoryFileStore):
-    """A blob store that raises on its n-th write — the durable store hiccup or
-    the disk filling up, mid-publish."""
-
-    def __init__(self, nth: int) -> None:
-        super().__init__()
-        self.writes = 0
-        self.nth = nth
-
-    async def write(self, workspace_id: str, path: str, data: bytes) -> None:
-        self.writes += 1
-        if self.writes == self.nth:
-            raise OSError("disk gone")
-        await super().write(workspace_id, path, data)
-
-
-async def test_a_republish_that_dies_writing_files_leaves_the_live_row_serving_the_old_files(
-    spec: SpecStar,
+async def test_a_version_is_a_commit_that_master_and_the_row_both_name(
+    store: SkillHubStore, repos: SkillHubRepos
 ) -> None:
-    """The first version of `publish` PURGED the old files before writing the
-    new ones, so a failure in between left a LIVE row whose manifest named two
-    files and whose namespace held none: installs wrote a folder holding only
-    `.origin`, the page showed no SKILL.md, and `skill_folder_in_the_way` read
-    that folder as free. Each version now lives in its own namespace; the row
-    moves to the new one only after every file is there, and the old one is
-    dropped only after that. A crash leaves orphan blobs, never a row pointing
-    at nothing — for the re-publish as well as the first publish."""
-    v1 = {"SKILL.md": PAYLOAD["SKILL.md"], "references/glossary.md": b"v1\n"}
-    v2 = {"SKILL.md": PAYLOAD["SKILL.md"], "references/glossary.md": b"v2\n"}
-    blobs = _DiesOnNthWrite(nth=4)  # v1 = writes 1–2; v2 dies on its 2nd file
-    store = SkillHubStore(spec, blobs)
-    entry = await _publish(store, payload=v1)
-
-    with pytest.raises(OSError):
-        await _publish(store, payload=v2)
-
-    live = store.get(entry)
-    assert live is not None and live.origin.files == origin_for("hub", v1, entry=entry).files
-    assert await store.payload_of(entry) == v1
-
-
-async def test_a_republish_that_succeeds_drops_the_previous_versions_files(
-    spec: SpecStar, store: SkillHubStore
-) -> None:
-    """The namespaces are per version, so the old one has to be let go of
-    explicitly — or every re-publish would leak a full copy."""
+    """G5 / G7: master is the current version, the row records it, and the
+    row's revision is tagged at it — the two link each way."""
     entry = await _publish(store)
-    before = store.get(entry)
-    assert before is not None
-    old_ns = before.blobs
-
-    await _publish(store, payload={"SKILL.md": PAYLOAD["SKILL.md"]})
-
-    after = store.get(entry)
-    assert after is not None and after.blobs != old_ns
-    assert await store._blobs.ls(old_ns) == []  # noqa: SLF001 — the namespace is the store's own
-    assert await store.payload_of(entry) == {"SKILL.md": PAYLOAD["SKILL.md"]}
+    row = store.get(entry)
+    assert row is not None and row.commit
+    assert await repos.master(entry) == row.commit
+    assert await repos.read(entry, row.commit) == PAYLOAD
+    tags = await repos.tagged_revisions(entry)
+    assert list(tags.values()) == [row.commit]
 
 
-async def test_delete_purges_the_version_the_row_points_at(
-    spec: SpecStar, store: SkillHubStore
+async def test_a_republish_is_a_commit_on_top_of_the_current_one(
+    store: SkillHubStore, repos: SkillHubRepos
 ) -> None:
+    entry = await _publish(store)
+    first = store.get(entry)
+    assert first is not None
+    await _publish(store, payload={"SKILL.md": PAYLOAD["SKILL.md"]})
+    second = store.get(entry)
+    assert second is not None and second.commit != first.commit
+
+    assert await repos.master(entry) == second.commit
+    import subprocess
+
+    parent = subprocess.run(
+        ["git", "-C", str(repos.path(entry)), "rev-parse", f"{second.commit}^"],
+        capture_output=True, check=True, text=True,
+    ).stdout.strip()  # fmt: skip
+    assert parent == first.commit
+    # Every revision is tagged at its commit, the old version included.
+    assert sorted((await repos.tagged_revisions(entry)).values()) == sorted(
+        [first.commit, second.commit]
+    )
+
+
+class _LosesTheFirstRace(SkillHubRepos):
+    """Another pod moves master between this one's read and its move — once."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.raced = False
+
+    async def move_master(self, entry_id: str, commit: str, *, expected: str | None) -> bool:
+        if not self.raced and expected is not None:
+            self.raced = True
+            theirs = await self.write_version(
+                entry_id, {"SKILL.md": b"theirs"}, parent=expected, author="bob", message="x"
+            )
+            assert await super().move_master(entry_id, theirs, expected=expected)
+        return await super().move_master(entry_id, commit, expected=expected)
+
+
+async def test_a_republish_that_loses_the_lease_rereads_master_and_goes_on_top(
+    spec: SpecStar, tmp_path: Path
+) -> None:
+    """G5: losing the push is not an error for a publish — it reads the new
+    master and commits on top of it."""
+    repos = _LosesTheFirstRace(tmp_path / "git")
+    store = SkillHubStore(spec, repos)
+    entry = await _publish(store)
+    await _publish(store, payload={"SKILL.md": b"mine"})
+
+    row = store.get(entry)
+    assert row is not None and repos.raced
+    assert await repos.master(entry) == row.commit
+    assert await store.payload_of(entry) == {"SKILL.md": b"mine"}
+
+
+async def test_delete_keeps_the_repo(store: SkillHubStore, repos: SkillHubRepos) -> None:
+    """§7 Q2: delete is a soft delete of the row; the version history stays."""
     entry = await _publish(store)
     row = store.get(entry)
     assert row is not None
 
     await store.delete(entry)
 
-    assert await store._blobs.ls(row.blobs) == []  # noqa: SLF001
+    assert store.get(entry) is None
+    assert await repos.master(entry) == row.commit
+
+
+async def test_a_legacy_row_still_serves_its_files_from_the_old_store(spec: SpecStar) -> None:
+    """An entry published before the git store has no `commit`, only the
+    namespace its files were written to; it is read from there until it is
+    migrated (§6)."""
+    legacy = MemoryFileStore()
+    await legacy.write("skill-hub:old1:v", "/SKILL.md", PAYLOAD["SKILL.md"])
+    rm = spec.get_resource_manager(SkillHubEntry)
+    rm.create(
+        SkillHubEntry(
+            owner="alice",
+            name="triage-reflow",
+            description="d",
+            source_item="i",
+            source_app="rca",
+            source_profile="p",
+            origin=origin_for("hub", {"SKILL.md": PAYLOAD["SKILL.md"]}, entry="old1"),
+            review=OK,
+            blobs="skill-hub:old1:v",
+        ),
+        resource_id="old1",
+    )
+    store = SkillHubStore(spec, SkillHubRepos("/nonexistent"), legacy=legacy)
+
+    assert store.find("alice", "triage-reflow") == "old1"
+    assert [i for i, _ in store.visible("alice")] == ["old1"]
+    assert await store.payload_of("old1") == {"SKILL.md": PAYLOAD["SKILL.md"]}
+    assert await store.skill_md_of("old1") == PAYLOAD["SKILL.md"]
+
+
+# ── two first publishes of one name (G26, §7 Q3) ─────────────────────────────
+
+
+def _row_ids(spec: SpecStar) -> list[str]:
+    """Every row the table holds, drafts and all — what a crash would leave."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    return sorted(
+        r.meta.resource_id  # ty: ignore[unresolved-attribute] — `returns=["meta"]` fills it
+        for r in rm.list_resources(returns=["meta"])
+    )
+
+
+def _pending(spec: SpecStar, entry_id: str, *, age: dt.timedelta) -> None:
+    """A draft someone else's first publish of the same name left — still in
+    flight (young) or from a pod that died (old)."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    rm.create(
+        SkillHubEntry(
+            owner="alice",
+            name="triage-reflow",
+            description="d",
+            source_item="i",
+            source_app="rca",
+            source_profile="p",
+            origin=origin_for("hub", {}, entry=entry_id),
+            review=OK,
+            pending=True,
+        ),
+        resource_id=entry_id,
+        now=dt.datetime.now(dt.UTC) - age,
+    )
+
+
+async def test_a_first_publish_that_meets_another_in_flight_steps_aside_and_retries(
+    spec: SpecStar, repos: SkillHubRepos
+) -> None:
+    """The later one deletes itself, waits a random moment and retries; here
+    the other publisher gives up meanwhile, so the retry goes through. Exactly
+    one entry remains."""
+    rm = spec.get_resource_manager(SkillHubEntry)
+    _pending(spec, "theirs", age=dt.timedelta(seconds=1))
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        rm.permanently_delete("theirs")  # the other one stepped aside too
+
+    store = SkillHubStore(spec, repos, sleep=sleep)
+    entry = await _publish(store)
+
+    assert len(waits) == 1
+    assert [i for i, _ in store.visible("alice")] == [entry]
+    assert _row_ids(spec) == [entry]
+
+
+async def test_a_first_publish_that_keeps_meeting_another_gives_up_with_no_row(
+    spec: SpecStar, repos: SkillHubRepos
+) -> None:
+    _pending(spec, "theirs", age=dt.timedelta(seconds=1))
+
+    async def sleep(_seconds: float) -> None:
+        return None
+
+    store = SkillHubStore(spec, repos, sleep=sleep)
+    with pytest.raises(ValueError, match="same name"):
+        await _publish(store)
+    assert _row_ids(spec) == ["theirs"]
+
+
+async def test_a_draft_older_than_ten_minutes_is_a_dead_publishers_and_is_cleared(
+    spec: SpecStar, repos: SkillHubRepos
+) -> None:
+    """§7 Q3: a pod that died mid-publish left a draft that would otherwise
+    make every later publish of the name step aside forever."""
+    _pending(spec, "dead", age=dt.timedelta(minutes=11))
+
+    async def sleep(_seconds: float) -> None:
+        raise AssertionError("a dead draft is not someone to step aside for")
+
+    store = SkillHubStore(spec, repos, sleep=sleep)
+    entry = await _publish(store)
+
+    assert _row_ids(spec) == [entry]
+
+
+async def test_a_pending_draft_is_invisible_everywhere(
+    spec: SpecStar, store: SkillHubStore
+) -> None:
+    _pending(spec, "theirs", age=dt.timedelta(seconds=1))
+    assert store.get("theirs") is None
+    assert store.find("alice", "triage-reflow") is None
+    assert store.visible("alice") == []
 
 
 # ── the one search-match rule ────────────────────────────────────────────────
@@ -448,4 +585,9 @@ async def test_the_store_refuses_a_name_or_a_size_the_publisher_would_have_been_
     assert store.find("alice", "a/b") is None
     with pytest.raises(ValueError, match="MiB"):
         await _publish(store, payload={"SKILL.md": b"x" * (SKILL_HUB_MAX_BYTES + 1)})
+    assert store.find("alice", "triage-reflow") is None
+    # G11: at most 1000 files, in the same check.
+    many = {"SKILL.md": PAYLOAD["SKILL.md"], **{f"references/{n}.md": b"x" for n in range(1000)}}
+    with pytest.raises(ValueError, match="1000"):
+        await _publish(store, payload=many)
     assert store.find("alice", "triage-reflow") is None

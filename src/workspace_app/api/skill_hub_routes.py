@@ -280,7 +280,7 @@ def register_skill_hub_routes(
         `unpublished`; the grant lists are kept for a later republish."""
         viewer = get_user_id()
         entry = _owned(entry_id, viewer)
-        hub.set_permission(
+        await hub.set_permission(
             entry_id, msgspec.structs.replace(entry.permission, visibility="private")
         )
         return PermissionOut(resource_id=entry_id, visibility="private", notified=[])
@@ -290,7 +290,9 @@ def register_skill_hub_routes(
         """Back up, public. A restricted republish is a `permission` PUT."""
         viewer = get_user_id()
         entry = _owned(entry_id, viewer)
-        hub.set_permission(entry_id, msgspec.structs.replace(entry.permission, visibility="public"))
+        await hub.set_permission(
+            entry_id, msgspec.structs.replace(entry.permission, visibility="public")
+        )
         return PermissionOut(resource_id=entry_id, visibility="public", notified=[])
 
     @app.put("/skill-hub/entries/{entry_id}/permission")
@@ -301,7 +303,7 @@ def register_skill_hub_routes(
         untouched so the shared UI round-trips."""
         viewer = get_user_id()
         _owned(entry_id, viewer)
-        hub.set_permission(entry_id, build_permission(body))
+        await hub.set_permission(entry_id, build_permission(body))
         return PermissionOut(resource_id=entry_id, visibility=body.visibility, notified=[])
 
     @app.delete("/skill-hub/entries/{entry_id}", status_code=204)
@@ -331,7 +333,7 @@ def register_skill_hub_routes(
                 status_code=409,
                 detail={"error": "transfer_name_taken", "owner": new_owner, "name": entry.name},
             )
-        hub.transfer(entry_id, new_owner)
+        await hub.transfer(entry_id, new_owner)
         return SkillTransferred(id=entry_id, owner=new_owner)
 
     @app.post("/skill-hub/entries/{entry_id}/edit")

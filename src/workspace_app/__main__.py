@@ -25,6 +25,7 @@ import uvicorn
 
 from workspace_app.api import create_app
 from workspace_app.api.drain import DrainingServer
+from workspace_app.apps.skill_hub_git import resolve_git_root
 from workspace_app.config.dump import emit_config_dump
 from workspace_app.config.loader import load_with_provenance
 from workspace_app.factories import (
@@ -254,6 +255,10 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             superusers=frozenset(settings.server.superusers),
             sandbox=sandbox,
             filestore=sandbox_filestore,
+            # plan-skill-hub-history G2: unset refuses a durable deploy here, at boot.
+            skill_hub_git_root=resolve_git_root(
+                settings.skill_hub.git_root, durable=settings.filestore.kind != "memory"
+            ),
             # #219: single-file upload cap (streaming keeps RAM flat regardless).
             max_file_size=settings.filestore.max_file_size,
             # #245: per-workspace total-size quota (protects the shared disk root).

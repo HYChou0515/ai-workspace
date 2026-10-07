@@ -9,6 +9,8 @@ may not read is not in the list (Q10).
 
 from __future__ import annotations
 
+import tempfile
+
 import msgspec
 from agents import RunContextWrapper
 
@@ -20,7 +22,7 @@ from workspace_app.apps.skill_hub import (
     SkillHubStore,
     register_skill_hub,
 )
-from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.apps.skill_hub_git import SkillHubRepos
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 
@@ -28,7 +30,7 @@ from workspace_app.resources import make_spec
 def _hub():
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
-    return spec, SkillHubStore(spec, MemoryFileStore())
+    return spec, SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
 
 
 async def _entry(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -373,11 +374,12 @@ async def test_a_shared_skill_is_found_even_when_the_profile_ships_others(
 
 def _hub():
     from workspace_app.apps.skill_hub import SkillHubStore, register_skill_hub
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
     from workspace_app.resources import make_spec
 
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
-    return spec, SkillHubStore(spec, MemoryFileStore())
+    return spec, SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
 
 
 async def _published(hub, body: str = "v1\n") -> str:
@@ -555,12 +557,13 @@ async def test_has_an_update_for_a_hub_copy_reads_no_blobs():
             return await super().read(workspace_id, path)
 
     from workspace_app.apps.skill_hub import SkillHubStore, register_skill_hub
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
     from workspace_app.resources import make_spec
 
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
     blobs = _CountsReads()
-    hub = SkillHubStore(spec, blobs)
+    hub = SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()), legacy=blobs)
     entry = await _published(hub)
     files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
     await install_hub_skill(files, inv, hub, entry)

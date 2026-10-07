@@ -12,6 +12,8 @@ one pointing at a package skill or an entry that no longer exists, is a root.
 
 from __future__ import annotations
 
+import tempfile
+
 import msgspec
 import pytest
 from agents import RunContextWrapper
@@ -20,6 +22,7 @@ from workspace_app.agent.context import AgentToolContext
 from workspace_app.agent.tools import publish_skill_impl
 from workspace_app.api.skill_review import SkillReviewUnavailable
 from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
+from workspace_app.apps.skill_hub_git import SkillHubRepos
 from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin
 from workspace_app.apps.skills import (
     WORKSPACE_SKILL_DIR,
@@ -57,7 +60,7 @@ class _Reviewer:
 def _hub() -> SkillHubStore:
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
-    return SkillHubStore(spec, MemoryFileStore())
+    return SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
 
 
 def _ctx(
@@ -420,7 +423,7 @@ async def test_a_copy_of_an_entry_the_publisher_may_no_longer_read_publishes_as_
         referenced_tools=[],
         review=OK,
     )
-    hub.set_permission(bobs, Permission(visibility="private"))
+    await hub.set_permission(bobs, Permission(visibility="private"))
     ctx = _ctx(hub, _Reviewer())
     await _put(ctx, "triage-reflow", {"SKILL.md": _md(), ORIGIN_FILE: _origin(bobs)})
 
@@ -442,7 +445,7 @@ async def test_the_reply_says_the_visibility_the_entry_actually_has():
     assert "public" in first
     mine = hub.find("alice", "s")
     assert mine is not None
-    hub.set_permission(mine, Permission(visibility="private"))
+    await hub.set_permission(mine, Permission(visibility="private"))
 
     again = await publish_skill_impl(ctx, "s")
 

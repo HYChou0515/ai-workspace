@@ -11,6 +11,8 @@ overwritten (plan install step 4).
 
 from __future__ import annotations
 
+import tempfile
+
 import msgspec
 from agents import RunContextWrapper
 
@@ -22,6 +24,7 @@ from workspace_app.apps.skill_hub import (
     SkillHubStore,
     register_skill_hub,
 )
+from workspace_app.apps.skill_hub_git import SkillHubRepos
 from workspace_app.apps.skill_payload import ORIGIN_FILE, SkillOrigin, origin_for
 from workspace_app.apps.skills import WORKSPACE_SKILL_DIR, workspace_skill_metas
 from workspace_app.files import WorkspaceFiles
@@ -38,7 +41,7 @@ PAYLOAD = {
 def _hub():
     spec = make_spec(default_user="system")
     register_skill_hub(spec)
-    return spec, SkillHubStore(spec, MemoryFileStore())
+    return spec, SkillHubStore(spec, SkillHubRepos(tempfile.mkdtemp()))
 
 
 async def _alices(hub: SkillHubStore, *, tools: list[str] | None = None) -> str:

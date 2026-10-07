@@ -6,14 +6,16 @@ only way to hand it to somebody else was for the operator to copy it into
 fourth source ``read_skill`` can materialize from, and the one users fill
 themselves. Design and the ten decisions behind it: ``docs/plan-skill-hub.md``.
 
-Storage is two halves, deliberately:
+Storage is two halves, deliberately (``docs/plan-skill-hub-history.md``):
 
 * one specstar row per published skill (:class:`SkillHubEntry`) — the metadata
-  everything else keys on, with specstar's own revisions standing in for
-  version history;
-* the files as blobs in the FileStore under a per-entry namespace, because a
-  ``references/`` folder or a ``scripts/`` folder can be large and a struct is
-  not the place for bytes.
+  everything else keys on: owner, visibility, the review, and ``commit``, the
+  version the row's revision is current in;
+* the files as one bare git repo per entry (``skill_hub_git``), whose
+  ``master`` is the current version and whose tags name each revision.
+  Entries published before the git store have no ``commit`` and are read from
+  the FileStore namespace their files were written to (``blobs``) until they
+  are migrated.
 
 Identity is ``(owner, name)`` over the row's stable resource id. Installed
 copies and forks point at the ID, so transferring ownership — an explicit,
@@ -23,9 +25,13 @@ mutable ``owner`` field rather than ``created_by`` — breaks nothing downstream
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextlib
+import datetime as dt
+import random
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal
 
 import msgspec
@@ -42,6 +48,7 @@ if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
 
     from ..filestore.protocol import FileStore
+    from .skill_hub_git import SkillHubRepos
 
 #: What an entry is to one viewer. `live`: readable. `unpublished`: exists but
 #: this viewer may not read it (the owner made it private / restricted them out
@@ -59,6 +66,15 @@ _BLOB_PREFIX = "skill-hub:"
 #: whole into memory and stores it in the durable store outside any user quota,
 #: and every installer's workspace then pays for it (review round 1).
 SKILL_HUB_MAX_BYTES = 20 * 1024 * 1024
+#: The most files one entry may hold (plan-skill-hub-history G11) — checked with
+#: the size, in the same function, by every caller that checks one.
+SKILL_HUB_MAX_FILES = 1000
+#: How many times a first publish that meets another first publish of the same
+#: name steps aside and retries before telling the publisher to try later (G26).
+_FIRST_PUBLISH_TRIES = 5
+#: A pending draft older than this is a dead publisher's, not one in flight
+#: (§7 Q3): far longer than a publish takes.
+_DRAFT_TTL = dt.timedelta(minutes=10)
 
 
 class SkillHubReview(Struct):
@@ -118,6 +134,15 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: never points at a namespace being emptied or half-filled. `""` is the
     #: pre-versioned layout (`skill-hub:<id>`), kept decodable.
     blobs: str = ""
+    #: The git commit this revision's version is (plan-skill-hub-history G7):
+    #: master when the revision was written, and the commit its `r-` tag
+    #: names. "" for an entry published before the git store (read from
+    #: `blobs` until migrated) and for a pending draft.
+    commit: str = ""
+    #: A first publish's draft, made only so the name can be checked (G26) —
+    #: invisible to every reader until the version is in git. Distinct from a
+    #: pre-git entry, which also has no `commit` but is live.
+    pending: bool = False
 
 
 # ── what publishing checks ───────────────────────────────────────────────────
@@ -170,9 +195,15 @@ def skill_name_problem(name: str) -> str | None:
 
 
 def skill_size_problem(sizes: Mapping[str, int]) -> str | None:
-    """The cap, stated from sizes alone (a `stat`, never a read): an entry's
-    files are read whole into memory on publish, stored in the durable store
-    outside any user quota, and every installer's workspace pays for them."""
+    """The caps, stated from sizes alone (a `stat`, never a read): an entry's
+    files are read whole into memory on publish, stored outside any user
+    quota, and every installer's workspace pays for them. The file count is
+    the same check (G11)."""
+    if len(sizes) > SKILL_HUB_MAX_FILES:
+        return (
+            f"the folder holds {len(sizes)} files, over the {SKILL_HUB_MAX_FILES} "
+            "file cap for one skill hub entry — drop or bundle some"
+        )
     total = sum(sizes.values())
     if total > SKILL_HUB_MAX_BYTES:
         return (
@@ -349,27 +380,44 @@ def mint_entry_id() -> str:
 
 
 class SkillHubStore:
-    """Reads and writes hub entries and their files. No policy here — who may
-    publish, transfer or unpublish is the caller's question, checked against
-    ``entry.owner`` and ``entry.permission`` before calling in."""
+    """Reads and writes skill hub entries and their versions. No policy here —
+    who may publish, transfer or unpublish is the caller's question, checked
+    against ``entry.owner`` and ``entry.permission`` before calling in."""
 
-    def __init__(self, spec: SpecStar, blobs: FileStore) -> None:
+    def __init__(
+        self,
+        spec: SpecStar,
+        repos: SkillHubRepos,
+        *,
+        legacy: FileStore | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
+    ) -> None:
         self._spec = spec
-        self._blobs = blobs
+        self.repos = repos
+        #: Where entries published before the git store keep their files.
+        self._legacy = legacy
+        self._sleep = sleep
+        self._now = now
 
     def _rm(self):  # noqa: ANN202 — specstar's manager type is not exported
         return self._spec.get_resource_manager(SkillHubEntry)
 
     # ── read ─────────────────────────────────────────────────────────────
 
-    def get(self, entry_id: str) -> SkillHubEntry | None:
-        """The entry, or ``None`` when it does not exist or was deleted."""
+    def _row(self, entry_id: str) -> SkillHubEntry | None:
         try:
             data = self._rm().get(entry_id).data
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return None
         assert isinstance(data, SkillHubEntry)
         return data
+
+    def get(self, entry_id: str) -> SkillHubEntry | None:
+        """The entry, or ``None`` when it does not exist, was deleted, or is a
+        first publish's draft that is not a version yet."""
+        row = self._row(entry_id)
+        return None if row is None or row.pending else row
 
     def can_read(self, entry: SkillHubEntry, viewer: str) -> bool:
         """Whether `viewer` may read the entry's content — the same `authorize`
@@ -405,6 +453,8 @@ class SkillHubStore:
         for res in self._rm().list_resources(live, returns=["info", "data"]):
             entry = res.data
             assert isinstance(entry, SkillHubEntry)
+            if entry.pending:
+                continue
             if authorize(actor, "read_content", entry.permission, created_by=entry.owner):
                 out.append((res.info.resource_id, entry))
         out.sort(key=lambda pair: (pair[1].name, pair[1].owner))
@@ -412,76 +462,138 @@ class SkillHubStore:
 
     def forks_of(self, entry_id: str) -> list[str]:
         """Ids of the entries forked from `entry_id` — an indexed `forked_from`
-        lookup, not a scan, tombstones excluded. Visibility is the caller's
-        to apply."""
+        lookup, not a scan, tombstones and drafts excluded. Visibility is the
+        caller's to apply."""
         query = ((QB["forked_from"] == entry_id) & (QB.is_deleted() == False)).build()  # noqa: E712
-        return [res.info.resource_id for res in self._rm().list_resources(query, returns=["info"])]
+        return [
+            res.info.resource_id
+            for res in self._rm().list_resources(query, returns=["info", "data"])
+            if isinstance(res.data, SkillHubEntry) and not res.data.pending
+        ]
+
+    def _same_name(self, owner: str, name: str) -> list[tuple[str, SkillHubEntry, dt.datetime]]:
+        """Every live row for an identity — drafts included — with when it was made."""
+        query = (
+            (QB["owner"] == owner) & (QB["name"] == name) & (QB.is_deleted() == False)  # noqa: E712
+        ).build()
+        out: list[tuple[str, SkillHubEntry, dt.datetime]] = []
+        for res in self._rm().list_resources(query, returns=["info", "data", "meta"]):
+            assert isinstance(res.data, SkillHubEntry)
+            out.append((res.info.resource_id, res.data, res.meta.created_time))
+        return out
 
     def find(self, owner: str, name: str) -> str | None:
         """The entry id for an identity, or ``None``. Scoped by both indexed
         fields, so this is a point lookup rather than a scan."""
-        # Tombstones excluded: `list_resources` returns soft-deleted rows, and
-        # a deleted entry's id must NOT be the one a re-publish lands on — the
-        # copies pointing at it read "deleted" for good (Q10), and the
-        # re-publish is a new entry.
-        query = (
-            (QB["owner"] == owner) & (QB["name"] == name) & (QB.is_deleted() == False)  # noqa: E712
-        ).build()
-        for res in self._rm().list_resources(query, returns=["info"]):
-            return res.info.resource_id
+        # Tombstones excluded: a deleted entry's id must NOT be the one a
+        # re-publish lands on — the copies pointing at it read "deleted" for
+        # good (Q10), and the re-publish is a new entry. Drafts excluded: a
+        # first publish in flight is not an entry yet.
+        for entry_id, row, _made in self._same_name(owner, name):
+            if not row.pending:
+                return entry_id
         return None
 
-    @staticmethod
-    def _namespace(entry_id: str, entry: SkillHubEntry | None) -> str:
-        return (entry.blobs if entry is not None and entry.blobs else "") or _BLOB_PREFIX + entry_id
+    async def _files(
+        self, entry_id: str, entry: SkillHubEntry, paths: Collection[str] | None = None
+    ) -> dict[str, bytes]:
+        if entry.commit:
+            return await self.repos.read(entry_id, entry.commit, paths=paths)
+        # Published before the git store: its files are where they were written.
+        if self._legacy is None:
+            return {}
+        ns = entry.blobs or _BLOB_PREFIX + entry_id
+        out: dict[str, bytes] = {}
+        for path in await self._legacy.ls(ns):
+            rel = path.lstrip("/")
+            if paths is None or rel in paths:
+                out[rel] = await self._legacy.read(ns, path)
+        return out
 
     async def skill_md_of(self, entry_id: str) -> bytes:
         """The entry's ``SKILL.md`` alone — what a page that shows the skill
-        and LISTS the other files needs (the names are on the row,
-        ``origin.files``). Reading the whole folder for that cost up to the
-        cap per page view (review round 2)."""
-        ws = self._namespace(entry_id, self.get(entry_id))
-        return await self._blobs.read(ws, "/SKILL.md")
+        and LISTS the other files needs."""
+        entry = self.get(entry_id)
+        assert entry is not None  # the caller resolved it a moment ago
+        return (await self._files(entry_id, entry, ["SKILL.md"]))["SKILL.md"]
 
     async def payload_of(self, entry_id: str) -> dict[str, bytes]:
-        """Every file the entry ships, keyed like :func:`skill_payload` keys
-        them — the shape ``materialize_skill`` writes into a workspace. Reads
-        the version the ROW points at; a version being published is invisible
-        until the row moves to it."""
-        ws = self._namespace(entry_id, self.get(entry_id))
-        out: dict[str, bytes] = {}
-        for path in await self._blobs.ls(ws):
-            out[path.lstrip("/")] = await self._blobs.read(ws, path)
-        return out
+        """Every file of the version the ROW points at, keyed like
+        :func:`skill_payload` keys them — the shape ``materialize_skill``
+        writes into a workspace."""
+        entry = self.get(entry_id)
+        assert entry is not None
+        return await self._files(entry_id, entry)
 
     # ── write ────────────────────────────────────────────────────────────
+
+    def _update(self, entry_id: str, row: SkillHubEntry) -> str:
+        """Write a revision; return its id (what the version's tag is named after)."""
+        return self._rm().update(entry_id, row).revision_id
+
+    async def _tag(self, entry_id: str, revision_id: str, commit: str) -> None:
+        if commit:
+            await self.repos.tag(entry_id, revision_id, commit)
+
+    async def _manage(self, entry_id: str, row: SkillHubEntry) -> None:
+        """A revision that changes who or how, not what: master does not move,
+        and the revision is tagged at the version it is current in (§4.4)."""
+        revision = self._update(entry_id, row)
+        await self._tag(entry_id, revision, row.commit)
 
     # The management writes (plan P7). No policy here either — the route has
     # already established the caller is the owner. Each replaces ONE field
     # and carries every other one over, because `update` is a whole-row write.
 
-    def set_permission(self, entry_id: str, permission: Permission) -> None:
+    async def set_permission(self, entry_id: str, permission: Permission) -> None:
         """Visibility + grant lists. Unpublish is `visibility="private"` with
         the lists kept, so a later republish loses no invite."""
         current = self.get(entry_id)
         assert current is not None  # the route resolved it a moment ago
-        self._rm().update(entry_id, msgspec.structs.replace(current, permission=permission))
+        await self._manage(entry_id, msgspec.structs.replace(current, permission=permission))
 
-    def transfer(self, entry_id: str, owner: str) -> None:
+    async def transfer(self, entry_id: str, owner: str) -> None:
         """Move `owner` and nothing else. The id is the identity every copy's
         `.origin` and every fork's `forked_from` point at, so they all survive
         a transfer untouched. The caller has checked `(owner, name)` is free."""
         current = self.get(entry_id)
         assert current is not None
-        self._rm().update(entry_id, msgspec.structs.replace(current, owner=owner))
+        await self._manage(entry_id, msgspec.structs.replace(current, owner=owner))
 
     async def delete(self, entry_id: str) -> None:
-        """Soft-delete the row and free its files. Final: `state_for` answers
-        `deleted` for every copy and fork from now on, and a re-publish of the
-        name is a NEW entry (`find` skips tombstones). No restore (Q5)."""
-        ws = self._namespace(entry_id, self.get(entry_id))
+        """Soft-delete the row. Final: `state_for` answers `deleted` for every
+        copy and fork from now on, and a re-publish of the name is a NEW entry
+        (`find` skips tombstones). The version history is KEPT (§7 Q2)."""
         self._rm().delete(entry_id)
-        await self._blobs.purge(ws)
+
+    async def _claim_name(self, row: SkillHubEntry) -> str:
+        """Make a first publish's pending draft and keep it only when no other
+        live row has the same `(owner, name)` (G26): the later of two first
+        publishes always sees the earlier, so two can never both stay; when both
+        step aside, the random wait lets the retries come one after the other.
+        A draft older than `_DRAFT_TTL` is a dead publisher's and is cleared
+        (§7 Q3). Returns the draft's id."""
+        rm = self._rm()
+        for attempt in range(_FIRST_PUBLISH_TRIES):
+            entry_id = mint_entry_id()
+            rm.create(msgspec.structs.replace(row, pending=True), resource_id=entry_id)
+            others = []
+            for other_id, other, made in self._same_name(row.owner, row.name):
+                if other_id == entry_id:
+                    continue
+                if other.pending and self._now() - made > _DRAFT_TTL:
+                    with contextlib.suppress(ResourceIDNotFoundError):
+                        rm.permanently_delete(other_id)
+                    continue
+                others.append(other_id)
+            if not others:
+                return entry_id
+            rm.permanently_delete(entry_id)
+            await self._sleep(random.uniform(0.05, 0.25) * (attempt + 1))  # noqa: S311
+        raise ValueError(
+            f"someone is publishing a skill with the same name ({row.name!r}) right now "
+            "— try again in a moment"
+        )
 
     async def publish(
         self,
@@ -498,19 +610,14 @@ class SkillHubStore:
         forked_from: str = "",
     ) -> str:
         """Create the entry for ``(owner, name)``, or — when it already exists —
-        replace its files and write a new revision of the same row. Returns the
-        entry id either way, so a caller cannot tell the two apart and does not
-        need to: the id is the identity that survives.
+        commit the new version on top of master and write a new revision of the
+        same row (§4.1, §4.2). Returns the entry id either way.
 
-        Every version gets its own namespace. The files are written there
-        FIRST, the row moves to it SECOND, and the previous version's namespace
-        is dropped LAST — so a row that exists always describes files that
-        exist, on the first publish and on every re-publish alike. The first
-        version purged the old files before writing the new ones, and a failure
-        in between left a LIVE row whose manifest named files its namespace no
-        longer held (review round 1). A crash now leaves orphan blobs in a
-        namespace no row points at, never a row pointing at nothing; those
-        orphans are the accepted residue.
+        The version is written to git first and master is moved by a leased
+        push (the lock, G5); the row follows. A first publish makes its row as
+        a pending draft BEFORE anything else, so the name can be checked; a
+        failure after that removes the draft, and a draft is invisible to
+        every reader until its version is in git.
         """
         # The publisher was refused with a sentence for these before the review
         # ran; the row is made HERE, so here they are guaranteed for any caller.
@@ -521,62 +628,65 @@ class SkillHubStore:
             if problem is not None:
                 raise ValueError(problem)
         existing = self.find(owner, name)
-        # A NEW entry's id is minted here, not by `create`, so the files can be
-        # written under it before the row exists. Asking `create` for the id
-        # first would put the row before the files, and a crash in between
-        # would leave a row pointing at nothing: the one shape this rules out.
-        entry_id = existing if existing is not None else mint_entry_id()
-        current = self.get(entry_id) if existing is not None else None
-
-        # Replace, not merge — and in a FRESH namespace: a file the new version
-        # dropped must not survive from the old one (an installed copy of the
-        # new version would carry a reference the SKILL.md no longer makes),
-        # and the old version must stay whole until the row has moved.
-        ws = f"{_BLOB_PREFIX}{entry_id}:{uuid.uuid4().hex}"
-        for rel, data in payload.items():
-            await self._blobs.write(ws, f"/{rel}", data)
-
-        origin = origin_for("hub", payload, entry=entry_id)
+        row = SkillHubEntry(
+            owner=owner,
+            name=name,
+            description=description,
+            source_item=source_item,
+            source_app=source_app,
+            source_profile=source_profile,
+            origin=origin_for("hub", payload, entry=""),
+            review=review,
+            forked_from=forked_from,
+            referenced_tools=list(referenced_tools),
+        )
         if existing is None:
-            self._rm().create(
-                SkillHubEntry(
-                    owner=owner,
-                    name=name,
-                    description=description,
-                    source_item=source_item,
-                    source_app=source_app,
-                    source_profile=source_profile,
-                    origin=origin,
-                    review=review,
-                    forked_from=forked_from,
-                    referenced_tools=list(referenced_tools),
-                    blobs=ws,
-                ),
-                resource_id=entry_id,
+            entry_id = await self._claim_name(row)
+            try:
+                commit = await self.repos.write_version(
+                    entry_id, payload, parent=None, author=owner, message=f"publish {name}"
+                )
+                if not await self.repos.move_master(entry_id, commit, expected=None):
+                    raise RuntimeError(f"a new entry's repo already had a version: {entry_id}")
+            except BaseException:
+                with contextlib.suppress(ResourceIDNotFoundError):
+                    self._rm().permanently_delete(entry_id)
+                raise
+            final = msgspec.structs.replace(
+                row, origin=origin_for("hub", payload, entry=entry_id), commit=commit
             )
+            await self._tag(entry_id, self._update(entry_id, final), commit)
             return entry_id
 
-        assert current is not None  # `find` answered it, and it is not a tombstone
-        previous = self._namespace(entry_id, current)
-        self._rm().update(
-            entry_id,
-            SkillHubEntry(
-                owner=current.owner,
-                name=name,
-                description=description,
-                source_item=source_item,
-                source_app=source_app,
-                source_profile=source_profile,
-                origin=origin,
-                review=review,
-                # Set once, when the fork is born. A re-publish does not know
-                # (or pass) where the fork came from; the row does.
-                forked_from=current.forked_from,
-                referenced_tools=list(referenced_tools),
-                permission=current.permission,
-                blobs=ws,
-            ),
+        current = self.get(existing)
+        assert current is not None  # `find` answered it
+        commit = await self._commit_on_master(existing, payload, author=owner, name=name)
+        final = msgspec.structs.replace(
+            row,
+            owner=current.owner,
+            origin=origin_for("hub", payload, entry=existing),
+            # Set once, when the fork is born. A re-publish does not know (or
+            # pass) where the fork came from; the row does.
+            forked_from=current.forked_from,
+            permission=current.permission,
+            commit=commit,
+            blobs=current.blobs,
         )
-        # The row now points at the new version; the old one can go.
-        await self._blobs.purge(previous)
-        return entry_id
+        await self._tag(existing, self._update(existing, final), commit)
+        return existing
+
+    async def _commit_on_master(
+        self, entry_id: str, payload: Mapping[str, bytes], *, author: str, name: str
+    ) -> str:
+        """Commit `payload` on top of master and move master to it, re-reading
+        and re-committing when another publish moved master first (G5)."""
+        for _attempt in range(_FIRST_PUBLISH_TRIES):
+            parent = await self.repos.master(entry_id)
+            commit = await self.repos.write_version(
+                entry_id, payload, parent=parent, author=author, message=f"publish {name}"
+            )
+            if await self.repos.move_master(entry_id, commit, expected=parent):
+                return commit
+        raise ValueError(
+            f"{name!r} is being published by someone else right now — try again in a moment"
+        )
