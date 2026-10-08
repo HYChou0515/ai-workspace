@@ -30,6 +30,7 @@ import { ModalActions } from "../components/ModalActions";
 import { ModalShell } from "../components/ModalShell";
 import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
 import { PermissionDialog } from "../components/PermissionDialog";
+import { SkillHubFiles } from "../components/SkillHubFiles";
 import { SkillHubHistory } from "../components/SkillHubHistory";
 import { SkillHubRow } from "../components/SkillHubRow";
 import { UserChip } from "../components/UserChip";
@@ -200,13 +201,13 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
               <ReactMarkdown components={UNDER_THE_TITLE}>{skillBody(entry.skill_md)}</ReactMarkdown>
             </div>
           ) : tab === "files" ? (
-            <ul className="skill-hub-files">
-              {entry.files.map(({ path: f }) => (
-                <li key={f}>
-                  <code>{f}</code>
-                </li>
-              ))}
-            </ul>
+            <SkillHubFiles
+              entryId={entry.id}
+              revision={entry.revision}
+              files={entry.files}
+              scripts={entry.scripts}
+              client={client}
+            />
           ) : tab === "history" ? (
             <SkillHubHistory entry={entry} client={client} />
           ) : entry.forks.length === 0 ? (

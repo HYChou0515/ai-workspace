@@ -44,6 +44,7 @@ const detail = (over: Partial<SkillHubDetail> = {}): SkillHubDetail => ({
   uses: 8,
   counted_since: "2026-10-07",
   updated_at: null,
+  revision: "e-1:1",
   ...over,
 });
 

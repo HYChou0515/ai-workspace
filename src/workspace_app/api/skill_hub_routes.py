@@ -184,6 +184,9 @@ class SkillHubDetail(BaseModel):
     counted_since: str = ""
     #: When the content last changed; `None` for an entry from before it was recorded.
     updated_at: dt.datetime | None = None
+    #: The revision the entry is at — what `…/versions/{revision}/file` takes
+    #: to open one of `files`; "" for an entry not in git yet.
+    revision: str = ""
 
 
 class SkillTransferRequest(BaseModel):
@@ -495,6 +498,7 @@ def register_skill_hub_routes(
             uses=uses,
             counted_since=await asyncio.to_thread(hub.usage.counted_since),
             updated_at=entry.content_at,
+            revision=await asyncio.to_thread(hub.current_revision, entry_id),
         )
 
     def _editable(viewer: str, slugs: list[str]) -> list[tuple[str, str, str]]:

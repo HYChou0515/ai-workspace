@@ -161,6 +161,22 @@ async def test_the_detail_says_when_the_content_last_changed(harness: Harness):
     assert detail["updated_at"].startswith(row.content_at.isoformat()[:19])
 
 
+async def test_the_detail_names_its_current_revision_so_a_file_can_be_opened(harness: Harness):
+    """The files tab opens a file through the version-file route, which is
+    keyed by revision: the detail says which revision is current."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one", extra={"notes.md": b"hello"})
+
+    detail = harness.client.get(f"/skill-hub/entries/{entry}").json()
+
+    assert detail["revision"] == _revision(harness, entry)
+    one = harness.client.get(
+        f"/skill-hub/entries/{entry}/versions/{detail['revision']}/file",
+        params={"path": "notes.md"},
+    )
+    assert one.json()["text"] == "hello"
+
+
 # ── where the viewer has it (D3) ─────────────────────────────────────────────
 
 

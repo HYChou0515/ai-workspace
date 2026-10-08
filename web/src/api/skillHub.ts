@@ -117,6 +117,9 @@ export type SkillHubDetail = {
   counted_since: string;
   /** ISO time the content last changed; `null` for an entry from before it was recorded. */
   updated_at: string | null;
+  /** The revision the entry is at — what `versionFile` takes to open one of
+   * `files`; "" for an entry not in git yet. */
+  revision: string;
 };
 
 /** Where the owner goes to edit (plan P8's table). `open`: go to `item_id`;

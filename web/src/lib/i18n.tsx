@@ -2132,6 +2132,13 @@ export const messages = {
     en: "Fork of an entry that was unpublished or deleted",
   },
   "skillHub.files": { "zh-TW": "檔案", en: "Files" },
+  // plan-skill-hub-ux-redo D12: the files tab's summary line and viewer.
+  "skillHub.files.summary": { "zh-TW": "{count} 個檔案 ・ {size}", en: "{count} files · {size}" },
+  "skillHub.files.scripts": { "zh-TW": "含 {count} 個 script", en: "{count} scripts" },
+  "skillHub.files.notText": {
+    "zh-TW": "這個檔案不是文字，這裡顯示不了。",
+    en: "This file is not text and cannot be shown here.",
+  },
   "skillHub.forksOf": { "zh-TW": "Fork", en: "Forks" },
   "skillHub.forksOf.none": { "zh-TW": "還沒有人 fork 這個 skill。", en: "Nobody has forked this skill yet." },
   "skillHub.howToInstall": {

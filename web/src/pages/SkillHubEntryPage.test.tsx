@@ -78,6 +78,7 @@ const detail = (over: Partial<SkillHubDetail>): SkillHubDetail => ({
   uses: 0,
   counted_since: "",
   updated_at: null,
+  revision: "e-1:1",
   ...over,
 });
 
@@ -606,6 +607,16 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     fireEvent.click(screen.getByRole("tab", { name: word("skillHub.tab.forks", { count: 1 }) }));
     expect(await screen.findByTestId("entry-e-f")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "How to triage" })).toBeNull();
+  });
+
+  it("the files tab sums the files up and opens one through the current revision (D12)", async () => {
+    const c = client(detail({}));
+    mount(c, undefined, "/skill-hub/e-1?tab=files");
+    expect(
+      await screen.findByText(word("skillHub.files.summary", { count: 2, size: "92 B" })),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /SKILL\.md/ }));
+    await waitFor(() => expect(c.versionFile).toHaveBeenCalledWith("e-1", "e-1:1", "SKILL.md"));
   });
 
   it("opens on the tab the address names — the list's fork count lands on the forks (D15)", async () => {

@@ -530,6 +530,14 @@ class SkillHubStore:
         row = self._row(entry_id)
         return None if row is None or row.pending else row
 
+    def current_revision(self, entry_id: str) -> str:
+        """The revision the entry is at now when it names a version — what the
+        version routes take — else "" (an entry not in git yet)."""
+        res = self._rm().get(entry_id)
+        return (
+            res.info.revision_id if isinstance(res.data, SkillHubEntry) and res.data.commit else ""
+        )
+
     def can_read(self, entry: SkillHubEntry, viewer: str) -> bool:
         """Whether `viewer` may read the entry's content — the same `authorize`
         every other resource uses, with `entry.owner` (not `created_by`) as

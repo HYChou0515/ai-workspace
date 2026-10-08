@@ -312,16 +312,86 @@
 }
 
 /* `my-resources.css` draws EVERY `.page ul > li` as a bordered flex row (the
-   resource lists). This list is not that. */
-.page .skill-hub-files {
+   resource lists). These lists are not that. */
+.page .skill-hub-files,
+.page .skill-hub-tree {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.page .skill-hub-files > li {
+.page .skill-hub-files > li,
+.page .skill-hub-tree > li {
   display: block;
-  padding: 2px 0;
+  padding: 0;
   border: 0;
+}
+
+/* The files tab (D12): the summary line, then the tree beside the opened
+   file — under it when there is no room. */
+.page .skill-hub-files-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-12);
+  margin: 0 0 var(--space-12);
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+}
+.page .skill-hub-files-body {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: var(--space-16);
+  align-items: start;
+}
+.page .skill-hub-tree .skill-hub-tree {
+  padding-left: var(--space-16);
+}
+.page .skill-hub-tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: 3px var(--space-8);
+  border-radius: var(--radius-btn);
+  text-align: left;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  min-width: 0;
+}
+button.skill-hub-tree-row:hover,
+.page .skill-hub-tree-row[aria-pressed="true"] {
+  background: var(--paper-2);
+}
+.page .skill-hub-tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page .skill-hub-file-view {
+  min-width: 0;
+}
+.page .skill-hub-file-view > h3 {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-body-sm);
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-file-view > pre {
+  margin: 0;
+  padding: var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  font-size: var(--text-small);
+  overflow: auto;
+  max-height: 70vh;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .page .skill-hub-files-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .page .skill-hub-notes {
