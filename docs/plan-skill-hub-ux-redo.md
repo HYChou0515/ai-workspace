@@ -50,12 +50,19 @@ Grilled 2026-10-08 on master `7d666c36`（含 #875 版本歷史）。每條決�
 **不做**：App／工具篩選（D4）；無限捲動（D4）；列表上的「已安裝」（D3）；用詞守衛（D7、D11）；
 全站其他頁面的版面重做（只動 skill hub 相關畫面與 D7 的用詞）。
 
+**實作註記**（review round 1 之後）：
+
+- D7 的範圍：字面上寫 item 的繁中 17 句，加上指 workspace 的「項目」與英文 item 21 句（審核清單、待辦、workflow 的
+  「項目」是清單上的一項，不改）。
+- D5「用到的工具（標這個 App 沒有的）」：skill 頁不屬於任何 App，現在只在「安裝到 workspace…」選了 App 之後標
+  （D6）；側欄列工具、不標。**待 web demo 時與使用者確認。**
+
 ## 機制
 
 ### 後端
 
 - **列表** `GET /skill-hub/entries`：新增 `owner`、`offset`、`limit`（預設 50）、`sort=updated`；回
-  `total`。瀏覽（沒有 `q`、不是 `mine`）只回原作，每列帶 `fork_count`；有 `q` 或 `mine` 時 fork 與原作
+  `total`。瀏覽（沒有 `q`、`mine`、`owner`，也沒有 `forks=true`）只回原作，每列帶 `fork_count`；有任一個時 fork 與原作
   平列、各自帶 `forked_from`。`forks` 巢狀欄位拿掉。
 - **最近更新**：`SkillHubEntry` 加 `content_at: datetime | None`，發布與回復時寫入（改內容的那兩條路）；
   只加有預設值的欄位，舊列 `None` → 排在最後、不顯示時間；不回填（下一次發布就有）。

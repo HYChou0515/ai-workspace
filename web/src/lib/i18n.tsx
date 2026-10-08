@@ -767,7 +767,7 @@ export const messages = {
   },
   "scheduleOverview.retry": { "zh-TW": "再試一次", en: "Try again" },
   "scheduleOverview.empty": {
-    "zh-TW": "你看得到的項目裡，還沒有任何排程。",
+    "zh-TW": "你看得到的 workspace 裡，還沒有任何排程。",
     en: "Nothing you can see is on a schedule yet.",
   },
   "scheduleOverview.empty.what": {
@@ -807,8 +807,8 @@ export const messages = {
   },
   "templates.copy": { "zh-TW": "拉一份來改", en: "Copy to edit" },
   "templates.unavailable": {
-    "zh-TW": "這個項目的設定不支援這個範本",
-    en: "This item's setup can't run this template",
+    "zh-TW": "這個 workspace 的設定不支援這個範本",
+    en: "This workspace's setup can't run this template",
   },
   "templates.replaceConfirm": {
     "zh-TW": "這個工作區已經有同名的「{name}」。要用範本覆蓋掉你現有的版本嗎？",
@@ -991,8 +991,8 @@ export const messages = {
     en: "Not sent — you're at your limit for live sandboxes. Close one in My resources, then send again.",
   },
   "chat.send.userFull": {
-    "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
-    en: "Not sent — you're out of space across all your items. Open My resources to see where it went, then send again.",
+    "zh-TW": "沒有送出:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再送一次。",
+    en: "Not sent — you're out of space across all your workspaces. Open My resources to see where it went, then send again.",
   },
   // Appended to whichever refusal led. A limit named without a number cannot be
   // checked by the person reading it — "your workspace is full" reads the same
@@ -1015,16 +1015,16 @@ export const messages = {
   // next one on the retry. They name the page for the same reason the primary
   // messages do — `ResourceLinkText` turns that name into the link.
   "resources.also.user": {
-    "zh-TW": "另外,你所有項目的空間總量也滿了——到「我的資源」看是哪些項目佔用。",
-    en: "You are also out of space across all your items — see where it went in My resources.",
+    "zh-TW": "另外,你所有 workspace 的空間總量也滿了——到「我的資源」看是哪些 workspace 佔用。",
+    en: "You are also out of space across all your workspaces — see where it went in My resources.",
   },
   "resources.also.workspace": {
-    "zh-TW": "另外,這個項目的工作區空間也滿了,請先刪除不需要的檔案。",
-    en: "This item's workspace is also full — delete files you no longer need.",
+    "zh-TW": "另外,這個 workspace 的空間也滿了,請先刪除不需要的檔案。",
+    en: "This workspace is also full — delete files you no longer need.",
   },
   "chat.send.workspaceFull": {
-    "zh-TW": "沒有送出:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
-    en: "Not sent — this item's workspace is full. Delete files you no longer need first.",
+    "zh-TW": "沒有送出:這個 workspace 的空間已滿。請先刪除不需要的檔案。",
+    en: "Not sent — this workspace is full. Delete files you no longer need first.",
   },
   // #714: the deploy's request→env source refused or broke. The turn was not
   // started BECAUSE the tools would have run without knowing who is asking, so
@@ -1038,12 +1038,12 @@ export const messages = {
     en: "Not run — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "terminal.userFull": {
-    "zh-TW": "沒有執行:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
-    en: "Not run — you're out of space across all your items. Open My resources to see where it went, then try again.",
+    "zh-TW": "沒有執行:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
+    en: "Not run — you're out of space across all your workspaces. Open My resources to see where it went, then try again.",
   },
   "terminal.workspaceFull": {
-    "zh-TW": "沒有執行:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
-    en: "Not run — this item's workspace is full. Delete files you no longer need first.",
+    "zh-TW": "沒有執行:這個 workspace 的空間已滿。請先刪除不需要的檔案。",
+    en: "Not run — this workspace is full. Delete files you no longer need first.",
   },
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
   "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
@@ -1120,21 +1120,21 @@ export const messages = {
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
   // ── who may MANAGE an item (change_permission), shown apart from roles ──
-  "itemshare.managers.heading": { "zh-TW": "可以管理這個項目的人", en: "Who can manage this item" },
+  "itemshare.managers.heading": { "zh-TW": "可以管理這個 workspace 的人", en: "Who can manage this workspace" },
   // The consequence, stated BEFORE the control. Both halves matter and the
   // second is the easy one to miss: this grant now decides who may spend the
   // owner's quota, not merely who may see the item.
   "itemshare.managers.consequence": {
-    "zh-TW": "他們可以把這個項目的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是 owner 的額度。",
-    en: "They can re-share this item with anyone, and can resize its sandbox — which spends the owner's quota.",
+    "zh-TW": "他們可以把這個 workspace 的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是 owner 的額度。",
+    en: "They can re-share this workspace with anyone, and can resize its sandbox — which spends the owner's quota.",
   },
   "itemshare.managers.add": { "zh-TW": "加入使用者 ID", en: "Add a user id" },
   "itemshare.managers.remove": { "zh-TW": "移除", en: "Remove" },
   // ── the item page's own sandbox panel ─────────────────────────────────
   "itemenv.button": { "zh-TW": "沙盒", en: "Sandbox" },
   "itemenv.tip": {
-    "zh-TW": "這個項目的沙盒：狀態、用量、大小。",
-    en: "This item's sandbox — status, usage, size.",
+    "zh-TW": "這個 workspace 的沙盒：狀態、用量、大小。",
+    en: "This workspace's sandbox — status, usage, size.",
   },
   "itemenv.heading": { "zh-TW": "沙盒", en: "Sandbox" },
   // Dismisses the PANEL. Deliberately not `itemenv.close`, which shuts the
@@ -1173,7 +1173,7 @@ export const messages = {
     "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
     en: "Close it to change the size. Running processes end; your files are untouched.",
   },
-  "itemenv.size.heading": { "zh-TW": "這個項目的沙盒大小", en: "This item's sandbox size" },
+  "itemenv.size.heading": { "zh-TW": "這個 workspace 的沙盒大小", en: "This workspace's sandbox size" },
   // The label an UNSET value carries. Without it an empty field renders as a
   // number with no provenance, and the person cannot tell what they chose from
   // what was chosen for them.
@@ -1230,30 +1230,30 @@ export const messages = {
   },
   "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
   "itemenv.readonly": {
-    "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是 owner 的額度。",
-    en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",
+    "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
+    en: "Only someone who can change this workspace's access may resize it — it spends the owner's quota.",
   },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
   "resources.disk.untracked": {
     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",
     en: "This deployment sets no personal storage limit, so usage isn't tracked.",
   },
-  "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
+  "resources.disk.empty": { "zh-TW": "還沒有任何 workspace 佔用空間。", en: "Nothing stored yet." },
   // Deleting can happen HERE now (plan-delete-item-cascade): each disk row
   // carries a delete that removes the item and everything it owns and refunds
   // the quota. The hint keeps the file-list path for partial clean-ups.
   "resources.disk.hint": {
-    "zh-TW": "要清出空間,可直接刪除整個項目,或開啟項目後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
-    en: "To free space, delete a whole item here, or open it and delete individual files — deleting is never blocked by a quota.",
+    "zh-TW": "要清出空間,可直接刪除整個 workspace,或開啟 workspace 後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
+    en: "To free space, delete a whole workspace here, or open it and delete individual files — deleting is never blocked by a quota.",
   },
   "resources.disk.delete": { "zh-TW": "刪除", en: "Delete" },
-  "resources.disk.delete.title": { "zh-TW": "刪除這個項目?", en: "Delete this item?" },
+  "resources.disk.delete.title": { "zh-TW": "刪除這個 workspace?", en: "Delete this workspace?" },
   "resources.disk.delete.body1": {
-    "zh-TW": "會刪除這個項目與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
-    en: "Deletes this item and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
+    "zh-TW": "會刪除這個 workspace 與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
+    en: "Deletes this workspace and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
   },
   "resources.disk.delete.body2": {
-    "zh-TW": "要備份請先開啟項目下載檔案。此動作無法復原。",
+    "zh-TW": "要備份請先開啟 workspace 下載檔案。此動作無法復原。",
     en: "To keep a copy, open it and download the files first. This can't be undone.",
   },
   "resources.disk.delete.cancel": { "zh-TW": "取消", en: "Cancel" },
@@ -1468,8 +1468,8 @@ export const messages = {
     en: "Storage is full — delete some files before uploading more.",
   },
   "workspace.overQuota.user": {
-    "zh-TW": "{names} 沒有附上:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
-    en: "{names} wasn't attached — you're out of space across all your items. Open My resources to see where it went, then try again.",
+    "zh-TW": "{names} 沒有附上:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
+    en: "{names} wasn't attached — you're out of space across all your workspaces. Open My resources to see where it went, then try again.",
   },
   "workspace.overQuota.env": {
     "zh-TW": "{names} 沒有附上:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
@@ -1485,8 +1485,8 @@ export const messages = {
   // The person's TOTAL across every item they own is full — the space to free
   // may well be in a different item, so the message must not point at this one.
   "workspace.upload.userFull": {
-    "zh-TW": "「{name}」沒有上傳:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再重試。",
-    en: "{name} wasn't uploaded — you're out of space across all your items. Open My resources to see where it went, delete what you don't need, then try again.",
+    "zh-TW": "「{name}」沒有上傳:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再重試。",
+    en: "{name} wasn't uploaded — you're out of space across all your workspaces. Open My resources to see where it went, delete what you don't need, then try again.",
   },
   // Nothing to do with files at all: they are holding as many live sandboxes
   // as they may. Saying "the workspace is full" here would be simply untrue.
@@ -2467,8 +2467,8 @@ export const messages = {
   "export.kind.md": { "zh-TW": "文字 Markdown", en: "Text (Markdown)" },
   "export.kind.video": { "zh-TW": "影片", en: "Video" },
   "export.kind.video.locked": {
-    "zh-TW": "做影片需要這個項目的「讀取檔案」與「新增檔案」權限。",
-    en: "Making a video needs read + add file access to this item.",
+    "zh-TW": "做影片需要這個 workspace 的「讀取檔案」與「新增檔案」權限。",
+    en: "Making a video needs read + add file access to this workspace.",
   },
   "export.range": { "zh-TW": "範圍", en: "Range" },
   "export.range.all": { "zh-TW": "全部（{n} 則）", en: "All ({n} messages)" },
