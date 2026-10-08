@@ -1,16 +1,19 @@
 /**
- * The skill hub detail page's 「版本紀錄」 (`docs/plan-skill-hub-history.md` §8).
+ * The skill page's 「版本紀錄」 tab (`docs/plan-skill-hub-history.md` §8, laid
+ * out by `docs/plan-skill-hub-ux-redo.md` D8, D13, D14).
  *
- * One row per event the server reports, newest first: a publish, a rollback,
- * a transfer, and — for the owner alone, the server's call — a visibility
- * change. A row that names a version (publish / rollback) can be read,
- * compared with any other version and forked by anyone who may read the entry;
- * only the owner can roll back to it. An old version is never installed
- * (G23): 〔從這一版 fork〕 copies it into an item as a starting point of the
- * viewer's own, which is never offered the entry's newer versions.
+ * One row per event the server reports, newest first, the latest five until
+ * the person asks for all (progressive disclosure). A version — a publish or
+ * a rollback — is named `v N ・ date time` everywhere it is referred to (D8):
+ * the number is the server's, counted the same for every reader. A transfer
+ * or a permission change is a one-line note, not a version. A row shows what
+ * changed — the description only when it differs from the version before —
+ * and what the review said. Anyone who may read the entry can view, compare
+ * and fork a version; only the owner rolls back, and that is a secondary
+ * action (Material 3: one primary action per screen). An old version is never
+ * installed (G23): fork copies it into a workspace as a starting point.
  *
- * No internals on screen: a version is named by when it was published, never
- * by its id or commit.
+ * No internals on screen: never a revision id or a commit.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,7 +22,12 @@ import ReactMarkdown from "react-markdown";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
-import type { SkillHubApi, SkillHubDetail, SkillHubHistoryEvent } from "../api/skillHub";
+import type {
+  SkillHubApi,
+  SkillHubDetail,
+  SkillHubFileChange,
+  SkillHubHistoryEvent,
+} from "../api/skillHub";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
 import { useUsers } from "../hooks/useUsers";
@@ -29,8 +37,10 @@ import { subjectGroup, subjectUser } from "../lib/permission";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { skillBody } from "../lib/skillBody";
 import { useDialog } from "./Dialog";
+import { Icon } from "./Icon";
 import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
+import { SkillHubFiles } from "./SkillHubFiles";
 import { UserChip } from "./UserChip";
 
 /** `YYYY/MM/DD HH:MM`, local time — the same date form as the rest of the app. */
@@ -41,6 +51,9 @@ function when(iso: string): string {
 }
 
 const namesAVersion = (e: SkillHubHistoryEvent) => e.kind === "publish" || e.kind === "rollback";
+
+/** How many rows show before 「顯示全部」 (D14). */
+const FIRST_ROWS = 5;
 
 type Open =
   | { kind: "view"; event: SkillHubHistoryEvent }
@@ -70,39 +83,45 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
     queryFn: () => client.history(entry.id),
   });
   const [open, setOpen] = useState<Open | null>(null);
+  const [all, setAll] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const current = events?.find((e) => e.current);
+  // The version in force: the newest row that names one. The current ROW may
+  // be a transfer or a permission change, which carries the commit but no number.
+  const currentVersion = events?.find(namesAVersion);
   // No current row (an empty or still-loading history) means nothing is
   // known to be current: every version reads as "not now".
   const isNow = (e: SkillHubHistoryEvent) => current !== undefined && e.commit === current.commit;
-  // A rollback names the version it brought back by when that version was
-  // first published — the row the server points at with `to_revision`.
-  const publishedAt = (revision: string) => {
-    const at = events?.find((e) => e.revision === revision)?.at;
-    return at ? ymd(at) : "";
-  };
-  const versionDay = (e: SkillHubHistoryEvent) =>
-    ymd(e.kind === "rollback" ? (events?.find((x) => x.revision === e.to_revision)?.at ?? e.at) : e.at);
-  // Every version once, newest first, as something to compare against: the
-  // current one through the current row, any other through its newest row.
-  // Named by the day it was first published (the oldest row with its commit).
+  const byRevision = (revision: string) => events?.find((e) => e.revision === revision);
+  /** `v N`, or "" for a row with no number (an entry from before numbering). */
+  const vn = (e: SkillHubHistoryEvent | undefined) => (e?.version ? `v${e.version}` : "");
+  /** `v N ・ date time` — how every version is referred to (D8). */
+  const name = (e: SkillHubHistoryEvent) => (vn(e) ? `${vn(e)} ・ ${when(e.at)}` : when(e.at));
+  // Every version once, newest first, as something to compare against.
   const versions = (() => {
     const seen = new Set<string>();
-    const out: { revision: string; commit: string; label: string }[] = [];
+    const out: { revision: string; commit: string; label: string; short: string }[] = [];
     for (const e of events ?? []) {
-      if (seen.has(e.commit) || !(namesAVersion(e) || e.current)) continue;
+      if (!namesAVersion(e) || seen.has(e.commit)) continue;
       seen.add(e.commit);
-      const isCurrent = current !== undefined && e.commit === current.commit;
-      const first = [...(events ?? [])].reverse().find((x) => x.commit === e.commit && namesAVersion(x));
-      const day = ymd(first?.at ?? e.at);
+      const isCurrent = e === currentVersion;
       out.push({
+        // The current version is compared through the current row: the
+        // server's own idea of "now".
         revision: isCurrent && current ? current.revision : e.revision,
         commit: e.commit,
-        label: isCurrent ? `${day} · ${t("skillHub.history.current")}` : day,
+        label: isCurrent ? `${name(e)}（${t("skillHub.history.current")}）` : name(e),
+        short: vn(e),
       });
     }
     return out;
   })();
+  // The description shows on a version only when it differs from the
+  // version before it (D14 「只顯示改了什麼」); the first version's always.
+  const previousVersion = (e: SkillHubHistoryEvent) => {
+    const list = events ?? [];
+    return list.slice(list.indexOf(e) + 1).find(namesAVersion);
+  };
 
   const rollback = useMutation({
     mutationFn: (e: SkillHubHistoryEvent) =>
@@ -116,9 +135,8 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
   });
 
   const askRollback = async (e: SkillHubHistoryEvent) => {
-    const day = versionDay(e);
     const choice = await confirm({
-      title: t("skillHub.history.rollback.title", { when: day }),
+      title: t("skillHub.history.rollback.title", { version: name(e) }),
       body: t("skillHub.history.rollback.body"),
       actions: [
         { id: "cancel", label: t("skillHub.cancel") },
@@ -132,8 +150,12 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
     switch (e.kind) {
       case "publish":
         return t("skillHub.history.kind.publish");
-      case "rollback":
-        return t("skillHub.history.kind.rollback", { when: publishedAt(e.to_revision) });
+      case "rollback": {
+        const back = byRevision(e.to_revision);
+        return t("skillHub.history.kind.rollback", {
+          version: vn(back) || (back ? when(back.at) : ""),
+        });
+      }
       case "transfer":
         return t("skillHub.history.kind.transfer", { owner: personName(e.owner) });
       case "permission":
@@ -148,9 +170,9 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
     }
   };
 
+  const shown = all ? (events ?? []) : (events ?? []).slice(0, FIRST_ROWS);
   return (
     <section>
-      <h2>{t("skillHub.history")}</h2>
       {isError ? (
         <p className="error" role="alert">
           {t("skillHub.error")}
@@ -158,92 +180,114 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
       ) : isPending || !events ? (
         <p className="muted">{t("skillHub.loading")}</p>
       ) : (
-        <ol className="skill-hub-history" aria-label={t("skillHub.history")}>
-          {events.map((e) => (
-            <li key={e.revision} className="skill-hub-history-row" data-current={e.current || undefined}>
-              <div className="skill-hub-history-head">
-                <span className="skill-hub-history-kind">{label(e)}</span>
-                {e.current ? (
-                  <span className="skill-hub-badge" data-kind="current">
-                    {t("skillHub.history.current")}
-                  </span>
-                ) : null}
-              </div>
-              <div className="skill-hub-history-meta muted small">
-                <UserChip userId={e.by} size={16} />
-                <time dateTime={e.at}>{when(e.at)}</time>
-              </div>
-              {namesAVersion(e) ? (
-                <p className="skill-hub-history-desc">{e.description}</p>
-              ) : null}
-              {e.kind === "permission" && e.audience.length > 0 ? (
-                // G24: the owner sees who it was opened to, not only the word.
-                <p className="skill-hub-history-desc">
-                  {t("skillHub.history.audience", { who: e.audience.map(subjectName).join(", ") })}
-                </p>
-              ) : null}
-              {namesAVersion(e) && e.review_notes.length > 0 ? (
-                // What the review said about this version (§8) — the one a
-                // rollback brings back is not reviewed again (G20).
-                <ul className="skill-hub-history-notes" aria-label={t("skillHub.review")}>
-                  {e.review_notes.map((note) => (
-                    <li key={note}>{note}</li>
-                  ))}
-                </ul>
-              ) : null}
-              {namesAVersion(e) ? (
-                <div className="skill-hub-history-actions">
-                  {e.current ? null : (
-                    <button
-                      type="button"
-                      className="btn"
-                      data-size="sm"
-                      data-variant="secondary"
-                      onClick={() => setOpen({ kind: "view", event: e })}
-                    >
-                      {t("skillHub.history.view")}
-                    </button>
-                  )}
-                  {/* A row whose version IS the current one (the current row,
-                      or the publish a rollback brought back) has nothing to
-                      compare and nothing to roll back to. */}
-                  {isNow(e) ? null : (
-                    <button
-                      type="button"
-                      className="btn"
-                      data-size="sm"
-                      data-variant="secondary"
-                      onClick={() => setOpen({ kind: "diff", event: e })}
-                    >
-                      {t("skillHub.history.compare")}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn"
-                    data-size="sm"
-                    data-variant="secondary"
-                    onClick={() => setOpen({ kind: "fork", event: e })}
-                  >
-                    {t("skillHub.history.fork")}
-                  </button>
-                  {entry.is_owner && !isNow(e) ? (
-                    <button
-                      type="button"
-                      className="btn"
-                      data-size="sm"
-                      data-variant="primary"
-                      disabled={rollback.isPending}
-                      onClick={() => void askRollback(e)}
-                    >
-                      {t("skillHub.history.rollback")}
-                    </button>
+        <>
+          <ol className="skill-hub-history" aria-label={t("skillHub.history")}>
+            {shown.map((e) => {
+              const version = namesAVersion(e);
+              const before = version ? previousVersion(e) : undefined;
+              return (
+                <li
+                  key={e.revision}
+                  className="skill-hub-history-row"
+                  data-kind={version ? "version" : "note"}
+                  data-current={(version && e === currentVersion) || undefined}
+                >
+                  <div className="skill-hub-history-head">
+                    {version ? <span className="skill-hub-history-name">{name(e)}</span> : null}
+                    <span className="skill-hub-history-kind">{label(e)}</span>
+                    {version && e === currentVersion ? (
+                      <span className="skill-hub-badge" data-kind="current">
+                        {t("skillHub.history.current")}
+                      </span>
+                    ) : null}
+                    <span className="skill-hub-history-meta muted small">
+                      <UserChip userId={e.by} size={16} nameOnly />
+                      {version ? null : <time dateTime={e.at}>{when(e.at)}</time>}
+                    </span>
+                  </div>
+                  {version && (!before || before.description !== e.description) ? (
+                    <p className="skill-hub-history-desc">{e.description}</p>
                   ) : null}
-                </div>
-              ) : null}
-            </li>
-          ))}
-        </ol>
+                  {e.kind === "permission" && e.audience.length > 0 ? (
+                    // G24: the owner sees who it was opened to, not only the word.
+                    <p className="skill-hub-history-desc">
+                      {t("skillHub.history.audience", { who: e.audience.map(subjectName).join(", ") })}
+                    </p>
+                  ) : null}
+                  {version && e.review_notes.length > 0 ? (
+                    // What the review said about this version (§8) — the one a
+                    // rollback brings back is not reviewed again (G20).
+                    <ul className="skill-hub-history-notes" aria-label={t("skillHub.review")}>
+                      {e.review_notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {version ? (
+                    <div className="skill-hub-history-actions">
+                      {e.current ? null : (
+                        <button
+                          type="button"
+                          className="btn"
+                          data-size="sm"
+                          data-variant="secondary"
+                          onClick={() => setOpen({ kind: "view", event: e })}
+                        >
+                          {t("skillHub.history.view")}
+                        </button>
+                      )}
+                      {/* A row whose version IS the current one has nothing
+                          to compare and nothing to roll back to. */}
+                      {isNow(e) ? null : (
+                        <button
+                          type="button"
+                          className="btn"
+                          data-size="sm"
+                          data-variant="secondary"
+                          onClick={() => setOpen({ kind: "diff", event: e })}
+                        >
+                          {t("skillHub.history.compare")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn"
+                        data-size="sm"
+                        data-variant="secondary"
+                        onClick={() => setOpen({ kind: "fork", event: e })}
+                      >
+                        {t("skillHub.history.fork")}
+                      </button>
+                      {entry.is_owner && !isNow(e) ? (
+                        <button
+                          type="button"
+                          className="btn"
+                          data-size="sm"
+                          data-variant="secondary"
+                          disabled={rollback.isPending}
+                          onClick={() => void askRollback(e)}
+                        >
+                          {t("skillHub.history.rollback")}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+          {!all && events.length > FIRST_ROWS ? (
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              onClick={() => setAll(true)}
+            >
+              {t("skillHub.history.showAll", { count: events.length })}
+            </button>
+          ) : null}
+        </>
       )}
       {failure ? (
         <p className="error" role="alert">
@@ -255,7 +299,7 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
         <VersionModal
           entryId={entry.id}
           event={open.event}
-          day={versionDay(open.event)}
+          title={name(open.event)}
           client={client}
           onClose={() => setOpen(null)}
         />
@@ -264,9 +308,9 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
         <DiffModal
           entryId={entry.id}
           from={open.event}
+          fromName={vn(open.event) || when(open.event.at)}
           others={versions.filter((v) => v.commit !== open.event.commit)}
           initial={current.revision}
-          day={versionDay(open.event)}
           client={client}
           onClose={() => setOpen(null)}
         />
@@ -275,7 +319,7 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
         <ForkDialog
           entry={entry}
           event={open.event}
-          day={versionDay(open.event)}
+          day={name(open.event)}
           client={client}
           onClose={() => setOpen(null)}
         />
@@ -284,37 +328,32 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
   );
 }
 
-/** One version, read: its SKILL.md and its files, one file's text on demand. */
+/** One version, read: its SKILL.md, and its files the way the files tab
+ * shows the current ones (D12). */
 function VersionModal({
   entryId,
   event,
-  day,
+  title,
   client,
   onClose,
 }: {
   entryId: string;
   event: SkillHubHistoryEvent;
-  day: string;
+  title: string;
   client: SkillHubApi;
   onClose: () => void;
 }) {
   const t = useT();
   const titleId = useId();
-  const [path, setPath] = useState<string | null>(null);
   const version = useQuery({
     queryKey: qk.skillHubVersion(entryId, event.revision),
     queryFn: () => client.version(entryId, event.revision),
   });
-  const file = useQuery({
-    queryKey: qk.skillHubVersionFile(entryId, event.revision, path ?? ""),
-    queryFn: () => client.versionFile(entryId, event.revision, path as string),
-    enabled: path !== null,
-  });
   return (
     // A read-only viewer: nothing to lose, so a stray click closes it (#779).
-    <ModalShell onClose={onClose} labelledBy={titleId} width={720} closeOnBackdrop data-testid="skill-hub-version">
+    <ModalShell onClose={onClose} labelledBy={titleId} width={860} closeOnBackdrop data-testid="skill-hub-version">
       <h2 id={titleId} className="modal-title">
-        {t("skillHub.history.version.title", { when: day })}
+        {title}
       </h2>
       {version.isError ? (
         <p className="error" role="alert">
@@ -328,29 +367,13 @@ function VersionModal({
             <ReactMarkdown>{skillBody(version.data.skill_md)}</ReactMarkdown>
           </div>
           <h3>{t("skillHub.files")}</h3>
-          <ul className="skill-hub-files">
-            {version.data.files.map(({ path: f }) => (
-              <li key={f}>
-                <button
-                  type="button"
-                  className="btn"
-                  data-size="sm"
-                  data-variant="ghost"
-                  aria-pressed={path === f}
-                  onClick={() => setPath(f)}
-                >
-                  {f}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {path !== null && file.data ? (
-            file.data.text === null ? (
-              <p className="muted">{t("skillHub.history.notText")}</p>
-            ) : (
-              <pre className="skill-hub-pre">{file.data.text}</pre>
-            )
-          ) : null}
+          <SkillHubFiles
+            entryId={entryId}
+            revision={event.revision}
+            files={version.data.files}
+            scripts={version.data.scripts}
+            client={client}
+          />
         </>
       )}
       <ModalActions>
@@ -362,23 +385,25 @@ function VersionModal({
   );
 }
 
-/** One version against another, per file — the current one unless the
- * viewer picks a different one (§8 「能和另一版比對」). */
+/** One version against another (GitHub's "Files changed"): how many files
+ * were added, changed, removed; then each file on request, its lines in red
+ * and green without the raw `---`/`+++`/`@@` headers (D13). Against the
+ * current version unless the viewer picks another (§8 「能和另一版比對」). */
 function DiffModal({
   entryId,
   from,
+  fromName,
   others,
   initial,
-  day,
   client,
   onClose,
 }: {
   entryId: string;
   from: SkillHubHistoryEvent;
+  fromName: string;
   /** The versions it can be compared with — never itself. */
-  others: { revision: string; label: string }[];
+  others: { revision: string; label: string; short: string }[];
   initial: string;
-  day: string;
   client: SkillHubApi;
   onClose: () => void;
 }) {
@@ -390,12 +415,14 @@ function DiffModal({
     queryKey: qk.skillHubDiff(entryId, from.revision, to),
     queryFn: () => client.diff(entryId, from.revision, to),
   });
-  const status = { added: "skillHub.history.status.added", removed: "skillHub.history.status.removed", changed: "skillHub.history.status.changed" } as const;
+  const toName = others.find((v) => v.revision === to)?.short ?? "";
+  const count = (status: SkillHubFileChange["status"]) =>
+    (diff.data ?? []).filter((f) => f.status === status).length;
   return (
     // Read-only: a stray click closes it (#779).
-    <ModalShell onClose={onClose} labelledBy={titleId} width={760} closeOnBackdrop data-testid="skill-hub-diff">
+    <ModalShell onClose={onClose} labelledBy={titleId} width={860} closeOnBackdrop data-testid="skill-hub-diff">
       <h2 id={titleId} className="modal-title">
-        {t("skillHub.history.diff.title", { when: day })}
+        {t("skillHub.history.diff.title", { from: fromName, to: toName })}
       </h2>
       <label className="skill-hub-diff-against" htmlFor={againstId}>
         <span>{t("skillHub.history.diff.against")}</span>
@@ -416,23 +443,20 @@ function DiffModal({
       ) : diff.data.length === 0 ? (
         <p className="muted">{t("skillHub.history.noChanges")}</p>
       ) : (
-        <ul className="skill-hub-diff">
-          {diff.data.map((f) => (
-            <li key={f.path}>
-              <div className="skill-hub-diff-head">
-                <code>{f.path}</code>
-                <span className="skill-hub-badge" data-kind={f.status}>
-                  {t(status[f.status])}
-                </span>
-              </div>
-              {f.patch === null ? (
-                <p className="muted small">{t("skillHub.history.binaryChanged")}</p>
-              ) : (
-                <pre className="skill-hub-pre">{f.patch}</pre>
-              )}
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="skill-hub-diff-summary">
+            {t("skillHub.history.diff.summary", {
+              added: count("added"),
+              changed: count("changed"),
+              removed: count("removed"),
+            })}
+          </p>
+          <ul className="skill-hub-diff">
+            {diff.data.map((f) => (
+              <DiffFile key={f.path} file={f} />
+            ))}
+          </ul>
+        </>
       )}
       <ModalActions>
         <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
@@ -440,6 +464,79 @@ function DiffModal({
         </button>
       </ModalActions>
     </ModalShell>
+  );
+}
+
+const STATUS = {
+  added: "skillHub.history.status.added",
+  removed: "skillHub.history.status.removed",
+  changed: "skillHub.history.status.changed",
+} as const;
+
+/** One file of a comparison, closed until asked for. */
+function DiffFile({ file }: { file: SkillHubFileChange }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <li>
+      <button
+        type="button"
+        className="skill-hub-diff-head"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon name={open ? "chev_d" : "chev_r"} size={12} />
+        <code>{file.path}</code>
+        <span className="skill-hub-badge" data-kind={file.status}>
+          {t(STATUS[file.status])}
+        </span>
+      </button>
+      {open ? (
+        file.patch === null ? (
+          <p className="muted small">{t("skillHub.history.binaryChanged")}</p>
+        ) : (
+          <PatchLines patch={file.patch} />
+        )
+      ) : null}
+    </li>
+  );
+}
+
+/** A unified diff's lines: the file header (everything before the first
+ * hunk — the server's `--- a/` / `+++ b/` pair) goes, a hunk header becomes a
+ * gap, and each line is marked `+` / `−` in its own column as well as
+ * coloured — colour alone is not a signal (WCAG 1.4.1). Only the lines before
+ * the first hunk are dropped: a removed line reading `-- x` is `--- x` in the
+ * patch, and is content. */
+function PatchLines({ patch }: { patch: string }) {
+  const all = patch.split("\n");
+  if (all[all.length - 1] === "") all.pop();
+  const first = all.findIndex((l) => l.startsWith("@@"));
+  const lines = first < 0 ? all : all.slice(first);
+  return (
+    <div className="skill-hub-patch">
+      {lines.map((line, i) => {
+        // git's "\ No newline at end of file" is about the line above, not a line.
+        if (line.startsWith("\\")) return null;
+        if (line.startsWith("@@")) {
+          // The first hunk needs no gap above it.
+          return i === 0 ? null : (
+            <div key={i} className="skill-hub-patch-gap" data-line="gap" aria-hidden="true">
+              ⋯
+            </div>
+          );
+        }
+        const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+        return (
+          <div key={i} className="skill-hub-patch-line" data-line={kind}>
+            <span className="skill-hub-patch-mark" aria-hidden="true">
+              {kind === "add" ? "+" : kind === "del" ? "−" : " "}
+            </span>
+            <span>{line.slice(1)}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

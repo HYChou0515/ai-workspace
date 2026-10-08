@@ -2317,10 +2317,9 @@ export const messages = {
   "skillHub.history": { "zh-TW": "版本紀錄", en: "History" },
   "skillHub.history.current": { "zh-TW": "目前版本", en: "Current" },
   "skillHub.history.kind.publish": { "zh-TW": "發布", en: "Published" },
-  "skillHub.history.kind.rollback": {
-    "zh-TW": "回復到 {when} 的版本",
-    en: "Rolled back to the version of {when}",
-  },
+  // plan-skill-hub-ux-redo D8: a version is named `v N ・ date time`.
+  "skillHub.history.kind.rollback": { "zh-TW": "回復成 {version}", en: "Rolled back to {version}" },
+  "skillHub.history.showAll": { "zh-TW": "顯示全部（{count}）", en: "Show all ({count})" },
   "skillHub.history.kind.transfer": { "zh-TW": "轉移給 {owner}", en: "Transferred to {owner}" },
   "skillHub.history.audience": { "zh-TW": "開放給：{who}", en: "Open to: {who}" },
   "skillHub.history.audience.everyone": { "zh-TW": "所有人", en: "everyone" },
@@ -2333,10 +2332,7 @@ export const messages = {
   "skillHub.history.compare": { "zh-TW": "比對其他版本", en: "Compare with another version" },
   "skillHub.history.fork": { "zh-TW": "從這一版 fork", en: "Fork from this version" },
   "skillHub.history.rollback": { "zh-TW": "回復到這一版", en: "Roll back to this version" },
-  "skillHub.history.rollback.title": {
-    "zh-TW": "回復到 {when} 的版本？",
-    en: "Roll back to the version of {when}?",
-  },
+  "skillHub.history.rollback.title": { "zh-TW": "回復到 {version}？", en: "Roll back to {version}?" },
   "skillHub.history.rollback.body": {
     "zh-TW": "這一版會成為目前版本，裝過這個 skill 的人會看到「skill 已變更」。之後的版本仍留在紀錄裡，隨時可以再回復。",
     en: "This version becomes the current one; everyone who installed this skill sees “Skill changed”. Later versions stay in the history and can be brought back.",
@@ -2346,13 +2342,12 @@ export const messages = {
     "zh-TW": "版本剛被別人改過，請重新確認。",
     en: "The skill changed meanwhile — check the history again.",
   },
-  "skillHub.history.version.title": { "zh-TW": "{when} 的版本", en: "The version of {when}" },
-  "skillHub.history.diff.title": {
-    "zh-TW": "比對 {when} 的版本",
-    en: "Compare the version of {when}",
+  "skillHub.history.diff.title": { "zh-TW": "{from} → {to}", en: "{from} → {to}" },
+  "skillHub.history.diff.summary": {
+    "zh-TW": "新增 {added}／修改 {changed}／刪除 {removed}",
+    en: "{added} added / {changed} changed / {removed} removed",
   },
   "skillHub.history.diff.against": { "zh-TW": "和這一版比", en: "Compare with" },
-  "skillHub.history.notText": { "zh-TW": "不是文字檔", en: "Not a text file" },
   "skillHub.history.binaryChanged": {
     "zh-TW": "這個檔案不顯示逐行差異（不是文字檔，或檔案太大），只比對是否相同",
     en: "No line-by-line difference for this file (not text, or too large) — compared only for being the same",
@@ -2362,10 +2357,7 @@ export const messages = {
   "skillHub.history.status.removed": { "zh-TW": "刪除", en: "Removed" },
   "skillHub.history.status.changed": { "zh-TW": "修改", en: "Changed" },
   "skillHub.history.close": { "zh-TW": "關閉", en: "Close" },
-  "skillHub.history.fork.title": {
-    "zh-TW": "從 {when} 的版本 fork",
-    en: "Fork from the version of {when}",
-  },
+  "skillHub.history.fork.title": { "zh-TW": "從 {version} fork", en: "Fork from {version}" },
   "skillHub.history.fork.body": {
     "zh-TW": "這一版會複製進你選的 item，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
     en: "This version is copied into the item you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there: someone else's skill becomes your fork, your own becomes its next version.",

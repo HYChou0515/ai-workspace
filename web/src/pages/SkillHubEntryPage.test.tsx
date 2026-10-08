@@ -121,11 +121,18 @@ const ev = (over: Partial<SkillHubHistoryEvent>): SkillHubHistoryEvent => ({
 
 /** Newest first: a transfer on top of a rollback to v1, over v2 and v1. */
 const HISTORY: SkillHubHistoryEvent[] = [
-  ev({ revision: "e-1:5", kind: "transfer", by: "bob", owner: "alice", commit: "c1", current: true }),
-  ev({ revision: "e-1:4", kind: "rollback", by: "bob", owner: "bob", commit: "c1", to_revision: "e-1:1" }),
-  ev({ revision: "e-1:2", kind: "publish", by: "bob", owner: "bob", commit: "c2", description: "v2 notes" }),
-  ev({ revision: "e-1:1", kind: "publish", by: "bob", owner: "bob", commit: "c1" }),
+  ev({ revision: "e-1:5", kind: "transfer", by: "bob", owner: "alice", commit: "c1", current: true, at: "2026-10-04T12:00:00Z" }),
+  ev({ revision: "e-1:4", kind: "rollback", by: "bob", owner: "bob", commit: "c1", to_revision: "e-1:1", version: 3, at: "2026-10-03T12:00:00Z" }),
+  ev({ revision: "e-1:2", kind: "publish", by: "bob", owner: "bob", commit: "c2", description: "v2 notes", version: 2, at: "2026-10-02T12:00:00Z" }),
+  ev({ revision: "e-1:1", kind: "publish", by: "bob", owner: "bob", commit: "c1", version: 1, at: "2026-10-01T12:00:00Z" }),
 ];
+
+/** How the page names a version (D8): `v N ・ date time`, local time. */
+const vlabel = (n: number, iso: string) => {
+  const d = new Date(iso);
+  const pad = (x: number) => String(x).padStart(2, "0");
+  return `v${n} ・ ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 
 function client(
   entry: SkillHubDetail,
@@ -720,7 +727,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
         audience: ["user:alice", "group:g-qa"],
         current: true,
       }),
-      ev({ revision: "e-1:1" }),
+      ev({ revision: "e-1:1", version: 1 }),
     ];
     mount(client(OWNED, OPEN, history), undefined, "/skill-hub/e-1?tab=history");
 
@@ -738,7 +745,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
         audience: ["all", "group:g-hidden"],
         current: true,
       }),
-      ev({ revision: "e-1:1" }),
+      ev({ revision: "e-1:1", version: 1 }),
     ];
     mount(client(OWNED, OPEN, history), undefined, "/skill-hub/e-1?tab=history");
 
@@ -748,16 +755,24 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     expect(rows[0]).not.toHaveTextContent("g-hidden");
   });
 
-  it("lists every row newest first, says what each did, and marks the current one", async () => {
+  it("lists every row newest first, names each version v N with its time, and marks the current one (D8)", async () => {
     mount(client(detail({}), OPEN, HISTORY), undefined, "/skill-hub/e-1?tab=history");
 
     const rows = within(await timeline()).getAllByRole("listitem");
     expect(rows).toHaveLength(4);
+    // A transfer is a one-line note, not a version.
     expect(rows[0]).toHaveTextContent(word("skillHub.history.kind.transfer", { owner: "Alice Wu" }));
-    expect(rows[0]).toHaveTextContent(word("skillHub.history.current"));
-    expect(rows[1]).toHaveTextContent(word("skillHub.history.kind.rollback", { when: "2026/10/01" }));
+    expect(rows[0]).not.toHaveTextContent(/v\d/);
+    // The current VERSION is v3 — the transfer row changed no content.
+    expect(rows[1]).toHaveTextContent(vlabel(3, "2026-10-03T12:00:00Z"));
+    expect(rows[1]).toHaveTextContent(word("skillHub.history.current"));
+    expect(rows[1]).toHaveTextContent(word("skillHub.history.kind.rollback", { version: "v1" }));
+    expect(rows[2]).toHaveTextContent(vlabel(2, "2026-10-02T12:00:00Z"));
     expect(rows[2]).toHaveTextContent(word("skillHub.history.kind.publish"));
+    // Only what changed: v2's description differs from v1's, so it shows; v1's is the first.
     expect(rows[2]).toHaveTextContent("v2 notes");
+    // v3 brought v1's description back: it changed from v2's, so it shows too.
+    expect(rows[1]).toHaveTextContent("Triage reflow defects.");
     // A transfer row changes no content: nothing to read, compare or fork.
     expect(within(rows[0]).queryAllByRole("button")).toEqual([]);
     // No internals on screen: the version's id is never printed.
@@ -787,6 +802,30 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
       word("skillHub.history.fork"),
       word("skillHub.history.rollback"),
     ]);
+    // One primary action per screen (D14): rolling back is not it.
+    expect(within(rows[2]).getByRole("button", { name: word("skillHub.history.rollback") })).toHaveAttribute(
+      "data-variant",
+      "secondary",
+    );
+  });
+
+  it("shows the latest five rows, and the rest on request (D14)", async () => {
+    const many = Array.from({ length: 8 }, (_, n) =>
+      ev({
+        revision: `e-1:${8 - n}`,
+        commit: `c${8 - n}`,
+        version: 8 - n,
+        at: `2026-10-0${8 - n}T12:00:00Z`,
+        current: n === 0,
+      }),
+    );
+    mount(client(detail({}), OPEN, many), undefined, "/skill-hub/e-1?tab=history");
+    const list = await timeline();
+    expect(within(list).getAllByRole("listitem")).toHaveLength(5);
+
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.history.showAll", { count: 8 }) }));
+
+    expect(within(list).getAllByRole("listitem")).toHaveLength(8);
   });
 
   it("shows an old version's SKILL.md and files, and one file's text or that it is not text", async () => {
@@ -796,12 +835,16 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.view") }));
 
     const modal = await screen.findByTestId("skill-hub-version");
+    expect(within(modal).getByRole("heading", { level: 2 })).toHaveTextContent(
+      vlabel(2, "2026-10-02T12:00:00Z"),
+    );
     expect(await within(modal).findByRole("heading", { name: "The second way" })).toBeInTheDocument();
     expect(c.version).toHaveBeenCalledWith("e-1", "e-1:2");
-    fireEvent.click(within(modal).getByRole("button", { name: "notes.md" }));
+    // The same files view as the files tab (D12).
+    fireEvent.click(within(modal).getByRole("button", { name: /notes\.md/ }));
     expect(await within(modal).findByText("old notes body")).toBeInTheDocument();
-    fireEvent.click(within(modal).getByRole("button", { name: "shot.png" }));
-    expect(await within(modal).findByText(word("skillHub.history.notText"))).toBeInTheDocument();
+    fireEvent.click(within(modal).getByRole("button", { name: /shot\.png/ }));
+    expect(await within(modal).findByText(word("skillHub.files.notText"))).toBeInTheDocument();
   });
 
   it("compares an old version with the current one, file by file", async () => {
@@ -811,9 +854,44 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
 
     const modal = await screen.findByTestId("skill-hub-diff");
-    expect(await within(modal).findByText(/\+new line/)).toBeInTheDocument();
-    expect(within(modal).getByText(word("skillHub.history.binaryChanged"))).toBeInTheDocument();
+    // Titled by the two versions; the current is v3 (the transfer row is not a version).
+    expect(within(modal).getByRole("heading", { level: 2 })).toHaveTextContent("v2 → v3");
     expect(c.diff).toHaveBeenCalledWith("e-1", "e-1:2", "e-1:5");
+    // A summary first, then each file on request.
+    expect(
+      await within(modal).findByText(word("skillHub.history.diff.summary", { added: 0, changed: 2, removed: 0 })),
+    ).toBeInTheDocument();
+    expect(within(modal).queryByText("new line")).toBeNull();
+    fireEvent.click(within(modal).getByRole("button", { name: /SKILL\.md/ }));
+    const added = await within(modal).findByText("new line");
+    expect(added.closest("[data-line]")).toHaveAttribute("data-line", "add");
+    expect(within(modal).getByText("old line").closest("[data-line]")).toHaveAttribute("data-line", "del");
+    // The raw headers are not shown.
+    expect(within(modal).queryByText(/@@|^\+\+\+|^---/)).toBeNull();
+    fireEvent.click(within(modal).getByRole("button", { name: /shot\.png/ }));
+    expect(within(modal).getByText(word("skillHub.history.binaryChanged"))).toBeInTheDocument();
+  });
+
+  it("drops only the file header: a removed line reading `-- x` is content (D13)", async () => {
+    const c = client(detail({}), OPEN, HISTORY);
+    c.diff.mockResolvedValue([
+      {
+        path: "notes.md",
+        status: "changed",
+        patch: "--- a/notes.md\n+++ b/notes.md\n@@ -1,2 +1,2 @@\n--- a dashed note\n+++ a plus note\n same\n@@ -9 +9 @@\n-x\n+y\n",
+      },
+    ]);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
+    const row = within(await timeline()).getAllByRole("listitem")[2];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
+    const modal = await screen.findByTestId("skill-hub-diff");
+    fireEvent.click(await within(modal).findByRole("button", { name: /notes\.md/ }));
+
+    expect(within(modal).getByText("-- a dashed note").closest("[data-line]")).toHaveAttribute("data-line", "del");
+    expect(within(modal).getByText("++ a plus note").closest("[data-line]")).toHaveAttribute("data-line", "add");
+    expect(within(modal).queryByText(/a\/notes\.md|b\/notes\.md/)).toBeNull();
+    // the second hunk is set off by a gap, the first is not
+    expect(modal.querySelectorAll("[data-line=gap]")).toHaveLength(1);
   });
 
   it("lets the owner roll back, against the version the page showed", async () => {
@@ -876,9 +954,9 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
 
   it("compares a version with any other one, the current by default (§8 「能和另一版比對」)", async () => {
     const three: SkillHubHistoryEvent[] = [
-      ev({ revision: "e-1:3", commit: "c3", at: "2026-10-03T12:00:00Z", current: true }),
-      ev({ revision: "e-1:2", commit: "c2", at: "2026-10-02T12:00:00Z" }),
-      ev({ revision: "e-1:1", commit: "c1", at: "2026-10-01T12:00:00Z" }),
+      ev({ revision: "e-1:3", commit: "c3", at: "2026-10-03T12:00:00Z", current: true, version: 3 }),
+      ev({ revision: "e-1:2", commit: "c2", at: "2026-10-02T12:00:00Z", version: 2 }),
+      ev({ revision: "e-1:1", commit: "c1", at: "2026-10-01T12:00:00Z", version: 1 }),
     ];
     const c = client(detail({}), OPEN, three);
     mount(c, undefined, "/skill-hub/e-1?tab=history");
@@ -890,8 +968,8 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     const against = within(modal).getByRole("combobox", { name: word("skillHub.history.diff.against") });
     // The other versions, by when they were published; never the version itself.
     expect(within(against).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      `2026/10/03 · ${word("skillHub.history.current")}`,
-      "2026/10/01",
+      `${vlabel(3, "2026-10-03T12:00:00Z")}（${word("skillHub.history.current")}）`,
+      vlabel(1, "2026-10-01T12:00:00Z"),
     ]);
     fireEvent.change(against, { target: { value: "e-1:1" } });
     await waitFor(() => expect(c.diff).toHaveBeenCalledWith("e-1", "e-1:2", "e-1:1"));

@@ -485,10 +485,29 @@ button.skill-hub-tree-row:hover,
   border-color: var(--accent-h);
 }
 
+/* A transfer or a permission change is a note between versions (D8), not a
+   card of its own. */
+.page .skill-hub-history > li[data-kind="note"] {
+  border: 0;
+  padding: 0 var(--space-12);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.page .skill-hub-history > li[data-kind="note"] .skill-hub-history-kind {
+  font-weight: 400;
+}
+
+.page .skill-hub-history-name {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.page .skill-hub-history-head .skill-hub-history-meta {
+  margin-left: auto;
+}
+
 .page .skill-hub-history-head,
 .page .skill-hub-history-meta,
-.page .skill-hub-history-actions,
-.page .skill-hub-diff-head {
+.page .skill-hub-history-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -560,15 +579,61 @@ button.skill-hub-tree-row:hover,
   overflow-wrap: anywhere;
 }
 
-.page .skill-hub-pre {
-  margin: var(--space-4) 0 0;
-  padding: var(--space-8);
-  max-height: 24rem;
-  overflow: auto;
-  border-radius: var(--radius-btn);
-  background: var(--paper-2);
+/* D13: the count line, then one disclosure row per file. */
+.page .skill-hub-diff-summary {
+  margin: 0 0 var(--space-8);
   font-size: var(--text-small);
-  white-space: pre;
+  color: var(--text-paper-d);
+}
+.page .skill-hub-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-btn);
+  text-align: left;
+  min-width: 0;
+}
+.page .skill-hub-diff-head:hover {
+  background: var(--paper-2);
+}
+
+/* The lines: a mark column, then the text; added in the ok hue, removed in
+   the err hue, both as tints so the text keeps its contrast. */
+.page .skill-hub-patch {
+  margin: var(--space-4) 0 0;
+  max-height: 28rem;
+  overflow: auto;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+.page .skill-hub-patch-line {
+  display: flex;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-patch-mark {
+  flex: none;
+  width: 2ch;
+  text-align: center;
+  color: var(--text-paper-d);
+  user-select: none;
+}
+.page .skill-hub-patch-line[data-line="add"] {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.page .skill-hub-patch-line[data-line="del"] {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.page .skill-hub-patch-gap {
+  padding: 0 var(--space-8);
+  color: var(--text-paper-d);
+  background: var(--paper-2);
 }
 
 .page .skill-hub-fork-items {
