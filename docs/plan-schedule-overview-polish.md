@@ -47,7 +47,8 @@ One FE module; the backend keeps answering in instants (`next_ms`,
 - `whenText(ms, now, zone, t)` → the relative phrasing (decision 2);
   `fullTime(ms, zone, t)` for the hover.
 - `zonedMs(y, mo, d, hh, mm, zone)` → the instant of a wall time in a zone, on
-  the sweep's DST rule (Python `ZoneInfo` fold=0: a repeated time is its first
+  `next_run_ms`'s DST rule, so it agrees with the `next_ms` beside it (Python
+  `ZoneInfo` fold=0: a repeated time is its first
   reading, a skipped one is read with the offset before the change), and
   `wallOf(ms, zone)` → `{y, mo, d, dow, hh, mm}`.
 - `periodText(raw, {viewer, now, nextMs, locale}, t)` → `{text, set}`: the

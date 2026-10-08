@@ -87,6 +87,20 @@ describe("periodText — a row's period on the viewer's clock", () => {
     expect(periodText({ every: "minutes", n: 20 }, kolkata, t).text).toBe("每 20 分鐘（世界標準時間）");
   });
 
+  it("reads a time the way the sweep does — digits either side, unpadded too", () => {
+    // `_looks_like_time`: "9:5" fires at 09:05 (review round 2).
+    expect(periodText({ every: "daily", at: "9:5" }, at(TPE), t).text).toBe("每天 17:05");
+    expect(periodText({ every: "daily", at: "009:05" }, at(TPE), t).text).toBe("每天 17:05");
+  });
+
+  it("an hourly row moves only when it fires on the same minutes all year", () => {
+    // Lord Howe shifts by 30 minutes for summer: a whole hour from UTC in
+    // January, half an hour in July — so a UTC hourly is :00 there half the
+    // year and :30 the other half (review round 2).
+    const january = { viewer: "Australia/Lord_Howe", now: Date.UTC(2026, 0, 15), locale: "zh-TW" };
+    expect(periodText({ every: "hourly" }, january, t).text).toBe("每小時（世界標準時間）");
+  });
+
   it("a zone the browser cannot read stays as written", () => {
     expect(periodText({ every: "daily", at: "09:00", tz: "Mars/Base" }, at(TPE), t).text).toBe(
       "每天 09:00（Mars/Base）",

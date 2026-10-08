@@ -909,7 +909,9 @@ Workflows 面板的排程區用同一組路由。
 **兩個地方的時間都寫在看的人的時鐘上，不標時區**（`docs/plan-schedule-overview-polish.md`，
 `web/src/lib/scheduleTime.ts`）：下一次／上一次寫成「15 分鐘後」「今天 23:34」，週期透過一次真的發生點換算
 （沒寫 `tz` 的列照 sweep 當 UTC），換算後規則會不一樣的——跨到別天的每月、在差半小時的時區裡的每小時／每 N 分鐘——
-照原設定寫，加上時區的名稱。DST 的邊界用 sweep 的同一條規則（Python `ZoneInfo` fold=0）。**「改時間」存檔時把
+照原設定寫，加上時區的名稱。DST 的邊界跟後端算 `next_ms` 的規則一樣（`next_run_ms`，Python `ZoneInfo` fold=0），所以換算出的週期與旁邊的
+「下一次」一致；但夏令時間開始那一天，被跳過的時刻（紐約 02:30）sweep 是在 03:00 牆鐘跳過去時就開火，比顯示的
+03:30 早。**「改時間」存檔時把
 `tz` 改寫成表單選的時區**（換算得乾淨的列預設是看的人的時區），因為表單用他的時鐘顯示與輸入。列名用標題：
 `ScheduleView.run_title`（item 自己的 workflow 檔的標題，與解析檢查同一次讀取；否則 profile 的）、
 總表的 `page_title`（那個資料夾裡 Deploy 的頁面）。「現在執行」啟動的 run 記 `WorkflowRun.by_hand`，

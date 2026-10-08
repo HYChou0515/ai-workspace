@@ -27,11 +27,18 @@ import { useDirtyClose } from "../hooks/useDirtyClose";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
-import { DOWS, moveTime, rowTime, subDailyMoves, validZone, zoneName } from "../lib/scheduleTime";
+import { DOWS, moveTime, parseAt, rowTime, subDailyMoves, validZone, zoneName } from "../lib/scheduleTime";
 import { useViewerClock } from "../lib/viewerClock";
 import { ModalShell } from "./ModalShell";
 
 const PERIODS: Period[] = ["minutes", "hourly", "daily", "weekly", "monthly"];
+
+/** A row's `at` as the form's `HH:MM`; the parser's 00:00 for one it refuses. */
+function atText(at: string): string {
+  const parsed = parseAt(at);
+  if (!parsed) return "00:00";
+  return `${String(parsed.hh).padStart(2, "0")}:${String(parsed.mm).padStart(2, "0")}`;
+}
 const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
 const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
 
@@ -49,9 +56,10 @@ export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTim
   const form: ScheduleTime = {
     every,
     n: typeof r.n === "number" ? r.n : 15,
-    // "9:05" is a time the sweep accepts: padded, never replaced by 00:00
-    // (saving that would move the schedule — review round 1).
-    at: /^\d{1,2}:\d{2}$/.test(written.at) ? written.at.padStart(5, "0") : "00:00",
+    // "9:05" and "9:5" are times the sweep accepts (`parseAt`): written out
+    // padded, never replaced by 00:00 — saving that would move the schedule
+    // (review rounds 1 and 2).
+    at: atText(written.at),
     dow: written.dow && (DOWS as readonly string[]).includes(written.dow) ? written.dow : "mon",
     dom: typeof r.dom === "number" ? r.dom : 1,
     tz: written.tz,

@@ -140,6 +140,8 @@ describe("ScheduleTimeModal", () => {
     // open on that time, not on 00:00 — saving would move the schedule.
     expect(timeOf({ every: "daily", at: "9:05", run: "r" }, "UTC", NOW).at).toBe("09:05");
     expect(timeOf({ every: "daily", at: "9:05", tz: TPE, run: "r" }, TPE, NOW).at).toBe("09:05");
+    // An unpadded minute too, and moved like any other time (review round 2).
+    expect(timeOf({ every: "daily", at: "9:5", run: "r" }, TPE, NOW)).toMatchObject({ at: "17:05", tz: TPE });
     // An hourly row moves to the viewer's zone only when its firing minute
     // stays put: not from UTC to Kolkata (+05:30).
     expect(timeOf({ every: "hourly", run: "r" }, TPE, NOW).tz).toBe(TPE);

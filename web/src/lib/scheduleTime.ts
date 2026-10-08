@@ -69,12 +69,14 @@ export function wallOf(ms: number, zone: string): Wall {
   };
 }
 
-/** The instant a clock in `zone` reads `y-mo-d hh:mm` — the sweep's own
- * answer (Python's `datetime(..., tzinfo=ZoneInfo(zone))`, fold=0, which is how
- * `next_run_ms` places a row): a wall time a DST change repeats is its FIRST
- * reading; one it skips is read with the offset in force before the change, so
- * it lands that much after it (02:30 on a New York spring-forward day is 03:30
- * EDT). The two candidate offsets are the ones a day either side. */
+/** The instant a clock in `zone` reads `y-mo-d hh:mm` — `next_run_ms`'s answer
+ * (Python's `datetime(..., tzinfo=ZoneInfo(zone))`, fold=0), so a period moved
+ * here agrees with the `next_ms` beside it: a wall time a DST change repeats is
+ * its FIRST reading; one it skips is read with the offset in force before the
+ * change, so it lands that much after it (02:30 on a New York spring-forward
+ * day is 03:30 EDT). Not when the sweep FIRES on that one day: it compares the
+ * zone's wall clock, which jumps past 02:30 straight to 03:00, and fires then.
+ * The two candidate offsets are the ones a day either side. */
 export function zonedMs(y: number, mo: number, d: number, hh: number, mm: number, zone: string): number {
   const asUtc = Date.UTC(y, mo - 1, d, hh, mm);
   const offset = (ms: number) => {
@@ -114,6 +116,17 @@ export function zoneName(zone: string, locale: string): string {
 const pad = (n: number) => String(n).padStart(2, "0");
 const hm = (w: Pick<Wall, "hh" | "mm">) => `${pad(w.hh)}:${pad(w.mm)}`;
 const dayNumber = (w: Pick<Wall, "y" | "mo" | "d">) => Date.UTC(w.y, w.mo - 1, w.d) / 86400000;
+
+/** `"HH:MM"` as the sweep reads it (`_looks_like_time`): digits either side
+ * of one colon, unpadded or zero-led too — "9:5" fires at 09:05 — within a day.
+ * `null` for anything else. */
+export function parseAt(at: string): { hh: number; mm: number } | null {
+  const m = /^(\d+):(\d+)$/.exec(at);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  return hh <= 23 && mm <= 59 ? { hh, mm } : null;
+}
 
 /** The day of week in the reader's words — 週一 / Mon. */
 export function dowWord(dow: number, t: T): string {
@@ -197,11 +210,9 @@ export function moveTime(
   to: string,
   refMs: number,
 ): { at: string; dow: string; dom: number } | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(time.at);
-  if (!m || !validZone(time.tz) || !validZone(to)) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (hh > 23 || mm > 59) return null;
+  const parsed = parseAt(time.at);
+  if (!parsed || !validZone(time.tz) || !validZone(to)) return null;
+  const { hh, mm } = parsed;
   const ref = wallOf(refMs, time.tz);
   let day = Date.UTC(ref.y, ref.mo - 1, ref.d);
   if (time.every === "weekly") {
@@ -222,20 +233,24 @@ export function moveTime(
 }
 
 /** Whether a minutes / hourly row fires on the same minutes on `to`'s clock
- * as on its own. They fire at the minutes of the hour their zone's clock reads
- * (hourly at :00, every 15 at :00/:15/:30/:45), so a zone a whole hour away
- * reads the same — and Kolkata (+05:30) does not: a UTC hourly runs at :30
- * there. The offsets are the ones in force at `refMs`. */
+ * as on its own, all year. They fire at the minutes of the hour their zone's
+ * clock reads (hourly at :00, every 15 at :00/:15/:30/:45), so a zone a whole
+ * hour away reads the same — and Kolkata (+05:30) does not: a UTC hourly runs
+ * at :30 there. Asked at `refMs` and half a year either side, because a DST
+ * shift can change the gap: Lord Howe moves by 30 minutes for summer. */
 export function subDailyMoves(time: Pick<RowTime, "every" | "n" | "tz">, to: string, refMs: number): boolean {
   if (!validZone(time.tz) || !validZone(to)) return false;
-  const offset = (zone: string) => {
-    const w = wallOf(refMs, zone);
-    return (Date.UTC(w.y, w.mo - 1, w.d, w.hh, w.mm) - Math.floor(refMs / 60000) * 60000) / 60000;
-  };
-  const apart = Math.abs(offset(time.tz) - offset(to));
-  if (apart % 60 === 0) return true;
   const width = time.every === "hourly" ? 60 : time.n;
-  return width > 0 && 60 % width === 0 && apart % width === 0;
+  const half = 182 * 86400000;
+  return [refMs - half, refMs, refMs + half].every((at) => {
+    const offset = (zone: string) => {
+      const w = wallOf(at, zone);
+      return (Date.UTC(w.y, w.mo - 1, w.d, w.hh, w.mm) - Math.floor(at / 60000) * 60000) / 60000;
+    };
+    const apart = Math.abs(offset(time.tz) - offset(to));
+    if (apart % 60 === 0) return true;
+    return width > 0 && 60 % width === 0 && apart % width === 0;
+  });
 }
 
 /** How often, in words, from fields already on the clock they are read on. */
