@@ -87,6 +87,21 @@ describe("AgentPanel — a request_env card in the log", () => {
     fireEvent.click(await screen.findByRole("button", { name: /設定 MAP_KEY|Set MAP_KEY/ }));
 
     expect(await screen.findByTestId("env-modal")).toBeInTheDocument();
+    // At the variable the card asked for, though no tool declared it.
+    const field = await screen.findByTestId("env-mine-MAP_KEY");
+    await waitFor(() => expect(field).toHaveFocus());
+  });
+
+  it("turns to Retry once the person saves the value from the panel it opened", async () => {
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: {}, auto: {} });
+    vi.spyOn(privateEnvApi, "put").mockResolvedValue(undefined);
+    renderPanel(agent(), { canEditEnv: true });
+
+    fireEvent.click(await screen.findByRole("button", { name: /設定 MAP_KEY|Set MAP_KEY/ }));
+    fireEvent.change(await screen.findByTestId("env-mine-MAP_KEY"), { target: { value: "k" } });
+    fireEvent.click(screen.getByTestId("env-mine-save"));
+
+    expect(await screen.findByRole("button", { name: /重試|Retry/ })).toBeEnabled();
   });
 
   it("retries as an ordinary send once the variable is set", async () => {

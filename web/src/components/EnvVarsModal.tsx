@@ -40,6 +40,7 @@ import { api as defaultApi } from "../api";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
+import type { EnvTarget } from "../hooks/chatItem";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
 import { layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
@@ -71,6 +72,7 @@ export function EnvVarsModal({
   itemId,
   client = defaultApi,
   privateClient = privateEnvApi,
+  target = null,
 }: {
   envVars: Record<string, string>;
   envPolicy?: Record<string, string>;
@@ -87,11 +89,15 @@ export function EnvVarsModal({
   itemId?: string;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
   privateClient?: Pick<PrivateEnvClient, "get" | "put" | "clear">;
+  /** Opened from a `request_env` card (docs/plan-env-request-card.md): start
+   * on its tab, at its variable — drawn even when no tool declared it (D5) —
+   * or inside the login that produces it. */
+  target?: EnvTarget | null;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
   const hasItem = Boolean(slug && itemId);
-  const [tab, setTab] = useState<Tab>(hasItem ? "mine" : "shared");
+  const [tab, setTab] = useState<Tab>(hasItem ? (target?.tab ?? "mine") : "shared");
   const [query, setQuery] = useState("");
 
   const toolsQ = useQuery({
@@ -196,7 +202,25 @@ export function EnvVarsModal({
   // name is the ONLY join, so a third-party author never chooses which
   // credential this dialog asks for (#750).
   const declared = new Set(tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)));
-  const offered = (providersQ.data ?? []).filter((p) => p.produces.some((n) => declared.has(n)));
+  // A card's login is offered whatever the tools declared: the card asked for
+  // it by name, and a tool with no `env.json` declares nothing.
+  const offered = (providersQ.data ?? []).filter(
+    (p) => p.produces.some((n) => declared.has(n)) || p.id === target?.login,
+  );
+
+  // Put the person at the variable the card asked for, once, when its field is
+  // drawn. A login target opens its dialog instead (below), which is where
+  // they type.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!target || target.login || focused.current) return;
+    const id = tab === "mine" ? `env-mine-${target.name}` : `env-field-${target.name}`;
+    const el = document.querySelector<HTMLElement>(`[data-testid="${CSS.escape(id)}"]`);
+    if (!el) return;
+    focused.current = true;
+    el.focus();
+    el.scrollIntoView?.({ block: "center" });
+  });
 
   return (
     <ModalShell
@@ -254,9 +278,11 @@ export function EnvVarsModal({
             onPolicy={choosePolicy}
             text={text}
             setText={setText}
+            focus={target?.tab === "shared" ? target.name : null}
             login={
               <Logins
                 offered={offered}
+                initialDialog={target?.tab === "shared" ? target.login : null}
                 disabled={!canEdit}
                 creds={creds}
                 setCreds={setCreds}
@@ -280,9 +306,11 @@ export function EnvVarsModal({
             auto={auto}
             failed={mineQ.isError}
             setMine={(name, value) => setMine((prev) => ({ ...(prev ?? {}), [name]: value }))}
+            focus={target?.tab === "mine" ? target.name : null}
             login={
               <Logins
                 offered={offered}
+                initialDialog={target?.tab === "mine" ? target.login : null}
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
@@ -461,6 +489,7 @@ function Sections({
   row,
   otherExtra,
   otherOpen = false,
+  focus = null,
 }: {
   sections: ToolSection[];
   query: string;
@@ -471,6 +500,8 @@ function Sections({
   /** Unfold "Other variables" from the start — it holds what the person came
    * to fill. */
   otherOpen?: boolean;
+  /** The variable a card asked for: its section starts unfolded. */
+  focus?: string | null;
 }) {
   const t = useT();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -480,8 +511,13 @@ function Sections({
   // the value they came for — the fold would move under their hands.
   const [initial] = useState<Record<string, boolean>>(() =>
     ({
-      ...Object.fromEntries(sections.map((s) => [s.key, s.status === "missingRequired"])),
-      __other: otherOpen,
+      ...Object.fromEntries(
+        sections.map((s) => [
+          s.key,
+          s.status === "missingRequired" || s.fields.some((f) => f.name === focus),
+        ]),
+      ),
+      __other: otherOpen || (focus !== null && other.includes(focus)),
     }),
   );
   const q = query.trim().toLowerCase();
@@ -541,12 +577,15 @@ function SharedTab({
   text,
   setText,
   login,
+  focus = null,
 }: {
   settled: boolean;
   tools: Parameters<typeof deriveEnvNeeds>[0];
   query: string;
   shared: Record<string, string>;
   policy: Record<string, string>;
+  /** The variable a card asked for — drawn even if nothing declared it (D5). */
+  focus?: string | null;
   canEdit: boolean;
   onVar: (name: string, value: string) => void;
   onPolicy: (name: string, p: EnvPolicy) => void;
@@ -557,9 +596,9 @@ function SharedTab({
   const t = useT();
   const view = deriveEnvNeeds(tools, shared);
   const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
-  const other = [...new Set([...Object.keys(shared), ...Object.keys(policy)])].filter(
-    (n) => !declared.has(n),
-  );
+  const other = [
+    ...new Set([...Object.keys(shared), ...Object.keys(policy), ...(focus ? [focus] : [])]),
+  ].filter((n) => !declared.has(n));
   const [newName, setNewName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -605,6 +644,7 @@ function SharedTab({
         </p>
       ) : (
       <Sections
+          focus={focus}
         sections={view.sections}
         query={query}
         other={other}
@@ -805,12 +845,15 @@ function MineTab({
   failed,
   setMine,
   login,
+  focus = null,
 }: {
   settled: boolean;
   tools: Parameters<typeof deriveEnvNeeds>[0];
   query: string;
   shared: Record<string, string>;
   policy: Record<string, string>;
+  /** The variable a card asked for — drawn even if nothing declared it (D5). */
+  focus?: string | null;
   mine: Record<string, string>;
   auto: Record<string, string>;
   failed: boolean;
@@ -841,6 +884,7 @@ function MineTab({
     ...new Set([
       ...Object.keys(own),
       ...Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first"),
+      ...(focus ? [focus] : []),
     ]),
   ].filter((n) => !declared.has(n));
 
@@ -860,6 +904,7 @@ function MineTab({
         </p>
       ) : (
       <Sections
+        focus={focus}
         sections={view.sections}
         query={query}
         other={other}
@@ -971,6 +1016,7 @@ function MineRow({
  * The credential typed here reaches the deploy's implementation and stops. */
 function Logins({
   offered,
+  initialDialog = null,
   disabled = false,
   creds,
   setCreds,
@@ -978,6 +1024,8 @@ function Logins({
   onFilled,
 }: {
   offered: EnvProvider[];
+  /** A card asked for this login (docs/plan-env-request-card.md): open on it. */
+  initialDialog?: string | null;
   disabled?: boolean;
   creds: Record<string, string>;
   setCreds: (next: Record<string, string>) => void;
@@ -985,7 +1033,7 @@ function Logins({
   onFilled: (env: Record<string, string>) => void;
 }) {
   const t = useT();
-  const [dialog, setDialog] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<string | null>(initialDialog);
   const [credError, setCredError] = useState<string | null>(null);
   const [exchanging, setExchanging] = useState(false);
   const openProvider = offered.find((p) => p.id === dialog);

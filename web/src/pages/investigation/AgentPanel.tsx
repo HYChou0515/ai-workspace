@@ -1704,6 +1704,7 @@ export function AgentHeader({
           // adds no request of its own.
           slug={slug}
           itemId={investigationId}
+          target={envTarget}
         />
       )}
       {showTools && onSaveToolPrefs && (
