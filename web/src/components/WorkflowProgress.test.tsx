@@ -59,6 +59,27 @@ describe("WorkflowProgress — collapsed bar (#331)", () => {
     expect(screen.queryByTestId("wf-progress")).toBeNull();
   });
 
+  it("opens expanded when asked for this mount, without changing the remembered choice", () => {
+    // The schedules overview's last-run link: the reader came to see what the
+    // run did (docs/plan-schedule-overview-polish.md decision 9).
+    render(
+      <WorkflowProgress
+        run={mkRun({ status: "done" })}
+        declaredPhases={PHASES}
+        disconnected={false}
+        onStop={vi.fn()}
+        expandedAtFirst
+      />,
+    );
+    const toggle = screen.getByTestId("wf-progress-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(localStorage.getItem("wf.progress.expanded")).toBeNull();
+  });
+
   it("is collapsed by default: the bar shows, the structural detail is hidden", () => {
     renderProgress({
       status: "running",

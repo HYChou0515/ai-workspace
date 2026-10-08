@@ -76,6 +76,11 @@ class ScheduleRowOut(BaseModel):
     run_problem: str = ""
     payload: dict[str, Any] = {}
     trigger_id: str = ""
+    #: `next_at` as one instant (epoch ms) — what the panel writes in the
+    #: viewer's own clock (`docs/plan-schedule-overview-polish.md`).
+    next_ms: int | None = None
+    #: The workflow's title — what the panel names the row's workflow by.
+    run_title: str = ""
 
 
 class SchedulesOut(BaseModel):

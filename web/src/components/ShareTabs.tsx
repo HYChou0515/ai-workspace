@@ -9,25 +9,36 @@
  */
 import { pxToRem } from "../lib/pxToRem";
 
-export type ShareTab = { id: string; label: string; count: number };
+export type ShareTab = { id: string; label: string; count?: number };
 
-export function ShareTabs({
+/** The share dialogs' strip — `Tabs` named for them. */
+export function ShareTabs(props: { tabs: ShareTab[]; value: string; onChange: (id: string) => void }) {
+  return <Tabs {...props} label="Share with" idPrefix="share" />;
+}
+
+/**
+ * The tab strip — text with an accent underline under the selected tab, no fill
+ * (WAI-ARIA tabs; Material 3 secondary tabs). ONE drawing for every place that
+ * switches between panels, so a switch never looks like a row of buttons
+ * (a schedule's 簡單 / cron did — user, 2026-10-08). A tab `i` controls the
+ * panel `${idPrefix}-panel-${i}`; the caller draws that panel with
+ * `role="tabpanel"` and `aria-labelledby={`${idPrefix}-tab-${i}`}`.
+ */
+export function Tabs({
   tabs,
   value,
   onChange,
-  idPrefix = "share-tab",
-  ariaLabel = "Share with",
+  label,
+  idPrefix,
 }: {
   tabs: ShareTab[];
   value: string;
   onChange: (id: string) => void;
-  /** The tab ids and test ids: `{idPrefix}-{tab id}`. The Env panel uses the
-   * same strip, so the two dialogs' tabs look alike (plan-personal-env A22). */
-  idPrefix?: string;
-  ariaLabel?: string;
+  label: string;
+  idPrefix: string;
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} style={strip}>
+    <div role="tablist" aria-label={label} style={strip}>
       {tabs.map((t) => {
         const on = t.id === value;
         return (
@@ -35,10 +46,10 @@ export function ShareTabs({
             key={t.id}
             type="button"
             role="tab"
-            id={`${idPrefix}-${t.id}`}
+            id={`${idPrefix}-tab-${t.id}`}
             aria-selected={on}
-            aria-controls={idPrefix === "share-tab" ? `share-panel-${t.id}` : undefined}
-            data-testid={`${idPrefix}-${t.id}`}
+            aria-controls={`${idPrefix}-panel-${t.id}`}
+            data-testid={`${idPrefix}-tab-${t.id}`}
             onClick={() => onChange(t.id)}
             style={{
               ...tab,
@@ -47,7 +58,7 @@ export function ShareTabs({
             }}
           >
             {t.label}
-            {t.count > 0 && <span style={badge}>{t.count}</span>}
+            {(t.count ?? 0) > 0 && <span style={badge}>{t.count}</span>}
           </button>
         );
       })}

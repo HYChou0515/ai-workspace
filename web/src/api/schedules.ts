@@ -47,6 +47,11 @@ export type ScheduleRow = {
   /** The row's identity — what the row routes find it by. `""` for a row the
    * sweep refuses (it has no identity because it never fires). */
   trigger_id: string;
+  /** `next_at` as one instant (epoch ms) — written on the viewer's clock.
+   * `null` for a row that will not run. */
+  next_ms: number | null;
+  /** The workflow's title; `""` when it has none. */
+  run_title: string;
 };
 
 export type ItemSchedules = {
@@ -75,6 +80,8 @@ export type LastRun = {
   /** Epoch ms. */
   started: number | null;
   ended: number | null;
+  /** Started by "run now", not by the schedule's time. */
+  by_hand: boolean;
 };
 
 /** One row of the overview: a schedule, where it lives, its last run and its
@@ -110,6 +117,10 @@ export type OverviewRow = {
   /** The Deployed page in the file's folder — where Open goes for a page's
    * row; `""` sends Open to the item. */
   page_path: string;
+  /** That page's title as Deployed; `""` when it has none or there is no page. */
+  page_title: string;
+  /** The workflow's title; `""` when it has none. */
+  run_title: string;
 };
 
 /** A schedules file with problems of its own (one that does not parse has no
@@ -197,7 +208,12 @@ export const schedulesApi = {
     if (!resp.ok) throw new Error(`list schedules failed: ${resp.status}`);
     return resp.json();
   },
-  async editTime(slug: string, itemId: string, ref: RowRef, time: ScheduleTime): Promise<void> {
+  async editTime(
+    slug: string,
+    itemId: string,
+    ref: RowRef,
+    time: ScheduleTime | { cron: string; tz: string },
+  ): Promise<void> {
     await act(slug, itemId, "edit", { ...ref, ...time });
   },
   async remove(slug: string, itemId: string, ref: RowRef): Promise<void> {

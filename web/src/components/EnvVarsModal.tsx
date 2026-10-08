@@ -60,7 +60,7 @@ import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
 import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
-import { ShareTabs } from "./ShareTabs";
+import { Tabs } from "./ShareTabs";
 
 type Tab = "shared" | "mine" | "personal";
 const TABS: Tab[] = ["shared", "mine", "personal"];
@@ -317,15 +317,15 @@ export function EnvVarsModal({
       <strong style={{ fontSize: pxToRem(14) }}>{t("env.title")}</strong>
 
       {hasItem && (
-        // The share dialog's strip: a filled button is how this app draws its
+        // The app's one tab strip (`Tabs`, the share dialog's too): a filled button is how this app draws its
         // primary ACTION, so a selected tab drawn that way read as "press me"
         // (A22). One component, so the two dialogs' tabs never drift apart.
-        <ShareTabs
+        <Tabs
           tabs={TABS.map((id) => ({ id, label: t(`env.tab.${id}`), count: 0 }))}
           value={tab}
           onChange={(id) => setTab(id as Tab)}
-          idPrefix="env-tab"
-          ariaLabel={t("env.title")}
+          idPrefix="env"
+          label={t("env.title")}
         />
       )}
 
@@ -341,7 +341,14 @@ export function EnvVarsModal({
         />
       )}
 
-      <div className="scrollable" style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10 }}>
+      <div
+        className="scrollable"
+        // What the strip's `aria-controls` points at (`Tabs`: `{idPrefix}-panel-{tab}`).
+        role={hasItem ? "tabpanel" : undefined}
+        id={hasItem ? `env-panel-${tab}` : undefined}
+        aria-labelledby={hasItem ? `env-tab-${tab}` : undefined}
+        style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10 }}
+      >
         {tab === "shared" ? (
           <SharedTab
             settled={toolsSettled}
