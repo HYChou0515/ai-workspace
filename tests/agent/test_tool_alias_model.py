@@ -174,3 +174,58 @@ def test_the_system_prompt_lists_third_party_commands_by_their_new_names() -> No
 
     assert isinstance(agent.instructions, str)
     assert "a__list-files" in agent.instructions and "b__list-files" in agent.instructions
+
+
+async def test_a_non_streamed_response_is_renamed_too() -> None:
+    """`Runner.run` (no stream) reads `get_response`; the same rename applies."""
+    inner = _Inner([NS(type="response.output_item.done", item=_fc("trend"))])
+    model = ToolAliasModel(inner, {"trend": (("a", "a__trend"),)})  # ty: ignore[invalid-argument-type]
+
+    response = await model.get_response()
+
+    assert [i.name for i in response.output] == ["a__trend"]
+
+
+async def test_events_other_than_finished_items_pass_through_untouched() -> None:
+    delta = NS(type="response.output_text.delta", delta="hi")
+    inner = _Inner([delta, NS(type="response.completed", response=NS(output=None))])
+
+    out = [
+        e
+        async for e in ToolAliasModel(inner, {"x": (("a", "a__x"),)}).stream_response()  # ty: ignore[invalid-argument-type]
+    ]
+
+    assert out[0] is delta and len(out) == 2
+
+
+def test_the_wrapped_model_still_answers_for_its_own_attributes() -> None:
+    """Code that reads e.g. `agent.model.model` (the model id) keeps working."""
+    inner = NS(model="ollama_chat/x")
+
+    assert ToolAliasModel(inner, {}).model == "ollama_chat/x"  # ty: ignore[invalid-argument-type]
+
+
+def test_a_message_item_is_not_a_call_and_is_left_alone() -> None:
+    from workspace_app.agent.tool_alias_model import _rename
+
+    item = NS(type="message", name="trend")
+    _rename(item, {"trend": (("a", "a__trend"),)})
+
+    assert item.name == "trend"
+
+
+def test_a_sentinel_that_is_not_one_of_ours_is_ordinary_arguments() -> None:
+    """A tool whose own argument happens to use the key is not failed."""
+    from workspace_app.agent.arg_repair import AMBIGUOUS_CALL_KEY
+
+    assert ambiguous_call_reply({AMBIGUOUS_CALL_KEY: "x"}) is None
+    assert ambiguous_call_reply({AMBIGUOUS_CALL_KEY: {"called": "x", "candidates": []}}) is None
+
+
+def test_a_mangled_sentinel_is_ordinary_arguments_not_a_crash() -> None:
+    """A model copying the sentinel shape from history with a bad entry must
+    not end the turn: `len(1)` raised out of the tool wrap."""
+    from workspace_app.agent.arg_repair import AMBIGUOUS_CALL_KEY
+
+    assert ambiguous_call_reply({AMBIGUOUS_CALL_KEY: {"called": "x", "candidates": [1]}}) is None
+    assert ambiguous_call_reply({AMBIGUOUS_CALL_KEY: {"called": "x", "candidates": 5}}) is None

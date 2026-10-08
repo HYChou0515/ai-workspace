@@ -189,36 +189,3 @@ def test_a_local_name_holding_the_separator_is_refused(caplog) -> None:  # noqa:
 
     assert [t.name for t in tools] == ["a__b__c"]
     assert "a__b:c" in caplog.text
-
-
-# ── tool cards (P4) ──────────────────────────────────────────────────────────
-
-
-def test_a_tool_card_finds_a_third_party_command_by_its_new_name_and_an_unshared_old_one() -> None:
-    """D4: a new turn's card says `a__trend`; a card from before the prefix
-    says `trend` and still finds it."""
-    from workspace_app.tooling.catalog import flat_catalog
-
-    cat = flat_catalog([_pkg("a", "trend", "list-files"), _pkg("b", "list-files")])
-
-    assert cat["a__trend"].description == "a's trend"
-    assert cat["trend"].description == "a's trend"
-    assert cat["a__list-files"].description == "a's list-files"
-    assert cat["b__list-files"].description == "b's list-files"
-
-
-def test_a_tool_card_does_not_guess_which_command_a_shared_old_name_was() -> None:
-    from workspace_app.tooling.catalog import flat_catalog
-
-    cat = flat_catalog([_pkg("a", "list-files"), _pkg("b", "list-files")])
-
-    assert "list-files" not in cat
-
-
-def test_a_first_party_command_keeps_its_card_beside_a_third_party_namesake() -> None:
-    from workspace_app.tooling.catalog import flat_catalog
-
-    cat = flat_catalog([_pkg("rca", "list-files", third_party=False), _pkg("a", "list-files")])
-
-    assert cat["list-files"].description == "rca's list-files"
-    assert cat["a__list-files"].description == "a's list-files"

@@ -1045,9 +1045,10 @@ TRUSTED_KEYS: dict[str, str] = {
 #### 發一張憑證
 
 **第 1 步：決定名字。** 這是**你**取的，會成為 `app.json` 裡 `external_tools` 的 key，也是
-模型看到的名字的前半：作者的 `list-files` 在模型面前叫 `<名字>__list-files`，所以兩支工具都有
-`list-files` 也不會撞。只用英數、`_`、`-`，不要含 `__`，和最長的 command 合起來不超過 64 字——不合的那個
-command 不會給模型，log 有一行 `registry: <名字>:<command> is not offered to the model`。
+模型看到的名字的前半。和作者的 command 叫什麼無關：作者的 `list-files` 在模型面前叫 `<名字>__list-files`，所以兩支工具都有
+`list-files` 也不會撞。只用英數、`_`、`-`，不要含 `__`，`<名字>__<command>` 整串不超過 64 字。名字本身不合規，這支工具的
+每個 command 都不會給模型、頁面也叫不到；只有某個 command 太長，就只少那一個。第一次有 turn 或頁面用到這個 App
+的工具時，log 有一行 `registry: <名字>:<command> is not offered to the model`。
 
 **第 2 步：確認名字沒被用過。** `issue` 會擋，但你可以先看
 [`tool-registry.csv`](https://github.com/HYChou0515/ai-workspace/blob/master/tool-registry.csv)。

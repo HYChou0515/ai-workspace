@@ -259,13 +259,15 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
                 raw_args=args_json,
                 call_id=call_id,
             )
+        # An old name two third-party commands answer to (`ToolAliasModel`):
+        # that call fails in-band and names the commands to call instead.
+        if (reply := ambiguous_call_reply(value)) is not None:
+            return reply
         # Backstop sentinel (set at the model-output boundary when the model's
         # args couldn't be parsed/repaired): RETURN a clean in-band error rather
         # than raise. The conversation already holds the valid sentinel, so this
         # neither poisons the next request nor aborts the turn — the model sees
         # the error as a normal tool result and retries in-band. #76.
-        if (reply := ambiguous_call_reply(value)) is not None:
-            return reply
         raw = malformed_raw(value)
         if raw is not None:
             _LOGGER.info("args_recovery: in-band malformed-args error on %s: %r", tool.name, raw)
@@ -315,7 +317,12 @@ def ambiguous_call_reply(args: dict) -> str | None:
     if not isinstance(detail, dict):
         return None
     called = detail.get("called")
-    candidates = [(str(c[0]), str(c[1])) for c in detail.get("candidates") or [] if len(c) == 2]
+    listed = detail.get("candidates")
+    candidates = [
+        (str(c[0]), str(c[1]))
+        for c in (listed if isinstance(listed, list) else [])
+        if isinstance(c, list) and len(c) == 2
+    ]
     if not isinstance(called, str) or not candidates:
         return None
     from ..tooling.registry import ambiguous_name_message

@@ -1174,3 +1174,18 @@ def test_a_refused_tool_named_by_its_new_name_still_says_why():
 
     assert resp.status_code == 409
     assert "artifact store unreachable" in resp.json()["detail"]
+
+
+def test_a_shared_old_name_the_item_turned_off_is_refused_as_turned_off():
+    """Both tools are offered and both are pinned off on this item: the page
+    is told about the picker, not handed two names it cannot reach either."""
+    loc = _ResolvedLocator(allowed=["a", "b"], ceiling=["a", "b"], prefs={"a": False, "b": False})
+    client, sandbox, _, _ = build(
+        locator=loc, packages=[], external=ExternalTools(packages=(_third("a"), _third("b")))
+    )
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 403, resp.text
+    assert "tool picker" in resp.json()["detail"]
+    assert sandbox.calls == []

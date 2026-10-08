@@ -14,8 +14,11 @@ the source of truth:
 ``discover_packages`` walks that tree and returns ``PackageInfo`` list;
 ``build_function_tools`` expands ``allowed_tools`` (the colon syntax
 ``"pkg"`` / ``"pkg:cmd"``) into one ``FunctionTool`` per selected
-command. Cross-package command-name collisions raise so the deployer
-gets a clear signal at startup, not opaque LLM confusion at runtime.
+command. A first-party command keeps its flat name and a collision
+between two first-party packages raises, so the deployer gets a clear
+signal rather than opaque LLM confusion; a third-party command is named
+``<local name>__<command>`` and cannot collide
+(docs/plan-third-party-tool-names.md).
 
 See `docs/plan-skills-and-tools.md` §B.3.
 """
@@ -277,9 +280,10 @@ def build_function_tools(
     mirrors the legacy ``build_tools`` behaviour and keeps the LLM
     from seeing 500s for a config typo.
 
-    Raises ``ValueError`` if two *different* packages export the same
-    command name within the same selection — the resulting flat name
-    would shadow one tool, so we want the deployer to rename one."""
+    Raises ``ValueError`` if two *different* first-party packages export
+    the same command name within the same selection — the flat name would
+    shadow one tool, so we want the deployer to rename one. Third-party
+    commands carry their local name and never collide."""
     if allowed is None:
         selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
     else:
@@ -324,8 +328,9 @@ def allowed_command_names(
     packages: Sequence[PackageInfo],
     allowed: list[str] | None,
 ) -> list[str]:
-    """Every package command this allow-list grants, by the flat name a caller
-    invokes.
+    """Every package command this allow-list grants, by the name the model is
+    given (`model_tool_name`: flat for first-party, `<local name>__<command>`
+    for third-party).
 
     The model cannot tell one of these from a built-in by looking: `data-fetch`
     and `read_file` are both just names in its toolset. So anything that has to
@@ -352,8 +357,11 @@ def find_allowed_command(
     `allowed=None` "the deploy did not restrict" case, which means everything
     there and has to mean everything here.
 
-    Commands are matched on their FLAT name, which is what a caller sees: a
-    package is a delivery unit, but `data-fetch` is what gets invoked."""
+    Matched first on the name the model is given (`model_tool_name` — flat for
+    a first-party command, `<local name>__<command>` for a third-party one),
+    then on the grant spelling `<local name>:<command>`, then on a third-party
+    command's bare name when only one granted command has it
+    (docs/plan-third-party-tool-names.md N2); a bare name two have raises."""
     every = [p.name for p in packages]
     selected = _callable_by_name(
         _select_commands(packages, allowed if allowed is not None else every)

@@ -1667,10 +1667,11 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   `list-files` 時，整個 turn 的 tool 清單組不起來，那個 App 的聊天每一句都失敗。
 - **舊名照舊能叫**：模型、skill 內文或已部署的 WUI（`tools:` / `callTool`）用 `list-files` 或 `mes:list-files`，
   只要這個 App 授權的工具裡只有一支有它，就照常轉過去。兩支都有時，**那一次呼叫**失敗，訊息是
-  `cross-package tool name collision: command 'list-files' appears in packages ['a', 'b'] — call `a__list-files` or `b__list-files` instead`
-  （頁面拿到 409，同一句）；turn 不失敗。舊聊天紀錄的工具卡片照常顯示。
+  `` cross-package tool name collision: command 'list-files' appears in packages ['a', 'b'] — call `a__list-files` or `b__list-files` instead ``
+  （頁面拿到 409，同一句）；turn 不失敗。第三方工具的卡片照舊是「使用工具」加上呼叫時的名字：新 turn 顯示 `a__list-files`，舊 turn 顯示當時的 `list-files`。
 - **名字不合規的 command 不會給模型**：`<本地名>__<command>` 必須只用英數、`_`、`-`，最多 64 字，且本地名不能含
-  `__`。以前模型只看到 command 名，本地名裡有 `.`、空白或中文也能用；現在那支工具的 command 會被略過，log 有一行
+  `__`。以前模型只看到 command 名，本地名裡有 `.`、空白或中文也能用；現在那支工具的 command 會被略過——模型拿不到，
+  頁面的 `callTool` 也回 403——第一次有 turn 或頁面用到這個 App 的工具時，log 有一行
   `registry: <本地名>:<command> is not offered to the model — …`。不檢查的症狀：模型說它沒有那個工具。
 
 **資料** — 沒有 `Schema` 升版，沒有回填。聊天紀錄存的 `tool_name` 不改寫：舊 turn 是舊名，新 turn 是新名。
@@ -1681,7 +1682,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 - `rollout 前`：檢查每個 App 的本地名都合規（沒有輸出就是都合規；App 不在 repo 裡的部署，把路徑換成你的 `app.json`）：
   `jq -r '.agent.external_tools // {} | keys[] | select((test("^[A-Za-z0-9_-]+$") | not) or contains("__"))' src/workspace_app/apps/*/app.json`。
-  名字和 command 合起來超過 64 字的，這個指令看不出來，看 rollout 後的那行 log。
+  `<本地名>__<command>` 整串超過 64 字的，這個指令看不出來：rollout 後在那個 App 開一次對話，再看 log 有沒有那行。
   有輸出的話，改名要連 `agent.tools` 裡同一個名字一起改，並重發那支工具的憑證（憑證綁的是本地名）。
 - `rollout 後`：在有第三方工具的 App 問 AI「你有哪些工具」，清單裡第三方的是 `<本地名>__<command>`；兩支工具有同名
   command 的 App，聊天不再整句失敗。
