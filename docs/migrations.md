@@ -1658,6 +1658,35 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 「改時間」：時、分是兩個 24 小時制下拉，下面灰字「時區：…（你的時區）」，沒有時區選單。
 - 沒部署到這一版的症狀：表格裡出現 `UTC` / `Asia/Taipei`，「上一次」沒有「手動」。
 
+### 2026-10-08 · #888 兩支第三方工具有同名 command 也都能用：模型看到 `<本地名>__<command>` {#pr-888}
+
+**設定** — 沒有新 key，`app.json` 不用改。**行為改變，沒有開關**（`docs/plan-third-party-tool-names.md`）：
+
+- **第三方工具的 command 在模型與頁面面前改名為 `<本地名>__<command>`**（本地名是 `agent.external_tools`
+  的 key），例如 `mes__lot-status`。第一方工具（vendor 進 repo 的）名字不變。為什麼：兩支第三方工具都有
+  `list-files` 時，整個 turn 的 tool 清單組不起來，那個 App 的聊天每一句都失敗。
+- **舊名照舊能叫**：模型、skill 內文或已部署的 WUI（`tools:` / `callTool`）用 `list-files` 或 `mes:list-files`，
+  只要這個 App 授權的工具裡只有一支有它，就照常轉過去。兩支都有時，**那一次呼叫**失敗，訊息是
+  `cross-package tool name collision: command 'list-files' appears in packages ['a', 'b'] — call `a__list-files` or `b__list-files` instead`
+  （頁面拿到 409，同一句）；turn 不失敗。舊聊天紀錄的工具卡片照常顯示。
+- **名字不合規的 command 不會給模型**：`<本地名>__<command>` 必須只用英數、`_`、`-`，最多 64 字，且本地名不能含
+  `__`。以前模型只看到 command 名，本地名裡有 `.`、空白或中文也能用；現在那支工具的 command 會被略過，log 有一行
+  `registry: <本地名>:<command> is not offered to the model — …`。不檢查的症狀：模型說它沒有那個工具。
+
+**資料** — 沒有 `Schema` 升版，沒有回填。聊天紀錄存的 `tool_name` 不改寫：舊 turn 是舊名，新 turn 是新名。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
+
+**確認做完**
+
+- `rollout 前`：檢查每個 App 的本地名都合規（沒有輸出就是都合規；App 不在 repo 裡的部署，把路徑換成你的 `app.json`）：
+  `jq -r '.agent.external_tools // {} | keys[] | select((test("^[A-Za-z0-9_-]+$") | not) or contains("__"))' src/workspace_app/apps/*/app.json`。
+  名字和 command 合起來超過 64 字的，這個指令看不出來，看 rollout 後的那行 log。
+  有輸出的話，改名要連 `agent.tools` 裡同一個名字一起改，並重發那支工具的憑證（憑證綁的是本地名）。
+- `rollout 後`：在有第三方工具的 App 問 AI「你有哪些工具」，清單裡第三方的是 `<本地名>__<command>`；兩支工具有同名
+  command 的 App，聊天不再整句失敗。
+- 沒部署到這一版的症狀：兩支第三方工具同名時，那個 App 每一句都回 `cross-package tool name collision`。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

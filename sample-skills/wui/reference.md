@@ -124,16 +124,23 @@ appended to the end of `SKILL.md` when you read it, under "Tools this app offers
 its WUIs". Your own toolset is not the answer: most of what you hold are
 built-ins, which a page can never call.
 
+**Copy each name exactly as that list spells it.** A tool brought in from
+outside this platform is listed as `<its name>__<command>` — `mes__lot-status`
+is the `lot-status` command of the tool this app calls `mes`. Two such tools
+may both have a `lot-status`, and the prefix is what tells them apart. A bare
+`lot-status` still reaches the command while only one tool in this app has it;
+once two do, the call fails with a sentence naming both full names.
+
 Declare each tool in the view file, or the call is refused:
 
 ```yaml
 view: wui
 title: Lot tracker
-tools: [lot-status]
+tools: [mes__lot-status]
 ```
 
 ```js
-const res = await workspace.callTool("lot-status", { lot: "A1" });
+const res = await workspace.callTool("mes__lot-status", { lot: "A1" });
 if (res.exit_code !== 0) show(res.output);   // the tool ran and failed
 let data;
 try {
@@ -246,7 +253,7 @@ and keeps the shared one first — the default, which whoever manages the item's
 settings can change per name.
 
 ```js
-const r = await workspace.callTool("lot-status", { lot: id });
+const r = await workspace.callTool("mes__lot-status", { lot: id });
 if (r.exit_code !== 0 && /401|unauthori[sz]ed/i.test(r.output)) {
   await workspace.openLogin();
   show("Sign in, then press Check again.");
