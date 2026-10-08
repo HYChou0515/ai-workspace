@@ -1671,9 +1671,10 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 **資料** — 沒有 `Schema` 升版，沒有回填，沒有要跑的指令。
 
-- **rollout 期間（`rollout 中`）舊 pod 不認得 `cron`**：舊 pod 的 sweep 把 cron 列當成「每天 00:00、列的時區」
-  來跑（舊的讀法忽略不認得的欄位，`every` 沒寫就是 daily、`at` 沒寫就是 00:00；`tz` 沒寫就是 UTC）。新 pod 上的 AI
-  一寫出 cron 列，舊 pod 就可能在那個時區的午夜多跑一次。為什麼：舊版本無法修改。所以 **rollout 要一次換完、不要留舊 pod 長跑**；同理，**有了 cron 列之後不要回滾**到
+- **`rollout 前` 決定：這一版要一次換完，不要讓新舊 pod 並存跑很久。** 為什麼：舊 pod 不認得 `cron`——舊的檢查
+  不看不認得的欄位，照樣放行；舊的讀法把 `every` 沒寫讀成 daily、`at` 沒寫讀成 00:00（`tz` 沒寫就是 UTC）——所以
+  舊 pod 的 sweep 把 cron 列當成「每天 00:00、列的時區」來跑。新 pod 上的 AI 一寫出 cron 列，還在跑的舊 pod 就可能
+  在那個時區的午夜多跑一次。同理，**有了 cron 列之後不要回滾**到
   這一版之前——回滾後所有 cron 列都會變成每天在列的時區 00:00 跑一次。漏看的症狀：cron 排程在午夜多出一次執行
   （`tz` 沒寫的是 UTC 午夜，台灣早上 8 點）。
 - `wui` skill 的 `reference.md` 改了（schedules 表格多一列 `cron`、範例多一列 cron、拿掉「平日要寫五列」）。

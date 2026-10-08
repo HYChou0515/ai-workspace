@@ -220,6 +220,18 @@ describe("ScheduleTimeModal — 簡單 / cron (docs/plan-schedule-cron.md decisi
     expect(screen.getByText(word("schedules.edit.cronSkipsMonths"))).toBeInTheDocument();
   });
 
+  it("asks once before throwing an edited cron away", async () => {
+    const { onClose } = open(WEEKDAYS);
+    fireEvent.change(cronBox(), { target: { value: "0 9 * * 1-6" } });
+    fireEvent.click(screen.getByRole("button", { name: word("schedules.cancel") }));
+
+    const ask = await screen.findByRole("dialog", { name: word("dirtyClose.prompt") });
+    fireEvent.click(within(ask).getByRole("button", { name: word("dirtyClose.keep") }));
+    await waitFor(() => expect(screen.queryByText(word("dirtyClose.prompt"))).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(cronBox()).toHaveValue("0 9 * * 1-6");
+  });
+
   it("switching away and back with nothing changed is not a change — and keeps the cron as typed", () => {
     const { onClose } = open(WEEKDAYS);
     fireEvent.click(mode(word("schedules.edit.mode.simple")));
