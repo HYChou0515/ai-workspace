@@ -1448,6 +1448,7 @@ function PersonalRow({
 export function Logins({
   offered,
   initialDialog = null,
+  onCancel,
   disabled = false,
   creds,
   setCreds,
@@ -1457,6 +1458,9 @@ export function Logins({
   offered: EnvProvider[];
   /** Open on this login's form — the card's login page (`EnvLoginModal`). */
   initialDialog?: string | null;
+  /** Where the form's Cancel goes when it is the whole page (`EnvLoginModal`):
+   * there, collapsing the form would leave a page with nothing to do. */
+  onCancel?: () => void;
   disabled?: boolean;
   creds: Record<string, string>;
   setCreds: (next: Record<string, string>) => void;
@@ -1565,6 +1569,10 @@ export function Logins({
               data-size="sm"
               data-testid="env-cred-cancel"
               onClick={() => {
+                if (onCancel) {
+                  onCancel();
+                  return;
+                }
                 setDialog(null);
                 setCreds({});
                 setCredError(null);

@@ -16,6 +16,7 @@ import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
+import { isBlank } from "../lib/envLayers";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Logins } from "./EnvVarsModal";
@@ -81,8 +82,10 @@ export function EnvLoginModal({
           creds={creds}
           setCreds={setCreds}
           exchange={(id, values) => client.resolveEnvProvider(slug, itemId, id, values)}
+          onCancel={attemptClose}
           onFilled={(env) => {
-            setFilled(env);
+            // A blank is not a value (plan N5): not listed as obtained, not stored.
+            setFilled(Object.fromEntries(Object.entries(env).filter(([, v]) => !isBlank(v))));
             setCreds({});
           }}
         />

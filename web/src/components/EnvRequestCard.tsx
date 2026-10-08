@@ -98,6 +98,8 @@ export function EnvRequestCard({
                 data-size="sm"
                 data-variant="primary"
                 onClick={() => {
+                  // `r.login` was read off this same list, so the provider is
+                  // always found; the panel is the fallback only by type.
                   const login = r.login && providers.data?.find((p) => p.id === r.login?.id);
                   if (login) setSigningIn(login);
                   else env.open({ name: r.name });

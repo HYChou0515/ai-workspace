@@ -5,7 +5,7 @@
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EnvProvider } from "../api/types";
@@ -19,19 +19,29 @@ const erp: EnvProvider = {
   inputs: [{ name: "password", label: "密碼", secret: true }],
 };
 
-function open() {
+function open({
+  got = { ERP_TOKEN: "tok" } as Record<string, string>,
+  stored = {} as Record<string, string>,
+} = {}) {
   const onClose = vi.fn();
+  const put = vi.fn(async () => {});
   renderWithQuery(
     <EnvLoginModal
       slug="rca"
       itemId="i1"
       provider={erp}
       onClose={onClose}
-      client={{ resolveEnvProvider: vi.fn() }}
-      privateClient={{ get: vi.fn(), put: vi.fn() }}
+      client={{ resolveEnvProvider: vi.fn(async () => got) }}
+      privateClient={{ get: vi.fn(async () => ({ values: stored, auto: {} })), put }}
     />,
   );
-  return onClose;
+  return Object.assign(onClose, { put });
+}
+
+async function signIn() {
+  fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "pw" } });
+  fireEvent.click(screen.getByTestId("env-cred-submit"));
+  await screen.findByTestId("env-login-save");
 }
 
 afterEach(cleanup);
@@ -53,5 +63,35 @@ describe("EnvLoginModal", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
     expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
+  });
+
+  it("asks before dropping a token it signed in for but has not saved", async () => {
+    const onClose = open();
+    await signIn();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
+  });
+
+  it("closes from the form's own Cancel — a login page is not left half-empty", async () => {
+    const onClose = open();
+
+    fireEvent.click(screen.getByTestId("env-cred-cancel"));
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("saves onto what is stored now, and leaves out a blank the login returned (N5)", async () => {
+    // The store holds a value the card's cache never saw: the save must read
+    // it fresh, or the PUT — which replaces the layer — would drop it.
+    const onClose = open({ got: { ERP_TOKEN: "tok", ERP_SITE: "" }, stored: { NEW: "n" } });
+    await signIn();
+
+    fireEvent.click(screen.getByTestId("env-login-save"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onClose.put).toHaveBeenCalledWith("rca", "i1", { NEW: "n", ERP_TOKEN: "tok" });
   });
 });
