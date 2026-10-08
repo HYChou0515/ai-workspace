@@ -9,8 +9,13 @@
  * attention first, as the viewer chooses (remembered per browser) — and
  * offers the four acts on a row: open it, run it now, move its time, remove it.
  *
+ * Every time is on the VIEWER's clock with no zone label, and things are called
+ * by the names people gave them — a workflow's title, a page's title
+ * (`docs/plan-schedule-overview-polish.md`).
+ *
  * "Last run" opens the schedule's own conversation — every run of one schedule
- * writes there — through the item's `?chat=` deep link.
+ * writes there — through the item's `?chat=` deep link; `from=schedules` tells
+ * that page the reader came from here.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -19,6 +24,7 @@ import { Link } from "react-router-dom";
 import { qk } from "../api/queryKeys";
 import {
   type OverviewRow,
+  type ScheduleOverview,
   ScheduleActionError,
   type SchedulesApi,
   mayRunNow,
@@ -33,12 +39,28 @@ import { useApps } from "../hooks/useResources";
 import { describeSchedule } from "../lib/describeSchedule";
 import { type MsgKey, useT } from "../lib/i18n";
 import { type ScheduleSort, useScheduleOverviewPrefs } from "../lib/scheduleOverviewPrefs";
+import { fullTime, whenText } from "../lib/scheduleTime";
+import { type ViewerClock, useViewerClock } from "../lib/viewerClock";
 
 /** The last-run states that need somebody: it failed, it was stopped, or it is
  * waiting for a review — the "needs attention" sort puts these first. */
 const ATTENTION = new Set(["error", "cancelled", "awaiting_human"]);
 
+/** A run that has not finished yet — while one is on the page, it refreshes
+ * often enough to see it finish. */
+const IN_FLIGHT = new Set(["pending", "running"]);
+
 const ITEM_SCHEDULES = "/.workflows/schedules.json";
+
+/** How long until the page asks again: every few seconds while a run on it is
+ * going (so "執行中" turns into how it went without a reload), every minute
+ * otherwise (a schedule that fired, a time somebody else moved). */
+export function refreshEvery(data: ScheduleOverview | undefined): number {
+  const going = data?.rows.some((r) => IN_FLIGHT.has(r.last_run?.status ?? ""));
+  return going ? 5000 : 60000;
+}
+
+const needsAttention = (r: OverviewRow) => ATTENTION.has(r.last_run?.status ?? "");
 
 /** The rows in the chosen order. "next": what runs soonest first (rows in
  * different zones compared as one instant, `next_ms`), the rows that will not
@@ -52,12 +74,24 @@ export function orderRows(rows: OverviewRow[], sort: ScheduleSort): OverviewRow[
   };
   if (sort === "next") return [...rows].sort(byNext);
   const when = (r: OverviewRow) => r.last_run?.ended ?? r.last_run?.started ?? 0;
-  const needs = (r: OverviewRow) => ATTENTION.has(r.last_run?.status ?? "");
   return [...rows].sort((a, b) => {
-    if (needs(a) !== needs(b)) return needs(a) ? -1 : 1;
-    if (needs(a)) return when(b) - when(a);
+    if (needsAttention(a) !== needsAttention(b)) return needsAttention(a) ? -1 : 1;
+    if (needsAttention(a)) return when(b) - when(a);
     return byNext(a, b);
   });
+}
+
+/** The folder a page's schedules file sits in; "" for the item's own. */
+const folderOf = (row: Pick<OverviewRow, "path">) =>
+  row.path === ITEM_SCHEDULES ? "" : row.path.slice(0, row.path.lastIndexOf("/"));
+
+/** Where a schedule lives, in words: the item, and the page when it is a
+ * page's — by the page's title, its folder only when it has none. */
+export function placeOf(row: OverviewRow, t: ReturnType<typeof useT>): string {
+  const item = row.item_title || row.item_id;
+  const folder = folderOf(row);
+  if (!folder) return item;
+  return `${item} · ${t("scheduleOverview.page", { page: row.page_title || folder })}`;
 }
 
 export function SchedulesOverviewPage({ client = schedulesApi }: { client?: SchedulesApi }) {
@@ -69,6 +103,7 @@ export function SchedulesOverviewPage({ client = schedulesApi }: { client?: Sche
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: qk.schedulesOverview,
     queryFn: () => client.overview(),
+    refetchInterval: (query) => refreshEvery(query.state.data),
   });
 
   if (isError) {
@@ -111,6 +146,9 @@ export function SchedulesOverviewPage({ client = schedulesApi }: { client?: Sche
     else groups.set(key, [row]);
   }
   const brokenFiles = data.files.filter((f) => !appPick || f.slug === appPick);
+  // "Needs attention first" with nothing that needs it changes nothing on
+  // screen; say so, or the control looks dead.
+  const calm = prefs.sort === "trouble" && shown.length > 0 && !shown.some(needsAttention);
 
   return (
     <div className="page page--wide">
@@ -169,6 +207,11 @@ export function SchedulesOverviewPage({ client = schedulesApi }: { client?: Sche
               </select>
             </label>
           </div>
+          {calm ? (
+            <p className="hint" role="status">
+              {t("scheduleOverview.sort.calm")}
+            </p>
+          ) : null}
           {brokenFiles.map((f) => (
             <p key={`${f.item_id}${f.path}`} className="detail schedule-file-problem" role="alert">
               <Link to={`/a/${encodeURIComponent(f.slug)}/${encodeURIComponent(f.item_id)}`}>
@@ -180,28 +223,25 @@ export function SchedulesOverviewPage({ client = schedulesApi }: { client?: Sche
           {shown.length === 0 && brokenFiles.length === 0 ? (
             <p className="empty">{t("scheduleOverview.nomatch")}</p>
           ) : null}
-          {[...groups].map(([slug, rows]) =>
-            // Grouped: a region per App, named by its heading — the App's own
-            // name, as on the WUI overview — so a group can be landed on.
-            slug ? (
-              <section key={slug} aria-labelledby={`schedules-app-${slug}`}>
-                <h2 id={`schedules-app-${slug}`}>
-                  <AppTag slug={slug} />
-                </h2>
-                <ScheduleTable rows={rows} client={client} />
-              </section>
-            ) : (
-              <ScheduleTable key="all" rows={rows} client={client} />
-            ),
-          )}
+          {shown.length > 0 ? <ScheduleTable groups={groups} client={client} /> : null}
         </>
       )}
     </div>
   );
 }
 
-function ScheduleTable({ rows, client }: { rows: OverviewRow[]; client: SchedulesApi }) {
+/** ONE table, grouped or not: a group is a heading row inside it, so the
+ * columns line up from the first group to the last (a table per group sized
+ * each one's columns to its own content). */
+function ScheduleTable({
+  groups,
+  client,
+}: {
+  groups: Map<string, OverviewRow[]>;
+  client: SchedulesApi;
+}) {
   const t = useT();
+  const clock = useViewerClock();
   return (
     <div className="schedule-scroll">
       <table className="schedule-table">
@@ -215,15 +255,25 @@ function ScheduleTable({ rows, client }: { rows: OverviewRow[]; client: Schedule
             <th scope="col">{t("scheduleOverview.col.actions")}</th>
           </tr>
         </thead>
-        <tbody>
-          {rows.map((row) => (
-            <ScheduleRowView
-              key={`${row.item_id}${row.path}#${row.index}`}
-              row={row}
-              client={client}
-            />
-          ))}
-        </tbody>
+        {[...groups].map(([slug, rows]) => (
+          <tbody key={slug || "all"}>
+            {slug ? (
+              <tr className="schedule-group">
+                <th scope="colgroup" colSpan={6}>
+                  <AppTag slug={slug} />
+                </th>
+              </tr>
+            ) : null}
+            {rows.map((row) => (
+              <ScheduleRowView
+                key={`${row.item_id}${row.path}#${row.index}`}
+                row={row}
+                client={client}
+                clock={clock}
+              />
+            ))}
+          </tbody>
+        ))}
       </table>
     </div>
   );
@@ -231,12 +281,26 @@ function ScheduleTable({ rows, client }: { rows: OverviewRow[]; client: Schedule
 
 /** One row and its actions — per row, so one row's pending press does not
  * hold every other row's buttons (the WUI overview's `useRemove` pattern). */
-function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesApi }) {
+function ScheduleRowView({
+  row,
+  client,
+  clock,
+}: {
+  row: OverviewRow;
+  client: SchedulesApi;
+  clock: ViewerClock;
+}) {
   const t = useT();
   const qc = useQueryClient();
   const dialog = useDialog();
   const [editing, setEditing] = useState(false);
-  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  // After Run now: the run the row showed as its last when it was pressed.
+  // The note stays until the row shows any other run — that one is the press's
+  // (or a fire that overtook it), and the last-run cell then says everything
+  // the note would. Not "until it shows the run id the press got back": a
+  // reply without one, or an overtaking fire, left the note up for good.
+  const [started, setStarted] = useState<{ before: string | null } | null>(null);
   // A row the sweep refuses has no identity; Remove finds it by its value.
   const ref = {
     path: row.path,
@@ -254,13 +318,12 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
       // Run now may have just made the schedule's own chat.
       qc.invalidateQueries({ queryKey: qk.itemChats(row.slug, row.item_id) }),
     ]);
-  const fail = (e: unknown) =>
-    setSaid({ ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });
+  const fail = (e: unknown) => setFailed(e instanceof ScheduleActionError ? e.message : String(e));
 
   const runNow = useMutation({
-    mutationFn: () => client.runNow(row.slug, row.item_id, ref),
-    onSuccess: () => {
-      setSaid({ ok: true, text: t("schedules.started") });
+    mutationFn: (_before: string | null) => client.runNow(row.slug, row.item_id, ref),
+    onSuccess: (_runId, before) => {
+      setStarted({ before });
       return refresh();
     },
     onError: fail,
@@ -270,54 +333,70 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
     onSuccess: refresh,
     onError: fail,
   });
-  const what = `${describeSchedule(row.raw, t)} → ${row.run || "?"}`;
+  const period = describeSchedule(row, clock, t);
+  const workflow = row.run_title || row.run || "?";
   const askRemove = async () => {
     const choice = await dialog.confirm({
       title: t("schedules.removeTitle"),
-      body: t("schedules.removeConfirm", { what }),
+      body: t("scheduleOverview.removeConfirm", {
+        place: placeOf(row, t),
+        period: period.text,
+        workflow,
+      }),
+      // The safe answer first: the destructive one is never what a stray
+      // Enter or the first focus lands on.
       actions: [
-        { id: "remove", label: t("schedules.remove"), variant: "danger" },
         { id: "cancel", label: t("schedules.cancel") },
+        { id: "remove", label: t("schedules.remove"), variant: "danger" },
       ],
     });
     if (choice === "remove") remove.mutate();
   };
 
   const itemHref = `/a/${encodeURIComponent(row.slug)}/${encodeURIComponent(row.item_id)}`;
-  const folder = row.path === ITEM_SCHEDULES ? "" : row.path.slice(0, row.path.lastIndexOf("/"));
+  const chatHref = `${itemHref}?chat=${encodeURIComponent(row.trigger_id)}&from=schedules`;
+  const folder = folderOf(row);
   // A row the sweep refuses has no identity: it has no time to move and
   // nothing that would run, so only Remove (by its value) applies.
   const identified = row.trigger_id !== "";
   const mayRun = mayRunNow(row, row.can_run);
+  const last = row.last_run;
+  const lastAt = last ? (last.ended ?? last.started) : null;
+  const showStarted = started !== null && (last?.run_id ?? null) === started.before;
 
   return (
     <tr data-testid={`schedule-${row.item_id}${row.path}#${row.index}`}>
       <td>
         <Link to={itemHref}>{row.item_title || row.item_id}</Link>
-        {folder ? (
-          <div className="detail">
-            {row.page_path ? (
+        <div className="detail">
+          {folder ? (
+            row.page_path ? (
               <a href={wuiAddress(row.slug, row.item_id, row.page_path)} target="_blank" rel="noreferrer">
-                {t("scheduleOverview.page", { folder })}
+                {t("scheduleOverview.page", { page: row.page_title || folder })}
               </a>
             ) : (
-              t("scheduleOverview.page", { folder })
-            )}
-          </div>
-        ) : null}
+              t("scheduleOverview.page", { page: row.page_title || folder })
+            )
+          ) : (
+            t("scheduleOverview.itemOwn")
+          )}
+        </div>
       </td>
-      <td>{row.run || "—"}</td>
-      <td className="schedule-when">{describeSchedule(row.raw, t)}</td>
+      <td title={row.run_title && row.run !== row.run_title ? row.run : undefined}>{row.run_title || row.run || "—"}</td>
+      <td className="schedule-when" title={period.set || undefined}>
+        {period.text}
+      </td>
       <td className={row.runnable ? "schedule-next" : "schedule-next schedule-problem"}>
-        <NextCell row={row} />
+        <NextCell row={row} clock={clock} />
       </td>
       <td className="schedule-last">
-        {row.last_run ? (
-          <Link to={`${itemHref}?chat=${encodeURIComponent(row.trigger_id)}`}>
-            <span className="schedule-status" data-status={row.last_run.status}>
-              {t(`scheduleOverview.status.${row.last_run.status}` as MsgKey)}
-            </span>{" "}
-            {timeOf(row.last_run.ended ?? row.last_run.started, row.tz)}
+        {last ? (
+          <Link to={chatHref} title={lastAt ? fullTime(lastAt, clock.viewer, t) : undefined}>
+            <span className="schedule-status" data-status={last.status}>
+              {t(`scheduleOverview.status.${last.status}` as MsgKey)}
+            </span>
+            {last.by_hand ? <span className="schedule-tag">{t("scheduleOverview.byHand")}</span> : null}{" "}
+            {lastAt ? whenText(lastAt, clock.now, clock.viewer, t, "past") : null}
           </Link>
         ) : (
           t("scheduleOverview.never")
@@ -333,8 +412,8 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
               data-size="sm"
               disabled={runNow.isPending}
               onClick={() => {
-                setSaid(null);
-                runNow.mutate();
+                setFailed(null);
+                runNow.mutate(row.last_run?.run_id ?? null);
               }}
             >
               {t("schedules.runNow")}
@@ -347,7 +426,7 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
               data-variant="secondary"
               data-size="sm"
               onClick={() => {
-                setSaid(null);
+                setFailed(null);
                 setEditing(true);
               }}
             >
@@ -355,32 +434,36 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
             </button>
           ) : null}
           {row.can_edit ? (
-            <>
-              <button
-                type="button"
-                className="btn"
-                data-variant="secondary"
-                data-size="sm"
-                disabled={remove.isPending}
-                aria-label={`${t("schedules.remove")} ${what}`}
-                onClick={() => {
-                  setSaid(null);
-                  void askRemove();
-                }}
-              >
-                {t("schedules.remove")}
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn"
+              data-variant="danger"
+              data-size="sm"
+              disabled={remove.isPending}
+              aria-label={`${t("schedules.remove")} ${placeOf(row, t)} · ${period.text} → ${workflow}`}
+              onClick={() => {
+                setFailed(null);
+                void askRemove();
+              }}
+            >
+              {t("schedules.remove")}
+            </button>
           ) : null}
         </div>
-        {said ? (
-          <div className={said.ok ? "detail" : "detail schedule-problem"} role={said.ok ? "status" : "alert"}>
-            {said.text}
+        {showStarted ? (
+          <div className="detail" role="status">
+            {t("schedules.started")} · <Link to={chatHref}>{t("scheduleOverview.seeRun")}</Link>
+          </div>
+        ) : null}
+        {failed ? (
+          <div className="detail schedule-problem" role="alert">
+            {failed}
           </div>
         ) : null}
         {editing ? (
           <ScheduleTimeModal
             raw={row.raw}
+            nextMs={row.next_ms}
             rowRef={ref}
             onSave={(r, time) => client.editTime(row.slug, row.item_id, r, time)}
             onSaved={() => {
@@ -397,39 +480,12 @@ function ScheduleRowView({ row, client }: { row: OverviewRow; client: SchedulesA
 
 /** When it runs next, or why it will not — the same reasons the item's panel
  * gives. */
-function NextCell({ row }: { row: OverviewRow }) {
+function NextCell({ row, clock }: { row: OverviewRow; clock: ViewerClock }) {
   const t = useT();
   if (row.problems.length > 0) return <>{`${t("schedules.invalidRow")} ${row.problems.join(" ")}`}</>;
   if (!row.known) return <>{t("schedules.unknownWorkflow")}</>;
   if (row.run_problem) return <>{`${t("schedules.brokenWorkflow")} ${row.run_problem}`}</>;
-  if (!row.runnable) return <>—</>;
+  if (!row.runnable || row.next_ms === null) return <>—</>;
   if (row.due_now) return <>{t("scheduleOverview.nextSweep")}</>;
-  return <>{`${row.next_at} ${row.tz}`}</>;
+  return <span title={fullTime(row.next_ms, clock.viewer, t)}>{whenText(row.next_ms, clock.now, clock.viewer, t, "future")}</span>;
 }
-
-/** An instant as `YYYY-MM-DD HH:MM <zone>` in the SCHEDULE's zone — the shape
- * and zone of its next run beside it, so the two read as one clock. Built from
- * parts, not a locale's format, so it reads the same on every machine. A zone
- * the browser cannot resolve reads as UTC, the server's own fallback. */
-export function timeOf(ms: number | null, tz: string): string {
-  if (!ms) return "";
-  let zone = tz || "UTC";
-  let fmt: Intl.DateTimeFormat;
-  try {
-    fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, ...PARTS });
-  } catch {
-    zone = "UTC";
-    fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, ...PARTS });
-  }
-  const p = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
-  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${zone}`;
-}
-
-const PARTS: Intl.DateTimeFormatOptions = {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-};

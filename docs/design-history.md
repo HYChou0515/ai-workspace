@@ -31,6 +31,7 @@
 | [plan-subagent-model-choice.md](plan-subagent-model-choice.md) | `run_agent` 的呼叫方替子 agent 選模型 |
 | [plan-verify-number.md](plan-verify-number.md) | `verify-number` skill：交出可以查核的數字 |
 | [plan-third-party-tools.md](plan-third-party-tools.md) | 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上 |
+| [plan-third-party-tool-names.md](plan-third-party-tool-names.md) | 第三方工具同名 command:模型看到 `<本地名>__<command>`,舊的扁平名不撞名時當別名 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
 | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
@@ -81,6 +82,7 @@
 | [plan-cache-required.md](plan-cache-required.md) | DSL 每一步都必須有 `cache`；解析不了的 workflow 到處都說清楚 |
 | [plan-item-schedules.md](plan-item-schedules.md) | item 層級的排程：讓 AI 把自己做的 workflow 放上時鐘 |
 | [plan-schedule-overview.md](plan-schedule-overview.md) | 排程總表：跨 item 列出看得到的排程，上次／下次、改時間、現在執行；新排程不補跑 |
+| [plan-schedule-overview-polish.md](plan-schedule-overview-polish.md) | 排程總表整修：時間換成看的人的時區與相對說法、名稱用標題、手動執行標記、排程對話的橫幅 |
 
 ## Sandbox 與基礎設施
 

@@ -17,6 +17,7 @@ import type { FileService } from "../api/fileService";
 import { workflowTemplatesApi } from "../api/workflowTemplates";
 import type { ItemSchedules } from "../api/schedules";
 import { renderWithQuery } from "../test/queryWrapper";
+import { ViewerClockPin } from "../lib/viewerClock";
 import { DialogProvider } from "./Dialog";
 import { ScheduleActionError } from "../api/schedules";
 import { WorkflowsModal } from "./WorkflowsModal";
@@ -73,7 +74,14 @@ const NIGHTLY = {
   runnable: true,
   payload: {},
   trigger_id: "wui:it:nightly",
+  next_ms: Date.UTC(2026, 8, 16, 1, 0),
+  run_title: "Nightly report",
 };
+
+// The viewer reads in Taipei, on 2026-09-15 at 10:00 — pinned, because the
+// machine a test runs on has a zone of its own.
+const VIEWER = "Asia/Taipei";
+const NOW = Date.UTC(2026, 8, 15, 2, 0);
 
 function schedules(over: Partial<ItemSchedules> = {}): ItemSchedules {
   return {
@@ -105,9 +113,11 @@ function fakeService() {
 
 function render(svc: FileService) {
   return renderWithQuery(
-    <DialogProvider>
-      <WorkflowsModal slug="playground" itemId="inv1" fileService={svc} onClose={() => {}} />
-    </DialogProvider>,
+    <ViewerClockPin viewer={VIEWER} now={NOW}>
+      <DialogProvider>
+        <WorkflowsModal slug="playground" itemId="inv1" fileService={svc} onClose={() => {}} />
+      </DialogProvider>
+    </ViewerClockPin>,
   );
 }
 
@@ -120,8 +130,9 @@ describe("WorkflowsModal — schedules", () => {
     const row = await screen.findByTestId("schedule-row-0");
     expect(row).toHaveTextContent("Nightly report"); // the workflow's title, not its id
     expect(row).toHaveTextContent("每天 09:00"); // zh-TW is the test locale
-    expect(row).toHaveTextContent("Asia/Taipei");
-    expect(row).toHaveTextContent("2026-09-16 09:00");
+    // On the viewer's clock, said the way a person says it — no zone id.
+    expect(row).toHaveTextContent("下次：明天 09:00");
+    expect(row).not.toHaveTextContent("Asia/Taipei");
   });
 
   it("says nothing when the item has no schedules", async () => {
@@ -193,7 +204,8 @@ describe("WorkflowsModal — schedules", () => {
     render(fakeService().svc);
 
     const row = await screen.findByTestId("schedule-row-0");
-    expect(row).toHaveTextContent("每天 09:00");
+    // No `tz` is UTC, the zone the sweep fires it by: 17:00 in Taipei.
+    expect(row).toHaveTextContent("每天 17:00");
     expect(row).not.toHaveTextContent("?");
   });
 
@@ -233,8 +245,8 @@ describe("WorkflowsModal — schedules", () => {
     );
     render(fakeService().svc);
 
-    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
-    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
+    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 08:00 →/);
+    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 08:00 →/);
     expect(screen.getByTestId("schedule-row-1")).not.toHaveTextContent("false");
   });
 
@@ -281,7 +293,7 @@ describe("WorkflowsModal — schedules", () => {
     render(fakeService().svc);
 
     const row = await screen.findByTestId("schedule-row-0");
-    expect(row).toHaveTextContent("每天 09:00");
+    expect(row).toHaveTextContent("每天 17:00");
     expect(row).not.toHaveTextContent("null");
   });
 
@@ -351,8 +363,8 @@ describe("WorkflowsModal — schedules", () => {
     );
     render(fakeService().svc);
 
-    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
-    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 00:00 \(UTC\)/);
+    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(/^每天 08:00 →/);
+    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(/^每天 08:00 →/);
   });
 
   it("says when the workflow a row names will not parse — the row is fine, the workflow is not", async () => {
@@ -388,7 +400,11 @@ describe("WorkflowsModal — schedules", () => {
     removeMock.mockResolvedValue(undefined);
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    const button = await screen.findByTestId("schedule-remove-0");
+    // The destructive act looks like one (the overview's Remove does too).
+    // (happy-dom drops `var()` from computed style, so read the attribute.)
+    expect(button.getAttribute("style")).toContain("color: var(--err)");
+    fireEvent.click(button);
     fireEvent.click(await screen.findByRole("button", { name: "移除" }));
 
     await waitFor(() =>
@@ -513,7 +529,8 @@ describe("WorkflowsModal — schedules", () => {
 
     fireEvent.click(await screen.findByTestId("schedule-edit-0"));
     const modal = await screen.findByTestId("schedule-time-modal");
-    fireEvent.change(within(modal).getByLabelText("時間"), { target: { value: "07:15" } });
+    fireEvent.change(within(modal).getByLabelText("時"), { target: { value: "07" } });
+    fireEvent.change(within(modal).getByLabelText("分"), { target: { value: "15" } });
     fireEvent.click(within(modal).getByTestId("schedule-time-save"));
 
     await waitFor(() => expect(screen.queryByTestId("schedule-time-modal")).toBeNull());

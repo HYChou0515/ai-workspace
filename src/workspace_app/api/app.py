@@ -250,8 +250,10 @@ async def start_page_schedule(
     key: str,
     env_user: str = "",
     env_digest: str | None = None,
+    by_hand: bool = False,
 ) -> str | None:
-    """Launch one page-declared schedule.
+    """Launch one page-declared schedule — by its time, or by "run now"
+    (``by_hand``, recorded on the run so the overview can tell the two apart).
 
     Module level, and taking its two collaborators as arguments, so a test can
     DRIVE it. The guards this replaced were source-text checks on this file:
@@ -305,6 +307,7 @@ async def start_page_schedule(
             workflow_id=workflow_id,
             chat_id=chat_id,
             payload=payload,
+            by_hand=by_hand,
         )
     except Exception:
         # Take the chat down with the run that never started, so a schedule

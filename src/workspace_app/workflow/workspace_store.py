@@ -83,11 +83,18 @@ def workflow_problem(raw: bytes | str) -> str | None:
     listing, the schedules route, the sweep, `save_schedules` and the two Run
     entrances, so a file that fails it is named with the same sentence at
     every door instead of vanishing at some."""
+    parsed = parse_workflow(raw)
+    return parsed if isinstance(parsed, str) else None
+
+
+def parse_workflow(raw: bytes | str) -> WorkflowDef | str:
+    """The file parsed, or why it will not run — `workflow_problem`'s test with
+    the parse kept, for a reader that wants what the file says (its title) from
+    the same single read."""
     try:
-        parse_def(raw)
+        return parse_def(raw)
     except DslError as exc:
         return str(exc)
-    return None
 
 
 def workflow_bytes_digest(raw: bytes) -> str:
