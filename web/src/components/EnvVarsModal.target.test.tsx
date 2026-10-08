@@ -82,6 +82,9 @@ describe("EnvVarsModal opened at a target", () => {
     openAt({ name: "ERP_TOKEN", login: "erp" });
 
     expect(await screen.findByTestId("env-cred-dialog")).toBeInTheDocument();
+    // In it, at its first field — as "set" puts the person at theirs.
+    const first = screen.getByTestId("env-cred-dialog").querySelector("input");
+    await waitFor(() => expect(first).toHaveFocus());
   });
 
   it("offers the person's own field where the shared copy is blank (N5)", async () => {

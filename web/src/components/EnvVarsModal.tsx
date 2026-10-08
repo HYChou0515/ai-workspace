@@ -316,15 +316,18 @@ export function EnvVarsModal({
     (p) => p.produces.some((n) => declared.has(n)) || p.id === target?.login,
   );
 
-  // Put the person at the variable the card asked for, once, when its field is
-  // drawn. A login target opens its dialog instead (below), which is where
-  // they type.
+  // Put the person where they type, once, when it is drawn: the variable's
+  // field, or — for a login target, whose dialog opens instead — that dialog's
+  // first field. Left to the modal, focus lands on the first tab.
   const focused = useRef(false);
   useEffect(() => {
-    if (!target || target.login || focused.current) return;
+    if (!target || focused.current) return;
     if (tab !== "mine") return;
-    const id = `env-mine-${target.name}`;
-    const el = document.querySelector<HTMLElement>(`[data-testid="${CSS.escape(id)}"]`);
+    const el = target.login
+      ? document.querySelector<HTMLElement>('[data-testid="env-cred-dialog"] input')
+      : document.querySelector<HTMLElement>(
+          `[data-testid="${CSS.escape(`env-mine-${target.name}`)}"]`,
+        );
     if (!el) return;
     focused.current = true;
     el.focus();
