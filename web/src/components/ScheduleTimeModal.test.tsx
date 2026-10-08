@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { translate } from "../lib/i18n";
 import { ViewerClockPin } from "../lib/viewerClock";
 import { renderWithQuery } from "../test/queryWrapper";
-import { ScheduleTimeModal, timeOf } from "./ScheduleTimeModal";
+import { ScheduleTimeModal, cronToSimple, simpleToCron, timeOf } from "./ScheduleTimeModal";
 
 const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
   translate("zh-TW", key, vars);
@@ -153,5 +153,98 @@ describe("ScheduleTimeModal", () => {
     // stays put: not from UTC to Kolkata (+05:30).
     expect(timeOf({ every: "hourly", run: "r" }, TPE, NOW).tz).toBe(TPE);
     expect(timeOf({ every: "hourly", run: "r" }, "Asia/Kolkata", NOW).tz).toBe("UTC");
+  });
+});
+
+
+describe("ScheduleTimeModal — 簡單 / cron (docs/plan-schedule-cron.md decision 4)", () => {
+  const WEEKDAYS = { cron: "0 9 * * 1-5", tz: TPE, run: "r" };
+  const mode = (name: string) => screen.getByRole("radio", { name });
+  const cronBox = () => screen.getByLabelText("cron");
+
+  it("opens a cron row in cron mode, its words under it, its zone in grey", () => {
+    open(WEEKDAYS);
+    expect(mode(word("schedules.edit.mode.cron"))).toHaveAttribute("aria-checked", "true");
+    expect(cronBox()).toHaveValue("0 9 * * 1-5");
+    expect(screen.getByTestId("schedule-cron-words")).toHaveTextContent("在 09:00, 星期一 到 星期五");
+    expect(zone()).toHaveTextContent(word("schedules.edit.zoneYours", { zone: "台北標準時間" }));
+  });
+
+  it("opens an every row in 簡單 mode", () => {
+    open();
+    expect(mode(word("schedules.edit.mode.simple"))).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByLabelText("cron")).toBeNull();
+  });
+
+  it("switching 簡單 → cron fills the same time as a cron", () => {
+    open({ every: "weekly", dow: "mon", at: "08:30", tz: TPE, run: "r" });
+    fireEvent.click(mode(word("schedules.edit.mode.cron")));
+    expect(cronBox()).toHaveValue("30 8 * * 1");
+  });
+
+  it("a cron it cannot follow says why and cannot be saved", () => {
+    open(WEEKDAYS);
+    for (const bad of ["0 9 * *", "0 0 9 * * 1-5", "0 25 * * *"]) {
+      fireEvent.change(cronBox(), { target: { value: bad } });
+      expect(screen.getByTestId("schedule-cron-error")).toBeInTheDocument();
+      expect(screen.getByTestId("schedule-time-save")).toBeDisabled();
+    }
+  });
+
+  it("saves a cron as a cron — no `every` beside it", async () => {
+    const { onSave } = open(WEEKDAYS);
+    fireEvent.change(cronBox(), { target: { value: "0 9 * * 1-6" } });
+    fireEvent.click(screen.getByTestId("schedule-time-save"));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(REF, { cron: "0 9 * * 1-6", tz: TPE }));
+  });
+
+  it("switching cron → 簡單 carries a cron the simple form can say", () => {
+    open({ cron: "30 8 * * 1", tz: TPE, run: "r" });
+    fireEvent.click(mode(word("schedules.edit.mode.simple")));
+    expect(value("schedules.edit.every")).toHaveValue("weekly");
+    expect(value("schedules.edit.dow")).toHaveValue("mon");
+    expect(value("schedules.edit.hour")).toHaveValue("08");
+    expect(screen.queryByText(word("schedules.edit.replacesCron"))).toBeNull();
+  });
+
+  it("switching cron → 簡單 on one it cannot say starts over and says the cron goes", () => {
+    open(WEEKDAYS);
+    fireEvent.click(mode(word("schedules.edit.mode.simple")));
+    expect(screen.getByText(word("schedules.edit.replacesCron"))).toBeInTheDocument();
+  });
+
+  it("a month day the cron would skip in short months says so", () => {
+    open({ every: "monthly", dom: 31, at: "09:00", tz: TPE, run: "r" });
+    fireEvent.click(mode(word("schedules.edit.mode.cron")));
+    expect(cronBox()).toHaveValue("0 9 31 * *");
+    expect(screen.getByText(word("schedules.edit.cronSkipsMonths"))).toBeInTheDocument();
+  });
+
+  it("switching away and back with nothing changed is not a change — and keeps the cron as typed", () => {
+    const { onClose } = open(WEEKDAYS);
+    fireEvent.click(mode(word("schedules.edit.mode.simple")));
+    fireEvent.click(mode(word("schedules.edit.mode.cron")));
+    expect(cronBox()).toHaveValue("0 9 * * 1-5");
+    fireEvent.click(screen.getByRole("button", { name: word("schedules.cancel") }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("converts both ways for every shape the simple form has", () => {
+    const shapes = [
+      [{ every: "minutes", n: 15 }, "*/15 * * * *"],
+      [{ every: "minutes", n: 1 }, "* * * * *"],
+      [{ every: "hourly" }, "0 * * * *"],
+      [{ every: "daily", at: "09:05" }, "5 9 * * *"],
+      [{ every: "weekly", dow: "sun", at: "23:00" }, "0 23 * * 0"],
+      [{ every: "monthly", dom: 15, at: "07:30" }, "30 7 15 * *"],
+    ] as const;
+    for (const [simple, cron] of shapes) {
+      expect(simpleToCron({ tz: TPE, ...simple })).toBe(cron);
+      expect(cronToSimple(cron)).toMatchObject(simple);
+    }
+    // Every 60 minutes is the top of the hour — `*/60` is not a minute a cron has.
+    expect(simpleToCron({ every: "minutes", n: 60, tz: TPE })).toBe("0 * * * *");
+    expect(cronToSimple("0 9 * * 1-5")).toBeNull();
+    expect(cronToSimple("*/7 * * * *")).toBeNull();
   });
 });
