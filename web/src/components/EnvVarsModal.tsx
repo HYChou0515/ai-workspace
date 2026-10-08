@@ -111,7 +111,7 @@ export function EnvVarsModal({
   personalClient?: Pick<PersonalEnvClient, "get" | "put">;
   /** Opened from a `request_env` card (docs/plan-env-request-card.md): on the
    * person's own tab (N4), at its variable — drawn even when no tool declared
-   * it (D5) — or inside the login that produces it. */
+   * it (D5). */
   target?: EnvTarget | null;
 }) {
   const t = useT();
@@ -310,24 +310,17 @@ export function EnvVarsModal({
   // name is the ONLY join, so a third-party author never chooses which
   // credential this dialog asks for (#750).
   const declared = new Set(tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)));
-  // A card's login is offered whatever the tools declared: the card asked for
-  // it by name, and a tool with no `env.json` declares nothing.
-  const offered = (providersQ.data ?? []).filter(
-    (p) => p.produces.some((n) => declared.has(n)) || p.id === target?.login,
-  );
+  const offered = (providersQ.data ?? []).filter((p) => p.produces.some((n) => declared.has(n)));
 
-  // Put the person where they type, once, when it is drawn: the variable's
-  // field, or — for a login target, whose dialog opens instead — that dialog's
-  // first field. Left to the modal, focus lands on the first tab.
+  // Put the person at the variable the card asked for, once, when its field is
+  // drawn. Left to the modal, focus lands on the first tab.
   const focused = useRef(false);
   useEffect(() => {
     if (!target || focused.current) return;
     if (tab !== "mine") return;
-    const el = target.login
-      ? document.querySelector<HTMLElement>('[data-testid="env-cred-dialog"] input')
-      : document.querySelector<HTMLElement>(
-          `[data-testid="${CSS.escape(`env-mine-${target.name}`)}"]`,
-        );
+    const el = document.querySelector<HTMLElement>(
+      `[data-testid="${CSS.escape(`env-mine-${target.name}`)}"]`,
+    );
     if (!el) return;
     focused.current = true;
     el.focus();
@@ -464,7 +457,6 @@ export function EnvVarsModal({
             login={
               <Logins
                 offered={offered}
-                initialDialog={target?.login ?? null}
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
@@ -1463,7 +1455,7 @@ export function Logins({
   onFilled,
 }: {
   offered: EnvProvider[];
-  /** A card asked for this login (docs/plan-env-request-card.md): open on it. */
+  /** Open on this login's form — the card's login page (`EnvLoginModal`). */
   initialDialog?: string | null;
   disabled?: boolean;
   creds: Record<string, string>;

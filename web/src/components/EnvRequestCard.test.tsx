@@ -5,7 +5,7 @@
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EnvProvider } from "../api/types";
@@ -14,7 +14,15 @@ import { renderWithQuery } from "../test/queryWrapper";
 
 import { EnvRequestCard } from "./EnvRequestCard";
 
-const erp: EnvProvider = { id: "erp", label: "ERP", produces: ["ERP_TOKEN"], inputs: [] };
+const erp: EnvProvider = {
+  id: "erp",
+  label: "ERP",
+  produces: ["ERP_TOKEN"],
+  inputs: [
+    { name: "user", label: "帳號", secret: false },
+    { name: "password", label: "密碼", secret: true },
+  ],
+};
 
 function draw({
   names,
@@ -25,6 +33,7 @@ function draw({
   providers = [erp],
   answered = false,
   sends = true,
+  resolve = async () => ({ ERP_TOKEN: "tok" }),
 }: {
   names: string[];
   mine?: Record<string, string>;
@@ -34,7 +43,13 @@ function draw({
   providers?: EnvProvider[];
   answered?: boolean;
   sends?: boolean;
+  resolve?: () => Promise<Record<string, string>>;
 }) {
+  // The person's own layer, as the server keeps it: a save is what it reads next.
+  const store = { values: { ...mine } };
+  const put = vi.fn(async (_s: string, _i: string, values: Record<string, string>) => {
+    store.values = values;
+  });
   const host: ChatEnv = {
     shared,
     policy,
@@ -47,13 +62,13 @@ function draw({
       <EnvRequestCard
         callId="c1"
         request={{ tool: "lookup", names, reason: "The ERP lookup needs you to sign in" }}
-        client={{ getEnvProviders: async () => providers }}
-        privateClient={{ get: async () => ({ values: mine, auto: {} }) }}
+        client={{ getEnvProviders: async () => providers, resolveEnvProvider: vi.fn(resolve) }}
+        privateClient={{ get: async () => ({ values: store.values, auto: {} }), put }}
         personalClient={{ get: async () => ({ values: personal, updated: {} }) }}
       />
     </ChatItemProvider>,
   );
-  return host;
+  return Object.assign(host, { put });
 }
 
 afterEach(cleanup);
@@ -65,12 +80,41 @@ describe("EnvRequestCard", () => {
     expect(await screen.findByText("The ERP lookup needs you to sign in")).toBeInTheDocument();
   });
 
-  it("signs in when a login produces the name, straight into that login", async () => {
-    const host = draw({ names: ["ERP_TOKEN"] });
+  it("signs in from a login page of its own, not the whole panel", async () => {
+    const host = draw({ names: ["ERP_TOKEN"], mine: { OTHER: "keep" } });
 
     fireEvent.click(await screen.findByRole("button", { name: /登入 ERP|Sign in to ERP/ }));
 
-    expect(host.open).toHaveBeenCalledWith({ name: "ERP_TOKEN", login: "erp" });
+    // The panel's own login form — a login button and the account inputs —
+    // opened at its first field.
+    const modal = await screen.findByTestId("env-login-modal");
+    expect(host.open).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId("env-cred-user")).toHaveFocus());
+    fireEvent.change(screen.getByTestId("env-cred-user"), { target: { value: "amy" } });
+    fireEvent.change(screen.getByTestId("env-cred-password"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByTestId("env-cred-submit"));
+
+    // What the login returned is shown, then saved to the person's own values
+    // — the rest of that layer kept — as the panel does (#750: Save stores it).
+    expect(await screen.findByText("ERP_TOKEN")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("env-login-save"));
+    await waitFor(() => expect(modal).not.toBeInTheDocument());
+    expect(host.put).toHaveBeenCalledWith("rca", "i1", { OTHER: "keep", ERP_TOKEN: "tok" });
+    expect(await screen.findByText(/已設定|^Set$/)).toBeInTheDocument();
+  });
+
+  it("stays on the login page and stores nothing when the login is refused", async () => {
+    const host = draw({
+      names: ["ERP_TOKEN"],
+      resolve: async () => Promise.reject({ detail: { why: "wrong password" } }),
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /登入 ERP|Sign in to ERP/ }));
+    fireEvent.click(await screen.findByTestId("env-cred-submit"));
+
+    expect(await screen.findByText("wrong password")).toBeInTheDocument();
+    expect(screen.getByTestId("env-login-modal")).toBeInTheDocument();
+    expect(host.put).not.toHaveBeenCalled();
   });
 
   it("opens the panel at the field when nothing signs in for it", async () => {
@@ -78,7 +122,7 @@ describe("EnvRequestCard", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /設定 MAP_KEY|Set MAP_KEY/ }));
 
-    expect(host.open).toHaveBeenCalledWith({ name: "MAP_KEY", login: null });
+    expect(host.open).toHaveBeenCalledWith({ name: "MAP_KEY" });
   });
 
   it("asks for the person's own value even where a blank shared copy exists", async () => {
@@ -86,7 +130,7 @@ describe("EnvRequestCard", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /設定 MAP_KEY|Set MAP_KEY/ }));
 
-    expect(host.open).toHaveBeenCalledWith({ name: "MAP_KEY", login: null });
+    expect(host.open).toHaveBeenCalledWith({ name: "MAP_KEY" });
   });
 
   it("offers no retry while something is still missing", async () => {
@@ -149,8 +193,11 @@ describe("EnvRequestCard", () => {
         <EnvRequestCard
           callId="c1"
           request={{ tool: "lookup", names: ["MAP_KEY"], reason: "r" }}
-          client={{ getEnvProviders: async () => Promise.reject(new Error("down")) }}
-          privateClient={{ get: async () => ({ values: {}, auto: {} }) }}
+          client={{
+            getEnvProviders: async () => Promise.reject(new Error("down")),
+            resolveEnvProvider: vi.fn(),
+          }}
+          privateClient={{ get: async () => ({ values: {}, auto: {} }), put: vi.fn() }}
         />
       </ChatItemProvider>,
     );

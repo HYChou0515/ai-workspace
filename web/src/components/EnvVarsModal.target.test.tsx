@@ -1,8 +1,8 @@
 /**
  * The panel opened from a `request_env` card (docs/plan-env-request-card.md
  * N3, N4, D5): on the person's own tab, at the variable it asked for — with
- * a field for it even when no tool declared it — or straight into the login
- * that produces it.
+ * a field for it even when no tool declared it. A login opens its own page
+ * instead (`EnvLoginModal`, tested with the card).
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
@@ -59,36 +59,27 @@ function openAt(target: EnvTarget, { tools = [] as ItemToolState[], shared = {} 
 
 describe("EnvVarsModal opened at a target", () => {
   it("draws and focuses a field for a name no tool declared (D5)", async () => {
-    openAt({ name: "MAP_KEY", login: null });
+    openAt({ name: "MAP_KEY" });
 
     const field = await screen.findByTestId("env-mine-MAP_KEY");
     await waitFor(() => expect(field).toHaveFocus());
   });
 
   it("unfolds the tool section the name is in and focuses it", async () => {
-    openAt({ name: "MAP_KEY", login: null }, { tools: [optional] });
+    openAt({ name: "MAP_KEY" }, { tools: [optional] });
 
     const field = await screen.findByTestId("env-mine-MAP_KEY");
     await waitFor(() => expect(field).toHaveFocus());
   });
 
   it("opens on the person's own tab", async () => {
-    openAt({ name: "MAP_KEY", login: null });
+    openAt({ name: "MAP_KEY" });
 
     expect(screen.getByTestId("env-tab-mine")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("goes straight into the login, even when no tool declared what it produces", async () => {
-    openAt({ name: "ERP_TOKEN", login: "erp" });
-
-    expect(await screen.findByTestId("env-cred-dialog")).toBeInTheDocument();
-    // In it, at its first field — as "set" puts the person at theirs.
-    const first = screen.getByTestId("env-cred-dialog").querySelector("input");
-    await waitFor(() => expect(first).toHaveFocus());
-  });
-
   it("offers the person's own field where the shared copy is blank (N5)", async () => {
-    openAt({ name: "MAP_KEY", login: null }, { shared: { MAP_KEY: "" } });
+    openAt({ name: "MAP_KEY" }, { shared: { MAP_KEY: "" } });
 
     const field = await screen.findByTestId("env-mine-MAP_KEY");
     await waitFor(() => expect(field).toHaveFocus());

@@ -12,17 +12,19 @@
  * a replay) it shows the request without actions.
  */
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { api as defaultApi } from "../api";
 import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
-import type { ApiClient } from "../api/types";
+import type { ApiClient, EnvProvider } from "../api/types";
 import { useChatItem } from "../hooks/chatItem";
 import { asksPersonal, ownLayer } from "../lib/envLayers";
 import { envRequestRows } from "../lib/envRequestRows";
 import { useT } from "../lib/i18n";
 import type { EnvRequest } from "../renderers/envRequest";
+import { EnvLoginModal } from "./EnvLoginModal";
 
 export function EnvRequestCard({
   callId,
@@ -34,8 +36,8 @@ export function EnvRequestCard({
   /** The `request_env` call — what the Retry message says it answers. */
   callId: string;
   request: EnvRequest;
-  client?: Pick<ApiClient, "getEnvProviders">;
-  privateClient?: Pick<PrivateEnvClient, "get">;
+  client?: Pick<ApiClient, "getEnvProviders" | "resolveEnvProvider">;
+  privateClient?: Pick<PrivateEnvClient, "get" | "put">;
   personalClient?: Pick<PersonalEnvClient, "get">;
 }) {
   const t = useT();
@@ -74,6 +76,8 @@ export function EnvRequestCard({
   // leaves a field to fill — the card must not go inert over it.
   const loaded = !providers.isPending && !mine.isPending && (!asks || !personal.isPending);
   const allSet = loaded && rows.every((r) => r.status === "ready");
+  // N6: a login opens its own page — the panel's login form on its own.
+  const [signingIn, setSigningIn] = useState<EnvProvider | null>(null);
   // Retired by the thread, not by a flag of its own: the Retry message is drawn
   // marked as answering this call, and a send the server refuses is retracted —
   // so the card comes back by itself (plan D8).
@@ -93,7 +97,11 @@ export function EnvRequestCard({
                 className="btn"
                 data-size="sm"
                 data-variant="primary"
-                onClick={() => env.open({ name: r.name, login: r.login?.id ?? null })}
+                onClick={() => {
+                  const login = r.login && providers.data?.find((p) => p.id === r.login?.id);
+                  if (login) setSigningIn(login);
+                  else env.open({ name: r.name });
+                }}
               >
                 {r.login
                   ? t("envreq.login", { label: r.login.label })
@@ -127,6 +135,16 @@ export function EnvRequestCard({
             <span>{t("envreq.wait", { tool: request.tool })}</span>
           )}
         </div>
+      ) : null}
+      {signingIn && env ? (
+        <EnvLoginModal
+          slug={slug}
+          itemId={itemId}
+          provider={signingIn}
+          onClose={() => setSigningIn(null)}
+          client={client}
+          privateClient={privateClient}
+        />
       ) : null}
     </div>
   );

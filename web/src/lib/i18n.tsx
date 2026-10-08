@@ -1815,6 +1815,10 @@ export const messages = {
   "envreq.login": { "zh-TW": "登入 {label}", en: "Sign in to {label}" },
   "envreq.set": { "zh-TW": "設定 {name}", en: "Set {name}" },
   "envreq.ready": { "zh-TW": "已設定", en: "Set" },
+  "envreq.loginGot": {
+    "zh-TW": "登入成功，取得以下變數。按「儲存」存進你在這個 workspace 的值。",
+    en: "Signed in and got these. Press Save to keep them as your values in this workspace.",
+  },
   "envreq.wait": {
     "zh-TW": "設定好之後按「重試」，AI 會重新執行 {tool}。",
     en: "Once these are set, press Retry and the AI runs {tool} again.",

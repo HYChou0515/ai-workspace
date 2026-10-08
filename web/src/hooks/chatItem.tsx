@@ -8,10 +8,10 @@ import { createContext, useContext } from "react";
  */
 export type ChatItem = { slug: string; itemId: string; env?: ChatEnv };
 
-/** Where the panel opens to, from a card (docs/plan-env-request-card.md):
- * the variable to show, or the login to go straight into (`null` for a
- * field). Always on the person's own tab (N4) — they switch tabs themselves. */
-export type EnvTarget = { name: string; login: string | null };
+/** Where the panel opens to, from a card (docs/plan-env-request-card.md): the
+ * variable to show, always on the person's own tab (N4) — they switch tabs
+ * themselves. A login opens its own page instead (`EnvLoginModal`, N6). */
+export type EnvTarget = { name: string };
 
 /** What the `request_env` card needs from the chat it sits in: the item's
  * shared values and policy (the viewer's own are read by the card), a way to
