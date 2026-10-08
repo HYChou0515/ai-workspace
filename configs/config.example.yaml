@@ -384,6 +384,10 @@
 #     cpu: 0            # summed cores of those sandboxes (0 = unlimited)
 #     memory: ""        # summed memory of those sandboxes
 #     disk: 200G        # summed workspace bytes across every item they own
+#   # How often every item's storage row is set right — listed on /my-resources
+#   # with or without a disk limit (docs/plan-storage-all-items.md). A blob-gc
+#   # job; the first ask goes out at boot. 0 = never.
+#   disk_reconcile_interval_sec: 21600
 #   # Per-person EXCEPTIONS are not configured here — they are data, set by a
 #   # superuser at PUT /api/admin/user-resources/{user}, and they take effect on
 #   # that person's next turn (the gate resolves limits per check, not at boot).

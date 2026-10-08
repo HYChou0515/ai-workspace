@@ -138,6 +138,14 @@ def make_disk_ledger_pass(
     activity = SpecstarActivityStore(spec)
 
     async def run() -> DiskReconcileReport:
+        reachable = getattr(filestore, "reachable", None)
+        if reachable is not None and not await asyncio.to_thread(reachable):
+            # A worker without the durable mount reads every tree as empty —
+            # booking 0 bytes for every cold item would wipe the real figures.
+            raise RuntimeError(
+                "disk-ledger: the durable store's tree is not reachable from this "
+                "process — mount it here (kubernetes/base/workers.yaml, blob-gc)"
+            )
         items = await asyncio.to_thread(every_item, spec)
         since_ms = int(dt.datetime.now(dt.UTC).timestamp() * 1000) - live_window_ms
 

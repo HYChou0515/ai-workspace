@@ -295,6 +295,21 @@ App 那一半怎麼寫見 [新增一個 App](adding-an-app.md#resources這個-ap
 **整段不寫 = 完全維持今天的行為**:`per_app` 落到舊旋鈕,`per_user` 全零 ⇒ 每個維度都無上限,
 等於沒有准入控制。**`0` / 空字串一律是「這個維度不設限」,不是「額度為零」。**
 
+**儲存用量不管有沒有設 `per_user.disk` 都會記、都會在 `/my-resources` 列出**——名下**每一個** item,
+不只開過 sandbox 的(`docs/plan-storage-all-items.md`)。sandbox 正開著的 item 用 sandbox 量到的數字;
+沒開著的用耐久儲存裡的大小,由背景的對帳補齊與更新:
+
+```yaml
+resources:
+  disk_reconcile_interval_sec: 21600   # 多久對一次帳(秒);0 = 不對帳
+```
+
+對帳是 `blob-gc` worker 上的一種 job(`run_consumers` 全開時就在 API 自己身上跑),API 只負責每個
+時窗由一個 pod 發出請求;**開機後第一個 tick 就發**,那一次就是把舊 item 補進帳本。用 `nfs_tree`
+耐久儲存的部署,`blob-gc` worker 要掛上 `/mnt/workspaces`(`kubernetes/base/workers.yaml` 裡註解掉的
+那組),沒掛的話對帳會**拒絕執行**(job 失敗),而不是把每個 item 記成 0。sandbox 被回收的 item,
+數字最多晚一個對帳間隔才更新。
+
 ### 使用者自己調單一 item 的環境大小
 
 App 宣告的是**天花板**;使用者可以在 item 頁面的「環境」面板把**那一個** item 調得更小,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
+import pytest
 from specstar import QB
 from specstar.types import TaskStatus
 
@@ -131,3 +132,22 @@ def test_a_store_without_usage_accounting_gets_no_pass():
     from workspace_app.quota.disk_reconcile import make_disk_ledger_pass
 
     assert make_disk_ledger_pass(make_spec(), object(), live_window_ms=1000) is None  # ty: ignore[invalid-argument-type]
+
+
+async def test_a_durable_tree_this_worker_cannot_reach_fails_the_pass_not_books_zeros(tmp_path):
+    """The NFS tree is an opt-in mount: a worker without it sees no tree, and
+    `workspace_usage` of a missing tree is 0 — the pass would book every cold
+    item at 0 bytes and wipe the real figures. It refuses instead."""
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
+    from workspace_app.quota.disk_reconcile import make_disk_ledger_pass
+
+    spec = make_spec()
+    run = make_disk_ledger_pass(
+        spec, NfsTreeFileStore(tmp_path / "not-mounted"), live_window_ms=1000
+    )
+    assert run is not None
+    with pytest.raises(RuntimeError, match="not reachable"):
+        await run()
+    # A tree that is there is reachable.
+    (tmp_path / "mounted").mkdir()
+    assert NfsTreeFileStore(tmp_path / "mounted").reachable()
