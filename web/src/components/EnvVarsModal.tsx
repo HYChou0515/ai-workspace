@@ -1200,7 +1200,10 @@ function MineRow({
             onChange={(e) => setMine(name, e.target.value)}
             autoComplete="off"
             spellCheck={false}
-            className="input input--block"
+            // `.input` (fills what is left), not `.input--block` (width 100%,
+            // never shrinks): beside the reveal button that pushed the button out of
+            // the panel and gave it a sideways scroll — on master too.
+            className="input"
             style={MONO}
           />
           <button
@@ -1368,7 +1371,10 @@ function PersonalRow({
           onChange={(e) => onEdit(name, e.target.value)}
           autoComplete="off"
           spellCheck={false}
-          className="input input--block"
+          // `.input` (fills what is left), not `.input--block` (width 100%,
+          // never shrinks): beside the reveal button that pushed the button out of
+          // the panel and gave it a sideways scroll — on master too.
+          className="input"
           style={MONO}
         />
         <button
