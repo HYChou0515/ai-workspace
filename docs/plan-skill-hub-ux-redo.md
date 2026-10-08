@@ -60,7 +60,8 @@ Grilled 2026-10-08 on master `7d666c36`（含 #875 版本歷史）。每條決�
 - **最近更新**：`SkillHubEntry` 加 `content_at: datetime | None`，發布與回復時寫入（改內容的那兩條路）；
   只加有預設值的欄位，舊列 `None` → 排在最後、不顯示時間；不回填（下一次發布就有）。
 - **版號**：`history` 依時間由舊到新，給 `publish` 與 `rollback` 事件 `version = 1, 2, …`；其他事件 `None`。
-- **檔案**：版本與條目回 `files: [{path, size}]`（`ls-tree -l`）與 `scripts`（可執行或 `scripts/` 下的數量）。
+- **檔案**：版本與條目回 `files: [{path, size}]`（`ls-tree -l`；LFS 檔是內容的大小）與 `scripts`（頂層 `scripts/` 下的數量——
+  版本一律以 `100644` 寫入 git，可執行位元不帶資訊）。
 - **你裝在哪**：`GET /skill-hub/entries/{id}/installs` 回 viewer 能編輯的 workspace 裡，副本 `.origin` 指向這個
   條目的那些（App、workspace、名稱）。
 - **安裝目標**：`GET /skill-hub/entries/{id}/targets?app=<slug>` 回該 App 裡 viewer 能編輯的 workspace，每個帶

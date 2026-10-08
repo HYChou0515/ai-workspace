@@ -19,14 +19,17 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Literal
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
-from specstar import SpecStar
+from specstar import QB, SpecStar
+from specstar.types import RevisionInfo
 
+from ..apps.base import WorkItemBase
+from ..apps.registry import registered_apps
 from ..apps.skill_hub import (
     SkillHubEntry,
     SkillHubStore,
@@ -35,14 +38,18 @@ from ..apps.skill_hub import (
     VersionMoved,
     matches_query,
     missing_tools_for,
+    script_count,
 )
+from ..apps.skill_payload import SkillOrigin
 from ..apps.skills import (
     fork_hub_version,
     install_hub_skill,
     skill_folder_in_the_way,
+    workspace_skill_origin,
     workspace_skill_payload,
 )
 from ..files import WorkspaceFiles
+from ..perm import Actor, authorize
 from ..resources.groups import groups_of
 from .item_authz import check_access, load_access_facts
 from .locator import ItemLocator
@@ -124,6 +131,18 @@ class SkillHubReviewOut(BaseModel):
     model: str
 
 
+class SkillHubFile(BaseModel):
+    """One file of a version, listed — never read (the files tab, D12)."""
+
+    path: str
+    #: Bytes; `None` for an entry published before the git store.
+    size: int | None
+
+
+def _listed(sizes: list[tuple[str, int | None]]) -> list[SkillHubFile]:
+    return [SkillHubFile(path=path, size=size) for path, size in sizes]
+
+
 class SkillHubDetail(BaseModel):
     id: str
     owner: str
@@ -138,7 +157,9 @@ class SkillHubDetail(BaseModel):
     review: SkillHubReviewOut
     forked_from: SkillHubLineage | None
     forks: list[SkillHubCard]
-    files: list[str]
+    files: list[SkillHubFile]
+    #: How many of `files` are scripts (`script_count`).
+    scripts: int
     skill_md: str
     is_owner: bool
     visibility: Literal["public", "restricted", "private"]
@@ -188,6 +209,8 @@ class SkillHubHistoryEvent(BaseModel):
     visibility: str
     audience: list[str] = []
     current: bool
+    #: v1, v2, … on a publish or rollback; `None` on any other row (D8).
+    version: int | None = None
 
 
 class SkillHubHistory(BaseModel):
@@ -203,7 +226,8 @@ class SkillHubVersion(BaseModel):
     revision: str
     commit: str
     description: str
-    files: list[str]
+    files: list[SkillHubFile]
+    scripts: int
     skill_md: str
 
 
@@ -251,6 +275,42 @@ class SkillInstallRequest(BaseModel):
 class SkillInstalled(BaseModel):
     name: str
     missing_tools: list[str]
+
+
+class SkillHubInstall(BaseModel):
+    """A workspace holding a copy of the entry (the skill page's 「你在這些
+    workspace 裝了它」, D3)."""
+
+    app: str
+    item_id: str
+    title: str
+
+
+class SkillHubInstalls(BaseModel):
+    installs: list[SkillHubInstall]
+
+
+class SkillHubTarget(BaseModel):
+    """One workspace the install dialog offers, and what installing would do
+    there (D6): `ok`; `installed` — a copy of this entry is already there;
+    `name_taken` — another folder of that name is, `owner` naming whose copy
+    it is when it is one ("" for a hand-written folder)."""
+
+    item_id: str
+    title: str
+    state: Literal["ok", "installed", "name_taken"]
+    owner: str = ""
+
+
+class SkillHubTargets(BaseModel):
+    #: What the App lacks of the tools the skill mentions — the same for every
+    #: workspace of the App, so said once.
+    missing_tools: list[str]
+    items: list[SkillHubTarget]
+
+
+#: How many workspaces are read at once when looking for copies.
+_COPY_READS = 16
 
 
 class SkillHubMigration(BaseModel):
@@ -386,6 +446,7 @@ def register_skill_hub_routes(
             )
         is_owner = entry.owner == viewer
         installs, uses = (await asyncio.to_thread(hub.usage.totals, [entry_id]))[entry_id]
+        sizes = await hub.file_sizes(entry_id)
         return SkillHubDetail(
             id=entry_id,
             owner=entry.owner,
@@ -402,7 +463,8 @@ def register_skill_hub_routes(
             ),
             forked_from=lineage,
             forks=_visible_forks(entry_id, viewer),
-            files=await hub.file_names(entry_id),
+            files=_listed(sizes),
+            scripts=script_count(p for p, _ in sizes),
             skill_md=skill_md.decode("utf-8", errors="replace"),
             is_owner=is_owner,
             visibility=entry.permission.visibility,
@@ -413,6 +475,90 @@ def register_skill_hub_routes(
             installs=installs,
             uses=uses,
             counted_since=await asyncio.to_thread(hub.usage.counted_since),
+        )
+
+    def _editable(viewer: str, slugs: list[str]) -> list[tuple[str, str, str]]:
+        """``(app, item id, title)`` of every live workspace of `slugs` the
+        viewer may `edit_content` — what an install needs — by title. Granted
+        by the workspace's own permission: a superuser's power to edit anyone's
+        workspace does not put everyone's in their picker."""
+        actor = Actor.human(viewer, groups=groups_of(spec, viewer))
+        live = (QB.is_deleted() == False).build()  # noqa: E712 — specstar's meta predicate
+        models = registered_apps()
+        out: list[tuple[str, str, str]] = []
+        for slug in slugs:
+            if slug not in models:
+                continue
+            rm = spec.get_resource_manager(models[slug])
+            for res in rm.list_resources(live, returns=["info", "data"]):
+                item, info = res.data, res.info
+                assert isinstance(item, WorkItemBase) and isinstance(info, RevisionInfo)
+                if authorize(
+                    actor, "read_meta", item.permission, created_by=info.created_by
+                ) and authorize(actor, "edit_content", item.permission, created_by=info.created_by):
+                    out.append((slug, info.resource_id, item.title))
+        out.sort(key=lambda t: (t[0], t[2].casefold(), t[1]))
+        return out
+
+    async def _bounded[T](calls: list[Callable[[], Awaitable[T]]]) -> list[T]:
+        gate = asyncio.Semaphore(_COPY_READS)
+
+        async def one(call: Callable[[], Awaitable[T]]) -> T:
+            async with gate:
+                return await call()
+
+        return list(await asyncio.gather(*(one(c) for c in calls)))
+
+    @app.get("/skill-hub/entries/{entry_id}/installs")
+    async def skill_hub_installs(entry_id: str) -> SkillHubInstalls:
+        """The viewer's workspaces holding a copy of this entry: a
+        `.skill/<name>/` whose `.origin` names it. Only workspaces the viewer
+        may edit — the ones they could have installed it into. A copy renamed
+        since is not found: the name is where to look."""
+        viewer = get_user_id()
+        entry = _readable(entry_id, viewer)
+        candidates = await asyncio.to_thread(_editable, viewer, sorted(registered_apps()))
+
+        def origin_of(item_id: str) -> Callable[[], Awaitable[SkillOrigin | None]]:
+            return lambda: workspace_skill_origin(files, item_id, entry.name)
+
+        origins = await _bounded([origin_of(item_id) for _slug, item_id, _t in candidates])
+        return SkillHubInstalls(
+            installs=[
+                SkillHubInstall(app=slug, item_id=item_id, title=title)
+                for (slug, item_id, title), origin in zip(candidates, origins, strict=True)
+                if origin is not None and origin.entry == entry_id
+            ]
+        )
+
+    @app.get("/skill-hub/entries/{entry_id}/targets")
+    async def skill_hub_targets(entry_id: str, app: str) -> SkillHubTargets:
+        """The workspaces of App `app` the viewer may install into, each with
+        what installing would do — the same refusal `POST …/skills/install`
+        gives (`skill_folder_in_the_way`), asked before rather than after.
+        An App the platform does not know has none."""
+        viewer = get_user_id()
+        entry = _readable(entry_id, viewer)
+        candidates = await asyncio.to_thread(_editable, viewer, [app])
+
+        def target(item_id: str, title: str) -> Callable[[], Awaitable[SkillHubTarget]]:
+            async def ask() -> SkillHubTarget:
+                origin = await workspace_skill_origin(files, item_id, entry.name)
+                if origin is not None and origin.entry == entry_id:
+                    return SkillHubTarget(item_id=item_id, title=title, state="installed")
+                taken = await skill_folder_in_the_way(files, item_id, hub, entry.name, viewer)
+                if taken is not None:
+                    return SkillHubTarget(
+                        item_id=item_id, title=title, state="name_taken", owner=taken.owner
+                    )
+                return SkillHubTarget(item_id=item_id, title=title, state="ok")
+
+            return ask
+
+        items = await _bounded([target(item_id, title) for _s, item_id, title in candidates])
+        return SkillHubTargets(
+            missing_tools=missing_tools_for(entry.referenced_tools, app),
+            items=items,
         )
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────
@@ -514,7 +660,7 @@ def register_skill_hub_routes(
         file read in full."""
         _readable(entry_id, get_user_id())
         old = await _version(entry_id, revision)
-        names = sorted(await hub.repos.tree(entry_id, old.commit))
+        sizes = await hub.file_sizes(entry_id, old.commit)
         read = await hub.repos.read(entry_id, old.commit, paths=["SKILL.md"])
         # A version migrated from an empty namespace has none; show nothing.
         skill_md = read.get("SKILL.md", b"")
@@ -522,7 +668,8 @@ def register_skill_hub_routes(
             revision=revision,
             commit=old.commit,
             description=old.description,
-            files=names,
+            files=_listed(sizes),
+            scripts=script_count(p for p, _ in sizes),
             skill_md=skill_md.decode("utf-8", errors="replace"),
         )
 

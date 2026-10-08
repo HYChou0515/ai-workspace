@@ -226,7 +226,7 @@ async def test_the_detail_carries_the_body_the_files_the_review_and_the_lineage(
     d = res.json()
     assert d["owner"] == "bob" and d["name"] == "triage"
     assert d["skill_md"].startswith("---\nname: triage")
-    assert d["files"] == ["SKILL.md", "references/g.md"]
+    assert [f["path"] for f in d["files"]] == ["SKILL.md", "references/g.md"]
     assert d["review"] == {"verdict": "notes", "notes": ["n1"], "model": "m"}
     assert d["forked_from"] == {"entry": root, "state": "live", "owner": "alice", "name": "triage"}
     assert d["is_owner"] is False
@@ -481,7 +481,8 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
 
     d = harness.client.get(f"/skill-hub/entries/{entry}").json()
 
-    assert d["files"] == ["SKILL.md", "assets/big.bin"]
+    assert [f["path"] for f in d["files"]] == ["SKILL.md", "assets/big.bin"]
+    assert d["files"][1]["size"] == 200_000, "the content's size, not a pointer's"
     assert d["skill_md"].startswith("---\nname: triage")
     assert reads == [["SKILL.md"]]
 
