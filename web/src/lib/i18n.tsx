@@ -2088,14 +2088,11 @@ export const messages = {
   "skillHub.forks": { "zh-TW": "{count} 個 fork", en: "{count} forks" },
   "skillHub.fork.one": { "zh-TW": "1 個 fork", en: "1 fork" },
   // plan-skill-hub-history U6/U7: the counts, never who; counting starts on the
-  // day the feature went live, so the number says since when.
-  "skillHub.counts": {
-    "zh-TW": "安裝 {installs} 次 · 使用 {uses} 次",
-    en: "Installed {installs} times · used {uses} times",
-  },
+  // day the feature went live, so the number says since when. Said in halves
+  // (`skillHub.counts.installs` / `.uses`), a zero half left out (`countsText`).
   "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
   "skillHub.counts.installs": { "zh-TW": "安裝 {count} 次", en: "Installed {count} times" },
-  "skillHub.counts.uses": { "zh-TW": "使用 {count} 次", en: "used {count} times" },
+  "skillHub.counts.uses": { "zh-TW": "使用 {count} 次", en: "Used {count} times" },
   // The list's summary line: beside 「共 N 個 skill」 the day alone read as
   // the skills' date, not the counts'.
   "skillHub.countedSince.list": { "zh-TW": "次數自 {day} 起計", en: "counts since {day}" },
@@ -2135,9 +2132,9 @@ export const messages = {
   "skillHub.review.ok": { "zh-TW": "審查沒有意見", en: "Nothing flagged" },
   "skillHub.review.notes": { "zh-TW": "審查有 {count} 則意見", en: "{count} review notes" },
   "skillHub.review.by": { "zh-TW": "由 {model} 審查", en: "reviewed by {model}" },
-  // A fork's card names its root (plan-skill-hub-ui-polish D9, reusing
-  // `skillHub.forkOf`); when the root is one the viewer cannot read —
-  // unpublished, deleted — it says that much. The "has review notes" badge
+  // A fork's card names its root (plan-skill-hub-ui-polish D9,
+  // `skillHub.forkOf.named`); when the root is one the viewer cannot read —
+  // unpublished, deleted, not shared with them — it says that much. The "has review notes" badge
   // is gone (D7): every entry was reviewed.
   "skillHub.forkOf.gone": {
     "zh-TW": "fork 自一個你看不到的 skill（已下架、已刪除，或你沒有權限）",
@@ -2210,6 +2207,7 @@ export const messages = {
   // plan-skill-hub-ux-redo D10: the one sentence on what unpublishing or
   // narrowing the permission does to copies already installed — said in the
   // 下架 confirm and in the share dialog's caption above, alike.
+  "skillHub.share.captionWithImpact": { "zh-TW": "{caption}{impact}", en: "{caption} {impact}" },
   "skillHub.impact.installed": {
     "zh-TW": "已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
     en: "People who installed it keep their copy, which keeps working; whoever can no longer see this skill gets no later versions.",

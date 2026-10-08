@@ -201,6 +201,30 @@ describe("SkillsModal (#380)", () => {
     expect((await action("author-skill", "download"))).toBeNull();
   });
 
+  it("an imported folder refreshes what skill pages say installing would do (round 2)", async () => {
+    const qc = makeQueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const f = fakeService();
+    renderWithQuery(
+      <SkillsModal
+        slug="rca"
+        itemId="i1"
+        fileService={f.svc}
+        onClose={vi.fn()}
+        onSaveSkillPrefs={vi.fn()}
+        appliedSkills={[]}
+        onToggleApply={vi.fn()}
+        client={fakeClient()}
+      />,
+      qc,
+    );
+    await screen.findByTestId("skills-import");
+    const file = new File(["body"], "SKILL.md", { type: "text/markdown" });
+    Object.defineProperty(file, "webkitRelativePath", { value: "new-skill/SKILL.md" });
+    fireEvent.change(screen.getByTestId("skills-import-input"), { target: { files: [file] } });
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "targets"] }));
+  });
+
   it("imports a selected skill folder into `.skill/<folder>/…`", async () => {
     const f = fakeService();
     renderModal({ fileService: f.svc });

@@ -1207,8 +1207,12 @@ describe("EntryView — publish_skill", () => {
     expect(screen.getByTestId("skill-hub-card-stub")).toHaveTextContent("e-7");
     // …and keeps the tool's own sentences one click away: what only the
     // reply knows (a fork of whom, a manifest the full workspace refused, a
-    // re-publish that stays private) is not on the card (review round 1).
-    expect(document.querySelector("details")).not.toBeNull();
+    // re-publish that stays private) is not on the card (review round 1) —
+    // without the marker line, which is plumbing (round 2).
+    const details = document.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).toHaveTextContent("It is public.");
+    expect(details?.textContent).not.toContain("[skill-hub-entry]");
   });
 
   it("keeps the tool card for a refused publish", () => {

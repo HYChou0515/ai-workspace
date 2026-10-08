@@ -82,9 +82,14 @@ export function ActionMenu({
     <div
       className="action-menu"
       ref={root}
-      // Tab (or anything else) taking focus out of it closes it (APG).
+      // Focus moving to something outside it — Tab — closes it (APG). Only a
+      // move TO an element: a press on an item in Safari / Firefox on macOS
+      // does not focus the button, so the item blurs to nowhere first, and
+      // closing then would drop the click (round 2). A mouse press outside is
+      // the document listener's.
       onBlur={(e) => {
-        if (open && !root.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
+        const to = e.relatedTarget as Node | null;
+        if (open && to !== null && !root.current?.contains(to)) setOpen(false);
       }}
     >
       <button

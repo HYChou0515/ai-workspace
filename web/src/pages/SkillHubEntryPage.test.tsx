@@ -644,6 +644,10 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     fireEvent.click(await manage("skillHub.share"));
     const dialog = await screen.findByTestId("permission-dialog");
     expect(dialog).toHaveTextContent(word("skillHub.impact.installed"));
+    // Two sentences: a space between them where the language wants one (round 2).
+    expect(
+      translate("en", "skillHub.share.captionWithImpact", { caption: "A.", impact: "B." }),
+    ).toBe("A. B.");
   });
 
   it("leaves one skill's notice and state behind when it opens another", async () => {

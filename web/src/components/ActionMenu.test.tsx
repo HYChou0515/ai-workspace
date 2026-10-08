@@ -94,6 +94,17 @@ describe("ActionMenu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("a blur to nowhere — a mouse press on an item in Safari, which does not focus a button — keeps it open", () => {
+    const edit = vi.fn();
+    render(<ActionMenu label="更多" items={[{ id: "a", label: "下載", onSelect: edit }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    const item = screen.getByRole("menuitem");
+    fireEvent.focusOut(item, { relatedTarget: null });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem"));
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
   it("Escape on the trigger of an open menu — every item disabled — closes the menu, not the modal", () => {
     const close = vi.fn();
     render(

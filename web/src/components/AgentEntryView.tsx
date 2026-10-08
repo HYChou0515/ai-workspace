@@ -22,7 +22,7 @@ import {
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
-import { parseShownSkillHubEntry } from "../renderers/skillHubEntry";
+import { parseShownSkillHubEntry, stripSkillHubEntry } from "../renderers/skillHubEntry";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
@@ -1051,10 +1051,11 @@ function ToolCallCard({
   const t = useT();
   // While running, show whatever stdout has streamed so far; once done, the
   // final formatted output supersedes it. Auto-expand a streaming tool.
-  // The declaration is plumbing for the file cards, not part of what the tool
-  // said — strip it so the card body reads as the tool's own output.
-  const body = stripShownFiles(
-    call.status === "done" ? call.output : (call.liveOutput ?? call.output),
+  // The declarations are plumbing for the cards (files, a skill hub entry),
+  // not part of what the tool said — strip them so the body reads as the
+  // tool's own output.
+  const body = stripSkillHubEntry(
+    stripShownFiles(call.status === "done" ? call.output : (call.liveOutput ?? call.output)),
   );
   const streamingLive = call.status === "running" && !!call.liveOutput;
   // #221: resolve the body's `[n]` markers (ask_knowledge_base attaches its KB

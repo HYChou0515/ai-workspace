@@ -211,7 +211,7 @@ async def hub_entries_here(files: WorkspaceFiles, workspace_id: str) -> set[str]
     return {m.hub_entry for m in await workspace_skill_metas(files, workspace_id) if m.hub_entry}
 
 
-async def _skill_file_paths(
+async def skill_file_paths(
     files: WorkspaceFiles, workspace_id: str, name: str, *, wake: bool = True
 ) -> list[str]:
     """The paths of the skill's own files under ``.skill/<name>/`` — its
@@ -232,7 +232,7 @@ async def workspace_skill_payload(
     copy came from, which is the copy's business, not the skill's. Empty when
     there is no such folder."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
-    paths = await _skill_file_paths(files, workspace_id, name)
+    paths = await skill_file_paths(files, workspace_id, name)
     from ..filestore.batch import read_all
 
     return {
@@ -895,14 +895,16 @@ async def skill_folder_in_the_way(
     :func:`workspace_skill_origin` — the install dialog asks this of every
     workspace it offers. A manifest that does not parse names no owner: the
     folder is still in the way."""
-    if not await _skill_file_paths(files, workspace_id, name, wake=wake):
+    if not await skill_file_paths(files, workspace_id, name, wake=wake):
         return None
     try:
         origin = await workspace_skill_origin(files, workspace_id, name, wake=wake)
     except (msgspec.DecodeError, msgspec.ValidationError):
         origin = None
     owner = ""
-    if origin is not None and origin.source == "hub" and origin.entry:
+    # A fork's starting point (`forked`) is the viewer's own skill: naming the
+    # original's owner on it read as someone else's copy (round 2).
+    if origin is not None and origin.source == "hub" and origin.entry and not origin.forked:
         _state, theirs = hub.state_for(origin.entry, viewer)
         if theirs is not None:
             owner = theirs.owner

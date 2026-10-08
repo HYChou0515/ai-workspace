@@ -660,7 +660,8 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
 - **身分是 `owner/name`**,底層是穩定的 resource id,副本與 fork 都指 id,所以 `owner` 可以轉移。
   非 owner 只能 **fork**:裝別人的、改、從自己 item 發布,`.origin` 指向別人的條目就自動記
   `forked_from`。列表只放原作、那列寫 fork 數;搜尋、「我的」、owner 篩選時 fork 平列(plan-skill-hub-ux-redo D2)。
-- **owner 的管理都在 skill 頁的「管理 ▾」**（`/skill-hub/:id`;別人只有「安裝到 workspace…」）:
+- **owner 的管理都在 skill 頁的「管理 ▾」**（`/skill-hub/:id`;別人只有「安裝到 workspace…」與版本紀錄裡的
+  「從這一版 fork」）:
   修改（回到當時發布的 workspace;已刪／已完成／進不去 → 開新 workspace）、下架／重新上架、權限設定
   （既有的權限對話框）、轉移、刪除。
 - **四個 tool 都是薄殼**:`publish_skill` / `install_skill` 在 `TOOL_VERBS` 裡吃 `edit_content`

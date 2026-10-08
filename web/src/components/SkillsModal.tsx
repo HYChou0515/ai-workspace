@@ -189,6 +189,7 @@ export function SkillsModal({
         const rel = f.webkitRelativePath || f.name;
         await fileService.writeFile(`.skill/${rel}`, await f.arrayBuffer());
       }
+      invalidateHubInstalls(qc);
       await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {

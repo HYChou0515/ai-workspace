@@ -324,7 +324,27 @@ async def test_a_fork_from_a_version_is_the_viewers_own_not_an_install(harness: 
     targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").json()["items"]
 
     assert started not in [i["item_id"] for i in installs]
-    assert {t["item_id"]: t["state"] for t in targets}[started] == "name_taken"
+    by_id = {t["item_id"]: t for t in targets}
+    # The viewer's own folder: no one else's name on it (round 2).
+    assert (by_id[started]["state"], by_id[started]["owner"]) == ("name_taken", "")
+
+
+async def test_a_folder_holding_only_the_record_is_not_an_install(harness: Harness):
+    """The install route accepts it (nothing of the skill is there), so the
+    dialog offers it and the sidebar does not list it."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    hollow = _item(harness, "hollow", "read_content", "edit_content")
+    origin = SkillOrigin(source="hub", files={}, entry=entry, commit="c")
+    await harness.filestore.write(hollow, "/.skill/triage/.origin", msgspec.json.encode(origin))
+
+    installs = harness.client.get(f"/skill-hub/entries/{entry}/installs").json()["installs"]
+    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").json()["items"]
+
+    assert hollow not in [i["item_id"] for i in installs]
+    assert {t["item_id"]: t["state"] for t in targets}[hollow] == "ok"
+    res = harness.client.post(f"/a/rca/items/{hollow}/skills/install", json={"entry_id": entry})
+    assert res.status_code == 200, res.text
 
 
 async def test_the_forks_on_an_originals_page_name_it_and_count_their_own(harness: Harness):

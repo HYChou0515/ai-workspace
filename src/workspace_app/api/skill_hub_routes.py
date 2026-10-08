@@ -43,6 +43,7 @@ from ..apps.skill_hub import (
 from ..apps.skills import (
     fork_hub_version,
     install_hub_skill,
+    skill_file_paths,
     skill_folder_in_the_way,
     workspace_skill_origin,
     workspace_skill_payload,
@@ -557,11 +558,15 @@ def register_skill_hub_routes(
         is not a copy of anything."""
         try:
             origin = await workspace_skill_origin(files, item_id, name, wake=False)
+            if origin is None or origin.entry != entry_id or origin.forked:
+                return False
+            # A record with none of the skill's files beside it is not a copy:
+            # the install route would accept that folder (round 2).
+            return bool(await skill_file_paths(files, item_id, name, wake=False))
         except (msgspec.DecodeError, msgspec.ValidationError):
             return False
         except SandboxBusy:
             return None
-        return origin is not None and origin.entry == entry_id and not origin.forked
 
     @app.get("/skill-hub/entries/{entry_id}/installs")
     async def skill_hub_installs(entry_id: str) -> SkillHubInstalls:

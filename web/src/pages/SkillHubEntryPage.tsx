@@ -704,7 +704,10 @@ function OwnerActions({
           value={entry.permission}
           roles={DOC_ROLES}
           // The one sentence on installed copies, the 下架 confirm's own (D10).
-          caption={`${t("skillHub.share.caption")}${t("skillHub.impact.installed")}`}
+          caption={t("skillHub.share.captionWithImpact", {
+            caption: t("skillHub.share.caption"),
+            impact: t("skillHub.impact.installed"),
+          })}
           // A hub entry is public to everyone on the platform, not to "this
           // workspace" (D12).
           audience="platform"
