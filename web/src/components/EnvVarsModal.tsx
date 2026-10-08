@@ -109,15 +109,15 @@ export function EnvVarsModal({
   /** My environment variables (`plan-personal-env`): read to say whose value
    * is in use, and edited on the cross-workspace tab. */
   personalClient?: Pick<PersonalEnvClient, "get" | "put">;
-  /** Opened from a `request_env` card (docs/plan-env-request-card.md): start
-   * on its tab, at its variable — drawn even when no tool declared it (D5) —
-   * or inside the login that produces it. */
+  /** Opened from a `request_env` card (docs/plan-env-request-card.md): on the
+   * person's own tab (N4), at its variable — drawn even when no tool declared
+   * it (D5) — or inside the login that produces it. */
   target?: EnvTarget | null;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
   const hasItem = Boolean(slug && itemId);
-  const [tab, setTab] = useState<Tab>(hasItem ? (target?.tab ?? "mine") : "shared");
+  const [tab, setTab] = useState<Tab>(hasItem ? "mine" : "shared");
   const [query, setQuery] = useState("");
 
   const toolsQ = useQuery({
@@ -321,7 +321,8 @@ export function EnvVarsModal({
   const focused = useRef(false);
   useEffect(() => {
     if (!target || target.login || focused.current) return;
-    const id = tab === "mine" ? `env-mine-${target.name}` : `env-field-${target.name}`;
+    if (tab !== "mine") return;
+    const id = `env-mine-${target.name}`;
     const el = document.querySelector<HTMLElement>(`[data-testid="${CSS.escape(id)}"]`);
     if (!el) return;
     focused.current = true;
@@ -385,11 +386,9 @@ export function EnvVarsModal({
             onPolicy={choosePolicy}
             text={text}
             setText={setText}
-            focus={target?.tab === "shared" ? target.name : null}
             login={
               <Logins
                 offered={offered}
-                initialDialog={target?.tab === "shared" ? target.login : null}
                 disabled={!canEdit}
                 creds={creds}
                 setCreds={setCreds}
@@ -457,11 +456,11 @@ export function EnvVarsModal({
             }
             // Not before the read: typing here would become the whole set.
             ready={mineQ.isSuccess}
-            focus={target?.tab === "mine" ? target.name : null}
+            focus={target?.name ?? null}
             login={
               <Logins
                 offered={offered}
-                initialDialog={target?.tab === "mine" ? target.login : null}
+                initialDialog={target?.login ?? null}
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
@@ -766,15 +765,12 @@ function SharedTab({
   text,
   setText,
   login,
-  focus = null,
 }: {
   settled: boolean;
   tools: Parameters<typeof deriveEnvNeeds>[0];
   query: string;
   shared: Record<string, string>;
   policy: Record<string, string>;
-  /** The variable a card asked for — drawn even if nothing declared it (D5). */
-  focus?: string | null;
   canEdit: boolean;
   onVar: (name: string, value: string) => void;
   onPolicy: (name: string, p: EnvPolicy) => void;
@@ -785,9 +781,9 @@ function SharedTab({
   const t = useT();
   const view = deriveEnvNeeds(tools, shared);
   const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
-  const other = [
-    ...new Set([...Object.keys(shared), ...Object.keys(policy), ...(focus ? [focus] : [])]),
-  ].filter((n) => !declared.has(n));
+  const other = [...new Set([...Object.keys(shared), ...Object.keys(policy)])].filter(
+    (n) => !declared.has(n),
+  );
   const [newName, setNewName] = useState("");
 
   return (
@@ -813,7 +809,6 @@ function SharedTab({
         </p>
       ) : (
       <Sections
-          focus={focus}
         sections={view.sections}
         query={query}
         other={other}

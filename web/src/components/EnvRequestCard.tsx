@@ -5,7 +5,8 @@
  * One row per name, judged NOW from the viewer's own values (D4): a sign-in
  * when a login produces it, a field otherwise, "set" once it has a value. The
  * turn stopped at this card (N3); once every row is set, Retry sends an
- * ordinary message and the AI runs the tool again. Nothing retries by itself.
+ * ordinary message — marked as answering this call, so the card retires,
+ * reload or not — and the AI runs the tool again. Nothing retries by itself.
  *
  * Outside an item chat (`useChatItem()` has no `env`: the knowledge-base chat,
  * a replay) it shows the request without actions.
@@ -25,11 +26,14 @@ import { useT } from "../lib/i18n";
 import type { EnvRequest } from "../renderers/envRequest";
 
 export function EnvRequestCard({
+  callId,
   request,
   client = defaultApi,
   privateClient = privateEnvApi,
   personalClient = personalEnvApi,
 }: {
+  /** The `request_env` call — what the Retry message says it answers. */
+  callId: string;
   request: EnvRequest;
   client?: Pick<ApiClient, "getEnvProviders">;
   privateClient?: Pick<PrivateEnvClient, "get">;
@@ -68,8 +72,11 @@ export function EnvRequestCard({
     personal: personal.data?.values ?? {},
     providers: providers.data ?? [],
   });
-  const loaded = providers.isSuccess && mine.isSuccess && (!asks || !personal.isPending);
+  // Settled, not succeeded: a list of logins that could not be read still
+  // leaves a field to fill — the card must not go inert over it.
+  const loaded = !providers.isPending && !mine.isPending && (!asks || !personal.isPending);
   const allSet = loaded && rows.every((r) => r.status === "ready");
+  const done = retried || Boolean(env?.answered(callId));
   return (
     <div className="env-request-card" data-testid="env-request-card">
       <p className="env-request-card-reason">{request.reason}</p>
@@ -85,19 +92,11 @@ export function EnvRequestCard({
                 className="btn"
                 data-size="sm"
                 data-variant="primary"
-                onClick={() =>
-                  env.open({
-                    name: r.name,
-                    login: r.status === "missing" ? (r.login?.id ?? null) : null,
-                    tab: r.status === "pinned" ? "shared" : "mine",
-                  })
-                }
+                onClick={() => env.open({ name: r.name, login: r.login?.id ?? null })}
               >
-                {r.status === "pinned"
-                  ? t("envreq.shared", { name: r.name })
-                  : r.login
-                    ? t("envreq.login", { label: r.login.label })
-                    : t("envreq.set", { name: r.name })}
+                {r.login
+                  ? t("envreq.login", { label: r.login.label })
+                  : t("envreq.set", { name: r.name })}
               </button>
             )}
           </li>
@@ -105,18 +104,20 @@ export function EnvRequestCard({
       </ul>
       {env ? (
         <div className="env-request-card-foot">
-          {allSet ? (
+          {done ? (
+            <span>{t("envreq.retried")}</span>
+          ) : allSet ? (
             <button
               type="button"
               className="btn"
               data-size="sm"
               data-variant="primary"
-              disabled={retried}
               onClick={() => {
-                setRetried(true);
-                env.retry(
-                  t("envreq.retryMessage", { names: request.names.join(", "), tool: request.tool }),
-                );
+                const text = t("envreq.retryMessage", {
+                  names: request.names.join(", "),
+                  tool: request.tool,
+                });
+                if (env.retry(callId, text)) setRetried(true);
               }}
             >
               {t("envreq.retry")}

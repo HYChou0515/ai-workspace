@@ -3,10 +3,9 @@
  * to draw it at all, and what the viewer is missing that they can supply.
  *
  * "Missing" is narrow on purpose: a variable some running tool marked
- * REQUIRED, whose value this viewer's tools would not get, and which the
- * viewer could fix — i.e. one their own value would actually be used for. A
- * shared value pinned by `shared_first` is not theirs to fix, and an optional
- * one is not missing. Each is named by the SYSTEM to sign in to when the deploy
+ * REQUIRED and whose value this viewer's tools would not get — a blank value
+ * counts as none in every layer, so whatever is missing, the viewer's own value
+ * would be used for it. An optional one is not missing. Each is named by the SYSTEM to sign in to when the deploy
  * can sign them in for it, else by the variable; never counted ("2 missing"
  * says nothing about what to do).
  */
@@ -70,10 +69,10 @@ export function identityState({
 
 /** Where one variable stands for this viewer — the ONE judgement the key
  * button (`identityState`) and the chat's request card (`envRequestRows`) both
- * make. `ready`: the value their tools would get is not blank. `pinned`: blank,
- * but held by the shared copy under `shared_first`, so whatever the viewer
- * typed would not be used. `missing`: blank, and theirs to fill. */
-export type ViewerStatus = "ready" | "pinned" | "missing";
+ * make: `ready` when the value their tools would get is not blank, otherwise
+ * `missing`. A blank value is not a value in any layer (`layerInUse`), so a
+ * blank shared copy never stands in the way of the viewer's own. */
+export type ViewerStatus = "ready" | "missing";
 
 export function viewerStatus(
   name: string,
@@ -91,9 +90,7 @@ export function viewerStatus(
         : layer === "shared"
           ? shared[name]
           : "";
-  if ((value ?? "").trim() !== "") return "ready";
-  if (policyOf(name, policy) === "shared_first" && Object.hasOwn(shared, name)) return "pinned";
-  return "missing";
+  return (value ?? "").trim() !== "" ? "ready" : "missing";
 }
 
 /** How the key button names what is missing (`plan-wui-viewer-login` Q11):

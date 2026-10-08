@@ -210,6 +210,10 @@ def _child_context(
         withheld_collection_ids=[],
         kb_passages=[],
         injected_card_ids=set(),
+        # What each package tool last printed in THIS turn — what `request_env`
+        # checks a name against. A sub-agent's runs are not the parent's: the
+        # parent's model never saw them (plan-env-request-card, review round 1).
+        tool_outputs={},
         # NOT reset, and deliberately: `kb_search_budget` / `wiki_search_budget`
         # stay shared, so a turn's search allowance is spent once however many
         # sub-agents it delegates to. Resetting them would let an agent multiply

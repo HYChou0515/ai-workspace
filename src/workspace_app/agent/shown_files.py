@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from ..files import WorkspaceFiles, abs_path, rel_path
 from ..filestore.protocol import FileNotFound
+from .env_request import ENV_REQUEST_MARKER
 
 SHOWN_FILES_KEY = "shown_files"
 SHOWN_FILES_MARKER = "\n[shown-files]"
@@ -165,7 +166,7 @@ SKILL_HUB_ENTRY_MARKER = "\n[skill-hub-entry]"
 #: The chat cards a tool reply can end with, and the field that marks a
 #: declaration as the tool's own: the skill hub entry (`show_skill_hub_entry`)
 #: and the request for variables (`request_env`, plan-env-request-card).
-_CARD_DECLARATIONS = ((SKILL_HUB_ENTRY_MARKER, "entry_id"), ("\n[env-request]", "tool"))
+_CARD_DECLARATIONS = ((SKILL_HUB_ENTRY_MARKER, "entry_id"), (ENV_REQUEST_MARKER, "tool"))
 
 
 def without_card_declaration(text: str) -> str:

@@ -334,10 +334,11 @@ export function EntryView({
     }
     if (hubEntry) return <SkillHubEntryCard entryId={hubEntry} />;
     // docs/plan-env-request-card.md: the declared request IS the rendering; a
-    // refused request (an `exec` failure, a name the tool never printed) stays
-    // a visible card so the refusal is in the log.
+    // refused request (an `exec` failure, a name the tool never printed)
+    // declares nothing and falls through to the ordinary tool card, so the
+    // refusal stays in the log.
     const envRequest = entry.call.name === "request_env" ? parseEnvRequest(entry.call.output) : null;
-    if (envRequest) return <EnvRequestCard request={envRequest} />;
+    if (envRequest) return <EnvRequestCard callId={entry.call.call_id} request={envRequest} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
         // 28 = the avatar column every assistant block is indented past. Flush

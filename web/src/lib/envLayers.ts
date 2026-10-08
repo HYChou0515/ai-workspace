@@ -34,7 +34,9 @@ export function layerInUse(
   policy: Record<string, string>,
   personal: Record<string, string> = {},
 ): Layer {
-  const has = (layer: Record<string, string>) => Object.hasOwn(layer, name);
+  // A blank value is not a value (`resolve_env`): it does not hide the next layer.
+  const has = (layer: Record<string, string>) =>
+    Object.hasOwn(layer, name) && (layer[name] ?? "").trim() !== "";
   switch (policyOf(name, policy)) {
     case "private_only":
       return has(mine) ? "private" : has(personal) ? "personal" : "none";

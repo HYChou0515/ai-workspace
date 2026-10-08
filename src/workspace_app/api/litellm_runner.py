@@ -27,13 +27,15 @@ from agents import (
     Model,
     ModelSettings,
     RunConfig,
+    RunContextWrapper,
     Runner,
     ToolOutputImage,
     ToolOutputText,
 )
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
-from agents.agent import StopAtTools
+from agents.agent import StopAtTools, ToolsToFinalOutputFunction, ToolsToFinalOutputResult
 from agents.extensions.models.litellm_model import LitellmModel
+from agents.tool import FunctionToolResult
 from openai.types.shared import Reasoning
 
 from ..agent.args_recovery import (
@@ -512,15 +514,17 @@ def _agent_for(
     # Re-deriving it here from a ceiling + pins was tried and re-widened every
     # config that had been narrowed after resolve (a sub-agent's own list, a
     # workflow node's `tools:`).
-    if packages:
-        tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # plan-env-request-card D6: the card asks a person to act, so it goes where
     # `ask_user` goes — and only when a package tool is here to need a variable
-    # (`exec` gets none). Granted by this rule alone, never by name.
+    # (`exec` gets none). Granted by this rule alone, never by name. Added BEFORE
+    # the package commands so `dedupe_tools` (first wins) keeps the built-in over
+    # a package's command of the same name, as it does for every built-in.
     from ..agent.env_request import request_env_granted, request_env_tool
 
     if request_env_granted(config, packages or []):
         tools.append(request_env_tool())
+    if packages:
+        tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # Last stop before the model sees them, and the only place every source is in
     # one list: built-ins, the conditional grants, and the package commands —
     # which `build_function_tools` rejects collisions AMONG, but not against
@@ -810,7 +814,7 @@ ASK_USER_TOOL = "ask_user"
 
 def ask_user_stop_behaviour(
     tool_names: Sequence[str] | None,
-) -> StopAtTools | Literal["run_llm_again"]:
+) -> StopAtTools | ToolsToFinalOutputFunction[Any] | Literal["run_llm_again"]:
     """End the turn when the agent asks the user something — a question
     (`ask_user`) or a variable only they can set (`request_env`).
 
@@ -822,13 +826,32 @@ def ask_user_stop_behaviour(
     ignore (local models routinely do).
 
     Only applied when the turn actually has the tool: a blanket stop would end
-    every turn at its first tool call."""
+    every turn at its first tool call.
+
+    `request_env` stops the turn only when it actually drew its card
+    (docs/plan-env-request-card.md N3). A refusal — a name the tool never
+    printed, `exec`, a tool it does not hold — tells the model what to do
+    instead, and stopping on it (as `StopAtTools` would, on any reply) left that
+    advice unreadable until the user next spoke."""
+    from ..agent.env_request import ENV_REQUEST_MARKER
     from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
 
-    stop = [n for n in (ASK_USER_TOOL, REQUEST_ENV_TOOL) if tool_names and n in tool_names]
-    if stop:
-        return StopAtTools(stop_at_tool_names=stop)
-    return "run_llm_again"
+    names = tool_names or ()
+    if REQUEST_ENV_TOOL not in names:
+        if ASK_USER_TOOL in names:
+            return StopAtTools(stop_at_tool_names=[ASK_USER_TOOL])
+        return "run_llm_again"
+
+    def stop(
+        _ctx: RunContextWrapper[Any], results: list[FunctionToolResult]
+    ) -> ToolsToFinalOutputResult:
+        for r in results:
+            asked = r.tool.name == ASK_USER_TOOL
+            if asked or (r.tool.name == REQUEST_ENV_TOOL and ENV_REQUEST_MARKER in str(r.output)):
+                return ToolsToFinalOutputResult(is_final_output=True, final_output=r.output)
+        return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+    return stop
 
 
 def _rate_limit_hold_emitter(

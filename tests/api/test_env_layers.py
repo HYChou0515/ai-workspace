@@ -114,9 +114,9 @@ def test_the_shared_case_table_still_says_what_resolve_env_does():
     table = json.loads(
         (Path(__file__).parents[1] / "fixtures" / "env_layers_cases.json").read_text()
     )
-    # Every combination of K in shared / this item's / every item's, under no
+    # Every combination of K absent, set or blank in shared / this item's / every item's, under no
     # policy, each of the three, and an unknown one (`plan-personal-env`).
-    assert len(table["cases"]) == 2 * 2 * 2 * 5
+    assert len(table["cases"]) == 3 * 3 * 3 * 5
     for case in table["cases"]:
         got = resolve_env(
             shared=case["shared"],
@@ -199,3 +199,25 @@ def test_splitting_the_service_account_out_changes_nothing_without_my_variables(
             old = resolve_env(shared=shared, private={**service, **own}, policy=policy)
             new = resolve_env(shared=shared, private=own, service=service, policy=policy)
             assert list(new.items()) == list(old.items()), (shared, own, service, policy)
+
+
+# ─── a blank value is not a value (docs/plan-env-request-card.md, review 1) ──
+
+
+@pytest.mark.parametrize(
+    ("policy", "shared", "private", "personal", "expected"),
+    [
+        # A blank shared copy no longer hides the person's own value.
+        ("shared_first", {"K": ""}, {"K": "p"}, {}, "p"),
+        ("shared_first", {"K": "  "}, {"K": "p"}, {}, "p"),
+        # Nor does a blank private value hide the next layer.
+        ("private_first", {"K": "s"}, {"K": ""}, {"K": "v"}, "v"),
+        ("private_first", {"K": "s"}, {"K": ""}, {}, "s"),
+        # Blank everywhere: the tool is not handed the name at all.
+        ("shared_first", {"K": ""}, {"K": ""}, {}, None),
+    ],
+)
+def test_a_blank_value_reads_as_not_set(policy, shared, private, personal, expected):  # noqa: ANN001
+    got = resolve_env(shared=shared, private=private, personal=personal, policy={"K": policy})
+
+    assert got.get("K") == expected

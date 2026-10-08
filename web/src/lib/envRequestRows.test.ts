@@ -48,9 +48,15 @@ describe("envRequestRows", () => {
     expect(rows[0].status).toBe("ready");
   });
 
-  it("says when only the shared copy can fix it", () => {
-    const rows = envRequestRows(["MAP_KEY"], { ...none, shared: { MAP_KEY: "" } });
-
-    expect(rows[0].status).toBe("pinned");
+  it("treats a blank shared copy as no value, so the person's own counts", () => {
+    expect(envRequestRows(["MAP_KEY"], { ...none, shared: { MAP_KEY: "" } })[0].status).toBe(
+      "missing",
+    );
+    const filled = envRequestRows(["MAP_KEY"], {
+      ...none,
+      shared: { MAP_KEY: " " },
+      mine: { MAP_KEY: "k" },
+    });
+    expect(filled[0].status).toBe("ready");
   });
 });

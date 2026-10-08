@@ -59,27 +59,27 @@ function openAt(target: EnvTarget, { tools = [] as ItemToolState[], shared = {} 
 
 describe("EnvVarsModal opened at a target", () => {
   it("draws and focuses a field for a name no tool declared (D5)", async () => {
-    openAt({ name: "MAP_KEY", login: null, tab: "mine" });
+    openAt({ name: "MAP_KEY", login: null });
 
     const field = await screen.findByTestId("env-mine-MAP_KEY");
     await waitFor(() => expect(field).toHaveFocus());
   });
 
   it("unfolds the tool section the name is in and focuses it", async () => {
-    openAt({ name: "MAP_KEY", login: null, tab: "mine" }, { tools: [optional] });
+    openAt({ name: "MAP_KEY", login: null }, { tools: [optional] });
 
     const field = await screen.findByTestId("env-mine-MAP_KEY");
     await waitFor(() => expect(field).toHaveFocus());
   });
 
-  it("opens on the tab the card chose", async () => {
-    openAt({ name: "MAP_KEY", login: null, tab: "shared" }, { shared: { MAP_KEY: "" } });
+  it("opens on the person's own tab", async () => {
+    openAt({ name: "MAP_KEY", login: null });
 
-    expect(screen.getByTestId("env-tab-shared")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("env-tab-mine")).toHaveAttribute("aria-selected", "true");
   });
 
   it("goes straight into the login, even when no tool declared what it produces", async () => {
-    openAt({ name: "ERP_TOKEN", login: "erp", tab: "mine" });
+    openAt({ name: "ERP_TOKEN", login: "erp" });
 
     expect(await screen.findByTestId("env-cred-dialog")).toBeInTheDocument();
   });

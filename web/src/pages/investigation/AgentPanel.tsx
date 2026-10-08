@@ -254,7 +254,16 @@ export function AgentPanel({
   // environment panel (`envTarget`, read by the header that owns it) and its
   // Retry is an ordinary send. Only where the panel can be opened at all.
   const [envTarget, setEnvTarget] = useState<EnvTarget | null>(null);
-  const retryRef = useRef<(text: string) => void>(() => {});
+  const retryRef = useRef<(callId: string, text: string) => boolean>(() => false);
+  // The calls a message in the thread answers (`Message.answers`) — a card's
+  // Retry marks its call, so a retried card stays retired after a reload.
+  const answeredCalls = useMemo(() => {
+    const out = new Set<string>();
+    for (const e of log.entries) {
+      if (e.kind === "message" && e.message.answers) out.add(e.message.answers);
+    }
+    return out;
+  }, [log.entries]);
   const canEnv = Boolean(canOpenEnv || onSaveEnvVars);
   const chatItem = useMemo<ChatItem | null>(
     () =>
@@ -269,12 +278,13 @@ export function AgentPanel({
                     shared: envVars ?? {},
                     policy: envPolicy ?? {},
                     open: setEnvTarget,
-                    retry: (text: string) => retryRef.current(text),
+                    retry: (callId: string, text: string) => retryRef.current(callId, text),
+                    answered: (callId: string) => answeredCalls.has(callId),
                   },
                 }
               : {}),
           },
-    [readOnly, slug, investigationId, canEnv, envVars, envPolicy],
+    [readOnly, slug, investigationId, canEnv, envVars, envPolicy, answeredCalls],
   );
   // A one-line answer to "I just did something and nothing happened" — the
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
@@ -621,13 +631,14 @@ export function AgentPanel({
    * spectator lock-out the change existed to remove — while ignoring the one
    * state where a send really is refused. */
   // Read at press time, so the card's Retry sees this render's send/refusal.
-  retryRef.current = (text: string) => {
+  retryRef.current = (callId: string, text: string) => {
     const why = sendRefusal();
     if (why) {
       setComposerHint(why);
-      return;
+      return false;
     }
-    void send(text);
+    void send(text, { answers: callId });
+    return true;
   };
   const sendRefusal = (): string | null => {
     // `readOnly` belongs here too. It was enforced on the composer, the Send

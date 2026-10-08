@@ -18,7 +18,7 @@ import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { AgentPanel } from "./AgentPanel";
 
-function agent(): AgentState {
+function agent(extra: unknown[] = []): AgentState {
   return {
     investigationId: "it1",
     log: {
@@ -34,6 +34,7 @@ function agent(): AgentState {
               'The user now sees a card.\n[env-request]{"tool":"lookup","names":["MAP_KEY"],"reason":"The map needs a key"}',
           },
         },
+        ...extra,
       ],
       streaming: false,
     } as unknown as AgentState["log"],
@@ -112,7 +113,22 @@ describe("AgentPanel — a request_env card in the log", () => {
     fireEvent.click(await screen.findByRole("button", { name: /重試|Retry/ }));
 
     await waitFor(() => expect(a.send).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(a.send).mock.calls[0][0]).toContain("MAP_KEY");
+    const [text, opts] = vi.mocked(a.send).mock.calls[0];
+    expect(text).toContain("MAP_KEY");
+    // Marked as answering the card, which is what retires it for good.
+    expect(opts).toEqual({ answers: "c1" });
+  });
+
+  it("offers no Retry on a card a later message already answered", async () => {
+    vi.spyOn(privateEnvApi, "get").mockResolvedValue({ values: { MAP_KEY: "k" }, auto: {} });
+    const retried = {
+      kind: "message",
+      message: { role: "user", content: "MAP_KEY is set", answers: "c1" },
+    };
+    renderPanel(agent([retried]), { canEditEnv: true });
+
+    expect(await screen.findByText(/已請 AI 重試|Asked the AI to retry/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(重試|Retry)$/ })).toBeNull();
   });
 
   it("shows the request without actions where the panel cannot be opened", async () => {

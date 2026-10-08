@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 #: Ends a `request_env` reply: the card the chat draws. Mirrored by
 #: `web/src/renderers/envRequest.ts`.
-ENV_REQUEST_MARKER = "\n[env-request]"  # also `shown_files._CARD_DECLARATIONS`
+ENV_REQUEST_MARKER = "\n[env-request]"
 
 TOOL_NAME = "request_env"
 
@@ -52,7 +52,7 @@ async def request_env_impl(
     login for it, otherwise a field to fill in. Your turn ends here. When the
     user has set them they press Retry, which arrives as their next message —
     then run the tool again."""
-    from ..tooling.registry import find_allowed_command
+    from ..tooling.registry import find_allowed_command, model_tool_name
 
     actx = ctx.context
     cfg = actx.agent_config
@@ -66,7 +66,11 @@ async def request_env_impl(
         return "error: name at least one variable the tool needs."
     if bad := [n for n in names if not _ENV_NAME.fullmatch(n)]:
         return f"error: {', '.join(map(repr, bad))} cannot be an environment variable name."
-    pkg, _cmd = found
+    pkg, cmd = found
+    # The name the run was recorded under, whichever spelling `tool` used (the
+    # grant's `pkg:cmd`, a third-party command's old bare name): the card and
+    # the check both speak of the tool as the model holds it.
+    tool = model_tool_name(pkg, cmd)
     declared = {n.name for n in pkg.env_needs or ()}
     said = actx.tool_outputs.get(tool, "")
     if unseen := [n for n in names if n not in declared and not _mentions(said, n)]:
@@ -75,7 +79,7 @@ async def request_env_impl(
             "this turn, and the tool does not declare it. Ask only for names the tool "
             "named — run it first if you have not."
         )
-    card = {"tool": tool, "names": names, "reason": reason}
+    card = {"tool": tool, "names": list(dict.fromkeys(names)), "reason": reason}
     said = (
         f"The user now sees a card asking for {', '.join(names)}. Wait for them: they "
         "will tell you when it is set, and then you run the tool again."
@@ -110,7 +114,8 @@ def request_env_granted(config: AgentConfig, packages: Sequence[PackageInfo]) ->
     tool list (`litellm_runner._agent_for`) and by the exit-3 hint alike.
 
     The card asks a person to act, so it goes where `ask_user` goes (D6), and
-    only when a package tool is granted to need a variable — `exec` gets none."""
+    only when the turn holds at least one package tool: only a package tool is
+    handed the item's variables — `exec` gets none."""
     from ..tooling.registry import allowed_command_names
     from .tools import granted_builtin_names
 

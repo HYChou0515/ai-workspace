@@ -1814,13 +1814,13 @@ export const messages = {
   "env.bar.login": { "zh-TW": "登入 {names}", en: "Sign in to {names}" },
   "envreq.login": { "zh-TW": "登入 {label}", en: "Sign in to {label}" },
   "envreq.set": { "zh-TW": "設定 {name}", en: "Set {name}" },
-  "envreq.shared": { "zh-TW": "在「共用」設定 {name}", en: "Set {name} on Shared" },
   "envreq.ready": { "zh-TW": "已設定", en: "Set" },
   "envreq.wait": {
     "zh-TW": "設定好之後按「重試」，AI 會重新執行 {tool}。",
     en: "Once these are set, press Retry and the AI runs {tool} again.",
   },
   "envreq.retry": { "zh-TW": "重試", en: "Retry" },
+  "envreq.retried": { "zh-TW": "已請 AI 重試", en: "Asked the AI to retry" },
   "envreq.retryMessage": {
     "zh-TW": "已設定 {names}，請重新執行 {tool}。",
     en: "I have set {names} — please run {tool} again.",

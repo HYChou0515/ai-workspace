@@ -216,26 +216,86 @@ def test_a_turn_with_no_package_tool_has_nothing_to_request_for() -> None:
 
 def test_naming_it_outright_does_not_grant_it() -> None:
     """Only the rule above grants it — a hand-written list cannot put a tool
-    that would refuse every call in front of the model."""
-    agent = _agent(["request_env"])
+    that would refuse every call in front of the model. Asked of `build_tools`
+    itself: through `_agent_for` the rule would deny this list anyway."""
+    from workspace_app.agent.tools import build_tools
 
-    assert "request_env" not in {t.name for t in agent.tools}
+    assert build_tools(["request_env"]) == []
 
 
-def test_the_turn_stops_at_the_card() -> None:
-    from agents.agent import StopAtTools
+async def _stops(agent, *results: tuple[str, str]):  # noqa: ANN001, ANN202
+    """What the SDK itself decides after these tool results — the real check,
+    not the shape of the setting."""
+    from types import SimpleNamespace as NS
 
+    from agents import RunContextWrapper as W
+    from agents.run_internal.turn_resolution import check_for_final_output_from_tools
+
+    tools = {t.name: t for t in agent.tools}
+    fake = [NS(tool=tools[name], output=out) for name, out in results]
+    return await check_for_final_output_from_tools(agent, fake, W(None))  # ty: ignore[invalid-argument-type]
+
+
+async def test_the_turn_stops_at_the_card() -> None:
+    agent = _agent(["ask_user"], _pkg("erp", "lookup"))
+    card = f'shown{ENV_REQUEST_MARKER}{{"tool":"lookup","names":["K"],"reason":"r"}}'
+
+    got = await _stops(agent, ("lookup", "error: set K"), ("request_env", card))
+
+    assert got.is_final_output and got.final_output == card
+
+
+async def test_a_refused_request_does_not_end_the_turn() -> None:
+    """The refusal tells the model what to do instead — it has to get the turn
+    to do it in (review round 1, D1)."""
     agent = _agent(["ask_user"], _pkg("erp", "lookup"))
 
-    behaviour = agent.tool_use_behavior
-    assert isinstance(behaviour, dict)
-    assert "request_env" in StopAtTools(**behaviour)["stop_at_tool_names"]  # ty: ignore[missing-typed-dict-key]
+    got = await _stops(agent, ("request_env", "error: K does not appear in what `lookup` printed"))
+
+    assert not got.is_final_output
+
+
+async def test_a_question_still_ends_the_turn() -> None:
+    agent = _agent(["ask_user"], _pkg("erp", "lookup"))
+
+    got = await _stops(agent, ("ask_user", "Asked."))
+
+    assert got.is_final_output and got.final_output == "Asked."
+
+
+def _child(parent: AgentToolContext, tools: list[str]) -> AgentToolContext:
+    from workspace_app.api.subagent_run import _child_context
+    from workspace_app.apps.subagents import SubagentDef
+
+    return _child_context(parent, SubagentDef(name="d", description="", tools=tools))
 
 
 def test_a_sub_agent_never_gets_it() -> None:
-    from workspace_app.apps.subagents import SUBAGENT_FORBIDDEN_TOOLS
+    """D6, through the child the delegation really builds: a definition that
+    names both halves of the rule still yields a turn without the card."""
+    from workspace_app.api.litellm_runner import _agent_for
 
-    assert "request_env" in SUBAGENT_FORBIDDEN_TOOLS
+    erp = _pkg("erp", "lookup")
+    parent = _ctx(erp)
+    parent.agent_config = AgentConfig(
+        name="a", model="ollama_chat/x", allowed_tools=["ask_user", "erp"]
+    )
+    child = _child(parent, ["ask_user", "request_env", "erp"])
+
+    assert child.agent_config is not None
+    agent = _agent_for(child.agent_config, packages=[erp])
+    assert "request_env" not in {t.name for t in agent.tools}
+
+
+def test_a_sub_agent_does_not_share_the_parent_s_tool_outputs() -> None:
+    """Review round 1 (D4): the check reads what THIS turn's model saw."""
+    parent = _ctx(_pkg("erp", "lookup"), outputs={"lookup": "set ERP_TOKEN"})
+
+    child = _child(parent, ["erp"])
+    child.tool_outputs["lookup"] = "the child's run"
+
+    assert child.tool_outputs == {"lookup": "the child's run"}
+    assert parent.tool_outputs == {"lookup": "set ERP_TOKEN"}
 
 
 # ── what the model is told when a tool exits 3 (D7) ─────────────────────────
@@ -302,3 +362,39 @@ def test_the_export_strips_the_marker_the_tool_writes() -> None:
     from workspace_app.agent.shown_files import _CARD_DECLARATIONS
 
     assert (ENV_REQUEST_MARKER, "tool") in _CARD_DECLARATIONS
+
+
+@pytest.mark.parametrize(
+    ("pkg", "called", "recorded"),
+    [
+        # The grant spelling of a first-party command.
+        (_pkg("erp", "lookup"), "erp:lookup", "lookup"),
+        # A third-party command by the bare name a skill written before the prefix uses.
+        (_pkg("mes", "lookup", third_party=True), "lookup", "mes__lookup"),
+    ],
+)
+async def test_any_name_the_tool_answers_to_reads_its_own_output(pkg, called, recorded) -> None:  # noqa: ANN001
+    """Review round 1 (D2): the tool resolves by every spelling, so its output
+    must be read under the name it was recorded by — and the card names it so."""
+    actx = _ctx(pkg, outputs={recorded: "error: set ERP_TOKEN"})
+
+    reply = await _call(actx, tool=called, names=["ERP_TOKEN"], reason="r")
+
+    assert _card(reply)["tool"] == recorded
+
+
+async def test_a_name_asked_for_twice_is_one_row() -> None:
+    actx = _ctx(_pkg("erp", "lookup"), outputs={"lookup": "error: set ERP_TOKEN"})
+
+    reply = await _call(actx, tool="lookup", names=["ERP_TOKEN", "ERP_TOKEN"], reason="r")
+
+    assert _card(reply)["names"] == ["ERP_TOKEN"]
+
+
+def test_the_built_in_outranks_a_package_command_of_the_same_name() -> None:
+    """Review round 1 (D5): first wins in `dedupe_tools`, and the stop rule and
+    the exit-3 hint both mean the built-in."""
+    agent = _agent(["ask_user"], _pkg("erp", "lookup", "request_env"))
+
+    (tool,) = [t for t in agent.tools if t.name == "request_env"]
+    assert tool.description.startswith("Ask the user to sign in")

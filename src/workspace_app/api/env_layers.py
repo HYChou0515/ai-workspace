@@ -75,6 +75,8 @@ def resolve_env(
     | ``private_first`` | private → personal → service → shared            |
     | ``private_only``  | private → personal → service                     |
 
+    A blank value (empty or whitespace) counts as not set, in every layer.
+
     An unrecognised policy string reads as the default: the item is a plain
     PATCH-able record, and a stray value must not become a behaviour nobody
     wrote."""
@@ -99,7 +101,9 @@ def resolve_env(
         else:
             order = (shared, private, service)
         for layer in order:
-            if name in layer:
+            # A blank value is not a value: it does not hide the next layer, and
+            # a name blank everywhere is not handed to the tool at all.
+            if layer.get(name, "").strip():
                 env[name] = layer[name]
                 break
     return env
