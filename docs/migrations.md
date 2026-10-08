@@ -1726,7 +1726,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
-### 2026-10-08 · #883 skill hub 版面重做：緊湊列表、skill 頁分頁＋側欄、從 skill 頁安裝 {#pr-883}
+### 2026-10-08 · d70dc49e · #883 skill hub 版面重做：緊湊列表、skill 頁分頁＋側欄、從 skill 頁安裝 {#pr-883}
 
 **設定** — 沒有。
 
