@@ -427,6 +427,22 @@ profile/App 預設;override 上限是 `app.json` 的 `tools`,**不是** profile)
 `.workflows/` 的 workflow 由 agent tool **`save_workflow`**(#323)寫入
 `<workspace>/.workflows/<id>.json`。
 
+### 2.11 Skill hub（plan-skill-hub*.md）
+
+只列頁面讀的形狀；管理動作（下架、權限、轉移、刪除、回復、fork）見 `api/skill_hub_routes.py`。看不到的條目一律 404，
+和不存在一樣。
+
+| Method | Path | 用途 | 狀態 |
+|---|---|---|---|
+| `GET` | `/skill-hub/entries` | 列表一頁：`?q&mine&owner&app&sort=name\|popular\|updated&offset&limit(≤200，預設 50)` → `{entries:[SkillHubCard], total, counted_since}`。只瀏覽時只列原作（`fork_count`）；有篩選時 fork 平列，`origin:{owner,name}\|null`。卡片有 `installs`、`uses`、`updated_at\|null` | ✅ |
+| `GET` | `/skill-hub/entries/{id}` | 詳情：`files:[{path,size\|null}]`、`scripts`、`revision`（目前版本，`""` = 還沒進 git）、`updated_at`、`forks`、`review`、`permission`（只給 owner） | ✅ |
+| `GET` | `/skill-hub/entries/{id}/history` | 版本紀錄，新到舊；發布 / 回復有 `version`（1, 2, …），其他列 `null` | ✅ |
+| `GET` | `/skill-hub/entries/{id}/versions/{rev}` | 一個版本：`files`（同上）、`scripts`、`skill_md` | ✅ |
+| `GET` | `/skill-hub/entries/{id}/versions/{rev}/file?path=` | 一個檔案：`{path, text\|null, size}` | ✅ |
+| `GET` | `/skill-hub/entries/{id}/installs` | 看的人能編輯、且有這個條目副本的 workspace：`{installs:[{app,item_id,title}]}` | ✅ |
+| `GET` | `/skill-hub/entries/{id}/targets?app=` | 那個 App 裡看的人能編輯的 workspace，各自裝下去會怎樣：`{missing_tools, items:[{item_id,title,state:"ok"\|"installed"\|"name_taken",owner}]}` | ✅ |
+| `POST` | `/a/{slug}/items/{item_id}/skills/install` | 安裝：body `{entry_id}` → `{name, missing_tools}`；同名資料夾已在回 409 `folder_in_the_way` | ✅ |
+
 ---
 
 ## 3. SSE 事件型別

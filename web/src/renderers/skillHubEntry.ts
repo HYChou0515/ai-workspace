@@ -10,6 +10,18 @@
  */
 const MARKER = "\n[skill-hub-entry]";
 
+/** The output without the declaration — the sentence a person reads. A
+ * marker still arriving (a trailing prefix of it) goes too. */
+export function stripSkillHubEntry(output: string | undefined): string | undefined {
+  if (!output) return output;
+  const at = output.lastIndexOf(MARKER);
+  if (at >= 0) return output.slice(0, at);
+  for (let n = MARKER.length - 1; n > 0; n--) {
+    if (output.endsWith(MARKER.slice(0, n))) return output.slice(0, output.length - n);
+  }
+  return output;
+}
+
 /** The declared entry id, or `null`. Never throws: tool output streams, so a
  * mid-turn call legitimately sees truncated JSON. */
 export function parseShownSkillHubEntry(output: string | undefined | null): string | null {

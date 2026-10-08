@@ -50,6 +50,7 @@ class _Fakes:
         self.events: list[tuple[str, object]] = []
         self.released: list[tuple[str, bool]] = []
         self.notified: list[WorkflowRun] = []
+        self.notified_ids: list[str] = []
 
     def publish(self, key, ev):
         self.events.append((key, ev))
@@ -57,8 +58,9 @@ class _Fakes:
     async def release(self, item_id, terminal, key=None):
         self.released.append((item_id, terminal))
 
-    def notify(self, run):
+    def notify(self, run, run_id=""):
         self.notified.append(run)
+        self.notified_ids.append(run_id)
 
     def types(self):
         return [type(e).__name__ for _i, e in self.events]
@@ -407,6 +409,22 @@ async def test_failing_step_records_error_phase_and_notifies(spec_instance: Spec
     assert fakes.released == [("i2", True)]
 
 
+async def test_the_failure_notice_names_the_run_that_failed(spec_instance: SpecStar):
+    """`plan-personal-env` D11: the notice also goes to the person the run ran
+    as, who is found by the run's id — so the id handed over must be this run's."""
+
+    async def run(wf, inputs):
+        await run_step(
+            wf, name="think", phase="think", args={}, execute=_ok, check=file_nonempty("x")
+        )
+
+    orch, fakes = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="i2", profile="echo", captured_user="bob")
+    await asyncio.sleep(0)
+
+    assert fakes.notified_ids == [run_id]
+
+
 async def test_second_active_run_on_same_item_is_rejected(spec_instance: SpecStar):
     gate = asyncio.Event()
 
@@ -547,6 +565,17 @@ async def test_abandon_marks_a_run_errored_and_discoverable(spec_instance: SpecS
     assert data.ended == 42
     assert ("iX", True) in fakes.released  # sandbox freed
     assert fakes.notified and fakes.notified[-1].result == data.result  # surfaced as a failure
+
+
+async def test_an_abandoned_runs_notice_names_that_run(spec_instance: SpecStar):
+    """`plan-personal-env` D11: the second way a run errors names it too, so the
+    person it ran as can be found."""
+    orch, fakes = _orch(spec_instance, _run_noop, now=lambda: 42)
+    rid = _insert_run(orch, item_id="iX", status=RunStatus.RUNNING, progress_at=0)
+
+    await orch.abandon(rid, reason="stuck")
+
+    assert fakes.notified_ids == [rid]
 
 
 async def test_abandon_is_a_noop_on_a_terminal_run(spec_instance: SpecStar):

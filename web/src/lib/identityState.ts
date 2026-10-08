@@ -21,6 +21,7 @@ export function identityState({
   shared,
   policy,
   mine,
+  personal = {},
   providers,
   hasSchedules,
 }: {
@@ -28,6 +29,9 @@ export function identityState({
   shared: Record<string, string>;
   policy: Record<string, string>;
   mine: Record<string, string>;
+  /** The viewer's values for every item (`plan-personal-env`): used only for a
+   * name the item asks for as personal (Private first / Private only). */
+  personal?: Record<string, string>;
   providers: EnvProvider[];
   hasSchedules: boolean;
 }): { show: boolean; missing: Missing[]; holdsOwn: boolean } {
@@ -43,7 +47,7 @@ export function identityState({
   const missing: Missing[] = [];
   const seen = new Set<string>();
   for (const name of required) {
-    if (viewerStatus(name, shared, mine, policy) !== "missing") continue;
+    if (viewerStatus(name, shared, mine, policy, personal) !== "missing") continue;
     const via = offered.find((p) => p.produces.includes(name));
     const entry: Missing = via ? { kind: "login", name: via.label } : { kind: "set", name };
     const key = `${entry.kind}:${entry.name}`;
@@ -52,11 +56,16 @@ export function identityState({
     missing.push(entry);
   }
 
-  const personal = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
+  const asksPersonal = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
   // Whether "signed in" would be TRUE: nothing missing is not the same as
-  // holding anything of one's own.
-  const holdsOwn = Object.values(mine).some((v) => v.trim() !== "");
-  return { show: personal || offered.length > 0 || hasSchedules, missing, holdsOwn };
+  // holding anything of one's own. A value from my environment variables
+  // counts only where this item would use it.
+  const holdsOwn =
+    Object.values(mine).some((v) => v.trim() !== "") ||
+    Object.entries(personal).some(
+      ([n, v]) => policyOf(n, policy) !== "shared_first" && v.trim() !== "",
+    );
+  return { show: asksPersonal || offered.length > 0 || hasSchedules, missing, holdsOwn };
 }
 
 /** Where one variable stands for this viewer — the ONE judgement the key
@@ -71,9 +80,17 @@ export function viewerStatus(
   shared: Record<string, string>,
   mine: Record<string, string>,
   policy: Record<string, string>,
+  personal: Record<string, string> = {},
 ): ViewerStatus {
-  const layer = layerInUse(name, shared, mine, policy);
-  const value = layer === "private" ? mine[name] : layer === "shared" ? shared[name] : "";
+  const layer = layerInUse(name, shared, mine, policy, personal);
+  const value =
+    layer === "private"
+      ? mine[name]
+      : layer === "personal"
+        ? personal[name]
+        : layer === "shared"
+          ? shared[name]
+          : "";
   if ((value ?? "").trim() !== "") return "ready";
   if (policyOf(name, policy) === "shared_first" && Object.hasOwn(shared, name)) return "pinned";
   return "missing";

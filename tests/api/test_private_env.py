@@ -359,7 +359,7 @@ async def test_a_seam_answer_left_from_a_removed_seam_is_not_used():
         no_seam, headless={}, acting_for="alice", item_id=rid, verb="read_meta"
     )
 
-    assert got == {}
+    assert got.own == {}
 
 
 def test_a_deploy_without_a_seam_does_not_use_a_left_over_seam_row():

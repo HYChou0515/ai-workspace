@@ -6,41 +6,77 @@
  * flex row at every width (the `.wui-list` note there).
  */
 
-/* ── the list ─────────────────────────────────────────────────────────── */
+/* ── the list (plan-skill-hub-ux-redo D1) ─────────────────────────────── */
 
-/* The 「全部 / 我的」 pair beside the search box. */
-.page .skill-hub-scope {
-  display: inline-flex;
-  gap: var(--space-4);
+/* The page's width is a token (tokens.css) so it can be settled where it is
+   seen (D5a, the web demo); `.page`'s 760px is a form's width. */
+.page.skill-hub-page {
+  max-width: var(--skill-hub-list-width);
 }
 
+/* 「顯示 全部 / 我的」 beside the search box, and the sort, each labelled (the
+   audit: two unlabeled pairs of identical buttons). */
+.page .skill-hub-scope,
+.page .skill-hub-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.page .skill-hub-tool-label {
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  margin-right: var(--space-4);
+}
+.page .skill-hub-sort > select {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 var(--space-8);
+  font-size: var(--text-small);
+}
+.page .skill-hub-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 0 0 var(--space-8);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  font-size: var(--text-small);
+}
+
+.page .skill-hub-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-12);
+  margin: 0 0 var(--space-8);
+}
+
+/* One list, rows divided by a rule — not a column of cards. */
 .page .skill-hub-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-12);
+  border-top: 1px solid var(--paper-3);
 }
 
-/* One entry: a head line (name · App · badges), the description, the owner.
-   A block, not a flex row: the head line wraps its own children, so a long
-   name at 390px folds under the App tag instead of squeezing it to 0px
-   (the lesson of PR #811's rows). */
-.page .skill-hub-row {
-  display: block;
-  padding: var(--space-12) var(--space-16);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
-  background: var(--white);
+/* A row: name, origin and a one-line description on the left; owner, counts,
+   update day and forks on the right. A grid whose right column drops under
+   the left one when there is no room for both (390px). */
+.page .skill-hub-list > .skill-hub-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4) var(--space-16);
+  padding: var(--space-12) var(--space-8);
+  border-top: 0;
+  border-bottom: 1px solid var(--paper-3);
   min-width: 0;
 }
+.page .skill-hub-list > .skill-hub-row:hover {
+  background: color-mix(in srgb, var(--paper-2) 40%, transparent);
+}
 
-.page .skill-hub-row-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-8);
+.page .skill-hub-row-main {
   min-width: 0;
 }
 
@@ -49,49 +85,77 @@
   color: inherit;
   text-decoration: none;
   overflow-wrap: anywhere;
-  min-width: 0;
 }
-
+/* The whole row opens the skill (D15): the title's link covers it. */
+.page .skill-hub-row-title::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
 .page .skill-hub-row-title:hover {
   text-decoration: underline;
 }
-
-.page .skill-hub-owner {
-  font-weight: 400;
-  color: var(--text-paper-d);
+/* The ring moves to the row the link covers — never "none" (base.css). */
+.page .skill-hub-row-title:focus-visible {
+  outline-color: transparent;
+}
+.page .skill-hub-row-title:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.page .skill-hub-row-desc {
-  margin: var(--space-4) 0 0;
-  color: var(--text-paper-d);
-  font-size: var(--text-small);
-  overflow-wrap: anywhere;
-}
-
-/* The fork's origin line (plan-skill-hub-ui-polish D9): a fact, in the meta tone. */
-.skill-hub-row-origin {
-  margin: 2px 0 0;
+/* The fork's origin (plan-skill-hub-ui-polish D9): a fact, in the meta tone. */
+.page .skill-hub-row-origin {
+  margin-left: var(--space-8);
   font-size: 12px;
   color: var(--text-paper-d);
 }
 
-.page .skill-hub-row-meta {
-  margin-top: var(--space-8);
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
+.page .skill-hub-row-desc {
+  margin: 2px 0 0;
+  color: var(--text-paper-d);
   font-size: var(--text-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Forks sit under their root, indented, in the same card shape. */
-.page .skill-hub-forks {
-  list-style: none;
-  margin: var(--space-12) 0 0;
-  padding: 0 0 0 var(--space-16);
-  border-left: 2px solid var(--paper-3);
+.page .skill-hub-row-side {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-4) var(--space-12);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+/* The links of their own sit above the title's cover. */
+.page .skill-hub-row-owner,
+.page .skill-hub-row-forks {
+  position: relative;
+  z-index: 1;
+}
+.page .skill-hub-row-owner {
+  color: var(--text-paper);
+}
+
+@media (max-width: 600px) {
+  .page .skill-hub-list > .skill-hub-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page .skill-hub-row-side {
+    justify-content: flex-start;
+  }
+}
+
+.page .skill-hub-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-12);
+  margin-top: var(--space-16);
 }
 
 .page .skill-hub-badge {
@@ -112,78 +176,226 @@
   color: var(--text-paper);
 }
 
-/* ── an entry ─────────────────────────────────────────────────────────── */
+/* ── a skill's page (plan-skill-hub-ux-redo D5) ───────────────────────── */
 
-.page.skill-hub-entry > .page-head > h1 {
-  overflow-wrap: anywhere;
+/* Wider than a form's 760px: a reading column and a sidebar. Tokens, to be
+   settled where they are seen (D5a, the web demo). */
+.page.skill-hub-entry {
+  max-width: var(--skill-hub-entry-width);
+}
+
+/* Name, description, owner and lineage on the left; 「管理 ▾」 on the right. */
+.page .skill-hub-entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-16);
+  margin-bottom: var(--space-16);
+}
+.page .skill-hub-entry-title {
   min-width: 0;
 }
-
-/* The actions take their own row under the heading at every width — five
-   buttons beside a long name shared the line badly, and at 390px a second
-   row of buttons ran INTO the description when it was pulled up under them
-   (measured, P9). Plain flow instead: heading, actions, description. */
-.page .skill-hub-entry-desc {
-  margin: 0 0 var(--space-16);
-  font-size: var(--text-body-lg);
+.page.skill-hub-entry .skill-hub-entry-title > h1 {
+  margin: 0 0 var(--space-8);
+  overflow-wrap: anywhere;
 }
-
-.page .skill-hub-entry-meta,
-.page .skill-hub-actions {
+.page .skill-hub-entry-desc {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-body-lg);
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-entry-byline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-8);
+  gap: var(--space-8) var(--space-16);
+  margin: 0;
+  font-size: var(--text-small);
 }
 
 .page .skill-hub-actions {
-  flex-basis: 100%;
-  margin: calc(-1 * var(--space-16)) 0 var(--space-16);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-8);
+  flex: none;
 }
-
 .page .skill-hub-actions > .error {
-  flex-basis: 100%;
   margin: 0;
+  max-width: 320px;
 }
 
-/* The first section follows the meta line, not another section, so the
-   inter-section gap does not reach it. */
-.page.skill-hub-entry > section:first-of-type {
-  margin-top: var(--space-24);
+.page .skill-hub-tabs {
+  display: flex;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--paper-3);
+  margin-bottom: var(--space-24);
+  overflow-x: auto;
+}
+.page .skill-hub-tab {
+  padding: var(--space-8) var(--space-12);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+.page .skill-hub-tab[aria-selected="true"] {
+  color: var(--text-paper);
+  font-weight: 700;
+  border-bottom-color: var(--accent);
+}
+
+/* The tab's content and the sidebar; at a phone width the sidebar goes under
+   the header, above the tab's content (where the install button is wanted). */
+.page .skill-hub-entry-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--skill-hub-side-width);
+  gap: var(--space-32);
+  align-items: start;
+}
+.page .skill-hub-entry-main {
+  min-width: 0;
+}
+.page .skill-hub-entry-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-width: 0;
+  font-size: var(--text-body-sm);
+}
+.page .skill-hub-entry-side > .btn {
+  align-self: stretch;
+}
+.page .skill-hub-entry-side h2 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-small);
+  font-weight: 700;
+  color: var(--text-paper-d);
+}
+.page .skill-hub-entry-side p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-side-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.page .skill-hub-side-list > li {
+  display: block;
+  padding: 2px 0;
+  border: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .page .skill-hub-entry-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page .skill-hub-entry-side {
+    order: -1;
+  }
+  .page .skill-hub-entry-head {
+    flex-direction: column;
+  }
+  .page .skill-hub-actions {
+    align-items: flex-start;
+  }
 }
 
 .page .skill-hub-lineage {
-  margin: var(--space-12) 0 0;
   font-size: var(--text-small);
 }
 
 /* `my-resources.css` draws EVERY `.page ul > li` as a bordered flex row (the
-   resource lists). These lists are not that; each says so, or the chips came
-   out one per line with a rule between them (measured, P9). */
-.page .skill-hub-chips,
-.page .skill-hub-files {
+   resource lists). These lists are not that. */
+.page .skill-hub-files,
+.page .skill-hub-tree {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-8);
 }
-
-.page .skill-hub-chips > li,
-.page .skill-hub-files > li {
-  display: inline;
+.page .skill-hub-files > li,
+.page .skill-hub-tree > li {
+  display: block;
   padding: 0;
   border: 0;
 }
 
-.page .skill-hub-chips code,
-.page .skill-hub-files code {
-  display: inline-block;
-  padding: 2px var(--space-8);
-  border-radius: var(--radius-btn);
-  background: var(--paper-2);
+/* The files tab (D12): the summary line, then the tree beside the opened
+   file — under it when there is no room. */
+.page .skill-hub-files-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-12);
+  margin: 0 0 var(--space-12);
+  color: var(--text-paper-d);
   font-size: var(--text-small);
+}
+.page .skill-hub-files-body {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: var(--space-16);
+  align-items: start;
+}
+.page .skill-hub-tree .skill-hub-tree {
+  padding-left: var(--space-16);
+}
+/* The tree scrolls in its own box, as tall as the opened file's: an opened
+   folder of hundreds of files no longer stretches the whole page. */
+.page .skill-hub-files-body > .skill-hub-tree {
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.page .skill-hub-tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: 3px var(--space-8);
+  border-radius: var(--radius-btn);
+  text-align: left;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  min-width: 0;
+}
+button.skill-hub-tree-row:hover,
+.page .skill-hub-tree-row[aria-pressed="true"] {
+  background: var(--paper-2);
+}
+.page .skill-hub-tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page .skill-hub-file-view {
+  min-width: 0;
+}
+.page .skill-hub-file-view > h3 {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-body-sm);
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-file-view > pre {
+  margin: 0;
+  padding: var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  font-size: var(--text-small);
+  overflow: auto;
+  max-height: 70vh;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .page .skill-hub-files-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .page .skill-hub-notes {
@@ -202,10 +414,6 @@
   margin-top: var(--space-4);
 }
 
-.page .skill-hub-list > li,
-.page .skill-hub-forks > li {
-  border-top: 0;
-}
 
 .page .skill-hub-md {
   padding: var(--space-16);
@@ -281,10 +489,29 @@
   border-color: var(--accent-h);
 }
 
+/* A transfer or a permission change is a note between versions (D8), not a
+   card of its own. */
+.page .skill-hub-history > li[data-kind="note"] {
+  border: 0;
+  padding: 0 var(--space-12);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.page .skill-hub-history > li[data-kind="note"] .skill-hub-history-kind {
+  font-weight: 400;
+}
+
+.page .skill-hub-history-name {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.page .skill-hub-history-head .skill-hub-history-meta {
+  margin-left: auto;
+}
+
 .page .skill-hub-history-head,
 .page .skill-hub-history-meta,
-.page .skill-hub-history-actions,
-.page .skill-hub-diff-head {
+.page .skill-hub-history-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -356,15 +583,61 @@
   overflow-wrap: anywhere;
 }
 
-.page .skill-hub-pre {
-  margin: var(--space-4) 0 0;
-  padding: var(--space-8);
-  max-height: 24rem;
-  overflow: auto;
-  border-radius: var(--radius-btn);
-  background: var(--paper-2);
+/* D13: the count line, then one disclosure row per file. */
+.page .skill-hub-diff-summary {
+  margin: 0 0 var(--space-8);
   font-size: var(--text-small);
-  white-space: pre;
+  color: var(--text-paper-d);
+}
+.page .skill-hub-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-btn);
+  text-align: left;
+  min-width: 0;
+}
+.page .skill-hub-diff-head:hover {
+  background: var(--paper-2);
+}
+
+/* The lines: a mark column, then the text; added in the ok hue, removed in
+   the err hue, both as tints so the text keeps its contrast. */
+.page .skill-hub-patch {
+  margin: var(--space-4) 0 0;
+  max-height: 28rem;
+  overflow: auto;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+.page .skill-hub-patch-line {
+  display: flex;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-patch-mark {
+  flex: none;
+  width: 2ch;
+  text-align: center;
+  color: var(--text-paper-d);
+  user-select: none;
+}
+.page .skill-hub-patch-line[data-line="add"] {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.page .skill-hub-patch-line[data-line="del"] {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.page .skill-hub-patch-gap {
+  padding: 0 var(--space-8);
+  color: var(--text-paper-d);
+  background: var(--paper-2);
 }
 
 .page .skill-hub-fork-items {
@@ -416,6 +689,9 @@
 .skill-hub-card-title {
   font-weight: 600;
   min-width: 0;
+  color: var(--accent-h);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .skill-hub-card-owner,
@@ -450,9 +726,194 @@
   color: var(--err);
 }
 
-/* The counts beside the owner on a list row, and the 「自 … 起」 note. */
-.page .skill-hub-row-meta {
+
+/* ── the workspace's Skills panel (plan-skill-hub-ux-redo D9) ───────────────
+   A modal, not under `.page`, so its own unscoped classes. */
+.skills-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.skills-panel-head > strong {
+  flex: 1;
+}
+.skills-panel-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.skills-panel-intro {
+  margin: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.skills-panel-note {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-btn);
+  font-size: var(--text-small);
+  color: var(--accent-h);
+  background: var(--accent-soft);
+}
+.skills-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.skills-panel-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: 4px;
+}
+.skills-panel-hint {
+  flex: 1;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.skills-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+/* A row: the text (two lines) and the three controls, which keep their slot
+   on every row so they line up down the list; under 480px the controls drop
+   under the text as one cluster. */
+.skills-row,
+.skills-picker-row {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-12);
+  padding: var(--space-8) var(--space-4);
+  border-bottom: 1px solid var(--paper-2);
+  font-size: var(--text-body-sm);
+}
+.skills-picker-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.skills-row-text {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.skills-row-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-8);
+  min-width: 0;
+}
+.skills-row-name {
+  font-weight: 600;
+  white-space: nowrap;
+  color: inherit;
+}
+a.skills-row-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.skills-row-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-8);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.skills-row-status > span + span::before {
+  content: "・";
+  margin-right: var(--space-4);
+  color: var(--text-paper-d);
+}
+.skills-row-todo {
+  color: var(--info);
+}
+.skills-row-warn {
+  font-size: var(--text-small);
+  color: var(--warn);
+}
+.skills-row-link {
+  margin-left: var(--space-4);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-h);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+.skills-row-desc {
+  margin-top: 2px;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-row-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex: none;
+  margin-left: auto;
+}
+.skills-row-seg {
+  display: inline-flex;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  overflow: hidden;
+}
+.skills-row-seg > button {
+  height: 24px;
+  padding: 0 10px;
+  font-size: var(--text-small);
+  border-right: 1px solid var(--paper-3);
+  background: var(--white);
+  color: var(--text-paper);
+  cursor: pointer;
+}
+.skills-row-seg > button:last-child {
+  border-right: 0;
+}
+.skills-row-seg > button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--white);
+}
+/* The ⋯ slot keeps its width when a row has nothing more, so the controls
+   of every row stay in one column. */
+.skills-row-more {
+  display: inline-flex;
+  width: 32px;
+  justify-content: flex-end;
+}
+
+/* D17 / audit #28: the transfer dialog's help line clear of the picker's focus ring. */
+.skill-hub-dialog-hint {
+  margin-bottom: var(--space-12);
+}
+/* Audit #34: inline code in a SKILL.md or a review note reads as code. */
+.page .skill-hub-md code,
+.page .skill-hub-notes code,
+.page .skill-hub-history-notes code {
+  padding: 1px 4px;
+  border-radius: var(--radius-chip);
+  background: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.page .skill-hub-md pre code {
+  padding: 0;
+  background: none;
+}
+.page .skill-hub-notes .markdown > p,
+.page .skill-hub-history-notes .markdown > p {
+  margin: 0;
 }
 
 /* docs/plan-env-request-card.md — the `request_env` card. Its own classes:

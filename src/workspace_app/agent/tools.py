@@ -2809,7 +2809,9 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         lines.append("It is visible to the people on its access list (restricted).")
     else:
         lines.append("It is public: everyone on the platform can find and install it.")
-    return "\n\n".join(lines)
+    # The chat draws the entry's live card from this marker, as it does for
+    # `show_skill_hub_entry`: the person can open what they just published.
+    return "\n\n".join(lines) + SKILL_HUB_ENTRY_MARKER + json.dumps({"entry_id": entry_id})
 
 
 async def install_skill_impl(ctx: RunContextWrapper[AgentToolContext], entry_id: str) -> str:

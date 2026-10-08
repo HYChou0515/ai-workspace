@@ -53,7 +53,7 @@ from .skill_payload import SkillOrigin
 from .skills import SKILL_BODY_CAP, SkillError, _parse_frontmatter
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection, Iterable, Mapping
 
     from ..filestore.protocol import FileStore
     from .skill_hub_git import SkillHubRepos, TreeFile
@@ -161,6 +161,12 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: it is migrated. Not written for a version in git: that version's files
     #: are its commit's tree (plan-skill-hub-history G12).
     origin: SkillOrigin = field(default_factory=lambda: SkillOrigin(source="hub", files={}))
+    #: When what the entry ships last changed — written by publish and
+    #: rollback only, the list's 「最近更新」 (plan-skill-hub-ux-redo D4). Not
+    #: the revision's timestamp: a permission change or a transfer is a new
+    #: revision too. `None` for a row written before the field (no backfill —
+    #: its next publish dates it).
+    content_at: dt.datetime | None = None
 
 
 # ── what publishing checks ───────────────────────────────────────────────────
@@ -347,6 +353,13 @@ def missing_tools_for(referenced: Collection[str], app_slug: str) -> list[str]:
     return [t for t in referenced if t not in ceiling]
 
 
+def script_count(paths: Iterable[str]) -> int:
+    """How many of a skill's files are scripts: those under its top-level
+    ``scripts/`` folder, the skill convention. Not the executable bit — a
+    version is committed with every file ``100644``, so it says nothing."""
+    return sum(1 for p in paths if p.startswith("scripts/"))
+
+
 def matches_query(entry: SkillHubEntry, query: str) -> bool:
     """The one search rule: the query, trimmed, is a case-insensitive
     substring of the name or the description; an empty query matches all.
@@ -433,6 +446,11 @@ class HistoryEvent(Struct, kw_only=True):
     visibility: str = ""
     audience: list[str] = field(default_factory=list)
     current: bool = False
+    #: `v1`, `v2`, … — a publish or a rollback, counted oldest first; `None`
+    #: on a row that changed no content (plan-skill-hub-ux-redo D8). Counted
+    #: before the owner-only rows are dropped, so every reader says the same
+    #: number for the same version.
+    version: int | None = None
 
 
 class FileChange(Struct, kw_only=True):
@@ -511,6 +529,14 @@ class SkillHubStore:
         first publish's draft that is not a version yet."""
         row = self._row(entry_id)
         return None if row is None or row.pending else row
+
+    def current_revision(self, entry_id: str) -> str:
+        """The revision the entry is at now when it names a version — what the
+        version routes take — else "" (an entry not in git yet)."""
+        res = self._rm().get(entry_id)
+        return (
+            res.info.revision_id if isinstance(res.data, SkillHubEntry) and res.data.commit else ""
+        )
 
     def can_read(self, entry: SkillHubEntry, viewer: str) -> bool:
         """Whether `viewer` may read the entry's content — the same `authorize`
@@ -620,13 +646,23 @@ class SkillHubStore:
         assert entry is not None  # the caller resolved it a moment ago
         return (await self._files(entry_id, entry, ["SKILL.md"]))["SKILL.md"]
 
-    async def file_names(self, entry_id: str) -> list[str]:
-        """The files of the current version, without reading them."""
-        entry = self.get(entry_id)
-        assert entry is not None
-        if entry.commit:
-            return sorted(await self.repos.tree(entry_id, entry.commit))
-        return sorted(entry.origin.files)
+    async def file_sizes(
+        self, entry_id: str, commit: str | None = None
+    ) -> list[tuple[str, int | None]]:
+        """``(path, size)`` for every file of a version — the current one
+        unless `commit` names another — sorted by path, without reading them:
+        the tree says each size, an LFS file's being its content's. An entry
+        not in git yet records only its paths, so its sizes are ``None``."""
+        if commit is None:
+            entry = self.get(entry_id)
+            assert entry is not None
+            if not entry.commit:
+                return [(path, None) for path in sorted(entry.origin.files)]
+            commit = entry.commit
+        tree = await self.repos.tree(entry_id, commit)
+        return [
+            (path, f.lfs[1] if f.lfs is not None else f.size) for path, f in sorted(tree.items())
+        ]
 
     def copy_manifest(self, entry_id: str, entry: SkillHubEntry) -> SkillOrigin:
         """What a copy of the entry's current version records in its `.origin`
@@ -748,6 +784,7 @@ class SkillHubStore:
             return out
 
         events: list[HistoryEvent] = []
+        numbered = 0
         first_seen: dict[str, str] = {}
         prev: SkillHubEntry | None = None
         last_revision = ""
@@ -788,6 +825,8 @@ class SkillHubStore:
                 else:
                     first_seen[row.commit] = revision_id
                     events.append(event("publish", row.owner))
+                numbered += 1
+                events[-1].version = numbered
             elif row.owner != prev.owner:
                 events.append(event("transfer", prev.owner))
             elif row.permission != prev.permission:
@@ -929,6 +968,7 @@ class SkillHubStore:
                 description=old.description,
                 review=old.review,
                 referenced_tools=list(old.referenced_tools),
+                content_at=self._now(),
             ),
             current_commit=old.commit,
         )
@@ -1092,7 +1132,9 @@ class SkillHubStore:
             if (
                 await self._change(
                     entry_id,
-                    lambda draft: msgspec.structs.replace(row, commit=commit, pending=False),
+                    lambda draft: msgspec.structs.replace(
+                        row, commit=commit, pending=False, content_at=self._now()
+                    ),
                 )
                 is None
             ):
@@ -1125,6 +1167,7 @@ class SkillHubStore:
                 review=row.review,
                 referenced_tools=row.referenced_tools,
                 commit=commit,
+                content_at=self._now(),
             ),
             current_commit=commit,
         )

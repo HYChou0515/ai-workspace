@@ -59,7 +59,7 @@ async def test_a_reader_sees_the_timeline_any_version_and_a_comparison(harness: 
     version = harness.client.get(f"{base}/versions/{first}")
     assert version.status_code == 200, version.text
     body = version.json()
-    assert (body["revision"], body["description"], body["files"]) == (
+    assert (body["revision"], body["description"], [f["path"] for f in body["files"]]) == (
         first,
         "one",
         ["SKILL.md", "notes.md"],

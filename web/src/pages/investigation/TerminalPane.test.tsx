@@ -49,7 +49,7 @@ describe("TerminalPane quota refusals", () => {
   it.each([
     ["sandbox_quota_exceeded", /沙盒已達上限/],
     ["user_quota_exceeded", /空間總量已滿/],
-    ["workspace_quota_exceeded", /工作區空間已滿/],
+    ["workspace_quota_exceeded", /workspace 的空間已滿/],
   ])("names the limit for %s", async (code, expected) => {
     execShell.mockRejectedValueOnce(
       Object.assign(new Error("exec failed: 507"), { status: 507, code }),
@@ -100,7 +100,7 @@ describe("TerminalPane quota refusals are reachable (#692)", () => {
     );
     render(<TerminalPane investigationId="item:1" />);
     await userEvent.type(screen.getByRole("textbox"), "ls{Enter}");
-    expect(await screen.findByText(/工作區空間已滿/)).toBeInTheDocument();
+    expect(await screen.findByText(/workspace 的空間已滿/)).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

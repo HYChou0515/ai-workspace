@@ -56,7 +56,7 @@ from ..tooling.external import (
     resolve_external_tools,
 )
 from ..workflow.user_schedules import SchedulePolicy
-from .env_layers import resolve_env
+from .env_layers import PersonEnv, resolve
 from .locator import TurnFacts
 from .turns import history_items
 
@@ -737,7 +737,7 @@ class TurnContextBuilder:
         facts: TurnFacts,
         subagent_defs: tuple[SubagentDef, ...] = (),
         skills_reachable: bool | None = None,
-        caller_env: dict[str, str] | None = None,
+        caller_env: PersonEnv | None = None,
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
         # #624: capture whether history had to be cut, so the send path can say so
@@ -804,10 +804,10 @@ class TurnContextBuilder:
             # (`plan-wui-viewer-login`): the caller's values are the PRIVATE
             # layer, the item's the SHARED one, and a name with no policy is
             # `shared_first` — the stored copy overriding, unannounced, which is
-            # what #714 decided so a value can be pinned for testing.
-            user_env=resolve_env(
-                shared=facts.env_vars, private=caller_env or {}, policy=facts.env_policy
-            ),
+            # what #714 decided so a value can be pinned for testing. The person's
+            # values for every item (`plan-personal-env`) are read only for a
+            # name whose policy is Private first / Private only.
+            user_env=resolve(shared=facts.env_vars, person=caller_env, policy=facts.env_policy),
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create
@@ -908,7 +908,7 @@ class TurnContextBuilder:
         call_lane: CallLane = "background",
         apply_skills: list[str] | None = None,
         conversation_id: str | None = None,
-        caller_env: dict[str, str] | None = None,
+        caller_env: PersonEnv | None = None,
     ) -> AgentToolContext:
         """The full RCA/workspace-chat turn context (`_send_into`).
 
@@ -991,7 +991,7 @@ class TurnContextBuilder:
         history_messages: list[Message],
         tool_subset: list[str] | None = None,
         entity_write_origin: EntityOrigin | None = None,
-        caller_env: dict[str, str] | None = None,
+        caller_env: PersonEnv | None = None,
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
         core only — every interactive extra stays at its ``AgentToolContext`` default.

@@ -20,20 +20,25 @@ function draw({
   names,
   mine = {},
   shared = {},
+  policy = {},
+  personal = {},
   providers = [erp],
 }: {
   names: string[];
   mine?: Record<string, string>;
   shared?: Record<string, string>;
+  policy?: Record<string, string>;
+  personal?: Record<string, string>;
   providers?: EnvProvider[];
 }) {
-  const host: ChatEnv = { shared, policy: {}, open: vi.fn(), retry: vi.fn() };
+  const host: ChatEnv = { shared, policy, open: vi.fn(), retry: vi.fn() };
   renderWithQuery(
     <ChatItemProvider value={{ slug: "rca", itemId: "i1", env: host }}>
       <EnvRequestCard
         request={{ tool: "lookup", names, reason: "The ERP lookup needs you to sign in" }}
         client={{ getEnvProviders: async () => providers }}
         privateClient={{ get: async () => ({ values: mine, auto: {} }) }}
+        personalClient={{ get: async () => ({ values: personal, updated: {} }) }}
       />
     </ChatItemProvider>,
   );
@@ -92,5 +97,15 @@ describe("EnvRequestCard", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /重試|Retry/ })).toBeDisabled(),
     );
+  });
+
+  it("counts the person's values across workspaces where the item uses them", async () => {
+    draw({
+      names: ["MAP_KEY"],
+      policy: { MAP_KEY: "private_first" },
+      personal: { MAP_KEY: "k" },
+    });
+
+    expect(await screen.findByRole("button", { name: /重試|Retry/ })).toBeEnabled();
   });
 });

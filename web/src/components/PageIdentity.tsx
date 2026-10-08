@@ -22,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
+import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import {
@@ -30,7 +31,7 @@ import {
   type ScheduleBindingsClient,
 } from "../api/scheduleBindings";
 import type { ApiClient } from "../api/types";
-import { ownLayer } from "../lib/envLayers";
+import { asksPersonal, ownLayer } from "../lib/envLayers";
 import { identityState, keyLabelParts, type Missing } from "../lib/identityState";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -41,6 +42,8 @@ import { Icon } from "./Icon";
 type Clients = {
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
   privateClient?: PrivateEnvClient;
+  /** My environment variables (`plan-personal-env`). */
+  personalClient?: Pick<PersonalEnvClient, "get" | "put">;
   bindingsClient?: ScheduleBindingsClient;
 };
 
@@ -56,6 +59,7 @@ export function usePageIdentity({
   folder,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
   bindingsClient = scheduleBindingsApi,
 }: Where & Clients) {
   const path = schedulesPathFor(folder);
@@ -79,13 +83,23 @@ export function usePageIdentity({
     queryKey: qk.scheduleBindings(slug, itemId, path),
     queryFn: () => bindingsClient.list(slug, itemId, path),
   });
-  const settled = [layers, tools, providers, mine, rows].every((q) => !q.isPending);
+  // Only a Private first / Private only name reads my environment variables;
+  // a page with none neither asks for them nor waits on them (round 2, R1).
+  const asks = asksPersonal(layers.data?.policy ?? {});
+  const personal = useQuery({
+    queryKey: qk.personalEnv(),
+    queryFn: () => personalClient.get(),
+    enabled: asks,
+  });
+  const settled =
+    [layers, tools, providers, mine, rows].every((q) => !q.isPending) && (!asks || !personal.isPending);
   const state = identityState({
     tools: tools.data?.tools ?? [],
     shared: layers.data?.shared ?? {},
     policy: layers.data?.policy ?? {},
     // What the deploy filled in wins a name over what they typed.
     mine: ownLayer(mine.data?.values ?? {}, mine.data?.auto ?? {}),
+    personal: personal.data?.values ?? {},
     providers: providers.data ?? [],
     hasSchedules: (rows.data ?? []).length > 0,
   });
@@ -121,7 +135,14 @@ export function missingLabel(t: ReturnType<typeof useT>, missing: Missing[]): st
 }
 
 export function PageIdentityControls(props: Where & Clients) {
-  const { slug, itemId, client, privateClient, bindingsClient = scheduleBindingsApi } = props;
+  const {
+    slug,
+    itemId,
+    client,
+    privateClient,
+    personalClient,
+    bindingsClient = scheduleBindingsApi,
+  } = props;
   const t = useT();
   const dialog = useDialog();
   const queryClient = useQueryClient();
@@ -234,6 +255,7 @@ export function PageIdentityControls(props: Where & Clients) {
           onClose={() => setEnvOpen(false)}
           client={client}
           privateClient={privateClient}
+          personalClient={personalClient}
         />
       )}
     </>
@@ -365,6 +387,7 @@ export function useEnvMissing({
   enabled,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
 }: {
   slug: string;
   itemId: string;
@@ -373,6 +396,7 @@ export function useEnvMissing({
   enabled: boolean;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders">;
   privateClient?: Pick<PrivateEnvClient, "get">;
+  personalClient?: Pick<PersonalEnvClient, "get">;
 }): Missing[] {
   const on = enabled && Boolean(slug && itemId);
   const tools = useQuery({
@@ -390,12 +414,18 @@ export function useEnvMissing({
     queryFn: () => privateClient.get(slug, itemId),
     enabled: on,
   });
+  const personal = useQuery({
+    queryKey: qk.personalEnv(),
+    queryFn: () => personalClient.get(),
+    enabled: on && asksPersonal(policy),
+  });
   if (!on) return [];
   return identityState({
     tools: tools.data?.tools ?? [],
     shared,
     policy,
     mine: ownLayer(mine.data?.values ?? {}, mine.data?.auto ?? {}),
+    personal: personal.data?.values ?? {},
     providers: providers.data ?? [],
     hasSchedules: false,
   }).missing;

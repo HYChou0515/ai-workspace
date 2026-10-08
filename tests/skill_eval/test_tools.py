@@ -218,7 +218,12 @@ def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path
     assert "id 0123456789abcdef" in run("search_skill_hub", {"query": "reflow"}, tmp_path, events)
     assert "installed skill" in run("install_skill", {"entry_id": "x"}, tmp_path, events)
     assert "[skill-hub-entry]" in run("show_skill_hub_entry", {"entry_id": "x"}, tmp_path, events)
-    assert "published skill 'mine'" in run("publish_skill", {"name": "mine"}, tmp_path, events)
+    published = run("publish_skill", {"name": "mine"}, tmp_path, events)
+    assert "published skill 'mine'" in published
+    # Ends as the real reply does, so a scenario shows the model what it sees.
+    from workspace_app.agent.shown_files import SKILL_HUB_ENTRY_MARKER
+
+    assert SKILL_HUB_ENTRY_MARKER + '{"entry_id": ' in published
 
 
 def test_the_standing_instruction_doubles_take_the_real_tools_parameters():

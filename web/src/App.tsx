@@ -8,6 +8,7 @@ import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GroupsPage } from "./pages/GroupsPage";
+import { MyEnvPage } from "./pages/MyEnvPage";
 import { MyResourcesPage } from "./pages/MyResourcesPage";
 import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
 import { SkillHubPage } from "./pages/SkillHubPage";
@@ -75,6 +76,7 @@ export function AppRoutes() {
             than evict, so this is where a refused person goes to free
             something up — without it, being at your limit is a dead end. */}
         <Route path="/my-resources" element={<MyResourcesPage />} />
+        <Route path="/my-env" element={<MyEnvPage />} />
         {/* Every Deployed WUI the viewer may open (docs/plan-wui-overview.md).
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}

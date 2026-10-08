@@ -6,7 +6,13 @@ import type { EnvProvider } from "../api/types";
 import { envRequestRows } from "./envRequestRows";
 
 const erp: EnvProvider = { id: "erp", label: "ERP", produces: ["ERP_TOKEN"], inputs: [] };
-const none = { shared: {}, mine: {}, policy: {}, providers: [] as EnvProvider[] };
+const none = {
+  shared: {},
+  mine: {},
+  personal: {},
+  policy: {} as Record<string, string>,
+  providers: [] as EnvProvider[],
+};
 
 describe("envRequestRows", () => {
   it("offers a sign-in when this deployment has a login that produces the name", () => {
@@ -30,6 +36,16 @@ describe("envRequestRows", () => {
     });
 
     expect(rows.map((r) => r.status)).toEqual(["ready", "ready"]);
+  });
+
+  it("counts a value from the person's own variables across workspaces where the item uses it", () => {
+    const rows = envRequestRows(["MAP_KEY"], {
+      ...none,
+      policy: { MAP_KEY: "private_first" },
+      personal: { MAP_KEY: "k" },
+    });
+
+    expect(rows[0].status).toBe("ready");
   });
 
   it("says when only the shared copy can fix it", () => {

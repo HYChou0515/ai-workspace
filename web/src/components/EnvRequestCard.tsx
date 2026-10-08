@@ -14,11 +14,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api as defaultApi } from "../api";
+import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
 import { useChatItem } from "../hooks/chatItem";
-import { ownLayer } from "../lib/envLayers";
+import { asksPersonal, ownLayer } from "../lib/envLayers";
 import { envRequestRows } from "../lib/envRequestRows";
 import { useT } from "../lib/i18n";
 import type { EnvRequest } from "../renderers/envRequest";
@@ -27,10 +28,12 @@ export function EnvRequestCard({
   request,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
 }: {
   request: EnvRequest;
   client?: Pick<ApiClient, "getEnvProviders">;
   privateClient?: Pick<PrivateEnvClient, "get">;
+  personalClient?: Pick<PersonalEnvClient, "get">;
 }) {
   const t = useT();
   const item = useChatItem();
@@ -50,14 +53,22 @@ export function EnvRequestCard({
     queryFn: () => privateClient.get(slug, itemId),
     enabled: on,
   });
+  // Read only where the item asks for personal values — like the header does.
+  const asks = asksPersonal(env?.policy ?? {});
+  const personal = useQuery({
+    queryKey: qk.personalEnv(),
+    queryFn: () => personalClient.get(),
+    enabled: on && asks,
+  });
   const [retried, setRetried] = useState(false);
   const rows = envRequestRows(request.names, {
     shared: env?.shared ?? {},
     policy: env?.policy ?? {},
     mine: ownLayer(mine.data?.values ?? {}, mine.data?.auto ?? {}),
+    personal: personal.data?.values ?? {},
     providers: providers.data ?? [],
   });
-  const loaded = providers.isSuccess && mine.isSuccess;
+  const loaded = providers.isSuccess && mine.isSuccess && (!asks || !personal.isPending);
   const allSet = loaded && rows.every((r) => r.status === "ready");
   return (
     <div className="env-request-card" data-testid="env-request-card">

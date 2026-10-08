@@ -20,11 +20,14 @@ export function envRequestRows(
   {
     shared,
     mine,
+    personal = {},
     policy,
     providers,
   }: {
     shared: Record<string, string>;
     mine: Record<string, string>;
+    /** The person's values across workspaces (`plan-personal-env`). */
+    personal?: Record<string, string>;
     policy: Record<string, string>;
     providers: EnvProvider[];
   },
@@ -33,7 +36,7 @@ export function envRequestRows(
     const via = providers.find((p) => p.produces.includes(name));
     return {
       name,
-      status: viewerStatus(name, shared, mine, policy),
+      status: viewerStatus(name, shared, mine, policy, personal),
       login: via ? { id: via.id, label: via.label } : null,
     };
   });
