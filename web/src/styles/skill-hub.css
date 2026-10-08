@@ -342,6 +342,13 @@
 .page .skill-hub-tree .skill-hub-tree {
   padding-left: var(--space-16);
 }
+/* The tree scrolls in its own box, as tall as the opened file's: an opened
+   folder of hundreds of files no longer stretches the whole page. */
+.page .skill-hub-files-body > .skill-hub-tree {
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .page .skill-hub-tree-row {
   display: flex;
   align-items: center;
