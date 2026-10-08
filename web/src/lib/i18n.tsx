@@ -1830,8 +1830,8 @@ export const messages = {
   "lookup.title": { "zh-TW": "請幫我查", en: "Please look this up" },
   "lookup.query": { "zh-TW": "查詢", en: "Search for" },
   "lookup.newTab": {
-    "zh-TW": "按鈕會在新分頁開啟",
-    en: "The buttons open a new tab",
+    "zh-TW": "標 ↗ 的按鈕會在新分頁開啟",
+    en: "Buttons marked ↗ open a new tab",
   },
   "lookup.target": { "zh-TW": "{name}(在新分頁開啟)", en: "{name} (opens in a new tab)" },
   "lookup.copy": { "zh-TW": "複製問題", en: "Copy the query" },

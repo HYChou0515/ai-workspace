@@ -1,14 +1,15 @@
 /**
- * The "請幫我查" card (docs/plan-outside-lookup.md): this backend is air-gapped
- * and the AI asked the person — whose browser is not — to look something up.
+ * The "請幫我查" card (docs/plan-outside-lookup.md): the backend may not reach
+ * the internet, the person's browser can, and the AI asked them to look
+ * something up.
  *
  * Two kinds (D2, D5): a SEARCH, with one button per destination the deploy
  * configured (`server.lookup_targets`) and the query editable first (D8); or a
  * PAGE, whose whole address is shown before the one button that opens it.
  * Either way the person brings back what they found — pasted (a web page
  * arrives as Markdown, links and tables kept), attached, with its source — or
- * says they could not find it (D7). One request saves it under `lookups/` and
- * sends the message that answers this call.
+ * says they could not find it (D7). One request saves it under `lookups/`
+ * (when they may add files) and sends the message that answers this call.
  *
  * Guidance (cited in the plan):
  * - Opening a new tab is announced before the click, in the button's name and a
@@ -280,67 +281,67 @@ export function OutsideLookupCard({
           {!canAttach ? (
             <p className="outside-lookup-hint">{t("lookup.textOnly")}</p>
           ) : (
-          <div className="outside-lookup-section">
-            <label className="outside-lookup-label" htmlFor={`${ids}-f`}>
-              {t("lookup.attach")}
-            </label>
-            <input
-              id={`${ids}-f`}
-              ref={fileInput}
-              type="file"
-              multiple
-              className="outside-lookup-file-input"
-              disabled={locked}
-              onChange={(e) => {
-                addFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            {!locked && (
-              <div
-                className="outside-lookup-drop"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  addFiles(e.dataTransfer.files);
+            <div className="outside-lookup-section">
+              <label className="outside-lookup-label" htmlFor={`${ids}-f`}>
+                {t("lookup.attach")}
+              </label>
+              <input
+                id={`${ids}-f`}
+                ref={fileInput}
+                type="file"
+                multiple
+                className="outside-lookup-file-input"
+                disabled={locked}
+                onChange={(e) => {
+                  addFiles(e.target.files);
+                  e.target.value = "";
                 }}
-              >
-                <button
-                  type="button"
-                  className="btn"
-                  data-size="sm"
-                  data-variant="secondary"
-                  onClick={() => fileInput.current?.click()}
+              />
+              {!locked && (
+                <div
+                  className="outside-lookup-drop"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    addFiles(e.dataTransfer.files);
+                  }}
                 >
-                  {t("lookup.choose")}
-                </button>
-                <span className="outside-lookup-hint">{t("lookup.drop")}</span>
-              </div>
-            )}
-            {files.length === 0 ? (
-              <p className="outside-lookup-hint">{t("lookup.noFile")}</p>
-            ) : (
-              <ul className="outside-lookup-files">
-                {files.map((f, i) => (
-                  <li key={`${f.name}-${i}`}>
-                    <span>{f.name}</span>
-                    {!locked && (
-                      <button
-                        type="button"
-                        className="btn"
-                        data-size="sm"
-                        data-variant="ghost"
-                        aria-label={t("lookup.remove", { name: f.name })}
-                        onClick={() => setFiles((all) => all.filter((_f, j) => j !== i))}
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-size="sm"
+                    data-variant="secondary"
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    {t("lookup.choose")}
+                  </button>
+                  <span className="outside-lookup-hint">{t("lookup.drop")}</span>
+                </div>
+              )}
+              {files.length === 0 ? (
+                <p className="outside-lookup-hint">{t("lookup.noFile")}</p>
+              ) : (
+                <ul className="outside-lookup-files">
+                  {files.map((f, i) => (
+                    <li key={`${f.name}-${i}`}>
+                      <span>{f.name}</span>
+                      {!locked && (
+                        <button
+                          type="button"
+                          className="btn"
+                          data-size="sm"
+                          data-variant="ghost"
+                          aria-label={t("lookup.remove", { name: f.name })}
+                          onClick={() => setFiles((all) => all.filter((_f, j) => j !== i))}
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
 
           <div className="outside-lookup-section">

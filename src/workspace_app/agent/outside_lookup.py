@@ -1,13 +1,14 @@
-"""`ask_outside` — the AI asks the person to look something up outside this
-air-gapped backend (docs/plan-outside-lookup.md).
+"""`ask_outside` — the AI asks the person to look something up outside
+(docs/plan-outside-lookup.md).
 
-The backend cannot reach the internet; the person's browser can. The model
+The backend may not reach the internet; the person's browser can. The model
 passes either a `query` (the card offers one button per search destination,
 `server.lookup_targets`) or a `url` (one button that opens it); the reply ends
 with a declaration the chat draws as the "請幫我查" card. The turn stops when
 the card is drawn, like `ask_user`; a refusal declares nothing and does not
 stop it, so the model reads why and corrects the call. The person's answer —
-what they pasted, saved as a file, or "not found" — is their next message.
+what they pasted (saved as a file when they may add files), or "not found" —
+is their next message.
 """
 
 from __future__ import annotations

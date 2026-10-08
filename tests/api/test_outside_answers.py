@@ -502,7 +502,9 @@ def test_what_was_searched_is_the_query_as_the_person_edited_it():
 
 @pytest.mark.parametrize(
     ("date", "named"),
-    [("2026-10-09", "lookups/2026-10-09-"), ("not a date", None), ("2026-13-40", None)],
+    # A date the server's clock cannot produce, so the case reddens on code that
+    # ignores it whatever day the suite runs (review round 2).
+    [("2000-01-02", "lookups/2000-01-02-"), ("not a date", None), ("2026-13-40", None)],
 )
 def test_the_file_is_named_by_the_person_s_own_date(date: str, named: str | None):
     """The server's clock is UTC; a person in UTC+8 looking something up at
@@ -515,3 +517,73 @@ def test_the_file_is_named_by_the_person_s_own_date(date: str, named: str | None
     path = _answer(client, iid, content="x", date=date).json()["path"]
 
     assert path.startswith(named or f"lookups/{datetime.now(UTC):%Y-%m-%d}-")
+
+
+def test_an_answer_another_pod_recorded_meanwhile_wins_and_ours_takes_its_files_back(
+    monkeypatch,
+):
+    """Two pods, one card, the same instant: the lock is per pod, so ours writes
+    its file, then the re-read finds the card answered by the other. Ours gets
+    the 409 — and must take its file back: a message answers the card, but not
+    THIS one, and nothing would ever name the file (review round 2)."""
+    import workspace_app.api.outside_lookup_routes as routes
+    from workspace_app.resources.conversation import Message
+
+    client, spec, iid = _asked()
+    real_save = routes._save
+
+    async def save_then_the_other_pod_answers(*a, **kw):
+        out = await real_save(*a, **kw)
+        rm = spec.get_resource_manager(Conversation)
+        [meta] = rm.search_resources(query=None)
+        conv = rm.get(meta.resource_id).data
+        conv.messages.append(Message(role="user", content="the other pod's", answers="c1"))
+        rm.update(meta.resource_id, conv)
+        return out
+
+    monkeypatch.setattr(routes, "_save", save_then_the_other_pod_answers)
+
+    r = _answer(client, iid, content="ours")
+
+    assert r.status_code == 409, r.text
+    assert [m.content for m in _answers(spec)] == ["the other pod's"]
+    assert not any(p.endswith(".md") for p in _paths(client, iid))
+
+
+async def test_a_card_lock_released_to_a_waiter_is_not_handed_out_again():
+    """`release()` frees the lock before the next waiter runs. Dropping the map
+    entry because the lock read free let a third request take a FRESH lock and
+    run beside that waiter — two answers at once on one pod (review round 2)."""
+    import asyncio
+
+    from workspace_app.api.outside_lookup_routes import _card_locks, card_lock
+
+    key = ("item", "c1")
+    inside = 0
+    peak = 0
+    a_in = asyncio.Event()
+    a_go = asyncio.Event()
+
+    async def hold(gate: asyncio.Event | None = None, entered: asyncio.Event | None = None):
+        nonlocal inside, peak
+        async with card_lock(key):
+            inside += 1
+            peak = max(peak, inside)
+            if entered:
+                entered.set()
+            if gate:
+                await gate.wait()
+            await asyncio.sleep(0.01)
+            inside -= 1
+
+    a = asyncio.create_task(hold(a_go, a_in))
+    await a_in.wait()
+    b = asyncio.create_task(hold())
+    await asyncio.sleep(0)  # B queues on A's lock
+    a_go.set()
+    await a  # A released; B woken but not yet running
+    c = asyncio.create_task(hold())
+    await asyncio.gather(b, c)
+
+    assert peak == 1
+    assert key not in _card_locks

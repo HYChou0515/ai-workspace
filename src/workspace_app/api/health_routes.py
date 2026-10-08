@@ -209,6 +209,8 @@ def register_replay_routes(
                 config=config,
                 packages=packages,
                 template_profile=template_profile,
+                # An item thread is a chat; a KB chat thread holds no `ask_user`.
+                in_chat=body.source == "rca",
             )
         except ReplayInvalidTarget as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

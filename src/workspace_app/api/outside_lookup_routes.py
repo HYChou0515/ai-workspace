@@ -6,12 +6,19 @@ what they bring back. ONE request does both halves — save it under
 so the thread does not mention a file that is not there, and a send refused
 before its message was persisted takes its files back.
 
-One answer per card. Answers to the same card on THIS pod run one at a time
-(`_card_locks`), and each re-reads the thread after its writes, so the second
-finds the card answered and takes its files back with a 409. Two pods
-answering the same card in the same instant can still both get through —
-the window is the length of one send, and closing it would need a
-cross-pod lock for an event two people have to race to produce.
+One answer per card. On THIS pod answers to the same card run one at a time
+(`card_lock`): the second waits, finds the card answered before writing
+anything, and gets a 409. Each also re-reads the thread after its writes,
+which catches an answer another pod recorded meanwhile — that one stands, and
+this one takes its files back with a 409, since no message names them. Two
+pods can still both send if their sends overlap exactly — the window is the
+length of one send, and closing it would need a cross-pod lock for an event
+two people have to race to produce.
+
+A request cancelled before its send is shielded (while the send is still
+checking the turn may run) leaves its files with no message naming them; the
+card stays open, and answering again saves a `-2` copy. A cancel after that
+point keeps the files, which the shielded send's message names.
 
 Sending asks `converse`. Saving asks `add_content`, as every other way into the
 workspace's files does (#847's markings): someone who may chat but not add
@@ -22,9 +29,10 @@ attach, since an attachment is nothing but a file.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
@@ -60,10 +68,31 @@ _STEM_CHARS = 40
 #: The person's own date, as their browser sends it (`YYYY-MM-DD`).
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-#: One lock per (item, card) being answered on this pod — see the module doc.
-#: Entries go when their last holder leaves, so the map holds only answers in
-#: flight.
-_card_locks: dict[tuple[str, str], asyncio.Lock] = {}
+#: One lock per (item, card) being answered on this pod — see the module doc —
+#: and how many requests hold or wait on it. An entry goes when that count is
+#: back to 0, so the map holds only answers in flight.
+_card_locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
+
+
+@contextlib.asynccontextmanager
+async def card_lock(key: tuple[str, str]) -> AsyncIterator[None]:
+    """Hold the lock for `key`, one request at a time.
+
+    The entry is counted, not dropped when the lock reads free: `release()`
+    frees the lock before the next waiter runs, so "free" right after a release
+    does not mean "nobody needs it" — dropping it then let a third request take
+    a FRESH lock and run beside the waiter (review round 2)."""
+    lock, users = _card_locks.get(key, (asyncio.Lock(), 0))
+    _card_locks[key] = (lock, users + 1)
+    try:
+        async with lock:
+            yield
+    finally:
+        lock, users = _card_locks[key]
+        if users == 1:
+            del _card_locks[key]
+        else:
+            _card_locks[key] = (lock, users - 1)
 
 
 class OutsideAnswerOut(BaseModel):
@@ -93,16 +122,10 @@ def register_outside_lookup_routes(
         form: _Form,
     ) -> OutsideAnswerOut:
         investigation_id = locator.require_access(slug, item_id, "converse")
-        key = (investigation_id, form.tool_call_id)
-        lock = _card_locks.setdefault(key, asyncio.Lock())
-        try:
-            async with lock:
-                return await _answer_once(
-                    request, slug, investigation_id, conversation, engine_key, form
-                )
-        finally:
-            if not lock.locked() and _card_locks.get(key) is lock:
-                del _card_locks[key]
+        async with card_lock((investigation_id, form.tool_call_id)):
+            return await _answer_once(
+                request, slug, investigation_id, conversation, engine_key, form
+            )
 
     async def _answer_once(
         request: Request,
@@ -162,11 +185,12 @@ def register_outside_lookup_routes(
             # Taken back only when no message names them. The send is shielded
             # (`ChatSendService.send`): a failure after it persisted the
             # message leaves a message pointing at these files.
-            if not _answered_by(conversation, form.tool_call_id):
+            if not _sent(conversation, form.tool_call_id, text):
                 await _take_back(files, investigation_id, written)
             raise
         # A cancelled request (`CancelledError` is not an `Exception`) keeps its
-        # files: the shielded send carries on and persists the message.
+        # files: once shielded, the send carries on and persists the message —
+        # the window before that is in the module doc.
         who = get_user_id()
         for path in written:
             turn_engine.publish(
@@ -279,14 +303,17 @@ def _open_card(conv: Conversation, call_id: str) -> dict:
     return card
 
 
-def _answered_by(conversation: Callable[[], tuple[str, Conversation]], call_id: str) -> bool:
-    """Whether the thread now holds a message answering `call_id` — read fresh;
-    a thread that cannot be read is taken as not answered."""
+def _sent(conversation: Callable[[], tuple[str, Conversation]], call_id: str, text: str) -> bool:
+    """Whether the thread now holds THIS answer — the message answering
+    `call_id` with this text, which names this request's files. Someone else's
+    answer to the same card (another pod's) names other files, so it does not
+    count: ours are then named by nothing and go. Read fresh; a thread that
+    cannot be read is taken as not holding it."""
     try:
         _rid, conv = conversation()
     except Exception:  # noqa: BLE001 — the caller is already failing; this only decides cleanup
         return False
-    return any(m.answers == call_id for m in conv.messages)
+    return any(m.answers == call_id and m.content == text for m in conv.messages)
 
 
 def _may(locator: ItemLocator, slug: str, item_id: str) -> bool:

@@ -239,7 +239,7 @@ describe("review round 1", () => {
   it("says, for a page too, that its button opens a new tab (NN/g)", () => {
     draw({ lookup: { why: "w", url: "https://a.example" } });
 
-    expect(screen.getByText("按鈕會在新分頁開啟")).toBeInTheDocument();
+    expect(screen.getByText("標 ↗ 的按鈕會在新分頁開啟")).toBeInTheDocument();
   });
 
   it("offers no attachments to someone who may not add files, and says the text is not saved", async () => {
