@@ -364,15 +364,18 @@ server:
 - **沒有設定任何方法 = 沒有鈕**,不是壞掉:每個變數都還是能手打,那條路永遠可用。
 - **能打開 item 的人都按得到(`read_meta`)。** #750 原本要 `write_meta`,理由是換出來的值只有
   「共用」一個去處,只能讀的人會換出一個存不進去的 token;`plan-wui-viewer-login` 之後它有了
-  **只屬於他自己**的去處(Env 面板「只有我」),換的是他自己輸入的帳密,你的 impl 也拿不到
+  **只屬於他自己**的去處(Env 面板「Private」與「Private(跨workspace)」分頁),換的是他自己輸入的帳密,你的 impl 也拿不到
   item 的任何資訊——所以換出來不會多給他什麼。把結果存成**共用**值仍然要 `write_meta`。
 
 ### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
 
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
-**private**:**每個人、每個 item 一份**,只有本人讀得到(連 superuser 也不行——路由只認
-「我的」,沒有指定別人的參數)。來源有三個:本人在 Env 面板「只有我」分頁手 key、本人按登入
-(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
+**private**:只有本人讀得到(連 superuser 也不行——路由只認「我的」,沒有指定別人的參數)。
+它有兩種範圍:**這個 item 的**(每個人、每個 item 一份),以及**所有 item 通用的**「我的環境變數」
+(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。後者只給把那個變數設成
+Private first／Private only 的 item;同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
+item 的)「Private(跨workspace)」(和 `/my-env` 同一份),在哪個分頁手 key 或按登入就寫進哪一層。這個 item
+的值來源有三個:本人在「Private」分頁手 key、本人在那個分頁按登入(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
 或頁面 `callTool` 時問它(其他請求不問)。後者存在**另一列**、值變了就**整份取代**:它沒再回的名字
 從那一次起就不再傳給 tool,同名時它贏過手 key 的。**登出 SSO 不是這個 app 看得到的請求**:在本人
 下一次於這裡聊天或按頁面工具之前,替他跑的工作(goal 續跑、重跑、他按下的 run、他綁定的排程)
@@ -380,11 +383,13 @@ server:
 
 tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_policy`,要 `write_meta` 才能改)決定:
 
-| 政策 | 畫面文字 | tool 拿到 |
+| 政策 | 畫面文字 | tool 拿到(左邊先) |
 |---|---|---|
-| `shared_first`(預設,沒設就是它) | 用共用值 | 共用的有值就用共用的,沒有才用本人的 |
-| `private_first` | 各人可改用自己的 | 本人的有值就用本人的,沒有才用共用的 |
-| `private_only` | 各人自己填 | 只用本人的;沒有就**不傳**(不是擋下——必不必填是 tool 的事) |
+| `shared_first`(預設,沒設就是它) | Shared | 共用值 → 本人這個 item 的值 → 服務帳號;**不讀**「我的環境變數」 |
+| `private_first` | Private first | 本人這個 item 的值 → 我的環境變數 → 服務帳號 → 共用值 |
+| `private_only` | Private only | 本人這個 item 的值 → 我的環境變數 → 服務帳號;沒有就**不傳**(不是擋下——必不必填是 tool 的事) |
+
+「服務帳號」是部署的 `env_without_request`,只在沒有人在場的 turn 出現。
 
 預設就是 #714 那行 `{**request_env, **item_env}`:沒設政策、也**沒有人存過自己的值**的 item,
 有人在場的 turn 行為一個字都沒變。唯一的差別在**沒有人在場**的 turn(見下面 #714 那段的「寫進本人的
@@ -660,9 +665,10 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
   沒有第二套接線。**審不到就不上架**——模型連不上是系統壞了,不是開缺口的理由;沒有「未審」狀態。
 - **身分是 `owner/name`**,底層是穩定的 resource id,副本與 fork 都指 id,所以 `owner` 可以轉移。
   非 owner 只能 **fork**:裝別人的、改、從自己 item 發布,`.origin` 指向別人的條目就自動記
-  `forked_from`。列表根在上、fork 收在原作底下。
-- **owner 的管理都在 skill hub 詳情頁**（`/skill-hub/:id`,owner 之外的人**沒有任何按鈕**）:
-  修改（回到當時發布的 item;item 已刪／已完成／進不去 → 開新 item）、下架／上架、可見範圍
+  `forked_from`。列表只放原作、那列寫 fork 數;搜尋、「我的」、owner 篩選時 fork 平列(plan-skill-hub-ux-redo D2)。
+- **owner 的管理都在 skill 頁的「管理 ▾」**（`/skill-hub/:id`;別人只有「安裝到 workspace…」與版本紀錄裡的
+  「從這一版 fork」）:
+  修改（回到當時發布的 workspace;已刪／已完成／進不去 → 開新 workspace）、下架／重新上架、權限設定
   （既有的權限對話框）、轉移、刪除。
 - **四個 tool 都是薄殼**:`publish_skill` / `install_skill` 在 `TOOL_VERBS` 裡吃 `edit_content`
   （和 `save_skill` 同）;`search_skill_hub`(每筆多回次數、這個 item 是否已裝、最後更新日、審查意見)

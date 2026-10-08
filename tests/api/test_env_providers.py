@@ -370,3 +370,55 @@ def test_a_deploy_with_no_providers_simply_has_no_buttons(harness: Harness, conf
     iid = register_rca_item(harness.spec)
     body = harness.client.get(f"/a/rca/items/{iid}/env-providers").json()
     assert len(body["providers"]) == (1 if configured else 0)
+
+
+# ─── my environment variables: signing in with no item (`plan-personal-env`) ─
+
+
+def test_my_page_offers_the_deploys_sign_ins_with_no_item(harness: Harness):
+    """The page that holds a person's values for every item has no item to
+    ask about. The offer is the deploy's list — the same one an item shows."""
+    _with_providers(harness, _SapLogin(), _Broken())
+
+    body = harness.client.get("/me/env-providers").json()
+
+    assert [p["id"] for p in body["providers"]] == ["sap-login", "broken"]
+    assert body["providers"][0]["inputs"][1] == {
+        "name": "password",
+        "label": "Password",
+        "secret": True,
+    }
+
+
+def test_signing_in_on_my_page_returns_the_variables_and_stores_nothing(harness: Harness):
+    """The same contract as in an item: the product goes back to the form, and
+    pressing Save is what writes it — here, to my environment variables."""
+    provider = _SapLogin()
+    _with_providers(harness, provider)
+
+    resp = harness.client.post(
+        "/me/env-providers/sap-login", json={"values": {"user": "alice", "password": "hunter2"}}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["env"] == {"SAP_TOKEN": "tok-for-alice", "SAP_HOST": "sap.corp"}
+    assert "hunter2" not in resp.text
+    assert harness.client.get("/me/env").json()["values"] == {}
+
+
+def test_a_failed_sign_in_on_my_page_is_one_the_page_will_show(harness: Harness):
+    _with_providers(harness, _Broken())
+
+    resp = harness.client.post(
+        "/me/env-providers/broken", json={"values": {"user": "a", "password": "b"}}
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["provider"] == "broken"
+    assert "b" not in resp.json()["detail"].get("values", "")
+
+
+def test_an_unknown_sign_in_on_my_page_is_a_404(harness: Harness):
+    _with_providers(harness, _SapLogin())
+
+    assert harness.client.post("/me/env-providers/nope", json={"values": {}}).status_code == 404

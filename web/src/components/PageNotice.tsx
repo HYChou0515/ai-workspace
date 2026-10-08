@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { useT } from "../lib/i18n";
 
@@ -14,7 +15,12 @@ import { useT } from "../lib/i18n";
  * for the success that took the person somewhere else — a transfer or a
  * delete leaving the entry page for the list (plan-skill-hub-ui-polish D10).
  */
-export type PageNoticeContent = { kind: "success" | "info"; text: string };
+export type PageNoticeContent = {
+  kind: "success" | "info";
+  text: string;
+  /** Where to go next from the outcome — 「打開 workspace」 after an install. */
+  link?: { to: string; label: string };
+};
 
 export function PageNotice({
   notice,
@@ -31,7 +37,15 @@ export function PageNotice({
       role="status"
       data-testid="page-notice"
     >
-      <span className="page-notice-text">{notice.text}</span>
+      <span className="page-notice-text">
+        {notice.text}
+        {notice.link ? (
+          <>
+            {" ・ "}
+            <Link to={notice.link.to}>{notice.link.label}</Link>
+          </>
+        ) : null}
+      </span>
       <button
         type="button"
         className="btn"

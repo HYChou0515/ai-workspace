@@ -401,7 +401,7 @@ describe("ExportDialog — video", () => {
     await screen.findByText("全部（10 則）");
 
     expect(screen.getByTestId("export-kind-video")).toBeDisabled();
-    expect(screen.getByText(/需要這個項目的「讀取檔案」與「新增檔案」權限/)).toBeTruthy();
+    expect(screen.getByText(/需要這個 workspace 的「讀取檔案」與「新增檔案」權限/)).toBeTruthy();
     expect(c.fetchChatVideoLimits).not.toHaveBeenCalled();
   });
 

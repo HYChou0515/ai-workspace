@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseShownSkillHubEntry } from "./skillHubEntry";
+import { parseShownSkillHubEntry, stripSkillHubEntry } from "./skillHubEntry";
 
 describe("parseShownSkillHubEntry", () => {
   it("reads the entry the tool declared after its sentence", () => {
@@ -19,5 +19,14 @@ describe("parseShownSkillHubEntry", () => {
     ["an id that is not a string", '…\n[skill-hub-entry]{"entry_id":7}'],
   ])("declares nothing for %s, and never throws", (_label, output) => {
     expect(parseShownSkillHubEntry(output)).toBeNull();
+  });
+});
+
+describe("stripSkillHubEntry", () => {
+  it("drops the declaration, and a half-arrived one, and leaves other text alone", () => {
+    expect(stripSkillHubEntry('published.\n[skill-hub-entry]{"entry_id":"e"}')).toBe("published.");
+    expect(stripSkillHubEntry("published.\n[skill-hu")).toBe("published.");
+    expect(stripSkillHubEntry("plain")).toBe("plain");
+    expect(stripSkillHubEntry(undefined)).toBe(undefined);
   });
 });

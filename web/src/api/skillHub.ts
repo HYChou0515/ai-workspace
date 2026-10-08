@@ -15,7 +15,7 @@ import { apiFetch, detailSentence, errorInfo, HttpError } from "./http";
 export type SkillHubReviewVerdict = "ok" | "notes";
 export type SkillUpstreamState = "live" | "unpublished" | "deleted";
 
-/** One row of the list. `forks` is filled for a root; a fork's own is empty. */
+/** One row of the list — flat: a fork is its own row (plan-skill-hub-ux-redo D2). */
 export type SkillHubCard = {
   id: string;
   owner: string;
@@ -35,14 +35,54 @@ export type SkillHubCard = {
    * §4.8). A fork counts its own; who installed or used it is never sent. */
   installs: number;
   uses: number;
-  forks: SkillHubCard[];
+  /** Direct forks the viewer may read — the row's 「N 個 fork」 link. */
+  fork_count: number;
+  /** A fork's original, named — `null` for an original, and for a fork whose
+   * original the viewer may not read. */
+  origin: { owner: string; name: string } | null;
+  /** ISO time the content last changed; `null` for an entry from before it was recorded. */
+  updated_at: string | null;
 };
 
-export type SkillHubSort = "name" | "popular";
+export type SkillHubSort = "name" | "popular" | "updated";
 
-/** The page's listing: the rows plus the day counting began (`YYYY-MM-DD`),
- * "" before anything was counted. */
-export type SkillHubListing = { entries: SkillHubCard[]; counted_since: string };
+/** What the list page asks for. Browsing (no `q`, `mine` or `owner`) lists
+ * originals only; any filter lists forks beside them. */
+export type SkillHubBrowseQuery = {
+  q?: string;
+  mine?: boolean;
+  owner?: string;
+  sort?: SkillHubSort;
+  offset?: number;
+  limit?: number;
+  /** An App slug: each row then says which of its tools that App lacks. */
+  app?: string;
+  /** List forks beside originals even with no filter (the install picker). */
+  forks?: boolean;
+};
+
+/** One page of the listing: its rows, how many match in all, and the day
+ * counting began (`YYYY-MM-DD`, "" before anything was counted). */
+export type SkillHubListing = { entries: SkillHubCard[]; total: number; counted_since: string };
+
+/** One file of a version, listed (never read); `size` is `null` for an entry
+ * from before versions were kept. */
+export type SkillHubFile = { path: string; size: number | null };
+
+/** A workspace holding a copy of the entry. */
+export type SkillHubInstall = { app: string; item_id: string; title: string };
+
+/** A workspace the install dialog offers, and what installing would do there. */
+export type SkillHubTarget = {
+  item_id: string;
+  title: string;
+  /** `unavailable`: the workspace's sandbox was too busy to answer. */
+  state: "ok" | "installed" | "name_taken" | "unavailable";
+  /** On `name_taken`: whose copy is in the way ("" for a hand-written folder). */
+  owner: string;
+};
+
+export type SkillHubTargets = { missing_tools: string[]; items: SkillHubTarget[] };
 
 /** What a fork was forked from, as THIS viewer may know it: `owner` / `name`
  * only when the root is `live` for them. */
@@ -66,7 +106,9 @@ export type SkillHubDetail = {
   review: { verdict: SkillHubReviewVerdict; notes: string[]; model: string };
   forked_from: SkillHubLineage | null;
   forks: SkillHubCard[];
-  files: string[];
+  files: SkillHubFile[];
+  /** How many files are under `scripts/`. */
+  scripts: number;
   skill_md: string;
   is_owner: boolean;
   visibility: "public" | "restricted" | "private";
@@ -78,6 +120,11 @@ export type SkillHubDetail = {
   installs: number;
   uses: number;
   counted_since: string;
+  /** ISO time the content last changed; `null` for an entry from before it was recorded. */
+  updated_at: string | null;
+  /** The revision the entry is at — what `versionFile` takes to open one of
+   * `files`; "" for an entry not in git yet. */
+  revision: string;
 };
 
 /** Where the owner goes to edit (plan P8's table). `open`: go to `item_id`;
@@ -115,6 +162,8 @@ export type SkillHubHistoryEvent = {
   /** On a permission change: who may read it — `user:<id>` / `group:<id>`. */
   audience: string[];
   current: boolean;
+  /** v1, v2, … on a publish or rollback; `null` on any other row. */
+  version: number | null;
 };
 
 /** One version, read (never installed — G23). */
@@ -122,7 +171,8 @@ export type SkillHubVersion = {
   revision: string;
   commit: string;
   description: string;
-  files: string[];
+  files: SkillHubFile[];
+  scripts: number;
   skill_md: string;
 };
 
@@ -139,11 +189,15 @@ export type SkillHubFileChange = {
 export type SkillHubApi = {
   /** `app` (a slug) adds each row's `missing_tools` against that App's ceiling. */
   list(q?: string, mine?: boolean, app?: string): Promise<SkillHubCard[]>;
-  /** The skill hub page's listing: `list` plus the counting day, in `sort` order
-   * (`popular` = most used first; forks stay under their root). */
-  browse(q?: string, mine?: boolean, sort?: SkillHubSort): Promise<SkillHubListing>;
+  /** One page of the skill hub page's listing, in `sort` order. */
+  browse(query: SkillHubBrowseQuery): Promise<SkillHubListing>;
   /** `app` (a slug) adds `missing_tools` against that App's ceiling. */
   get(entryId: string, app?: string): Promise<SkillHubDetail>;
+  /** The viewer's workspaces that hold a copy of the entry. */
+  installs(entryId: string): Promise<SkillHubInstall[]>;
+  /** App `app`'s workspaces the viewer may install into, each with what
+   * installing would do there. */
+  targets(entryId: string, app: string): Promise<SkillHubTargets>;
   /** The Skills panel's install door: 409 when a folder of that name is
    * already in the item (a coded refusal naming whose copy it is), 404 when
    * the entry cannot be read. */
@@ -170,6 +224,14 @@ export type SkillHubApi = {
 const entryBase = (entryId: string) => `/skill-hub/entries/${encodeURIComponent(entryId)}`;
 const versionBase = (entryId: string, revision: string) =>
   `${entryBase(entryId)}/versions/${encodeURIComponent(revision)}`;
+
+/** `files` as this client knows them. An API pod from before the files tab
+ * (mid-rollout) sends bare names; they read as files of unknown size. */
+function asFiles(files: unknown): SkillHubFile[] {
+  return (Array.isArray(files) ? files : []).map((f) =>
+    typeof f === "string" ? { path: f, size: null } : (f as SkillHubFile),
+  );
+}
 
 async function getJson<T>(path: string, failed: string): Promise<T> {
   const resp = await apiFetch(path);
@@ -225,22 +287,57 @@ export const skillHubApi: SkillHubApi = {
     if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
     return ((await resp.json()) as { entries: SkillHubCard[] }).entries;
   },
-  async browse(q = "", mine = false, sort = "name") {
+  async browse({
+    q = "",
+    mine = false,
+    owner = "",
+    sort = "name",
+    offset = 0,
+    limit,
+    app = "",
+    forks = false,
+  }) {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (mine) params.set("mine", "true");
+    if (owner) params.set("owner", owner);
     if (sort !== "name") params.set("sort", sort);
+    if (offset) params.set("offset", String(offset));
+    if (limit) params.set("limit", String(limit));
+    if (app) params.set("app", app);
+    if (forks) params.set("forks", "true");
     const suffix = params.size ? `?${params}` : "";
     const resp = await apiFetch(`/skill-hub/entries${suffix}`);
     if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
     const body = (await resp.json()) as Partial<SkillHubListing>;
-    return { entries: body.entries ?? [], counted_since: body.counted_since ?? "" };
+    const entries = body.entries ?? [];
+    return {
+      entries,
+      // An API pod from before paging (mid-rollout) sends no total: what it
+      // sent is all there is. 0 would draw "nobody has published anything".
+      total: body.total ?? offset + entries.length,
+      counted_since: body.counted_since ?? "",
+    };
   },
   async get(entryId, app) {
     const suffix = app ? `?app=${encodeURIComponent(app)}` : "";
     const resp = await apiFetch(`${entryBase(entryId)}${suffix}`);
     if (!resp.ok) throw await refused(resp, "the skill hub entry could not be read");
-    return (await resp.json()) as SkillHubDetail;
+    const body = (await resp.json()) as SkillHubDetail;
+    return { ...body, files: asFiles(body.files), scripts: body.scripts ?? 0 };
+  },
+  async installs(entryId) {
+    const body = await getJson<{ installs: SkillHubInstall[] }>(
+      `${entryBase(entryId)}/installs`,
+      "the installs could not be read",
+    );
+    return body.installs;
+  },
+  targets(entryId, app) {
+    return getJson<SkillHubTargets>(
+      `${entryBase(entryId)}/targets?${new URLSearchParams({ app })}`,
+      "the workspaces could not be read",
+    );
   },
   async install(slug, itemId, entryId) {
     const resp = await post(
@@ -282,8 +379,12 @@ export const skillHubApi: SkillHubApi = {
     );
     return body.events;
   },
-  version(entryId, revision) {
-    return getJson<SkillHubVersion>(versionBase(entryId, revision), "the version could not be read");
+  async version(entryId, revision) {
+    const body = await getJson<SkillHubVersion>(
+      versionBase(entryId, revision),
+      "the version could not be read",
+    );
+    return { ...body, files: asFiles(body.files), scripts: body.scripts ?? 0 };
   },
   versionFile(entryId, revision, path) {
     const q = new URLSearchParams({ path });

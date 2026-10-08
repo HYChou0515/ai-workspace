@@ -86,8 +86,10 @@ export const qk = {
   // and one entry (with the tool diff for an App when asked). Both are per
   // viewer; a management write invalidates the whole family.
   skillHub: (q: string, mine: boolean, app = "") => ["skillHub", q, mine, app] as const,
-  skillHubBrowse: (q: string, mine: boolean, sort: string) =>
-    ["skillHub", "browse", q, mine, sort] as const,
+  skillHubBrowse: (q: string, mine: boolean, owner: string, sort: string) =>
+    ["skillHub", "browse", q, mine, owner, sort] as const,
+  skillHubInstalls: (id: string) => ["skillHub", "installs", id] as const,
+  skillHubTargets: (id: string, app: string) => ["skillHub", "targets", id, app] as const,
   skillHubEntry: (id: string, app: string) => ["skillHub", "entry", id, app] as const,
   skillHubHistory: (id: string) => ["skillHub", "history", id] as const,
   skillHubVersion: (id: string, revision: string) => ["skillHub", "version", id, revision] as const,
@@ -111,6 +113,10 @@ export const qk = {
   envProviders: (slug: string, itemId: string) => ["envProviders", slug, itemId] as const,
   // `plan-wui-viewer-login`: the CALLER's private env values for one item.
   privateEnv: (slug: string, itemId: string) => ["privateEnv", slug, itemId] as const,
+  // `plan-personal-env`: the CALLER's values for every item.
+  personalEnv: () => ["personalEnv"] as const,
+  // The deploy's sign-ins, asked with no item (the "My environment variables" page).
+  myEnvProviders: () => ["myEnvProviders"] as const,
   // The item's shared values + policy, for a page that has only its id.
   envLayers: (slug: string, itemId: string) => ["envLayers", slug, itemId] as const,
   // One schedules file's rows with who each runs as ("run as me").

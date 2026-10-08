@@ -211,6 +211,18 @@ async def hub_entries_here(files: WorkspaceFiles, workspace_id: str) -> set[str]
     return {m.hub_entry for m in await workspace_skill_metas(files, workspace_id) if m.hub_entry}
 
 
+async def skill_file_paths(
+    files: WorkspaceFiles, workspace_id: str, name: str, *, wake: bool = True
+) -> list[str]:
+    """The paths of the skill's own files under ``.skill/<name>/`` — its
+    bookkeeping (``.origin``, the copy marker) left out — sorted."""
+    prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
+    bookkeeping = {prefix + ORIGIN_FILE, prefix + COPYING_FILE}
+    return sorted(
+        p for p in await files.ls(workspace_id, prefix, wake=wake) if p not in bookkeeping
+    )
+
+
 async def workspace_skill_payload(
     files: WorkspaceFiles, workspace_id: str, name: str
 ) -> dict[str, bytes]:
@@ -220,8 +232,7 @@ async def workspace_skill_payload(
     copy came from, which is the copy's business, not the skill's. Empty when
     there is no such folder."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/{name}/"
-    bookkeeping = {prefix + ORIGIN_FILE, prefix + COPYING_FILE}
-    paths = sorted(p for p in await files.ls(workspace_id, prefix) if p not in bookkeeping)
+    paths = await skill_file_paths(files, workspace_id, name)
     from ..filestore.batch import read_all
 
     return {
@@ -231,14 +242,19 @@ async def workspace_skill_payload(
 
 
 async def workspace_skill_origin(
-    files: WorkspaceFiles, workspace_id: str, name: str
+    files: WorkspaceFiles, workspace_id: str, name: str, *, wake: bool = True
 ) -> SkillOrigin | None:
     """The copy's ``.origin`` manifest, or ``None`` when the folder is not a
-    copy (or does not exist)."""
+    copy (or does not exist). ``wake=False`` for a read across many
+    workspaces: a reaped sandbox is answered from its durable copy rather than
+    rebuilt (`WorkspaceFiles._warm`). A manifest that does not parse raises
+    ``msgspec.DecodeError`` / ``ValidationError``."""
     from ..filestore.protocol import FileNotFound
 
     try:
-        raw = await files.read(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}")
+        raw = await files.read(
+            workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}", wake=wake
+        )
     except FileNotFound:
         return None
     return msgspec.json.decode(raw, type=SkillOrigin)
@@ -861,19 +877,34 @@ class FolderInTheWay(msgspec.Struct, frozen=True):
 
 
 async def skill_folder_in_the_way(
-    files: WorkspaceFiles, workspace_id: str, hub: SkillHubStore, name: str, viewer: str
+    files: WorkspaceFiles,
+    workspace_id: str,
+    hub: SkillHubStore,
+    name: str,
+    viewer: str,
+    *,
+    wake: bool = True,
 ) -> FolderInTheWay | None:
     """The refusal an install gets when ``.skill/<name>/`` already exists —
     one fact, shared by the tool and the route so the two doors refuse alike
     — or ``None`` when the name is free. Never overwrite: the folder may be
     the user's own skill, or an earlier install they have since edited. It
     says WHOSE copy it is when it is one, so "already have it" and "name
-    clash" read differently (plan install step 4)."""
-    if not await workspace_skill_payload(files, workspace_id, name):
+    clash" read differently (plan install step 4). Listed, not read: a
+    folder with any file of its own is in the way. ``wake`` as for
+    :func:`workspace_skill_origin` — the install dialog asks this of every
+    workspace it offers. A manifest that does not parse names no owner: the
+    folder is still in the way."""
+    if not await skill_file_paths(files, workspace_id, name, wake=wake):
         return None
-    origin = await workspace_skill_origin(files, workspace_id, name)
+    try:
+        origin = await workspace_skill_origin(files, workspace_id, name, wake=wake)
+    except (msgspec.DecodeError, msgspec.ValidationError):
+        origin = None
     owner = ""
-    if origin is not None and origin.source == "hub" and origin.entry:
+    # A fork's starting point (`forked`) is the viewer's own skill: naming the
+    # original's owner on it read as someone else's copy (round 2).
+    if origin is not None and origin.source == "hub" and origin.entry and not origin.forked:
         _state, theirs = hub.state_for(origin.entry, viewer)
         if theirs is not None:
             owner = theirs.owner

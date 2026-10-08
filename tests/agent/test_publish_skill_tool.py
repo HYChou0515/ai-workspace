@@ -12,6 +12,7 @@ one pointing at a package skill or an entry that no longer exists, is a root.
 
 from __future__ import annotations
 
+import json
 import tempfile
 
 import msgspec
@@ -19,7 +20,7 @@ import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.tools import publish_skill_impl
+from workspace_app.agent.tools import SKILL_HUB_ENTRY_MARKER, publish_skill_impl
 from workspace_app.api.skill_review import SkillReviewUnavailable
 from workspace_app.apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from workspace_app.apps.skill_hub_git import SkillHubRepos
@@ -120,6 +121,10 @@ async def test_a_workspace_skill_publishes_with_its_files_and_where_it_came_from
     entry_id = hub.find("alice", "triage-reflow")
     assert entry_id is not None and entry_id in out, out
     assert "error" not in out
+    # The chat draws the entry's live card from the same marker
+    # `show_skill_hub_entry` ends with (plan-skill-hub-ux-redo, audit #26): the
+    # person reaches what they just published.
+    assert out.endswith(f"{SKILL_HUB_ENTRY_MARKER}{json.dumps({'entry_id': entry_id})}"), out
     entry = hub.get(entry_id)
     assert entry is not None
     assert (entry.owner, entry.name, entry.description) == (

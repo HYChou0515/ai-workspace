@@ -1,18 +1,28 @@
 /**
- * The per-item environment variables panel — two layers
- * (`docs/plan-wui-viewer-login.md`).
+ * The per-item environment variables panel — one tab per layer, named as the
+ * user named them (`docs/plan-wui-viewer-login.md`, `docs/plan-personal-env.md`
+ * A20). What is done in a tab, a sign-in included, lands in that tab's layer
+ * and nowhere else:
  *
- * * **Only me** (the default tab) — the viewer's PRIVATE values for this item:
- *   typed, filled by a login, or written for them by the deploy's seam. Only
- *   they can read them (`api/privateEnv.ts`), so they are masked until asked.
- * * **Everyone** — the item's SHARED `env_vars` plus a per-variable POLICY
+ * * **Shared** — the item's SHARED `env_vars` plus a per-variable POLICY
  *   saying which layer a tool gets: `shared_first` (the default, and what every
  *   item did before), `private_first`, `private_only`. Written by whoever holds
  *   `write_meta`; everyone else sees it read-only, with the reason.
+ * * **Private** (the default tab) — the viewer's PRIVATE values for this item:
+ *   typed, signed in for, or written for them by the deploy's seam. Each row
+ *   says whose value a tool gets, my values for every item included.
+ * * **Private(跨workspace)** — the viewer's values for every item, the same
+ *   row as the "My environment variables" page: the names this item's tools
+ *   need and the ones it sets to Private first / Private only, each saying
+ *   whether this item uses it (only such a name does, D2). A sign-in here is
+ *   stored at once.
+ *
+ * Only the viewer can read the private two (`api/privateEnv.ts`,
+ * `api/personalEnv.ts`), so they are masked until asked.
  *
  * One layer is edited at a time, each tab saving on its own: Postman retired
  * editing a shared and a local value side by side in one row, and VS Code
- * separates User / Workspace the same way. Every "Only me" row says whose value
+ * separates User / Workspace the same way. Every Private row says whose value
  * is in use and why (`lib/envLayers.ts`, held to the backend's rule by a shared
  * table).
  *
@@ -34,9 +44,10 @@
  * from the one person who may edit them and from nobody else.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
+import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
@@ -47,9 +58,14 @@ import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } f
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
+import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
+import { Tabs } from "./ShareTabs";
 
-type Tab = "mine" | "shared";
+type Tab = "shared" | "mine" | "personal";
+const TABS: Tab[] = ["shared", "mine", "personal"];
+/** The tab each layer is edited on: "in use" names the tab, not the layer. */
+const TAB_OF = { shared: "shared", private: "mine", personal: "personal" } as const;
 
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) };
 const MUTED = { fontSize: pxToRem(11), color: "var(--text-paper-d)" } as const;
@@ -71,22 +87,26 @@ export function EnvVarsModal({
   itemId,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
 }: {
   envVars: Record<string, string>;
   envPolicy?: Record<string, string>;
   /** Store the SHARED values and policy. Absent ⇒ the caller may not
-   * (`write_meta`), and the Everyone tab is read-only. */
+   * (`write_meta`), and the Shared tab is read-only. */
   onSave?: (
     next: Record<string, string>,
     policy: Record<string, string>,
   ) => void | boolean | Promise<void | boolean>;
   onClose: () => void;
   /** The item. Without one there is no private layer (and no declared tools):
-   * only the Everyone tab is drawn. */
+   * only the Shared tab is drawn. */
   slug?: string;
   itemId?: string;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
   privateClient?: Pick<PrivateEnvClient, "get" | "put" | "clear">;
+  /** My environment variables (`plan-personal-env`): read to say whose value
+   * is in use, and edited on the cross-workspace tab. */
+  personalClient?: Pick<PersonalEnvClient, "get" | "put">;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -109,6 +129,25 @@ export function EnvVarsModal({
     queryFn: () => privateClient.get(slug!, itemId!),
     enabled: hasItem,
   });
+  const personalQ = useQuery({
+    queryKey: qk.personalEnv(),
+    queryFn: () => personalClient.get(),
+    enabled: hasItem,
+  });
+  const personal = personalQ.data?.values ?? {};
+  // Only the names edited on the cross-workspace tab, "" = remove: the rest of
+  // the row is the server's, so a save writes these and nothing it did not
+  // touch, onto a fresh read (round 1, F2). The values are the one copy —
+  // NOT the `.env` text, which trims and cannot hold a line break (review
+  // A22: making the text the copy ate typed spaces and rewrote stored values).
+  const [personalEdits, setPersonalEdits] = useState<Record<string, string>>({});
+  const personalValues = Object.fromEntries(
+    Object.entries({ ...personal, ...personalEdits }).filter(([, v]) => v !== ""),
+  );
+  // A name edited back to what is stored, or cleared when nothing is, changes
+  // nothing.
+  const personalChange = () =>
+    Object.fromEntries(Object.entries(personalEdits).filter(([n, v]) => v !== (personal[n] ?? "")));
 
   // ── the SHARED layer: the box's text is the one copy of the values ────────
   const [text, setText] = useState(() => toEnvText(envVars));
@@ -126,21 +165,26 @@ export function EnvVarsModal({
     });
 
   // ── the PRIVATE layer ─────────────────────────────────────────────────────
-  const [mine, setMine] = useState<Record<string, string> | null>(null);
-  useEffect(() => {
-    // Seeded once from the server; afterwards the form is what the person is
-    // editing, and a background refetch must not overwrite it.
-    if (mineQ.data && mine === null) setMine({ ...mineQ.data.values });
-  }, [mineQ.data, mine]);
-  const mineValues = mine ?? {};
+  // The same shape as the cross-workspace tab: only the names edited here
+  // ("" = cleared), laid over what the server holds. Nothing is seeded, so
+  // nothing can be lost between the read landing and a seed applying — a
+  // sign-in before the read, then Save in that instant, sent the sign-in
+  // alone as the whole set (review A22). The `.env` box edits these values;
+  // it is not their copy (it trims and cannot hold a line break).
+  const [mineEdits, setMineEdits] = useState<Record<string, string>>({});
+  const mineServer = mineQ.data?.values ?? {};
+  const mineValues = { ...mineServer, ...mineEdits };
+  const setMineVars = (env: Record<string, string>) => setMineEdits((prev) => ({ ...prev, ...env }));
   // What the deploy filled in at their last request — shown, not editable, and
   // it wins a name (the server's `unattended_layer` / `private_layer`).
   const auto = mineQ.data?.auto ?? {};
 
   const [creds, setCreds] = useState<Record<string, string>>({});
   const sharedDirty = text !== toEnvText(envVars) || !sameShape(policy, envPolicy);
-  const mineDirty = mine !== null && mineQ.data !== undefined && !sameShape(mine, mineQ.data.values);
-  const dirty = sharedDirty || mineDirty || Object.values(creds).some((v) => v.trim() !== "");
+  const mineDirty = Object.entries(mineEdits).some(([n, v]) => v !== (mineServer[n] ?? ""));
+  const personalDirty = Object.keys(personalChange()).length > 0;
+  const dirty =
+    sharedDirty || mineDirty || personalDirty || Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(dirty, onClose);
 
   const tools = toolsQ.data?.tools ?? [];
@@ -150,13 +194,15 @@ export function EnvVarsModal({
   // variables", then jumps under its tool, and a section unfolded for a missing
   // value folds again the moment the person's own value loads.
   const toolsSettled = !hasItem || toolsQ.isSuccess || toolsQ.isError;
-  const mineSettled = !hasItem || mine !== null || mineQ.isError;
+  const mineSettled = !hasItem || mineQ.isSuccess || mineQ.isError;
 
-  /** After one tab saves: close only if the OTHER tab has nothing unsaved;
-   * otherwise stay, on that tab (#779 — a Save is a deliberate exit, and it
-   * must not throw away the other tab's work without asking). */
-  const afterSave = (other: Tab, otherDirty: boolean) => {
-    if (otherDirty) setTab(other);
+  /** After one tab saves: close only if no OTHER tab has anything unsaved;
+   * otherwise stay, on the first that does (#779 — a Save is a deliberate exit,
+   * and it must not throw away another tab's work without asking). */
+  const afterSave = (saved: Tab) => {
+    const waiting = { shared: sharedDirty, mine: mineDirty, personal: personalDirty };
+    const next = TABS.find((x) => x !== saved && waiting[x]);
+    if (next) setTab(next);
     else onClose();
   };
   // Mutations, not bare awaits: a failed write reaches the app's one write-
@@ -170,18 +216,79 @@ export function EnvVarsModal({
       return kept;
     },
     onSuccess: async (kept) => {
-      setMine(kept);
+      setMineEdits({});
       queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: kept, auto });
-      afterSave("shared", sharedDirty);
+      afterSave("mine");
+    },
+  });
+  // Every write to my environment variables: re-read the row (`staleTime: 0`,
+  // never the cached copy — round 1, F2), change only the names given, write
+  // it whole. One queue with the page's writes (round 2, F2).
+  const writePersonal = async (change: Record<string, string>) => {
+    const current = (
+      await queryClient.fetchQuery({
+        queryKey: qk.personalEnv(),
+        queryFn: () => personalClient.get(),
+        staleTime: 0,
+      })
+    ).values;
+    const next = { ...current };
+    // A cleared field is "no value of mine", as on the Private tab.
+    for (const [n, v] of Object.entries(change)) {
+      if (v === "") delete next[n];
+      else next[n] = v;
+    }
+    return personalClient.put(next);
+  };
+  // A sign-in on the cross-workspace tab is stored at once: it is the
+  // deliberate act, and a token waiting for a Save is one the next run lacks.
+  const signIn = useMutation({
+    scope: PERSONAL_ENV_WRITES,
+    // Its failure is said in the sign-in dialog, which stays open; the
+    // app-wide notice would say it twice (review A20 round 2, F1).
+    meta: { silentError: true },
+    mutationFn: writePersonal,
+    onSuccess: (saved, env) => {
+      queryClient.setQueryData(qk.personalEnv(), saved);
+      // Stored: shown, and no longer an unsaved edit — whatever was typed for
+      // those names before.
+      setPersonalEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([n]) => !(n in env))));
+    },
+  });
+  const savePersonal = useMutation({
+    scope: PERSONAL_ENV_WRITES,
+    mutationFn: () => writePersonal(personalChange()),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(qk.personalEnv(), saved);
+      setPersonalEdits({});
+      afterSave("personal");
     },
   });
   const logout = useMutation({
     mutationFn: () => privateClient.clear(slug!, itemId!),
     onSuccess: async () => {
-      setMine({});
+      setMineEdits({});
+      // Gone now, not when the refetch lands: until then the old row showed
+      // and Save wrote it back (review of P19, F1).
+      queryClient.setQueryData(qk.privateEnv(slug!, itemId!), { values: {}, auto: {} });
       await queryClient.invalidateQueries({ queryKey: qk.privateEnv(slug!, itemId!) });
     },
   });
+  // Clearing cannot be undone (a signed-in token must be signed in for
+  // again), so it is marked destructive and asks first, the choice named by
+  // its outcome — NN/g "Confirmation Dialogs"; GOV.UK "Warning button" (A22).
+  const dialog = useDialog();
+  const askToClear = async () => {
+    const choice = await dialog.confirm({
+      title: t("env.clearTitle"),
+      body: t("env.clearBody"),
+      actions: [
+        { id: "cancel", label: t("env.cancel") },
+        { id: "clear", label: t("env.clearConfirm"), variant: "danger" },
+      ],
+    });
+    if (choice === "clear") logout.mutate();
+  };
   const saveShared = async () => {
     if (!onSave) return;
     // `false` = the write failed (the app's write-failure notice says so):
@@ -189,7 +296,7 @@ export function EnvVarsModal({
     if ((await onSave(parseEnvText(text), policy)) === false) return;
     // A page's platform strip reads these through its own query.
     if (hasItem) await queryClient.invalidateQueries({ queryKey: qk.envLayers(slug!, itemId!) });
-    afterSave("mine", mineDirty);
+    afterSave("shared");
   };
 
   // A provider is offered when it produces a name some tool asked for — the
@@ -210,23 +317,16 @@ export function EnvVarsModal({
       <strong style={{ fontSize: pxToRem(14) }}>{t("env.title")}</strong>
 
       {hasItem && (
-        <div role="tablist" aria-label={t("env.title")} style={{ display: "flex", gap: 6 }}>
-          {(["mine", "shared"] as const).map((id) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              className="btn"
-              data-size="sm"
-              data-variant={tab === id ? "primary" : "secondary"}
-              data-testid={`env-tab-${id}`}
-              aria-selected={tab === id}
-              onClick={() => setTab(id)}
-            >
-              {t(id === "mine" ? "env.tab.mine" : "env.tab.shared")}
-            </button>
-          ))}
-        </div>
+        // The app's one tab strip (`Tabs`, the share dialog's too): a filled button is how this app draws its
+        // primary ACTION, so a selected tab drawn that way read as "press me"
+        // (A22). One component, so the two dialogs' tabs never drift apart.
+        <Tabs
+          tabs={TABS.map((id) => ({ id, label: t(`env.tab.${id}`), count: 0 }))}
+          value={tab}
+          onChange={(id) => setTab(id as Tab)}
+          idPrefix="env"
+          label={t("env.title")}
+        />
       )}
 
       {hasItem && (
@@ -241,7 +341,14 @@ export function EnvVarsModal({
         />
       )}
 
-      <div className="scrollable" style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10 }}>
+      <div
+        className="scrollable"
+        // What the strip's `aria-controls` points at (`Tabs`: `{idPrefix}-panel-{tab}`).
+        role={hasItem ? "tabpanel" : undefined}
+        id={hasItem ? `env-panel-${tab}` : undefined}
+        aria-labelledby={hasItem ? `env-tab-${tab}` : undefined}
+        style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10 }}
+      >
         {tab === "shared" ? (
           <SharedTab
             settled={toolsSettled}
@@ -269,6 +376,38 @@ export function EnvVarsModal({
               />
             }
           />
+        ) : tab === "personal" ? (
+          <PersonalTab
+            settled={toolsSettled && (personalQ.isSuccess || personalQ.isError)}
+            tools={tools}
+            query={query}
+            policy={policy}
+            values={personalValues}
+            failed={personalQ.isError}
+            saving={savePersonal.isPending}
+            onEdit={(name, value) => setPersonalEdits((prev) => ({ ...prev, [name]: value }))}
+            // The box replaces the whole layer: a name taken out of it is removed.
+            onReplace={(next) =>
+              setPersonalEdits(
+                Object.fromEntries([
+                  ...Object.keys({ ...personal, ...personalEdits }).map((n) => [n, ""] as const),
+                  ...Object.entries(next),
+                ]),
+              )
+            }
+            ready={personalQ.isSuccess}
+            login={
+              <Logins
+                offered={offered}
+                creds={creds}
+                setCreds={setCreds}
+                exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
+                // Awaited: a value that could not be stored keeps the sign-in
+                // open and says so (review A20, D5).
+                onFilled={(env) => signIn.mutateAsync(env)}
+              />
+            }
+          />
         ) : (
           <MineTab
             settled={toolsSettled && mineSettled}
@@ -278,15 +417,29 @@ export function EnvVarsModal({
             policy={policy}
             mine={mineValues}
             auto={auto}
+            personal={personal}
             failed={mineQ.isError}
-            setMine={(name, value) => setMine((prev) => ({ ...(prev ?? {}), [name]: value }))}
+            setMine={(name, value) => setMineVars({ [name]: value })}
+            // The box replaces the whole layer: a name taken out of it is cleared.
+            onReplace={(next) =>
+              setMineEdits(
+                Object.fromEntries([
+                  ...Object.keys(mineValues).map((n) => [n, ""] as const),
+                  ...Object.entries(next),
+                ]),
+              )
+            }
+            // Not before the read: typing here would become the whole set.
+            ready={mineQ.isSuccess}
             login={
               <Logins
                 offered={offered}
                 creds={creds}
                 setCreds={setCreds}
                 exchange={(id, values) => client.resolveEnvProvider(slug!, itemId!, id, values)}
-                onFilled={(env) => setMine((prev) => ({ ...(prev ?? {}), ...env }))}
+                // This tab is my values for THIS item, so that is where its
+                // sign-in lands — saved with this tab (A20).
+                onFilled={(env) => setMineVars(env)}
               />
             }
           />
@@ -324,16 +477,52 @@ export function EnvVarsModal({
               </button>
             )}
           </>
-        ) : (
+        ) : tab === "personal" ? (
           <>
             <button
               type="button"
               className="btn"
               data-variant="secondary"
               data-size="sm"
+              data-testid="env-cancel"
+              style={{ marginLeft: "auto" }}
+              onClick={attemptClose}
+            >
+              {t("env.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-size="sm"
+              data-testid="env-personal-save"
+              // Not over a failed read: the row would be written from nothing.
+              disabled={!personalQ.isSuccess || savePersonal.isPending}
+              // Nothing typed: nothing to write — a whole-row PUT for no change
+              // could only race another tab (review A20, D6).
+              onClick={() => (personalDirty ? savePersonal.mutate() : afterSave("personal"))}
+            >
+              {t("env.save")}
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn"
+              data-variant="danger"
+              data-size="sm"
               data-testid="env-mine-logout"
               style={{ marginRight: "auto" }}
-              onClick={() => logout.mutate()}
+              // Nothing of mine stored here: nothing to clear (review A22). Only
+              // when that is KNOWN: clearing is deliberately allowed without
+              // read access, so someone who lost it can still take their
+              // credential back out (`private_env.py`, the DELETE route).
+              disabled={
+                mineQ.isSuccess &&
+                Object.keys(mineQ.data?.values ?? {}).length === 0 &&
+                Object.keys(auto).length === 0
+              }
+              onClick={() => void askToClear()}
             >
               {t("env.logout")}
             </button>
@@ -354,7 +543,7 @@ export function EnvVarsModal({
               data-testid="env-mine-save"
               // Not until the person's values have loaded: Save replaces the
               // whole set, and saving over a failed read erased it (F5).
-              disabled={mine === null || saveMine.isPending}
+              disabled={!mineQ.isSuccess || saveMine.isPending}
               onClick={() => saveMine.mutate()}
             >
               {t("env.save")}
@@ -527,7 +716,7 @@ function Sections({
   );
 }
 
-// ── Everyone ──────────────────────────────────────────────────────────────
+// ── Shared ──────────────────────────────────────────────────────────────
 
 function SharedTab({
   settled,
@@ -561,26 +750,6 @@ function SharedTab({
     (n) => !declared.has(n),
   );
   const [newName, setNewName] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const importFile = async (file: File) => {
-    // MERGES into what is in the box — the thing the person is looking at.
-    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))));
-  };
-  const exportFile = () => {
-    // What is in the box, unsaved edits included; to the browser, never into
-    // the workspace (a file there is one the agent can read).
-    const url = URL.createObjectURL(
-      new Blob([toEnvText(parseEnvText(text))], { type: "text/plain" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = ".env";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <>
@@ -654,65 +823,153 @@ function SharedTab({
       />
       )}
       {login}
-      <details data-testid="env-text-details">
-        <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>{t("env.editAsText")}</summary>
-        <textarea
-          data-testid="env-text"
-          aria-label={t("env.title")}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          readOnly={!canEdit}
-          placeholder={"FOO=BAR\nBAZ=HOO"}
-          spellCheck={false}
-          rows={8}
-          className="input input--block"
-          style={{
-            ...MONO,
-            marginTop: 6,
-            lineHeight: 1.6,
-            whiteSpace: "pre",
-            overflowWrap: "normal",
-            overflowX: "auto",
+      <EnvTextBox prefix="env" text={text} setText={setText} readOnly={!canEdit} />
+    </>
+  );
+}
+
+// ── the `.env` box ────────────────────────────────────────────────────────
+
+/** Each tab's values as `.env` text — the tab's ONE copy, which its fields
+ * edit in place (`setEnvValue`, so a keystroke in a field never costs the
+ * comments written in the box). Folded: it is for what people do with these,
+ * paste a block from elsewhere. One component for every tab (A22). */
+function EnvTextBox({
+  prefix,
+  text,
+  setText,
+  readOnly,
+}: {
+  prefix: string;
+  text: string;
+  /** `imported`: the text came from a file, not from typing in the box. */
+  setText: (next: string, imported?: boolean) => void;
+  readOnly: boolean;
+}) {
+  const t = useT();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const importFile = async (file: File) => {
+    // MERGES into what is in the box — the thing the person is looking at.
+    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))), true);
+  };
+  const exportFile = () => {
+    // What is in the box, unsaved edits included; to the browser, never into
+    // the workspace (a file there is one the agent can read).
+    const url = URL.createObjectURL(new Blob([toEnvText(parseEnvText(text))], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ".env";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <details data-testid={`${prefix}-text-details`}>
+      <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>{t("env.editAsText")}</summary>
+      <textarea
+        data-testid={`${prefix}-text`}
+        aria-label={t("env.editAsText")}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        readOnly={readOnly}
+        placeholder={"FOO=BAR\nBAZ=HOO"}
+        spellCheck={false}
+        rows={8}
+        className="input input--block"
+        style={{
+          ...MONO,
+          marginTop: 6,
+          lineHeight: 1.6,
+          whiteSpace: "pre",
+          overflowWrap: "normal",
+          overflowX: "auto",
+        }}
+      />
+      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".env,text/plain"
+          data-testid={`${prefix}-import`}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void importFile(f);
+            e.target.value = ""; // so re-picking the same file fires again
           }}
         />
-        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".env,text/plain"
-            data-testid="env-import"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void importFile(f);
-              e.target.value = ""; // so re-picking the same file fires again
-            }}
-          />
-          {canEdit && (
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              data-testid="env-import-button"
-              onClick={() => fileRef.current?.click()}
-            >
-              {t("env.import")}
-            </button>
-          )}
+        {!readOnly && (
           <button
             type="button"
             className="btn"
             data-variant="secondary"
             data-size="sm"
-            data-testid="env-export"
-            onClick={exportFile}
+            data-testid={`${prefix}-import-button`}
+            onClick={() => fileRef.current?.click()}
           >
-            {t("env.export")}
+            {t("env.import")}
           </button>
-        </div>
-      </details>
-    </>
+        )}
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid={`${prefix}-export`}
+          onClick={exportFile}
+        >
+          {t("env.export")}
+        </button>
+      </div>
+    </details>
+  );
+}
+
+/** The private tabs' `.env` box: an editor OF the tab's values, not their
+ * copy. It shows them as text; what is typed in it replaces the tab's values
+ * with what parses. While it is being typed in, the typed text stays as typed;
+ * otherwise it follows the fields. Comments are not kept (the Shared box,
+ * which IS its layer's copy, keeps them). */
+function DerivedEnvBox({
+  prefix,
+  values,
+  onReplace,
+  readOnly,
+}: {
+  prefix: string;
+  values: Record<string, string>;
+  onReplace: (next: Record<string, string>) => void;
+  readOnly: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  // A cleared field is "no value", not a `NAME=` line to show or export.
+  const shown = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== ""));
+  return (
+    <div onBlur={() => setDraft(null)}>
+      <EnvTextBox
+        prefix={prefix}
+        text={draft ?? toEnvText(shown)}
+        setText={(next, imported) => {
+          // Only typing keeps a draft; after an import the box follows the
+          // fields again (review of P19, F3).
+          setDraft(imported ? null : next);
+          // A line nobody touched keeps its stored value: the text format
+          // trims and cannot hold a line break, so a value it shows can parse
+          // back different (review of P19, F4).
+          const parsed = parseEnvText(next);
+          onReplace(
+            Object.fromEntries(
+              Object.entries(parsed).map(([n, v]) => {
+                const was = shown[n];
+                return [n, was !== undefined && parseEnvText(toEnvText({ [n]: was }))[n] === v ? was : v];
+              }),
+            ),
+          );
+        }}
+        readOnly={readOnly}
+      />
+    </div>
   );
 }
 
@@ -792,7 +1049,7 @@ function SharedRow({
   );
 }
 
-// ── Only me ───────────────────────────────────────────────────────────────
+// ── Private ───────────────────────────────────────────────────────────────
 
 function MineTab({
   settled,
@@ -802,8 +1059,11 @@ function MineTab({
   policy,
   mine,
   auto,
+  personal,
   failed,
   setMine,
+  onReplace,
+  ready,
   login,
 }: {
   settled: boolean;
@@ -813,8 +1073,11 @@ function MineTab({
   policy: Record<string, string>;
   mine: Record<string, string>;
   auto: Record<string, string>;
+  personal: Record<string, string>;
   failed: boolean;
   setMine: (name: string, value: string) => void;
+  onReplace: (next: Record<string, string>) => void;
+  ready: boolean;
   login: ReactNode;
 }) {
   const t = useT();
@@ -830,8 +1093,9 @@ function MineTab({
   ]);
   const effective: Record<string, string> = {};
   for (const n of names) {
-    const layer = layerInUse(n, shared, own, policy);
-    if (layer !== "none") effective[n] = (layer === "private" ? own : shared)[n];
+    const layer = layerInUse(n, shared, own, policy, personal);
+    if (layer !== "none")
+      effective[n] = (layer === "private" ? own : layer === "personal" ? personal : shared)[n];
   }
   const view = deriveEnvNeeds(tools, effective);
   const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
@@ -865,7 +1129,9 @@ function MineTab({
         other={other}
         // What only THEY can fill and have not: unfold it, or a person who
         // opened this from a page finds it folded below every tool.
-        otherOpen={other.some((n) => policyOf(n, policy) === "private_only" && !own[n])}
+        otherOpen={other.some(
+          (n) => policyOf(n, policy) === "private_only" && !own[n] && !personal[n],
+        )}
         row={(field, section) => (
           <MineRow
             key={`${section.key}:${field.name}`}
@@ -875,12 +1141,14 @@ function MineTab({
             policy={policy}
             mine={mine}
             auto={auto}
+            personal={personal}
             setMine={setMine}
           />
         )}
       />
       )}
       {login}
+      <DerivedEnvBox prefix="env-mine" values={mine} onReplace={onReplace} readOnly={!ready} />
     </>
   );
 }
@@ -892,6 +1160,7 @@ function MineRow({
   policy,
   mine,
   auto,
+  personal,
   setMine,
 }: {
   name: string;
@@ -900,12 +1169,13 @@ function MineRow({
   policy: Record<string, string>;
   mine: Record<string, string>;
   auto: Record<string, string>;
+  personal: Record<string, string>;
   setMine: (name: string, value: string) => void;
 }) {
   const t = useT();
   const [revealed, setRevealed] = useState(false);
   const p = policyOf(name, policy);
-  const layer = layerInUse(name, shared, ownLayer(mine, auto), policy);
+  const layer = layerInUse(name, shared, ownLayer(mine, auto), policy, personal);
   // Filled in by the deploy at the person's last request: it wins over
   // anything typed, and their next request rewrites it — a box here would
   // edit nothing.
@@ -937,7 +1207,10 @@ function MineRow({
             onChange={(e) => setMine(name, e.target.value)}
             autoComplete="off"
             spellCheck={false}
-            className="input input--block"
+            // `.input` (fills what is left), not `.input--block` (width 100%,
+            // never shrinks): beside the reveal button that pushed the button out of
+            // the panel and gave it a sideways scroll — on master too.
+            className="input"
             style={MONO}
           />
           <button
@@ -953,13 +1226,175 @@ function MineRow({
           </button>
         </div>
       )}
-      <span style={{ ...MUTED, display: "flex", gap: 8 }}>
-        {!pinned && p !== "shared_first" && <span>{t(`env.hint.${p}`)}</span>}
-        <span style={{ marginLeft: "auto" }}>
-          {inUse === "mine" ? "✓ " : ""}
-          {t(`env.inUse.${layer}`)}
+      {/* Each phrase whole: at phone width the two used to break mid-name side
+          by side ("Private(跨 / workspace)"); now the second wraps under. */}
+      <span style={{ ...MUTED, display: "flex", flexWrap: "wrap", columnGap: 8 }}>
+        {/* What typing here would take over from — named by its tab, so the
+            words are the ones on the tabs above (A22). Nothing when this tab
+            already holds the value, or when nothing is in use to take over. */}
+        {!pinned && !automatic && p !== "shared_first" && (layer === "shared" || layer === "personal") && (
+          <span style={{ whiteSpace: "nowrap" }}>{t("env.override", { tab: t(`env.tab.${TAB_OF[layer]}`) })}</span>
+        )}
+        <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
+          {layer === "none" ? (
+            t("env.inUse.none")
+          ) : (
+            <>
+              {inUse === "mine" || inUse === "personal" ? "✓ " : ""}
+              {t("env.inUse", { tab: t(`env.tab.${TAB_OF[layer]}`) })}
+            </>
+          )}
         </span>
       </span>
+    </div>
+  );
+}
+
+// ── Private(跨workspace) ────────────────────────────────────────────────
+
+function PersonalTab({
+  settled,
+  tools,
+  query,
+  policy,
+  values,
+  failed,
+  saving,
+  onEdit,
+  onReplace,
+  ready,
+  login,
+}: {
+  settled: boolean;
+  tools: Parameters<typeof deriveEnvNeeds>[0];
+  query: string;
+  policy: Record<string, string>;
+  /** My values for every item, as the box holds them now. */
+  values: Record<string, string>;
+  failed: boolean;
+  /** A save is on its way: what is typed now would be dropped as it lands. */
+  saving: boolean;
+  onEdit: (name: string, value: string) => void;
+  onReplace: (next: Record<string, string>) => void;
+  ready: boolean;
+  login: ReactNode;
+}) {
+  const t = useT();
+  // The tools' sections, searched by the SAME rule as the other tabs
+  // (`matching`: tool name, publisher or variable — review A20, D1).
+  const sections = deriveEnvNeeds(tools, {}).sections;
+  const needed = new Map<string, string>();
+  for (const f of sections.flatMap((x) => x.fields)) if (!needed.has(f.name)) needed.set(f.name, f.description);
+  // Names the item asks each person for without a tool declaring them.
+  const asked = Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first" && !needed.has(n));
+  for (const n of asked) needed.set(n, "");
+  const q = query.trim().toLowerCase();
+  const found = new Set([
+    ...matching(sections, query).flatMap((x) => x.fields.map((f) => f.name)),
+    ...asked.filter((n) => !q || n.toLowerCase().includes(q)),
+  ]);
+  const names = [...needed.keys()].filter((n) => found.has(n));
+  return (
+    <>
+      <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+        {/* The way to the page that holds them is the sentence's own link, so
+            it reads as one thing (A22) — placed by the sentence itself, so
+            each language brings its own brackets. Styled as the docs' inline
+            links (`.md-body a`): the base `a` rule inherits the text colour. */}
+        {t("env.personalDesc").split("{link}").map((part, i) =>
+          i === 0 ? (
+            part
+          ) : (
+            <span key={i}>
+              <a
+                href="/my-env"
+                data-testid="env-personal-page"
+                style={{ color: "var(--accent-h)", textDecoration: "underline", whiteSpace: "nowrap" }}
+              >
+                {t("env.personalPage")}
+              </a>
+              {part}
+            </span>
+          ),
+        )}
+      </p>
+      {failed && (
+        <p role="alert" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--err)" }}>
+          {t("myEnv.loadFailed")}
+        </p>
+      )}
+      {!settled ? (
+        <p style={MUTED}>…</p>
+      ) : needed.size === 0 ? (
+        // Nothing to fill is not a search that matched nothing (review A20, D2).
+        <p data-testid="env-personal-none" style={MUTED}>
+          {t("env.personalNone")}
+        </p>
+      ) : names.length === 0 ? (
+        <p style={MUTED}>{t("env.noMatches")}</p>
+      ) : (
+        names.map((name) => (
+          <PersonalRow
+            key={name}
+            name={name}
+            description={needed.get(name) ?? ""}
+            value={values[name] ?? ""}
+            disabled={saving}
+            onEdit={onEdit}
+          />
+        ))
+      )}
+      {login}
+      <DerivedEnvBox prefix="env-personal" values={values} onReplace={onReplace} readOnly={saving || !ready} />
+    </>
+  );
+}
+
+function PersonalRow({
+  name,
+  description,
+  value,
+  disabled,
+  onEdit,
+}: {
+  name: string;
+  description: string;
+  value: string;
+  disabled: boolean;
+  onEdit: (name: string, value: string) => void;
+}) {
+  const t = useT();
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <div data-testid={`env-personal-row-${name}`} style={{ display: "grid", gap: 3 }}>
+      <span style={MONO}>{name}</span>
+      {description && <span style={MUTED}>{description}</span>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          data-testid={`env-personal-${name}`}
+          type={revealed ? "text" : "password"}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onEdit(name, e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          // `.input` (fills what is left), not `.input--block` (width 100%,
+          // never shrinks): beside the reveal button that pushed the button out of
+          // the panel and gave it a sideways scroll — on master too.
+          className="input"
+          style={MONO}
+        />
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          aria-pressed={revealed}
+          onClick={() => setRevealed((r) => !r)}
+        >
+          {t(revealed ? "env.hide" : "env.reveal")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -967,9 +1402,11 @@ function MineRow({
 // ── logins (`IEnvProvider`, #750) ─────────────────────────────────────────
 
 /** The deploy's "log in, get the variables" buttons. The exchange result goes
- * into the FORM of whichever tab is open — never stored until that tab's Save.
+ * to the caller's `onFilled`, which puts it in that tab's own layer: Shared and
+ * Private fill their form (saved with Save); the cross-workspace tab and the
+ * My environment variables page store it at once (`docs/plan-personal-env.md`).
  * The credential typed here reaches the deploy's implementation and stops. */
-function Logins({
+export function Logins({
   offered,
   disabled = false,
   creds,
@@ -982,7 +1419,8 @@ function Logins({
   creds: Record<string, string>;
   setCreds: (next: Record<string, string>) => void;
   exchange: (providerId: string, values: Record<string, string>) => Promise<Record<string, string>>;
-  onFilled: (env: Record<string, string>) => void;
+  /** May return a promise: a rejection keeps the dialog open with a reason. */
+  onFilled: (env: Record<string, string>) => void | Promise<unknown>;
 }) {
   const t = useT();
   const [dialog, setDialog] = useState<string | null>(null);
@@ -1003,7 +1441,13 @@ function Logins({
         setCredError(t("env.providerValueTooComplex", { names: cannotStore.join(", ") }));
         return;
       }
-      onFilled(env);
+      try {
+        await onFilled(env);
+      } catch {
+        // Signed in, but not stored: closing would lose the token in silence.
+        setCredError(t("env.signInNotSaved"));
+        return;
+      }
       setDialog(null);
       setCreds({});
     } catch (err) {

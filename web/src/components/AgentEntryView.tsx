@@ -22,7 +22,7 @@ import {
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
-import { parseShownSkillHubEntry } from "../renderers/skillHubEntry";
+import { parseShownSkillHubEntry, stripSkillHubEntry } from "../renderers/skillHubEntry";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
@@ -313,7 +313,22 @@ export function EntryView({
     // plan-skill-hub-history A3: the declared entry IS the rendering; a call
     // that declared nothing (an id it could not read) stays a visible card.
     const hubEntry =
-      entry.call.name === "show_skill_hub_entry" ? parseShownSkillHubEntry(entry.call.output) : null;
+      // A publish ends with the same marker (plan-skill-hub-ux-redo, audit #26):
+      // the person gets the entry they just published, live, not tool text.
+      entry.call.name === "show_skill_hub_entry" || entry.call.name === "publish_skill"
+        ? parseShownSkillHubEntry(entry.call.output)
+        : null;
+    if (hubEntry && entry.call.name === "publish_skill") {
+      // The card, and the reply still one click away: what only the reply
+      // knows — a fork of whom, a manifest a full workspace refused, a
+      // re-publish that stays private — is not on the card (review round 1).
+      return (
+        <>
+          <SkillHubEntryCard entryId={hubEntry} />
+          <ToolCallCard call={entry.call} onOpenCitation={onOpenCitation} onReplay={onReplay} />
+        </>
+      );
+    }
     if (hubEntry) return <SkillHubEntryCard entryId={hubEntry} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
@@ -1036,10 +1051,11 @@ function ToolCallCard({
   const t = useT();
   // While running, show whatever stdout has streamed so far; once done, the
   // final formatted output supersedes it. Auto-expand a streaming tool.
-  // The declaration is plumbing for the file cards, not part of what the tool
-  // said — strip it so the card body reads as the tool's own output.
-  const body = stripShownFiles(
-    call.status === "done" ? call.output : (call.liveOutput ?? call.output),
+  // The declarations are plumbing for the cards (files, a skill hub entry),
+  // not part of what the tool said — strip them so the body reads as the
+  // tool's own output.
+  const body = stripSkillHubEntry(
+    stripShownFiles(call.status === "done" ? call.output : (call.liveOutput ?? call.output)),
   );
   const streamingLive = call.status === "running" && !!call.liveOutput;
   // #221: resolve the body's `[n]` markers (ask_knowledge_base attaches its KB

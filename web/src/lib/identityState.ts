@@ -21,6 +21,7 @@ export function identityState({
   shared,
   policy,
   mine,
+  personal = {},
   providers,
   hasSchedules,
 }: {
@@ -28,6 +29,9 @@ export function identityState({
   shared: Record<string, string>;
   policy: Record<string, string>;
   mine: Record<string, string>;
+  /** The viewer's values for every item (`plan-personal-env`): used only for a
+   * name the item asks for as personal (Private first / Private only). */
+  personal?: Record<string, string>;
   providers: EnvProvider[];
   hasSchedules: boolean;
 }): { show: boolean; missing: Missing[]; holdsOwn: boolean } {
@@ -43,8 +47,15 @@ export function identityState({
   const missing: Missing[] = [];
   const seen = new Set<string>();
   for (const name of required) {
-    const layer = layerInUse(name, shared, mine, policy);
-    const value = layer === "private" ? mine[name] : layer === "shared" ? shared[name] : "";
+    const layer = layerInUse(name, shared, mine, policy, personal);
+    const value =
+      layer === "private"
+        ? mine[name]
+        : layer === "personal"
+          ? personal[name]
+          : layer === "shared"
+            ? shared[name]
+            : "";
     if ((value ?? "").trim() !== "") continue;
     // Pinned to the shared copy: whatever the viewer typed would not be used.
     if (policyOf(name, policy) === "shared_first" && Object.hasOwn(shared, name)) continue;
@@ -56,11 +67,16 @@ export function identityState({
     missing.push(entry);
   }
 
-  const personal = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
+  const asksPersonal = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
   // Whether "signed in" would be TRUE: nothing missing is not the same as
-  // holding anything of one's own.
-  const holdsOwn = Object.values(mine).some((v) => v.trim() !== "");
-  return { show: personal || offered.length > 0 || hasSchedules, missing, holdsOwn };
+  // holding anything of one's own. A value from my environment variables
+  // counts only where this item would use it.
+  const holdsOwn =
+    Object.values(mine).some((v) => v.trim() !== "") ||
+    Object.entries(personal).some(
+      ([n, v]) => policyOf(n, policy) !== "shared_first" && v.trim() !== "",
+    );
+  return { show: asksPersonal || offered.length > 0 || hasSchedules, missing, holdsOwn };
 }
 
 /** How the key button names what is missing (`plan-wui-viewer-login` Q11):

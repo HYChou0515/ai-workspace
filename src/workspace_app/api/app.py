@@ -2733,7 +2733,11 @@ def create_app(
     )
 
     register_private_env_routes(
-        api, store=private_env_store, locator=locator, get_user_id=get_user_id
+        api,
+        store=private_env_store,
+        locator=locator,
+        get_user_id=get_user_id,
+        superusers=superusers,
     )
     register_schedule_binding_routes(
         api,
