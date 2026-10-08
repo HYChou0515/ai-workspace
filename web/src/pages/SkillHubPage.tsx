@@ -253,7 +253,7 @@ export function SkillHubPage({
                 <p className="muted small skill-hub-summary">
                   <span>{t("skillHub.total", { count: total })}</span>
                   {countedSince ? (
-                    <span>{t("skillHub.countedSince", { day: countedSince })}</span>
+                    <span>{t("skillHub.countedSince.list", { day: countedSince })}</span>
                   ) : null}
                 </p>
                 <ul className="skill-hub-list">

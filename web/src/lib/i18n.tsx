@@ -2094,6 +2094,9 @@ export const messages = {
     en: "Installed {installs} times · used {uses} times",
   },
   "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
+  // The list's summary line: beside 「共 N 個 skill」 the day alone read as
+  // the skills' date, not the counts'.
+  "skillHub.countedSince.list": { "zh-TW": "次數自 {day} 起計", en: "counts since {day}" },
   "skillHub.sort": { "zh-TW": "排序", en: "Sort" },
   // plan-skill-hub-ux-redo D1/D4/D17: the list's toolbar, paging and empty search.
   "skillHub.sort.updated": { "zh-TW": "最近更新", en: "Recently updated" },

@@ -124,7 +124,7 @@ describe("SkillHubPage", () => {
       within(row).getByText(word("skillHub.counts", { installs: 3, uses: 12 })),
     ).toBeInTheDocument();
     expect(within(screen.getByTestId("entry-e-quiet")).queryByText(/安裝 0 次/)).toBeNull();
-    expect(screen.getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
+    expect(screen.getByText(word("skillHub.countedSince.list", { day: "2026-10-07" }))).toBeInTheDocument();
   });
 
   it("shows when a skill's content was last updated, and nothing for one with no date", async () => {
