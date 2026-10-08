@@ -159,21 +159,42 @@ describe("ScheduleTimeModal", () => {
 
 describe("ScheduleTimeModal — 簡單 / cron (docs/plan-schedule-cron.md decision 4)", () => {
   const WEEKDAYS = { cron: "0 9 * * 1-5", tz: TPE, run: "r" };
-  const mode = (name: string) => screen.getByRole("radio", { name });
-  const cronBox = () => screen.getByLabelText("cron");
+  const mode = (name: string) => screen.getByRole("tab", { name });
+  const cronBox = () => screen.getByRole("textbox", { name: word("schedules.edit.cronField") });
 
   it("opens a cron row in cron mode, its words under it, its zone in grey", () => {
     open(WEEKDAYS);
-    expect(mode(word("schedules.edit.mode.cron"))).toHaveAttribute("aria-checked", "true");
+    expect(mode(word("schedules.edit.mode.cron"))).toHaveAttribute("aria-selected", "true");
     expect(cronBox()).toHaveValue("0 9 * * 1-5");
     expect(screen.getByTestId("schedule-cron-words")).toHaveTextContent("在 09:00, 星期一 到 星期五");
     expect(zone()).toHaveTextContent(word("schedules.edit.zoneYours", { zone: "台北標準時間" }));
   });
 
+  it("switches mode with tabs, not buttons — the textbook tab, as the share dialog draws it", () => {
+    // User, 2026-10-08: 「你的tab有問題 看起來像按鈕」. Two filled buttons read
+    // as actions to press; a mode switch is a tab strip (WAI-ARIA tabs; Material
+    // 3 secondary tabs: text with an underline, no fill).
+    open(WEEKDAYS);
+    const strip = screen.getByRole("tablist", { name: word("schedules.edit.mode") });
+    const tabs = within(strip).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      word("schedules.edit.mode.simple"),
+      word("schedules.edit.mode.cron"),
+    ]);
+    for (const tab of tabs) {
+      expect(tab).not.toHaveClass("btn");
+      expect(tab).not.toHaveAttribute("data-variant");
+    }
+    // The fields below are the selected tab's panel.
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", mode(word("schedules.edit.mode.cron")).id);
+    expect(within(panel).getByRole("textbox", { name: word("schedules.edit.cronField") })).toBeInTheDocument();
+  });
+
   it("opens an every row in 簡單 mode", () => {
     open();
-    expect(mode(word("schedules.edit.mode.simple"))).toHaveAttribute("aria-checked", "true");
-    expect(screen.queryByLabelText("cron")).toBeNull();
+    expect(mode(word("schedules.edit.mode.simple"))).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("textbox", { name: word("schedules.edit.cronField") })).toBeNull();
   });
 
   it("switching 簡單 → cron fills the same time as a cron", () => {

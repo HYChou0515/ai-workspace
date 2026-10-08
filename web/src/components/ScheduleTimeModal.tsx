@@ -47,6 +47,7 @@ import {
 } from "../lib/scheduleTime";
 import { useViewerClock } from "../lib/viewerClock";
 import { ModalShell } from "./ModalShell";
+import { Tabs } from "./ShareTabs";
 
 const PERIODS: Period[] = ["minutes", "hourly", "daily", "weekly", "monthly"];
 
@@ -280,32 +281,29 @@ export function ScheduleTimeModal({
       >
         {t("schedules.edit.title")}
       </h2>
-      <div role="radiogroup" aria-label={t("schedules.edit.mode")} style={{ display: "flex", gap: 6 }}>
-        {(["simple", "cron"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="radio"
-            aria-checked={state.mode === m}
-            className="btn"
-            data-variant={state.mode === m ? "primary" : "secondary"}
-            data-size="sm"
-            onClick={() => switchTo(m)}
-          >
-            {t(`schedules.edit.mode.${m}` as MsgKey)}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        label={t("schedules.edit.mode")}
+        idPrefix="schedule-mode"
+        tabs={(["simple", "cron"] as const).map((m) => ({ id: m, label: t(`schedules.edit.mode.${m}` as MsgKey) }))}
+        value={state.mode}
+        onChange={(m) => switchTo(m === "cron" ? "cron" : "simple")}
+      />
+      <div
+        role="tabpanel"
+        id={`schedule-mode-panel-${state.mode}`}
+        aria-labelledby={`schedule-mode-tab-${state.mode}`}
+        style={{ display: "flex", flexDirection: "column", gap: 10 }}
+      >
       {state.mode === "cron" ? (
         <label style={field}>
-          cron
+          {t("schedules.edit.cronField")}
           <input
             className="input"
             type="text"
             value={state.cron}
             spellCheck={false}
             onChange={(e) => setState((s) => ({ ...s, cron: e.target.value }))}
-            aria-label="cron"
+            aria-label={t("schedules.edit.cronField")}
             placeholder="0 9 * * 1-5"
             style={{ fontFamily: "var(--font-mono)" }}
           />
@@ -424,6 +422,7 @@ export function ScheduleTimeModal({
       ) : null}
       </>
       ) : null}
+      </div>
       <p
         data-testid="schedule-time-zone"
         style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}

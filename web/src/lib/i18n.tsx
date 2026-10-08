@@ -764,6 +764,7 @@ export const messages = {
   "schedules.edit.mode": { "zh-TW": "設定方式", en: "How" },
   "schedules.edit.mode.simple": { "zh-TW": "簡單", en: "Simple" },
   "schedules.edit.mode.cron": { "zh-TW": "cron", en: "cron" },
+  "schedules.edit.cronField": { "zh-TW": "cron 表達式", en: "cron expression" },
   "schedules.edit.cronFields": {
     "zh-TW": "cron 要剛好 5 欄：分 時 日 月 星期。",
     en: "A cron has exactly 5 fields: minute hour day-of-month month day-of-week.",
