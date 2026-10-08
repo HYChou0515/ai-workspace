@@ -11,12 +11,19 @@ keeps charging for ones it deleted). This ledger only remembers the number the
 measurement already produced, so it can be summed across items without walking
 every workspace on every write.
 
+For an item with NO live sandbox there is nothing to measure live, and its
+durable copy is honest — the reap wrote its deletions back — so the reconcile
+pass (`quota/disk_reconcile.py`, docs/plan-storage-all-items.md) books THAT
+size, and gives every item a row. #538's warning is about a LIVE workspace's
+snapshot; a live item is left to the mirror's measurement.
+
 The consequence is honest and deliberate: **a person's total trails reality by up
-to one measurement**. The per-ITEM limit stays exact — it measures live on the
-write path — so the looser number is only ever the cross-item one, and the worst
-case is somebody briefly getting a little over their personal cap. Making it
-exact would mean measuring every workspace a person owns on every write, which
-is the traversal `WorkspaceFiles` exists to keep off the request path.
+to one measurement** (or, for a reaped item, one reconcile interval). The per-ITEM
+limit stays exact — it measures live on the write path — so the looser number is
+only ever the cross-item one, and the worst case is somebody briefly getting a
+little over their personal cap. Making it exact would mean measuring every
+workspace a person owns on every write, which is the traversal `WorkspaceFiles`
+exists to keep off the request path.
 
 Charged to the item's `owner`, like everything else here (#687).
 """

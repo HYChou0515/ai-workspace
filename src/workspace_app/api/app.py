@@ -878,10 +878,11 @@ def create_app(
         item being written is excluded from the sum so its stale row and the
         fresh number cannot both be counted.
 
-        This only DECIDES. Recording is `_record_usage` below, wired as the
-        facade's usage publisher so that shrinks and deletes update the ledger
-        too — a total that only learned about growth would keep charging for
-        bytes the user just deleted."""
+        It decides, and on an allowed growing write it records the size the
+        write leaves (for everyone, capped or not — docs/plan-storage-all-items.md
+        decision 2). Shrinks and deletes are recorded by `_record_usage` below,
+        wired as the facade's usage publisher — a total that only learned about
+        growth would keep charging for bytes the user just deleted."""
         owner = _owner_of(item_id)
         if not owner:
             # Near-unreachable since `debtor_of` gained the `created_by` floor:

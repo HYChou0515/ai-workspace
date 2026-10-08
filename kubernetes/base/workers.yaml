@@ -439,7 +439,7 @@ spec:
             - name: scratch
               mountPath: /scratch
             # #492 host-managed NFS durable (opt-in, as on `rca-app`): with
-            # FILESTORE_KIND=nfs_tree the disk-ledger reconcile measures each
+            # SANDBOX_DURABLE_KIND=nfs_tree the disk-ledger reconcile measures each
             # item's tree here. Uncomment WITH the `workspaces` volume below.
             # - name: workspaces
             #   mountPath: /mnt/workspaces

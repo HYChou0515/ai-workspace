@@ -151,3 +151,19 @@ async def test_a_durable_tree_this_worker_cannot_reach_fails_the_pass_not_books_
     # A tree that is there is reachable.
     (tmp_path / "mounted").mkdir()
     assert NfsTreeFileStore(tmp_path / "mounted").reachable()
+
+
+async def test_the_guard_sees_through_the_migration_wrapper(tmp_path):
+    """Review round 1: the M2 config (`sandbox.durable.migrate_from: specstar`)
+    wraps the tree in `MigratingFileStore`, which had no `reachable` — so the
+    guard was skipped and an unmounted worker booked the legacy sizes."""
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.filestore.migrating import MigratingFileStore
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
+    from workspace_app.quota.disk_reconcile import make_disk_ledger_pass
+
+    store = MigratingFileStore(NfsTreeFileStore(tmp_path / "not-mounted"), MemoryFileStore())
+    run = make_disk_ledger_pass(make_spec(), store, live_window_ms=1000)
+    assert run is not None
+    with pytest.raises(RuntimeError, match="not reachable"):
+        await run()

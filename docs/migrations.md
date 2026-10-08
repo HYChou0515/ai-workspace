@@ -1849,13 +1849,13 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 - **行為改變：每人的儲存總量開始把以前漏算的 item 算進去。** 以前帳本只記「帳本上線後、有被平台寫過或
   sandbox 開著被掃到」的 item，而且只記有設 `per_user.disk` 的人；很久沒碰的 item 不列也不算。上線後第一次
-  對帳（開機後第一個 tick，幾分鐘內）會把每個 item 用耐久儲存的大小補進帳本，**總量和上限一起變正確**。
+  對帳（開機後第一個 tick 就送出請求；排在進行中的 blob 回收之後，跑多久看 item 數）會把每個 item 用耐久儲存的大小補進帳本，**總量和上限一起變正確**。
   - **`rollout 前`**：有設 `resources.per_user.disk`（或個人特例）的部署，先想好要不要調高上限——真實用量
     超過上限的人，第一次對帳後**寫入會被拒絕**（刪除永遠可以）。為什麼：以前漏算的 item 本來就佔著空間，
     只是沒被算到；這一版讓帳本跟事實一致。還沒準備好可以先設 `disk_reconcile_interval_sec: 0`，等調好再開。
-    漏看的症狀：一上線就有人被告知「你所有項目的空間總量已滿」，但他最近什麼都沒加。
+    漏看的症狀：一上線就有人被告知「你所有 workspace 的空間總量已滿」，但他最近什麼都沒加。
 - **行為改變：沒設 `per_user.disk` 的人，`/my-resources` 也會顯示儲存用量**（以前顯示「這個部署沒有設定
-  個人儲存空間上限，因此不統計用量」）。每個 item 一列、附刪除鈕。
+  個人儲存空間上限,因此不統計用量。」）。每個 item 一列、附刪除鈕。
 - **多一點寫入（沒有要做的事）**：沒設上限的部署，以前檔案變大時不寫帳本，現在每次「讓 workspace 變大的寫入」
   多一次帳本 upsert、每次刪檔多一次（有上限的部署本來就有）。對帳本身在 `blob-gc` worker 上：每個 App 的 item
   表各讀一次、每個沒開 sandbox 的 item 讀一次耐久儲存的大小（`nfs_tree` 是走一遍那個 item 的目錄、specstar
@@ -1867,6 +1867,10 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 **k8s · CI 側**
 
+- **`rca-worker-blob-gc` 要跟 API 一起（或先）換成這一版（`rollout 前` 排好順序）。** 為什麼：舊版 worker 不認得
+  `disk-ledger` 這種 job，會記一行 `blob-gc: unknown job kind 'disk-ledger'` 然後把它當作完成——開機第一個 tick
+  送出的那次補帳就被吃掉，要等下一個對帳時窗（預設 6 小時）才補。漏做的症狀：上線後 worker log 出現上面那一行，
+  「我的資源」幾個小時都還只列出最近碰過的 item。
 - **`nfs_tree` 耐久儲存的部署（`rollout 前`）**：`rca-worker-blob-gc` 要掛上 `/mnt/workspaces`——
   `kubernetes/base/workers.yaml` 裡那組註解掉的 `workspaces` volume / volumeMount 取消註解，跟 `rca-app` 一樣。
   為什麼：對帳要量每個 item 在耐久儲存裡的大小，沒掛就看不到那棵樹。漏做的症狀：`blob-gc` worker 的
@@ -1877,7 +1881,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 **確認做完**（`rollout 後`）
 
-- 幾分鐘內 `blob-gc` worker（或單機的 API）log 出現
+- 第一次對帳跑完時，`blob-gc` worker（或單機的 API）log 出現
   `disk-ledger: reconcile complete recorded=… forgotten=… live=… failed=0`。
 - 用一個有很久沒開過的 item 的帳號打開「我的資源」：那些 item 都列出來、有大小、有刪除鈕；上面的總量等於
   各列加總。沒設上限的帳號也看得到這一區。

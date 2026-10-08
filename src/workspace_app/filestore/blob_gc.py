@@ -186,7 +186,8 @@ class BlobGcCoordinator:
 
     def _disk_ledger(self) -> None:
         if self._disk_ledger_pass is None:
-            # A runner built without the pass (no filestore wired) must not read
+            # A runner built without the pass (no filestore wired, no live
+            # window, or a store without usage accounting) must not read
             # as having reconciled: FAILED, visibly.
             raise RuntimeError("blob-gc: this runner has no disk-ledger pass wired")
         # The handler runs on the queue's consumer thread, which owns no loop.
