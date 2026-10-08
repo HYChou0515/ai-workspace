@@ -160,3 +160,17 @@ async def test_the_failed_call_runs_nothing_and_the_model_reads_why(monkeypatch)
     out = await tool.on_invoke_tool(ctx, item.arguments)  # ty: ignore[unresolved-attribute]
 
     assert "cross-package tool name collision: command 'list-files'" in str(out)
+
+
+def test_the_system_prompt_lists_third_party_commands_by_their_new_names() -> None:
+    """P4: the inventory the model reads names what it can call."""
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    agent = _agent_for(
+        AgentConfig(name="a", model="ollama_chat/x"),
+        packages=[_pkg("a", "list-files"), _pkg("b", "list-files")],
+    )
+
+    assert isinstance(agent.instructions, str)
+    assert "a__list-files" in agent.instructions and "b__list-files" in agent.instructions

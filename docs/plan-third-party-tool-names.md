@@ -39,6 +39,7 @@
 | D4 | 工具卡片(`flat_catalog`)新名、舊名都查得到;撞名的舊名不顯示成任一個。 | 舊聊天紀錄的卡片照常;不猜它是哪一個。 |
 | D5 | MCP runner 不動:它一次只服務一個套件,不會撞名。 | |
 | D6 | 第三方 command 與內建 tool 同名(例 `read_file`)時,前綴後就不再相撞;頁面用扁平名 `read_file` 指的是內建,不轉到套件。 | 和模型那側(`dedupe_tools`:內建優先)同一條規則。 |
+| D7 | 工具卡片的標題用模型看到的名字(`a__list-files` → `A List Files`);舊名卡片仍是 `List Files`。 | 同一個 turn 裡 `a`、`b` 兩張卡片要分得出來。 |
 
 ## 4. Phases
 

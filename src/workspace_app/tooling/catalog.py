@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -142,17 +142,29 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
 
 def flat_catalog(packages: Sequence[PackageInfo]) -> dict[str, ToolMeta]:
     """Every callable tool name → its ``ToolMeta``: built-ins (by registered
-    name) plus every command of every provisioned package (by command name —
-    what the LLM actually calls, so a tool card can look it up). Built-in names
-    win on the (deliberately avoided) name collision."""
+    name) plus every command of every provisioned package (by the name the LLM
+    actually calls, ``model_tool_name`` — so a tool card can look it up).
+    Built-in names win on the (deliberately avoided) name collision.
+
+    A third-party command is also found by the bare name it was called before
+    the ``<local name>__`` prefix (docs/plan-third-party-tool-names.md D4), so
+    an old turn's card still reads; a bare name two packages share is left out
+    — the card falls back to the raw name rather than guess which one it was —
+    and never displaces a first-party command or built-in of that name."""
     from ..agent.tools import builtin_tool_descriptions
+    from .registry import model_tool_name, third_party_aliases
 
     out: dict[str, ToolMeta] = {}
     for pkg in packages:
         for cmd in pkg.commands:
-            out[cmd.name] = _meta(cmd.name, cmd.description, group=pkg.name)
+            name = model_tool_name(pkg, cmd)
+            out[name] = _meta(name, cmd.description, group=pkg.name)
     for name, desc in builtin_tool_descriptions().items():
         out[name] = _meta(name, desc)
+    for old, targets in third_party_aliases(packages, allowed=None).items():
+        if len(targets) != 1 or old in out:
+            continue
+        out[old] = replace(out[targets[0][1]], name=old, label=humanize_tool_label(old))
     return out
 
 
