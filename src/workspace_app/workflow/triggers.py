@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import msgspec
+from croniter import croniter
 from msgspec import Struct, field
 from specstar import SpecStar
 from specstar.types import (
@@ -320,15 +321,43 @@ def window_key(every: str, now: datetime) -> str:
     return now.strftime("%Y-%m-%d")
 
 
+#: A user schedule's cron row reaches these functions as ``every="cron:<expr>"``
+#: (`UserSchedule.as_schedule`), so the sweep's due / claim / catch-up / birth
+#: rule are the same code for it as for the five periods
+#: (`docs/plan-schedule-cron.md`).
+CRON_PREFIX = "cron:"
+
+
+def _cron_expr(every: str) -> str | None:
+    return every[len(CRON_PREFIX) :] if every.startswith(CRON_PREFIX) else None
+
+
+def _cron_last(expr: str, now: datetime) -> datetime:
+    """The latest occurrence at or before ``now``'s minute. `croniter` steps
+    strictly away from its start, so it starts one minute on."""
+    start = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return croniter(expr, start).get_prev(datetime)
+
+
 def fire_window(s: Schedule, now: datetime) -> str:
-    """The period key for ``now`` (local to the schedule's tz) — see :func:`window_key`."""
+    """The period key for ``now`` (local to the schedule's tz) — see :func:`window_key`.
+    A cron row's window is its latest occurrence itself (`cron:2026-10-08T09:00`):
+    cron has no calendar period, so the occurrence is the period."""
+    expr = _cron_expr(s.every)
+    if expr is not None:
+        return f"{CRON_PREFIX}{_cron_last(expr, now):%Y-%m-%dT%H:%M}"
     return window_key(s.every, now)
 
 
 def period_target(s: Schedule, now: datetime) -> datetime:
     """The datetime within ``now``'s period the schedule targets — today at ``at`` (daily),
     the ``dow`` day of this ISO week at ``at`` (weekly), or ``dom`` (clamped to the month's
-    length, C2 edge 1) at ``at`` (monthly)."""
+    length, C2 edge 1) at ``at`` (monthly). A cron row targets its latest occurrence
+    at or before ``now`` — due until claimed, so one the sweep missed fires once,
+    late, until the next one replaces it."""
+    expr = _cron_expr(s.every)
+    if expr is not None:
+        return _cron_last(expr, now)
     hh, mm = (int(p) for p in s.at.split(":"))
     if s.every == "weekly":
         target_wd = _DOW.index(s.dow) + 1  # ISO weekday 1..7
@@ -385,7 +414,11 @@ def next_run(s: Schedule, now: datetime, last_window: str) -> datetime | None:
 def _next_period(s: Schedule, now: datetime) -> datetime:
     """An instant inside the period AFTER ``now``'s, for ``period_target`` to place the
     schedule in. Sub-daily periods are bucketed, so the next one starts at the end
-    of this bucket; calendar periods step a day / a week / to the first of next month."""
+    of this bucket; calendar periods step a day / a week / to the first of next month;
+    a cron row steps to its next occurrence (which `period_target` then returns)."""
+    expr = _cron_expr(s.every)
+    if expr is not None:
+        return croniter(expr, now).get_next(datetime)
     if s.every == "hourly":
         return _bucket_start(s.every, now) + timedelta(hours=1)
     if s.every.startswith("minutes:"):

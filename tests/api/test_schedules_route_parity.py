@@ -116,6 +116,22 @@ CASES: list[tuple[str, bytes, set[int], int]] = [
         100,
     ),
     ("not json", b"{not json", set(), 100),
+    # Cron rows (docs/plan-schedule-cron.md): fired by the same sweep.
+    (
+        "a cron row",
+        _rows({"cron": "* * * * *", "run": "w0"}, {"every": "hourly", "run": "w1"}),
+        {0, 1},
+        100,
+    ),
+    (
+        "cron and every on one row",
+        _rows(
+            {"cron": "* * * * *", "every": "hourly", "run": "w0"}, {"every": "hourly", "run": "w1"}
+        ),
+        {1},
+        100,
+    ),
+    ("a cron the sweep cannot follow", _rows({"cron": "0 25 * * *", "run": "w0"}), set(), 100),
 ]
 
 
