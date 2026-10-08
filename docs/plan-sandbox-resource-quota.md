@@ -1,6 +1,7 @@
 # Sandbox 資源額度：依 App 設定 + 每人總量
 
 > 被 #771（plan-item-sandbox-resources.md）推翻
+> 被 #893（plan-storage-all-items.md）推翻
 
 依 **App 種類**設定 sandbox 資源(cpu / memory / disk quota),並限制**一個人跨 App items 總共能用多少**。
 

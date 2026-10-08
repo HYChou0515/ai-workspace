@@ -1723,6 +1723,49 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   command 的 App，聊天不再整句失敗。
 - 沒部署到這一版的症狀：兩支第三方工具同名時，那個 App 每一句都回 `cross-package tool name collision`。
 
+---
+
+### 2026-10-08 · #893 儲存空間列出名下所有項目，沒設上限的人也記帳 {#pr-893}
+
+**設定** — 新 key **`resources.disk_reconcile_interval_sec`**（預設 `21600`＝6 小時；`0`＝不對帳）。
+多久把每個 item 的儲存用量重新對一次帳（`docs/plan-storage-all-items.md`）。**預設就開**，不用動也會跑。
+
+- **行為改變：每人的儲存總量開始把以前漏算的 item 算進去。** 以前帳本只記「帳本上線後、有被平台寫過或
+  sandbox 開著被掃到」的 item，而且只記有設 `per_user.disk` 的人；很久沒碰的 item 不列也不算。上線後第一次
+  對帳（開機後第一個 tick，幾分鐘內）會把每個 item 用耐久儲存的大小補進帳本，**總量和上限一起變正確**。
+  - **`rollout 前`**：有設 `resources.per_user.disk`（或個人特例）的部署，先想好要不要調高上限——真實用量
+    超過上限的人，第一次對帳後**寫入會被拒絕**（刪除永遠可以）。為什麼：以前漏算的 item 本來就佔著空間，
+    只是沒被算到；這一版讓帳本跟事實一致。還沒準備好可以先設 `disk_reconcile_interval_sec: 0`，等調好再開。
+    漏看的症狀：一上線就有人被告知「你所有項目的空間總量已滿」，但他最近什麼都沒加。
+- **行為改變：沒設 `per_user.disk` 的人，`/my-resources` 也會顯示儲存用量**（以前顯示「這個部署沒有設定
+  個人儲存空間上限，因此不統計用量」）。每個 item 一列、附刪除鈕。
+- **多一點寫入（沒有要做的事）**：沒設上限的部署，以前檔案變大時不寫帳本，現在每次「讓 workspace 變大的寫入」
+  多一次帳本 upsert、每次刪檔多一次（有上限的部署本來就有）。對帳本身在 `blob-gc` worker 上：每個 App 的 item
+  表各讀一次、每個沒開 sandbox 的 item 讀一次耐久儲存的大小（`nfs_tree` 是走一遍那個 item 的目錄、specstar
+  是一次加總查詢）、帳本整張讀一次；只寫有變的列。
+
+**資料** — 沒有 `Schema` 升版，沒有要跑的指令。`_WorkspaceDisk` 會在第一次對帳時為每個 item 長出一列（以前
+只有被量過的 item 有）。項目已經不存在的帳本列會被刪掉（`plan-delete-item-cascade` 當時延後的幽靈列；
+`find_work_item` 確認項目不在才刪）。sandbox 被回收的 item，數字最多晚一個對帳間隔才更新。
+
+**k8s · CI 側**
+
+- **`nfs_tree` 耐久儲存的部署（`rollout 前`）**：`rca-worker-blob-gc` 要掛上 `/mnt/workspaces`——
+  `kubernetes/base/workers.yaml` 裡那組註解掉的 `workspaces` volume / volumeMount 取消註解，跟 `rca-app` 一樣。
+  為什麼：對帳要量每個 item 在耐久儲存裡的大小，沒掛就看不到那棵樹。漏做的症狀：`blob-gc` worker 的
+  `disk-ledger` job 一直 FAILED，log 有 `durable store's tree is not reachable`；`/my-resources` 的儲存列表照舊
+  不完整（對帳**拒絕執行**，不會把 item 記成 0）。
+- 其他部署：沒有新的 manifest、env、probe 或 JobType（對帳是 `blob-gc` 既有 job 的第二種 kind）；照常重 build。
+  `run_consumers` 全開（單機）的部署在 API 自己身上跑，不用動。
+
+**確認做完**（`rollout 後`）
+
+- 幾分鐘內 `blob-gc` worker（或單機的 API）log 出現
+  `disk-ledger: reconcile complete recorded=… forgotten=… live=… failed=0`。
+- 用一個有很久沒開過的 item 的帳號打開「我的資源」：那些 item 都列出來、有大小、有刪除鈕；上面的總量等於
+  各列加總。沒設上限的帳號也看得到這一區。
+- 沒部署到這一版的症狀：「我的資源」只列出最近碰過的 item；沒設上限的帳號看到「不統計用量」。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
