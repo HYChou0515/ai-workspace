@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,12 @@ class PackageInfo:
     first-party package, or an artifact built before the builder wrote the
     field. Never "unknown" — that would be the platform putting words in an
     author's mouth."""
+
+    third_party: bool = False
+    """A tool published from outside this repo (#674), named by the operator's
+    local name in `app.json` `external_tools`. Its commands reach the model as
+    `<name>__<command>` (docs/plan-third-party-tool-names.md): two authors who
+    never see each other's command names cannot be asked to keep them apart."""
 
     latest_version: str | None = None
     """plan-tool-running-version: set only when the live sandbox runs a
@@ -277,6 +284,7 @@ def build_function_tools(
         selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
     else:
         selected = _select_commands(packages, allowed)
+    selected = _callable_by_name(selected)
     _check_collisions(selected)
     logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
     # The same ceiling the built-ins get: a package command's stdout already
@@ -363,12 +371,52 @@ def _select_commands(
     return out
 
 
+#: What a model's tool name may be: providers accept letters, digits, `_` and
+#: `-`, up to 64 (OpenAI's function-name rule; Anthropic's is the same).
+_MODEL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: Between a third-party tool's local name and its command: providers refuse
+#: `:`, so the grant syntax's separator cannot be the model's.
+THIRD_PARTY_SEP = "__"
+_warned_names: set[str] = set()
+
+
+def model_tool_name(pkg: PackageInfo, cmd: CommandInfo) -> str:
+    """The name the model calls `cmd` by: `<local name>__<command>` for a
+    third-party tool, the command itself for a first-party one."""
+    return f"{pkg.name}{THIRD_PARTY_SEP}{cmd.name}" if pkg.third_party else cmd.name
+
+
+def _callable_by_name(
+    selected: list[tuple[PackageInfo, CommandInfo]],
+) -> list[tuple[PackageInfo, CommandInfo]]:
+    """`selected` minus the commands whose model name a provider would refuse
+    (D1) — one such name in the list makes the provider reject the whole turn.
+    Said once per name in the log, naming the tool and the command."""
+    kept = []
+    for pkg, cmd in selected:
+        name = model_tool_name(pkg, cmd)
+        if _MODEL_NAME.fullmatch(name):
+            kept.append((pkg, cmd))
+        elif name not in _warned_names:
+            _warned_names.add(name)
+            logger.warning(
+                "registry: %s:%s is not offered to the model — its tool name %r has characters "
+                "a model provider refuses or is over 64 long; rename the tool or the command",
+                pkg.name,
+                cmd.name,
+                name,
+            )
+    return kept
+
+
 def _check_collisions(selected: list[tuple[PackageInfo, CommandInfo]]) -> None:
     """If two different packages export a command with the same name in
     the selected set, raise a clear ValueError listing both packages."""
     by_cmd: dict[str, list[str]] = {}
     for pkg, cmd in selected:
-        by_cmd.setdefault(cmd.name, []).append(pkg.name)
+        # By the name the model sees: a third-party command carries its tool's
+        # local name, so only first-party packages can still meet here (D2).
+        by_cmd.setdefault(model_tool_name(pkg, cmd), []).append(pkg.name)
     collisions = {cmd_name: pkgs for cmd_name, pkgs in by_cmd.items() if len(set(pkgs)) > 1}
     if collisions:
         msg = "; ".join(
@@ -612,7 +660,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         # fails, the tool prints a friendly error to stderr + exits 2.
         result = await _exec_tool(actx, handle, pkg, cmd.name, args_json)
         logger.info("registry: dispatch %s:%s exited %d", pkg.name, cmd.name, result.exit_code)
-        text = _exec_result_text(actx, cmd.name, result)
+        text = _exec_result_text(actx, model_tool_name(pkg, cmd), result)
         # #285: a chart command that emits image(s) gets a VLM visual self-review
         # (detect layout issues → restyle → re-render, ≤2 passes) when a vision
         # model is wired. Gated on the command accepting a `style` override so a
@@ -623,7 +671,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         return await _declare_images(actx, result, text, best)
 
     return FunctionTool(
-        name=cmd.name,
+        name=model_tool_name(pkg, cmd),
         description=describe_command(pkg, cmd),
         params_json_schema=cmd.params_json_schema,
         on_invoke_tool=on_invoke,
