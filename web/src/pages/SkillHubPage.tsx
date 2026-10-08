@@ -91,6 +91,11 @@ export function SkillHubPage({
   // review inbox's idiom. The box holds what is typed; the address what was
   // searched.
   const [query, setQuery] = useState(q);
+  // …and the box follows the address when it changes under it (a link to
+  // `?q=…`, Back within the page): otherwise the list and the box disagree.
+  useEffect(() => {
+    setQuery((typed) => (typed.trim() === q ? typed : q));
+  }, [q]);
   useEffect(() => {
     const id = setTimeout(() => {
       if (query.trim() !== q) setFilter({ q: query.trim() });
@@ -262,6 +267,12 @@ export function SkillHubPage({
                       key={entry.id}
                       entry={entry}
                       onOwner={(o) => setFilter({ owner: o, mine: "" })}
+                      ownerHref={(o) => {
+                        const next = new URLSearchParams(params);
+                        next.set("owner", o);
+                        next.delete("mine");
+                        return `?${next}`;
+                      }}
                     />
                   ))}
                 </ul>

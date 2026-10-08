@@ -10,6 +10,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../api", () => ({
+  api: {
+    getUsers: vi.fn(async () => [
+      { id: "alice", name: "Alice Wu", section: "", email: "", photo_url: null },
+    ]),
+  },
+}));
+
 import { HttpError } from "../api/http";
 import type { SkillHubApi, SkillHubDetail } from "../api/skillHub";
 import type { ItemSkillState } from "../api/types";
@@ -115,10 +123,10 @@ describe("SkillHubEntryCard", () => {
 
     const link = await screen.findByRole("link", { name: "triage-reflow" });
     expect(link).toHaveAttribute("href", "/skill-hub/e-1");
-    expect(screen.getByText("alice")).toBeInTheDocument();
+    expect(await screen.findByText("Alice Wu")).toBeInTheDocument();
     expect(hub.get).toHaveBeenCalledWith("e-1", "pm");
     expect(screen.getByText("Triage reflow defects.")).toBeInTheDocument();
-    expect(screen.getByText(word("skillHub.counts", { installs: 3, uses: 8 }))).toBeInTheDocument();
+    expect(screen.getByText(`${word("skillHub.counts.installs", { count: 3 })} · ${word("skillHub.counts.uses", { count: 8 })}`)).toBeInTheDocument();
     // The tools this App lacks, in the picker's own sentence.
     expect(
       screen.getByText(word("skills.fromHub.missing", { tools: "query_entity" })),

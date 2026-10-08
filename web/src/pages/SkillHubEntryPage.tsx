@@ -33,7 +33,7 @@ import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { SkillHubFiles } from "../components/SkillHubFiles";
 import { SkillHubHistory } from "../components/SkillHubHistory";
-import { SkillHubRow } from "../components/SkillHubRow";
+import { ForkOf, SkillHubRow } from "../components/SkillHubRow";
 import { UserChip } from "../components/UserChip";
 import { UserPicker } from "../components/UserPicker";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
@@ -42,7 +42,8 @@ import { useApps } from "../hooks/useResources";
 import { useUsers } from "../hooks/useUsers";
 import { ymd } from "../lib/date";
 import { useT } from "../lib/i18n";
-import { skillBody } from "../lib/skillBody";
+import { skillBodyUnderTitle } from "../lib/skillBody";
+import { countsText } from "../lib/skillHubCounts";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { DOC_ROLES } from "../lib/permission";
 
@@ -110,7 +111,9 @@ export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubA
     );
   }
   if (isPending || !data) return <p>{t("skillHub.loading")}</p>;
-  return <EntryView entry={data} client={client} />;
+  // Keyed: another skill is another page — a notice about this one's install,
+  // its open tab's state, must not ride along to the next (review round 1).
+  return <EntryView key={data.id} entry={data} client={client} />;
 }
 
 function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
@@ -199,7 +202,7 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
         >
           {tab === "readme" ? (
             <div className="skill-hub-md markdown">
-              <ReactMarkdown components={UNDER_THE_TITLE}>{skillBody(entry.skill_md)}</ReactMarkdown>
+              <ReactMarkdown components={UNDER_THE_TITLE}>{skillBodyUnderTitle(entry.skill_md, entry.name)}</ReactMarkdown>
             </div>
           ) : tab === "files" ? (
             <SkillHubFiles
@@ -298,7 +301,7 @@ function Sidebar({
       {counted ? (
         <section>
           <h2>{t("skillHub.side.usage")}</h2>
-          <p>{t("skillHub.counts", { installs: entry.installs, uses: entry.uses })}</p>
+          <p>{countsText(t, entry.installs, entry.uses)}</p>
           {entry.counted_since ? (
             <p className="muted small">
               {t("skillHub.countedSince", { day: entry.counted_since })}
@@ -381,6 +384,8 @@ function InstallDialog({
   const t = useT();
   const titleId = useId();
   const apps = useApps();
+  const users = useUsers();
+  const nameOf = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const qc = useQueryClient();
   const [slug, setSlug] = useState(entry.source_app);
   const [picked, setPicked] = useState<string | null>(null);
@@ -453,7 +458,7 @@ function InstallDialog({
               ) : it.state === "name_taken" ? (
                 <span className="muted small">
                   {it.owner
-                    ? t("skillHub.install.state.taken", { owner: it.owner })
+                    ? t("skillHub.install.state.taken", { owner: nameOf(it.owner) })
                     : t("skillHub.install.state.takenHand")}
                 </span>
               ) : null}
@@ -493,7 +498,7 @@ function Lineage({ lineage }: { lineage: NonNullable<SkillHubDetail["forked_from
     return (
       <span className="skill-hub-lineage">
         <Link to={`/skill-hub/${encodeURIComponent(lineage.entry)}`}>
-          {t("skillHub.forkOf", { origin: `${lineage.owner}/${lineage.name}` })}
+          <ForkOf owner={lineage.owner} name={lineage.name} />
         </Link>
       </span>
     );
@@ -698,7 +703,8 @@ function OwnerActions({
           owner={entry.owner}
           value={entry.permission}
           roles={DOC_ROLES}
-          caption={t("skillHub.share.caption")}
+          // The one sentence on installed copies, the 下架 confirm's own (D10).
+          caption={`${t("skillHub.share.caption")}${t("skillHub.impact.installed")}`}
           // A hub entry is public to everyone on the platform, not to "this
           // workspace" (D12).
           audience="platform"

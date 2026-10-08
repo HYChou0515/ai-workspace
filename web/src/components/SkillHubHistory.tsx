@@ -53,8 +53,9 @@ function when(iso: string): string {
 
 const namesAVersion = (e: SkillHubHistoryEvent) => e.kind === "publish" || e.kind === "rollback";
 
-/** How many rows show before 「顯示全部」 (D14). */
-const FIRST_ROWS = 5;
+/** How many VERSIONS show before 「顯示全部」 (D14) — with the notes among
+ * them; counting rows let a few permission changes crowd versions out. */
+const FIRST_VERSIONS = 5;
 
 type Open =
   | { kind: "view"; event: SkillHubHistoryEvent }
@@ -112,7 +113,8 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
         revision: isCurrent && current ? current.revision : e.revision,
         commit: e.commit,
         label: isCurrent ? `${name(e)}（${t("skillHub.history.current")}）` : name(e),
-        short: vn(e),
+        // A version with no number (an older API pod) is named by its time.
+        short: vn(e) || when(e.at),
       });
     }
     return out;
@@ -171,7 +173,16 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
     }
   };
 
-  const shown = all ? (events ?? []) : (events ?? []).slice(0, FIRST_ROWS);
+  // Up to the fifth version's row, the notes between them included.
+  const cut = (() => {
+    const list = events ?? [];
+    let versions = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (namesAVersion(list[i]) && ++versions === FIRST_VERSIONS) return i + 1;
+    }
+    return list.length;
+  })();
+  const shown = all ? (events ?? []) : (events ?? []).slice(0, cut);
   return (
     <section>
       {isError ? (
@@ -281,7 +292,7 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
               );
             })}
           </ol>
-          {!all && events.length > FIRST_ROWS ? (
+          {!all && events.length > cut ? (
             <button
               type="button"
               className="btn"

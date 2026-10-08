@@ -874,7 +874,7 @@ describe("SkillsModal — the skill hub", () => {
     fireEvent.click(screen.getByTestId("skills-from-hub"));
 
     const fork = await screen.findByTestId("pick-e-fork");
-    expect(fork).toHaveTextContent(word("skillHub.forkOf", { origin: "alice/triage-reflow" }));
+    expect(fork).toHaveTextContent(word("skillHub.forkOf.named", { owner: "alice", name: "triage-reflow" }));
     expect(screen.queryByTestId("pick-missing-e-fork")).toBeNull();
   });
 

@@ -26,6 +26,8 @@ import type { ApiClient } from "../api/types";
 import { useChatItem } from "../hooks/chatItem";
 import { useT } from "../lib/i18n";
 import { filesHere } from "../lib/skillFiles";
+import { countsText } from "../lib/skillHubCounts";
+import { useUser } from "../hooks/useUsers";
 import { describeRefusal } from "../lib/skillHubRefusal";
 
 export function SkillHubEntryCard({
@@ -52,6 +54,8 @@ export function SkillHubEntryCard({
     queryFn: () => skillsClient.getItemSkills(slug, itemId),
     enabled: item !== null,
   });
+  // Before any early return (a hook): the owner as people know them, not an id.
+  const ownerName = useUser(entryQ.data?.owner ?? "").name;
   const [refusal, setRefusal] = useState<string | null>(null);
   const install = useMutation({
     mutationFn: () => client.install(slug, itemId, entryId),
@@ -94,6 +98,7 @@ export function SkillHubEntryCard({
     );
   }
   const rows = skillsQ.data ?? [];
+  const counts = countsText(t, entry.installs, entry.uses);
   const copy = rows.find((s) => s.hub_entry === entry.id);
   const installed = copy !== undefined;
   const behind = copy?.update_available === true && copy.upstream !== "unpublished" && copy.upstream !== "deleted";
@@ -106,14 +111,10 @@ export function SkillHubEntryCard({
         <Link to={`/skill-hub/${encodeURIComponent(entry.id)}`} className="skill-hub-card-title">
           {entry.name}
         </Link>
-        <span className="skill-hub-card-owner">{entry.owner}</span>
+        <span className="skill-hub-card-owner">{ownerName}</span>
       </div>
       <p className="skill-hub-card-desc">{entry.description}</p>
-      {entry.installs > 0 || entry.uses > 0 ? (
-        <p className="skill-hub-card-muted">
-          {t("skillHub.counts", { installs: entry.installs, uses: entry.uses })}
-        </p>
-      ) : null}
+      {counts ? <p className="skill-hub-card-muted">{counts}</p> : null}
       {entry.missing_tools.length > 0 ? (
         <p className="skill-hub-card-warn">
           {t("skills.fromHub.missing", { tools: entry.missing_tools.join(", ") })}

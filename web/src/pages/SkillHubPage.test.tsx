@@ -121,7 +121,9 @@ describe("SkillHubPage", () => {
 
     const row = await screen.findByTestId("entry-e-busy");
     expect(
-      within(row).getByText(word("skillHub.counts", { installs: 3, uses: 12 })),
+      within(row).getByText(
+        `${word("skillHub.counts.installs", { count: 3 })} · ${word("skillHub.counts.uses", { count: 12 })}`,
+      ),
     ).toBeInTheDocument();
     expect(within(screen.getByTestId("entry-e-quiet")).queryByText(/安裝 0 次/)).toBeNull();
     expect(screen.getByText(word("skillHub.countedSince.list", { day: "2026-10-07" }))).toBeInTheDocument();
@@ -193,7 +195,7 @@ describe("SkillHubPage", () => {
 
     const fork = await screen.findByTestId("entry-e-fork");
     expect(
-      within(fork).getByText(word("skillHub.forkOf", { origin: "alice/triage-reflow" })),
+      within(fork).getByText(word("skillHub.forkOf.named", { owner: "Alice Wu", name: "triage-reflow" })),
     ).toBeInTheDocument();
     expect(where).toContain("q=triage");
   });
@@ -225,6 +227,53 @@ describe("SkillHubPage", () => {
     await waitFor(() =>
       expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ mine: true })),
     );
+  });
+
+  it("the owner link keeps the other filters in its address and opens in a new tab on a modified click", async () => {
+    const c = client();
+    render(
+      <Wrap at="/skill-hub?sort=popular">
+        <SkillHubPage client={c} />
+      </Wrap>,
+    );
+    const other = await screen.findByTestId("entry-e-other");
+    const link = within(other).getByRole("link", { name: word("skillHub.owner.only", { name: "carol" }) });
+    expect(link.getAttribute("href")).toContain("sort=popular");
+    expect(link.getAttribute("href")).toContain("owner=carol");
+    // A ctrl/cmd/middle click is the browser's: not prevented, no filter here.
+    expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);
+    expect(c.browse).not.toHaveBeenCalledWith(expect.objectContaining({ owner: "carol" }));
+  });
+
+  it("follows the address when ?q= changes under it", async () => {
+    render(
+      <Wrap>
+        <SkillHubPage client={client()} />
+        <Link to="/skill-hub?q=deck">go</Link>
+      </Wrap>,
+    );
+    await screen.findByTestId("entry-e-root");
+    fireEvent.click(screen.getByRole("link", { name: "go" }));
+    await waitFor(() => expect(screen.getByRole("searchbox")).toHaveValue("deck"));
+  });
+
+  it("a fork names its original's owner as people know them", async () => {
+    render(<SkillHubPage client={client()} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-root");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "triage" } });
+    const fork = await screen.findByTestId("entry-e-fork");
+    expect(
+      within(fork).getByText(word("skillHub.forkOf.named", { owner: "Alice Wu", name: "triage-reflow" })),
+    ).toBeInTheDocument();
+  });
+
+  it("says only the counts that are not zero (D17)", async () => {
+    render(<SkillHubPage client={client([card({ id: "e-i", installs: 3, uses: 0 })])} />, {
+      wrapper: Wrap,
+    });
+    const row = await screen.findByTestId("entry-e-i");
+    expect(within(row).getByText(word("skillHub.counts.installs", { count: 3 }))).toBeInTheDocument();
+    expect(within(row).queryByText(/使用 0 次/)).toBeNull();
   });
 
   it("when a search finds nothing, says what was searched and offers to clear it (D17)", async () => {

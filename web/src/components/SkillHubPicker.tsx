@@ -28,6 +28,7 @@ import { useUser } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { Icon } from "./Icon";
+import { ForkOf } from "./SkillHubRow";
 
 const PAGE = 50;
 
@@ -192,13 +193,10 @@ function PickRow({
           </Link>
           <span className="skills-row-status">
             {owner}
-            {row.forked_from
-              ? ` ・ ${
-                  row.origin
-                    ? t("skillHub.forkOf", { origin: `${row.origin.owner}/${row.origin.name}` })
-                    : t("skillHub.forkOf.gone")
-                }`
-              : ""}
+            {row.forked_from ? " ・ " : ""}
+            {row.forked_from ? (
+              row.origin ? <ForkOf {...row.origin} /> : t("skillHub.forkOf.gone")
+            ) : null}
           </span>
         </div>
         <div className="skills-row-desc" title={row.description}>

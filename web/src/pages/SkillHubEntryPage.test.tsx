@@ -248,7 +248,7 @@ describe("SkillHubEntryPage", () => {
     mount(client(detail({ installs: 4, uses: 17, counted_since: "2026-10-07" })));
 
     expect(
-      await screen.findByText(word("skillHub.counts", { installs: 4, uses: 17 })),
+      await screen.findByText(`${word("skillHub.counts.installs", { count: 4 })} · ${word("skillHub.counts.uses", { count: 17 })}`),
     ).toBeInTheDocument();
     expect(screen.getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
   });
@@ -373,7 +373,7 @@ describe("SkillHubEntryPage", () => {
 
   it("says what a fork was forked from, including an original that went away", async () => {
     mount(client(detail({ forked_from: { entry: "e-root", state: "live", owner: "carol", name: "triage-reflow" } })));
-    expect(await screen.findByRole("link", { name: word("skillHub.forkOf", { origin: "carol/triage-reflow" }) })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: word("skillHub.forkOf.named", { owner: "carol", name: "triage-reflow" }) })).toHaveAttribute(
       "href",
       "/skill-hub/e-root",
     );
@@ -626,6 +626,50 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     await waitFor(() => expect(c.versionFile).toHaveBeenCalledWith("e-1", "e-1:1", "SKILL.md"));
   });
 
+  it("does not repeat the page's title as the SKILL.md's first heading (D17)", async () => {
+    mount(client(detail({ skill_md: "---\nname: triage-reflow\ndescription: d\n---\n\n# triage-reflow\n\nRead the log." })));
+    expect(await screen.findByText("Read the log.")).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "triage-reflow" })).toHaveLength(1);
+  });
+
+  it("names a fork's original by its owner's name (D17)", async () => {
+    mount(client(detail({ forked_from: { entry: "e-root", state: "live", owner: "bob", name: "triage-reflow" } })));
+    expect(
+      await screen.findByRole("link", { name: word("skillHub.forkOf.named", { owner: "Bob Lee", name: "triage-reflow" }) }),
+    ).toHaveAttribute("href", "/skill-hub/e-root");
+  });
+
+  it("the permission dialog says what narrowing does to installed copies — the 下架 confirm's sentence (D10)", async () => {
+    mount(client(OWNED));
+    fireEvent.click(await manage("skillHub.share"));
+    const dialog = await screen.findByTestId("permission-dialog");
+    expect(dialog).toHaveTextContent(word("skillHub.impact.installed"));
+  });
+
+  it("leaves one skill's notice and state behind when it opens another", async () => {
+    const one = detail({ forks: [hubCard({ id: "e-2", name: "other", forked_from: "e-1", origin: { owner: "alice", name: "triage-reflow" } })] });
+    const two = detail({ id: "e-2", name: "other", forks: [] });
+    const c = client(one);
+    c.get.mockImplementation(async (id) => (id === "e-2" ? two : one));
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one", state: "ok", owner: "" }] });
+    c.install.mockResolvedValue({ name: "triage-reflow", missing_tools: [] });
+    // B already read: the page does not pass through loading on the way —
+    // the case where one EntryView would carry A's state over to B.
+    const qc = makeQueryClient();
+    qc.setQueryData(qk.skillHubEntry("e-2", ""), two);
+    mount(c, qc);
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Free one/ }));
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.install.confirm") }));
+    await screen.findByRole("status");
+
+    fireEvent.click(screen.getByRole("tab", { name: word("skillHub.tab.forks", { count: 1 }) }));
+    fireEvent.click(await screen.findByRole("link", { name: "other" }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "other" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("opens on the tab the address names — the list's fork count lands on the forks (D15)", async () => {
     mount(client(detail({ forks: [] })), undefined, "/skill-hub/e-1?tab=forks");
     expect(await screen.findByText(word("skillHub.forksOf.none"))).toBeInTheDocument();
@@ -638,7 +682,7 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
       ),
     );
     const side = await screen.findByRole("complementary");
-    expect(within(side).getByText(word("skillHub.counts", { installs: 4, uses: 17 }))).toBeInTheDocument();
+    expect(within(side).getByText(`${word("skillHub.counts.installs", { count: 4 })} · ${word("skillHub.counts.uses", { count: 17 })}`)).toBeInTheDocument();
     expect(within(side).getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
     expect(within(side).getByText("2026/10/02")).toBeInTheDocument();
   });
@@ -670,7 +714,7 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
       items: [
         { item_id: "i-1", title: "Free one", state: "ok", owner: "" },
         { item_id: "i-2", title: "Has it", state: "installed", owner: "" },
-        { item_id: "i-3", title: "Clash", state: "name_taken", owner: "carol" },
+        { item_id: "i-3", title: "Clash", state: "name_taken", owner: "bob" },
         { item_id: "i-4", title: "Busy", state: "unavailable", owner: "" },
       ],
     });
@@ -684,7 +728,7 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled();
     expect(within(dialog).getByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: /Clash/ })).toBeDisabled();
-    expect(within(dialog).getByText(word("skillHub.install.state.taken", { owner: "carol" }))).toBeInTheDocument();
+    expect(within(dialog).getByText(word("skillHub.install.state.taken", { owner: "Bob Lee" }))).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: /Busy/ })).toBeDisabled();
     expect(within(dialog).getByText(word("skillHub.install.state.unavailable"))).toBeInTheDocument();
     const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
@@ -819,6 +863,35 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
       "data-variant",
       "secondary",
     );
+  });
+
+  it("shows the latest five VERSIONS, notes between them included (D14)", async () => {
+    const rows = [
+      ev({ revision: "e-1:9", kind: "permission", visibility: "public", current: true, commit: "c6", at: "2026-10-09T12:00:00Z" }),
+      ...Array.from({ length: 6 }, (_, n) =>
+        ev({ revision: `e-1:${6 - n}`, commit: `c${6 - n}`, version: 6 - n, at: `2026-10-0${6 - n}T12:00:00Z` }),
+      ),
+    ];
+    rows.splice(3, 0, ev({ revision: "e-1:7", kind: "transfer", owner: "bob", commit: "c4", at: "2026-10-04T13:00:00Z" }));
+    mount(client(OWNED, OPEN, rows), undefined, "/skill-hub/e-1?tab=history");
+    const list = await timeline();
+    const shown = within(list).getAllByRole("listitem").filter((li) => li.parentElement === list);
+    expect(shown).toHaveLength(7); // five versions and the two notes among them
+    expect(list).toHaveTextContent("v2 ・");
+    expect(list).not.toHaveTextContent("v1 ・");
+  });
+
+  it("names a version with no number by its time, in a diff's title too", async () => {
+    const plain = [
+      ev({ revision: "e-1:2", commit: "c2", at: "2026-10-02T12:00:00Z", current: true }),
+      ev({ revision: "e-1:1", commit: "c1", at: "2026-10-01T12:00:00Z" }),
+    ];
+    mount(client(detail({}), OPEN, plain), undefined, "/skill-hub/e-1?tab=history");
+    const row = within(await timeline()).getAllByRole("listitem")[1];
+    fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
+    const modal = await screen.findByTestId("skill-hub-diff");
+    const title = within(modal).getByRole("heading", { level: 2 }).textContent ?? "";
+    expect(title).toMatch(/2026\/10\/01 \d\d:\d\d → 2026\/10\/02 \d\d:\d\d/);
   });
 
   it("shows the latest five rows, and the rest on request (D14)", async () => {

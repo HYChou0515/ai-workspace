@@ -2094,6 +2094,8 @@ export const messages = {
     en: "Installed {installs} times · used {uses} times",
   },
   "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
+  "skillHub.counts.installs": { "zh-TW": "安裝 {count} 次", en: "Installed {count} times" },
+  "skillHub.counts.uses": { "zh-TW": "使用 {count} 次", en: "used {count} times" },
   // The list's summary line: beside 「共 N 個 skill」 the day alone read as
   // the skills' date, not the counts'.
   "skillHub.countedSince.list": { "zh-TW": "次數自 {day} 起計", en: "counts since {day}" },
@@ -2124,7 +2126,7 @@ export const messages = {
   },
   "skillHub.sort.name": { "zh-TW": "名稱", en: "Name" },
   "skillHub.sort.popular": { "zh-TW": "最常使用", en: "Most used" },
-  "skillHub.forkOf": { "zh-TW": "fork 自 {origin}", en: "fork of {origin}" },
+  "skillHub.forkOf.named": { "zh-TW": "fork 自 {owner} 的 {name}", en: "fork of {owner}'s {name}" },
   "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
   "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },
   "skillHub.tools": { "zh-TW": "用到的工具", en: "Tools it mentions" },
@@ -2138,8 +2140,8 @@ export const messages = {
   // unpublished, deleted — it says that much. The "has review notes" badge
   // is gone (D7): every entry was reviewed.
   "skillHub.forkOf.gone": {
-    "zh-TW": "fork 自一個已下架或刪除的 skill",
-    en: "Fork of a skill that was unpublished or deleted",
+    "zh-TW": "fork 自一個你看不到的 skill（已下架、已刪除，或你沒有權限）",
+    en: "Fork of a skill you cannot see (unpublished, deleted, or not shared with you)",
   },
   "skillHub.files": { "zh-TW": "檔案", en: "Files" },
   // plan-skill-hub-ux-redo D12: the files tab's summary line and viewer.
@@ -2202,8 +2204,8 @@ export const messages = {
   "perm.cancel": { "zh-TW": "取消", en: "Cancel" },
   "perm.save": { "zh-TW": "儲存", en: "Save" },
   "skillHub.share.caption": {
-    "zh-TW": "誰能在 skill hub 看到並裝這個 skill。已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
-    en: "Who can see and install this skill on the skill hub. People who installed it keep their copy, which keeps working; whoever can no longer see this skill gets no later versions.",
+    "zh-TW": "誰能在 skill hub 看到並裝這個 skill。",
+    en: "Who can see and install this skill on the skill hub.",
   },
   // plan-skill-hub-ux-redo D10: the one sentence on what unpublishing or
   // narrowing the permission does to copies already installed — said in the
