@@ -409,6 +409,42 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_host_managed_durable(merged, source=source)
     _check_window_ratio(merged, source=source)
     _check_chat_video(merged, source=source)
+    _check_lookup_targets(merged, source=source)
+
+
+def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
+    """`server.lookup_targets` (docs/plan-outside-lookup.md D3): each entry is
+    a button on the "請幫我查" card that opens `url` with the query in place of
+    `{q}`. One that cannot work — no placeholder, not a web address, a name the
+    card cannot tell apart — is refused here, naming the entry, rather than
+    found when a person presses it."""
+    if "lookup_targets" not in merged.get("server", {}):
+        return  # a partial dict (a caller's own `_validate`)
+    targets = merged["server"]["lookup_targets"]
+    key = "server.lookup_targets"
+    if not isinstance(targets, list):
+        raise ValueError(f"config {source}: {key} must be a list of {{name, url}}, got {targets!r}")
+    if not targets:
+        raise ValueError(
+            f"config {source}: {key} must name at least one target — leave it unset for Google"
+        )
+    seen: set[str] = set()
+    for i, t in enumerate(targets):
+        at = f"{key}[{i}]"
+        if not isinstance(t, dict) or "name" not in t or "url" not in t:
+            raise ValueError(f"config {source}: {at} must be a mapping with `name` and `url`")
+        if extra := sorted(set(t) - {"name", "url"}):
+            raise ValueError(f"config {source}: {at} has unknown key {extra[0]!r}")
+        name, url = t["name"], t["url"]
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"config {source}: {at}.name must be a non-empty string")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ValueError(f"config {source}: {at}.url must start with http:// or https://")
+        if "{q}" not in url:
+            raise ValueError(f"config {source}: {at}.url must contain {{q}} — where the query goes")
+        if name in seen:
+            raise ValueError(f"config {source}: {at}.name {name!r} is already used")
+        seen.add(name)
 
 
 def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:

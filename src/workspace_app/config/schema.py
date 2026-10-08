@@ -27,8 +27,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ─── server ─────────────────────────────────────────────────────────────
+#: The "請幫我查" card's search buttons when `server.lookup_targets` is unset
+#: (docs/plan-outside-lookup.md D3). Read through `default_lookup_targets()`,
+#: never shared: the field below is a list, and a frozen dataclass does not
+#: freeze what it holds.
+DEFAULT_LOOKUP_TARGETS: list[dict[str, str]] = [
+    {"name": "Google", "url": "https://www.google.com/search?q={q}"}
+]
+
+
+def default_lookup_targets() -> list[dict[str, str]]:
+    return [dict(t) for t in DEFAULT_LOOKUP_TARGETS]
+
+
 @dataclass(frozen=True)
 class ServerSettings:
     default_user: str = "default-user"
@@ -152,6 +164,14 @@ class ServerSettings:
     # `_build` takes `**dict[str, Any]` and the type checker never sees the
     # field it is filling.
     env_providers: list[str] = field(default_factory=list)
+
+    # docs/plan-outside-lookup.md D3 — where the "請幫我查" card sends a search.
+    # The backend is air-gapped; the person's browser is not, so each entry is a
+    # button that opens `url` in a new tab with the query in place of `{q}`.
+    # Unset ⇒ Google alone. Set ⇒ this list REPLACES that default (list it
+    # yourself to keep it). Every entry is `{name, url}`, `url` http(s) with a
+    # `{q}`, names distinct — anything else refuses to boot, naming the entry.
+    lookup_targets: list[dict[str, str]] = field(default_factory=default_lookup_targets)
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

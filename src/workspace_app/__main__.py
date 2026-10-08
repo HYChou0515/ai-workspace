@@ -250,6 +250,8 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             # Empty is the ordinary case — no buttons, and every variable
             # still typeable by hand.
             env_providers=get_env_providers(settings.server.env_providers),
+            # Where the "請幫我查" card sends a search (plan-outside-lookup D3).
+            lookup_targets=settings.server.lookup_targets,
             # #262: same superuser set threaded into get_spec(...) above, so the
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),

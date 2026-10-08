@@ -181,6 +181,13 @@
 #                              # Empty (default) = no login buttons anywhere;
 #                              # every variable stays typeable by hand, which is
 #                              # the path that always works.
+#   lookup_targets:            # The "請幫我查" card's search buttons (the AI
+#     - name: Google           # asks the person to look something up in their
+#       url: "https://www.google.com/search?q={q}"   # own browser — this backend
+#                              # is air-gapped). `{q}` = the query as edited.
+#                              # Unset = Google alone (this entry); set = this
+#                              # list REPLACES it. http(s) + `{q}` + distinct
+#                              # names, or boot refuses naming the entry.
 
 # ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
 # sandbox:

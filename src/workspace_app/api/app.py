@@ -456,6 +456,9 @@ def create_app(
     # ordinary case — no buttons, and every variable still typeable by hand.
     # __main__ passes factories.get_env_providers(settings.server.env_providers).
     env_providers: list[IEnvProvider] | None = None,
+    # docs/plan-outside-lookup.md D3: the "請幫我查" card's search buttons
+    # (`server.lookup_targets`, validated by the loader). None ⇒ Google alone.
+    lookup_targets: list[dict[str, str]] | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -1651,6 +1654,7 @@ def create_app(
         # #608: /me carries the caller's group ids so the FE can resolve a
         # `group:<id>` grant to the current viewer (same resolver the access_scopes use).
         groups_provider=lambda u: groups_of(spec, u),
+        lookup_targets=lookup_targets,
     )
 
     # #106: context-card create/update custom actions must register on the spec
