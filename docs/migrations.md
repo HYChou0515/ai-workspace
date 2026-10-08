@@ -1780,7 +1780,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
-### 2026-10-08 · #878 我的環境變數：登入一次，所有 item 都用到新的 token {#pr-878}
+### 2026-10-08 · 6a2aeba6 · #878 我的環境變數：登入一次，所有 item 都用到新的 token {#pr-878}
 
 **設定** — 沒有新 key、沒有要改的設定。**行為改變，沒有開關**（設計：[plan-personal-env](plan-personal-env.md)）：
 
