@@ -56,7 +56,12 @@ _truncate_middle = truncate_middle
 
 
 def _format_exec(
-    name: str, r: ExecResult, max_chars: int | None = None, *, keep_stderr: bool = False
+    name: str,
+    r: ExecResult,
+    max_chars: int | None = None,
+    *,
+    keep_stderr: bool = False,
+    can_request_env: bool = False,
 ) -> str:
     """Format an ExecResult. See tests/agent/test_format_exec.py for the
     contract — name prefix anchors attribution; stderr is suppressed on
@@ -72,7 +77,7 @@ def _format_exec(
     # a bundle that never started, a crash that means the wrong build. The
     # number alone is unactionable, so the sentence rides on the header where
     # the model reads it before the body.
-    note = explain(r.exit_code)
+    note = explain(r.exit_code, by_exec=name == "exec", can_request_env=can_request_env)
     header = f"Tool `{name}` returned (exit_code={r.exit_code}):"
     if note:
         header = f"Tool `{name}` returned (exit_code={r.exit_code}) — {note}"
@@ -211,9 +216,12 @@ def _exec_result_text(ctx: AgentToolContext, name: str, result: ExecResult) -> s
     record the FULL display result (success-stderr kept) on the context so
     the runner can attach it to the ToolEnd (#62). Returns the cleaned form
     (what the model and `history_items` consume)."""
+    from .env_request import request_env_granted
+
     cap = ctx.exec_output_max_chars
-    cleaned = _format_exec(name, result, max_chars=cap)
-    display = _format_exec(name, result, max_chars=cap, keep_stderr=True)
+    card = ctx.agent_config is not None and request_env_granted(ctx.agent_config, ctx.packages)
+    cleaned = _format_exec(name, result, max_chars=cap, can_request_env=card)
+    display = _format_exec(name, result, max_chars=cap, keep_stderr=True, can_request_env=card)
     if display != cleaned:
         ctx.tool_displays[cleaned] = display
     return cleaned
@@ -4246,8 +4254,7 @@ def build_tools(
     refuses every call reads to a model as "stop trying" (#537); the mirror
     image, advertising an index for a tool that was never registered, wastes the
     turn on a call that cannot resolve."""
-    names = allowed if allowed is not None else _WORKSPACE_TOOLS
-    names = [LEGACY_TOOL_RENAMES.get(n, n) for n in names]
+    names = granted_builtin_names(allowed)
     if not delegation_is_available(names, has_subagents):
         names = [n for n in names if n != "run_agent"]
     # Not `append` unconditionally: a config that already names `read_skill`
@@ -4285,6 +4292,13 @@ def build_tools(
         t.params_json_schema = _inline_schema_refs(t.params_json_schema)
     # Nothing leaves here without a ceiling on what it can put in the context.
     return cap_tool_outputs(dedupe_tools(tools))
+
+
+def granted_builtin_names(allowed: list[str] | None) -> list[str]:
+    """The built-in names an allow-list asks for, as `build_tools` reads it:
+    `None` is the workspace default, and legacy names are renamed."""
+    names = allowed if allowed is not None else _WORKSPACE_TOOLS
+    return [LEGACY_TOOL_RENAMES.get(n, n) for n in names]
 
 
 def _grant_read_skill(

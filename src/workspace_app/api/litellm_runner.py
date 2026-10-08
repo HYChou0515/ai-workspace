@@ -514,6 +514,13 @@ def _agent_for(
     # workflow node's `tools:`).
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
+    # plan-env-request-card D6: the card asks a person to act, so it goes where
+    # `ask_user` goes — and only when a package tool is here to need a variable
+    # (`exec` gets none). Granted by this rule alone, never by name.
+    from ..agent.env_request import request_env_granted, request_env_tool
+
+    if request_env_granted(config, packages or []):
+        tools.append(request_env_tool())
     # Last stop before the model sees them, and the only place every source is in
     # one list: built-ins, the conditional grants, and the package commands —
     # which `build_function_tools` rejects collisions AMONG, but not against
@@ -804,7 +811,8 @@ ASK_USER_TOOL = "ask_user"
 def ask_user_stop_behaviour(
     tool_names: Sequence[str] | None,
 ) -> StopAtTools | Literal["run_llm_again"]:
-    """End the turn when the agent asks the user something.
+    """End the turn when the agent asks the user something — a question
+    (`ask_user`) or a variable only they can set (`request_env`).
 
     `ask_user` posts a question and does not wait for it — the answer arrives
     as the user's next message, in the next turn. Without stopping here the
@@ -815,8 +823,11 @@ def ask_user_stop_behaviour(
 
     Only applied when the turn actually has the tool: a blanket stop would end
     every turn at its first tool call."""
-    if tool_names and ASK_USER_TOOL in tool_names:
-        return StopAtTools(stop_at_tool_names=[ASK_USER_TOOL])
+    from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
+
+    stop = [n for n in (ASK_USER_TOOL, REQUEST_ENV_TOOL) if tool_names and n in tool_names]
+    if stop:
+        return StopAtTools(stop_at_tool_names=stop)
     return "run_llm_again"
 
 

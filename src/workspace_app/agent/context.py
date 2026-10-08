@@ -253,6 +253,11 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
+    tool_outputs: dict[str, str] = field(default_factory=dict)
+    """What each package tool said the last time it ran in this turn, by the name
+    the model called it (stdout then stderr). `request_env` checks a variable
+    name against it, so the card asks for a name the tool actually printed
+    (docs/plan-env-request-card.md D3). Written by `registry` after each run."""
     unavailable_tools: dict[str, str] = field(default_factory=dict)
     """#674: third-party tools this turn could not obtain, `{name: reason}`.
     Disclosed in the system prompt rather than left absent — an agent that
