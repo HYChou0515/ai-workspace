@@ -59,8 +59,9 @@ def resolve(*, shared: dict[str, str], person: PersonEnv | None, policy: dict[st
     )
 
 
-#: What a blank value is made of — and nothing else: `str.strip()` and JS's
-#: `String.trim()` each strip a different dozen further characters, and a value
+#: What a blank value is made of — and nothing else: `str.strip()` strips 23
+#: characters beyond these six and JS's `String.trim()` 19, disagreeing on 6
+#: (U+001C–001F and U+0085 only Python, U+FEFF only JS), and a value
 #: one side sees as blank the other would hand to a tool. Held to the same list
 #: as the FE's `isBlank` by `tests/fixtures/env_layers_cases.json` (`blanks`).
 _BLANK = " \t\n\r\f\v"

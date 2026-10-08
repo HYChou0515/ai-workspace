@@ -42,7 +42,7 @@
 | D6 | 誰拿得到這個工具:這個 turn 拿得到 `ask_user` **且**至少有一支套件工具時才給(`request_env_granted`);sub-agent 不給(`apps/subagents.py`);config 裡直接寫 `request_env` 不算授權。 | 卡片要有人按,和 `ask_user` 同一批人;沒有套件工具就沒有東西需要變數。 |
 | D7 | exit 3 的提示(`exit_codes.explain`)依誰跑的而不同:套件工具、且這個 turn 拿得到 `request_env` → 叫模型呼叫它;套件工具、拿不到 → 照舊指向環境變數面板;`exec` 跑的指令 → 說明 `exec` 拿不到環境變數、設了也沒用(原本也叫它指向面板,是錯的)。「拿不拿得到」和 turn 的工具清單讀同一個判斷 `request_env_granted`。bundle 裡的 `mcp_server.py` 副本不改:它服務的是別的 agent,沒有 `request_env`。 | 讓 AI 知道有卡片可用;N2 的同一件事也要反映在提示裡。 |
 | D8 | 「重試」送出的訊息標記為回應這張卡片的那個 call(沿用 `ask_user` 的 `answers`);thread 裡已經有回應它的訊息,卡片就顯示「已請 AI 重試」、不再出「重試」——重新整理後也一樣。送不出去(composer 拒絕)時按鈕留著。 | 卡片不能在重新整理後又邀請人重試一次已經處理過的事。 |
-| D9 | 「空白」的定義兩邊各寫一份但共用一張表:只有空格、tab、換行、CR、FF、VT 算空白(Python `strip()` 和 JS `trim()` 各自多剝不同的一打字元,會讓工具拿到的值和卡片說的不一致)。`tests/fixtures/env_layers_cases.json` 的 `blanks` 同時檢查後端 `is_blank` 和前端 `isBlank`。 | 卡片說「已設定」時,工具一定拿得到。 |
+| D9 | 「空白」的定義兩邊各寫一份但共用一張表:只有空格、tab、換行、CR、FF、VT 算空白(Python `strip()` 在這六個之外多剝 23 個、JS `trim()` 多剝 19 個,兩邊有 6 個不一樣,會讓工具拿到的值和卡片說的不一致)。`tests/fixtures/env_layers_cases.json` 的 `blanks` 同時檢查後端 `is_blank` 和前端 `isBlank`。 | 卡片說「已設定」時,工具一定拿得到。 |
 
 ## 4. Phases
 

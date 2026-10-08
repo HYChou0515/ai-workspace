@@ -326,4 +326,13 @@ describe("deriveEnvNeeds sections", () => {
 
     expect(view.sections[0]).toMatchObject({ missingRequired: 1, missingOptional: 2 });
   });
+
+  it("judges a value blank the way the tool's environment does (plan D9)", () => {
+    // A full-width space — an IME types one — is a value to `resolve_env`, so
+    // the panel must not call it missing; spaces and tabs are not.
+    const needs = [tool({ key: "maps", env_needs: [{ name: "K", description: "", required: true }] })];
+
+    expect(deriveEnvNeeds(needs, { K: "\u3000" }).sections[0].status).toBe("ready");
+    expect(deriveEnvNeeds(needs, { K: " \t" }).sections[0].status).toBe("missingRequired");
+  });
 });

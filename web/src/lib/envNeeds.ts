@@ -11,6 +11,7 @@
  * every variable the item holds, whether or not it said so.
  */
 import type { ItemToolState } from "../api/types";
+import { isBlank } from "./envLayers";
 import { unstorable } from "./envFile";
 
 export type EnvField = {
@@ -148,7 +149,9 @@ export function deriveEnvNeeds(
     }
   }
 
-  const filled = (name: string) => (values[name] ?? "").trim() !== "";
+  // The tool's environment's notion of blank (`isBlank`, plan D9) — `trim()`
+  // would call a full-width space missing while the tool receives it.
+  const filled = (name: string) => !isBlank(values[name]);
 
   const groups: ToolEnvGroup[] = live
     .filter((t) => t.env_needs && usable(t).length > 0)

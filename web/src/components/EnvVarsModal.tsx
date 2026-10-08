@@ -215,8 +215,9 @@ export function EnvVarsModal({
   // failure notice (MutationCache.onError) instead of failing in silence.
   const saveMine = useMutation({
     mutationFn: async () => {
-      // A cleared field is "no value of mine", not an empty value — "" would
-      // override the shared value the person meant to fall back to.
+      // A cleared field is "no value of mine": stored as absence, so the saved
+      // set says what the person meant rather than keeping a blank that every
+      // reader then has to skip (a blank is not a value, plan N5).
       const kept = Object.fromEntries(Object.entries(mineValues).filter(([, v]) => v !== ""));
       await privateClient.put(slug!, itemId!, kept);
       return kept;

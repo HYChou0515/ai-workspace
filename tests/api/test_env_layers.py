@@ -224,7 +224,7 @@ def test_a_blank_value_reads_as_not_set(policy, shared, private, personal, expec
 
 
 def test_what_counts_as_blank_is_the_table_both_sides_read():
-    """Python's `str.strip()` and JS's `String.trim()` disagree on a dozen
+    """Python's `str.strip()` and JS's `String.trim()` disagree on six
     characters; the tool would get a value the card calls missing. One list,
     held by both (`web/tests/envLayersParity.test.ts`)."""
     import json
