@@ -136,14 +136,14 @@ async def test_a_mirror_measurement_lands_in_the_disk_ledger():
 # ─── 3. a deploy that configures nothing must pay nothing ────────────────
 
 
-def test_no_per_user_limit_means_no_ledger_writes_and_no_extra_lookups(monkeypatch):
-    """Both halves of "an existing deploy is unaffected".
-
-    `find_work_item` is a store round-trip and its own docstring warns the call
+def test_no_per_user_limit_still_records_with_one_lookup(monkeypatch):
+    """`find_work_item` is a store round-trip and its own docstring warns the call
     COUNT is the latency (~219ms measured in production). The quota closures had
-    turned one file write into five of them, and added a durable ledger write on
-    top — for a deploy with no per-person limit at all, i.e. for an answer
-    nobody had asked for."""
+    turned one file write into five of them — still one, now.
+
+    The ledger write is no longer skipped for a deploy with no per-person limit:
+    the person sees what they use whether or not anyone limits it
+    (docs/plan-storage-all-items.md decision 2)."""
     calls: list[str] = []
     real = resolve_mod.find_work_item
 
@@ -163,8 +163,8 @@ def test_no_per_user_limit_means_no_ledger_writes_and_no_extra_lookups(monkeypat
 
         # One lookup for the whole write, not one per question asked about it.
         assert len(calls) <= 1, f"{len(calls)} item lookups for a single write"
-        # …and nothing durable was written to account for a limit that does not exist.
-        assert DiskLedger(spec)._per_item_sync("alice") == []
+        # …and the write is on the person's books.
+        assert DiskLedger(spec)._per_item_sync("alice") == [(item, 5)]
 
 
 # ─── 4. the warning that keeps a per-person dimension from being a dead knob ──
@@ -305,10 +305,10 @@ async def test_a_refused_write_leaves_no_phantom_size_in_the_ledger():
         assert await DiskLedger(spec).total_for("alice") == 80
 
 
-async def test_the_usage_panel_says_untracked_rather_than_zero():
-    """The panel is visible to everyone by design. With no disk cap the ledger
-    is deliberately not written, so 0 means "not measured" — rendering it as
-    "nothing stored" states something false."""
+async def test_the_usage_panel_shows_storage_without_a_disk_limit():
+    """docs/plan-storage-all-items.md decision 2: 「就算沒有quotation限制 也應該顯示
+    他用多少」. The panel used to say "untracked" for anyone without a disk cap —
+    because the ledger was not written for them."""
     spec = make_spec()
     app = create_app(
         spec=spec,
@@ -316,20 +316,15 @@ async def test_the_usage_panel_says_untracked_rather_than_zero():
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
         per_user_resources=PerUserResources(count=5),  # no disk cap
+        get_user_id=lambda: "alice",  # the panel is the reader's own
     )
     with ApiTestClient(app) as client:
-        _mk(spec)
-        assert client.get("/me/resources").json()["disk_tracked"] is False
-
-    app2 = create_app(
-        spec=make_spec(),
-        sandbox=MockSandbox(),
-        filestore=SpecstarFileStore(spec),
-        runner=ScriptedAgentRunner([]),
-        per_user_resources=PerUserResources(disk="1G"),
-    )
-    with ApiTestClient(app2) as client:
-        assert client.get("/me/resources").json()["disk_tracked"] is True
+        item = _mk(spec)
+        assert client.put(f"/a/rca/items/{item}/files/a.txt", content=b"hello").status_code == 204
+        panel = client.get("/me/resources").json()
+        assert [(w["item_id"], w["bytes_used"]) for w in panel["workspaces"]] == [(item, 5)]
+        assert panel["disk_in_use"] == 5
+        assert "disk_tracked" not in panel
 
 
 # ─── 6. the warning must not send people to a key that does not exist ────

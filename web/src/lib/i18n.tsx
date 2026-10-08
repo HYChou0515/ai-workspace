@@ -1279,10 +1279,6 @@ export const messages = {
     en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",
   },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
-  "resources.disk.untracked": {
-    "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",
-    en: "This deployment sets no personal storage limit, so usage isn't tracked.",
-  },
   "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
   // Deleting can happen HERE now (plan-delete-item-cascade): each disk row
   // carries a delete that removes the item and everything it owns and refunds

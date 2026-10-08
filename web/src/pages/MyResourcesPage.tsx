@@ -108,11 +108,9 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
 
       <section aria-labelledby="disk-heading">
         <h2 id="disk-heading">{t("resources.disk.heading")}</h2>
-        {!data.disk_tracked ? (
-          // Not "0 B" — this deploy caps nobody's disk, so nothing is measured.
-          // Reporting zero would state something false on a page anyone can open.
-          <p className="empty">{t("resources.disk.untracked")}</p>
-        ) : (
+        {
+          // Shown with or without a disk limit — what a person uses is theirs to
+          // see either way (docs/plan-storage-all-items.md decision 2).
           // The same panel the live totals sit in. Left bare, this gauge was
           // full-width in the same column as the list below it, at the same
           // type size, separated by the same hairline — which is precisely the
@@ -128,8 +126,8 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
               format={formatBytes}
             />
           </div>
-        )}
-        {!data.disk_tracked ? null : data.workspaces.length === 0 ? (
+        }
+        {data.workspaces.length === 0 ? (
           <p className="empty">{t("resources.disk.empty")}</p>
         ) : (
           <ul className="disk-list">
@@ -164,7 +162,7 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
             ))}
           </ul>
         )}
-        {data.disk_tracked ? <p className="hint">{t("resources.disk.hint")}</p> : null}
+        <p className="hint">{t("resources.disk.hint")}</p>
       </section>
 
       <AdminOverrides client={client} />

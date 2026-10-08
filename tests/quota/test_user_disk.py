@@ -134,10 +134,10 @@ async def test_a_forgotten_item_stops_being_charged():
 
 
 async def test_an_unmeasured_item_contributes_nothing_yet():
-    """The deliberate gap: until an item has been measured once, it is invisible
-    to the personal total, so a person can briefly sit a little over. Pinned as
-    a fact rather than left as a surprise — the per-ITEM limit is the exact one,
-    and making this exact too would mean walking every workspace on every write.
+    """The ledger sums the rows it has: an item without one contributes 0. That
+    was the deliberate gap of plan-sandbox-resource-quota P6; the reconcile pass
+    of docs/plan-storage-all-items.md now gives every item a row, so the gap is
+    at most one reconcile interval — this pins what the ledger itself does.
     """
     spec = make_spec()
     register_disk_ledger(spec)
@@ -183,22 +183,16 @@ def test_a_turn_does_not_invent_a_ledger_row_for_the_item_it_runs_in():
         )
 
 
-def test_a_delete_writes_no_ledger_row_when_nobody_is_capped():
-    """One rule, two writers, and only one of them was tested.
-
-    "No per-person disk cap ⇒ no ledger" is asserted on a PUT, which reaches the
-    GATE's copy of the rule. `_record_usage` is the other writer, and it fires on
-    every DELETE — so without its own cap test an uncapped deploy pays a durable
-    upsert per deleted file, silently, forever. The guard sweep found the second
-    copy unheld precisely because the first one looked covered.
-    """
+def test_an_uncapped_persons_writes_and_deletes_are_recorded_too():
+    """docs/plan-storage-all-items.md decision 2: a person with no disk limit
+    still sees what they use — so both writers record for them: the gate on a
+    growing write, `_record_usage` on a delete (it was skipped for the
+    uncapped, and "我的資源" showed them nothing at all)."""
     with _app("") as (client, spec):
         item = _mk(spec, RcaInvestigation, "alice")
         assert client.put(f"/a/rca/items/{item}/files/a.txt", content=b"hello").status_code == 204
-        assert client.delete(f"/a/rca/items/{item}/files/a.txt").status_code in (200, 204)
+        assert DiskLedger(spec)._per_item_sync("alice") == [(item, 5)]
 
-        # PER-ITEM, not the sum: a delete leaves a row whose total is 0, so
-        # `total_for` reads 0 whether the row exists or not. The first version of
-        # this test used the sum and could not fail.
-        rows = DiskLedger(spec)._per_item_sync("alice")
-        assert rows == [], f"an uncapped deploy wrote a ledger row on delete: {rows}"
+        assert client.delete(f"/a/rca/items/{item}/files/a.txt").status_code in (200, 204)
+        # PER-ITEM, not the sum: the row stays, now at 0.
+        assert DiskLedger(spec)._per_item_sync("alice") == [(item, 0)]
