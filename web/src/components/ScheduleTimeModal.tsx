@@ -18,6 +18,12 @@
  * says what that costs BEFORE the press (decision 16): it starts from the next
  * time on, its history starts over, and "Run as me" has to be pressed again.
  *
+ * Two modes (`docs/plan-schedule-cron.md` decision 4): 簡單 — the fields above —
+ * and cron, a text box with the library's words under it. A row opens in its own
+ * kind; switching 簡單 → cron fills the same time as a cron, cron → 簡單 carries a
+ * cron the fields can say and otherwise starts over, saying the cron will go.
+ * Saving writes the mode on screen, `every` fields or `cron`, never both.
+ *
  * Holding unsaved work, every deliberate exit goes through `useDirtyClose`;
  * `dirty` is measured against what the modal opened with (`sameShape`).
  */
@@ -28,9 +34,20 @@ import { useDirtyClose } from "../hooks/useDirtyClose";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { sameShape } from "../lib/sameShape";
-import { DOWS, moveTime, parseAt, rowTime, subDailyMoves, validZone, zoneName } from "../lib/scheduleTime";
+import {
+  DOWS,
+  cronOf,
+  cronWords,
+  moveTime,
+  parseAt,
+  rowTime,
+  subDailyMoves,
+  validZone,
+  zoneName,
+} from "../lib/scheduleTime";
 import { useViewerClock } from "../lib/viewerClock";
 import { ModalShell } from "./ModalShell";
+import { Tabs } from "./ShareTabs";
 
 const PERIODS: Period[] = ["minutes", "hourly", "daily", "weekly", "monthly"];
 
@@ -75,6 +92,94 @@ export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTim
   return { ...form, at: moved.at, dow: every === "weekly" ? moved.dow : form.dow, tz: viewer };
 }
 
+/** cron's day-of-week numbers (0 and 7 are Sunday). */
+const CRON_DOW: Record<string, string> = { sun: "0", mon: "1", tue: "2", wed: "3", thu: "4", fri: "5", sat: "6" };
+
+/** The simple form's time as the same cron, in the same zone. */
+export function simpleToCron(time: ScheduleTime): string {
+  const parsed = parseAt(time.at ?? "00:00") ?? { hh: 0, mm: 0 };
+  const { hh, mm } = parsed;
+  switch (time.every) {
+    case "minutes": {
+      const n = time.n ?? 1;
+      if (n <= 1) return "* * * * *";
+      // Every 60 minutes is the top of the hour; `*/60` is not a minute.
+      return n >= 60 ? "0 * * * *" : `*/${n} * * * *`;
+    }
+    case "hourly":
+      return "0 * * * *";
+    case "weekly":
+      return `${mm} ${hh} * * ${CRON_DOW[time.dow ?? "mon"] ?? "1"}`;
+    case "monthly":
+      return `${mm} ${hh} ${time.dom ?? 1} * *`;
+    default:
+      return `${mm} ${hh} * * *`;
+  }
+}
+
+/** A cron as the simple form's fields, or `null` when the fields cannot say it
+ * (a range of days, a step of hours, a month). The zone is the caller's. */
+export function cronToSimple(cron: string): Omit<ScheduleTime, "tz"> | null {
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+  const [mi, h, dom, mon, dow] = fields;
+  const num = (s: string, max: number) => (/^\d+$/.test(s) && Number(s) <= max ? Number(s) : null);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (mon !== "*") return null;
+  if (dom === "*" && dow === "*" && h === "*") {
+    if (mi === "*") return { every: "minutes", n: 1 };
+    if (mi === "0") return { every: "hourly" };
+    const step = /^\*\/(\d+)$/.exec(mi);
+    return step && 60 % Number(step[1]) === 0 ? { every: "minutes", n: Number(step[1]) } : null;
+  }
+  const H = num(h, 23);
+  const Mi = num(mi, 59);
+  if (H === null || Mi === null) return null;
+  const at = `${pad(H)}:${pad(Mi)}`;
+  if (dom === "*" && dow === "*") return { every: "daily", at };
+  if (dom === "*" && /^[0-7]$/.test(dow)) {
+    const day = Object.keys(CRON_DOW).find((d) => CRON_DOW[d] === String(Number(dow) % 7));
+    return { every: "weekly", dow: day, at };
+  }
+  const D = num(dom, 31);
+  if (dow === "*" && D !== null && D >= 1) return { every: "monthly", dom: D, at };
+  return null;
+}
+
+type Mode = "simple" | "cron";
+
+/** The form's whole state: which mode, the simple fields, the cron text. The
+ * simple fields hold the zone for both modes. `snapshot` is the simple fields as
+ * the last switch to 簡單 left them — switching back to cron with them untouched
+ * keeps the cron as typed instead of overwriting it from the fields. */
+type FormState = {
+  mode: Mode;
+  simple: ScheduleTime;
+  cron: string;
+  snapshot: ScheduleTime | null;
+  /** The last switch to 簡單 could not carry the cron over. */
+  dropped: boolean;
+};
+
+const blankSimple = (tz: string): ScheduleTime => ({ every: "daily", n: 15, at: "00:00", dow: "mon", dom: 1, tz });
+
+function openState(raw: unknown, viewer: string, refMs: number): FormState {
+  const cron = cronOf(raw);
+  if (cron === null) {
+    return { mode: "simple", simple: timeOf(raw, viewer, refMs), cron: "", snapshot: null, dropped: false };
+  }
+  // Not moved onto the viewer's clock (decision 3): a cron opens in its zone.
+  const tz = rowTime(raw).tz;
+  const carried = cronToSimple(cron);
+  return { mode: "cron", simple: { ...blankSimple(tz), ...carried, tz }, cron, snapshot: null, dropped: false };
+}
+
+/** What Save sends — and what "changed" is measured on. */
+function payloadOf(state: FormState): ScheduleTime | { cron: string; tz: string } {
+  if (state.mode === "cron") return { cron: state.cron.trim(), tz: state.simple.tz ?? "" };
+  return state.simple;
+}
+
 export function ScheduleTimeModal({
   raw,
   nextMs,
@@ -89,7 +194,7 @@ export function ScheduleTimeModal({
   nextMs?: number | null;
   rowRef: RowRef;
   /** Sends the new time; rejects with the server's reason. */
-  onSave: (ref: RowRef, time: ScheduleTime) => Promise<void>;
+  onSave: (ref: RowRef, time: ScheduleTime | { cron: string; tz: string }) => Promise<void>;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -97,13 +202,42 @@ export function ScheduleTimeModal({
   const clock = useViewerClock();
   const titleId = useId();
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const [initial] = useState(() => timeOf(raw, clock.viewer, nextMs ?? clock.now));
-  const [draft, setDraft] = useState<ScheduleTime>(initial);
+  const [initial] = useState(() => openState(raw, clock.viewer, nextMs ?? clock.now));
+  const [state, setState] = useState<FormState>(initial);
+  const draft = state.simple;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dirty = !sameShape(draft, initial);
+  const dirty = !sameShape(payloadOf(state), payloadOf(initial));
   const attemptClose = useDirtyClose(dirty, onClose);
-  const set = (patch: Partial<ScheduleTime>) => setDraft((d) => ({ ...d, ...patch }));
+  const set = (patch: Partial<ScheduleTime>) => setState((s) => ({ ...s, simple: { ...s.simple, ...patch } }));
+  const switchTo = (mode: Mode) =>
+    setState((s) => {
+      if (s.mode === mode) return s;
+      if (mode === "cron") {
+        const kept = s.snapshot !== null && sameShape(s.simple, s.snapshot);
+        return { ...s, mode, cron: kept ? s.cron : simpleToCron(s.simple) };
+      }
+      const carried = cronToSimple(s.cron);
+      const tz = s.simple.tz ?? "";
+      const simple = carried ? { ...s.simple, ...carried, tz } : blankSimple(tz);
+      return { ...s, mode, simple, snapshot: simple, dropped: carried === null };
+    });
+  // What the browser can check before Save: exactly 5 fields, and one the
+  // library can read — its words, or why not. Not the server's whole rule:
+  // `croniter` refuses a few the library reads (`1L`, `*/0`, a date that never
+  // comes). The server has the last word; its sentence shows under the form.
+  const cronFields = state.cron.trim().split(/\s+/).filter(Boolean).length;
+  const cronSaid = cronWords(state.cron, clock.locale);
+  const cronProblem =
+    state.mode !== "cron"
+      ? null
+      : cronFields !== 5
+        ? t("schedules.edit.cronFields")
+        : cronSaid === null
+          ? t("schedules.edit.cronUnreadable")
+          : null;
+  const monthEnd = cronToSimple(state.cron);
+  const skipsMonths = state.mode === "cron" && monthEnd?.every === "monthly" && (monthEnd.dom ?? 0) >= 29;
   const usesAt = draft.every === "daily" || draft.every === "weekly" || draft.every === "monthly";
   const [hh, mm] = (draft.at ?? "00:00").split(":");
   // The zone the time is read in — shown, not picked; saved as it is.
@@ -121,7 +255,7 @@ export function ScheduleTimeModal({
     setBusy(true);
     setError(null);
     try {
-      await onSave(rowRef, draft);
+      await onSave(rowRef, payloadOf(state));
       onSaved();
     } catch (e) {
       setError(e instanceof ScheduleActionError ? e.message : String(e));
@@ -147,6 +281,53 @@ export function ScheduleTimeModal({
       >
         {t("schedules.edit.title")}
       </h2>
+      <Tabs
+        label={t("schedules.edit.mode")}
+        idPrefix="schedule-mode"
+        tabs={(["simple", "cron"] as const).map((m) => ({ id: m, label: t(`schedules.edit.mode.${m}` as MsgKey) }))}
+        value={state.mode}
+        onChange={(m) => switchTo(m === "cron" ? "cron" : "simple")}
+      />
+      <div
+        role="tabpanel"
+        id={`schedule-mode-panel-${state.mode}`}
+        aria-labelledby={`schedule-mode-tab-${state.mode}`}
+        style={{ display: "flex", flexDirection: "column", gap: 10 }}
+      >
+      {state.mode === "cron" ? (
+        <label style={field}>
+          {t("schedules.edit.cronField")}
+          <input
+            className="input"
+            type="text"
+            value={state.cron}
+            spellCheck={false}
+            onChange={(e) => setState((s) => ({ ...s, cron: e.target.value }))}
+            aria-label={t("schedules.edit.cronField")}
+            placeholder="0 9 * * 1-5"
+            style={{ fontFamily: "var(--font-mono)" }}
+          />
+          {cronProblem ? (
+            <span data-testid="schedule-cron-error" role="alert" style={{ color: "var(--err)" }}>
+              {cronProblem}
+            </span>
+          ) : (
+            <span data-testid="schedule-cron-words" style={{ color: "var(--text-paper-d)" }}>
+              {cronSaid}
+            </span>
+          )}
+          {skipsMonths ? (
+            <span style={{ color: "var(--text-paper-d)" }}>{t("schedules.edit.cronSkipsMonths")}</span>
+          ) : null}
+        </label>
+      ) : null}
+      {state.mode === "simple" && state.dropped ? (
+        <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
+          {t("schedules.edit.replacesCron")}
+        </p>
+      ) : null}
+      {state.mode === "simple" ? (
+      <>
       <label style={field}>
         {t("schedules.edit.every")}
         <select
@@ -239,6 +420,9 @@ export function ScheduleTimeModal({
           </div>
         </fieldset>
       ) : null}
+      </>
+      ) : null}
+      </div>
       <p
         data-testid="schedule-time-zone"
         style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
@@ -265,7 +449,7 @@ export function ScheduleTimeModal({
           data-variant="primary"
           data-size="sm"
           data-testid="schedule-time-save"
-          disabled={!dirty || busy}
+          disabled={!dirty || busy || cronProblem !== null}
           onClick={() => void submit()}
         >
           {busy ? t("schedules.edit.saving") : t("schedules.edit.save")}

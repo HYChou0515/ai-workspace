@@ -10,6 +10,7 @@ actually walks: the `author-workflow` skill every app grants, the sentence
 from __future__ import annotations
 
 import json
+import pathlib
 
 import pytest
 from agents import RunContextWrapper
@@ -70,6 +71,25 @@ def test_the_author_workflow_skill_says_how_to_put_a_workflow_on_a_clock() -> No
     body = load_shared_skill("author-workflow")
     assert "save_schedules" in body
     assert "schedules.json" in body
+
+
+def test_every_teacher_says_one_cron_row_instead_of_several():
+    """docs/plan-schedule-cron.md decision 5: `every` when one row says it, ONE
+    `cron` row when it would take several — said where the model reads how to
+    write a schedule: the tool, the skill every app grants, and the page skill."""
+    teachers = {
+        "save_schedules": save_schedules_impl.__doc__ or "",
+        "author-workflow": load_shared_skill("author-workflow"),
+        "wui reference.md": pathlib.Path("sample-skills/wui/reference.md").read_text(
+            encoding="utf-8"
+        ),
+    }
+    for name, text in teachers.items():
+        assert "`cron`" in text, f"{name} does not offer `cron`"
+        assert "0 9 * * 1-5" in text, f"{name} does not show the weekday example"
+        # The old advice — split it into rows — must be gone, or the model
+        # follows whichever sentence it read last.
+        assert "five rows" not in text, f"{name} still says to split into rows"
 
 
 async def test_saving_a_workflow_points_at_the_clock() -> None:

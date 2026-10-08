@@ -83,6 +83,7 @@
 | [plan-item-schedules.md](plan-item-schedules.md) | item 層級的排程：讓 AI 把自己做的 workflow 放上時鐘 |
 | [plan-schedule-overview.md](plan-schedule-overview.md) | 排程總表：跨 item 列出看得到的排程，上次／下次、改時間、現在執行；新排程不補跑 |
 | [plan-schedule-overview-polish.md](plan-schedule-overview-polish.md) | 排程總表整修：時間換成看的人的時區與相對說法、名稱用標題、手動執行標記、排程對話的橫幅 |
+| [plan-schedule-cron.md](plan-schedule-cron.md) | cron 排程：一列寫完原本要拆成好幾列的排程；改時間有簡單／cron 兩種模式 |
 
 ## Sandbox 與基礎設施
 

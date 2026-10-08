@@ -3415,15 +3415,22 @@ def _save_schedules_doc() -> str:
         "save_workflow, or one the app ships; check with the Workflows panel or by "
         "listing .workflows/), `every` (one of " + every + "), and for `minutes` an `n` "
         'that divides 60; `at` as "HH:MM" for daily/weekly/monthly; `dow` (ONE of '
-        'mon..sun) for weekly — "every weekday" is five rows; `dom` (1-31, clamped) for '
+        "mon..sun) for weekly; `dom` (1-31, clamped) for "
         'monthly; `tz` an IANA zone like "Asia/Taipei" (defaults to UTC — name the zone '
         "whenever the time is one a person chose); `with` a payload handed to the "
         "workflow as-is.\n\n"
+        "Use `every` when ONE such row says it. When it would take several — every "
+        "weekday at nine, every 2 hours, the 1st and the 15th — write ONE row with `cron` "
+        "instead of `every` and its fields: a standard 5-field cron (minute hour "
+        'day-of-month month day-of-week), read in `tz` — `{"cron": "0 9 * * 1-5", '
+        '"tz": "Asia/Taipei", "run": "..."}`, `"0 */2 * * *"`, `"0 9 1,15 * *"`. A row '
+        "has `cron` or `every`, never both.\n\n"
         "This VALIDATES before saving and returns the problems so you can fix and "
         "re-save (address each one; don't guess), and refuses a `run` this item does "
         "not have. On success it says when each row runs next — relay that to the "
         "user, including the WARNING when this deployment has schedules switched off. "
-        "A row that is already due today runs on the next sweep, not tomorrow."
+        "A new row whose time already passed today first runs at its NEXT time (a daily "
+        "09:00 saved at 14:00 runs tomorrow) — nothing is caught up."
     )
 
 

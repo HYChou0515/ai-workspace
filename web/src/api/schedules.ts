@@ -208,7 +208,12 @@ export const schedulesApi = {
     if (!resp.ok) throw new Error(`list schedules failed: ${resp.status}`);
     return resp.json();
   },
-  async editTime(slug: string, itemId: string, ref: RowRef, time: ScheduleTime): Promise<void> {
+  async editTime(
+    slug: string,
+    itemId: string,
+    ref: RowRef,
+    time: ScheduleTime | { cron: string; tz: string },
+  ): Promise<void> {
     await act(slug, itemId, "edit", { ...ref, ...time });
   },
   async remove(slug: string, itemId: string, ref: RowRef): Promise<void> {
