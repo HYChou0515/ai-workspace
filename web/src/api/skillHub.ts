@@ -222,6 +222,14 @@ const entryBase = (entryId: string) => `/skill-hub/entries/${encodeURIComponent(
 const versionBase = (entryId: string, revision: string) =>
   `${entryBase(entryId)}/versions/${encodeURIComponent(revision)}`;
 
+/** `files` as this client knows them. An API pod from before the files tab
+ * (mid-rollout) sends bare names; they read as files of unknown size. */
+function asFiles(files: unknown): SkillHubFile[] {
+  return (Array.isArray(files) ? files : []).map((f) =>
+    typeof f === "string" ? { path: f, size: null } : (f as SkillHubFile),
+  );
+}
+
 async function getJson<T>(path: string, failed: string): Promise<T> {
   const resp = await apiFetch(path);
   if (!resp.ok) throw await refused(resp, failed);
@@ -289,9 +297,12 @@ export const skillHubApi: SkillHubApi = {
     const resp = await apiFetch(`/skill-hub/entries${suffix}`);
     if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
     const body = (await resp.json()) as Partial<SkillHubListing>;
+    const entries = body.entries ?? [];
     return {
-      entries: body.entries ?? [],
-      total: body.total ?? 0,
+      entries,
+      // An API pod from before paging (mid-rollout) sends no total: what it
+      // sent is all there is. 0 would draw "nobody has published anything".
+      total: body.total ?? offset + entries.length,
       counted_since: body.counted_since ?? "",
     };
   },
@@ -299,7 +310,8 @@ export const skillHubApi: SkillHubApi = {
     const suffix = app ? `?app=${encodeURIComponent(app)}` : "";
     const resp = await apiFetch(`${entryBase(entryId)}${suffix}`);
     if (!resp.ok) throw await refused(resp, "the skill hub entry could not be read");
-    return (await resp.json()) as SkillHubDetail;
+    const body = (await resp.json()) as SkillHubDetail;
+    return { ...body, files: asFiles(body.files), scripts: body.scripts ?? 0 };
   },
   async installs(entryId) {
     const body = await getJson<{ installs: SkillHubInstall[] }>(
@@ -354,8 +366,12 @@ export const skillHubApi: SkillHubApi = {
     );
     return body.events;
   },
-  version(entryId, revision) {
-    return getJson<SkillHubVersion>(versionBase(entryId, revision), "the version could not be read");
+  async version(entryId, revision) {
+    const body = await getJson<SkillHubVersion>(
+      versionBase(entryId, revision),
+      "the version could not be read",
+    );
+    return { ...body, files: asFiles(body.files), scripts: body.scripts ?? 0 };
   },
   versionFile(entryId, revision, path) {
     const q = new URLSearchParams({ path });

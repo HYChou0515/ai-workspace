@@ -2141,6 +2141,7 @@ export const messages = {
   "skillHub.files": { "zh-TW": "檔案", en: "Files" },
   // plan-skill-hub-ux-redo D12: the files tab's summary line and viewer.
   "skillHub.files.summary": { "zh-TW": "{count} 個檔案 ・ {size}", en: "{count} files · {size}" },
+  "skillHub.files.count": { "zh-TW": "{count} 個檔案", en: "{count} files" },
   "skillHub.files.scripts": { "zh-TW": "含 {count} 個 script", en: "{count} scripts" },
   "skillHub.files.notText": {
     "zh-TW": "這個檔案不是文字，這裡顯示不了。",

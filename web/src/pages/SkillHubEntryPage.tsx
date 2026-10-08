@@ -258,11 +258,14 @@ function Sidebar({
       </button>
       <section>
         <h2>{t("skillHub.installs.title")}</h2>
-        {(installs.data ?? []).length === 0 ? (
+        {/* Only what is known: a failed or pending read says nothing rather
+            than "you have not installed it" (an older API pod mid-rollout
+            has no such route). */}
+        {!installs.isSuccess ? null : installs.data.length === 0 ? (
           <p className="muted small">{t("skillHub.installs.none")}</p>
         ) : (
           <ul className="skill-hub-side-list">
-            {(installs.data ?? []).map((i) => (
+            {installs.data.map((i) => (
               <li key={i.item_id}>
                 <Link to={`/a/${encodeURIComponent(i.app)}/${encodeURIComponent(i.item_id)}`}>
                   {i.title || i.item_id}

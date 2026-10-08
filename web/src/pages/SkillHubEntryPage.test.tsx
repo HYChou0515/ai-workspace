@@ -654,6 +654,15 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     );
   });
 
+  it("says nothing about installs it could not read — not 「還沒有裝」 (rollout)", async () => {
+    const c = client(detail({}));
+    c.installs.mockRejectedValue(new HttpError(404, "not found"));
+    mount(c);
+    const side = await screen.findByRole("complementary");
+    await waitFor(() => expect(c.installs).toHaveBeenCalled());
+    expect(within(side).queryByText(word("skillHub.installs.none"))).toBeNull();
+  });
+
   it("installs into a workspace picked per App, saying beforehand what each would do, and stays on the page (D6)", async () => {
     const c = client(detail({}));
     c.targets.mockResolvedValue({

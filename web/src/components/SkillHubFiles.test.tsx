@@ -48,6 +48,12 @@ describe("SkillHubFiles", () => {
     expect(screen.getByText(word("skillHub.files.scripts", { count: 1 }))).toBeInTheDocument();
   });
 
+  it("says how many files but no size when a size is unknown — never 0 B", () => {
+    mount([{ path: "SKILL.md", size: null }, { path: "a.md", size: null }], 0);
+    expect(screen.getByText(word("skillHub.files.count", { count: 2 }))).toBeInTheDocument();
+    expect(screen.queryByText(/0 B/)).toBeNull();
+  });
+
   it("says nothing about scripts when there are none", () => {
     mount([{ path: "SKILL.md", size: 10 }], 0);
     expect(screen.queryByText(/script/)).toBeNull();

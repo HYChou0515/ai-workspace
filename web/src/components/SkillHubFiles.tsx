@@ -128,7 +128,13 @@ export function SkillHubFiles({
   return (
     <div className="skill-hub-files-tab">
       <p className="skill-hub-files-summary">
-        <span>{t("skillHub.files.summary", { count: files.length, size: formatBytes(total) })}</span>
+        {/* A size we do not know is not 0 B: an entry not in git yet, or an
+            older API pod mid-rollout, gives names only. */}
+        <span>
+          {files.some((f) => f.size === null)
+            ? t("skillHub.files.count", { count: files.length })
+            : t("skillHub.files.summary", { count: files.length, size: formatBytes(total) })}
+        </span>
         {scripts > 0 ? <span>{t("skillHub.files.scripts", { count: scripts })}</span> : null}
       </p>
       <div className="skill-hub-files-body">

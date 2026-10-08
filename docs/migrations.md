@@ -1619,6 +1619,54 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 在一個 pod 發布新版，從另一個 pod（或重開後）打開詳情頁，看得到新版的檔案。
 
 
+### 2026-10-08 · #883 skill hub 版面重做：緊湊列表、skill 頁分頁＋側欄、從 skill 頁安裝 {#pr-883}
+
+**設定** — 沒有。
+
+**資料** — 沒有 `Schema` 升版。`SkillHubEntry` 多一個有預設值的欄位 `content_at`（內容最後一次改變的時間，
+發布與回復時寫入），**不回填**。
+
+- **要做的事**：沒有。
+  - 為什麼不回填：舊條目只是沒有日期——列表不顯示它的更新時間、「最近更新」排序排在最後；下一次發布或回復就有了。
+  - **rollout 期間**：舊 pod 改權限 / 轉移 / 下架 / 發布同一個條目時，會把整列寫回沒有 `content_at` 的樣子
+    （舊程式不認得這個欄位，讀進來再寫回去就沒了）。症狀：那個條目的更新時間不見、排到最後；下一次發布或回復就回來。
+
+**k8s · CI 側** — 沒有新 JobType、probe、manifest、env。
+
+**rollout 期間（新前端配舊 API pod）**——不用做事，知道就好：
+
+- 列表照舊列得出來，但一次全部列出、不分頁；原作那列不顯示 fork 數；搜尋時找不到 fork（舊 pod 把它巢狀放在原作底下，
+  新頁面不畫巢狀）。skill 頁的檔案分頁只列檔名、不列大小；版本紀錄沒有 v 編號，只有時間。
+- skill 頁側欄「你裝在這些 workspace」是空的，「安裝到 workspace…」對話框讀不到 workspace 清單（舊 pod 沒有這兩條路由，
+  回 404）。rollout 完就好。
+
+行為改變，沒有開關：
+
+- **skill hub 列表** `GET /api/skill-hub/entries`：一次回 50 筆（`offset` / `limit`，上限 200），多回 `total`；
+  只瀏覽（沒有 `q`、`mine`、`owner`）時**只列原作**，每列帶 `fork_count`；有任一篩選時 fork 與原作平列、帶
+  `forked_from` 與 `origin`。**不再巢狀回 `forks`**。新參數 `owner`、`sort=updated`。
+  有程式（腳本、外部整合）直接讀這條路由的，要改讀新形狀；agent 的 `search_skill_hub` 不受影響。
+- **skill 頁**：說明／檔案／版本紀錄／fork 四個分頁（`?tab=`）＋右側欄；owner 的動作收進「管理 ▾」；
+  「可見範圍」改名「權限設定」；下架前會先確認。詳情多回 `updated_at`、`revision`、`scripts`，`files` 從
+  檔名清單改成 `[{path, size}]`（版本 `versions/{rev}` 同）。版本紀錄每筆發布 / 回復多回 `version`（v1、v2…）。
+- **從 skill 頁直接安裝**：新路由 `GET …/entries/{id}/installs`、`GET …/entries/{id}/targets?app=`。
+  - 成本（沒有要做的事）：`/installs` 在每次打開 skill 頁時，讀每個已註冊 App 的整張 workspace 表（每個 App 一次
+    查詢），對這個人能編輯的每個 workspace 讀一次 `.skill/<name>/.origin`（同時最多 16 個）。`/targets` 只讀選定 App
+    的表，每個能編輯的 workspace 讀一次 `.origin`；不是已裝的，再用安裝路由同一個判斷看 `.skill/<name>/`——那個資料夾
+    存在時會連檔案內容一起讀。一個人能編輯的 workspace
+    越多，skill 頁側欄越慢出來。
+- **workspace 的 Skills 面板**：每列兩行、固定「套用／預設・開啟・關閉／⋯」，下載 / 發布 / 還原 / 更新收進 ⋯；
+  來源顯示成文字（App 內建、範本內建、這個 workspace 的、從 skill hub 裝的）；「從 skill hub 裝」改成面板內的一頁。
+- **`publish_skill` 的回覆**最後多一行 `[skill-hub-entry]{"entry_id": …}`（和 `show_skill_hub_entry` 同一個標記），
+  聊天裡會畫成那個條目的卡片。成本：每次發布的 tool 回覆多幾十個字元給模型。
+- 畫面上的「item」一律改成「workspace」，「技能」→「Skills／skill」、「擁有者」→「owner」。
+
+**確認做完**
+
+- 打開 `/skill-hub`：看到「共 N 個 skill」，超過 50 個時有「載入更多」；有 fork 的原作那列寫「N 個 fork」。
+- 打開任一 skill 頁，右側欄「安裝到 workspace…」→ 選 App 後列得出你能編輯的 workspace。
+- `curl -s '<host>/api/skill-hub/entries?limit=1'` 回的 JSON 有 `total`。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
