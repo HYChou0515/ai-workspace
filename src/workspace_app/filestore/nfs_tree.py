@@ -305,6 +305,13 @@ class NfsTreeFileStore:
 
     # ── usage / census (#245 / #407) ─────────────────────────────────────────
 
+    def reachable(self) -> bool:
+        """Whether this process sees the tree at all. The NFS volume is an
+        opt-in mount, and a process without it sees no root — where every
+        `workspace_usage` is 0. A caller that would RECORD those sizes (the
+        disk-ledger reconcile) asks this first."""
+        return self._root.is_dir()
+
     async def workspace_usage(self, workspace_id: str) -> int:
         return await asyncio.to_thread(self._usage_sync, workspace_id)
 

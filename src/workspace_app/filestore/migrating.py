@@ -173,6 +173,13 @@ class MigratingFileStore:
             max_entries=max_entries,
         )
 
+    def reachable(self) -> bool:
+        """The PRIMARY store's answer — the tree the reconcile must see
+        (docs/plan-storage-all-items.md). Without it, a worker missing the NFS
+        mount read the legacy store alone and booked those sizes as current."""
+        reachable = getattr(self._primary, "reachable", None)
+        return reachable() if reachable is not None else True
+
     async def workspace_usage(self, workspace_id: str) -> int:
         merged: dict[str, int] = {}
         for path, size in await self._legacy.stat_all(workspace_id):  # ty: ignore[unresolved-attribute]

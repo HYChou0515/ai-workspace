@@ -107,6 +107,7 @@ def build_lifespan(
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
     gc_interval: timedelta | None,
+    disk_reconcile_interval: timedelta | None = None,
     shutdown_budget: timedelta = timedelta(seconds=20),
     trigger_check_interval: timedelta | None = None,
     user_schedule_sweeper: UserScheduleSweeper | None = None,
@@ -400,6 +401,32 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def disk_ledger_sweeper(app: FastAPI) -> None:
+        """docs/plan-storage-all-items.md: ask for the disk-ledger reconcile — a
+        pure producer like ``blob_gc_sweeper`` (one ``ScanLease`` window ⇒ one
+        ask, run wherever the ``blob-gc`` JobType is consumed), except it asks
+        at its FIRST tick: that first pass is the backfill, and must not wait a
+        whole interval after a rollout. The lease still holds it to one ask per
+        window across pods and restarts."""
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+
+        assert disk_reconcile_interval is not None
+        interval_s = disk_reconcile_interval.total_seconds()
+        lease = ScanLease(SpecstarTriggerStore(spec), "disk-ledger", interval_s=interval_s)
+
+        def ask() -> None:
+            if not lease.claim():
+                return  # another pod asked this window
+            app.state.blob_gc_coordinator.enqueue_disk_ledger()
+
+        try:
+            while True:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(ask)
+                await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
     async def blob_gc_sweeper(app: FastAPI) -> None:
         """#245: periodically ask for the orphaned-blob reconcile (deleted files'
         content), so the per-workspace quota stays honest. A pure producer, like
@@ -663,6 +690,9 @@ def build_lifespan(
             # #245: ask for the orphan-blob reconcile on a schedule.
             bg.append(asyncio.create_task(blob_gc_sweeper(app)))
             logger.debug("lifespan: blob-GC sweeper enabled")
+        if disk_reconcile_interval is not None:
+            bg.append(asyncio.create_task(disk_ledger_sweeper(app)))
+            logger.debug("lifespan: disk-ledger sweeper enabled")
         if offhours is not None and offhours.window:
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")

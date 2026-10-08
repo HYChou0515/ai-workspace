@@ -394,7 +394,9 @@ spec:
 # not land on the container layer); `sandbox.isolation.enabled: true` needs the
 # CAP_SETUID/SETGID + cgroup grant `deployment.yaml` documents, on this pod too;
 # an `nfs_tree` durable store needs `/mnt/workspaces` here for the ws_census
-# figure to be real (an absent tree reads as zeros). Mirror whatever the
+# figure to be real (an absent tree reads as zeros) — and for the disk-ledger
+# reconcile (docs/plan-storage-all-items.md), which REFUSES to run without it
+# rather than book every cold item at 0 bytes. Mirror whatever the
 # overlay adds to `rca-app` for those. It serves nothing and starts none of the
 # sweepers; the #219 inline→Binary migration it runs at boot is idempotent.
 #
@@ -436,6 +438,11 @@ spec:
             # composition builds mkdirs it at boot. Never written to by a pass.
             - name: scratch
               mountPath: /scratch
+            # #492 host-managed NFS durable (opt-in, as on `rca-app`): with
+            # SANDBOX_DURABLE_KIND=nfs_tree the disk-ledger reconcile measures each
+            # item's tree here. Uncomment WITH the `workspaces` volume below.
+            # - name: workspaces
+            #   mountPath: /mnt/workspaces
           resources:
             requests:
               cpu: "100m"
@@ -450,6 +457,9 @@ spec:
         - name: scratch
           persistentVolumeClaim:
             claimName: rca-scratch
+        # - name: workspaces
+        #   persistentVolumeClaim:
+        #     claimName: workspaces
 ---
 # ── chat-video render (plan-chat-video-export) — fixed 1 replica, no HPA ──────
 # One job = one headless Chromium recording the transcript replay in real time

@@ -560,6 +560,11 @@ def create_app(
     # is gone and re-runs them. None ⇒ off.
     turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
     gc_interval: timedelta | None = timedelta(hours=1),
+    # docs/plan-storage-all-items.md: how often the disk-ledger reconcile is
+    # asked for (every item's storage row set right). None ⇒ never — the
+    # default here, so an app built in a test does not reconcile at startup;
+    # a deploy gets `resources.disk_reconcile_interval_sec` (6 h) from config.
+    disk_reconcile_interval: timedelta | None = None,
     gc_t1: str = "1h",
     gc_t2: str = "24h",
     # plan-chat-video-export: the `chat_video:` config section — the size /
@@ -873,10 +878,11 @@ def create_app(
         item being written is excluded from the sum so its stale row and the
         fresh number cannot both be counted.
 
-        This only DECIDES. Recording is `_record_usage` below, wired as the
-        facade's usage publisher so that shrinks and deletes update the ledger
-        too — a total that only learned about growth would keep charging for
-        bytes the user just deleted."""
+        It decides, and on an allowed growing write it records the size the
+        write leaves (for everyone, capped or not — docs/plan-storage-all-items.md
+        decision 2). Shrinks and deletes are recorded by `_record_usage` below,
+        wired as the facade's usage publisher — a total that only learned about
+        growth would keep charging for bytes the user just deleted."""
         owner = _owner_of(item_id)
         if not owner:
             # Near-unreachable since `debtor_of` gained the `created_by` floor:
@@ -888,7 +894,13 @@ def create_app(
             return
         limit = parse_size((await user_limits.for_user(owner)).disk)
         if not limit:
-            return  # nobody capped this person's disk — no ledger, no reads
+            # Nothing to check — but the person still sees what they use
+            # (docs/plan-storage-all-items.md decision 2), so the write is
+            # recorded all the same. No total is read: there is no limit to
+            # hold it against.
+            if record:
+                await disk_ledger.record(item_id, owner, new_size)
+            return
         others = await disk_ledger.total_for(owner, exclude=item_id)
         if others + new_size > limit:
             # Refused — and deliberately NOT recorded. Charging a write that did
@@ -909,8 +921,6 @@ def create_app(
             )
         # Allowed: keep the row current so this person's next write in a
         # DIFFERENT item is judged against a total that includes this one.
-        # Only reached when they are actually capped — an uncapped deploy pays
-        # no durable write for an answer nobody asked for.
         #
         # `new_size` is what the workspace will be AFTER the write this gate just
         # allowed, so recording it is only honest if that write is going to
@@ -949,11 +959,13 @@ def create_app(
         a durable round-trip to refresh a row the sweep will refresh anyway is
         cost with no answer attached.
 
-        Skipped entirely when this person has no disk cap — the same rule the
-        growth path applies. A ledger nobody reads is pure cost, and having two
-        writers disagree about when to write is how one of them ends up wrong."""
+        Written for everyone, capped or not — the same rule the growth path
+        applies: the ledger is what "我的資源" shows a person, not only what a
+        limit is checked against (docs/plan-storage-all-items.md decision 2).
+        Two writers disagreeing about when to write is how one of them ends up
+        wrong."""
         owner = _owner_of(item_id)
-        if not owner or not parse_size((await user_limits.for_user(owner)).disk):
+        if not owner:
             return
         await disk_ledger.record(item_id, owner, total)
 
@@ -1411,6 +1423,7 @@ def create_app(
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
+        disk_reconcile_interval=disk_reconcile_interval,
         shutdown_budget=shutdown_budget,
         turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
@@ -1730,6 +1743,7 @@ def create_app(
         monitor=monitor,
         filestore=filestore,
         chat_video_settings=chat_video,
+        disk_live_window_ms=int(idle_timeout.total_seconds() * 1000),
     )
 
     # #208: the first real backend hit — specstar materialises every model's

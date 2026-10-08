@@ -56,7 +56,6 @@ const CAPPED = {
   live: [],
   workspaces: [],
   disk_in_use: 0,
-  disk_tracked: false,
   owner: "alice",
 };
 const UNCAPPED = { ...CAPPED, limits: { count: 0, cpu: 0, memory_bytes: 0, disk_bytes: 0 } };

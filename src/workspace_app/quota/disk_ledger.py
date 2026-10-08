@@ -11,12 +11,19 @@ keeps charging for ones it deleted). This ledger only remembers the number the
 measurement already produced, so it can be summed across items without walking
 every workspace on every write.
 
+For an item with NO live sandbox there is nothing to measure live, and its
+durable copy is honest — the reap wrote its deletions back — so the reconcile
+pass (`quota/disk_reconcile.py`, docs/plan-storage-all-items.md) books THAT
+size, and gives every item a row. #538's warning is about a LIVE workspace's
+snapshot; a live item is left to the mirror's measurement.
+
 The consequence is honest and deliberate: **a person's total trails reality by up
-to one measurement**. The per-ITEM limit stays exact — it measures live on the
-write path — so the looser number is only ever the cross-item one, and the worst
-case is somebody briefly getting a little over their personal cap. Making it
-exact would mean measuring every workspace a person owns on every write, which
-is the traversal `WorkspaceFiles` exists to keep off the request path.
+to one measurement** (or, for a reaped item, one reconcile interval). The per-ITEM
+limit stays exact — it measures live on the write path — so the looser number is
+only ever the cross-item one, and the worst case is somebody briefly getting a
+little over their personal cap. Making it exact would mean measuring every
+workspace a person owns on every write, which is the traversal `WorkspaceFiles`
+exists to keep off the request path.
 
 Charged to the item's `owner`, like everything else here (#687).
 """
@@ -140,6 +147,20 @@ class DiskLedger:
         what the usage panel lists so somebody can see WHERE their space went.
         A total alone tells you that you are full, not what to delete."""
         return await asyncio.to_thread(self._per_item_sync, owner)
+
+    async def rows(self) -> dict[str, _WorkspaceDisk]:
+        """Every live row, by item — what the reconcile pass compares the items
+        that exist against (docs/plan-storage-all-items.md decision 5)."""
+        return await asyncio.to_thread(self._rows_sync)
+
+    def _rows_sync(self) -> dict[str, _WorkspaceDisk]:
+        rm = self._spec.get_resource_manager(_WorkspaceDisk)
+        out: dict[str, _WorkspaceDisk] = {}
+        for rev in rm.list_resources((QB.is_deleted() == False).build()):  # noqa: E712
+            data = rev.data
+            assert isinstance(data, _WorkspaceDisk)
+            out[data.item_id] = data
+        return out
 
     def _per_item_sync(self, owner: str) -> list[tuple[str, int]]:
         rm = self._spec.get_resource_manager(_WorkspaceDisk)

@@ -62,7 +62,6 @@ function data(over: Partial<MyResources> = {}): MyResources {
     cpu_in_use: 2,
     memory_in_use: 512,
     disk_in_use: 800,
-    disk_tracked: true,
     ...over,
   };
 }
@@ -398,6 +397,20 @@ describe("MyResourcesPage", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(api.deleteAppItem).not.toHaveBeenCalled();
+  });
+
+  it("lists storage and its Delete for a person with no disk limit", async () => {
+    // docs/plan-storage-all-items.md decision 2: 「就算沒有quotation限制 也應該顯示
+    // 他用多少」 — the section was replaced by "not tracked" without a limit.
+    const unlimited = data({ limits: { count: 2, cpu: 0, memory_bytes: 0, disk_bytes: 0 } });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => unlimited) })} />, { wrapper: Wrap });
+
+    const heading = await screen.findByRole("heading", { name: "儲存空間" });
+    const section = heading.closest("section") as HTMLElement;
+    expect(within(section).getByText("Line 3 stoppage")).toBeInTheDocument();
+    // The total (no limit beside it) and the row's own size.
+    expect(within(section).getAllByText(formatBytes(800))).toHaveLength(2);
+    expect(within(section).getByRole("button", { name: /Line 3 stoppage/ })).toBeInTheDocument();
   });
 
   it("renders an empty state rather than a bare zero", async () => {
