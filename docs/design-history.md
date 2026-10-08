@@ -32,6 +32,7 @@
 | [plan-verify-number.md](plan-verify-number.md) | `verify-number` skill：交出可以查核的數字 |
 | [plan-third-party-tools.md](plan-third-party-tools.md) | 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上 |
 | [plan-third-party-tool-names.md](plan-third-party-tool-names.md) | 第三方工具同名 command:模型看到 `<本地名>__<command>`,舊的扁平名不撞名時當別名 |
+| [plan-env-request-card.md](plan-env-request-card.md) | 工具缺環境變數時,AI 在聊天裡出「登入 / 設定」卡片,turn 停在卡片、使用者設定後按重試 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
 | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
