@@ -18,14 +18,18 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-from collections.abc import Callable
-from typing import Literal
+from collections import Counter
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Annotated, Literal
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
-from specstar import SpecStar
+from specstar import QB, SpecStar
+from specstar.types import RevisionInfo
 
+from ..apps.base import WorkItemBase
+from ..apps.registry import registered_apps
 from ..apps.skill_hub import (
     SkillHubEntry,
     SkillHubStore,
@@ -34,16 +38,20 @@ from ..apps.skill_hub import (
     VersionMoved,
     matches_query,
     missing_tools_for,
-    nest_forks,
+    script_count,
 )
 from ..apps.skills import (
     fork_hub_version,
     install_hub_skill,
+    skill_file_paths,
     skill_folder_in_the_way,
+    workspace_skill_origin,
     workspace_skill_payload,
 )
 from ..files import WorkspaceFiles
+from ..perm import Actor, authorize
 from ..resources.groups import groups_of
+from ..sandbox.protocol import SandboxBusy
 from .item_authz import check_access, load_access_facts
 from .locator import ItemLocator
 from .permission_body import PermissionBody, PermissionOut, build_permission
@@ -60,10 +68,16 @@ _OWNER_ONLY = {"error": "owner_only"}
 _TRANSFER_OWNER_REQUIRED = {"error": "transfer_owner_required"}
 
 
+class SkillHubOrigin(BaseModel):
+    """The original a fork was forked from, named — when the viewer may read it."""
+
+    owner: str
+    name: str
+
+
 class SkillHubCard(BaseModel):
-    """One row of the list. `forks` is filled for a root; a fork's own `forks`
-    is always empty — one level, per `nest_forks` (a fork of a fork is listed
-    as a root of its own)."""
+    """One row of the list — flat: a fork is its own row, never nested
+    (plan-skill-hub-ux-redo D2)."""
 
     id: str
     owner: str
@@ -82,14 +96,34 @@ class SkillHubCard(BaseModel):
     #: (plan-skill-hub-history §4.8). A fork counts its own.
     installs: int = 0
     uses: int = 0
-    forks: list[SkillHubCard] = []
+    #: Direct forks the viewer may read — the 「N 個 fork」 link on the row.
+    fork_count: int = 0
+    #: A fork's original, named for 「fork 自 owner/name」 — `None` for an
+    #: original, and for a fork whose original the viewer may not read.
+    origin: SkillHubOrigin | None = None
+    #: When the content last changed (`SkillHubEntry.content_at`); `None` for
+    #: a row from before the field — the list shows no date for it.
+    updated_at: dt.datetime | None = None
 
 
 class SkillHubList(BaseModel):
+    #: One page of the matching rows (`offset` / `limit`).
     entries: list[SkillHubCard]
+    #: How many rows match in all — 「共 N 個」 and whether there is more.
+    total: int = 0
     #: The day counting began (`YYYY-MM-DD`), for 「自 … 起」; "" before the
     #: first flush anywhere.
     counted_since: str = ""
+
+
+def _newest_first(hits: Mapping[str, SkillHubEntry]) -> Callable[[str], tuple[bool, float]]:
+    """Sort key for `sort=updated`: dated rows newest first, undated after."""
+
+    def key(entry_id: str) -> tuple[bool, float]:
+        at = hits[entry_id].content_at
+        return (at is None, -at.timestamp() if at is not None else 0.0)
+
+    return key
 
 
 class SkillHubLineage(BaseModel):
@@ -108,6 +142,18 @@ class SkillHubReviewOut(BaseModel):
     model: str
 
 
+class SkillHubFile(BaseModel):
+    """One file of a version, listed — never read (the files tab, D12)."""
+
+    path: str
+    #: Bytes; `None` for an entry published before the git store.
+    size: int | None
+
+
+def _listed(sizes: list[tuple[str, int | None]]) -> list[SkillHubFile]:
+    return [SkillHubFile(path=path, size=size) for path, size in sizes]
+
+
 class SkillHubDetail(BaseModel):
     id: str
     owner: str
@@ -122,7 +168,9 @@ class SkillHubDetail(BaseModel):
     review: SkillHubReviewOut
     forked_from: SkillHubLineage | None
     forks: list[SkillHubCard]
-    files: list[str]
+    files: list[SkillHubFile]
+    #: How many of `files` are scripts (`script_count`).
+    scripts: int
     skill_md: str
     is_owner: bool
     visibility: Literal["public", "restricted", "private"]
@@ -135,6 +183,11 @@ class SkillHubDetail(BaseModel):
     installs: int = 0
     uses: int = 0
     counted_since: str = ""
+    #: When the content last changed; `None` for an entry from before it was recorded.
+    updated_at: dt.datetime | None = None
+    #: The revision the entry is at — what `…/versions/{revision}/file` takes
+    #: to open one of `files`; "" for an entry not in git yet.
+    revision: str = ""
 
 
 class SkillTransferRequest(BaseModel):
@@ -172,6 +225,8 @@ class SkillHubHistoryEvent(BaseModel):
     visibility: str
     audience: list[str] = []
     current: bool
+    #: v1, v2, … on a publish or rollback; `None` on any other row (D8).
+    version: int | None = None
 
 
 class SkillHubHistory(BaseModel):
@@ -187,7 +242,8 @@ class SkillHubVersion(BaseModel):
     revision: str
     commit: str
     description: str
-    files: list[str]
+    files: list[SkillHubFile]
+    scripts: int
     skill_md: str
 
 
@@ -237,6 +293,44 @@ class SkillInstalled(BaseModel):
     missing_tools: list[str]
 
 
+class SkillHubInstall(BaseModel):
+    """A workspace holding a copy of the entry (the skill page's 「你在這些
+    workspace 裝了它」, D3)."""
+
+    app: str
+    item_id: str
+    title: str
+
+
+class SkillHubInstalls(BaseModel):
+    installs: list[SkillHubInstall]
+
+
+class SkillHubTarget(BaseModel):
+    """One workspace the install dialog offers, and what installing would do
+    there (D6): `ok`; `installed` — a copy of this entry is already there;
+    `name_taken` — another folder of that name is, `owner` naming whose copy
+    it is when the viewer can read that entry ("" otherwise: a hand-written
+    folder, a fork's starting point, a copy of an entry gone from their view);
+    `unavailable` — the workspace's sandbox was too busy to answer."""
+
+    item_id: str
+    title: str
+    state: Literal["ok", "installed", "name_taken", "unavailable"]
+    owner: str = ""
+
+
+class SkillHubTargets(BaseModel):
+    #: What the App lacks of the tools the skill mentions — the same for every
+    #: workspace of the App, so said once.
+    missing_tools: list[str]
+    items: list[SkillHubTarget]
+
+
+#: How many workspaces are read at once when looking for copies.
+_COPY_READS = 16
+
+
 class SkillHubMigration(BaseModel):
     """What the move into git did: the entries moved, and each `owner/name`
     held by more than one entry — left for the operator, never merged."""
@@ -266,6 +360,7 @@ def register_skill_hub_routes(
         viewer: str,
         app: str = "",
         counts: tuple[int, int] = (0, 0),
+        fork_count: int = 0,
     ) -> SkillHubCard:
         return SkillHubCard(
             id=entry_id,
@@ -280,6 +375,8 @@ def register_skill_hub_routes(
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
             installs=counts[0],
             uses=counts[1],
+            fork_count=fork_count,
+            updated_at=entry.content_at,
         )
 
     def _readable(entry_id: str, viewer: str) -> SkillHubEntry:
@@ -288,12 +385,22 @@ def register_skill_hub_routes(
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
         return entry
 
-    def _visible_forks(entry_id: str, viewer: str) -> list[SkillHubCard]:
-        out: list[SkillHubCard] = []
+    def _readable_forks(entry_id: str, viewer: str) -> list[tuple[str, SkillHubEntry]]:
+        out: list[tuple[str, SkillHubEntry]] = []
         for fork_id in hub.forks_of(entry_id):
             _state, fork = hub.state_for(fork_id, viewer)
             if fork is not None:
-                out.append(_card(fork_id, fork, viewer))
+                out.append((fork_id, fork))
+        return out
+
+    def _visible_forks(entry_id: str, entry: SkillHubEntry, viewer: str) -> list[SkillHubCard]:
+        """The forks tab: each fork names this entry as its original (the
+        viewer is reading it) and counts its own forks, as a list row does."""
+        out: list[SkillHubCard] = []
+        for fork_id, fork in _readable_forks(entry_id, viewer):
+            card = _card(fork_id, fork, viewer, fork_count=len(_readable_forks(fork_id, viewer)))
+            card.origin = SkillHubOrigin(owner=entry.owner, name=entry.name)
+            out.append(card)
         out.sort(key=lambda c: (c.name, c.owner))
         return out
 
@@ -301,34 +408,60 @@ def register_skill_hub_routes(
     async def list_skill_hub(
         q: str = "",
         mine: bool = False,
+        owner: str = "",
         app: str = "",
-        sort: Literal["name", "popular"] = "name",
+        forks: bool = False,
+        sort: Literal["name", "popular", "updated"] = "name",
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> SkillHubList:
-        """The page's list: roots with their forks beneath, in name order.
-        `q` matches name and description (case-insensitive); `mine` keeps the
-        viewer's own. A fork whose root is out of view — filtered by `q`,
-        private to the viewer, or deleted — is listed on its own, so a skill is
-        never hidden by what it was forked from. `app` (a slug) adds each
-        row's `missing_tools` against that App's ceiling — the Skills panel's
-        picker asks for the item's App, so the告知 is on the row it picks from.
-        `sort=popular` puts the most used first (U6); forks stay under their root."""
+        """The page's list, one page of it (plan-skill-hub-ux-redo D1/D2/D4).
+
+        Browsing — no `q`, no `mine`, no `owner` — lists the originals, each
+        with `fork_count`; a fork whose original the viewer cannot see (private
+        to them, deleted) is listed itself, so a skill is never hidden by what
+        it was forked from. Any filter lists forks beside originals, each with
+        its `forked_from`: a search is for one skill, wherever it sits.
+        `forks=true` does the same unfiltered — the workspace's install picker
+        offers everything installable. `q`
+        matches name and description (case-insensitive); `mine` keeps the
+        viewer's own and `owner` one person's. `app` (a slug) adds each row's
+        `missing_tools` against that App's ceiling. `sort`: `name`, `popular`
+        (most used first), `updated` (latest content first, undated last);
+        ties stay in name order. `total` counts every matching row."""
         viewer = get_user_id()
+        visible = dict(hub.visible(viewer))
+        fork_counts = Counter(e.forked_from for e in visible.values() if e.forked_from)
+        browsing = not q.strip() and not mine and not owner and not forks
         hits = {
             i: e
-            for i, e in hub.visible(viewer)
-            if (not mine or e.owner == viewer) and matches_query(e, q)
+            for i, e in visible.items()
+            if (not mine or e.owner == viewer)
+            and (not owner or e.owner == owner)
+            and matches_query(e, q)
+            and not (browsing and e.forked_from in visible)
         }
         counts = await asyncio.to_thread(hub.usage.totals, hits)
-        roots: list[SkillHubCard] = []
-        for root, forks in nest_forks(hits):
-            card = _card(root, hits[root], viewer, app, counts[root])
-            card.forks = [_card(j, hits[j], viewer, app, counts[j]) for j in forks]
-            roots.append(card)
+        # `visible` is in name order; every sort below is stable on it.
+        order = list(hits)
         if sort == "popular":
-            # Stable on the name order `nest_forks` gave: ties stay alphabetical.
-            roots.sort(key=lambda c: (-c.uses, -c.installs))
+            order.sort(key=lambda i: (-counts[i][1], -counts[i][0]))
+        elif sort == "updated":
+            order.sort(key=_newest_first(hits))
+        page = order[offset : offset + limit]
         since = await asyncio.to_thread(hub.usage.counted_since)
-        return SkillHubList(entries=roots, counted_since=since)
+
+        def card(i: str) -> SkillHubCard:
+            out = _card(i, hits[i], viewer, app, counts[i], fork_counts[i])
+            if (root := visible.get(hits[i].forked_from)) is not None:
+                out.origin = SkillHubOrigin(owner=root.owner, name=root.name)
+            return out
+
+        return SkillHubList(
+            entries=[card(i) for i in page],
+            total=len(order),
+            counted_since=since,
+        )
 
     @app.get("/skill-hub/entries/{entry_id}")
     async def skill_hub_detail(entry_id: str, app: str = "") -> SkillHubDetail:
@@ -351,6 +484,7 @@ def register_skill_hub_routes(
             )
         is_owner = entry.owner == viewer
         installs, uses = (await asyncio.to_thread(hub.usage.totals, [entry_id]))[entry_id]
+        sizes = await hub.file_sizes(entry_id)
         return SkillHubDetail(
             id=entry_id,
             owner=entry.owner,
@@ -366,8 +500,9 @@ def register_skill_hub_routes(
                 model=entry.review.model,
             ),
             forked_from=lineage,
-            forks=_visible_forks(entry_id, viewer),
-            files=await hub.file_names(entry_id),
+            forks=_visible_forks(entry_id, entry, viewer),
+            files=_listed(sizes),
+            scripts=script_count(p for p, _ in sizes),
             skill_md=skill_md.decode("utf-8", errors="replace"),
             is_owner=is_owner,
             visibility=entry.permission.visibility,
@@ -378,6 +513,118 @@ def register_skill_hub_routes(
             installs=installs,
             uses=uses,
             counted_since=await asyncio.to_thread(hub.usage.counted_since),
+            updated_at=entry.content_at,
+            revision=await asyncio.to_thread(hub.current_revision, entry_id),
+        )
+
+    def _editable(viewer: str, slugs: list[str]) -> list[tuple[str, str, str]]:
+        """``(app, item id, title)`` of every live workspace of `slugs` the
+        viewer may `edit_content` — what an install needs — by title. Granted
+        by the workspace's own permission: a superuser's power to edit anyone's
+        workspace does not put everyone's in their picker."""
+        actor = Actor.human(viewer, groups=groups_of(spec, viewer))
+        live = (QB.is_deleted() == False).build()  # noqa: E712 — specstar's meta predicate
+        models = registered_apps()
+        out: list[tuple[str, str, str]] = []
+        for slug in slugs:
+            if slug not in models:
+                continue
+            rm = spec.get_resource_manager(models[slug])
+            for res in rm.list_resources(live, returns=["info", "data"]):
+                item, info = res.data, res.info
+                assert isinstance(item, WorkItemBase) and isinstance(info, RevisionInfo)
+                if authorize(
+                    actor, "read_meta", item.permission, created_by=info.created_by
+                ) and authorize(actor, "edit_content", item.permission, created_by=info.created_by):
+                    out.append((slug, info.resource_id, item.title))
+        out.sort(key=lambda t: (t[0], t[2].casefold(), t[1]))
+        return out
+
+    async def _bounded[T](calls: list[Callable[[], Awaitable[T]]]) -> list[T]:
+        gate = asyncio.Semaphore(_COPY_READS)
+
+        async def one(call: Callable[[], Awaitable[T]]) -> T:
+            async with gate:
+                return await call()
+
+        return list(await asyncio.gather(*(one(c) for c in calls)))
+
+    async def _holds_copy(item_id: str, entry_id: str, name: str) -> bool | None:
+        """Whether the workspace holds an installed copy of the entry at
+        `.skill/<name>/` — not a fork's starting point (`forked`, the viewer's
+        own skill) — or ``None`` when it cannot be told now (a sandbox too busy
+        to answer). Never wakes a sandbox: this runs for every workspace the
+        viewer can edit, on every skill page open. A record that does not parse
+        is not a copy of anything."""
+        try:
+            origin = await workspace_skill_origin(files, item_id, name, wake=False)
+            if origin is None or origin.entry != entry_id or origin.forked:
+                return False
+            # A record with none of the skill's files beside it is not a copy:
+            # the install route would accept that folder (round 2).
+            return bool(await skill_file_paths(files, item_id, name, wake=False))
+        except (msgspec.DecodeError, msgspec.ValidationError):
+            return False
+        except SandboxBusy:
+            return None
+
+    @app.get("/skill-hub/entries/{entry_id}/installs")
+    async def skill_hub_installs(entry_id: str) -> SkillHubInstalls:
+        """The viewer's workspaces holding a copy of this entry: a
+        `.skill/<name>/` whose `.origin` names it. Only workspaces the viewer
+        may edit — the ones they could have installed it into. A copy renamed
+        since is not found: the name is where to look."""
+        viewer = get_user_id()
+        entry = _readable(entry_id, viewer)
+        candidates = await asyncio.to_thread(_editable, viewer, sorted(registered_apps()))
+
+        def holds(item_id: str) -> Callable[[], Awaitable[bool | None]]:
+            return lambda: _holds_copy(item_id, entry_id, entry.name)
+
+        held = await _bounded([holds(item_id) for _slug, item_id, _t in candidates])
+        return SkillHubInstalls(
+            installs=[
+                SkillHubInstall(app=slug, item_id=item_id, title=title)
+                for (slug, item_id, title), yes in zip(candidates, held, strict=True)
+                if yes
+            ]
+        )
+
+    @app.get("/skill-hub/entries/{entry_id}/targets")
+    async def skill_hub_targets(entry_id: str, app: str) -> SkillHubTargets:
+        """The workspaces of App `app` the viewer may install into, each with
+        what installing would do — the same refusal `POST …/skills/install`
+        gives (`skill_folder_in_the_way`), asked before rather than after.
+        An App the platform does not know has none."""
+        viewer = get_user_id()
+        entry = _readable(entry_id, viewer)
+        candidates = await asyncio.to_thread(_editable, viewer, [app])
+
+        def target(item_id: str, title: str) -> Callable[[], Awaitable[SkillHubTarget]]:
+            async def ask() -> SkillHubTarget:
+                held = await _holds_copy(item_id, entry_id, entry.name)
+                if held is None:
+                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
+                if held:
+                    return SkillHubTarget(item_id=item_id, title=title, state="installed")
+                try:
+                    taken = await skill_folder_in_the_way(
+                        files, item_id, hub, entry.name, viewer, wake=False
+                    )
+                except SandboxBusy:
+                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
+                if taken is not None:
+                    return SkillHubTarget(
+                        item_id=item_id, title=title, state="name_taken", owner=taken.owner
+                    )
+                return SkillHubTarget(item_id=item_id, title=title, state="ok")
+
+            return ask
+
+        items = await _bounded([target(item_id, title) for _s, item_id, title in candidates])
+        return SkillHubTargets(
+            missing_tools=missing_tools_for(entry.referenced_tools, app),
+            items=items,
         )
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────
@@ -479,7 +726,7 @@ def register_skill_hub_routes(
         file read in full."""
         _readable(entry_id, get_user_id())
         old = await _version(entry_id, revision)
-        names = sorted(await hub.repos.tree(entry_id, old.commit))
+        sizes = await hub.file_sizes(entry_id, old.commit)
         read = await hub.repos.read(entry_id, old.commit, paths=["SKILL.md"])
         # A version migrated from an empty namespace has none; show nothing.
         skill_md = read.get("SKILL.md", b"")
@@ -487,7 +734,8 @@ def register_skill_hub_routes(
             revision=revision,
             commit=old.commit,
             description=old.description,
-            files=names,
+            files=_listed(sizes),
+            scripts=script_count(p for p, _ in sizes),
             skill_md=skill_md.decode("utf-8", errors="replace"),
         )
 

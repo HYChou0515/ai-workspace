@@ -208,7 +208,7 @@ export const messages = {
   "tool.read_new_source": { "zh-TW": "讀取新文件", en: "Read new source" },
   "tool.list_sources": { "zh-TW": "列出文件", en: "List sources" },
   "tool.read_source": { "zh-TW": "讀取文件", en: "Read source" },
-  "tool.read_skill": { "zh-TW": "讀取技能", en: "Read skill" },
+  "tool.read_skill": { "zh-TW": "讀取 skill", en: "Read skill" },
   "tool.run_agent": { "zh-TW": "委派子代理", en: "Delegate to sub-agent" },
   "tool.fallback": { "zh-TW": "使用工具", en: "Using a tool" },
   "tool.argSep": { "zh-TW": "：", en: ": " },
@@ -248,7 +248,7 @@ export const messages = {
   },
   "entry.withheld.requestAccess": { "zh-TW": "申請存取", en: "Request access" },
   "entry.withheld.requested": { "zh-TW": "已送出申請", en: "Access requested" },
-  "entry.withheld.owner": { "zh-TW": "擁有者", en: "Owner" },
+  "entry.withheld.owner": { "zh-TW": "owner", en: "Owner" },
   // #254 — citation source-location chip labels. The formatter adds one space
   // before the value, so labels carry none (the i18n layer has no interpolation).
   "cite.loc.page": { "zh-TW": "頁碼", en: "p." },
@@ -587,18 +587,18 @@ export const messages = {
   // the superuser toggle on the collection page.
   "collections.global": { "zh-TW": "全域", en: "Global" },
   // #298 — the Skills panel (co-created skills in a workspace).
-  "skills.button": { "zh-TW": "技能", en: "Skills" },
+  "skills.button": { "zh-TW": "Skills", en: "Skills" },
   "skills.tip": {
-    "zh-TW": "查看技能、開啟關閉，或讓助理這回合套用",
+    "zh-TW": "查看 skill、開啟關閉，或讓助理這回合套用",
     en: "See skills, turn them on or off, or apply one for this turn",
   },
-  "skills.title": { "zh-TW": "技能", en: "Skills" },
+  "skills.title": { "zh-TW": "Skills", en: "Skills" },
   "skills.intro": {
-    "zh-TW": "開啟或關閉助理能用的技能，或選「套用」讓它這回合照著某個技能做。",
+    "zh-TW": "開啟或關閉助理能用的 skill，或選「套用」讓它這回合照著某個 skill 做。",
     en: "Turn the assistant's skills on or off, or Apply one to have it follow that skill this turn.",
   },
   "skills.empty": {
-    "zh-TW": "還沒有技能。在對話中請助理「幫我做一個技能」就能一起做一個。",
+    "zh-TW": "還沒有 skill。在對話中請助理「幫我做一個 skill」就能一起做一個。",
     en: 'No skills yet. Ask the assistant "help me make a skill" to build one together.',
   },
   "skills.download": { "zh-TW": "下載", en: "Download" },
@@ -625,21 +625,29 @@ export const messages = {
     en: "Edited here, so left as they are",
   },
   "skills.copy": { "zh-TW": "可在此編輯", en: "editable here" },
+  // plan-skill-hub-ux-redo D9: where a skill comes from, in words, and the row's controls.
+  "skills.source.shared": { "zh-TW": "App 內建", en: "Built into the App" },
+  "skills.source.profile": { "zh-TW": "範本內建", en: "Built into the template" },
+  "skills.source.workspace": { "zh-TW": "這個 workspace 的", en: "This workspace's" },
+  "skills.source.hub": { "zh-TW": "從 skill hub 裝的", en: "From the skill hub" },
+  "skills.refresh.short": { "zh-TW": "更新", en: "Update" },
+  "skills.state": { "zh-TW": "要不要載入", en: "Whether it loads" },
+  "skills.more": { "zh-TW": "{name} 的其他動作", en: "More for {name}" },
   "skills.import": { "zh-TW": "匯入", en: "Import" },
   "skills.importHint": {
-    "zh-TW": "選擇一個技能資料夾以加入這個工作區",
+    "zh-TW": "選擇一個 skill 資料夾以加入這個 workspace",
     en: "Pick a skill folder to add it to this workspace",
   },
   "skills.close": { "zh-TW": "關閉", en: "Close" },
   "skills.apply": { "zh-TW": "套用", en: "Apply" },
   "skills.applyTip": {
-    "zh-TW": "這回合讓助理套用此技能",
+    "zh-TW": "這回合讓助理套用此 skill",
     en: "Apply this skill for the assistant's next turn",
   },
   "skills.save": { "zh-TW": "儲存", en: "Save" },
   "skills.applied": { "zh-TW": "這回合套用：", en: "Applying:" },
   "skills.appliedTip": {
-    "zh-TW": "助理這回合會照這個技能做（送出後自動移除）",
+    "zh-TW": "助理這回合會照這個 skill 做（送出後自動移除）",
     en: "The assistant follows this skill this turn (removed after you send)",
   },
   // #323 — the Workflows panel (co-created workflows in a workspace).
@@ -801,7 +809,7 @@ export const messages = {
   },
   "scheduleOverview.retry": { "zh-TW": "再試一次", en: "Try again" },
   "scheduleOverview.empty": {
-    "zh-TW": "你看得到的項目裡，還沒有任何排程。",
+    "zh-TW": "你看得到的 workspace 裡，還沒有任何排程。",
     en: "Nothing you can see is on a schedule yet.",
   },
   "scheduleOverview.empty.what": {
@@ -852,8 +860,8 @@ export const messages = {
   },
   "templates.copy": { "zh-TW": "拉一份來改", en: "Copy to edit" },
   "templates.unavailable": {
-    "zh-TW": "這個項目的設定不支援這個範本",
-    en: "This item's setup can't run this template",
+    "zh-TW": "這個 workspace 的設定不支援這個範本",
+    en: "This workspace's setup can't run this template",
   },
   "templates.replaceConfirm": {
     "zh-TW": "這個工作區已經有同名的「{name}」。要用範本覆蓋掉你現有的版本嗎？",
@@ -1036,8 +1044,8 @@ export const messages = {
     en: "Not sent — you're at your limit for live sandboxes. Close one in My resources, then send again.",
   },
   "chat.send.userFull": {
-    "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
-    en: "Not sent — you're out of space across all your items. Open My resources to see where it went, then send again.",
+    "zh-TW": "沒有送出:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再送一次。",
+    en: "Not sent — you're out of space across all your workspaces. Open My resources to see where it went, then send again.",
   },
   // Appended to whichever refusal led. A limit named without a number cannot be
   // checked by the person reading it — "your workspace is full" reads the same
@@ -1060,16 +1068,16 @@ export const messages = {
   // next one on the retry. They name the page for the same reason the primary
   // messages do — `ResourceLinkText` turns that name into the link.
   "resources.also.user": {
-    "zh-TW": "另外,你所有項目的空間總量也滿了——到「我的資源」看是哪些項目佔用。",
-    en: "You are also out of space across all your items — see where it went in My resources.",
+    "zh-TW": "另外,你所有 workspace 的空間總量也滿了——到「我的資源」看是哪些 workspace 佔用。",
+    en: "You are also out of space across all your workspaces — see where it went in My resources.",
   },
   "resources.also.workspace": {
-    "zh-TW": "另外,這個項目的工作區空間也滿了,請先刪除不需要的檔案。",
-    en: "This item's workspace is also full — delete files you no longer need.",
+    "zh-TW": "另外,這個 workspace 的空間也滿了,請先刪除不需要的檔案。",
+    en: "This workspace is also full — delete files you no longer need.",
   },
   "chat.send.workspaceFull": {
-    "zh-TW": "沒有送出:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
-    en: "Not sent — this item's workspace is full. Delete files you no longer need first.",
+    "zh-TW": "沒有送出:這個 workspace 的空間已滿。請先刪除不需要的檔案。",
+    en: "Not sent — this workspace is full. Delete files you no longer need first.",
   },
   // #714: the deploy's request→env source refused or broke. The turn was not
   // started BECAUSE the tools would have run without knowing who is asking, so
@@ -1083,12 +1091,12 @@ export const messages = {
     en: "Not run — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "terminal.userFull": {
-    "zh-TW": "沒有執行:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
-    en: "Not run — you're out of space across all your items. Open My resources to see where it went, then try again.",
+    "zh-TW": "沒有執行:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
+    en: "Not run — you're out of space across all your workspaces. Open My resources to see where it went, then try again.",
   },
   "terminal.workspaceFull": {
-    "zh-TW": "沒有執行:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
-    en: "Not run — this item's workspace is full. Delete files you no longer need first.",
+    "zh-TW": "沒有執行:這個 workspace 的空間已滿。請先刪除不需要的檔案。",
+    en: "Not run — this workspace is full. Delete files you no longer need first.",
   },
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
   // `plan-personal-env`: a person's values for every item.
@@ -1187,21 +1195,21 @@ export const messages = {
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
   // ── who may MANAGE an item (change_permission), shown apart from roles ──
-  "itemshare.managers.heading": { "zh-TW": "可以管理這個項目的人", en: "Who can manage this item" },
+  "itemshare.managers.heading": { "zh-TW": "可以管理這個 workspace 的人", en: "Who can manage this workspace" },
   // The consequence, stated BEFORE the control. Both halves matter and the
   // second is the easy one to miss: this grant now decides who may spend the
   // owner's quota, not merely who may see the item.
   "itemshare.managers.consequence": {
-    "zh-TW": "他們可以把這個項目的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是擁有者的額度。",
-    en: "They can re-share this item with anyone, and can resize its sandbox — which spends the owner's quota.",
+    "zh-TW": "他們可以把這個 workspace 的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是 owner 的額度。",
+    en: "They can re-share this workspace with anyone, and can resize its sandbox — which spends the owner's quota.",
   },
   "itemshare.managers.add": { "zh-TW": "加入使用者 ID", en: "Add a user id" },
   "itemshare.managers.remove": { "zh-TW": "移除", en: "Remove" },
   // ── the item page's own sandbox panel ─────────────────────────────────
   "itemenv.button": { "zh-TW": "沙盒", en: "Sandbox" },
   "itemenv.tip": {
-    "zh-TW": "這個項目的沙盒：狀態、用量、大小。",
-    en: "This item's sandbox — status, usage, size.",
+    "zh-TW": "這個 workspace 的沙盒：狀態、用量、大小。",
+    en: "This workspace's sandbox — status, usage, size.",
   },
   "itemenv.heading": { "zh-TW": "沙盒", en: "Sandbox" },
   // Dismisses the PANEL. Deliberately not `itemenv.close`, which shuts the
@@ -1240,7 +1248,7 @@ export const messages = {
     "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
     en: "Close it to change the size. Running processes end; your files are untouched.",
   },
-  "itemenv.size.heading": { "zh-TW": "這個項目的沙盒大小", en: "This item's sandbox size" },
+  "itemenv.size.heading": { "zh-TW": "這個 workspace 的沙盒大小", en: "This workspace's sandbox size" },
   // The label an UNSET value carries. Without it an empty field renders as a
   // number with no provenance, and the person cannot tell what they chose from
   // what was chosen for them.
@@ -1297,30 +1305,30 @@ export const messages = {
   },
   "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
   "itemenv.readonly": {
-    "zh-TW": "只有能變更這個項目存取權的人可以調整大小 —— 它花的是擁有者的額度。",
-    en: "Only someone who can change this item's access may resize it — it spends the owner's quota.",
+    "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
+    en: "Only someone who can change this workspace's access may resize it — it spends the owner's quota.",
   },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
   "resources.disk.untracked": {
     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",
     en: "This deployment sets no personal storage limit, so usage isn't tracked.",
   },
-  "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
+  "resources.disk.empty": { "zh-TW": "還沒有任何 workspace 佔用空間。", en: "Nothing stored yet." },
   // Deleting can happen HERE now (plan-delete-item-cascade): each disk row
   // carries a delete that removes the item and everything it owns and refunds
   // the quota. The hint keeps the file-list path for partial clean-ups.
   "resources.disk.hint": {
-    "zh-TW": "要清出空間,可直接刪除整個項目,或開啟項目後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
-    en: "To free space, delete a whole item here, or open it and delete individual files — deleting is never blocked by a quota.",
+    "zh-TW": "要清出空間,可直接刪除整個 workspace,或開啟 workspace 後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
+    en: "To free space, delete a whole workspace here, or open it and delete individual files — deleting is never blocked by a quota.",
   },
   "resources.disk.delete": { "zh-TW": "刪除", en: "Delete" },
-  "resources.disk.delete.title": { "zh-TW": "刪除這個項目?", en: "Delete this item?" },
+  "resources.disk.delete.title": { "zh-TW": "刪除這個 workspace?", en: "Delete this workspace?" },
   "resources.disk.delete.body1": {
-    "zh-TW": "會刪除這個項目與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
-    en: "Deletes this item and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
+    "zh-TW": "會刪除這個 workspace 與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
+    en: "Deletes this workspace and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
   },
   "resources.disk.delete.body2": {
-    "zh-TW": "要備份請先開啟項目下載檔案。此動作無法復原。",
+    "zh-TW": "要備份請先開啟 workspace 下載檔案。此動作無法復原。",
     en: "To keep a copy, open it and download the files first. This can't be undone.",
   },
   "resources.disk.delete.cancel": { "zh-TW": "取消", en: "Cancel" },
@@ -1340,8 +1348,8 @@ export const messages = {
   "wui.retry": { "zh-TW": "再試一次", en: "Try again" },
   "wui.empty": { "zh-TW": "還沒有任何 WUI 被 Deploy。", en: "No WUI has been deployed yet." },
   "wui.empty.what": {
-    "zh-TW": "WUI 是 item 工作區裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
-    en: "A WUI is a folder in an item's workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
+    "zh-TW": "WUI 是 workspace 裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
+    en: "A WUI is a folder in a workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
   },
   "wui.empty.help": { "zh-TW": "看說明", en: "Read the help" },
   // `{when}` is `relativeTime`'s form — "just now", "3 min ago", "2 d ago",
@@ -1378,7 +1386,7 @@ export const messages = {
   // sections, which stay.
   "wui.filter.app": { "zh-TW": "App", en: "App" },
   "wui.filter.all": { "zh-TW": "全部", en: "All" },
-  "wui.search": { "zh-TW": "搜尋頁面或 item", en: "Search pages or items" },
+  "wui.search": { "zh-TW": "搜尋頁面或 workspace", en: "Search pages or workspaces" },
   "wui.sort": { "zh-TW": "排序", en: "Sort" },
   "wui.sort.newest": { "zh-TW": "最新 Deploy", en: "Newest Deploy" },
   "wui.sort.title": { "zh-TW": "名稱", en: "Name" },
@@ -1535,8 +1543,8 @@ export const messages = {
     en: "Storage is full — delete some files before uploading more.",
   },
   "workspace.overQuota.user": {
-    "zh-TW": "{names} 沒有附上:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
-    en: "{names} wasn't attached — you're out of space across all your items. Open My resources to see where it went, then try again.",
+    "zh-TW": "{names} 沒有附上:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
+    en: "{names} wasn't attached — you're out of space across all your workspaces. Open My resources to see where it went, then try again.",
   },
   "workspace.overQuota.env": {
     "zh-TW": "{names} 沒有附上:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
@@ -1552,8 +1560,8 @@ export const messages = {
   // The person's TOTAL across every item they own is full — the space to free
   // may well be in a different item, so the message must not point at this one.
   "workspace.upload.userFull": {
-    "zh-TW": "「{name}」沒有上傳:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再重試。",
-    en: "{name} wasn't uploaded — you're out of space across all your items. Open My resources to see where it went, delete what you don't need, then try again.",
+    "zh-TW": "「{name}」沒有上傳:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再重試。",
+    en: "{name} wasn't uploaded — you're out of space across all your workspaces. Open My resources to see where it went, delete what you don't need, then try again.",
   },
   // Nothing to do with files at all: they are holding as many live sandboxes
   // as they may. Saying "the workspace is full" here would be simply untrue.
@@ -2140,20 +2148,38 @@ export const messages = {
     en: "Nobody has published a skill yet.",
   },
   "skillHub.empty.what": {
-    "zh-TW": "在 item 的 Skills 面板裡，把你做好的 skill 發布到 skill hub，其他人就能從自己的 item 裝進去。",
-    en: "In an item's Skills panel, publish a skill you made to the skill hub; others install it from their own items.",
+    "zh-TW": "在 workspace 的 Skills 面板裡，把你做好的 skill 發布到 skill hub，其他人就能從自己的 workspace 裝進去。",
+    en: "In a workspace's Skills panel, publish a skill you made to the skill hub; others install it into their own workspaces.",
   },
   "skillHub.noMatch": { "zh-TW": "沒有符合的 skill。", en: "No skill matches." },
   "skillHub.forks": { "zh-TW": "{count} 個 fork", en: "{count} forks" },
   "skillHub.fork.one": { "zh-TW": "1 個 fork", en: "1 fork" },
   // plan-skill-hub-history U6/U7: the counts, never who; counting starts on the
-  // day the feature went live, so the number says since when.
-  "skillHub.counts": {
-    "zh-TW": "安裝 {installs} 次 · 使用 {uses} 次",
-    en: "Installed {installs} times · used {uses} times",
-  },
+  // day the feature went live, so the number says since when. Said in halves
+  // (`skillHub.counts.installs` / `.uses`), a zero half left out (`countsText`).
   "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
+  "skillHub.counts.installs": { "zh-TW": "安裝 {count} 次", en: "Installed {count} times" },
+  "skillHub.counts.uses": { "zh-TW": "使用 {count} 次", en: "Used {count} times" },
+  // The list's summary line: beside 「共 N 個 skill」 the day alone read as
+  // the skills' date, not the counts'.
+  "skillHub.countedSince.list": { "zh-TW": "次數自 {day} 起計", en: "counts since {day}" },
   "skillHub.sort": { "zh-TW": "排序", en: "Sort" },
+  // plan-skill-hub-ux-redo D1/D4/D17: the list's toolbar, paging and empty search.
+  "skillHub.sort.updated": { "zh-TW": "最近更新", en: "Recently updated" },
+  "skillHub.show": { "zh-TW": "顯示", en: "Show" },
+  "skillHub.total": { "zh-TW": "共 {count} 個 skill", en: "{count} skills" },
+  "skillHub.loadMore": { "zh-TW": "載入更多", en: "Load more" },
+  "skillHub.shown": { "zh-TW": "已顯示 {shown} / {total}", en: "Showing {shown} of {total}" },
+  "skillHub.owner.filter": { "zh-TW": "owner：{name}", en: "Owner: {name}" },
+  "skillHub.owner.clear": { "zh-TW": "清除 owner 篩選", en: "Clear the owner filter" },
+  "skillHub.owner.only": { "zh-TW": "只看 {name} 的 skill", en: "Only {name}'s skills" },
+  "skillHub.noMatch.query": {
+    "zh-TW": "沒有名稱或說明符合「{q}」的 skill。",
+    en: "No skill's name or description matches “{q}”.",
+  },
+  "skillHub.clearSearch": { "zh-TW": "清除搜尋", en: "Clear search" },
+  "skillHub.clearFilters": { "zh-TW": "清除篩選", en: "Clear filters" },
+  "skillHub.updated": { "zh-TW": "{day} 更新", en: "Updated {day}" },
   // plan-skill-hub-history A3: the card `show_skill_hub_entry` draws in a chat.
   "skillHub.card.install": { "zh-TW": "安裝", en: "Install" },
   "skillHub.card.installed": { "zh-TW": "已安裝", en: "Installed" },
@@ -2164,31 +2190,33 @@ export const messages = {
   },
   "skillHub.sort.name": { "zh-TW": "名稱", en: "Name" },
   "skillHub.sort.popular": { "zh-TW": "最常使用", en: "Most used" },
-  "skillHub.forkOf": { "zh-TW": "fork 自 {origin}", en: "fork of {origin}" },
+  "skillHub.forkOf.named": { "zh-TW": "fork 自 {owner} 的 {name}", en: "fork of {owner}'s {name}" },
   "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
   "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },
-  "skillHub.writtenIn": { "zh-TW": "在 {app} 寫的", en: "written in {app}" },
   "skillHub.tools": { "zh-TW": "用到的工具", en: "Tools it mentions" },
   "skillHub.tools.none": { "zh-TW": "沒有提到任何工具", en: "mentions no tools" },
   "skillHub.review": { "zh-TW": "AI 審查意見", en: "AI review" },
   "skillHub.review.ok": { "zh-TW": "審查沒有意見", en: "Nothing flagged" },
   "skillHub.review.notes": { "zh-TW": "審查有 {count} 則意見", en: "{count} review notes" },
   "skillHub.review.by": { "zh-TW": "由 {model} 審查", en: "reviewed by {model}" },
-  // A fork's card names its root (plan-skill-hub-ui-polish D9, reusing
-  // `skillHub.forkOf`); when the root is one the viewer cannot read —
-  // unpublished, deleted — it says that much. The "has review notes" badge
+  // A fork's card names its root (plan-skill-hub-ui-polish D9,
+  // `skillHub.forkOf.named`); when the root is one the viewer cannot read —
+  // unpublished, deleted, not shared with them — it says that much. The "has review notes" badge
   // is gone (D7): every entry was reviewed.
   "skillHub.forkOf.gone": {
-    "zh-TW": "fork 自一個已下架或刪除的條目",
-    en: "Fork of an entry that was unpublished or deleted",
+    "zh-TW": "fork 自一個你看不到的 skill（已下架、已刪除，或你沒有權限）",
+    en: "Fork of a skill you cannot see (unpublished, deleted, or not shared with you)",
   },
   "skillHub.files": { "zh-TW": "檔案", en: "Files" },
-  "skillHub.forksOf": { "zh-TW": "Fork", en: "Forks" },
-  "skillHub.forksOf.none": { "zh-TW": "還沒有人 fork 這個 skill。", en: "Nobody has forked this skill yet." },
-  "skillHub.howToInstall": {
-    "zh-TW": "要用這個 skill，到你 item 的 Skills 面板按「從 skill hub 裝」。",
-    en: "To use this skill, open your item's Skills panel and press “Install from the skill hub”.",
+  // plan-skill-hub-ux-redo D12: the files tab's summary line and viewer.
+  "skillHub.files.summary": { "zh-TW": "{count} 個檔案 ・ {size}", en: "{count} files · {size}" },
+  "skillHub.files.count": { "zh-TW": "{count} 個檔案", en: "{count} files" },
+  "skillHub.files.scripts": { "zh-TW": "含 {count} 個 script", en: "{count} scripts" },
+  "skillHub.files.notText": {
+    "zh-TW": "這個檔案不是文字，這裡顯示不了。",
+    en: "This file is not text and cannot be shown here.",
   },
+  "skillHub.forksOf.none": { "zh-TW": "還沒有人 fork 這個 skill。", en: "Nobody has forked this skill yet." },
   "skillHub.visibility.public": { "zh-TW": "公開", en: "Public" },
   "skillHub.visibility.restricted": { "zh-TW": "限定名單", en: "Restricted" },
   "skillHub.visibility.private": { "zh-TW": "已下架（只有你看得到）", en: "Unpublished (only you can see it)" },
@@ -2196,7 +2224,7 @@ export const messages = {
   "skillHub.edit": { "zh-TW": "修改", en: "Edit" },
   "skillHub.unpublish": { "zh-TW": "下架", en: "Unpublish" },
   "skillHub.republish": { "zh-TW": "重新上架", en: "Republish" },
-  "skillHub.share": { "zh-TW": "可見範圍", en: "Visibility" },
+  "skillHub.share": { "zh-TW": "權限設定", en: "Permissions" },
   // The generic sharing dialog (`PermissionDialog`), plan-skill-hub-ui-polish
   // D12: it used to be English only, inside a zh-TW page. The English is
   // word for word what it said before (pinned by its parity tests).
@@ -2243,6 +2271,75 @@ export const messages = {
     "zh-TW": "誰能在 skill hub 看到並裝這個 skill。",
     en: "Who can see and install this skill on the skill hub.",
   },
+  // plan-skill-hub-ux-redo D10: the one sentence on what unpublishing or
+  // narrowing the permission does to copies already installed — said in the
+  // 下架 confirm and in the share dialog's caption above, alike.
+  "skillHub.share.captionWithImpact": { "zh-TW": "{caption}{impact}", en: "{caption} {impact}" },
+  "skillHub.impact.installed": {
+    "zh-TW": "已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
+    en: "People who installed it keep their copy, which keeps working; whoever can no longer see this skill gets no later versions.",
+  },
+  "skillHub.unpublish.title": { "zh-TW": "下架「{name}」？", en: "Unpublish “{name}”?" },
+  "skillHub.unpublish.body": {
+    "zh-TW": "下架後只有你看得到它：別人搜尋不到，也不能再安裝。之後可以重新上架。",
+    en: "Once unpublished only you can see it: nobody else finds or installs it. You can republish it later.",
+  },
+  "skillHub.unpublish.confirm": { "zh-TW": "下架", en: "Unpublish" },
+  "skillHub.unpublished": {
+    "zh-TW": "已下架「{name}」，現在只有你看得到。",
+    en: "Unpublished “{name}” — only you can see it now.",
+  },
+  "skillHub.republished": { "zh-TW": "已重新上架「{name}」。", en: "Republished “{name}”." },
+  // plan-skill-hub-ux-redo D5: the skill page's header, tabs and sidebar.
+  "skillHub.manage": { "zh-TW": "管理", en: "Manage" },
+  "skillHub.tab.readme": { "zh-TW": "說明", en: "Overview" },
+  "skillHub.tab.files": { "zh-TW": "檔案（{count}）", en: "Files ({count})" },
+  "skillHub.tab.history": { "zh-TW": "版本紀錄", en: "Versions" },
+  "skillHub.tab.forks": { "zh-TW": "fork（{count}）", en: "Forks ({count})" },
+  "skillHub.side.permission": { "zh-TW": "權限", en: "Permissions" },
+  "skillHub.side.updated": { "zh-TW": "更新時間", en: "Updated" },
+  "skillHub.side.usage": { "zh-TW": "次數", en: "Usage" },
+  "skillHub.side.source": { "zh-TW": "來源 App", en: "Written in" },
+  "skillHub.installs.title": { "zh-TW": "你裝在這些 workspace", en: "Your workspaces with it" },
+  "skillHub.installs.none": {
+    "zh-TW": "你還沒有把它裝進任何 workspace。",
+    en: "You have not installed it in any workspace.",
+  },
+  // plan-skill-hub-ux-redo D6: the install dialog.
+  "skillHub.install": { "zh-TW": "安裝到 workspace…", en: "Install in a workspace…" },
+  "skillHub.install.title": { "zh-TW": "把「{name}」裝到哪個 workspace？", en: "Install “{name}” in which workspace?" },
+  "skillHub.install.app": { "zh-TW": "App", en: "App" },
+  "skillHub.install.items": { "zh-TW": "workspace", en: "Workspace" },
+  "skillHub.install.none": {
+    "zh-TW": "這個 App 裡沒有你能編輯的 workspace。",
+    en: "You can edit no workspace in this App.",
+  },
+  "skillHub.install.missing": {
+    "zh-TW": "這個 App 沒有它提到的工具：{tools}。裝了仍可用，只是用到這些工具的步驟做不到。",
+    en: "This App lacks tools it mentions: {tools}. It still installs; the steps that need them will not work.",
+  },
+  "skillHub.install.state.installed": { "zh-TW": "已經裝了", en: "Already installed" },
+  "skillHub.install.state.unavailable": {
+    "zh-TW": "現在讀不到這個 workspace，稍後再試",
+    en: "This workspace cannot be read right now — try again shortly",
+  },
+  "skillHub.install.state.taken": {
+    "zh-TW": "已有同名的 skill（{owner} 的）",
+    en: "Has a skill of that name ({owner}'s)",
+  },
+  "skillHub.install.state.takenHand": {
+    "zh-TW": "已有同名的資料夾",
+    en: "Has a folder of that name",
+  },
+  "skillHub.install.confirm": { "zh-TW": "安裝", en: "Install" },
+  "skillHub.install.done": { "zh-TW": "已裝進「{title}」", en: "Installed in “{title}”" },
+  "skillHub.install.open": { "zh-TW": "打開 workspace", en: "Open the workspace" },
+  // plan-skill-hub-ux-redo D16: gone is not a network error.
+  "skillHub.notFound": {
+    "zh-TW": "找不到這個 skill：它可能已刪除、已下架，或你沒有權限看。",
+    en: "This skill is not here: it may have been deleted or unpublished, or you may not have access.",
+  },
+  "skillHub.backToList": { "zh-TW": "回 skill hub", en: "Back to the skill hub" },
   "skillHub.transfer": { "zh-TW": "轉移 owner", en: "Transfer" },
   "skillHub.transfer.title": { "zh-TW": "把「{name}」轉給誰？", en: "Transfer “{name}” to whom?" },
   "skillHub.transfer.body": {
@@ -2253,8 +2350,8 @@ export const messages = {
   "skillHub.delete": { "zh-TW": "刪除", en: "Delete" },
   "skillHub.delete.title": { "zh-TW": "刪除「{name}」？", en: "Delete “{name}”?" },
   "skillHub.delete.body": {
-    "zh-TW": "刪除後不能復原。已裝的副本留在各自的 item 裡，但會顯示「原作已刪除」；同名重新發布會是新的 skill。",
-    en: "This cannot be undone. Installed copies stay in their items but will read “the original was deleted”; publishing the name again starts a new skill.",
+    "zh-TW": "刪除後不能復原。已裝的副本留在各自的 workspace 裡，但會顯示「原作已刪除」；同名重新發布會是新的 skill。",
+    en: "This cannot be undone. Installed copies stay in their workspaces but will read “the original was deleted”; publishing the name again starts a new skill.",
   },
   "skillHub.delete.confirm": { "zh-TW": "刪除", en: "Delete" },
   "skillHub.cancel": { "zh-TW": "取消", en: "Cancel" },
@@ -2268,55 +2365,51 @@ export const messages = {
   },
   "skillHub.transferred.private": {
     "zh-TW":
-      "已把「{name}」轉給 {owner}。它是已下架的條目，從現在起只有 {owner} 看得到。",
+      "已把「{name}」轉給 {owner}。它是已下架的 skill，從現在起只有 {owner} 看得到。",
     en: "“{name}” is {owner}'s now. It is unpublished, so from here on only {owner} can see it.",
   },
   "notice.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
   // The edit resolver's "new item" branch (plan P8): the source item cannot
   // take the edit, and the reason says why.
-  "skillHub.edit.newItem.title": { "zh-TW": "要開一個新的 item 來修改", en: "Edit in a new item" },
+  "skillHub.edit.newItem.title": { "zh-TW": "要開一個新的 workspace 來修改", en: "Edit in a new workspace" },
   "skillHub.edit.reason.closed": {
-    "zh-TW": "發布這個 skill 的 item 已經完成。",
-    en: "The item this skill was published from is closed.",
+    "zh-TW": "發布這個 skill 的 workspace 已經完成。",
+    en: "The workspace this skill was published from is closed.",
   },
   "skillHub.edit.reason.deleted": {
-    "zh-TW": "發布這個 skill 的 item 已經刪除。",
-    en: "The item this skill was published from was deleted.",
+    "zh-TW": "發布這個 skill 的 workspace 已經刪除。",
+    en: "The workspace this skill was published from was deleted.",
   },
   "skillHub.edit.reason.no_access": {
-    "zh-TW": "你已經進不去發布這個 skill 的 item。",
-    en: "You can no longer edit the item this skill was published from.",
+    "zh-TW": "你已經進不去發布這個 skill 的 workspace。",
+    en: "You can no longer edit the workspace this skill was published from.",
   },
   "skillHub.edit.newItem.how": {
-    "zh-TW": "開一個新的 {app} item，在 Skills 面板把這個 skill 裝進去修改，再從那裡重新發布——之後「修改」就會開那個新 item。",
-    en: "Create a new {app} item, install this skill from its Skills panel, edit, and publish from there — Edit will open that item from then on.",
+    "zh-TW": "開一個新的 {app} workspace，在 Skills 面板把這個 skill 裝進去修改，再從那裡重新發布——之後「修改」就會開那個新 workspace。",
+    en: "Create a new {app} workspace, install this skill from its Skills panel, edit, and publish from there — Edit will open that workspace from then on.",
   },
-  "skillHub.edit.newItem.go": { "zh-TW": "開新 item", en: "Create the item" },
+  "skillHub.edit.newItem.go": { "zh-TW": "開新 workspace", en: "Create the workspace" },
   // plan-skill-hub-history §8: the detail page's timeline. No internals on
   // screen — a version is named by when it was published, never by its id.
   "skillHub.history": { "zh-TW": "版本紀錄", en: "History" },
   "skillHub.history.current": { "zh-TW": "目前版本", en: "Current" },
   "skillHub.history.kind.publish": { "zh-TW": "發布", en: "Published" },
-  "skillHub.history.kind.rollback": {
-    "zh-TW": "回復到 {when} 的版本",
-    en: "Rolled back to the version of {when}",
-  },
+  // plan-skill-hub-ux-redo D8: a version is named `v N ・ date time`.
+  "skillHub.history.kind.rollback": { "zh-TW": "回復成 {version}", en: "Rolled back to {version}" },
+  "skillHub.history.showAll": { "zh-TW": "顯示全部（{count}）", en: "Show all ({count})" },
   "skillHub.history.kind.transfer": { "zh-TW": "轉移給 {owner}", en: "Transferred to {owner}" },
   "skillHub.history.audience": { "zh-TW": "開放給：{who}", en: "Open to: {who}" },
   "skillHub.history.audience.everyone": { "zh-TW": "所有人", en: "everyone" },
   "skillHub.history.audience.group": { "zh-TW": "一個群組", en: "a group" },
   "skillHub.history.kind.permission": {
-    "zh-TW": "可見範圍改為「{visibility}」",
-    en: "Visibility set to “{visibility}”",
+    "zh-TW": "權限設定改為「{visibility}」",
+    en: "Permissions set to “{visibility}”",
   },
   "skillHub.history.view": { "zh-TW": "查看", en: "View" },
   "skillHub.history.compare": { "zh-TW": "比對其他版本", en: "Compare with another version" },
   "skillHub.history.fork": { "zh-TW": "從這一版 fork", en: "Fork from this version" },
   "skillHub.history.rollback": { "zh-TW": "回復到這一版", en: "Roll back to this version" },
-  "skillHub.history.rollback.title": {
-    "zh-TW": "回復到 {when} 的版本？",
-    en: "Roll back to the version of {when}?",
-  },
+  "skillHub.history.rollback.title": { "zh-TW": "回復到 {version}？", en: "Roll back to {version}?" },
   "skillHub.history.rollback.body": {
     "zh-TW": "這一版會成為目前版本，裝過這個 skill 的人會看到「skill 已變更」。之後的版本仍留在紀錄裡，隨時可以再回復。",
     en: "This version becomes the current one; everyone who installed this skill sees “Skill changed”. Later versions stay in the history and can be brought back.",
@@ -2326,13 +2419,12 @@ export const messages = {
     "zh-TW": "版本剛被別人改過，請重新確認。",
     en: "The skill changed meanwhile — check the history again.",
   },
-  "skillHub.history.version.title": { "zh-TW": "{when} 的版本", en: "The version of {when}" },
-  "skillHub.history.diff.title": {
-    "zh-TW": "比對 {when} 的版本",
-    en: "Compare the version of {when}",
+  "skillHub.history.diff.title": { "zh-TW": "{from} → {to}", en: "{from} → {to}" },
+  "skillHub.history.diff.summary": {
+    "zh-TW": "新增 {added}／修改 {changed}／刪除 {removed}",
+    en: "{added} added / {changed} changed / {removed} removed",
   },
   "skillHub.history.diff.against": { "zh-TW": "和這一版比", en: "Compare with" },
-  "skillHub.history.notText": { "zh-TW": "不是文字檔", en: "Not a text file" },
   "skillHub.history.binaryChanged": {
     "zh-TW": "這個檔案不顯示逐行差異（不是文字檔，或檔案太大），只比對是否相同",
     en: "No line-by-line difference for this file (not text, or too large) — compared only for being the same",
@@ -2342,41 +2434,38 @@ export const messages = {
   "skillHub.history.status.removed": { "zh-TW": "刪除", en: "Removed" },
   "skillHub.history.status.changed": { "zh-TW": "修改", en: "Changed" },
   "skillHub.history.close": { "zh-TW": "關閉", en: "Close" },
-  "skillHub.history.fork.title": {
-    "zh-TW": "從 {when} 的版本 fork",
-    en: "Fork from the version of {when}",
-  },
+  "skillHub.history.fork.title": { "zh-TW": "從 {version} fork", en: "Fork from {version}" },
   "skillHub.history.fork.body": {
-    "zh-TW": "這一版會複製進你選的 item，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
-    en: "This version is copied into the item you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there: someone else's skill becomes your fork, your own becomes its next version.",
+    "zh-TW": "這一版會複製進你選的 workspace，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
+    en: "This version is copied into the workspace you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there: someone else's skill becomes your fork, your own becomes its next version.",
   },
   "skillHub.history.fork.app": { "zh-TW": "App", en: "App" },
-  "skillHub.history.fork.items": { "zh-TW": "複製進哪個 item", en: "Copy into which item" },
+  "skillHub.history.fork.items": { "zh-TW": "複製進哪個 workspace", en: "Copy into which workspace" },
   "skillHub.history.fork.noItems": {
-    "zh-TW": "這個 App 裡還沒有你看得到的 item。",
-    en: "No items you can see in this App yet.",
+    "zh-TW": "這個 App 裡還沒有你看得到的 workspace。",
+    en: "No workspaces you can see in this App yet.",
   },
-  "skillHub.history.fork.confirm": { "zh-TW": "複製進這個 item", en: "Copy into this item" },
+  "skillHub.history.fork.confirm": { "zh-TW": "複製進這個 workspace", en: "Copy into this workspace" },
   "skillHub.history.fork.done": {
     "zh-TW": "已複製「{name}」，下一輪就能用。",
     en: "Copied “{name}” — usable from the next turn.",
   },
-  "skillHub.history.fork.open": { "zh-TW": "打開 item", en: "Open the item" },
+  "skillHub.history.fork.open": { "zh-TW": "打開 workspace", en: "Open the workspace" },
   // plan-skill-hub-ui-polish D11: the new-item form, opened from a hub entry.
   "newItem.skillHint": {
-    "zh-TW": "建好後，到「技能」面板把 {skill} 裝進來再修改。",
+    "zh-TW": "建好後，到「Skills」面板把 {skill} 裝進來再修改。",
     en: "Once it exists, install {skill} from its Skills panel and edit it there.",
   },
   "newItem.skillHint.this": { "zh-TW": "這個 skill", en: "this skill" },
   // The routes' coded refusals (plan-skill-hub-ui-polish D16), worded by
   // `lib/skillHubRefusal.ts`.
   "skillHub.refused.not_found": {
-    "zh-TW": "找不到這個 skill hub 條目。",
-    en: "No such skill hub entry.",
+    "zh-TW": "找不到這個 skill。",
+    en: "No such skill.",
   },
   "skillHub.refused.owner_only": {
-    "zh-TW": "只有 owner 能管理這個條目。",
-    en: "Only the owner may manage this entry.",
+    "zh-TW": "只有 owner 能管理這個 skill。",
+    en: "Only the owner may manage this skill.",
   },
   "skillHub.refused.transfer_owner_required": {
     "zh-TW": "轉移要指定另一個人。",
@@ -2388,22 +2477,23 @@ export const messages = {
   },
   "skillHub.refused.folder_in_the_way": {
     "zh-TW":
-      "這個 workspace 已經有 {path}，先把那個資料夾刪掉或改名，再裝一次。",
-    en: "This workspace already has {path} — remove or rename that folder first, then install again.",
+      "這個 workspace 已經有叫「{name}」的 skill，先把它刪掉或改名，再裝一次。",
+    en: "This workspace already has a skill named “{name}” — remove or rename it first, then install again.",
   },
   "skillHub.refused.folder_in_the_way.theirs": {
     "zh-TW":
-      "這個 workspace 已經有 {owner} 的 {path}，先把那個資料夾刪掉或改名，再裝一次。",
-    en: "This workspace already has {owner}'s {path} — remove or rename that folder first, then install again.",
+      "這個 workspace 已經有 {owner} 的「{name}」，先把它刪掉或改名，再裝一次。",
+    en: "This workspace already has {owner}'s “{name}” — remove or rename it first, then install again.",
   },
   "skillHub.failed": { "zh-TW": "沒有成功：{reason}", en: "That didn't work: {reason}" },
   // The Skills panel's two skill hub buttons (plan D2: the actions live in the item).
   "skills.fromHub": { "zh-TW": "從 skill hub 裝", en: "Install from the skill hub" },
+  "skills.fromHub.back": { "zh-TW": "返回", en: "Back" },
   // plan-skill-hub-ui-polish D6: one sentence, then the link on a line of
   // its own; the button is a verb; the warning names what is missing first.
   "skills.fromHub.intro": {
-    "zh-TW": "裝別人發布的 skill 進這個 item；缺這個 App 沒有的 tool 時會先告訴你。",
-    en: "Install a skill someone published into this item; when it needs a tool this App does not have, the row says so first.",
+    "zh-TW": "裝別人發布的 skill 進這個 workspace；缺這個 App 沒有的 tool 時會先告訴你。",
+    en: "Install a skill someone published into this workspace; when it needs a tool this App does not have, the row says so first.",
   },
   "skills.fromHub.browse": { "zh-TW": "到 skill hub 看全部 →",
     en: "Browse the skill hub →", },
@@ -2442,8 +2532,8 @@ export const messages = {
   "export.kind.md": { "zh-TW": "文字 Markdown", en: "Text (Markdown)" },
   "export.kind.video": { "zh-TW": "影片", en: "Video" },
   "export.kind.video.locked": {
-    "zh-TW": "做影片需要這個項目的「讀取檔案」與「新增檔案」權限。",
-    en: "Making a video needs read + add file access to this item.",
+    "zh-TW": "做影片需要這個 workspace 的「讀取檔案」與「新增檔案」權限。",
+    en: "Making a video needs read + add file access to this workspace.",
   },
   "export.range": { "zh-TW": "範圍", en: "Range" },
   "export.range.all": { "zh-TW": "全部（{n} 則）", en: "All ({n} messages)" },

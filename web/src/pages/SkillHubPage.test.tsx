@@ -1,14 +1,16 @@
 // @vitest-environment happy-dom
 /**
- * The skill hub list (`docs/plan-skill-hub.md`): roots with forks beneath,
- * search + 「我的」 as SERVER parameters, and the two empty states.
+ * The skill hub list (docs/plan-skill-hub-ux-redo.md D1/D2/D4/D15/D17): one
+ * compact row per skill, originals only while browsing, search / 「我的」 /
+ * owner / sort as SERVER parameters kept in the address, a page of 50 with
+ * 「載入更多」 and the total, and the empty states.
  */
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { SkillHubApi, SkillHubCard } from "../api/skillHub";
+import type { SkillHubCard, SkillHubListing } from "../api/skillHub";
 
 vi.mock("../api", () => ({
   api: {
@@ -24,6 +26,7 @@ vi.mock("../api", () => ({
 import { translate } from "../lib/i18n";
 import { makeQueryClient } from "../api/queryClient";
 import { QueryWrap } from "../test/queryWrapper";
+import { fakeSkillHub, hubCard as card, matching } from "../test/skillHubFake";
 import { SkillHubPage } from "./SkillHubPage";
 
 const word = (
@@ -31,133 +34,112 @@ const word = (
   vars?: Record<string, string | number>,
 ) => translate("zh-TW", key, vars);
 
-const card = (over: Partial<SkillHubCard>): SkillHubCard => ({
-  id: "e-root",
-  owner: "alice",
-  name: "triage-reflow",
-  description: "Triage reflow defects.",
-  source_app: "rca",
-  referenced_tools: ["exec"],
-  forked_from: "",
-  review_verdict: "ok",
-  is_mine: false,
-  missing_tools: [],
-  installs: 0,
-  uses: 0,
-  forks: [],
-  ...over,
-});
-
-const ROOT_WITH_FORK = card({
-  forks: [card({ id: "e-fork", owner: "bob", forked_from: "e-root", review_verdict: "notes" })],
+const ROOT = card({});
+const FORK = card({
+  id: "e-fork",
+  owner: "bob",
+  forked_from: "e-root",
+  origin: { owner: "alice", name: "triage-reflow" },
+  review_verdict: "notes",
 });
 const OTHER = card({ id: "e-other", owner: "carol", name: "deck-maker", description: "Slides." });
 
-function client(entries: SkillHubCard[] = [ROOT_WITH_FORK, OTHER], since = "2026-10-07") {
-  // The server's shape (`nest_forks`): a hit nests under its root only when
-  // the root is a hit too; otherwise it is a root of its own — so 「我的」
-  // lifts a fork of somebody else's entry out to the top level.
-  const hit = (e: SkillHubCard, q: string, mine: boolean) =>
-    (!mine || e.is_mine) &&
-    (!q ||
-      e.name.includes(q.toLowerCase()) ||
-      e.description.toLowerCase().includes(q.toLowerCase()));
-  const list = vi.fn<SkillHubApi["list"]>(async (q = "", mine = false) => {
-    const roots = entries
-      .filter((e) => hit(e, q, mine))
-      .map((e) => ({ ...e, forks: e.forks.filter((f) => hit(f, q, mine)) }));
-    const lifted = entries
-      .filter((e) => !hit(e, q, mine))
-      .flatMap((e) => e.forks.filter((f) => hit(f, q, mine)))
-      .map((f) => ({ ...f, forks: [] }));
-    return [...roots, ...lifted];
-  });
-  // The page's own listing: the same rows, plus the day counting began. A
-  // popular sort is the server's (uses, then installs; name order on ties).
-  const browse = vi.fn<SkillHubApi["browse"]>(async (q = "", mine = false, sort = "name") => {
-    const rows = await list(q, mine);
-    if (sort === "popular") rows.sort((a, b) => b.uses - a.uses || b.installs - a.installs);
-    return { entries: rows, counted_since: since };
-  });
-  return {
-    list,
-    browse,
-    get: vi.fn<SkillHubApi["get"]>(),
-    install: vi.fn<SkillHubApi["install"]>(),
-    unpublish: vi.fn<SkillHubApi["unpublish"]>(),
-    republish: vi.fn<SkillHubApi["republish"]>(),
-    setPermission: vi.fn<SkillHubApi["setPermission"]>(),
-    remove: vi.fn<SkillHubApi["remove"]>(),
-    transfer: vi.fn<SkillHubApi["transfer"]>(),
-    edit: vi.fn<SkillHubApi["edit"]>(),
-    history: vi.fn<SkillHubApi["history"]>(async () => []),
-    version: vi.fn<SkillHubApi["version"]>(),
-    versionFile: vi.fn<SkillHubApi["versionFile"]>(),
-    diff: vi.fn<SkillHubApi["diff"]>(async () => []),
-    rollback: vi.fn<SkillHubApi["rollback"]>(),
-    fork: vi.fn<SkillHubApi["fork"]>(),
-  } satisfies SkillHubApi;
+const client = (entries: SkillHubCard[] = [ROOT, FORK, OTHER], since = "2026-10-07") =>
+  fakeSkillHub(entries, since);
+
+/** What the address says, for the tests that check the filters live there. */
+let where = "";
+function Spy() {
+  const loc = useLocation();
+  where = loc.search;
+  return null;
 }
 
-function Wrap({ children }: { children: React.ReactNode }) {
+function Wrap({ children, at = "/skill-hub" }: { children: React.ReactNode; at?: string }) {
   return (
-    <MemoryRouter>
-      <QueryWrap>{children}</QueryWrap>
+    <MemoryRouter initialEntries={[at]}>
+      <QueryWrap>
+        {children}
+        <Spy />
+      </QueryWrap>
     </MemoryRouter>
   );
 }
 
+const answer = (entries: SkillHubCard[], query = {}): SkillHubListing => {
+  const rows = matching(entries, query);
+  return { entries: rows, total: rows.length, counted_since: "2026-10-07" };
+};
+
 afterEach(cleanup);
 
 describe("SkillHubPage", () => {
-  it("lists roots with their forks nested beneath, each linking to its page", async () => {
+  it("lists originals only, one row each, and says how many forks an original has (D1, D2)", async () => {
     render(<SkillHubPage client={client()} />, { wrapper: Wrap });
 
     const root = await screen.findByTestId("entry-e-root");
-    const fork = within(root).getByTestId("entry-e-fork");
-    expect(fork).toHaveAttribute("data-fork", "true");
-    expect(within(root).getByRole("link", { name: /alice\/\s*triage-reflow/ })).toHaveAttribute(
+    expect(screen.queryByTestId("entry-e-fork")).toBeNull();
+    expect(within(root).getByRole("link", { name: "triage-reflow" })).toHaveAttribute(
       "href",
       "/skill-hub/e-root",
     );
-    expect(within(fork).getByRole("link", { name: /bob\/\s*triage-reflow/ })).toHaveAttribute(
+    // The fork count is a link to the original's fork tab (D15).
+    expect(within(root).getByRole("link", { name: word("skillHub.fork.one") })).toHaveAttribute(
       "href",
-      "/skill-hub/e-fork",
+      "/skill-hub/e-root?tab=forks",
     );
-    // The root says how many forks it has; the fork says whose it is.
-    expect(within(root).getByText(word("skillHub.fork.one"))).toBeInTheDocument();
-    expect(within(fork).getByText(
-        word("skillHub.forkOf", { origin: "alice/triage-reflow" }),
-      ),).toBeInTheDocument();
-    // The other root is NOT under the first.
-    expect(within(root).queryByTestId("entry-e-other")).toBeNull();
-    expect(screen.getByTestId("entry-e-other")).toBeInTheDocument();
+    // The owner is said once, not as an `owner/` prefix beside a chip as well.
+    expect(within(root).queryByText("alice/")).toBeNull();
+    // No App tag on a row: it said the same thing on every row (D15).
+    expect(within(root).queryByText("根因分析")).toBeNull();
   });
 
-  it("shows each card's installs and uses, since when they were counted (plan-skill-hub-history U6)", async () => {
+  it("says the total and pages fifty at a time with 「載入更多」 (D4)", async () => {
+    const many = Array.from({ length: 51 }, (_, n) =>
+      card({ id: `e-${String(n).padStart(2, "0")}`, name: `s${String(n).padStart(2, "0")}` }),
+    );
+    const c = client(many);
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+
+    await screen.findByTestId("entry-e-49");
+    expect(screen.queryByTestId("entry-e-50")).toBeNull();
+    expect(screen.getByText(word("skillHub.total", { count: 51 }))).toBeInTheDocument();
+    expect(screen.getByText(word("skillHub.shown", { shown: 50, total: 51 }))).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.loadMore") }));
+
+    expect(await screen.findByTestId("entry-e-50")).toBeInTheDocument();
+    expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 50 }));
+    expect(screen.queryByRole("button", { name: word("skillHub.loadMore") })).toBeNull();
+    expect(screen.getByTestId("entry-e-00")).toBeInTheDocument(); // added to, not replaced
+  });
+
+  it("shows counts only when there are some, and since when they were counted (D17, U6)", async () => {
     const busy = card({ id: "e-busy", name: "busy", installs: 3, uses: 12 });
-    const forked = card({
-      id: "e-root2",
-      name: "rooted",
-      installs: 1,
-      uses: 0,
-      forks: [card({ id: "e-f2", owner: "bob", forked_from: "e-root2", installs: 0, uses: 5 })],
-    });
-    render(<SkillHubPage client={client([busy, forked])} />, { wrapper: Wrap });
+    const quiet = card({ id: "e-quiet", name: "quiet" });
+    render(<SkillHubPage client={client([busy, quiet])} />, { wrapper: Wrap });
 
     const row = await screen.findByTestId("entry-e-busy");
     expect(
-      within(row).getByText(word("skillHub.counts", { installs: 3, uses: 12 })),
+      within(row).getByText(
+        `${word("skillHub.counts.installs", { count: 3 })} · ${word("skillHub.counts.uses", { count: 12 })}`,
+      ),
     ).toBeInTheDocument();
-    // A fork counts its own.
-    const fork = screen.getByTestId("entry-e-f2");
-    expect(
-      within(fork).getByText(word("skillHub.counts", { installs: 0, uses: 5 })),
-    ).toBeInTheDocument();
-    expect(screen.getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
+    expect(within(screen.getByTestId("entry-e-quiet")).queryByText(/安裝 0 次/)).toBeNull();
+    expect(screen.getByText(word("skillHub.countedSince.list", { day: "2026-10-07" }))).toBeInTheDocument();
   });
 
-  it("opening the page sends one listing request, not one per query", async () => {
+  it("shows when a skill's content was last updated, and nothing for one with no date", async () => {
+    const dated = card({ id: "e-dated", name: "dated", updated_at: "2026-10-02T09:00:00Z" });
+    const undated = card({ id: "e-undated", name: "undated" });
+    render(<SkillHubPage client={client([dated, undated])} />, { wrapper: Wrap });
+
+    const row = await screen.findByTestId("entry-e-dated");
+    expect(within(row).getByText(word("skillHub.updated", { day: "2026/10/02" }))).toBeInTheDocument();
+    expect(within(screen.getByTestId("entry-e-undated")).queryByText(/更新/)).toBeNull();
+  });
+
+  it("opening the page sends one listing request", async () => {
     const c = client();
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-root");
@@ -167,39 +149,143 @@ describe("SkillHubPage", () => {
   it("says nothing about since when before anything was counted", async () => {
     render(<SkillHubPage client={client([OTHER], "")} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-other");
-    expect(screen.queryByText(word("skillHub.countedSince", { day: "" }))).toBeNull();
     expect(screen.queryByText(/自 .* 起|since/)).toBeNull();
   });
 
-  it("sorts by most used on request — name order stays the default (U6)", async () => {
-    const quiet = card({ id: "e-a", name: "aaa", uses: 1 });
-    const busy = card({ id: "e-z", name: "zzz", uses: 9 });
+  it("sorts by name, most used or recently updated — a labelled choice kept in the address (D4)", async () => {
+    const quiet = card({ id: "e-a", name: "aaa", uses: 1, updated_at: "2026-10-03T00:00:00Z" });
+    const busy = card({ id: "e-z", name: "zzz", uses: 9, updated_at: "2026-10-01T00:00:00Z" });
     const c = client([quiet, busy]);
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-a");
     const order = () =>
       screen.getAllByTestId(/^entry-e-[az]$/).map((el) => el.getAttribute("data-testid"));
     expect(order()).toEqual(["entry-e-a", "entry-e-z"]);
-    expect(c.browse).toHaveBeenLastCalledWith("", false, "name");
 
-    fireEvent.click(screen.getByRole("button", { name: word("skillHub.sort.popular") }));
-
-    await waitFor(() => expect(c.browse).toHaveBeenLastCalledWith("", false, "popular"));
+    const sort = screen.getByRole("combobox", { name: word("skillHub.sort") });
+    fireEvent.change(sort, { target: { value: "popular" } });
     await waitFor(() => expect(order()).toEqual(["entry-e-z", "entry-e-a"]));
+    expect(where).toContain("sort=popular");
+
+    fireEvent.change(sort, { target: { value: "updated" } });
+    await waitFor(() =>
+      expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "updated" })),
+    );
+    await waitFor(() => expect(order()).toEqual(["entry-e-a", "entry-e-z"]));
   });
 
-  it("sends the search to the server, debounced, and 「我的」 as a parameter", async () => {
+  it("restores the filters from the address — Back to the list lands where you were (D4)", async () => {
+    const c = client();
+    render(
+      <Wrap at="/skill-hub?q=deck&sort=popular">
+        <SkillHubPage client={c} />
+      </Wrap>,
+    );
+    await screen.findByTestId("entry-e-other");
+    expect(c.browse).toHaveBeenCalledWith(expect.objectContaining({ q: "deck", sort: "popular" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("deck");
+  });
+
+  it("a search lists forks beside originals, each saying what it was forked from (D2)", async () => {
     const c = client();
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-root");
 
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "deck" } });
-    await waitFor(() => expect(c.list).toHaveBeenCalledWith("deck", false));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "triage" } });
+
+    const fork = await screen.findByTestId("entry-e-fork");
+    expect(
+      within(fork).getByText(word("skillHub.forkOf.named", { owner: "Alice Wu", name: "triage-reflow" })),
+    ).toBeInTheDocument();
+    expect(where).toContain("q=triage");
+  });
+
+  it("a fork whose original the viewer cannot read says only that (D2)", async () => {
+    const orphan = card({ id: "e-orphan", owner: "me", forked_from: "e-gone", is_mine: true });
+    render(<SkillHubPage client={client([orphan])} />, { wrapper: Wrap });
+
+    const row = await screen.findByTestId("entry-e-orphan");
+    expect(within(row).getByText(word("skillHub.forkOf.gone"))).toBeInTheDocument();
+  });
+
+  it("「我的」 and an owner are server parameters; an owner's name on a row filters to them (D4)", async () => {
+    const c = client();
+    render(<SkillHubPage client={c} />, { wrapper: Wrap });
+    const other = await screen.findByTestId("entry-e-other");
+
+    fireEvent.click(within(other).getByRole("link", { name: word("skillHub.owner.only", { name: "carol" }) }));
+
+    await waitFor(() =>
+      expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ owner: "carol" })),
+    );
     await waitFor(() => expect(screen.queryByTestId("entry-e-root")).toBeNull());
-    expect(screen.getByTestId("entry-e-other")).toBeInTheDocument();
+    expect(where).toContain("owner=carol");
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.owner.clear") }));
+    expect(await screen.findByTestId("entry-e-root")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: word("skillHub.mine") }));
-    await waitFor(() => expect(c.list).toHaveBeenCalledWith("deck", true));
+    await waitFor(() =>
+      expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ mine: true })),
+    );
+  });
+
+  it("the owner link keeps the other filters in its address and opens in a new tab on a modified click", async () => {
+    const c = client();
+    render(
+      <Wrap at="/skill-hub?sort=popular">
+        <SkillHubPage client={c} />
+      </Wrap>,
+    );
+    const other = await screen.findByTestId("entry-e-other");
+    const link = within(other).getByRole("link", { name: word("skillHub.owner.only", { name: "carol" }) });
+    expect(link.getAttribute("href")).toContain("sort=popular");
+    expect(link.getAttribute("href")).toContain("owner=carol");
+    // A ctrl/cmd/middle click is the browser's: not prevented, no filter here.
+    expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);
+    expect(c.browse).not.toHaveBeenCalledWith(expect.objectContaining({ owner: "carol" }));
+  });
+
+  it("follows the address when ?q= changes under it", async () => {
+    render(
+      <Wrap>
+        <SkillHubPage client={client()} />
+        <Link to="/skill-hub?q=deck">go</Link>
+      </Wrap>,
+    );
+    await screen.findByTestId("entry-e-root");
+    fireEvent.click(screen.getByRole("link", { name: "go" }));
+    await waitFor(() => expect(screen.getByRole("searchbox")).toHaveValue("deck"));
+  });
+
+  it("a fork names its original's owner as people know them", async () => {
+    render(<SkillHubPage client={client()} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-root");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "triage" } });
+    const fork = await screen.findByTestId("entry-e-fork");
+    expect(
+      within(fork).getByText(word("skillHub.forkOf.named", { owner: "Alice Wu", name: "triage-reflow" })),
+    ).toBeInTheDocument();
+  });
+
+  it("says only the counts that are not zero (D17)", async () => {
+    render(<SkillHubPage client={client([card({ id: "e-i", installs: 3, uses: 0 })])} />, {
+      wrapper: Wrap,
+    });
+    const row = await screen.findByTestId("entry-e-i");
+    expect(within(row).getByText(word("skillHub.counts.installs", { count: 3 }))).toBeInTheDocument();
+    expect(within(row).queryByText(/使用 0 次/)).toBeNull();
+  });
+
+  it("when a search finds nothing, says what was searched and offers to clear it (D17)", async () => {
+    render(<SkillHubPage client={client()} />, { wrapper: Wrap });
+    await screen.findByTestId("entry-e-root");
+
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "zzz" } });
+
+    expect(await screen.findByText(word("skillHub.noMatch.query", { q: "zzz" }))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: word("skillHub.clearSearch") }));
+    expect(await screen.findByTestId("entry-e-root")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("");
   });
 
   it("keeps the search box mounted and focused while a new query is fetched (plan-skill-hub-ui-polish D2)", async () => {
@@ -209,17 +295,12 @@ describe("SkillHubPage", () => {
     // what loads; the controls stay, holding the previous list meanwhile.
     const c = client();
     let release: (() => void) | undefined;
-    c.list.mockImplementation(
-      (q = "", mine = false) =>
-        new Promise<SkillHubCard[]>((resolve) => {
-          const answer = () =>
-            resolve(
-              [ROOT_WITH_FORK, OTHER].filter(
-                (e) => (!mine || e.is_mine) && (!q || e.name.includes(q)),
-              ),
-            );
-          if (!q && !mine) answer();
-          else release = answer; // the search is answered only when the test says
+    c.browse.mockImplementation(
+      (query) =>
+        new Promise<SkillHubListing>((resolve) => {
+          const reply = () => resolve(answer([ROOT, FORK, OTHER], query));
+          if (!query.q) reply();
+          else release = reply; // the search is answered only when the test says
         }),
     );
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
@@ -227,7 +308,9 @@ describe("SkillHubPage", () => {
     const box = screen.getByRole("searchbox");
     box.focus();
     fireEvent.change(box, { target: { value: "deck" } });
-    await waitFor(() => expect(c.list).toHaveBeenCalledWith("deck", false));
+    await waitFor(() =>
+      expect(c.browse).toHaveBeenCalledWith(expect.objectContaining({ q: "deck" })),
+    );
 
     // mid-fetch: same node, still focused, previous rows still there — and
     // the results area SAYS it is loading (review round 1: nothing did).
@@ -258,9 +341,9 @@ describe("SkillHubPage", () => {
     // (no result, no error yet) gets the whole-tree line.
     const c = client();
     let first = true;
-    c.list.mockImplementation(
+    c.browse.mockImplementation(
       () =>
-        new Promise<SkillHubCard[]>((_resolve, reject) => {
+        new Promise<SkillHubListing>((_resolve, reject) => {
           if (first) {
             first = false;
             reject(new Error("boom"));
@@ -272,7 +355,7 @@ describe("SkillHubPage", () => {
     const box = screen.getByRole("searchbox");
     fireEvent.click(within(alert).getByRole("button", { name: word("skillHub.retry") }));
 
-    await waitFor(() => expect(c.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(c.browse).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("searchbox")).toBe(box);
     expect(screen.getByTestId("skill-hub-results")).toHaveTextContent(word("skillHub.loading"));
   });
@@ -285,9 +368,9 @@ describe("SkillHubPage", () => {
     // state of the results area.
     const c = client();
     let first = true;
-    c.list.mockImplementation(
+    c.browse.mockImplementation(
       () =>
-        new Promise<SkillHubCard[]>((_resolve, reject) => {
+        new Promise<SkillHubListing>((_resolve, reject) => {
           if (first) {
             first = false;
             reject(new Error("boom"));
@@ -299,7 +382,9 @@ describe("SkillHubPage", () => {
     const box = screen.getByRole("searchbox");
     fireEvent.change(box, { target: { value: "x" } });
 
-    await waitFor(() => expect(c.list).toHaveBeenCalledWith("x", false));
+    await waitFor(() =>
+      expect(c.browse).toHaveBeenCalledWith(expect.objectContaining({ q: "x" })),
+    );
     expect(screen.getByRole("searchbox")).toBe(box);
     expect(screen.getByTestId("skill-hub-results")).toHaveTextContent(word("skillHub.loading"));
   });
@@ -318,7 +403,7 @@ describe("SkillHubPage", () => {
       </MemoryRouter>,
     );
     await screen.findByText(word("skillHub.empty"));
-    c.list.mockRejectedValue(new Error("boom"));
+    c.browse.mockRejectedValue(new Error("boom"));
     await qc.invalidateQueries({ queryKey: ["skillHub"] });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(word("skillHub.error"));
@@ -327,9 +412,9 @@ describe("SkillHubPage", () => {
 
   it("keeps the search box and the tools when a search fails — the error and Retry sit in the results area (D2, review round 1)", async () => {
     const c = client();
-    c.list.mockImplementation(async (q = "") => {
-      if (q) throw new Error("boom");
-      return [ROOT_WITH_FORK, OTHER];
+    c.browse.mockImplementation(async (query) => {
+      if (query.q) throw new Error("boom");
+      return answer([ROOT, FORK, OTHER]);
     });
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
     await screen.findByTestId("entry-e-root");
@@ -339,58 +424,13 @@ describe("SkillHubPage", () => {
     const alert = await screen.findByRole("alert");
     expect(screen.getByRole("searchbox")).toBe(box);
     expect(screen.getByTestId("skill-hub-results")).toContainElement(alert);
-    const calls = c.list.mock.calls.length;
+    const calls = c.browse.mock.calls.length;
     fireEvent.click(
       within(alert).getByRole("button", { name: word("skillHub.retry") }),
     );
     await waitFor(() =>
-      expect(c.list.mock.calls.length).toBeGreaterThan(calls),
+      expect(c.browse.mock.calls.length).toBeGreaterThan(calls),
     );
-  });
-
-  it("does not badge an entry for having review notes — every entry was reviewed (D7)", async () => {
-    render(<SkillHubPage client={client()} />, { wrapper: Wrap });
-    const fork = await screen.findByTestId("entry-e-fork"); // review_verdict: notes
-    expect(within(fork).queryByText("有審查意見")).toBeNull();
-    expect(screen.queryByText("有審查意見")).toBeNull();
-  });
-
-  it("says where a fork came from on its own card, in 「我的」 too, where its root is out of view (D9)", async () => {
-    const mine = card({
-      id: "e-mine-fork",
-      owner: "me",
-      name: "triage-reflow",
-      forked_from: "e-root",
-      is_mine: true,
-    });
-    const gone = card({
-      id: "e-orphan",
-      owner: "me",
-      name: "old-fork",
-      forked_from: "e-vanished",
-      is_mine: true,
-    });
-    const c = client([card({ forks: [mine] }), gone]);
-    render(<SkillHubPage client={c} />, { wrapper: Wrap });
-    await screen.findByTestId("entry-e-mine-fork");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: word("skillHub.mine") }),
-    );
-    // …and only once the mine-only list has landed (the root card gone): the
-    // previous list is kept on screen meanwhile, and asserting on it would
-    // pass with the root right there.
-    await waitFor(() =>
-      expect(screen.queryByTestId("entry-e-root")).toBeNull(),
-    );
-    const row = screen.getByTestId("entry-e-mine-fork");
-    expect(
-      within(row).getByText(/fork 自 alice\/triage-reflow/),
-    ).toBeInTheDocument();
-    const orphan = screen.getByTestId("entry-e-orphan");
-    expect(
-      within(orphan).getByText(word("skillHub.forkOf.gone")),
-    ).toBeInTheDocument();
   });
 
   it("shows the notice a navigation handed it, as a status the person can dismiss (D10)", async () => {
@@ -459,16 +499,6 @@ describe("SkillHubPage", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("says so when nothing matches, and keeps the tools", async () => {
-    render(<SkillHubPage client={client()} />, { wrapper: Wrap });
-    await screen.findByTestId("entry-e-root");
-
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "zzz" } });
-
-    expect(await screen.findByText(word("skillHub.noMatch"))).toBeInTheDocument();
-    expect(screen.getByRole("searchbox")).toBeInTheDocument();
-  });
-
   it("shows the empty state, without tools, when nobody has published anything", async () => {
     render(<SkillHubPage client={client([])} />, { wrapper: Wrap });
 
@@ -478,7 +508,7 @@ describe("SkillHubPage", () => {
 
   it("offers a retry when the listing cannot be read", async () => {
     const c = client();
-    c.list.mockRejectedValueOnce(new Error("boom"));
+    c.browse.mockRejectedValueOnce(new Error("boom"));
     render(<SkillHubPage client={c} />, { wrapper: Wrap });
 
     const alert = await screen.findByRole("alert");

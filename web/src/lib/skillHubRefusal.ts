@@ -30,13 +30,12 @@ export function describeRefusal(
     const owner = str(d.owner);
     if (e.code === "folder_in_the_way") {
       // Whose copy is in the way, when it is one — "already have it" and
-      // "name clash" read differently.
+      // "name clash" read differently. Named as the skill the person sees in
+      // their Skills panel, not as the hidden folder `.skill/<name>/` (D17).
+      const name = str(d.path).replace(/^\.skill\//, "").replace(/\/$/, "");
       return owner
-        ? t("skillHub.refused.folder_in_the_way.theirs", {
-            owner,
-            path: str(d.path),
-          })
-        : t(KEY[e.code], { path: str(d.path) });
+        ? t("skillHub.refused.folder_in_the_way.theirs", { owner, name })
+        : t(KEY[e.code], { name });
     }
     return t(KEY[e.code], { owner, name: str(d.name) });
   }

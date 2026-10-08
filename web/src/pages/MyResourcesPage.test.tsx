@@ -406,7 +406,7 @@ describe("MyResourcesPage", () => {
       wrapper: Wrap,
     });
     expect(await screen.findByText(/目前沒有執行中的沙盒/)).toBeTruthy();
-    expect(screen.getByText(/還沒有任何項目佔用空間/)).toBeTruthy();
+    expect(screen.getByText(/還沒有任何 workspace 佔用空間/)).toBeTruthy();
   });
 });
 

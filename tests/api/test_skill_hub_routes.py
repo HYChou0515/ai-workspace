@@ -13,6 +13,8 @@ you may not read is 404, the same 404 as one that never existed).
 
 from __future__ import annotations
 
+import datetime as dt
+
 import msgspec
 import pytest
 
@@ -68,23 +70,102 @@ def _private(harness: Harness, entry_id: str) -> None:
 # ── list ─────────────────────────────────────────────────────────────────────
 
 
-async def test_the_list_nests_forks_under_their_root_and_hides_what_the_viewer_cannot_read(
+async def test_browsing_lists_only_originals_with_their_fork_count_and_hides_the_unreadable(
     harness: Harness,
 ):
+    """plan-skill-hub-ux-redo D2: browsing shows originals; a fork is a count
+    on its original's row (GitHub's repo list), not a nested card."""
     hub = _hub(harness)
     root = await _entry(hub, "alice", "triage")
     fork = await _entry(hub, "bob", "triage", forked_from=root)
+    await _entry(hub, "carol", "triage", forked_from=fork)  # a fork of a fork
     hidden = await _entry(hub, "alice", "hidden")
     _private(harness, hidden)
 
     res = harness.client.get("/skill-hub/entries")
 
     assert res.status_code == 200, res.text
-    entries = res.json()["entries"]
-    assert [e["id"] for e in entries] == [root]
-    assert [f["id"] for f in entries[0]["forks"]] == [fork]
-    assert entries[0]["forks"][0]["forked_from"] == root
+    body = res.json()
+    assert [e["id"] for e in body["entries"]] == [root]
+    assert body["entries"][0]["fork_count"] == 1, "direct forks only"
+    assert "forks" not in body["entries"][0]
+    assert body["total"] == 1
     assert hidden not in res.text
+
+
+async def test_a_search_lists_forks_beside_originals_each_saying_what_it_was_forked_from(
+    harness: Harness,
+):
+    hub = _hub(harness)
+    root = await _entry(hub, "alice", "triage")
+    fork = await _entry(hub, "bob", "triage", forked_from=root)
+
+    hits = harness.client.get("/skill-hub/entries", params={"q": "triage"}).json()
+
+    by_id = {e["id"]: e for e in hits["entries"]}
+    assert set(by_id) == {root, fork}
+    assert by_id[fork]["forked_from"] == root and by_id[root]["forked_from"] == ""
+    assert by_id[fork]["origin"] == {"owner": "alice", "name": "triage"}
+    assert by_id[root]["origin"] is None
+    assert by_id[root]["fork_count"] == 1
+    assert hits["total"] == 2
+
+
+async def test_the_owner_filter_lists_that_owners_skills_forks_included(harness: Harness):
+    hub = _hub(harness)
+    root = await _entry(hub, "alice", "triage")
+    fork = await _entry(hub, "bob", "triage", forked_from=root)
+    bobs = await _entry(hub, "bob", "deck")
+
+    listed = harness.client.get("/skill-hub/entries", params={"owner": "bob"}).json()
+
+    assert [e["id"] for e in listed["entries"]] == [bobs, fork]
+    assert listed["total"] == 2
+
+
+async def test_the_list_pages_with_offset_and_limit_and_says_the_total(harness: Harness):
+    hub = _hub(harness)
+    for name in ["a1", "a2", "a3", "a4", "a5"]:
+        await _entry(hub, "alice", name)
+
+    first = harness.client.get("/skill-hub/entries", params={"limit": 2}).json()
+    third = harness.client.get("/skill-hub/entries", params={"limit": 2, "offset": 4}).json()
+
+    assert [e["name"] for e in first["entries"]] == ["a1", "a2"]
+    assert [e["name"] for e in third["entries"]] == ["a5"]
+    assert first["total"] == third["total"] == 5
+
+
+async def test_the_list_pages_fifty_at_a_time_by_default(harness: Harness):
+    hub = _hub(harness)
+    for n in range(51):
+        await _entry(hub, "alice", f"s{n:02d}")
+
+    listed = harness.client.get("/skill-hub/entries").json()
+
+    assert len(listed["entries"]) == 50 and listed["total"] == 51
+
+
+async def test_sorting_by_updated_puts_the_latest_content_first_and_unknown_last(
+    harness: Harness,
+):
+    """`content_at` is when the content last changed (publish / rollback); a
+    row written before it existed has none and sorts after every dated one."""
+    hub = _hub(harness)
+    at = {"t": dt.datetime(2026, 10, 1, tzinfo=dt.UTC)}
+    hub._now = lambda: at["t"]  # noqa: SLF001 — the store's injected clock
+    old = await _entry(hub, "alice", "old")
+    at["t"] += dt.timedelta(days=1)
+    new = await _entry(hub, "alice", "new")
+    undated = await _entry(hub, "alice", "undated")
+    rm = harness.spec.get_resource_manager(SkillHubEntry)
+    rm.update(undated, msgspec.structs.replace(rm.get(undated).data, content_at=None))
+
+    listed = harness.client.get("/skill-hub/entries", params={"sort": "updated"}).json()
+
+    assert [e["id"] for e in listed["entries"]] == [new, old, undated]
+    assert listed["entries"][0]["updated_at"].startswith("2026-10-02")
+    assert listed["entries"][2]["updated_at"] is None
 
 
 async def test_the_list_searches_name_and_description_and_filters_mine(harness: Harness):
@@ -107,14 +188,17 @@ async def test_the_list_computes_the_tool_diff_per_row_for_the_app_asked_about(h
     item's App and every row — forks included — says what that App lacks."""
     hub = _hub(harness)
     root = await _entry(hub, "alice", "triage", tools=["exec", "query_entity"], app="pm")
-    await _entry(hub, "bob", "triage", tools=["kb_search"], forked_from=root)
+    fork = await _entry(hub, "bob", "triage", tools=["kb_search"], forked_from=root)
 
-    for_rca = harness.client.get("/skill-hub/entries", params={"app": "rca"}).json()["entries"]
-    plain = harness.client.get("/skill-hub/entries").json()["entries"]
+    asked = {"app": "rca", "q": "triage"}
+    for_rca = {
+        e["id"]: e for e in harness.client.get("/skill-hub/entries", params=asked).json()["entries"]
+    }
+    plain = harness.client.get("/skill-hub/entries", params={"q": "triage"}).json()["entries"]
 
-    assert for_rca[0]["missing_tools"] == ["query_entity"]
-    assert for_rca[0]["forks"][0]["missing_tools"] == ["kb_search"]
-    assert plain[0]["missing_tools"] == [] and plain[0]["forks"][0]["missing_tools"] == []
+    assert for_rca[root]["missing_tools"] == ["query_entity"]
+    assert for_rca[fork]["missing_tools"] == ["kb_search"]
+    assert [e["missing_tools"] for e in plain] == [[], []]
 
 
 async def test_a_fork_whose_root_the_viewer_cannot_see_is_listed_on_its_own(harness: Harness):
@@ -128,6 +212,7 @@ async def test_a_fork_whose_root_the_viewer_cannot_see_is_listed_on_its_own(harn
     entries = harness.client.get("/skill-hub/entries").json()["entries"]
 
     assert [e["id"] for e in entries] == [fork]
+    assert entries[0]["origin"] is None, "whose original it is is not the viewer's to know"
 
 
 # ── detail ───────────────────────────────────────────────────────────────────
@@ -144,7 +229,7 @@ async def test_the_detail_carries_the_body_the_files_the_review_and_the_lineage(
     d = res.json()
     assert d["owner"] == "bob" and d["name"] == "triage"
     assert d["skill_md"].startswith("---\nname: triage")
-    assert d["files"] == ["SKILL.md", "references/g.md"]
+    assert [f["path"] for f in d["files"]] == ["SKILL.md", "references/g.md"]
     assert d["review"] == {"verdict": "notes", "notes": ["n1"], "model": "m"}
     assert d["forked_from"] == {"entry": root, "state": "live", "owner": "alice", "name": "triage"}
     assert d["is_owner"] is False
@@ -163,7 +248,7 @@ async def test_a_deleted_fork_is_not_listed_under_its_root(harness: Harness):
 
     assert harness.client.get(f"/skill-hub/entries/{root}").json()["forks"] == []
     entries = harness.client.get("/skill-hub/entries").json()["entries"]
-    assert [e["id"] for e in entries] == [root] and entries[0]["forks"] == []
+    assert [e["id"] for e in entries] == [root] and entries[0]["fork_count"] == 0
 
 
 async def test_the_owner_sees_the_source_item_and_is_owner(harness: Harness):
@@ -399,7 +484,8 @@ async def test_the_detail_reads_the_skill_md_and_lists_the_rest_from_the_row(
 
     d = harness.client.get(f"/skill-hub/entries/{entry}").json()
 
-    assert d["files"] == ["SKILL.md", "assets/big.bin"]
+    assert [f["path"] for f in d["files"]] == ["SKILL.md", "assets/big.bin"]
+    assert d["files"][1]["size"] == 200_000, "the content's size, not a pointer's"
     assert d["skill_md"].startswith("---\nname: triage")
     assert reads == [["SKILL.md"]]
 
@@ -467,3 +553,16 @@ async def test_refreshing_a_copy_that_lost_its_version_record_is_a_409_with_the_
 
     assert res.status_code == 409, res.text
     assert "reset" in res.json()["detail"]
+
+
+async def test_the_picker_asks_for_forks_beside_originals_without_a_search(harness: Harness):
+    """The workspace's install picker lists everything installable; browsing's
+    originals-only is the page's way to read the hub, not the picker's."""
+    hub = _hub(harness)
+    root = await _entry(hub, "alice", "triage")
+    fork = await _entry(hub, "bob", "triage", forked_from=root)
+
+    flat = harness.client.get("/skill-hub/entries", params={"forks": "true"}).json()
+
+    assert {e["id"] for e in flat["entries"]} == {root, fork}
+    assert flat["total"] == 2

@@ -43,10 +43,7 @@ describe("describeRefusal (plan-skill-hub-ui-polish D16)", () => {
         owner: "alice",
         path: ".skill/csv-peek/",
       }),
-      t("skillHub.refused.folder_in_the_way.theirs", {
-        owner: "alice",
-        path: ".skill/csv-peek/",
-      }),
+      t("skillHub.refused.folder_in_the_way.theirs", { owner: "alice", name: "csv-peek" }),
     ],
     [
       coded(409, {
@@ -54,10 +51,19 @@ describe("describeRefusal (plan-skill-hub-ui-polish D16)", () => {
         owner: "",
         path: ".skill/csv-peek/",
       }),
-      t("skillHub.refused.folder_in_the_way", { path: ".skill/csv-peek/" }),
+      t("skillHub.refused.folder_in_the_way", { name: "csv-peek" }),
     ],
   ])("words each code in the viewer's language: %s", (err, expected) => {
     expect(describeRefusal(err, t)).toBe(expected);
+  });
+
+  it("names the skill in the way, never the hidden folder it lives in (D17)", () => {
+    const said = describeRefusal(
+      coded(409, { error: "folder_in_the_way", owner: "", path: ".skill/csv-peek/" }),
+      t,
+    );
+    expect(said).toContain("csv-peek");
+    expect(said).not.toContain(".skill");
   });
 
   it("falls back to the message for an unknown code, a plain sentence, or a non-HTTP error", () => {

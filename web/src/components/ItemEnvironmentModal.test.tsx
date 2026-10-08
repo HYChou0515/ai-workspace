@@ -306,7 +306,7 @@ describe("ItemEnvironmentModal — Save", () => {
     expect(screen.queryByTestId("itemenv-save")).toBeNull();
     expect(screen.queryByTestId("itemenv-cancel")).toBeNull();
     expect(screen.getByTestId("itemenv-close-panel")).toBeTruthy();
-    expect(screen.getByText(/擁有者的額度|owner's quota/)).toBeTruthy();
+    expect(screen.getByText(/owner 的額度|owner's quota/)).toBeTruthy();
   });
 
   it("says so when the server refuses the size, and stays open with the draft", async () => {

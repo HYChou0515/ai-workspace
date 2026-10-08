@@ -1726,6 +1726,60 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
+### 2026-10-08 · #883 skill hub 版面重做：緊湊列表、skill 頁分頁＋側欄、從 skill 頁安裝 {#pr-883}
+
+**設定** — 沒有。
+
+**資料** — 沒有 `Schema` 升版。`SkillHubEntry` 多一個有預設值的欄位 `content_at`（內容最後一次改變的時間，
+發布與回復時寫入），**不回填**。
+
+- **要做的事**：沒有。
+  - 為什麼不回填：舊條目只是沒有日期——列表不顯示它的更新時間、「最近更新」排序排在最後；下一次發布或回復就有了。
+  - **rollout 期間**：舊 pod 寫回同一個條目的任何動作（發布、回復、改權限、轉移、下架）都會把整列寫回沒有
+    `content_at` 的樣子（舊程式不認得這個欄位，讀進來再寫回去就沒了）。症狀：那個條目的更新時間不見、排到最後；下一次發布或回復就回來。
+
+**k8s · CI 側** — 沒有新 JobType、probe、manifest、env。
+
+**rollout 期間（新前端配舊 API pod）**——不用做事，知道就好：
+
+- 列表一次全部列出、不分頁；原作那列不顯示 fork 數；一個 fork 和它的原作都符合搜尋時，fork 不顯示
+  （舊 pod 把它巢狀放在原作底下，新頁面不畫巢狀）。排序選「最近更新」時列表出錯（舊 pod 回 422）；owner 篩選沒有作用
+  （列出所有人的）；workspace 的「從 skill hub 裝」看不到 fork。skill 頁的檔案分頁只列檔名、不列大小、點了打不開；側欄沒有更新時間；
+  版本紀錄沒有 v 編號，只有時間。
+- skill 頁側欄「你裝在這些 workspace」是空的，「安裝到 workspace…」對話框讀不到 workspace 清單（舊 pod 沒有這兩條路由，
+  回 404）。rollout 完就好。
+
+行為改變，沒有開關：
+
+- **skill hub 列表** `GET /api/skill-hub/entries`：一次回 50 筆（`offset` / `limit`，上限 200），多回 `total`；
+  只瀏覽（沒有 `q`、`mine`、`owner`）時**只列原作**，每列帶 `fork_count`；有任一篩選時 fork 與原作平列、帶
+  `forked_from` 與 `origin`。**不再巢狀回 `forks`**。新參數 `owner`、`sort=updated`。
+  `forks=true` 不篩選也把 fork 平列（workspace 的「從 skill hub 裝」用）。
+  有程式（腳本、外部整合）直接讀這條路由的，要改讀新形狀；agent 的 `search_skill_hub` 不受影響。
+- **skill 頁**：說明／檔案／版本紀錄／fork 四個分頁（`?tab=`）＋右側欄；owner 的動作收進「管理 ▾」；
+  「可見範圍」改名「權限設定」；下架前會先確認。詳情多回 `updated_at`、`revision`、`scripts`，`files` 從
+  檔名清單改成 `[{path, size}]`（版本 `versions/{rev}` 同）。版本紀錄每筆發布 / 回復多回 `version`（v1、v2…）。
+- **從 skill 頁直接安裝**：新路由 `GET …/entries/{id}/installs`、`GET …/entries/{id}/targets?app=`。
+  - 成本（沒有要做的事）：`/installs` 在每次打開 skill 頁時，讀每個已註冊 App 的整張 workspace 表（每個 App 一次
+    查詢），對這個人能編輯的每個 workspace 讀一次 `.skill/<name>/.origin`（同時最多 16 個）。`/targets` 只讀選定 App
+    的表，每個能編輯的 workspace 讀一次 `.origin`；不是已裝的，再用安裝路由同一個判斷列一次 `.skill/<name>/`。
+    兩條都**不喚醒沙盒**：已被回收的 workspace 讀它的持久副本，不會因為有人打開 skill 頁就重建。一個人能編輯的
+    workspace 越多，skill 頁側欄越慢出來。讀不到的（沙盒忙）在對話框裡標「現在讀不到」。
+- **workspace 的 Skills 面板**：每列兩行、固定「套用／預設・開啟・關閉／⋯」，下載 / 發布 / 還原 / 更新收進 ⋯；
+  來源顯示成文字（App 內建、範本內建、這個 workspace 的、從 skill hub 裝的）；「從 skill hub 裝」改成面板內的一頁。
+- **`publish_skill` 的回覆**最後多一行 `[skill-hub-entry]{"entry_id": …}`（和 `show_skill_hub_entry` 同一個標記），
+  聊天裡畫成那個條目的卡片，原本的工具卡片留在卡片下面。成本：每次發布的 tool 回覆多幾十個字元給模型。
+- 畫面上指 workspace 的「item」「項目」改成「workspace」（審核清單、待辦、workflow 的「項目」是清單上的一項，不變）；
+  「技能」→「Skills／skill」、「擁有者」→「owner」。
+
+**確認做完**
+
+- 打開 `/skill-hub`：看到「共 N 個 skill」，超過 50 個時有「載入更多」；有 fork 的原作那列寫「N 個 fork」。
+- 打開任一 skill 頁，右側欄「安裝到 workspace…」→ 選 App 後列得出你能編輯的 workspace。
+- `curl -s '<host>/api/skill-hub/entries?limit=1'` 回的 JSON 有 `total`。
+
+---
+
 ### 2026-10-08 · #878 我的環境變數：登入一次，所有 item 都用到新的 token {#pr-878}
 
 **設定** — 沒有新 key、沒有要改的設定。**行為改變，沒有開關**（設計：[plan-personal-env](plan-personal-env.md)）：
@@ -1785,6 +1839,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 部署有 `server.env_providers` 時：在「Private(跨workspace)」分頁登入一次，`GET /api/me/env` 裡出現那個變數；在「Private」
   分頁登入，值出現在表單裡、按儲存後只存進這個 item，`/api/me/env` 不變。
 - 清理腳本 dry run 跑得動（以 superuser 身分），列出的是你預期的人與 item。
+
 
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
