@@ -1658,6 +1658,40 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 「改時間」：時、分是兩個 24 小時制下拉，下面灰字「時區：…（你的時區）」，沒有時區選單。
 - 沒部署到這一版的症狀：表格裡出現 `UTC` / `Asia/Taipei`，「上一次」沒有「手動」。
 
+---
+
+### 2026-10-08 · #884 cron 排程：一列寫完原本要拆成好幾列的排程 {#pr-884}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-schedule-cron.md`）：
+
+- `schedules.json` 的一列可以寫 `{"cron": "0 9 * * 1-5", "tz": "Asia/Taipei", "run": "..."}`（標準 5 欄）。原本的
+  `every` 五種週期、欄位、身分（`trigger_id`）都不變——既有排程照舊跑，帳本與「用我的身分執行」都還在。
+- **AI 會開始寫 cron 列**：一列 `every` 說不出來的（「平日 9 點」「每 2 小時」）寫成一列 cron，不再拆成好幾列。
+- 排程總表與 Workflows 面板用 `cronstrue` 的中文描述 cron 列；「改時間」多了「簡單／cron」兩種模式。
+
+**資料** — 沒有 `Schema` 升版，沒有回填，沒有要跑的指令。
+
+- **rollout 期間（`rollout 中`）舊 pod 不認得 `cron`**：舊 pod 的 sweep 把 cron 列當成「每天 00:00、列的時區」
+  來跑（舊的讀法忽略不認得的欄位，`every` 沒寫就是 daily、`at` 沒寫就是 00:00；`tz` 沒寫就是 UTC）。新 pod 上的 AI
+  一寫出 cron 列，舊 pod 就可能在那個時區的午夜多跑一次。為什麼：舊版本無法修改。所以 **rollout 要一次換完、不要留舊 pod 長跑**；同理，**有了 cron 列之後不要回滾**到
+  這一版之前——回滾後所有 cron 列都會變成每天在列的時區 00:00 跑一次。漏看的症狀：cron 排程在午夜多出一次執行
+  （`tz` 沒寫的是 UTC 午夜，台灣早上 8 點）。
+- `wui` skill 的 `reference.md` 改了（schedules 表格多一列 `cron`、範例多一列 cron、拿掉「平日要寫五列」）。
+  **已經在某個 item 用過 `wui` skill 的，那個 item 有自己的副本，不會自動跟上**——在那個 item 的 Skills 面板按
+  「更新為出貨版本」（`rollout 後`，不必一次做完）。漏做的症狀：那個 item 的 AI 在頁面裡還是把「平日」拆成五列。
+  `author-workflow` 只有 `SKILL.md`，一直讀出貨版，不用動。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。後端多一個依賴 `croniter`、前端多一個 `cronstrue`，
+都在 lockfile 裡，照常重 build image 就會裝。
+
+**確認做完**（`rollout 後`）
+
+- 在某個 item 請 AI「平日早上 9 點跑 <workflow>」：`.workflows/schedules.json` 只有一列 `{"cron": "0 9 * * 1-5", ...}`，
+  回覆說下一次的時間。
+- 打開「排程」：那一列的週期是「在 09:00, 星期一 到 星期五」，下一次是下一個平日 09:00；「改時間」開在 cron 模式。
+- 沒部署到這一版的症狀：AI 還是寫五列；手寫的 cron 列在總表上顯示成「每天 00:00」那種每天的排程（舊版當成每天
+  00:00、列的時區）。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
