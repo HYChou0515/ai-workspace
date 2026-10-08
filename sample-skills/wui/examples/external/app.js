@@ -9,7 +9,7 @@
 // about the three ways that fails, each of which a reader has to be able to act
 // on. Getting those right is the whole job here.
 
-var TOOL = "lot-status"; // must appear in `tools:` in page.ai.yaml AND be granted
+var TOOL = "mes__lot-status"; // must appear in `tools:` in page.ai.yaml AND be granted
 
 var last = null; // the last good answer, so Save has something to write
 
@@ -27,8 +27,8 @@ function status(text) {
  * Do NOT replace these with your own message. Each one names the thing the
  * reader can change, and they are different things:
  *
- *   "did not declare lot-status"  → add it to `tools:` in the view file
- *   "does not offer lot-status"   → this app does not grant it; ask an operator
+ *   "did not declare mes__lot-status"  → add it to `tools:` in the view file
+ *   "does not offer mes__lot-status"   → this app does not grant it; ask an operator
  *   "is unavailable: ..."         → the tool exists but could not be resolved
  *
  * A page that showed "Lookup failed" for all three would send the reader to the

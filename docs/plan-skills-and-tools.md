@@ -1,5 +1,7 @@
 # Skills + Tool packages — issues #29 + #25
 
+> 被 #888（plan-third-party-tool-names.md）推翻
+
 > Status: **完成**(全部 17 階段 ✅ — §A.S1–S7 + §B.T1–T10)。672 tests green; full coverage gate at 100%; ty + ruff clean.
 > 投資人: hychour。
 > 來源:

@@ -771,6 +771,23 @@ def _agent_for(
 
             give_up_s, idle_s = stream_deadlines
             model = DeadlineModel(model, first_event_s=give_up_s, idle_s=idle_s)
+    # plan-third-party-tool-names N2: a call by a third-party command's old
+    # name (a skill or page written before the prefix) is renamed before the
+    # SDK resolves it — which would otherwise end the turn. Not for a name the
+    # model was given: a built-in or first-party command of that name is what
+    # the name means (D6).
+    if packages:
+        from ..agent.tool_alias_model import ToolAliasModel
+        from ..tooling.registry import third_party_aliases
+
+        given = {t.name for t in tools}
+        aliases = {
+            old: targets
+            for old, targets in third_party_aliases(packages, allowed=config.allowed_tools).items()
+            if old not in given
+        }
+        if aliases:
+            model = ToolAliasModel(model, aliases)
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,

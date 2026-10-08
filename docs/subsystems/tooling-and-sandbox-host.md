@@ -33,7 +33,7 @@
 | --- | --- |
 | `src/workspace_app/tooling/packages.py` | 套件登錄表：`PACKAGES = {name → host source dir}` + `PREBUILT_DIR`（env `WORKSPACE_TOOLS_DIR`，預設 `<repo>/.workspace-tools`）。CLI 套件的 key 必須等於 `[project.scripts]` console_script；venv carrier 的 key 只是 bundle 目錄名。`rca-tools` gitignored、source 不在就略過。 |
 | `src/workspace_app/tooling/prebuild.py` | 把套件 source build 成自帶的 bundle。`build_package`（生產路徑：`uv sync --frozen --no-editable` + `--reinstall/--refresh-package` 破 cache，#64）；`build_package_uvrun` / `provision_uvrun`（#63 輕量 DEBUG bundle，symlink source + `uv run --project`）。`_LAUNCH` / `_PYTHON_LAUNCH` 帶 AT_SECURE 動態載入器解法；`_is_venv_carrier` 以「無 `[project.scripts]`」分流；`_dump_schemas` 跑 3-stage contract 快取 schema；`_source_hash` / `_should_rebuild` 驅動增量重建。 |
-| `src/workspace_app/tooling/registry.py` | App 端（在 agent-host 進程建 FunctionTool,非 sandbox-host)：`discover_packages(prebuilt_dir)` 走 `PREBUILT_DIR` → `list[PackageInfo]`（STRICT：每個子目錄都得是完整 bundle，否則 `RuntimeError`；缺目錄 `FileNotFoundError`）。`build_function_tools` 展開 `allowed` 的 colon 語法（`pkg` / `pkg:cmd`；`None`=全部、`[]`=無）成 `FunctionTool`，`on_invoke` 在 sandbox 跑 `<install_dir>/launch <cmd> <args_json>`。`_check_collisions` 在跨套件命令撞名時 raise；`_review_chart` 接 #285 VLM 圖表自審。 |
+| `src/workspace_app/tooling/registry.py` | App 端（在 agent-host 進程建 FunctionTool,非 sandbox-host)：`discover_packages(prebuilt_dir)` 走 `PREBUILT_DIR` → `list[PackageInfo]`（STRICT：每個子目錄都得是完整 bundle，否則 `RuntimeError`；缺目錄 `FileNotFoundError`）。`build_function_tools` 展開 `allowed` 的 colon 語法（`pkg` / `pkg:cmd`；`None`=全部、`[]`=無）成 `FunctionTool`，`on_invoke` 在 sandbox 跑 `<install_dir>/launch <cmd> <args_json>`。`_check_collisions` 在兩個第一方套件命令撞名時 raise（第三方工具的 command 對模型叫 `<本地名>__<command>`，不會撞；見 `plan-third-party-tool-names.md`）；`_review_chart` 接 #285 VLM 圖表自審。 |
 | `src/workspace_app/tooling/dispatcher.py` | 工具作者用的 `Dispatcher`：實作 3-stage binary contract（無參數 → 列出命令 JSON；`<cmd>` → 印 pydantic JSON schema；`<cmd> <args_json>` → 驗證 + 跑 handler）。每個 `@d.command` 一個 pydantic Args model，同時當 LLM schema 與 runtime 驗證的單一事實來源；錯誤的子命令/參數 exit 2。 |
 | `scripts/prebuild_tools.py` | Operator 進入點 `uv run python scripts/prebuild_tools.py [--force]`：iterate `PACKAGES`、缺 source 就跳過（`rca-tools` 保持可選）、`build_package` 進 `PREBUILT_DIR/<name>`。改任何工具 source 後**必須**重跑。 |
 | `sample-tools/` | 倉庫內含四個各自獨立的 uv workspace（自帶 pyproject + uv.lock，絕對 import only；外加 gitignored 的 `rca-tools`，`PACKAGES` 共五筆登錄）。`data-fetch` / `csv-column-summary` / `sci-plot` = CLI 套件（3-stage Dispatcher，自帶 pandas/matplotlib）；`python-stack` = venv carrier（無 scripts；綁 pandas/numpy/scipy/matplotlib + office stack openpyxl/XlsxWriter/python-pptx，#252）；`rca-tools` = gitignored 的 in-house 多命令套件。 |
@@ -87,7 +87,7 @@ flowchart TD
 
 **PREBUILD（operator，在 host 上）** — `scripts/prebuild_tools.py` iterate `PACKAGES`。對每個 source，`prebuild.build_package` 跑 `uv venv --relocatable` + `uv sync --frozen --no-editable`（對著套件已 commit 的 `uv.lock`）裝進 `PREBUILT_DIR/<name>/.venv`，複製可攜 cpython，寫 AT_SECURE 的 `launch` shell（venv carrier 則寫純 python launcher），`_dump_schemas` 再跑一次 `launch`（3-stage contract）把 `commands.json` + `schemas/<cmd>.json` 快取下來，最後寫 `.built` source-hash。
 
-**STARTUP（app / host 進程）** — `registry.discover_packages(PREBUILT_DIR)` 嚴格驗證每個 bundle → `list[PackageInfo]`；依 `AgentConfig.allowed_tools`，`build_function_tools` 在跨套件撞名檢查後，把 `pkg` / `pkg:cmd` 選擇展開成 `FunctionTool`。
+**STARTUP（app / host 進程）** — `registry.discover_packages(PREBUILT_DIR)` 嚴格驗證每個 bundle → `list[PackageInfo]`；依 `AgentConfig.allowed_tools`，`build_function_tools` 在第一方套件之間的撞名檢查後，把 `pkg` / `pkg:cmd` 選擇展開成 `FunctionTool`。
 
 **RUNTIME（LLM 回合）** — LLM 呼叫某個 `FunctionTool` → `on_invoke` 先 `ensure_sandbox()` 取得 handle，再呼 `actx.sandbox.exec([<install_dir>/launch, cmd, args_json])`。HTTP 部署時 `actx.sandbox` 是 app 端的 `HttpSandbox` client → `POST /sandboxes/{rid}/exec` 打到 sandbox-host pod → `app.py._exec_ndjson` 串流輸出 → `IsolatedProcessSandbox._exec_argv` 把 argv 包成「join per-handle cgroup + `setpriv` 降到 pooled uid」，在 chroot jail 裡跑，bundle 以 read-only 掛在 `/.tools/<name>`。工具進程透過自己的 `Dispatcher`（驗證參數 → 跑 → stdout/stderr）分派，結果文字回流；若命令輸出了圖片且其 schema 接受 `style`，`registry._review_chart` 跑 #285 的 VLM 自審迴圈（下載 render → describe → restyle → 重 exec，≤2 passes）。
 
@@ -106,7 +106,7 @@ flowchart TD
     venv carrier = 無 `[project.scripts]` → prebuild 寫純 python launcher + 空的 `commands.json`（`"[]"`）+ 空 `schemas/`（讓 discover 滿意但暴露 0 個工具）。jail bootstrap 只在該 carrier 被 provision 時，才把 `python`/`python3`/`python3.x` shim 到 `/.tools/python-stack/launch`。
 
 !!! warning "allowed_tools 的 None vs [] 不可混淆"
-    `build_function_tools(None)` = 暴露所有套件的所有命令（對齊 `build_tools(None)`）；`allowed_tools=[]` = 明確「不要任何套件」。未知的 pkg/cmd 名會被**靜默略過**（設定打錯不能讓 LLM 收 500）；但同一次選擇裡兩個不同套件匯出同名命令會 raise `ValueError`（避免 flat name 互蓋）。
+    `build_function_tools(None)` = 暴露所有套件的所有命令（對齊 `build_tools(None)`）；`allowed_tools=[]` = 明確「不要任何套件」。未知的 pkg/cmd 名會被**靜默略過**（設定打錯不能讓 LLM 收 500）；但同一次選擇裡兩個不同的**第一方**套件匯出同名命令會 raise `ValueError`（避免 flat name 互蓋）；第三方工具的命令帶本地名前綴 `<本地名>__<command>`，不會撞。
 
 !!! warning "host 與 app 不共用任何 Python module"
     耦合**只有** HTTP wire 契約（[sandbox-host-wire.md](../sandbox-host-wire.md)）。`protocol.py` 是 sandbox 形狀的刻意獨立副本。

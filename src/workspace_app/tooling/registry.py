@@ -14,8 +14,11 @@ the source of truth:
 ``discover_packages`` walks that tree and returns ``PackageInfo`` list;
 ``build_function_tools`` expands ``allowed_tools`` (the colon syntax
 ``"pkg"`` / ``"pkg:cmd"``) into one ``FunctionTool`` per selected
-command. Cross-package command-name collisions raise so the deployer
-gets a clear signal at startup, not opaque LLM confusion at runtime.
+command. A first-party command keeps its flat name and a collision
+between two first-party packages raises, so the deployer gets a clear
+signal rather than opaque LLM confusion; a third-party command is named
+``<local name>__<command>`` and cannot collide
+(docs/plan-third-party-tool-names.md).
 
 See `docs/plan-skills-and-tools.md` §B.3.
 """
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +123,12 @@ class PackageInfo:
     first-party package, or an artifact built before the builder wrote the
     field. Never "unknown" — that would be the platform putting words in an
     author's mouth."""
+
+    third_party: bool = False
+    """A tool published from outside this repo (#674), named by the operator's
+    local name in `app.json` `external_tools`. Its commands reach the model as
+    `<name>__<command>` (docs/plan-third-party-tool-names.md): two authors who
+    never see each other's command names cannot be asked to keep them apart."""
 
     latest_version: str | None = None
     """plan-tool-running-version: set only when the live sandbox runs a
@@ -270,13 +280,15 @@ def build_function_tools(
     mirrors the legacy ``build_tools`` behaviour and keeps the LLM
     from seeing 500s for a config typo.
 
-    Raises ``ValueError`` if two *different* packages export the same
-    command name within the same selection — the resulting flat name
-    would shadow one tool, so we want the deployer to rename one."""
+    Raises ``ValueError`` if two *different* first-party packages export
+    the same command name within the same selection — the flat name would
+    shadow one tool, so we want the deployer to rename one. Third-party
+    commands carry their local name and never collide."""
     if allowed is None:
         selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
     else:
         selected = _select_commands(packages, allowed)
+    selected = _callable_by_name(selected)
     _check_collisions(selected)
     logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
     # The same ceiling the built-ins get: a package command's stdout already
@@ -285,12 +297,40 @@ def build_function_tools(
     return cap_tool_outputs([_to_function_tool(pkg, cmd) for pkg, cmd in selected])
 
 
+def third_party_aliases(
+    packages: Sequence[PackageInfo],
+    *,
+    allowed: list[str] | None,
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    """The names a granted third-party command used to be called by, each to
+    the `(local name, model name)` of every command answering to it
+    (docs/plan-third-party-tool-names.md N2): its bare command name and the
+    grant spelling `<local name>:<command>`. Two entries for one bare name is
+    a collision — the caller fails that call, never the turn.
+
+    The SAME expansion as `build_function_tools` (D3): an old name cannot
+    reach a command the turn was not granted."""
+    if allowed is None:
+        selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
+    else:
+        selected = _select_commands(packages, allowed)
+    out: dict[str, list[tuple[str, str]]] = {}
+    for pkg, cmd in _callable_by_name(selected):
+        if not pkg.third_party:
+            continue
+        target = (pkg.name, model_tool_name(pkg, cmd))
+        out.setdefault(cmd.name, []).append(target)
+        out.setdefault(f"{pkg.name}:{cmd.name}", []).append(target)
+    return {name: tuple(sorted(set(targets))) for name, targets in out.items()}
+
+
 def allowed_command_names(
     packages: Sequence[PackageInfo],
     allowed: list[str] | None,
 ) -> list[str]:
-    """Every package command this allow-list grants, by the flat name a caller
-    invokes.
+    """Every package command this allow-list grants, by the name the model is
+    given (`model_tool_name`: flat for first-party, `<local name>__<command>`
+    for third-party).
 
     The model cannot tell one of these from a built-in by looking: `data-fetch`
     and `read_file` are both just names in its toolset. So anything that has to
@@ -298,8 +338,10 @@ def allowed_command_names(
     declaration is the case this exists for — has to be told, and told from the
     same expansion the toolset itself was built from."""
     every = [p.name for p in packages]
-    selected = _select_commands(packages, allowed if allowed is not None else every)
-    return sorted({cmd.name for _, cmd in selected})
+    selected = _callable_by_name(
+        _select_commands(packages, allowed if allowed is not None else every)
+    )
+    return sorted({model_tool_name(pkg, cmd) for pkg, cmd in selected})
 
 
 def find_allowed_command(
@@ -315,12 +357,38 @@ def find_allowed_command(
     `allowed=None` "the deploy did not restrict" case, which means everything
     there and has to mean everything here.
 
-    Commands are matched on their FLAT name, which is what a caller sees: a
-    package is a delivery unit, but `data-fetch` is what gets invoked."""
+    Matched first on the name the model is given (`model_tool_name` — flat for
+    a first-party command, `<local name>__<command>` for a third-party one),
+    then on the grant spelling `<local name>:<command>`, then on a third-party
+    command's bare name when only one granted command has it
+    (docs/plan-third-party-tool-names.md N2); a bare name two have raises."""
     every = [p.name for p in packages]
-    selected = _select_commands(packages, allowed if allowed is not None else every)
+    selected = _callable_by_name(
+        _select_commands(packages, allowed if allowed is not None else every)
+    )
     _check_collisions(selected)
-    return next(((pkg, cmd) for pkg, cmd in selected if cmd.name == name), None)
+    by_model = {model_tool_name(pkg, cmd): (pkg, cmd) for pkg, cmd in selected}
+    if name in by_model:
+        return by_model[name]
+    # The grant spelling a page may also use: `<local name>:<command>`.
+    if ":" in name:
+        pkg_name, _, cmd_name = name.partition(":")
+        return next(
+            ((p, c) for p, c in selected if p.name == pkg_name and c.name == cmd_name), None
+        )
+    # An old bare name (written before the prefix): only a third-party one,
+    # and never a built-in's — `read_file` means the built-in, as it does to
+    # the model (D6).
+    from ..agent.tools import builtin_tool_names
+
+    if name in builtin_tool_names():
+        return None
+    matches = [(p, c) for p, c in selected if p.third_party and c.name == name]
+    if len(matches) > 1:
+        raise ValueError(
+            ambiguous_name_message(name, [(p.name, model_tool_name(p, c)) for p, c in matches])
+        )
+    return matches[0] if matches else None
 
 
 async def exec_package_command(
@@ -363,12 +431,68 @@ def _select_commands(
     return out
 
 
+#: What a model's tool name may be: providers accept letters, digits, `_` and
+#: `-`, up to 64 (OpenAI's function-name rule; Anthropic's is the same).
+_MODEL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: Between a third-party tool's local name and its command: providers refuse
+#: `:`, so the grant syntax's separator cannot be the model's.
+THIRD_PARTY_SEP = "__"
+_warned_names: set[str] = set()
+
+
+def ambiguous_name_message(called: str, targets: Sequence[tuple[str, str]]) -> str:
+    """What a caller is told when an old name answers to two third-party
+    commands (`targets` = `(local name, model name)`): today's collision
+    sentence, then the names to call instead. ONE renderer, for the model's
+    call and a page's alike (docs/plan-third-party-tool-names.md N2)."""
+    packages = sorted({pkg for pkg, _name in targets})
+    names = " or ".join(f"`{name}`" for _pkg, name in sorted(targets))
+    return (
+        f"cross-package tool name collision: command {called!r} appears in packages "
+        f"{packages} — call {names} instead"
+    )
+
+
+def model_tool_name(pkg: PackageInfo, cmd: CommandInfo) -> str:
+    """The name the model calls `cmd` by: `<local name>__<command>` for a
+    third-party tool, the command itself for a first-party one."""
+    return f"{pkg.name}{THIRD_PARTY_SEP}{cmd.name}" if pkg.third_party else cmd.name
+
+
+def _callable_by_name(
+    selected: list[tuple[PackageInfo, CommandInfo]],
+) -> list[tuple[PackageInfo, CommandInfo]]:
+    """`selected` minus the commands whose model name a provider would refuse
+    (D1) — one such name in the list makes the provider reject the whole turn.
+    Said once per name in the log, naming the tool and the command."""
+    kept = []
+    for pkg, cmd in selected:
+        name = model_tool_name(pkg, cmd)
+        # A local name holding the separator would let two commands meet in
+        # one name (`a__b`'s `c`, `a`'s `b__c`).
+        if _MODEL_NAME.fullmatch(name) and not (pkg.third_party and THIRD_PARTY_SEP in pkg.name):
+            kept.append((pkg, cmd))
+        elif name not in _warned_names:
+            _warned_names.add(name)
+            logger.warning(
+                "registry: %s:%s is not offered to the model — its tool name %r has characters "
+                "a model provider refuses, is over 64 long, or its tool's local name holds "
+                "'__'; rename the tool or the command",
+                pkg.name,
+                cmd.name,
+                name,
+            )
+    return kept
+
+
 def _check_collisions(selected: list[tuple[PackageInfo, CommandInfo]]) -> None:
     """If two different packages export a command with the same name in
     the selected set, raise a clear ValueError listing both packages."""
     by_cmd: dict[str, list[str]] = {}
     for pkg, cmd in selected:
-        by_cmd.setdefault(cmd.name, []).append(pkg.name)
+        # By the name the model sees: a third-party command carries its tool's
+        # local name, so only first-party packages can still meet here (D2).
+        by_cmd.setdefault(model_tool_name(pkg, cmd), []).append(pkg.name)
     collisions = {cmd_name: pkgs for cmd_name, pkgs in by_cmd.items() if len(set(pkgs)) > 1}
     if collisions:
         msg = "; ".join(
@@ -612,7 +736,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         # fails, the tool prints a friendly error to stderr + exits 2.
         result = await _exec_tool(actx, handle, pkg, cmd.name, args_json)
         logger.info("registry: dispatch %s:%s exited %d", pkg.name, cmd.name, result.exit_code)
-        text = _exec_result_text(actx, cmd.name, result)
+        text = _exec_result_text(actx, model_tool_name(pkg, cmd), result)
         # #285: a chart command that emits image(s) gets a VLM visual self-review
         # (detect layout issues → restyle → re-render, ≤2 passes) when a vision
         # model is wired. Gated on the command accepting a `style` override so a
@@ -623,7 +747,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         return await _declare_images(actx, result, text, best)
 
     return FunctionTool(
-        name=cmd.name,
+        name=model_tool_name(pkg, cmd),
         description=describe_command(pkg, cmd),
         params_json_schema=cmd.params_json_schema,
         on_invoke_tool=on_invoke,

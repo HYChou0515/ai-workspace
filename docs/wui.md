@@ -62,8 +62,8 @@ Renderer 是全平台都有的——**手寫一份 `view: wui` 的 yaml 現在�
 
 ```json
 "agent": {
-  "tools": ["read_file", "write_file", "lot-status"],
-  "external_tools": { "lot-status": "https://.../tool.manifest.json" }
+  "tools": ["read_file", "write_file", "mes"],
+  "external_tools": { "mes": "https://.../tool.manifest.json" }
 }
 ```
 
@@ -76,10 +76,13 @@ Renderer 是全平台都有的——**手寫一份 `view: wui` 的 yaml 現在�
 - **agent 的內建工具（`read_file`、`exec` …）永遠不通。** 不是安全考量，是型別：
   那些工具是講給模型聽的——會截斷、會在資料後面接一句英文說它截斷了、錯誤是一段散文。
   程式讀到那種東西會靜默地拿到半份 JSON。頁面要平台的能力，補一條 HTTP 路由，不是開一個內建工具。
-- **AI 不會自己猜哪些能用。** `read_file` 和 `lot-status` 在它眼裡只是兩個名字，
+- **AI 不會自己猜哪些能用。** `read_file` 和 `mes__lot-status` 在它眼裡只是兩個名字，
   所以平台會在 skill 裡把可呼叫的清單**逐個列出來**給它。這也表示 tool 一加上去，
   下一輪對話 AI 就知道了，不用改 skill。
-- **頁面自己還要在 yaml 宣告一次**（`tools: [lot-status]`）。那不是安全閘門——伺服器端的
+- **第三方工具的名字帶前綴**：本地名 `mes` 的 `lot-status` 叫 `mes__lot-status`，兩支工具都有
+  `lot-status` 也分得開。舊頁面寫的 `lot-status` 在只有一支工具有它時照常能叫；兩支都有時那次呼叫
+  回 409，訊息列出兩個完整名字。
+- **頁面自己還要在 yaml 宣告一次**（`tools: [mes__lot-status]`）。那不是安全閘門——伺服器端的
   上限才是——而是揭露：讓人打開一個頁面之前，看得出它會伸手到哪裡。
 
 ## 你能拿什麼來寫
