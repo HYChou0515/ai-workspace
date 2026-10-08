@@ -371,7 +371,7 @@ export function WorkflowsModal({
                         t("schedules.nextSweep")
                       ) : row.next_ms !== null ? (
                         <span title={fullTime(row.next_ms, clock.viewer, t)}>
-                          {t("schedules.next", { at: whenText(row.next_ms, clock.now, clock.viewer, t) })}
+                          {t("schedules.next", { at: whenText(row.next_ms, clock.now, clock.viewer, t, "future") })}
                         </span>
                       ) : null}
                     </div>

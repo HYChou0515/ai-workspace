@@ -135,12 +135,23 @@ export function dowWord(dow: number, t: T): string {
 
 /** An instant as a person wants it next to a schedule: "15 分鐘後" / "3 分鐘前"
  * within the hour, else "今天 / 明天 / 昨天 HH:MM", else the date — on the
- * viewer's clock, 24-hour. */
-export function whenText(ms: number, now: number, zone: string, t: T): string {
+ * viewer's clock, 24-hour.
+ *
+ * `kind` says which side of `now` the instant is known to be on: a run that
+ * started is "past", a next run is "future". The page's `now` moves only every
+ * 30 s, so a run that started after the last tick is a few seconds "ahead" of
+ * it — and read "不到 1 分鐘後" in the recorded demo. Known past is never
+ * ahead; known future is never gone (a next run the sweep has yet to pick up
+ * reads "不到 1 分鐘後", not "3 分鐘前"). */
+export function whenText(ms: number, now: number, zone: string, t: T, kind?: "past" | "future"): string {
+  if (kind === "past") ms = Math.min(ms, now);
+  if (kind === "future") ms = Math.max(ms, now);
   const ahead = ms - now;
   if (Math.abs(ahead) < 3600000) {
     const n = Math.floor(Math.abs(ahead) / 60000);
-    if (ahead >= 0) return n < 1 ? t("time.inUnderAMinute") : t("time.inMinutes", { n });
+    // At `now` exactly, the side is the one `kind` knows.
+    const isAhead = kind === undefined ? ahead >= 0 : kind === "future";
+    if (isAhead) return n < 1 ? t("time.inUnderAMinute") : t("time.inMinutes", { n });
     return n < 1 ? t("time.justNow") : t("time.minutesAgo", { n });
   }
   const w = wallOf(ms, zone);

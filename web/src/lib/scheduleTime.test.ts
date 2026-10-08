@@ -36,6 +36,17 @@ describe("whenText — an instant on the viewer's clock", () => {
     expect(whenText(ms, NOW, "America/Los_Angeles", t)).toBe("明天 18:00");
   });
 
+  it("a past event never reads as ahead, a coming one never as gone", () => {
+    // The page's `now` moves every 30 s; a run that started after the last
+    // tick read "不到 1 分鐘後" in the recorded demo, and a next run the sweep
+    // has not picked up yet would read "3 分鐘前".
+    expect(whenText(NOW + 20000, NOW, TPE, t, "past")).toBe("剛剛");
+    expect(whenText(NOW - 3 * MIN, NOW, TPE, t, "future")).toBe("不到 1 分鐘後");
+    expect(whenText(NOW - 3 * MIN, NOW, TPE, t, "past")).toBe("3 分鐘前");
+    // A server clock well ahead of the browser's: still just now, not "今天 16:00".
+    expect(whenText(NOW + 120 * MIN, NOW, TPE, t, "past")).toBe("剛剛");
+  });
+
   it("the hover has the whole date", () => {
     expect(fullTime(Date.UTC(2026, 9, 8, 15, 34), TPE, t)).toBe("2026/10/8（週四）23:34");
     expect(fullTime(Date.UTC(2026, 9, 8, 15, 34), TPE, en)).toBe("Thu 2026/10/8 23:34");

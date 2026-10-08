@@ -396,7 +396,7 @@ function ScheduleRowView({
               {t(`scheduleOverview.status.${last.status}` as MsgKey)}
             </span>
             {last.by_hand ? <span className="schedule-tag">{t("scheduleOverview.byHand")}</span> : null}{" "}
-            {lastAt ? whenText(lastAt, clock.now, clock.viewer, t) : null}
+            {lastAt ? whenText(lastAt, clock.now, clock.viewer, t, "past") : null}
           </Link>
         ) : (
           t("scheduleOverview.never")
@@ -487,5 +487,5 @@ function NextCell({ row, clock }: { row: OverviewRow; clock: ViewerClock }) {
   if (row.run_problem) return <>{`${t("schedules.brokenWorkflow")} ${row.run_problem}`}</>;
   if (!row.runnable || row.next_ms === null) return <>—</>;
   if (row.due_now) return <>{t("scheduleOverview.nextSweep")}</>;
-  return <span title={fullTime(row.next_ms, clock.viewer, t)}>{whenText(row.next_ms, clock.now, clock.viewer, t)}</span>;
+  return <span title={fullTime(row.next_ms, clock.viewer, t)}>{whenText(row.next_ms, clock.now, clock.viewer, t, "future")}</span>;
 }

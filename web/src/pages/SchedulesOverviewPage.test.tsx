@@ -134,6 +134,17 @@ describe("SchedulesOverviewPage", () => {
     expect(link).not.toHaveTextContent(word("scheduleOverview.byHand"));
   });
 
+  it("a run that started after the page's clock last moved reads as just now", async () => {
+    // The recorded demo: Run now's run started a few seconds after the 30 s
+    // tick and the last-run cell read "執行中 手動 不到 1 分鐘後".
+    const fresh = row({ last_run: { run_id: "r1", status: "running", started: NOW + 20000, ended: null, by_hand: true } });
+    render(<SchedulesOverviewPage client={client({ rows: [fresh] })} />, { wrapper: Wrap });
+
+    const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.running")) });
+    expect(link).toHaveTextContent("剛剛");
+    expect(link).not.toHaveTextContent("後");
+  });
+
   it("tags a last run started by Run now", async () => {
     const pressed = row({ last_run: { run_id: "r1", status: "done", started: NOW - 5 * MIN, ended: NOW - 4 * MIN, by_hand: true } });
     render(<SchedulesOverviewPage client={client({ rows: [pressed] })} />, { wrapper: Wrap });
