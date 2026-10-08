@@ -146,17 +146,45 @@ def register_env_provider_routes(
                 )
         return None
 
+    def _offers(request: Request) -> EnvProviders:
+        described = (_describe(p) for p in _providers(request))
+        return EnvProviders(providers=[d for d in described if d is not None])
+
     @app.get("/a/{slug}/items/{item_id}/env-providers")
     async def list_env_providers(slug: str, item_id: str, request: Request) -> EnvProviders:
         _gate(slug, item_id)
-        described = (_describe(p) for p in _providers(request))
-        return EnvProviders(providers=[d for d in described if d is not None])
+        return _offers(request)
 
     @app.post("/a/{slug}/items/{item_id}/env-providers/{provider_id}")
     async def resolve_env_provider(
         slug: str, item_id: str, provider_id: str, body: ResolveBody, request: Request
     ) -> ResolvedEnv:
         _gate(slug, item_id)
+        return await _exchange(request, provider_id, body, f"item {item_id}")
+
+    # My environment variables (`plan-personal-env`): a person's values for every
+    # item are signed in for with no item to ask about. No gate beyond being
+    # signed in to this app — the exchange takes only what they typed, and its
+    # product goes back to their own form.
+
+    @app.get("/me/env-providers")
+    async def list_my_env_providers(request: Request) -> EnvProviders:
+        return _offers(request)
+
+    @app.post("/me/env-providers/{provider_id}")
+    async def resolve_my_env_provider(
+        provider_id: str, body: ResolveBody, request: Request
+    ) -> ResolvedEnv:
+        return await _exchange(request, provider_id, body, f"user {get_user_id()}")
+
+    async def _exchange(
+        request: Request, provider_id: str, body: ResolveBody, where: str
+    ) -> ResolvedEnv:
+        """Run one provider and hand its product back. Stores nothing here:
+        the caller decides where the product goes — the item's shared form or
+        the person's values for it (saved with that form), or their values for
+        every item, stored at once (`plan-personal-env`). ``where`` only names
+        the place for the log."""
         provider = _find(_providers(request), provider_id)
         if provider is None:
             raise HTTPException(status_code=404, detail=f"unknown env provider: {provider_id!r}")
@@ -170,7 +198,7 @@ def register_env_provider_routes(
             #
             # The message is the exception's TYPE and text as the implementation
             # wrote it — never `values`, which holds the credential.
-            logger.warning("env provider %r failed for item %s: %s", provider_id, item_id, exc)
+            logger.warning("env provider %r failed for %s: %s", provider_id, where, exc)
             raise HTTPException(
                 status_code=400,
                 detail={"error": "env_provider_failed", "provider": provider_id, "why": str(exc)},

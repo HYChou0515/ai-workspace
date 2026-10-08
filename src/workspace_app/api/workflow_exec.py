@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from specstar import SpecStar
@@ -33,6 +34,7 @@ from ..workflow.engine import StepFailed
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
+from .env_layers import PersonEnv
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
@@ -58,6 +60,9 @@ if TYPE_CHECKING:
 RunSubagent = Callable[..., Awaitable[tuple[str, list]]]
 
 logger = logging.getLogger(__name__)
+
+#: What a failed run that used someone's credentials tells them (`plan-personal-env` D11).
+_SIGN_IN_HINT = "If your sign-in has expired, sign in again under My environment variables."
 
 
 def _reply_text(produced: list[TurnMessage]) -> str:
@@ -256,9 +261,7 @@ class WorkflowExecutor:
             raise asyncio.CancelledError
         return answer
 
-    async def _headless_env(
-        self, captured_user: str, item_id: str, run_id: str = ""
-    ) -> dict[str, str]:
+    async def _headless_env(self, captured_user: str, item_id: str, run_id: str = "") -> PersonEnv:
         """What this node's tools get from the deploy's seam, given that no
         request is behind it: the seam's answer for ``captured_user`` — the item
         owner for an item schedule and for a page-button run, the trigger's
@@ -671,8 +674,10 @@ class WorkflowExecutor:
         await self._turn_engine.forget(chat_key)
         self._run_baseline.pop(chat_key, None)
 
-    def notify_failure(self, run: WorkflowRun) -> None:
-        """In-app failure notification to the item's owner (manual §17)."""
+    def notify_failure(self, run: WorkflowRun, run_id: str) -> None:
+        """In-app failure notification to the item's owner (manual §17) — and to
+        the person the run ran as, when that is somebody else
+        (`plan-personal-env` D11)."""
         from ..apps.resolve import debtor_of, find_work_item
 
         found = find_work_item(self._spec, run.item_id)
@@ -691,11 +696,45 @@ class WorkflowExecutor:
             run.item_id,
             recipient,
         )
+        # The person whose credentials it used (the presser, the binder of the
+        # schedule) is the one who can sign in again — and the only one who
+        # can. The platform cannot tell an expired token from any other
+        # failure, so the notice says what to do IF it was the sign-in.
+        identity = RunIdentities(self._spec).get(run_id) if run_id else None
+        acting = identity.env_user if identity is not None else ""
         notify(
             self._spec,
             recipient=recipient,
             kind="status",
             title=f"Workflow run failed at “{phase}”",
+            # The owner ran it as themselves: one notice, carrying the hint the
+            # second one would have — they are the likeliest to need it.
+            body=_SIGN_IN_HINT if acting == recipient else "",
             link=f"/a/{slug}/items/{run.item_id}",
             actor=run.captured_user,
+        )
+        if identity is None or not acting or acting == recipient:
+            return
+        # The gate that decided whether their values were lent: someone removed
+        # from the item lent nothing, and the notice would name a phase of an
+        # item they can no longer open (round 1, N2).
+        if self._private_env is not None and not self._private_env.may(
+            acting, run.item_id, cast("Verb", identity.verb)
+        ):
+            return
+        # One per person, item, workflow and UTC day: a schedule failing every
+        # hour must not bury them.
+        day = datetime.fromtimestamp(now_ms() / 1000, UTC).date().isoformat()
+        key = f"run-failed-as:{acting}:{run.item_id}:{run.workflow_id}:{day}"
+        if notification_sent(self._spec, key):
+            return
+        notify(
+            self._spec,
+            recipient=acting,
+            kind="status",
+            title=f"A workflow run as you failed at “{phase}”",
+            body=_SIGN_IN_HINT,
+            link="/my-env",
+            actor=run.captured_user,
+            dedup_key=key,
         )

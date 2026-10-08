@@ -1618,7 +1618,6 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - skill hub 上每個條目在 `<git_root>` 都有 `<條目 id>.git`（反過來不成立：刪掉的條目、發布失敗留下的 repo 也在）。
 - 在一個 pod 發布新版，從另一個 pod（或重開後）打開詳情頁，看得到新版的檔案。
 
-
 ---
 
 ### 2026-10-08 · 62b2fe85 · #882 排程總表整修：時間用看的人的時區、名稱用標題、手動執行有標記 {#pr-882}
@@ -1693,6 +1692,8 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 沒部署到這一版的症狀：AI 還是寫五列；手寫的 cron 列在總表上顯示成「每天 00:00」那種每天的排程（舊版當成每天
   00:00、列的時區）。
 
+---
+
 ### 2026-10-08 · 6e1666c6 · #888 兩支第三方工具有同名 command 也都能用：模型看到 `<本地名>__<command>` {#pr-888}
 
 **設定** — 沒有新 key，`app.json` 不用改。**行為改變，沒有開關**（`docs/plan-third-party-tool-names.md`）：
@@ -1722,8 +1723,6 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - `rollout 後`：在有第三方工具的 App 問 AI「你有哪些工具」，清單裡第三方的是 `<本地名>__<command>`；兩支工具有同名
   command 的 App，聊天不再整句失敗。
 - 沒部署到這一版的症狀：兩支第三方工具同名時，那個 App 每一句都回 `cross-package tool name collision`。
-
----
 
 ---
 
@@ -1778,6 +1777,69 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 - 打開 `/skill-hub`：看到「共 N 個 skill」，超過 50 個時有「載入更多」；有 fork 的原作那列寫「N 個 fork」。
 - 打開任一 skill 頁，右側欄「安裝到 workspace…」→ 選 App 後列得出你能編輯的 workspace。
 - `curl -s '<host>/api/skill-hub/entries?limit=1'` 回的 JSON 有 `total`。
+
+---
+
+### 2026-10-08 · #878 我的環境變數：登入一次，所有 item 都用到新的 token {#pr-878}
+
+**設定** — 沒有新 key、沒有要改的設定。**行為改變，沒有開關**（設計：[plan-personal-env](plan-personal-env.md)）：
+
+- 每個人多一份「我的環境變數」（新頁面 `/my-env`，平台選單裡「我的資源」的下一個）：所有 item 通用的個人值。
+- 一個變數只有在 item 把它的提供方式設成 **Private first** 或 **Private only** 時，才會拿到這裡的值；設成
+  Shared 或沒設的 item 拿不到。某個 item 裡另外填的值仍然優先。
+- **item 的環境變數面板改成三個分頁**：原本的「所有參與者」改名 **Shared**、「只有我」改名 **Private**（仍是預設打開的那個），
+  另外多一個 **Private(跨workspace)**：就是「我的環境變數」，列出這個 item 的工具要的、以及這個 item 設成 Private first／Private only 的名稱。
+  分頁畫成底線式（和分享視窗同一個元件），三個分頁都有可展開的 `.env` 文字框（貼上、匯入、匯出；Private 兩個分頁的框不保留註解）。
+- 面板與「我的環境變數」頁的文字統一說 **workspace**（原本混用 item、工作區）；「使用中」直接寫分頁名，例如「使用中：Shared」。
+- 「清除我在這個 workspace 的值」改成紅色、確定沒有值時不能按（讀不到值時仍可按）；它和「我的環境變數」頁的「移除」按下去都先問一次，確認鈕是紅色，確認了才刪。
+- **在哪個分頁登入（部署設定的 `server.env_providers`）或填值，就寫進哪一層：**
+  - 「我的環境變數」頁、「Private(跨workspace)」分頁 → 登入**立刻存進「我的環境變數」**，所有把那個變數設成
+    Private first／Private only 的 item 都用它。
+  - 「Private」分頁 → 和以前一樣填進這個 item 的表單、按儲存才存，只給這個 item。
+  - 「Shared」分頁 → 不變（填共用值的表單）。
+  - 所以**要「登入一處、全部更新」，兩件事都要做到：item 擁有者把那個變數的提供方式設成 Private first 或 Private only；
+    使用者在「我的環境變數」或「Private(跨workspace)」登入。** 在「Private」分頁登入的值只給那個 item，而且會蓋過
+    「我的環境變數」（那一列會顯示「使用中：Private」）。
+- 提供方式的三個選項文字改成 **Shared／Private first／Private only**（中英文介面都是），意思不變。
+- 一個用了某人憑證的 workflow run（綁定的排程、頁面按鈕、workflow 面板的 Run）失敗時：
+  - 代理的人不是 item 擁有者 → 另外通知他，連到「我的環境變數」，提示若是登入過期就去那裡重新登入；這一封同人、同 item、
+    同 workflow、同一個 UTC 日只發一封。他若已被移出這個 item，就不通知。
+  - 代理的人就是擁有者 → 只有原本那一封，但內文帶上同樣的提示。
+  - 擁有者原本那一封照舊，每次失敗一封。
+
+**資料** — 沒有 `Schema` 升版，沒有要跑的 migrate。新的資料表 `PersonalEnv` 隨程式建立，沒有 auto-CRUD 路由。
+
+- **#869 時期在各 item 登入留下的 token，要不要清，由你決定（可選，rollout 之後；可以隔一段時間再跑一次）**：
+  ```bash
+  uv run python scripts/clear_item_sign_ins.py                 # 先 dry run：列出（人、item、變數名），不印值、不改任何東西
+  uv run python scripts/clear_item_sign_ins.py --apply         # 確認後才刪
+  uv run python scripts/clear_item_sign_ins.py --base-url https://<你的 API> --header "<你的閘道讀的身分 header>: <值>"
+  ```
+  - 為什麼：#869 之後到這一版之前，系統登入是寫進「那一個 item」。在把變數設成 Private first／Private only 的 item 裡，
+    item 的值優先，所以這些舊 token 會蓋過使用者之後在「我的環境變數」重新登入的新值。腳本**只清真的蓋住另一個值的那些**（看有沒有，不比新舊——事後刻意在 item 裡另填的同名值、以及這一版之後在 Env 面板「Private」分頁登入留下的同名值，也都會被清，所以每次 `--apply` 前先看 dry run）：
+    那個 item 把變數設成 Private first／Private only，**而且**那個人在「我的環境變數」也有同名的值。Shared 的 item 本來就不讀
+    「我的環境變數」，留在裡面的值正是它在用的，所以不動；那個人還沒在「我的環境變數」登入的話，item 裡的舊值是他的 tool 唯一
+    拿得到的，清掉反而壞掉，所以也不動。因此剛 rollout 時多半清不到幾筆；使用者陸續在「我的環境變數」重新登入之後再跑一次，
+    才會清到他們的。腳本打的路由這一版才有，所以要在 rollout 之後跑。名單是「某個系統登入會產生的變數名」，取自 API 實際載入的
+    `server.env_providers`，不是手抄的。手打的其他變數、「我的環境變數」、共用值、SSO 自動帶入的值都不動。
+  - 執行的身分要在 `server.superusers` 裡（它會改到所有人的值）。不帶 header 時，身分是部署給「沒帶身分的請求」的那個
+    （一般部署是 `server.default_user`）；前面有 SSO 閘道就用 `--header` 帶上閘道讀的東西。被拒絕（HTTP 403，不在 superusers
+    或閘道擋下）時腳本印出 `refused`、結束碼 1；其他非 200 的回應（例如閘道回 401 或轉址）印出 `failed: HTTP <碼>`、結束碼 1。`--apply` 之後馬上再跑會是 0 筆。
+  - 不做的症狀：使用者在「我的環境變數」重新登入了，某些設成 Private first／Private only 的 item 還是用過期的 token 失敗；那些 item 的 Env 面板
+    「Private」分頁會顯示「使用中：Private」。不清也可以讓使用者自己在那個 workspace 按「清除我在這個 workspace 的值」。
+
+**k8s · CI 側** — 沒有新的 manifest、probe、env、JobType。
+
+**確認做完**
+
+- 打開 `/my-env`：新增一個值，列表出現、值是遮蔽的、標示「今天設定」。
+- 找一個工具宣告了某變數、而 item 把它設成 Private first 的 item：Env 面板「Private」分頁那一列顯示
+  「✓ 使用中：Private(跨workspace)」（在 `/my-env` 新增的值要和那個變數同名）；在 Private 分頁另外填值後變成「✓ 使用中：Private」。
+- 「清除我在這個 workspace 的值」是紅色，按下去先跳確認，按「取消」值還在。
+- 部署有 `server.env_providers` 時：在「Private(跨workspace)」分頁登入一次，`GET /api/me/env` 裡出現那個變數；在「Private」
+  分頁登入，值出現在表單裡、按儲存後只存進這個 item，`/api/me/env` 不變。
+- 清理腳本 dry run 跑得動（以 superuser 身分），列出的是你預期的人與 item。
+
 
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

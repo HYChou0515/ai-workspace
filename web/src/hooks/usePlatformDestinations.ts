@@ -49,6 +49,8 @@ export function usePlatformDestinations(): PlatformDestination[] {
     { to: "/review", label: t("review.title"), icon: "check" },
     { to: "/diagnostics", label: "Diagnostics", icon: "sparkle" },
     { to: "/my-resources", label: t("resources.title"), icon: "layers" },
+    // `plan-personal-env`: a person's values for every item. The Env button's icon.
+    { to: "/my-env", label: t("myEnv.title"), icon: "tag" },
     // The overview of Deployed pages (docs/plan-wui-overview.md). Unconditional:
     // an entrance that appears only once somebody has a page is the confusing
     // kind, and the empty state says what a WUI is. "WUI" is a proper noun.

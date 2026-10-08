@@ -12,6 +12,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api as defaultApi } from "../api";
+import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient } from "../api/types";
@@ -23,12 +24,14 @@ export function ItemEnvModal({
   onClose,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
 }: {
   slug: string;
   itemId: string;
   onClose: () => void;
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
   privateClient?: PrivateEnvClient;
+  personalClient?: Pick<PersonalEnvClient, "get" | "put">;
 }) {
   const layers = useQuery({
     queryKey: qk.envLayers(slug, itemId),
@@ -45,6 +48,7 @@ export function ItemEnvModal({
       itemId={itemId}
       client={client}
       privateClient={privateClient}
+      personalClient={personalClient}
     />
   );
 }
