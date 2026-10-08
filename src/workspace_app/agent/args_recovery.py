@@ -315,12 +315,9 @@ def ambiguous_call_reply(args: dict) -> str | None:
     if not isinstance(detail, dict):
         return None
     called = detail.get("called")
-    candidates = [tuple(c) for c in detail.get("candidates") or [] if len(c) == 2]
+    candidates = [(str(c[0]), str(c[1])) for c in detail.get("candidates") or [] if len(c) == 2]
     if not isinstance(called, str) or not candidates:
         return None
-    packages = sorted({pkg for pkg, _name in candidates})
-    names = " or ".join(f"`{name}`" for _pkg, name in candidates)
-    return (
-        f"cross-package tool name collision: command {called!r} appears in packages "
-        f"{packages} — call {names} instead"
-    )
+    from ..tooling.registry import ambiguous_name_message
+
+    return ambiguous_name_message(called, candidates)

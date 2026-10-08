@@ -39,7 +39,12 @@ from ..agent.context import AgentToolContext
 from ..apps.catalog import finalize_tool_grants
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
-from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
+from ..tooling.registry import (
+    THIRD_PARTY_SEP,
+    PackageInfo,
+    exec_package_command,
+    find_allowed_command,
+)
 from ..workflow.offered import no_such_workflow, wont_parse
 from .env_layers import resolve_env
 from .locator import ItemLocator
@@ -526,7 +531,14 @@ def register_wui_routes(
             # Named rather than 404'd blank: this reaches a person through the
             # page's own error panel, and "which tool, and why not" is the whole
             # of what they can act on.
-            if reason := external.refused.get(name.partition(":")[0]):
+            # The tool a name points at, however the page spelled it:
+            # `<local name>__<command>`, `<local name>:<command>`, or bare.
+            local = (
+                name.split(THIRD_PARTY_SEP, 1)[0]
+                if THIRD_PARTY_SEP in name
+                else name.partition(":")[0]
+            )
+            if reason := external.refused.get(local):
                 raise HTTPException(status_code=409, detail=f"{name} is unavailable: {reason}")
             if in_ceiling is not None:
                 # The App offers it; this item's picker turned it off. Naming

@@ -116,3 +116,76 @@ async def test_the_sandbox_is_asked_for_the_command_by_its_own_name(monkeypatch)
     await tool.on_invoke_tool(RunContextWrapper(actx), json.dumps({}))  # ty: ignore[invalid-argument-type]
 
     assert asked == ["a:list-files"]
+
+
+# ── a page names a command (P3) ──────────────────────────────────────────────
+
+
+def _find(name: str, *pkgs: PackageInfo, allowed: list[str] | None = None):  # noqa: ANN202
+    from workspace_app.tooling.registry import find_allowed_command
+
+    found = find_allowed_command(list(pkgs), allowed, name)
+    return None if found is None else f"{found[0].name}:{found[1].name}"
+
+
+@pytest.mark.parametrize("name", ["a__list-files", "a:list-files", "list-files"])
+def test_a_page_reaches_a_lone_third_party_command_by_any_of_its_names(name: str) -> None:
+    assert _find(name, _pkg("a", "list-files"), _pkg("b", "other")) == "a:list-files"
+
+
+@pytest.mark.parametrize("name", ["a__list-files", "a:list-files"])
+def test_a_page_names_one_of_two_same_named_commands_exactly(name: str) -> None:
+    assert _find(name, _pkg("a", "list-files"), _pkg("b", "list-files")) == "a:list-files"
+
+
+def test_a_page_calling_an_ambiguous_old_name_fails_with_todays_message() -> None:
+    with pytest.raises(ValueError) as e:
+        _find("list-files", _pkg("a", "list-files"), _pkg("b", "list-files"))
+
+    assert str(e.value).startswith(
+        "cross-package tool name collision: command 'list-files' appears in packages ['a', 'b']"
+    )
+    assert "a__list-files" in str(e.value) and "b__list-files" in str(e.value)
+
+
+def test_the_model_and_a_page_are_told_one_sentence() -> None:
+    """Parity by construction: both sides render the collision with one function."""
+    from workspace_app.agent.arg_repair import AMBIGUOUS_CALL_KEY
+    from workspace_app.agent.args_recovery import ambiguous_call_reply
+
+    with pytest.raises(ValueError) as e:
+        _find("list-files", _pkg("a", "list-files"), _pkg("b", "list-files"))
+    candidates = [["a", "a__list-files"], ["b", "b__list-files"]]
+    reply = ambiguous_call_reply(
+        {AMBIGUOUS_CALL_KEY: {"called": "list-files", "candidates": candidates}}
+    )
+
+    assert reply == str(e.value)
+
+
+def test_a_built_in_name_is_never_a_third_party_command_on_a_page() -> None:
+    """D6: `read_file` means the built-in, as it does to the model."""
+    assert _find("read_file", _pkg("a", "read_file")) is None
+    assert _find("a__read_file", _pkg("a", "read_file")) == "a:read_file"
+
+
+def test_a_page_cannot_reach_an_ungranted_command_by_an_old_name() -> None:
+    assert _find("list-files", _pkg("a", "list-files"), allowed=["b"]) is None
+
+
+def test_a_page_is_told_the_names_the_model_is_given() -> None:
+    from workspace_app.tooling.registry import allowed_command_names
+
+    names = allowed_command_names(
+        [_pkg("a", "list-files"), _pkg("rca", "spc", third_party=False)], None
+    )
+
+    assert names == ["a__list-files", "spc"]
+
+
+def test_a_local_name_holding_the_separator_is_refused(caplog) -> None:  # noqa: ANN001
+    """`a__b`'s `c` and `a`'s `b__c` would both be `a__b__c`."""
+    tools = build_function_tools([_pkg("a__b", "c"), _pkg("a", "b__c")], allowed=None)
+
+    assert [t.name for t in tools] == ["a__b__c"]
+    assert "a__b:c" in caplog.text

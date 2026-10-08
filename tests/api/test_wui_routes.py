@@ -1119,3 +1119,58 @@ def test_a_command_the_item_pinned_on_is_admitted_even_when_the_profile_left_it_
 
     assert client.post(URL, json={}).status_code == 200
     assert sandbox.calls
+
+
+# ── third-party command names (docs/plan-third-party-tool-names.md P3) ──────
+
+
+def _third(name: str) -> PackageInfo:
+    return PackageInfo(
+        name=name,
+        commands=(CommandInfo(name="lot-status", description="d", params_json_schema={}),),
+        install_dir=f"/tools/{name}",
+        third_party=True,
+    )
+
+
+def _two_tools_one_command():  # noqa: ANN202
+    return build(
+        allowed=["a", "b"],
+        packages=[],
+        external=ExternalTools(packages=(_third("a"), _third("b"))),
+    )
+
+
+def test_a_page_names_one_of_two_same_named_commands_by_its_new_name():
+    client, sandbox, _, _ = _two_tools_one_command()
+
+    resp = client.post("/a/rca/items/i1/wui/tools/b__lot-status/call", json={"args": {}})
+
+    assert resp.status_code == 200, resp.text
+    # The bundle is asked for its command by the command's own name.
+    assert sandbox.calls == [["/tools/b/launch", "lot-status", "{}"]]
+
+
+def test_a_page_calling_the_shared_old_name_is_refused_with_todays_message():
+    client, sandbox, _, _ = _two_tools_one_command()
+
+    resp = client.post(URL, json={"args": {}})
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(
+        "cross-package tool name collision: command 'lot-status' appears in packages ['a', 'b']"
+    )
+    assert sandbox.calls == []
+
+
+def test_a_refused_tool_named_by_its_new_name_still_says_why():
+    client, _, _, _ = build(
+        allowed=["mes"],
+        packages=[],
+        external=ExternalTools(refused={"mes": "artifact store unreachable"}),
+    )
+
+    resp = client.post("/a/rca/items/i1/wui/tools/mes__lot-status/call", json={})
+
+    assert resp.status_code == 409
+    assert "artifact store unreachable" in resp.json()["detail"]

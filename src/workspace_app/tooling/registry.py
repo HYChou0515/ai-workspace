@@ -333,8 +333,10 @@ def allowed_command_names(
     declaration is the case this exists for — has to be told, and told from the
     same expansion the toolset itself was built from."""
     every = [p.name for p in packages]
-    selected = _select_commands(packages, allowed if allowed is not None else every)
-    return sorted({cmd.name for _, cmd in selected})
+    selected = _callable_by_name(
+        _select_commands(packages, allowed if allowed is not None else every)
+    )
+    return sorted({model_tool_name(pkg, cmd) for pkg, cmd in selected})
 
 
 def find_allowed_command(
@@ -353,9 +355,32 @@ def find_allowed_command(
     Commands are matched on their FLAT name, which is what a caller sees: a
     package is a delivery unit, but `data-fetch` is what gets invoked."""
     every = [p.name for p in packages]
-    selected = _select_commands(packages, allowed if allowed is not None else every)
+    selected = _callable_by_name(
+        _select_commands(packages, allowed if allowed is not None else every)
+    )
     _check_collisions(selected)
-    return next(((pkg, cmd) for pkg, cmd in selected if cmd.name == name), None)
+    by_model = {model_tool_name(pkg, cmd): (pkg, cmd) for pkg, cmd in selected}
+    if name in by_model:
+        return by_model[name]
+    # The grant spelling a page may also use: `<local name>:<command>`.
+    if ":" in name:
+        pkg_name, _, cmd_name = name.partition(":")
+        return next(
+            ((p, c) for p, c in selected if p.name == pkg_name and c.name == cmd_name), None
+        )
+    # An old bare name (written before the prefix): only a third-party one,
+    # and never a built-in's — `read_file` means the built-in, as it does to
+    # the model (D6).
+    from ..agent.tools import builtin_tool_names
+
+    if name in builtin_tool_names():
+        return None
+    matches = [(p, c) for p, c in selected if p.third_party and c.name == name]
+    if len(matches) > 1:
+        raise ValueError(
+            ambiguous_name_message(name, [(p.name, model_tool_name(p, c)) for p, c in matches])
+        )
+    return matches[0] if matches else None
 
 
 async def exec_package_command(
@@ -407,6 +432,19 @@ THIRD_PARTY_SEP = "__"
 _warned_names: set[str] = set()
 
 
+def ambiguous_name_message(called: str, targets: Sequence[tuple[str, str]]) -> str:
+    """What a caller is told when an old name answers to two third-party
+    commands (`targets` = `(local name, model name)`): today's collision
+    sentence, then the names to call instead. ONE renderer, for the model's
+    call and a page's alike (docs/plan-third-party-tool-names.md N2)."""
+    packages = sorted({pkg for pkg, _name in targets})
+    names = " or ".join(f"`{name}`" for _pkg, name in sorted(targets))
+    return (
+        f"cross-package tool name collision: command {called!r} appears in packages "
+        f"{packages} — call {names} instead"
+    )
+
+
 def model_tool_name(pkg: PackageInfo, cmd: CommandInfo) -> str:
     """The name the model calls `cmd` by: `<local name>__<command>` for a
     third-party tool, the command itself for a first-party one."""
@@ -422,13 +460,16 @@ def _callable_by_name(
     kept = []
     for pkg, cmd in selected:
         name = model_tool_name(pkg, cmd)
-        if _MODEL_NAME.fullmatch(name):
+        # A local name holding the separator would let two commands meet in
+        # one name (`a__b`'s `c`, `a`'s `b__c`).
+        if _MODEL_NAME.fullmatch(name) and not (pkg.third_party and THIRD_PARTY_SEP in pkg.name):
             kept.append((pkg, cmd))
         elif name not in _warned_names:
             _warned_names.add(name)
             logger.warning(
                 "registry: %s:%s is not offered to the model — its tool name %r has characters "
-                "a model provider refuses or is over 64 long; rename the tool or the command",
+                "a model provider refuses, is over 64 long, or its tool's local name holds "
+                "'__'; rename the tool or the command",
                 pkg.name,
                 cmd.name,
                 name,
