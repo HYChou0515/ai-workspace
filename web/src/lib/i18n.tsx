@@ -219,6 +219,7 @@ export const messages = {
   "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "tool.show_file": { "zh-TW": "顯示檔案", en: "Show a file" },
   "tool.show_skill_hub_entry": { "zh-TW": "顯示 skill hub 上的 skill", en: "Show a skill hub skill" },
+  "tool.request_env": { "zh-TW": "請你提供工具需要的變數", en: "Ask you for a tool's variables" },
   // The affordance on a file the agent showed. "openHere" = a workspace shell is
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
@@ -1789,6 +1790,19 @@ export const messages = {
   // Between the names in the key button's label (round 3: English read "A、B").
   "env.bar.sep": { "zh-TW": "、", en: ", " },
   "env.bar.login": { "zh-TW": "登入 {names}", en: "Sign in to {names}" },
+  "envreq.login": { "zh-TW": "登入 {label}", en: "Sign in to {label}" },
+  "envreq.set": { "zh-TW": "設定 {name}", en: "Set {name}" },
+  "envreq.shared": { "zh-TW": "在「共用」設定 {name}", en: "Set {name} on Shared" },
+  "envreq.ready": { "zh-TW": "已設定", en: "Set" },
+  "envreq.wait": {
+    "zh-TW": "設定好之後按「重試」，AI 會重新執行 {tool}。",
+    en: "Once these are set, press Retry and the AI runs {tool} again.",
+  },
+  "envreq.retry": { "zh-TW": "重試", en: "Retry" },
+  "envreq.retryMessage": {
+    "zh-TW": "已設定 {names}，請重新執行 {tool}。",
+    en: "I have set {names} — please run {tool} again.",
+  },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
   "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
   // Three or more, not all sign-ins: a variable to type is not a "system" —

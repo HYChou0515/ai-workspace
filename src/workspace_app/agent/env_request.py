@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 #: Ends a `request_env` reply: the card the chat draws. Mirrored by
 #: `web/src/renderers/envRequest.ts`.
-ENV_REQUEST_MARKER = "\n[env-request]"
+ENV_REQUEST_MARKER = "\n[env-request]"  # also `shown_files._CARD_DECLARATIONS`
 
 TOOL_NAME = "request_env"
 

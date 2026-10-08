@@ -23,6 +23,7 @@ import {
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
 import { parseShownSkillHubEntry } from "../renderers/skillHubEntry";
+import { parseEnvRequest } from "../renderers/envRequest";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
@@ -30,6 +31,7 @@ import { ShownFiles } from "./ShownFiles";
 import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
 import { SkillHubEntryCard } from "./SkillHubEntryCard";
+import { EnvRequestCard } from "./EnvRequestCard";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
@@ -115,6 +117,7 @@ const TOOL_LABEL: Record<string, MsgKey> = {
   read_image: "tool.read_image",
   show_file: "tool.show_file",
   show_skill_hub_entry: "tool.show_skill_hub_entry",
+  request_env: "tool.request_env",
   write_file: "tool.write_file",
   edit_file: "tool.edit_file",
   delete_file: "tool.delete_file",
@@ -315,6 +318,11 @@ export function EntryView({
     const hubEntry =
       entry.call.name === "show_skill_hub_entry" ? parseShownSkillHubEntry(entry.call.output) : null;
     if (hubEntry) return <SkillHubEntryCard entryId={hubEntry} />;
+    // docs/plan-env-request-card.md: the declared request IS the rendering; a
+    // refused request (an `exec` failure, a name the tool never printed) stays
+    // a visible card so the refusal is in the log.
+    const envRequest = entry.call.name === "request_env" ? parseEnvRequest(entry.call.output) : null;
+    if (envRequest) return <EnvRequestCard request={envRequest} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
         // 28 = the avatar column every assistant block is indented past. Flush

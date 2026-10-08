@@ -337,3 +337,39 @@ async def test_a_skill_hub_card_is_exported_as_its_sentence_not_its_marker():
 
     assert files == [] and "alice/triage" in body and "[skill-hub-entry]" not in body
     assert "alice/triage" in md and "[skill-hub-entry]" not in md
+
+
+async def test_an_env_request_card_is_exported_as_its_sentence_not_its_marker():
+    """docs/plan-env-request-card.md: `request_env` ends its reply with a card
+    declaration too; the export and the video keep the sentence. Built with
+    the REAL tool so the marker is the one the chat parses."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent.context import AgentToolContext
+    from workspace_app.agent.env_request import request_env_impl
+    from workspace_app.chat_video.timeline import shown_files_in
+    from workspace_app.kb.chat_export import build_chat_markdown
+    from workspace_app.resources.agent_config import AgentConfig
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    pkg = PackageInfo(
+        name="erp",
+        commands=(CommandInfo(name="lookup", description="d", params_json_schema={}),),
+        install_dir="../.tools/erp",
+    )
+    actx = AgentToolContext(
+        agent_config=AgentConfig(name="a", model="m", allowed_tools=["erp"]), packages=[pkg]
+    )
+    actx.tool_outputs["lookup"] = "error: set ERP_TOKEN"
+    out = await request_env_impl(
+        RunContextWrapper(actx), tool="lookup", names=["ERP_TOKEN"], reason="r"
+    )
+
+    body, files = shown_files_in(out)
+    md = build_chat_markdown(
+        title="t",
+        messages=[{"role": "tool", "tool_name": "request_env", "tool_args": {}, "content": out}],
+    )
+
+    assert files == [] and "ERP_TOKEN" in body and "[env-request]" not in body
+    assert "ERP_TOKEN" in md and "[env-request]" not in md

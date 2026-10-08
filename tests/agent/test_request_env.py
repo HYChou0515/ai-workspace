@@ -295,3 +295,10 @@ def test_the_hint_and_the_grant_answer_from_one_rule(tools, with_package) -> Non
     )
 
     assert request_env_granted(config, packages) == ("request_env" in {t.name for t in agent.tools})
+
+
+def test_the_export_strips_the_marker_the_tool_writes() -> None:
+    """Parity: the export's copy of the marker is the tool's own."""
+    from workspace_app.agent.shown_files import _CARD_DECLARATIONS
+
+    assert (ENV_REQUEST_MARKER, "tool") in _CARD_DECLARATIONS

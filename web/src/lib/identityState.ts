@@ -43,11 +43,7 @@ export function identityState({
   const missing: Missing[] = [];
   const seen = new Set<string>();
   for (const name of required) {
-    const layer = layerInUse(name, shared, mine, policy);
-    const value = layer === "private" ? mine[name] : layer === "shared" ? shared[name] : "";
-    if ((value ?? "").trim() !== "") continue;
-    // Pinned to the shared copy: whatever the viewer typed would not be used.
-    if (policyOf(name, policy) === "shared_first" && Object.hasOwn(shared, name)) continue;
+    if (viewerStatus(name, shared, mine, policy) !== "missing") continue;
     const via = offered.find((p) => p.produces.includes(name));
     const entry: Missing = via ? { kind: "login", name: via.label } : { kind: "set", name };
     const key = `${entry.kind}:${entry.name}`;
@@ -61,6 +57,26 @@ export function identityState({
   // holding anything of one's own.
   const holdsOwn = Object.values(mine).some((v) => v.trim() !== "");
   return { show: personal || offered.length > 0 || hasSchedules, missing, holdsOwn };
+}
+
+/** Where one variable stands for this viewer — the ONE judgement the key
+ * button (`identityState`) and the chat's request card (`envRequestRows`) both
+ * make. `ready`: the value their tools would get is not blank. `pinned`: blank,
+ * but held by the shared copy under `shared_first`, so whatever the viewer
+ * typed would not be used. `missing`: blank, and theirs to fill. */
+export type ViewerStatus = "ready" | "pinned" | "missing";
+
+export function viewerStatus(
+  name: string,
+  shared: Record<string, string>,
+  mine: Record<string, string>,
+  policy: Record<string, string>,
+): ViewerStatus {
+  const layer = layerInUse(name, shared, mine, policy);
+  const value = layer === "private" ? mine[name] : layer === "shared" ? shared[name] : "";
+  if ((value ?? "").trim() !== "") return "ready";
+  if (policyOf(name, policy) === "shared_first" && Object.hasOwn(shared, name)) return "pinned";
+  return "missing";
 }
 
 /** How the key button names what is missing (`plan-wui-viewer-login` Q11):
