@@ -20,13 +20,15 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
+import { invalidateHubInstalls } from "../api/skillHubCache";
 import { type SkillHubApi, skillHubApi } from "../api/skillHub";
 import type { ApiClient } from "../api/types";
 import { useChatItem } from "../hooks/chatItem";
 import { useT } from "../lib/i18n";
 import { filesHere } from "../lib/skillFiles";
+import { countsText } from "../lib/skillHubCounts";
+import { useUser } from "../hooks/useUsers";
 import { describeRefusal } from "../lib/skillHubRefusal";
-import { AppTag } from "./AppTag";
 
 export function SkillHubEntryCard({
   entryId,
@@ -35,7 +37,7 @@ export function SkillHubEntryCard({
 }: {
   entryId: string;
   client?: Pick<SkillHubApi, "get" | "install">;
-  skillsClient?: Pick<ApiClient, "getItemSkills">;
+  skillsClient?: Pick<ApiClient, "getItemSkills" | "refreshItemSkill">;
 }) {
   const t = useT();
   const qc = useQueryClient();
@@ -52,14 +54,27 @@ export function SkillHubEntryCard({
     queryFn: () => skillsClient.getItemSkills(slug, itemId),
     enabled: item !== null,
   });
+  // Before any early return (a hook): the owner as people know them, not an id.
+  const ownerName = useUser(entryQ.data?.owner ?? "").name;
   const [refusal, setRefusal] = useState<string | null>(null);
   const install = useMutation({
     mutationFn: () => client.install(slug, itemId, entryId),
     onMutate: () => setRefusal(null),
     onSuccess: async () => {
+      invalidateHubInstalls(qc);
       await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     },
+    onError: (e) => setRefusal(describeRefusal(e, t)),
+    meta: { silentError: true },
+  });
+  // A copy here that is behind the entry: the card says so and syncs it, as
+  // the Skills panel's row does (audit #25) — 「已安裝」 would be untrue.
+  const sync = useMutation({
+    mutationFn: (name: string) =>
+      skillsClient.refreshItemSkill(slug, itemId, name, { force: false }),
+    onMutate: () => setRefusal(null),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) }),
     onError: (e) => setRefusal(describeRefusal(e, t)),
     meta: { silentError: true },
   });
@@ -83,21 +98,23 @@ export function SkillHubEntryCard({
     );
   }
   const rows = skillsQ.data ?? [];
-  const installed = rows.some((s) => s.hub_entry === entry.id);
+  const counts = countsText(t, entry.installs, entry.uses);
+  const copy = rows.find((s) => s.hub_entry === entry.id);
+  const installed = copy !== undefined;
+  const behind = copy?.update_available === true && copy.upstream !== "unpublished" && copy.upstream !== "deleted";
   const taken = !installed && rows.some((s) => s.name === entry.name && filesHere(s));
   return (
     <div className="skill-hub-card" data-testid="skill-hub-card">
       <div className="skill-hub-card-head">
+        {/* Drawn as the link it is (plan-skill-hub-ux-redo D15, NN/g
+            "Beyond Blue Links"): it was bold text that happened to navigate. */}
         <Link to={`/skill-hub/${encodeURIComponent(entry.id)}`} className="skill-hub-card-title">
-          <span className="skill-hub-card-owner">{entry.owner}/</span>
           {entry.name}
         </Link>
-        <AppTag slug={entry.source_app} />
+        <span className="skill-hub-card-owner">{ownerName}</span>
       </div>
       <p className="skill-hub-card-desc">{entry.description}</p>
-      <p className="skill-hub-card-muted">
-        {t("skillHub.counts", { installs: entry.installs ?? 0, uses: entry.uses ?? 0 })}
-      </p>
+      {counts ? <p className="skill-hub-card-muted">{counts}</p> : null}
       {entry.missing_tools.length > 0 ? (
         <p className="skill-hub-card-warn">
           {t("skills.fromHub.missing", { tools: entry.missing_tools.join(", ") })}
@@ -114,7 +131,21 @@ export function SkillHubEntryCard({
       )}
       {item !== null ? (
         <div className="skill-hub-card-actions">
-          {installed ? (
+          {behind && copy ? (
+            <>
+              <span className="skill-hub-card-warn">{t("skills.updateAvailable.hub")}</span>
+              <button
+                type="button"
+                className="btn"
+                data-size="sm"
+                data-variant="secondary"
+                disabled={sync.isPending}
+                onClick={() => sync.mutate(copy.name)}
+              >
+                {t("skills.refresh.hub")}
+              </button>
+            </>
+          ) : installed ? (
             <span className="skill-hub-card-muted">{t("skillHub.card.installed")}</span>
           ) : (
             <>

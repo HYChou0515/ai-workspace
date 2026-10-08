@@ -584,3 +584,49 @@ textarea.input {
 .hdr-more__item:hover {
   background: var(--paper-2);
 }
+
+/* The menu button (`ActionMenu`): a list of actions hung under its trigger,
+   in the popover's chrome. */
+.action-menu {
+  position: relative;
+  display: inline-block;
+}
+.action-menu__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--z-popover);
+  min-width: 180px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 6px 20px rgba(20, 22, 28, 0.08);
+}
+.action-menu__menu[data-align="start"] {
+  right: auto;
+  left: 0;
+}
+.action-menu__item {
+  display: block;
+  width: 100%;
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius-btn);
+  text-align: left;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  white-space: nowrap;
+}
+.action-menu__item:hover:not(:disabled),
+.action-menu__item:focus-visible {
+  background: var(--paper-2);
+}
+.action-menu__item:disabled {
+  color: var(--text-paper-d);
+  cursor: not-allowed;
+}
+.action-menu__item[data-variant="danger"] {
+  color: var(--err);
+}

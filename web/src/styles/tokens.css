@@ -120,6 +120,12 @@
   --radius-modal:  12px;
   --radius-avatar: 50%;
 
+  /* The skill hub's page widths (plan-skill-hub-ux-redo D5a): the list, a
+   * skill's page and its sidebar — settled where they are seen, in one place. */
+  --skill-hub-list-width:  960px;
+  --skill-hub-entry-width: 1120px;
+  --skill-hub-side-width:  280px;
+
   /* Layering — one scale so overlays stop colliding (#445). Content modals sit
    * at --z-modal; an imperative confirm (Dialog) rides just above so it stacks
    * over an open modal; the brand splash and the global progress bar own the
