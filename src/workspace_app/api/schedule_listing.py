@@ -55,6 +55,7 @@ from ..workflow.user_schedules import (
     ScheduleView,
     UserSchedule,
     last_window_lookup,
+    normalise_cron,
     parse_row,
     schedule_key,
     schedule_views,
@@ -323,7 +324,7 @@ def _time_fields(body: EditTime) -> dict[str, Any]:
     a daily row edited to weekly does not keep a `dom` nothing consults. A cron
     is the whole "when": with it only the zone stays."""
     if body.cron:
-        return {"cron": body.cron, **({"tz": body.tz} if body.tz else {})}
+        return {"cron": normalise_cron(body.cron), **({"tz": body.tz} if body.tz else {})}
     out: dict[str, Any] = {"every": body.every}
     if body.every == "minutes":
         out["n"] = body.n

@@ -142,3 +142,34 @@ def test_the_agent_hears_the_cron_and_its_zone():
         describe_row(UserSchedule(run="w", cron="0 9 * * 1-5", tz=TPE))
         == "cron `0 9 * * 1-5` (Asia/Taipei)"
     )
+
+
+# --- review round 1 -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cron", ["0 0 30 2 *", "0 0 31 4 *"])
+def test_a_cron_that_never_comes_round_is_refused_not_a_crash(cron: str):
+    """`0 0 30 2 *` parses — croniter calls it valid — and has no occurrence.
+    Left to the sweep it raised out of the whole file, the good rows beside it
+    included; refused here it costs its own row."""
+    raw = _file({"cron": cron, "run": "w"}, {"every": "daily", "at": "09:00", "run": "w"})
+    problems = validate_user_schedules(raw)
+    assert any("never" in p for p in problems), problems
+    views, _ = schedule_views(raw, offered={"w"}, now_utc=NOW, last_window=lambda _r: "")
+    assert [v.runnable for v in views] == [False, True]
+
+
+@pytest.mark.parametrize("left_out", [None, "", 0])
+def test_a_cron_left_out_the_way_a_generator_writes_it_is_an_every_row(left_out):
+    """The parser's `or` rule: `null`, `""` and `0` are "not written" — an
+    `every` row, not a broken cron row."""
+    row = {"every": "daily", "at": "09:00", "cron": left_out, "run": "w"}
+    assert validate_user_schedules(_file(row)) == []
+
+
+def test_crons_that_differ_only_in_spacing_are_one_schedule():
+    a, _ = parse_row(0, {"cron": "0 9 * * 1-5", "run": "w"})
+    b, _ = parse_row(1, {"cron": " 0  9 * *   1-5 ", "run": "w"})
+    assert a is not None and b is not None
+    assert b.cron == "0 9 * * 1-5"
+    assert trigger_id_for("it", "", a) == trigger_id_for("it", "", b)

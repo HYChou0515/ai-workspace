@@ -341,6 +341,9 @@ def test_editing_the_time_rewrites_that_row_and_keeps_the_others_as_written():
             {"cron": "0 9 * * 1-5", "at": "09:00", "tz": "Asia/Taipei"},
             {"cron": "0 9 * * 1-5", "tz": "Asia/Taipei"},
         ),
+        # Written the way the parser reads it — one space between fields — so
+        # the file holds the cron its identity is made of.
+        ({"cron": "  0  9 * * 1-5 "}, {"cron": "0 9 * * 1-5"}),
     ],
 )
 def test_each_period_writes_only_the_fields_it_reads(asked: dict, written: dict):

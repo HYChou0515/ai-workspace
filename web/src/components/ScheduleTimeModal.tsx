@@ -221,8 +221,10 @@ export function ScheduleTimeModal({
       const simple = carried ? { ...s.simple, ...carried, tz } : blankSimple(tz);
       return { ...s, mode, simple, snapshot: simple, dropped: carried === null };
     });
-  // The cron as Save would send it: exactly 5 fields (the backend's rule), and
-  // one the library can read — its words, or why not.
+  // What the browser can check before Save: exactly 5 fields, and one the
+  // library can read — its words, or why not. Not the server's whole rule:
+  // `croniter` refuses a few the library reads (`1L`, `*/0`, a date that never
+  // comes). The server has the last word; its sentence shows under the form.
   const cronFields = state.cron.trim().split(/\s+/).filter(Boolean).length;
   const cronSaid = cronWords(state.cron, clock.locale);
   const cronProblem =

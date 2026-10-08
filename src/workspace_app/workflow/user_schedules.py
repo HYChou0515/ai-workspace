@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from croniter import croniter
+from croniter import CroniterError, croniter
 from msgspec import Struct
 
 from .triggers import CRON_PREFIX, Schedule, _valid_tz, fire_window, next_run, period_target
@@ -149,7 +149,9 @@ def parse_user_schedules(raw: str) -> list[UserSchedule]:
                 # "with" in the file because that is how it reads to an author;
                 # `payload` in code because `with` is a keyword.
                 payload=dict(row.get("with") or {}),
-                cron=str(row.get("cron") or ""),
+                # One space between fields: the identity is made of this text,
+                # and "0 9 * * 1-5" spaced two ways is one schedule.
+                cron=normalise_cron(str(row.get("cron") or "")),
             )
         )
     return out
@@ -213,7 +215,9 @@ def validate_user_schedules(raw: str) -> list[str]:
         # was dropped, while omitting the same key was accepted. The parser
         # already spelled every one of these `or`; the validator did not, so the
         # two halves disagreed about the same file.
-        if row.get("cron") is not None:
+        # Set means truthy, the parser's `or` rule: a generator writing `"cron": ""`
+        # or `null` for what it left out has written an `every` row.
+        if row.get("cron"):
             # A cron row says WHEN with the cron alone; the period fields are
             # another way of saying it, and two answers to one question is a
             # row nobody can predict.
@@ -307,6 +311,23 @@ def _tz_problems(where: str, row: dict[str, Any]) -> list[str]:
     return []
 
 
+def normalise_cron(cron: str) -> str:
+    """The cron with one space between its fields — what a row's identity is made of."""
+    return " ".join(cron.split())
+
+
+def _comes_round(cron: str) -> bool:
+    """Whether the cron has an occurrence at all — both ways from a fixed day, so
+    a once-a-leap-year `0 0 29 2 *` counts and `0 0 30 2 *` does not."""
+    start = datetime(2001, 1, 1)
+    try:
+        croniter(cron, start).get_next(datetime)
+        croniter(cron, start).get_prev(datetime)
+    except CroniterError:
+        return False
+    return True
+
+
 #: The fields a cron row must not carry: they are the five periods' way of
 #: saying when, and the cron already says it.
 _PERIOD_FIELDS = ("n", "at", "dow", "dom")
@@ -338,6 +359,10 @@ def _cron_problems(where: str, row: dict[str, Any]) -> list[str]:
         )
     elif not croniter.is_valid(cron):
         problems.append(f"{where}: `cron` {cron!r} is not a cron expression the sweep can follow.")
+    elif not _comes_round(cron):
+        # `0 0 30 2 *` parses and has no date. Left to the sweep, looking for its
+        # occurrence raised out of the whole file — the good rows beside it too.
+        problems.append(f"{where}: `cron` {cron!r} never comes round — no date matches it.")
     return problems + _tz_problems(where, row)
 
 
