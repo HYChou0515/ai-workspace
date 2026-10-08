@@ -125,6 +125,34 @@ describe("periodText — a row's period on the viewer's clock", () => {
   });
 });
 
+describe("periodText — a cron row (docs/plan-schedule-cron.md decision 3)", () => {
+  const at = (viewer: string) => ({ viewer, now: NOW, locale: "zh-TW" });
+
+  it("reads in the library's own words, and the cron itself on hover", () => {
+    expect(periodText({ cron: "0 9 * * 1-5", tz: TPE, run: "w" }, at(TPE), t)).toEqual({
+      text: "在 09:00, 星期一 到 星期五",
+      set: "cron：0 9 * * 1-5（台北標準時間）",
+    });
+  });
+
+  it("is not moved onto another clock: away from its zone it names the zone", () => {
+    expect(periodText({ cron: "0 9 * * 1-5", run: "w" }, at(TPE), t).text).toBe(
+      "在 09:00, 星期一 到 星期五（世界標準時間）",
+    );
+  });
+
+  it("speaks the reader's language", () => {
+    const english = { viewer: TPE, now: NOW, locale: "en" };
+    expect(periodText({ cron: "0 9 * * 1-5", tz: TPE, run: "w" }, english, en).text).toBe(
+      "At 09:00, Monday through Friday",
+    );
+  });
+
+  it("a cron the library cannot read is shown as written", () => {
+    expect(periodText({ cron: "0 9 * *", tz: TPE, run: "w" }, at(TPE), t).text).toBe("0 9 * *");
+  });
+});
+
 describe("the clock arithmetic", () => {
   it("a wall time in a zone is one instant, and reads back as itself", () => {
     const ms = zonedMs(2026, 10, 8, 9, 0, TPE);

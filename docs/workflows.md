@@ -918,6 +918,15 @@ Workflows 面板的排程區用同一組路由。
 總表的 `page_title`（那個資料夾裡 Deploy 的頁面）。「現在執行」啟動的 run 記 `WorkflowRun.by_hand`，
 總表的「上一次」標「手動」。總表的「上一次」連到 `?chat=<trigger_id>&from=schedules`，對話上方顯示那條排程
 與「回到排程」、進度展開（只這一次，不寫回記住的偏好）。
+
+**一列也可以是 cron**（`docs/plan-schedule-cron.md`）：`{"cron": "0 9 * * 1-5", "tz": "...", "run": "..."}`，
+標準 5 欄（分 時 日 月 星期），用在一列 `every` 說不出來、原本要拆成好幾列的排程（平日、每 2 小時、1 號和 15 號）；
+`every` 的五種週期與欄位不變（`trigger_id` 也不變，有測試釘住）。`UserSchedule.as_schedule` 把它交給 sweep 成
+`every="cron:<expr>"`，所以到期、claim、補跑、出生規則都是同一份程式：時間窗是「現在或之前最近的一次」本身
+（`cron:2026-10-08T09:00`，漏掉的只補最近一次），下一次是之後的第一次（`croniter`，在列的時區裡算）。linter 拒絕
+`cron` 與 `every` 同列、cron 列帶週期欄位、不是 5 欄、`croniter` 看不懂的。改時間路由收 `every` 或 `cron` 其一。
+總表與面板用 `cronstrue` 原本的字描述（不換算到看的人時區，時區不同時加時區名稱，滑過顯示 cron）；改時間有
+「簡單／cron」兩種模式。AI 的規則：一列 `every` 說得出來就用 `every`，否則一列 `cron`。
 教它的地方在 `author-workflow` skill（每個 app 都授權）、`save_workflow` 的成功回覆句、以及工具
 自己的說明（`every` 的字從 `EVERY` 產生，測試釘住不會漂移）。
 
