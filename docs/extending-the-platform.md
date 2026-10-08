@@ -175,7 +175,8 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
   數不對、annotation 不是 BaseModel)在**註冊時**就 `TypeError`——fail-loud,不會拖到執行期。
 - Dispatcher 本身**零 domain 邏輯**、除 pydantic 外零依賴;不想用照樣手寫 `main()`,framework 不挑。
 
-**exit code 是契約的一部分**(#674):`2` = 可以重試、`3` = 要有人先做一件事、`1` = 其他失敗;
+**exit code 是契約的一部分**(#674):`2` = 可以重試、`3` = 要有人先做一件事(缺環境變數時聊天裡會出
+「登入 / 設定」卡片,見 [`tool-authoring.md`](tool-authoring.md) §4c)、`1` = 其他失敗;
 `124` / `-9`(記憶體上限)/ `-11`(ABI)/ `126`·`127`(bundle 壞了)由平台產生並自動翻成人話給模型。
 第一方工具走的是同一條路徑,細節見 [`tool-authoring.md`](tool-authoring.md)。
 
@@ -306,6 +307,10 @@ def run(args: Args) -> str:
 不用為了填欄位而亂猜。**整個檔案缺席:平台內部仍記得「沒宣告」≠「宣告了不需要」**(`env_needs` 是三態),**但面板
 會告訴使用者這個 tool 什麼都不需要、不列它**(`plan-wui-viewer-login`)。說清楚需要什麼是 tool
 provider 的義務——沒寫導致使用者跑下去才知道缺什麼,責任在 provider。
+
+**宣告也讓聊天裡的請求卡片認得這個名字。** 工具 exit 3 時,AI 呼叫 `request_env` 請使用者登入或設定
+(`plan-env-request-card.md`);平台只為**工具這次輸出裡出現過**、或 **`env.json` 宣告過**的名字出卡片,
+擋住模型自己編出來的名字。所以有宣告的工具,錯誤訊息沒寫出完整變數名也一樣會有卡片。
 
 `env.json` 格式錯誤的話,**prebuild 會當場失敗並指名檔案**(你在自己的 build 上,改得掉);
 但在別人的部署上 `discover_packages` 會**降級成「沒宣告」並記一條 warning**,不會讓對方的
