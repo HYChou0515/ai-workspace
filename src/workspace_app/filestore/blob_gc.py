@@ -47,8 +47,8 @@ import contextlib
 import datetime as dt
 import logging
 import time
-from collections.abc import Callable
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 from specstar import QB, Schema, SpecStar
@@ -56,6 +56,7 @@ from specstar.types import Job, TaskStatus
 
 if TYPE_CHECKING:
     from ..monitor import IMonitor
+    from ..quota.disk_reconcile import DiskReconcileReport
     from .protocol import FileStore
 
 logger = logging.getLogger(__name__)
@@ -110,8 +111,13 @@ class BlobGcCoordinator:
         filestore: FileStore | None = None,
         message_queue_factory: object | None = None,
         now: Callable[[], dt.datetime] = _utcnow,
+        disk_ledger_pass: Callable[[], Coroutine[Any, Any, DiskReconcileReport]] | None = None,
     ) -> None:
         self._spec = spec
+        # docs/plan-storage-all-items.md: the disk-ledger reconcile, a second
+        # kind on this queue — it needs what this worker already boots (the
+        # API's whole composition: every App's items, the ledger, the store).
+        self._disk_ledger_pass = disk_ledger_pass
         self._t1 = t1
         self._t2 = t2
         self._monitor = monitor
@@ -139,13 +145,22 @@ class BlobGcCoordinator:
         No retry budget: the next window asks again, which is the cadence the
         in-process sweep this replaced retried at — the queue's default (3)
         would run a failing reconcile four times back to back on the worker."""
-        if self._job_rm.count_resources(QB["status"].in_(_ACTIVE).build()) > 0:
+        self._enqueue("reconcile")
+
+    def enqueue_disk_ledger(self) -> None:
+        """Ask for one disk-ledger reconcile (docs/plan-storage-all-items.md):
+        every item's row set right. Same shape as :meth:`enqueue_reconcile` —
+        coalesced per KIND, so a long blob pass in flight does not make this
+        window's disk ask disappear."""
+        self._enqueue("disk-ledger")
+
+    def _enqueue(self, kind: str) -> None:
+        active = self._job_rm.list_resources(QB["status"].in_(_ACTIVE).build())
+        if any(isinstance(r.data, BlobGcJob) and r.data.payload.kind == kind for r in active):
             return
         self._job_rm.create(
             BlobGcJob(
-                payload=BlobGcPayload(
-                    kind="reconcile", registry=sorted(self._spec.resource_managers)
-                ),
+                payload=BlobGcPayload(kind=kind, registry=sorted(self._spec.resource_managers)),
                 partition_key=_PARTITION,
                 max_retries=0,
             )
@@ -155,7 +170,7 @@ class BlobGcCoordinator:
     def _handle(self, job) -> None:  # job: Resource[BlobGcJob]
         payload = job.data.payload
         assert isinstance(payload, BlobGcPayload)
-        if payload.kind != "reconcile":
+        if payload.kind not in ("reconcile", "disk-ledger"):
             logger.warning("blob-gc: unknown job kind %r", payload.kind)
             return
         # Prune BEFORE the pass, whatever the pass does: a reconcile that fails
@@ -164,7 +179,25 @@ class BlobGcCoordinator:
         self._prune_finished()
         self._check_partition(job.data.partition_key)
         self._check_registry(payload.registry)
+        if payload.kind == "disk-ledger":
+            self._disk_ledger()
+            return
         self._reconcile()
+
+    def _disk_ledger(self) -> None:
+        if self._disk_ledger_pass is None:
+            # A runner built without the pass (no filestore wired) must not read
+            # as having reconciled: FAILED, visibly.
+            raise RuntimeError("blob-gc: this runner has no disk-ledger pass wired")
+        # The handler runs on the queue's consumer thread, which owns no loop.
+        report = asyncio.run(self._disk_ledger_pass())
+        logger.info(
+            "disk-ledger: reconcile complete recorded=%d forgotten=%d live=%d failed=%d",
+            report.recorded,
+            report.forgotten,
+            report.skipped_live,
+            report.failed,
+        )
 
     def _check_partition(self, partition_key: str | None) -> None:
         """Only :data:`_PARTITION` serialises passes; the model's auto-CRUD

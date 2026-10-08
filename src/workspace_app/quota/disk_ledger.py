@@ -141,6 +141,20 @@ class DiskLedger:
         A total alone tells you that you are full, not what to delete."""
         return await asyncio.to_thread(self._per_item_sync, owner)
 
+    async def rows(self) -> dict[str, _WorkspaceDisk]:
+        """Every live row, by item — what the reconcile pass compares the items
+        that exist against (docs/plan-storage-all-items.md decision 5)."""
+        return await asyncio.to_thread(self._rows_sync)
+
+    def _rows_sync(self) -> dict[str, _WorkspaceDisk]:
+        rm = self._spec.get_resource_manager(_WorkspaceDisk)
+        out: dict[str, _WorkspaceDisk] = {}
+        for rev in rm.list_resources((QB.is_deleted() == False).build()):  # noqa: E712
+            data = rev.data
+            assert isinstance(data, _WorkspaceDisk)
+            out[data.item_id] = data
+        return out
+
     def _per_item_sync(self, owner: str) -> list[tuple[str, int]]:
         rm = self._spec.get_resource_manager(_WorkspaceDisk)
         query = ((QB["owner"] == owner) & (QB.is_deleted() == False)).build()  # noqa: E712

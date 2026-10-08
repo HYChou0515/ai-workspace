@@ -34,6 +34,7 @@ from .kb.quality_coordinator import QualityCoordinator
 from .kb.reconcile import Reconciler, collection_wiki_text
 from .kb.wiki.coordinator import WikiMaintenanceCoordinator
 from .kb.wiki.maintainer import default_wiki_maintainer_config
+from .quota.disk_reconcile import make_disk_ledger_pass
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -189,6 +190,9 @@ def build_coordinators(
     # plan-chat-video-export: the `chat_video:` config section — the output
     # ceiling and the heartbeat the worker applies. None ⇒ its defaults.
     chat_video_settings: ChatVideoSettings | None = None,
+    # docs/plan-storage-all-items.md: a sandbox active within this window is
+    # live — the disk-ledger pass leaves it to the mirror. 0 ⇒ no pass wired.
+    disk_live_window_ms: int = 0,
 ) -> CoordinatorBundle:
     """Construct the background job coordinators and wire the index→wiki→quality
     chain. The returned coordinators are *not* yet consuming — the caller (API
@@ -338,6 +342,13 @@ def build_coordinators(
         monitor=monitor,
         filestore=filestore,
         message_queue_factory=message_queue_factory,
+        # None for no store, no live window, or a store without usage
+        # accounting: the runner then FAILS the job rather than booking 0s.
+        disk_ledger_pass=(
+            make_disk_ledger_pass(spec, filestore, live_window_ms=disk_live_window_ms)
+            if filestore is not None and disk_live_window_ms > 0
+            else None
+        ),
     )
     # plan-chat-video-export: one render per job; the route's own answer to
     # "who may" is asked again by the worker, with the same superuser set.

@@ -376,6 +376,11 @@ class ResourceSettings:
 
     per_app: PerAppResources = field(default_factory=PerAppResources)
     per_user: PerUserResources = field(default_factory=PerUserResources)
+    # docs/plan-storage-all-items.md: how often the disk-ledger reconcile is
+    # asked for — every item a person owns gets its storage row, with its
+    # durable size when no sandbox is live for it. The pass is a `blob-gc` job.
+    # 0 ⇒ never.
+    disk_reconcile_interval_sec: float = 21600.0
 
 
 # ─── runner ─────────────────────────────────────────────────────────────

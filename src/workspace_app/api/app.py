@@ -560,6 +560,11 @@ def create_app(
     # is gone and re-runs them. None ⇒ off.
     turn_reclaim_interval: timedelta | None = timedelta(seconds=RECLAIM_TICK_S),
     gc_interval: timedelta | None = timedelta(hours=1),
+    # docs/plan-storage-all-items.md: how often the disk-ledger reconcile is
+    # asked for (every item's storage row set right). None ⇒ never — the
+    # default here, so an app built in a test does not reconcile at startup;
+    # a deploy gets `resources.disk_reconcile_interval_sec` (6 h) from config.
+    disk_reconcile_interval: timedelta | None = None,
     gc_t1: str = "1h",
     gc_t2: str = "24h",
     # plan-chat-video-export: the `chat_video:` config section — the size /
@@ -1417,6 +1422,7 @@ def create_app(
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
+        disk_reconcile_interval=disk_reconcile_interval,
         shutdown_budget=shutdown_budget,
         turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
@@ -1736,6 +1742,7 @@ def create_app(
         monitor=monitor,
         filestore=filestore,
         chat_video_settings=chat_video,
+        disk_live_window_ms=int(idle_timeout.total_seconds() * 1000),
     )
 
     # #208: the first real backend hit — specstar materialises every model's

@@ -635,6 +635,8 @@ _TOP_SCHEMA: dict[str, Any] = {
             "max": _dataclass_keys(ResourceAmounts),
         },
         "per_user": _dataclass_keys(PerUserResources),
+        # A leaf beside the two sub-sections (docs/plan-storage-all-items.md).
+        "disk_reconcile_interval_sec": set(),
     },
     "runner": _dataclass_keys(RunnerSettings),
     "llm": _dataclass_keys(LlmSettings),
@@ -1139,6 +1141,9 @@ def _build_resources(d: dict[str, Any]) -> ResourceSettings:
             max=_build(ResourceAmounts, per_app.get("max", {})),
         ),
         per_user=_build(PerUserResources, d.get("per_user", {})),
+        disk_reconcile_interval_sec=float(
+            d.get("disk_reconcile_interval_sec", ResourceSettings().disk_reconcile_interval_sec)
+        ),
     )
 
 

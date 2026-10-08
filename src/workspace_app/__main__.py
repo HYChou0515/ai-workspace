@@ -288,6 +288,11 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             ),
             gc_t1=settings.filestore.gc_t1,
             gc_t2=settings.filestore.gc_t2,
+            disk_reconcile_interval=(
+                timedelta(seconds=settings.resources.disk_reconcile_interval_sec)
+                if settings.resources.disk_reconcile_interval_sec
+                else None
+            ),
             # plan-chat-video-export: the video ceilings + the worker's heartbeat.
             chat_video=settings.chat_video,
             # plan-graceful-shutdown P2: the turn-drain budget — the same number

@@ -49,6 +49,16 @@ def test_resources_section_loads_from_yaml(tmp_path: Path):
     assert s.resources.per_user.cpu == 0.0
 
 
+@pytest.mark.parametrize(
+    ("written", "read"), [("", 21600.0), ("  disk_reconcile_interval_sec: 0\n", 0.0)]
+)
+def test_the_disk_reconcile_interval_reaches_settings(tmp_path: Path, written: str, read: float):
+    """docs/plan-storage-all-items.md decision 7: 6 h by default, 0 ⇒ never."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("resources:\n  per_user:\n    count: 1\n" + written, encoding="utf-8")
+    assert load(config_path=cfg, env={}).resources.disk_reconcile_interval_sec == read
+
+
 def test_absent_resources_section_is_all_unset(tmp_path: Path):
     """An existing deploy's config.yaml has no `resources:` block at all. It must
     load to the all-unset shape — which resolves to today's numbers."""
