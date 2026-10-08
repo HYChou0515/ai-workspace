@@ -1842,7 +1842,7 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
 
 ---
 
-### 2026-10-08 · #893 儲存空間列出名下所有項目，沒設上限的人也記帳 {#pr-893}
+### 2026-10-08 · 6b652320 · #893 儲存空間列出名下所有項目，沒設上限的人也記帳 {#pr-893}
 
 **設定** — 新 key **`resources.disk_reconcile_interval_sec`**（預設 `21600`＝6 小時；`0`＝不對帳）。
 多久把每個 item 的儲存用量重新對一次帳（`docs/plan-storage-all-items.md`）。**預設就開**，不用動也會跑。
