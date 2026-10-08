@@ -207,7 +207,7 @@ describe("SkillHubEntryCard", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.card.install") }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      word("skillHub.refused.folder_in_the_way", { path: ".skill/triage-reflow" }),
+      word("skillHub.refused.folder_in_the_way", { name: "triage-reflow" }),
     );
   });
 

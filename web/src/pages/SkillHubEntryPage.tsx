@@ -251,6 +251,7 @@ function Sidebar({
         type="button"
         className="btn"
         data-variant="primary"
+        data-size="md"
         onClick={() => setInstalling(true)}
       >
         {t("skillHub.install")}
@@ -687,7 +688,8 @@ function OwnerActions({
 
       {sharing && entry.permission ? (
         <PermissionDialog
-          resourceName={`${entry.owner}/${entry.name}`}
+          // The skill's name, as the page shows it — not `owner/name` (audit #30).
+          resourceName={entry.name}
           owner={entry.owner}
           value={entry.permission}
           roles={DOC_ROLES}
@@ -751,7 +753,7 @@ function TransferDialog({
       <h2 id={titleId} className="modal-title">
         {t("skillHub.transfer.title", { name })}
       </h2>
-      <p className="hint">{t("skillHub.transfer.body")}</p>
+      <p className="hint skill-hub-dialog-hint">{t("skillHub.transfer.body")}</p>
       <UserPicker
         selected={picked ? [picked] : []}
         onToggle={(id) => setPicked((cur) => (cur === id ? null : id))}
@@ -817,9 +819,12 @@ function NewItemDialog({
             the new item opens on it rather than the App's default. So does
             the entry (`?skill=`), for the form to say what comes next
             (plan-skill-hub-ui-polish D11). */}
+        {/* Sized like the buttons beside it: `.btn` alone has no padding, and
+            a link does not get a button's (audit #29). */}
         <Link
           className="btn"
           data-variant="primary"
+          data-size="md"
           to={`/a/${encodeURIComponent(target.app)}/new?profile=${encodeURIComponent(target.profile)}&skill=${encodeURIComponent(entryId)}`}
         >
           {t("skillHub.edit.newItem.go")}

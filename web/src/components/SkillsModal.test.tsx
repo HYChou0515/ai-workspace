@@ -697,10 +697,7 @@ describe("SkillsModal — the skill hub", () => {
     fireEvent.click(await screen.findByTestId("pick-install-e-1"));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      word("skillHub.refused.folder_in_the_way.theirs", {
-        owner: "alice",
-        path: ".skill/triage-reflow/",
-      }),
+      word("skillHub.refused.folder_in_the_way.theirs", { owner: "alice", name: "triage-reflow" }),
     );
   });
 

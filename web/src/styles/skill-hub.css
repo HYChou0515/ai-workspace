@@ -8,10 +8,9 @@
 
 /* ── the list (plan-skill-hub-ux-redo D1) ─────────────────────────────── */
 
-/* The page's width is a variable so it can be settled where it is seen
-   (D5a, the web demo); `.page`'s 760px is a form's width. */
+/* The page's width is a token (tokens.css) so it can be settled where it is
+   seen (D5a, the web demo); `.page`'s 760px is a form's width. */
 .page.skill-hub-page {
-  --skill-hub-list-width: 960px;
   max-width: var(--skill-hub-list-width);
 }
 
@@ -179,11 +178,9 @@
 
 /* ── a skill's page (plan-skill-hub-ux-redo D5) ───────────────────────── */
 
-/* Wider than a form's 760px: a reading column and a sidebar. A variable, to
-   be settled where it is seen (D5a, the web demo). */
+/* Wider than a form's 760px: a reading column and a sidebar. Tokens, to be
+   settled where they are seen (D5a, the web demo). */
 .page.skill-hub-entry {
-  --skill-hub-entry-width: 1120px;
-  --skill-hub-side-width: 280px;
   max-width: var(--skill-hub-entry-width);
 }
 
@@ -887,4 +884,27 @@ a.skills-row-name {
   display: inline-flex;
   width: 32px;
   justify-content: flex-end;
+}
+
+/* D17 / audit #28: the transfer dialog's help line clear of the picker's focus ring. */
+.skill-hub-dialog-hint {
+  margin-bottom: var(--space-12);
+}
+/* Audit #34: inline code in a SKILL.md or a review note reads as code. */
+.page .skill-hub-md code,
+.page .skill-hub-notes code,
+.page .skill-hub-history-notes code {
+  padding: 1px 4px;
+  border-radius: var(--radius-chip);
+  background: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.page .skill-hub-md pre code {
+  padding: 0;
+  background: none;
+}
+.page .skill-hub-notes .markdown > p,
+.page .skill-hub-history-notes .markdown > p {
+  margin: 0;
 }

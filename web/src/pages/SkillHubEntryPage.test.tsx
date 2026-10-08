@@ -941,7 +941,11 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
 
   it("shows what the review said about each version on its row (§8)", async () => {
     const history = HISTORY.map((e) =>
-      e.revision === "e-1:2" ? { ...e, review_notes: ["names a path it does not ship"] } : e,
+      e.revision === "e-1:2"
+        ? { ...e, review_notes: ["names a path it does not ship"] }
+        : e.revision === "e-1:4"
+          ? { ...e, review_notes: ["the current version's note"] }
+          : e,
     );
     mount(client(detail({}), OPEN, history), undefined, "/skill-hub/e-1?tab=history");
     const list = await timeline();
@@ -950,6 +954,8 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     expect(rows).toHaveLength(4);
     expect(rows[2]).toHaveTextContent("names a path it does not ship");
     expect(rows[3]).not.toHaveTextContent("names a path");
+    // The current version's notes are the sidebar's; said once (D17).
+    expect(rows[1]).not.toHaveTextContent("the current version's note");
   });
 
   it("compares a version with any other one, the current by default (§8 「能和另一版比對」)", async () => {

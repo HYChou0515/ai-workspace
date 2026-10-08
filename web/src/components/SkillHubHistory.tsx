@@ -214,12 +214,16 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
                       {t("skillHub.history.audience", { who: e.audience.map(subjectName).join(", ") })}
                     </p>
                   ) : null}
-                  {version && e.review_notes.length > 0 ? (
+                  {version && e !== currentVersion && e.review_notes.length > 0 ? (
                     // What the review said about this version (§8) — the one a
-                    // rollback brings back is not reviewed again (G20).
+                    // rollback brings back is not reviewed again (G20). Not on
+                    // the current version's row: the sidebar says it, once
+                    // (D17). Markdown, as the reviewer wrote it.
                     <ul className="skill-hub-history-notes" aria-label={t("skillHub.review")}>
                       {e.review_notes.map((note) => (
-                        <li key={note}>{note}</li>
+                        <li key={note} className="markdown">
+                          <ReactMarkdown>{note}</ReactMarkdown>
+                        </li>
                       ))}
                     </ul>
                   ) : null}
