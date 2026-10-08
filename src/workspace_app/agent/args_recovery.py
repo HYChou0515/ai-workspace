@@ -68,7 +68,7 @@ from typing import Any, cast
 from agents import FunctionTool
 from agents.tool_context import ToolContext
 
-from .arg_repair import malformed_raw
+from .arg_repair import AMBIGUOUS_CALL_KEY, malformed_raw
 from .context import AgentToolContext
 
 _LOGGER = logging.getLogger(__name__)
@@ -264,6 +264,8 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
         # than raise. The conversation already holds the valid sentinel, so this
         # neither poisons the next request nor aborts the turn — the model sees
         # the error as a normal tool result and retries in-band. #76.
+        if (reply := ambiguous_call_reply(value)) is not None:
+            return reply
         raw = malformed_raw(value)
         if raw is not None:
             _LOGGER.info("args_recovery: in-band malformed-args error on %s: %r", tool.name, raw)
@@ -302,3 +304,23 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     # silently dropped those — broke the model's tool emission. Use
     # `dataclasses.replace` so every other field is preserved verbatim.
     return dataclasses.replace(tool, on_invoke_tool=safer)
+
+
+def ambiguous_call_reply(args: dict) -> str | None:
+    """The reply to a call `ToolAliasModel` found ambiguous — today's collision
+    message, then the names to call instead — or ``None`` for ordinary args."""
+    if set(args) != {AMBIGUOUS_CALL_KEY}:
+        return None
+    detail = args[AMBIGUOUS_CALL_KEY]
+    if not isinstance(detail, dict):
+        return None
+    called = detail.get("called")
+    candidates = [tuple(c) for c in detail.get("candidates") or [] if len(c) == 2]
+    if not isinstance(called, str) or not candidates:
+        return None
+    packages = sorted({pkg for pkg, _name in candidates})
+    names = " or ".join(f"`{name}`" for _pkg, name in candidates)
+    return (
+        f"cross-package tool name collision: command {called!r} appears in packages "
+        f"{packages} — call {names} instead"
+    )

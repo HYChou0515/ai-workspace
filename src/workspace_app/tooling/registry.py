@@ -293,6 +293,33 @@ def build_function_tools(
     return cap_tool_outputs([_to_function_tool(pkg, cmd) for pkg, cmd in selected])
 
 
+def third_party_aliases(
+    packages: Sequence[PackageInfo],
+    *,
+    allowed: list[str] | None,
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    """The names a granted third-party command used to be called by, each to
+    the `(local name, model name)` of every command answering to it
+    (docs/plan-third-party-tool-names.md N2): its bare command name and the
+    grant spelling `<local name>:<command>`. Two entries for one bare name is
+    a collision — the caller fails that call, never the turn.
+
+    The SAME expansion as `build_function_tools` (D3): an old name cannot
+    reach a command the turn was not granted."""
+    if allowed is None:
+        selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
+    else:
+        selected = _select_commands(packages, allowed)
+    out: dict[str, list[tuple[str, str]]] = {}
+    for pkg, cmd in _callable_by_name(selected):
+        if not pkg.third_party:
+            continue
+        target = (pkg.name, model_tool_name(pkg, cmd))
+        out.setdefault(cmd.name, []).append(target)
+        out.setdefault(f"{pkg.name}:{cmd.name}", []).append(target)
+    return {name: tuple(sorted(set(targets))) for name, targets in out.items()}
+
+
 def allowed_command_names(
     packages: Sequence[PackageInfo],
     allowed: list[str] | None,
