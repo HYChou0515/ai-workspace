@@ -9,9 +9,10 @@
  *
  * On the VIEWER's clock (`docs/plan-schedule-overview-polish.md` decision 6):
  * the form opens on the row moved into the viewer's zone when it moves cleanly
- * (else as written, in its own zone), the zone is picked by its name — never
- * typed as an IANA id — and the time is two 24-hour selects, because a time
- * input draws 上午/下午 or AM/PM in some locales while the table reads 24-hour.
+ * (else as written, in its own zone), says that zone in grey by its name — it
+ * is not a choice: nobody needs to pick a zone to move a time — and saves the
+ * time in it. The time is two 24-hour selects, because a time input draws
+ * 上午/下午 or AM/PM in some locales while the table reads 24-hour.
  *
  * A new time is a new schedule to the platform, so the note under the fields
  * says what that costs BEFORE the press (decision 16): it starts from the next
@@ -20,7 +21,7 @@
  * Holding unsaved work, every deliberate exit goes through `useDirtyClose`;
  * `dirty` is measured against what the modal opened with (`sameShape`).
  */
-import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 
 import { type Period, type RowRef, type ScheduleTime, ScheduleActionError } from "../api/schedules";
 import { useDirtyClose } from "../hooks/useDirtyClose";
@@ -74,31 +75,6 @@ export function timeOf(raw: unknown, viewer: string, refMs: number): ScheduleTim
   return { ...form, at: moved.at, dow: every === "weekly" ? moved.dow : form.dow, tz: viewer };
 }
 
-/** Every zone the browser knows, by name — the viewer's own first, then the
- * one the row is in, then UTC, then the rest named with their city (several
- * share a name: 中歐時間 is Berlin and Paris). */
-function useZoneOptions(viewer: string, current: string, locale: string, t: ReturnType<typeof useT>) {
-  return useMemo(() => {
-    const first: { value: string; label: string }[] = [
-      { value: viewer, label: t("schedules.edit.yourZone", { zone: zoneName(viewer, locale) }) },
-    ];
-    for (const zone of [current, "UTC"]) {
-      if (zone && !first.some((o) => o.value === zone)) {
-        first.push({ value: zone, label: validZone(zone) ? zoneName(zone, locale) : zone });
-      }
-    }
-    const all =
-      typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
-    const rest = all
-      .filter((zone) => !first.some((o) => o.value === zone))
-      .map((zone) => ({
-        value: zone,
-        label: `${zoneName(zone, locale)}（${zone.slice(zone.lastIndexOf("/") + 1).replace(/_/g, " ")}）`,
-      }));
-    return { first, rest };
-  }, [viewer, current, locale, t]);
-}
-
 export function ScheduleTimeModal({
   raw,
   nextMs,
@@ -130,7 +106,9 @@ export function ScheduleTimeModal({
   const set = (patch: Partial<ScheduleTime>) => setDraft((d) => ({ ...d, ...patch }));
   const usesAt = draft.every === "daily" || draft.every === "weekly" || draft.every === "monthly";
   const [hh, mm] = (draft.at ?? "00:00").split(":");
-  const zones = useZoneOptions(clock.viewer, initial.tz ?? "", clock.locale, t);
+  // The zone the time is read in — shown, not picked; saved as it is.
+  const zoneTz = draft.tz || "UTC";
+  const zoneWords = validZone(zoneTz) ? zoneName(zoneTz, clock.locale) : zoneTz;
 
   // Focus the title, not the first field: a field's focus ring is the accent
   // colour and read as an error on a form nobody has touched yet. ModalShell
@@ -261,30 +239,14 @@ export function ScheduleTimeModal({
           </div>
         </fieldset>
       ) : null}
-      <label style={field}>
-        {t("schedules.edit.tz")}
-        <select
-          className="input"
-          value={draft.tz}
-          onChange={(e) => set({ tz: e.target.value })}
-          aria-label={t("schedules.edit.tz")}
-        >
-          {zones.first.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-          {zones.rest.length > 0 ? (
-            <optgroup label={t("schedules.edit.otherZones")}>
-              {zones.rest.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-        </select>
-      </label>
+      <p
+        data-testid="schedule-time-zone"
+        style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
+      >
+        {zoneTz === clock.viewer
+          ? t("schedules.edit.zoneYours", { zone: zoneWords })
+          : t("schedules.edit.zone", { zone: zoneWords })}
+      </p>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
         {t("schedules.edit.note")}
       </p>

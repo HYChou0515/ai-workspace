@@ -757,11 +757,10 @@ export const messages = {
   "schedules.edit.at": { "zh-TW": "時間", en: "Time" },
   "schedules.edit.dow": { "zh-TW": "星期", en: "Day of week" },
   "schedules.edit.dom": { "zh-TW": "每月幾號", en: "Day of month" },
-  "schedules.edit.tz": { "zh-TW": "時區", en: "Time zone" },
   "schedules.edit.hour": { "zh-TW": "時", en: "Hour" },
   "schedules.edit.minute": { "zh-TW": "分", en: "Minute" },
-  "schedules.edit.yourZone": { "zh-TW": "你的時區（{zone}）", en: "Your time zone ({zone})" },
-  "schedules.edit.otherZones": { "zh-TW": "其他時區", en: "Other time zones" },
+  "schedules.edit.zone": { "zh-TW": "時區：{zone}", en: "Time zone: {zone}" },
+  "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":
       "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，「用我的身分執行」要重新按一次。",

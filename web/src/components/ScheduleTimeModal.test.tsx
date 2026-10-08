@@ -40,6 +40,8 @@ function open(raw: unknown = FRIDAY_1730_TPE, viewer = TPE) {
 }
 
 const value = (key: Parameters<typeof translate>[1]) => screen.getByLabelText(word(key));
+/** The zone the form's time is in — said in grey, not picked (user, 2026-10-08). */
+const zone = () => screen.getByTestId("schedule-time-zone");
 
 describe("ScheduleTimeModal", () => {
   it("opens on the row as written when the viewer is in its zone", () => {
@@ -48,20 +50,22 @@ describe("ScheduleTimeModal", () => {
     expect(value("schedules.edit.dow")).toHaveValue("fri");
     expect(value("schedules.edit.hour")).toHaveValue("17");
     expect(value("schedules.edit.minute")).toHaveValue("30");
-    expect(value("schedules.edit.tz")).toHaveValue(TPE);
+    expect(zone()).toHaveTextContent(word("schedules.edit.zoneYours", { zone: "台北標準時間" }));
   });
 
   it("opens on the row moved onto the viewer's clock, in the viewer's zone", () => {
     open(FRIDAY_1730_TPE, "UTC");
     expect(value("schedules.edit.dow")).toHaveValue("fri");
     expect(value("schedules.edit.hour")).toHaveValue("09");
-    expect(value("schedules.edit.tz")).toHaveValue("UTC");
+    expect(zone()).toHaveTextContent(word("schedules.edit.zoneYours", { zone: "世界標準時間" }));
   });
 
   it("keeps a time that would land on another day of the month in its own zone", () => {
     open({ every: "monthly", dom: 1, at: "02:00", tz: TPE, run: "r" }, "UTC");
     expect(value("schedules.edit.hour")).toHaveValue("02");
-    expect(value("schedules.edit.tz")).toHaveValue(TPE);
+    // Not the viewer's zone, so it is named without "your" — the time is read there.
+    expect(zone()).toHaveTextContent(word("schedules.edit.zone", { zone: "台北標準時間" }));
+    expect(zone()).not.toHaveTextContent("你的時區");
   });
 
   it("writes the time in 24 hours, never 上午/下午", () => {
@@ -72,16 +76,19 @@ describe("ScheduleTimeModal", () => {
     expect(hours[23]).toBe("23");
   });
 
-  it("offers zones by name — the viewer's first — never as an id to type", () => {
+  it("says the zone in grey and offers nothing to pick — never an id", () => {
     open({ every: "daily", at: "09:00", run: "r" });
-    const zone = value("schedules.edit.tz");
-    expect(zone.tagName).toBe("SELECT");
-    const [mine, second] = within(zone).getAllByRole("option");
-    expect(mine).toHaveTextContent(word("schedules.edit.yourZone", { zone: "台北標準時間" }));
-    expect(second).toHaveTextContent("世界標準時間");
+    expect(zone()).toHaveTextContent("台北標準時間");
+    expect(zone()).not.toHaveTextContent("Asia/Taipei");
+    expect(zone().tagName).not.toBe("SELECT");
+    expect(screen.getAllByRole("combobox").map((c) => c.getAttribute("aria-label"))).toEqual([
+      word("schedules.edit.every"),
+      word("schedules.edit.hour"),
+      word("schedules.edit.minute"),
+    ]);
   });
 
-  it("saves in the zone chosen — the viewer's by default", async () => {
+  it("saves in the zone it shows — the viewer's when the time moved there", async () => {
     const { onSave } = open({ every: "daily", at: "09:00", run: "r" });
     // 09:00 UTC opened as 17:00 in Taipei.
     expect(value("schedules.edit.hour")).toHaveValue("17");
