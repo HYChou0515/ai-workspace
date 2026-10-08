@@ -63,7 +63,11 @@ const detail = (over: Partial<SkillHubDetail>): SkillHubDetail => ({
   review: { verdict: "notes", notes: ["the description never says when", "step 2 needs exec"], model: "gpt-4o" },
   forked_from: null,
   forks: [],
-  files: ["SKILL.md", "references/glossary.md"],
+  files: [
+    { path: "SKILL.md", size: 80 },
+    { path: "references/glossary.md", size: 12 },
+  ],
+  scripts: 0,
   skill_md: "---\nname: triage-reflow\ndescription: d\n---\n\n# How to triage\n\nRead the log.",
   is_owner: false,
   visibility: "public",
@@ -108,6 +112,7 @@ const ev = (over: Partial<SkillHubHistoryEvent>): SkillHubHistoryEvent => ({
   visibility: "",
   audience: [],
   current: false,
+  version: null,
   ...over,
 });
 
@@ -126,8 +131,10 @@ function client(
 ) {
   return {
     list: vi.fn<SkillHubApi["list"]>(async () => []),
-    browse: vi.fn<SkillHubApi["browse"]>(async () => ({ entries: [], counted_since: "" })),
+    browse: vi.fn<SkillHubApi["browse"]>(async () => ({ entries: [], total: 0, counted_since: "" })),
     get: vi.fn<SkillHubApi["get"]>(async () => entry),
+    installs: vi.fn<SkillHubApi["installs"]>(async () => []),
+    targets: vi.fn<SkillHubApi["targets"]>(async () => ({ missing_tools: [], items: [] })),
     install: vi.fn<SkillHubApi["install"]>(),
     unpublish: vi.fn<SkillHubApi["unpublish"]>(async () => undefined),
     republish: vi.fn<SkillHubApi["republish"]>(async () => undefined),
@@ -140,7 +147,12 @@ function client(
       revision,
       commit: "c2",
       description: "v2 notes",
-      files: ["SKILL.md", "shot.png", "notes.md"],
+      files: [
+        { path: "SKILL.md", size: 60 },
+        { path: "shot.png", size: 9 },
+        { path: "notes.md", size: 14 },
+      ],
+      scripts: 0,
       skill_md: "---\nname: triage-reflow\ndescription: d\n---\n\n# The second way\n",
     })),
     versionFile: vi.fn<SkillHubApi["versionFile"]>(async (_id, _rev, path) =>

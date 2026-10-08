@@ -329,7 +329,7 @@ function VersionModal({
           </div>
           <h3>{t("skillHub.files")}</h3>
           <ul className="skill-hub-files">
-            {version.data.files.map((f) => (
+            {version.data.files.map(({ path: f }) => (
               <li key={f}>
                 <button
                   type="button"

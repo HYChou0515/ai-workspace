@@ -124,15 +124,32 @@ describe("skillHubApi history (plan-skill-hub-history §8)", () => {
     return calls;
   }
 
-  it("browses with the sort only when it is not the default, and keeps the counting day", async () => {
-    const calls = recording({ entries: [], counted_since: "2026-10-07" });
-    const page = await skillHubApi.browse("deck", true, "popular");
-    await skillHubApi.browse();
+  it("browses with only the parameters that are not the default, and keeps the total and counting day", async () => {
+    const calls = recording({ entries: [], total: 7, counted_since: "2026-10-07" });
+    const page = await skillHubApi.browse({
+      q: "deck",
+      mine: true,
+      owner: "bob",
+      sort: "updated",
+      offset: 50,
+      limit: 50,
+    });
+    await skillHubApi.browse({});
     expect(calls.map((c) => c.url)).toEqual([
-      "/api/skill-hub/entries?q=deck&mine=true&sort=popular",
+      "/api/skill-hub/entries?q=deck&mine=true&owner=bob&sort=updated&offset=50&limit=50",
       "/api/skill-hub/entries",
     ]);
-    expect(page).toEqual({ entries: [], counted_since: "2026-10-07" });
+    expect(page).toEqual({ entries: [], total: 7, counted_since: "2026-10-07" });
+  });
+
+  it("asks for where the entry is installed and where it could go", async () => {
+    const calls = recording({ installs: [], missing_tools: [], items: [] });
+    await skillHubApi.installs("e/1");
+    await skillHubApi.targets("e/1", "rca");
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/skill-hub/entries/e%2F1/installs",
+      "/api/skill-hub/entries/e%2F1/targets?app=rca",
+    ]);
   });
 
   it("asks for each history read at its route, the revision in the path encoded", async () => {

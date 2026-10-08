@@ -6,41 +6,78 @@
  * flex row at every width (the `.wui-list` note there).
  */
 
-/* ── the list ─────────────────────────────────────────────────────────── */
+/* ── the list (plan-skill-hub-ux-redo D1) ─────────────────────────────── */
 
-/* The 「全部 / 我的」 pair beside the search box. */
-.page .skill-hub-scope {
-  display: inline-flex;
-  gap: var(--space-4);
+/* The page's width is a variable so it can be settled where it is seen
+   (D5a, the web demo); `.page`'s 760px is a form's width. */
+.page.skill-hub-page {
+  --skill-hub-list-width: 960px;
+  max-width: var(--skill-hub-list-width);
 }
 
+/* 「顯示 全部 / 我的」 beside the search box, and the sort, each labelled (the
+   audit: two unlabeled pairs of identical buttons). */
+.page .skill-hub-scope,
+.page .skill-hub-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.page .skill-hub-tool-label {
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  margin-right: var(--space-4);
+}
+.page .skill-hub-sort > select {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 var(--space-8);
+  font-size: var(--text-small);
+}
+.page .skill-hub-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 0 0 var(--space-8);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  font-size: var(--text-small);
+}
+
+.page .skill-hub-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-12);
+  margin: 0 0 var(--space-8);
+}
+
+/* One list, rows divided by a rule — not a column of cards. */
 .page .skill-hub-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-12);
+  border-top: 1px solid var(--paper-3);
 }
 
-/* One entry: a head line (name · App · badges), the description, the owner.
-   A block, not a flex row: the head line wraps its own children, so a long
-   name at 390px folds under the App tag instead of squeezing it to 0px
-   (the lesson of PR #811's rows). */
-.page .skill-hub-row {
-  display: block;
-  padding: var(--space-12) var(--space-16);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
-  background: var(--white);
+/* A row: name, origin and a one-line description on the left; owner, counts,
+   update day and forks on the right. A grid whose right column drops under
+   the left one when there is no room for both (390px). */
+.page .skill-hub-list > .skill-hub-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4) var(--space-16);
+  padding: var(--space-12) var(--space-8);
+  border-top: 0;
+  border-bottom: 1px solid var(--paper-3);
   min-width: 0;
 }
+.page .skill-hub-list > .skill-hub-row:hover {
+  background: color-mix(in srgb, var(--paper-2) 40%, transparent);
+}
 
-.page .skill-hub-row-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-8);
+.page .skill-hub-row-main {
   min-width: 0;
 }
 
@@ -49,49 +86,77 @@
   color: inherit;
   text-decoration: none;
   overflow-wrap: anywhere;
-  min-width: 0;
 }
-
+/* The whole row opens the skill (D15): the title's link covers it. */
+.page .skill-hub-row-title::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
 .page .skill-hub-row-title:hover {
   text-decoration: underline;
 }
-
-.page .skill-hub-owner {
-  font-weight: 400;
-  color: var(--text-paper-d);
+/* The ring moves to the row the link covers — never "none" (base.css). */
+.page .skill-hub-row-title:focus-visible {
+  outline-color: transparent;
+}
+.page .skill-hub-row-title:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.page .skill-hub-row-desc {
-  margin: var(--space-4) 0 0;
-  color: var(--text-paper-d);
-  font-size: var(--text-small);
-  overflow-wrap: anywhere;
-}
-
-/* The fork's origin line (plan-skill-hub-ui-polish D9): a fact, in the meta tone. */
-.skill-hub-row-origin {
-  margin: 2px 0 0;
+/* The fork's origin (plan-skill-hub-ui-polish D9): a fact, in the meta tone. */
+.page .skill-hub-row-origin {
+  margin-left: var(--space-8);
   font-size: 12px;
   color: var(--text-paper-d);
 }
 
-.page .skill-hub-row-meta {
-  margin-top: var(--space-8);
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
+.page .skill-hub-row-desc {
+  margin: 2px 0 0;
+  color: var(--text-paper-d);
   font-size: var(--text-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Forks sit under their root, indented, in the same card shape. */
-.page .skill-hub-forks {
-  list-style: none;
-  margin: var(--space-12) 0 0;
-  padding: 0 0 0 var(--space-16);
-  border-left: 2px solid var(--paper-3);
+.page .skill-hub-row-side {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-4) var(--space-12);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+/* The links of their own sit above the title's cover. */
+.page .skill-hub-row-owner,
+.page .skill-hub-row-forks {
+  position: relative;
+  z-index: 1;
+}
+.page .skill-hub-row-owner {
+  color: var(--text-paper);
+}
+
+@media (max-width: 600px) {
+  .page .skill-hub-list > .skill-hub-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page .skill-hub-row-side {
+    justify-content: flex-start;
+  }
+}
+
+.page .skill-hub-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-12);
+  margin-top: var(--space-16);
 }
 
 .page .skill-hub-badge {
@@ -202,10 +267,6 @@
   margin-top: var(--space-4);
 }
 
-.page .skill-hub-list > li,
-.page .skill-hub-forks > li {
-  border-top: 0;
-}
 
 .page .skill-hub-md {
   padding: var(--space-16);
@@ -450,7 +511,3 @@
   color: var(--err);
 }
 
-/* The counts beside the owner on a list row, and the 「自 … 起」 note. */
-.page .skill-hub-row-meta {
-  flex-wrap: wrap;
-}

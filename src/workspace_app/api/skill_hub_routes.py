@@ -67,6 +67,13 @@ _OWNER_ONLY = {"error": "owner_only"}
 _TRANSFER_OWNER_REQUIRED = {"error": "transfer_owner_required"}
 
 
+class SkillHubOrigin(BaseModel):
+    """The original a fork was forked from, named — when the viewer may read it."""
+
+    owner: str
+    name: str
+
+
 class SkillHubCard(BaseModel):
     """One row of the list — flat: a fork is its own row, never nested
     (plan-skill-hub-ux-redo D2)."""
@@ -90,6 +97,9 @@ class SkillHubCard(BaseModel):
     uses: int = 0
     #: Direct forks the viewer may read — the 「N 個 fork」 link on the row.
     fork_count: int = 0
+    #: A fork's original, named for 「fork 自 owner/name」 — `None` for an
+    #: original, and for a fork whose original the viewer may not read.
+    origin: SkillHubOrigin | None = None
     #: When the content last changed (`SkillHubEntry.content_at`); `None` for
     #: a row from before the field — the list shows no date for it.
     updated_at: dt.datetime | None = None
@@ -419,8 +429,15 @@ def register_skill_hub_routes(
             order.sort(key=_newest_first(hits))
         page = order[offset : offset + limit]
         since = await asyncio.to_thread(hub.usage.counted_since)
+
+        def card(i: str) -> SkillHubCard:
+            out = _card(i, hits[i], viewer, app, counts[i], fork_counts[i])
+            if (root := visible.get(hits[i].forked_from)) is not None:
+                out.origin = SkillHubOrigin(owner=root.owner, name=root.name)
+            return out
+
         return SkillHubList(
-            entries=[_card(i, hits[i], viewer, app, counts[i], fork_counts[i]) for i in page],
+            entries=[card(i) for i in page],
             total=len(order),
             counted_since=since,
         )

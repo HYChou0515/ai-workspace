@@ -73,9 +73,8 @@ export function SkillHubPickerModal({
     // (plan-skill-hub-ui-polish D3).
     meta: { silentError: true },
   });
-  // Roots and forks flattened for the picker: a fork is one more thing to
-  // install, and the list route already put each under its root.
-  const rows = (listQ.data ?? []).flatMap((e) => [e, ...e.forks]);
+  // The list route's rows, flat — a fork is one more thing to install.
+  const rows = listQ.data ?? [];
 
   return (
     // A picker that applies nothing until Install is pressed: nothing to lose,

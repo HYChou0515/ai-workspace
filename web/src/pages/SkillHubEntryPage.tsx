@@ -160,7 +160,7 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
       <section>
         <h2>{t("skillHub.files")}</h2>
         <ul className="skill-hub-files">
-          {entry.files.map((f) => (
+          {entry.files.map(({ path: f }) => (
             <li key={f}>
               <code>{f}</code>
             </li>

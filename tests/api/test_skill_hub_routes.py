@@ -105,6 +105,8 @@ async def test_a_search_lists_forks_beside_originals_each_saying_what_it_was_for
     by_id = {e["id"]: e for e in hits["entries"]}
     assert set(by_id) == {root, fork}
     assert by_id[fork]["forked_from"] == root and by_id[root]["forked_from"] == ""
+    assert by_id[fork]["origin"] == {"owner": "alice", "name": "triage"}
+    assert by_id[root]["origin"] is None
     assert by_id[root]["fork_count"] == 1
     assert hits["total"] == 2
 
@@ -210,6 +212,7 @@ async def test_a_fork_whose_root_the_viewer_cannot_see_is_listed_on_its_own(harn
     entries = harness.client.get("/skill-hub/entries").json()["entries"]
 
     assert [e["id"] for e in entries] == [fork]
+    assert entries[0]["origin"] is None, "whose original it is is not the viewer's to know"
 
 
 # ── detail ───────────────────────────────────────────────────────────────────

@@ -533,7 +533,9 @@ const hubCard = (over: Partial<SkillHubCard>): SkillHubCard => ({
   missing_tools: ["query_entity"],
   installs: 0,
   uses: 0,
-  forks: [],
+  fork_count: 0,
+  origin: null,
+  updated_at: null,
   ...over,
 });
 
@@ -831,7 +833,8 @@ describe("SkillsModal — the skill hub", () => {
 
   it("lists a fork under its root as one more thing to install", async () => {
     const hub = fakeHub([
-      hubCard({ forks: [hubCard({ id: "e-fork", owner: "bob", forked_from: "e-1", missing_tools: [] })] }),
+      hubCard({}),
+      hubCard({ id: "e-fork", owner: "bob", forked_from: "e-1", missing_tools: [] }),
     ]);
     renderWithHub(hub);
     await screen.findByTestId("skill-row-my-skill");

@@ -2087,6 +2087,22 @@ export const messages = {
   },
   "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
   "skillHub.sort": { "zh-TW": "排序", en: "Sort" },
+  // plan-skill-hub-ux-redo D1/D4/D17: the list's toolbar, paging and empty search.
+  "skillHub.sort.updated": { "zh-TW": "最近更新", en: "Recently updated" },
+  "skillHub.show": { "zh-TW": "顯示", en: "Show" },
+  "skillHub.total": { "zh-TW": "共 {count} 個 skill", en: "{count} skills" },
+  "skillHub.loadMore": { "zh-TW": "載入更多", en: "Load more" },
+  "skillHub.shown": { "zh-TW": "已顯示 {shown} / {total}", en: "Showing {shown} of {total}" },
+  "skillHub.owner.filter": { "zh-TW": "owner：{name}", en: "Owner: {name}" },
+  "skillHub.owner.clear": { "zh-TW": "清除 owner 篩選", en: "Clear the owner filter" },
+  "skillHub.owner.only": { "zh-TW": "只看 {name} 的 skill", en: "Only {name}'s skills" },
+  "skillHub.noMatch.query": {
+    "zh-TW": "沒有名稱或說明符合「{q}」的 skill。",
+    en: "No skill's name or description matches “{q}”.",
+  },
+  "skillHub.clearSearch": { "zh-TW": "清除搜尋", en: "Clear search" },
+  "skillHub.clearFilters": { "zh-TW": "清除篩選", en: "Clear filters" },
+  "skillHub.updated": { "zh-TW": "{day} 更新", en: "Updated {day}" },
   // plan-skill-hub-history A3: the card `show_skill_hub_entry` draws in a chat.
   "skillHub.card.install": { "zh-TW": "安裝", en: "Install" },
   "skillHub.card.installed": { "zh-TW": "已安裝", en: "Installed" },

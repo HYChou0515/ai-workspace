@@ -1,21 +1,24 @@
 /**
  * `/skill-hub` — every skill the viewer may read, in one place
- * (`docs/plan-skill-hub.md`).
+ * (`docs/plan-skill-hub.md`, laid out by `docs/plan-skill-hub-ux-redo.md`).
  *
- * The rows are the server's, and so is the visibility: `GET /skill-hub/entries`
- * returns exactly the entries this viewer may read, roots with their forks
- * beneath (plan Q4: 根在上、fork 收在原作底下). Search (name / description)
- * and 「我的」 are server parameters too — one rule in `SkillHubStore.visible`
- * for the page, the search tool and the install door alike.
+ * A compact list (D1, NN/g "List vs. Grid": text to compare, no images): one
+ * row per skill, the name and a one-line description on the left, owner,
+ * counts and the update day on the right. Browsing lists originals, each with
+ * its fork count; a search, 「我的」 or an owner lists forks beside them, each
+ * naming its original (D2). The rows, the visibility and every filter are the
+ * server's (`GET /skill-hub/entries`); the filters live in the address, so
+ * Back from a skill lands on the same list (D4). Fifty at a time, with
+ * 「載入更多」 and the total (D4, NN/g "Infinite Scrolling": the footer stays
+ * reachable).
  *
- * Nothing here installs, downloads or publishes (D2): those are the item's,
- * in its Skills panel. A row opens the entry's page; that page holds the
- * owner's actions and nobody else's.
+ * Nothing here installs, downloads or publishes: installing is the skill's
+ * page (D6) or the workspace's Skills panel.
  */
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import {
@@ -24,11 +27,19 @@ import {
   type SkillHubSort,
   skillHubApi,
 } from "../api/skillHub";
-import { AppTag } from "../components/AppTag";
 import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
-import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
+import { useUser } from "../hooks/useUsers";
+import { ymd } from "../lib/date";
 import { useT } from "../lib/i18n";
+
+const SORTS: readonly SkillHubSort[] = ["name", "popular", "updated"];
+const SORT_LABEL = {
+  name: "skillHub.sort.name",
+  popular: "skillHub.sort.popular",
+  updated: "skillHub.sort.updated",
+} as const;
+const PAGE = 50;
 
 export function SkillHubPage({
   client = skillHubApi,
@@ -57,70 +68,91 @@ export function SkillHubPage({
     // Once, on arrival: the notice is what THIS mount was handed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [query, setQuery] = useState("");
-  const [mine, setMine] = useState(false);
-  const [sort, setSort] = useState<SkillHubSort>("name");
+
+  // The filters are the address's (D4): a reload, a shared link and Back
+  // all land on the same list. Replaced, not pushed — a filter change is not
+  // a page the person means to go back through one by one.
+  const [params, setParams] = useSearchParams();
+  const q = params.get("q") ?? "";
+  const mine = params.get("mine") === "1";
+  const owner = params.get("owner") ?? "";
+  const sortParam = params.get("sort") as SkillHubSort | null;
+  const sort: SkillHubSort = sortParam && SORTS.includes(sortParam) ? sortParam : "name";
+  const setFilter = (next: Record<string, string>) =>
+    setParams(
+      (prev) => {
+        const out = new URLSearchParams(prev);
+        for (const [k, v] of Object.entries(next)) {
+          if (v) out.set(k, v);
+          else out.delete(k);
+        }
+        return out;
+      },
+      { replace: true },
+    );
+
   // The search is the server's (it matches what the agent's search tool
   // matches), so the box is debounced rather than sent per keystroke — the
-  // review inbox's idiom.
-  const [q, setQ] = useState("");
+  // review inbox's idiom. The box holds what is typed; the address what was
+  // searched.
+  const [query, setQuery] = useState(q);
   useEffect(() => {
-    const id = setTimeout(() => setQ(query.trim()), 250);
+    const id = setTimeout(() => {
+      if (query.trim() !== q) setFilter({ q: query.trim() });
+    }, 250);
     return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
-  const { data, isPending, isError, isFetching, isPlaceholderData, errorUpdateCount, refetch } =
-    useQuery({
-      queryKey: qk.skillHubBrowse(q, mine, sort),
-      queryFn: () => client.browse(q, mine, sort),
-      // A new (q, mine) is a new query key, and without this every keystroke's
-      // debounce made the page `isPending` — the whole tree, search box
-      // included, was swapped for 載入中…, the box remounted, and the caret
-      // and focus went with it (plan-skill-hub-ui-polish D2). The previous
-      // list stays on screen until the next one lands; only the FIRST load
-      // has nothing to show.
-      placeholderData: keepPreviousData,
-    });
-  // "Nothing published at all" and "nothing matches the tools" are different
-  // states: the first gets the empty state (no tools, they would filter
-  // nothing); the second keeps the tools, because they are what to change.
-  // The same key as the untouched page's own listing, so opening the page
-  // sends one request, not two.
-  const { data: everythingListing } = useQuery({
-    queryKey: qk.skillHubBrowse("", false, "name"),
-    queryFn: () => client.browse("", false, "name"),
+
+  const {
+    data,
+    isPending,
+    isError,
+    isFetching,
+    isFetchingNextPage,
+    isPlaceholderData,
+    errorUpdateCount,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+  } = useInfiniteQuery({
+    queryKey: qk.skillHubBrowse(q, mine, owner, sort),
+    queryFn: ({ pageParam }) =>
+      client.browse({ q, mine, owner, sort, offset: pageParam, limit: PAGE }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.entries.length, 0);
+      return loaded < last.total && last.entries.length > 0 ? loaded : undefined;
+    },
+    // A new filter is a new query key, and without this every keystroke's
+    // debounce made the page `isPending` — the whole tree, search box
+    // included, was swapped for 載入中…, the box remounted, and the caret
+    // and focus went with it (plan-skill-hub-ui-polish D2). The previous
+    // list stays on screen until the next one lands; only the FIRST load
+    // has nothing to show.
+    placeholderData: keepPreviousData,
   });
-  const everything = everythingListing?.entries;
 
   // Only the UNTOUCHED page's first load has nothing to show. Once the tools
   // were used they stay mounted whatever the list does — loading and failure
   // are states of the results area, not of the tree (review rounds 1 and 2
-  // of #826: the error branch swapped the tree; so did a search after a
-  // failed first load, which has no previous data to keep).
-  // …and Retry after a failed first load is a refetch of a data-less errored
-  // query, which TanStack reports as `pending` again — so "never settled"
-  // means no result AND no error so far (round 3 of #826).
-  const untouched = !q && !mine;
+  // of #826). Retry after a failed first load is a refetch of a data-less
+  // errored query, which TanStack reports as `pending` again — so "never
+  // settled" means no result AND no error so far (round 3 of #826).
+  const untouched = !q && !mine && !owner;
   const neverSettled = isPending && !isError && errorUpdateCount === 0;
   if (neverSettled && untouched) return <p>{t("skillHub.loading")}</p>;
-  const rows = data?.entries ?? [];
-  const countedSince = data?.counted_since ?? "";
-
-  // Not while an error is shown: the two share a key, and a failed refetch of
-  // an empty hub kept `[]` as data — the empty state hid the error and Retry.
+  const pages = data?.pages ?? [];
+  const rows = pages.flatMap((p) => p.entries);
+  const total = pages[0]?.total ?? 0;
+  const countedSince = pages[0]?.counted_since ?? "";
+  // Not while an error is shown: a failed refetch of an empty hub keeps the
+  // empty page as data, and the empty state would hide the error and Retry.
   const nothingPublished =
-    everything !== undefined && everything.length === 0 && untouched && !isError;
-  // Where a fork's root is — by id, from the one listing that always holds
-  // every entry this viewer may read (`everything`): a fork shown on its own
-  // (「我的」, or a search that matched the fork and not the root) can still
-  // say whose it is. A root that is in neither is one the viewer cannot read.
-  const lineage = new Map<string, SkillHubCard>();
-  for (const e of everything ?? rows) {
-    lineage.set(e.id, e);
-    for (const f of e.forks) lineage.set(f.id, f);
-  }
+    untouched && !isError && !isPlaceholderData && data !== undefined && total === 0;
 
   return (
-    <div className="page">
+    <div className="page skill-hub-page">
       <h1>Skill hub</h1>
       <PageNotice notice={notice} />
       {nothingPublished ? (
@@ -139,18 +171,17 @@ export function SkillHubPage({
               placeholder={t("skillHub.search")}
               aria-label={t("skillHub.search")}
             />
-            <div
-              className="skill-hub-scope"
-              role="group"
-              aria-label={t("skillHub.mine")}
-            >
+            <div className="skill-hub-scope" role="group" aria-label={t("skillHub.show")}>
+              <span className="skill-hub-tool-label" aria-hidden="true">
+                {t("skillHub.show")}
+              </span>
               <button
                 type="button"
                 className="btn"
                 data-size="sm"
                 data-variant={mine ? "secondary" : "primary"}
                 aria-pressed={!mine}
-                onClick={() => setMine(false)}
+                onClick={() => setFilter({ mine: "" })}
               >
                 {t("skillHub.all")}
               </button>
@@ -160,31 +191,28 @@ export function SkillHubPage({
                 data-size="sm"
                 data-variant={mine ? "primary" : "secondary"}
                 aria-pressed={mine}
-                onClick={() => setMine(true)}
+                onClick={() => setFilter({ mine: "1", owner: "" })}
               >
                 {t("skillHub.mine")}
               </button>
             </div>
-            <div className="skill-hub-scope" role="group" aria-label={t("skillHub.sort")}>
-              {(["name", "popular"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className="btn"
-                  data-size="sm"
-                  data-variant={sort === s ? "primary" : "secondary"}
-                  aria-pressed={sort === s}
-                  onClick={() => setSort(s)}
-                >
-                  {t(s === "name" ? "skillHub.sort.name" : "skillHub.sort.popular")}
-                </button>
-              ))}
-            </div>
-            {countedSince ? (
-              <span className="muted small skill-hub-since">
-                {t("skillHub.countedSince", { day: countedSince })}
-              </span>
-            ) : null}
+            <label className="skill-hub-sort">
+              <span className="skill-hub-tool-label">{t("skillHub.sort")}</span>
+              <select
+                className="input"
+                value={sort}
+                onChange={(e) =>
+                  setFilter({ sort: e.target.value === "name" ? "" : e.target.value })
+                }
+              >
+                {SORTS.map((s) => (
+                  <option key={s} value={s}>
+                    {t(SORT_LABEL[s])}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {owner ? <OwnerFilter owner={owner} onClear={() => setFilter({ owner: "" })} /> : null}
           </div>
           {/* The results area: busy while the next list is on its way (the
               previous one stays visible, dimmed), the error with Retry when
@@ -210,13 +238,57 @@ export function SkillHubPage({
             ) : isPending ? (
               <p className="loading">{t("skillHub.loading")}</p>
             ) : rows.length === 0 ? (
-              <p className="empty">{t("skillHub.noMatch")}</p>
+              <div className="empty">
+                <p>{q ? t("skillHub.noMatch.query", { q }) : t("skillHub.noMatch")}</p>
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="secondary"
+                  data-size="sm"
+                  onClick={() => {
+                    setQuery("");
+                    setFilter(q ? { q: "" } : { q: "", mine: "", owner: "" });
+                  }}
+                >
+                  {q ? t("skillHub.clearSearch") : t("skillHub.clearFilters")}
+                </button>
+              </div>
             ) : (
-              <ul className="skill-hub-list">
-                {rows.map((entry) => (
-                  <SkillRow key={entry.id} entry={entry} lineage={lineage} />
-                ))}
-              </ul>
+              <>
+                <p className="muted small skill-hub-summary">
+                  <span>{t("skillHub.total", { count: total })}</span>
+                  {countedSince ? (
+                    <span>{t("skillHub.countedSince", { day: countedSince })}</span>
+                  ) : null}
+                </p>
+                <ul className="skill-hub-list">
+                  {rows.map((entry) => (
+                    <SkillRow
+                      key={entry.id}
+                      entry={entry}
+                      onOwner={(o) => setFilter({ owner: o, mine: "" })}
+                    />
+                  ))}
+                </ul>
+                <div className="skill-hub-more">
+                  {rows.length < total ? (
+                    <span className="muted small">
+                      {t("skillHub.shown", { shown: rows.length, total })}
+                    </span>
+                  ) : null}
+                  {hasNextPage ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="secondary"
+                      disabled={isFetchingNextPage}
+                      onClick={() => void fetchNextPage()}
+                    >
+                      {isFetchingNextPage ? t("skillHub.loading") : t("skillHub.loadMore")}
+                    </button>
+                  ) : null}
+                </div>
+              </>
             )}
           </div>
         </>
@@ -225,68 +297,82 @@ export function SkillHubPage({
   );
 }
 
-/** A root with its forks beneath (one level), or a fork standing on its own
- * when its root is out of view. */
+function OwnerFilter({ owner, onClear }: { owner: string; onClear: () => void }) {
+  const t = useT();
+  const name = useUser(owner).name;
+  return (
+    <span className="skill-hub-filter-chip">
+      {t("skillHub.owner.filter", { name })}
+      <button
+        type="button"
+        className="btn"
+        data-variant="ghost"
+        data-size="sm"
+        aria-label={t("skillHub.owner.clear")}
+        onClick={onClear}
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
+/** One skill: the whole row opens its page (the title's link is stretched
+ * over it, D15); the owner and the fork count are links of their own above
+ * that, so each does what it looks like it does. */
 function SkillRow({
   entry,
-  fork = false,
-  lineage,
+  onOwner,
 }: {
   entry: SkillHubCard;
-  fork?: boolean;
-  lineage: Map<string, SkillHubCard>;
+  onOwner: (owner: string) => void;
 }) {
   const t = useT();
-  const forks = entry.forks.length;
-  // Every fork says where it came from, whether it sits under its root or
-  // stands alone (plan-skill-hub-ui-polish D9). The review badge is gone
-  // (D7): every entry was reviewed, so "has notes" separated nothing worth a
-  // badge — the notes themselves are on the entry's page.
-  const root = entry.forked_from ? lineage.get(entry.forked_from) : undefined;
+  const ownerName = useUser(entry.owner).name;
+  const href = `/skill-hub/${encodeURIComponent(entry.id)}`;
+  const counted = entry.installs > 0 || entry.uses > 0;
   return (
-    <li
-      className="skill-hub-row"
-      data-fork={fork || undefined}
-      data-testid={`entry-${entry.id}`}
-    >
-      <div className="skill-hub-row-head">
-        <Link
-          to={`/skill-hub/${encodeURIComponent(entry.id)}`}
-          className="skill-hub-row-title"
-        >
-          <span className="skill-hub-owner">{entry.owner}/</span>
+    <li className="skill-hub-row" data-testid={`entry-${entry.id}`}>
+      <div className="skill-hub-row-main">
+        <Link to={href} className="skill-hub-row-title">
           {entry.name}
         </Link>
-        <AppTag slug={entry.source_app} />
-        {forks > 0 ? (
-          <span className="skill-hub-badge" data-kind="forks">
-            {forks === 1
-              ? t("skillHub.fork.one")
-              : t("skillHub.forks", { count: forks })}
+        {entry.forked_from ? (
+          <span className="skill-hub-row-origin">
+            {entry.origin
+              ? t("skillHub.forkOf", { origin: `${entry.origin.owner}/${entry.origin.name}` })
+              : t("skillHub.forkOf.gone")}
           </span>
         ) : null}
+        <p className="skill-hub-row-desc">{entry.description}</p>
       </div>
-      <p className="skill-hub-row-desc">{entry.description}</p>
-      {entry.forked_from ? (
-        <p className="skill-hub-row-origin">
-          {root
-            ? t("skillHub.forkOf", { origin: `${root.owner}/${root.name}` })
-            : t("skillHub.forkOf.gone")}
-        </p>
-      ) : null}
-      <div className="skill-hub-row-meta">
-        <UserChip userId={entry.owner} size={18} nameOnly />
-        <span className="muted small skill-hub-counts">
-          {t("skillHub.counts", { installs: entry.installs ?? 0, uses: entry.uses ?? 0 })}
-        </span>
+      <div className="skill-hub-row-side">
+        <a
+          href={`?owner=${encodeURIComponent(entry.owner)}`}
+          className="skill-hub-row-owner"
+          aria-label={t("skillHub.owner.only", { name: ownerName })}
+          title={t("skillHub.owner.only", { name: ownerName })}
+          onClick={(e) => {
+            e.preventDefault();
+            onOwner(entry.owner);
+          }}
+        >
+          {ownerName}
+        </a>
+        {counted ? (
+          <span>{t("skillHub.counts", { installs: entry.installs, uses: entry.uses })}</span>
+        ) : null}
+        {entry.updated_at ? (
+          <span>{t("skillHub.updated", { day: ymd(entry.updated_at) })}</span>
+        ) : null}
+        {entry.fork_count > 0 ? (
+          <Link to={`${href}?tab=forks`} className="skill-hub-row-forks">
+            {entry.fork_count === 1
+              ? t("skillHub.fork.one")
+              : t("skillHub.forks", { count: entry.fork_count })}
+          </Link>
+        ) : null}
       </div>
-      {forks > 0 ? (
-        <ul className="skill-hub-forks">
-          {entry.forks.map((f) => (
-            <SkillRow key={f.id} entry={f} fork lineage={lineage} />
-          ))}
-        </ul>
-      ) : null}
     </li>
   );
 }
