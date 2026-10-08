@@ -221,3 +221,19 @@ def test_a_blank_value_reads_as_not_set(policy, shared, private, personal, expec
     got = resolve_env(shared=shared, private=private, personal=personal, policy={"K": policy})
 
     assert got.get("K") == expected
+
+
+def test_what_counts_as_blank_is_the_table_both_sides_read():
+    """Python's `str.strip()` and JS's `String.trim()` disagree on a dozen
+    characters; the tool would get a value the card calls missing. One list,
+    held by both (`web/tests/envLayersParity.test.ts`)."""
+    import json
+    from pathlib import Path
+
+    from workspace_app.api.env_layers import is_blank
+
+    table = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "env_layers_cases.json").read_text()
+    )
+    for row in table["blanks"]:
+        assert is_blank(row["value"]) is row["blank"], repr(row["value"])

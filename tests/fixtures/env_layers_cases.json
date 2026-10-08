@@ -1,5 +1,5 @@
 {
- "_comment": "plan-wui-viewer-login + plan-personal-env: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows. `private` is the person's values for this item, `personal` their values for every item. Each layer is absent, holds a value, or holds a blank (which counts as not set).",
+ "_comment": "plan-wui-viewer-login + plan-personal-env: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows. `private` is the person's values for this item, `personal` their values for every item. Each layer is absent, holds a value, or holds a blank (which counts as not set). `blanks`: what counts as blank, the SAME on both sides \u2014 only space, tab, newline, carriage return, form feed and vertical tab, so a value one side sees the other does too.",
  "cases": [
   {
    "shared": {},
@@ -1701,6 +1701,48 @@
     "K": "bogus"
    },
    "expected": "none"
+  }
+ ],
+ "blanks": [
+  {
+   "value": "",
+   "blank": true
+  },
+  {
+   "value": " ",
+   "blank": true
+  },
+  {
+   "value": " \t\n\r\f\u000b",
+   "blank": true
+  },
+  {
+   "value": "x",
+   "blank": false
+  },
+  {
+   "value": " x ",
+   "blank": false
+  },
+  {
+   "value": "\u00a0",
+   "blank": false
+  },
+  {
+   "value": "\ufeff",
+   "blank": false
+  },
+  {
+   "value": "\u001c",
+   "blank": false
+  },
+  {
+   "value": "\u0085",
+   "blank": false
+  },
+  {
+   "value": "\u3000",
+   "blank": false
   }
  ]
 }

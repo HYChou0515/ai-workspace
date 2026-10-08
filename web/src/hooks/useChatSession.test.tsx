@@ -247,6 +247,36 @@ describe("useChatSession", () => {
     expect(result.current.log.streaming).toBe(true);
   });
 
+  it("send draws the call a message answers on the bubble, and takes it back if refused", async () => {
+    // docs/plan-env-request-card.md D8: a `request_env` card retires on this
+    // mark — and must come back when the server refuses the Retry.
+    const answering = (log: typeof result.current.log) =>
+      log.entries.filter((e) => e.kind === "message" && e.message.answers === "c1");
+    let release: (v: unknown) => void = () => {};
+    const t = fakeTransport({
+      post: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            release = () => reject(Object.assign(new Error("full"), { status: 507 }));
+          }),
+      ),
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    let sending: Promise<void> = Promise.resolve();
+    act(() => {
+      sending = result.current.send("retry", { answers: "c1" });
+    });
+    expect(answering(result.current.log)).toHaveLength(1);
+
+    await act(async () => {
+      release(undefined);
+      await sending;
+    });
+    expect(answering(result.current.log)).toHaveLength(0);
+  });
+
   it("send ignores a blank message", async () => {
     const t = fakeTransport();
     const { result } = render(t);

@@ -27,6 +27,14 @@ export function asksPersonal(policy: Record<string, string>): boolean {
  * every item ("my environment variables", `docs/plan-personal-env.md`). */
 export type Layer = "shared" | "private" | "personal" | "none";
 
+/** A value that counts as not set (plan-env-request-card N5): only space, tab,
+ * newline, carriage return, form feed and vertical tab — NOT `trim()`, which
+ * strips a different set from Python's `strip()`. The backend's `is_blank`,
+ * held to the same list by `tests/fixtures/env_layers_cases.json` (`blanks`). */
+export function isBlank(value: string | undefined): boolean {
+  return /^[ \t\n\r\f\v]*$/.test(value ?? "");
+}
+
 export function layerInUse(
   name: string,
   shared: Record<string, string>,
@@ -35,8 +43,7 @@ export function layerInUse(
   personal: Record<string, string> = {},
 ): Layer {
   // A blank value is not a value (`resolve_env`): it does not hide the next layer.
-  const has = (layer: Record<string, string>) =>
-    Object.hasOwn(layer, name) && (layer[name] ?? "").trim() !== "";
+  const has = (layer: Record<string, string>) => Object.hasOwn(layer, name) && !isBlank(layer[name]);
   switch (policyOf(name, policy)) {
     case "private_only":
       return has(mine) ? "private" : has(personal) ? "personal" : "none";

@@ -106,8 +106,8 @@ describe("EnvRequestCard", () => {
     expect(callId).toBe("c1");
     expect(text).toContain("ERP_TOKEN");
     expect(text).toContain("lookup");
-    expect(await screen.findByText(/已請 AI 重試|Asked the AI to retry/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /重試|Retry/ })).toBeNull();
+    // Retiring is the thread's job (`answered`), pinned in the panel and
+    // `useChatSession` tests — this host's thread never changes.
   });
 
   it("counts the person's values across workspaces where the item uses them", async () => {

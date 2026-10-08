@@ -12,7 +12,6 @@
  * a replay) it shows the request without actions.
  */
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 
 import { api as defaultApi } from "../api";
 import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
@@ -64,7 +63,6 @@ export function EnvRequestCard({
     queryFn: () => personalClient.get(),
     enabled: on && asks,
   });
-  const [retried, setRetried] = useState(false);
   const rows = envRequestRows(request.names, {
     shared: env?.shared ?? {},
     policy: env?.policy ?? {},
@@ -76,7 +74,10 @@ export function EnvRequestCard({
   // leaves a field to fill — the card must not go inert over it.
   const loaded = !providers.isPending && !mine.isPending && (!asks || !personal.isPending);
   const allSet = loaded && rows.every((r) => r.status === "ready");
-  const done = retried || Boolean(env?.answered(callId));
+  // Retired by the thread, not by a flag of its own: the Retry message is drawn
+  // marked as answering this call, and a send the server refuses is retracted —
+  // so the card comes back by itself (plan D8).
+  const done = Boolean(env?.answered(callId));
   return (
     <div className="env-request-card" data-testid="env-request-card">
       <p className="env-request-card-reason">{request.reason}</p>
@@ -117,7 +118,7 @@ export function EnvRequestCard({
                   names: request.names.join(", "),
                   tool: request.tool,
                 });
-                if (env.retry(callId, text)) setRetried(true);
+                env.retry(callId, text);
               }}
             >
               {t("envreq.retry")}

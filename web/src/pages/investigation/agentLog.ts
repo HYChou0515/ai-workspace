@@ -234,7 +234,7 @@ const TURN_OVER = {
  * was persisted before it was ever broadcast, so the store is where it heals. */
 export function drawOwnAsk(
   log: AgentLog,
-  ask: { author: string; content: string; markings?: SentMarking[] },
+  ask: { author: string; content: string; markings?: SentMarking[]; answers?: string },
 ): AgentLog {
   return {
     ...log,
@@ -259,6 +259,10 @@ export function drawOwnAsk(
           // #847 P7: the chips it was sent with, until the broadcast brings
           // what the server actually recorded.
           ...(ask.markings?.length ? { markings: ask.markings } : {}),
+          // The call it answers (`ask_user`, a `request_env` card's Retry), on
+          // the bubble at once: the card retires on it, and comes back by
+          // itself if the send is refused and this entry retracted.
+          ...(ask.answers ? { answers: ask.answers } : {}),
         },
       },
     ],

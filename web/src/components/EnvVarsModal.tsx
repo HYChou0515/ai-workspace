@@ -54,7 +54,7 @@ import type { ApiClient, EnvProvider } from "../api/types";
 import type { EnvTarget } from "../hooks/chatItem";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
-import { layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
+import { isBlank, layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
 import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -819,7 +819,8 @@ function SharedTab({
             section={section}
             value={shared[field.name] ?? ""}
             policy={policyOf(field.name, policy)}
-            hasShared={Object.hasOwn(shared, field.name)}
+            // A blank is not a value (N5): no "the shared value is unused" note.
+            hasShared={!isBlank(shared[field.name])}
             canEdit={canEdit}
             onVar={onVar}
             onPolicy={onPolicy}
@@ -1222,7 +1223,9 @@ function MineRow({
   const automatic = Object.hasOwn(auto, name);
   // `shared_first` with a shared value set: nothing the person types could be
   // used, so no box is offered — a field that silently does nothing is worse.
-  const pinned = p === "shared_first" && Object.hasOwn(shared, name);
+  // Read off `layerInUse`, the one rule of what a tool gets: a blank shared
+  // value is not a value (N5), so it pins nothing and theirs is used.
+  const pinned = p === "shared_first" && layer === "shared";
   const inUse = layer === "private" ? "mine" : layer;
   return (
     <div data-testid={`env-mine-row-${name}`} data-in-use={inUse} style={{ display: "grid", gap: 3 }}>

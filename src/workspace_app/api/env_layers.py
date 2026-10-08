@@ -59,6 +59,18 @@ def resolve(*, shared: dict[str, str], person: PersonEnv | None, policy: dict[st
     )
 
 
+#: What a blank value is made of — and nothing else: `str.strip()` and JS's
+#: `String.trim()` each strip a different dozen further characters, and a value
+#: one side sees as blank the other would hand to a tool. Held to the same list
+#: as the FE's `isBlank` by `tests/fixtures/env_layers_cases.json` (`blanks`).
+_BLANK = " \t\n\r\f\v"
+
+
+def is_blank(value: str) -> bool:
+    """A value that counts as not set (plan-env-request-card N5)."""
+    return not value.strip(_BLANK)
+
+
 def resolve_env(
     *,
     shared: dict[str, str],
@@ -103,7 +115,7 @@ def resolve_env(
         for layer in order:
             # A blank value is not a value: it does not hide the next layer, and
             # a name blank everywhere is not handed to the tool at all.
-            if layer.get(name, "").strip():
+            if not is_blank(layer.get(name, "")):
                 env[name] = layer[name]
                 break
     return env

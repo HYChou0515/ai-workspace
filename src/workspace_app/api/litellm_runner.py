@@ -833,8 +833,8 @@ def ask_user_stop_behaviour(
     printed, `exec`, a tool it does not hold — tells the model what to do
     instead, and stopping on it (as `StopAtTools` would, on any reply) left that
     advice unreadable until the user next spoke."""
-    from ..agent.env_request import ENV_REQUEST_MARKER
     from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
+    from ..agent.env_request import declared_card
 
     names = tool_names or ()
     if REQUEST_ENV_TOOL not in names:
@@ -847,7 +847,8 @@ def ask_user_stop_behaviour(
     ) -> ToolsToFinalOutputResult:
         for r in results:
             asked = r.tool.name == ASK_USER_TOOL
-            if asked or (r.tool.name == REQUEST_ENV_TOOL and ENV_REQUEST_MARKER in str(r.output)):
+            drew = r.tool.name == REQUEST_ENV_TOOL and declared_card(str(r.output)) is not None
+            if asked or drew:
                 return ToolsToFinalOutputResult(is_final_output=True, final_output=r.output)
         return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 

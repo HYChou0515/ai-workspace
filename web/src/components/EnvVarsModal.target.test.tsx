@@ -1,6 +1,6 @@
 /**
  * The panel opened from a `request_env` card (docs/plan-env-request-card.md
- * N3, N4, D5): at the tab the card chose, at the variable it asked for — with
+ * N3, N4, D5): on the person's own tab, at the variable it asked for — with
  * a field for it even when no tool declared it — or straight into the login
  * that produces it.
  */
@@ -82,5 +82,13 @@ describe("EnvVarsModal opened at a target", () => {
     openAt({ name: "ERP_TOKEN", login: "erp" });
 
     expect(await screen.findByTestId("env-cred-dialog")).toBeInTheDocument();
+  });
+
+  it("offers the person's own field where the shared copy is blank (N5)", async () => {
+    openAt({ name: "MAP_KEY", login: null }, { shared: { MAP_KEY: "" } });
+
+    const field = await screen.findByTestId("env-mine-MAP_KEY");
+    await waitFor(() => expect(field).toHaveFocus());
+    expect(screen.queryByTestId("env-pinned-MAP_KEY")).toBeNull();
   });
 });

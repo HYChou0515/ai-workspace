@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import table from "../../tests/fixtures/env_layers_cases.json";
 
-import { layerInUse } from "../src/lib/envLayers";
+import { isBlank, layerInUse } from "../src/lib/envLayers";
 
 type Case = {
   shared: Record<string, string>;
@@ -25,6 +25,12 @@ type Case = {
 describe("layerInUse", () => {
   it.each(table.cases as Case[])("agrees with resolve_env: %j", (c) => {
     expect(layerInUse("K", c.shared, c.private, c.policy, c.personal)).toBe(c.expected);
+  });
+});
+
+describe("isBlank", () => {
+  it.each(table.blanks)("agrees with is_blank: %j", (row) => {
+    expect(isBlank(row.value)).toBe(row.blank);
   });
 });
 

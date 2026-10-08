@@ -5,7 +5,8 @@ A package tool that cannot work without a credential exits 3 and names the
 variable in its output. The model passes that name here; the reply ends with
 a declaration the chat draws as a card — one button per name, "sign in" when
 a login method produces it and "set" otherwise (the FE decides, from the
-viewer's own values). The turn stops at this tool, like `ask_user`.
+viewer's own values). The turn stops when the card is drawn, like `ask_user`;
+a refusal does not stop it, so the model reads why and carries on.
 """
 
 from __future__ import annotations
@@ -85,6 +86,31 @@ async def request_env_impl(
         "will tell you when it is set, and then you run the tool again."
     )
     return f"{said}{ENV_REQUEST_MARKER}{json.dumps(card)}"
+
+
+def declared_card(text: str) -> dict | None:
+    """The card a reply declares, read the way the chat reads it
+    (`web/src/renderers/envRequest.ts`): the tail after the LAST marker is one
+    JSON object naming a tool, a non-empty list of names and a reason. `None`
+    for anything else — a refusal that merely quotes the marker included."""
+    at = text.rfind(ENV_REQUEST_MARKER)
+    if at < 0:
+        return None
+    try:
+        card = json.loads(text[at + len(ENV_REQUEST_MARKER) :])
+    except ValueError:
+        return None
+    if not isinstance(card, dict):
+        return None
+    names = card.get("names")
+    ok = (
+        isinstance(card.get("tool"), str)
+        and isinstance(card.get("reason"), str)
+        and isinstance(names, list)
+        and bool(names)
+        and all(isinstance(n, str) and n for n in names)
+    )
+    return card if ok else None
 
 
 def _mentions(text: str, name: str) -> bool:

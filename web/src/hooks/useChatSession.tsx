@@ -605,7 +605,14 @@ export function useChatSession(
         keys: m.keys,
         source: m.source,
       }));
-      setLog((prev) => drawOwnAsk(prev, { author: currentUser, content: trimmed, markings }));
+      setLog((prev) =>
+        drawOwnAsk(prev, {
+          author: currentUser,
+          content: trimmed,
+          markings,
+          answers: opts?.answers,
+        }),
+      );
       try {
         await transport.post(trimmed, opts);
       } catch (err: unknown) {

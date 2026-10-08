@@ -11,7 +11,7 @@
  */
 import type { EnvProvider, ItemToolState } from "../api/types";
 
-import { layerInUse, policyOf } from "./envLayers";
+import { isBlank, layerInUse, policyOf } from "./envLayers";
 
 export type Missing = { kind: "login" | "set"; name: string };
 
@@ -60,9 +60,9 @@ export function identityState({
   // holding anything of one's own. A value from my environment variables
   // counts only where this item would use it.
   const holdsOwn =
-    Object.values(mine).some((v) => v.trim() !== "") ||
+    Object.values(mine).some((v) => !isBlank(v)) ||
     Object.entries(personal).some(
-      ([n, v]) => policyOf(n, policy) !== "shared_first" && v.trim() !== "",
+      ([n, v]) => policyOf(n, policy) !== "shared_first" && !isBlank(v),
     );
   return { show: asksPersonal || offered.length > 0 || hasSchedules, missing, holdsOwn };
 }
@@ -90,7 +90,7 @@ export function viewerStatus(
         : layer === "shared"
           ? shared[name]
           : "";
-  return (value ?? "").trim() !== "" ? "ready" : "missing";
+  return isBlank(value) ? "missing" : "ready";
 }
 
 /** How the key button names what is missing (`plan-wui-viewer-login` Q11):
