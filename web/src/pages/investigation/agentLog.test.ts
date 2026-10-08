@@ -13,6 +13,7 @@ import type { Message } from "../../api/types";
 import {
   EMPTY_LOG,
   drawOwnAsk,
+  retractOwnAsk,
   type AgentEntry,
   type AgentLog,
   type AgentMetricsState,
@@ -1339,6 +1340,24 @@ describe("the sender sees their own words at once", () => {
     // the rules that key on it (the store de-dupe, banner staleness) see the
     // same message the backend does rather than a browser clock.
     expect(asked(after)[0].at).toBe(100);
+  });
+
+  it("marks the call a sent message answers at once, and keeps it through adoption", () => {
+    // docs/plan-env-request-card.md D8: a card's Retry retires on THIS mark, so
+    // it must be on the drawn bubble, survive the broadcast, and leave with a
+    // retracted send.
+    const sent = drawOwnAsk(EMPTY_LOG, { author: "alice", content: "yo", answers: "c1" });
+    expect(asked(sent)[0].message.answers).toBe("c1");
+
+    const after = reduceAgent(sent, {
+      type: "user_message",
+      author: "alice",
+      content: "yo",
+      created_at: 100,
+    } as never);
+    expect(asked(after)[0].message.answers).toBe("c1");
+
+    expect(asked(retractOwnAsk(sent, { author: "alice", content: "yo" }))).toHaveLength(0);
   });
 
   it("does not let my pending message swallow someone else's identical one", () => {

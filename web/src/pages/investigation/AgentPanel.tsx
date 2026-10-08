@@ -26,7 +26,7 @@ import { missingLabel, useEnvMissing } from "../../components/PageIdentity";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { type ChatItem, ChatItemProvider } from "../../hooks/chatItem";
+import { type ChatItem, ChatItemProvider, type EnvTarget } from "../../hooks/chatItem";
 import { HeaderActions, type HeaderTier, useHeaderTier } from "./HeaderActions";
 import { UsageBar } from "./UsageBar";
 import { ContextBar } from "../../components/ContextBar";
@@ -249,9 +249,42 @@ export function AgentPanel({
   const { log, connection, send, mention, cancel, undo } = agent;
   // plan-skill-hub-history A3: the item a card in this log acts on (the
   // `show_skill_hub_entry` card's install). None for a read-only viewer.
+  //
+  // docs/plan-env-request-card.md: a `request_env` card opens THIS chat's
+  // environment panel (`envTarget`, read by the header that owns it) and its
+  // Retry is an ordinary send. Only where the panel can be opened at all.
+  const [envTarget, setEnvTarget] = useState<EnvTarget | null>(null);
+  const retryRef = useRef<(callId: string, text: string) => boolean>(() => false);
+  // The calls a message in the thread answers (`Message.answers`) — a card's
+  // Retry marks its call, so a retried card stays retired after a reload.
+  const answeredCalls = useMemo(() => {
+    const out = new Set<string>();
+    for (const e of log.entries) {
+      if (e.kind === "message" && e.message.answers) out.add(e.message.answers);
+    }
+    return out;
+  }, [log.entries]);
+  const canEnv = Boolean(canOpenEnv || onSaveEnvVars);
   const chatItem = useMemo<ChatItem | null>(
-    () => (readOnly || !slug ? null : { slug, itemId: investigationId }),
-    [readOnly, slug, investigationId],
+    () =>
+      readOnly || !slug
+        ? null
+        : {
+            slug,
+            itemId: investigationId,
+            ...(canEnv
+              ? {
+                  env: {
+                    shared: envVars ?? {},
+                    policy: envPolicy ?? {},
+                    open: setEnvTarget,
+                    retry: (callId: string, text: string) => retryRef.current(callId, text),
+                    answered: (callId: string) => answeredCalls.has(callId),
+                  },
+                }
+              : {}),
+          },
+    [readOnly, slug, investigationId, canEnv, envVars, envPolicy, answeredCalls],
   );
   // A one-line answer to "I just did something and nothing happened" — the
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
@@ -597,6 +630,16 @@ export function AgentPanel({
    * two of them were left behind still refusing during anyone's turn — the
    * spectator lock-out the change existed to remove — while ignoring the one
    * state where a send really is refused. */
+  // Read at press time, so the card's Retry sees this render's send/refusal.
+  retryRef.current = (callId: string, text: string) => {
+    const why = sendRefusal();
+    if (why) {
+      setComposerHint(why);
+      return false;
+    }
+    void send(text, { answers: callId });
+    return true;
+  };
   const sendRefusal = (): string | null => {
     // `readOnly` belongs here too. It was enforced on the composer, the Send
     // button and the chip, each separately — and NOT on the `ask_user` answer
@@ -749,6 +792,8 @@ export function AgentPanel({
         envPolicy={envPolicy}
         canOpenEnv={canOpenEnv}
         onSaveEnvVars={onSaveEnvVars}
+        envTarget={envTarget}
+        onEnvTargetClose={() => setEnvTarget(null)}
         environment={environment}
         canExportVideo={canExportVideo}
         appliedSkills={appliedSkills}
@@ -1492,6 +1537,8 @@ export function AgentHeader({
   envPolicy,
   canOpenEnv,
   onSaveEnvVars,
+  envTarget = null,
+  onEnvTargetClose,
   environment,
   canExportVideo = false,
   appliedSkills = [],
@@ -1539,6 +1586,10 @@ export function AgentHeader({
     envVars: Record<string, string>,
     envPolicy: Record<string, string>,
   ) => void | boolean | Promise<void | boolean>;
+  /** docs/plan-env-request-card.md: a `request_env` card asked for the panel
+   * at this variable. The panel is the header's; the card only says where. */
+  envTarget?: EnvTarget | null;
+  onEnvTargetClose?: () => void;
   /** #P4: whether this App ever opens a sandbox (`function.sandbox`), and
    *  whether this viewer may resize it (`change_permission`). Absent ⇒ the
    *  button is not drawn: a control that can never do anything is worse than
@@ -1647,14 +1698,17 @@ export function AgentHeader({
           onClose={() => setShowItemEnv(false)}
         />
       )}
-      {showEnv && (canOpenEnv || onSaveEnvVars) && (
+      {(showEnv || envTarget) && (canOpenEnv || onSaveEnvVars) && (
         <EnvVarsModal
           envVars={envVars ?? {}}
           envPolicy={envPolicy ?? {}}
           // The panel closes ITSELF after a save — and stays open when its other
           // tab still has unsaved work (#779); closing here overrode that.
           onSave={onSaveEnvVars}
-          onClose={() => setShowEnv(false)}
+          onClose={() => {
+            setShowEnv(false);
+            onEnvTargetClose?.();
+          }}
           // #750: which item, so the panel can offer a field per variable this
           // item's own tools declared. The header's missing-value hint already
           // holds the tools, sign-ins and my-values-here queries
@@ -1662,6 +1716,7 @@ export function AgentHeader({
           // adds my environment variables where the hint did not need them.
           slug={slug}
           itemId={investigationId}
+          target={envTarget}
         />
       )}
       {showTools && onSaveToolPrefs && (

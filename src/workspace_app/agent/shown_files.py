@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from ..files import WorkspaceFiles, abs_path, rel_path
 from ..filestore.protocol import FileNotFound
+from .env_request import ENV_REQUEST_MARKER
 
 SHOWN_FILES_KEY = "shown_files"
 SHOWN_FILES_MARKER = "\n[shown-files]"
@@ -162,20 +163,28 @@ def layout_paths(tree: dict[str, Any]) -> list[str]:
 SKILL_HUB_ENTRY_MARKER = "\n[skill-hub-entry]"
 
 
+#: The chat cards a tool reply can end with, and the field that marks a
+#: declaration as the tool's own: the skill hub entry (`show_skill_hub_entry`)
+#: and the request for variables (`request_env`, plan-env-request-card).
+_CARD_DECLARATIONS = ((SKILL_HUB_ENTRY_MARKER, "entry_id"), (ENV_REQUEST_MARKER, "tool"))
+
+
 def without_card_declaration(text: str) -> str:
-    """`text` without a trailing skill hub card declaration — what a reader
-    that does not draw the card (the export, the video) shows instead."""
-    at = text.rfind(SKILL_HUB_ENTRY_MARKER)
-    if at < 0:
-        return text
-    # Only a declaration as the tool writes it — the tail, one JSON object
-    # naming an entry. Anything else that happens to carry the marker on a
-    # line (a grep of a log, say) is output, kept whole.
-    try:
-        card = json.loads(text[at + len(SKILL_HUB_ENTRY_MARKER) :])
-    except ValueError:
-        return text
-    return text[:at] if isinstance(card, dict) and isinstance(card.get("entry_id"), str) else text
+    """`text` without a trailing chat-card declaration — what a reader that
+    does not draw the card (the export, the video) shows instead."""
+    for marker, field in _CARD_DECLARATIONS:
+        at = text.rfind(marker)
+        if at < 0:
+            continue
+        # Only a declaration as the tool writes it — the tail, one JSON object
+        # naming its subject. Anything else that happens to carry the marker on
+        # a line (a grep of a log, say) is output, kept whole.
+        try:
+            card = json.loads(text[at + len(marker) :])
+        except ValueError:
+            return text
+        return text[:at] if isinstance(card, dict) and isinstance(card.get(field), str) else text
+    return text
 
 
 def split_declaration(text: str) -> tuple[str, str]:

@@ -229,7 +229,8 @@ class Message(Struct):
 
     answers: str | None = None
     """The `tool_call_id` of the `ask_user` question this message answers, when
-    the user replied by choosing an option rather than typing (grill-me).
+    the user replied by choosing an option rather than typing (grill-me) — or
+    of the `request_env` card whose Retry sent it (plan-env-request-card).
 
     Without it the UI can only guess which question an answer belongs to by
     adjacency, which breaks the moment two questions are open, the user scrolls

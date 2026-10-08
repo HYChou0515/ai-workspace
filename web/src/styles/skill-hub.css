@@ -915,3 +915,54 @@ a.skills-row-name {
 .page .skill-hub-history-notes .markdown > p {
   margin: 0;
 }
+
+/* docs/plan-env-request-card.md — the `request_env` card. Its own classes:
+   a rule written for another card is not a style this one can count on. */
+.env-request-card {
+  margin-left: 28px; /* the avatar column every assistant block is indented past */
+  padding: var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  font-size: var(--text-small);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.env-request-card-reason {
+  margin: 0;
+  font-weight: 600;
+}
+
+.env-request-card-rows {
+  list-style: none;
+  margin: var(--space-8) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.env-request-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.env-request-card-name {
+  font-family: var(--font-mono);
+}
+
+.env-request-card-ready {
+  color: var(--ok);
+}
+
+.env-request-card-foot {
+  margin: var(--space-8) 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  color: var(--text-paper-d);
+}

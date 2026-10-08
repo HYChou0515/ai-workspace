@@ -59,6 +59,19 @@ def resolve(*, shared: dict[str, str], person: PersonEnv | None, policy: dict[st
     )
 
 
+#: What a blank value is made of — and nothing else: `str.strip()` strips 23
+#: characters beyond these six and JS's `String.trim()` 19, disagreeing on 6
+#: (U+001C–001F and U+0085 only Python, U+FEFF only JS), and a value
+#: one side sees as blank the other would hand to a tool. Held to the same list
+#: as the FE's `isBlank` by `tests/fixtures/env_layers_cases.json` (`blanks`).
+_BLANK = " \t\n\r\f\v"
+
+
+def is_blank(value: str) -> bool:
+    """A value that counts as not set (plan-env-request-card N5)."""
+    return not value.strip(_BLANK)
+
+
 def resolve_env(
     *,
     shared: dict[str, str],
@@ -74,6 +87,8 @@ def resolve_env(
     | ``shared_first``  | shared → private → service                       |
     | ``private_first`` | private → personal → service → shared            |
     | ``private_only``  | private → personal → service                     |
+
+    A blank value (empty or whitespace) counts as not set, in every layer.
 
     An unrecognised policy string reads as the default: the item is a plain
     PATCH-able record, and a stray value must not become a behaviour nobody
@@ -99,7 +114,9 @@ def resolve_env(
         else:
             order = (shared, private, service)
         for layer in order:
-            if name in layer:
+            # A blank value is not a value: it does not hide the next layer, and
+            # a name blank everywhere is not handed to the tool at all.
+            if not is_blank(layer.get(name, "")):
                 env[name] = layer[name]
                 break
     return env

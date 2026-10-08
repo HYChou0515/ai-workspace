@@ -162,6 +162,17 @@ describe("Shared: tools as sections", () => {
     expect(screen.getByTestId("env-section-head-maps")).toBeInTheDocument();
   });
 
+  it("says a shared value goes unused under Private only — but not of a blank (N5)", async () => {
+    open({ envVars: { ERP_TOKEN: "t", DB_HOST: "" }, envPolicy: { ERP_TOKEN: "private_only", DB_HOST: "private_only" } });
+    everyone();
+    await screen.findByTestId("env-section-head-erp");
+    unfold("erp");
+    unfold("maps");
+
+    expect(screen.getByTestId("env-shared-unused-ERP_TOKEN")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-shared-unused-DB_HOST")).toBeNull();
+  });
+
   it("saves each variable's policy with the shared values", async () => {
     const { onSave } = open({ envVars: { DB_HOST: "db" } });
     everyone();

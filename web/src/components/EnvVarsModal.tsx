@@ -44,16 +44,17 @@
  * from the one person who may edit them and from nobody else.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
+import type { EnvTarget } from "../hooks/chatItem";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
-import { layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
+import { isBlank, layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
 import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -88,6 +89,7 @@ export function EnvVarsModal({
   client = defaultApi,
   privateClient = privateEnvApi,
   personalClient = personalEnvApi,
+  target = null,
 }: {
   envVars: Record<string, string>;
   envPolicy?: Record<string, string>;
@@ -107,6 +109,10 @@ export function EnvVarsModal({
   /** My environment variables (`plan-personal-env`): read to say whose value
    * is in use, and edited on the cross-workspace tab. */
   personalClient?: Pick<PersonalEnvClient, "get" | "put">;
+  /** Opened from a `request_env` card (docs/plan-env-request-card.md): on the
+   * person's own tab (N4), at its variable — drawn even when no tool declared
+   * it (D5). */
+  target?: EnvTarget | null;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -209,8 +215,9 @@ export function EnvVarsModal({
   // failure notice (MutationCache.onError) instead of failing in silence.
   const saveMine = useMutation({
     mutationFn: async () => {
-      // A cleared field is "no value of mine", not an empty value — "" would
-      // override the shared value the person meant to fall back to.
+      // A cleared field is "no value of mine": stored as absence, so the saved
+      // set says what the person meant rather than keeping a blank that every
+      // reader then has to skip (a blank is not a value, plan N5).
       const kept = Object.fromEntries(Object.entries(mineValues).filter(([, v]) => v !== ""));
       await privateClient.put(slug!, itemId!, kept);
       return kept;
@@ -304,6 +311,21 @@ export function EnvVarsModal({
   // credential this dialog asks for (#750).
   const declared = new Set(tools.flatMap((x) => (x.env_needs ?? []).map((n) => n.name)));
   const offered = (providersQ.data ?? []).filter((p) => p.produces.some((n) => declared.has(n)));
+
+  // Put the person at the variable the card asked for, once, when its field is
+  // drawn. Left to the modal, focus lands on the first tab.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!target || focused.current) return;
+    if (tab !== "mine") return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-testid="${CSS.escape(`env-mine-${target.name}`)}"]`,
+    );
+    if (!el) return;
+    focused.current = true;
+    el.focus();
+    el.scrollIntoView?.({ block: "center" });
+  });
 
   return (
     <ModalShell
@@ -431,6 +453,7 @@ export function EnvVarsModal({
             }
             // Not before the read: typing here would become the whole set.
             ready={mineQ.isSuccess}
+            focus={target?.name ?? null}
             login={
               <Logins
                 offered={offered}
@@ -650,6 +673,7 @@ function Sections({
   row,
   otherExtra,
   otherOpen = false,
+  focus = null,
 }: {
   sections: ToolSection[];
   query: string;
@@ -660,6 +684,8 @@ function Sections({
   /** Unfold "Other variables" from the start — it holds what the person came
    * to fill. */
   otherOpen?: boolean;
+  /** The variable a card asked for: its section starts unfolded. */
+  focus?: string | null;
 }) {
   const t = useT();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -669,8 +695,13 @@ function Sections({
   // the value they came for — the fold would move under their hands.
   const [initial] = useState<Record<string, boolean>>(() =>
     ({
-      ...Object.fromEntries(sections.map((s) => [s.key, s.status === "missingRequired"])),
-      __other: otherOpen,
+      ...Object.fromEntries(
+        sections.map((s) => [
+          s.key,
+          s.status === "missingRequired" || s.fields.some((f) => f.name === focus),
+        ]),
+      ),
+      __other: otherOpen || (focus !== null && other.includes(focus)),
     }),
   );
   const q = query.trim().toLowerCase();
@@ -784,7 +815,8 @@ function SharedTab({
             section={section}
             value={shared[field.name] ?? ""}
             policy={policyOf(field.name, policy)}
-            hasShared={Object.hasOwn(shared, field.name)}
+            // A blank is not a value (N5): no "the shared value is unused" note.
+            hasShared={!isBlank(shared[field.name])}
             canEdit={canEdit}
             onVar={onVar}
             onPolicy={onPolicy}
@@ -1065,12 +1097,15 @@ function MineTab({
   onReplace,
   ready,
   login,
+  focus = null,
 }: {
   settled: boolean;
   tools: Parameters<typeof deriveEnvNeeds>[0];
   query: string;
   shared: Record<string, string>;
   policy: Record<string, string>;
+  /** The variable a card asked for — drawn even if nothing declared it (D5). */
+  focus?: string | null;
   mine: Record<string, string>;
   auto: Record<string, string>;
   personal: Record<string, string>;
@@ -1105,6 +1140,7 @@ function MineTab({
     ...new Set([
       ...Object.keys(own),
       ...Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first"),
+      ...(focus ? [focus] : []),
     ]),
   ].filter((n) => !declared.has(n));
 
@@ -1124,6 +1160,7 @@ function MineTab({
         </p>
       ) : (
       <Sections
+        focus={focus}
         sections={view.sections}
         query={query}
         other={other}
@@ -1182,7 +1219,9 @@ function MineRow({
   const automatic = Object.hasOwn(auto, name);
   // `shared_first` with a shared value set: nothing the person types could be
   // used, so no box is offered — a field that silently does nothing is worse.
-  const pinned = p === "shared_first" && Object.hasOwn(shared, name);
+  // Read off `layerInUse`, the one rule of what a tool gets: a blank shared
+  // value is not a value (N5), so it pins nothing and theirs is used.
+  const pinned = p === "shared_first" && layer === "shared";
   const inUse = layer === "private" ? "mine" : layer;
   return (
     <div data-testid={`env-mine-row-${name}`} data-in-use={inUse} style={{ display: "grid", gap: 3 }}>
@@ -1408,6 +1447,8 @@ function PersonalRow({
  * The credential typed here reaches the deploy's implementation and stops. */
 export function Logins({
   offered,
+  initialDialog = null,
+  onCancel,
   disabled = false,
   creds,
   setCreds,
@@ -1415,6 +1456,11 @@ export function Logins({
   onFilled,
 }: {
   offered: EnvProvider[];
+  /** Open on this login's form — the card's login page (`EnvLoginModal`). */
+  initialDialog?: string | null;
+  /** Where the form's Cancel goes when it is the whole page (`EnvLoginModal`):
+   * there, collapsing the form would leave a page with nothing to do. */
+  onCancel?: () => void;
   disabled?: boolean;
   creds: Record<string, string>;
   setCreds: (next: Record<string, string>) => void;
@@ -1423,7 +1469,7 @@ export function Logins({
   onFilled: (env: Record<string, string>) => void | Promise<unknown>;
 }) {
   const t = useT();
-  const [dialog, setDialog] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<string | null>(initialDialog);
   const [credError, setCredError] = useState<string | null>(null);
   const [exchanging, setExchanging] = useState(false);
   const openProvider = offered.find((p) => p.id === dialog);
@@ -1523,6 +1569,10 @@ export function Logins({
               data-size="sm"
               data-testid="env-cred-cancel"
               onClick={() => {
+                if (onCancel) {
+                  onCancel();
+                  return;
+                }
                 setDialog(null);
                 setCreds({});
                 setCredError(null);

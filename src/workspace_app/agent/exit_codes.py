@@ -84,9 +84,36 @@ def _signal_of(exit_code: int) -> int | None:
     return None
 
 
-def explain(exit_code: int) -> str | None:
+#: BLOCKED, said to a turn that can show the user a card for a variable
+#: (`request_env`, docs/plan-env-request-card.md).
+_BLOCKED_WITH_CARD = (
+    "The tool cannot proceed until someone acts, so calling it again unchanged "
+    "will fail the same way. If it names a missing environment variable, call "
+    "`request_env` with this tool's name and that variable — the user gets a card "
+    "to sign in or set it. Otherwise tell the user exactly what is needed."
+)
+
+#: BLOCKED from a command the agent ran itself: `exec` gets none of the
+#: workspace's variables (only a package tool does), so the panel cannot help.
+_BLOCKED_EXEC = (
+    "The command cannot proceed until someone acts, so running it again "
+    "unchanged will fail the same way. A command run with `exec` does not "
+    "receive this workspace's environment variables, so setting one will not "
+    "help it — tell the user exactly what it needs."
+)
+
+
+def explain(exit_code: int, *, by_exec: bool = False, can_request_env: bool = False) -> str | None:
     """One sentence about this exit code, or None when the output speaks for
-    itself (success, and plain unqualified failure)."""
+    itself (success, and plain unqualified failure).
+
+    BLOCKED depends on who ran the command: `by_exec` (the agent's own `exec`,
+    which no variable reaches) or a package tool, and then whether this turn
+    holds `request_env`."""
+    if exit_code == BLOCKED and by_exec:
+        return _BLOCKED_EXEC
+    if exit_code == BLOCKED and can_request_env:
+        return _BLOCKED_WITH_CARD
     if exit_code in _BY_CODE:
         return _BY_CODE[exit_code]
     sig = _signal_of(exit_code)

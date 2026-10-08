@@ -1,5 +1,5 @@
 {
- "_comment": "plan-wui-viewer-login + plan-personal-env: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows. `private` is the person's values for this item, `personal` their values for every item.",
+ "_comment": "plan-wui-viewer-login + plan-personal-env: the table BOTH resolvers are held to. `expected` is the layer `api.env_layers.resolve_env` picks \u2014 generated from it, and re-checked against it by tests/api/test_env_layers.py; web/tests/envLayersParity.test.ts holds the FE's copy to the same rows. `private` is the person's values for this item, `personal` their values for every item. Each layer is absent, holds a value, or holds a blank (which counts as not set). `blanks`: what counts as blank, the SAME on both sides \u2014 only space, tab, newline, carriage return, form feed and vertical tab, so a value one side sees the other does too.",
  "cases": [
   {
    "shared": {},
@@ -99,6 +99,59 @@
   },
   {
    "shared": {},
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
    "private": {
     "K": "p"
    },
@@ -212,6 +265,248 @@
     "K": "bogus"
    },
    "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {},
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
   },
   {
    "shared": {
@@ -333,6 +628,69 @@
    "shared": {
     "K": "s"
    },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
    "private": {
     "K": "p"
    },
@@ -464,6 +822,927 @@
     "K": "bogus"
    },
    "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": "s"
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "shared"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {},
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {},
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": "p"
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "private"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {},
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "personal"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": "v"
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {},
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "shared_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_first"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "private_only"
+   },
+   "expected": "none"
+  },
+  {
+   "shared": {
+    "K": ""
+   },
+   "private": {
+    "K": ""
+   },
+   "personal": {
+    "K": ""
+   },
+   "policy": {
+    "K": "bogus"
+   },
+   "expected": "none"
+  }
+ ],
+ "blanks": [
+  {
+   "value": "",
+   "blank": true
+  },
+  {
+   "value": " ",
+   "blank": true
+  },
+  {
+   "value": " \t\n\r\f\u000b",
+   "blank": true
+  },
+  {
+   "value": "x",
+   "blank": false
+  },
+  {
+   "value": " x ",
+   "blank": false
+  },
+  {
+   "value": "\u00a0",
+   "blank": false
+  },
+  {
+   "value": "\ufeff",
+   "blank": false
+  },
+  {
+   "value": "\u001c",
+   "blank": false
+  },
+  {
+   "value": "\u0085",
+   "blank": false
+  },
+  {
+   "value": "\u3000",
+   "blank": false
   }
  ]
 }

@@ -736,6 +736,10 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         # fails, the tool prints a friendly error to stderr + exits 2.
         result = await _exec_tool(actx, handle, pkg, cmd.name, args_json)
         logger.info("registry: dispatch %s:%s exited %d", pkg.name, cmd.name, result.exit_code)
+        # What `request_env` checks a variable name against (plan-env-request-card D3).
+        actx.tool_outputs[model_tool_name(pkg, cmd)] = (result.stdout + result.stderr).decode(
+            errors="replace"
+        )
         text = _exec_result_text(actx, model_tool_name(pkg, cmd), result)
         # #285: a chart command that emits image(s) gets a VLM visual self-review
         # (detect layout issues → restyle → re-render, ≤2 passes) when a vision

@@ -28,7 +28,8 @@ class MarkingInput(BaseModel):
 class _MessageBody(BaseModel):
     content: str
     # grill-me: the `tool_call_id` of the `ask_user` question this message
-    # answers, set when the user clicked an option instead of typing. Carried
+    # answers, set when the user clicked an option instead of typing — or of
+    # the `request_env` card whose Retry sent it (plan-env-request-card). Carried
     # through to `Message.answers`; the send path is otherwise unchanged — an
     # answer starts a turn like any other message.
     answers: str | None = None

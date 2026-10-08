@@ -3,16 +3,15 @@
  * to draw it at all, and what the viewer is missing that they can supply.
  *
  * "Missing" is narrow on purpose: a variable some running tool marked
- * REQUIRED, whose value this viewer's tools would not get, and which the
- * viewer could fix — i.e. one their own value would actually be used for. A
- * shared value pinned by `shared_first` is not theirs to fix, and an optional
- * one is not missing. Each is named by the SYSTEM to sign in to when the deploy
+ * REQUIRED and whose value this viewer's tools would not get — a blank value
+ * counts as none in every layer, so whatever is missing, the viewer's own value
+ * would be used for it. An optional one is not missing. Each is named by the SYSTEM to sign in to when the deploy
  * can sign them in for it, else by the variable; never counted ("2 missing"
  * says nothing about what to do).
  */
 import type { EnvProvider, ItemToolState } from "../api/types";
 
-import { layerInUse, policyOf } from "./envLayers";
+import { isBlank, layerInUse, policyOf } from "./envLayers";
 
 export type Missing = { kind: "login" | "set"; name: string };
 
@@ -47,18 +46,7 @@ export function identityState({
   const missing: Missing[] = [];
   const seen = new Set<string>();
   for (const name of required) {
-    const layer = layerInUse(name, shared, mine, policy, personal);
-    const value =
-      layer === "private"
-        ? mine[name]
-        : layer === "personal"
-          ? personal[name]
-          : layer === "shared"
-            ? shared[name]
-            : "";
-    if ((value ?? "").trim() !== "") continue;
-    // Pinned to the shared copy: whatever the viewer typed would not be used.
-    if (policyOf(name, policy) === "shared_first" && Object.hasOwn(shared, name)) continue;
+    if (viewerStatus(name, shared, mine, policy, personal) !== "missing") continue;
     const via = offered.find((p) => p.produces.includes(name));
     const entry: Missing = via ? { kind: "login", name: via.label } : { kind: "set", name };
     const key = `${entry.kind}:${entry.name}`;
@@ -72,11 +60,37 @@ export function identityState({
   // holding anything of one's own. A value from my environment variables
   // counts only where this item would use it.
   const holdsOwn =
-    Object.values(mine).some((v) => v.trim() !== "") ||
+    Object.values(mine).some((v) => !isBlank(v)) ||
     Object.entries(personal).some(
-      ([n, v]) => policyOf(n, policy) !== "shared_first" && v.trim() !== "",
+      ([n, v]) => policyOf(n, policy) !== "shared_first" && !isBlank(v),
     );
   return { show: asksPersonal || offered.length > 0 || hasSchedules, missing, holdsOwn };
+}
+
+/** Where one variable stands for this viewer — the ONE judgement the key
+ * button (`identityState`) and the chat's request card (`envRequestRows`) both
+ * make: `ready` when the value their tools would get is not blank, otherwise
+ * `missing`. A blank value is not a value in any layer (`layerInUse`), so a
+ * blank shared copy never stands in the way of the viewer's own. */
+export type ViewerStatus = "ready" | "missing";
+
+export function viewerStatus(
+  name: string,
+  shared: Record<string, string>,
+  mine: Record<string, string>,
+  policy: Record<string, string>,
+  personal: Record<string, string> = {},
+): ViewerStatus {
+  const layer = layerInUse(name, shared, mine, policy, personal);
+  const value =
+    layer === "private"
+      ? mine[name]
+      : layer === "personal"
+        ? personal[name]
+        : layer === "shared"
+          ? shared[name]
+          : "";
+  return isBlank(value) ? "missing" : "ready";
 }
 
 /** How the key button names what is missing (`plan-wui-viewer-login` Q11):

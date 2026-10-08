@@ -33,6 +33,11 @@ vi.mock("./SkillHubEntryCard", () => ({
     <div data-testid="skill-hub-card-stub">{entryId}</div>
   ),
 }));
+vi.mock("./EnvRequestCard", () => ({
+  EnvRequestCard: ({ request }: { request: { names: string[] } }) => (
+    <div data-testid="env-request-card-stub">{request.names.join(",")}</div>
+  ),
+}));
 vi.mock("./RcaMark", () => ({
   RcaMark: () => <span data-rca />,
 }));
@@ -1185,6 +1190,35 @@ describe("EntryView — show_skill_hub_entry", () => {
   it("draws nothing but the running card while the call is in flight", () => {
     render(<EntryView entry={call(undefined, "running")} />);
     expect(screen.queryByTestId("skill-hub-card-stub")).toBeNull();
+  });
+});
+
+
+// docs/plan-env-request-card.md: `request_env` declares the variables a tool
+// needs and the chat draws them as a card — the card IS its rendering.
+describe("EntryView — request_env", () => {
+  const call = (output: string | undefined, status: "done" | "running" = "done") => ({
+    kind: "tool_call" as const,
+    call: { call_id: "c1", name: "request_env", status, args: {}, output },
+  });
+
+  it("draws the declared request as a card instead of a collapsed tool card", () => {
+    render(
+      <EntryView
+        entry={call(
+          'The user now sees a card.\n[env-request]{"tool":"lookup","names":["ERP_TOKEN"],"reason":"r"}',
+        )}
+      />,
+    );
+    expect(screen.getByTestId("env-request-card-stub")).toHaveTextContent("ERP_TOKEN");
+    expect(document.querySelector("details")).toBeNull();
+  });
+
+  it("falls back to the ordinary tool card, labelled, when the request was refused", () => {
+    render(<EntryView entry={call("error: `exec` does not receive this item's variables")} />);
+    expect(screen.queryByTestId("env-request-card-stub")).toBeNull();
+    expect(document.querySelector("details")).not.toBeNull();
+    expect(screen.getByText(translate("zh-TW", "tool.request_env"))).toBeInTheDocument();
   });
 });
 
