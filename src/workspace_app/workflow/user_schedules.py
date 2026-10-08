@@ -34,9 +34,10 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
+from croniter import CroniterError, croniter
 from msgspec import Struct
 
-from .triggers import Schedule, _valid_tz, fire_window, next_run, period_target
+from .triggers import CRON_PREFIX, Schedule, _valid_tz, fire_window, next_run, period_target
 from .workspace_store import SCHEDULES_FILE, WORKSPACE_WORKFLOW_DIR
 
 logger = logging.getLogger(__name__)
@@ -106,11 +107,16 @@ class UserSchedule(Struct):
     dom: int = 0
     tz: str = ""
     payload: dict[str, Any] = {}
+    cron: str = ""
+    """A 5-field cron expression, read in ``tz`` — instead of ``every`` and its
+    fields, for what would otherwise take several rows (`docs/plan-schedule-cron.md`)."""
 
     def as_schedule(self) -> Schedule:
         """The same row in the shape the existing window/due functions take, so
         `fire_window`, `period_target` and `is_due` are reused rather than
         reimplemented against a second definition of "what period is it"."""
+        if self.cron:
+            return Schedule(every=f"{CRON_PREFIX}{self.cron}", tz=self.tz)
         return Schedule(
             every=self.every if self.every != "minutes" else f"minutes:{self.n}",
             at=self.at,
@@ -143,6 +149,9 @@ def parse_user_schedules(raw: str) -> list[UserSchedule]:
                 # "with" in the file because that is how it reads to an author;
                 # `payload` in code because `with` is a keyword.
                 payload=dict(row.get("with") or {}),
+                # One space between fields: the identity is made of this text,
+                # and "0 9 * * 1-5" spaced two ways is one schedule.
+                cron=normalise_cron(str(row.get("cron") or "")),
             )
         )
     return out
@@ -206,6 +215,14 @@ def validate_user_schedules(raw: str) -> list[str]:
         # was dropped, while omitting the same key was accepted. The parser
         # already spelled every one of these `or`; the validator did not, so the
         # two halves disagreed about the same file.
+        # Set means truthy, the parser's `or` rule: a generator writing `"cron": ""`
+        # or `null` for what it left out has written an `every` row.
+        if row.get("cron"):
+            # A cron row says WHEN with the cron alone; the period fields are
+            # another way of saying it, and two answers to one question is a
+            # row nobody can predict.
+            problems.extend(_cron_problems(where, row))
+            continue
         every = row.get("every") or "daily"
         if every not in EVERY:
             problems.append(f"{where}: `every` is {every!r}; it must be one of {', '.join(EVERY)}.")
@@ -235,14 +252,7 @@ def validate_user_schedules(raw: str) -> list[str]:
         # and was told about a value nobody typed, while the parser next door
         # ran the same row happily. reference.md tells authors tz is optional,
         # and a generated page emits nulls for what it left out.
-        tz = normalise_tz(str(row.get("tz") or ""))
-        if tz and not _valid_tz(tz):
-            # Nothing checked this, so a typo travelled all the way to `ZoneInfo`
-            # — which raises `ValueError` for an absolute path or a traversal,
-            # not the `ZoneInfoNotFoundError` the sweep was catching. One bad
-            # zone took the WHOLE file down and the good rows in it stopped
-            # firing, which is the failure this per-row linting exists to stop.
-            problems.append(f"{where}: `tz` {tz!r} is not a known IANA time zone.")
+        problems.extend(_tz_problems(where, row))
         if every == "weekly" and row.get("dow") not in _DOW:
             problems.append(f"{where}: a weekly schedule needs `dow` ({', '.join(_DOW)}).")
         if every == "monthly":
@@ -276,6 +286,84 @@ def _looks_like_time(at: object) -> bool:
     if not (hh.isdigit() and mm.isdigit()):
         return False
     return 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
+
+
+def _tz_problems(where: str, row: dict[str, Any]) -> list[str]:
+    """The row's `tz`, linted — every kind of row, cron included.
+
+    `or ""`, the SAME spelling `parse_user_schedules` uses, because the two
+    halves have to agree about one file. `str(row.get("tz", ""))` turns a
+    JSON `null` into the string "None" — truthy, not a zone — so a page
+    that wrote `"tz": null` for "I did not pick one" had its row refused
+    and was told about a value nobody typed, while the parser next door
+    ran the same row happily. reference.md tells authors tz is optional,
+    and a generated page emits nulls for what it left out.
+
+    Nothing checked this once, so a typo travelled all the way to `ZoneInfo`
+    — which raises `ValueError` for an absolute path or a traversal, not the
+    `ZoneInfoNotFoundError` the sweep was catching. One bad zone took the WHOLE
+    file down and the good rows in it stopped firing, which is the failure this
+    per-row linting exists to stop.
+    """
+    tz = normalise_tz(str(row.get("tz") or ""))
+    if tz and not _valid_tz(tz):
+        return [f"{where}: `tz` {tz!r} is not a known IANA time zone."]
+    return []
+
+
+def normalise_cron(cron: str) -> str:
+    """The cron with one space between its fields — what a row's identity is made of."""
+    return " ".join(cron.split())
+
+
+def _comes_round(cron: str) -> bool:
+    """Whether the cron has an occurrence at all — both ways from a fixed day, so
+    a once-a-leap-year `0 0 29 2 *` counts and `0 0 30 2 *` does not."""
+    start = datetime(2001, 1, 1)
+    try:
+        croniter(cron, start).get_next(datetime)
+        croniter(cron, start).get_prev(datetime)
+    except CroniterError:
+        return False
+    return True
+
+
+#: The fields a cron row must not carry: they are the five periods' way of
+#: saying when, and the cron already says it.
+_PERIOD_FIELDS = ("n", "at", "dow", "dom")
+
+
+def _cron_problems(where: str, row: dict[str, Any]) -> list[str]:
+    """A cron row's problems: the cron itself (text, exactly 5 fields, one
+    `croniter` can follow), the period fields it must not carry, and its zone."""
+    problems: list[str] = []
+    cron = row.get("cron")
+    # Set means truthy — the parser's `or` rule: `null`, `0` and `""` are "left out".
+    if row.get("every"):
+        problems.append(f"{where}: use either `cron` or `every`, not both.")
+    for key in _PERIOD_FIELDS:
+        if row.get(key):
+            problems.append(
+                f"{where}: `{key}` does not apply to a `cron` schedule — the cron says when."
+            )
+    if not isinstance(cron, str):
+        problems.append(
+            f'{where}: `cron` must be text like "0 9 * * 1-5", got {type(cron).__name__}.'
+        )
+    elif len(cron.split()) != 5:
+        # `croniter` also takes a seconds field, a year field and `@daily`;
+        # the plan's format is the 5 fields people and models write.
+        problems.append(
+            f"{where}: `cron` must have 5 fields (minute hour day-of-month month day-of-week), "
+            f"got {cron!r}."
+        )
+    elif not croniter.is_valid(cron):
+        problems.append(f"{where}: `cron` {cron!r} is not a cron expression the sweep can follow.")
+    elif not _comes_round(cron):
+        # `0 0 30 2 *` parses and has no date. Left to the sweep, looking for its
+        # occurrence raised out of the whole file — the good rows beside it too.
+        problems.append(f"{where}: `cron` {cron!r} never comes round — no date matches it.")
+    return problems + _tz_problems(where, row)
 
 
 def file_rows(raw: str) -> list[Any] | None:
@@ -387,7 +475,11 @@ def trigger_id_for(item_id: str, folder: str, row: UserSchedule) -> str:
     The prefix is not decoration. An operator reading the window ledger sees raw
     keys, and one that names where it came from is one they can act on.
     """
-    when = (row.every, row.n, row.at, row.dow, row.dom, row.tz)
+    when: tuple[Any, ...] = (row.every, row.n, row.at, row.dow, row.dom, row.tz)
+    if row.cron:
+        # Appended only for a cron row: an `every` row's key stays exactly the
+        # one it had before cron existed — its ledger, chat and binding with it.
+        when = (*when, row.cron)
     fingerprint = json.dumps(
         {
             "folder": folder,
@@ -469,6 +561,8 @@ def describe_row(row: UserSchedule) -> str:
     """The row in words, for the reply the agent relays: `daily at 09:00
     Asia/Taipei`, `weekly on mon at 08:00 UTC`, `every 15 minutes`."""
     zone = row.tz or "UTC"
+    if row.cron:
+        return f"cron `{row.cron}` ({zone})"
     if row.every == "minutes":
         return f"every {row.n} minutes ({zone})"
     if row.every == "hourly":

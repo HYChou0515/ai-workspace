@@ -335,6 +335,15 @@ def test_editing_the_time_rewrites_that_row_and_keeps_the_others_as_written():
             {"every": "monthly", "dom": 1, "at": "06:00", "dow": "mon"},
             {"every": "monthly", "dom": 1, "at": "06:00"},
         ),
+        # A cron is the whole "when" (docs/plan-schedule-cron.md decision 4):
+        # the `every` row's fields go, the zone stays.
+        (
+            {"cron": "0 9 * * 1-5", "at": "09:00", "tz": "Asia/Taipei"},
+            {"cron": "0 9 * * 1-5", "tz": "Asia/Taipei"},
+        ),
+        # Written the way the parser reads it — one space between fields — so
+        # the file holds the cron its identity is made of.
+        ({"cron": "  0  9 * * 1-5 "}, {"cron": "0 9 * * 1-5"}),
     ],
 )
 def test_each_period_writes_only_the_fields_it_reads(asked: dict, written: dict):
@@ -1044,3 +1053,57 @@ def _settle(client, iid: str) -> None:
             return
         time.sleep(0.02)
     raise AssertionError(f"runs never settled: {runs}")
+
+
+def test_a_cron_row_edited_back_to_a_period_loses_its_cron():
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(
+        client,
+        iid,
+        ITEM_SCHEDULES,
+        _schedules({"cron": "0 9 * * 1-5", "tz": "Asia/Taipei", "run": "w0"}),
+    )
+    row = _row_of(client, ITEM_SCHEDULES)
+    assert row["runnable"], row
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={
+            "path": ITEM_SCHEDULES,
+            "trigger_id": row["trigger_id"],
+            "every": "daily",
+            "at": "09:00",
+            "tz": "Asia/Taipei",
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == [
+        {"every": "daily", "at": "09:00", "tz": "Asia/Taipei", "run": "w0"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("asked", "said"),
+    [
+        ({}, "either `every` or `cron`"),
+        ({"every": "daily", "at": "09:00", "cron": "0 9 * * *"}, "either `every` or `cron`"),
+        ({"cron": "0 25 * * *"}, "not a cron expression"),
+    ],
+)
+def test_an_edit_that_is_not_one_time_is_refused_and_the_file_is_untouched(asked: dict, said: str):
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    before = _file_rows(client, iid, ITEM_SCHEDULES)
+    ref = {"path": ITEM_SCHEDULES, "trigger_id": _row_of(client, ITEM_SCHEDULES)["trigger_id"]}
+
+    r = client.post(_wp(iid, "/schedules/edit"), json={**ref, **asked})
+
+    assert r.status_code == 422, r.text
+    assert said in r.json()["detail"]
+    assert _file_rows(client, iid, ITEM_SCHEDULES) == before

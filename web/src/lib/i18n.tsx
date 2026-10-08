@@ -692,6 +692,7 @@ export const messages = {
   // named the way a person says it (docs/plan-schedule-overview-polish.md).
   "schedules.inZone": { "zh-TW": "{what}（{zone}）", en: "{what} ({zone})" },
   "schedules.setAs": { "zh-TW": "設定為：{what}（{zone}）", en: "Set as: {what} ({zone})" },
+  "schedules.cronSet": { "zh-TW": "cron：{cron}（{zone}）", en: "cron: {cron} ({zone})" },
   // An instant on the viewer's clock.
   "time.inUnderAMinute": { "zh-TW": "不到 1 分鐘後", en: "in under a minute" },
   "time.inMinutes": { "zh-TW": "{n} 分鐘後", en: "in {n} min" },
@@ -760,6 +761,26 @@ export const messages = {
   "schedules.edit.hour": { "zh-TW": "時", en: "Hour" },
   "schedules.edit.minute": { "zh-TW": "分", en: "Minute" },
   "schedules.edit.zone": { "zh-TW": "時區：{zone}", en: "Time zone: {zone}" },
+  "schedules.edit.mode": { "zh-TW": "設定方式", en: "How" },
+  "schedules.edit.mode.simple": { "zh-TW": "簡單", en: "Simple" },
+  "schedules.edit.mode.cron": { "zh-TW": "cron", en: "cron" },
+  "schedules.edit.cronField": { "zh-TW": "cron 表達式", en: "cron expression" },
+  "schedules.edit.cronFields": {
+    "zh-TW": "cron 要剛好 5 欄：分 時 日 月 星期。",
+    en: "A cron has exactly 5 fields: minute hour day-of-month month day-of-week.",
+  },
+  "schedules.edit.cronUnreadable": {
+    "zh-TW": "看不懂這個 cron，請檢查每一欄的值。",
+    en: "This cron cannot be read — check each field's value.",
+  },
+  "schedules.edit.cronSkipsMonths": {
+    "zh-TW": "cron 在沒有這一天的月份不會執行；「簡單」的每月會在月底執行。",
+    en: "A cron skips months without this day; the simple monthly runs on the month's last day.",
+  },
+  "schedules.edit.replacesCron": {
+    "zh-TW": "原本的 cron 無法用簡單欄位表示，存檔後會換成這裡的設定。",
+    en: "The cron cannot be said with these fields; saving replaces it with what is here.",
+  },
   "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":

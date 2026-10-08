@@ -11,6 +11,9 @@
  * Pure functions over `Intl`. The viewer's zone and `now` are parameters so a
  * test pins them — the machine a test runs on has a zone of its own.
  */
+import cronstrue from "cronstrue";
+import "cronstrue/locales/zh_TW";
+
 import type { MsgKey, useT } from "./i18n";
 
 type T = ReturnType<typeof useT>;
@@ -183,6 +186,13 @@ export type RowTime = {
   tz: string;
 };
 
+/** The row's `cron`, or `null` for an `every` row (or one that is not an object). */
+export function cronOf(value: unknown): string | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const cron = (value as Record<string, unknown>).cron;
+  return typeof cron === "string" ? cron : null;
+}
+
 export function rowTime(value: unknown): RowTime {
   const raw: Record<string, unknown> =
     value !== null && typeof value === "object" && !Array.isArray(value)
@@ -284,6 +294,21 @@ function periodWords(time: RowTime, t: T): string {
   }
 }
 
+/** A cron in words — `cronstrue`'s own, as it writes them
+ * (`docs/plan-schedule-cron.md` decision 3: "用現有的就好了") — or `null` when it
+ * cannot read the expression; the backend says why the row will not run. */
+export function cronWords(cron: string, locale: string): string | null {
+  try {
+    return cronstrue.toString(cron, {
+      locale: locale.startsWith("zh") ? "zh_TW" : "en",
+      use24HourTimeFormat: true,
+      throwExceptionOnParseError: true,
+    });
+  } catch {
+    return null;
+  }
+}
+
 /** A row's period on the viewer's clock (decision 3), and what it was set as —
  * for the hover; `set` is "" when there is nothing to add (minutes, hourly). */
 export function periodText(
@@ -292,6 +317,16 @@ export function periodText(
   t: T,
 ): { text: string; set: string } {
   const time = rowTime(value);
+  const cron = cronOf(value);
+  if (cron !== null) {
+    // Not moved onto the viewer's clock: a cron's fields move together across
+    // a day boundary. In the viewer's zone it reads bare; elsewhere it names
+    // its zone (docs/plan-schedule-cron.md decision 3).
+    const zone = validZone(time.tz) ? zoneName(time.tz, opts.locale) : time.tz;
+    const words = cronWords(cron, opts.locale) ?? cron;
+    const text = time.tz === opts.viewer ? words : t("schedules.inZone", { what: words, zone });
+    return { text, set: t("schedules.cronSet", { cron, zone }) };
+  }
   const asWritten = periodWords(time, t);
   const where = validZone(time.tz) ? zoneName(time.tz, opts.locale) : time.tz;
   const set = t("schedules.setAs", { what: asWritten, zone: where });

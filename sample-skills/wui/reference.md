@@ -275,7 +275,8 @@ await workspace.writeFile("schedules.json", JSON.stringify({
     { every: "weekly",  dow: "mon",  at: "08:00", run: "build-report" },
     { every: "monthly", dom: 1,      at: "07:30", run: "close-month" },
     { every: "hourly",  run: "check-arrivals" },
-    { every: "minutes", n: 15,       run: "check-arrivals" }
+    { every: "minutes", n: 15,       run: "check-arrivals" },
+    { cron: "0 9 * * 1-5", tz: "Asia/Taipei", run: "build-report" }
   ]
 }, null, 2));
 ```
@@ -285,8 +286,9 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 | `every` | `minutes` · `hourly` · `daily` · `weekly` · `monthly` |
 | `n` | required by `every: "minutes"`; must divide 60 (1·2·3·4·5·6·10·12·15·20·30·60) |
 | `at` | `"HH:MM"`, for daily/weekly/monthly |
-| `dow` | ONE of `mon`…`sun`, for weekly. Not a list and not `weekdays` — "every weekday at nine" is **five rows**, one per day |
+| `dow` | ONE of `mon`…`sun`, for weekly. Not a list and not `weekdays` — for "every weekday at nine" use `cron` |
 | `dom` | 1–31, for monthly; a day past the month's end clamps to its last day |
+| `cron` | INSTEAD of `every` and its fields, when one `every` row cannot say it: a standard 5-field cron (minute hour day-of-month month day-of-week) read in `tz` — `"0 9 * * 1-5"` (every weekday at nine), `"0 */2 * * *"`, `"0 9 1,15 * *"`. Use `every` when one row says it; a row has one or the other, never both |
 | `tz` | an IANA zone (`"Asia/Taipei"`); **defaults to UTC** |
 | `run` | a workflow id this ITEM has: one its profile declares, or one saved in the item's own `.workflows/` (the agent's `save_workflow`) — the same list `workflows:` may name. An id the item does not have is **skipped with a log line naming what it has**, and the other rows still run |
 | `with` | the payload, handed to the workflow exactly as `startRun` does |

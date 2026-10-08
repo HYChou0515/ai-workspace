@@ -55,6 +55,7 @@ from ..workflow.user_schedules import (
     ScheduleView,
     UserSchedule,
     last_window_lookup,
+    normalise_cron,
     parse_row,
     schedule_key,
     schedule_views,
@@ -301,7 +302,11 @@ class RowRef(BaseModel):
 
 
 class EditTime(RowRef):
-    every: str
+    """A new time: `every` and the fields it reads, or a `cron` — one of the two
+    (`docs/plan-schedule-cron.md` decision 4)."""
+
+    every: str = ""
+    cron: str = ""
     n: int = 0
     at: str = ""
     dow: str = ""
@@ -311,12 +316,15 @@ class EditTime(RowRef):
 
 #: The fields "edit time" may change (decision 8). `run` and `with` are not
 #: among them: changing what runs is a different act from changing when.
-_TIME_KEYS = ("every", "n", "at", "dow", "dom", "tz")
+_TIME_KEYS = ("every", "n", "at", "dow", "dom", "tz", "cron")
 
 
 def _time_fields(body: EditTime) -> dict[str, Any]:
     """The new time as a row writes it — only the fields this `every` reads, so
-    a daily row edited to weekly does not keep a `dom` nothing consults."""
+    a daily row edited to weekly does not keep a `dom` nothing consults. A cron
+    is the whole "when": with it only the zone stays."""
+    if body.cron:
+        return {"cron": normalise_cron(body.cron), **({"tz": body.tz} if body.tz else {})}
     out: dict[str, Any] = {"every": body.every}
     if body.every == "minutes":
         out["n"] = body.n
@@ -428,6 +436,10 @@ def register_schedule_overview_routes(
         landing stamp keeps it from catching up on a window that passed before
         the edit (docs/plan-schedule-overview.md decisions 10, 16)."""
         workspace_id = locator.require_access(slug, item_id, "edit_content")
+        if bool(body.every) == bool(body.cron):
+            raise HTTPException(
+                status_code=422, detail="A new time says either `every` or `cron` — one of the two."
+            )
         path, doc, i, _row = await _locate(workspace_id, body)
         edited = {k: v for k, v in doc["schedules"][i].items() if k not in _TIME_KEYS}
         edited = {**_time_fields(body), **edited}
