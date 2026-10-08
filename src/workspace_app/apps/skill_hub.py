@@ -161,6 +161,12 @@ class SkillHubEntry(Struct):  # → resource "skill-hub-entry"
     #: it is migrated. Not written for a version in git: that version's files
     #: are its commit's tree (plan-skill-hub-history G12).
     origin: SkillOrigin = field(default_factory=lambda: SkillOrigin(source="hub", files={}))
+    #: When what the entry ships last changed — written by publish and
+    #: rollback only, the list's 「最近更新」 (plan-skill-hub-ux-redo D4). Not
+    #: the revision's timestamp: a permission change or a transfer is a new
+    #: revision too. `None` for a row written before the field (no backfill —
+    #: its next publish dates it).
+    content_at: dt.datetime | None = None
 
 
 # ── what publishing checks ───────────────────────────────────────────────────
@@ -929,6 +935,7 @@ class SkillHubStore:
                 description=old.description,
                 review=old.review,
                 referenced_tools=list(old.referenced_tools),
+                content_at=self._now(),
             ),
             current_commit=old.commit,
         )
@@ -1092,7 +1099,9 @@ class SkillHubStore:
             if (
                 await self._change(
                     entry_id,
-                    lambda draft: msgspec.structs.replace(row, commit=commit, pending=False),
+                    lambda draft: msgspec.structs.replace(
+                        row, commit=commit, pending=False, content_at=self._now()
+                    ),
                 )
                 is None
             ):
@@ -1125,6 +1134,7 @@ class SkillHubStore:
                 review=row.review,
                 referenced_tools=row.referenced_tools,
                 commit=commit,
+                content_at=self._now(),
             ),
             current_commit=commit,
         )

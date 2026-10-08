@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-from collections.abc import Callable
-from typing import Literal
+from collections import Counter
+from collections.abc import Callable, Mapping
+from typing import Annotated, Literal
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
@@ -34,7 +35,6 @@ from ..apps.skill_hub import (
     VersionMoved,
     matches_query,
     missing_tools_for,
-    nest_forks,
 )
 from ..apps.skills import (
     fork_hub_version,
@@ -61,9 +61,8 @@ _TRANSFER_OWNER_REQUIRED = {"error": "transfer_owner_required"}
 
 
 class SkillHubCard(BaseModel):
-    """One row of the list. `forks` is filled for a root; a fork's own `forks`
-    is always empty — one level, per `nest_forks` (a fork of a fork is listed
-    as a root of its own)."""
+    """One row of the list — flat: a fork is its own row, never nested
+    (plan-skill-hub-ux-redo D2)."""
 
     id: str
     owner: str
@@ -82,14 +81,31 @@ class SkillHubCard(BaseModel):
     #: (plan-skill-hub-history §4.8). A fork counts its own.
     installs: int = 0
     uses: int = 0
-    forks: list[SkillHubCard] = []
+    #: Direct forks the viewer may read — the 「N 個 fork」 link on the row.
+    fork_count: int = 0
+    #: When the content last changed (`SkillHubEntry.content_at`); `None` for
+    #: a row from before the field — the list shows no date for it.
+    updated_at: dt.datetime | None = None
 
 
 class SkillHubList(BaseModel):
+    #: One page of the matching rows (`offset` / `limit`).
     entries: list[SkillHubCard]
+    #: How many rows match in all — 「共 N 個」 and whether there is more.
+    total: int = 0
     #: The day counting began (`YYYY-MM-DD`), for 「自 … 起」; "" before the
     #: first flush anywhere.
     counted_since: str = ""
+
+
+def _newest_first(hits: Mapping[str, SkillHubEntry]) -> Callable[[str], tuple[bool, float]]:
+    """Sort key for `sort=updated`: dated rows newest first, undated after."""
+
+    def key(entry_id: str) -> tuple[bool, float]:
+        at = hits[entry_id].content_at
+        return (at is None, -at.timestamp() if at is not None else 0.0)
+
+    return key
 
 
 class SkillHubLineage(BaseModel):
@@ -266,6 +282,7 @@ def register_skill_hub_routes(
         viewer: str,
         app: str = "",
         counts: tuple[int, int] = (0, 0),
+        fork_count: int = 0,
     ) -> SkillHubCard:
         return SkillHubCard(
             id=entry_id,
@@ -280,6 +297,8 @@ def register_skill_hub_routes(
             missing_tools=missing_tools_for(entry.referenced_tools, app) if app else [],
             installs=counts[0],
             uses=counts[1],
+            fork_count=fork_count,
+            updated_at=entry.content_at,
         )
 
     def _readable(entry_id: str, viewer: str) -> SkillHubEntry:
@@ -301,34 +320,50 @@ def register_skill_hub_routes(
     async def list_skill_hub(
         q: str = "",
         mine: bool = False,
+        owner: str = "",
         app: str = "",
-        sort: Literal["name", "popular"] = "name",
+        sort: Literal["name", "popular", "updated"] = "name",
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> SkillHubList:
-        """The page's list: roots with their forks beneath, in name order.
-        `q` matches name and description (case-insensitive); `mine` keeps the
-        viewer's own. A fork whose root is out of view — filtered by `q`,
-        private to the viewer, or deleted — is listed on its own, so a skill is
-        never hidden by what it was forked from. `app` (a slug) adds each
-        row's `missing_tools` against that App's ceiling — the Skills panel's
-        picker asks for the item's App, so the告知 is on the row it picks from.
-        `sort=popular` puts the most used first (U6); forks stay under their root."""
+        """The page's list, one page of it (plan-skill-hub-ux-redo D1/D2/D4).
+
+        Browsing — no `q`, no `mine`, no `owner` — lists the originals, each
+        with `fork_count`; a fork whose original the viewer cannot see (private
+        to them, deleted) is listed itself, so a skill is never hidden by what
+        it was forked from. Any filter lists forks beside originals, each with
+        its `forked_from`: a search is for one skill, wherever it sits. `q`
+        matches name and description (case-insensitive); `mine` keeps the
+        viewer's own and `owner` one person's. `app` (a slug) adds each row's
+        `missing_tools` against that App's ceiling. `sort`: `name`, `popular`
+        (most used first), `updated` (latest content first, undated last);
+        ties stay in name order. `total` counts every matching row."""
         viewer = get_user_id()
+        visible = dict(hub.visible(viewer))
+        fork_counts = Counter(e.forked_from for e in visible.values() if e.forked_from)
+        browsing = not q.strip() and not mine and not owner
         hits = {
             i: e
-            for i, e in hub.visible(viewer)
-            if (not mine or e.owner == viewer) and matches_query(e, q)
+            for i, e in visible.items()
+            if (not mine or e.owner == viewer)
+            and (not owner or e.owner == owner)
+            and matches_query(e, q)
+            and not (browsing and e.forked_from in visible)
         }
         counts = await asyncio.to_thread(hub.usage.totals, hits)
-        roots: list[SkillHubCard] = []
-        for root, forks in nest_forks(hits):
-            card = _card(root, hits[root], viewer, app, counts[root])
-            card.forks = [_card(j, hits[j], viewer, app, counts[j]) for j in forks]
-            roots.append(card)
+        # `visible` is in name order; every sort below is stable on it.
+        order = list(hits)
         if sort == "popular":
-            # Stable on the name order `nest_forks` gave: ties stay alphabetical.
-            roots.sort(key=lambda c: (-c.uses, -c.installs))
+            order.sort(key=lambda i: (-counts[i][1], -counts[i][0]))
+        elif sort == "updated":
+            order.sort(key=_newest_first(hits))
+        page = order[offset : offset + limit]
         since = await asyncio.to_thread(hub.usage.counted_since)
-        return SkillHubList(entries=roots, counted_since=since)
+        return SkillHubList(
+            entries=[_card(i, hits[i], viewer, app, counts[i], fork_counts[i]) for i in page],
+            total=len(order),
+            counted_since=since,
+        )
 
     @app.get("/skill-hub/entries/{entry_id}")
     async def skill_hub_detail(entry_id: str, app: str = "") -> SkillHubDetail:
