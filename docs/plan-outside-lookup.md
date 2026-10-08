@@ -1,0 +1,150 @@
+# 斷網部署:AI 停下來請使用者去外面查,再把結果帶回來
+
+**狀態:** 計劃(P1)。
+**來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master` 程式碼或文件確認的事實;
+〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
+
+## 1. 問題
+
+後端部署在斷網環境〔user〕:AI 查不到網路,也問不到別的 AI。使用者的瀏覽器可以上網。現在 AI 遇到需要外部資料
+的問題,只能說「我無法上網」或自己猜。
+
+已經有的零件〔查證〕:
+
+- `ask_user`(`agent/tools.py:ask_user_impl`):AI 出選擇題,turn 停下,答案是使用者的下一則訊息
+  (`Message.answers` 記下答的是哪一個 tool call)。卡片的內容來自這次呼叫的 `tool_args`,turn 已經會存下來並串流。
+- `request_env`(`agent/env_request.py`,#892):第二個「畫卡片、停 turn」的工具;**只要這個 turn 有 `ask_user`,
+  它就跟著有**(`env_request.py` 的授權判斷),不必改每個 app 的 `app.json`。
+- 停 turn 的機制只有一個:`api/litellm_runner.py:ask_user_stop_behaviour`(SDK 的 `StopAtTools`;`request_env`
+  只在真的畫出卡片時停,被拒絕時不停,讓模型讀到原因)。
+- `ask_user` 開在五個 app 的聊天(`_template`、`playground`、`pm`、`rca`、`topic-hub` 的 `app.json`);KB 聊天沒有;
+  workflow 的 agent step 只拿它自己列的 `tools`。
+
+## 2. 決定
+
+| # | 決定 | 來源 |
+|---|---|---|
+| D1 | AI 自己決定要出選擇題(`ask_user`)還是請使用者去外面查 | 〔user〕「他自己要決定是問選題還是讓user查google」 |
+| D2 | 「查詢」模式:卡片上每個目的地一顆按鈕,按下去開新分頁直接搜尋;另外固定有「複製問題」 | 〔user〕「一個按鈕按下去就開啟新tab然後問google直接查」;複製鈕〔施工〕 |
+| D3 | 目的地清單由部署設定 `server.lookup_targets` 決定;沒設就只有 Google;有設就整份取代 | 〔user〕「預設只有google」;鍵名與「整份取代」〔施工〕 |
+| D4 | 帶回來:大的貼上區(貼網頁時把 HTML 轉成 Markdown,保留連結、表格)、可附檔(PDF、截圖)、選填來源網址;送出時存成 workspace 裡的檔案 | 〔user〕同意 |
+| D5 | 「開網址」模式:AI 給網址,卡片上一顆「開啟這個網址」;完整網址明文顯示;只接受 `http://`、`https://` | 〔user〕「如果html裡面有超連結 ai要問user幫她開」;限制〔施工〕,user 同意 |
+| D6 | 所有 app 的聊天有;KB 聊天沒有;workflow / 排程沒有 | 〔user〕「Kb不用特別處理」 |
+| D7 | 有「查不到／不查了」按鈕,可選填理由;AI 下一輪改用手上的資料,並說明沒有外部佐證 | 〔user〕同意 |
+| D8 | 查詢在卡片上可以先改,按目的地按鈕時送出去的是改過的內容;不另外寫 AI 規則、不加公司提醒文字 | 〔user〕「1就好」 |
+| D9 | 一張卡只查一件事 | 〔user〕同意 |
+
+## 3. 機制
+
+### 3.1 工具 `ask_outside`〔施工:名稱與參數〕
+
+```
+ask_outside(why: str, query: str | None = None, url: str | None = None)
+```
+
+- `query` 和 `url` **恰好給一個**:給 `query` 是查詢模式(D2),給 `url` 是開網址模式(D5)。兩個都給或都沒給 → 回
+  錯誤字串,turn 不停(照 `request_env` 的做法:被拒絕時不停,模型讀得到原因再改)。
+- `url` 不是 `http://` / `https://` → 錯誤,不停。
+- `why`:一句話說為什麼需要外面的資料,顯示在卡片上方。
+- 成功時回給模型的字是平鋪直敘的重述(「Asked the user to look this up outside: …」),turn 停在這裡。卡片內容來自
+  `tool_args`,和 `ask_user` 一樣,不另存一份。
+- docstring(模型看到的說明)只寫能力與時機:這個部署是斷網的;需要公開的外部資訊時用它;要選擇時用 `ask_user`;
+  使用者可能回「查不到」。不寫外洩規則(D8)。
+
+### 3.2 停 turn 與授權
+
+- `ask_user_stop_behaviour` 多一個工具:`ask_outside` 畫出卡片時停(成功回覆才停,錯誤不停),和 `request_env` 同一套。
+- 授權照 `request_env`:**這個 turn 有 `ask_user` 就有 `ask_outside`**。結果:五個 app 的聊天有;KB 聊天沒有 `ask_user`
+  所以沒有;workflow step 只拿它列的工具,所以沒有(D6)。不改任何 `app.json`。
+
+### 3.3 目的地設定(D3)
+
+```yaml
+server:
+  lookup_targets:
+    - name: Google
+      url: "https://www.google.com/search?q={q}"
+```
+
+- 預設值就是上面這一筆。設了就整份取代,要保留 Google 就自己列進去。
+- 每筆的 `url` 必須是 `http(s)://` 且含 `{q}`,否則啟動時拒絕(說出是哪一筆)——設錯在部署當下就知道,不是使用者按了才發現。
+- 前端用一支唯讀路由拿清單(`GET /lookup-targets`〔施工〕),只要登入就能讀;`{q}` 由前端用
+  `encodeURIComponent` 代入。
+
+### 3.4 卡片(前端)
+
+〔指南〕依據:
+
+- **開新分頁**:NN/g〈Opening Links in New Browser Windows and Tabs〉——預設同一分頁,但原頁是使用者的「出發點」、
+  要從多處蒐集資料時,開新分頁是合理的;此時要在點之前讓人知道(文字與圖示)。所以每顆目的地按鈕都帶 ↗ 圖示和
+  「在新分頁開啟」的說明文字。<https://www.nngroup.com/articles/new-browser-windows-and-tabs/>
+- **按鈕輕重**:Material 3 按鈕的強調層級——filled 留給完成流程的最終動作、outlined 給重要但不是主要的動作、
+  text 給最低優先。所以「送出」是唯一的 filled;目的地按鈕與「開啟這個網址」是 outlined;「複製問題」「查不到／不查了」
+  是 text。<https://material-web.dev/components/button/>
+
+卡片內容,由上到下:
+
+1. 標題「請幫我查」,下面是 `why`。
+2. **查詢模式**:查詢放在**可編輯**的文字框(D8);一排目的地按鈕(outlined,↗);「複製問題」(text,按下後顯示「已複製」)。
+   按目的地按鈕時,代入的是文字框**當下**的內容。
+   **開網址模式**:完整網址以等寬字明文顯示(可選取);一顆「開啟這個網址 ↗」(outlined)。
+3. **帶回來**(D4):
+   - 大的貼上區。貼上時若剪貼簿有 `text/html`,先用既有的 `dompurify` 清掉 script / 事件屬性,再轉成 Markdown
+     (新增 `turndown` + GFM 表格外掛〔施工〕);沒有 HTML 就照純文字貼。
+   - 附檔(PDF、圖片;拖放或選檔)。
+   - 選填「來源網址」。
+4. 「送出」(filled)與「查不到／不查了」(text,展開一個選填理由欄)。
+5. 送出後:送出鈕消失,欄位改唯讀,卡片留著當紀錄——照 `ask_user` 卡片現在的做法(`readOnly` 不用 `disabled`,
+   已送出的字才讀得到)。重新整理後,有對應 `Message.answers` 的卡片顯示為已回答。
+
+### 3.5 送出:存檔與回覆(D4、D7)
+
+一支伺服器路由一次做完〔施工〕:`POST /a/{slug}/items/{id}/chats/{chat_id}/outside-answers`(multipart:
+`tool_call_id`、`kind=found|not_found`、`content`、`source_url`、`reason`、附檔)。
+
+- **權限與送訊息相同**(`converse`)。不讓前端自己寫檔,是因為有些聊天參與者只能聊天、不能改檔案;拆成兩個請求
+  也會出現「檔案存了、訊息沒送」的半套狀態。
+- `found`:寫 `lookups/<YYYY-MM-DD-HHMM>-<摘要>.md`(檔頭記 AI 的查詢或網址、使用者按的目的地、來源網址、時間;
+  內文是貼上的 Markdown),附檔放進同名資料夾;然後用和一般送訊息相同的路徑送一則使用者訊息,`answers` 填這個
+  `tool_call_id`。訊息內容:一行說明 + 檔案路徑 + 貼上的內容(超過上限只放開頭,註明完整內容見檔案〔施工:上限值〕)。
+  寫檔走 `WorkspaceFiles`,所以容量上限照常擋(滿了回 507,訊息不送)。
+- `not_found`:不寫檔,送一則固定格式的訊息「使用者沒有查到:<理由>」,`answers` 同上。
+- 存檔名的「摘要」取自查詢或網址,去掉路徑不允許的字元;同一分鐘撞名就加序號。
+
+## 4. 施工時我定的事〔施工〕
+
+- 工具名 `ask_outside`、卡片標題「請幫我查」。
+- 停 turn 不另做等待機制,照 `ask_user`(非阻塞;使用者的回覆就是下一則訊息)。
+- 存檔目錄 `lookups/`;回覆路由由伺服器一次寫檔加送訊息。
+- HTML→Markdown 用 `turndown`(+ GFM 表格),先經 `dompurify`。
+- 目的地清單的路由與「整份取代」語意。
+
+## 5. Phases
+
+| Phase | 內容 | 完成的判準 |
+|---|---|---|
+| P1 | 這份計劃 | 文件測試、mkdocs `--strict` 綠 |
+| P2 | `server.lookup_targets`(預設 Google、啟動時驗證)與 `GET /lookup-targets` | 設錯啟動失敗並說出哪一筆;路由回清單 |
+| P3 | 工具 `ask_outside`、停 turn、跟著 `ask_user` 授權 | 成功停、錯誤不停;有 `ask_user` 的 turn 才有;workflow step 沒有 |
+| P4 | 回覆路由:存檔 + 附檔 + 送 `answers` 訊息;`not_found` | 權限同送訊息;容量滿 507 且不送訊息;檔名撞名加序號 |
+| P5 | 卡片:兩種模式、可編輯查詢、目的地按鈕、複製、開網址的明文網址 | 按鈕帶入的是改過的查詢;非 http(s) 網址不出按鈕 |
+| P6 | 卡片:貼上轉 Markdown、附檔、來源網址、送出／查不到、送出後狀態 | HTML 表格與連結轉成 Markdown;script 被清掉;送出後鈕消失、欄位唯讀 |
+| P7 | 文件:`docs/migrations.md`(所有 app 多一個工具、聊天出現新卡片——行為改變沒有開關)、`docs/configuration.md` | mkdocs `--strict` 綠 |
+| P8 | 真瀏覽器量 1280／390 版面、對照引用的指南截圖、錄 demo(MP4) | 卡片在兩種寬度不溢出;按鈕層級與指南一致 |
+
+## 6. 不做
+
+- KB 聊天、workflow／排程(D6)。
+- 外洩防護的第二、三層(AI 規則、公司提醒文字)(D8)。
+- 一張卡多件事(D9)。
+- 伺服器去抓網址:後端斷網,本來就抓不到。
+- 自動判斷貼上的內容是否真的回答了問題:由 AI 下一輪自己讀。
+
+## 7. prod 怎麼驗證
+
+1. 在任一 app 的聊天裡問一個需要外部資料的問題(例如某個公開函式庫最新版本的變更),AI 出「請幫我查」卡片,turn 停住。
+2. 改一下查詢,按「Google ↗」:新分頁打開,搜尋的是改過的字。
+3. 在搜尋結果頁選一段內容(含連結或表格)複製,貼回卡片:貼上區是 Markdown,連結與表格還在。
+4. 送出:`lookups/` 底下多一個檔案,AI 下一輪引用它作答。
+5. 再問一次,這次按「查不到／不查了」:AI 說明沒有外部佐證,改用手上資料。
+6. 部署有設 `server.lookup_targets` 時:卡片上的按鈕就是清單上的那些。
