@@ -49,7 +49,8 @@ SUBAGENT_BODY_CAP = 50_000
 #:   checklist. A sub-agent has no idea what is on it, so "add my step" is
 #:   really "delete the user's plan", and the live event goes to the child's
 #:   queue, so the panel changes with nothing in the stream explaining it.
-#: - `ask_user` / `request_env` — they end the turn to wait for the user. In a
+#: - `ask_user` / `request_env` / `ask_outside` — they end the turn to wait for
+#:   the user. In a
 #:   sub-turn that means stopping with a card nobody is shown and no report for
 #:   the caller.
 #:
@@ -62,7 +63,15 @@ SUBAGENT_BODY_CAP = 50_000
 #:   no view of the conversation) cannot have heard. Installing and searching
 #:   stay: they touch this item only.
 SUBAGENT_FORBIDDEN_TOOLS = frozenset(
-    {"run_agent", "save_subagent", "update_todos", "ask_user", "request_env", "publish_skill"}
+    {
+        "run_agent",
+        "save_subagent",
+        "update_todos",
+        "ask_user",
+        "request_env",
+        "ask_outside",
+        "publish_skill",
+    }
 )
 
 

@@ -21,7 +21,7 @@ import dataclasses
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .interpolate import expand_env, has_env_reference
 from .merge import merge_layered
@@ -433,9 +433,10 @@ def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
         at = f"{key}[{i}]"
         if not isinstance(t, dict) or "name" not in t or "url" not in t:
             raise ValueError(f"config {source}: {at} must be a mapping with `name` and `url`")
-        if extra := sorted(set(t) - {"name", "url"}):
+        entry = cast("dict[str, Any]", t)
+        if extra := sorted(set(entry) - {"name", "url"}):
             raise ValueError(f"config {source}: {at} has unknown key {extra[0]!r}")
-        name, url = t["name"], t["url"]
+        name, url = entry["name"], entry["url"]
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"config {source}: {at}.name must be a non-empty string")
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):

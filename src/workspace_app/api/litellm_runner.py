@@ -523,6 +523,12 @@ def _agent_for(
 
     if request_env_granted(config, packages or []):
         tools.append(request_env_tool())
+    # plan-outside-lookup D6: the "請幫我查" card, by the same rule — where
+    # `ask_user` goes, since only a person can press its buttons.
+    from ..agent.outside_lookup import ask_outside_granted, ask_outside_tool
+
+    if ask_outside_granted(config):
+        tools.append(ask_outside_tool())
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # Last stop before the model sees them, and the only place every source is in
@@ -832,12 +838,20 @@ def ask_user_stop_behaviour(
     (docs/plan-env-request-card.md N3). A refusal — a name the tool never
     printed, `exec`, a tool it does not hold — tells the model what to do
     instead, and stopping on it (as `StopAtTools` would, on any reply) left that
-    advice unreadable until the user next spoke."""
+    advice unreadable until the user next spoke. `ask_outside` (the "請幫我查"
+    card, docs/plan-outside-lookup.md) follows the same rule."""
     from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
     from ..agent.env_request import declared_card
+    from ..agent.outside_lookup import TOOL_NAME as ASK_OUTSIDE_TOOL
+    from ..agent.outside_lookup import declared_lookup
 
+    # A card tool → whether its reply drew the card.
+    cards: dict[str, Callable[[str], object]] = {
+        REQUEST_ENV_TOOL: declared_card,
+        ASK_OUTSIDE_TOOL: declared_lookup,
+    }
     names = tool_names or ()
-    if REQUEST_ENV_TOOL not in names:
+    if not any(n in cards for n in names):
         if ASK_USER_TOOL in names:
             return StopAtTools(stop_at_tool_names=[ASK_USER_TOOL])
         return "run_llm_again"
@@ -847,8 +861,8 @@ def ask_user_stop_behaviour(
     ) -> ToolsToFinalOutputResult:
         for r in results:
             asked = r.tool.name == ASK_USER_TOOL
-            drew = r.tool.name == REQUEST_ENV_TOOL and declared_card(str(r.output)) is not None
-            if asked or drew:
+            drawn = cards.get(r.tool.name)
+            if asked or (drawn is not None and drawn(str(r.output)) is not None):
                 return ToolsToFinalOutputResult(is_final_output=True, final_output=r.output)
         return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 
