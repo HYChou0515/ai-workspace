@@ -1,6 +1,6 @@
 # 斷網部署:AI 停下來請使用者去外面查,再把結果帶回來
 
-**狀態:** 計劃(P1)。
+**狀態:** P1–P7 實作完成(#897);as-built 與計劃不同之處見 §8。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master` 程式碼或文件確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -148,3 +148,20 @@ server:
 4. 送出:`lookups/` 底下多一個檔案,AI 下一輪引用它作答。
 5. 再問一次,這次按「查不到／不查了」:AI 說明沒有外部佐證,改用手上資料。
 6. 部署有設 `server.lookup_targets` 時:卡片上的按鈕就是清單上的那些。
+
+## 8. 施工後與計劃不同的地方(as-built,#897)
+
+- **A1 卡片的來源**:不從 `tool_args` 畫,改成回覆尾端的宣告(`\n[outside-lookup]{json}`),和 `request_env` 同一套。
+  停 turn 的判斷、匯出、聊天三處讀的都是後端驗過的同一份;前端的讀法用共用案例表
+  `tests/fixtures/outside_lookup_cases.json` 釘在後端上(`web/tests/outsideLookupParity.test.ts`)。
+- **A2 網址的判斷**:前後端都用同一個樣式 `https?://[^/?#\s]+([/?#]\S*)?`,不各用自己語言的網址解析器——
+  `http://a b` 在 Python 有 host、在 JS 會丟錯,後端會為一張前端畫不出來的卡停住 turn。
+- **A3 權限**:送出要 `converse`;**存檔要 `add_content`**,和 #847 marking 同一條規則(review 抓過「只能聊天的人
+  透過 marking 寫檔」)。只能聊天的人照樣能回,內容只在訊息裡、不存檔、不能附檔。
+- **A4 檔名**:`lookups/<YYYY-MM-DD>-<摘要>.md`,不放時分——伺服器時區和使用者不同時,檔名上的時間會讓人誤會;
+  同名加 `-2`、`-3`。檔頭照記完整時間(UTC)。
+- **A5 廣播帶 `answers`**:`user_message` 事件多一個 `answers`,另一個分頁的同一張卡當下收起,不必等重新整理後
+  才發現送出被拒(409)。`ask_user`、`request_env` 的卡一起受益。
+- **A6 錯誤文字**:容量滿用聊天送出的同一組文字(`CHAT_QUOTA_KEY`),其他用伺服器給的原因。
+- **A7 附件 UI**:照 GOV.UK Design System〈File upload〉——看得到的標籤、次要樣式的「選擇檔案」、一直看得到的拖放區、
+  「尚未選擇檔案」、選了列檔名且可移除。<https://design-system.service.gov.uk/components/file-upload/>
