@@ -277,8 +277,6 @@ def test_a_command_run_with_exec_is_not_sent_to_the_panel() -> None:
     assert "does not receive" in header
 
 
-
-
 @pytest.mark.parametrize(
     ("tools", "with_package"),
     [(["ask_user"], True), (["ask_user"], False), (["read_file"], True), (None, True), ([], True)],
