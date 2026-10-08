@@ -625,6 +625,14 @@ export const messages = {
     en: "Edited here, so left as they are",
   },
   "skills.copy": { "zh-TW": "可在此編輯", en: "editable here" },
+  // plan-skill-hub-ux-redo D9: where a skill comes from, in words, and the row's controls.
+  "skills.source.shared": { "zh-TW": "App 內建", en: "Built into the App" },
+  "skills.source.profile": { "zh-TW": "範本內建", en: "Built into the template" },
+  "skills.source.workspace": { "zh-TW": "這個 workspace 的", en: "This workspace's" },
+  "skills.source.hub": { "zh-TW": "從 skill hub 裝的", en: "From the skill hub" },
+  "skills.refresh.short": { "zh-TW": "更新", en: "Update" },
+  "skills.state": { "zh-TW": "要不要載入", en: "Whether it loads" },
+  "skills.more": { "zh-TW": "{name} 的其他動作", en: "More for {name}" },
   "skills.import": { "zh-TW": "匯入", en: "Import" },
   "skills.importHint": {
     "zh-TW": "選擇一個技能資料夾以加入這個工作區",
@@ -2411,6 +2419,7 @@ export const messages = {
   "skillHub.failed": { "zh-TW": "沒有成功：{reason}", en: "That didn't work: {reason}" },
   // The Skills panel's two skill hub buttons (plan D2: the actions live in the item).
   "skills.fromHub": { "zh-TW": "從 skill hub 裝", en: "Install from the skill hub" },
+  "skills.fromHub.back": { "zh-TW": "返回", en: "Back" },
   // plan-skill-hub-ui-polish D6: one sentence, then the link on a line of
   // its own; the button is a verb; the warning names what is missing first.
   "skills.fromHub.intro": {

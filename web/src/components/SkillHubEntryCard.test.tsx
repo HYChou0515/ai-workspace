@@ -85,7 +85,13 @@ function setup({
         }),
     ),
   };
-  const items = { getItemSkills: vi.fn(async () => have) };
+  const items = {
+    getItemSkills: vi.fn(async () => have),
+    refreshItemSkill: vi.fn(async (_slug: string, _item: string, name: string) => {
+      have = have.map((s) => (s.name === name ? { ...s, update_available: false } : s));
+      return { updated: ["SKILL.md"], skipped: [], removed: [] };
+    }),
+  };
   const card = <SkillHubEntryCard entryId="e-1" client={hub} skillsClient={items} />;
   render(
     <MemoryRouter>
@@ -103,8 +109,9 @@ describe("SkillHubEntryCard", () => {
   it("shows the entry as this App sees it, with its counts, the tools it lacks and the review", async () => {
     const { hub } = setup();
 
-    const link = await screen.findByRole("link", { name: /alice\/\s*triage-reflow/ });
+    const link = await screen.findByRole("link", { name: "triage-reflow" });
     expect(link).toHaveAttribute("href", "/skill-hub/e-1");
+    expect(screen.getByText("alice")).toBeInTheDocument();
     expect(hub.get).toHaveBeenCalledWith("e-1", "pm");
     expect(screen.getByText("Triage reflow defects.")).toBeInTheDocument();
     expect(screen.getByText(word("skillHub.counts", { installs: 3, uses: 8 }))).toBeInTheDocument();
@@ -113,6 +120,12 @@ describe("SkillHubEntryCard", () => {
       screen.getByText(word("skills.fromHub.missing", { tools: "query_entity" })),
     ).toBeInTheDocument();
     expect(screen.getByText("step 2 needs exec")).toBeInTheDocument();
+  });
+
+  it("says nothing about counts that are zero (plan-skill-hub-ux-redo D17)", async () => {
+    setup({ entry: detail({ installs: 0, uses: 0 }) });
+    await screen.findByRole("link", { name: "triage-reflow" });
+    expect(screen.queryByText(/安裝 0 次/)).toBeNull();
   });
 
   it("says the review had nothing to add when it had no notes", async () => {
@@ -137,6 +150,30 @@ describe("SkillHubEntryCard", () => {
     });
     expect(await screen.findByText(word("skillHub.card.installed"))).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: word("skillHub.card.install") })).toBeNull();
+  });
+
+  it("says 「skill 已變更 ・ 同步」, not 「已安裝」, when this item's copy is behind — and syncs it (audit #25)", async () => {
+    const { items } = setup({
+      skills: [
+        skill({
+          name: "triage-reflow",
+          copy_of: "hub",
+          is_copy: true,
+          hub_entry: "e-1",
+          upstream: "live",
+          update_available: true,
+        }),
+      ],
+    });
+    expect(await screen.findByText(word("skills.updateAvailable.hub"))).toBeInTheDocument();
+    expect(screen.queryByText(word("skillHub.card.installed"))).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: word("skills.refresh.hub") }));
+
+    await waitFor(() =>
+      expect(items.refreshItemSkill).toHaveBeenCalledWith("pm", "inv-1", "triage-reflow", { force: false }),
+    );
+    expect(await screen.findByText(word("skillHub.card.installed"))).toBeInTheDocument();
   });
 
   it.each([
@@ -176,7 +213,7 @@ describe("SkillHubEntryCard", () => {
 
   it("offers no install where there is no item — the card still shows the entry", async () => {
     const { hub, items } = setup({ item: false });
-    await screen.findByRole("link", { name: /alice\/\s*triage-reflow/ });
+    await screen.findByRole("link", { name: "triage-reflow" });
     expect(hub.get).toHaveBeenCalledWith("e-1", "");
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByText(word("skillHub.card.installed"))).toBeNull();

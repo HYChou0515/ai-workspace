@@ -18,6 +18,7 @@ export type ActionMenuItem = {
   disabled?: boolean;
   /** A destructive action: drawn in the danger tone (and placed last by the caller). */
   danger?: boolean;
+  testId?: string;
 };
 
 export function ActionMenu({
@@ -26,6 +27,7 @@ export function ActionMenu({
   disabled = false,
   iconOnly = false,
   align = "end",
+  testId,
 }: {
   /** The trigger's name — shown, or only its accessible name when `iconOnly`. */
   label: string;
@@ -34,6 +36,8 @@ export function ActionMenu({
   /** A ⋯ trigger, for a row with no room for a word. */
   iconOnly?: boolean;
   align?: "start" | "end";
+  /** The trigger's `data-testid`. */
+  testId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -79,6 +83,7 @@ export function ActionMenu({
         className="btn"
         data-size="sm"
         data-variant={iconOnly ? "ghost" : "secondary"}
+        data-testid={testId}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
@@ -111,6 +116,7 @@ export function ActionMenu({
               key={item.id}
               type="button"
               role="menuitem"
+              data-testid={item.testId}
               className="action-menu__item"
               data-variant={item.danger ? "danger" : undefined}
               disabled={item.disabled}

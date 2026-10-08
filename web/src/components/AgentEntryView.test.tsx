@@ -1187,3 +1187,29 @@ describe("EntryView — show_skill_hub_entry", () => {
     expect(screen.queryByTestId("skill-hub-card-stub")).toBeNull();
   });
 });
+
+// plan-skill-hub-ux-redo (audit #26): a publish ends with the same marker, so
+// the person gets the entry they just published as the same live card.
+describe("EntryView — publish_skill", () => {
+  const call = (output: string) => ({
+    kind: "tool_call" as const,
+    call: { call_id: "c2", name: "publish_skill", status: "done" as const, args: { name: "triage" }, output },
+  });
+
+  it("draws the published entry as its card", () => {
+    render(
+      <EntryView
+        entry={call(
+          'published skill \'triage\' to the skill hub (new; entry e-7).\n\nIt is public.\n[skill-hub-entry]{"entry_id":"e-7"}',
+        )}
+      />,
+    );
+    expect(screen.getByTestId("skill-hub-card-stub")).toHaveTextContent("e-7");
+  });
+
+  it("keeps the tool card for a refused publish", () => {
+    render(<EntryView entry={call("error: not published — too big")} />);
+    expect(screen.queryByTestId("skill-hub-card-stub")).toBeNull();
+    expect(document.querySelector("details")).not.toBeNull();
+  });
+});

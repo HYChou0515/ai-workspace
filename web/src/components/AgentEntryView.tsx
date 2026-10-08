@@ -313,7 +313,11 @@ export function EntryView({
     // plan-skill-hub-history A3: the declared entry IS the rendering; a call
     // that declared nothing (an id it could not read) stays a visible card.
     const hubEntry =
-      entry.call.name === "show_skill_hub_entry" ? parseShownSkillHubEntry(entry.call.output) : null;
+      // A publish ends with the same marker (plan-skill-hub-ux-redo, audit #26):
+      // the person gets the entry they just published, live, not tool text.
+      entry.call.name === "show_skill_hub_entry" || entry.call.name === "publish_skill"
+        ? parseShownSkillHubEntry(entry.call.output)
+        : null;
     if (hubEntry) return <SkillHubEntryCard entryId={hubEntry} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (

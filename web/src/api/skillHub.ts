@@ -55,6 +55,8 @@ export type SkillHubBrowseQuery = {
   sort?: SkillHubSort;
   offset?: number;
   limit?: number;
+  /** An App slug: each row then says which of its tools that App lacks. */
+  app?: string;
 };
 
 /** One page of the listing: its rows, how many match in all, and the day
@@ -274,7 +276,7 @@ export const skillHubApi: SkillHubApi = {
     if (!resp.ok) throw await refused(resp, "the skill hub listing failed");
     return ((await resp.json()) as { entries: SkillHubCard[] }).entries;
   },
-  async browse({ q = "", mine = false, owner = "", sort = "name", offset = 0, limit }) {
+  async browse({ q = "", mine = false, owner = "", sort = "name", offset = 0, limit, app = "" }) {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (mine) params.set("mine", "true");
@@ -282,6 +284,7 @@ export const skillHubApi: SkillHubApi = {
     if (sort !== "name") params.set("sort", sort);
     if (offset) params.set("offset", String(offset));
     if (limit) params.set("limit", String(limit));
+    if (app) params.set("app", app);
     const suffix = params.size ? `?${params}` : "";
     const resp = await apiFetch(`/skill-hub/entries${suffix}`);
     if (!resp.ok) throw await refused(resp, "the skill hub listing failed");

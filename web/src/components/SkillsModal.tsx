@@ -8,14 +8,14 @@ import type { ApiClient, ItemSkillState, ToolPref } from "../api/types";
 import { skillDir } from "../api/workspaceSkills";
 import { useT } from "../lib/i18n";
 import { sameShape } from "../lib/sameShape";
-import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { filesHere, hubCopy } from "../lib/skillFiles";
 import { useContainerWidth } from "../hooks/useContainerWidth";
 import { publishAgentDraft } from "../lib/agentDraftBus";
+import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
 import { ModalShell } from "./ModalShell";
-import { SkillHubPickerModal } from "./SkillHubPickerModal";
+import { SkillHubPicker } from "./SkillHubPicker";
 
 /**
  * The Skills panel (#298 + #380). Lists every skill available to this item —
@@ -49,7 +49,7 @@ export function SkillsModal({
   onToggleApply?: (name: string) => void;
   client?: Pick<ApiClient, "getItemSkills" | "refreshItemSkill">;
   /** The skill hub client the picker installs through (tests inject one). */
-  hubClient?: ComponentProps<typeof SkillHubPickerModal>["client"];
+  hubClient?: ComponentProps<typeof SkillHubPicker>["client"];
 }) {
   const t = useT();
   const qc = useQueryClient();
@@ -63,7 +63,8 @@ export function SkillsModal({
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // 「從 skill hub 裝」 (plan D2): the picker over this panel.
+  // 「從 skill hub 裝」 (plan D2): a page of this panel, with a way back
+  // (plan-skill-hub-ux-redo D9) — it used to be a modal over the modal.
   const [picking, setPicking] = useState(false);
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [initial, setInitial] = useState<Record<string, boolean> | null>(null);
@@ -198,10 +199,9 @@ export function SkillsModal({
       onClose={attemptClose}
       ariaLabel={t("skills.title")}
       data-testid="skills-modal"
-      // 640, not the 520 the panel opened at: a workspace copy's row now
-      // carries Apply, Publish, Download, Refresh and the three toggles, and at
-      // 520 the name broke at its hyphen and the pills split mid-word (seen in
-      // the browser, never in a test).
+      // Each row is two lines with three fixed controls (D9), so the panel
+      // no longer has to widen for a copy's six; 640 keeps a long name and a
+      // status on the first line.
       width={640}
       maxWidth="92vw"
       panelStyle={{
@@ -212,51 +212,45 @@ export function SkillsModal({
         minHeight: 0,
       }}
     >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {picking ? (
+          <SkillHubPicker
+            slug={slug}
+            itemId={itemId}
+            taken={new Set(list.filter(filesHere).map((s) => s.name))}
+            onInstalled={(name) => void installed(name)}
+            onBack={() => setPicking(false)}
+            client={hubClient}
+          />
+        ) : (
+          <>
+        <div className="skills-panel-head">
           <Icon name="sparkle" size={15} />
-          <strong style={{ flex: 1 }}>{t("skills.title")}</strong>
+          <strong>{t("skills.title")}</strong>
           <button
             type="button"
+            className="skills-panel-close"
             aria-label={t("skills.close")}
             onClick={attemptClose}
-            style={{ border: "none", background: "transparent", cursor: "pointer" }}
           >
             <Icon name="x" size={14} />
           </button>
         </div>
 
-        <p style={{ margin: 0, fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}>
-          {t("skills.intro")}
-        </p>
+        <p className="skills-panel-intro">{t("skills.intro")}</p>
 
         {refreshError && (
-          <p className="error" role="alert" style={{ margin: 0, fontSize: pxToRem(11) }}>
+          <p className="error" role="alert">
             {refreshError}
           </p>
         )}
         {refreshNote && (
-          <p
-            data-testid="skills-refresh-note"
-            style={{
-              margin: 0,
-              fontSize: pxToRem(11),
-              color: "var(--accent-h)",
-              background: "var(--accent-soft)",
-              borderRadius: "var(--radius-btn)",
-              padding: "4px 8px",
-            }}
-          >
+          <p data-testid="skills-refresh-note" className="skills-panel-note" role="status">
             {refreshNote}
           </p>
         )}
-        <div className="scrollable"
-          style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}
-        >
+        <div className="scrollable skills-panel-list">
           {list.length === 0 ? (
-            <p
-              data-testid="skills-empty"
-              style={{ fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}
-            >
+            <p data-testid="skills-empty" className="muted">
               {t("skills.empty")}
             </p>
           ) : (
@@ -305,51 +299,45 @@ export function SkillsModal({
           )}
         </div>
 
-        <div ref={footerRef} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+        <div ref={footerRef} className="skills-panel-foot">
           <button
             type="button"
+            className="btn"
+            data-size="sm"
+            data-variant="secondary"
             data-testid="skills-import"
             disabled={busy}
-          title={t("skills.importHint")}
+            title={t("skills.importHint")}
             onClick={() => importRef.current?.click()}
-            style={pillBtn}
           >
             <Icon name="upload" size={12} /> {t("skills.import")}
           </button>
           <button
             type="button"
+            className="btn"
+            data-size="sm"
+            data-variant="secondary"
             data-testid="skills-from-hub"
             disabled={busy}
             onClick={() => setPicking(true)}
-            style={pillBtn}
           >
             <Icon name="sparkle" size={12} /> {t("skills.fromHub")}
           </button>
-        {showImportHint ? (
-          <span
-            data-testid="skills-import-hint"
-            style={{
-              fontSize: pxToRem(11),
-              color: "var(--text-paper-d)",
-              flex: 1,
-            }}
-          >
-            {t("skills.importHint")}
-          </span>
-        ) : (
-          <span style={{ flex: 1 }} />
-        )}
+          {showImportHint ? (
+            <span data-testid="skills-import-hint" className="skills-panel-hint">
+              {t("skills.importHint")}
+            </span>
+          ) : (
+            <span style={{ flex: 1 }} />
+          )}
           <button
             type="button"
+            className="btn"
+            data-size="sm"
+            data-variant="primary"
             data-testid="skills-save"
             disabled={saving || prefs === null}
             onClick={() => void save()}
-            style={{
-              ...pillBtn,
-              background: "var(--accent)",
-              color: "var(--white)",
-              borderColor: "var(--accent)",
-            }}
           >
             {t("skills.save")}
           </button>
@@ -370,20 +358,26 @@ export function SkillsModal({
             }}
           />
         </div>
-        {picking && (
-          <SkillHubPickerModal
-            slug={slug}
-            itemId={itemId}
-          taken={new Set(list.filter(filesHere).map((s) => s.name))}
-            onInstalled={(name) => void installed(name)}
-            onClose={() => setPicking(false)}
-            client={hubClient}
-          />
+          </>
         )}
     </ModalShell>
   );
 }
 
+/** Where a skill comes from, in words — never the internal `shared` /
+ * `profile` / `workspace` (plan-skill-hub-ux-redo D9). */
+const SOURCE_WORD = {
+  shared: "skills.source.shared",
+  profile: "skills.source.profile",
+  workspace: "skills.source.workspace",
+} as const;
+
+/** One skill (plan-skill-hub-ux-redo D9): two lines — the name with what it
+ * is and what needs doing, then the description — and three controls that
+ * are always there, in the same place on every row: Apply, the tri-state,
+ * and ⋯ for the rest (Material 3's overflow menu). A state that needs
+ * something done carries the action beside its words (Polaris / GOV.UK):
+ * 「有新版 ・ 更新」. */
 function SkillRow({
   skill,
   state,
@@ -414,212 +408,96 @@ function SkillRow({
   // "The shipped version" is the package's phrase; a hub copy updates to,
   // and resets to, the version on the hub (D4).
   const fromHub = hubCopy(skill);
+  const sourceKey = SOURCE_WORD[skill.source as keyof typeof SOURCE_WORD];
+  const more: ActionMenuItem[] = [];
+  if (onRefresh)
+    more.push({
+      id: "refresh",
+      label: t(fromHub ? "skills.refresh.hub" : "skills.refresh"),
+      onSelect: onRefresh,
+      testId: `skill-refresh-${skill.name}`,
+    });
+  if (onReset)
+    more.push({
+      id: "reset",
+      label: t(fromHub ? "skills.reset.hub" : "skills.reset"),
+      onSelect: onReset,
+      testId: `skill-reset-${skill.name}`,
+    });
+  if (onDownload)
+    more.push({
+      id: "download",
+      label: t("skills.download"),
+      onSelect: onDownload,
+      testId: `skill-download-${skill.name}`,
+    });
+  if (onPublish)
+    more.push({
+      id: "publish",
+      label: t("skills.publish"),
+      onSelect: onPublish,
+      testId: `skill-publish-${skill.name}`,
+    });
   return (
-    <div
-      data-testid={`skill-row-${skill.name}`}
-      style={{
-        display: "flex",
-        // The actions are one cluster that drops under the text when the row
-        // is too narrow for both (a phone-width panel), instead of the two
-        // fighting for one line — measured at 390 px: pills over buttons,
-        // toggles two lines high, the name clipped.
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 6px",
-        borderRadius: "var(--radius-btn)",
-        fontSize: pxToRem(13),
-      }}
-    >
-      {/* A real basis, not `flex: 1` alone: wrapping is decided on the
-          hypothetical size, and a column that may be 0 wide never lets the
-          cluster wrap. */}
-      <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {/* nowrap, like the pills: with the badge and four glyphs beside it
-              the name broke at its hyphen (`log-` / `digest`) at 1280; the
-              controls are the cluster that wraps, not the name. */}
-          <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{skill.name}</span>
-          <span
-            data-testid={`skill-source-${skill.name}`}
-            style={{
-              fontSize: pxToRem(10),
-              color: "var(--text-paper-d)",
-              border: "1px solid var(--paper-3)",
-              borderRadius: 999,
-              padding: "0 6px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {skill.source}
+    <div data-testid={`skill-row-${skill.name}`} className="skills-row">
+      <div className="skills-row-text">
+        <div className="skills-row-line">
+          <span className="skills-row-name">{skill.name}</span>
+          <span className="skills-row-status">
+            <span data-testid={`skill-source-${skill.name}`}>
+              {fromHub ? t("skills.source.hub") : sourceKey ? t(sourceKey) : skill.source}
+            </span>
+            {skill.is_copy && !skill.readonly && !fromHub ? (
+              // A copy of a package skill IS editable here, and that is the
+              // whole point of copying it.
+              <span data-testid={`skill-copy-${skill.name}`}>{t("skills.copy")}</span>
+            ) : null}
+            {skill.update_available && !upstreamGone(skill) && !skill.readonly ? (
+              <span data-testid={`skill-update-${skill.name}`} className="skills-row-todo">
+                {t(fromHub ? "skills.updateAvailable.hub" : "skills.updateAvailable")}
+                {onRefresh ? (
+                  <button
+                    type="button"
+                    className="skills-row-link"
+                    data-testid={`skill-update-go-${skill.name}`}
+                    onClick={onRefresh}
+                  >
+                    {t(fromHub ? "skills.refresh.hub" : "skills.refresh.short")}
+                  </button>
+                ) : null}
+              </span>
+            ) : null}
+            {upstreamGone(skill) ? (
+              // A copy whose skill hub original went away (plan P5): said on
+              // the row, so the missing Update reads as explained, not broken.
+              // The copy itself keeps working.
+              <span data-testid={`skill-upstream-${skill.name}`} className="skills-row-warn">
+                {skill.upstream === "unpublished"
+                  ? t("skillHub.origin.unpublished")
+                  : t("skillHub.origin.deleted")}
+              </span>
+            ) : null}
           </span>
-          {skill.is_copy && !skill.readonly && (
-            // The source badge alone would read as "this is package content, you
-            // can't touch it" — but a copy IS editable here, and that is the
-            // whole point of copying it.
-            <span
-              data-testid={`skill-copy-${skill.name}`}
-              style={{
-                fontSize: pxToRem(10),
-                color: "var(--accent-h)",
-                background: "var(--accent-soft)",
-                borderRadius: 999,
-                padding: "0 6px",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {t("skills.copy")}
-            </span>
-          )}
-          {skill.update_available && !upstreamGone(skill) && !skill.readonly && (
-            // In words (plan-skill-hub-ui-polish D4): a fourth unlabelled
-            // icon was the only sign that upstream had moved. Not shown when
-            // upstream is KNOWN gone (that row has its own badge); an absent
-            // `upstream` (an older API) still shows it.
-            <span
-              data-testid={`skill-update-${skill.name}`}
-              style={{
-                fontSize: pxToRem(10),
-                color: "var(--info)",
-                border: "1px solid var(--info)",
-                borderRadius: 999,
-                padding: "0 6px",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {t(fromHub ? "skills.updateAvailable.hub" : "skills.updateAvailable")}
-            </span>
-          )}
-          {(skill.upstream === "unpublished" || skill.upstream === "deleted") && (
-            // A copy whose skill hub original went away (plan P5): a state on
-            // the row, so the missing Update control is explained rather than
-            // read as broken. The copy itself keeps working.
-            <span
-              data-testid={`skill-upstream-${skill.name}`}
-              style={{
-                fontSize: pxToRem(10),
-                color: "var(--warn)",
-                border: "1px solid var(--warn)",
-                borderRadius: 999,
-                padding: "0 6px",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {skill.upstream === "unpublished"
-                ? t("skillHub.origin.unpublished")
-                : t("skillHub.origin.deleted")}
-            </span>
-          )}
         </div>
-        <div
-          title={skill.description}
-          style={{
-            fontSize: pxToRem(11),
-            color: "var(--text-paper-d)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
+        <div className="skills-row-desc" title={skill.description}>
           {skill.description}
         </div>
       </div>
 
-      <div
-        data-testid={`skill-actions-${skill.name}`}
-        style={{
-          display: "flex",
-          // …and the cluster wraps within itself too: a copy's six controls
-          // are wider than a phone-width panel even on their own line.
-          flexWrap: "wrap",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          gap: 8,
-          flex: "none",
-          marginLeft: "auto",
-          minWidth: 0,
-          maxWidth: "100%",
-        }}
-      >
+      <div data-testid={`skill-actions-${skill.name}`} className="skills-row-controls">
         <button
           type="button"
+          className="btn"
+          data-size="sm"
+          data-variant={applied ? "primary" : "secondary"}
           data-testid={`skill-apply-${skill.name}`}
           aria-pressed={applied}
           title={t("skills.applyTip")}
           onClick={onToggleApply}
-          style={{
-            ...pillBtn,
-            height: 24,
-            background: applied ? "var(--accent)" : "var(--white)",
-            color: applied ? "var(--white)" : "var(--text-paper)",
-            borderColor: applied ? "var(--accent)" : "var(--paper-3)",
-          }}
         >
-          <Icon name="sparkle" size={11} /> {t("skills.apply")}
+          {t("skills.apply")}
         </button>
-
-        {/* Icon-only buttons, so every one says what it does on hover
-            (`title`) and to assistive tech (`aria-label`) — and each has a
-            glyph of its own (D17): ↓ download, cloud↑ publish, clock↺
-            restore, ↻ update. The words stay off the row; it is full. */}
-        {onDownload && (
-          <button
-            type="button"
-            data-testid={`skill-download-${skill.name}`}
-            aria-label={`${t("skills.download")} ${skill.name}`}
-            title={t("skills.download")}
-            onClick={onDownload}
-            style={{ ...pillBtn, height: 24 }}
-          >
-            <Icon name="download" size={14} />
-          </button>
-        )}
-        {onPublish && (
-          <button
-            type="button"
-            data-testid={`skill-publish-${skill.name}`}
-            aria-label={`${t("skills.publish")} ${skill.name}`}
-            title={t("skills.publish")}
-            onClick={onPublish}
-            style={{ ...pillBtn, height: 24 }}
-          >
-            <Icon name="publish" size={14} />
-          </button>
-        )}
-        {onReset && (
-          <button
-            type="button"
-            data-testid={`skill-reset-${skill.name}`}
-            aria-label={`${t(fromHub ? "skills.reset.hub" : "skills.reset")} ${skill.name}`}
-            title={t(fromHub ? "skills.reset.hub" : "skills.reset")}
-            onClick={onReset}
-            style={{ ...pillBtn, height: 24 }}
-          >
-            <Icon name="restore" size={14} />
-          </button>
-        )}
-        {onRefresh && (
-          <button
-            type="button"
-            data-testid={`skill-refresh-${skill.name}`}
-            aria-label={`${t(fromHub ? "skills.refresh.hub" : "skills.refresh")} ${skill.name}`}
-            title={t(fromHub ? "skills.refresh.hub" : "skills.refresh")}
-            onClick={onRefresh}
-            style={{ ...pillBtn, height: 24 }}
-          >
-            <Icon name="refresh" size={14} />
-          </button>
-        )}
-
-        <div
-          role="group"
-          style={{
-            display: "flex",
-            border: "1px solid var(--paper-3)",
-            borderRadius: "var(--radius-btn)",
-            overflow: "hidden",
-          }}
-        >
+        <div role="group" aria-label={t("skills.state")} className="skills-row-seg">
           {(["follow", "on", "off"] as ToolPref[]).map((opt) => (
             <button
               key={opt}
@@ -627,18 +505,23 @@ function SkillRow({
               data-testid={`skill-${skill.name}-${opt}`}
               aria-pressed={state === opt}
               onClick={() => onSetState(opt)}
-              style={segBtn(state === opt)}
             >
-              {t(
-                opt === "follow"
-                  ? "tools.follow"
-                  : opt === "on"
-                    ? "tools.on"
-                    : "tools.off",
-              )}
+              {t(opt === "follow" ? "tools.follow" : opt === "on" ? "tools.on" : "tools.off")}
             </button>
           ))}
         </div>
+        {/* The same slot on every row, so the controls line up down the
+            list; empty when there is nothing more to do. */}
+        <span className="skills-row-more">
+          {more.length > 0 ? (
+            <ActionMenu
+              label={t("skills.more", { name: skill.name })}
+              iconOnly
+              items={more}
+              testId={`skill-more-${skill.name}`}
+            />
+          ) : null}
+        </span>
       </div>
     </div>
   );
@@ -664,29 +547,4 @@ function overrideFromSkills(skills: ItemSkillState[]): Record<string, boolean> {
   return out;
 }
 
-function segBtn(active: boolean): React.CSSProperties {
-  return {
-    height: 24,
-    padding: "0 10px",
-    fontSize: pxToRem(12),
-    border: "none",
-    borderRight: "1px solid var(--paper-3)",
-    background: active ? "var(--accent)" : "var(--white)",
-    color: active ? "var(--white)" : "var(--text-paper)",
-    cursor: "pointer",
-  };
-}
 
-const pillBtn: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  height: 24,
-  padding: "0 8px",
-  fontSize: pxToRem(11),
-  borderRadius: "var(--radius-btn)",
-  border: "1px solid var(--paper-3)",
-  background: "var(--white)",
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
