@@ -81,8 +81,14 @@ dev team build it as code (`run.py`).
 without anyone pressing Run. Declare it with **`save_schedules`**: it writes this item's
 `.workflows/schedules.json` — the same format and the same sweep as a page's own
 `schedules.json`, but this item's file, not a page's. The tool's own description has the row format (`run`, `every`, `at`, `dow`, `dom`, `tz`,
-`with`); it **validates before saving** and refuses a `run` this item does not have, so save
+`with`, or `cron`); it **validates before saving** and refuses a `run` this item does not have, so save
 the workflow first, then the schedule.
+
+**One row per wish.** Use `every` when one row says it ("every night at nine", "every Monday
+at 08:30"). When it would take several — every weekday at nine, every 2 hours, the 1st and
+the 15th — write ONE row with a 5-field `cron` instead: `"0 9 * * 1-5"`, `"0 */2 * * *"`,
+`"0 9 1,15 * *"`, read in the row's `tz`. The person sees it as one schedule on the Schedules
+page, and changes it once.
 
 Four things to get right, because each one is a report that quietly never arrives:
 
