@@ -62,3 +62,45 @@ def test_an_answer_still_starts_a_turn(harness: Harness):
     assert any(m.role == "assistant" for m in _thread(harness)), (
         "answering produced no assistant turn"
     )
+
+
+async def test_live_viewers_learn_which_call_a_message_answers():
+    """The broadcast carries `answers`, so a second viewer's card retires the
+    moment someone else answers it — not on their next reload, after pressing
+    a send the server then refuses (plan-outside-lookup)."""
+    import asyncio
+
+    from httpx import ASGITransport
+
+    from tests.api._client import AsyncClient
+    from tests.api.conftest import register_rca_item
+    from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([MessageDelta(text="hi"), RunDone()]),
+    )
+    iid = register_rca_item(spec)
+    sub = app.state.turn_engine.subscribe(iid)
+    seen: list = []
+
+    async def collect():
+        async for ev in sub:
+            seen.append(ev)
+            if getattr(ev, "type", None) == "done":
+                return
+
+    collector = asyncio.create_task(collect())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post(f"/a/rca/items/{iid}/messages", json={"content": "a", "answers": "c1"})
+        assert r.status_code == 202, r.text
+    await asyncio.wait_for(collector, 3)
+
+    um = next(e for e in seen if type(e).__name__ == "UserMessage")
+    assert um.answers == "c1"

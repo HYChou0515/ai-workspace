@@ -199,3 +199,19 @@ async def test_the_export_strips_the_declaration() -> None:
     reply = await _call(why="w", query="q")
 
     assert without_card_declaration(reply) == reply[: reply.rfind(OUTSIDE_LOOKUP_MARKER)]
+
+
+def test_the_shared_case_table_still_says_what_declared_lookup_does() -> None:
+    """`tests/fixtures/outside_lookup_cases.json` is what the chat's copy of
+    this reader (`web/src/renderers/outsideLookup.ts`) is held to: the turn
+    stops when THIS function sees a card, so a card the chat reads differently
+    is a turn stopped for nothing on screen. Change the rule and this reddens
+    until the table is regenerated; then the FE test reddens until it follows."""
+    from pathlib import Path
+
+    table = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "outside_lookup_cases.json").read_text()
+    )
+    assert len(table["cases"]) >= 20
+    for case in table["cases"]:
+        assert declared_lookup(case["output"]) == case["card"], case["output"]

@@ -13,8 +13,8 @@ what they pasted, saved as a file, or "not found" — is their next message.
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
 
 from agents import FunctionTool, RunContextWrapper, function_tool
 
@@ -76,14 +76,17 @@ async def ask_outside_impl(
     return f"{said}{OUTSIDE_LOOKUP_MARKER}{json.dumps(card, ensure_ascii=False)}"
 
 
+#: http(s), a host, no whitespace anywhere — the only kind of link the card
+#: will open (D5): `javascript:`, `file:` and the like are not "a page on the
+#: internet". A pattern rather than `urlsplit`, because the chat applies the
+#: SAME one (`outsideLookup.ts`) and two URL parsers disagree (`http://a b` has
+#: a host to one and throws in the other) — a card the turn stopped for that
+#: the chat then cannot draw. Held together by `outside_lookup_cases.json`.
+_WEB_ADDRESS = re.compile(r"https?://[^/?#\s]+(?:[/?#]\S*)?")
+
+
 def _is_web_address(url: str) -> bool:
-    """http(s) with a host — the only kind of link the card will open (D5):
-    `javascript:`, `file:` and the like are not "a page on the internet"."""
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return False
-    return parts.scheme in ("http", "https") and bool(parts.netloc)
+    return _WEB_ADDRESS.fullmatch(url) is not None
 
 
 def declared_lookup(text: str) -> dict | None:

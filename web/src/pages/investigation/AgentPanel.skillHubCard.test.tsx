@@ -84,7 +84,10 @@ afterEach(cleanup);
 describe("AgentPanel — a skill hub card in the log", () => {
   it("is handed the panel's item", () => {
     renderPanel(false);
-    expect(screen.getByTestId("card-item")).toHaveTextContent('e-1 {"slug":"pm","itemId":"it1"}');
+    // `chatId` too: the "請幫我查" card answers into this chat (plan-outside-lookup).
+    expect(screen.getByTestId("card-item")).toHaveTextContent(
+      'e-1 {"slug":"pm","itemId":"it1","chatId":"chat-1"}',
+    );
   });
 
   it("is handed no item when the viewer may only read the chat", () => {

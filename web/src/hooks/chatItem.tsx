@@ -6,7 +6,17 @@ import { createContext, useContext } from "react";
  * chat panel (`AgentPanel`); a log drawn anywhere else (the knowledge-base
  * chat, a read-only replay) has none, and such a card shows without actions.
  */
-export type ChatItem = { slug: string; itemId: string; env?: ChatEnv };
+export type ChatItem = {
+  slug: string;
+  itemId: string;
+  env?: ChatEnv;
+  /** The chat the log is, when it is not the item's default one — where the
+   * "請幫我查" card's answer goes (docs/plan-outside-lookup.md). */
+  chatId?: string;
+  /** Whether a message in the thread already answers this call
+   * (`Message.answers`), so an answered card stays retired after a reload. */
+  answered?: (callId: string) => boolean;
+};
 
 /** Where the panel opens to, from a card (docs/plan-env-request-card.md): the
  * variable to show, always on the person's own tab (N4) — they switch tabs

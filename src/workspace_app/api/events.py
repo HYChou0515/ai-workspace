@@ -134,6 +134,9 @@ class UserMessage:
     # #847 P7: the markings sent with the message, as persisted (`SentMarking`),
     # so live viewers draw the same chips a reload shows — a refused one too.
     markings: list[dict[str, Any]] = field(default_factory=list)
+    # The call this message answers (`Message.answers`), so a live viewer's card
+    # retires when someone else answers it rather than on their next reload.
+    answers: str | None = None
     type: Literal["user_message"] = "user_message"
 
 

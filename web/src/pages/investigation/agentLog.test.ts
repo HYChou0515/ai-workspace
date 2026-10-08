@@ -1584,3 +1584,33 @@ describe("a re-hydrate must not cancel a Stop that is still in flight", () => {
     expect(after.stopping).toBe(false);
   });
 });
+
+describe("a broadcast answer says which call it answers", () => {
+  // plan-outside-lookup: someone else answering a card retires it on every
+  // screen at once — the card reads `Message.answers`, and only the reload
+  // used to carry it.
+  it("carries `answers` onto the drawn message", () => {
+    const next = reduceAgent(EMPTY_LOG, {
+      type: "user_message",
+      author: "carol",
+      content: "我在外面查了:x",
+      created_at: 5,
+      answers: "call_1",
+    } as AgentEvent);
+
+    const [entry] = next.entries;
+    expect(entry?.kind === "message" && entry.message.answers).toBe("call_1");
+  });
+
+  it("draws an ordinary message without one", () => {
+    const next = reduceAgent(EMPTY_LOG, {
+      type: "user_message",
+      author: "carol",
+      content: "hi",
+      created_at: 5,
+    } as AgentEvent);
+
+    const [entry] = next.entries;
+    expect(entry?.kind === "message" && "answers" in entry.message).toBe(false);
+  });
+});

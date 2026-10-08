@@ -1147,6 +1147,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
               author: ev.author,
               content: ev.content,
               ...(ev.markings?.length ? { markings: ev.markings } : {}),
+              // The card it answers retires on every screen at once.
+              ...(ev.answers ? { answers: ev.answers } : {}),
             },
           });
         }

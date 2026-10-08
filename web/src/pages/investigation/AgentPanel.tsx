@@ -272,6 +272,9 @@ export function AgentPanel({
         : {
             slug,
             itemId: investigationId,
+            // The "請幫我查" card answers into THIS chat (plan-outside-lookup).
+            ...(chatId ? { chatId } : {}),
+            answered: (callId: string) => answeredCalls.has(callId),
             ...(canEnv
               ? {
                   env: {
@@ -284,7 +287,7 @@ export function AgentPanel({
                 }
               : {}),
           },
-    [readOnly, slug, investigationId, canEnv, envVars, envPolicy, answeredCalls],
+    [readOnly, slug, investigationId, chatId, canEnv, envVars, envPolicy, answeredCalls],
   );
   // A one-line answer to "I just did something and nothing happened" — the
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
