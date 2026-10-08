@@ -38,8 +38,8 @@ async def ask_outside_impl(
 ) -> str:
     """Ask the user to look something up outside for you, with a card in the chat.
 
-    This deployment has no internet access; the user's browser does. Use this
-    when answering needs public outside information you do not have — a
+    The server you run on may not reach the internet; the user's browser can.
+    Use this when answering needs public outside information you do not have — a
     library's current documentation, a release note, an error message others
     have reported, a page a document links to. To have the user choose between
     options instead, use `ask_user`.
@@ -51,9 +51,10 @@ async def ask_outside_impl(
       file.
 
     One card asks for one thing. Your turn ends here. The user's answer is their
-    next message: either what they found (also saved as a file under
-    `lookups/`, whose path they give you), or that they could not find it — then
-    carry on with what you have and say the answer has no outside source."""
+    next message: either what they found (usually also saved under `lookups/`;
+    the message names the file when it is), or that they did not find it or
+    chose not to look — then carry on with what you have and say the answer has
+    no outside source."""
     why = why.strip()
     query = (query or "").strip() or None
     url = (url or "").strip() or None
@@ -81,8 +82,14 @@ async def ask_outside_impl(
 #: internet". A pattern rather than `urlsplit`, because the chat applies the
 #: SAME one (`outsideLookup.ts`) and two URL parsers disagree (`http://a b` has
 #: a host to one and throws in the other) — a card the turn stopped for that
-#: the chat then cannot draw. Held together by `outside_lookup_cases.json`.
-_WEB_ADDRESS = re.compile(r"https?://[^/?#\s]+(?:[/?#]\S*)?")
+#: the chat then cannot draw. And no `\s` either: Python's and JavaScript's
+#: differ (U+FEFF is whitespace to one, U+0085 to the other), so the characters
+#: are spelled out, identically in both. Held together by
+#: `outside_lookup_cases.json`.
+_SPACE = (
+    "\\x00-\\x20\\x7f-\\x9f\\u00a0\\u1680\\u2000-\\u200b\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff"
+)
+_WEB_ADDRESS = re.compile(f"https?://[^/?#{_SPACE}]+(?:[/?#][^{_SPACE}]*)?")
 
 
 def _is_web_address(url: str) -> bool:

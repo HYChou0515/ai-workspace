@@ -1018,6 +1018,7 @@ function ShellBody({
               // transcript shows) and adds one (the video). Text export needs
               // neither: it is the chat's own, gated on read_chat above.
               canExportVideo={_canSeeFiles && _canAddContent}
+              canAddFiles={_canAddContent}
             />
             )}
           </div>

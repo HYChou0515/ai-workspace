@@ -3,8 +3,15 @@
 The AI asked the person to look something up outside (`ask_outside`); this is
 what they bring back. ONE request does both halves — save it under
 `lookups/`, then send the message that answers the card (`Message.answers`) —
-so the thread never mentions a file that is not there and the workspace never
-holds one no message mentions: a send that is refused takes its files back.
+so the thread does not mention a file that is not there, and a send refused
+before its message was persisted takes its files back.
+
+One answer per card. Answers to the same card on THIS pod run one at a time
+(`_card_locks`), and each re-reads the thread after its writes, so the second
+finds the card answered and takes its files back with a 409. Two pods
+answering the same card in the same instant can still both get through —
+the window is the length of one send, and closing it would need a
+cross-pod lock for an event two people have to race to produce.
 
 Sending asks `converse`. Saving asks `add_content`, as every other way into the
 workspace's files does (#847's markings): someone who may chat but not add
@@ -14,6 +21,7 @@ attach, since an attachment is nothing but a file.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Callable
@@ -49,6 +57,14 @@ MESSAGE_EXCERPT_CHARS = 4_000
 #: Longest summary in a file name, in characters.
 _STEM_CHARS = 40
 
+#: The person's own date, as their browser sends it (`YYYY-MM-DD`).
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+#: One lock per (item, card) being answered on this pod — see the module doc.
+#: Entries go when their last holder leaves, so the map holds only answers in
+#: flight.
+_card_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
 
 class OutsideAnswerOut(BaseModel):
     """What was saved: the file (None when nothing was — "not found", or a
@@ -74,60 +90,89 @@ def register_outside_lookup_routes(
         item_id: str,
         conversation: Callable[[], tuple[str, Conversation]],
         engine_key: Callable[[str, str], str],
-        tool_call_id: str,
-        kind: str,
-        content: str,
-        source_url: str,
-        reason: str,
-        target: str,
-        attachments: list[UploadFile],
+        form: _Form,
     ) -> OutsideAnswerOut:
         investigation_id = locator.require_access(slug, item_id, "converse")
+        key = (investigation_id, form.tool_call_id)
+        lock = _card_locks.setdefault(key, asyncio.Lock())
+        try:
+            async with lock:
+                return await _answer_once(
+                    request, slug, investigation_id, conversation, engine_key, form
+                )
+        finally:
+            if not lock.locked() and _card_locks.get(key) is lock:
+                del _card_locks[key]
+
+    async def _answer_once(
+        request: Request,
+        slug: str,
+        investigation_id: str,
+        conversation: Callable[[], tuple[str, Conversation]],
+        engine_key: Callable[[str, str], str],
+        form: _Form,
+    ) -> OutsideAnswerOut:
         _rid, conv = conversation()
-        card = _open_card(conv, tool_call_id)
-        subject = card.get("query") or card.get("url") or ""
-        saved: list[str] = []
+        card = _open_card(conv, form.tool_call_id)
+        asked = card.get("query") or card.get("url") or ""
+        # What was actually searched: the query as the person edited it (D8).
+        searched = (form.query.strip() if "query" in card else "") or asked
+        written: list[str] = []
+        saved: str | None = None
         attached: list[str] = []
-        if kind == "not_found":
-            text = f"沒查到:{subject}" + (f"\n原因:{reason.strip()}" if reason.strip() else "")
+        if form.kind == "not_found":
+            text = f"沒有查到／不查了:{searched}" + (
+                f"\n原因:{form.reason.strip()}" if form.reason.strip() else ""
+            )
         else:
-            body = content.strip()
-            if not body and not attachments:
+            body = (await _read_text(form.content, max_file_size)).strip()
+            if not body and not form.attachments:
                 raise HTTPException(status_code=422, detail="nothing to send — paste or attach")
             may_add = _may(locator, slug, investigation_id)
-            if attachments and not may_add:
+            if form.attachments and not may_add:
                 raise HTTPException(
                     status_code=403,
                     detail="you may not add files in this workspace — send the text without "
                     "attachments",
                 )
             blobs = [
-                (_safe_name(f.filename), await _read_capped(f, max_file_size)) for f in attachments
+                (_safe_name(f.filename), await _read_capped(f, max_file_size))
+                for f in form.attachments
             ]
             if may_add:
-                doc = _document(card, body, source_url.strip(), target.strip(), get_user_id())
-                saved, attached = await _save(files, investigation_id, subject, doc, blobs)
-            text = _message(subject, body, saved[0] if saved else None, attached)
-        rid, conv = conversation()  # the writes can wait on a cold sandbox: read it fresh
+                doc = _document(card, searched, body, form, get_user_id())
+                day = form.date if _is_date(form.date) else f"{datetime.now(UTC):%Y-%m-%d}"
+                saved, attached = await _save(files, investigation_id, day, searched, doc, blobs)
+                written = [*attached, saved]
+            text = _message(searched, body, saved, attached)
         try:
+            rid, conv = conversation()  # the writes can wait on a cold sandbox: read it fresh
+            # Answered meanwhile — another tab, another viewer: theirs stands.
+            _open_card(conv, form.tool_call_id)
             await send_into(
                 investigation_id,
                 rid,
                 conv,
                 engine_key(investigation_id, rid),
-                _MessageBody(content=text, answers=tool_call_id),
+                _MessageBody(content=text, answers=form.tool_call_id),
                 lane="interactive",
                 request=request,
             )
-        except BaseException:
-            await _take_back(files, investigation_id, [*attached, *saved])
+        except Exception:
+            # Taken back only when no message names them. The send is shielded
+            # (`ChatSendService.send`): a failure after it persisted the
+            # message leaves a message pointing at these files.
+            if not _answered_by(conversation, form.tool_call_id):
+                await _take_back(files, investigation_id, written)
             raise
+        # A cancelled request (`CancelledError` is not an `Exception`) keeps its
+        # files: the shielded send carries on and persists the message.
         who = get_user_id()
-        for path in [*saved, *attached]:
+        for path in written:
             turn_engine.publish(
                 investigation_id, FileChanged(path=abs_path(path), by=who, kind="written")
             )
-        return OutsideAnswerOut(path=saved[0] if saved else None, attachments=attached)
+        return OutsideAnswerOut(path=saved, attachments=attached)
 
     @app.post("/a/{slug}/items/{item_id}/outside-answers", response_model=OutsideAnswerOut)
     async def answer_default_chat(
@@ -136,10 +181,12 @@ def register_outside_lookup_routes(
         item_id: str,
         tool_call_id: Annotated[str, Form(min_length=1)],
         kind: Annotated[Literal["found", "not_found"], Form()],
-        content: Annotated[str, Form()] = "",
+        content: Annotated[UploadFile | None, File()] = None,
+        query: Annotated[str, Form()] = "",
         source_url: Annotated[str, Form()] = "",
         reason: Annotated[str, Form()] = "",
         target: Annotated[str, Form()] = "",
+        date: Annotated[str, Form()] = "",
         attachments: Annotated[list[UploadFile], File()] = [],  # noqa: B006 — FastAPI's form default
     ) -> OutsideAnswerOut:
         return await answer(
@@ -149,13 +196,9 @@ def register_outside_lookup_routes(
             lambda: locator.conversation_for(item_id),
             # The default chat keys on the ITEM id, like its send route.
             lambda iid, _rid: iid,
-            tool_call_id,
-            kind,
-            content,
-            source_url,
-            reason,
-            target,
-            attachments,
+            _Form(
+                tool_call_id, kind, content, query, source_url, reason, target, date, attachments
+            ),
         )
 
     @app.post(
@@ -169,10 +212,12 @@ def register_outside_lookup_routes(
         chat_id: str,
         tool_call_id: Annotated[str, Form(min_length=1)],
         kind: Annotated[Literal["found", "not_found"], Form()],
-        content: Annotated[str, Form()] = "",
+        content: Annotated[UploadFile | None, File()] = None,
+        query: Annotated[str, Form()] = "",
         source_url: Annotated[str, Form()] = "",
         reason: Annotated[str, Form()] = "",
         target: Annotated[str, Form()] = "",
+        date: Annotated[str, Form()] = "",
         attachments: Annotated[list[UploadFile], File()] = [],  # noqa: B006
     ) -> OutsideAnswerOut:
         return await answer(
@@ -181,14 +226,38 @@ def register_outside_lookup_routes(
             item_id,
             lambda: locator.require_chat(slug, item_id, chat_id),
             locator.engine_key,
-            tool_call_id,
-            kind,
-            content,
-            source_url,
-            reason,
-            target,
-            attachments,
+            _Form(
+                tool_call_id, kind, content, query, source_url, reason, target, date, attachments
+            ),
         )
+
+
+class _Form:
+    """The answer as posted. `content` — the pasted text — is a FILE part, not
+    a field: Starlette caps a plain field at 1 MiB, and one pasted page in CJK
+    (three bytes a character) passes that."""
+
+    def __init__(
+        self,
+        tool_call_id: str,
+        kind: str,
+        content: UploadFile | None,
+        query: str,
+        source_url: str,
+        reason: str,
+        target: str,
+        date: str,
+        attachments: list[UploadFile],
+    ) -> None:
+        self.tool_call_id = tool_call_id
+        self.kind = kind
+        self.content = content
+        self.query = query
+        self.source_url = source_url.strip()
+        self.reason = reason
+        self.target = target.strip()
+        self.date = date.strip()
+        self.attachments = attachments
 
 
 def _open_card(conv: Conversation, call_id: str) -> dict:
@@ -210,6 +279,16 @@ def _open_card(conv: Conversation, call_id: str) -> dict:
     return card
 
 
+def _answered_by(conversation: Callable[[], tuple[str, Conversation]], call_id: str) -> bool:
+    """Whether the thread now holds a message answering `call_id` — read fresh;
+    a thread that cannot be read is taken as not answered."""
+    try:
+        _rid, conv = conversation()
+    except Exception:  # noqa: BLE001 — the caller is already failing; this only decides cleanup
+        return False
+    return any(m.answers == call_id for m in conv.messages)
+
+
 def _may(locator: ItemLocator, slug: str, item_id: str) -> bool:
     try:
         locator.require_access(slug, item_id, "add_content")
@@ -223,6 +302,26 @@ async def _read_capped(upload: UploadFile, cap: int) -> bytes:
     if len(data) > cap:
         raise HTTPException(status_code=413, detail=f"{upload.filename} is larger than {cap} bytes")
     return data
+
+
+async def _read_text(upload: UploadFile | None, cap: int) -> str:
+    if upload is None:
+        return ""
+    data = await _read_capped(upload, cap)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="the pasted text is not UTF-8") from exc
+
+
+def _is_date(day: str) -> bool:
+    if not _DATE.fullmatch(day):
+        return False
+    try:
+        datetime.strptime(day, "%Y-%m-%d")  # noqa: DTZ007 — a calendar date, no time to zone
+    except ValueError:
+        return False
+    return True
 
 
 def _safe_name(name: str | None) -> str:
@@ -240,14 +339,19 @@ def _stem(subject: str) -> str:
     return slug or "lookup"
 
 
-def _document(card: dict, body: str, source_url: str, target: str, who: str) -> str:
-    subject = card.get("query") or card.get("url") or ""
-    lines = [f"# 外部查詢:{subject}", "", f"- 為什麼:{card['why']}"]
-    lines.append(f"- 查詢:{card['query']}" if "query" in card else f"- 網址:{card['url']}")
-    if target:
-        lines.append(f"- 用:{target}")
-    if source_url:
-        lines.append(f"- 來源:{source_url}")
+def _document(card: dict, searched: str, body: str, form: _Form, who: str) -> str:
+    asked = card.get("query") or card.get("url") or ""
+    lines = [f"# 外部查詢:{searched}", "", f"- 為什麼:{card['why']}"]
+    if "query" in card:
+        lines.append(f"- AI 的查詢:{asked}")
+        if searched != asked:
+            lines.append(f"- 實際搜尋:{searched}")
+    else:
+        lines.append(f"- 網址:{asked}")
+    if form.target:
+        lines.append(f"- 用:{form.target}")
+    if form.source_url:
+        lines.append(f"- 來源:{form.source_url}")
     lines += [f"- 查的人:{who}", f"- 時間:{datetime.now(UTC).isoformat(timespec='seconds')}"]
     return "\n".join([*lines, "", "---", "", body, ""])
 
@@ -255,17 +359,17 @@ def _document(card: dict, body: str, source_url: str, target: str, who: str) -> 
 async def _save(
     files: WorkspaceFiles,
     workspace_id: str,
+    day: str,
     subject: str,
     doc: str,
     blobs: list[tuple[str, bytes]],
-) -> tuple[list[str], list[str]]:
+) -> tuple[str, list[str]]:
     """Write the document and its attachments; the paths written. Room is
     checked for all of it up front, so a full workspace refuses the whole
     answer rather than half of it (#538)."""
     data = doc.encode()
     await files.ensure_room_for(workspace_id, len(data) + sum(len(b) for _n, b in blobs))
-    base = f"{LOOKUPS_DIR}/{datetime.now(UTC):%Y-%m-%d}-{_stem(subject)}"
-    stem = await _claim(files, workspace_id, base, data)
+    stem = await _claim(files, workspace_id, f"{LOOKUPS_DIR}/{day}-{_stem(subject)}", data)
     attached: list[str] = []
     try:
         taken: set[str] = set()
@@ -277,7 +381,7 @@ async def _save(
     except BaseException:
         await _take_back(files, workspace_id, [*attached, f"{stem}.md"])
         raise
-    return [f"{stem}.md"], attached
+    return f"{stem}.md", attached
 
 
 async def _claim(files: WorkspaceFiles, workspace_id: str, base: str, data: bytes) -> str:

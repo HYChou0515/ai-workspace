@@ -93,17 +93,25 @@ def test_only_a_declaration_as_the_tool_writes_it_is_a_card() -> None:
 # ── who gets it (D6) and where the turn stops ───────────────────────────────
 
 
-def _agent(tools: list[str] | None, *packages: PackageInfo):  # noqa: ANN202
+def _agent(tools: list[str] | None, *packages: PackageInfo, in_chat: bool = True):  # noqa: ANN202
     from workspace_app.api.litellm_runner import _agent_for
 
     names = None if tools is None else [*tools, *(p.name for p in packages)]
     return _agent_for(
-        AgentConfig(name="a", model="ollama_chat/x", allowed_tools=names), packages=list(packages)
+        AgentConfig(name="a", model="ollama_chat/x", allowed_tools=names),
+        packages=list(packages),
+        in_chat=in_chat,
     )
 
 
 def test_a_turn_that_can_ask_the_user_can_ask_them_to_look_outside() -> None:
     assert "ask_outside" in {t.name for t in _agent(["ask_user"]).tools}
+
+
+def test_a_turn_outside_a_chat_cannot_even_holding_ask_user() -> None:
+    """D6: a workflow step or a schedule — nobody there to press the buttons.
+    Walked through the real doors in `tests/api/test_tool_grant_doors.py`."""
+    assert "ask_outside" not in {t.name for t in _agent(["ask_user"], in_chat=False).tools}
 
 
 def test_a_turn_that_cannot_ask_the_user_cannot() -> None:

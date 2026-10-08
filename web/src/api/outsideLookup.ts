@@ -42,12 +42,23 @@ export const outsideLookupApi = {
     chatId?: string;
     callId: string;
     answer: OutsideAnswer;
+    /** What was searched — the query as the person edited it (D8). */
+    query?: string;
+    /** The person's own date, `YYYY-MM-DD`, for the saved file's name. */
+    date?: string;
   }): Promise<OutsideAnswerSaved> {
     const form = new FormData();
     form.set("tool_call_id", args.callId);
     form.set("kind", args.answer.kind);
+    if (args.query) form.set("query", args.query);
+    if (args.date) form.set("date", args.date);
     if (args.answer.kind === "found") {
-      form.set("content", args.answer.content);
+      // A FILE part, not a field: the server's form parser caps a plain field
+      // at 1 MiB, and one pasted page can pass that.
+      form.set(
+        "content",
+        new File([args.answer.content], "content.md", { type: "text/markdown;charset=utf-8" }),
+      );
       form.set("source_url", args.answer.sourceUrl);
       form.set("target", args.answer.target);
       for (const f of args.answer.attachments) form.append("attachments", f, f.name);

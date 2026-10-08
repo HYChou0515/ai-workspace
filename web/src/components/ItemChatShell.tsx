@@ -75,6 +75,10 @@ type AgentChrome = {
    * `read_content` + `add_content`. Threaded to the AgentPanel header's Export
    * dialog, which draws its video choice locked without it. */
   canExportVideo?: boolean;
+  /** plan-outside-lookup: may this viewer add files (`add_content`)? The
+   * 請幫我查 card hides its attachments without it — the server would refuse
+   * them, and its text goes to the AI without being saved. */
+  canAddFiles?: boolean;
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -124,6 +128,7 @@ export function ItemChatShell({
   onSaveEnvVars,
   environment,
   canExportVideo,
+  canAddFiles,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -436,6 +441,7 @@ export function ItemChatShell({
           onSaveEnvVars={onSaveEnvVars}
           environment={environment}
           canExportVideo={canExportVideo}
+          canAddFiles={canAddFiles}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
           // Arrived from the schedules overview's last-run link, and still on
@@ -498,6 +504,7 @@ function ItemChatPanel({
   onSaveEnvVars,
   environment,
   canExportVideo,
+  canAddFiles,
   onSaveSkillPrefs,
   uploadDir,
   fromSchedules = false,
@@ -645,6 +652,7 @@ function ItemChatPanel({
         onSaveEnvVars={onSaveEnvVars}
         environment={environment}
         canExportVideo={canExportVideo}
+        canAddFiles={canAddFiles}
         onSaveSkillPrefs={onSaveSkillPrefs}
         appTitle={appTitle}
         appIcon={appIcon}

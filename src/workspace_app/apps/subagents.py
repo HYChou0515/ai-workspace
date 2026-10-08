@@ -50,9 +50,8 @@ SUBAGENT_BODY_CAP = 50_000
 #:   really "delete the user's plan", and the live event goes to the child's
 #:   queue, so the panel changes with nothing in the stream explaining it.
 #: - `ask_user` / `request_env` / `ask_outside` — they end the turn to wait for
-#:   the user. In a
-#:   sub-turn that means stopping with a card nobody is shown and no report for
-#:   the caller.
+#:   the user. In a sub-turn that means stopping with a card nobody is shown and
+#:   no report for the caller.
 #:
 #: Enforced twice on purpose: subtracted from what `save_subagent` will grant
 #: (so the agent is TOLD, per the refuse-don't-trim rule) and stripped again in

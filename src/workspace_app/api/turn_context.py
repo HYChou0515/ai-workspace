@@ -964,6 +964,9 @@ class TurnContextBuilder:
             # Is a person waiting on this turn? Decides which rate limit the
             # gateway applies to its LLM calls.
             call_lane=call_lane,
+            # A thread a person answers in: the 請幫我查 card may be drawn here
+            # (plan-outside-lookup D6) — and in no workflow step.
+            in_chat=True,
             # #275: the directory the `lookup_user` tool resolves a handle through.
             users=self._users,
             # #380: skills applied this turn — read_skill exempts them from the

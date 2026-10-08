@@ -1863,6 +1863,11 @@ export const messages = {
     "zh-TW": "請貼上查到的內容,或附加檔案",
     en: "Paste what you found, or attach a file",
   },
+  "lookup.emptyText": { "zh-TW": "請貼上查到的內容", en: "Paste what you found" },
+  "lookup.textOnly": {
+    "zh-TW": "你在這個 workspace 不能新增檔案:查到的內容只會隨訊息送給 AI,不會存成檔案,也不能附檔。",
+    en: "You can't add files in this workspace: what you found goes to the AI in the message, without being saved or attached.",
+  },
   "lookup.savedTo": { "zh-TW": "已送出,已存到 {path}", en: "Sent — saved to {path}" },
   "lookup.sent": { "zh-TW": "已送出", en: "Sent" },
   "lookup.sentNotFound": { "zh-TW": "已告訴 AI 查不到", en: "Told the AI you couldn't find it" },

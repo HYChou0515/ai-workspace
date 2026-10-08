@@ -45,7 +45,10 @@ function agent(extra: unknown[] = []): AgentState {
   };
 }
 
-function renderPanel(a: AgentState, { readOnly = false }: { readOnly?: boolean } = {}) {
+function renderPanel(
+  a: AgentState,
+  { readOnly = false, canAddFiles }: { readOnly?: boolean; canAddFiles?: boolean } = {},
+) {
   renderWithQuery(
     <MemoryRouter>
       <DialogProvider>
@@ -60,6 +63,7 @@ function renderPanel(a: AgentState, { readOnly = false }: { readOnly?: boolean }
             onAttachPreset={() => {}}
             uploadDir="uploads"
             readOnly={readOnly}
+            canAddFiles={canAddFiles}
           />
         </WorkspaceSlugProvider>
       </DialogProvider>
@@ -108,6 +112,13 @@ describe("AgentPanel — a 請幫我查 card in the log", () => {
 
     expect(await screen.findByText("已回覆")).toBeInTheDocument();
     expect(screen.queryByLabelText("查到的內容")).toBeNull();
+  });
+
+  it("hands the card the viewer's file permission", async () => {
+    renderPanel(agent(), { canAddFiles: false });
+
+    expect(await screen.findByLabelText("查到的內容")).toBeInTheDocument();
+    expect(screen.queryByLabelText("附加檔案")).toBeNull();
   });
 
   it("shows the request without actions to a read-only viewer", async () => {

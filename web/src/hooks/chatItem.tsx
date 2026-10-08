@@ -13,6 +13,9 @@ export type ChatItem = {
   /** The chat the log is, when it is not the item's default one — where the
    * "請幫我查" card's answer goes (docs/plan-outside-lookup.md). */
   chatId?: string;
+  /** `false` when this viewer may not add files (`add_content`): the
+   * 請幫我查 card then offers no attachments, and its text is not saved. */
+  canAddFiles?: false;
   /** Whether a message in the thread already answers this call
    * (`Message.answers`), so an answered card stays retired after a reload. */
   answered?: (callId: string) => boolean;

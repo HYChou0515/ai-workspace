@@ -183,6 +183,39 @@ async def test_a_workflow_step_naming_a_package_gets_the_commands_the_item_holds
     assert "pareto" in instr  # off by the item's preference: that IS the picker's business
 
 
+def _ask_outside_held(ctx) -> bool:
+    """Whether the runner would register `ask_outside` for `ctx` — through the
+    runner's OWN kwargs, so the hop from the context to `_agent_for` is walked
+    too, not restated here."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+    from workspace_app.tokens import LlmCredential
+
+    kw = LitellmAgentRunner()._agent_kwargs(ctx, None, LlmCredential)
+    agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools, **kw)
+    return "ask_outside" in {t.name for t in agent.tools}
+
+
+async def test_a_chat_turn_can_ask_the_person_to_look_outside(monkeypatch):
+    """plan-outside-lookup D6: every app's chat has the 請幫我查 card."""
+    spec, builder, _, _, iid = _build(monkeypatch, {})
+    ctx = await _chat_ctx(spec, builder, iid)
+
+    assert "ask_user" in (ctx.agent_config.allowed_tools or [])
+    assert _ask_outside_held(ctx)
+
+
+async def test_a_workflow_step_cannot_even_holding_ask_user(monkeypatch):
+    """D6: no workflow, no schedule. A step that lists no `tools` holds what
+    the app holds — `ask_user` included — and still gets no card: there is
+    nobody in a run to press its buttons (review round 1)."""
+    _, _, executor, runner, iid = _build(monkeypatch, {})
+    await executor.drive_turn(iid, "no-such-chat", "u", "hello", None)
+    ctx = runner.ctxs[-1]
+
+    assert "ask_user" in (ctx.agent_config.allowed_tools or [])
+    assert not _ask_outside_held(ctx)
+
+
 async def test_a_workflow_step_with_an_empty_tools_list_holds_nothing_whatever_the_pins(
     monkeypatch,
 ):

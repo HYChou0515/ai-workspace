@@ -41,6 +41,8 @@ describe("outsideLookupApi.answer", () => {
       chatId: "c/1",
       callId: "call_1",
       answer: { kind: "found", content: "md", sourceUrl: "https://s", target: "Google", attachments: [file] },
+      query: "edited",
+      date: "2026-10-09",
     });
 
     expect(saved).toEqual({ path: "lookups/a.md", attachments: ["lookups/a/x.png"] });
@@ -48,7 +50,12 @@ describe("outsideLookupApi.answer", () => {
     const form = calls[0]!.init!.body as FormData;
     expect(form.get("tool_call_id")).toBe("call_1");
     expect(form.get("kind")).toBe("found");
-    expect(form.get("content")).toBe("md");
+    // A file part: a plain field is capped at 1 MiB by the server's parser.
+    const content = form.get("content") as File;
+    expect(content.name).toBe("content.md");
+    expect(await content.text()).toBe("md");
+    expect(form.get("query")).toBe("edited");
+    expect(form.get("date")).toBe("2026-10-09");
     expect(form.get("source_url")).toBe("https://s");
     expect(form.get("target")).toBe("Google");
     expect((form.getAll("attachments")[0] as File).name).toBe("x.png");

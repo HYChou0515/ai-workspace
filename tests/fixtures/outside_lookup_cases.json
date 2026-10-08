@@ -65,6 +65,37 @@
    "card": null
   },
   {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\ufeffy\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u0085y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u001fy\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u00a0y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u3000y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a\\u200b.example/\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://例子.測試/路徑?q=中文\"}",
+   "card": {
+    "why": "w",
+    "url": "https://例子.測試/路徑?q=中文"
+   }
+  },
+  {
    "output": "Asked.\n[outside-lookup]{\"why\":\"w\"}",
    "card": null
   },

@@ -17,8 +17,9 @@
   它就跟著有**(`env_request.py` 的授權判斷),不必改每個 app 的 `app.json`。
 - 停 turn 的機制只有一個:`api/litellm_runner.py:ask_user_stop_behaviour`(SDK 的 `StopAtTools`;`request_env`
   只在真的畫出卡片時停,被拒絕時不停,讓模型讀到原因)。
-- `ask_user` 開在五個 app 的聊天(`_template`、`playground`、`pm`、`rca`、`topic-hub` 的 `app.json`);KB 聊天沒有;
-  workflow 的 agent step 只拿它自己列的 `tools`。
+- `ask_user` 列在五個 `app.json`(`_template`、`playground`、`pm`、`rca`、`topic-hub`;`_template` 不是使用者看得到的
+  App);KB 聊天沒有。workflow 的 agent step 有寫 `tools:` 就只拿它列的,**沒寫就拿 App 的全部**(含 `ask_user`)——
+  所以「跟著 `ask_user`」不足以擋掉 workflow,見 §8 A8。
 
 ## 2. 決定
 
@@ -54,8 +55,8 @@ ask_outside(why: str, query: str | None = None, url: str | None = None)
 ### 3.2 停 turn 與授權
 
 - `ask_user_stop_behaviour` 多一個工具:`ask_outside` 畫出卡片時停(成功回覆才停,錯誤不停),和 `request_env` 同一套。
-- 授權照 `request_env`:**這個 turn 有 `ask_user` 就有 `ask_outside`**。結果:五個 app 的聊天有;KB 聊天沒有 `ask_user`
-  所以沒有;workflow step 只拿它列的工具,所以沒有(D6)。不改任何 `app.json`。
+- 授權:**聊天的 turn、而且有 `ask_user`**,才有 `ask_outside`(§8 A8)。結果:四個 App 的聊天有;KB 聊天沒有
+  `ask_user` 所以沒有;workflow step 不是聊天,所以沒有(D6)。不改任何 `app.json`。
 
 ### 3.3 目的地設定(D3)
 
@@ -152,16 +153,37 @@ server:
 ## 8. 施工後與計劃不同的地方(as-built,#897)
 
 - **A1 卡片的來源**:不從 `tool_args` 畫,改成回覆尾端的宣告(`\n[outside-lookup]{json}`),和 `request_env` 同一套。
-  停 turn 的判斷、匯出、聊天三處讀的都是後端驗過的同一份;前端的讀法用共用案例表
-  `tests/fixtures/outside_lookup_cases.json` 釘在後端上(`web/tests/outsideLookupParity.test.ts`)。
-- **A2 網址的判斷**:前後端都用同一個樣式 `https?://[^/?#\s]+([/?#]\S*)?`,不各用自己語言的網址解析器——
-  `http://a b` 在 Python 有 host、在 JS 會丟錯,後端會為一張前端畫不出來的卡停住 turn。
+  停 turn 的判斷和聊天讀的是後端驗過的同一份(`declared_lookup`;前端的讀法用共用案例表
+  `tests/fixtures/outside_lookup_cases.json` 釘在後端上,`web/tests/outsideLookupParity.test.ts`);匯出只拿掉同一個
+  marker 後面的宣告(`shown_files.without_card_declaration`),不做同樣的驗證。
+- **A2 網址的判斷**:前後端用同一個樣式,不各用自己語言的網址解析器——`http://a b` 在 Python 有 host、在 JS 會丟錯,
+  後端會為一張前端畫不出來的卡停住 turn。樣式裡也**不用 `\s`**,把空白字元逐一列出(`_SPACE`):兩種語言的 `\s`
+  不一樣(U+FEFF 只在 JS 算空白,U+0085 只在 Python 算),review round 1 抓到。
 - **A3 權限**:送出要 `converse`;**存檔要 `add_content`**,和 #847 marking 同一條規則(review 抓過「只能聊天的人
-  透過 marking 寫檔」)。只能聊天的人照樣能回,內容只在訊息裡、不存檔、不能附檔。
-- **A4 檔名**:`lookups/<YYYY-MM-DD>-<摘要>.md`,不放時分——伺服器時區和使用者不同時,檔名上的時間會讓人誤會;
-  同名加 `-2`、`-3`。檔頭照記完整時間(UTC)。
+  透過 marking 寫檔」)。只能聊天的人照樣能回,內容只在訊息裡、不存檔;卡片上**不出附檔區**,改說明文字不會存
+  (`ChatItem.canAddFiles`,從 `useItemAccess().canAddContent` 傳下來)。
+- **A4 檔名**:`lookups/<使用者當地日期 YYYY-MM-DD>-<摘要>.md`,日期由瀏覽器送(格式不對才用伺服器的 UTC 日期)——
+  伺服器是 UTC,台灣早上 8 點前查的會被歸到前一天。不放時分;同名加 `-2`、`-3`。檔頭照記完整時間(UTC)。
 - **A5 廣播帶 `answers`**:`user_message` 事件多一個 `answers`,另一個分頁的同一張卡當下收起,不必等重新整理後
   才發現送出被拒(409)。`ask_user`、`request_env` 的卡一起受益。
 - **A6 錯誤文字**:容量滿用聊天送出的同一組文字(`CHAT_QUOTA_KEY`),其他用伺服器給的原因。
 - **A7 附件 UI**:照 GOV.UK Design System〈File upload〉——看得到的標籤、次要樣式的「選擇檔案」、一直看得到的拖放區、
   「尚未選擇檔案」、選了列檔名且可移除。<https://design-system.service.gov.uk/components/file-upload/>
+- **A8 只在聊天裡(D6)**:「有 `ask_user` 就有」不夠——workflow 步驟沒寫 `tools:` 時拿到 App 的全部工具,`ask_user`
+  也在內,連排程跑的都會出卡片。改成**只有聊天的 turn**(`AgentToolContext.in_chat`,只有 `build_chat_turn` 設)
+  才給。review round 1 抓到。
+- **A9 送出的流程**:同一張卡在同一顆 pod 上一次只處理一個回覆(依 item + call id 上鎖),寫完檔後重讀對話再確認
+  一次,已被回覆就收回自己的檔案、回 409。送出失敗時,**只在沒有訊息回應這張卡時**收回檔案;請求被取消時**不收回**
+  ——送出本身受 shield 保護,訊息可能在取消之後才存進去。兩顆 pod 在同一瞬間回同一張卡仍可能都成功(差一次送出的
+  時間),不另做跨 pod 鎖。
+- **A10 貼上的內容用檔案 part 送**:Starlette 的表單欄位上限 1 MiB,一頁中文(一字 3 bytes)就會超過;改成檔案 part,
+  上限同單一檔案上限。
+- **A11 用字**:
+  - 訊息和檔頭記的是**實際搜尋的字**(使用者改過的查詢,D8),檔頭另記 AI 原本的查詢。
+  - 「查不到／不查了」送「沒有查到／不查了:<查詢>」+「原因:<理由>」(計劃寫「使用者沒有查到:<理由>」,但同一顆
+    按鈕也代表「不查了」)。
+  - 工具給模型的回覆是「The user now sees a card asking them to look up … Wait for them …」(計劃寫「Asked the user
+    to look this up outside: …」)。
+  - 工具說明不說「這個部署斷網」,改說「你跑的伺服器可能上不了網」——工具不分部署都會給。
+- **A12 卡片的寫入用 `useMutation`**(repo 慣例),送出中/錯誤狀態從 mutation 來。
+- **A13 目的地名稱比對去掉前後空白**:`Google` 和 `Google ` 在卡片上是同一顆按鈕。

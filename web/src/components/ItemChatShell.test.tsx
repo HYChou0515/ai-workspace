@@ -23,8 +23,8 @@ import { ItemChatShell } from "./ItemChatShell";
 // stub forwards `onNewChat` (#200) so we can assert the escape hatch is threaded
 // into the chat header exactly when the shell bar is hidden.
 vi.mock("../pages/investigation/AgentPanel", () => ({
-  AgentPanel: ({ onNewChat }: { onNewChat?: () => void }) => (
-    <div data-testid="agent-panel-stub">
+  AgentPanel: ({ onNewChat, canAddFiles }: { onNewChat?: () => void; canAddFiles?: boolean }) => (
+    <div data-testid="agent-panel-stub" data-can-add-files={String(canAddFiles)}>
       {onNewChat ? (
         <button type="button" data-testid="header-new-chat" onClick={onNewChat}>
           + New chat
@@ -111,7 +111,9 @@ beforeEach(() => {
 // Defaults mirror Topic Hub's manifest (always-on switcher + a collection set),
 // so the pre-#200 tests keep seeing the full chrome. #200 tests override these to
 // the single-chat-leaning shape (chatSwitcher="auto", showCollections=false).
-const render = (over: { chatSwitcher?: "auto" | "always"; showCollections?: boolean } = {}) =>
+const render = (
+  over: { chatSwitcher?: "auto" | "always"; showCollections?: boolean; canAddFiles?: boolean } = {},
+) =>
   renderWithQuery(
     <ItemChatShell
       slug="topic-hub"
@@ -125,6 +127,7 @@ const render = (over: { chatSwitcher?: "auto" | "always"; showCollections?: bool
       uploadDir="uploads"
       chatSwitcher={over.chatSwitcher ?? "always"}
       showCollections={over.showCollections ?? true}
+      canAddFiles={over.canAddFiles}
     />,
   );
 
@@ -135,6 +138,24 @@ const NO_WORKFLOW_PROFILES: ProfileDTO[] = [
 ];
 
 describe("ItemChatShell", () => {
+  // plan-outside-lookup: the 請幫我查 card hides its attachments from a viewer
+  // who may not add files — that answer comes from the shell, through here.
+  it("hands the active chat's panel the viewer's file permission", async () => {
+    const chat = summary({ chat_id: "conversation:c", is_default: true });
+    vi.spyOn(itemChatApi, "listChats").mockResolvedValue([chat]);
+    vi.spyOn(itemChatApi, "getChat").mockResolvedValue(thread({ chatId: "conversation:c" }));
+    vi.spyOn(itemChatApi, "subscribe").mockImplementation(
+      () =>
+        (async function* () {
+          await new Promise<void>(() => {});
+        })(),
+    );
+    render({ canAddFiles: false });
+
+    const panel = await screen.findByTestId("agent-panel-stub");
+    expect(panel).toHaveAttribute("data-can-add-files", "false");
+  });
+
   // #613: the pinned todo checklist rides above the feed for the active chat.
   it("mounts the todo checklist panel for the active chat", async () => {
     const { itemTodosApi } = await import("../api/itemTodos");

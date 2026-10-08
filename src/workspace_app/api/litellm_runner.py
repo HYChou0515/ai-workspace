@@ -469,6 +469,7 @@ def _agent_for(
     template_profile: str | None = None,
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
+    in_chat: bool = False,
     subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
@@ -523,11 +524,12 @@ def _agent_for(
 
     if request_env_granted(config, packages or []):
         tools.append(request_env_tool())
-    # plan-outside-lookup D6: the "請幫我查" card, by the same rule — where
-    # `ask_user` goes, since only a person can press its buttons.
+    # plan-outside-lookup D6: the "請幫我查" card — where `ask_user` goes, and
+    # only in a chat: only a person can press its buttons, and a workflow step
+    # holding `ask_user` has nobody there (`ctx.in_chat`, set by the chat turn).
     from ..agent.outside_lookup import ask_outside_granted, ask_outside_tool
 
-    if ask_outside_granted(config):
+    if in_chat and ask_outside_granted(config):
         tools.append(ask_outside_tool())
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
@@ -1717,6 +1719,7 @@ class LitellmAgentRunner:
             "template_profile": ctx.template_profile,
             "has_subagents": bool(ctx.subagent_defs),
             "skills_reachable": ctx.skills_reachable,
+            "in_chat": ctx.in_chat,
             "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,
             "cooldown_registry": self._cooldown_registry,

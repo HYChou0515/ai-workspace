@@ -14,8 +14,12 @@ const MARKER = "\n[outside-lookup]";
 
 /** http(s), a host, no whitespace anywhere — the same pattern as the backend's
  * `_WEB_ADDRESS`, not the `URL` parser: two URL parsers disagree on what has a
- * host, and the turn stops on the backend's answer. */
-const WEB_ADDRESS = /^https?:\/\/[^/?#\s]+(?:[/?#]\S*)?$/;
+ * host, and the turn stops on the backend's answer. The whitespace is spelled
+ * out (`_SPACE`) rather than `\s`, whose meaning differs between the two
+ * languages. */
+const SPACE =
+  "\\x00-\\x20\\x7f-\\x9f\\u00a0\\u1680\\u2000-\\u200b\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
+const WEB_ADDRESS = new RegExp(`^https?://[^/?#${SPACE}]+(?:[/?#][^${SPACE}]*)?$`);
 
 export type OutsideLookup =
   | { why: string; query: string }

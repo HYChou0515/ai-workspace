@@ -95,6 +95,11 @@ def test_the_default_is_not_shared_between_loads():
             "[{name: G, url: 'https://g/?q={q}'}, {name: G, url: 'https://h/?q={q}'}]",
             "server.lookup_targets[1].name 'G' is already used",
         ),
+        (
+            # Two buttons that read the same (review round 1).
+            "[{name: Google, url: 'https://g/?q={q}'}, {name: 'Google ', url: 'https://h/?q={q}'}]",
+            "server.lookup_targets[1].name 'Google ' is already used",
+        ),
     ],
     ids=[
         "mapping",
@@ -106,6 +111,7 @@ def test_the_default_is_not_shared_between_loads():
         "not-http",
         "no-placeholder",
         "duplicate-name",
+        "duplicate-name-padded",
     ],
 )
 def test_a_target_that_cannot_work_refuses_to_boot(tmp_path: Path, value: str, sentence: str):

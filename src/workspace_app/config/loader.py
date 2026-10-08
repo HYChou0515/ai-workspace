@@ -443,9 +443,10 @@ def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
             raise ValueError(f"config {source}: {at}.url must start with http:// or https://")
         if "{q}" not in url:
             raise ValueError(f"config {source}: {at}.url must contain {{q}} — where the query goes")
-        if name in seen:
+        # Compared as the card shows it: `Google` and `Google ` are one button.
+        if name.strip() in seen:
             raise ValueError(f"config {source}: {at}.name {name!r} is already used")
-        seen.add(name)
+        seen.add(name.strip())
 
 
 def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:

@@ -30,11 +30,13 @@ function draw({
   lookup = { why: "需要 2.0 的變更", query: "pandas 2.0 breaking" } as OutsideLookup,
   answered = false,
   item = true,
+  canAddFiles = true,
   answer = async () => ({ path: "lookups/a.md", attachments: [] }),
 }: {
   lookup?: OutsideLookup;
   answered?: boolean;
   item?: boolean;
+  canAddFiles?: boolean;
   answer?: (args: Parameters<OutsideLookupClient["answer"]>[0]) => Promise<{
     path: string | null;
     attachments: string[];
@@ -46,7 +48,13 @@ function draw({
   renderWithQuery(
     item ? (
       <ChatItemProvider
-        value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => answered }}
+        value={{
+          slug: "rca",
+          itemId: "i1",
+          chatId: "ch1",
+          answered: () => answered,
+          ...(canAddFiles ? {} : { canAddFiles: false as const }),
+        }}
       >
         {card}
       </ChatItemProvider>
@@ -209,6 +217,39 @@ describe("bringing it back", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("空間已滿");
     expect(screen.getByRole("button", { name: "送出" })).toBeInTheDocument();
     expect(screen.getByLabelText("查到的內容")).toHaveValue("found");
+  });
+});
+
+describe("review round 1", () => {
+  it("sends the query as edited, and the person's own date", async () => {
+    const { client } = draw();
+    fireEvent.change(screen.getByLabelText("查詢"), { target: { value: "pandas 2.1" } });
+    fireEvent.change(screen.getByLabelText("查到的內容"), { target: { value: "x" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "送出" }));
+
+    await waitFor(() => expect(client.answer).toHaveBeenCalled());
+    const args = client.answer.mock.calls[0]![0] as { query?: string; date?: string };
+    expect(args.query).toBe("pandas 2.1");
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    expect(args.date).toBe(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+  });
+
+  it("says, for a page too, that its button opens a new tab (NN/g)", () => {
+    draw({ lookup: { why: "w", url: "https://a.example" } });
+
+    expect(screen.getByText("按鈕會在新分頁開啟")).toBeInTheDocument();
+  });
+
+  it("offers no attachments to someone who may not add files, and says the text is not saved", async () => {
+    const { client } = draw({ canAddFiles: false });
+
+    expect(screen.queryByLabelText("附加檔案")).toBeNull();
+    expect(screen.getByText(/不會存成檔案/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("查到的內容"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "送出" }));
+    await waitFor(() => expect(client.answer).toHaveBeenCalled());
   });
 });
 

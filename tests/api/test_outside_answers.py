@@ -60,9 +60,16 @@ def _asked(**kw):
     return client, spec, iid
 
 
-def _answer(client, iid, *, files=None, **form):
-    data = {"tool_call_id": "c1", "kind": "found", **form}
-    return client.post(f"/a/rca/items/{iid}/outside-answers", data=data, files=files or [])
+def _answer(client, iid, *, files=None, content=None, call="c1", kind="found", chat=None, **form):
+    """Post an answer the way the card does: the pasted text as a FILE part
+    (a whole page can pass the 1 MiB a plain form field is allowed — review
+    round 1), the rest as fields."""
+    data = {"tool_call_id": call, "kind": kind, **form}
+    parts = list(files or [])
+    if content is not None:
+        parts.append(("content", ("content.md", content.encode(), "text/markdown")))
+    route = f"/chats/{chat}/outside-answers" if chat else "/outside-answers"
+    return client.post(f"/a/rca/items/{iid}{route}", data=data, files=parts)
 
 
 def _thread(spec):
@@ -180,10 +187,7 @@ def test_a_second_lookup_on_the_same_day_gets_its_own_file():
             m.tool_call_id = "c2"
     rm.update(meta.resource_id, conv)
 
-    second = client.post(
-        f"/a/rca/items/{iid}/outside-answers",
-        data={"tool_call_id": "c2", "kind": "found", "content": "two"},
-    ).json()["path"]
+    second = _answer(client, iid, call="c2", content="two").json()["path"]
 
     assert first != second
     assert _read(client, iid, first).endswith("one\n")
@@ -208,15 +212,14 @@ def test_a_long_paste_is_excerpted_in_the_message_and_whole_in_the_file():
 def test_not_found_saves_nothing_and_says_so_with_the_reason():
     client, spec, iid = _asked()
 
-    r = client.post(
-        f"/a/rca/items/{iid}/outside-answers",
-        data={"tool_call_id": "c1", "kind": "not_found", "reason": "公司擋了這個網站"},
-    )
+    r = _answer(client, iid, kind="not_found", reason="公司擋了這個網站")
 
     assert r.status_code == 200, r.text
     assert r.json() == {"path": None, "attachments": []}
     [msg] = _answers(spec)
-    assert "沒查到" in msg.content and "公司擋了這個網站" in msg.content
+    # "or skipped": the same button says 「查不到／不查了」, so the AI must not
+    # be told a search failed that may never have been run (review round 1).
+    assert "沒有查到／不查了" in msg.content and "公司擋了這個網站" in msg.content
     assert not any(p.startswith("lookups") for p in _paths(client, iid))
 
 
@@ -227,10 +230,7 @@ def test_not_found_saves_nothing_and_says_so_with_the_reason():
 def test_only_a_card_in_this_chat_can_be_answered(call: str):
     client, spec, iid = _asked()
 
-    r = client.post(
-        f"/a/rca/items/{iid}/outside-answers",
-        data={"tool_call_id": call, "kind": "found", "content": "x"},
-    )
+    r = _answer(client, iid, call=call, content="x")
 
     assert r.status_code in (404, 422)
     assert _answers(spec) == []
@@ -282,10 +282,7 @@ def test_a_named_chat_has_the_same_route():
     rm = spec.get_resource_manager(Conversation)
     [meta] = rm.search_resources(query=None)
 
-    r = client.post(
-        f"/a/rca/items/{iid}/chats/{meta.resource_id}/outside-answers",
-        data={"tool_call_id": "c1", "kind": "found", "content": "x"},
-    )
+    r = _answer(client, iid, chat=meta.resource_id, content="x")
 
     assert r.status_code == 200, r.text
     assert len(_answers(spec)) == 1
@@ -370,3 +367,151 @@ def test_a_send_refused_after_the_file_landed_takes_the_file_back():
     assert r.status_code == 507, r.text
     assert _answers(spec) == []
     assert not any(p.endswith(".md") for p in _paths(client, iid))
+
+
+# ── review round 1 ──────────────────────────────────────────────────────────
+
+
+async def test_two_answers_at_once_record_one_and_refuse_the_other():
+    """Two tabs, or two viewers of a shared workspace, pressing 送出 together.
+    Both used to pass the "answered once" check read before their writes:
+    both got 200, one paste overwrote the other, and a file was left that no
+    message names."""
+    import asyncio
+
+    from httpx import ASGITransport
+
+    from tests.api._client import AsyncClient
+
+    client, spec, iid = _asked()
+    app = client.app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+        async def post(text: str):
+            return await c.post(
+                f"/a/rca/items/{iid}/outside-answers",
+                data={"tool_call_id": "c1", "kind": "found"},
+                files=[("content", ("content.md", text.encode(), "text/markdown"))],
+            )
+
+        rs = await asyncio.gather(post("hello-1"), post("hello-2"), post("hello-3"))
+
+    assert sorted(r.status_code for r in rs) == [200, 409, 409]
+    [ok] = [r for r in rs if r.status_code == 200]
+    [msg] = _answers(spec)
+    path = ok.json()["path"]
+    assert path in msg.content
+    assert [p for p in _paths(client, iid) if p.endswith(".md")] == [path]
+
+
+@pytest.mark.parametrize(
+    "order", ["persisted-then-cancelled", "cancelled-then-persisted", "persisted-then-failed"]
+)
+async def test_a_send_that_persisted_its_message_keeps_the_files_it_names(monkeypatch, order: str):
+    """The send is shielded on purpose: a request that goes away still has
+    its message persisted and its turn started (`ChatSendService.send`) —
+    possibly AFTER the cancel reached this route. And a send can fail after it
+    persisted. Either way a message names these files, so they stay; taking
+    them back left the AI pointed at a file that was not there (review round 1).
+
+    Two guards, one per order: a cancel never takes back (the message may
+    still be on its way), and a failure takes back only when no message
+    answers the card."""
+    import asyncio
+    import contextlib
+
+    from httpx import ASGITransport
+
+    from tests.api._client import AsyncClient
+    from workspace_app.api.chat_send import ChatSendService
+
+    real = ChatSendService.send
+    later: list[asyncio.Task] = []
+
+    async def persisted_then_cancelled(self, *a, **kw):
+        await real(self, *a, **kw)
+        raise asyncio.CancelledError
+
+    async def cancelled_then_persisted(self, *a, **kw):
+        later.append(asyncio.get_running_loop().create_task(real(self, *a, **kw)))
+        raise asyncio.CancelledError
+
+    async def persisted_then_failed(self, *a, **kw):
+        await real(self, *a, **kw)
+        raise RuntimeError("after the write")
+
+    odd = {
+        "persisted-then-cancelled": persisted_then_cancelled,
+        "cancelled-then-persisted": cancelled_then_persisted,
+        "persisted-then-failed": persisted_then_failed,
+    }[order]
+
+    async def send(self, *a, **kw):
+        # Patched BEFORE the app is built — the route holds the bound method it
+        # was handed — and only the answer takes the odd path: the question
+        # that drew the card is sent normally.
+        body = a[4]
+        return await (odd if body.answers else real)(self, *a, **kw)
+
+    monkeypatch.setattr(ChatSendService, "send", send)
+    client, spec, iid = _asked()
+
+    async with AsyncClient(transport=ASGITransport(app=client.app), base_url="http://t") as c:
+        # The cancel (or the failure) is the point; what matters is what is left.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await c.post(
+                f"/a/rca/items/{iid}/outside-answers",
+                data={"tool_call_id": "c1", "kind": "found"},
+                files=[("content", ("content.md", b"found it", "text/markdown"))],
+            )
+        for task in later:  # the shielded send finishing after the route gave up
+            await task
+    monkeypatch.setattr(ChatSendService, "send", real)
+
+    [msg] = _answers(spec)
+    [path] = [p for p in _paths(client, iid) if p.endswith(".md")]
+    assert path in msg.content
+
+
+def test_a_page_larger_than_a_form_field_may_be_still_goes():
+    """Starlette caps a plain form field at 1 MiB; a CJK page is 3 bytes a
+    character. The paste rides as a file part, capped like any file."""
+    client, spec, iid = _asked()
+    page = "表" * 400_000  # 1.2 MB
+
+    r = _answer(client, iid, content=page)
+
+    assert r.status_code == 200, r.text
+    assert page in _read(client, iid, r.json()["path"])
+
+
+def test_what_was_searched_is_the_query_as_the_person_edited_it():
+    """D8: the card lets the query be edited before searching; the record says
+    what was actually searched, beside what the AI asked for."""
+    client, spec, iid = _asked()
+
+    r = _answer(client, iid, content="x", query="pandas 2.1 pyarrow")
+
+    saved = _read(client, iid, r.json()["path"])
+    assert "pandas 2.1 pyarrow" in saved
+    assert "pandas 2.0 新功能" in saved  # the AI's own query is kept beside it
+    [msg] = _answers(spec)
+    assert "pandas 2.1 pyarrow" in msg.content
+
+
+@pytest.mark.parametrize(
+    ("date", "named"),
+    [("2026-10-09", "lookups/2026-10-09-"), ("not a date", None), ("2026-13-40", None)],
+)
+def test_the_file_is_named_by_the_person_s_own_date(date: str, named: str | None):
+    """The server's clock is UTC; a person in UTC+8 looking something up at
+    07:00 would otherwise find it filed under yesterday. A date that is not a
+    date falls back to the server's."""
+    from datetime import UTC, datetime
+
+    client, _spec, iid = _asked()
+
+    path = _answer(client, iid, content="x", date=date).json()["path"]
+
+    assert path.startswith(named or f"lookups/{datetime.now(UTC):%Y-%m-%d}-")

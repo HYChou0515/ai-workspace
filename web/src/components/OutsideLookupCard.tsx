@@ -25,7 +25,7 @@
  * the record (the `ask_user` card's rule). Outside an item chat (the knowledge
  * base, a replay) the request shows without actions.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
 import { HttpError } from "../api/http";
@@ -44,6 +44,14 @@ import { quotaMessage } from "../lib/quotaFailure";
 import type { OutsideLookup } from "../renderers/outsideLookup";
 
 const NEW_TAB = "noopener,noreferrer";
+
+/** Today in the person's own calendar, `YYYY-MM-DD` — what the saved file is
+ * named by. The server's clock is UTC; a lookup at 07:00 in UTC+8 would
+ * otherwise be filed under yesterday. */
+function localDate(now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
 
 export function OutsideLookupCard({
   callId,
@@ -67,8 +75,8 @@ export function OutsideLookupCard({
   const [copied, setCopied] = useState(false);
   const [giveUp, setGiveUp] = useState(false);
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // What the card itself says is missing, before anything is sent.
+  const [hint, setHint] = useState<string | null>(null);
   // Pressed and accepted — the transcript's `answered` is a round trip away.
   const [done, setDone] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -77,6 +85,29 @@ export function OutsideLookupCard({
     queryFn: () => client.targets(),
     enabled: Boolean(item) && isSearch,
     staleTime: Infinity,
+  });
+  const answer = useMutation({
+    mutationFn: (a: OutsideAnswer) => {
+      if (!item) throw new Error("no chat to answer in");
+      return client.answer({
+        slug: item.slug,
+        itemId: item.itemId,
+        chatId: item.chatId,
+        callId,
+        answer: a,
+        query: isSearch ? query.trim() : undefined,
+        date: localDate(),
+      });
+    },
+    onMutate: () => setHint(null),
+    onSuccess: (saved, a) =>
+      setDone(
+        a.kind === "not_found"
+          ? t("lookup.sentNotFound")
+          : saved.path
+            ? t("lookup.savedTo", { path: saved.path })
+            : t("lookup.sent"),
+      ),
   });
 
   const head = (
@@ -103,6 +134,10 @@ export function OutsideLookupCard({
     );
   }
   const locked = done !== null;
+  const busy = answer.isPending;
+  // Without `add_content` the server saves nothing and refuses attachments.
+  const canAttach = item.canAddFiles !== false;
+  const error = hint ?? (answer.error ? failure(t, answer.error) : null);
 
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text).then(() => setCopied(true));
@@ -110,36 +145,18 @@ export function OutsideLookupCard({
   const addFiles = (list: FileList | null) => {
     if (list?.length) setFiles((f) => [...f, ...Array.from(list)]);
   };
-  const send = async (answer: OutsideAnswer) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const saved = await client.answer({
-        slug: item.slug,
-        itemId: item.itemId,
-        chatId: item.chatId,
-        callId,
-        answer,
-      });
-      setDone(
-        answer.kind === "not_found"
-          ? t("lookup.sentNotFound")
-          : saved.path
-            ? t("lookup.savedTo", { path: saved.path })
-            : t("lookup.sent"),
-      );
-    } catch (err) {
-      setError(failure(t, err));
-    } finally {
-      setBusy(false);
-    }
-  };
   const submitFound = () => {
     if (!content.trim() && files.length === 0) {
-      setError(t("lookup.empty"));
+      setHint(t(canAttach ? "lookup.empty" : "lookup.emptyText"));
       return;
     }
-    void send({ kind: "found", content, sourceUrl: sourceUrl.trim(), target, attachments: files });
+    answer.mutate({
+      kind: "found",
+      content,
+      sourceUrl: sourceUrl.trim(),
+      target,
+      attachments: files,
+    });
   };
 
   return (
@@ -216,6 +233,7 @@ export function OutsideLookupCard({
               {copied ? t("lookup.copied") : t("lookup.copyUrl")}
             </button>
           </div>
+          <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
         </div>
       )}
 
@@ -259,6 +277,9 @@ export function OutsideLookupCard({
             />
           </div>
 
+          {!canAttach ? (
+            <p className="outside-lookup-hint">{t("lookup.textOnly")}</p>
+          ) : (
           <div className="outside-lookup-section">
             <label className="outside-lookup-label" htmlFor={`${ids}-f`}>
               {t("lookup.attach")}
@@ -320,6 +341,7 @@ export function OutsideLookupCard({
               </ul>
             )}
           </div>
+          )}
 
           <div className="outside-lookup-section">
             <label className="outside-lookup-label" htmlFor={`${ids}-s`}>
@@ -353,7 +375,7 @@ export function OutsideLookupCard({
             data-size="sm"
             data-variant="primary"
             disabled={busy}
-            onClick={() => void send({ kind: "not_found", reason: reason.trim() })}
+            onClick={() => answer.mutate({ kind: "not_found", reason: reason.trim() })}
           >
             {t("lookup.sendNotFound")}
           </button>
@@ -365,7 +387,8 @@ export function OutsideLookupCard({
             disabled={busy}
             onClick={() => {
               setGiveUp(false);
-              setError(null);
+              setHint(null);
+              answer.reset();
             }}
           >
             {t("lookup.back")}
@@ -391,7 +414,8 @@ export function OutsideLookupCard({
             disabled={busy}
             onClick={() => {
               setGiveUp(true);
-              setError(null);
+              setHint(null);
+              answer.reset();
             }}
           >
             {t("lookup.notFound")}
