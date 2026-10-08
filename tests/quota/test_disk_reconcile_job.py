@@ -167,3 +167,28 @@ async def test_the_guard_sees_through_the_migration_wrapper(tmp_path):
     assert run is not None
     with pytest.raises(RuntimeError, match="not reachable"):
         await run()
+
+
+async def test_a_soft_deleted_item_keeps_being_counted_like_the_gate_counts_it():
+    """Review round 1: a soft delete (the auto-CRUD route) leaves the files; the
+    ledger's live writers keep charging the item (`include_deleted=True`). The
+    pass forgot its row, and a warm sandbox's mirror re-added it next sweep."""
+    from workspace_app.api.sandbox_activity import register_sandbox_activity
+    from workspace_app.quota.disk_ledger import register_disk_ledger
+    from workspace_app.quota.disk_reconcile import make_disk_ledger_pass
+
+    spec = make_spec(default_user="alice")
+    store = SpecstarFileStore(spec)
+    register_disk_ledger(spec)
+    register_sandbox_activity(spec)  # the app registers both at boot
+    rm = spec.get_resource_manager(RcaInvestigation)
+    item = rm.create(RcaInvestigation(title="t", owner="alice")).resource_id
+    await store.write(item, "/a.bin", b"x" * 700)
+    rm.delete(item)  # soft
+
+    run = make_disk_ledger_pass(spec, store, live_window_ms=1000)
+    assert run is not None
+    report = await run()
+
+    assert report.forgotten == 0
+    assert await DiskLedger(spec).per_item_for("alice") == [(item, 700)]

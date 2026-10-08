@@ -16,8 +16,11 @@ This pass looks at every item that exists and sets its row right:
   live (#538), so the mirror's measurement is the honest one — and only its
   debtor is corrected if the item moved;
 * a row whose item no longer exists is dropped — but only on `exists`'s word,
-  never because the listing missed it (an App this process did not register
-  would look missing);
+  never because the listing missed it. A SOFT-deleted item still exists here:
+  its files stay until the cascade purges them, and the ledger's live writers
+  keep charging it (`include_deleted=True` behind `_owner_of`). An App this
+  process does not register is not this module's guard — the blob-gc job's
+  registry check refuses a runner that lacks any model the asker has;
 * a row already right is not written again.
 
 One item's failure costs that item only. Pure over what it is handed, so the
@@ -96,8 +99,10 @@ async def reconcile_disk_ledger(
 
 
 def every_item(spec: SpecStar) -> list[tuple[str, str]]:
-    """``(item_id, debtor)`` for every item of every App this process registers
-    — the debtor by the quota gate's own rule (`apps.resolve.debtor_of`). A
+    """``(item_id, debtor)`` for every item of every App this process registers,
+    soft-deleted ones included (they still hold their files, and the gate still
+    charges them) — the debtor by the quota gate's own rule
+    (`apps.resolve.debtor_of`). A
     whole-table read per App: run on a worker (the CLAUDE.md sweeper rule), never
     on an API pod's timer. Blocking."""
     from ..apps.base import WorkItemBase
@@ -110,7 +115,9 @@ def every_item(spec: SpecStar) -> list[tuple[str, str]]:
             rm = spec.get_resource_manager(model)
         except Exception:  # noqa: BLE001 — an App this spec does not hold
             continue
-        for rev in rm.list_resources((QB.is_deleted() == False).build()):  # noqa: E712
+        # No `is_deleted` filter: `list_resources` returns soft-deleted rows too,
+        # and here that is wanted.
+        for rev in rm.list_resources(QB.all().build()):
             item_id = rev.info.resource_id  # ty: ignore[unresolved-attribute]
             data = rev.data
             assert isinstance(data, WorkItemBase)  # narrow for ty
@@ -156,7 +163,7 @@ def make_disk_ledger_pass(
             items=items,
             is_live=is_live,
             usage=workspace_usage,
-            exists=lambda item_id: find_work_item(spec, item_id) is not None,
+            exists=lambda item_id: find_work_item(spec, item_id, include_deleted=True) is not None,
             ledger=ledger,
         )
 
