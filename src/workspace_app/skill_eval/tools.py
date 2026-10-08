@@ -28,6 +28,7 @@ from pydantic import ValidationError
 
 from workspace_app.agent.shown_files import (
     PATH_OR_LAYOUT,
+    SKILL_HUB_ENTRY_MARKER,
     LayoutError,
     PaneLayout,
     layout_paths,
@@ -261,6 +262,9 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
             "0123456789abcdef0123456789abcdef).\n\n"
             "The reviewer (eval) had nothing to flag.\n\n"
             "It is public: everyone on the platform can find and install it."
+            # …and the chat card's marker, as the real reply ends (plan-skill-hub-ux-redo).
+            f"{SKILL_HUB_ENTRY_MARKER}"
+            '{"entry_id": "0123456789abcdef0123456789abcdef"}'
         )
     return f"unknown tool {name!r}"
 

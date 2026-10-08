@@ -40,7 +40,6 @@ from ..apps.skill_hub import (
     missing_tools_for,
     script_count,
 )
-from ..apps.skill_payload import SkillOrigin
 from ..apps.skills import (
     fork_hub_version,
     install_hub_skill,
@@ -51,6 +50,7 @@ from ..apps.skills import (
 from ..files import WorkspaceFiles
 from ..perm import Actor, authorize
 from ..resources.groups import groups_of
+from ..sandbox.protocol import SandboxBusy
 from .item_authz import check_access, load_access_facts
 from .locator import ItemLocator
 from .permission_body import PermissionBody, PermissionOut, build_permission
@@ -309,11 +309,13 @@ class SkillHubTarget(BaseModel):
     """One workspace the install dialog offers, and what installing would do
     there (D6): `ok`; `installed` — a copy of this entry is already there;
     `name_taken` — another folder of that name is, `owner` naming whose copy
-    it is when it is one ("" for a hand-written folder)."""
+    it is when the viewer can read that entry ("" otherwise: a hand-written
+    folder, a fork's starting point, a copy of an entry gone from their view);
+    `unavailable` — the workspace's sandbox was too busy to answer."""
 
     item_id: str
     title: str
-    state: Literal["ok", "installed", "name_taken"]
+    state: Literal["ok", "installed", "name_taken", "unavailable"]
     owner: str = ""
 
 
@@ -382,12 +384,22 @@ def register_skill_hub_routes(
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
         return entry
 
-    def _visible_forks(entry_id: str, viewer: str) -> list[SkillHubCard]:
-        out: list[SkillHubCard] = []
+    def _readable_forks(entry_id: str, viewer: str) -> list[tuple[str, SkillHubEntry]]:
+        out: list[tuple[str, SkillHubEntry]] = []
         for fork_id in hub.forks_of(entry_id):
             _state, fork = hub.state_for(fork_id, viewer)
             if fork is not None:
-                out.append(_card(fork_id, fork, viewer))
+                out.append((fork_id, fork))
+        return out
+
+    def _visible_forks(entry_id: str, entry: SkillHubEntry, viewer: str) -> list[SkillHubCard]:
+        """The forks tab: each fork names this entry as its original (the
+        viewer is reading it) and counts its own forks, as a list row does."""
+        out: list[SkillHubCard] = []
+        for fork_id, fork in _readable_forks(entry_id, viewer):
+            card = _card(fork_id, fork, viewer, fork_count=len(_readable_forks(fork_id, viewer)))
+            card.origin = SkillHubOrigin(owner=entry.owner, name=entry.name)
+            out.append(card)
         out.sort(key=lambda c: (c.name, c.owner))
         return out
 
@@ -397,6 +409,7 @@ def register_skill_hub_routes(
         mine: bool = False,
         owner: str = "",
         app: str = "",
+        forks: bool = False,
         sort: Literal["name", "popular", "updated"] = "name",
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -407,7 +420,9 @@ def register_skill_hub_routes(
         with `fork_count`; a fork whose original the viewer cannot see (private
         to them, deleted) is listed itself, so a skill is never hidden by what
         it was forked from. Any filter lists forks beside originals, each with
-        its `forked_from`: a search is for one skill, wherever it sits. `q`
+        its `forked_from`: a search is for one skill, wherever it sits.
+        `forks=true` does the same unfiltered — the workspace's install picker
+        offers everything installable. `q`
         matches name and description (case-insensitive); `mine` keeps the
         viewer's own and `owner` one person's. `app` (a slug) adds each row's
         `missing_tools` against that App's ceiling. `sort`: `name`, `popular`
@@ -416,7 +431,7 @@ def register_skill_hub_routes(
         viewer = get_user_id()
         visible = dict(hub.visible(viewer))
         fork_counts = Counter(e.forked_from for e in visible.values() if e.forked_from)
-        browsing = not q.strip() and not mine and not owner
+        browsing = not q.strip() and not mine and not owner and not forks
         hits = {
             i: e
             for i, e in visible.items()
@@ -484,7 +499,7 @@ def register_skill_hub_routes(
                 model=entry.review.model,
             ),
             forked_from=lineage,
-            forks=_visible_forks(entry_id, viewer),
+            forks=_visible_forks(entry_id, entry, viewer),
             files=_listed(sizes),
             scripts=script_count(p for p, _ in sizes),
             skill_md=skill_md.decode("utf-8", errors="replace"),
@@ -533,6 +548,21 @@ def register_skill_hub_routes(
 
         return list(await asyncio.gather(*(one(c) for c in calls)))
 
+    async def _holds_copy(item_id: str, entry_id: str, name: str) -> bool | None:
+        """Whether the workspace holds an installed copy of the entry at
+        `.skill/<name>/` — not a fork's starting point (`forked`, the viewer's
+        own skill) — or ``None`` when it cannot be told now (a sandbox too busy
+        to answer). Never wakes a sandbox: this runs for every workspace the
+        viewer can edit, on every skill page open. A record that does not parse
+        is not a copy of anything."""
+        try:
+            origin = await workspace_skill_origin(files, item_id, name, wake=False)
+        except (msgspec.DecodeError, msgspec.ValidationError):
+            return False
+        except SandboxBusy:
+            return None
+        return origin is not None and origin.entry == entry_id and not origin.forked
+
     @app.get("/skill-hub/entries/{entry_id}/installs")
     async def skill_hub_installs(entry_id: str) -> SkillHubInstalls:
         """The viewer's workspaces holding a copy of this entry: a
@@ -543,15 +573,15 @@ def register_skill_hub_routes(
         entry = _readable(entry_id, viewer)
         candidates = await asyncio.to_thread(_editable, viewer, sorted(registered_apps()))
 
-        def origin_of(item_id: str) -> Callable[[], Awaitable[SkillOrigin | None]]:
-            return lambda: workspace_skill_origin(files, item_id, entry.name)
+        def holds(item_id: str) -> Callable[[], Awaitable[bool | None]]:
+            return lambda: _holds_copy(item_id, entry_id, entry.name)
 
-        origins = await _bounded([origin_of(item_id) for _slug, item_id, _t in candidates])
+        held = await _bounded([holds(item_id) for _slug, item_id, _t in candidates])
         return SkillHubInstalls(
             installs=[
                 SkillHubInstall(app=slug, item_id=item_id, title=title)
-                for (slug, item_id, title), origin in zip(candidates, origins, strict=True)
-                if origin is not None and origin.entry == entry_id
+                for (slug, item_id, title), yes in zip(candidates, held, strict=True)
+                if yes
             ]
         )
 
@@ -567,10 +597,17 @@ def register_skill_hub_routes(
 
         def target(item_id: str, title: str) -> Callable[[], Awaitable[SkillHubTarget]]:
             async def ask() -> SkillHubTarget:
-                origin = await workspace_skill_origin(files, item_id, entry.name)
-                if origin is not None and origin.entry == entry_id:
+                held = await _holds_copy(item_id, entry_id, entry.name)
+                if held is None:
+                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
+                if held:
                     return SkillHubTarget(item_id=item_id, title=title, state="installed")
-                taken = await skill_folder_in_the_way(files, item_id, hub, entry.name, viewer)
+                try:
+                    taken = await skill_folder_in_the_way(
+                        files, item_id, hub, entry.name, viewer, wake=False
+                    )
+                except SandboxBusy:
+                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
                 if taken is not None:
                     return SkillHubTarget(
                         item_id=item_id, title=title, state="name_taken", owner=taken.owner

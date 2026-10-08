@@ -248,3 +248,119 @@ async def test_targets_for_an_unknown_app_is_an_empty_list(harness: Harness):
 
     assert res.status_code == 200, res.text
     assert res.json() == {"missing_tools": [], "items": []}
+
+
+# ── review round 1 ───────────────────────────────────────────────────────────
+
+
+def _record_wakes(harness: Harness, monkeypatch) -> list[bool]:  # noqa: ANN001
+    """Every `wake` the routes pass the workspace files facade."""
+    files = harness.spa_client.app.state.workspace_files  # ty: ignore[unresolved-attribute]
+    seen: list[bool] = []
+    real_read, real_ls = files.read, files.ls
+
+    async def read(workspace_id: str, path: str, *, wake: bool = True) -> bytes:
+        seen.append(wake)
+        return await real_read(workspace_id, path, wake=wake)
+
+    async def ls(workspace_id: str, prefix: str = "", *, wake: bool = True) -> list[str]:
+        seen.append(wake)
+        return await real_ls(workspace_id, prefix, wake=wake)
+
+    monkeypatch.setattr(files, "read", read)
+    monkeypatch.setattr(files, "ls", ls)
+    return seen
+
+
+async def test_installs_and_targets_never_wake_a_sandbox(harness: Harness, monkeypatch):
+    """They read every workspace the viewer can edit, on every skill page
+    open: waking one rebuilds a reaped sandbox, so N idle workspaces cost N
+    rebuilds a view. A gone sandbox has nothing newer than its durable copy."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    other = await _publish(hub, "x", owner="carol")
+    taken = _item(harness, "taken", "read_content", "edit_content")
+    await _copy(harness, taken, "triage", other)
+    seen = _record_wakes(harness, monkeypatch)
+
+    assert harness.client.get(f"/skill-hub/entries/{entry}/installs").status_code == 200
+    assert harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").status_code == 200
+
+    assert seen and not any(seen), seen
+
+
+async def test_a_copy_with_an_unreadable_record_does_not_break_the_page(harness: Harness):
+    """Someone else's hand-edited `.origin` in a workspace shared with the
+    viewer: that workspace is left out of where-installed and offered as
+    taken (a folder of that name is there), and the rest still answer."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    broken = _item(harness, "broken", "read_content", "edit_content")
+    await harness.filestore.write(broken, "/.skill/triage/SKILL.md", _md("x"))
+    await harness.filestore.write(broken, "/.skill/triage/.origin", b"{not json")
+    harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry})
+
+    installs = harness.client.get(f"/skill-hub/entries/{entry}/installs")
+    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca")
+
+    assert installs.status_code == 200, installs.text
+    assert [i["item_id"] for i in installs.json()["installs"]] == [harness.iid]
+    assert targets.status_code == 200, targets.text
+    by_id = {t["item_id"]: t for t in targets.json()["items"]}
+    assert by_id[broken]["state"] == "name_taken"
+
+
+async def test_a_fork_from_a_version_is_the_viewers_own_not_an_install(harness: Harness):
+    """「從這一版 fork」 copies a version as a starting point of the viewer's
+    own (`.origin.forked`): not 「已經裝了」, but a folder of that name."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    started = _item(harness, "started", "read_content", "edit_content")
+    await harness.filestore.write(started, "/.skill/triage/SKILL.md", _md("x"))
+    origin = SkillOrigin(source="hub", files={}, entry=entry, commit="c", forked=True)
+    await harness.filestore.write(started, "/.skill/triage/.origin", msgspec.json.encode(origin))
+
+    installs = harness.client.get(f"/skill-hub/entries/{entry}/installs").json()["installs"]
+    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").json()["items"]
+
+    assert started not in [i["item_id"] for i in installs]
+    assert {t["item_id"]: t["state"] for t in targets}[started] == "name_taken"
+
+
+async def test_the_forks_on_an_originals_page_name_it_and_count_their_own(harness: Harness):
+    hub = _hub(harness)
+    root = await _publish(hub, "one")
+    fork = await _publish(hub, "f", owner="bob")
+    rm = harness.spec.get_resource_manager(SkillHubEntry)
+    rm.update(fork, msgspec.structs.replace(rm.get(fork).data, forked_from=root))
+    grand = await _publish(hub, "g", owner="carol")
+    rm.update(grand, msgspec.structs.replace(rm.get(grand).data, forked_from=fork))
+
+    forks = harness.client.get(f"/skill-hub/entries/{root}").json()["forks"]
+
+    assert [f["id"] for f in forks] == [fork]
+    assert forks[0]["origin"] == {"owner": "alice", "name": "triage"}
+    assert forks[0]["fork_count"] == 1
+
+
+async def test_a_busy_workspace_is_said_not_failed(harness: Harness, monkeypatch):
+    from workspace_app.sandbox.protocol import SandboxBusy
+
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    busy = _item(harness, "busy", "read_content", "edit_content")
+    files = harness.spa_client.app.state.workspace_files  # ty: ignore[unresolved-attribute]
+    real_read = files.read
+
+    async def read(workspace_id: str, path: str, *, wake: bool = True) -> bytes:
+        if workspace_id == busy:
+            raise SandboxBusy(workspace_id)
+        return await real_read(workspace_id, path, wake=wake)
+
+    monkeypatch.setattr(files, "read", read)
+
+    installs = harness.client.get(f"/skill-hub/entries/{entry}/installs")
+    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca")
+
+    assert installs.status_code == 200 and targets.status_code == 200
+    assert {t["item_id"]: t["state"] for t in targets.json()["items"]}[busy] == "unavailable"

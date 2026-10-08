@@ -553,3 +553,16 @@ async def test_refreshing_a_copy_that_lost_its_version_record_is_a_409_with_the_
 
     assert res.status_code == 409, res.text
     assert "reset" in res.json()["detail"]
+
+
+async def test_the_picker_asks_for_forks_beside_originals_without_a_search(harness: Harness):
+    """The workspace's install picker lists everything installable; browsing's
+    originals-only is the page's way to read the hub, not the picker's."""
+    hub = _hub(harness)
+    root = await _entry(hub, "alice", "triage")
+    fork = await _entry(hub, "bob", "triage", forked_from=root)
+
+    flat = harness.client.get("/skill-hub/entries", params={"forks": "true"}).json()
+
+    assert {e["id"] for e in flat["entries"]} == {root, fork}
+    assert flat["total"] == 2
