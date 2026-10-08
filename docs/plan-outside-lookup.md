@@ -189,5 +189,6 @@ server:
   - 工具說明不說「這個部署斷網」,改說「你跑的伺服器可能上不了網」——工具不分部署都會給。
 - **A12 卡片的寫入用 `useMutation`**(repo 慣例),送出中/錯誤狀態從 mutation 來。
 - **A13 目的地名稱比對去掉前後空白**:`Google` 和 `Google ` 在卡片上是同一顆按鈕。
-- **A14 health replay 照聊天回放**:回放 item 的聊天(`source: rca`)時也給 `in_chat`,工具清單才和當時那一輪一樣
-  (review round 2)。
+- **A14 health replay 照聊天回放**:回放 item 的對話(`source: rca`)時給 `in_chat`,聊天那一輪的工具清單才對得上
+  (review round 2)。已知不準:replay 載入的若是 workflow run 的對話,回放會多一個 `ask_outside`(那一輪本來沒有)——
+  replay 本來就不套步驟的 `tools` 子集,這是同一類既有的診斷誤差,不影響真正跑的那一輪(review round 3)。
