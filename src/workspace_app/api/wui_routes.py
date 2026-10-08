@@ -39,7 +39,12 @@ from ..agent.context import AgentToolContext
 from ..apps.catalog import finalize_tool_grants
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
-from ..tooling.registry import PackageInfo, exec_package_command, find_allowed_command
+from ..tooling.registry import (
+    THIRD_PARTY_SEP,
+    PackageInfo,
+    exec_package_command,
+    find_allowed_command,
+)
 from ..workflow.offered import no_such_workflow, wont_parse
 from .env_layers import PersonEnv, resolve, resolve_env
 from .locator import ItemLocator
@@ -515,20 +520,33 @@ def register_wui_routes(
 
         try:
             found = find_allowed_command(available, allowed, name)
-            in_ceiling = found or find_allowed_command(available, offered, name)
         except ValueError as exc:
-            # Two packages exporting one command name: a deploy-configuration
-            # fault, not this caller's. It breaks the agent's turn identically,
-            # but an opaque 500 here reaches a person through the page's error
-            # panel with nothing to act on.
+            # A bare name two granted third-party commands share: only this call
+            # fails, with the full names to use instead — the same sentence the
+            # model gets (`ambiguous_name_message`). A 409, not a 500, because it
+            # reaches a person through the page's error panel and says what to do.
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if found is None:
             # Named rather than 404'd blank: this reaches a person through the
             # page's own error panel, and "which tool, and why not" is the whole
             # of what they can act on.
-            if reason := external.refused.get(name.partition(":")[0]):
+            # The local name in `<local name>__<command>` or `<local name>:<command>`.
+            # A bare name is a command name, so a refused tool's reason is only
+            # found here when the page named the tool itself.
+            local = (
+                name.split(THIRD_PARTY_SEP, 1)[0]
+                if THIRD_PARTY_SEP in name
+                else name.partition(":")[0]
+            )
+            if reason := external.refused.get(local):
                 raise HTTPException(status_code=409, detail=f"{name} is unavailable: {reason}")
-            if in_ceiling is not None:
+            try:
+                in_ceiling = find_allowed_command(available, offered, name) is not None
+            except ValueError:
+                # Several offered commands answer to it and none is held: the
+                # item turned them off, which is the refusal that is true.
+                in_ceiling = True
+            if in_ceiling:
                 # The App offers it; this item's picker turned it off. Naming
                 # app.json here would send the person to the wrong switch.
                 raise HTTPException(

@@ -72,6 +72,8 @@ async def test_a_resolved_tool_becomes_a_package_the_agent_can_call() -> None:
     assert pkg.install_dir == "../.tools/wafer-history"
     assert [c.name for c in pkg.commands] == ["trend"]
     assert pkg.commands[0].params_json_schema == {"type": "object", "properties": {}}
+    # plan-third-party-tool-names N1: the model calls it `wafer-history__trend`.
+    assert pkg.third_party is True
 
 
 async def test_a_strangers_entry_that_cannot_name_a_variable_is_dropped() -> None:

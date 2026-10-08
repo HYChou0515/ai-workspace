@@ -95,7 +95,7 @@ see it. Libraries do not decide this either way: a UMD file in the folder
 ⚠️ **The external example is the one you cannot copy unchanged.** Its tool has
 to be one this app actually grants, and **"Tools this app offers its WUIs"** —
 appended to the end of this skill when you read it — is the only place that says
-which. You cannot tell from a tool's name: `read_file` and `lot-status` look
+which. You cannot tell from a tool's name: `read_file` and `mes__lot-status` look
 alike to you, and only one of them a page can call. If that section is absent,
 say so and ask rather than guessing; a tool you invent fails at the call.
 
@@ -200,7 +200,7 @@ view: wui
 title: Lot tracker
 # icon: logo.png         # a file in this folder, or an emoji ("📦"), or a platform icon name ("kanban")
 # color: "#0EA5A4"        # the card's colour on the WUI overview; the App's colour without it
-# tools: [lot-status]   # only if the page calls one — see reference.md
+# tools: [mes__lot-status]   # only if the page calls one — see reference.md
 ```
 
 `title` is what the pane is called. `entry` overrides `index.html` if you must.
