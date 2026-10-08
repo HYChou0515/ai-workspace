@@ -26,7 +26,7 @@
 | # | 決定 | 來源 |
 |---|---|---|
 | N1 | **第三方工具一律帶前綴**:模型看到 `<本地名>__<command>`(例 `a__list-files`)。自家打包的工具(第一方套件)維持扁平名稱。 | 〔user〕「A」 |
-| N2 | **舊的扁平名稱當別名,不影響現有**:模型或頁面用 `list-files` 呼叫,這個 App 裡只有一個套件有它就照常轉過去;撞名時那一次呼叫回一句話列出新名字(「`list-files` 有兩個:`a__list-files`、`b__list-files`,請指名一個」),不讓整個 turn 失敗。舊聊天紀錄的卡片照常顯示。 | 〔user〕「A 但不要影響現有」「就是你的建議」 |
+| N2 | **舊的扁平名稱當別名,不影響現有**:模型或頁面用 `list-files` 呼叫,這個 App 裡只有一個套件有它就照常轉過去;撞名時**那一次呼叫失敗**,錯誤訊息照現在的寫法 `cross-package tool name collision: command 'list-files' appears in packages ['a', 'b']`,後面接新名字 `a__list-files`、`b__list-files`;頁面的 `callTool` 同樣失敗、同樣訊息。turn 本身不失敗(清單裡是帶前綴的名字,組清單不再撞名)。舊聊天紀錄的卡片照常顯示。 | 〔user〕「A 但不要影響現有」「就是你的建議」;「還是要讓他失敗 現在失敗 message 很清楚」→ 失敗範圍是那一次呼叫(「1」) |
 | N3 | **分隔符用雙底線 `__`**(供應商的 tool 名稱只能用英數、`_`、`-`,不能用冒號)。頁面與授權語法另外也接受 `a:list-files`,兩種寫法指同一個 command;文件教 `a__list-files`。 | 〔user〕「Ok 用雙底線吧」 |
 
 ## 3. 施工時我定的事〔施工〕
@@ -45,8 +45,8 @@
 | Phase | 內容 |
 |---|---|
 | P1 | registry:第三方套件的 FunctionTool 名稱 = `<本地名>__<cmd>`;`_check_collisions` 只對第一方之間報錯;D1 名稱檢查 |
-| P2 | 模型用扁平名(或 `a:cmd`)呼叫時的別名:唯一 → 轉過去;撞名 → 回一句話列出新名字;turn 不失敗 |
-| P3 | WUI `callTool` / `tools:` 接受 `a__cmd`、`a:cmd`、不撞名的扁平名;撞名回 409 帶同一句話;D6 |
+| P2 | 模型用扁平名(或 `a:cmd`)呼叫時的別名:唯一 → 轉過去;撞名 → 那一次呼叫失敗,訊息照現在的寫法加上新名字;turn 不失敗 |
+| P3 | WUI `callTool` / `tools:` 接受 `a__cmd`、`a:cmd`、不撞名的扁平名;撞名回 409 帶同一句錯誤訊息;D6 |
 | P4 | 工具卡片與選單(D4);系統提示的 tool 清單用新名字 |
 | P5 | 文件:`sample-skills/wui` 範例與 reference 教新名字;`docs/migrations.md` 一條;`plan-skills-and-tools.md` T5 標推翻 |
 | P6 | review 回合、CI、PR |
