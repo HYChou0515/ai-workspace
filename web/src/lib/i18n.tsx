@@ -2145,7 +2145,7 @@ export const messages = {
   "skillHub.edit": { "zh-TW": "修改", en: "Edit" },
   "skillHub.unpublish": { "zh-TW": "下架", en: "Unpublish" },
   "skillHub.republish": { "zh-TW": "重新上架", en: "Republish" },
-  "skillHub.share": { "zh-TW": "可見範圍", en: "Visibility" },
+  "skillHub.share": { "zh-TW": "權限設定", en: "Permissions" },
   // The generic sharing dialog (`PermissionDialog`), plan-skill-hub-ui-polish
   // D12: it used to be English only, inside a zh-TW page. The English is
   // word for word what it said before (pinned by its parity tests).
@@ -2189,9 +2189,73 @@ export const messages = {
   "perm.cancel": { "zh-TW": "取消", en: "Cancel" },
   "perm.save": { "zh-TW": "儲存", en: "Save" },
   "skillHub.share.caption": {
-    "zh-TW": "誰能在 skill hub 看到並裝這個 skill。",
-    en: "Who can see and install this skill on the skill hub.",
+    "zh-TW": "誰能在 skill hub 看到並裝這個 skill。已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
+    en: "Who can see and install this skill on the skill hub. People who installed it keep their copy, which keeps working; whoever can no longer see this skill gets no later versions.",
   },
+  // plan-skill-hub-ux-redo D10: the one sentence on what unpublishing or
+  // narrowing the permission does to copies already installed — said in the
+  // 下架 confirm and in the share dialog's caption above, alike.
+  "skillHub.impact.installed": {
+    "zh-TW": "已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
+    en: "People who installed it keep their copy, which keeps working; whoever can no longer see this skill gets no later versions.",
+  },
+  "skillHub.unpublish.title": { "zh-TW": "下架「{name}」？", en: "Unpublish “{name}”?" },
+  "skillHub.unpublish.body": {
+    "zh-TW": "下架後只有你看得到它：別人搜尋不到，也不能再安裝。之後可以重新上架。",
+    en: "Once unpublished only you can see it: nobody else finds or installs it. You can republish it later.",
+  },
+  "skillHub.unpublish.confirm": { "zh-TW": "下架", en: "Unpublish" },
+  "skillHub.unpublished": {
+    "zh-TW": "已下架「{name}」，現在只有你看得到。",
+    en: "Unpublished “{name}” — only you can see it now.",
+  },
+  "skillHub.republished": { "zh-TW": "已重新上架「{name}」。", en: "Republished “{name}”." },
+  // plan-skill-hub-ux-redo D5: the skill page's header, tabs and sidebar.
+  "skillHub.manage": { "zh-TW": "管理", en: "Manage" },
+  "skillHub.tab.readme": { "zh-TW": "說明", en: "Overview" },
+  "skillHub.tab.files": { "zh-TW": "檔案（{count}）", en: "Files ({count})" },
+  "skillHub.tab.history": { "zh-TW": "版本紀錄", en: "Versions" },
+  "skillHub.tab.forks": { "zh-TW": "fork（{count}）", en: "Forks ({count})" },
+  "skillHub.side.permission": { "zh-TW": "權限", en: "Permissions" },
+  "skillHub.side.updated": { "zh-TW": "更新時間", en: "Updated" },
+  "skillHub.side.usage": { "zh-TW": "次數", en: "Usage" },
+  "skillHub.side.source": { "zh-TW": "來源 App", en: "Written in" },
+  "skillHub.installs.title": { "zh-TW": "你裝在這些 workspace", en: "Your workspaces with it" },
+  "skillHub.installs.none": {
+    "zh-TW": "你還沒有把它裝進任何 workspace。",
+    en: "You have not installed it in any workspace.",
+  },
+  // plan-skill-hub-ux-redo D6: the install dialog.
+  "skillHub.install": { "zh-TW": "安裝到 workspace…", en: "Install in a workspace…" },
+  "skillHub.install.title": { "zh-TW": "把「{name}」裝到哪個 workspace？", en: "Install “{name}” in which workspace?" },
+  "skillHub.install.app": { "zh-TW": "App", en: "App" },
+  "skillHub.install.items": { "zh-TW": "workspace", en: "Workspace" },
+  "skillHub.install.none": {
+    "zh-TW": "這個 App 裡沒有你能編輯的 workspace。",
+    en: "You can edit no workspace in this App.",
+  },
+  "skillHub.install.missing": {
+    "zh-TW": "這個 App 沒有它提到的工具：{tools}。裝了仍可用，只是用到這些工具的步驟做不到。",
+    en: "This App lacks tools it mentions: {tools}. It still installs; the steps that need them will not work.",
+  },
+  "skillHub.install.state.installed": { "zh-TW": "已經裝了", en: "Already installed" },
+  "skillHub.install.state.taken": {
+    "zh-TW": "已有同名的 skill（{owner} 的）",
+    en: "Has a skill of that name ({owner}'s)",
+  },
+  "skillHub.install.state.takenHand": {
+    "zh-TW": "已有同名的資料夾",
+    en: "Has a folder of that name",
+  },
+  "skillHub.install.confirm": { "zh-TW": "安裝", en: "Install" },
+  "skillHub.install.done": { "zh-TW": "已裝進「{title}」", en: "Installed in “{title}”" },
+  "skillHub.install.open": { "zh-TW": "打開 workspace", en: "Open the workspace" },
+  // plan-skill-hub-ux-redo D16: gone is not a network error.
+  "skillHub.notFound": {
+    "zh-TW": "找不到這個 skill：它可能已刪除、已下架，或你沒有權限看。",
+    en: "This skill is not here: it may have been deleted or unpublished, or you may not have access.",
+  },
+  "skillHub.backToList": { "zh-TW": "回 skill hub", en: "Back to the skill hub" },
   "skillHub.transfer": { "zh-TW": "轉移 owner", en: "Transfer" },
   "skillHub.transfer.title": { "zh-TW": "把「{name}」轉給誰？", en: "Transfer “{name}” to whom?" },
   "skillHub.transfer.body": {
@@ -2255,8 +2319,8 @@ export const messages = {
   "skillHub.history.audience.everyone": { "zh-TW": "所有人", en: "everyone" },
   "skillHub.history.audience.group": { "zh-TW": "一個群組", en: "a group" },
   "skillHub.history.kind.permission": {
-    "zh-TW": "可見範圍改為「{visibility}」",
-    en: "Visibility set to “{visibility}”",
+    "zh-TW": "權限設定改為「{visibility}」",
+    en: "Permissions set to “{visibility}”",
   },
   "skillHub.history.view": { "zh-TW": "查看", en: "View" },
   "skillHub.history.compare": { "zh-TW": "比對其他版本", en: "Compare with another version" },

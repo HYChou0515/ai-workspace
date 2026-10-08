@@ -177,78 +177,151 @@
   color: var(--text-paper);
 }
 
-/* ── an entry ─────────────────────────────────────────────────────────── */
+/* ── a skill's page (plan-skill-hub-ux-redo D5) ───────────────────────── */
 
-.page.skill-hub-entry > .page-head > h1 {
-  overflow-wrap: anywhere;
+/* Wider than a form's 760px: a reading column and a sidebar. A variable, to
+   be settled where it is seen (D5a, the web demo). */
+.page.skill-hub-entry {
+  --skill-hub-entry-width: 1120px;
+  --skill-hub-side-width: 280px;
+  max-width: var(--skill-hub-entry-width);
+}
+
+/* Name, description, owner and lineage on the left; 「管理 ▾」 on the right. */
+.page .skill-hub-entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-16);
+  margin-bottom: var(--space-16);
+}
+.page .skill-hub-entry-title {
   min-width: 0;
 }
-
-/* The actions take their own row under the heading at every width — five
-   buttons beside a long name shared the line badly, and at 390px a second
-   row of buttons ran INTO the description when it was pulled up under them
-   (measured, P9). Plain flow instead: heading, actions, description. */
-.page .skill-hub-entry-desc {
-  margin: 0 0 var(--space-16);
-  font-size: var(--text-body-lg);
+.page.skill-hub-entry .skill-hub-entry-title > h1 {
+  margin: 0 0 var(--space-8);
+  overflow-wrap: anywhere;
 }
-
-.page .skill-hub-entry-meta,
-.page .skill-hub-actions {
+.page .skill-hub-entry-desc {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-body-lg);
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-entry-byline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-8);
+  gap: var(--space-8) var(--space-16);
+  margin: 0;
+  font-size: var(--text-small);
 }
 
 .page .skill-hub-actions {
-  flex-basis: 100%;
-  margin: calc(-1 * var(--space-16)) 0 var(--space-16);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-8);
+  flex: none;
 }
-
 .page .skill-hub-actions > .error {
-  flex-basis: 100%;
   margin: 0;
+  max-width: 320px;
 }
 
-/* The first section follows the meta line, not another section, so the
-   inter-section gap does not reach it. */
-.page.skill-hub-entry > section:first-of-type {
-  margin-top: var(--space-24);
+.page .skill-hub-tabs {
+  display: flex;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--paper-3);
+  margin-bottom: var(--space-24);
+  overflow-x: auto;
+}
+.page .skill-hub-tab {
+  padding: var(--space-8) var(--space-12);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+.page .skill-hub-tab[aria-selected="true"] {
+  color: var(--text-paper);
+  font-weight: 700;
+  border-bottom-color: var(--accent);
+}
+
+/* The tab's content and the sidebar; at a phone width the sidebar goes under
+   the header, above the tab's content (where the install button is wanted). */
+.page .skill-hub-entry-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--skill-hub-side-width);
+  gap: var(--space-32);
+  align-items: start;
+}
+.page .skill-hub-entry-main {
+  min-width: 0;
+}
+.page .skill-hub-entry-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-width: 0;
+  font-size: var(--text-body-sm);
+}
+.page .skill-hub-entry-side > .btn {
+  align-self: stretch;
+}
+.page .skill-hub-entry-side h2 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-small);
+  font-weight: 700;
+  color: var(--text-paper-d);
+}
+.page .skill-hub-entry-side p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.page .skill-hub-side-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.page .skill-hub-side-list > li {
+  display: block;
+  padding: 2px 0;
+  border: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .page .skill-hub-entry-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page .skill-hub-entry-side {
+    order: -1;
+  }
+  .page .skill-hub-entry-head {
+    flex-direction: column;
+  }
+  .page .skill-hub-actions {
+    align-items: flex-start;
+  }
 }
 
 .page .skill-hub-lineage {
-  margin: var(--space-12) 0 0;
   font-size: var(--text-small);
 }
 
 /* `my-resources.css` draws EVERY `.page ul > li` as a bordered flex row (the
-   resource lists). These lists are not that; each says so, or the chips came
-   out one per line with a rule between them (measured, P9). */
-.page .skill-hub-chips,
+   resource lists). This list is not that. */
 .page .skill-hub-files {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-8);
 }
-
-.page .skill-hub-chips > li,
 .page .skill-hub-files > li {
-  display: inline;
-  padding: 0;
+  display: block;
+  padding: 2px 0;
   border: 0;
-}
-
-.page .skill-hub-chips code,
-.page .skill-hub-files code {
-  display: inline-block;
-  padding: 2px var(--space-8);
-  border-radius: var(--radius-btn);
-  background: var(--paper-2);
-  font-size: var(--text-small);
 }
 
 .page .skill-hub-notes {

@@ -182,6 +182,8 @@ class SkillHubDetail(BaseModel):
     installs: int = 0
     uses: int = 0
     counted_since: str = ""
+    #: When the content last changed; `None` for an entry from before it was recorded.
+    updated_at: dt.datetime | None = None
 
 
 class SkillTransferRequest(BaseModel):
@@ -492,6 +494,7 @@ def register_skill_hub_routes(
             installs=installs,
             uses=uses,
             counted_since=await asyncio.to_thread(hub.usage.counted_since),
+            updated_at=entry.content_at,
         )
 
     def _editable(viewer: str, slugs: list[str]) -> list[tuple[str, str, str]]:

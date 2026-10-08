@@ -115,6 +115,8 @@ export type SkillHubDetail = {
   installs: number;
   uses: number;
   counted_since: string;
+  /** ISO time the content last changed; `null` for an entry from before it was recorded. */
+  updated_at: string | null;
 };
 
 /** Where the owner goes to edit (plan P8's table). `open`: go to `item_id`;

@@ -46,6 +46,7 @@ vi.mock("../api/groups", () => ({
 import { DialogProvider } from "../components/Dialog";
 import { translate } from "../lib/i18n";
 import { QueryWrap } from "../test/queryWrapper";
+import { hubCard } from "../test/skillHubFake";
 import { SkillHubEntryPage } from "./SkillHubEntryPage";
 
 const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
@@ -76,6 +77,7 @@ const detail = (over: Partial<SkillHubDetail>): SkillHubDetail => ({
   installs: 0,
   uses: 0,
   counted_since: "",
+  updated_at: null,
   ...over,
 });
 
@@ -177,9 +179,9 @@ function ListStub() {
   return <p>LIST PAGE {notice?.text ?? ""}</p>;
 }
 
-function mount(c: SkillHubApi, queryClient?: QueryClient) {
+function mount(c: SkillHubApi, queryClient?: QueryClient, at = "/skill-hub/e-1") {
   return render(
-    <MemoryRouter initialEntries={["/skill-hub/e-1"]}>
+    <MemoryRouter initialEntries={[at]}>
       <QueryWrap client={queryClient}>
         <DialogProvider>
           <Routes>
@@ -195,27 +197,42 @@ function mount(c: SkillHubApi, queryClient?: QueryClient) {
 
 afterEach(cleanup);
 
+/** One of the owner's actions, from 「管理 ▾」 (plan-skill-hub-ux-redo D5). */
+async function manage(key: Parameters<typeof translate>[1]) {
+  fireEvent.click(await screen.findByRole("button", { name: word("skillHub.manage") }));
+  return screen.getByRole("menuitem", { name: word(key) });
+}
+
+/** The 下架 confirm (D10): the impact sentence, then the confirm. */
+async function confirmUnpublish() {
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog).toHaveTextContent(word("skillHub.impact.installed"));
+  fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.unpublish.confirm") }));
+}
+
 describe("SkillHubEntryPage", () => {
-  it("shows a non-owner the skill, the tools, the review notes — and not one button", async () => {
+  it("shows a non-owner the skill's description tab, the sidebar — and of the actions only Install", async () => {
     mount(client(detail({})));
 
-    expect(await screen.findByRole("heading", { level: 1, name: /alice/ })).toHaveTextContent("alice/triage-reflow");
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(/^triage-reflow$/);
     expect(screen.getByText("Triage reflow defects.")).toBeInTheDocument();
-    expect(screen.getByText("exec")).toBeInTheDocument();
-    expect(screen.getByText("read_file")).toBeInTheDocument();
-    expect(screen.getByText("the description never says when")).toBeInTheDocument();
-    expect(screen.getByText(word("skillHub.review.by", { model: "gpt-4o" }))).toBeInTheDocument();
+    // The description tab is the default; it renders the body, not the frontmatter.
+    expect(screen.getByRole("tab", { name: word("skillHub.tab.readme") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(screen.getByRole("heading", { name: "How to triage" })).toBeInTheDocument();
-    // The body, not the frontmatter: rendered, `---` under a line makes a heading.
     expect(screen.queryByText(/name: triage-reflow/)).toBeNull();
-    expect(screen.getByText("references/glossary.md")).toBeInTheDocument();
-    // Installing is the item's (D2): a sentence, never a control.
-    expect(screen.getByText(word("skillHub.howToInstall"))).toBeInTheDocument();
-    // None of the owner's actions; the history's own controls are everyone's
-    // (plan-skill-hub-history §8) — on a one-version entry, just the fork.
-    await screen.findByText(word("skillHub.history.current"));
+    // The sidebar: tools as plain text, the review notes, the source App once.
+    const side = screen.getByRole("complementary");
+    expect(within(side).getByText("exec")).toBeInTheDocument();
+    expect(within(side).getByText("read_file")).toBeInTheDocument();
+    expect(within(side).getByText("the description never says when")).toBeInTheDocument();
+    expect(within(side).getByText(word("skillHub.review.by", { model: "gpt-4o" }))).toBeInTheDocument();
+    expect(await within(side).findByText("根因分析")).toBeInTheDocument();
+    // Installing happens here now (D6); none of the owner's actions.
     expect(screen.queryAllByRole("button").map((b) => b.textContent)).toEqual([
-      word("skillHub.history.fork"),
+      word("skillHub.install"),
     ]);
   });
 
@@ -228,12 +245,11 @@ describe("SkillHubEntryPage", () => {
     expect(screen.getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
   });
 
-  it("gives the owner the five actions, and no install sentence", async () => {
+  it("gives the owner the five actions behind 「管理 ▾」, the delete last (D5)", async () => {
     mount(client(OWNED));
 
-    await screen.findByRole("heading", { level: 1, name: /alice/ });
-    const actions = screen.getByRole("group", { name: word("skillHub.edit") });
-    const names = within(actions).getAllByRole("button").map((b) => b.textContent);
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.manage") }));
+    const names = screen.getAllByRole("menuitem").map((b) => b.textContent);
     expect(names).toEqual([
       word("skillHub.edit"),
       word("skillHub.unpublish"),
@@ -241,14 +257,25 @@ describe("SkillHubEntryPage", () => {
       word("skillHub.transfer"),
       word("skillHub.delete"),
     ]);
-    expect(screen.queryByText(word("skillHub.howToInstall"))).toBeNull();
-    expect(screen.getByText(word("skillHub.visibility.public"))).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: word("skillHub.delete") })).toHaveAttribute(
+      "data-variant",
+      "danger",
+    );
+    expect(
+      within(screen.getByRole("complementary")).getByText(word("skillHub.visibility.public")),
+    ).toBeInTheDocument();
+  });
+
+  it("a non-owner has no 「管理」", async () => {
+    mount(client(detail({})));
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByRole("button", { name: word("skillHub.manage") })).toBeNull();
   });
 
   it("opens the visibility dialog with 'Public' meaning everyone on the platform (D12)", async () => {
     mount(client(OWNED));
     fireEvent.click(
-      await screen.findByRole("button", { name: word("skillHub.share") }),
+      await manage("skillHub.share"),
     );
     const dialog = await screen.findByTestId("permission-dialog");
     expect(
@@ -259,16 +286,25 @@ describe("SkillHubEntryPage", () => {
     ).toBeNull();
   });
 
-  it("unpublishes, and on a private entry offers Republish instead", async () => {
+  it("unpublishes only after a confirm that says what happens to installed copies, then says it is done (D10)", async () => {
     const c = client(OWNED);
     mount(c);
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.unpublish") }));
+    fireEvent.click(await manage("skillHub.unpublish"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.cancel") }));
+    expect(c.unpublish).not.toHaveBeenCalled();
+
+    fireEvent.click(await manage("skillHub.unpublish"));
+    await confirmUnpublish();
     await waitFor(() => expect(c.unpublish).toHaveBeenCalledWith("e-1"));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      word("skillHub.unpublished", { name: "triage-reflow" }),
+    );
 
     cleanup();
     const c2 = client(detail({ ...OWNED, visibility: "private" }));
     mount(c2);
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.republish") }));
+    fireEvent.click(await manage("skillHub.republish"));
     await waitFor(() => expect(c2.republish).toHaveBeenCalledWith("e-1"));
     expect(screen.getByText(word("skillHub.visibility.private"))).toBeInTheDocument();
   });
@@ -276,14 +312,14 @@ describe("SkillHubEntryPage", () => {
   it("deletes only after the confirm, then leaves for the list", async () => {
     const c = client(OWNED);
     mount(c);
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.delete") }));
+    fireEvent.click(await manage("skillHub.delete"));
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(word("skillHub.delete.title", { name: "triage-reflow" }));
     fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.cancel") }));
     expect(c.remove).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: word("skillHub.delete") }));
+    fireEvent.click(await manage("skillHub.delete"));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("skillHub.delete.confirm") }));
     await waitFor(() => expect(c.remove).toHaveBeenCalledWith("e-1"));
     expect(await screen.findByText(/^LIST PAGE/)).toBeInTheDocument();
@@ -291,14 +327,14 @@ describe("SkillHubEntryPage", () => {
 
   it("Edit opens the source item when the server says open", async () => {
     mount(client(OWNED));
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.edit") }));
+    fireEvent.click(await manage("skillHub.edit"));
 
     expect(await screen.findByText("ITEM PAGE")).toBeInTheDocument();
   });
 
   it("Edit explains a closed source item and points at a new one", async () => {
     mount(client(OWNED, { action: "new_item", app: "rca", profile: "default", item_id: "", reason: "closed" }));
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.edit") }));
+    fireEvent.click(await manage("skillHub.edit"));
 
     const dialog = await screen.findByTestId("skill-hub-new-item");
     expect(dialog).toHaveTextContent(word("skillHub.edit.reason.closed"));
@@ -312,7 +348,7 @@ describe("SkillHubEntryPage", () => {
   it("transfers to the person picked", async () => {
     const c = client(OWNED);
     mount(c);
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.transfer") }));
+    fireEvent.click(await manage("skillHub.transfer"));
 
     const dialog = await screen.findByTestId("skill-hub-transfer");
     const go = within(dialog).getByRole("button", { name: word("skillHub.transfer.confirm") });
@@ -348,7 +384,8 @@ describe("SkillHubEntryPage", () => {
     // The shape the real client throws (`api/skillHub.test.ts`).
     c.unpublish.mockRejectedValueOnce(new HttpError(403, "only the owner may manage this entry"));
     mount(c);
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.unpublish") }));
+    fireEvent.click(await manage("skillHub.unpublish"));
+    await confirmUnpublish();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("only the owner may manage this entry");
   });
@@ -370,7 +407,7 @@ describe("SkillHubEntryPage", () => {
     );
     mount(c);
     fireEvent.click(
-      await screen.findByRole("button", { name: word("skillHub.transfer") }),
+      await manage("skillHub.transfer"),
     );
     const dialog = await screen.findByTestId("skill-hub-transfer");
     fireEvent.click(await within(dialog).findByText("Bob Lee"));
@@ -398,10 +435,9 @@ describe("SkillHubEntryPage", () => {
       "unpublish",
       async () => {
         fireEvent.click(
-          await screen.findByRole("button", {
-            name: word("skillHub.unpublish"),
-          }),
+          await manage("skillHub.unpublish"),
         );
+        await confirmUnpublish();
       },
     ],
     [
@@ -409,7 +445,7 @@ describe("SkillHubEntryPage", () => {
       "setPermission",
       async () => {
         fireEvent.click(
-          await screen.findByRole("button", { name: word("skillHub.share") }),
+          await manage("skillHub.share"),
         );
         fireEvent.click(
           within(await screen.findByTestId("permission-dialog")).getByTestId(
@@ -426,9 +462,7 @@ describe("SkillHubEntryPage", () => {
       "transfer",
       async () => {
         fireEvent.click(
-          await screen.findByRole("button", {
-            name: word("skillHub.transfer"),
-          }),
+          await manage("skillHub.transfer"),
         );
         const dialog = await screen.findByTestId("skill-hub-transfer");
         fireEvent.click(await within(dialog).findByText("Bob Lee"));
@@ -445,7 +479,7 @@ describe("SkillHubEntryPage", () => {
       "remove",
       async () => {
         fireEvent.click(
-          await screen.findByRole("button", { name: word("skillHub.delete") }),
+          await manage("skillHub.delete"),
         );
         fireEvent.click(
           within(await screen.findByRole("dialog")).getByRole("button", {
@@ -459,7 +493,7 @@ describe("SkillHubEntryPage", () => {
       "edit",
       async () => {
         fireEvent.click(
-          await screen.findByRole("button", { name: word("skillHub.edit") }),
+          await manage("skillHub.edit"),
         );
       },
     ],
@@ -484,7 +518,7 @@ describe("SkillHubEntryPage", () => {
     const c = client(detail({ ...OWNED, visibility: "private" }));
     mount(c);
     fireEvent.click(
-      await screen.findByRole("button", { name: word("skillHub.transfer") }),
+      await manage("skillHub.transfer"),
     );
     const dialog = await screen.findByTestId("skill-hub-transfer");
     fireEvent.click(await within(dialog).findByText("Bob Lee"));
@@ -515,11 +549,12 @@ describe("SkillHubEntryPage", () => {
     c.unpublish.mockRejectedValueOnce(new HttpError(403, "only the owner may manage this entry"));
     c.setPermission.mockRejectedValueOnce(new HttpError(403, "only the owner may manage this entry"));
     mount(c);
-    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.unpublish") }));
+    fireEvent.click(await manage("skillHub.unpublish"));
+    await confirmUnpublish();
     await screen.findByRole("alert");
 
     // an unrelated dialog: the page's failure is not the dialog's, and it is back after
-    fireEvent.click(screen.getByRole("button", { name: word("skillHub.share") }));
+    fireEvent.click(await manage("skillHub.share"));
     const dialog = await screen.findByTestId("permission-dialog");
     expect(within(dialog).queryByRole("alert")).toBeNull();
     fireEvent.click(within(dialog).getByTestId("permission-cancel"));
@@ -527,7 +562,7 @@ describe("SkillHubEntryPage", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
 
     // the share fails once, then succeeds: nothing stale stays behind
-    fireEvent.click(screen.getByRole("button", { name: word("skillHub.share") }));
+    fireEvent.click(await manage("skillHub.share"));
     const again = await screen.findByTestId("permission-dialog");
     fireEvent.click(within(again).getByTestId("permission-save"));
     await within(again).findByRole("alert");
@@ -540,7 +575,7 @@ describe("SkillHubEntryPage", () => {
     const c = client(OWNED);
     mount(c);
     fireEvent.click(
-      await screen.findByRole("button", { name: word("skillHub.delete") }),
+      await manage("skillHub.delete"),
     );
     fireEvent.click(
       within(await screen.findByRole("dialog")).getByRole("button", {
@@ -553,6 +588,112 @@ describe("SkillHubEntryPage", () => {
     expect(list).toHaveTextContent(
       word("skillHub.deleted", { name: "triage-reflow" }),
     );
+  });
+});
+
+describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", () => {
+  it("switches tabs through the address, the description first (D5)", async () => {
+    mount(client(detail({ forks: [hubCard({ id: "e-f", owner: "bob", forked_from: "e-1" })] })));
+    await screen.findByRole("heading", { name: "How to triage" });
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(tabs).toEqual([
+      word("skillHub.tab.readme"),
+      word("skillHub.tab.files", { count: 2 }),
+      word("skillHub.tab.history"),
+      word("skillHub.tab.forks", { count: 1 }),
+    ]);
+
+    fireEvent.click(screen.getByRole("tab", { name: word("skillHub.tab.forks", { count: 1 }) }));
+    expect(await screen.findByTestId("entry-e-f")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "How to triage" })).toBeNull();
+  });
+
+  it("opens on the tab the address names — the list's fork count lands on the forks (D15)", async () => {
+    mount(client(detail({ forks: [] })), undefined, "/skill-hub/e-1?tab=forks");
+    expect(await screen.findByText(word("skillHub.forksOf.none"))).toBeInTheDocument();
+  });
+
+  it("the sidebar says when it was updated, the counts and since when (D5, U6)", async () => {
+    mount(
+      client(
+        detail({ installs: 4, uses: 17, counted_since: "2026-10-07", updated_at: "2026-10-02T09:00:00Z" }),
+      ),
+    );
+    const side = await screen.findByRole("complementary");
+    expect(within(side).getByText(word("skillHub.counts", { installs: 4, uses: 17 }))).toBeInTheDocument();
+    expect(within(side).getByText(word("skillHub.countedSince", { day: "2026-10-07" }))).toBeInTheDocument();
+    expect(within(side).getByText("2026/10/02")).toBeInTheDocument();
+  });
+
+  it("lists the workspaces the viewer installed it in, each a link (D3)", async () => {
+    const c = client(detail({}));
+    c.installs.mockResolvedValue([{ app: "rca", item_id: "i-9", title: "Line 3 reflow" }]);
+    mount(c);
+    const side = await screen.findByRole("complementary");
+    expect(await within(side).findByRole("link", { name: /Line 3 reflow/ })).toHaveAttribute(
+      "href",
+      "/a/rca/i-9",
+    );
+  });
+
+  it("installs into a workspace picked per App, saying beforehand what each would do, and stays on the page (D6)", async () => {
+    const c = client(detail({}));
+    c.targets.mockResolvedValue({
+      missing_tools: ["read_file"],
+      items: [
+        { item_id: "i-1", title: "Free one", state: "ok", owner: "" },
+        { item_id: "i-2", title: "Has it", state: "installed", owner: "" },
+        { item_id: "i-3", title: "Clash", state: "name_taken", owner: "carol" },
+      ],
+    });
+    c.install.mockResolvedValue({ name: "triage-reflow", missing_tools: ["read_file"] });
+    mount(c);
+
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    const dialog = await screen.findByTestId("skill-hub-install");
+    await waitFor(() => expect(c.targets).toHaveBeenCalledWith("e-1", "rca"));
+    expect(await within(dialog).findByText(word("skillHub.install.missing", { tools: "read_file" }))).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled();
+    expect(within(dialog).getByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /Clash/ })).toBeDisabled();
+    expect(within(dialog).getByText(word("skillHub.install.state.taken", { owner: "carol" }))).toBeInTheDocument();
+    const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
+    expect(go).toBeDisabled();
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Free one/ }));
+    fireEvent.click(go);
+
+    await waitFor(() => expect(c.install).toHaveBeenCalledWith("rca", "i-1", "e-1"));
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(word("skillHub.install.done", { title: "Free one" }));
+    expect(within(status).getByRole("link", { name: word("skillHub.install.open") })).toHaveAttribute(
+      "href",
+      "/a/rca/i-1",
+    );
+    expect(screen.queryByTestId("skill-hub-install")).toBeNull();
+    await waitFor(() => expect(c.installs.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("says the skill is not there — no Retry — when the server says not found (D16)", async () => {
+    const c = client(detail({}));
+    c.get.mockRejectedValue(new HttpError(404, "the skill hub entry could not be read (404)", "not_found"));
+    mount(c);
+    expect(await screen.findByText(word("skillHub.notFound"))).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: word("skillHub.backToList") })).toHaveAttribute(
+      "href",
+      "/skill-hub",
+    );
+    expect(screen.queryByRole("button", { name: word("skillHub.retry") })).toBeNull();
+  });
+
+  it("offers Retry when the page could not be reached (D16)", async () => {
+    const c = client(detail({}));
+    c.get.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    mount(c);
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.retry") }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "triage-reflow" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -570,7 +711,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
       }),
       ev({ revision: "e-1:1" }),
     ];
-    mount(client(OWNED, OPEN, history));
+    mount(client(OWNED, OPEN, history), undefined, "/skill-hub/e-1?tab=history");
 
     const rows = within(await timeline()).getAllByRole("listitem");
     expect(rows[0]).toHaveTextContent(word("skillHub.history.audience", { who: "Alice Wu, QA" }));
@@ -588,7 +729,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
       }),
       ev({ revision: "e-1:1" }),
     ];
-    mount(client(OWNED, OPEN, history));
+    mount(client(OWNED, OPEN, history), undefined, "/skill-hub/e-1?tab=history");
 
     const rows = within(await timeline()).getAllByRole("listitem");
     const who = `${word("skillHub.history.audience.everyone")}, ${word("skillHub.history.audience.group")}`;
@@ -597,7 +738,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
   });
 
   it("lists every row newest first, says what each did, and marks the current one", async () => {
-    mount(client(detail({}), OPEN, HISTORY));
+    mount(client(detail({}), OPEN, HISTORY), undefined, "/skill-hub/e-1?tab=history");
 
     const rows = within(await timeline()).getAllByRole("listitem");
     expect(rows).toHaveLength(4);
@@ -621,7 +762,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
   it("offers no compare and no rollback on a row whose version is the current one", async () => {
     // The rollback (row 1) brought v1 back, so v1's own row (row 3) holds the
     // same content as now: comparing shows nothing, rolling back does nothing.
-    mount(client(OWNED, OPEN, HISTORY));
+    mount(client(OWNED, OPEN, HISTORY), undefined, "/skill-hub/e-1?tab=history");
     const rows = within(await timeline()).getAllByRole("listitem");
     for (const row of [rows[1], rows[3]]) {
       expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual([
@@ -639,7 +780,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
 
   it("shows an old version's SKILL.md and files, and one file's text or that it is not text", async () => {
     const c = client(detail({}), OPEN, HISTORY);
-    mount(c);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[2];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.view") }));
 
@@ -654,7 +795,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
 
   it("compares an old version with the current one, file by file", async () => {
     const c = client(detail({}), OPEN, HISTORY);
-    mount(c);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[2];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
 
@@ -666,7 +807,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
 
   it("lets the owner roll back, against the version the page showed", async () => {
     const c = client(OWNED, OPEN, HISTORY);
-    mount(c);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[2];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.rollback") }));
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.history.rollback.confirm") }));
@@ -679,7 +820,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     c.rollback.mockRejectedValueOnce(
       new HttpError(409, "rollback failed (409)", "version_moved", [], {}),
     );
-    mount(c);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[2];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.rollback") }));
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.history.rollback.confirm") }));
@@ -692,7 +833,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
 
   it("forks a version into one of the viewer's items", async () => {
     const c = client(detail({}), OPEN, HISTORY);
-    mount(c);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[2];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.fork") }));
 
@@ -713,7 +854,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     const history = HISTORY.map((e) =>
       e.revision === "e-1:2" ? { ...e, review_notes: ["names a path it does not ship"] } : e,
     );
-    mount(client(detail({}), OPEN, history));
+    mount(client(detail({}), OPEN, history), undefined, "/skill-hub/e-1?tab=history");
     const list = await timeline();
     // The rows themselves — a row's notes are list items of their own list.
     const rows = within(list).getAllByRole("listitem").filter((li) => li.parentElement === list);
@@ -729,7 +870,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
       ev({ revision: "e-1:1", commit: "c1", at: "2026-10-01T12:00:00Z" }),
     ];
     const c = client(detail({}), OPEN, three);
-    mount(c);
+    mount(c, undefined, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[1];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.compare") }));
 
@@ -755,7 +896,7 @@ describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
     const qc = makeQueryClient();
     const spy = vi.spyOn(qc, "invalidateQueries");
     const c = client(detail({}), OPEN, HISTORY);
-    mount(c, qc);
+    mount(c, qc, "/skill-hub/e-1?tab=history");
     const row = within(await timeline()).getAllByRole("listitem")[2];
     fireEvent.click(within(row).getByRole("button", { name: word("skillHub.history.fork") }));
     const dialog = await screen.findByTestId("skill-hub-fork");

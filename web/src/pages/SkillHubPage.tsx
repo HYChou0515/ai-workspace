@@ -18,19 +18,14 @@
 
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
-import {
-  type SkillHubApi,
-  type SkillHubCard,
-  type SkillHubSort,
-  skillHubApi,
-} from "../api/skillHub";
+import { type SkillHubApi, type SkillHubSort, skillHubApi } from "../api/skillHub";
 import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
+import { SkillHubRow } from "../components/SkillHubRow";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useUser } from "../hooks/useUsers";
-import { ymd } from "../lib/date";
 import { useT } from "../lib/i18n";
 
 const SORTS: readonly SkillHubSort[] = ["name", "popular", "updated"];
@@ -263,7 +258,7 @@ export function SkillHubPage({
                 </p>
                 <ul className="skill-hub-list">
                   {rows.map((entry) => (
-                    <SkillRow
+                    <SkillHubRow
                       key={entry.id}
                       entry={entry}
                       onOwner={(o) => setFilter({ owner: o, mine: "" })}
@@ -314,65 +309,5 @@ function OwnerFilter({ owner, onClear }: { owner: string; onClear: () => void })
         ×
       </button>
     </span>
-  );
-}
-
-/** One skill: the whole row opens its page (the title's link is stretched
- * over it, D15); the owner and the fork count are links of their own above
- * that, so each does what it looks like it does. */
-function SkillRow({
-  entry,
-  onOwner,
-}: {
-  entry: SkillHubCard;
-  onOwner: (owner: string) => void;
-}) {
-  const t = useT();
-  const ownerName = useUser(entry.owner).name;
-  const href = `/skill-hub/${encodeURIComponent(entry.id)}`;
-  const counted = entry.installs > 0 || entry.uses > 0;
-  return (
-    <li className="skill-hub-row" data-testid={`entry-${entry.id}`}>
-      <div className="skill-hub-row-main">
-        <Link to={href} className="skill-hub-row-title">
-          {entry.name}
-        </Link>
-        {entry.forked_from ? (
-          <span className="skill-hub-row-origin">
-            {entry.origin
-              ? t("skillHub.forkOf", { origin: `${entry.origin.owner}/${entry.origin.name}` })
-              : t("skillHub.forkOf.gone")}
-          </span>
-        ) : null}
-        <p className="skill-hub-row-desc">{entry.description}</p>
-      </div>
-      <div className="skill-hub-row-side">
-        <a
-          href={`?owner=${encodeURIComponent(entry.owner)}`}
-          className="skill-hub-row-owner"
-          aria-label={t("skillHub.owner.only", { name: ownerName })}
-          title={t("skillHub.owner.only", { name: ownerName })}
-          onClick={(e) => {
-            e.preventDefault();
-            onOwner(entry.owner);
-          }}
-        >
-          {ownerName}
-        </a>
-        {counted ? (
-          <span>{t("skillHub.counts", { installs: entry.installs, uses: entry.uses })}</span>
-        ) : null}
-        {entry.updated_at ? (
-          <span>{t("skillHub.updated", { day: ymd(entry.updated_at) })}</span>
-        ) : null}
-        {entry.fork_count > 0 ? (
-          <Link to={`${href}?tab=forks`} className="skill-hub-row-forks">
-            {entry.fork_count === 1
-              ? t("skillHub.fork.one")
-              : t("skillHub.forks", { count: entry.fork_count })}
-          </Link>
-        ) : null}
-      </div>
-    </li>
   );
 }

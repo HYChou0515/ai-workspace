@@ -1,20 +1,22 @@
 /**
- * `/skill-hub/:entryId` — one published skill (`docs/plan-skill-hub.md`).
+ * `/skill-hub/:entryId` — one published skill (`docs/plan-skill-hub.md`,
+ * laid out by `docs/plan-skill-hub-ux-redo.md` D5).
  *
- * Everyone who may read it sees the same page: the SKILL.md, who published
- * it and from which App, the tools it mentions, the AI review's notes, what
- * it was forked from (and whether that original is still up), and its own
- * forks. What differs is the ACTIONS: the owner's five — Edit, Unpublish /
- * Republish, Visibility, Transfer, Delete — and nobody else's. Not one
- * button for a non-owner (plan Q7): installing is done in an item's Skills
- * panel (D2), which the page says in a sentence rather than a control.
+ * A header (name, description, owner, what it was forked from — and the
+ * owner's 「管理 ▾」), tabs kept in the address (`?tab=`: 說明 / 檔案 / 版本紀錄
+ * / fork — VS Code Marketplace's Details / Changelog, npm's Readme / Code /
+ * Versions), and a sidebar with what a person decides by: 「安裝到
+ * workspace…」, where they already have it, the permissions (owner), when it
+ * changed, the counts, the source App, the tools it mentions and the AI
+ * review. Installing happens here (D6) and in a workspace's Skills panel.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
 import {
   type SkillEditTarget,
@@ -22,27 +24,49 @@ import {
   type SkillHubDetail,
   skillHubApi,
 } from "../api/skillHub";
-import { AppTag } from "../components/AppTag";
+import { ActionMenu } from "../components/ActionMenu";
 import { useDialog } from "../components/Dialog";
 import { ModalActions } from "../components/ModalActions";
 import { ModalShell } from "../components/ModalShell";
+import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { SkillHubHistory } from "../components/SkillHubHistory";
+import { SkillHubRow } from "../components/SkillHubRow";
 import { UserChip } from "../components/UserChip";
 import { UserPicker } from "../components/UserPicker";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useApps } from "../hooks/useResources";
 import { useUsers } from "../hooks/useUsers";
+import { ymd } from "../lib/date";
 import { useT } from "../lib/i18n";
 import { skillBody } from "../lib/skillBody";
 import { describeRefusal } from "../lib/skillHubRefusal";
 import { DOC_ROLES } from "../lib/permission";
 
+const TABS = ["readme", "files", "history", "forks"] as const;
+
+/** The SKILL.md's headings, one level under the page's: its `#` is not the
+ * page's title, and a second h1 told assistive tech the page had two. */
+const UNDER_THE_TITLE = {
+  h1: ({ children }: { children?: React.ReactNode }) => <h2>{children}</h2>,
+  h2: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
+  h3: ({ children }: { children?: React.ReactNode }) => <h4>{children}</h4>,
+  h4: ({ children }: { children?: React.ReactNode }) => <h5>{children}</h5>,
+  h5: ({ children }: { children?: React.ReactNode }) => <h6>{children}</h6>,
+};
+type Tab = (typeof TABS)[number];
+
+/** Gone — deleted, unpublished, never there, or not the viewer's to read: the
+ * server answers all of them alike (Q10), and none is fixed by trying again. */
+function isGone(e: unknown): boolean {
+  return e instanceof HttpError && (e.status === 404 || e.code === "not_found");
+}
+
 export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubApi }) {
   const { entryId = "" } = useParams();
   const t = useT();
-  const { data, isPending, isError, refetch } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: qk.skillHubEntry(entryId, ""),
     queryFn: () => client.get(entryId),
     enabled: entryId !== "",
@@ -50,28 +74,36 @@ export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubA
   useBreadcrumbs([
     { label: t("nav.home"), to: "/" },
     { label: "Skill hub", to: "/skill-hub" },
-    // The name alone: the h1 right below says `owner/name`, and at a phone
-    // width `owner/name` was cut to `defaul…` even with the trail folded
-    // (plan-skill-hub-ui-polish D14; measured at 390).
     { label: data ? data.name : "…" },
   ]);
 
   if (isError) {
+    // D16: "not there" says so and points back; only a failure to reach the
+    // server gets 「再試一次」 (NN/g #9, GOV.UK's page-not-found pattern).
     return (
       <div className="page">
         <h1>Skill hub</h1>
-        <p className="error" role="alert">
-          {t("skillHub.error")}{" "}
-          <button
-            type="button"
-            className="btn"
-            data-variant="secondary"
-            data-size="sm"
-            onClick={() => void refetch()}
-          >
-            {t("skillHub.retry")}
-          </button>
-        </p>
+        {isGone(error) ? (
+          <>
+            <p className="empty">{t("skillHub.notFound")}</p>
+            <p>
+              <Link to="/skill-hub">{t("skillHub.backToList")}</Link>
+            </p>
+          </>
+        ) : (
+          <p className="error" role="alert">
+            {t("skillHub.error")}{" "}
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              onClick={() => void refetch()}
+            >
+              {t("skillHub.retry")}
+            </button>
+          </p>
+        )}
       </div>
     );
   }
@@ -81,50 +113,203 @@ export function SkillHubEntryPage({ client = skillHubApi }: { client?: SkillHubA
 
 function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
   const t = useT();
-  const apps = useApps();
-  const appTitle = (slug: string) => apps.find((a) => a.slug === slug)?.title || slug;
+  const [params, setParams] = useSearchParams();
+  const asked = params.get("tab") as Tab | null;
+  const tab: Tab = asked && TABS.includes(asked) ? asked : "readme";
+  const [notice, setNotice] = useState<PageNoticeContent | null>(null);
+  const tabIds = useId();
+  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({
+    readme: null,
+    files: null,
+    history: null,
+    forks: null,
+  });
+  const choose = (next: Tab) =>
+    setParams(
+      (prev) => {
+        const out = new URLSearchParams(prev);
+        if (next === "readme") out.delete("tab");
+        else out.set("tab", next);
+        return out;
+      },
+      { replace: true },
+    );
+  // APG tabs: ←/→ move between the tabs, and moving selects.
+  const onTabKey = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const at = TABS.indexOf(tab);
+    const next = TABS[(at + (e.key === "ArrowRight" ? 1 : -1) + TABS.length) % TABS.length];
+    choose(next);
+    tabRefs.current[next]?.focus();
+  };
+  const label: Record<Tab, string> = {
+    readme: t("skillHub.tab.readme"),
+    files: t("skillHub.tab.files", { count: entry.files.length }),
+    history: t("skillHub.tab.history"),
+    forks: t("skillHub.tab.forks", { count: entry.forks.length }),
+  };
+
   return (
     <div className="page skill-hub-entry">
-      <div className="page-head">
-        <h1>
-          <span className="skill-hub-owner">{entry.owner}/</span>
-          {entry.name}
-        </h1>
-        {entry.is_owner ? <OwnerActions entry={entry} client={client} /> : null}
-      </div>
-      <p className="skill-hub-entry-desc">{entry.description}</p>
-      <div className="skill-hub-entry-meta">
-        <UserChip userId={entry.owner} size={20} />
-        <AppTag slug={entry.source_app} />
-        <span className="muted">{t("skillHub.writtenIn", { app: appTitle(entry.source_app) })}</span>
+      <PageNotice notice={notice} />
+      <header className="skill-hub-entry-head">
+        <div className="skill-hub-entry-title">
+          <h1>{entry.name}</h1>
+          <p className="skill-hub-entry-desc">{entry.description}</p>
+          <p className="skill-hub-entry-byline">
+            <UserChip userId={entry.owner} size={20} />
+            {entry.forked_from ? <Lineage lineage={entry.forked_from} /> : null}
+          </p>
+        </div>
         {entry.is_owner ? (
-          <span className="skill-hub-badge" data-kind={entry.visibility}>
+          <OwnerActions entry={entry} client={client} onNotice={setNotice} />
+        ) : null}
+      </header>
+
+      <div className="skill-hub-tabs" role="tablist" aria-label={entry.name} onKeyDown={onTabKey}>
+        {TABS.map((id) => (
+          <button
+            key={id}
+            ref={(el) => {
+              tabRefs.current[id] = el;
+            }}
+            type="button"
+            role="tab"
+            id={`${tabIds}-${id}`}
+            aria-selected={tab === id}
+            aria-controls={`${tabIds}-panel`}
+            tabIndex={tab === id ? 0 : -1}
+            className="skill-hub-tab"
+            onClick={() => choose(id)}
+          >
+            {label[id]}
+          </button>
+        ))}
+      </div>
+
+      <div className="skill-hub-entry-body">
+        <div
+          className="skill-hub-entry-main"
+          role="tabpanel"
+          id={`${tabIds}-panel`}
+          aria-labelledby={`${tabIds}-${tab}`}
+        >
+          {tab === "readme" ? (
+            <div className="skill-hub-md markdown">
+              <ReactMarkdown components={UNDER_THE_TITLE}>{skillBody(entry.skill_md)}</ReactMarkdown>
+            </div>
+          ) : tab === "files" ? (
+            <ul className="skill-hub-files">
+              {entry.files.map(({ path: f }) => (
+                <li key={f}>
+                  <code>{f}</code>
+                </li>
+              ))}
+            </ul>
+          ) : tab === "history" ? (
+            <SkillHubHistory entry={entry} client={client} />
+          ) : entry.forks.length === 0 ? (
+            <p className="muted">{t("skillHub.forksOf.none")}</p>
+          ) : (
+            <ul className="skill-hub-list">
+              {entry.forks.map((f) => (
+                <SkillHubRow key={f.id} entry={f} />
+              ))}
+            </ul>
+          )}
+        </div>
+        <Sidebar entry={entry} client={client} onNotice={setNotice} />
+      </div>
+    </div>
+  );
+}
+
+/** What a person decides by, beside whatever tab they read (D5). */
+function Sidebar({
+  entry,
+  client,
+  onNotice,
+}: {
+  entry: SkillHubDetail;
+  client: SkillHubApi;
+  onNotice: (n: PageNoticeContent) => void;
+}) {
+  const t = useT();
+  const apps = useApps();
+  const appTitle = (slug: string) => apps.find((a) => a.slug === slug)?.title || slug;
+  const [installing, setInstalling] = useState(false);
+  const installs = useQuery({
+    queryKey: qk.skillHubInstalls(entry.id),
+    queryFn: () => client.installs(entry.id),
+  });
+  const counted = entry.installs > 0 || entry.uses > 0;
+  return (
+    <aside className="skill-hub-entry-side">
+      <button
+        type="button"
+        className="btn"
+        data-variant="primary"
+        onClick={() => setInstalling(true)}
+      >
+        {t("skillHub.install")}
+      </button>
+      <section>
+        <h2>{t("skillHub.installs.title")}</h2>
+        {(installs.data ?? []).length === 0 ? (
+          <p className="muted small">{t("skillHub.installs.none")}</p>
+        ) : (
+          <ul className="skill-hub-side-list">
+            {(installs.data ?? []).map((i) => (
+              <li key={i.item_id}>
+                <Link to={`/a/${encodeURIComponent(i.app)}/${encodeURIComponent(i.item_id)}`}>
+                  {i.title || i.item_id}
+                </Link>{" "}
+                <span className="muted small">{appTitle(i.app)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      {entry.is_owner ? (
+        <section>
+          <h2>{t("skillHub.side.permission")}</h2>
+          <p>
             {entry.visibility === "private"
               ? t("skillHub.visibility.private")
               : entry.visibility === "restricted"
                 ? t("skillHub.visibility.restricted")
                 : t("skillHub.visibility.public")}
-          </span>
-        ) : null}
-      </div>
-      <p className="muted small skill-hub-counts">
-        {t("skillHub.counts", { installs: entry.installs ?? 0, uses: entry.uses ?? 0 })}
-        {entry.counted_since ? (
-          <span className="skill-hub-since">
-            {" "}
-            {t("skillHub.countedSince", { day: entry.counted_since })}
-          </span>
-        ) : null}
-      </p>
-      {entry.forked_from ? <Lineage lineage={entry.forked_from} /> : null}
-      {entry.is_owner ? null : <p className="hint">{t("skillHub.howToInstall")}</p>}
-
+          </p>
+        </section>
+      ) : null}
+      {entry.updated_at ? (
+        <section>
+          <h2>{t("skillHub.side.updated")}</h2>
+          <p>{ymd(entry.updated_at)}</p>
+        </section>
+      ) : null}
+      {counted ? (
+        <section>
+          <h2>{t("skillHub.side.usage")}</h2>
+          <p>{t("skillHub.counts", { installs: entry.installs, uses: entry.uses })}</p>
+          {entry.counted_since ? (
+            <p className="muted small">
+              {t("skillHub.countedSince", { day: entry.counted_since })}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
       <section>
+        <h2>{t("skillHub.side.source")}</h2>
+        <p>{appTitle(entry.source_app)}</p>
+      </section>
+      <section id="tools">
         <h2>{t("skillHub.tools")}</h2>
         {entry.referenced_tools.length === 0 ? (
-          <p className="muted">{t("skillHub.tools.none")}</p>
+          <p className="muted small">{t("skillHub.tools.none")}</p>
         ) : (
-          <ul className="skill-hub-chips">
+          <ul className="skill-hub-side-list">
             {entry.referenced_tools.map((tool) => (
               <li key={tool}>
                 <code>{tool}</code>
@@ -133,15 +318,16 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
           </ul>
         )}
       </section>
-
       <section>
         <h2>{t("skillHub.review")}</h2>
         {entry.review.notes.length === 0 ? (
-          <p className="muted">{t("skillHub.review.ok")}</p>
+          <p className="muted small">{t("skillHub.review.ok")}</p>
         ) : (
           <ul className="skill-hub-notes">
             {entry.review.notes.map((note) => (
-              <li key={note}>{note}</li>
+              <li key={note} className="markdown">
+                <ReactMarkdown>{note}</ReactMarkdown>
+              </li>
             ))}
           </ul>
         )}
@@ -149,49 +335,145 @@ function EntryView({ entry, client }: { entry: SkillHubDetail; client: SkillHubA
           <p className="muted small">{t("skillHub.review.by", { model: entry.review.model })}</p>
         ) : null}
       </section>
+      {installing ? (
+        <InstallDialog
+          entry={entry}
+          client={client}
+          onClose={() => setInstalling(false)}
+          onDone={(slug, itemId, title) => {
+            setInstalling(false);
+            onNotice({
+              kind: "success",
+              text: t("skillHub.install.done", { title }),
+              link: {
+                to: `/a/${encodeURIComponent(slug)}/${encodeURIComponent(itemId)}`,
+                label: t("skillHub.install.open"),
+              },
+            });
+          }}
+        />
+      ) : null}
+    </aside>
+  );
+}
 
-      <section>
-        <h2>SKILL.md</h2>
-        <div className="skill-hub-md markdown">
-          <ReactMarkdown>{skillBody(entry.skill_md)}</ReactMarkdown>
-        </div>
-      </section>
-
-      <section>
-        <h2>{t("skillHub.files")}</h2>
-        <ul className="skill-hub-files">
-          {entry.files.map(({ path: f }) => (
-            <li key={f}>
-              <code>{f}</code>
-            </li>
+/** 「安裝到 workspace…」 (D6): an App, then one of its workspaces the viewer
+ * may edit, each saying beforehand what installing would do there — the
+ * same refusal the install route gives, asked first. A pick is cheap to redo,
+ * so the close is not guarded (#779); it is a form, so no backdrop close. */
+function InstallDialog({
+  entry,
+  client,
+  onClose,
+  onDone,
+}: {
+  entry: SkillHubDetail;
+  client: SkillHubApi;
+  onClose: () => void;
+  onDone: (slug: string, itemId: string, title: string) => void;
+}) {
+  const t = useT();
+  const titleId = useId();
+  const apps = useApps();
+  const qc = useQueryClient();
+  const [slug, setSlug] = useState(entry.source_app);
+  const [picked, setPicked] = useState<string | null>(null);
+  const targets = useQuery({
+    queryKey: qk.skillHubTargets(entry.id, slug),
+    queryFn: () => client.targets(entry.id, slug),
+  });
+  const items = targets.data?.items ?? [];
+  const install = useMutation({
+    mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
+    onSuccess: (_res, itemId) => {
+      void qc.invalidateQueries({ queryKey: qk.skillHubInstalls(entry.id) });
+      void qc.invalidateQueries({ queryKey: ["skillHub", "targets", entry.id] });
+      void qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
+      onDone(slug, itemId, items.find((i) => i.item_id === itemId)?.title ?? itemId);
+    },
+    meta: { silentError: true },
+  });
+  const missing = targets.data?.missing_tools ?? [];
+  return (
+    <ModalShell onClose={onClose} labelledBy={titleId} width={520} data-testid="skill-hub-install">
+      <h2 id={titleId} className="modal-title">
+        {t("skillHub.install.title", { name: entry.name })}
+      </h2>
+      <label className="skill-hub-fork-app">
+        <span>{t("skillHub.install.app")}</span>
+        <select
+          className="input"
+          value={slug}
+          onChange={(e) => {
+            setSlug(e.target.value);
+            setPicked(null);
+          }}
+        >
+          {(apps.some((a) => a.slug === slug) ? apps : [{ slug, title: slug }, ...apps]).map((a) => (
+            <option key={a.slug} value={a.slug}>
+              {a.title || a.slug}
+            </option>
           ))}
-        </ul>
-      </section>
-
-      <SkillHubHistory entry={entry} client={client} />
-
-      <section>
-        <h2>{t("skillHub.forksOf")}</h2>
-        {entry.forks.length === 0 ? (
-          <p className="muted">{t("skillHub.forksOf.none")}</p>
+        </select>
+      </label>
+      {missing.length > 0 ? (
+        <p className="hint">{t("skillHub.install.missing", { tools: missing.join(", ") })}</p>
+      ) : null}
+      <fieldset className="skill-hub-fork-items">
+        <legend>{t("skillHub.install.items")}</legend>
+        {targets.isPending ? (
+          <p className="muted">{t("skillHub.loading")}</p>
+        ) : targets.isError ? (
+          <p className="error" role="alert">
+            {t("skillHub.failed", { reason: describeRefusal(targets.error, t) })}
+          </p>
+        ) : items.length === 0 ? (
+          <p className="muted">{t("skillHub.install.none")}</p>
         ) : (
-          <ul className="skill-hub-list">
-            {entry.forks.map((f) => (
-              <li key={f.id} className="skill-hub-row" data-fork>
-                <div className="skill-hub-row-head">
-                  <Link to={`/skill-hub/${encodeURIComponent(f.id)}`} className="skill-hub-row-title">
-                    <span className="skill-hub-owner">{f.owner}/</span>
-                    {f.name}
-                  </Link>
-                  <AppTag slug={f.source_app} />
-                </div>
-                <p className="skill-hub-row-desc">{f.description}</p>
-              </li>
-            ))}
-          </ul>
+          items.map((it) => (
+            <label key={it.item_id} className="skill-hub-fork-item">
+              <input
+                type="radio"
+                name={`${titleId}-item`}
+                value={it.item_id}
+                checked={picked === it.item_id}
+                disabled={it.state !== "ok"}
+                onChange={() => setPicked(it.item_id)}
+              />
+              <span>{it.title || it.item_id}</span>
+              {it.state === "installed" ? (
+                <span className="muted small">{t("skillHub.install.state.installed")}</span>
+              ) : it.state === "name_taken" ? (
+                <span className="muted small">
+                  {it.owner
+                    ? t("skillHub.install.state.taken", { owner: it.owner })
+                    : t("skillHub.install.state.takenHand")}
+                </span>
+              ) : null}
+            </label>
+          ))
         )}
-      </section>
-    </div>
+      </fieldset>
+      {install.isError ? (
+        <p className="error" role="alert">
+          {t("skillHub.failed", { reason: describeRefusal(install.error, t) })}
+        </p>
+      ) : null}
+      <ModalActions>
+        <button type="button" className="btn" data-variant="secondary" onClick={onClose}>
+          {t("skillHub.cancel")}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          data-variant="primary"
+          disabled={!picked || install.isPending}
+          onClick={() => picked && install.mutate(picked)}
+        >
+          {t("skillHub.install.confirm")}
+        </button>
+      </ModalActions>
+    </ModalShell>
   );
 }
 
@@ -202,26 +484,34 @@ function Lineage({ lineage }: { lineage: NonNullable<SkillHubDetail["forked_from
   const t = useT();
   if (lineage.state === "live") {
     return (
-      <p className="skill-hub-lineage">
+      <span className="skill-hub-lineage">
         <Link to={`/skill-hub/${encodeURIComponent(lineage.entry)}`}>
           {t("skillHub.forkOf", { origin: `${lineage.owner}/${lineage.name}` })}
         </Link>
-      </p>
+      </span>
     );
   }
   return (
-    <p className="skill-hub-lineage muted">
+    <span className="skill-hub-lineage muted">
       {lineage.state === "unpublished"
         ? t("skillHub.origin.unpublished")
         : t("skillHub.origin.deleted")}
-    </p>
+    </span>
   );
 }
 
 /** The owner's five actions. Rendered for the owner ONLY — the caller gates
  * on `entry.is_owner`, the server's answer, and every one of these routes
  * refuses a non-owner anyway. */
-function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillHubApi }) {
+function OwnerActions({
+  entry,
+  client,
+  onNotice,
+}: {
+  entry: SkillHubDetail;
+  client: SkillHubApi;
+  onNotice: (n: PageNoticeContent) => void;
+}) {
   const t = useT();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -256,9 +546,17 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
       state: { notice: { kind: "success", text } },
     });
 
+  const wasPrivate = entry.visibility === "private";
   const unpublish = useMutation({
-    mutationFn: () => (entry.visibility === "private" ? client.republish(entry.id) : client.unpublish(entry.id)),
-    onSuccess: refresh,
+    mutationFn: () => (wasPrivate ? client.republish(entry.id) : client.unpublish(entry.id)),
+    // D10 (NN/g #1): say it happened — the only other sign was a word in the sidebar.
+    onSuccess: () => {
+      void refresh();
+      onNotice({
+        kind: "success",
+        text: t(wasPrivate ? "skillHub.republished" : "skillHub.unpublished", { name: entry.name }),
+      });
+    },
     onError: failed("unpublish"),
     ...starting,
     ...own,
@@ -323,6 +621,29 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
     ...own,
   });
 
+  // D10 (NN/g #5): unpublishing takes the skill away from everyone else, so
+  // it asks first and says what happens to the copies already installed.
+  // Republishing gives nothing away and does not ask.
+  const askUnpublish = async () => {
+    if (wasPrivate) {
+      unpublish.mutate();
+      return;
+    }
+    const choice = await confirm({
+      title: t("skillHub.unpublish.title", { name: entry.name }),
+      body: (
+        <>
+          <p>{t("skillHub.unpublish.body")}</p>
+          <p>{t("skillHub.impact.installed")}</p>
+        </>
+      ),
+      actions: [
+        { id: "cancel", label: t("skillHub.cancel") },
+        { id: "unpublish", label: t("skillHub.unpublish.confirm"), variant: "danger" },
+      ],
+    });
+    if (choice === "unpublish") unpublish.mutate();
+  };
   const askDelete = async () => {
     const choice = await confirm({
       title: t("skillHub.delete.title", { name: entry.name }),
@@ -338,22 +659,22 @@ function OwnerActions({ entry, client }: { entry: SkillHubDetail; client: SkillH
     unpublish.isPending || remove.isPending || edit.isPending || transfer.isPending;
 
   return (
-    <div className="skill-hub-actions" role="group" aria-label={t("skillHub.edit")}>
-      <button type="button" className="btn" data-size="sm" data-variant="primary" disabled={busy} onClick={() => edit.mutate()}>
-        {t("skillHub.edit")}
-      </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => unpublish.mutate()}>
-        {entry.visibility === "private" ? t("skillHub.republish") : t("skillHub.unpublish")}
-      </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setSharing(true)}>
-        {t("skillHub.share")}
-      </button>
-      <button type="button" className="btn" data-size="sm" data-variant="secondary" disabled={busy} onClick={() => setTransferring(true)}>
-        {t("skillHub.transfer")}
-      </button>
-      <button type="button" className="btn" data-size="sm" data-variant="danger" disabled={busy} onClick={() => void askDelete()}>
-        {t("skillHub.delete")}
-      </button>
+    <div className="skill-hub-actions">
+      <ActionMenu
+        label={t("skillHub.manage")}
+        disabled={busy}
+        items={[
+          { id: "edit", label: t("skillHub.edit"), onSelect: () => edit.mutate() },
+          {
+            id: "unpublish",
+            label: wasPrivate ? t("skillHub.republish") : t("skillHub.unpublish"),
+            onSelect: () => void askUnpublish(),
+          },
+          { id: "share", label: t("skillHub.share"), onSelect: () => setSharing(true) },
+          { id: "transfer", label: t("skillHub.transfer"), onSelect: () => setTransferring(true) },
+          { id: "delete", label: t("skillHub.delete"), onSelect: () => void askDelete(), danger: true },
+        ]}
+      />
       {/* A dialog draws its own failure (round 2 of #826: a line behind the
           backdrop was invisible); the page draws the rest, and only while no
           dialog covers it. */}

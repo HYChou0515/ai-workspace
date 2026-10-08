@@ -149,6 +149,18 @@ async def test_the_detail_and_a_version_list_each_file_with_its_size_and_count_s
         assert body["scripts"] == 2, "files under scripts/ — the skill convention"
 
 
+async def test_the_detail_says_when_the_content_last_changed(harness: Harness):
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+
+    detail = harness.client.get(f"/skill-hub/entries/{entry}").json()
+
+    row = hub.get(entry)
+    assert row is not None and row.content_at is not None
+    assert detail["updated_at"] is not None
+    assert detail["updated_at"].startswith(row.content_at.isoformat()[:19])
+
+
 # ── where the viewer has it (D3) ─────────────────────────────────────────────
 
 
