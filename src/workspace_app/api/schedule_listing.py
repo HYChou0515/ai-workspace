@@ -42,6 +42,8 @@ from ..resources import Conversation
 from ..workflow.offered import (
     no_such_workflow,
     offered_workflow_ids,
+    profile_workflow_titles,
+    read_workflow_file,
     unparsable_workflow,
     wont_parse,
 )
@@ -139,12 +141,18 @@ async def grade_file(
     are the index's answers, which the caller holds."""
     offered = await offered_workflow_ids(source.ls, item_id, slug=slug, profile=profile)
     # Which of the workflows the rows name will not run because their own file
-    # does not parse — asked per distinct `run`, the sweep's own check.
+    # does not parse — asked per distinct `run`, the sweep's own check — and,
+    # from the same read, what each is called. The item's own file shadows
+    # the profile's workflow of the same id, as it does when it runs.
     broken: dict[str, str] = {}
+    titles = profile_workflow_titles(slug, profile)
     for run in {row.run for row in usable_rows(raw)[0]} & set(offered):
-        problem = await unparsable_workflow(source.read, item_id, run)
-        if problem is not None:
-            broken[run] = problem
+        found = await read_workflow_file(source.read, item_id, run)
+        if found is None:
+            continue
+        titles[run] = found.title
+        if found.problem is not None:
+            broken[run] = found.problem
     # One hop off the loop: the ledger reads inside are blocking specstar I/O.
     return await asyncio.to_thread(
         schedule_views,
@@ -158,6 +166,7 @@ async def grade_file(
         broken=broken,
         landed_ms=landed,
         key_of=schedule_key(item_id, path),
+        titles=titles,
     )
 
 
@@ -178,6 +187,8 @@ class LastRun(BaseModel):
     status: str
     started: int | None = None
     ended: int | None = None
+    by_hand: bool = False
+    """Started by "run now", not by the schedule's time (`WorkflowRun.by_hand`)."""
 
 
 def last_run_of(spec: SpecStar, trigger_id: str) -> LastRun | None:
@@ -199,7 +210,13 @@ def last_run_of(spec: SpecStar, trigger_id: str) -> LastRun | None:
         return None
     if not isinstance(run, WorkflowRun):  # pragma: no cover - defensive
         return None
-    return LastRun(run_id=run_id, status=str(run.status), started=run.started, ended=run.ended)
+    return LastRun(
+        run_id=run_id,
+        status=str(run.status),
+        started=run.started,
+        ended=run.ended,
+        by_hand=run.by_hand,
+    )
 
 
 class OverviewRow(BaseModel):
@@ -232,6 +249,11 @@ class OverviewRow(BaseModel):
     """The Deployed view file in this schedules file's folder — where Open
     goes for a page's row (the WUI overview's address). "" for the item's own
     schedules or a page never Deployed: Open goes to the item."""
+    page_title: str = ""
+    """That page's title as Deployed — what a person calls the page; "" when
+    it has none (or there is no page): the folder names it instead."""
+    run_title: str = ""
+    """The title of the workflow `run` names (`ScheduleView.run_title`)."""
 
 
 class OverviewFile(BaseModel):
@@ -470,6 +492,7 @@ def register_schedule_overview_routes(
                 payload=row.payload,
                 key=body.trigger_id,
                 env_user=presser,
+                by_hand=True,
             )
         except ActiveRunExists:
             raise HTTPException(
@@ -493,9 +516,9 @@ def register_schedule_overview_routes(
         # Deployed pages by (item, folder): one listing for the whole page.
         # Newest Deploy first, so the first page seen for a folder is the one
         # kept when a folder holds two Deployed view files.
-        pages: dict[tuple[str, str], str] = {}
+        pages: dict[tuple[str, str], DeployedWui] = {}
         for page in await asyncio.to_thread(deployed_pages):
-            pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page.path)
+            pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page)
         for item_id, paths, landed in await asyncio.to_thread(index.entries):
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
@@ -542,10 +565,10 @@ def register_schedule_overview_routes(
                     continue
                 if problems:
                     problem_files.append(_file(path, problems))
-                page_path = (
-                    pages.get((item_id, path.rsplit("/", 1)[0]), "")
+                page = (
+                    pages.get((item_id, path.rsplit("/", 1)[0]))
                     if path != ITEM_SCHEDULES_PATH
-                    else ""
+                    else None
                 )
                 for view, last in zip(views, lasts, strict=True):
                     fields = msgspec.to_builtins(view)
@@ -566,7 +589,8 @@ def register_schedule_overview_routes(
                             can_edit=can_edit,
                             can_run=can_run,
                             can_read=can_read,
-                            page_path=page_path,
+                            page_path=page.path if page is not None else "",
+                            page_title=page.title if page is not None else "",
                         )
                     )
         return ScheduleOverview(enabled=policy.sweep_enabled, rows=rows, files=problem_files)

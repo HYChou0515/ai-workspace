@@ -1,6 +1,7 @@
 import { pxToRem } from "../lib/pxToRem";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { investigationFileService } from "../api/fileService";
 import { type ItemChatSummary } from "../api/itemChats";
@@ -32,6 +33,7 @@ import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 import { WorkflowLaunchMenu } from "./WorkflowLaunchMenu";
 import { TodoPanel } from "./TodoPanel";
 import { WorkflowProgress } from "./WorkflowProgress";
+import { useT } from "../lib/i18n";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
@@ -82,6 +84,12 @@ type AgentChrome = {
  * rather than the router so the shell keeps working wherever it is mounted. */
 function chatFromAddress(): string | null {
   return new URLSearchParams(window.location.search).get("chat") || null;
+}
+
+/** Whether the reader came from the schedules overview (`&from=schedules` on
+ * its last-run link) — the chat then says what it is and leads back. */
+function cameFromSchedules(): boolean {
+  return new URLSearchParams(window.location.search).get("from") === "schedules";
 }
 
 /**
@@ -138,7 +146,7 @@ export function ItemChatShell({
   // links a schedule's last run to its own chat this way. Tied to the item it
   // was read for: the shell is not remounted between items, and an id held
   // for another item left the next one with no chat selected (review round 3).
-  const [address] = useState(() => ({ itemId, chat: chatFromAddress() }));
+  const [address] = useState(() => ({ itemId, chat: chatFromAddress(), fromSchedules: cameFromSchedules() }));
   const addressChat = address.itemId === itemId ? address.chat : null;
   const { chats, isLoading, isFetchedAfterMount, createFreeChat, renameChat, deleteChat } =
     useItemChats(
@@ -430,6 +438,9 @@ export function ItemChatShell({
           canExportVideo={canExportVideo}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
+          // Arrived from the schedules overview's last-run link, and still on
+          // the chat it named (docs/plan-schedule-overview-polish.md decision 9).
+          fromSchedules={address.fromSchedules && active.chat_id === addressChat}
         />
       ) : (
         <div className="item-chat-panel__empty" data-testid="no-chat">
@@ -489,12 +500,16 @@ function ItemChatPanel({
   canExportVideo,
   onSaveSkillPrefs,
   uploadDir,
+  fromSchedules = false,
 }: {
   slug: string;
   itemId: string;
   readOnly?: boolean;
   chat: ItemChatSummary;
   workflows: WorkflowManifestDTO[];
+  /** The reader followed a schedule's last-run link here: say whose runs these
+   * are, lead back, and open the run's progress. */
+  fromSchedules?: boolean;
   /** #200: the single-chat-leaning escape hatch — present only when the shell
    * bar is hidden, so the header is the sole place to start a fresh chat. */
   onNewChat?: () => void;
@@ -502,6 +517,7 @@ function ItemChatPanel({
   // The active chat drives the full RCA AgentPanel (AgentState shape) — the
   // model picker, suggestions, @mention, attach, undo and Cmd-Enter all work
   // per chat. Injected as a prop so AgentPanel needs no <AgentProvider> here.
+  const t = useT();
   const agent = useItemChat({ slug, itemId, chatId: chat.chat_id });
   // Poll the driving run only for a workflow chat — to surface its human gate.
   const run = useRun(slug, itemId, chat.run_id ?? undefined);
@@ -531,10 +547,23 @@ function ItemChatPanel({
       {/* #331: the run's progress (collapsible bar → #283 detail) sits above the
           decision/steer cards and the feed (I1 甲) — the structural overview the
           retired WorkflowRunPanel used to give, restored for the multi-chat shell. */}
+      {fromSchedules && (
+        <div className="item-chat-panel__schedule" data-testid="schedule-chat-banner" role="note">
+          {/* The schedule's chat is named after its workflow when it is made
+              (`chat_for_schedule`); the workflow's title wins when it is known. */}
+          <span>
+            {t("scheduleChat.banner", {
+              title: workflows.find((w) => w.id === run.data?.workflow_id)?.title || chat.title,
+            })}
+          </span>
+          <Link to="/schedules">{t("scheduleChat.back")}</Link>
+        </div>
+      )}
       {chat.run_id && (
         <WorkflowProgress
           run={run.data}
           declaredPhases={declared}
+          expandedAtFirst={fromSchedules}
           disconnected={(run.failureCount ?? 0) > 0}
           onStop={() => cancel.mutate(chat.run_id!)}
           stopping={cancel.isPending}

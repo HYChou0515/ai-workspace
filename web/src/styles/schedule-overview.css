@@ -57,3 +57,20 @@
 .page .schedule-table .schedule-status[data-status="cancelled"] {
   color: var(--err);
 }
+
+/* A group is a heading row inside the one table, so every group's columns
+ * line up (docs/plan-schedule-overview-polish.md decision 11). */
+.page .schedule-table .schedule-group th {
+  padding-top: var(--space-16);
+  border-bottom: 1px solid var(--paper-3);
+}
+
+/* "手動" beside a last run started by Run now. */
+.page .schedule-table .schedule-tag {
+  margin-left: var(--space-4);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  color: var(--text-paper-d);
+  font-size: var(--text-xs);
+}

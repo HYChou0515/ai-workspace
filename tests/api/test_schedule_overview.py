@@ -943,3 +943,104 @@ def test_a_file_the_index_still_names_but_that_is_gone_is_skipped():
     assert client.delete(_wp(iid, f"/files{PAGE_SCHEDULES}")).status_code in (200, 204)
 
     assert [r["path"] for r in _rows(client)] == [ITEM_SCHEDULES]
+
+
+def test_rows_name_the_workflow_and_the_page_by_their_titles():
+    """The overview says what a person named things (polish decision 10): the
+    workflow's title, not its file name, and the Deployed page's title, not its
+    folder. A workflow with no title has none to show — the page falls back to
+    its id."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/.workflows/w0.json", _workflow("Daily summary"))
+    _put(client, iid, "/.workflows/w1.json", _workflow(""))
+    _put(
+        client,
+        iid,
+        ITEM_SCHEDULES,
+        _schedules({"every": "hourly", "run": "w0"}, {"every": "hourly", "run": "w1"}),
+    )
+    _put(client, iid, PAGE_SCHEDULES, _schedules({"every": "hourly", "run": "w0"}))
+    view = "/reports/scrap/page.ai.yaml"
+    _put(client, iid, view, "view: wui\ntitle: Scrap board\n")
+    assert client.post(_wp(iid, "/wui/deploy"), json={"path": view}).status_code == 200
+
+    named = sorted((r["path"], r["run"], r["run_title"], r["page_title"]) for r in _rows(client))
+
+    assert named == sorted(
+        [
+            (ITEM_SCHEDULES, "w0", "Daily summary", ""),
+            (ITEM_SCHEDULES, "w1", "", ""),
+            (PAGE_SCHEDULES, "w0", "Daily summary", "Scrap board"),
+        ]
+    )
+
+
+def test_a_profile_workflow_is_named_by_its_manifest_title_and_the_items_own_file_shadows_it():
+    from workspace_app.apps.playground.model import PlaygroundItem
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="bob", profile="multi"))
+        .resource_id
+    )
+    base = f"/a/playground/items/{iid}"
+    # `beta` is the profile's; `alpha` is the profile's too, but the item's own
+    # file shadows it — the one that runs is the one named.
+    r = client.put(f"{base}/files/.workflows/alpha.json", content=_workflow("Our alpha").encode())
+    assert r.status_code == 204, r.text
+    r = client.put(
+        f"{base}/files{ITEM_SCHEDULES}",
+        content=_schedules(
+            {"every": "hourly", "run": "alpha"}, {"every": "hourly", "run": "beta"}
+        ).encode(),
+    )
+    assert r.status_code == 204, r.text
+
+    titles = {r["run"]: r["run_title"] for r in _rows(client)}
+    panel = client.get(f"{base}/schedules").json()
+
+    assert titles == {"alpha": "Our alpha", "beta": "Beta workflow"}
+    assert {r["run"]: r["run_title"] for r in panel["rows"]} == titles
+
+
+def test_last_run_says_whether_it_was_run_by_hand():
+    """ "手動" on the last run (polish decision 8): Run now marks its run; a
+    fire does not."""
+    holder = {"id": "bob"}
+    client, spec, app = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    with client:
+        _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+        _put(client, iid, ITEM_SCHEDULES, _schedules({"every": "hourly", "run": "w0"}))
+        _fire(client, app, iid)
+        (fired,) = _rows(client)
+        _settle(client, iid)
+
+        r = client.post(
+            _wp(iid, "/schedules/run"),
+            json={"path": ITEM_SCHEDULES, "trigger_id": fired["trigger_id"]},
+        )
+        assert r.status_code == 202, r.text
+        (pressed,) = _rows(client)
+
+    assert fired["last_run"]["by_hand"] is False
+    assert pressed["last_run"]["run_id"] == r.json()["run_id"]
+    assert pressed["last_run"]["by_hand"] is True
+
+
+def _settle(client, iid: str) -> None:
+    """Wait for the item's runs to finish — Run now is refused while one is
+    going."""
+    import time
+
+    runs: list = []
+    for _ in range(200):
+        runs = client.get(_wp(iid, "/runs")).json()
+        if all(run["status"] in {"done", "error", "cancelled"} for run in runs):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"runs never settled: {runs}")
