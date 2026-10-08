@@ -37,7 +37,7 @@ const RECORDS = "/scrap/";
 /** This page's own file. Bare, because it lives next to the page. */
 const NOTES = "notes.json";
 /** Must appear in `tools:` in page.ai.yaml AND be granted by this app. */
-const TOOL = "lot-status";
+const TOOL = "mes__lot-status";
 /** Must appear in `workflows:` in page.ai.yaml AND exist in this app's profile. */
 const JUDGE = "judge";
 

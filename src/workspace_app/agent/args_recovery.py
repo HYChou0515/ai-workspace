@@ -68,7 +68,7 @@ from typing import Any, cast
 from agents import FunctionTool
 from agents.tool_context import ToolContext
 
-from .arg_repair import malformed_raw
+from .arg_repair import AMBIGUOUS_CALL_KEY, malformed_raw
 from .context import AgentToolContext
 
 _LOGGER = logging.getLogger(__name__)
@@ -259,6 +259,10 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
                 raw_args=args_json,
                 call_id=call_id,
             )
+        # An old name two third-party commands answer to (`ToolAliasModel`):
+        # that call fails in-band and names the commands to call instead.
+        if (reply := ambiguous_call_reply(value)) is not None:
+            return reply
         # Backstop sentinel (set at the model-output boundary when the model's
         # args couldn't be parsed/repaired): RETURN a clean in-band error rather
         # than raise. The conversation already holds the valid sentinel, so this
@@ -302,3 +306,25 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     # silently dropped those — broke the model's tool emission. Use
     # `dataclasses.replace` so every other field is preserved verbatim.
     return dataclasses.replace(tool, on_invoke_tool=safer)
+
+
+def ambiguous_call_reply(args: dict) -> str | None:
+    """The reply to a call `ToolAliasModel` found ambiguous — today's collision
+    message, then the names to call instead — or ``None`` for ordinary args."""
+    if set(args) != {AMBIGUOUS_CALL_KEY}:
+        return None
+    detail = args[AMBIGUOUS_CALL_KEY]
+    if not isinstance(detail, dict):
+        return None
+    called = detail.get("called")
+    listed = detail.get("candidates")
+    candidates = [
+        (str(c[0]), str(c[1]))
+        for c in (listed if isinstance(listed, list) else [])
+        if isinstance(c, list) and len(c) == 2
+    ]
+    if not isinstance(called, str) or not candidates:
+        return None
+    from ..tooling.registry import ambiguous_name_message
+
+    return ambiguous_name_message(called, candidates)

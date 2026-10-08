@@ -123,6 +123,7 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
         # how the host stores the bundle; it never appears in a path the agent
         # or the model sees.
         install_dir=f"../.tools/{name}",
+        third_party=True,
         commands=tuple(
             CommandInfo(
                 name=c["name"],

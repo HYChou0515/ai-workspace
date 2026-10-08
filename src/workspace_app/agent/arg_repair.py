@@ -59,6 +59,12 @@ def repair_tool_args(raw: str) -> str | None:
 MALFORMED_ARGS_KEY = "__malformed_tool_args__"
 
 
+#: The arguments `ToolAliasModel` gives a call whose old name answers to two
+#: third-party commands (docs/plan-third-party-tool-names.md N2): the tool wrap
+#: answers with the collision instead of running anything.
+AMBIGUOUS_CALL_KEY = "__ambiguous_tool_name__"
+
+
 def make_backstop_sentinel(raw: str) -> str:
     """A valid JSON-object string encoding unrepairable ``raw`` tool args."""
     return json.dumps({MALFORMED_ARGS_KEY: raw})

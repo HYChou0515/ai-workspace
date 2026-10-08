@@ -144,7 +144,12 @@ def flat_catalog(packages: Sequence[PackageInfo]) -> dict[str, ToolMeta]:
     """Every callable tool name → its ``ToolMeta``: built-ins (by registered
     name) plus every command of every provisioned package (by command name —
     what the LLM actually calls, so a tool card can look it up). Built-in names
-    win on the (deliberately avoided) name collision."""
+    win on the (deliberately avoided) name collision.
+
+    ``packages`` is the boot-time FIRST-PARTY set: a third-party tool is
+    resolved per item, so it is not here and its card shows the generic label
+    with the raw name it was called by (`a__list-files`), which already tells
+    two tools apart (docs/plan-third-party-tool-names.md D4)."""
     from ..agent.tools import builtin_tool_descriptions
 
     out: dict[str, ToolMeta] = {}

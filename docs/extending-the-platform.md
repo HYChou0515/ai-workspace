@@ -217,8 +217,9 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 3. **授權**——在某個 app 的 `app.json` `agent.tools` 陣列列出它。用 colon 語法細選:
    `"csv-column-summary"` 收全部 command,`"csv-column-summary:plot"` 只收 `plot`。
 4. **重啟** app——開機時 `tooling/registry.discover_packages` 掃 `.workspace-tools/` 建
-   `PackageInfo`,`build_function_tools` 依 `allowed` 展開成 `FunctionTool`(扁平 command name
-   撞名會在開機 raise)。tool 的 name/description/JSON schema 也會被
+   `PackageInfo`,`build_function_tools` 依 `allowed` 展開成 `FunctionTool`(第一方套件用扁平
+   command name,兩個第一方套件撞名會 raise;第三方工具的 command 帶本地名前綴 `<本地名>__<command>`,
+   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 也會被
    `agent/tool_prompt.format_tools_for_prompt` render 進 system prompt 末段,免得小模型把
    function tool 當成 PATH 上的 shell binary。
 
