@@ -133,10 +133,11 @@ describe("skillHubApi history (plan-skill-hub-history §8)", () => {
       sort: "updated",
       offset: 50,
       limit: 50,
+      forks: true,
     });
     await skillHubApi.browse({});
     expect(calls.map((c) => c.url)).toEqual([
-      "/api/skill-hub/entries?q=deck&mine=true&owner=bob&sort=updated&offset=50&limit=50",
+      "/api/skill-hub/entries?q=deck&mine=true&owner=bob&sort=updated&offset=50&limit=50&forks=true",
       "/api/skill-hub/entries",
     ]);
     expect(page).toEqual({ entries: [], total: 7, counted_since: "2026-10-07" });

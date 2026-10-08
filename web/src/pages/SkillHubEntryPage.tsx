@@ -18,6 +18,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
+import { invalidateHubInstalls } from "../api/skillHubCache";
 import {
   type SkillEditTarget,
   type SkillHubApi,
@@ -391,8 +392,7 @@ function InstallDialog({
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
     onSuccess: (_res, itemId) => {
-      void qc.invalidateQueries({ queryKey: qk.skillHubInstalls(entry.id) });
-      void qc.invalidateQueries({ queryKey: ["skillHub", "targets", entry.id] });
+      invalidateHubInstalls(qc);
       void qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       onDone(slug, itemId, items.find((i) => i.item_id === itemId)?.title ?? itemId);
     },
@@ -448,6 +448,8 @@ function InstallDialog({
               <span>{it.title || it.item_id}</span>
               {it.state === "installed" ? (
                 <span className="muted small">{t("skillHub.install.state.installed")}</span>
+              ) : it.state === "unavailable" ? (
+                <span className="muted small">{t("skillHub.install.state.unavailable")}</span>
               ) : it.state === "name_taken" ? (
                 <span className="muted small">
                   {it.owner

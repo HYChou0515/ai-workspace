@@ -15,6 +15,8 @@ import type { SkillHubApi, SkillHubDetail } from "../api/skillHub";
 import type { ItemSkillState } from "../api/types";
 import { ChatItemProvider } from "../hooks/chatItem";
 import { translate } from "../lib/i18n";
+import type { QueryClient } from "@tanstack/react-query";
+import { makeQueryClient } from "../api/queryClient";
 import { QueryWrap } from "../test/queryWrapper";
 import { SkillHubEntryCard } from "./SkillHubEntryCard";
 
@@ -64,12 +66,14 @@ function setup({
   item = true,
   get,
   install,
+  queryClient,
 }: {
   entry?: SkillHubDetail;
   skills?: ItemSkillState[];
   item?: boolean;
   get?: SkillHubApi["get"];
   install?: SkillHubApi["install"];
+  queryClient?: QueryClient;
 } = {}) {
   let have = skills;
   const hub = {
@@ -95,7 +99,7 @@ function setup({
   const card = <SkillHubEntryCard entryId="e-1" client={hub} skillsClient={items} />;
   render(
     <MemoryRouter>
-      <QueryWrap>
+      <QueryWrap client={queryClient}>
         {item ? <ChatItemProvider value={{ slug: "pm", itemId: "inv-1" }}>{card}</ChatItemProvider> : card}
       </QueryWrap>
     </MemoryRouter>,
@@ -142,6 +146,14 @@ describe("SkillHubEntryCard", () => {
     expect(await screen.findByText(word("skillHub.card.installed"))).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: word("skillHub.card.install") })).toBeNull();
     expect(items.getItemSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it("an install from the card refreshes what skill pages say about installs (review round 1)", async () => {
+    const qc = makeQueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    setup({ queryClient: qc });
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.card.install") }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "installs"] }));
   });
 
   it("reads as installed when this item holds a copy of THIS entry — search_skill_hub's rule", async () => {

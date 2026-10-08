@@ -22,6 +22,7 @@ import ReactMarkdown from "react-markdown";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
+import { invalidateHubInstalls } from "../api/skillHubCache";
 import type {
   SkillHubApi,
   SkillHubDetail,
@@ -573,7 +574,10 @@ function ForkDialog({
     mutationFn: () => client.fork(slug, itemId as string, entry.id, event.revision),
     // The item now holds the copy: its Skills list (and any chat card reading
     // it) re-reads, as after an install.
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId as string) }),
+    onSuccess: () => {
+      invalidateHubInstalls(qc);
+      return qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId as string) });
+    },
     meta: { silentError: true },
   });
   const done = fork.data;

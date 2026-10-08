@@ -81,6 +81,34 @@ describe("ActionMenu", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
+  it("closes when focus leaves it — Tab out of the menu (APG)", () => {
+    render(
+      <>
+        <ActionMenu label="更多" items={[{ id: "a", label: "下載", onSelect: vi.fn() }]} />
+        <button type="button">next</button>
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    const item = screen.getByRole("menuitem");
+    fireEvent.focusOut(item, { relatedTarget: screen.getByRole("button", { name: "next" }) });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("Escape on the trigger of an open menu — every item disabled — closes the menu, not the modal", () => {
+    const close = vi.fn();
+    render(
+      <ModalShell onClose={close} ariaLabel="panel">
+        <ActionMenu label="更多" items={[{ id: "a", label: "下載", onSelect: vi.fn(), disabled: true }]} />
+      </ModalShell>,
+    );
+    const trigger = screen.getByRole("button", { name: "更多" });
+    fireEvent.click(trigger);
+    expect(document.activeElement).not.toBe(screen.getByRole("menuitem"));
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it("closes on a click outside", () => {
     const { trigger } = setup();
     fireEvent.click(trigger);

@@ -58,7 +58,10 @@ export function SkillHubPicker({
   }, [query]);
   const listQ = useInfiniteQuery({
     queryKey: [...qk.skillHub(q, false, slug), "paged"],
-    queryFn: ({ pageParam }) => client.browse({ q, app: slug, offset: pageParam, limit: PAGE }),
+    // Forks beside originals: the picker offers everything installable; the
+    // hub page's originals-only browse would hide a fork until searched for.
+    queryFn: ({ pageParam }) =>
+      client.browse({ q, app: slug, forks: true, offset: pageParam, limit: PAGE }),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
       const loaded = pages.reduce((n, p) => n + p.entries.length, 0);

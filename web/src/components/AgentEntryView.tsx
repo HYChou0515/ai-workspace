@@ -318,6 +318,17 @@ export function EntryView({
       entry.call.name === "show_skill_hub_entry" || entry.call.name === "publish_skill"
         ? parseShownSkillHubEntry(entry.call.output)
         : null;
+    if (hubEntry && entry.call.name === "publish_skill") {
+      // The card, and the reply still one click away: what only the reply
+      // knows — a fork of whom, a manifest a full workspace refused, a
+      // re-publish that stays private — is not on the card (review round 1).
+      return (
+        <>
+          <SkillHubEntryCard entryId={hubEntry} />
+          <ToolCallCard call={entry.call} onOpenCitation={onOpenCitation} onReplay={onReplay} />
+        </>
+      );
+    }
     if (hubEntry) return <SkillHubEntryCard entryId={hubEntry} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (

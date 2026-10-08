@@ -4,6 +4,7 @@ import { type ComponentProps, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
+import { invalidateHubInstalls } from "../api/skillHubCache";
 import type { ApiClient, ItemSkillState, ToolPref } from "../api/types";
 import { skillDir } from "../api/workspaceSkills";
 import { useT } from "../lib/i18n";
@@ -162,6 +163,7 @@ export function SkillsModal({
 
   const installed = async (name: string) => {
     setPicking(false);
+    invalidateHubInstalls(qc);
     setRefreshNote(t("skills.fromHub.installed", { name }));
     await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
     await qc.invalidateQueries({ queryKey: qk.files(itemId) });

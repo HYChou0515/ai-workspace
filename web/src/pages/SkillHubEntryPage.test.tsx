@@ -671,6 +671,7 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
         { item_id: "i-1", title: "Free one", state: "ok", owner: "" },
         { item_id: "i-2", title: "Has it", state: "installed", owner: "" },
         { item_id: "i-3", title: "Clash", state: "name_taken", owner: "carol" },
+        { item_id: "i-4", title: "Busy", state: "unavailable", owner: "" },
       ],
     });
     c.install.mockResolvedValue({ name: "triage-reflow", missing_tools: ["read_file"] });
@@ -684,6 +685,8 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     expect(within(dialog).getByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
     expect(within(dialog).getByRole("radio", { name: /Clash/ })).toBeDisabled();
     expect(within(dialog).getByText(word("skillHub.install.state.taken", { owner: "carol" }))).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /Busy/ })).toBeDisabled();
+    expect(within(dialog).getByText(word("skillHub.install.state.unavailable"))).toBeInTheDocument();
     const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
     expect(go).toBeDisabled();
 

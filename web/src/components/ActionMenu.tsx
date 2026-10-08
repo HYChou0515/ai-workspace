@@ -79,7 +79,14 @@ export function ActionMenu({
   };
 
   return (
-    <div className="action-menu" ref={root}>
+    <div
+      className="action-menu"
+      ref={root}
+      // Tab (or anything else) taking focus out of it closes it (APG).
+      onBlur={(e) => {
+        if (open && !root.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
       <button
         ref={trigger}
         type="button"
@@ -94,6 +101,15 @@ export function ActionMenu({
         title={iconOnly ? label : undefined}
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
+        // Focus stays here when every item is disabled: Escape must still be
+        // the menu's, not the modal's around it.
+        onKeyDown={(e) => {
+          if (open && e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
       >
         {iconOnly ? (
           <Icon name="dots_h" size={14} />

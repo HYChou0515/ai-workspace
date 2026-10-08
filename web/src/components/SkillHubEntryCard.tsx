@@ -20,6 +20,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
+import { invalidateHubInstalls } from "../api/skillHubCache";
 import { type SkillHubApi, skillHubApi } from "../api/skillHub";
 import type { ApiClient } from "../api/types";
 import { useChatItem } from "../hooks/chatItem";
@@ -56,6 +57,7 @@ export function SkillHubEntryCard({
     mutationFn: () => client.install(slug, itemId, entryId),
     onMutate: () => setRefusal(null),
     onSuccess: async () => {
+      invalidateHubInstalls(qc);
       await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     },

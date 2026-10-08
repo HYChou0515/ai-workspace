@@ -96,13 +96,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Opens every row's ⋯ menu (plan-skill-hub-ux-redo D9), so the actions in
- * them — download, publish, reset, update — can be found or found absent. */
-async function openMenus() {
-  await screen.findAllByTestId(/^skill-row-/);
-  for (const b of screen.queryAllByTestId(/^skill-more-/)) {
-    if (b.getAttribute("aria-expanded") !== "true") fireEvent.click(b);
-  }
+/** One action in a row's ⋯ menu (plan-skill-hub-ux-redo D9), that row's
+ * menu opened first — or `null` when the row has no such action. Opened per
+ * row: opening a menu moves focus out of any other, which closes it, so an
+ * absence asserted against a closed menu would hold vacuously. */
+async function action(name: string, kind: string): Promise<HTMLElement | null> {
+  await screen.findByTestId(`skill-row-${name}`);
+  const trigger = screen.queryByTestId(`skill-more-${name}`);
+  if (trigger && trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
+  return screen.queryByTestId(`skill-${kind}-${name}`);
+}
+async function mustAction(name: string, kind: string): Promise<HTMLElement> {
+  const el = await action(name, kind);
+  if (!el) throw new Error(`no ${kind} in ${name}'s ⋯ menu`);
+  return el;
 }
 
 describe("SkillsModal (#380)", () => {
@@ -182,8 +189,7 @@ describe("SkillsModal (#380)", () => {
     const f = fakeService();
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     renderModal({ fileService: f.svc });
-    await openMenus();
-    fireEvent.click(await screen.findByTestId("skill-download-my-skill"));
+    fireEvent.click((await mustAction("my-skill", "download")));
     await waitFor(() => expect(f.prepareDirDownload).toHaveBeenCalledWith(".skill/my-skill"));
     expect(f.dirDownloadUrl).toHaveBeenCalledWith("d1", ".skill/my-skill");
     expect(click).toHaveBeenCalled();
@@ -191,9 +197,8 @@ describe("SkillsModal (#380)", () => {
 
   it("offers download only on workspace skills", async () => {
     renderModal();
-    await openMenus();
-    expect(await screen.findByTestId("skill-download-my-skill")).toBeInTheDocument();
-    expect(screen.queryByTestId("skill-download-author-skill")).toBeNull();
+    expect((await mustAction("my-skill", "download"))).toBeInTheDocument();
+    expect((await action("author-skill", "download"))).toBeNull();
   });
 
   it("imports a selected skill folder into `.skill/<folder>/…`", async () => {
@@ -229,8 +234,7 @@ describe("SkillsModal — a baked-in skill with a local copy (#589)", () => {
 
   it("offers download for a copy even though its source is not `workspace`", async () => {
     renderModal({ client: fakeClient(COPIED) as never });
-    await openMenus();
-    expect(await screen.findByTestId("skill-download-triage")).toBeInTheDocument();
+    expect((await mustAction("triage", "download"))).toBeInTheDocument();
   });
 
   it("says the copy is editable here, so its source badge is not the whole story", async () => {
@@ -266,12 +270,11 @@ describe("SkillsModal — a readonly skill", () => {
     expect(screen.queryByTestId("skill-readonly-system-help")).toBeNull();
     // its files ARE in the workspace (the copy), but they are the platform's,
     // not the person's to take away -- no download either, like chart
-    await openMenus();
-    expect(screen.queryByTestId("skill-download-system-help")).toBeNull();
+    expect((await action("system-help", "download"))).toBeNull();
     expect(screen.queryByTestId("skill-copy-system-help")).toBeNull();
     expect(screen.queryByTestId("skill-update-system-help")).toBeNull();
-    expect(screen.queryByTestId("skill-refresh-system-help")).toBeNull();
-    expect(screen.queryByTestId("skill-reset-system-help")).toBeNull();
+    expect((await action("system-help", "refresh"))).toBeNull();
+    expect((await action("system-help", "reset"))).toBeNull();
   });
 });
 
@@ -304,9 +307,7 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
       client: { ...fakeClient(COPIED), refreshItemSkill } as never,
     });
 
-    await openMenus();
-
-    fireEvent.click(await screen.findByTestId("skill-refresh-triage"));
+    fireEvent.click((await mustAction("triage", "refresh")));
 
     await waitFor(() =>
       expect(refreshItemSkill).toHaveBeenCalledWith("rca", "i1", "triage", { force: false }),
@@ -324,9 +325,7 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     });
     renderModal({ client: { ...fakeClient(COPIED), refreshItemSkill } as never });
 
-    await openMenus();
-
-    fireEvent.click(await screen.findByTestId("skill-refresh-triage"));
+    fireEvent.click((await mustAction("triage", "refresh")));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(sentence);
   });
@@ -335,9 +334,7 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     const refreshItemSkill = vi.fn(async () => ({ updated: [], skipped: [], removed: [] }));
     renderModal({ client: { ...fakeClient(NO_UPDATE), refreshItemSkill } as never });
 
-    await openMenus();
-
-    fireEvent.click(await screen.findByTestId("skill-reset-triage"));
+    fireEvent.click((await mustAction("triage", "reset")));
 
     // The escape hatch for edits the per-file update deliberately refuses to
     // touch: without it, one bad edit by the AI has no way back.
@@ -350,9 +347,8 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     renderModal({ client: fakeClient(NO_UPDATE) as never });
     await screen.findByTestId("skill-row-triage");
     // A button whose only honest outcome is "nothing changed" reads as broken.
-    await openMenus();
-    expect(screen.queryByTestId("skill-refresh-triage")).toBeNull();
-    expect(screen.getByTestId("skill-reset-triage")).toBeInTheDocument();
+    expect((await action("triage", "refresh"))).toBeNull();
+    expect((await mustAction("triage", "reset"))).toBeInTheDocument();
   });
 
   it("says 「有新版」 on the row, in words, when upstream has moved (plan-skill-hub-ui-polish D4)", async () => {
@@ -431,21 +427,18 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
     });
     await screen.findByTestId("skill-row-from-hub");
 
-    await openMenus();
+    expect((await mustAction("triage", "refresh"))).toHaveAccessibleName(word("skills.refresh"));
+    expect((await mustAction("triage", "reset"))).toHaveAccessibleName(word("skills.reset"));
+    expect((await mustAction("from-hub", "refresh"))).toHaveAccessibleName(word("skills.refresh.hub"));
+    expect((await mustAction("from-hub", "reset"))).toHaveAccessibleName(word("skills.reset.hub"));
+    expect((await mustAction("undeclared", "reset"))).toHaveAccessibleName(word("skills.reset"));
+    expect((await mustAction("older-api", "reset"))).toHaveAccessibleName(word("skills.reset"));
 
-    expect(screen.getByTestId("skill-refresh-triage")).toHaveAccessibleName(word("skills.refresh"));
-    expect(screen.getByTestId("skill-reset-triage")).toHaveAccessibleName(word("skills.reset"));
-    expect(screen.getByTestId("skill-refresh-from-hub")).toHaveAccessibleName(word("skills.refresh.hub"));
-    expect(screen.getByTestId("skill-reset-from-hub")).toHaveAccessibleName(word("skills.reset.hub"));
-    expect(screen.getByTestId("skill-reset-undeclared")).toHaveAccessibleName(word("skills.reset"));
-    expect(screen.getByTestId("skill-reset-older-api")).toHaveAccessibleName(word("skills.reset"));
-
-    fireEvent.click(screen.getByTestId("skill-refresh-from-hub"));
+    fireEvent.click((await mustAction("from-hub", "refresh")));
     expect(await screen.findByTestId("skills-refresh-note")).toHaveTextContent(
       word("skills.refreshDone.hub"),
     );
-    await openMenus();
-    fireEvent.click(screen.getByTestId("skill-refresh-triage"));
+    fireEvent.click((await mustAction("triage", "refresh")));
     await waitFor(() =>
       expect(screen.getByTestId("skills-refresh-note")).toHaveTextContent(
         word("skills.refreshDone"),
@@ -484,8 +477,7 @@ describe("SkillsModal — refreshing a copy (#589)", () => {
   it("offers no refresh for a skill that was written here", async () => {
     renderModal();
     await screen.findByTestId("skill-row-my-skill");
-    await openMenus();
-    expect(screen.queryByTestId("skill-refresh-my-skill")).toBeNull();
+    expect((await action("my-skill", "refresh"))).toBeNull();
   });
 
   // #779: a long list of tri-states — re-picking through it is the cost, and
@@ -620,9 +612,8 @@ describe("SkillsModal — the skill hub", () => {
     const unsubscribe = subscribeAgentDraft("i1", (text) => offered.push(text));
 
     // A shared (package) skill's files are the deploy's — nothing to publish.
-    await openMenus();
-    expect(screen.queryByTestId("skill-publish-author-skill")).toBeNull();
-    fireEvent.click(screen.getByTestId("skill-publish-my-skill"));
+    expect((await action("author-skill", "publish"))).toBeNull();
+    fireEvent.click((await mustAction("my-skill", "publish")));
 
     expect(offered).toEqual([word("skills.publishSentence", { name: "my-skill" })]);
     // Offered, not sent — and the panel gets out of the way of the box.
@@ -638,7 +629,11 @@ describe("SkillsModal — the skill hub", () => {
     fireEvent.click(screen.getByTestId("skills-from-hub"));
     const picker = await screen.findByTestId("skill-hub-picker");
     await waitFor(() =>
-      expect(hub.browse).toHaveBeenCalledWith(expect.objectContaining({ q: "", app: "rca" })),
+      // Forks beside originals: the picker offers everything installable,
+      // not the hub page's originals-only browse (review round 1).
+      expect(hub.browse).toHaveBeenCalledWith(
+        expect.objectContaining({ q: "", app: "rca", forks: true }),
+      ),
     );
     // A page of the panel, not a second modal over it (D9).
     expect(screen.queryByTestId("skill-row-my-skill")).toBeNull();
@@ -654,6 +649,35 @@ describe("SkillsModal — the skill hub", () => {
     expect(screen.getByTestId("skills-refresh-note")).toHaveTextContent(
       word("skills.fromHub.installed", { name: "triage-reflow" }),
     );
+  });
+
+  it("an install from the picker refreshes what the skill page says about installs (review round 1)", async () => {
+    const qc = makeQueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const hub = fakeHub();
+    const props: ComponentProps<typeof SkillsModal> = {
+      slug: "rca",
+      itemId: "i1",
+      fileService: fakeService().svc,
+      onClose: vi.fn(),
+      onSaveSkillPrefs: vi.fn(),
+      appliedSkills: [],
+      onToggleApply: vi.fn(),
+      client: fakeClient(),
+      hubClient: hub,
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillsModal {...props} />
+      </MemoryRouter>,
+      qc,
+    );
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    fireEvent.click(await screen.findByTestId("pick-install-e-1"));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "installs"] }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "targets"] });
   });
 
   it("shows the server's refusal when a folder of that name is already here", async () => {
@@ -873,9 +897,7 @@ describe("SkillsModal — the skill hub", () => {
     const offered: string[] = [];
     const unsubscribe = subscribeAgentDraft("i1", (text) => offered.push(text));
 
-    await openMenus();
-
-    fireEvent.click(screen.getByTestId("skill-publish-my-skill"));
+    fireEvent.click((await mustAction("my-skill", "publish")));
 
     // The sentence is in the box either way; the panel asks before it goes.
     expect(offered).toHaveLength(1);
@@ -897,12 +919,11 @@ describe("SkillsModal — the skill hub", () => {
     renderModal({ client: fakeClient(skills) });
 
     await screen.findByTestId("skill-row-fine");
-    await openMenus();
-    expect(screen.getByTestId("skill-reset-fine")).toBeInTheDocument();
-    expect(screen.getByTestId("skill-refresh-fine")).toBeInTheDocument();
-    expect(screen.queryByTestId("skill-reset-gone")).toBeNull();
-    expect(screen.queryByTestId("skill-refresh-gone")).toBeNull();
-    expect(screen.queryByTestId("skill-reset-hidden")).toBeNull();
+    expect((await mustAction("fine", "reset"))).toBeInTheDocument();
+    expect((await mustAction("fine", "refresh"))).toBeInTheDocument();
+    expect((await action("gone", "reset"))).toBeNull();
+    expect((await action("gone", "refresh"))).toBeNull();
+    expect((await action("hidden", "reset"))).toBeNull();
   });
 
   it("says on the row when a copy's skill hub original was unpublished or deleted", async () => {
