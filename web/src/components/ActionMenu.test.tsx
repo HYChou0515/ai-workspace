@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ActionMenu } from "./ActionMenu";
+import { ModalShell } from "./ModalShell";
 
 afterEach(cleanup);
 
@@ -65,6 +66,19 @@ describe("ActionMenu", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("Escape closes the menu, not the modal it sits in (the Skills panel's ⋯)", () => {
+    const close = vi.fn();
+    render(
+      <ModalShell onClose={close} ariaLabel="panel">
+        <ActionMenu label="更多" items={[{ id: "a", label: "下載", onSelect: vi.fn() }]} />
+      </ModalShell>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("closes on a click outside", () => {

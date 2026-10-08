@@ -63,6 +63,9 @@ export function ActionMenu({
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
+      // The menu's Escape, not the modal's around it: a modal listens on the
+      // document, and without this one press closed the Skills panel too.
+      e.stopPropagation();
       setOpen(false);
       trigger.current?.focus();
       return;
