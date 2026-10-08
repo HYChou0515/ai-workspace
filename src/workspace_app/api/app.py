@@ -2512,6 +2512,19 @@ def create_app(
             window=offhours.window, timezone=offhours.timezone
         ).enabled,
     )
+    # docs/plan-outside-lookup.md D4: answering the "請幫我查" card — save under
+    # `lookups/`, then the SAME send a typed message takes.
+    from .outside_lookup_routes import register_outside_lookup_routes
+
+    register_outside_lookup_routes(
+        api,
+        locator=locator,
+        files=files,
+        send_into=chat_send_svc.send,
+        turn_engine=turn_engine,
+        get_user_id=get_user_id,
+        max_file_size=max_file_size,
+    )
 
     # ---- Files API (plan-backend §3.8) ----
 
