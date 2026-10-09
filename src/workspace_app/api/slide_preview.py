@@ -1,9 +1,10 @@
 """A slide deck in the workspace, shown as a PDF (docs/plan-pptx-preview.md).
 
-The item's sandbox converts the deck — through its own exec, under its own uid
-and limits (N1) — and keeps the PDF beside the workspace under the deck's
-content hash (N2), so an edited deck is simply a new preview and the cache
-dies with the sandbox. This module decides the order of the questions:
+The item's sandbox converts the deck — through its own exec and limits, under
+the item's own uid where isolation is on (the production host) (N1) — and
+keeps the PDF beside the workspace under the deck's content hash (N2), so an
+edited deck is simply a new preview and the cache dies with the sandbox. This
+module decides the order of the questions:
 
 1. is it a deck at all (N4), and does it exist;
 2. is its preview already there — asked WITHOUT waking a cold sandbox;

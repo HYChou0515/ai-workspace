@@ -127,6 +127,10 @@ class PreviewFailed(Exception):
 PREVIEW_COMMAND: tuple[str, ...] = ("soffice", "--headless", "--convert-to", "pdf", "--outdir")
 #: Wall-clock for one conversion.
 PREVIEW_TIMEOUT_S = 180.0
+# The most of a converted deck the host will read, keep or serve. What a
+# conversion leaves is the sandbox's, and a sparse file costs it nothing while
+# costing the reader every byte.
+PREVIEW_MAX_BYTES = 200 * 1024 * 1024
 
 _PREVIEW_KEY = re.compile(r"[0-9a-f]{64}")
 

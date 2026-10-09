@@ -406,6 +406,9 @@ def register_file_routes(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"{path} not found") from exc
         except PreviewFailed as exc:
+            # The page says only "couldn't preview"; the reason is for whoever
+            # looks into it, so it lands here as well as in the body.
+            logger.info("slide preview of %s in %s failed: %s", path, investigation_id, exc)
             raise HTTPException(
                 status_code=422, detail={"code": "preview_failed", "why": str(exc)}
             ) from exc

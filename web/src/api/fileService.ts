@@ -12,6 +12,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
+import type { QuotaDetail } from "../lib/quotaFailure";
+
 import { api } from "./index";
 import { writeVerified } from "./writeVerified";
 import { API_PREFIX, apiFetch } from "./http";
@@ -55,7 +57,9 @@ export type ListTreeOpts = { prefix?: string; depth?: number };
 export type SlidePreview =
   | { kind: "pdf"; blob: Blob }
   | { kind: "confirm"; size: number; limit: number }
-  | { kind: "failed"; why: string };
+  | { kind: "failed"; why: string }
+  /** 507: converting would open a sandbox past the owner's limit. */
+  | { kind: "refused"; detail: QuotaDetail };
 
 export type FileService = {
   /** Stable id for query-key scoping + tree-collapse persistence. */
@@ -175,6 +179,7 @@ export function investigationFileService(slug: string, investigationId: string):
       if (resp.status === 422 && detail?.code === "preview_failed") {
         return { kind: "failed", why: String(detail.why) };
       }
+      if (resp.status === 507) return { kind: "refused", detail: detail ?? {} };
       throw new Error(`slide preview failed: ${resp.status}`);
     },
   };

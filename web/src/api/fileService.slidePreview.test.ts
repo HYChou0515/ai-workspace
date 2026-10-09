@@ -54,6 +54,15 @@ describe("slidePreview", () => {
     expect(got).toEqual({ kind: "failed", why: "could not be loaded" });
   });
 
+  it("reads 507 as a refusal, keeping the limit's numbers for the page to name", async () => {
+    const detail = { error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 1, limit: 1 };
+    answer(507, JSON.stringify({ detail }));
+
+    const got = await investigationFileService("rca", "i1").slidePreview!("/q3.pptx", false);
+
+    expect(got).toEqual({ kind: "refused", detail });
+  });
+
   it("throws on anything else, so the page shows it rather than a blank", async () => {
     answer(404, JSON.stringify({ detail: "/q3.pptx not found" }));
 

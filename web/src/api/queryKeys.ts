@@ -26,8 +26,7 @@ export const qk = {
   // The environment modal's own reads (plan-tool-running-version shares them
   // with the tool picker, which closes the same sandbox): the item's sandbox
   // status, and the budget the modal sizes it against.
-  itemEnvironment: (slug: string, itemId: string) =>
-    ["item-environment", slug, itemId] as const,
+  itemEnvironment: (slug: string, itemId: string) => ["item-environment", slug, itemId] as const,
   myBudget: ["my-resources"] as const,
   // Who is above the deploy default (superuser only). Separate from
   // `myResources`: it answers a different question, for a different person.
@@ -59,8 +58,7 @@ export const qk = {
     ["file", id, path, "slidePreview", confirmed] as const,
   // plan-chat-video-export: the export dialog's transcript (what the range
   // picker counts) and the deployment's video ceilings (what the form offers).
-  chatTranscript: (id: string, chatId: string) =>
-    ["chatTranscript", id, chatId] as const,
+  chatTranscript: (id: string, chatId: string) => ["chatTranscript", id, chatId] as const,
   chatVideoLimits: (id: string) => ["chatVideoLimits", id] as const,
   // The progress file the header line polls; keyed by path so two videos of
   // one item are two queries.
@@ -83,8 +81,7 @@ export const qk = {
   // Whether a WUI's folder declares a build. Its own key rather than `file`:
   // that one holds a `FileContent`, and two shapes under one key is a cache
   // that hands a consumer the other one's answer.
-  wuiBuildable: (id: string, folder: string) =>
-    ["wuiBuildable", id, folder] as const,
+  wuiBuildable: (id: string, folder: string) => ["wuiBuildable", id, folder] as const,
   // The `/wui` overview: every Deployed page the viewer may open. One key for
   // the whole listing — it is per viewer, and Remove invalidates all of it.
   wuiOverview: ["wuiOverview"] as const,
@@ -93,22 +90,17 @@ export const qk = {
   // The skill hub (docs/plan-skill-hub.md): the listing per search + 「我的」,
   // and one entry (with the tool diff for an App when asked). Both are per
   // viewer; a management write invalidates the whole family.
-  skillHub: (q: string, mine: boolean, app = "") =>
-    ["skillHub", q, mine, app] as const,
+  skillHub: (q: string, mine: boolean, app = "") => ["skillHub", q, mine, app] as const,
   skillHubBrowse: (q: string, mine: boolean, owner: string, sort: string) =>
     ["skillHub", "browse", q, mine, owner, sort] as const,
   skillHubInstalls: (id: string) => ["skillHub", "installs", id] as const,
-  skillHubTargets: (id: string, app: string) =>
-    ["skillHub", "targets", id, app] as const,
-  skillHubEntry: (id: string, app: string) =>
-    ["skillHub", "entry", id, app] as const,
+  skillHubTargets: (id: string, app: string) => ["skillHub", "targets", id, app] as const,
+  skillHubEntry: (id: string, app: string) => ["skillHub", "entry", id, app] as const,
   skillHubHistory: (id: string) => ["skillHub", "history", id] as const,
-  skillHubVersion: (id: string, revision: string) =>
-    ["skillHub", "version", id, revision] as const,
+  skillHubVersion: (id: string, revision: string) => ["skillHub", "version", id, revision] as const,
   skillHubVersionFile: (id: string, revision: string, path: string) =>
     ["skillHub", "versionFile", id, revision, path] as const,
-  skillHubDiff: (id: string, from: string, to: string) =>
-    ["skillHub", "diff", id, from, to] as const,
+  skillHubDiff: (id: string, from: string, to: string) => ["skillHub", "diff", id, from, to] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 
@@ -120,15 +112,12 @@ export const qk = {
   // #322: the flat tool catalog (chat tool-card labels) + one item's tool-picker
   // state. Invalidate `itemTools` after saving the picker (the override changed).
   toolsCatalog: ["toolsCatalog"] as const,
-  itemTools: (slug: string, itemId: string) =>
-    ["itemTools", slug, itemId] as const,
+  itemTools: (slug: string, itemId: string) => ["itemTools", slug, itemId] as const,
   // #750: this deploy's credential->variable implementations, per item
   // (the item decides who may ask, so the answer is not global).
-  envProviders: (slug: string, itemId: string) =>
-    ["envProviders", slug, itemId] as const,
+  envProviders: (slug: string, itemId: string) => ["envProviders", slug, itemId] as const,
   // `plan-wui-viewer-login`: the CALLER's private env values for one item.
-  privateEnv: (slug: string, itemId: string) =>
-    ["privateEnv", slug, itemId] as const,
+  privateEnv: (slug: string, itemId: string) => ["privateEnv", slug, itemId] as const,
   // `plan-personal-env`: the CALLER's values for every item.
   personalEnv: () => ["personalEnv"] as const,
   /** docs/plan-outside-lookup.md D3: the deploy's search buttons. */
@@ -136,16 +125,14 @@ export const qk = {
   // The deploy's sign-ins, asked with no item (the "My environment variables" page).
   myEnvProviders: () => ["myEnvProviders"] as const,
   // The item's shared values + policy, for a page that has only its id.
-  envLayers: (slug: string, itemId: string) =>
-    ["envLayers", slug, itemId] as const,
+  envLayers: (slug: string, itemId: string) => ["envLayers", slug, itemId] as const,
   // One schedules file's rows with who each runs as ("run as me").
   scheduleBindings: (slug: string, itemId: string, path: string) =>
     ["scheduleBindings", slug, itemId, path] as const,
 
   // #380: one item's skills-picker state (per-skill source + tri-state + effective).
   // Invalidate after saving the picker (the override changed).
-  itemSkills: (slug: string, itemId: string) =>
-    ["itemSkills", slug, itemId] as const,
+  itemSkills: (slug: string, itemId: string) => ["itemSkills", slug, itemId] as const,
 
   // topic-hub §5 (#142): the parsed `collections.json` of one Hub item — the
   // collection-set picker's badge + modal read it; saving the picker invalidates
@@ -160,8 +147,7 @@ export const qk = {
   // An item's schedules (`.workflows/schedules.json`), interpreted by the backend
   // the way the sweep reads them. The Workflows panel reads this; removing a row
   // rewrites the file and invalidates it.
-  itemSchedules: (slug: string, itemId: string) =>
-    ["itemSchedules", slug, itemId] as const,
+  itemSchedules: (slug: string, itemId: string) => ["itemSchedules", slug, itemId] as const,
 
   // #520: the shipped starter templates, with per-item compatibility. Keyed by item
   // because the compatibility flag depends on the item's profile, not just the app.
@@ -184,8 +170,7 @@ export const qk = {
   },
 
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
-  itemChats: (slug: string, itemId: string) =>
-    ["itemChats", slug, itemId] as const,
+  itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>
     ["itemChat", slug, itemId, chatId] as const,
   // #613: one chat's todo checklist (the pinned panel; live `todos_updated`
@@ -243,8 +228,7 @@ export const qk = {
     // #715: one archive import's progress. Keyed by the RUN id, not the
     // collection — two imports into one collection are two runs, and the poll
     // must stop with the run it belongs to.
-    archiveImport: (importId: string) =>
-      ["kb", "archive-import", importId] as const,
+    archiveImport: (importId: string) => ["kb", "archive-import", importId] as const,
     // #730: several documents' envelopes in one request. Keyed by the SORTED
     // id set — the same attachments in another order are the same query, and a
     // card that gains one is a different query rather than a stale hit.
@@ -253,8 +237,7 @@ export const qk = {
     chats: ["kb", "chats"] as const,
     chat: (id: string) => ["kb", "chat", id] as const,
     // #310: a collection's current access state (share dialog pre-fill).
-    collectionPermission: (id: string) =>
-      ["kb", "collection-permission", id] as const,
+    collectionPermission: (id: string) => ["kb", "collection-permission", id] as const,
     // #308: a document's current per-doc read override (share dialog pre-fill).
     docPermission: (id: string) => ["kb", "doc-permission", id] as const,
     agent: ["kb", "agent"] as const,
@@ -262,12 +245,8 @@ export const qk = {
     // The doc IDE's cheap open-a-doc metadata (rationale + parser guidance) —
     // separate from `doc` (the heavy render, used by the citation drawer).
     docMeta: (id: string) => ["kb", "doc-meta", id] as const,
-    graphEntities: (p: {
-      q: string;
-      kind: string;
-      collection: string;
-      offset: number;
-    }) => ["kb", "graph", "entities", p] as const,
+    graphEntities: (p: { q: string; kind: string; collection: string; offset: number }) =>
+      ["kb", "graph", "entities", p] as const,
     graphEntity: (id: string) => ["kb", "graph-entity", id] as const,
     evalRuns: () => ["kb", "eval-runs"] as const,
     evalResults: () => ["kb", "eval-results"] as const,
@@ -275,24 +254,18 @@ export const qk = {
     // Issue #50: the LLM wiki browser. (Wiki *page content* is cached under the
     // shared `qk.file(scopeId, path)` key via the wiki IDE's buffer, not a
     // separate per-page key — so there's no `wikiPage` here.)
-    wikiPages: (collectionId: string) =>
-      ["kb", "wiki-pages", collectionId] as const,
-    wikiStatus: (collectionId: string) =>
-      ["kb", "wiki-status", collectionId] as const,
+    wikiPages: (collectionId: string) => ["kb", "wiki-pages", collectionId] as const,
+    wikiStatus: (collectionId: string) => ["kb", "wiki-status", collectionId] as const,
     // #106: a collection's context cards (the lightweight glossary).
-    contextCards: (collectionId: string) =>
-      ["kb", "context-cards", collectionId] as const,
+    contextCards: (collectionId: string) => ["kb", "context-cards", collectionId] as const,
     // #175: a 自動 context card generation run (status + proposals, polled).
     cardGen: (jobId: string) => ["kb", "card-gen", jobId] as const,
-    cardGenRuns: (collectionId: string) =>
-      ["kb", "card-gen-runs", collectionId] as const,
+    cardGenRuns: (collectionId: string) => ["kb", "card-gen-runs", collectionId] as const,
     // #506/#577 follow-up: the collection's last run funnel (drafted → kept summary).
-    cardGenLatest: (collectionId: string) =>
-      ["kb", "card-gen-latest", collectionId] as const,
+    cardGenLatest: (collectionId: string) => ["kb", "card-gen-latest", collectionId] as const,
     // #377: the global "待釐清" clarification-question inbox.
     docQuestions: ["kb", "doc-questions"] as const,
-    docQuestionsFor: (collectionId: string) =>
-      ["kb", "doc-questions", collectionId] as const,
+    docQuestionsFor: (collectionId: string) => ["kb", "doc-questions", collectionId] as const,
     // #481: the global 審核 review inbox (pending items, or the resolved history;
     // optionally scoped to one collection's tab). Prefix `["kb","review-inbox"]`
     // so any decide / commit / answer / discard can invalidate every variant.

@@ -22,10 +22,7 @@ export const messages = {
     "zh-TW": "調整介面文字大小；其餘版面維持不變。",
     en: "Scales the interface text; the rest of the layout stays put.",
   },
-  "settings.fontsize.reset": {
-    "zh-TW": "重置為預設大小",
-    en: "Reset to default size",
-  },
+  "settings.fontsize.reset": { "zh-TW": "重置為預設大小", en: "Reset to default size" },
   "settings.theme": { "zh-TW": "外觀", en: "Appearance" },
   "settings.theme.note": {
     "zh-TW": "「系統」會跟隨你的作業系統外觀。",
@@ -38,10 +35,7 @@ export const messages = {
   "settings.about": { "zh-TW": "關於", en: "About" },
   "about.product": { "zh-TW": "產品", en: "Product" },
   "about.signin": { "zh-TW": "登入方式", en: "Sign-in" },
-  "about.signin.value": {
-    "zh-TW": "示範模式（尚未接 SSO）",
-    en: "Demo mode (SSO not configured)",
-  },
+  "about.signin.value": { "zh-TW": "示範模式（尚未接 SSO）", en: "Demo mode (SSO not configured)" },
   "about.docs": { "zh-TW": "開發者文件", en: "Developer docs" },
   "about.docs.link": { "zh-TW": "API 文件", en: "API reference" },
 
@@ -53,21 +47,12 @@ export const messages = {
   "effort.low": { "zh-TW": "快速", en: "Quick" },
   "effort.medium": { "zh-TW": "一般", en: "Standard" },
   "effort.high": { "zh-TW": "深入", en: "Deep" },
-  "effort.low.note": {
-    "zh-TW": "回答最快，思考較淺",
-    en: "Fastest answer, lighter thinking",
-  },
+  "effort.low.note": { "zh-TW": "回答最快，思考較淺", en: "Fastest answer, lighter thinking" },
   "effort.medium.note": { "zh-TW": "深度均衡", en: "Balanced depth" },
-  "effort.high.note": {
-    "zh-TW": "較慢但更完整",
-    en: "Slower but more thorough",
-  },
+  "effort.high.note": { "zh-TW": "較慢但更完整", en: "Slower but more thorough" },
   "picker.footer.low": { "zh-TW": "最快、最輕", en: "Fastest, lightest" },
   "picker.footer.medium": { "zh-TW": "速度適中", en: "Balanced speed" },
-  "picker.footer.high": {
-    "zh-TW": "較慢但更完整",
-    en: "Slower, more thorough",
-  },
+  "picker.footer.high": { "zh-TW": "較慢但更完整", en: "Slower, more thorough" },
   "picker.done": { "zh-TW": "完成", en: "Done" },
 
   // Knowledge-search scope (KB surface) — renamed from "depth" so it no longer
@@ -98,18 +83,12 @@ export const messages = {
     "zh-TW": "用不同說法多找一些相關文件（0＝關閉）",
     en: "Find more by rephrasing your question (0 = off)",
   },
-  "depth.hyde": {
-    "zh-TW": "先擬假設答案再搜",
-    en: "Hypothetical-answer probes",
-  },
+  "depth.hyde": { "zh-TW": "先擬假設答案再搜", en: "Hypothetical-answer probes" },
   "depth.hyde.title": {
     "zh-TW": "先猜可能的答案，用它找更貼近的文件（0＝關閉）",
     en: "Draft a likely answer first to find closer matches (0 = off)",
   },
-  "depth.rerank": {
-    "zh-TW": "讓 AI 重新排序結果",
-    en: "Let AI re-rank results",
-  },
+  "depth.rerank": { "zh-TW": "讓 AI 重新排序結果", en: "Let AI re-rank results" },
   "depth.rerank.title": {
     "zh-TW": "讓 AI 把最相關的結果排到前面",
     en: "Let AI move the most relevant results to the top",
@@ -141,40 +120,24 @@ export const messages = {
 
   // #605: the "answer exists but you lack permission" disclosure toggle.
   // #534/#535: the graph entity page + the retrieval-eval panel.
-  "entity.missing": {
-    "zh-TW": "找不到這個實體，或你沒有權限看它。",
-    en: "This entity doesn't exist, or you can't see it.",
-  },
+  "entity.missing": { "zh-TW": "找不到這個實體，或你沒有權限看它。", en: "This entity doesn't exist, or you can't see it." },
   "entity.eyebrow": { "zh-TW": "知識圖譜實體", en: "Knowledge-graph entity" },
   "entity.stat.occ": { "zh-TW": "次出現", en: "occurrences" },
   "entity.stat.docs": { "zh-TW": "份文件提到", en: "documents" },
   "entity.aliases": { "zh-TW": "也叫", en: "Also called" },
   "entity.mentions": { "zh-TW": "哪些文件提到它", en: "Where it appears" },
-  "entity.noMentions": {
-    "zh-TW": "沒有你可讀的出處。",
-    en: "No readable evidence.",
-  },
+  "entity.noMentions": { "zh-TW": "沒有你可讀的出處。", en: "No readable evidence." },
   "entity.related": { "zh-TW": "它和誰有關", en: "How it connects" },
   "graph.browse.eyebrow": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
   "graph.browse.title": { "zh-TW": "圖譜裡有什麼", en: "What the graph knows" },
   "graph.browse.blurb": {
-    "zh-TW":
-      "系統從文件裡認出來的東西。點一個看它的檔案卡:文件怎麼說它、誰用了它、它和誰有關。",
+    "zh-TW": "系統從文件裡認出來的東西。點一個看它的檔案卡:文件怎麼說它、誰用了它、它和誰有關。",
     en: "The things the system recognised in your documents. Open one to see what documents state about it, what uses it, and how it connects.",
   },
-  "graph.browse.searchPlaceholder": {
-    "zh-TW": "搜尋名字…",
-    en: "Search by name…",
-  },
-  "graph.browse.kindPlaceholder": {
-    "zh-TW": "類別(機台、材料…)",
-    en: "Kind (machine, material…)",
-  },
+  "graph.browse.searchPlaceholder": { "zh-TW": "搜尋名字…", en: "Search by name…" },
+  "graph.browse.kindPlaceholder": { "zh-TW": "類別(機台、材料…)", en: "Kind (machine, material…)" },
   "graph.browse.collectionLabel": { "zh-TW": "知識庫", en: "Knowledge base" },
-  "graph.browse.allCollections": {
-    "zh-TW": "全部知識庫",
-    en: "All knowledge bases",
-  },
+  "graph.browse.allCollections": { "zh-TW": "全部知識庫", en: "All knowledge bases" },
   "graph.browse.alsoWritten": { "zh-TW": "也寫作 ", en: "also written " },
   "graph.browse.colName": { "zh-TW": "名稱", en: "Name" },
   "graph.browse.colKind": { "zh-TW": "類別", en: "Kind" },
@@ -187,18 +150,9 @@ export const messages = {
   "graph.browse.empty": { "zh-TW": "沒有符合的東西。", en: "Nothing matches." },
   "graph.browse.next": { "zh-TW": "下一頁", en: "Next" },
   "graph.browse.prev": { "zh-TW": "上一頁", en: "Previous" },
-  "graph.browse.link": {
-    "zh-TW": "瀏覽圖譜裡的全部實體",
-    en: "Browse all entities in the graph",
-  },
-  "entity.claims": {
-    "zh-TW": "文件怎麼說它",
-    en: "What documents state about it",
-  },
-  "entity.valueOf": {
-    "zh-TW": "誰用了它",
-    en: "Things that have it as a value",
-  },
+  "graph.browse.link": { "zh-TW": "瀏覽圖譜裡的全部實體", en: "Browse all entities in the graph" },
+  "entity.claims": { "zh-TW": "文件怎麼說它", en: "What documents state about it" },
+  "entity.valueOf": { "zh-TW": "誰用了它", en: "Things that have it as a value" },
   "entity.basis.identical": { "zh-TW": "同名", en: "same name" },
   "entity.basis.resembles": { "zh-TW": "名稱相近", en: "similar name" },
   "entity.basis.declared": { "zh-TW": "AI 併入", en: "merged by AI" },
@@ -215,39 +169,20 @@ export const messages = {
     en: "Auto-generated questions per knowledge base — can search find the source again?",
   },
   "eval.legend": {
-    "zh-TW":
-      "前 k 名命中率＝出處排進前 k 名的比例；命中排名分數＝出處平均排名的倒數（1.00＝永遠第一名）。",
+    "zh-TW": "前 k 名命中率＝出處排進前 k 名的比例；命中排名分數＝出處平均排名的倒數（1.00＝永遠第一名）。",
     en: "Top-k hit rate = how often the source ranks in the top k; rank score = mean reciprocal rank (1.00 = always first).",
   },
   "eval.run": { "zh-TW": "跑一輪評測", en: "Run evaluation" },
-  "eval.fireFailed": {
-    "zh-TW": "評測沒有啟動，請稍後再試。",
-    en: "The evaluation didn't start — try again.",
-  },
-  "eval.empty": {
-    "zh-TW": "還沒有評測結果。按「跑一輪評測」開始。",
-    en: "No results yet. Press Run evaluation to start.",
-  },
-  "eval.sample": {
-    "zh-TW": "以 {kept} 題評測（自動出題 {gen} 題）",
-    en: "{kept} questions scored (of {gen} generated)",
-  },
-  "eval.chunkTitle": {
-    "zh-TW": "找回出處段落",
-    en: "Finds the source passage",
-  },
+  "eval.fireFailed": { "zh-TW": "評測沒有啟動，請稍後再試。", en: "The evaluation didn't start — try again." },
+  "eval.empty": { "zh-TW": "還沒有評測結果。按「跑一輪評測」開始。", en: "No results yet. Press Run evaluation to start." },
+  "eval.sample": { "zh-TW": "以 {kept} 題評測（自動出題 {gen} 題）", en: "{kept} questions scored (of {gen} generated)" },
+  "eval.chunkTitle": { "zh-TW": "找回出處段落", en: "Finds the source passage" },
   "eval.docTitle": { "zh-TW": "找回出處文件", en: "Finds the source document" },
   "eval.mrr": { "zh-TW": "命中排名分數", en: "rank score" },
   "eval.topK": { "zh-TW": "前 {k} 名", en: "top {k}" },
-  "eval.recallTitle": {
-    "zh-TW": "出處排進前 {k} 名的比例",
-    en: "How often the source ranks in the top {k}",
-  },
+  "eval.recallTitle": { "zh-TW": "出處排進前 {k} 名的比例", en: "How often the source ranks in the top {k}" },
 
-  "disclosure.label": {
-    "zh-TW": "提示無權限的相關資料",
-    en: "Point out inaccessible sources",
-  },
+  "disclosure.label": { "zh-TW": "提示無權限的相關資料", en: "Point out inaccessible sources" },
   "disclosure.title": {
     "zh-TW": "找到相關但你沒權限的資料時提醒你（可申請存取）；關閉可加快回覆",
     en: "When an answer exists in a collection you can't read, say so (with request access); off is faster",
@@ -260,28 +195,16 @@ export const messages = {
   "tool.write_file": { "zh-TW": "寫入檔案", en: "Write file" },
   "tool.edit_file": { "zh-TW": "編輯檔案", en: "Edit file" },
   "tool.delete_file": { "zh-TW": "刪除檔案", en: "Delete file" },
-  "tool.ask_knowledge_base": {
-    "zh-TW": "查詢知識庫",
-    en: "Ask the knowledge base",
-  },
+  "tool.ask_knowledge_base": { "zh-TW": "查詢知識庫", en: "Ask the knowledge base" },
   "tool.kb_search": { "zh-TW": "搜尋知識庫", en: "Search the knowledge base" },
   "tool.kb_grep": { "zh-TW": "精確搜尋字串", en: "Find exact text" },
   "tool.read_page": { "zh-TW": "看文件頁面", en: "Read a page" },
   "tool.read_lines": { "zh-TW": "讀文件內文", en: "Read document lines" },
   "tool.search_wiki": { "zh-TW": "搜尋知識百科", en: "Search the wiki" },
-  "tool.resolve_collection": {
-    "zh-TW": "確認知識集",
-    en: "Resolve collection",
-  },
+  "tool.resolve_collection": { "zh-TW": "確認知識集", en: "Resolve collection" },
   "tool.lookup_glossary": { "zh-TW": "查詢詞彙", en: "Look up glossary" },
-  "tool.update_context_card": {
-    "zh-TW": "更新詞彙卡",
-    en: "Update glossary card",
-  },
-  "tool.create_context_card": {
-    "zh-TW": "新增詞彙卡",
-    en: "Create glossary card",
-  },
+  "tool.update_context_card": { "zh-TW": "更新詞彙卡", en: "Update glossary card" },
+  "tool.create_context_card": { "zh-TW": "新增詞彙卡", en: "Create glossary card" },
   "tool.read_new_source": { "zh-TW": "讀取新文件", en: "Read new source" },
   "tool.list_sources": { "zh-TW": "列出文件", en: "List sources" },
   "tool.read_source": { "zh-TW": "讀取文件", en: "Read source" },
@@ -293,57 +216,27 @@ export const messages = {
   "tool.running": { "zh-TW": "執行中…", en: "Running…" },
   // Caption over still-streaming tool output (#170) — so a half-written stdout
   // isn't mistaken for the final result.
-  "tool.streamingHint": {
-    "zh-TW": "即時輸出，可能未完成",
-    en: "Live output — may be incomplete",
-  },
+  "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "tool.show_file": { "zh-TW": "顯示檔案", en: "Show a file" },
-  "tool.show_skill_hub_entry": {
-    "zh-TW": "顯示 skill hub 上的 skill",
-    en: "Show a skill hub skill",
-  },
-  "tool.request_env": {
-    "zh-TW": "請你提供工具需要的變數",
-    en: "Ask you for a tool's variables",
-  },
-  "tool.ask_outside": {
-    "zh-TW": "請你幫忙查外部資料",
-    en: "Ask you to look something up",
-  },
+  "tool.show_skill_hub_entry": { "zh-TW": "顯示 skill hub 上的 skill", en: "Show a skill hub skill" },
+  "tool.request_env": { "zh-TW": "請你提供工具需要的變數", en: "Ask you for a tool's variables" },
+  "tool.ask_outside": { "zh-TW": "請你幫忙查外部資料", en: "Ask you to look something up" },
   // The affordance on a file the agent showed. "openHere" = a workspace shell is
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
   "shownFile.open": { "zh-TW": "開啟", en: "Open" },
-  "shownLayout.files": {
-    "zh-TW": "{n} 個檔案的版面",
-    en: "Layout of {n} files",
-  },
+  "shownLayout.files": { "zh-TW": "{n} 個檔案的版面", en: "Layout of {n} files" },
   "markings.notSent": { "zh-TW": "未送出", en: "Not sent" },
-  "markings.remove": {
-    "zh-TW": "這次不送 {name}",
-    en: "Remove {name} from this message",
-  },
+  "markings.remove": { "zh-TW": "這次不送 {name}", en: "Remove {name} from this message" },
   // P7 — save a marking's lit rows as a new CSV in the workspace.
   "markings.saveTable": { "zh-TW": "存成表格", en: "Save as table" },
   "markings.saving": { "zh-TW": "儲存中…", en: "Saving…" },
   "markings.saved": { "zh-TW": "已存 {n} 列 →", en: "Saved {n} rows →" },
   "markings.savedOne": { "zh-TW": "已存 1 列 →", en: "Saved 1 row →" },
-  "markings.saveFailed": {
-    "zh-TW": "表格沒有存成",
-    en: "The table could not be saved",
-  },
-  "markings.noView": {
-    "zh-TW": "這個標記沒有記下來自哪個視圖",
-    en: "No view is recorded for this marking",
-  },
-  "markings.nothingMarked": {
-    "zh-TW": "還沒有標記任何值",
-    en: "Nothing is marked yet",
-  },
-  "markings.notAFile": {
-    "zh-TW": "這個視圖不是工作區裡的檔案",
-    en: "This view is not a file in the workspace",
-  },
+  "markings.saveFailed": { "zh-TW": "表格沒有存成", en: "The table could not be saved" },
+  "markings.noView": { "zh-TW": "這個標記沒有記下來自哪個視圖", en: "No view is recorded for this marking" },
+  "markings.nothingMarked": { "zh-TW": "還沒有標記任何值", en: "Nothing is marked yet" },
+  "markings.notAFile": { "zh-TW": "這個視圖不是工作區裡的檔案", en: "This view is not a file in the workspace" },
   // P27 — the keys a marking marks by, beside its picker and on its chip:
   // which columns link the views (#861).
   "markings.by": { "zh-TW": "依 {columns}", en: "by {columns}" },
@@ -377,53 +270,28 @@ export const messages = {
   },
   "mention.agent": { "zh-TW": "代理", en: "The agent" },
   "mention.summoned": { "zh-TW": "召喚了", en: "summoned" },
-  "entry.replay": {
-    "zh-TW": "重跑這一步",
-    en: "Replay this step with the current AI",
-  },
-  "entry.undo": {
-    "zh-TW": "復原這一回合（含之後）",
-    en: "Undo this turn and everything after it",
-  },
+  "entry.replay": { "zh-TW": "重跑這一步", en: "Replay this step with the current AI" },
+  "entry.undo": { "zh-TW": "復原這一回合（含之後）", en: "Undo this turn and everything after it" },
   // Compact label revealed on hover/focus of the undo control (#172).
-  "entry.undo.label": {
-    "zh-TW": "復原此回合之後",
-    en: "Undo this turn onward",
-  },
+  "entry.undo.label": { "zh-TW": "復原此回合之後", en: "Undo this turn onward" },
   // #397: report a wrong answer so the wiki gets corrected.
-  "entry.reportWiki": {
-    "zh-TW": "回報有誤",
-    en: "Report a wiki error in this answer",
-  },
+  "entry.reportWiki": { "zh-TW": "回報有誤", en: "Report a wiki error in this answer" },
 
   // #397: wiki-correction dialog ("回報有誤")
-  "wikiCorrection.title": {
-    "zh-TW": "回報 wiki 有誤",
-    en: "Report a wiki error",
-  },
+  "wikiCorrection.title": { "zh-TW": "回報 wiki 有誤", en: "Report a wiki error" },
   "wikiCorrection.intro": {
     "zh-TW": "告訴維護者哪裡錯、應該怎樣，AI 會去修正 wiki（你不用自己改）。",
     en: "Tell the maintainer what's wrong and how it should read; the AI corrects the wiki for you.",
   },
   "wikiCorrection.generate": { "zh-TW": "AI 幫我草擬", en: "Draft with AI" },
   "wikiCorrection.generating": { "zh-TW": "草擬中…", en: "Drafting…" },
-  "wikiCorrection.instructionLabel": {
-    "zh-TW": "哪裡錯 / 應該怎樣",
-    en: "What's wrong / how it should read",
-  },
+  "wikiCorrection.instructionLabel": { "zh-TW": "哪裡錯 / 應該怎樣", en: "What's wrong / how it should read" },
   "wikiCorrection.instructionPlaceholder": {
-    "zh-TW":
-      "例如：Foo 成立於 1998 年，不是 1989 年。（可留空按「AI 幫我草擬」）",
+    "zh-TW": "例如：Foo 成立於 1998 年，不是 1989 年。（可留空按「AI 幫我草擬」）",
     en: "e.g. Foo was founded in 1998, not 1989. (Leave blank and click “Draft with AI”.)",
   },
-  "wikiCorrection.targetLabel": {
-    "zh-TW": "wiki 頁面（可選）",
-    en: "Wiki page (optional)",
-  },
-  "wikiCorrection.targetPlaceholder": {
-    "zh-TW": "/entities/foo.md（留空讓維護者自己找）",
-    en: "/entities/foo.md (blank = let the maintainer find it)",
-  },
+  "wikiCorrection.targetLabel": { "zh-TW": "wiki 頁面（可選）", en: "Wiki page (optional)" },
+  "wikiCorrection.targetPlaceholder": { "zh-TW": "/entities/foo.md（留空讓維護者自己找）", en: "/entities/foo.md (blank = let the maintainer find it)" },
   "wikiCorrection.questionsIntro": {
     "zh-TW": "AI 需要多一點資訊，請回答：",
     en: "The AI needs a little more to go on:",
@@ -431,14 +299,8 @@ export const messages = {
   "wikiCorrection.submit": { "zh-TW": "送出修正", en: "Submit correction" },
   "wikiCorrection.submitting": { "zh-TW": "送出中…", en: "Submitting…" },
   "wikiCorrection.cancel": { "zh-TW": "取消", en: "Cancel" },
-  "wikiCorrection.done": {
-    "zh-TW": "已送出，wiki 更新中。",
-    en: "Submitted — the wiki is being updated.",
-  },
-  "wikiCorrection.error": {
-    "zh-TW": "送出失敗，請再試一次。",
-    en: "Couldn't submit — please try again.",
-  },
+  "wikiCorrection.done": { "zh-TW": "已送出，wiki 更新中。", en: "Submitted — the wiki is being updated." },
+  "wikiCorrection.error": { "zh-TW": "送出失敗，請再試一次。", en: "Couldn't submit — please try again." },
 
   // App launcher (Launcher)
   "launcher.appsEyebrow": { "zh-TW": "應用程式", en: "APPS" },
@@ -477,18 +339,9 @@ export const messages = {
   // de-jargoned from "Indexing" / "Retrieval modes").
   "kb.status.uploading": { "zh-TW": "上傳中…", en: "Uploading…" },
   "kb.status.indexing": { "zh-TW": "處理 {n} 份中…", en: "Processing {n}…" },
-  "kb.status.failed": {
-    "zh-TW": "{n} 份處理失敗",
-    en: "{n} couldn’t be processed",
-  },
-  "kb.retrieval.title": {
-    "zh-TW": "答案如何查詢",
-    en: "How answers are found",
-  },
-  "kb.retrieval.close": {
-    "zh-TW": "收合答案如何查詢",
-    en: "Close how answers are found",
-  },
+  "kb.status.failed": { "zh-TW": "{n} 份處理失敗", en: "{n} couldn’t be processed" },
+  "kb.retrieval.title": { "zh-TW": "答案如何查詢", en: "How answers are found" },
+  "kb.retrieval.close": { "zh-TW": "收合答案如何查詢", en: "Close how answers are found" },
 
   // Per-doc index state (KbDocIde status bar / tree badge / editor header) — #171.
   "kb.doc.ready": { "zh-TW": "就緒", en: "Ready" },
@@ -523,22 +376,13 @@ export const messages = {
   },
   "kb.docview.delete": { "zh-TW": "刪除", en: "Delete" },
   "kb.docview.deleteAria": { "zh-TW": "刪除文件", en: "Delete document" },
-  "kb.docview.confirmDeleteAria": {
-    "zh-TW": "確認刪除文件",
-    en: "Confirm delete document",
-  },
-  "kb.docview.confirmDeleteBody": {
-    "zh-TW": "確定刪除這份文件？",
-    en: "Delete this document?",
-  },
+  "kb.docview.confirmDeleteAria": { "zh-TW": "確認刪除文件", en: "Confirm delete document" },
+  "kb.docview.confirmDeleteBody": { "zh-TW": "確定刪除這份文件？", en: "Delete this document?" },
   "kb.docview.cancel": { "zh-TW": "取消", en: "Cancel" },
   // KB document body: File ⇄ Chunks toggle, chunk list, no-preview notice.
   "kb.docbody.viewFile": { "zh-TW": "檔案", en: "File" },
   "kb.docbody.viewChunks": { "zh-TW": "區塊 ({n})", en: "Chunks ({n})" },
-  "kb.docbody.noChunks": {
-    "zh-TW": "沒有已索引的區塊。",
-    en: "No indexed chunks.",
-  },
+  "kb.docbody.noChunks": { "zh-TW": "沒有已索引的區塊。", en: "No indexed chunks." },
   "kb.docbody.chunkCited": { "zh-TW": "被引用 {n} 次", en: "{n} cited" },
   "kb.docbody.previewUnavailable": {
     "zh-TW": "這種檔案無法預覽 —— 請用「下載」開啟。",
@@ -554,8 +398,7 @@ export const messages = {
   },
   "kb.tuneParsing.title": { "zh-TW": "調整解讀方式", en: "Adjust reading" },
   "kb.tuneParsing.description": {
-    "zh-TW":
-      "打一個使用者會問的問題,看這份文件在檢索中排到多深(會排得比使用者實際看到的更深,所以埋很深的段落會顯示成像「#37」而不只是「找不到」)。編輯下面的解讀指引後可重新解讀、並「試答」這題;只套用到這份文件,或套用到整個 collection。套用前不會寫入任何東西。",
+    "zh-TW": "打一個使用者會問的問題,看這份文件在檢索中排到多深(會排得比使用者實際看到的更深,所以埋很深的段落會顯示成像「#37」而不只是「找不到」)。編輯下面的解讀指引後可重新解讀、並「試答」這題;只套用到這份文件,或套用到整個 collection。套用前不會寫入任何東西。",
     en: 'Type a question your users would ask and see how deep this document ranks for it — we rank far past the top results a user sees, so a buried passage reads as "#37" rather than just "absent". Edit the reading instructions below, re-read, and "Try answer" the question; save it for this document only, or apply it to the whole collection. Nothing is written until you apply.',
   },
   "kb.tuneParsing.close": { "zh-TW": "關閉", en: "Close" },
@@ -566,47 +409,31 @@ export const messages = {
   },
   "kb.tuneParsing.k": { "zh-TW": "前 k 段 (k={k})", en: "Top-k (k={k})" },
   "kb.tuneParsing.kTitle": {
-    "zh-TW":
-      "排名前 k 段才算「使用者看得到」、才會進入試答的 context;同時決定排名高亮。",
+    "zh-TW": "排名前 k 段才算「使用者看得到」、才會進入試答的 context;同時決定排名高亮。",
     en: 'The top-k passages count as "what a user sees" and feed Try answer; also drives the rank highlight.',
   },
   "kb.tuneParsing.checkRanks": { "zh-TW": "檢查排名", en: "Check ranks" },
-  "kb.tuneParsing.reparse": {
-    "zh-TW": "用指引重新解讀",
-    en: "Re-read with these instructions",
-  },
+  "kb.tuneParsing.reparse": { "zh-TW": "用指引重新解讀", en: "Re-read with these instructions" },
   "kb.tuneParsing.reparseTitle": {
     "zh-TW": "用下面的指引讓 AI 重新解讀這份文件(可能要一下子)",
     en: "Have the AI re-read this document with the instructions below (may take a moment)",
   },
-  "kb.tuneParsing.guidance": {
-    "zh-TW": "解讀指引",
-    en: "Reading instructions",
-  },
+  "kb.tuneParsing.guidance": { "zh-TW": "解讀指引", en: "Reading instructions" },
   "kb.tuneParsing.guidancePlaceholder": {
     "zh-TW": "例如:看到魚骨圖就輸出 JSON;看到表格就輸出 Markdown。",
     en: "e.g. If you see a fishbone diagram, emit JSON; a table, emit Markdown.",
   },
-  "kb.tuneParsing.sourceCustom": {
-    "zh-TW": "此文件:專屬設定",
-    en: "This document: custom override",
-  },
+  "kb.tuneParsing.sourceCustom": { "zh-TW": "此文件:專屬設定", en: "This document: custom override" },
   "kb.tuneParsing.sourceInherited": {
     "zh-TW": "此文件:繼承自 collection",
     en: "This document: inherited from collection",
   },
   "kb.tuneParsing.before": { "zh-TW": "現況", en: "Before (current)" },
-  "kb.tuneParsing.after": {
-    "zh-TW": "套用新指引後",
-    en: "After (these instructions)",
-  },
+  "kb.tuneParsing.after": { "zh-TW": "套用新指引後", en: "After (these instructions)" },
   "kb.tuneParsing.tryAnswer": { "zh-TW": "試答", en: "Try answer" },
   "kb.tuneParsing.bestRank": { "zh-TW": "最佳 #{rank}", en: "best #{rank}" },
   "kb.tuneParsing.notInTop": { "zh-TW": "不在前 {k} 名", en: "not in top {k}" },
-  "kb.tuneParsing.saveDoc": {
-    "zh-TW": "只套用到這份文件",
-    en: "Save for this document",
-  },
+  "kb.tuneParsing.saveDoc": { "zh-TW": "只套用到這份文件", en: "Save for this document" },
   "kb.tuneParsing.applyCollection": {
     "zh-TW": "套用到整個 collection",
     en: "Apply to whole collection",
@@ -615,25 +442,18 @@ export const messages = {
     "zh-TW": "這會改變整個 collection 之後所有文件的解讀方式。確定要套用嗎?",
     en: "This changes how every document in the collection is read on the next re-read. Continue?",
   },
-  "kb.tuneParsing.clearOverride": {
-    "zh-TW": "清除專屬設定",
-    en: "Clear document override",
-  },
+  "kb.tuneParsing.clearOverride": { "zh-TW": "清除專屬設定", en: "Clear document override" },
   "kb.tuneParsing.savedNudge": {
     "zh-TW": "已儲存,尚未生效 — 讓 AI 重新讀取後才會套用。",
     en: "Saved — not in effect yet; re-read to apply.",
   },
-  "kb.tuneParsing.reindexDoc": {
-    "zh-TW": "重新讀取這份文件",
-    en: "Re-read this document",
-  },
+  "kb.tuneParsing.reindexDoc": { "zh-TW": "重新讀取這份文件", en: "Re-read this document" },
   "kb.tuneParsing.running": { "zh-TW": "執行中…", en: "running…" },
   "kb.tuneParsing.applied": { "zh-TW": "已套用", en: "Applied" },
   "kb.tuneParsing.probeFailed": { "zh-TW": "探測失敗", en: "probe failed" },
   "kb.tuneParsing.answerFailed": { "zh-TW": "回答失敗", en: "answer failed" },
   "kb.tuneParsing.emptyForQuestion": {
-    "zh-TW":
-      "在前 {k} 名內,這份文件沒有任何段落 — 使用者問這題時用不到它(這就是要修的訊號)。",
+    "zh-TW": "在前 {k} 名內,這份文件沒有任何段落 — 使用者問這題時用不到它(這就是要修的訊號)。",
     en: "This document has no passage in the top {k} for the question — it won't help a user asking it (the red flag to fix).",
   },
 
@@ -649,13 +469,11 @@ export const messages = {
   "kb.quality.unscored": { "zh-TW": "尚未評分", en: "Not yet scored" },
   "kb.quality.rubric.title": { "zh-TW": "品質評分標準", en: "Quality rubric" },
   "kb.quality.rubric.hint": {
-    "zh-TW":
-      "用一段文字說明：什麼樣的文件算好/壞的知識來源、要從哪些面向評。留空＝不評分，搜尋排序不受影響。",
+    "zh-TW": "用一段文字說明：什麼樣的文件算好/壞的知識來源、要從哪些面向評。留空＝不評分，搜尋排序不受影響。",
     en: "Describe what makes a document a good/bad knowledge source here, and which dimensions to assess. Leave blank to turn scoring off (search ranking is unaffected).",
   },
   "kb.quality.rubric.placeholder": {
-    "zh-TW":
-      "例如：評這份缺陷報告作為知識來源的品質，面向：清晰度、完整度、雜訊。",
+    "zh-TW": "例如：評這份缺陷報告作為知識來源的品質，面向：清晰度、完整度、雜訊。",
     en: "e.g. Judge this defect report as a knowledge source. Dimensions: clarity, completeness, noise.",
   },
   "kb.quality.rubric.save": { "zh-TW": "儲存評分標準", en: "Save rubric" },
@@ -682,15 +500,9 @@ export const messages = {
   // Index-status strip — async progress feedback (#170), de-jargoned to match
   // #171's "processing" wording: per-file progress, an explicit "all set"
   // confirmation (fades), and a clickable failure list.
-  "kb.status.uploadingProgress": {
-    "zh-TW": "上傳 {done}/{total}",
-    en: "Uploading {done}/{total}",
-  },
+  "kb.status.uploadingProgress": { "zh-TW": "上傳 {done}/{total}", en: "Uploading {done}/{total}" },
   "kb.status.allReady": { "zh-TW": "✓ 全部就緒", en: "✓ All set" },
-  "kb.status.openFailed": {
-    "zh-TW": "查看 {name} 的失敗原因",
-    en: "View why {name} failed",
-  },
+  "kb.status.openFailed": { "zh-TW": "查看 {name} 的失敗原因", en: "View why {name} failed" },
   "kb.status.retryFailed": { "zh-TW": "重試", en: "Retry" },
   // #325: files refused at upload (encrypted/unreadable) — distinct from a
   // background processing failure: there's no doc to open, just a reason +
@@ -707,10 +519,7 @@ export const messages = {
 
   // Workflow review gate (WorkflowDecisionCard) — make "it's your turn" loud (#170)
   "wf.decision.cue": { "zh-TW": "需要你的決定", en: "Your decision needed" },
-  "wf.decision.titleFallback": {
-    "zh-TW": "需要你的決定",
-    en: "Awaiting your decision",
-  },
+  "wf.decision.titleFallback": { "zh-TW": "需要你的決定", en: "Awaiting your decision" },
 
   // #205 — context-card diff review (before approving an overwrite)
   "cardDiff.view": { "zh-TW": "查看變更", en: "View changes" },
@@ -775,10 +584,7 @@ export const messages = {
     "zh-TW": "沒有符合「{q}」的知識庫。",
     en: "No collections match “{q}”.",
   },
-  "collections.none": {
-    "zh-TW": "目前沒有任何知識庫可選。",
-    en: "No collections to choose from.",
-  },
+  "collections.none": { "zh-TW": "目前沒有任何知識庫可選。", en: "No collections to choose from." },
   // Global collection — the system-wide baseline badge on a checklist row and
   // the superuser toggle on the collection page.
   "collections.global": { "zh-TW": "全域", en: "Global" },
@@ -790,8 +596,7 @@ export const messages = {
   },
   "skills.title": { "zh-TW": "Skills", en: "Skills" },
   "skills.intro": {
-    "zh-TW":
-      "開啟或關閉助理能用的 skill，或選「套用」讓它這回合照著某個 skill 做。",
+    "zh-TW": "開啟或關閉助理能用的 skill，或選「套用」讓它這回合照著某個 skill 做。",
     en: "Turn the assistant's skills on or off, or Apply one to have it follow that skill this turn.",
   },
   "skills.empty": {
@@ -799,18 +604,9 @@ export const messages = {
     en: 'No skills yet. Ask the assistant "help me make a skill" to build one together.',
   },
   "skills.download": { "zh-TW": "下載", en: "Download" },
-  "skills.reset": {
-    "zh-TW": "還原成出貨版本",
-    en: "Reset to the shipped version",
-  },
-  "skills.refresh": {
-    "zh-TW": "更新為出貨版本",
-    en: "Update to the shipped version",
-  },
-  "skills.refreshDone": {
-    "zh-TW": "已更新到出貨版本。",
-    en: "Updated to the shipped version.",
-  },
+  "skills.reset": { "zh-TW": "還原成出貨版本", en: "Reset to the shipped version" },
+  "skills.refresh": { "zh-TW": "更新為出貨版本", en: "Update to the shipped version" },
+  "skills.refreshDone": { "zh-TW": "已更新到出貨版本。", en: "Updated to the shipped version." },
   // plan-skill-hub-ui-polish D4: a copy installed from the skill hub has no
   // "shipped version" — it updates to what is on the skill hub now. Always
   // "skill hub", never "hub" alone (plan-skill-hub-history G22).
@@ -825,10 +621,7 @@ export const messages = {
     en: "Synced with the version on the skill hub.",
   },
   "skills.updateAvailable": { "zh-TW": "有新版", en: "Update available" },
-  "skills.updateAvailable.hub": {
-    "zh-TW": "skill 已變更",
-    en: "Skill changed",
-  },
+  "skills.updateAvailable.hub": { "zh-TW": "skill 已變更", en: "Skill changed" },
   "skills.refreshKept": {
     "zh-TW": "這些檔案你改過，所以保持原樣",
     en: "Edited here, so left as they are",
@@ -836,18 +629,9 @@ export const messages = {
   "skills.copy": { "zh-TW": "可在此編輯", en: "editable here" },
   // plan-skill-hub-ux-redo D9: where a skill comes from, in words, and the row's controls.
   "skills.source.shared": { "zh-TW": "App 內建", en: "Built into the App" },
-  "skills.source.profile": {
-    "zh-TW": "範本內建",
-    en: "Built into the template",
-  },
-  "skills.source.workspace": {
-    "zh-TW": "這個 workspace 的",
-    en: "This workspace's",
-  },
-  "skills.source.hub": {
-    "zh-TW": "從 skill hub 裝的",
-    en: "From the skill hub",
-  },
+  "skills.source.profile": { "zh-TW": "範本內建", en: "Built into the template" },
+  "skills.source.workspace": { "zh-TW": "這個 workspace 的", en: "This workspace's" },
+  "skills.source.hub": { "zh-TW": "從 skill hub 裝的", en: "From the skill hub" },
   "skills.refresh.short": { "zh-TW": "更新", en: "Update" },
   "skills.state": { "zh-TW": "要不要載入", en: "Whether it loads" },
   "skills.more": { "zh-TW": "{name} 的其他動作", en: "More for {name}" },
@@ -874,17 +658,13 @@ export const messages = {
     "zh-TW": "查看、執行與下載你和助理一起做的工作流程",
     en: "See, run, and download the workflows you built with the assistant",
   },
-  "workflows.title": {
-    "zh-TW": "這個工作區的工作流程",
-    en: "Workflows in this workspace",
-  },
+  "workflows.title": { "zh-TW": "這個工作區的工作流程", en: "Workflows in this workspace" },
   "workflows.intro": {
     "zh-TW": "工作流程是你和助理一起定下、可以重複執行的步驟。",
     en: "A workflow is a repeatable set of steps you built with the assistant.",
   },
   "workflows.empty": {
-    "zh-TW":
-      "還沒有工作流程。在對話中請助理「幫我做一個工作流程」就能一起做一個。",
+    "zh-TW": "還沒有工作流程。在對話中請助理「幫我做一個工作流程」就能一起做一個。",
     en: 'No workflows yet. Ask the assistant "help me make a workflow" to build one together.',
   },
   "workflows.run": { "zh-TW": "執行", en: "Run" },
@@ -901,25 +681,15 @@ export const messages = {
   // operator's word, never shown here.
   "schedules.heading": { "zh-TW": "定時執行", en: "Scheduled runs" },
   "schedules.intro": {
-    "zh-TW":
-      "這些工作流程會照時間自動執行；同一條排程的每次執行都寫進同一個對話。",
+    "zh-TW": "這些工作流程會照時間自動執行；同一條排程的每次執行都寫進同一個對話。",
     en: "These workflows run on their own at the times below; a schedule's runs share one conversation.",
   },
   "schedules.every.minute": { "zh-TW": "每分鐘", en: "Every minute" },
-  "schedules.every.minutes": {
-    "zh-TW": "每 {n} 分鐘",
-    en: "Every {n} minutes",
-  },
+  "schedules.every.minutes": { "zh-TW": "每 {n} 分鐘", en: "Every {n} minutes" },
   "schedules.every.hourly": { "zh-TW": "每小時", en: "Hourly" },
   "schedules.every.daily": { "zh-TW": "每天 {at}", en: "Daily at {at}" },
-  "schedules.every.weekly": {
-    "zh-TW": "每{dow} {at}",
-    en: "Weekly on {dow} at {at}",
-  },
-  "schedules.every.monthly": {
-    "zh-TW": "每月 {dom} 日 {at}",
-    en: "Monthly on day {dom} at {at}",
-  },
+  "schedules.every.weekly": { "zh-TW": "每{dow} {at}", en: "Weekly on {dow} at {at}" },
+  "schedules.every.monthly": { "zh-TW": "每月 {dom} 日 {at}", en: "Monthly on day {dom} at {at}" },
   "schedules.dow.mon": { "zh-TW": "週一", en: "Mon" },
   "schedules.dow.tue": { "zh-TW": "週二", en: "Tue" },
   "schedules.dow.wed": { "zh-TW": "週三", en: "Wed" },
@@ -931,14 +701,8 @@ export const messages = {
   // A period that cannot be moved onto the viewer's clock keeps its own zone,
   // named the way a person says it (docs/plan-schedule-overview-polish.md).
   "schedules.inZone": { "zh-TW": "{what}（{zone}）", en: "{what} ({zone})" },
-  "schedules.setAs": {
-    "zh-TW": "設定為：{what}（{zone}）",
-    en: "Set as: {what} ({zone})",
-  },
-  "schedules.cronSet": {
-    "zh-TW": "cron：{cron}（{zone}）",
-    en: "cron: {cron} ({zone})",
-  },
+  "schedules.setAs": { "zh-TW": "設定為：{what}（{zone}）", en: "Set as: {what} ({zone})" },
+  "schedules.cronSet": { "zh-TW": "cron：{cron}（{zone}）", en: "cron: {cron} ({zone})" },
   // An instant on the viewer's clock.
   "time.inUnderAMinute": { "zh-TW": "不到 1 分鐘後", en: "in under a minute" },
   "time.inMinutes": { "zh-TW": "{n} 分鐘後", en: "in {n} min" },
@@ -948,10 +712,7 @@ export const messages = {
   "time.tomorrow": { "zh-TW": "明天 {hm}", en: "tomorrow {hm}" },
   "time.yesterday": { "zh-TW": "昨天 {hm}", en: "yesterday {hm}" },
   "time.date": { "zh-TW": "{m}/{d}（{dow}）{hm}", en: "{dow} {m}/{d} {hm}" },
-  "time.dateYear": {
-    "zh-TW": "{y}/{m}/{d}（{dow}）{hm}",
-    en: "{dow} {y}/{m}/{d} {hm}",
-  },
+  "time.dateYear": { "zh-TW": "{y}/{m}/{d}（{dow}）{hm}", en: "{dow} {y}/{m}/{d} {hm}" },
   "schedules.nextSweep": {
     "zh-TW": "下次：下一輪掃描（這一期已到期，尚未執行）",
     en: "Next: on the next sweep (this period is due and has not run yet)",
@@ -998,10 +759,7 @@ export const messages = {
   "schedules.editTime": { "zh-TW": "改時間", en: "Edit time" },
   "schedules.edit.title": { "zh-TW": "改時間", en: "Edit time" },
   "schedules.edit.every": { "zh-TW": "頻率", en: "Repeats" },
-  "schedules.edit.period.minutes": {
-    "zh-TW": "每幾分鐘",
-    en: "Every few minutes",
-  },
+  "schedules.edit.period.minutes": { "zh-TW": "每幾分鐘", en: "Every few minutes" },
   "schedules.edit.period.hourly": { "zh-TW": "每小時", en: "Hourly" },
   "schedules.edit.period.daily": { "zh-TW": "每天", en: "Daily" },
   "schedules.edit.period.weekly": { "zh-TW": "每週", en: "Weekly" },
@@ -1033,10 +791,7 @@ export const messages = {
     "zh-TW": "原本的 cron 無法用簡單欄位表示，存檔後會換成這裡的設定。",
     en: "The cron cannot be said with these fields; saving replaces it with what is here.",
   },
-  "schedules.edit.zoneYours": {
-    "zh-TW": "時區：{zone}（你的時區）",
-    en: "Time zone: {zone} (yours)",
-  },
+  "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":
       "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，「用我的身分執行」要重新按一次。",
@@ -1047,10 +802,7 @@ export const messages = {
   // The overview of every schedule the viewer may read.
   "scheduleOverview.title": { "zh-TW": "排程", en: "Schedules" },
   // A schedule's own conversation, reached from the overview's last-run link.
-  "scheduleChat.banner": {
-    "zh-TW": "這是排程「{title}」的執行紀錄",
-    en: "The runs of the schedule “{title}”",
-  },
+  "scheduleChat.banner": { "zh-TW": "這是排程「{title}」的執行紀錄", en: "The runs of the schedule “{title}”" },
   "scheduleChat.back": { "zh-TW": "回到排程", en: "Back to schedules" },
   "scheduleOverview.loading": { "zh-TW": "載入中…", en: "Loading…" },
   "scheduleOverview.error": {
@@ -1063,14 +815,10 @@ export const messages = {
     en: "Nothing you can see is on a schedule yet.",
   },
   "scheduleOverview.empty.what": {
-    "zh-TW":
-      "請 AI 把一個工作流程排上時間，或在頁面上設定定時執行，就會出現在這裡。",
+    "zh-TW": "請 AI 把一個工作流程排上時間，或在頁面上設定定時執行，就會出現在這裡。",
     en: "Ask the assistant to put a workflow on a clock, or set one up from a page, and it shows here.",
   },
-  "scheduleOverview.nomatch": {
-    "zh-TW": "沒有符合條件的排程。",
-    en: "No schedule matches.",
-  },
+  "scheduleOverview.nomatch": { "zh-TW": "沒有符合條件的排程。", en: "No schedule matches." },
   "scheduleOverview.col.where": { "zh-TW": "位置", en: "Where" },
   "scheduleOverview.col.workflow": { "zh-TW": "工作流程", en: "Workflow" },
   "scheduleOverview.col.when": { "zh-TW": "週期", en: "Repeats" },
@@ -1078,28 +826,18 @@ export const messages = {
   "scheduleOverview.col.last": { "zh-TW": "上一次", en: "Last run" },
   "scheduleOverview.col.actions": { "zh-TW": "動作", en: "Actions" },
   "scheduleOverview.page": { "zh-TW": "頁面「{page}」", en: "Page “{page}”" },
-  "scheduleOverview.itemOwn": {
-    "zh-TW": "項目本身的排程",
-    en: "The item's own schedule",
-  },
+  "scheduleOverview.itemOwn": { "zh-TW": "項目本身的排程", en: "The item's own schedule" },
   "scheduleOverview.byHand": { "zh-TW": "手動", en: "manual" },
   "scheduleOverview.seeRun": { "zh-TW": "查看", en: "See it" },
   "scheduleOverview.removeConfirm": {
-    "zh-TW":
-      "要移除「{place}」的排程「{period} → {workflow}」嗎？之後就不會再自動執行。",
+    "zh-TW": "要移除「{place}」的排程「{period} → {workflow}」嗎？之後就不會再自動執行。",
     en: "Remove the schedule “{period} → {workflow}” of {place}? It will no longer run on its own.",
   },
-  "scheduleOverview.nextSweep": {
-    "zh-TW": "馬上就會執行",
-    en: "Any moment now",
-  },
+  "scheduleOverview.nextSweep": { "zh-TW": "馬上就會執行", en: "Any moment now" },
   "scheduleOverview.never": { "zh-TW": "還沒跑過", en: "Never run" },
   "scheduleOverview.status.pending": { "zh-TW": "準備中", en: "Starting" },
   "scheduleOverview.status.running": { "zh-TW": "執行中", en: "Running" },
-  "scheduleOverview.status.awaiting_human": {
-    "zh-TW": "等待審核",
-    en: "Waiting for review",
-  },
+  "scheduleOverview.status.awaiting_human": { "zh-TW": "等待審核", en: "Waiting for review" },
   "scheduleOverview.status.done": { "zh-TW": "完成", en: "Done" },
   "scheduleOverview.status.error": { "zh-TW": "失敗", en: "Failed" },
   "scheduleOverview.status.cancelled": { "zh-TW": "已取消", en: "Cancelled" },
@@ -1108,13 +846,9 @@ export const messages = {
   "scheduleOverview.group.app": { "zh-TW": "依應用程式", en: "By app" },
   "scheduleOverview.sort": { "zh-TW": "排序", en: "Sort" },
   "scheduleOverview.sort.next": { "zh-TW": "下一次最近", en: "Next run" },
-  "scheduleOverview.sort.trouble": {
-    "zh-TW": "需要處理的在前",
-    en: "Needs attention first",
-  },
+  "scheduleOverview.sort.trouble": { "zh-TW": "需要處理的在前", en: "Needs attention first" },
   "scheduleOverview.sort.calm": {
-    "zh-TW":
-      "目前沒有需要處理的排程（上一次失敗、被取消或等待審核的會排在最前面）。",
+    "zh-TW": "目前沒有需要處理的排程（上一次失敗、被取消或等待審核的會排在最前面）。",
     en: "Nothing needs attention right now (a schedule whose last run failed, was cancelled or waits for a review would be listed first).",
   },
   "scheduleOverview.filter.app": { "zh-TW": "應用程式", en: "App" },
@@ -1139,10 +873,7 @@ export const messages = {
   "templates.copied": { "zh-TW": "已加入「{name}」", en: 'Added "{name}"' },
   // KB chat collection modal (KbCollectionsModal) — #271.
   "collections.more": { "zh-TW": "更多 · {n}", en: "More · {n}" },
-  "collections.kbTitle": {
-    "zh-TW": "在哪些知識庫裡搜尋",
-    en: "Which collections to search",
-  },
+  "collections.kbTitle": { "zh-TW": "在哪些知識庫裡搜尋", en: "Which collections to search" },
   "collections.kbDesc": {
     "zh-TW": "勾選這次對話要搜尋的知識庫；預設是你最常用的幾個。",
     en: "Pick the collections this chat searches; defaults to the ones you use most.",
@@ -1156,8 +887,7 @@ export const messages = {
   // failure and the button gets pressed again.
   "kb.reindexAll.sent": { "zh-TW": "已送出", en: "Sent" },
   "kb.reindexAll.sentBody": {
-    "zh-TW":
-      "{n} 份文件已排入重新讀取，會在背景陸續完成。你可以關閉這個頁面，進度會保留。",
+    "zh-TW": "{n} 份文件已排入重新讀取，會在背景陸續完成。你可以關閉這個頁面，進度會保留。",
     en: "{n} documents are queued to be re-read. This runs in the background — you can close this page and the progress is kept.",
   },
   "kb.reindexAll.already": { "zh-TW": "已經在重新讀取", en: "Already running" },
@@ -1180,18 +910,14 @@ export const messages = {
   "kb.uploadFiles": { "zh-TW": "上傳檔案", en: "Upload files" },
   "kb.uploadFolder": { "zh-TW": "上傳資料夾", en: "Upload folder" },
   "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },
-  "kb.dropHint": {
-    "zh-TW": "把檔案拖到這裡開始",
-    en: "Drag files here to start",
-  },
+  "kb.dropHint": { "zh-TW": "把檔案拖到這裡開始", en: "Drag files here to start" },
   // plan-rag-context P2/P11: the document-tree order is a rule the KB agent's
   // neighbouring-context walk follows, so people uploading must be able to
   // steer it — one line, where the files are added and where they are seen.
   // One line, as the plan promised — the full rule (folders first, natural
   // sort, the walk follows it) is in the docs; here only what to DO about it.
   "kb.orderRule": {
-    "zh-TW":
-      "AI 讀前後文照這棵樹的順序。要控制順序，檔名前加數字：01_intro.pdf、02_method.pdf。",
+    "zh-TW": "AI 讀前後文照這棵樹的順序。要控制順序，檔名前加數字：01_intro.pdf、02_method.pdf。",
     en: "The assistant reads context in this tree's order. To control it, prefix names with numbers: 01_intro.pdf, 02_method.pdf.",
   },
 
@@ -1212,19 +938,12 @@ export const messages = {
 
   // KB collection landing + in-place concept help (#173)
   "kb.lead": {
-    "zh-TW":
-      "每個集合是一組文件，AI 回答時可參考。挑選對話要用哪些當參考資料。",
+    "zh-TW": "每個集合是一組文件，AI 回答時可參考。挑選對話要用哪些當參考資料。",
     en: "Each collection is a set of documents the assistant can draw on. Pick which to use as context when chatting.",
   },
   // The collection page's collapsible "what's in here" orientation strip.
-  "kb.col.overview.title": {
-    "zh-TW": "這個集合裡有什麼",
-    en: "What's in here",
-  },
-  "kb.col.overview.expand": {
-    "zh-TW": "這些分頁是什麼",
-    en: "What are these tabs?",
-  },
+  "kb.col.overview.title": { "zh-TW": "這個集合裡有什麼", en: "What's in here" },
+  "kb.col.overview.expand": { "zh-TW": "這些分頁是什麼", en: "What are these tabs?" },
   "kb.col.overview.collapse": { "zh-TW": "收合", en: "Collapse" },
   "kb.tab.documents": { "zh-TW": "文件", en: "Documents" },
   "kb.tab.cards": { "zh-TW": "詞彙表", en: "Glossary" },
@@ -1257,10 +976,7 @@ export const messages = {
   },
   // Glossary auto-generate controls — were hardcoded zh-TW (#456).
   "kb.cards.autogen": { "zh-TW": "⚡ 自動生成", en: "⚡ Auto-generate" },
-  "kb.cards.autogen.count": {
-    "zh-TW": "自動生成（{n}）",
-    en: "Auto-generate ({n})",
-  },
+  "kb.cards.autogen.count": { "zh-TW": "自動生成（{n}）", en: "Auto-generate ({n})" },
   "kb.cards.autogen.pending": {
     "zh-TW": "其中 {n} 份仍在索引，完成後會自動生成。",
     en: "{n} still indexing — they'll be generated automatically once ready.",
@@ -1270,8 +986,7 @@ export const messages = {
     en: "{n} still indexing — generate again once they finish indexing.",
   },
   "kb.cards.funnel.summary": {
-    "zh-TW":
-      "最近一次生成：讀 {units} 份來源 → 抽 {drafts} 張草稿 → 留 {kept} 張提案",
+    "zh-TW": "最近一次生成：讀 {units} 份來源 → 抽 {drafts} 張草稿 → 留 {kept} 張提案",
     en: "Last run: read {units} sources → drafted {drafts} → kept {kept} proposals",
   },
   "kb.cards.funnel.skipped": {
@@ -1280,8 +995,7 @@ export const messages = {
   },
   "kb.useGraph.label": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
   "kb.useGraph.help": {
-    "zh-TW":
-      "從文件抽取指標與實體,建成可交叉查詢的圖譜。抽取會用到視覺/語言模型,建議只對含指標的文件庫開啟。",
+    "zh-TW": "從文件抽取指標與實體,建成可交叉查詢的圖譜。抽取會用到視覺/語言模型,建議只對含指標的文件庫開啟。",
     en: "Extract metrics and entities from documents into a cross-referenced graph. Extraction spends VLM/LLM work, so turn it on for metric-bearing collections.",
   },
   "kb.useGraph.rebuild": { "zh-TW": "立即抽取", en: "Extract now" },
@@ -1300,8 +1014,7 @@ export const messages = {
   },
   // Glossary (Context Cards) tab empty states.
   "kb.cards.empty.none": {
-    "zh-TW":
-      "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",
+    "zh-TW": "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",
     en: 'No glossary cards yet. A glossary defines terms the assistant should use verbatim — e.g. "COGS always means Cost of Goods Sold." Use "+ New" on the left to start.',
   },
   "kb.cards.empty.unselected": {
@@ -1311,24 +1024,14 @@ export const messages = {
   // #377: the global clarification-question inbox.
   "docq.title": { "zh-TW": "待釐清", en: "Clarifications" },
   "docq.subtitle": {
-    "zh-TW":
-      "AI 讀文件時看不懂、需要你補充的地方。回答後：名詞會寫成詞彙卡，段落說明會寫進 wiki。",
+    "zh-TW": "AI 讀文件時看不懂、需要你補充的地方。回答後：名詞會寫成詞彙卡，段落說明會寫進 wiki。",
     en: "Things the assistant couldn't understand while reading your documents. Your answers become glossary cards (terms) or wiki notes (passages).",
   },
-  "docq.empty": {
-    "zh-TW": "目前沒有待釐清的問題。",
-    en: "Nothing to clarify right now.",
-  },
+  "docq.empty": { "zh-TW": "目前沒有待釐清的問題。", en: "Nothing to clarify right now." },
   "docq.kind.term": { "zh-TW": "名詞", en: "Term" },
   "docq.kind.description": { "zh-TW": "段落", en: "Passage" },
-  "docq.sources": {
-    "zh-TW": "{n} 份文件提到",
-    en: "raised in {n} document(s)",
-  },
-  "docq.answerPlaceholder": {
-    "zh-TW": "輸入你的答案…",
-    en: "Type your answer…",
-  },
+  "docq.sources": { "zh-TW": "{n} 份文件提到", en: "raised in {n} document(s)" },
+  "docq.answerPlaceholder": { "zh-TW": "輸入你的答案…", en: "Type your answer…" },
   "docq.answer": { "zh-TW": "送出", en: "Submit" },
   "docq.discard": { "zh-TW": "丟棄", en: "Discard" },
   // #481: the global 審核 review inbox — one filterable table over every pending
@@ -1339,13 +1042,11 @@ export const messages = {
   // Sending a message is the primary interface and the other place the
   // live-sandbox limit appears, so it gets its own wording too.
   "chat.send.envFull": {
-    "zh-TW":
-      "沒有送出:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再送一次。",
+    "zh-TW": "沒有送出:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再送一次。",
     en: "Not sent — you're at your limit for live sandboxes. Close one in My resources, then send again.",
   },
   "chat.send.userFull": {
-    "zh-TW":
-      "沒有送出:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再送一次。",
+    "zh-TW": "沒有送出:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再送一次。",
     en: "Not sent — you're out of space across all your workspaces. Open My resources to see where it went, then send again.",
   },
   // Appended to whichever refusal led. A limit named without a number cannot be
@@ -1369,8 +1070,7 @@ export const messages = {
   // next one on the retry. They name the page for the same reason the primary
   // messages do — `ResourceLinkText` turns that name into the link.
   "resources.also.user": {
-    "zh-TW":
-      "另外,你所有 workspace 的空間總量也滿了——到「我的資源」看是哪些 workspace 佔用。",
+    "zh-TW": "另外,你所有 workspace 的空間總量也滿了——到「我的資源」看是哪些 workspace 佔用。",
     en: "You are also out of space across all your workspaces — see where it went in My resources.",
   },
   "resources.also.workspace": {
@@ -1385,18 +1085,15 @@ export const messages = {
   // started BECAUSE the tools would have run without knowing who is asking, so
   // the copy has to say "nothing happened", not "something went wrong".
   "chat.send.identityUnavailable": {
-    "zh-TW":
-      "沒有送出:這次沒辦法確認你的登入身分。請重新整理頁面或重新登入後再送一次。",
+    "zh-TW": "沒有送出:這次沒辦法確認你的登入身分。請重新整理頁面或重新登入後再送一次。",
     en: "Not sent — we couldn't confirm your sign-in for this request. Refresh the page or sign in again, then send it once more.",
   },
   "terminal.envFull": {
-    "zh-TW":
-      "沒有執行:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
+    "zh-TW": "沒有執行:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
     en: "Not run — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "terminal.userFull": {
-    "zh-TW":
-      "沒有執行:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
+    "zh-TW": "沒有執行:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
     en: "Not run — you're out of space across all your workspaces. Open My resources to see where it went, then try again.",
   },
   "terminal.workspaceFull": {
@@ -1407,11 +1104,7 @@ export const messages = {
   // `plan-personal-env`: a person's values for every item.
   "myEnv.title": { "zh-TW": "我的環境變數", en: "My environment variables" },
   "myEnv.heading": { "zh-TW": "我的環境變數", en: "My environment variables" },
-  "myEnv.desc": {
-    "zh-TW":
-      "你在所有 workspace 共用的值，只有你看得到。登入過期時，在這裡重新登入。",
-    en: "Your values shared by all your workspaces. Only you can see them. When a sign-in expires, sign in again here.",
-  },
+  "myEnv.desc": { "zh-TW": "你在所有 workspace 共用的值，只有你看得到。登入過期時，在這裡重新登入。", en: "Your values shared by all your workspaces. Only you can see them. When a sign-in expires, sign in again here." },
   "myEnv.values": { "zh-TW": "值", en: "Values" },
   "myEnv.loadFailed": {
     "zh-TW": "讀不到你的值，請重新整理再試一次。",
@@ -1425,16 +1118,10 @@ export const messages = {
   "myEnv.value": { "zh-TW": "值", en: "Value" },
   "myEnv.add": { "zh-TW": "新增", en: "Add" },
   "myEnv.removeTitle": { "zh-TW": "移除 {name}？", en: "Remove {name}?" },
-  "myEnv.removeBody": {
-    "zh-TW": "所有 workspace 都不會再拿到這個值，無法復原。",
-    en: "No workspace gets this value any more. This can't be undone.",
-  },
+  "myEnv.removeBody": { "zh-TW": "所有 workspace 都不會再拿到這個值，無法復原。", en: "No workspace gets this value any more. This can't be undone." },
   "myEnv.remove": { "zh-TW": "移除", en: "Remove" },
   "myEnv.updatedToday": { "zh-TW": "今天設定", en: "set today" },
-  "myEnv.updatedDays": {
-    "zh-TW": "{days} 天前設定",
-    en: "set {days} days ago",
-  },
+  "myEnv.updatedDays": { "zh-TW": "{days} 天前設定", en: "set {days} days ago" },
   "myEnv.signIns": { "zh-TW": "登入", en: "Sign in" },
   "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
   "resources.loading": { "zh-TW": "載入中…", en: "Loading…" },
@@ -1443,10 +1130,7 @@ export const messages = {
   // sections. A bare 「沙盒」 also collided with `itemenv.heading`, which names
   // one item's panel — two regions, one accessible name, different pages.
   "resources.live.heading": { "zh-TW": "執行中的沙盒", en: "Live sandboxes" },
-  "resources.live.empty": {
-    "zh-TW": "目前沒有執行中的沙盒。",
-    en: "No live sandboxes.",
-  },
+  "resources.live.empty": { "zh-TW": "目前沒有執行中的沙盒。", en: "No live sandboxes." },
   "resources.live.close": { "zh-TW": "關閉", en: "Close" },
   // Says what happened and what to do, not which call returned what. The row
   // stays put deliberately, so "再試一次" points at something that is still there.
@@ -1460,43 +1144,27 @@ export const messages = {
   // the same string there rather than pretending the distinction exists.
   "resources.live.cores_one": { "zh-TW": "{n} 核", en: "{n} core" },
   // ── superuser: per-person allowances ──────────────────────────────────
-  "resources.admin.heading": {
-    "zh-TW": "個人額度（管理員）",
-    en: "Per-person allowances (admin)",
-  },
+  "resources.admin.heading": { "zh-TW": "個人額度（管理員）", en: "Per-person allowances (admin)" },
   "resources.admin.intro": {
-    "zh-TW":
-      "把某個人的額度調得比站台預設高。只填要放寬的維度,留空的沿用站台預設。",
+    "zh-TW": "把某個人的額度調得比站台預設高。只填要放寬的維度,留空的沿用站台預設。",
     en: "Raise one person above the site default. Fill only the dimensions you want to change; blank ones keep the default.",
   },
   // The person an exception is for. Now a directory pick, so the label names
   // the person rather than the identifier they happen to be stored under.
   "resources.admin.user": { "zh-TW": "對象", en: "Person" },
-  "resources.admin.userSearch": {
-    "zh-TW": "搜尋姓名、id、單位…",
-    en: "Search name, id, section…",
-  },
+  "resources.admin.userSearch": { "zh-TW": "搜尋姓名、id、單位…", en: "Search name, id, section…" },
   "resources.admin.lookup": { "zh-TW": "查詢", en: "Look up" },
   "resources.admin.save": { "zh-TW": "儲存", en: "Save" },
   "resources.admin.clear": { "zh-TW": "清除覆寫", en: "Clear override" },
-  "resources.admin.count": {
-    "zh-TW": "同時開啟沙盒上限",
-    en: "Live sandbox limit",
-  },
+  "resources.admin.count": { "zh-TW": "同時開啟沙盒上限", en: "Live sandbox limit" },
   "resources.admin.cpu": { "zh-TW": "CPU 核心上限", en: "CPU core limit" },
   "resources.admin.memory": { "zh-TW": "記憶體上限", en: "Memory limit" },
   "resources.admin.disk": { "zh-TW": "儲存空間上限", en: "Storage limit" },
   "resources.admin.effective": { "zh-TW": "目前有效額度", en: "Effective now" },
   "resources.admin.unlimited": { "zh-TW": "無上限", en: "unlimited" },
-  "resources.admin.saved": {
-    "zh-TW": "已套用,不需重啟。",
-    en: "Applied — no restart needed.",
-  },
+  "resources.admin.saved": { "zh-TW": "已套用,不需重啟。", en: "Applied — no restart needed." },
   "resources.admin.defaults": { "zh-TW": "站台預設", en: "Site default" },
-  "resources.admin.who": {
-    "zh-TW": "目前有特例的人",
-    en: "People with an exception",
-  },
+  "resources.admin.who": { "zh-TW": "目前有特例的人", en: "People with an exception" },
   "resources.admin.none": {
     "zh-TW": "目前沒有人有特例——所有人都吃站台預設。",
     en: "Nobody has an exception — everyone is on the site default.",
@@ -1529,16 +1197,12 @@ export const messages = {
   "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
   "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
   // ── who may MANAGE an item (change_permission), shown apart from roles ──
-  "itemshare.managers.heading": {
-    "zh-TW": "可以管理這個 workspace 的人",
-    en: "Who can manage this workspace",
-  },
+  "itemshare.managers.heading": { "zh-TW": "可以管理這個 workspace 的人", en: "Who can manage this workspace" },
   // The consequence, stated BEFORE the control. Both halves matter and the
   // second is the easy one to miss: this grant now decides who may spend the
   // owner's quota, not merely who may see the item.
   "itemshare.managers.consequence": {
-    "zh-TW":
-      "他們可以把這個 workspace 的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是 owner 的額度。",
+    "zh-TW": "他們可以把這個 workspace 的存取權再授權給任何人，也可以調整沙盒大小 —— 那花的是 owner 的額度。",
     en: "They can re-share this workspace with anyone, and can resize its sandbox — which spends the owner's quota.",
   },
   "itemshare.managers.add": { "zh-TW": "加入使用者 ID", en: "Add a user id" },
@@ -1586,17 +1250,11 @@ export const messages = {
     "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
     en: "Close it to change the size. Running processes end; your files are untouched.",
   },
-  "itemenv.size.heading": {
-    "zh-TW": "這個 workspace 的沙盒大小",
-    en: "This workspace's sandbox size",
-  },
+  "itemenv.size.heading": { "zh-TW": "這個 workspace 的沙盒大小", en: "This workspace's sandbox size" },
   // The label an UNSET value carries. Without it an empty field renders as a
   // number with no provenance, and the person cannot tell what they chose from
   // what was chosen for them.
-  "itemenv.size.default": {
-    "zh-TW": "預設（依你目前的額度）",
-    en: "Default (from your current quota)",
-  },
+  "itemenv.size.default": { "zh-TW": "預設（依你目前的額度）", en: "Default (from your current quota)" },
   "itemenv.size.stated": { "zh-TW": "你設定的", en: "Set by you" },
   "itemenv.size.reset": { "zh-TW": "回到預設", en: "Back to default" },
   // Both numbers, and which limit bound — never the smaller one alone.
@@ -1641,48 +1299,30 @@ export const messages = {
   // the RECORD's ceiling in the server's own spelling (`1024` / `1024T`) for
   // `over` — what a person can type back, never the display format
   // (`1024.0 TB`), which the server would refuse.
-  "itemenv.field.cpu.unreadable": {
-    "zh-TW": "要大於 0，例如 {detail}。",
-    en: "More than 0 — e.g. {detail}.",
-  },
-  "itemenv.field.cpu.over": {
-    "zh-TW": "最多 {detail} 核。",
-    en: "At most {detail} cores.",
-  },
+  "itemenv.field.cpu.unreadable": { "zh-TW": "要大於 0，例如 {detail}。", en: "More than 0 — e.g. {detail}." },
+  "itemenv.field.cpu.over": { "zh-TW": "最多 {detail} 核。", en: "At most {detail} cores." },
   "itemenv.field.memory.unreadable": {
     "zh-TW": "數字加單位，例如 {detail}。",
     en: "A number with a unit — e.g. {detail}.",
   },
-  "itemenv.field.memory.over": {
-    "zh-TW": "最多 {detail}。",
-    en: "At most {detail}.",
-  },
+  "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
   "itemenv.readonly": {
-    "zh-TW":
-      "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
+    "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
     en: "Only someone who can change this workspace's access may resize it — it spends the owner's quota.",
   },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
-  "resources.disk.empty": {
-    "zh-TW": "還沒有任何 workspace 佔用空間。",
-    en: "Nothing stored yet.",
-  },
+  "resources.disk.empty": { "zh-TW": "還沒有任何 workspace 佔用空間。", en: "Nothing stored yet." },
   // Deleting can happen HERE now (plan-delete-item-cascade): each disk row
   // carries a delete that removes the item and everything it owns and refunds
   // the quota. The hint keeps the file-list path for partial clean-ups.
   "resources.disk.hint": {
-    "zh-TW":
-      "要清出空間,可直接刪除整個 workspace,或開啟 workspace 後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
+    "zh-TW": "要清出空間,可直接刪除整個 workspace,或開啟 workspace 後在檔案清單中逐檔刪 —— 刪除永遠不受額度限制。",
     en: "To free space, delete a whole workspace here, or open it and delete individual files — deleting is never blocked by a quota.",
   },
   "resources.disk.delete": { "zh-TW": "刪除", en: "Delete" },
-  "resources.disk.delete.title": {
-    "zh-TW": "刪除這個 workspace?",
-    en: "Delete this workspace?",
-  },
+  "resources.disk.delete.title": { "zh-TW": "刪除這個 workspace?", en: "Delete this workspace?" },
   "resources.disk.delete.body1": {
-    "zh-TW":
-      "會刪除這個 workspace 與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
+    "zh-TW": "會刪除這個 workspace 與它名下的一切 —— 檔案、對話、workflow 紀錄 —— 並釋放它佔用的儲存額度。已升級進知識庫的知識會保留。",
     en: "Deletes this workspace and everything it owns — its files, chats and workflow runs — and frees its storage quota. Knowledge already promoted to the knowledge base stays.",
   },
   "resources.disk.delete.body2": {
@@ -1694,10 +1334,7 @@ export const messages = {
     "zh-TW": "目前占用 {bytes},刪除後全數釋放。",
     en: "Currently using {bytes} — all of it comes back when deleted.",
   },
-  "resources.disk.delete.zip": {
-    "zh-TW": "下載 zip 備份",
-    en: "Download a zip backup",
-  },
+  "resources.disk.delete.zip": { "zh-TW": "下載 zip 備份", en: "Download a zip backup" },
   // `/wui` — the overview of Deployed pages (docs/plan-wui-overview.md). "WUI"
   // itself is a proper noun in every locale, so the heading and the nav entry
   // are not translated.
@@ -1707,23 +1344,16 @@ export const messages = {
     en: "The WUI listing could not be read.",
   },
   "wui.retry": { "zh-TW": "再試一次", en: "Try again" },
-  "wui.empty": {
-    "zh-TW": "還沒有任何 WUI 被 Deploy。",
-    en: "No WUI has been deployed yet.",
-  },
+  "wui.empty": { "zh-TW": "還沒有任何 WUI 被 Deploy。", en: "No WUI has been deployed yet." },
   "wui.empty.what": {
-    "zh-TW":
-      "WUI 是 workspace 裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
+    "zh-TW": "WUI 是 workspace 裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
     en: "A WUI is a folder in a workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
   },
   "wui.empty.help": { "zh-TW": "看說明", en: "Read the help" },
   // `{when}` is `relativeTime`'s form — "just now", "3 min ago", "2 d ago",
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
-  "wui.row.by": {
-    "zh-TW": "{who} Deploy · {when}",
-    en: "deployed by {who} · {when}",
-  },
+  "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
   // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
   // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
   // what stays.
@@ -1732,48 +1362,29 @@ export const messages = {
     "zh-TW": "從 WUI 總覽下架；頁面和資料夾都留著",
     en: "Takes the page off the WUI overview; the page and its folder stay",
   },
-  "wui.remove.title": {
-    "zh-TW": "把「{title}」從 WUI 下架？",
-    en: "Unlist “{title}” from WUI?",
-  },
+  "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 下架？", en: "Unlist “{title}” from WUI?" },
   "wui.remove.body": {
-    "zh-TW":
-      "頁面和它的資料夾都會留著，只是不再列在這裡。要再列回來，到頁面上再按一次 Deploy。",
+    "zh-TW": "頁面和它的資料夾都會留著，只是不再列在這裡。要再列回來，到頁面上再按一次 Deploy。",
     en: "The page and its folder stay; only this listing goes. To list it again, press Deploy on the page.",
   },
   "wui.remove.cancel": { "zh-TW": "取消", en: "Cancel" },
-  "wui.remove.failed": {
-    "zh-TW": "下架失敗，再試一次。",
-    en: "Could not unlist it — try again.",
-  },
+  "wui.remove.failed": { "zh-TW": "下架失敗，再試一次。", en: "Could not unlist it — try again." },
   // The viewer's favourites (plan-wui-overview-icon-favourites): a group at the
   // top of the overview, and a star on every row. The star's label is the
   // ACTION, naming the page — `aria-pressed` carries the state.
   "wui.favourites": { "zh-TW": "我的最愛", en: "Favourites" },
-  "wui.star": {
-    "zh-TW": "把「{title}」加入我的最愛",
-    en: "Add “{title}” to favourites",
-  },
-  "wui.unstar": {
-    "zh-TW": "把「{title}」從我的最愛移除",
-    en: "Remove “{title}” from favourites",
-  },
+  "wui.star": { "zh-TW": "把「{title}」加入我的最愛", en: "Add “{title}” to favourites" },
+  "wui.unstar": { "zh-TW": "把「{title}」從我的最愛移除", en: "Remove “{title}” from favourites" },
   // The overview's two views (the cards amendment); cards is the default.
   "wui.view.label": { "zh-TW": "顯示方式", en: "View" },
   "wui.view.cards": { "zh-TW": "卡片", en: "Cards" },
   "wui.view.table": { "zh-TW": "表格", en: "Table" },
-  "wui.view.tip": {
-    "zh-TW": "切換卡片 / 表格",
-    en: "Switch between cards and the table",
-  },
+  "wui.view.tip": { "zh-TW": "切換卡片 / 表格", en: "Switch between cards and the table" },
   // The tools (amendment 2): filter by App, search, sort — within the App
   // sections, which stay.
   "wui.filter.app": { "zh-TW": "App", en: "App" },
   "wui.filter.all": { "zh-TW": "全部", en: "All" },
-  "wui.search": {
-    "zh-TW": "搜尋頁面或 workspace",
-    en: "Search pages or workspaces",
-  },
+  "wui.search": { "zh-TW": "搜尋頁面或 workspace", en: "Search pages or workspaces" },
   "wui.sort": { "zh-TW": "排序", en: "Sort" },
   "wui.sort.newest": { "zh-TW": "最新 Deploy", en: "Newest Deploy" },
   "wui.sort.title": { "zh-TW": "名稱", en: "Name" },
@@ -1781,14 +1392,10 @@ export const messages = {
   // The viewer's own items' pages — owner, not deployer.
   "wui.mine": { "zh-TW": "我的", en: "Mine" },
   "review.subtitle": {
-    "zh-TW":
-      "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
+    "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",
   },
-  "review.empty": {
-    "zh-TW": "目前沒有待審核項目。",
-    en: "Nothing to review right now.",
-  },
+  "review.empty": { "zh-TW": "目前沒有待審核項目。", en: "Nothing to review right now." },
   "review.empty.resolved": {
     "zh-TW": "還沒有已處理的紀錄。",
     en: "No handled items yet.",
@@ -1831,15 +1438,9 @@ export const messages = {
   "review.pager.total": { "zh-TW": "共 {n} 筆", en: "{n} total" },
   "review.pager.prev": { "zh-TW": "上一頁", en: "Prev" },
   "review.pager.next": { "zh-TW": "下一頁", en: "Next" },
-  "review.pager.pos": {
-    "zh-TW": "第 {page} / {pages} 頁",
-    en: "Page {page} / {pages}",
-  },
+  "review.pager.pos": { "zh-TW": "第 {page} / {pages} 頁", en: "Page {page} / {pages}" },
   "review.cluster.count": { "zh-TW": "{n} 項", en: "{n} items" },
-  "review.cluster.apply": {
-    "zh-TW": "套用此概念已接受（{n}）",
-    en: "Apply accepted ({n})",
-  },
+  "review.cluster.apply": { "zh-TW": "套用此概念已接受（{n}）", en: "Apply accepted ({n})" },
   "review.cluster.empty": {
     "zh-TW": "目前沒有可分組的待審核項目。",
     en: "No groupable items to review right now.",
@@ -1852,10 +1453,7 @@ export const messages = {
     "zh-TW": "共 {cards} 張卡片、{questions} 個問題被自動略過",
     en: "{cards} cards, {questions} questions auto-skipped",
   },
-  "review.suppressed.reason.wiki": {
-    "zh-TW": "已在 wiki 說明",
-    en: "Explained in the wiki",
-  },
+  "review.suppressed.reason.wiki": { "zh-TW": "已在 wiki 說明", en: "Explained in the wiki" },
   "review.suppressed.reason.near-card": {
     "zh-TW": "已有相近卡片",
     en: "A similar card already exists",
@@ -1864,23 +1462,11 @@ export const messages = {
     "zh-TW": "已有相近卡片「{card}」",
     en: "Duplicates an existing card «{card}»",
   },
-  "review.suppressed.reason.other": {
-    "zh-TW": "已被涵蓋",
-    en: "Already covered",
-  },
-  "review.filter.search": {
-    "zh-TW": "搜尋標題、詞彙、問題…",
-    en: "Search titles, terms, questions…",
-  },
-  "review.filter.collection": {
-    "zh-TW": "所有知識庫",
-    en: "All knowledge bases",
-  },
+  "review.suppressed.reason.other": { "zh-TW": "已被涵蓋", en: "Already covered" },
+  "review.filter.search": { "zh-TW": "搜尋標題、詞彙、問題…", en: "Search titles, terms, questions…" },
+  "review.filter.collection": { "zh-TW": "所有知識庫", en: "All knowledge bases" },
   "review.filter.type": { "zh-TW": "所有類型", en: "All types" },
-  "review.filter.actionable": {
-    "zh-TW": "只看我能操作的",
-    en: "Only what I can act on",
-  },
+  "review.filter.actionable": { "zh-TW": "只看我能操作的", en: "Only what I can act on" },
   "review.groupByRun": { "zh-TW": "依產生批次分組", en: "Group by run" },
   "review.type.card": { "zh-TW": "卡片提案", en: "Card proposal" },
   "review.type.question": { "zh-TW": "待釐清問題", en: "Question" },
@@ -1902,14 +1488,8 @@ export const messages = {
   "review.action.answer": { "zh-TW": "回答", en: "Answer" },
   "review.action.apply": { "zh-TW": "套用", en: "Apply" },
   "review.select": { "zh-TW": "選取", en: "Select" },
-  "review.action.applySelected": {
-    "zh-TW": "套用選取（{n}）",
-    en: "Apply selected ({n})",
-  },
-  "review.action.applyRun": {
-    "zh-TW": "套用此批次已接受（{n}）",
-    en: "Apply run's accepted ({n})",
-  },
+  "review.action.applySelected": { "zh-TW": "套用選取（{n}）", en: "Apply selected ({n})" },
+  "review.action.applyRun": { "zh-TW": "套用此批次已接受（{n}）", en: "Apply run's accepted ({n})" },
   "review.readonly": { "zh-TW": "無編輯權", en: "No edit access" },
   "review.readonly.hint": {
     "zh-TW": "你只能查看這個知識庫,無法套用或回答。",
@@ -1925,10 +1505,7 @@ export const messages = {
   "review.drawer.removeKey": { "zh-TW": "移除 {k}", en: "Remove {k}" },
   "review.drawer.title": { "zh-TW": "標題", en: "Title" },
   "review.drawer.body": { "zh-TW": "內容", en: "Body" },
-  "review.drawer.overwrites": {
-    "zh-TW": "將覆蓋現有卡片",
-    en: "Overwrites the current card",
-  },
+  "review.drawer.overwrites": { "zh-TW": "將覆蓋現有卡片", en: "Overwrites the current card" },
   "review.drawer.provenance": { "zh-TW": "依據", en: "Evidence" },
   "review.drawer.close": { "zh-TW": "關閉", en: "Close" },
   "review.drawer.save": { "zh-TW": "儲存編輯", en: "Save edits" },
@@ -1940,8 +1517,7 @@ export const messages = {
   // Wiki: AI-written + editable badge, and the rebuild confirmation.
   "kb.wiki.badge": { "zh-TW": "AI 撰寫，可編輯", en: "AI-written, editable" },
   "kb.wiki.rebuild.confirm": {
-    "zh-TW":
-      "重建會依文件重新整理頁面，AI 可能改寫你手動編輯過的頁面（不會刪除任何頁面）。要繼續嗎？",
+    "zh-TW": "重建會依文件重新整理頁面，AI 可能改寫你手動編輯過的頁面（不會刪除任何頁面）。要繼續嗎？",
     en: "Rebuild refreshes pages from the documents and may rewrite pages you've edited (no pages are deleted). Continue?",
   },
   "kb.wiki.rebuild.confirm.go": { "zh-TW": "重建", en: "Rebuild" },
@@ -1965,13 +1541,11 @@ export const messages = {
     en: "Storage is full — delete some files before uploading more.",
   },
   "workspace.overQuota.user": {
-    "zh-TW":
-      "{names} 沒有附上:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
+    "zh-TW": "{names} 沒有附上:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再試一次。",
     en: "{names} wasn't attached — you're out of space across all your workspaces. Open My resources to see where it went, then try again.",
   },
   "workspace.overQuota.env": {
-    "zh-TW":
-      "{names} 沒有附上:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
+    "zh-TW": "{names} 沒有附上:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
     en: "{names} wasn't attached — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "workspace.overQuota": {
@@ -1984,20 +1558,17 @@ export const messages = {
   // The person's TOTAL across every item they own is full — the space to free
   // may well be in a different item, so the message must not point at this one.
   "workspace.upload.userFull": {
-    "zh-TW":
-      "「{name}」沒有上傳:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再重試。",
+    "zh-TW": "「{name}」沒有上傳:你所有 workspace 的空間總量已滿。到「我的資源」看是哪些 workspace 佔用,刪掉不需要的再重試。",
     en: "{name} wasn't uploaded — you're out of space across all your workspaces. Open My resources to see where it went, delete what you don't need, then try again.",
   },
   // Nothing to do with files at all: they are holding as many live sandboxes
   // as they may. Saying "the workspace is full" here would be simply untrue.
   "workspace.upload.envFull": {
-    "zh-TW":
-      "「{name}」沒有上傳:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再重試。",
+    "zh-TW": "「{name}」沒有上傳:你同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再重試。",
     en: "{name} wasn't uploaded — you're at your limit for live sandboxes. Close one in My resources, then try again.",
   },
   "workspace.upload.full": {
-    "zh-TW":
-      "「{name}」沒有上傳:工作區空間已滿。請先刪除不需要的檔案，再重新上傳。",
+    "zh-TW": "「{name}」沒有上傳:工作區空間已滿。請先刪除不需要的檔案，再重新上傳。",
     en: "{name} wasn't uploaded — the workspace is full. Delete files you no longer need, then try again.",
   },
   // A failure we could not attribute. Report WHAT happened rather than guessing
@@ -2038,10 +1609,7 @@ export const messages = {
   "wf.launch.steps": { "zh-TW": "步驟", en: "Steps" },
   "wf.launch.checklist": { "zh-TW": "開始前檢查", en: "Pre-flight checks" },
   "wf.launch.loading": { "zh-TW": "檢查中…", en: "Checking…" },
-  "wf.launch.error": {
-    "zh-TW": "無法載入預覽，請稍後再試。",
-    en: "Couldn’t load the preview — try again.",
-  },
+  "wf.launch.error": { "zh-TW": "無法載入預覽，請稍後再試。", en: "Couldn’t load the preview — try again." },
   "wf.launch.run": { "zh-TW": "開始執行", en: "Run" },
   "wf.launch.cancel": { "zh-TW": "取消", en: "Cancel" },
   "wf.launch.blocked": {
@@ -2076,10 +1644,7 @@ export const messages = {
   "goal.clear": { "zh-TW": "清除", en: "Clear" },
   "goal.round": { "zh-TW": "續跑 {k}/{n} 輪", en: "round {k}/{n}" },
   "goal.met": { "zh-TW": "已達成", en: "Met" },
-  "goal.exhausted": {
-    "zh-TW": "額度用盡,交還給你",
-    en: "Budget spent — back to you",
-  },
+  "goal.exhausted": { "zh-TW": "額度用盡,交還給你", en: "Budget spent — back to you" },
   "goal.noChecker": {
     "zh-TW": "此部署未設定目標檢查模型,目標不會自動續跑",
     en: "No goal checker is configured on this deploy — the goal will not auto-continue",
@@ -2089,14 +1654,8 @@ export const messages = {
     en: "Stuck — paused for you",
   },
   // #615: opting a goal in to unattended work outside office hours.
-  "goal.offhours": {
-    "zh-TW": "下班時間繼續做",
-    en: "Keep working after hours",
-  },
-  "goal.offhoursOn": {
-    "zh-TW": "下班時間會繼續做",
-    en: "Continues after hours",
-  },
+  "goal.offhours": { "zh-TW": "下班時間繼續做", en: "Keep working after hours" },
+  "goal.offhoursOn": { "zh-TW": "下班時間會繼續做", en: "Continues after hours" },
   "goal.offhoursRound": {
     "zh-TW": "下班續跑 {k}/{n} 輪",
     en: "after-hours round {k}/{n}",
@@ -2115,14 +1674,8 @@ export const messages = {
   "todos.inProgress": { "zh-TW": "進行中", en: "In progress" },
   "wf.progress.expand": { "zh-TW": "展開細節", en: "Show details" },
   "wf.progress.collapse": { "zh-TW": "收合細節", en: "Hide details" },
-  "wf.progress.step": {
-    "zh-TW": "第 {n} 步 · {title}",
-    en: "step {n} · {title}",
-  },
-  "wf.progress.noop": {
-    "zh-TW": "已完成，但未執行任何步驟",
-    en: "Finished without running any steps",
-  },
+  "wf.progress.step": { "zh-TW": "第 {n} 步 · {title}", en: "step {n} · {title}" },
+  "wf.progress.noop": { "zh-TW": "已完成，但未執行任何步驟", en: "Finished without running any steps" },
   "wf.stop": { "zh-TW": "停止", en: "Stop" },
   // What dropped is this browser's stream, not the run: the run executes on the
   // server and nothing here can stop it. "可能已停止" said otherwise, which turns
@@ -2158,10 +1711,7 @@ export const messages = {
   },
 
   // #441: the /help/releases view (structured, per-version release notes).
-  "help.releaseNotes.view": {
-    "zh-TW": "查看更新紀錄",
-    en: "View release notes",
-  },
+  "help.releaseNotes.view": { "zh-TW": "查看更新紀錄", en: "View release notes" },
   "releases.title": { "zh-TW": "更新紀錄", en: "Release notes" },
   "releases.intro": {
     "zh-TW": "平台每次更新的重點,最新的在最上面。",
@@ -2198,6 +1748,10 @@ export const messages = {
     "zh-TW": "這份簡報無法轉成預覽。可以下載原檔，用簡報軟體開啟。",
     en: "This deck couldn't be turned into a preview. Download the original to open it in a presentation app.",
   },
+  "slides.envFull": {
+    "zh-TW": "還沒預覽:轉換要開啟沙盒,但同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
+    en: "Not previewed — converting needs a sandbox, and the limit for live sandboxes is reached. Close one in My resources, then try again.",
+  },
   "slides.unreachable": {
     "zh-TW": "暫時無法預覽，請稍後再試。",
     en: "This deck can't be previewed right now. Try again in a moment.",
@@ -2207,73 +1761,37 @@ export const messages = {
     "zh-TW": "這裡無法預覽簡報。",
     en: "Slide decks can't be previewed here.",
   },
-  "env.title": {
-    "zh-TW": "工具用的環境變數",
-    en: "Environment variables for tools",
-  },
+  "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
   // `plan-wui-viewer-login`: the panel lists every tool as a section, with
   // one always-open search box instead of a tool dropdown.
-  "env.search": {
-    "zh-TW": "搜尋工具或變數…",
-    en: "Search tools or variables…",
-  },
+  "env.search": { "zh-TW": "搜尋工具或變數…", en: "Search tools or variables…" },
   "env.alsoUsedBy": { "zh-TW": "與 {tools} 共用", en: "Shared with {tools}" },
   // The three section states. Symbol + colour + these words (Carbon: never
   // colour alone). A tool that declared nothing has no section: its provider
   // owes the declaration, and the panel takes it at its word.
-  "env.status.missingRequired": {
-    "zh-TW": "缺 {count} 個必填",
-    en: "{count} required missing",
-  },
+  "env.status.missingRequired": { "zh-TW": "缺 {count} 個必填", en: "{count} required missing" },
   "env.status.missingOptional": {
     "zh-TW": "{count} 個選填未設",
     en: "{count} optional not set",
   },
   "env.status.ready": { "zh-TW": "已就緒", en: "Ready" },
-  "env.noMatches": {
-    "zh-TW": "沒有符合的工具或變數",
-    en: "No tool or variable matches",
-  },
+  "env.noMatches": { "zh-TW": "沒有符合的工具或變數", en: "No tool or variable matches" },
   "env.otherVars": { "zh-TW": "其他變數", en: "Other variables" },
   // The tab names are the user's (`plan-personal-env` A20): one per layer.
   "env.tab.shared": { "zh-TW": "Shared", en: "Shared" },
   "env.tab.mine": { "zh-TW": "Private", en: "Private" },
-  "env.tab.personal": {
-    "zh-TW": "Private(跨workspace)",
-    en: "Private (all workspaces)",
-  },
-  "env.personalDesc": {
-    "zh-TW": "你在所有 workspace 共用的值 （{link}）",
-    en: "Your values shared by all your workspaces ({link})",
-  },
-  "env.personalPage": {
-    "zh-TW": "前往我的環境變數設定",
-    en: "set them in My environment variables",
-  },
-  "env.personalNone": {
-    "zh-TW": "這個 workspace 的工具沒有要你填的變數。",
-    en: "This workspace's tools don't ask you for any variable.",
-  },
+  "env.tab.personal": { "zh-TW": "Private(跨workspace)", en: "Private (all workspaces)" },
+  "env.personalDesc": { "zh-TW": "你在所有 workspace 共用的值 （{link}）", en: "Your values shared by all your workspaces ({link})" },
+  "env.personalPage": { "zh-TW": "前往我的環境變數設定", en: "set them in My environment variables" },
+  "env.personalNone": { "zh-TW": "這個 workspace 的工具沒有要你填的變數。", en: "This workspace's tools don't ask you for any variable." },
   "env.signInNotSaved": {
     "zh-TW": "登入成功，但值沒有存進去。請再試一次。",
     en: "Signed in, but the value wasn't saved. Try again.",
   },
-  "env.mineDesc": {
-    "zh-TW": "你在這個 workspace 的值",
-    en: "Your values for this workspace",
-  },
-  "env.sharedDesc": {
-    "zh-TW": "這裡的值，能打開這個 workspace 的人都看得到。",
-    en: "Everyone who can open this workspace can see these values.",
-  },
-  "env.readonly": {
-    "zh-TW": "只有能修改這個 workspace 設定的人可以改這一頁。",
-    en: "Only people who can change this workspace's settings can change this page.",
-  },
-  "env.affectsEveryone": {
-    "zh-TW": "會影響這個 workspace 的所有人",
-    en: "Affects everyone in this workspace",
-  },
+  "env.mineDesc": { "zh-TW": "你在這個 workspace 的值", en: "Your values for this workspace" },
+  "env.sharedDesc": { "zh-TW": "這裡的值，能打開這個 workspace 的人都看得到。", en: "Everyone who can open this workspace can see these values." },
+  "env.readonly": { "zh-TW": "只有能修改這個 workspace 設定的人可以改這一頁。", en: "Only people who can change this workspace's settings can change this page." },
+  "env.affectsEveryone": { "zh-TW": "會影響這個 workspace 的所有人", en: "Affects everyone in this workspace" },
   // The three policies, in words a person decides by.
   // `plan-personal-env` D9 (user): the three choices are named by these words,
   // in both languages, with no sentence beside them.
@@ -2281,14 +1799,8 @@ export const messages = {
   "env.policy.private_first": { "zh-TW": "Private first", en: "Private first" },
   "env.policy.private_only": { "zh-TW": "Private only", en: "Private only" },
   "env.policyLabel": { "zh-TW": "{name} 由誰提供", en: "Who provides {name}" },
-  "env.sharedUnused": {
-    "zh-TW": "這裡的值不會被使用",
-    en: "This value isn't used",
-  },
-  "env.addPrivate": {
-    "zh-TW": "+ 加一個由各人自己填的變數",
-    en: "+ Add a variable each person fills in",
-  },
+  "env.sharedUnused": { "zh-TW": "這裡的值不會被使用", en: "This value isn't used" },
+  "env.addPrivate": { "zh-TW": "+ 加一個由各人自己填的變數", en: "+ Add a variable each person fills in" },
   "env.addPrivateName": { "zh-TW": "變數名稱", en: "Variable name" },
   "env.editAsText": {
     "zh-TW": "用 .env 文字編輯（貼上、匯入、匯出）",
@@ -2301,30 +1813,17 @@ export const messages = {
   "env.pinned": { "zh-TW": "固定用 Shared", en: "Always uses Shared" },
   // Written by the deploy from the person's own request (their SSO session):
   // rewritten at every request, so there is nothing to type.
-  "env.hint.auto": {
-    "zh-TW": "自動填入，每次使用時更新",
-    en: "Filled in automatically, updated each time you use it",
-  },
+  "env.hint.auto": { "zh-TW": "自動填入，每次使用時更新", en: "Filled in automatically, updated each time you use it" },
   "env.reveal": { "zh-TW": "顯示", en: "Show" },
   "env.hide": { "zh-TW": "隱藏", en: "Hide" },
   // Clears what the person KEEPS; what their sign-in fills in comes back at
   // their next request — so not "sign out", which it cannot promise.
   // Clears this item's values only — my environment variables are cleared on
   // their own page (`plan-personal-env`, round 1).
-  "env.clearTitle": {
-    "zh-TW": "清除你在這個 workspace 的值？",
-    en: "Clear your values for this workspace?",
-  },
-  "env.clearBody": {
-    "zh-TW":
-      "你在 Private 分頁自己填的、登入取得的值都會刪掉，無法復原。要再用，得重新填或重新登入。",
-    en: "What you typed or signed in for on the Private tab is deleted and can't be restored. To use it again, type it or sign in again.",
-  },
+  "env.clearTitle": { "zh-TW": "清除你在這個 workspace 的值？", en: "Clear your values for this workspace?" },
+  "env.clearBody": { "zh-TW": "你在 Private 分頁自己填的、登入取得的值都會刪掉，無法復原。要再用，得重新填或重新登入。", en: "What you typed or signed in for on the Private tab is deleted and can't be restored. To use it again, type it or sign in again." },
   "env.clearConfirm": { "zh-TW": "清除", en: "Clear" },
-  "env.logout": {
-    "zh-TW": "清除我在這個 workspace 的值",
-    en: "Clear my values for this workspace",
-  },
+  "env.logout": { "zh-TW": "清除我在這個 workspace 的值", en: "Clear my values for this workspace" },
   // The `/w/` page's platform bar (`plan-wui-viewer-login` Q11): WHAT to do,
   // by name — never "N missing", which says nothing about what to press.
   "env.bar.signedIn": { "zh-TW": "已登入", en: "Signed in" },
@@ -2337,8 +1836,7 @@ export const messages = {
   "envreq.set": { "zh-TW": "設定 {name}", en: "Set {name}" },
   "envreq.ready": { "zh-TW": "已設定", en: "Set" },
   "envreq.loginGot": {
-    "zh-TW":
-      "登入成功，取得以下變數。按「儲存」存進 Private（你在這個 workspace 的值）。",
+    "zh-TW": "登入成功，取得以下變數。按「儲存」存進 Private（你在這個 workspace 的值）。",
     en: "Signed in and got these. Press Save to keep them in Private (your values in this workspace).",
   },
   "envreq.wait": {
@@ -2358,10 +1856,7 @@ export const messages = {
     "zh-TW": "標 ↗ 的按鈕會在新分頁開啟",
     en: "Buttons marked ↗ open a new tab",
   },
-  "lookup.target": {
-    "zh-TW": "{name}(在新分頁開啟)",
-    en: "{name} (opens in a new tab)",
-  },
+  "lookup.target": { "zh-TW": "{name}(在新分頁開啟)", en: "{name} (opens in a new tab)" },
   "lookup.copy": { "zh-TW": "複製問題", en: "Copy the query" },
   "lookup.copied": { "zh-TW": "已複製", en: "Copied" },
   "lookup.url": { "zh-TW": "網址", en: "Address" },
@@ -2373,13 +1868,11 @@ export const messages = {
   "lookup.copyUrl": { "zh-TW": "複製網址", en: "Copy the address" },
   "lookup.found": { "zh-TW": "查到的內容", en: "What you found" },
   "lookup.foundHint": {
-    "zh-TW":
-      "在網頁上選取要的段落再複製(避免全選),貼上後連結和表格會保留成 Markdown;截圖可以直接貼上",
+    "zh-TW": "在網頁上選取要的段落再複製(避免全選),貼上後連結和表格會保留成 Markdown;截圖可以直接貼上",
     en: "Select the part you need on the page (not the whole page) and copy it — links and tables are kept as Markdown; screenshots can be pasted too",
   },
   "lookup.foundHintText": {
-    "zh-TW":
-      "在網頁上選取要的段落再複製(避免全選),貼上後連結和表格會保留成 Markdown",
+    "zh-TW": "在網頁上選取要的段落再複製(避免全選),貼上後連結和表格會保留成 Markdown",
     en: "Select the part you need on the page (not the whole page) and copy it — links and tables are kept as Markdown",
   },
   "lookup.pasteImageRefused": {
@@ -2391,50 +1884,28 @@ export const messages = {
   "lookup.drop": { "zh-TW": "或把檔案拖到這裡", en: "or drop files here" },
   "lookup.noFile": { "zh-TW": "尚未選擇檔案", en: "No file chosen" },
   "lookup.remove": { "zh-TW": "移除 {name}", en: "Remove {name}" },
-  "lookup.source": {
-    "zh-TW": "來源網址(選填)",
-    en: "Source address (optional)",
-  },
+  "lookup.source": { "zh-TW": "來源網址(選填)", en: "Source address (optional)" },
   "lookup.send": { "zh-TW": "送出", en: "Send" },
-  "lookup.notFound": {
-    "zh-TW": "查不到／不查了",
-    en: "Couldn't find it / skip",
-  },
+  "lookup.notFound": { "zh-TW": "查不到／不查了", en: "Couldn't find it / skip" },
   "lookup.reason": { "zh-TW": "原因(選填)", en: "Why (optional)" },
-  "lookup.sendNotFound": {
-    "zh-TW": "送出「查不到」",
-    en: "Send “couldn't find it”",
-  },
+  "lookup.sendNotFound": { "zh-TW": "送出「查不到」", en: "Send “couldn't find it”" },
   "lookup.back": { "zh-TW": "返回", en: "Back" },
   "lookup.empty": {
     "zh-TW": "請貼上查到的內容,或附加檔案",
     en: "Paste what you found, or attach a file",
   },
-  "lookup.emptyText": {
-    "zh-TW": "請貼上查到的內容",
-    en: "Paste what you found",
-  },
+  "lookup.emptyText": { "zh-TW": "請貼上查到的內容", en: "Paste what you found" },
   "lookup.textOnly": {
-    "zh-TW":
-      "你在這個 workspace 不能新增檔案:查到的內容只會隨訊息送給 AI,不會存成檔案,也不能附檔。",
+    "zh-TW": "你在這個 workspace 不能新增檔案:查到的內容只會隨訊息送給 AI,不會存成檔案,也不能附檔。",
     en: "You can't add files in this workspace: what you found goes to the AI in the message, without being saved or attached.",
   },
-  "lookup.savedTo": {
-    "zh-TW": "已送出,已存到 {path}",
-    en: "Sent — saved to {path}",
-  },
+  "lookup.savedTo": { "zh-TW": "已送出,已存到 {path}", en: "Sent — saved to {path}" },
   "lookup.sent": { "zh-TW": "已送出", en: "Sent" },
-  "lookup.sentNotFound": {
-    "zh-TW": "已告訴 AI 查不到",
-    en: "Told the AI you couldn't find it",
-  },
+  "lookup.sentNotFound": { "zh-TW": "已告訴 AI 查不到", en: "Told the AI you couldn't find it" },
   "lookup.answered": { "zh-TW": "已回覆", en: "Answered" },
   "lookup.failed": { "zh-TW": "沒有送出:{reason}", en: "Not sent — {reason}" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
-  "env.bar.many": {
-    "zh-TW": "需要登入 {count} 個系統",
-    en: "Sign in to {count} systems",
-  },
+  "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
   // Three or more, not all sign-ins: a variable to type is not a "system" —
   // and never a bare count: the first two by name, then how many in all.
   "env.bar.manyItems": {
@@ -2452,13 +1923,9 @@ export const messages = {
   "sched.bindMe": { "zh-TW": "用我的身分執行", en: "Run as me" },
   "sched.replaceMe": { "zh-TW": "改用我的身分", en: "Run as me instead" },
   "sched.unbind": { "zh-TW": "停止用我的身分", en: "Stop running as me" },
-  "sched.replaceTitle": {
-    "zh-TW": "改用你的身分執行?",
-    en: "Run this as you instead?",
-  },
+  "sched.replaceTitle": { "zh-TW": "改用你的身分執行?", en: "Run this as you instead?" },
   "sched.replaceBody": {
-    "zh-TW":
-      "目前用 {who} 的身分執行。改成你的之後,{who} 的值就不會再被使用,我們會通知 {who}。",
+    "zh-TW": "目前用 {who} 的身分執行。改成你的之後,{who} 的值就不會再被使用,我們會通知 {who}。",
     en: "It runs as {who} now. Once it runs as you, {who}'s values are no longer used, and {who} is told.",
   },
   "sched.none": { "zh-TW": "這一頁沒有排程", en: "This page has no schedules" },
@@ -2520,13 +1987,9 @@ export const messages = {
     en: "Couldn’t save — the change was not applied.",
   },
   "writeFailure.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
-  "tools.title": {
-    "zh-TW": "助理可用的工具",
-    en: "Tools the assistant can use",
-  },
+  "tools.title": { "zh-TW": "助理可用的工具", en: "Tools the assistant can use" },
   "tools.desc": {
-    "zh-TW":
-      "預設沿用範本設定。把任一工具改成「開啟」或「關閉」只會影響這個工作區；其餘維持「預設」會跟著範本變動。",
+    "zh-TW": "預設沿用範本設定。把任一工具改成「開啟」或「關閉」只會影響這個工作區；其餘維持「預設」會跟著範本變動。",
     en: "Defaults follow the template. Set a tool to On or Off to override it for this workspace only; the rest stay on Default and follow the template.",
   },
   "tools.search": { "zh-TW": "搜尋工具…", en: "Search tools…" },
@@ -2544,20 +2007,11 @@ export const messages = {
   "tools.group.builtin": { "zh-TW": "核心工具", en: "Core tools" },
   "tools.group.count": { "zh-TW": "{n} 項", en: "{n} tools" },
   "tools.group.mixed": { "zh-TW": "混合", en: "Mixed" },
-  "tools.group.aria": {
-    "zh-TW": "{group} 整組的設定",
-    en: "Setting for all of {group}",
-  },
+  "tools.group.aria": { "zh-TW": "{group} 整組的設定", en: "Setting for all of {group}" },
   "tools.defaultOn": { "zh-TW": "預設開啟", en: "On by default" },
   "tools.defaultOff": { "zh-TW": "預設關閉", en: "Off by default" },
-  "tools.noMatch": {
-    "zh-TW": "沒有符合「{q}」的工具。",
-    en: "No tools match “{q}”.",
-  },
-  "tools.none": {
-    "zh-TW": "這個工作區沒有可選的工具。",
-    en: "No tools to choose from.",
-  },
+  "tools.noMatch": { "zh-TW": "沒有符合「{q}」的工具。", en: "No tools match “{q}”." },
+  "tools.none": { "zh-TW": "這個工作區沒有可選的工具。", en: "No tools to choose from." },
   "tools.save": { "zh-TW": "儲存", en: "Save" },
   "tools.cancel": { "zh-TW": "取消", en: "Cancel" },
   "tools.loading": { "zh-TW": "載入工具中…", en: "Loading tools…" },
@@ -2568,18 +2022,12 @@ export const messages = {
     "zh-TW": "取自快取副本，可能不是最新版",
     en: "From the cached copy — may not be the latest",
   },
-  "tools.origin.unavailable": {
-    "zh-TW": "目前無法取得：{reason}",
-    en: "Unavailable: {reason}",
-  },
+  "tools.origin.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
   "tools.origin.running": {
     "zh-TW": "執行中 {running} · 最新 {latest}",
     en: "Running {running} · latest {latest}",
   },
-  "tools.origin.unrecorded": {
-    "zh-TW": "未記錄的版本",
-    en: "an unrecorded release",
-  },
+  "tools.origin.unrecorded": { "zh-TW": "未記錄的版本", en: "an unrecorded release" },
   "tools.origin.runningNotLatest": {
     "zh-TW": "執行中 {running}（不是最新版）",
     en: "Running {running} (not the latest)",
@@ -2589,18 +2037,14 @@ export const messages = {
     en: "Not in the current sandbox",
   },
   "tools.update.note": {
-    "zh-TW":
-      "沙盒裡的工具和最新版不一樣。關閉沙盒後，下一次對話就會使用最新版。",
+    "zh-TW": "沙盒裡的工具和最新版不一樣。關閉沙盒後，下一次對話就會使用最新版。",
     en: "The sandbox's tools differ from the latest. Close the sandbox and the next turn uses the latest.",
   },
   "tools.update.noteOthers": {
     "zh-TW": "沙盒裡的工具和最新版不一樣，沙盒關閉後就會使用最新版。",
     en: "The sandbox's tools differ from the latest; they update once the sandbox is closed.",
   },
-  "tools.update.close": {
-    "zh-TW": "關閉沙盒以更新",
-    en: "Close sandbox to update",
-  },
+  "tools.update.close": { "zh-TW": "關閉沙盒以更新", en: "Close sandbox to update" },
   "tools.update.failed": {
     "zh-TW": "沒能關閉沙盒，請稍後再試。",
     en: "The sandbox could not be closed. Try again shortly.",
@@ -2638,39 +2082,20 @@ export const messages = {
   "telemetry.span.tool": { "zh-TW": "工具", en: "tool" },
   "telemetry.span.agent": { "zh-TW": "代理", en: "agent" },
   "telemetry.span.handoff": { "zh-TW": "交接", en: "handoff" },
-  "telemetry.noSteps": {
-    "zh-TW": "沒有記錄任何步驟。",
-    en: "No steps recorded.",
-  },
+  "telemetry.noSteps": { "zh-TW": "沒有記錄任何步驟。", en: "No steps recorded." },
   "telemetry.step": { "zh-TW": "{n} 步", en: "{n} step" },
   "telemetry.steps": { "zh-TW": "{n} 步", en: "{n} steps" },
   "telemetry.live": { "zh-TW": "即時", en: "live" },
   "telemetry.empty": {
-    "zh-TW":
-      "目前沒有任何活動。跑一次 AI（對話、建立 wiki）後，它的 LLM 呼叫與工具呼叫就會即時出現在這裡。",
+    "zh-TW": "目前沒有任何活動。跑一次 AI（對話、建立 wiki）後，它的 LLM 呼叫與工具呼叫就會即時出現在這裡。",
     en: "No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls appear here live.",
   },
-  "telemetry.durable.aria": {
-    "zh-TW": "持久儲存遙測",
-    en: "Durable store telemetry",
-  },
+  "telemetry.durable.aria": { "zh-TW": "持久儲存遙測", en: "Durable store telemetry" },
   "telemetry.durable.title": { "zh-TW": "持久儲存", en: "Durable store" },
-  "telemetry.durable.files": {
-    "zh-TW": "每次鏡射檔案數（p95）",
-    en: "Files / mirror (p95)",
-  },
-  "telemetry.durable.restore": {
-    "zh-TW": "冷喚醒還原（p95）",
-    en: "Cold-wake restore (p95)",
-  },
-  "telemetry.durable.rows": {
-    "zh-TW": "WorkspaceFile 列數",
-    en: "WorkspaceFile rows",
-  },
-  "telemetry.durable.trend": {
-    "zh-TW": "WorkspaceFile 列數趨勢",
-    en: "WorkspaceFile rows trend",
-  },
+  "telemetry.durable.files": { "zh-TW": "每次鏡射檔案數（p95）", en: "Files / mirror (p95)" },
+  "telemetry.durable.restore": { "zh-TW": "冷喚醒還原（p95）", en: "Cold-wake restore (p95)" },
+  "telemetry.durable.rows": { "zh-TW": "WorkspaceFile 列數", en: "WorkspaceFile rows" },
+  "telemetry.durable.trend": { "zh-TW": "WorkspaceFile 列數趨勢", en: "WorkspaceFile rows trend" },
   "telemetry.durable.samples": {
     "zh-TW": "{mirror} 次鏡射 · {restore} 次還原取樣",
     en: "{mirror} mirror · {restore} restore samples",
@@ -2678,10 +2103,7 @@ export const messages = {
 
   // Model sanity → fitness verdicts (#465).
   "sanity.verdicts.title": { "zh-TW": "適配度評分", en: "Fitness scores" },
-  "sanity.verdicts.rescore": {
-    "zh-TW": "重新 AI 評分",
-    en: "Re-score with AI",
-  },
+  "sanity.verdicts.rescore": { "zh-TW": "重新 AI 評分", en: "Re-score with AI" },
   "sanity.verdicts.scoring": { "zh-TW": "評分中…", en: "Scoring…" },
   "sanity.verdicts.empty": {
     "zh-TW": "尚無評分。跑題後按「重新 AI 評分」讓 AI 評估每個模型的適配度。",
@@ -2696,20 +2118,14 @@ export const messages = {
   "sanity.table.models": { "zh-TW": "模型", en: "Models" },
   "sanity.table.allCategories": { "zh-TW": "全部題組", en: "All categories" },
   "sanity.table.onlyMissing": { "zh-TW": "只看未跑", en: "Only not-run" },
-  "sanity.table.runMissing": {
-    "zh-TW": "跑掉所有未跑的",
-    en: "Run all not-run",
-  },
+  "sanity.table.runMissing": { "zh-TW": "跑掉所有未跑的", en: "Run all not-run" },
   "sanity.table.run": { "zh-TW": "▶ 跑", en: "▶ Run" },
   "sanity.table.status.missing": { "zh-TW": "未跑", en: "Not run" },
   "sanity.table.status.done": { "zh-TW": "完成", en: "Done" },
   "sanity.table.status.error": { "zh-TW": "錯誤", en: "Error" },
   "sanity.table.grade.pass": { "zh-TW": "通過", en: "Pass" },
   "sanity.table.grade.fail": { "zh-TW": "未通過", en: "Fail" },
-  "sanity.table.summary": {
-    "zh-TW": "已測 {done} / {total} 格",
-    en: "Ran {done} / {total} cells",
-  },
+  "sanity.table.summary": { "zh-TW": "已測 {done} / {total} 格", en: "Ran {done} / {total} cells" },
   "sanity.table.summaryRemaining": {
     "zh-TW": " · 還有 {n} 格未跑",
     en: " · {n} still not run",
@@ -2727,10 +2143,7 @@ export const messages = {
   "sanity.table.col.expected": { "zh-TW": "參考答案", en: "Expected" },
   "sanity.table.col.aux": { "zh-TW": "aux", en: "aux" },
   "sanity.table.close": { "zh-TW": "關閉", en: "Close" },
-  "sanity.table.modal.aiNote": {
-    "zh-TW": "AI 評語：{note}",
-    en: "AI note: {note}",
-  },
+  "sanity.table.modal.aiNote": { "zh-TW": "AI 評語：{note}", en: "AI note: {note}" },
   "sanity.table.modal.auto": { "zh-TW": "機械：{grade}", en: "Auto: {grade}" },
   "sanity.table.modal.ai": { "zh-TW": "AI：{grade}", en: "AI: {grade}" },
   "sanity.table.modal.reasoned": { "zh-TW": "有推理", en: "reasoned" },
@@ -2746,10 +2159,7 @@ export const messages = {
     "zh-TW": "題組（例如：格式輸出）",
     en: "Category (e.g. Formatting)",
   },
-  "sanity.q.ph.prompt": {
-    "zh-TW": "題目（給模型的提問）",
-    en: "Question (the prompt sent to the model)",
-  },
+  "sanity.q.ph.prompt": { "zh-TW": "題目（給模型的提問）", en: "Question (the prompt sent to the model)" },
   "sanity.q.ph.expected": {
     "zh-TW": "參考答案 / 期望行為（餵給 AI 評審）",
     en: "Expected answer / behavior (given to the AI judge)",
@@ -2772,10 +2182,7 @@ export const messages = {
       "collections.json 目前無法解析（可能正在手動編輯）。下方以空清單顯示；按「儲存」會以乾淨清單覆寫原內容。",
     en: "collections.json can't be parsed right now (it may be mid-edit). It's shown below as an empty list; Save will overwrite it with a clean one.",
   },
-  "colpicker.empty": {
-    "zh-TW": "尚未選擇任何知識庫。",
-    en: "No knowledge bases selected yet.",
-  },
+  "colpicker.empty": { "zh-TW": "尚未選擇任何知識庫。", en: "No knowledge bases selected yet." },
   "colpicker.readError": {
     "zh-TW": "無法讀取 collections.json。",
     en: "Couldn't read collections.json.",
@@ -2786,18 +2193,9 @@ export const messages = {
     en: "Search priority (top tier first; the AI only widens to lower tiers if it can't answer).",
   },
   "colpicker.tier": { "zh-TW": "優先層 {n}", en: "Priority {n}" },
-  "colpicker.raise": {
-    "zh-TW": "把 {name} 往上移一層",
-    en: "Raise {name} a tier",
-  },
-  "colpicker.lower": {
-    "zh-TW": "把 {name} 往下移一層",
-    en: "Lower {name} a tier",
-  },
-  "colpicker.ignored": {
-    "zh-TW": "已忽略 {n} 筆無效項。",
-    en: "Ignored {n} invalid entries.",
-  },
+  "colpicker.raise": { "zh-TW": "把 {name} 往上移一層", en: "Raise {name} a tier" },
+  "colpicker.lower": { "zh-TW": "把 {name} 往下移一層", en: "Lower {name} a tier" },
+  "colpicker.ignored": { "zh-TW": "已忽略 {n} 筆無效項。", en: "Ignored {n} invalid entries." },
   "colpicker.orphans": {
     "zh-TW": "已不存在的知識庫（建議移除）",
     en: "Knowledge bases that no longer exist (remove suggested)",
@@ -2813,10 +2211,7 @@ export const messages = {
   // Leaving a modal that holds something unsaved (#779). ONE set of words for
   // every modal — the tool picker and the collections picker each used to carry
   // their own, which is how the same question ended up phrased three ways.
-  "dirtyClose.prompt": {
-    "zh-TW": "放棄未儲存的變更？",
-    en: "Discard unsaved changes?",
-  },
+  "dirtyClose.prompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
   "dirtyClose.keep": { "zh-TW": "繼續編輯", en: "Keep editing" },
   "dirtyClose.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
 
@@ -2829,23 +2224,16 @@ export const messages = {
     en: "All available models are busy right now, so this response wasn't completed. Please try again in a moment.",
   },
   "turn.rateLimited": {
-    "zh-TW":
-      "模型服務正在限制我們的請求頻率，這次回答沒有完成。這不是模型忙 —— 要等限制解除，或把額度調高。",
+    "zh-TW": "模型服務正在限制我們的請求頻率，這次回答沒有完成。這不是模型忙 —— 要等限制解除，或把額度調高。",
     en: "The model endpoint is rate-limiting us, so this response wasn't completed. This is not a busy model: the limit has to clear, or be raised.",
   },
 
   // The skill hub (docs/plan-skill-hub.md). "Skill hub" is the proper noun
   // (the author: 「不要縮寫 就是skill hub」), so it is not translated.
   "skillHub.loading": { "zh-TW": "載入中…", en: "Loading…" },
-  "skillHub.error": {
-    "zh-TW": "讀不到 skill hub。",
-    en: "The skill hub could not be read.",
-  },
+  "skillHub.error": { "zh-TW": "讀不到 skill hub。", en: "The skill hub could not be read." },
   "skillHub.retry": { "zh-TW": "再試一次", en: "Try again" },
-  "skillHub.search": {
-    "zh-TW": "搜尋名稱或說明",
-    en: "Search names or descriptions",
-  },
+  "skillHub.search": { "zh-TW": "搜尋名稱或說明", en: "Search names or descriptions" },
   "skillHub.all": { "zh-TW": "全部", en: "All" },
   "skillHub.mine": { "zh-TW": "我的", en: "Mine" },
   "skillHub.empty": {
@@ -2853,53 +2241,31 @@ export const messages = {
     en: "Nobody has published a skill yet.",
   },
   "skillHub.empty.what": {
-    "zh-TW":
-      "在 workspace 的 Skills 面板裡，把你做好的 skill 發布到 skill hub，其他人就能從自己的 workspace 裝進去。",
+    "zh-TW": "在 workspace 的 Skills 面板裡，把你做好的 skill 發布到 skill hub，其他人就能從自己的 workspace 裝進去。",
     en: "In a workspace's Skills panel, publish a skill you made to the skill hub; others install it into their own workspaces.",
   },
-  "skillHub.noMatch": {
-    "zh-TW": "沒有符合的 skill。",
-    en: "No skill matches.",
-  },
+  "skillHub.noMatch": { "zh-TW": "沒有符合的 skill。", en: "No skill matches." },
   "skillHub.forks": { "zh-TW": "{count} 個 fork", en: "{count} forks" },
   "skillHub.fork.one": { "zh-TW": "1 個 fork", en: "1 fork" },
   // plan-skill-hub-history U6/U7: the counts, never who; counting starts on the
   // day the feature went live, so the number says since when. Said in halves
   // (`skillHub.counts.installs` / `.uses`), a zero half left out (`countsText`).
   "skillHub.countedSince": { "zh-TW": "自 {day} 起", en: "since {day}" },
-  "skillHub.counts.installs": {
-    "zh-TW": "安裝 {count} 次",
-    en: "Installed {count} times",
-  },
-  "skillHub.counts.uses": {
-    "zh-TW": "使用 {count} 次",
-    en: "Used {count} times",
-  },
+  "skillHub.counts.installs": { "zh-TW": "安裝 {count} 次", en: "Installed {count} times" },
+  "skillHub.counts.uses": { "zh-TW": "使用 {count} 次", en: "Used {count} times" },
   // The list's summary line: beside 「共 N 個 skill」 the day alone read as
   // the skills' date, not the counts'.
-  "skillHub.countedSince.list": {
-    "zh-TW": "次數自 {day} 起計",
-    en: "counts since {day}",
-  },
+  "skillHub.countedSince.list": { "zh-TW": "次數自 {day} 起計", en: "counts since {day}" },
   "skillHub.sort": { "zh-TW": "排序", en: "Sort" },
   // plan-skill-hub-ux-redo D1/D4/D17: the list's toolbar, paging and empty search.
   "skillHub.sort.updated": { "zh-TW": "最近更新", en: "Recently updated" },
   "skillHub.show": { "zh-TW": "顯示", en: "Show" },
   "skillHub.total": { "zh-TW": "共 {count} 個 skill", en: "{count} skills" },
   "skillHub.loadMore": { "zh-TW": "載入更多", en: "Load more" },
-  "skillHub.shown": {
-    "zh-TW": "已顯示 {shown} / {total}",
-    en: "Showing {shown} of {total}",
-  },
+  "skillHub.shown": { "zh-TW": "已顯示 {shown} / {total}", en: "Showing {shown} of {total}" },
   "skillHub.owner.filter": { "zh-TW": "owner：{name}", en: "Owner: {name}" },
-  "skillHub.owner.clear": {
-    "zh-TW": "清除 owner 篩選",
-    en: "Clear the owner filter",
-  },
-  "skillHub.owner.only": {
-    "zh-TW": "只看 {name} 的 skill",
-    en: "Only {name}'s skills",
-  },
+  "skillHub.owner.clear": { "zh-TW": "清除 owner 篩選", en: "Clear the owner filter" },
+  "skillHub.owner.only": { "zh-TW": "只看 {name} 的 skill", en: "Only {name}'s skills" },
   "skillHub.noMatch.query": {
     "zh-TW": "沒有名稱或說明符合「{q}」的 skill。",
     en: "No skill's name or description matches “{q}”.",
@@ -2910,43 +2276,22 @@ export const messages = {
   // plan-skill-hub-history A3: the card `show_skill_hub_entry` draws in a chat.
   "skillHub.card.install": { "zh-TW": "安裝", en: "Install" },
   "skillHub.card.installed": { "zh-TW": "已安裝", en: "Installed" },
-  "skillHub.card.reviewOk": {
-    "zh-TW": "審查沒有意見",
-    en: "The review had no notes",
-  },
+  "skillHub.card.reviewOk": { "zh-TW": "審查沒有意見", en: "The review had no notes" },
   "skillHub.card.gone": {
     "zh-TW": "這個 skill 已不在 skill hub 上",
     en: "This skill is no longer on the skill hub",
   },
   "skillHub.sort.name": { "zh-TW": "名稱", en: "Name" },
   "skillHub.sort.popular": { "zh-TW": "最常使用", en: "Most used" },
-  "skillHub.forkOf.named": {
-    "zh-TW": "fork 自 {owner} 的 {name}",
-    en: "fork of {owner}'s {name}",
-  },
-  "skillHub.origin.unpublished": {
-    "zh-TW": "原作已下架",
-    en: "the original was unpublished",
-  },
-  "skillHub.origin.deleted": {
-    "zh-TW": "原作已刪除",
-    en: "the original was deleted",
-  },
+  "skillHub.forkOf.named": { "zh-TW": "fork 自 {owner} 的 {name}", en: "fork of {owner}'s {name}" },
+  "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
+  "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },
   "skillHub.tools": { "zh-TW": "用到的工具", en: "Tools it mentions" },
-  "skillHub.tools.none": {
-    "zh-TW": "沒有提到任何工具",
-    en: "mentions no tools",
-  },
+  "skillHub.tools.none": { "zh-TW": "沒有提到任何工具", en: "mentions no tools" },
   "skillHub.review": { "zh-TW": "AI 審查意見", en: "AI review" },
   "skillHub.review.ok": { "zh-TW": "審查沒有意見", en: "Nothing flagged" },
-  "skillHub.review.notes": {
-    "zh-TW": "審查有 {count} 則意見",
-    en: "{count} review notes",
-  },
-  "skillHub.review.by": {
-    "zh-TW": "由 {model} 審查",
-    en: "reviewed by {model}",
-  },
+  "skillHub.review.notes": { "zh-TW": "審查有 {count} 則意見", en: "{count} review notes" },
+  "skillHub.review.by": { "zh-TW": "由 {model} 審查", en: "reviewed by {model}" },
   // A fork's card names its root (plan-skill-hub-ui-polish D9,
   // `skillHub.forkOf.named`); when the root is one the viewer cannot read —
   // unpublished, deleted, not shared with them — it says that much. The "has review notes" badge
@@ -2957,29 +2302,17 @@ export const messages = {
   },
   "skillHub.files": { "zh-TW": "檔案", en: "Files" },
   // plan-skill-hub-ux-redo D12: the files tab's summary line and viewer.
-  "skillHub.files.summary": {
-    "zh-TW": "{count} 個檔案 ・ {size}",
-    en: "{count} files · {size}",
-  },
+  "skillHub.files.summary": { "zh-TW": "{count} 個檔案 ・ {size}", en: "{count} files · {size}" },
   "skillHub.files.count": { "zh-TW": "{count} 個檔案", en: "{count} files" },
-  "skillHub.files.scripts": {
-    "zh-TW": "含 {count} 個 script",
-    en: "{count} scripts",
-  },
+  "skillHub.files.scripts": { "zh-TW": "含 {count} 個 script", en: "{count} scripts" },
   "skillHub.files.notText": {
     "zh-TW": "這個檔案不是文字，這裡顯示不了。",
     en: "This file is not text and cannot be shown here.",
   },
-  "skillHub.forksOf.none": {
-    "zh-TW": "還沒有人 fork 這個 skill。",
-    en: "Nobody has forked this skill yet.",
-  },
+  "skillHub.forksOf.none": { "zh-TW": "還沒有人 fork 這個 skill。", en: "Nobody has forked this skill yet." },
   "skillHub.visibility.public": { "zh-TW": "公開", en: "Public" },
   "skillHub.visibility.restricted": { "zh-TW": "限定名單", en: "Restricted" },
-  "skillHub.visibility.private": {
-    "zh-TW": "已下架（只有你看得到）",
-    en: "Unpublished (only you can see it)",
-  },
+  "skillHub.visibility.private": { "zh-TW": "已下架（只有你看得到）", en: "Unpublished (only you can see it)" },
   // Owner-only actions (plan Q7). Nobody else sees a single button.
   "skillHub.edit": { "zh-TW": "修改", en: "Edit" },
   "skillHub.unpublish": { "zh-TW": "下架", en: "Unpublish" },
@@ -3034,22 +2367,14 @@ export const messages = {
   // plan-skill-hub-ux-redo D10: the one sentence on what unpublishing or
   // narrowing the permission does to copies already installed — said in the
   // 下架 confirm and in the share dialog's caption above, alike.
-  "skillHub.share.captionWithImpact": {
-    "zh-TW": "{caption}{impact}",
-    en: "{caption} {impact}",
-  },
+  "skillHub.share.captionWithImpact": { "zh-TW": "{caption}{impact}", en: "{caption} {impact}" },
   "skillHub.impact.installed": {
-    "zh-TW":
-      "已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
+    "zh-TW": "已經裝了的人保留自己的副本、照常能用；看不到這個 skill 的人收不到之後的新版。",
     en: "People who installed it keep their copy, which keeps working; whoever can no longer see this skill gets no later versions.",
   },
-  "skillHub.unpublish.title": {
-    "zh-TW": "下架「{name}」？",
-    en: "Unpublish “{name}”?",
-  },
+  "skillHub.unpublish.title": { "zh-TW": "下架「{name}」？", en: "Unpublish “{name}”?" },
   "skillHub.unpublish.body": {
-    "zh-TW":
-      "下架後只有你看得到它：別人搜尋不到，也不能再安裝。之後可以重新上架。",
+    "zh-TW": "下架後只有你看得到它：別人搜尋不到，也不能再安裝。之後可以重新上架。",
     en: "Once unpublished only you can see it: nobody else finds or installs it. You can republish it later.",
   },
   "skillHub.unpublish.confirm": { "zh-TW": "下架", en: "Unpublish" },
@@ -3057,10 +2382,7 @@ export const messages = {
     "zh-TW": "已下架「{name}」，現在只有你看得到。",
     en: "Unpublished “{name}” — only you can see it now.",
   },
-  "skillHub.republished": {
-    "zh-TW": "已重新上架「{name}」。",
-    en: "Republished “{name}”.",
-  },
+  "skillHub.republished": { "zh-TW": "已重新上架「{name}」。", en: "Republished “{name}”." },
   // plan-skill-hub-ux-redo D5: the skill page's header, tabs and sidebar.
   "skillHub.manage": { "zh-TW": "管理", en: "Manage" },
   "skillHub.tab.readme": { "zh-TW": "說明", en: "Overview" },
@@ -3071,23 +2393,14 @@ export const messages = {
   "skillHub.side.updated": { "zh-TW": "更新時間", en: "Updated" },
   "skillHub.side.usage": { "zh-TW": "次數", en: "Usage" },
   "skillHub.side.source": { "zh-TW": "來源 App", en: "Written in" },
-  "skillHub.installs.title": {
-    "zh-TW": "你裝在這些 workspace",
-    en: "Your workspaces with it",
-  },
+  "skillHub.installs.title": { "zh-TW": "你裝在這些 workspace", en: "Your workspaces with it" },
   "skillHub.installs.none": {
     "zh-TW": "你還沒有把它裝進任何 workspace。",
     en: "You have not installed it in any workspace.",
   },
   // plan-skill-hub-ux-redo D6: the install dialog.
-  "skillHub.install": {
-    "zh-TW": "安裝到 workspace…",
-    en: "Install in a workspace…",
-  },
-  "skillHub.install.title": {
-    "zh-TW": "把「{name}」裝到哪個 workspace？",
-    en: "Install “{name}” in which workspace?",
-  },
+  "skillHub.install": { "zh-TW": "安裝到 workspace…", en: "Install in a workspace…" },
+  "skillHub.install.title": { "zh-TW": "把「{name}」裝到哪個 workspace？", en: "Install “{name}” in which workspace?" },
   "skillHub.install.app": { "zh-TW": "App", en: "App" },
   "skillHub.install.items": { "zh-TW": "workspace", en: "Workspace" },
   "skillHub.install.none": {
@@ -3095,14 +2408,10 @@ export const messages = {
     en: "You can edit no workspace in this App.",
   },
   "skillHub.install.missing": {
-    "zh-TW":
-      "這個 App 沒有它提到的工具：{tools}。裝了仍可用，只是用到這些工具的步驟做不到。",
+    "zh-TW": "這個 App 沒有它提到的工具：{tools}。裝了仍可用，只是用到這些工具的步驟做不到。",
     en: "This App lacks tools it mentions: {tools}. It still installs; the steps that need them will not work.",
   },
-  "skillHub.install.state.installed": {
-    "zh-TW": "已經裝了",
-    en: "Already installed",
-  },
+  "skillHub.install.state.installed": { "zh-TW": "已經裝了", en: "Already installed" },
   "skillHub.install.state.unavailable": {
     "zh-TW": "現在讀不到這個 workspace，稍後再試",
     en: "This workspace cannot be read right now — try again shortly",
@@ -3116,50 +2425,30 @@ export const messages = {
     en: "Has a folder of that name",
   },
   "skillHub.install.confirm": { "zh-TW": "安裝", en: "Install" },
-  "skillHub.install.done": {
-    "zh-TW": "已裝進「{title}」",
-    en: "Installed in “{title}”",
-  },
-  "skillHub.install.open": {
-    "zh-TW": "打開 workspace",
-    en: "Open the workspace",
-  },
+  "skillHub.install.done": { "zh-TW": "已裝進「{title}」", en: "Installed in “{title}”" },
+  "skillHub.install.open": { "zh-TW": "打開 workspace", en: "Open the workspace" },
   // plan-skill-hub-ux-redo D16: gone is not a network error.
   "skillHub.notFound": {
     "zh-TW": "找不到這個 skill：它可能已刪除、已下架，或你沒有權限看。",
     en: "This skill is not here: it may have been deleted or unpublished, or you may not have access.",
   },
-  "skillHub.backToList": {
-    "zh-TW": "回 skill hub",
-    en: "Back to the skill hub",
-  },
+  "skillHub.backToList": { "zh-TW": "回 skill hub", en: "Back to the skill hub" },
   "skillHub.transfer": { "zh-TW": "轉移 owner", en: "Transfer" },
-  "skillHub.transfer.title": {
-    "zh-TW": "把「{name}」轉給誰？",
-    en: "Transfer “{name}” to whom?",
-  },
+  "skillHub.transfer.title": { "zh-TW": "把「{name}」轉給誰？", en: "Transfer “{name}” to whom?" },
   "skillHub.transfer.body": {
-    "zh-TW":
-      "轉移後只有新 owner 能修改、下架或刪除；已裝的副本和 fork 都不受影響。",
+    "zh-TW": "轉移後只有新 owner 能修改、下架或刪除；已裝的副本和 fork 都不受影響。",
     en: "After the transfer only the new owner can edit, unpublish or delete it; installed copies and forks are unaffected.",
   },
   "skillHub.transfer.confirm": { "zh-TW": "轉移", en: "Transfer" },
   "skillHub.delete": { "zh-TW": "刪除", en: "Delete" },
-  "skillHub.delete.title": {
-    "zh-TW": "刪除「{name}」？",
-    en: "Delete “{name}”?",
-  },
+  "skillHub.delete.title": { "zh-TW": "刪除「{name}」？", en: "Delete “{name}”?" },
   "skillHub.delete.body": {
-    "zh-TW":
-      "刪除後不能復原。已裝的副本留在各自的 workspace 裡，但會顯示「原作已刪除」；同名重新發布會是新的 skill。",
+    "zh-TW": "刪除後不能復原。已裝的副本留在各自的 workspace 裡，但會顯示「原作已刪除」；同名重新發布會是新的 skill。",
     en: "This cannot be undone. Installed copies stay in their workspaces but will read “the original was deleted”; publishing the name again starts a new skill.",
   },
   "skillHub.delete.confirm": { "zh-TW": "刪除", en: "Delete" },
   "skillHub.cancel": { "zh-TW": "取消", en: "Cancel" },
-  "skillHub.deleted": {
-    "zh-TW": "已刪除「{name}」。",
-    en: "Deleted “{name}”.",
-  },
+  "skillHub.deleted": { "zh-TW": "已刪除「{name}」。", en: "Deleted “{name}”." },
   // What the list says after an entry was given away (plan-skill-hub-ui-polish
   // D10): who has it now — and, when it was unpublished, that it is out of
   // the old owner's sight from here on, which is why they landed here.
@@ -3175,10 +2464,7 @@ export const messages = {
   "notice.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
   // The edit resolver's "new item" branch (plan P8): the source item cannot
   // take the edit, and the reason says why.
-  "skillHub.edit.newItem.title": {
-    "zh-TW": "要開一個新的 workspace 來修改",
-    en: "Edit in a new workspace",
-  },
+  "skillHub.edit.newItem.title": { "zh-TW": "要開一個新的 workspace 來修改", en: "Edit in a new workspace" },
   "skillHub.edit.reason.closed": {
     "zh-TW": "發布這個 skill 的 workspace 已經完成。",
     en: "The workspace this skill was published from is closed.",
@@ -3192,36 +2478,20 @@ export const messages = {
     en: "You can no longer edit the workspace this skill was published from.",
   },
   "skillHub.edit.newItem.how": {
-    "zh-TW":
-      "開一個新的 {app} workspace，在 Skills 面板把這個 skill 裝進去修改，再從那裡重新發布——之後「修改」就會開那個新 workspace。",
+    "zh-TW": "開一個新的 {app} workspace，在 Skills 面板把這個 skill 裝進去修改，再從那裡重新發布——之後「修改」就會開那個新 workspace。",
     en: "Create a new {app} workspace, install this skill from its Skills panel, edit, and publish from there — Edit will open that workspace from then on.",
   },
-  "skillHub.edit.newItem.go": {
-    "zh-TW": "開新 workspace",
-    en: "Create the workspace",
-  },
+  "skillHub.edit.newItem.go": { "zh-TW": "開新 workspace", en: "Create the workspace" },
   // plan-skill-hub-history §8: the detail page's timeline. No internals on
   // screen — a version is named by when it was published, never by its id.
   "skillHub.history": { "zh-TW": "版本紀錄", en: "History" },
   "skillHub.history.current": { "zh-TW": "目前版本", en: "Current" },
   "skillHub.history.kind.publish": { "zh-TW": "發布", en: "Published" },
   // plan-skill-hub-ux-redo D8: a version is named `v N ・ date time`.
-  "skillHub.history.kind.rollback": {
-    "zh-TW": "回復成 {version}",
-    en: "Rolled back to {version}",
-  },
-  "skillHub.history.showAll": {
-    "zh-TW": "顯示全部（{count}）",
-    en: "Show all ({count})",
-  },
-  "skillHub.history.kind.transfer": {
-    "zh-TW": "轉移給 {owner}",
-    en: "Transferred to {owner}",
-  },
-  "skillHub.history.audience": {
-    "zh-TW": "開放給：{who}",
-    en: "Open to: {who}",
-  },
+  "skillHub.history.kind.rollback": { "zh-TW": "回復成 {version}", en: "Rolled back to {version}" },
+  "skillHub.history.showAll": { "zh-TW": "顯示全部（{count}）", en: "Show all ({count})" },
+  "skillHub.history.kind.transfer": { "zh-TW": "轉移給 {owner}", en: "Transferred to {owner}" },
+  "skillHub.history.audience": { "zh-TW": "開放給：{who}", en: "Open to: {who}" },
   "skillHub.history.audience.everyone": { "zh-TW": "所有人", en: "everyone" },
   "skillHub.history.audience.group": { "zh-TW": "一個群組", en: "a group" },
   "skillHub.history.kind.permission": {
@@ -3229,25 +2499,12 @@ export const messages = {
     en: "Permissions set to “{visibility}”",
   },
   "skillHub.history.view": { "zh-TW": "查看", en: "View" },
-  "skillHub.history.compare": {
-    "zh-TW": "比對其他版本",
-    en: "Compare with another version",
-  },
-  "skillHub.history.fork": {
-    "zh-TW": "從這一版 fork",
-    en: "Fork from this version",
-  },
-  "skillHub.history.rollback": {
-    "zh-TW": "回復到這一版",
-    en: "Roll back to this version",
-  },
-  "skillHub.history.rollback.title": {
-    "zh-TW": "回復到 {version}？",
-    en: "Roll back to {version}?",
-  },
+  "skillHub.history.compare": { "zh-TW": "比對其他版本", en: "Compare with another version" },
+  "skillHub.history.fork": { "zh-TW": "從這一版 fork", en: "Fork from this version" },
+  "skillHub.history.rollback": { "zh-TW": "回復到這一版", en: "Roll back to this version" },
+  "skillHub.history.rollback.title": { "zh-TW": "回復到 {version}？", en: "Roll back to {version}?" },
   "skillHub.history.rollback.body": {
-    "zh-TW":
-      "這一版會成為目前版本，裝過這個 skill 的人會看到「skill 已變更」。之後的版本仍留在紀錄裡，隨時可以再回復。",
+    "zh-TW": "這一版會成為目前版本，裝過這個 skill 的人會看到「skill 已變更」。之後的版本仍留在紀錄裡，隨時可以再回復。",
     en: "This version becomes the current one; everyone who installed this skill sees “Skill changed”. Later versions stay in the history and can be brought back.",
   },
   "skillHub.history.rollback.confirm": { "zh-TW": "回復", en: "Roll back" },
@@ -3255,60 +2512,38 @@ export const messages = {
     "zh-TW": "版本剛被別人改過，請重新確認。",
     en: "The skill changed meanwhile — check the history again.",
   },
-  "skillHub.history.diff.title": {
-    "zh-TW": "{from} → {to}",
-    en: "{from} → {to}",
-  },
+  "skillHub.history.diff.title": { "zh-TW": "{from} → {to}", en: "{from} → {to}" },
   "skillHub.history.diff.summary": {
     "zh-TW": "新增 {added}／修改 {changed}／刪除 {removed}",
     en: "{added} added / {changed} changed / {removed} removed",
   },
-  "skillHub.history.diff.against": {
-    "zh-TW": "和這一版比",
-    en: "Compare with",
-  },
+  "skillHub.history.diff.against": { "zh-TW": "和這一版比", en: "Compare with" },
   "skillHub.history.binaryChanged": {
     "zh-TW": "這個檔案不顯示逐行差異（不是文字檔，或檔案太大），只比對是否相同",
     en: "No line-by-line difference for this file (not text, or too large) — compared only for being the same",
   },
-  "skillHub.history.noChanges": {
-    "zh-TW": "兩版內容相同。",
-    en: "The two versions are identical.",
-  },
+  "skillHub.history.noChanges": { "zh-TW": "兩版內容相同。", en: "The two versions are identical." },
   "skillHub.history.status.added": { "zh-TW": "新增", en: "Added" },
   "skillHub.history.status.removed": { "zh-TW": "刪除", en: "Removed" },
   "skillHub.history.status.changed": { "zh-TW": "修改", en: "Changed" },
   "skillHub.history.close": { "zh-TW": "關閉", en: "Close" },
-  "skillHub.history.fork.title": {
-    "zh-TW": "從 {version} fork",
-    en: "Fork from {version}",
-  },
+  "skillHub.history.fork.title": { "zh-TW": "從 {version} fork", en: "Fork from {version}" },
   "skillHub.history.fork.body": {
-    "zh-TW":
-      "這一版會複製進你選的 workspace，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
+    "zh-TW": "這一版會複製進你選的 workspace，成為你自己的起點：這個 skill 之後的新版不會提示同步。從那裡發布：別人的 skill 會成為你的 fork，你自己的則成為它的新版本。",
     en: "This version is copied into the workspace you pick as a starting point of your own: newer versions of this skill are not offered to it. Publish it from there: someone else's skill becomes your fork, your own becomes its next version.",
   },
   "skillHub.history.fork.app": { "zh-TW": "App", en: "App" },
-  "skillHub.history.fork.items": {
-    "zh-TW": "複製進哪個 workspace",
-    en: "Copy into which workspace",
-  },
+  "skillHub.history.fork.items": { "zh-TW": "複製進哪個 workspace", en: "Copy into which workspace" },
   "skillHub.history.fork.noItems": {
     "zh-TW": "這個 App 裡還沒有你看得到的 workspace。",
     en: "No workspaces you can see in this App yet.",
   },
-  "skillHub.history.fork.confirm": {
-    "zh-TW": "複製進這個 workspace",
-    en: "Copy into this workspace",
-  },
+  "skillHub.history.fork.confirm": { "zh-TW": "複製進這個 workspace", en: "Copy into this workspace" },
   "skillHub.history.fork.done": {
     "zh-TW": "已複製「{name}」，下一輪就能用。",
     en: "Copied “{name}” — usable from the next turn.",
   },
-  "skillHub.history.fork.open": {
-    "zh-TW": "打開 workspace",
-    en: "Open the workspace",
-  },
+  "skillHub.history.fork.open": { "zh-TW": "打開 workspace", en: "Open the workspace" },
   // plan-skill-hub-ui-polish D11: the new-item form, opened from a hub entry.
   "newItem.skillHint": {
     "zh-TW": "建好後，到「Skills」面板把 {skill} 裝進來再修改。",
@@ -3343,31 +2578,19 @@ export const messages = {
       "這個 workspace 已經有 {owner} 的「{name}」，先把它刪掉或改名，再裝一次。",
     en: "This workspace already has {owner}'s “{name}” — remove or rename it first, then install again.",
   },
-  "skillHub.failed": {
-    "zh-TW": "沒有成功：{reason}",
-    en: "That didn't work: {reason}",
-  },
+  "skillHub.failed": { "zh-TW": "沒有成功：{reason}", en: "That didn't work: {reason}" },
   // The Skills panel's two skill hub buttons (plan D2: the actions live in the item).
-  "skills.fromHub": {
-    "zh-TW": "從 skill hub 裝",
-    en: "Install from the skill hub",
-  },
+  "skills.fromHub": { "zh-TW": "從 skill hub 裝", en: "Install from the skill hub" },
   "skills.fromHub.back": { "zh-TW": "返回", en: "Back" },
   // plan-skill-hub-ui-polish D6: one sentence, then the link on a line of
   // its own; the button is a verb; the warning names what is missing first.
   "skills.fromHub.intro": {
-    "zh-TW":
-      "裝別人發布的 skill 進這個 workspace；缺這個 App 沒有的 tool 時會先告訴你。",
+    "zh-TW": "裝別人發布的 skill 進這個 workspace；缺這個 App 沒有的 tool 時會先告訴你。",
     en: "Install a skill someone published into this workspace; when it needs a tool this App does not have, the row says so first.",
   },
-  "skills.fromHub.browse": {
-    "zh-TW": "到 skill hub 看全部 →",
-    en: "Browse the skill hub →",
-  },
-  "skills.fromHub.none": {
-    "zh-TW": "skill hub 上還沒有任何 skill。",
-    en: "Nothing has been published to the skill hub yet.",
-  },
+  "skills.fromHub.browse": { "zh-TW": "到 skill hub 看全部 →",
+    en: "Browse the skill hub →", },
+  "skills.fromHub.none": { "zh-TW": "skill hub 上還沒有任何 skill。", en: "Nothing has been published to the skill hub yet." },
   "skills.fromHub.install": { "zh-TW": "安裝", en: "Install" },
   "skills.fromHub.missing": {
     "zh-TW": "缺少 tool：{tools}，可能有步驟無法執行",
@@ -3379,14 +2602,8 @@ export const messages = {
     "zh-TW": "已有同名 skill",
     en: "A skill of this name is already here",
   },
-  "skills.fromHub.installed": {
-    "zh-TW": "已裝入「{name}」，下一輪就能用。",
-    en: "Installed “{name}” — usable from the next turn.",
-  },
-  "skills.publish": {
-    "zh-TW": "發布到 skill hub",
-    en: "Publish to the skill hub",
-  },
+  "skills.fromHub.installed": { "zh-TW": "已裝入「{name}」，下一輪就能用。", en: "Installed “{name}” — usable from the next turn." },
+  "skills.publish": { "zh-TW": "發布到 skill hub", en: "Publish to the skill hub" },
   // Offered into the chat box, not sent (the WUI's idiom): publishing is a
   // turn — the agent checks the folder, has it reviewed, and reports in the
   // chat — and what to say next is still theirs.
@@ -3397,10 +2614,7 @@ export const messages = {
   // plan-chat-video-export: the chat header's Export dialog (text or video)
   // and the video's progress line.
   "export.button": { "zh-TW": "匯出", en: "Export" },
-  "export.tip": {
-    "zh-TW": "匯出這段對話：文字或影片",
-    en: "Export this conversation as text or video",
-  },
+  "export.tip": { "zh-TW": "匯出這段對話：文字或影片", en: "Export this conversation as text or video" },
   "export.title": { "zh-TW": "匯出對話", en: "Export conversation" },
   "export.desc": {
     "zh-TW": "把這段對話存成文字，或做成一支影片。範圍從最新的一則往回數。",
@@ -3432,14 +2646,8 @@ export const messages = {
   "export.video.theme.dark": { "zh-TW": "深色", en: "Dark" },
   "export.video.theme.light": { "zh-TW": "淺色", en: "Light" },
   "export.video.size": { "zh-TW": "尺寸", en: "Size" },
-  "export.video.size.resolution": {
-    "zh-TW": "比例＋解析度",
-    en: "Aspect + resolution",
-  },
-  "export.video.size.text": {
-    "zh-TW": "比例＋文字大小",
-    en: "Aspect + text size",
-  },
+  "export.video.size.resolution": { "zh-TW": "比例＋解析度", en: "Aspect + resolution" },
+  "export.video.size.text": { "zh-TW": "比例＋文字大小", en: "Aspect + text size" },
   "export.video.size.custom": { "zh-TW": "寬 × 高", en: "Width × height" },
   "export.video.aspect": { "zh-TW": "比例", en: "Aspect" },
   "export.video.resolution": { "zh-TW": "解析度", en: "Resolution" },
@@ -3460,10 +2668,7 @@ export const messages = {
     en: "Past this deployment's ceiling (at most the pixels of {w}×{h}).",
   },
   "export.video.tempo": { "zh-TW": "節奏", en: "Tempo" },
-  "export.video.typeMs": {
-    "zh-TW": "打字（毫秒／字）",
-    en: "Typing (ms per character)",
-  },
+  "export.video.typeMs": { "zh-TW": "打字（毫秒／字）", en: "Typing (ms per character)" },
   "export.video.zoom": { "zh-TW": "輸入框推近倍率", en: "Composer zoom" },
   "export.video.speed": { "zh-TW": "整體速度倍率", en: "Overall speed" },
   "export.video.maxSeconds": { "zh-TW": "最長秒數", en: "Max seconds" },
@@ -3475,49 +2680,29 @@ export const messages = {
   "export.submit.video": { "zh-TW": "開始做影片", en: "Make the video" },
   "export.cancel": { "zh-TW": "取消", en: "Cancel" },
   "export.loading": { "zh-TW": "讀取對話中…", en: "Loading the conversation…" },
-  "export.loadFailed": {
-    "zh-TW": "讀不到這段對話。",
-    en: "Could not load this conversation.",
-  },
-  "export.limitsLoading": {
-    "zh-TW": "讀取影片上限中…",
-    en: "Loading the video limits…",
-  },
+  "export.loadFailed": { "zh-TW": "讀不到這段對話。", en: "Could not load this conversation." },
+  "export.limitsLoading": { "zh-TW": "讀取影片上限中…", en: "Loading the video limits…" },
   "export.limitsFailed": {
     "zh-TW": "讀不到這個部署的影片上限，暫時做不了影片。",
     en: "Could not load this deployment's video limits; no video for now.",
   },
-  "export.failed": {
-    "zh-TW": "匯出失敗：{reason}",
-    en: "Export failed: {reason}",
-  },
+  "export.failed": { "zh-TW": "匯出失敗：{reason}", en: "Export failed: {reason}" },
   "video.progress.queued": { "zh-TW": "影片排隊中", en: "Video queued" },
   "video.progress.rendering": { "zh-TW": "錄影中", en: "Recording" },
   "video.progress.encoding": { "zh-TW": "編碼中", en: "Encoding" },
-  "video.progress.elapsed": {
-    "zh-TW": "{e} / 約 {x} 秒",
-    en: "{e} / about {x} s",
-  },
-  "video.progress.done": {
-    "zh-TW": "影片已存到 {path}",
-    en: "Video saved to {path}",
-  },
+  "video.progress.elapsed": { "zh-TW": "{e} / 約 {x} 秒", en: "{e} / about {x} s" },
+  "video.progress.done": { "zh-TW": "影片已存到 {path}", en: "Video saved to {path}" },
   "video.progress.open": { "zh-TW": "開啟", en: "Open" },
-  "video.progress.failed": {
-    "zh-TW": "影片沒做成：{error}",
-    en: "The video failed: {error}",
-  },
+  "video.progress.failed": { "zh-TW": "影片沒做成：{error}", en: "The video failed: {error}" },
   "video.progress.cancel": { "zh-TW": "取消", en: "Cancel" },
   "video.progress.cancelled": { "zh-TW": "影片已取消", en: "Video cancelled" },
   "video.progress.download": { "zh-TW": "下載", en: "Download" },
   "video.progress.waiting": {
-    "zh-TW":
-      "排隊 {n} 秒，還沒有 worker 接手：可能在等前一支影片，或沒有 chat-video worker 在跑。",
+    "zh-TW": "排隊 {n} 秒，還沒有 worker 接手：可能在等前一支影片，或沒有 chat-video worker 在跑。",
     en: "In line for {n} s, no worker has taken it yet: it may be waiting on another video, or there may be no chat-video worker running.",
   },
   "video.progress.stale": {
-    "zh-TW":
-      "worker 沒有回應（{n} 秒沒心跳）：可能沒有 chat-video worker 在跑。取消可以清掉這一支。",
+    "zh-TW": "worker 沒有回應（{n} 秒沒心跳）：可能沒有 chat-video worker 在跑。取消可以清掉這一支。",
     en: "No worker is answering ({n} s without a heartbeat): there may be no chat-video worker running. Cancel clears this one.",
   },
   "video.progress.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
@@ -3579,9 +2764,7 @@ export function setStoredLocale(locale: Locale): void {
 export function initialLocale(): Locale {
   return (
     getStoredLocale() ??
-    detectLocale(
-      typeof navigator === "undefined" ? undefined : navigator.language,
-    )
+    detectLocale(typeof navigator === "undefined" ? undefined : navigator.language)
   );
 }
 
@@ -3589,10 +2772,7 @@ type LocaleCtx = { locale: Locale; setLocale: (locale: Locale) => void };
 
 // Default value lets `useT()` work outside a provider (untouched components,
 // isolated unit tests) — it renders zh-TW and `setLocale` is a no-op.
-const LocaleContext = createContext<LocaleCtx>({
-  locale: "zh-TW",
-  setLocale: () => {},
-});
+const LocaleContext = createContext<LocaleCtx>({ locale: "zh-TW", setLocale: () => {} });
 
 export function LocaleProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(initialLocale);
@@ -3600,11 +2780,7 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     setStoredLocale(next);
     setLocaleState(next);
   }, []);
-  return (
-    <LocaleContext.Provider value={{ locale, setLocale }}>
-      {children}
-    </LocaleContext.Provider>
-  );
+  return <LocaleContext.Provider value={{ locale, setLocale }}>{children}</LocaleContext.Provider>;
 }
 
 /** The active locale and a sticky setter. */
@@ -3616,8 +2792,5 @@ export function useLocale(): [Locale, (locale: Locale) => void] {
 /** `t(key, vars?)` bound to the active locale. */
 export function useT(): (key: MsgKey, vars?: Vars) => string {
   const { locale } = useContext(LocaleContext);
-  return useCallback(
-    (key: MsgKey, vars?: Vars) => translate(locale, key, vars),
-    [locale],
-  );
+  return useCallback((key: MsgKey, vars?: Vars) => translate(locale, key, vars), [locale]);
 }

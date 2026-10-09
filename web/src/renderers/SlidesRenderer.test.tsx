@@ -80,18 +80,21 @@ describe("SlidesRenderer", () => {
   });
 
   it("asks before converting a big deck, and converts once told yes", async () => {
-    const ask = draw((confirm) =>
-      confirm
+    // Once converted, the server serves its cache without asking.
+    let converted = false;
+    const ask = draw((confirm) => {
+      if (confirm) converted = true;
+      return converted
         ? pdf
-        : { kind: "confirm", size: 42 * 1024 * 1024, limit: 20 * 1024 * 1024 },
-    );
+        : { kind: "confirm", size: 42 * 1024 * 1024, limit: 20 * 1024 * 1024 };
+    });
 
     expect(await screen.findByText(/42 MB/)).toBeInTheDocument();
     expect(screen.queryByTitle("slides/q3.pptx")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /預覽|Preview/ }));
 
     expect(await screen.findByTitle("slides/q3.pptx")).toBeInTheDocument();
-    expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", true);
+    expect(ask).toHaveBeenCalledWith("/slides/q3.pptx", true);
   });
 
   it("says the deck could not be converted, and offers the original", async () => {
@@ -122,6 +125,17 @@ describe("SlidesRenderer", () => {
     ).toBeInTheDocument();
   });
 
+  it("says the sandbox limit is reached, with the numbers, when converting would open one", async () => {
+    draw(() => ({
+      kind: "refused",
+      detail: { error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 2 },
+    }));
+
+    expect(await screen.findByText(/沙盒已達上限|limit for live sandboxes/)).toBeInTheDocument();
+    expect(screen.getByText(/2/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /下載|Download/ })).toBeInTheDocument();
+  });
+
   it("asks again for the next big deck — a yes is for the deck it was given to", async () => {
     const big: SlidePreview = {
       kind: "confirm",
@@ -137,6 +151,45 @@ describe("SlidesRenderer", () => {
 
     expect(await screen.findByText(/42 MB/)).toBeInTheDocument();
     expect(ask).toHaveBeenLastCalledWith("/slides/q4.pptx", false);
+  });
+
+  it("keeps showing the deck while it re-asks without the yes", async () => {
+    // After the conversion, the next ask (no yes) never answers: what is on
+    // screen meanwhile is what the cache gave it — the PDF, not the question.
+    let converted = false;
+    const ask = draw((confirm) => {
+      if (confirm) converted = true;
+      if (converted && !confirm) return new Promise<never>(() => {}) as never;
+      return converted ? pdf : { kind: "confirm", size: 42 * 1024 * 1024, limit: 1 };
+    });
+    await screen.findByText(/42 MB/);
+    fireEvent.click(screen.getByRole("button", { name: /預覽|Preview/ }));
+
+    await waitFor(() => expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false));
+    expect(screen.getByTitle("slides/q3.pptx")).toBeInTheDocument();
+    expect(screen.queryByText(/42 MB/)).toBeNull();
+  });
+
+  it("asks again when a big deck it said yes to is replaced by new content", async () => {
+    // The server's side: a converted version is cached and served without
+    // asking; new content has no cache, so a big one is asked about again.
+    let converted = false;
+    const big: SlidePreview = { kind: "confirm", size: 42 * 1024 * 1024, limit: 1 };
+    const ask = draw((confirm) => {
+      if (confirm) converted = true;
+      return converted ? pdf : big;
+    });
+    await screen.findByText(/42 MB/);
+    fireEvent.click(screen.getByRole("button", { name: /預覽|Preview/ }));
+    await screen.findByTitle("slides/q3.pptx");
+
+    // The yes is spent once the PDF is here: the next ask goes without it.
+    await waitFor(() => expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false));
+    converted = false;
+    act(() => publishFileChanged("i1", "slides/q3.pptx"));
+
+    expect(await screen.findByText(/42 MB/)).toBeInTheDocument();
+    expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false);
   });
 
   it("asks again when the deck's file is refreshed — a turn or a refresh changed it", async () => {

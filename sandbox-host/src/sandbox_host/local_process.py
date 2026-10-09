@@ -40,6 +40,7 @@ from pathlib import Path
 
 from .protocol import (
     PREVIEW_COMMAND,
+    PREVIEW_MAX_BYTES,
     PREVIEW_TIMEOUT_S,
     EnforcedLimits,
     ExecResult,
@@ -335,7 +336,9 @@ def _open_dir(base: Path, *parts: str) -> int | None:
 
 def _read_lone_file(dir_fd: int, name: str) -> bytes | None:
     """`name` in `dir_fd` when it is a regular file with one link; else None.
-    O_NONBLOCK so a planted FIFO cannot hang the open."""
+    O_NONBLOCK so a planted FIFO cannot hang the open. Read bounded, not by
+    trusting `st_size`: the file is the sandbox's and can grow while read, and
+    a sparse one costs it nothing while costing this process every byte."""
     try:
         fd = os.open(
             name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd
@@ -346,7 +349,10 @@ def _read_lone_file(dir_fd: int, name: str) -> bytes | None:
         st = os.fstat(f.fileno())
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             return None
-        return f.read()
+        data = f.read(PREVIEW_MAX_BYTES + 1)
+        if len(data) > PREVIEW_MAX_BYTES:
+            raise PreviewFailed(f"the preview is too large (over {PREVIEW_MAX_BYTES} bytes)")
+        return data
 
 
 def _is_lone_file(dir_fd: int, name: str) -> bool:
@@ -390,9 +396,9 @@ def _keep_preview(root: Path, sha: str, pdf: bytes) -> None:
             raise PreviewFailed("the preview store is not a directory")
     finally:
         os.close(top)
+    part = f".{sha}.{uuid.uuid4().hex}.part"
     try:
         os.fchmod(store, 0o700)
-        part = f".{sha}.{uuid.uuid4().hex}.part"
         fd = os.open(
             part,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -402,6 +408,12 @@ def _keep_preview(root: Path, sha: str, pdf: bytes) -> None:
         with os.fdopen(fd, "wb") as f:
             f.write(pdf)
         os.replace(part, f"{sha}.pdf", src_dir_fd=store, dst_dir_fd=store)
+    except OSError as exc:
+        # A full disk, or something already standing at the name: the half
+        # copy goes, and the asker hears "could not preview", not a 500.
+        with contextlib.suppress(OSError):
+            os.unlink(part, dir_fd=store)
+        raise PreviewFailed(f"the preview could not be kept: {exc.strerror}") from exc
     finally:
         os.close(store)
 
@@ -429,8 +441,21 @@ def _take_conversion(root: Path, nonce: str, stem: str) -> bytes | None:
 
 
 def _sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
+    """The deck's content hash. The deck is the sandbox's file: a link would
+    have the host read whatever it names (another item's file, `/dev/zero`
+    forever), so a link or anything but a regular file is refused, not hashed.
+    O_NONBLOCK so a FIFO cannot hang the open."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:  # ELOOP: the deck is a link
+        raise PreviewFailed(f"{path.name} is not a regular file") from exc
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise PreviewFailed(f"{path.name} is not a regular file")
+    with os.fdopen(fd, "rb") as f:
+        digest = hashlib.sha256()
         for block in iter(lambda: f.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()

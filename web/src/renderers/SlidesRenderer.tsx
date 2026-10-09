@@ -12,11 +12,20 @@ import { useFileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { useEditMode } from "../hooks/editMode";
 import { subscribeFileChanged } from "../lib/fileChangedBus";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
+import { type QuotaKind, quotaMessage } from "../lib/quotaFailure";
 import { relPath } from "../lib/relPath";
 import { TextRenderer } from "./TextRenderer";
 
 const MUTED = { color: "var(--text-paper-d)" } as const;
+
+/** A preview writes no file, so only the sandbox limit can refuse it; the other
+ * two kinds fall back to the plain "can't preview right now". */
+const SLIDES_QUOTA_KEY = {
+  workspace: "slides.unreachable",
+  user: "slides.unreachable",
+  environment: "slides.envFull",
+} as const satisfies Record<NonNullable<QuotaKind>, MsgKey>;
 
 function megabytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MB`;
@@ -51,6 +60,16 @@ export function SlidesRenderer({ path }: { path: string }) {
     retry: false,
   });
   const data = q.data;
+  // A yes is for the content it was given to, too: once its PDF is here the
+  // server has it cached, so later asks go without the yes — the same version
+  // comes straight back, and new content that is big is asked about again.
+  // The no-yes key still holds the first answer ("big — preview?"); give it the
+  // PDF first, or dropping the yes would flash the question back.
+  useEffect(() => {
+    if (!confirmed || data?.kind !== "pdf") return;
+    qc.setQueryData(qk.slidePreview(svc.scopeId, path, false), data);
+    setConfirmedPath(null);
+  }, [confirmed, data, qc, svc.scopeId, path]);
   const url = useMemo(
     () => (data?.kind === "pdf" ? URL.createObjectURL(data.blob) : null),
     [data],
@@ -85,6 +104,17 @@ export function SlidesRenderer({ path }: { path: string }) {
         >
           {t("slides.confirmButton")}
         </button>
+        {download}
+      </div>
+    );
+  }
+  if (data.kind === "refused") {
+    return (
+      <div style={{ display: "grid", gap: 8 }}>
+        <span>
+          {quotaMessage(t, SLIDES_QUOTA_KEY, { status: 507, detail: data.detail }) ??
+            t("slides.unreachable")}
+        </span>
         {download}
       </div>
     );

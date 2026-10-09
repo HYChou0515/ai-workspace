@@ -299,3 +299,76 @@ async def test_nothing_of_a_conversion_is_left_behind(tmp_path) -> None:  # noqa
     await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
 
     assert list((_root_of(tmp_path, h) / ".home" / ".preview-out").iterdir()) == []
+
+
+async def test_a_pdf_bigger_than_the_preview_limit_is_not_read_or_kept(
+    tmp_path, monkeypatch
+) -> None:  # noqa: ANN001
+    """What the sandbox leaves can be any size — a sparse file costs it nothing
+    and the host would read every byte of it."""
+    import sandbox_host.local_process as lp
+
+    monkeypatch.setattr(lp, "PREVIEW_MAX_BYTES", 1024)
+    huge = (
+        "sh",
+        "-c",
+        'f="$1/$(basename "${2%.*}").pdf"; printf "%%PDF-" > "$f"; truncate -s 1G "$f"',
+        "sh",
+    )
+    sandbox = _local(tmp_path, huge)
+    h = await _deck(sandbox)
+
+    with pytest.raises(PreviewFailed, match="too large"):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.get_preview(h, SHA) is None
+
+
+async def test_a_preview_that_cannot_be_kept_leaves_nothing_half_written(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path)
+    h = await _deck(sandbox)
+    (_root_of(tmp_path, h) / ".preview" / f"{SHA}.pdf" / "x").mkdir(parents=True)
+
+    with pytest.raises(PreviewFailed):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert [p.name for p in (_root_of(tmp_path, h) / ".preview").iterdir()] == [f"{SHA}.pdf"]
+
+
+@pytest.mark.parametrize("target", ["outside", "/dev/zero"])
+async def test_a_deck_that_is_a_link_is_not_followed(tmp_path, target) -> None:  # noqa: ANN001
+    """The deck is the sandbox's file too: hashing through a link would read
+    whatever it names, as the host — another item's file, or /dev/zero forever."""
+    outside = tmp_path / "outside.pptx"
+    outside.write_bytes(DECK)
+    sandbox = _local(tmp_path)
+    h = await sandbox.create(SandboxSpec())
+    link = _root_of(tmp_path, h) / "root" / "q3.pptx"
+    link.symlink_to(outside if target == "outside" else target)
+
+    with pytest.raises(PreviewFailed, match="not a regular file"):
+        await sandbox.render_preview(h, "/q3.pptx", convert=False)
+
+
+async def test_a_deck_that_is_a_folder_is_not_a_deck(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path)
+    h = await sandbox.create(SandboxSpec())
+    (_root_of(tmp_path, h) / "root" / "q3.pptx").mkdir()
+
+    with pytest.raises(PreviewFailed, match="not a regular file"):
+        await sandbox.render_preview(h, "/q3.pptx", convert=False)
+
+
+async def test_an_output_dir_swapped_for_a_link_is_not_read_through(tmp_path) -> None:  # noqa: ANN001
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "q3.pdf").write_bytes(b"%PDF someone else's")
+    swap = ("sh", "-c", f'rmdir "$1" && ln -s {elsewhere} "$1"', "sh")
+    sandbox = _local(tmp_path, swap)
+    h = await _deck(sandbox)
+
+    with pytest.raises(PreviewFailed):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.get_preview(h, SHA) is None
+    assert (elsewhere / "q3.pdf").exists()

@@ -73,7 +73,11 @@ def test_a_big_deck_already_converted_is_served_without_asking(monkeypatch):
     assert r.status_code == 200 and r.content.startswith(b"%PDF")
 
 
-def test_a_failed_conversion_says_why():
+def test_a_failed_conversion_says_why(caplog):
+    """The page shows no reason (no internals); the body and the log carry it."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="workspace_app.api.file_routes")
     sandbox = MockSandbox()
     sandbox.fail_preview = "source file could not be loaded"
     client, iid = _client_and_item(sandbox)
@@ -85,6 +89,7 @@ def test_a_failed_conversion_says_why():
         "code": "preview_failed",
         "why": "source file could not be loaded",
     }
+    assert "source file could not be loaded" in caplog.text
 
 
 def test_a_missing_deck_is_404():
