@@ -441,10 +441,11 @@ def _take_conversion(root: Path, nonce: str, stem: str) -> bytes | None:
 
 
 def _sha256_of(path: Path) -> str:
-    """The deck's content hash. The deck is the sandbox's file: a link would
-    have the host read whatever it names (another item's file, `/dev/zero`
-    forever), so a link or anything but a regular file is refused, not hashed.
-    O_NONBLOCK so a FIFO cannot hang the open."""
+    """The deck's content hash. The deck is the sandbox's file: when the deck
+    itself is a link, or not a regular file, it is refused rather than hashed
+    (a link to `/dev/zero` would be read forever). Only the LAST name is
+    checked — a linked folder above it is followed, as every other file op
+    here (`download` included) follows it. O_NONBLOCK so a FIFO cannot hang."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except FileNotFoundError:

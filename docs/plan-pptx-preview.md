@@ -55,7 +55,7 @@ review 第一輪後定的事〔施工〕(D8–D12):
 | D9 | `.preview/` 是 0700、PDF 是 0600。 | 別的 item 的 uid 不能讀這份預覽。 |
 | D10 | 每次轉檔用自己的 LibreOffice profile(`-env:UserInstallation=file://<暫存目錄>/profile`)和自己的 `TMPDIR`。 | LibreOffice 不讓兩個程序共用一個 profile:同時轉兩份、或轉檔撞上 `make_deck`,會有一邊失敗。isolated 模式的 `TMPDIR` 是 workspace,暫存檔會跑進檔案樹。 |
 | D11 | 轉檔期間每 `log_timeout / 3` 秒印一個點。 | soffice 工作時不印東西;exec 的 idle 上限(預設 60 秒)會在 180 秒總時限之前把它殺掉。 |
-| D12 | 要喚醒沙盒來轉檔時,先過每人的沙盒上限(`AdmissionGate.check`,跟 terminal 一樣);快取命中不問。超過上限回 507,前端用 chat / terminal 共用的 `quotaMessage` 說「同時開啟的沙盒已達上限」與數字、到「我的資源」關掉一個,加上下載。 | 預覽跟 terminal 一樣會開一個沙盒,佔的是同一份額度。 |
+| D12 | 要喚醒沙盒來轉檔時,先過每人的沙盒上限(`AdmissionGate.check`,跟 terminal 一樣);快取命中不問。超過上限回 507,前端用 chat / terminal 共用的 `quotaMessage` 說「這個 workspace 擁有者同時開啟的沙盒已達上限」與數字、擁有者到「我的資源」關掉一個,加上下載(額度算在擁有者身上,打開的人可能只是讀者)。 | 預覽跟 terminal 一樣會開一個沙盒,佔的是同一份額度。 |
 
 D5、D6 的「前端顯示原因」也改了〔施工〕:轉換器的錯誤訊息(LibreOffice 的英文 stderr)只留在 API 回應與 log,畫面只說
 「這份簡報無法轉成預覽」加上「下載原檔」;拿不到回應(503 等)則說「暫時無法預覽,請稍後再試」。介面不露內部字串。
@@ -70,7 +70,7 @@ review 第二輪後定的事〔施工〕(D13–D15):
 | # | 定了什麼 | 為什麼 |
 |---|---|---|
 | D13 | host 讀、存、送的 PDF 有上限 `PREVIEW_MAX_BYTES`(200 MiB):讀的時候最多讀上限 + 1 個 byte,超過就是轉檔失敗。 | 沙盒可以留一個背景程序,在 soffice 寫完後把 PDF 撐成巨大的 sparse 檔:它不花沙盒什麼,host 卻要整份讀進記憶體(review 重現讀了 2 GB)。只看 `st_size` 不夠,檔案讀的時候還能長大。 |
-| D14 | 簡報本身也是沙盒的檔案:算 hash 前不跟隨 symlink、只收一般檔案,否則轉檔失敗。 | 跟著 link 讀,host 會讀它指向的東西(別的 item 的檔案,或 `/dev/zero` 讀不完)。 |
+| D14 | 簡報本身也是沙盒的檔案:簡報**這個名字**是 symlink 或不是一般檔案時,不算 hash、不預覽(畫面說無法轉成預覽,可下載)。只檢查最後一層:路徑中間的資料夾是 symlink 時仍會跟過去——檔案的其他操作(包括「下載原檔」)本來就都這樣,是另一類問題,不在這個 PR 修。 | 跟著 link 讀,host 會讀它指向的東西(例如 `/dev/zero`,讀不完)。 |
 | D15 | 寫快取失敗(磁碟滿、名稱被佔)時刪掉寫了一半的暫存檔,回「轉檔失敗」(422),不是 500。 | 寫一半的檔案在 infra 區、不算容量,留著就是漏。 |
 
 ## 4. Phases

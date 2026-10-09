@@ -419,3 +419,43 @@ async def test_an_output_dir_swapped_for_a_link_is_not_read_through(tmp_path) ->
 
     assert await sandbox.get_preview(h, SHA) is None
     assert (elsewhere / "q3.pdf").exists()
+
+
+async def test_the_converter_s_pdf_is_read_no_further_than_the_limit(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """Refusing after reading the whole file would already have cost the memory:
+    what is pinned is how much is asked for."""
+    import workspace_app.sandbox.local_process as lp
+
+    asked: list[int] = []
+    real_fdopen = lp.os.fdopen
+
+    class _Counting:
+        def __init__(self, f) -> None:  # noqa: ANN001
+            self._f = f
+
+        def __enter__(self):  # noqa: ANN204
+            self._f.__enter__()
+            return self
+
+        def __exit__(self, *exc) -> None:  # noqa: ANN002
+            self._f.__exit__(*exc)
+
+        def fileno(self) -> int:
+            return self._f.fileno()
+
+        def read(self, n: int = -1) -> bytes:
+            asked.append(n)
+            return self._f.read(n)
+
+        def write(self, data: bytes) -> int:
+            return self._f.write(data)
+
+    monkeypatch.setattr(
+        lp.os, "fdopen", lambda fd, mode="r", *a, **k: _Counting(real_fdopen(fd, mode, *a, **k))
+    )
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert lp.PREVIEW_MAX_BYTES + 1 in asked and -1 not in asked

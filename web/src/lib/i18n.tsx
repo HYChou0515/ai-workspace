@@ -1749,8 +1749,8 @@ export const messages = {
     en: "This deck couldn't be turned into a preview. Download the original to open it in a presentation app.",
   },
   "slides.envFull": {
-    "zh-TW": "還沒預覽:轉換要開啟沙盒,但同時開啟的沙盒已達上限。到「我的資源」關掉不用的沙盒再試一次。",
-    en: "Not previewed — converting needs a sandbox, and the limit for live sandboxes is reached. Close one in My resources, then try again.",
+    "zh-TW": "還沒預覽:轉換要開啟沙盒,但這個 workspace 擁有者同時開啟的沙盒已達上限。擁有者到「我的資源」關掉不用的沙盒後再試一次。",
+    en: "Not previewed — converting needs a sandbox, and this workspace's owner is at their limit for live sandboxes. Once the owner closes one in My resources, try again.",
   },
   "slides.unreachable": {
     "zh-TW": "暫時無法預覽，請稍後再試。",
