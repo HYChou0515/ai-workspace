@@ -94,4 +94,27 @@ describe("EnvLoginModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(onClose.put).toHaveBeenCalledWith("rca", "i1", { NEW: "n", ERP_TOKEN: "tok" });
   });
+
+  it("is the login form alone — no one-choice provider button above it", () => {
+    open();
+
+    expect(screen.queryByTestId("env-provider-erp")).toBeNull();
+    expect(screen.getByTestId("env-cred-password")).toBeInTheDocument();
+  });
+
+  it("keeps its top edge put when the form gives way to the result", () => {
+    // Centred, the shorter result view moved the whole dialog down under the
+    // pointer that had just pressed submit.
+    open();
+
+    const backdrop = screen.getByTestId("env-login-modal").parentElement;
+    expect(backdrop).toHaveStyle({ alignItems: "flex-start" });
+  });
+
+  it("names where Save puts it the way the panel's tab does", async () => {
+    open();
+    await signIn();
+
+    expect(screen.getByText(/Private/)).toBeInTheDocument();
+  });
 });
