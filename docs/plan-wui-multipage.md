@@ -192,8 +192,8 @@ breaks top-level `let`/`const` sharing across scripts, cannot reach
   nothing; one that does is reachable this way.
 
 - **A served frame reloads on every read the pane shows, a Deploy's included,
-  on the sub-page it was on** (settled in review round 3, author's decision —
-  the user may overturn it). A served page's address is the same before and
+  on the sub-page it was on** (settled in review round 3; **user-confirmed
+  2026-10-09**: "一律重載"). A served page's address is the same before and
   after a rebuild, so the frame is remounted rather than re-pointed; and it
   takes its address only when it mounts, so a re-read never navigates a frame
   the person moved inside. Reloading only when the folder had changed was
@@ -215,6 +215,12 @@ whether the pass is acceptable under it is the first item below.
 
 ### Needs the user's decision (not settled by the author)
 
+Status 2026-10-09: the user confirmed the Deploy reload rule above and accepted
+acceptance 1 as it stands (second item below). The pass (first item) is still
+open — the user's first reaction was that a viewer must not need a pass to
+open a WUI, and nobody does: the pane mints it with the viewer's own sign-in,
+and the open question is only the URL-as-capability side effect.
+
 - **The pass qualifies `plan-wui.md` decision 1** ("not a public URL … anonymous
   access would need a second auth story") and its Deploy section ("不需要第二套
   安全模型"), which D2 said stand. A pass is a bearer capability: whoever holds
@@ -224,7 +230,8 @@ whether the pass is acceptable under it is the first item below.
   what an opaque-origin frame can present, since it sends no cookie. The
   alternative that keeps decision 1 whole is the separate content origin
   (GitHub/Google "usercontent"), at the cost of a hostname.
-- **Acceptance 1 is not met as written** (see the record below): this repo's
+- **Acceptance 1 is not met as written — accepted by the user as it stands
+  (2026-10-09)** (see the record below): this repo's
   `docs/` with `mkdocs.yml` unchanged renders and navigates, but its search
   stalls because the site fetches mermaid from a CDN at runtime. That also
   qualifies **D3** ("an existing `mkdocs.yml` runs unchanged") for any site
