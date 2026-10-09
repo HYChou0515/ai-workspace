@@ -40,6 +40,17 @@ function wuiRuntime(window: any, parent: any, document: any): void {
   var PROTO = "wui/1";
   var pending: any = {};
   var seq = 0;
+  // A served site navigates its frame, and the parent answers whatever
+  // document is in the frame NOW. Ids that restarted at 1 on every page let the
+  // previous page's late answer to its call "1" settle this page's call "1",
+  // with the wrong value — so each page numbers its calls under its own prefix.
+  var nonce = Math.random().toString(36).slice(2, 10);
+  var loc: any = window.location || null;
+  // Served from a real address (plan-wui-multipage) rather than as one
+  // assembled `srcdoc` document. Only then do links, fragments and relative
+  // reads mean what they say; in a srcdoc document they resolve against the
+  // PARENT's address.
+  var served = !!loc && (loc.protocol === "http:" || loc.protocol === "https:");
   var fileListeners: any[] = [];
   var picking = false;
   var box: any = null;
@@ -89,7 +100,7 @@ function wuiRuntime(window: any, parent: any, document: any): void {
 
   function send(verb: any, args?: any, onEvent?: any) {
     return new Promise(function (resolve: any, reject: any) {
-      var id = String(++seq);
+      var id = nonce + "." + ++seq;
       // `onEvent` rides along on the pending entry rather than in a second map:
       // it lives exactly as long as the call, and it goes away with it.
       pending[id] = { resolve: resolve, reject: reject, onEvent: onEvent };
@@ -193,6 +204,199 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     var r = e.reason;
     report("error", r && r.message ? r.message : String(r));
   });
+
+  // ── leaving the page ─────────────────────────────────────────────────────
+  // A link to another site cannot be followed from in here — the frame's own
+  // navigation is refused by the CONTAINING document (`frame-src`), which is
+  // what stops a page carrying what it read out in a URL. So it is handed to
+  // the platform, which asks the reader before opening it (D4). Only schemes a
+  // person means to visit: a `javascript:` link is the page's own business.
+  var OUTSIDE = /^(https?|mailto):/i;
+
+  function anchorOf(t: any): any {
+    for (var n = t; n; n = n.parentNode) {
+      if (n.nodeType === 1 && String(n.tagName).toLowerCase() === "a" && n.getAttribute("href") !== null) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  /** Where `href` points, as an absolute URL — or `null` when this document has
+   * no address to resolve it against (a srcdoc page) and it is not absolute. */
+  function absolute(href: any): any {
+    try {
+      return served ? new URL(String(href), loc.href) : new URL(String(href));
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function leaves(url: any): boolean {
+    return !!url && OUTSIDE.test(url.protocol) && (!served || url.origin !== loc.origin);
+  }
+
+  window.addEventListener("click", function (ev: any) {
+    // The page's own handler came first and decided: a router, a tab strip.
+    if (ev.defaultPrevented || ev.button !== 0) return;
+    var a = anchorOf(ev.target);
+    if (!a) return;
+    var href = a.getAttribute("href");
+    var url = absolute(href);
+    if (leaves(url)) {
+      ev.preventDefault();
+      post({ proto: PROTO, open: url.href });
+      return;
+    }
+    if (served) return; // within the site: the browser's to follow
+    // A single-page document. Its links resolve against the parent's address,
+    // so following one navigated the frame into the platform's own app.
+    if (href.charAt(0) === "#") {
+      ev.preventDefault();
+      var name = decodeURIComponent(href.slice(1));
+      var to = name ? document.getElementById(name) || document.getElementsByName(name)[0] : null;
+      if (to && to.scrollIntoView) to.scrollIntoView();
+      return;
+    }
+    if (url) return; // another scheme (`javascript:`) — not ours
+    ev.preventDefault();
+    report(
+      "error",
+      "This page links to " + href + ", but here it can only be shown as a single page, so the link cannot be followed.",
+    );
+  });
+
+  window.open = function (target: any) {
+    var url = absolute(target);
+    if (leaves(url)) post({ proto: PROTO, open: url.href });
+    else if (url && served) loc.href = url.href;
+    return null;
+  };
+
+  // ── what an opaque origin is not given ───────────────────────────────────
+  // Storage throws `SecurityError` in an opaque origin, and a generator's theme
+  // toggle calls it and stops there. One that lasts for the visit is what such
+  // a page gets anyway — nothing it writes would have been kept.
+  function memoryStorage(): any {
+    var data: any = Object.create(null);
+    return {
+      getItem: function (k: any) {
+        k = String(k);
+        return k in data ? data[k] : null;
+      },
+      setItem: function (k: any, v: any) {
+        data[String(k)] = String(v);
+      },
+      removeItem: function (k: any) {
+        delete data[String(k)];
+      },
+      clear: function () {
+        data = Object.create(null);
+      },
+      key: function (i: any) {
+        var keys = Object.keys(data);
+        return i < keys.length ? keys[i] : null;
+      },
+      get length() {
+        return Object.keys(data).length;
+      },
+    };
+  }
+
+  var stores = ["localStorage", "sessionStorage"];
+  for (var si = 0; si < stores.length; si++) {
+    try {
+      void window[stores[si]];
+    } catch (_e) {
+      try {
+        Object.defineProperty(window, stores[si], { configurable: true, value: memoryStorage() });
+      } catch (_e2) {
+        // Left as it was: the page sees the browser's own refusal.
+      }
+    }
+  }
+
+  // An opaque origin may not start a worker from a URL. So the script is read
+  // and started from a blob, with a prologue telling it where it really lives —
+  // a blob has no path, and the worker's own `importScripts` / `fetch` would
+  // otherwise resolve against nothing. The worker exists only once the script
+  // has arrived, so messages posted before then wait.
+  if (served && window.Worker) {
+    var RealWorker = window.Worker;
+    window.Worker = function (this: any, script: any, opts: any) {
+      var at = new URL(String(script), loc.href).href;
+      if (/^(blob|data):/.test(at)) return new RealWorker(script, opts);
+      var self: any = this;
+      var real: any = null;
+      var queue: any[] = [];
+      var listeners: any[] = [];
+      var ended = false;
+      self.onmessage = null;
+      self.onerror = null;
+      self.onmessageerror = null;
+      self.postMessage = function (m: any, t: any) {
+        if (real) real.postMessage(m, t);
+        else queue.push([m, t]);
+      };
+      self.terminate = function () {
+        ended = true;
+        if (real) real.terminate();
+      };
+      self.addEventListener = function (type: any, fn: any, o: any) {
+        listeners.push([type, fn, o]);
+        if (real) real.addEventListener(type, fn, o);
+      };
+      self.removeEventListener = function (type: any, fn: any, o: any) {
+        listeners = listeners.filter(function (l: any) {
+          return !(l[0] === type && l[1] === fn);
+        });
+        if (real) real.removeEventListener(type, fn, o);
+      };
+      window
+        .fetch(at)
+        .then(function (r: any) {
+          if (!r.ok) throw new Error("it answered " + r.status);
+          return r.text();
+        })
+        .then(function (source: any) {
+          if (ended) return;
+          var prologue =
+            "(function(b){var i=self.importScripts;self.importScripts=function(){var a=[];" +
+            "for(var k=0;k<arguments.length;k++)a.push(new URL(arguments[k],b).href);return i.apply(self,a)};" +
+            "var f=self.fetch;if(f)self.fetch=function(u,o){return f.call(self,typeof u==='string'?new URL(u,b).href:u,o)}})(" +
+            JSON.stringify(at) +
+            ");\n";
+          var blob = new window.Blob([prologue, source], { type: "text/javascript" });
+          real = new RealWorker(URL.createObjectURL(blob), opts);
+          real.onmessage = function (e: any) {
+            if (self.onmessage) self.onmessage(e);
+          };
+          real.onerror = function (e: any) {
+            if (self.onerror) self.onerror(e);
+          };
+          real.onmessageerror = function (e: any) {
+            if (self.onmessageerror) self.onmessageerror(e);
+          };
+          for (var li = 0; li < listeners.length; li++) {
+            real.addEventListener(listeners[li][0], listeners[li][1], listeners[li][2]);
+          }
+          for (var qi = 0; qi < queue.length; qi++) real.postMessage(queue[qi][0], queue[qi][1]);
+          queue = [];
+        })
+        .catch(function (err: any) {
+          report("error", "This page could not start a worker from " + at + " (" + (err && err.message ? err.message : err) + ").");
+        });
+    };
+  }
+
+  // The address follows the page: each page says where it is, and so does a
+  // jump within it.
+  if (served) {
+    post({ proto: PROTO, page: loc.href });
+    window.addEventListener("hashchange", function () {
+      post({ proto: PROTO, page: loc.href });
+    });
+  }
 
   // ── pick mode ────────────────────────────────────────────────────────────
   // The outline is drawn by an element of ours, so it is styled with
