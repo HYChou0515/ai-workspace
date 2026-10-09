@@ -35,7 +35,7 @@ from ..files.zip_download import (
 from ..filestore.protocol import FileExists, FileNotFound
 from ..kernels import KernelService
 from ..quota.admission import AdmissionGate
-from ..sandbox.protocol import Sandbox
+from ..sandbox.protocol import PreviewFailed, Sandbox
 from .activity import ActivityLog
 from .byte_range import UNSATISFIABLE, byte_range
 from .events import CellEvent, FileChanged, to_sse
@@ -58,6 +58,7 @@ from .schemas import (
     _WorkspaceUsage,
 )
 from .search import InvalidQuery, compile_query, path_selected, search_text
+from .slide_preview import NeedsConfirm, NotASlideDeck, SlidePreviews
 from .turn_gate import quota_body
 from .turns import ChatTurnEngine
 
@@ -386,6 +387,34 @@ def register_file_routes(
             used=await files.workspace_usage(investigation_id),
             quota=files.quota_of(investigation_id),
         )
+
+    previews = SlidePreviews(files=files, registry=registry, sandbox=sandbox)
+
+    @app.get("/a/{slug}/items/{item_id}/files/preview")
+    async def slide_preview(slug: str, item_id: str, path: str, confirm: bool = False) -> Response:
+        """A slide deck as a PDF (docs/plan-pptx-preview.md). Read access is
+        enough (N5): the converter is the platform's, not the reader's.
+
+        409 `preview_needs_confirm` = a big deck not yet converted (N6); 422
+        `preview_failed` carries the converter's own reason; 415 = not a deck."""
+        investigation_id = locator.require_access(slug, item_id, "read_content")
+        path = _workspace_path(path)
+        try:
+            got = await previews.preview(investigation_id, path, confirm=confirm)
+        except NotASlideDeck as exc:
+            raise HTTPException(status_code=415, detail=f"{path} is not a slide deck") from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"{path} not found") from exc
+        except PreviewFailed as exc:
+            raise HTTPException(
+                status_code=422, detail={"code": "preview_failed", "why": str(exc)}
+            ) from exc
+        if isinstance(got, NeedsConfirm):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "preview_needs_confirm", "size": got.size, "limit": got.limit},
+            )
+        return Response(content=got.pdf, media_type="application/pdf")
 
     @app.get("/a/{slug}/items/{item_id}/files/exists")
     async def workspace_file_exists(slug: str, item_id: str, path: str) -> _FileExists:

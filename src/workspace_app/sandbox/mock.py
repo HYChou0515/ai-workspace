@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import shlex
 import uuid
@@ -73,6 +74,8 @@ class MockSandbox:
         self._previews: dict[str, dict[str, bytes]] = {}
         #: Set to a reason to make every conversion fail with it (tests).
         self.fail_preview: str | None = None
+        #: How many conversions actually ran (tests).
+        self.preview_conversions = 0
         # handle id -> the item it serves, `None` for an anonymous create.
         self._item_of: dict[str, str | None] = {}
 
@@ -151,6 +154,10 @@ class MockSandbox:
             return None
         if self.fail_preview is not None:
             raise PreviewFailed(self.fail_preview)
+        self.preview_conversions += 1
+        # A real conversion takes seconds; yield here so two concurrent askers
+        # really can both be converting — the race a caller's lock exists for.
+        await asyncio.sleep(0)
         previews[sha] = b"%PDF-mock " + sha.encode()
         return sha
 
