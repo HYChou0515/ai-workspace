@@ -1738,6 +1738,18 @@ export const messages = {
     en: "Choose which tools the assistant can use in this workspace",
   },
   "env.button": { "zh-TW": "環境變數", en: "Env" },
+  "slides.converting": { "zh-TW": "轉換中…", en: "Converting…" },
+  "slides.confirm": {
+    "zh-TW": "這份簡報有 {size}，轉成預覽要一點時間。要預覽嗎？",
+    en: "This deck is {size}; converting it takes a while. Preview it?",
+  },
+  "slides.confirmButton": { "zh-TW": "預覽", en: "Preview" },
+  "slides.failed": { "zh-TW": "無法預覽：{why}", en: "Can't preview this deck: {why}" },
+  "slides.download": { "zh-TW": "下載原檔", en: "Download the original" },
+  "slides.unavailable": {
+    "zh-TW": "這裡無法預覽簡報。",
+    en: "Slide decks can't be previewed here.",
+  },
   "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
   // `plan-wui-viewer-login`: the panel lists every tool as a section, with
   // one always-open search box instead of a tool dropdown.
