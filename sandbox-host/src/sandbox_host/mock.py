@@ -14,6 +14,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .walk import flat_lister, walk_tree
 
@@ -63,6 +64,7 @@ class MockSandbox:
         self._dirs: dict[str, set[str]] = {}
         # #366: readiness kept outside the file store so it never shows in walk.
         self._ready: set[str] = set()
+        self._previews: dict[str, dict[str, bytes]] = {}
         # Kept outside the file store like `_ready`: on a real backend the
         # user-env file sits beside the workspace, never inside it.
         self._user_env: dict[str, str] = {}
@@ -97,6 +99,7 @@ class MockSandbox:
         del self._fs[handle.id]
         self._dirs.pop(handle.id, None)
         self._ready.discard(handle.id)
+        self._previews.pop(handle.id, None)
         self._user_env.pop(handle.id, None)
 
     async def reown(self, handle: SandboxHandle) -> None:
@@ -111,6 +114,14 @@ class MockSandbox:
     async def is_ready(self, handle: SandboxHandle) -> bool:
         self._require(handle)
         return handle.id in self._ready
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        self._require(handle)
+        return self._previews.get(handle.id, {}).get(check_preview_key(sha))
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        self._require(handle)
+        self._previews.setdefault(handle.id, {})[check_preview_key(sha)] = data
 
     async def exec(
         self,

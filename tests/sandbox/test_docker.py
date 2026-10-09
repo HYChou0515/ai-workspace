@@ -211,3 +211,17 @@ def test_parse_find_output_rebases_a_subfolder_walk_onto_workspace_paths():
     walked = _parse_find_output(raw, base="/node_modules")
     assert [e.path for e in walked.files] == ["/node_modules/lodash/index.js"]
     assert walked.dirs == ["/node_modules/lodash"]
+
+
+async def test_a_preview_round_trips_outside_the_workspace(sandbox: DockerSandbox):
+    """plan-pptx-preview N2: kept at the container root, beside `.ready`."""
+    import hashlib
+
+    h = await sandbox.create(SandboxSpec())
+    sha = hashlib.sha256(b"deck").hexdigest()
+    assert await sandbox.get_preview(h, sha) is None
+
+    await sandbox.put_preview(h, sha, b"%PDF\x00\xff")
+
+    assert await sandbox.get_preview(h, sha) == b"%PDF\x00\xff"
+    assert (await sandbox.walk(h, "/")).files == []

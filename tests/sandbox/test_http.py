@@ -147,6 +147,17 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     async def exists(rid: str, path: str) -> dict[str, bool]:
         return {"exists": await backend.exists(SandboxHandle(id=rid), path)}
 
+    @app.get("/sandboxes/{rid}/preview/{sha}")
+    async def get_preview(rid: str, sha: str) -> Response:
+        data = await backend.get_preview(SandboxHandle(id=rid), sha)
+        if data is None:
+            return Response(status_code=204)
+        return Response(content=data, media_type="application/pdf")
+
+    @app.put("/sandboxes/{rid}/preview/{sha}", status_code=204)
+    async def put_preview(rid: str, sha: str, request: Request) -> None:
+        await backend.put_preview(SandboxHandle(id=rid), sha, await request.body())
+
     @app.post("/sandboxes/{rid}/mark-ready", status_code=204)
     async def mark_ready(rid: str) -> None:
         await backend.mark_ready(SandboxHandle(id=rid))

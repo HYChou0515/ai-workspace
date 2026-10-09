@@ -13,6 +13,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .walk import flat_lister, walk_tree
 
@@ -68,6 +69,7 @@ class MockSandbox:
         # it never appears in walk/exists (it lives outside the workspace on a
         # real backend). A handle id here ⇔ its sandbox is marked authoritative.
         self._ready: set[str] = set()
+        self._previews: dict[str, dict[str, bytes]] = {}
         # handle id -> the item it serves, `None` for an anonymous create.
         self._item_of: dict[str, str | None] = {}
 
@@ -117,6 +119,7 @@ class MockSandbox:
         self._dirs.pop(handle.id, None)
         self._exposed.pop(handle.id, None)
         self._ready.discard(handle.id)  # #366: teardown drops the readiness mark
+        self._previews.pop(handle.id, None)  # reaped with the sandbox (plan-pptx-preview N2)
 
     async def mark_ready(self, handle: SandboxHandle) -> None:
         """#366: mark the sandbox authoritative (its files are the complete,
@@ -129,6 +132,14 @@ class MockSandbox:
         """#366: True once `mark_ready` ran and the sandbox still lives."""
         self._require(handle)
         return handle.id in self._ready
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        self._require(handle)
+        return self._previews.get(handle.id, {}).get(check_preview_key(sha))
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        self._require(handle)
+        self._previews.setdefault(handle.id, {})[check_preview_key(sha)] = data
 
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         self._require(handle)

@@ -37,6 +37,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -682,6 +683,14 @@ class HttpSandbox:
     async def is_ready(self, handle: SandboxHandle) -> bool:
         resp = await self._io_request(handle, "GET", "/ready")
         return bool(resp.json()["ready"])
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        # 204 = no such preview; 404 already means "no such sandbox" on this wire.
+        resp = await self._io_request(handle, "GET", f"/preview/{check_preview_key(sha)}")
+        return None if resp.status_code == 204 else resp.content
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        await self._io_request(handle, "PUT", f"/preview/{check_preview_key(sha)}", content=data)
 
     async def walk(
         self,

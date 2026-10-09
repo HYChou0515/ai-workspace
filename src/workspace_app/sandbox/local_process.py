@@ -44,6 +44,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .walk import scandir_lister, walk_tree
 
@@ -331,6 +332,10 @@ _WORKSPACE = "root"
 # it) — written via mark_ready after a restore, so walk/sync/the file tree never
 # see it and no user file can forge it. Teardown unlinks it FIRST (before rmtree).
 _READY_MARKER = ".ready"
+# plan-pptx-preview N2: converted slide decks, by content hash — a sibling of
+# the workspace like `.ready`, so never walked, synced or counted, and reaped
+# with the sandbox dir.
+_PREVIEW_DIR = ".preview"
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
@@ -603,6 +608,26 @@ class LocalProcessSandbox:
         """#366: True once `mark_ready` ran (and the sandbox dir still exists)."""
         marker = self._require(handle) / _READY_MARKER
         return await asyncio.to_thread(marker.is_file)
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        path = self._require(handle) / _PREVIEW_DIR / f"{check_preview_key(sha)}.pdf"
+        try:
+            return await asyncio.to_thread(path.read_bytes)
+        except FileNotFoundError:
+            return None
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        folder = self._require(handle) / _PREVIEW_DIR
+        path = folder / f"{check_preview_key(sha)}.pdf"
+
+        def write() -> None:
+            folder.mkdir(exist_ok=True)
+            # Whole or absent: a reader racing this write never gets half a PDF.
+            part = path.with_suffix(".part")
+            part.write_bytes(data)
+            part.replace(path)
+
+        await asyncio.to_thread(write)
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The per-sandbox `$HOME` (#393/#600), guaranteed at the point it is USED.

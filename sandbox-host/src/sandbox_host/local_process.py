@@ -44,6 +44,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .tool_cache import BUILTIN_DIR, EXT_DIR
 from .walk import scandir_lister, walk_tree
@@ -285,6 +286,9 @@ _TOOLS_VIEW = ".tools-view"
 # unlink it FIRST (before rmtree) so a racing mirror sees an incomplete sandbox
 # and never wipes the durable snapshot.
 _READY_MARKER = ".ready"
+# The app's plan-pptx-preview N2: converted decks by content hash, a sibling of
+# the workspace like `.ready` — never walked or archived, reaped with the dir.
+_PREVIEW_DIR = ".preview"
 # Unjailed `python` shim dir (#350). The jail bootstrap (isolate=True) routes
 # raw `python`/`python3*` to the python-stack carrier from inside the chroot;
 # unjailed pods — the model our deployments actually run (uid + cgroup, no
@@ -651,6 +655,26 @@ class LocalProcessSandbox:
         """#366: True once `mark_ready` ran (and the sandbox still exists)."""
         marker = self._require(handle) / _READY_MARKER
         return await asyncio.to_thread(marker.is_file)
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        path = self._require(handle) / _PREVIEW_DIR / f"{check_preview_key(sha)}.pdf"
+        try:
+            return await asyncio.to_thread(path.read_bytes)
+        except FileNotFoundError:
+            return None
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        folder = self._require(handle) / _PREVIEW_DIR
+        path = folder / f"{check_preview_key(sha)}.pdf"
+
+        def write() -> None:
+            folder.mkdir(exist_ok=True)
+            # Whole or absent: a reader racing this write never gets half a PDF.
+            part = path.with_suffix(".part")
+            part.write_bytes(data)
+            part.replace(path)
+
+        await asyncio.to_thread(write)
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The per-sandbox `$HOME` (#393/#600), guaranteed where it is USED.

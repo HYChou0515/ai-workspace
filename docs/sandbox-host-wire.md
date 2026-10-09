@@ -43,6 +43,8 @@ sandbox。
 | `GET /sandboxes/{rid}/size?path=` | — | `200 {size: int\|null}` | 單檔大小(配額;不存在回 `null`) |
 | `POST /sandboxes/{rid}/mark-ready` | — | `204` | 標記沙盒「已完整還原、可信」(#366) |
 | `GET /sandboxes/{rid}/ready` | — | `200 {ready: bool}` | 讀 ready 狀態(#366) |
+| `GET /sandboxes/{rid}/preview/{sha}` | — | `200` PDF / `204` 沒有 | 讀簡報預覽快取(`plan-pptx-preview`);`sha` 不是 64 位小寫 hex → `422`。`204` 而不是 `404`:這條 wire 上 `404` 是「沒有這個沙盒」 |
+| `PUT /sandboxes/{rid}/preview/{sha}` | raw PDF body | `204` | 存簡報預覽快取:放在 workspace 旁(像 `.ready`),不進 walk、不算容量,隨沙盒回收 |
 | `GET /sandboxes/{rid}/walk?root=` | — | `200 {entries: [{path,size,version}]}` | walk |
 | `DELETE /sandboxes/{rid}/file?path=` | — | `204` | 刪除 |
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |

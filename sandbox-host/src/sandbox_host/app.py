@@ -27,14 +27,21 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .artifact import ArtifactError
 from .config import SandboxHostSettings
 from .nfs_archive import NfsArchive
-from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import (
+    ExecResult,
+    Sandbox,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+    check_preview_key,
+)
 from .tool_cache import ToolCache
 from .tool_resolve import ToolResolver
 
@@ -126,6 +133,14 @@ class _CreateReply(BaseModel):
 
 class _ExistsReply(BaseModel):
     exists: bool
+
+
+def _preview_key(sha: str) -> str:
+    """The cache name, refused as a 422 when it is not a content hash."""
+    try:
+        return check_preview_key(sha)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class _ReadyReply(BaseModel):
@@ -821,6 +836,18 @@ def make_host_app(
     async def is_ready(rid: str) -> _ReadyReply:
         ok = await sandbox.is_ready(SandboxHandle(id=rid))
         return _ReadyReply(ready=ok)
+
+    @app.get("/sandboxes/{rid}/preview/{sha}")
+    async def get_preview(rid: str, sha: str) -> Response:
+        # 204, not 404: on this wire 404 means "no such sandbox".
+        data = await sandbox.get_preview(SandboxHandle(id=rid), _preview_key(sha))
+        if data is None:
+            return Response(status_code=204)
+        return Response(content=data, media_type="application/pdf")
+
+    @app.put("/sandboxes/{rid}/preview/{sha}", status_code=204)
+    async def put_preview(rid: str, sha: str, request: Request) -> None:
+        await sandbox.put_preview(SandboxHandle(id=rid), _preview_key(sha), await request.body())
 
     @app.get("/sandboxes/{rid}/walk")
     async def walk(

@@ -12,6 +12,7 @@ backend (`IsolatedProcessSandbox` in production, `MockSandbox` in tests).
 network-service path in v1, and the wire API exposes no such endpoint.
 """
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -118,6 +119,17 @@ class WalkResult:
     truncated: bool = False
 
 
+_PREVIEW_KEY = re.compile(r"[0-9a-f]{64}")
+
+
+def check_preview_key(sha: str) -> str:
+    """A preview cache name must be a content hash and nothing else: it becomes
+    a path on disk, so a `..` or a `/` must never get that far."""
+    if not _PREVIEW_KEY.fullmatch(sha):
+        raise ValueError(f"not a preview key (64 lowercase hex): {sha!r}")
+    return sha
+
+
 class Sandbox(Protocol):
     """The host's internal backend interface — the 13 operations its HTTP shell
     proxies. Implemented by `IsolatedProcessSandbox` (production) and
@@ -182,6 +194,11 @@ class Sandbox(Protocol):
     # deletions while `is_ready` holds. Never appears in walk (not a workspace file).
     async def mark_ready(self, handle: SandboxHandle) -> None: ...
     async def is_ready(self, handle: SandboxHandle) -> bool: ...
+    # The app's plan-pptx-preview N2: a converted slide deck, by content hash,
+    # beside the workspace like `.ready` — never walked or archived, reaped with
+    # the sandbox. `sha` becomes a file name, so only 64 lowercase hex passes.
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None: ...
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None: ...
     # The item's user-set environment variables, as `KEY=VALUE` lines, placed
     # beside the workspace for the tool launchers to export. Outside the walk
     # scope like `.ready`, so it never reaches the file tree or the archive.

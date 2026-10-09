@@ -24,6 +24,7 @@ contracts; nothing else in the app needs to change (it's injected via
 `create_app(sandbox=...)`).
 """
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -208,6 +209,17 @@ class WalkResult:
     dirs: list[str]
     unwalked: list[str] = field(default_factory=list)
     truncated: bool = False
+
+
+_PREVIEW_KEY = re.compile(r"[0-9a-f]{64}")
+
+
+def check_preview_key(sha: str) -> str:
+    """A slide-preview cache name must be a content hash and nothing else: it
+    becomes a path on disk, so a `..` or a `/` must never get that far."""
+    if not _PREVIEW_KEY.fullmatch(sha):
+        raise ValueError(f"not a preview key (64 lowercase hex): {sha!r}")
+    return sha
 
 
 class Sandbox(Protocol):
@@ -434,6 +446,21 @@ class Sandbox(Protocol):
         """#366: True once `mark_ready` ran and the sandbox still lives; False
         for a fresh/rebuilt-but-not-yet-restored sandbox. A vanished sandbox
         raises `SandboxNotFound` like every other op."""
+        ...
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        """The slide preview (a PDF) cached for the deck whose content hashes to
+        `sha`, or None (docs/plan-pptx-preview.md N2, D1).
+
+        Kept OUTSIDE the workspace, like the `.ready` marker: never walked,
+        synced, shown in the file tree or counted against the workspace, and
+        gone when the sandbox is reaped. `sha` must be 64 lowercase hex
+        (`check_preview_key`) — it becomes a file name."""
+        ...
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        """Store `data` as the preview for the deck hashing to `sha` (see
+        `get_preview`)."""
         ...
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:

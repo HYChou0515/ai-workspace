@@ -38,6 +38,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .walk import flat_lister, walk_tree
 
@@ -51,6 +52,9 @@ _WORKDIR = "/workspace"
 # #366: readiness marker OUTSIDE the workspace (container root), so walk never
 # sees it. Deprecated backend — kept only to satisfy the Sandbox protocol.
 _READY_MARKER = "/.ready"
+# plan-pptx-preview N2: converted decks by content hash, at the container root
+# beside `.ready` — outside the `/workspace` walk scope.
+_PREVIEW_DIR = "/.preview"
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +243,22 @@ class DockerSandbox:
         container = self._require(handle)
         r = await asyncio.to_thread(container.exec_run, ["test", "-f", _READY_MARKER])
         return r.exit_code == 0
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        container = self._require(handle)
+        path = f"{_PREVIEW_DIR}/{check_preview_key(sha)}.pdf"
+        r = await asyncio.to_thread(container.exec_run, ["cat", path], demux=True)
+        return (r.output[0] or b"") if r.exit_code == 0 else None
+
+    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+        container = self._require(handle)
+        name = f"{check_preview_key(sha)}.pdf"
+        await asyncio.to_thread(self._mkdir_p, container, _PREVIEW_DIR)
+        ok = await asyncio.to_thread(
+            container.put_archive, _PREVIEW_DIR, _make_single_file_tar(name, data)
+        )
+        if not ok:  # pragma: no cover — docker SDK edge case, no reliable trigger
+            raise RuntimeError(f"docker put_archive failed for preview {name}")
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         if not await self.exists(handle, path):
