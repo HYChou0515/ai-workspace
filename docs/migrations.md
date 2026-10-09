@@ -1980,8 +1980,8 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
   stdout，host 只回 hash，API 讀一次 PDF 轉給瀏覽器。
 - **看得到檔案就能預覽**（`read_content`）：只有讀權限的人打開也會觸發轉檔，必要時**喚醒沙盒**。喚醒前會先過**每人的沙盒上限**
   （跟 terminal 同一道關卡）：超過上限時回 `507`，畫面說「這個 workspace 擁有者同時開啟的沙盒已達上限」與數字、擁有者到「我的資源」關掉不用的再試（額度算在擁有者身上，不是打開的人），並給「下載原檔」。
-- **知識庫的檔案檢視**（沒有沙盒）打開簡報，改成顯示「這裡無法預覽簡報。」；切到「編輯」是以前的顯示。
-- **超過 20 MB 的簡報先問**，按「預覽」才轉；已經轉好的直接顯示。
+- **知識庫的檔案檢視**（沒有沙盒）打開簡報，改成顯示「這裡無法預覽簡報」與「下載原檔」按鈕；切到「編輯」是以前的顯示。
+- **超過 20 MiB 的簡報先問**（「這份簡報有 N MB」），按「轉成預覽」才轉；已經轉好的直接顯示。
 - 多一點負載（沒有要做的事）：每份簡報（每個版本）第一次被打開時，在那個 item 的沙盒裡跑一次 LibreOffice，用的是那個沙盒的額度。
 
 **資料** — 沒有 `Schema` 升版，沒有回填。
@@ -1990,13 +1990,13 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
 見 `docs/sandbox-host-wire.md`）。沒有新的 manifest、env、probe 或 JobType。
 
 - `rollout 前／同時`：**先換 sandbox-host，或兩個一起換**。為什麼：新 API 遇到舊 host，`POST /preview` 是 host 不認得的路由。
-  症狀：開簡報顯示「暫時無法預覽，請稍後再試。」，API log / 回應是 `503 sandbox_gone`，訊息寫著 `POST /preview is not implemented by this
+  症狀：開簡報顯示「暫時無法預覽」（「請稍後再試，或先下載原檔。」），API log / 回應是 `503 sandbox_gone`，訊息寫著 `POST /preview is not implemented by this
   sandbox-host`；其他功能不受影響，host 換上後自己好。
 - sandbox-host image 本來就裝 `libreoffice-impress`（`make_deck` 在用），不用改。
 
 **確認做完**（`rollout 後`）
 
-- 在一個 item 上傳一份 .pptx，點開：先顯示「轉換中…」，幾秒後是 PDF；切到「編輯」是以前的顯示；再點開一次直接出現（快取）。
+- 在一個 item 上傳一份 .pptx，點開：先顯示「正在轉成預覽…」與進度條，幾秒後是 PDF；切到「編輯」是以前的顯示；再點開一次直接出現（快取）。
 - `kubectl exec` 進 sandbox-host：`ls <sandbox root>/<id>/.preview/` 有一個 64 位 hex 檔名的 `.pdf`；workspace 檔案樹裡看不到。
 - 沒部署到這一版的症狀：pptx 點開是一堆亂碼（文字編輯器）。
 

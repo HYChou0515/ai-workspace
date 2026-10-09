@@ -6,10 +6,12 @@
  * shows the file as it was shown before this existed (N3).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { useFileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
+import { Btn } from "../components/Btn";
+import { Icon } from "../components/Icon";
 import { useEditMode } from "../hooks/editMode";
 import { subscribeFileChanged } from "../lib/fileChangedBus";
 import { type MsgKey, useT } from "../lib/i18n";
@@ -17,18 +19,54 @@ import { type QuotaKind, quotaMessage } from "../lib/quotaFailure";
 import { relPath } from "../lib/relPath";
 import { TextRenderer } from "./TextRenderer";
 
-const MUTED = { color: "var(--text-paper-d)" } as const;
-
 /** A preview writes no file, so only the sandbox limit can refuse it; the other
- * two kinds fall back to the plain "can't preview right now". */
+ * two kinds fall back to the plain "try again in a moment". */
 const SLIDES_QUOTA_KEY = {
-  workspace: "slides.unreachable",
-  user: "slides.unreachable",
+  workspace: "slides.unreachableBody",
+  user: "slides.unreachableBody",
   environment: "slides.envFull",
 } as const satisfies Record<NonNullable<QuotaKind>, MsgKey>;
 
 function megabytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/**
+ * Everything the viewer shows that is not the PDF: one block, centred in the
+ * pane — a heading saying what is going on, a line of detail, then the actions
+ * (Polaris "Empty state": graphic, heading, detail, one primary action and a
+ * secondary beside it). `busy` swaps the graphic for an indeterminate bar.
+ */
+function SlidesNotice({
+  title,
+  body,
+  busy,
+  actions,
+}: {
+  title: string;
+  body?: ReactNode;
+  busy?: boolean;
+  actions: ReactNode;
+}) {
+  return (
+    <div className="slides-notice">
+      {busy ? (
+        <div
+          className="slides-notice__progress"
+          role="progressbar"
+          aria-label={title}
+          aria-busy="true"
+        >
+          <div className="slides-notice__bar" />
+        </div>
+      ) : (
+        <Icon name="file" size={32} color="var(--text-paper-d)" />
+      )}
+      <h3 className="slides-notice__title">{title}</h3>
+      {body && <p className="slides-notice__body">{body}</p>}
+      <div className="slides-notice__actions">{actions}</div>
+    </div>
+  );
 }
 
 export function SlidesRenderer({ path }: { path: string }) {
@@ -77,54 +115,78 @@ export function SlidesRenderer({ path }: { path: string }) {
   useEffect(() => () => void (url && URL.revokeObjectURL(url)), [url]);
 
   if (isEditing(path)) return <TextRenderer path={path} />;
-  if (!preview) return <div style={MUTED}>{t("slides.unavailable")}</div>;
+  // A link that downloads, drawn as the outlined (secondary) button it acts as.
   const download = (
-    <a href={svc.fileDownloadUrl(path)} download>
+    <a
+      className="btn"
+      data-variant="secondary"
+      data-size="md"
+      href={svc.fileDownloadUrl(path)}
+      download
+    >
+      <Icon name="download" size={14} />
       {t("slides.download")}
     </a>
   );
-  if (q.isError) {
+  if (!preview) {
     return (
-      <div style={{ display: "grid", gap: 8 }}>
-        <span>{t("slides.unreachable")}</span>
-        {download}
-      </div>
+      <SlidesNotice
+        title={t("slides.unavailable")}
+        body={t("slides.unavailableBody")}
+        actions={download}
+      />
     );
   }
-  if (!data) return <div style={MUTED}>{t("slides.converting")}</div>;
+  if (q.isError) {
+    return (
+      <SlidesNotice
+        title={t("slides.unreachable")}
+        body={t("slides.unreachableBody")}
+        actions={download}
+      />
+    );
+  }
+  if (!data)
+    return (
+      <SlidesNotice busy title={t("slides.converting")} actions={download} />
+    );
   if (data.kind === "confirm") {
     return (
-      <div style={{ display: "grid", gap: 8, justifyItems: "start" }}>
-        <span>{t("slides.confirm", { size: megabytes(data.size) })}</span>
-        <button
-          type="button"
-          className="btn"
-          data-variant="primary"
-          onClick={() => setConfirmedPath(path)}
-        >
-          {t("slides.confirmButton")}
-        </button>
-        {download}
-      </div>
+      <SlidesNotice
+        title={t("slides.confirm", { size: megabytes(data.size) })}
+        body={t("slides.confirmBody")}
+        actions={
+          <>
+            <Btn variant="primary" onClick={() => setConfirmedPath(path)}>
+              {t("slides.confirmButton")}
+            </Btn>
+            {download}
+          </>
+        }
+      />
     );
   }
   if (data.kind === "refused") {
     return (
-      <div style={{ display: "grid", gap: 8 }}>
-        <span>
-          {quotaMessage(t, SLIDES_QUOTA_KEY, { status: 507, detail: data.detail }) ??
-            t("slides.unreachable")}
-        </span>
-        {download}
-      </div>
+      <SlidesNotice
+        title={t("slides.unreachable")}
+        body={
+          quotaMessage(t, SLIDES_QUOTA_KEY, {
+            status: 507,
+            detail: data.detail,
+          }) ?? t("slides.unreachableBody")
+        }
+        actions={download}
+      />
     );
   }
   if (data.kind === "failed") {
     return (
-      <div style={{ display: "grid", gap: 8 }}>
-        <span>{t("slides.failed")}</span>
-        {download}
-      </div>
+      <SlidesNotice
+        title={t("slides.failed")}
+        body={t("slides.failedBody")}
+        actions={download}
+      />
     );
   }
   return (

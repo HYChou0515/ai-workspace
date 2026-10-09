@@ -101,7 +101,7 @@ describe("SlidesRenderer", () => {
     draw(() => ({ kind: "failed", why: "source file could not be loaded" }));
 
     expect(
-      await screen.findByText(/無法轉成預覽|couldn't be turned into a preview/),
+      await screen.findByText(/無法預覽這份簡報|Can't preview this deck/),
     ).toBeInTheDocument();
     // The converter's own words are for the logs, not the person (no internals).
     expect(screen.queryByText(/source file could not be loaded/)).toBeNull();
@@ -128,12 +128,21 @@ describe("SlidesRenderer", () => {
   it("says the sandbox limit is reached, with the numbers, when converting would open one", async () => {
     draw(() => ({
       kind: "refused",
-      detail: { error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 2 },
+      detail: {
+        error: "sandbox_quota_exceeded",
+        dimension: "sandboxes",
+        used: 2,
+        limit: 2,
+      },
     }));
 
-    expect(await screen.findByText(/沙盒已達上限|limit for live sandboxes/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/沙盒已達上限|limit for live sandboxes/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/2/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /下載|Download/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /下載|Download/ }),
+    ).toBeInTheDocument();
   });
 
   it("asks again for the next big deck — a yes is for the deck it was given to", async () => {
@@ -160,12 +169,16 @@ describe("SlidesRenderer", () => {
     const ask = draw((confirm) => {
       if (confirm) converted = true;
       if (converted && !confirm) return new Promise<never>(() => {}) as never;
-      return converted ? pdf : { kind: "confirm", size: 42 * 1024 * 1024, limit: 1 };
+      return converted
+        ? pdf
+        : { kind: "confirm", size: 42 * 1024 * 1024, limit: 1 };
     });
     await screen.findByText(/42 MB/);
     fireEvent.click(screen.getByRole("button", { name: /預覽|Preview/ }));
 
-    await waitFor(() => expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false));
+    await waitFor(() =>
+      expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false),
+    );
     expect(screen.getByTitle("slides/q3.pptx")).toBeInTheDocument();
     expect(screen.queryByText(/42 MB/)).toBeNull();
   });
@@ -174,7 +187,11 @@ describe("SlidesRenderer", () => {
     // The server's side: a converted version is cached and served without
     // asking; new content has no cache, so a big one is asked about again.
     let converted = false;
-    const big: SlidePreview = { kind: "confirm", size: 42 * 1024 * 1024, limit: 1 };
+    const big: SlidePreview = {
+      kind: "confirm",
+      size: 42 * 1024 * 1024,
+      limit: 1,
+    };
     const ask = draw((confirm) => {
       if (confirm) converted = true;
       return converted ? pdf : big;
@@ -184,7 +201,9 @@ describe("SlidesRenderer", () => {
     await screen.findByTitle("slides/q3.pptx");
 
     // The yes is spent once the PDF is here: the next ask goes without it.
-    await waitFor(() => expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false));
+    await waitFor(() =>
+      expect(ask).toHaveBeenLastCalledWith("/slides/q3.pptx", false),
+    );
     converted = false;
     act(() => publishFileChanged("i1", "slides/q3.pptx"));
 
@@ -225,6 +244,104 @@ describe("SlidesRenderer", () => {
     await new Promise((r) => setTimeout(r, 20));
 
     expect(ask.mock.calls.length).toBe(before);
+  });
+});
+
+// Every state that is not the PDF is one centred block (Polaris "Empty state"):
+// a heading that says what is going on, a line of detail, and the actions as
+// real buttons — the main one filled, "download the original" outlined.
+describe("SlidesRenderer — the states around the PDF", () => {
+  const downloadIsAButton = () => {
+    const link = screen.getByRole("link", {
+      name: /下載原檔|Download the original/,
+    });
+    expect(link).toHaveAttribute("href", "/api/files/slides/q3.pptx");
+    expect(link).toHaveClass("btn");
+    expect(link).toHaveAttribute("data-variant", "secondary");
+    expect(link).toHaveAttribute("data-size", "md");
+  };
+
+  it("asks about a big deck with a heading, a filled action and an outlined download", async () => {
+    draw(() => ({ kind: "confirm", size: 42 * 1024 * 1024, limit: 1 }));
+
+    expect(
+      await screen.findByRole("heading", { name: /42 MB/ }),
+    ).toBeInTheDocument();
+    const go = screen.getByRole("button", {
+      name: /轉成預覽|Convert to preview/,
+    });
+    expect(go).toHaveAttribute("data-variant", "primary");
+    expect(go).toHaveAttribute("data-size", "md");
+    downloadIsAButton();
+  });
+
+  it("shows progress while converting, and the original is there meanwhile", async () => {
+    draw(() => new Promise<never>(() => {}) as never);
+
+    expect(await screen.findByRole("progressbar")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /正在轉成預覽|Converting/ }),
+    ).toBeInTheDocument();
+    downloadIsAButton();
+  });
+
+  it("says a deck could not be converted as a heading, with the download as a button", async () => {
+    draw(() => ({ kind: "failed", why: "x" }));
+
+    expect(
+      await screen.findByRole("heading", { name: /無法預覽|Can't preview/ }),
+    ).toBeInTheDocument();
+    downloadIsAButton();
+  });
+
+  it("says the preview could not be fetched as a heading, with the download as a button", async () => {
+    draw(() => {
+      throw new Error("HTTP 503");
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: /暫時無法預覽|right now/ }),
+    ).toBeInTheDocument();
+    downloadIsAButton();
+  });
+
+  it("says the sandbox limit is reached as a heading, the numbers below", async () => {
+    draw(() => ({
+      kind: "refused",
+      detail: {
+        error: "sandbox_quota_exceeded",
+        dimension: "sandboxes",
+        used: 2,
+        limit: 2,
+      },
+    }));
+
+    expect(
+      await screen.findByRole("heading", { name: /暫時無法預覽|right now/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/沙盒已達上限|limit for live sandboxes/),
+    ).toBeInTheDocument();
+    downloadIsAButton();
+  });
+
+  it("says where a deck can't be previewed, with the download as a button", () => {
+    const svc = {
+      scopeId: "k1",
+      fileDownloadUrl: (p: string) => `/api/files${p}`,
+    } as unknown as FileService;
+    renderWithQuery(
+      <FileServiceProvider value={svc}>
+        <SlidesRenderer path="/slides/q3.pptx" />
+      </FileServiceProvider>,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: /無法預覽簡報|can't be previewed here/,
+      }),
+    ).toBeInTheDocument();
+    downloadIsAButton();
   });
 });
 
