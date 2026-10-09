@@ -37,7 +37,7 @@ User-confirmed:
 | # | Decision |
 |---|---|
 | D1 | **A WUI may be a multi-page site.** What it hosts is a real generator's OUTPUT (mkdocs, Sphinx, hand-written HTML …); the platform does not learn markdown. A platform-rendered markdown site (a `docs.ai.yaml` view) was the rejected alternative: re-implementing a docs site that loses to mkdocs. |
-| D2 | **Same permissions as every WUI.** It IS a WUI — `view: wui`, `entry:`, Deploy, the overview, unlisting, the reader page, the bridge. No second, wider read scope (`plan-wui.md` decision 1 and the Deploy section stand — **qualified by the pass, pending the user: see "Needs the user's decision"**). |
+| D2 | **Same permissions as every WUI.** It IS a WUI — `view: wui`, `entry:`, Deploy, the overview, unlisting, the reader page, the bridge. No second, wider read scope (`plan-wui.md` decision 1 and the Deploy section stand — **qualified by the pass, accepted by the user 2026-10-09: see "Needs the user's decision"**). |
 | D3 | **The platform bridges one-page → many-page**, so an existing `mkdocs.yml` runs unchanged. Rejected: requiring authors to switch on Material's `offline` plugin / `use_directory_urls: false` — less platform work, but it helps one generator only, and an unconverted site fails silently, the failure `wui.md` exists to avoid. |
 | D4 | **Links out open behind a platform-drawn confirmation.** The dialog is drawn OUTSIDE the frame (as `openLogin`'s is), shows the domain large and the full URL beneath, and opens a new tab only on the reader's press. **Applies to every WUI** — it cannot be docs-only. Accepted residual risk: a reader who presses Open without reading lets a hostile page carry data out in the URL; the gate is the reader's attention, not a guarantee like `openLogin`'s "credentials never pass the page". |
 
@@ -215,13 +215,14 @@ whether the pass is acceptable under it is the first item below.
 
 ### Needs the user's decision (not settled by the author)
 
-Status 2026-10-09: the user confirmed the Deploy reload rule above and accepted
-acceptance 1 as it stands (second item below). The pass (first item) is still
-open — the user's first reaction was that a viewer must not need a pass to
-open a WUI, and nobody does: the pane mints it with the viewer's own sign-in,
-and the open question is only the URL-as-capability side effect.
+Status 2026-10-09 — **all three decided by the user**: the Deploy reload rule
+above confirmed; acceptance 1 accepted as it stands (second item); and the
+pass accepted (first item) once it was clear that a viewer never handles one —
+the pane mints it with the viewer's own sign-in — and that the decision was
+only about the URL-as-capability side effect ("看起來可以").
 
-- **The pass qualifies `plan-wui.md` decision 1** ("not a public URL … anonymous
+- **The pass qualifies `plan-wui.md` decision 1 — accepted by the user
+  (2026-10-09)** ("not a public URL … anonymous
   access would need a second auth story") and its Deploy section ("不需要第二套
   安全模型"), which D2 said stand. A pass is a bearer capability: whoever holds
   the URL reads that one folder, read-only, until it lapses, as long as the
