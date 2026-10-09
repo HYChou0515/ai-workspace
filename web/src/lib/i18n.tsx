@@ -1738,6 +1738,33 @@ export const messages = {
     en: "Choose which tools the assistant can use in this workspace",
   },
   "env.button": { "zh-TW": "環境變數", en: "Env" },
+  "slides.converting": { "zh-TW": "正在轉成預覽…", en: "Converting to a preview…" },
+  "slides.confirm": { "zh-TW": "這份簡報有 {size}", en: "This deck is {size}" },
+  "slides.confirmBody": {
+    "zh-TW": "轉成 PDF 才能在這裡看，大檔會花一點時間。",
+    en: "It becomes a PDF to show here; a big deck takes a while.",
+  },
+  "slides.confirmButton": { "zh-TW": "轉成預覽", en: "Convert to preview" },
+  "slides.failed": { "zh-TW": "無法預覽這份簡報", en: "Can't preview this deck" },
+  "slides.failedBody": {
+    "zh-TW": "轉成 PDF 沒有成功。可以下載原檔，用簡報軟體開啟。",
+    en: "It couldn't be converted to a PDF. Download the original to open it in a presentation app.",
+  },
+  "slides.envFull": {
+    "zh-TW": "轉換要開啟沙盒，但這個 workspace 擁有者同時開啟的沙盒已達上限。擁有者到「我的資源」關掉不用的沙盒後再試一次。",
+    en: "Converting needs a sandbox, and this workspace's owner is at their limit for live sandboxes. Once the owner closes one in My resources, try again.",
+  },
+  "slides.unreachable": { "zh-TW": "暫時無法預覽", en: "Can't preview right now" },
+  "slides.unreachableBody": {
+    "zh-TW": "請稍後再試，或先下載原檔。",
+    en: "Try again in a moment, or download the original.",
+  },
+  "slides.download": { "zh-TW": "下載原檔", en: "Download the original" },
+  "slides.unavailable": { "zh-TW": "這裡無法預覽簡報", en: "Slide decks can't be previewed here" },
+  "slides.unavailableBody": {
+    "zh-TW": "可以下載原檔，用簡報軟體開啟。",
+    en: "Download the original to open it in a presentation app.",
+  },
   "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
   // `plan-wui-viewer-login`: the panel lists every tool as a section, with
   // one always-open search box instead of a tool dropdown.

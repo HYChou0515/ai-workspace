@@ -12,6 +12,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
+import type { QuotaDetail } from "../lib/quotaFailure";
+
 import { api } from "./index";
 import { writeVerified } from "./writeVerified";
 import { API_PREFIX, apiFetch } from "./http";
@@ -49,6 +51,15 @@ export type TreeListing = {
  * own entries with every subfolder reported in `unwalked`. Omitted → the
  * preload: everything the user wrote, derived folders listed but not entered. */
 export type ListTreeOpts = { prefix?: string; depth?: number };
+
+/** A slide deck as the server answers for it (docs/plan-pptx-preview.md): the
+ * converted PDF, "big — ask first" (N6), or the converter's reason. */
+export type SlidePreview =
+  | { kind: "pdf"; blob: Blob }
+  | { kind: "confirm"; size: number; limit: number }
+  | { kind: "failed"; why: string }
+  /** 507: converting would open a sandbox past the owner's limit. */
+  | { kind: "refused"; detail: QuotaDetail };
 
 export type FileService = {
   /** Stable id for query-key scoping + tree-collapse persistence. */
@@ -90,6 +101,10 @@ export type FileService = {
   /** #247: the URL a native `<a download>` points at to stream a prepared folder
    * zip. `prefix` is echoed so the streamed file is named after the folder. */
   dirDownloadUrl(downloadId: string, prefix: string): string;
+  /** A slide deck converted to PDF by the item's sandbox (plan-pptx-preview).
+   * Absent where there is no sandbox to convert in (the KB). `confirm` is the
+   * person's yes to converting a big deck. */
+  slidePreview?(path: string, confirm: boolean): Promise<SlidePreview>;
 };
 
 // ── investigation binding (existing behaviour, just scoped) ────────────────
@@ -153,6 +168,20 @@ export function investigationFileService(slug: string, investigationId: string):
     },
     dirDownloadUrl: (downloadId, prefix) =>
       `${API_PREFIX}/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/download/${encodeURIComponent(downloadId)}?prefix=${encodeURIComponent(prefix)}`,
+    slidePreview: async (path, confirm) => {
+      const q = `path=${encodeURIComponent(path)}${confirm ? "&confirm=1" : ""}`;
+      const resp = await apiFetch(`/${filesBase}/preview?${q}`);
+      if (resp.ok) return { kind: "pdf", blob: await resp.blob() };
+      const detail = (await resp.json().catch(() => ({})))?.detail;
+      if (resp.status === 409 && detail?.code === "preview_needs_confirm") {
+        return { kind: "confirm", size: detail.size, limit: detail.limit };
+      }
+      if (resp.status === 422 && detail?.code === "preview_failed") {
+        return { kind: "failed", why: String(detail.why) };
+      }
+      if (resp.status === 507) return { kind: "refused", detail: detail ?? {} };
+      throw new Error(`slide preview failed: ${resp.status}`);
+    },
   };
 }
 

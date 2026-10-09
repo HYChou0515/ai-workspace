@@ -1,6 +1,6 @@
 # workspace 裡的簡報可以直接看:沙盒轉 PDF、快取在沙盒旁
 
-**狀態:** grill 完成(2026-10-09),待施工。
+**狀態:** 已施工(P1–P4,PR #902)。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master` 程式碼確認的事實;〔施工〕= 我定的實作細節,可推翻。
 
 ## 1. 問題〔查證〕
@@ -31,19 +31,53 @@ workspace 檔案檢視依副檔名挑 renderer(`web/src/renderers/registry.ts`);
 
 | # | 定了什麼 | 為什麼 |
 |---|---|---|
-| D1 | 新 Sandbox op 兩個:`get_preview(handle, sha) -> bytes \| None`、`put_preview(handle, sha, data)`,只存取 `<item>/.preview/<sha>.pdf`;sha 必須是 64 位小寫 hex(擋路徑穿越)。protocol / mock / local / isolated / http client / sandbox-host 各一份,照 `mark_ready` 的形狀。 | infra 區只能經專用 op 碰;只存 bytes,不在 host 端跑程式。 |
-| D2 | 轉檔走既有的 `exec`(uid / cgroup / 時間上限都沿用):`soffice --headless --convert-to pdf --outdir <tmp> <path>` 後把 PDF 讀回來。不是新的特權路徑。 | N1 的隔離要真的套用在轉檔上。 |
+| D1 | 新 Sandbox op 兩個:`render_preview(handle, path, convert) -> sha \| None`(算 hash、查快取、`convert` 時轉檔)、`get_preview(handle, sha) -> bytes \| None`,只存取 `<item>/.preview/<sha>.pdf`;sha 必須是 64 位小寫 hex(擋路徑穿越)。protocol / mock / local / isolated / docker / http client / sandbox-host 各一份,照 `mark_ready` 的形狀。(原本的 `put_preview` 在 D2 改寫時拿掉了,見下。) | infra 區只能經專用 op 碰。 |
+| D2 | 轉檔走既有的 `exec`(isolated / 正式環境是 item 自己的 uid 與 cgroup;時間上限沿用):`soffice --headless --convert-to pdf --outdir <out> <path>`,輸出留在沙盒的 `$HOME` 裡,由 host 讀走。不是新的特權路徑。 | N1 的隔離要真的套用在轉檔上。 |
 | D3 | 新路由 `GET /a/{slug}/items/{id}/files/preview?path=`:權限 `read_content`(N5);讀檔算 sha → 快取命中直接回 `application/pdf` → 沒命中才確保沙盒、轉檔、存快取、回 PDF。沙盒冷的時候先查快取不喚醒——但快取跟沙盒一起回收,所以冷沙盒等於沒命中。 | 一次請求一個答案;前端不必輪詢。 |
 | D4 | 同一個 (item, sha) 同時只轉一次(per-key lock,pod 內);另一個請求等第一個的結果。 | 兩個人同時打開不跑兩次 soffice。 |
 | D5 | 大小門檻(N6)由後端決定:超過門檻又沒帶 `confirm=1` → 回「需要確認」與檔案大小,前端顯示詢問,按「是」再帶 `confirm=1` 重打;快取已經有的直接回,不問。轉檔逾時或失敗 → 回錯誤(說明原因),前端顯示原因與「下載原檔」。門檻先定 20 MB(之後可做成設定)。 | 門檻只寫在一處,前端照後端的回答問;已經轉好的不必再問。 |
-| D6 | 前端 `SlidesRenderer`:`registry.ts` 對 pptx/ppt/odp,`editToggle: true`(切到編輯 = 現在的顯示);預覽模式載入中顯示「轉換中…」,成功交給現有 PDF 顯示,太大時顯示詢問(N6),失敗顯示原因 + 下載。 | N3、N6。 |
+| D6 | 前端 `SlidesRenderer`:`registry.ts` 對 pptx/ppt/odp,`editToggle: true`(切到編輯 = 現在的顯示);預覽模式載入中顯示「正在轉成預覽…」與進度條,成功交給現有 PDF 顯示,太大時顯示詢問(N6),失敗顯示一句說明 + 下載(原因不上畫面,見下方 D5/D6 的修改)。PDF 以外的每個狀態(詢問、轉換中、失敗、拿不到、額度滿、這裡不能預覽)都是同一個置中區塊:圖示或進度條、標題、(有的話)一行說明、按鈕——主要動作用實心 `Btn`(「轉成預覽」),「下載原檔」用 outlined 按鈕(服務拿不到這個檔案的下載網址時——知識庫 / wiki——不畫,也不叫人下載;依 Polaris Empty state、Material 3 按鈕層級;user 指出原本的詢問沒照 UI/UX 守則)。 | N3、N6。 |
 | D7 | `docs/migrations.md` 一條:新路由 + sandbox-host 新端點,兩邊要一起部署(API 先上而 host 還舊時,預覽回錯誤、其他功能不受影響)。 | 運營方要知道兩個 image 都得換。 |
+
+施工中確認的限制〔查證〕:`kind: local` 的 userns jail 裡沒有掛 `/proc`,LibreOffice 起不來(`make_deck` 也一樣):
+它印出 `/proc not mounted` 之後不會自己結束,要等到轉檔時限(`PREVIEW_TIMEOUT_S`,180 秒)才被收掉;轉檔失敗、說出原因、
+不快取。正式環境的 sandbox-host 是 uid + cgroup 隔離、沒有 jail,可以轉。
+
+D2 施工時改過〔施工〕:原本「exec 轉完把 PDF `cat` 到 stdout、再存回快取」會讓整份 PDF 在 host 與 API 之間來回兩趟、
+暫存在 API 記憶體(user 指出)。改成 `render_preview(path, convert)`:host 自己算 hash、在 exec 裡把輸出寫進沙盒自己的
+`$HOME/.preview-out/<一次一個的隨機名>/`、讀走後寫進 `.preview/<sha>.pdf`;API 只拿 hash,再用 `get_preview` 讀一次。
+
+review 第一輪後定的事〔施工〕(D8–D12):
+
+| # | 定了什麼 | 為什麼 |
+|---|---|---|
+| D8 | 沙盒寫出來的東西一律當不可信:host 開每一層目錄、開 PDF 都**不跟隨 symlink**,只收「一般檔案、只有一個 link、開頭是 `%PDF`」的 `<簡報檔名>.pdf`;快取是 host **重新寫一份**(先寫暫存檔再 rename),不是把沙盒做的檔案搬過去。`get_preview` 讀快取也一樣不跟隨 symlink。清掉暫存目錄也透過已開的目錄 fd。 | isolated 模式 host 用 root 讀沙盒 uid 寫的東西;jail 模式 infra 區就是 chroot 的 `/`。不這樣做,沙盒在輸出位置放一個 symlink,就能讓 host 把任何檔案(包括別的 item 的檔案)讀出來當成預覽。 |
+| D9 | `.preview/` 是 0700、PDF 是 0600。 | 別的 item 的 uid 不能讀這份預覽。 |
+| D10 | 每次轉檔用自己的 LibreOffice profile(`-env:UserInstallation=file://<暫存目錄>/profile`)和自己的 `TMPDIR`。 | LibreOffice 不讓兩個程序共用一個 profile:同時轉兩份、或轉檔撞上 `make_deck`,會有一邊失敗。isolated 模式的 `TMPDIR` 是 workspace,暫存檔會跑進檔案樹。 |
+| D11 | 轉檔期間每 `log_timeout / 3` 秒印一個點。 | soffice 工作時不印東西;exec 的 idle 上限(預設 60 秒)會在 180 秒總時限之前把它殺掉。 |
+| D12 | 要喚醒沙盒來轉檔時,先過每人的沙盒上限(`AdmissionGate.check`,跟 terminal 一樣);快取命中不問。超過上限回 507,前端用 chat / terminal 共用的 `quotaMessage` 說「這個 workspace 擁有者同時開啟的沙盒已達上限」與數字、擁有者到「我的資源」關掉一個,加上下載(額度算在擁有者身上,打開的人可能只是讀者)。 | 預覽跟 terminal 一樣會開一個沙盒,佔的是同一份額度。 |
+
+D5、D6 的「前端顯示原因」也改了〔施工〕:轉換器的錯誤訊息(LibreOffice 的英文 stderr)只留在 API 回應與 log,畫面只說
+「無法預覽這份簡報」加上「下載原檔」;拿不到回應(503 等)則說「暫時無法預覽」。介面不露內部字串。
+「已同意預覽大檔」只對同一個路徑、同一份內容有效(轉好之後就收回,之後再問都不帶同意:同一版直接拿快取,內容變了又大就再問一次);簡報被改(turn 結束、terminal、重新整理、有人存檔)時,預覽會重新抓。
+D4 的鎖在沒有人持有或等待時就移除,不會隨著打開過的簡報數量一直長大。
+
+Docker backend(開發用)也照 D10 用各自的 profile / 暫存目錄;它的 container 本身就是沙盒,所以讀輸出不必做 D8。
+docker 的 `exec_run` 沒有時間上限,轉檔時限在那裡不生效。
+
+review 第二輪後定的事〔施工〕(D13–D15):
+
+| # | 定了什麼 | 為什麼 |
+|---|---|---|
+| D13 | host 讀、存、送的 PDF 有上限 `PREVIEW_MAX_BYTES`(200 MiB):讀的時候最多讀上限 + 1 個 byte,超過就是轉檔失敗。 | 沙盒可以留一個背景程序,在 soffice 寫完後把 PDF 撐成巨大的 sparse 檔:它不花沙盒什麼,host 卻要整份讀進記憶體(review 重現讀了 2 GB)。只看 `st_size` 不夠,檔案讀的時候還能長大。 |
+| D14 | 簡報本身也是沙盒的檔案:簡報**這個名字**是 symlink 或不是一般檔案時,不算 hash、不預覽(畫面說無法預覽這份簡報,可下載)。只檢查最後一層:路徑中間的資料夾是 symlink 時仍會跟過去——檔案的其他操作(包括「下載原檔」)本來就都這樣,是另一類問題,不在這個 PR 修。 | 跟著 link 讀,host 會讀它指向的東西(例如 `/dev/zero`,讀不完)。 |
+| D15 | 寫快取失敗(磁碟滿、名稱被佔)時刪掉寫了一半的暫存檔,回「轉檔失敗」(422),不是 500。 | 寫一半的檔案在 infra 區、不算容量,留著就是漏。 |
 
 ## 4. Phases
 
 | Phase | 內容 |
 |---|---|
-| P1 | Sandbox op `get_preview` / `put_preview`(D1),全部實作 + sandbox-host 端點 + http client |
+| P1 | Sandbox op `render_preview` / `get_preview`(D1),全部實作 + sandbox-host 端點 + http client |
 | P2 | 轉檔服務與路由(D2–D5) |
 | P3 | 前端 `SlidesRenderer`(D6) |
 | P4 | 文件:`docs/migrations.md`(D7)、相關說明 |

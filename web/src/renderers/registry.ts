@@ -22,6 +22,7 @@ import { VideoRenderer } from "./VideoRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
 import { PdfRenderer } from "./PdfRenderer";
+import { SlidesRenderer } from "./SlidesRenderer";
 import { ReportRenderer } from "./report/ReportRenderer";
 import { SheetRenderer } from "./SheetRenderer";
 import { JsonRenderer, JsonlRenderer, YamlRenderer } from "./structuredRenderers";
@@ -89,6 +90,9 @@ export const RENDERERS: RendererDef[] = [
   // #117: a .pdf gets the browser's native PDF viewer in an iframe — without
   // this it fell through to the catch-all text editor and showed raw bytes.
   { key: "pdf", match: ext("pdf"), Component: PdfRenderer, editToggle: true },
+  // plan-pptx-preview: a slide deck is converted to PDF in the item's sandbox
+  // and shown like one; Edit shows the file as before.
+  { key: "slides", match: ext("pptx", "ppt", "odp"), Component: SlidesRenderer, editToggle: true },
   {
     key: "image",
     match: ext("png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"),

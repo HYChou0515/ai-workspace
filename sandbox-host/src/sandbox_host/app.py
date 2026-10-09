@@ -27,14 +27,22 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .artifact import ArtifactError
 from .config import SandboxHostSettings
 from .nfs_archive import NfsArchive
-from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import (
+    ExecResult,
+    PreviewFailed,
+    Sandbox,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+    check_preview_key,
+)
 from .tool_cache import ToolCache
 from .tool_resolve import ToolResolver
 
@@ -126,6 +134,18 @@ class _CreateReply(BaseModel):
 
 class _ExistsReply(BaseModel):
     exists: bool
+
+
+def _preview_key(sha: str) -> str:
+    """The cache name, refused as a 422 when it is not a content hash."""
+    try:
+        return check_preview_key(sha)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class _PreviewReply(BaseModel):
+    sha: str | None
 
 
 class _ReadyReply(BaseModel):
@@ -718,6 +738,11 @@ def make_host_app(
     async def _file_not_found(_request: Request, exc: FileNotFoundError) -> JSONResponse:
         return _error(exc)
 
+    @app.exception_handler(PreviewFailed)
+    async def _preview_failed(_request: Request, exc: PreviewFailed) -> JSONResponse:
+        # The converter's reason, named so the app raises it as PreviewFailed.
+        return _error(exc)
+
     @app.get("/sandboxes")
     async def list_sandboxes() -> dict[str, object]:
         """What is ACTUALLY running here, keyed by item.
@@ -821,6 +846,20 @@ def make_host_app(
     async def is_ready(rid: str) -> _ReadyReply:
         ok = await sandbox.is_ready(SandboxHandle(id=rid))
         return _ReadyReply(ready=ok)
+
+    @app.get("/sandboxes/{rid}/preview/{sha}")
+    async def get_preview(rid: str, sha: str) -> Response:
+        # 204, not 404: on this wire 404 means "no such sandbox".
+        data = await sandbox.get_preview(SandboxHandle(id=rid), _preview_key(sha))
+        if data is None:
+            return Response(status_code=204)
+        return Response(content=data, media_type="application/pdf")
+
+    @app.post("/sandboxes/{rid}/preview")
+    async def render_preview(rid: str, path: str, convert: bool = False) -> _PreviewReply:
+        # Only the hash crosses the wire here; the PDF is read by GET, once.
+        sha = await sandbox.render_preview(SandboxHandle(id=rid), path, convert=convert)
+        return _PreviewReply(sha=sha)
 
     @app.get("/sandboxes/{rid}/walk")
     async def walk(

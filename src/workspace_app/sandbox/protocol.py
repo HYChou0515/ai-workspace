@@ -24,6 +24,7 @@ contracts; nothing else in the app needs to change (it's injected via
 `create_app(sandbox=...)`).
 """
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -208,6 +209,32 @@ class WalkResult:
     dirs: list[str]
     unwalked: list[str] = field(default_factory=list)
     truncated: bool = False
+
+
+class PreviewFailed(Exception):
+    """A slide deck could not be converted to its preview; the message is the
+    converter's own reason (docs/plan-pptx-preview.md D5)."""
+
+
+#: The command a sandbox converts a deck with: the output dir and the deck are
+#: appended (`soffice` writes `<stem>.pdf` into the dir).
+PREVIEW_COMMAND: tuple[str, ...] = ("soffice", "--headless", "--convert-to", "pdf", "--outdir")
+#: Wall-clock for one conversion; a big deck in a cold LibreOffice takes a while.
+PREVIEW_TIMEOUT_S = 180.0
+# The most of a converted deck the host will read, keep or serve. What a
+# conversion leaves is the sandbox's, and a sparse file costs it nothing while
+# costing the reader every byte.
+PREVIEW_MAX_BYTES = 200 * 1024 * 1024
+
+_PREVIEW_KEY = re.compile(r"[0-9a-f]{64}")
+
+
+def check_preview_key(sha: str) -> str:
+    """A slide-preview cache name must be a content hash and nothing else: it
+    becomes a path on disk, so a `..` or a `/` must never get that far."""
+    if not _PREVIEW_KEY.fullmatch(sha):
+        raise ValueError(f"not a preview key (64 lowercase hex): {sha!r}")
+    return sha
 
 
 class Sandbox(Protocol):
@@ -434,6 +461,31 @@ class Sandbox(Protocol):
         """#366: True once `mark_ready` ran and the sandbox still lives; False
         for a fresh/rebuilt-but-not-yet-restored sandbox. A vanished sandbox
         raises `SandboxNotFound` like every other op."""
+        ...
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        """The slide preview (a PDF) cached for the deck whose content hashes to
+        `sha`, or None (docs/plan-pptx-preview.md N2, D1).
+
+        Kept OUTSIDE the workspace, like the `.ready` marker: never walked,
+        synced, shown in the file tree or counted against the workspace, and
+        gone when the sandbox is reaped. `sha` must be 64 lowercase hex
+        (`check_preview_key`) — it becomes a file name."""
+        ...
+
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        """The content hash of the slide deck at `path`, once its PDF preview
+        is in this sandbox's cache — or None when it is not there and
+        `convert` is False (docs/plan-pptx-preview.md D1, D2).
+
+        With `convert`, a missing preview is MADE here: the deck is converted
+        through this sandbox's own exec (its uid, its limits), the PDF written
+        beside the workspace and kept under the hash. The PDF itself never
+        comes back through a command's stdout; `get_preview` reads it once.
+        A conversion that fails raises `PreviewFailed` with the converter's own
+        words, and caches nothing. A missing deck is `FileNotFoundError`."""
         ...
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:

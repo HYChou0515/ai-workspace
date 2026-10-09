@@ -51,6 +51,11 @@ export const qk = {
   chatContext: (slug: string, itemId: string, chatId: string) =>
     ["chatContext", slug, itemId, chatId] as const,
   file: (id: string, path: string) => ["file", id, path] as const,
+  /** A slide deck's PDF preview (docs/plan-pptx-preview.md). UNDER `file`, so
+   * whatever refreshes the file — turn end, terminal exec, the refresh button
+   * (`useRefreshFiles` prefix-invalidates `["file", id]`) — asks again too. */
+  slidePreview: (id: string, path: string, confirmed: boolean) =>
+    ["file", id, path, "slidePreview", confirmed] as const,
   // plan-chat-video-export: the export dialog's transcript (what the range
   // picker counts) and the deployment's video ceilings (what the form offers).
   chatTranscript: (id: string, chatId: string) => ["chatTranscript", id, chatId] as const,
