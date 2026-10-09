@@ -33,7 +33,7 @@ function megabytes(bytes: number): string {
 
 /**
  * Everything the viewer shows that is not the PDF: one block, centred in the
- * pane — a heading saying what is going on, a line of detail, then the actions
+ * pane — a heading saying what is going on, a line of detail where there is one, then the actions
  * (Polaris "Empty state": graphic, heading, detail, one primary action and a
  * secondary beside it). `busy` swaps the graphic for an indeterminate bar.
  */
@@ -46,7 +46,7 @@ function SlidesNotice({
   title: string;
   body?: ReactNode;
   busy?: boolean;
-  actions: ReactNode;
+  actions?: ReactNode;
 }) {
   return (
     <div className="slides-notice">
@@ -55,7 +55,6 @@ function SlidesNotice({
           className="slides-notice__progress"
           role="progressbar"
           aria-label={title}
-          aria-busy="true"
         >
           <div className="slides-notice__bar" />
         </div>
@@ -64,7 +63,7 @@ function SlidesNotice({
       )}
       <h3 className="slides-notice__title">{title}</h3>
       {body && <p className="slides-notice__body">{body}</p>}
-      <div className="slides-notice__actions">{actions}</div>
+      {actions && <div className="slides-notice__actions">{actions}</div>}
     </div>
   );
 }
@@ -116,23 +115,26 @@ export function SlidesRenderer({ path }: { path: string }) {
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   // A link that downloads, drawn as the outlined (secondary) button it acts as.
-  const download = (
+  // None where the service has no address for the file (the KB / wiki answer
+  // "" there): a download button that downloads nothing is worse than none.
+  const href = svc.fileDownloadUrl(path);
+  const download = href ? (
     <a
       className="btn"
       data-variant="secondary"
       data-size="md"
-      href={svc.fileDownloadUrl(path)}
+      href={href}
       download
     >
       <Icon name="download" size={14} />
       {t("slides.download")}
     </a>
-  );
+  ) : null;
   if (!preview) {
     return (
       <SlidesNotice
         title={t("slides.unavailable")}
-        body={t("slides.unavailableBody")}
+        body={href ? t("slides.unavailableBody") : undefined}
         actions={download}
       />
     );

@@ -278,7 +278,11 @@ describe("SlidesRenderer — the states around the PDF", () => {
   it("shows progress while converting, and the original is there meanwhile", async () => {
     draw(() => new Promise<never>(() => {}) as never);
 
-    expect(await screen.findByRole("progressbar")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("progressbar", {
+        name: /正在轉成預覽|Converting/,
+      }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: /正在轉成預覽|Converting/ }),
     ).toBeInTheDocument();
@@ -323,6 +327,28 @@ describe("SlidesRenderer — the states around the PDF", () => {
       screen.getByText(/沙盒已達上限|limit for live sandboxes/),
     ).toBeInTheDocument();
     downloadIsAButton();
+  });
+
+  it("offers no download where the service has no address for the file", () => {
+    // The KB / wiki services answer "" for a file they can't serve: a
+    // "download" there would be a button that does nothing (React drops an
+    // empty href) or, where it is kept, saves the page itself.
+    const svc = {
+      scopeId: "k1",
+      fileDownloadUrl: () => "",
+    } as unknown as FileService;
+    renderWithQuery(
+      <FileServiceProvider value={svc}>
+        <SlidesRenderer path="/slides/q3.pptx" />
+      </FileServiceProvider>,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: /無法預覽簡報|can't be previewed here/,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/下載原檔|Download the original/)).toBeNull();
   });
 
   it("says where a deck can't be previewed, with the download as a button", () => {

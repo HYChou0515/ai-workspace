@@ -36,7 +36,7 @@ workspace 檔案檢視依副檔名挑 renderer(`web/src/renderers/registry.ts`);
 | D3 | 新路由 `GET /a/{slug}/items/{id}/files/preview?path=`:權限 `read_content`(N5);讀檔算 sha → 快取命中直接回 `application/pdf` → 沒命中才確保沙盒、轉檔、存快取、回 PDF。沙盒冷的時候先查快取不喚醒——但快取跟沙盒一起回收,所以冷沙盒等於沒命中。 | 一次請求一個答案;前端不必輪詢。 |
 | D4 | 同一個 (item, sha) 同時只轉一次(per-key lock,pod 內);另一個請求等第一個的結果。 | 兩個人同時打開不跑兩次 soffice。 |
 | D5 | 大小門檻(N6)由後端決定:超過門檻又沒帶 `confirm=1` → 回「需要確認」與檔案大小,前端顯示詢問,按「是」再帶 `confirm=1` 重打;快取已經有的直接回,不問。轉檔逾時或失敗 → 回錯誤(說明原因),前端顯示原因與「下載原檔」。門檻先定 20 MB(之後可做成設定)。 | 門檻只寫在一處,前端照後端的回答問;已經轉好的不必再問。 |
-| D6 | 前端 `SlidesRenderer`:`registry.ts` 對 pptx/ppt/odp,`editToggle: true`(切到編輯 = 現在的顯示);預覽模式載入中顯示「正在轉成預覽…」與進度條,成功交給現有 PDF 顯示,太大時顯示詢問(N6),失敗顯示一句說明 + 下載(原因不上畫面,見下方 D5/D6 的修改)。PDF 以外的每個狀態(詢問、轉換中、失敗、拿不到、額度滿、這裡不能預覽)都是同一個置中區塊:圖示或進度條、標題、一行說明、按鈕——主要動作用實心 `Btn`(「轉成預覽」),「下載原檔」用 outlined 按鈕(依 Polaris Empty state、Material 3 按鈕層級;user 指出原本的詢問沒照 UI/UX 守則)。 | N3、N6。 |
+| D6 | 前端 `SlidesRenderer`:`registry.ts` 對 pptx/ppt/odp,`editToggle: true`(切到編輯 = 現在的顯示);預覽模式載入中顯示「正在轉成預覽…」與進度條,成功交給現有 PDF 顯示,太大時顯示詢問(N6),失敗顯示一句說明 + 下載(原因不上畫面,見下方 D5/D6 的修改)。PDF 以外的每個狀態(詢問、轉換中、失敗、拿不到、額度滿、這裡不能預覽)都是同一個置中區塊:圖示或進度條、標題、(有的話)一行說明、按鈕——主要動作用實心 `Btn`(「轉成預覽」),「下載原檔」用 outlined 按鈕(服務拿不到這個檔案的下載網址時——知識庫 / wiki——不畫,也不叫人下載;依 Polaris Empty state、Material 3 按鈕層級;user 指出原本的詢問沒照 UI/UX 守則)。 | N3、N6。 |
 | D7 | `docs/migrations.md` 一條:新路由 + sandbox-host 新端點,兩邊要一起部署(API 先上而 host 還舊時,預覽回錯誤、其他功能不受影響)。 | 運營方要知道兩個 image 都得換。 |
 
 施工中確認的限制〔查證〕:`kind: local` 的 userns jail 裡沒有掛 `/proc`,LibreOffice 起不來(`make_deck` 也一樣):

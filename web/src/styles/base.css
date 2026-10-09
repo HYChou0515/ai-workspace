@@ -434,7 +434,7 @@ textarea.input {
 }
 
 /* A file viewer's stand-in for content it cannot show yet (SlidesRenderer):
-   centred in the pane — graphic, heading, one line of detail, actions. The busy
+   centred in the pane — graphic, heading, a line of detail, actions. The busy
    bar reuses the global progress sweep (and its reduced-motion pulse). */
 .slides-notice {
   height: 100%;
@@ -473,7 +473,6 @@ textarea.input {
   gap: 8px;
   margin-top: 6px;
 }
-.slides-notice__actions a.btn { text-decoration: none; }
 .slides-notice__progress {
   width: 160px;
   height: 3px;
