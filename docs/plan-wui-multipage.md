@@ -191,6 +191,19 @@ breaks top-level `let`/`const` sharing across scripts, cannot reach
   one), such a GET runs as that user. GET routes are expected to change
   nothing; one that does is reachable this way.
 
+- **A served frame reloads on every read the pane shows, a Deploy's included,
+  on the sub-page it was on** (settled in review round 3, author's decision —
+  the user may overturn it). A served page's address is the same before and
+  after a rebuild, so the frame is remounted rather than re-pointed; and it
+  takes its address only when it mounts, so a re-read never navigates a frame
+  the person moved inside. Reloading only when the folder had changed was
+  tried for three rounds — an entry digest (missed stylesheets), then change
+  broadcasts (missed the agent's own edits, which announce nothing) — and kept
+  showing the old page under "✓ Deployed". The cost accepted: a Deploy, a
+  deliberate press by the author, reloads the author's own page even when
+  nothing changed, and a half-filled form on it is lost. Two view files in one
+  folder keep their sub-pages apart.
+
 ### What this overturns in `plan-wui.md`
 
 `plan-wui.md` carries the overturned marker for one replaced mechanism: its

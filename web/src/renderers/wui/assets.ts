@@ -309,9 +309,6 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
  * frame showing a server's 404.
  */
 export async function checkWuiEntry(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
-  // The entry's own text is the `doc`: never put in a frame, but what the pane
-  // compares to decide whether a re-read changed the page (a served page's
-  // address is the same before and after a rebuild).
-  const { html } = await readWuiEntry(fs, folder, entry);
-  return { doc: html, used: [entry] };
+  await readWuiEntry(fs, folder, entry);
+  return { doc: "", used: [entry] };
 }

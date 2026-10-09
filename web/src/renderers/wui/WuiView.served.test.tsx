@@ -12,10 +12,9 @@ import { FileServiceProvider, type FileService } from "../../api/fileService";
 import { HttpError } from "../../api/http";
 import type { FileContent } from "../../api/types";
 import { OpenFileProvider } from "../../hooks/openFile";
-import { publishFileChanged } from "../../lib/fileChangedBus";
 import { autoBuildScope, setWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
-import { QueryWrap } from "../../test/queryWrapper";
+import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
 import { WUI_PROTOCOL } from "./protocol";
 import { openServedWui } from "./served";
@@ -53,23 +52,37 @@ const SITE = {
   "/sales/s.css": "body{}",
 };
 
-function renderPane(
-  opts: { files?: Record<string, string>; spec?: Partial<ViewSpec>; chrome?: WuiChrome; openFile?: (p: string) => void } = {},
-) {
+type PaneOpts = {
+  files?: Record<string, string>;
+  spec?: Partial<ViewSpec>;
+  chrome?: WuiChrome;
+  openFile?: (p: string) => void;
+  path?: string;
+};
+
+function renderPane(opts: PaneOpts = {}) {
   const fs = svc(opts.files ?? { ...SITE });
-  const view = (
-    <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "", ...opts.spec } as ViewSpec} chrome={opts.chrome} />
-  );
-  const utils = render(
-    <QueryWrap>
+  const tree = (o: PaneOpts) => {
+    const view = (
+      <WuiView
+        path={o.path ?? "/sales/page.ai.yaml"}
+        spec={{ view: "wui", entity: "", ...o.spec } as ViewSpec}
+        chrome={o.chrome}
+      />
+    );
+    return (
       <WorkspaceSlugProvider value="rca">
         <FileServiceProvider value={fs}>
-          {opts.openFile ? <OpenFileProvider value={opts.openFile}>{view}</OpenFileProvider> : view}
+          {o.openFile ? <OpenFileProvider value={o.openFile}>{view}</OpenFileProvider> : view}
         </FileServiceProvider>
       </WorkspaceSlugProvider>
-    </QueryWrap>,
-  );
-  return { ...utils, fs };
+    );
+  };
+  const client = makeTestQueryClient();
+  const utils = render(<QueryWrap client={client}>{tree(opts)}</QueryWrap>);
+  /** Show another view file in the same pane — the same folder keeps the instance. */
+  const showView = (o: PaneOpts) => utils.rerender(<QueryWrap client={client}>{tree({ ...opts, ...o })}</QueryWrap>);
+  return { ...utils, fs, showView };
 }
 
 const frame = () => document.querySelector("iframe");
@@ -274,13 +287,16 @@ describe("a served WUI, deployed", () => {
     expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
   });
 
-  it("shows the page Deploy verified when only a stylesheet changed — the entry is not the whole page", async () => {
+  it("shows the page Deploy verified when only a stylesheet changed, and nobody announced it", async () => {
+    /** The agent's own writes broadcast nothing (round 3), so a reload that
+     * waited for a change event left the old page under "Deployed". */
     stubDeploy();
-    renderPane();
+    const files: Record<string, string> = { ...SITE };
+    renderPane({ files });
     await waitFor(() => expect(frame()).toBeInTheDocument());
     const before = frame();
 
-    act(() => publishFileChanged("item1", "/sales/s.css"));
+    files["/sales/s.css"] = "body{color:blue}";
     fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
     await screen.findByRole("textbox", { name: /address/i });
@@ -339,50 +355,21 @@ describe("a served WUI, deployed", () => {
     await waitFor(() => expect(frame()).not.toBe(during));
   });
 
-  it("does not count the page's own save as a change to reload for", async () => {
-    stubDeploy();
-    const { say, replies } = await framed();
-    const before = frame();
-
-    say({ proto: WUI_PROTOCOL, id: "p.1", verb: "writeFile", args: { path: "data.json", text: "{}" } });
-    await waitFor(() => expect(replies).toContainEqual(expect.objectContaining({ id: "p.1", ok: true })));
-    act(() => publishFileChanged("item1", "/sales/data.json"));
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
-
-    await screen.findByRole("textbox", { name: /address/i });
-    await settle();
-    expect(frame()).toBe(before);
-  });
-
-  it("does not move a frame the person navigated inside, on a Deploy that changed nothing", async () => {
-    /** Setting an iframe's `src` IS a navigation. Recomputing it from the
-     * sub-page on every re-read sent the frame to the page it was already on —
-     * a reload, and the half-filled form with it. */
+  it("reloads on every Deploy, on the sub-page the person was on — never a stale page, never back to the entry", async () => {
+    /** Deploy is the author saying "ship this"; what it verified is what the
+     * frame then shows. Telling an unchanged folder from a changed one took
+     * three rounds and still missed writers that announce nothing, so it is
+     * not attempted: the frame reloads, where it was. */
     stubDeploy();
     const { say } = await framed();
     say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
     const before = frame();
-    const src = before!.getAttribute("src");
 
     fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
     await screen.findByRole("textbox", { name: /address/i });
-    await settle();
-    expect(frame()).toBe(before);
-    expect(frame()!.getAttribute("src")).toBe(src);
-  });
-
-  it("does not reload a page Deploy found unchanged — a half-filled form survives it", async () => {
-    stubDeploy();
-    renderPane();
-    await waitFor(() => expect(frame()).toBeInTheDocument());
-    const before = frame();
-
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
-
-    await screen.findByRole("textbox", { name: /address/i });
-    await settle();
-    expect(frame()).toBe(before);
+    await waitFor(() => expect(frame()).not.toBe(before));
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/setup/`);
   });
 });
 
@@ -449,6 +436,25 @@ describe("a remembered sub-page that is gone", () => {
 
     expect(frame()).toBe(before);
     expect(sessionStorage.getItem("wui-page:item1:/sales/page.ai.yaml")).toBe("sales/setup/");
+  });
+});
+
+describe("two view files in one folder", () => {
+  it("opens each on its own page, not the one the other was on", async () => {
+    const files = { ...SITE, "/sales/alt.html": "<html><body>alt</body></html>" };
+    const r = renderPane({ files });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const win = frame()!.contentWindow as Window;
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", { data: { proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` }, source: win }));
+    });
+
+    r.showView({ path: "/sales/alt.ai.yaml", spec: { entry: "alt.html" } as Partial<ViewSpec> });
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/alt.html`));
+
+    // And back: the first one is where it was left.
+    r.showView({ path: "/sales/page.ai.yaml", spec: {} });
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/setup/`));
   });
 });
 

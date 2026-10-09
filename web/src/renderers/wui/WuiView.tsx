@@ -88,13 +88,6 @@ function ServedFrame({
   return <iframe ref={frameRef} title={title} sandbox="allow-scripts" src={at} style={FRAME_STYLE} />;
 }
 
-/** A short fingerprint of a page's text, to tell whether a re-read changed it. */
-function digest(text: string): string {
-  let h = 5381;
-  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
-  return `${text.length}:${h.toString(36)}`;
-}
-
 /** `href` as a path below `base`, or `null` when it is not under it — another
  * site, a protocol-relative address, a climb out with `..`. Resolved first, so
  * no spelling of "somewhere else" survives as text that merely starts right. */
@@ -361,17 +354,18 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     enabled: !serve.isPending,
   });
 
-  /** The sub-page the frame is on, as a path below `servedAt` — what a page
-   * announces as it lands (`{ page }`). A ref, not state: the frame navigated
+  /** The sub-page each view file's frame is on, as a path below `servedAt` —
+   * what a page announces as it lands (`{ page }`). Per view file: two of them
+   * share this pane (it is keyed by folder), and one keyed slot opened the
+   * second on the page the first was on. A ref, not state: the frame navigated
    * there itself, and re-rendering its `src` would load the page a second
-   * time. It is read when the frame is (re)loaded — on open and on Refresh.
-   * Remembered so a reload lands where the person was: the reader's in the
-   * address (`?page=`, shareable), the author's for the tab's life. */
+   * time. It is read when a frame mounts. Remembered so a reload lands where
+   * the person was: the reader's in the address (`?page=`, shareable — a
+   * reader page shows one view file), the author's for the tab's life. */
   const pageKey = `wui-page:${fs.scopeId}:${path}`;
-  const [remembered] = useState(() =>
-    author ? sessionStorage.getItem(pageKey) : new URLSearchParams(window.location.search).get("page"),
-  );
-  const pageRef = useRef<string | null>(null);
+  const pages = useRef(new Map<string, string>());
+  const [readerPage] = useState(() => (author ? null : new URLSearchParams(window.location.search).get("page")));
+  const currentPage = pages.current.get(path) ?? (author ? sessionStorage.getItem(pageKey) : readerPage);
   /** Whether the frame's current load has announced a real page yet. A gone
    * address BEFORE that is the remembered one — drop it and open the entry; a
    * gone address AFTER it is a broken link someone followed, and Back is theirs. */
@@ -388,7 +382,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   const frameSrc =
     servedAt === null || entryAt === null
       ? null
-      : servedAt + (below(servedAt, pageRef.current ?? remembered) ?? entryAt);
+      : servedAt + (below(servedAt, currentPage) ?? entryAt);
   /** A frame that has just mounted has not landed anywhere yet. */
   const frameMounted = useMemo(
     () => () => {
@@ -396,20 +390,6 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     },
     [],
   );
-  /** Has anything the served frame may load changed since it was loaded? A
-   * served page's address is the same before and after, so a re-read that is
-   * a cache hit (a verified Deploy) would leave it showing the old page — the
-   * single-page way reloads because its inlined document changed. The entry's
-   * own text is compared in the frame's key; this covers the rest of the
-   * folder: a write anyone else made inside it, or a build. The page's own
-   * saves do not count — reloading over them is how a half-filled form is lost. */
-  const folderChanged = useRef(false);
-  const [frameEpoch, setFrameEpoch] = useState(0);
-  useEffect(() => {
-    if (!folderChanged.current) return;
-    folderChanged.current = false;
-    setFrameEpoch((e) => e + 1);
-  }, [generation]);
 
   /**
    * Does this page have a build step?
@@ -742,7 +722,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         if (typeof msg.page === "string" && servedAt !== null) {
           const rel = below(servedAt, msg.page);
           if (rel === null) return; // not this page's address — not ours to remember
-          pageRef.current = rel;
+          pages.current.set(path, rel);
           landed.current = true;
           if (author) sessionStorage.setItem(pageKey, rel);
           else rememberInAddress(rel);
@@ -757,7 +737,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           // it and open the entry instead of reloading a dead page forever.
           if (author) sessionStorage.removeItem(pageKey);
           else rememberInAddress(null);
-          pageRef.current = entryAt;
+          if (entryAt !== null) pages.current.set(path, entryAt);
           reload.current();
         } else if (typeof msg.open === "string") {
           void askToOpen(msg.open);
@@ -855,7 +835,6 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // change the pane must follow, and a self-write is an exact path,
         // so the manifest's own path is the whole of that exception.
         const inFolder = changed === folder || changed.startsWith(`${folder}/`);
-        if (inFolder && !own) folderChanged.current = true;
         if (changed === `${folder}/package.json` || (!own && inFolder)) {
           void queryClient.invalidateQueries({ queryKey: qk.wuiBuildable(fs.scopeId, folder) });
         }
@@ -958,9 +937,6 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
           outcome = "ok";
-          // A build rewrote what the frame loads; whatever re-read follows —
-          // a Rebuild's, or a Deploy's verified one — must reload it.
-          folderChanged.current = true;
           note("Build finished.");
           // Fold it away: the page below IS the result, and it is what the
           // reader came for. One line stays, and opens it again.
@@ -1666,12 +1642,14 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       ) : frameSrc !== null ? (
         <ServedFrame
           // A served page's address is the same before and after a rebuild, so
-          // it is reloaded by remounting: when the re-read entry differs, or
-          // anything else in the folder changed since the frame was loaded
-          // (`folderChanged` — someone else's write, or a build). Its own saves
-          // do not reload it. (A Refresh remounts anyway: the read in between
-          // shows "Opening…".)
-          key={`served:${digest(built.data.doc)}:${frameEpoch}`}
+          // it is reloaded by remounting — on every read the pane shows,
+          // including a Deploy's verified one, and on the sub-page it was on.
+          // Telling an unchanged folder from a changed one was tried for three
+          // review rounds and kept missing writers (the agent's edits announce
+          // nothing), so it is not attempted: a Deploy shows what it verified.
+          // Per view file too: two share this pane, and a return to one whose
+          // read is cached would otherwise keep the other's frame.
+          key={`served:${path}:${generation}`}
           frameRef={frameRef}
           title={viewParamString(spec, "title") ?? folder.split("/").pop() ?? "WUI"}
           src={frameSrc}
