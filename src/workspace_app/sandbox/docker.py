@@ -19,6 +19,7 @@ import contextlib
 import io
 import logging
 import os
+import shlex
 import shutil
 import tarfile
 import tempfile
@@ -29,10 +30,12 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from .protocol import (
+    PREVIEW_COMMAND,
     EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
+    PreviewFailed,
     RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
@@ -250,15 +253,31 @@ class DockerSandbox:
         r = await asyncio.to_thread(container.exec_run, ["cat", path], demux=True)
         return (r.output[0] or b"") if r.exit_code == 0 else None
 
-    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
         container = self._require(handle)
-        name = f"{check_preview_key(sha)}.pdf"
-        await asyncio.to_thread(self._mkdir_p, container, _PREVIEW_DIR)
-        ok = await asyncio.to_thread(
-            container.put_archive, _PREVIEW_DIR, _make_single_file_tar(name, data)
+        deck = self._target(path)
+        r = await asyncio.to_thread(container.exec_run, ["sha256sum", deck], demux=True)
+        if r.exit_code != 0:
+            raise FileNotFoundError(path)
+        sha = check_preview_key((r.output[0] or b"").decode().split()[0])
+        cached = f"{_PREVIEW_DIR}/{sha}.pdf"
+        if (await asyncio.to_thread(container.exec_run, ["test", "-f", cached])).exit_code == 0:
+            return sha
+        if not convert:
+            return None
+        out = f"/.preview-out/{sha}"
+        script = (
+            f'mkdir -p {out} {_PREVIEW_DIR} && "$@" {out} {shlex.quote(deck)} '
+            f"&& mv {out}/*.pdf {cached}; rc=$?; rm -rf {out}; exit $rc"
         )
-        if not ok:  # pragma: no cover — docker SDK edge case, no reliable trigger
-            raise RuntimeError(f"docker put_archive failed for preview {name}")
+        r = await asyncio.to_thread(
+            container.exec_run, ["sh", "-c", script, "sh", *PREVIEW_COMMAND], demux=True
+        )
+        if r.exit_code != 0:
+            raise PreviewFailed((r.output[1] or b"").decode(errors="replace").strip()[-2000:])
+        return sha
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         if not await self.exists(handle, path):

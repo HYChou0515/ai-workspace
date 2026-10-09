@@ -1,9 +1,11 @@
-"""The slide-preview cache beside a sandbox (docs/plan-pptx-preview.md N2, D1).
+"""Slide previews, made and kept beside the sandbox (docs/plan-pptx-preview.md
+N1, N2, D1, D2).
 
-A converted PDF is kept OUTSIDE the workspace, named by the deck's content
-hash: never in the file tree, never synced, never counted against the
-workspace, and gone when the sandbox is reaped. Every backend keeps the same
-promise, so one set of tests runs against each.
+The sandbox converts a deck itself — through its own exec, under its own uid
+and limits — and keeps the PDF OUTSIDE the workspace, named by the deck's
+content hash: never in the file tree, never synced, never counted, gone when
+the sandbox is reaped. The PDF never travels through a command's stdout. Every
+backend keeps the same promise, so one set of tests runs against each.
 """
 
 from __future__ import annotations
@@ -17,9 +19,20 @@ from httpx import ASGITransport
 from workspace_app.sandbox.http_client import HttpSandbox
 from workspace_app.sandbox.local_process import LocalProcessSandbox
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxSpec
+from workspace_app.sandbox.protocol import PreviewFailed, SandboxSpec
 
-SHA = hashlib.sha256(b"deck").hexdigest()
+DECK = b"PK\x03\x04 a deck"
+SHA = hashlib.sha256(DECK).hexdigest()
+
+# What the local backend runs instead of `soffice` in a unit test: it is handed
+# the output dir and the deck, and writes `<stem>.pdf` there — soffice's shape.
+FAKE_SOFFICE = (
+    "sh",
+    "-c",
+    'printf "%%PDF-fake" > "$1/$(basename "${2%.*}").pdf"; echo ran >> "$1/../../count"',
+    "sh",
+)
+FAILING_SOFFICE = ("sh", "-c", "echo 'source file could not be loaded' >&2; exit 1", "sh")
 
 
 @pytest.fixture(params=["mock", "local", "http"])
@@ -27,7 +40,7 @@ async def sandbox(request, tmp_path):  # noqa: ANN001, ANN201
     if request.param == "mock":
         yield MockSandbox()
     elif request.param == "local":
-        yield LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+        yield LocalProcessSandbox(root_dir=tmp_path, isolate=False, preview_command=FAKE_SOFFICE)
     else:
         from tests.sandbox.test_http import _ADVERTISE, _fake_host
 
@@ -36,39 +49,58 @@ async def sandbox(request, tmp_path):  # noqa: ANN001, ANN201
             yield HttpSandbox(base_url=_ADVERTISE, client=client)
 
 
-async def test_a_preview_not_yet_made_is_none(sandbox) -> None:  # noqa: ANN001
+async def _with_deck(sandbox):  # noqa: ANN001, ANN202
     h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, DECK, "/slides/q3.pptx")
+    return h
 
-    assert await sandbox.get_preview(h, SHA) is None
+
+async def test_a_deck_not_yet_converted_has_no_preview(sandbox) -> None:  # noqa: ANN001
+    h = await _with_deck(sandbox)
+
+    assert await sandbox.render_preview(h, "/slides/q3.pptx", convert=False) is None
 
 
-async def test_a_stored_preview_comes_back_byte_for_byte(sandbox) -> None:  # noqa: ANN001
-    h = await sandbox.create(SandboxSpec())
-    pdf = b"%PDF-1.7\n\x00\xff binary"
+async def test_converting_names_the_preview_by_the_deck_s_content(sandbox) -> None:  # noqa: ANN001
+    h = await _with_deck(sandbox)
 
-    await sandbox.put_preview(h, SHA, pdf)
+    sha = await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
 
-    assert await sandbox.get_preview(h, SHA) == pdf
+    assert sha == SHA
+    pdf = await sandbox.get_preview(h, SHA)
+    assert pdf is not None and pdf.startswith(b"%PDF")
+
+
+async def test_a_converted_deck_is_found_without_converting_again(sandbox) -> None:  # noqa: ANN001
+    h = await _with_deck(sandbox)
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.render_preview(h, "/slides/q3.pptx", convert=False) == SHA
+
+
+async def test_an_edited_deck_is_a_new_preview(sandbox) -> None:  # noqa: ANN001
+    h = await _with_deck(sandbox)
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    await sandbox.upload(h, DECK + b" edited", "/slides/q3.pptx")
+
+    assert await sandbox.render_preview(h, "/slides/q3.pptx", convert=False) is None
 
 
 async def test_a_preview_is_not_a_workspace_file(sandbox) -> None:  # noqa: ANN001
-    h = await sandbox.create(SandboxSpec())
+    h = await _with_deck(sandbox)
 
-    await sandbox.put_preview(h, SHA, b"%PDF")
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
 
     walked = await sandbox.walk(h, "/")
-    assert walked.files == [] and walked.dirs == []
+    assert [f.path for f in walked.files] == ["/slides/q3.pptx"]
 
 
-async def test_a_preview_is_not_charged_to_the_workspace(tmp_path) -> None:  # noqa: ANN001
-    """Measured where the quota measures (`disk_usage`), on a real disk."""
-    sandbox = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+async def test_a_missing_deck_is_file_not_found(sandbox) -> None:  # noqa: ANN001
     h = await sandbox.create(SandboxSpec())
-    before = await sandbox.disk_usage(h)
 
-    await sandbox.put_preview(h, SHA, b"%PDF" * 100_000)
-
-    assert await sandbox.disk_usage(h) == before
+    with pytest.raises(FileNotFoundError):
+        await sandbox.render_preview(h, "/nope.pptx", convert=True)
 
 
 @pytest.mark.parametrize("key", ["../../etc/passwd", "A" * 64, "abc", SHA + "/x", ""])
@@ -77,16 +109,96 @@ async def test_only_a_content_hash_names_a_preview(sandbox, key: str) -> None:  
     h = await sandbox.create(SandboxSpec())
 
     with pytest.raises(ValueError):
-        await sandbox.put_preview(h, key, b"%PDF")
-    with pytest.raises(ValueError):
         await sandbox.get_preview(h, key)
 
 
 async def test_a_reaped_sandbox_takes_its_previews_with_it(sandbox) -> None:  # noqa: ANN001
     h = await sandbox.create(SandboxSpec(), sandbox_id="item-1")
-    await sandbox.put_preview(h, SHA, b"%PDF")
+    await sandbox.upload(h, DECK, "/q3.pptx")
+    await sandbox.render_preview(h, "/q3.pptx", convert=True)
 
     await sandbox.kill(h)
     again = await sandbox.create(SandboxSpec(), sandbox_id="item-1")
 
     assert await sandbox.get_preview(again, SHA) is None
+
+
+# ── the local backend: the real exec path ──────────────────────────────────
+
+
+def _local(tmp_path, command=FAKE_SOFFICE) -> LocalProcessSandbox:  # noqa: ANN001
+    return LocalProcessSandbox(root_dir=tmp_path, isolate=False, preview_command=command)
+
+
+async def test_the_deck_is_converted_once_however_often_it_is_asked_for(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+
+    for _ in range(3):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    runs = list(tmp_path.rglob("count"))
+    assert len(runs) == 1 and runs[0].read_text().count("ran") == 1
+
+
+async def test_a_failed_conversion_says_why_and_caches_nothing(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path, FAILING_SOFFICE)
+    h = await _with_deck(sandbox)
+
+    with pytest.raises(PreviewFailed, match="could not be loaded"):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.get_preview(h, SHA) is None
+
+
+async def test_a_preview_is_not_charged_to_the_workspace(tmp_path) -> None:  # noqa: ANN001
+    """Measured where the quota measures (`disk_usage`), on a real disk; the
+    converter's scratch output is gone too."""
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+    before = await sandbox.disk_usage(h)
+
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.disk_usage(h) == before
+    assert not list(tmp_path.rglob(".preview-out/*/*.pdf"))
+
+
+async def test_the_failure_is_named_over_the_wire_too() -> None:
+    from tests.sandbox.test_http import _ADVERTISE, _fake_host
+
+    backend = MockSandbox()
+    backend.fail_preview = "source file could not be loaded"
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sandbox = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await _with_deck(sandbox)
+
+        with pytest.raises(PreviewFailed, match="could not be loaded"):
+            await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+
+async def test_a_converter_that_exits_non_zero_is_a_failure_even_with_a_pdf(tmp_path) -> None:  # noqa: ANN001
+    """A crash part-way can leave a PDF behind; it is not the deck, so it is not kept."""
+    half = (
+        "sh",
+        "-c",
+        'printf "%%PDF-half" > "$1/$(basename "${2%.*}").pdf"; echo crashed >&2; exit 1',
+        "sh",
+    )
+    sandbox = _local(tmp_path, half)
+    h = await _with_deck(sandbox)
+
+    with pytest.raises(PreviewFailed, match="crashed"):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.get_preview(h, SHA) is None
+
+
+async def test_the_converter_s_scratch_output_is_cleared(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert not list(tmp_path.rglob(f".preview-out/{SHA}"))

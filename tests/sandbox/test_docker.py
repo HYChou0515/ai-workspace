@@ -213,15 +213,21 @@ def test_parse_find_output_rebases_a_subfolder_walk_onto_workspace_paths():
     assert walked.dirs == ["/node_modules/lodash"]
 
 
-async def test_a_preview_round_trips_outside_the_workspace(sandbox: DockerSandbox):
-    """plan-pptx-preview N2: kept at the container root, beside `.ready`."""
+async def test_a_deck_is_converted_and_kept_outside_the_workspace(sandbox: DockerSandbox):
+    """plan-pptx-preview N2/D2: the container converts it and keeps the PDF at
+    its root, beside `.ready`. The image may lack LibreOffice — then the
+    conversion fails with its reason, which is the other half of the contract."""
     import hashlib
 
+    from workspace_app.sandbox.protocol import PreviewFailed
+
     h = await sandbox.create(SandboxSpec())
-    sha = hashlib.sha256(b"deck").hexdigest()
-    assert await sandbox.get_preview(h, sha) is None
+    await sandbox.upload(h, b"not really a deck", "/q3.pptx")
+    sha = hashlib.sha256(b"not really a deck").hexdigest()
+    assert await sandbox.render_preview(h, "/q3.pptx", convert=False) is None
 
-    await sandbox.put_preview(h, sha, b"%PDF\x00\xff")
-
-    assert await sandbox.get_preview(h, sha) == b"%PDF\x00\xff"
-    assert (await sandbox.walk(h, "/")).files == []
+    try:
+        assert await sandbox.render_preview(h, "/q3.pptx", convert=True) == sha
+    except PreviewFailed:
+        assert await sandbox.get_preview(h, sha) is None
+    assert [f.path for f in (await sandbox.walk(h, "/")).files] == ["/q3.pptx"]

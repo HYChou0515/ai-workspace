@@ -35,6 +35,7 @@ from workspace_app.sandbox.http_client import (
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import (
     EnforcedLimits,
+    PreviewFailed,
     SandboxBusy,
     SandboxHandle,
     SandboxNotFound,
@@ -67,6 +68,10 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
 
     @app.exception_handler(FileNotFoundError)
     async def _fnf(_r: Request, exc: FileNotFoundError) -> JSONResponse:
+        return _err(exc)
+
+    @app.exception_handler(PreviewFailed)
+    async def _pf(_r: Request, exc: PreviewFailed) -> JSONResponse:
         return _err(exc)
 
     @app.post("/sandboxes")
@@ -154,9 +159,10 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
             return Response(status_code=204)
         return Response(content=data, media_type="application/pdf")
 
-    @app.put("/sandboxes/{rid}/preview/{sha}", status_code=204)
-    async def put_preview(rid: str, sha: str, request: Request) -> None:
-        await backend.put_preview(SandboxHandle(id=rid), sha, await request.body())
+    @app.post("/sandboxes/{rid}/preview")
+    async def render_preview(rid: str, path: str, convert: bool) -> dict:
+        sha = await backend.render_preview(SandboxHandle(id=rid), path, convert=convert)
+        return {"sha": sha}
 
     @app.post("/sandboxes/{rid}/mark-ready", status_code=204)
     async def mark_ready(rid: str) -> None:

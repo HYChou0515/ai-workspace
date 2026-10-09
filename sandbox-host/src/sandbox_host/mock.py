@@ -10,6 +10,7 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     OutputSink,
+    PreviewFailed,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
@@ -65,6 +66,8 @@ class MockSandbox:
         # #366: readiness kept outside the file store so it never shows in walk.
         self._ready: set[str] = set()
         self._previews: dict[str, dict[str, bytes]] = {}
+        #: Set to a reason to make every conversion fail with it (tests).
+        self.fail_preview: str | None = None
         # Kept outside the file store like `_ready`: on a real backend the
         # user-env file sits beside the workspace, never inside it.
         self._user_env: dict[str, str] = {}
@@ -119,9 +122,19 @@ class MockSandbox:
         self._require(handle)
         return self._previews.get(handle.id, {}).get(check_preview_key(sha))
 
-    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
-        self._require(handle)
-        self._previews.setdefault(handle.id, {})[check_preview_key(sha)] = data
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        sha = hashlib.sha256(await self.download(handle, path)).hexdigest()
+        previews = self._previews.setdefault(handle.id, {})
+        if sha in previews:
+            return sha
+        if not convert:
+            return None
+        if self.fail_preview is not None:
+            raise PreviewFailed(self.fail_preview)
+        previews[sha] = b"%PDF-mock " + sha.encode()
+        return sha
 
     async def exec(
         self,

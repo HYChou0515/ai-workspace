@@ -119,6 +119,15 @@ class WalkResult:
     truncated: bool = False
 
 
+class PreviewFailed(Exception):
+    """A slide deck could not be converted; the message is the converter's own."""
+
+
+#: What converts a deck: the output dir and the deck are appended.
+PREVIEW_COMMAND: tuple[str, ...] = ("soffice", "--headless", "--convert-to", "pdf", "--outdir")
+#: Wall-clock for one conversion.
+PREVIEW_TIMEOUT_S = 180.0
+
 _PREVIEW_KEY = re.compile(r"[0-9a-f]{64}")
 
 
@@ -198,7 +207,12 @@ class Sandbox(Protocol):
     # beside the workspace like `.ready` — never walked or archived, reaped with
     # the sandbox. `sha` becomes a file name, so only 64 lowercase hex passes.
     async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None: ...
-    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None: ...
+    # Converts the deck at `path` through this sandbox's own exec when asked
+    # (`convert`), keeping the PDF under the deck's hash; returns the hash, or
+    # None when not cached and not asked to convert. Raises PreviewFailed.
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None: ...
     # The item's user-set environment variables, as `KEY=VALUE` lines, placed
     # beside the workspace for the tool launchers to export. Outside the walk
     # scope like `.ready`, so it never reaches the file tree or the archive.

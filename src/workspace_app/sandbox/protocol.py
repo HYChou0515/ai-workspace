@@ -211,6 +211,17 @@ class WalkResult:
     truncated: bool = False
 
 
+class PreviewFailed(Exception):
+    """A slide deck could not be converted to its preview; the message is the
+    converter's own reason (docs/plan-pptx-preview.md D5)."""
+
+
+#: The command a sandbox converts a deck with: the output dir and the deck are
+#: appended (`soffice` writes `<stem>.pdf` into the dir).
+PREVIEW_COMMAND: tuple[str, ...] = ("soffice", "--headless", "--convert-to", "pdf", "--outdir")
+#: Wall-clock for one conversion; a big deck in a cold LibreOffice takes a while.
+PREVIEW_TIMEOUT_S = 180.0
+
 _PREVIEW_KEY = re.compile(r"[0-9a-f]{64}")
 
 
@@ -458,9 +469,19 @@ class Sandbox(Protocol):
         (`check_preview_key`) — it becomes a file name."""
         ...
 
-    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
-        """Store `data` as the preview for the deck hashing to `sha` (see
-        `get_preview`)."""
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        """The content hash of the slide deck at `path`, once its PDF preview
+        is in this sandbox's cache — or None when it is not there and
+        `convert` is False (docs/plan-pptx-preview.md D1, D2).
+
+        With `convert`, a missing preview is MADE here: the deck is converted
+        through this sandbox's own exec (its uid, its limits), the PDF written
+        beside the workspace and kept under the hash. The PDF itself never
+        comes back through a command's stdout; `get_preview` reads it once.
+        A conversion that fails raises `PreviewFailed` with the converter's own
+        words, and caches nothing. A missing deck is `FileNotFoundError`."""
         ...
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:

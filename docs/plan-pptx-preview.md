@@ -39,6 +39,13 @@ workspace 檔案檢視依副檔名挑 renderer(`web/src/renderers/registry.ts`);
 | D6 | 前端 `SlidesRenderer`:`registry.ts` 對 pptx/ppt/odp,`editToggle: true`(切到編輯 = 現在的顯示);預覽模式載入中顯示「轉換中…」,成功交給現有 PDF 顯示,太大時顯示詢問(N6),失敗顯示原因 + 下載。 | N3、N6。 |
 | D7 | `docs/migrations.md` 一條:新路由 + sandbox-host 新端點,兩邊要一起部署(API 先上而 host 還舊時,預覽回錯誤、其他功能不受影響)。 | 運營方要知道兩個 image 都得換。 |
 
+施工中確認的限制〔查證〕:`kind: local` 的 userns jail 裡沒有掛 `/proc`,LibreOffice 起不來(`make_deck` 也一樣);
+轉檔會失敗並說出原因(`/proc not mounted`)、不快取。正式環境的 sandbox-host 是 uid + cgroup 隔離、沒有 jail,可以轉。
+
+D2 施工時改過〔施工〕:原本「exec 轉完把 PDF `cat` 到 stdout、再存回快取」會讓整份 PDF 在 host 與 API 之間來回兩趟、
+暫存在 API 記憶體(user 指出)。改成 `render_preview(path, convert)`:host 自己算 hash、在 exec 裡把輸出寫進沙盒自己的
+`$HOME/.preview-out/<sha>/`、再搬進 `.preview/<sha>.pdf`;API 只拿 hash,再用 `get_preview` 讀一次。`put_preview` 不對外。
+
 ## 4. Phases
 
 | Phase | 內容 |

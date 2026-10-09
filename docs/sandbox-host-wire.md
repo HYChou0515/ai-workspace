@@ -44,7 +44,7 @@ sandbox。
 | `POST /sandboxes/{rid}/mark-ready` | — | `204` | 標記沙盒「已完整還原、可信」(#366) |
 | `GET /sandboxes/{rid}/ready` | — | `200 {ready: bool}` | 讀 ready 狀態(#366) |
 | `GET /sandboxes/{rid}/preview/{sha}` | — | `200` PDF / `204` 沒有 | 讀簡報預覽快取(`plan-pptx-preview`);`sha` 不是 64 位小寫 hex → `422`。`204` 而不是 `404`:這條 wire 上 `404` 是「沒有這個沙盒」 |
-| `PUT /sandboxes/{rid}/preview/{sha}` | raw PDF body | `204` | 存簡報預覽快取:放在 workspace 旁(像 `.ready`),不進 walk、不算容量,隨沙盒回收 |
+| `POST /sandboxes/{rid}/preview?path=&convert=` | — | `200 {sha: str\|null}` | 簡報預覽:host 算檔案 hash、查快取;`convert=true` 且沒有快取時,用沙盒自己的 exec(uid / cgroup / 時限)跑 `soffice`,輸出寫進沙盒的 `$HOME/.preview-out/` 再搬進 workspace 旁的 `.preview/<sha>.pdf`(不進 walk、不算容量、隨沙盒回收)。只回 hash,PDF 用上一列讀一次——不經 stdout。轉檔失敗 → `404 {error: "PreviewFailed", detail: <轉檔器的原因>}` |
 | `GET /sandboxes/{rid}/walk?root=` | — | `200 {entries: [{path,size,version}]}` | walk |
 | `DELETE /sandboxes/{rid}/file?path=` | — | `204` | 刪除 |
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |

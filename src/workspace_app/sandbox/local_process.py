@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import shlex
@@ -36,9 +37,12 @@ from functools import cache
 from pathlib import Path
 
 from .protocol import (
+    PREVIEW_COMMAND,
+    PREVIEW_TIMEOUT_S,
     EnforcedLimits,
     ExecResult,
     OutputSink,
+    PreviewFailed,
     RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
@@ -336,6 +340,19 @@ _READY_MARKER = ".ready"
 # the workspace like `.ready`, so never walked, synced or counted, and reaped
 # with the sandbox dir.
 _PREVIEW_DIR = ".preview"
+# The converter's scratch output, under the sandbox's own HOME (writable by the
+# exec uid, in the infra area); moved into `.preview` and removed.
+_PREVIEW_OUT = ".preview-out"
+
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
@@ -407,8 +424,12 @@ class LocalProcessSandbox:
         log_timeout: float = 60.0,
         isolate: bool | None = None,
         tools_dir: Path | None = None,
+        preview_command: Sequence[str] = PREVIEW_COMMAND,
     ) -> None:
         self._root = root_dir or Path(tempfile.gettempdir()) / "workspace-app-sandbox"
+        # plan-pptx-preview D2: what converts a deck — `soffice`, or a stand-in
+        # in a unit test (CI has no LibreOffice).
+        self._preview_command = tuple(preview_command)
         self._root.mkdir(parents=True, exist_ok=True)
         # Shared, prebuilt provisioned-tools dir, made available at /.tools
         # (outside the workspace): read-only bind-mount when jailed, symlink when
@@ -616,18 +637,51 @@ class LocalProcessSandbox:
         except FileNotFoundError:
             return None
 
-    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
-        folder = self._require(handle) / _PREVIEW_DIR
-        path = folder / f"{check_preview_key(sha)}.pdf"
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        root = self._require(handle)
+        deck = self._resolve(self._workspace(handle), path)
+        sha = await asyncio.to_thread(_sha256_of, deck)
+        cached = root / _PREVIEW_DIR / f"{sha}.pdf"
+        if await asyncio.to_thread(cached.is_file):
+            return sha
+        if not convert:
+            return None
+        # The converter writes into the sandbox's own HOME (infra area, owned by
+        # the exec uid, a sibling of the workspace) — never the workspace, never
+        # stdout. Spelled as the exec sees it: chroot-relative under the jail.
+        home = f"/{_HOME}" if self._isolate else str(root / _HOME)
+        out_rel = f"{_PREVIEW_OUT}/{sha}"
+        rel_deck = "./" + deck.relative_to(self._workspace(handle)).as_posix()
+        # The dir is made by the exec itself, as the sandbox's uid — one made
+        # here, by this process, would not be writable by an isolated exec.
+        script = 'out="$1"; deck="$2"; shift 2; mkdir -p "$out" && exec "$@" "$out" "$deck"'
+        result = await self.exec(
+            handle,
+            ["sh", "-c", script, "sh", f"{home}/{out_rel}", rel_deck, *self._preview_command],
+            exec_timeout=PREVIEW_TIMEOUT_S,
+        )
+        out_dir = root / _HOME / out_rel
+        made = sorted(out_dir.glob("*.pdf")) if out_dir.is_dir() else []
+        # Kept only from a clean exit: a crash part-way can leave a PDF behind
+        # that is not the deck.
+        ok = result.exit_code == 0 and bool(made)
 
-        def write() -> None:
-            folder.mkdir(exist_ok=True)
-            # Whole or absent: a reader racing this write never gets half a PDF.
-            part = path.with_suffix(".part")
-            part.write_bytes(data)
-            part.replace(path)
+        def keep() -> None:
+            if ok:
+                cached.parent.mkdir(exist_ok=True)
+                # Whole or absent: a racing reader never gets half a PDF.
+                made[0].replace(cached)
+            shutil.rmtree(out_dir, ignore_errors=True)
 
-        await asyncio.to_thread(write)
+        await asyncio.to_thread(keep)
+        if not ok:
+            reason = result.stderr.decode(errors="replace").strip() or (
+                f"the converter exited {result.exit_code} without writing a PDF"
+            )
+            raise PreviewFailed(reason[-2000:])
+        return sha
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
         """The per-sandbox `$HOME` (#393/#600), guaranteed at the point it is USED.

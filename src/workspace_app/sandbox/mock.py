@@ -8,6 +8,7 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     OutputSink,
+    PreviewFailed,
     RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
@@ -70,6 +71,8 @@ class MockSandbox:
         # real backend). A handle id here ⇔ its sandbox is marked authoritative.
         self._ready: set[str] = set()
         self._previews: dict[str, dict[str, bytes]] = {}
+        #: Set to a reason to make every conversion fail with it (tests).
+        self.fail_preview: str | None = None
         # handle id -> the item it serves, `None` for an anonymous create.
         self._item_of: dict[str, str | None] = {}
 
@@ -137,9 +140,19 @@ class MockSandbox:
         self._require(handle)
         return self._previews.get(handle.id, {}).get(check_preview_key(sha))
 
-    async def put_preview(self, handle: SandboxHandle, sha: str, data: bytes) -> None:
-        self._require(handle)
-        self._previews.setdefault(handle.id, {})[check_preview_key(sha)] = data
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        sha = hashlib.sha256(await self.download(handle, path)).hexdigest()
+        previews = self._previews.setdefault(handle.id, {})
+        if sha in previews:
+            return sha
+        if not convert:
+            return None
+        if self.fail_preview is not None:
+            raise PreviewFailed(self.fail_preview)
+        previews[sha] = b"%PDF-mock " + sha.encode()
+        return sha
 
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         self._require(handle)
