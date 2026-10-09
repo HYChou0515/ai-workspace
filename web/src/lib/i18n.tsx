@@ -1845,8 +1845,16 @@ export const messages = {
   "lookup.copyUrl": { "zh-TW": "複製網址", en: "Copy the address" },
   "lookup.found": { "zh-TW": "查到的內容", en: "What you found" },
   "lookup.foundHint": {
-    "zh-TW": "從網頁複製貼上,連結和表格會保留成 Markdown",
-    en: "Paste from the page — links and tables are kept as Markdown",
+    "zh-TW": "在網頁上選取要的段落再複製(避免全選),貼上後連結和表格會保留成 Markdown;截圖可以直接貼上",
+    en: "Select the part you need on the page (not the whole page) and copy it — links and tables are kept as Markdown; screenshots can be pasted too",
+  },
+  "lookup.foundHintText": {
+    "zh-TW": "在網頁上選取要的段落再複製(避免全選),貼上後連結和表格會保留成 Markdown",
+    en: "Select the part you need on the page (not the whole page) and copy it — links and tables are kept as Markdown",
+  },
+  "lookup.pasteImageRefused": {
+    "zh-TW": "你在這個 workspace 不能附檔,貼上的圖片沒有加入",
+    en: "You can't attach files in this workspace — the pasted image was not added",
   },
   "lookup.attach": { "zh-TW": "附加檔案", en: "Attach files" },
   "lookup.choose": { "zh-TW": "選擇檔案", en: "Choose files" },

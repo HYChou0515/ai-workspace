@@ -257,7 +257,9 @@ export function OutsideLookupCard({
             <label className="outside-lookup-label" htmlFor={`${ids}-c`}>
               {t("lookup.found")}
             </label>
-            <p className="outside-lookup-hint">{t("lookup.foundHint")}</p>
+            <p className="outside-lookup-hint">
+              {t(canAttach ? "lookup.foundHint" : "lookup.foundHintText")}
+            </p>
             <textarea
               id={`${ids}-c`}
               className="input outside-lookup-paste"
@@ -266,8 +268,23 @@ export function OutsideLookupCard({
               readOnly={locked}
               onChange={(e) => setContent(e.target.value)}
               onPaste={(e) => {
+                if (locked) return;
+                // D10: a pasted image (a screenshot, "copy image") is an
+                // attachment — a text box has nowhere to put it.
+                const images = Array.from(e.clipboardData.files ?? []).filter((f) =>
+                  f.type.startsWith("image/"),
+                );
+                if (images.length) {
+                  if (canAttach) setFiles((f) => [...f, ...images]);
+                  else setHint(t("lookup.pasteImageRefused"));
+                }
                 const html = e.clipboardData.getData("text/html");
-                if (!html || locked) return; // plain text: the browser's own paste
+                if (!html) {
+                  // Plain text: the browser's own paste. An image alone has no
+                  // text to put in the box.
+                  if (images.length) e.preventDefault();
+                  return;
+                }
                 e.preventDefault();
                 const md = htmlToMarkdown(html);
                 const box = e.currentTarget;

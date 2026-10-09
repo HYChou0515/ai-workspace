@@ -144,6 +144,71 @@ describe("bringing it back", () => {
     expect(box.value).toBe("");
   });
 
+  // D10: a screenshot or a "copied image" pasted on the card is an attachment
+  // — the paste box is text, and used to swallow it without a word.
+  it("takes a pasted image as an attachment, and sends it", async () => {
+    const { client } = draw();
+    const box = screen.getByLabelText("查到的內容") as HTMLTextAreaElement;
+    const shot = new File(["png"], "image.png", { type: "image/png" });
+
+    fireEvent.paste(box, { clipboardData: { getData: () => "", files: [shot] } });
+
+    expect(screen.getByText("image.png")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "送出" }));
+    await waitFor(() => expect(client.answer).toHaveBeenCalled());
+    expect(sent(client)).toMatchObject({ kind: "found", attachments: [shot] });
+  });
+
+  it("keeps a pasted page's text AND its pasted image", () => {
+    draw();
+    const box = screen.getByLabelText("查到的內容") as HTMLTextAreaElement;
+    const img = new File(["png"], "chart.png", { type: "image/png" });
+
+    fireEvent.paste(box, {
+      clipboardData: {
+        getData: (t: string) => (t === "text/html" ? "<p>營收</p>" : ""),
+        files: [img],
+      },
+    });
+
+    expect(box.value).toBe("營收");
+    expect(screen.getByText("chart.png")).toBeInTheDocument();
+  });
+
+  it("does not take a pasted file that is not an image", () => {
+    draw();
+    const box = screen.getByLabelText("查到的內容") as HTMLTextAreaElement;
+    const doc = new File(["x"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.paste(box, { clipboardData: { getData: () => "", files: [doc] } });
+
+    expect(screen.queryByText("notes.txt")).toBeNull();
+  });
+
+  it("says a pasted image cannot be attached by someone who may not add files", () => {
+    draw({ canAddFiles: false });
+    const box = screen.getByLabelText("查到的內容") as HTMLTextAreaElement;
+    const shot = new File(["png"], "image.png", { type: "image/png" });
+
+    fireEvent.paste(box, { clipboardData: { getData: () => "", files: [shot] } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("不能附檔");
+    expect(screen.queryByText("image.png")).toBeNull();
+  });
+
+  it("asks for a selection rather than the whole page (D11)", () => {
+    draw();
+
+    expect(screen.getByText(/選取要的段落再複製/)).toHaveTextContent("截圖可以直接貼上");
+  });
+
+  it("does not offer screenshots to someone who may not attach them", () => {
+    draw({ canAddFiles: false });
+
+    const hint = screen.getByText(/選取要的段落再複製/);
+    expect(hint).not.toHaveTextContent("截圖");
+  });
+
   it("sends what was found, the source, the button pressed and the files", async () => {
     const { client } = draw();
     fireEvent.click(await screen.findByRole("button", { name: /Google/ }));
