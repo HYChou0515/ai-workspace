@@ -1,0 +1,365 @@
+// @vitest-environment happy-dom
+/**
+ * The pane with a page served from its own address (`docs/plan-wui-multipage.md`,
+ * Phase 4). Whether the deployment CAN serve it is `openServedWui`'s question,
+ * answered in its own tests; here it is answered by hand, both ways.
+ */
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { FileServiceProvider, type FileService } from "../../api/fileService";
+import { HttpError } from "../../api/http";
+import type { FileContent } from "../../api/types";
+import { OpenFileProvider } from "../../hooks/openFile";
+import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
+import { QueryWrap } from "../../test/queryWrapper";
+import type { ViewSpec } from "../entity/types";
+import { WUI_PROTOCOL } from "./protocol";
+import { openServedWui } from "./served";
+import { WuiView, type WuiChrome } from "./WuiView";
+
+const served = vi.hoisted(() => ({ base: "http://localhost:3000/api/wui-content/TOK/" as string | null }));
+vi.mock("./served", () => ({ openServedWui: vi.fn(async () => served.base) }));
+
+const BASE = "http://localhost:3000/api/wui-content/TOK/";
+const ORIGIN = "http://localhost:3000";
+
+const text = (path: string, body: string): FileContent => ({
+  kind: "text",
+  path,
+  size: body.length,
+  text: body,
+  encoding: "utf-8",
+});
+
+function svc(files: Record<string, string>): FileService {
+  return {
+    scopeId: "item1",
+    caps: { write: true, delete: true },
+    readFile: vi.fn(async (path: string) => {
+      if (!(path in files)) throw new HttpError(404, `read ${path} failed: 404`);
+      return text(path, files[path]);
+    }),
+    writeFile: vi.fn(),
+    fileDownloadUrl: (path: string) => `/api/files${path}`,
+  } as unknown as FileService;
+}
+
+const SITE = {
+  "/sales/index.html": "<html><head><link rel=stylesheet href=s.css></head><body>home</body></html>",
+  "/sales/s.css": "body{}",
+};
+
+function renderPane(
+  opts: { files?: Record<string, string>; spec?: Partial<ViewSpec>; chrome?: WuiChrome; openFile?: (p: string) => void } = {},
+) {
+  const fs = svc(opts.files ?? { ...SITE });
+  const view = (
+    <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "", ...opts.spec } as ViewSpec} chrome={opts.chrome} />
+  );
+  const utils = render(
+    <QueryWrap>
+      <WorkspaceSlugProvider value="rca">
+        <FileServiceProvider value={fs}>
+          {opts.openFile ? <OpenFileProvider value={opts.openFile}>{view}</OpenFileProvider> : view}
+        </FileServiceProvider>
+      </WorkspaceSlugProvider>
+    </QueryWrap>,
+  );
+  return { ...utils, fs };
+}
+
+const frame = () => document.querySelector("iframe");
+
+async function framed(opts: Parameters<typeof renderPane>[0] = {}) {
+  const r = renderPane(opts);
+  await waitFor(() => expect(frame()).toBeInTheDocument());
+  const win = frame()!.contentWindow as Window;
+  const replies: unknown[] = [];
+  vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+  const say = (data: unknown) =>
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", { data, source: win }));
+    });
+  return { ...r, say, replies };
+}
+
+/** happy-dom loads an `<iframe src>` over a real socket, and no `fetch` stub
+ * sees it. Answered here, in the browser's own interceptor, so the frame gets
+ * a window to speak through and nothing leaves the process. */
+type HappyWindow = Window & {
+  happyDOM: { settings: { fetch: { interceptor: unknown } } };
+};
+
+beforeEach(() => {
+  (window as unknown as HappyWindow).happyDOM.settings.fetch.interceptor = {
+    beforeAsyncRequest: async () => new Response("<html><body></body></html>", { headers: { "content-type": "text/html" } }),
+  };
+  served.base = BASE;
+  vi.mocked(openServedWui).mockClear();
+  sessionStorage.clear();
+  window.history.replaceState(null, "", "/");
+});
+
+afterEach(() => {
+  (window as unknown as HappyWindow).happyDOM.settings.fetch.interceptor = null;
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("a served WUI", () => {
+  it("loads the page from its own address instead of assembling it", async () => {
+    const { fs } = renderPane();
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+    expect(frame()!.hasAttribute("srcdoc")).toBe(false);
+    // The boundary is unchanged: scripts, and NOT same-origin.
+    expect(frame()!.getAttribute("sandbox")).toBe("allow-scripts");
+    // Nothing is inlined — the browser fetches the siblings itself.
+    expect(vi.mocked(fs.readFile).mock.calls.map((c) => c[0])).not.toContain("/sales/s.css");
+  });
+
+  it("is shown the single-page way where the deployment cannot serve it", async () => {
+    served.base = null;
+    renderPane();
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("srcdoc")).toContain("home");
+    expect(frame()!.hasAttribute("src")).toBe(false);
+  });
+
+  it("follows a built page's entry into its folder", async () => {
+    renderPane({
+      files: { "/sales/site/index.html": "<html><body>docs</body></html>" },
+      spec: { entry: "site/index.html" } as Partial<ViewSpec>,
+    });
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/site/index.html`);
+  });
+
+  it("still names a missing entry in plain language rather than loading a 404", async () => {
+    renderPane({ files: {} });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("index.html");
+    expect(frame()).toBeNull();
+  });
+
+  it("tells each page which part of the address is still the page, so a link out of it can be caught", async () => {
+    const { say, replies } = await framed();
+
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+
+    expect(replies).toContainEqual({ proto: WUI_PROTOCOL, event: "scope", prefix: `${BASE}sales/` });
+  });
+
+  it("keeps the workspace on the sub-page it was on across a reload", async () => {
+    const first = await framed();
+    first.say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/#install` });
+    first.unmount();
+
+    renderPane();
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/setup/#install`);
+  });
+
+  it("does not reload the frame when a page announces itself", async () => {
+    const { say } = await framed();
+    const before = frame();
+
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+
+    expect(frame()).toBe(before);
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+  });
+
+  it("ignores an announced address that is not this page's", async () => {
+    const first = await framed();
+    first.say({ proto: WUI_PROTOCOL, page: `${ORIGIN}/api/a/rca/items/x/files/secret` });
+    first.unmount();
+
+    renderPane();
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+  });
+
+  it("reloads the page it is on when Refresh is pressed", async () => {
+    const { say } = await framed();
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+    const before = frame();
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+
+    await waitFor(() => expect(frame()).not.toBe(before));
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/setup/`));
+  });
+});
+
+describe("asking again", () => {
+  it("asks again on Refresh whether the page can be served — the last answer may have been a moment's", async () => {
+    served.base = null;
+    renderPane();
+    await waitFor(() => expect(frame()?.hasAttribute("srcdoc")).toBe(true));
+
+    served.base = BASE;
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+
+    await waitFor(() => expect(frame()?.getAttribute("src")).toBe(`${BASE}sales/index.html`));
+  });
+
+  it("asks again on a reader's Try again", async () => {
+    served.base = null;
+    renderPane({ files: {}, chrome: "viewer" });
+    await screen.findByRole("button", { name: /try again/i });
+
+    served.base = BASE;
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(vi.mocked(openServedWui)).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("a served WUI, deployed", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the page Deploy verified, even though its address has not changed", async () => {
+    /** The single-page way reloads because the document changed; a served page
+     * has the same address before and after, so without a reload of its own
+     * the frame would go on showing the page from before the Deploy. */
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) =>
+        String(url).includes("/wui/deploy") && init?.method === "POST"
+          ? new Response(
+              JSON.stringify({
+                slug: "rca",
+                item_id: "item1",
+                item_title: "Item one",
+                path: "/sales/page.ai.yaml",
+                title: "Sales",
+                deployed_by: "u",
+                deployed_at: 1,
+                can_remove: true,
+              }),
+              { headers: { "content-type": "application/json" } },
+            )
+          : Promise.reject(new Error(`unexpected ${String(url)}`)),
+      ),
+    );
+    renderPane();
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const before = frame();
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    await screen.findByRole("textbox", { name: /address/i });
+    await waitFor(() => expect(frame()).not.toBe(before));
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+  });
+});
+
+describe("a served WUI's reader page", () => {
+  it("opens on the sub-page its address names", async () => {
+    window.history.replaceState(null, "", "/w/rca/item1/sales/page.ai.yaml?page=sales%2Fsetup%2F");
+
+    renderPane({ chrome: "viewer" });
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/setup/`);
+  });
+
+  it("writes the page it lands on into the address, so the address can be shared", async () => {
+    window.history.replaceState(null, "", "/w/rca/item1/sales/page.ai.yaml?x=1");
+    const { say } = await framed({ chrome: "viewer" });
+
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/#install` });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("sales/setup/#install");
+    expect(params.get("x")).toBe("1");
+    expect(window.location.pathname).toBe("/w/rca/item1/sales/page.ai.yaml");
+  });
+
+  it.each([
+    ["a climb out of the page", "..%2F..%2Fapi%2Fa%2Frca"],
+    ["another site", "https%3A%2F%2Fevil.test%2F"],
+    ["a protocol-relative address", "%2F%2Fevil.test%2F"],
+  ])("refuses %s in the address and opens the entry instead", async (_why, page) => {
+    window.history.replaceState(null, "", `/w/rca/item1/sales/page.ai.yaml?page=${page}`);
+
+    renderPane({ chrome: "viewer" });
+
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+  });
+});
+
+describe("leaving a WUI", () => {
+  it("asks the reader before opening a link to another site, naming where it goes", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const { say } = await framed();
+
+    say({ proto: WUI_PROTOCOL, open: "https://example.com/x?y=1" });
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("example.com");
+    expect(dialog).toHaveTextContent("https://example.com/x?y=1");
+    expect(open).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    await waitFor(() => expect(open).toHaveBeenCalledWith("https://example.com/x?y=1", "_blank", "noopener,noreferrer"));
+  });
+
+  it("opens nothing when the reader cancels", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const { say } = await framed();
+
+    say({ proto: WUI_PROTOCOL, open: "https://example.com/" });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("never offers an address that is not a place to visit", async () => {
+    const { say } = await framed();
+
+    say({ proto: WUI_PROTOCOL, open: "javascript:alert(1)" });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("asks once, not once per request, while a question is already up", async () => {
+    const { say } = await framed();
+
+    say({ proto: WUI_PROTOCOL, open: "https://a.test/" });
+    say({ proto: WUI_PROTOCOL, open: "https://b.test/" });
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("a.test");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("opens a workspace file a link points at, in the workspace", async () => {
+    const openFile = vi.fn();
+    const { say } = await framed({ openFile });
+
+    say({ proto: WUI_PROTOCOL, leave: "/notes.md" });
+
+    expect(openFile).toHaveBeenCalledWith("/notes.md");
+  });
+
+  it("tells a reader that such a link points into the workspace", async () => {
+    const { say } = await framed({ chrome: "viewer" });
+
+    say({ proto: WUI_PROTOCOL, leave: "/notes.md" });
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("/notes.md");
+  });
+});

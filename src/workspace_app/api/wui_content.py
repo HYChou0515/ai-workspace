@@ -195,7 +195,8 @@ class PassBody(BaseModel):
 
 class PassOut(BaseModel):
     """Where the frame loads from: ``base`` + the workspace path, minus its
-    leading slash."""
+    leading slash. API-relative, like every route path the frontend hands to
+    `apiFetch`, so a deploy under a sub-path prefixes it the same way."""
 
     base: str
 
@@ -238,7 +239,7 @@ def register_wui_content_routes(
         item = locator.require_access(slug, item_id, "read_content")
         folder = _workspace_path(body.folder)
         token = passes.mint(slug=slug, item_id=item, folder=folder, user=get_user_id())
-        return PassOut(base=f"/api/wui-content/{token}/")
+        return PassOut(base=f"/wui-content/{token}/")
 
     def _headers() -> dict[str, str]:
         return {

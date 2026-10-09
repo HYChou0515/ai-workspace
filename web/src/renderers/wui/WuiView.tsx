@@ -31,6 +31,8 @@ import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { ItemEnvModal } from "../../components/ItemEnvModal";
 import { PageIdentityControls } from "../../components/PageIdentity";
 import { HttpError } from "../../api/http";
+import { encodePath } from "../../api/refPath";
+import { useDialog } from "../../components/Dialog";
 import { wuiAddress, wuiApi } from "../../api/wui";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
@@ -41,9 +43,10 @@ import { itemCallTool } from "./api";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
-import { buildWuiDoc, readAsset, WuiEntryMissing, type AssetRead } from "./assets";
+import { buildWuiDoc, checkWuiEntry, readAsset, WuiEntryMissing, type AssetRead } from "./assets";
 import { dispatchWuiRequest } from "./bridge";
-import { wuiFolder } from "./paths";
+import { resolveInFolder, resolveReadPath, wuiFolder } from "./paths";
+import { openServedWui } from "./served";
 import { createSelfWrites } from "./selfWrites";
 import { TryAgain } from "./TryAgain";
 import { WUI_PROTOCOL, isWuiRequest, refuse, type WuiEvent } from "./protocol";
@@ -57,6 +60,38 @@ import {
 /** The conventional entry, overridable with `entry:` in the view file. */
 export const DEFAULT_ENTRY = "index.html";
 
+/** `href` as a path below `base`, or `null` when it is not under it — another
+ * site, a protocol-relative address, a climb out with `..`. Resolved first, so
+ * no spelling of "somewhere else" survives as text that merely starts right. */
+function below(base: string, href: string | null): string | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href, base).href;
+    return url.startsWith(base) && url.length > base.length ? url.slice(base.length) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The reader's address, with the sub-page in it — replaced, not pushed: the
+ * frame's own navigation already made the history entry, so Back and Forward
+ * are the browser's. */
+function rememberInAddress(page: string): void {
+  const params = new URLSearchParams(window.location.search);
+  params.set("page", page);
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params}${window.location.hash}`);
+}
+
+/** What a page says about leaving itself (`runtime.ts`): where it landed, a
+ * link to another site, a link to a file in the item. */
+type PageMessage = { proto: typeof WUI_PROTOCOL; page?: unknown; open?: unknown; leave?: unknown };
+
+function isPageMessage(data: unknown): data is PageMessage {
+  if (!data || typeof data !== "object") return false;
+  const m = data as Record<string, unknown>;
+  return m.proto === WUI_PROTOCOL && ("page" in m || "open" in m || "leave" in m) && !("id" in m);
+}
+
 /**
  * The pane's document, as ONE query definition. The pane observes it and
  * Deploy fetches it — the same options object, so what Deploy verified is,
@@ -67,10 +102,19 @@ export const DEFAULT_ENTRY = "index.html";
  * back with every test green. The folder is DERIVED from the path here, so a
  * caller cannot hand the key one page and the read another.
  */
-function wuiDocQuery(fs: FileService, path: string, entry: string, instance: number, generation: number) {
+function wuiDocQuery(
+  fs: FileService,
+  path: string,
+  entry: string,
+  instance: number,
+  generation: number,
+  served: boolean,
+) {
   return queryOptions({
-    queryKey: qk.wuiDoc(fs.scopeId, path, instance, generation),
-    queryFn: () => buildWuiDoc(fs, wuiFolder(path), entry),
+    queryKey: qk.wuiDoc(fs.scopeId, path, instance, generation, served),
+    // A served page is fetched by the browser from its own address, so only its
+    // entry is checked; the single-page way assembles the whole document.
+    queryFn: () => (served ? checkWuiEntry : buildWuiDoc)(fs, wuiFolder(path), entry),
     staleTime: Infinity,
     retry: false,
   });
@@ -251,7 +295,49 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   // fresh document — and a fresh frame, so the page's state goes with it.
   const [generation, setGeneration] = useState(0);
 
-  const built = useQuery(wuiDocQuery(fs, path, entry, instance, generation));
+  const slug = useWorkspaceSlug();
+  /** Where this folder is served from — `<prefix>/wui-content/<pass>/`, as an
+   * absolute URL — or `null` for the single-page way: no item to mint a pass
+   * against, or a deployment that turns a cookie-less request away
+   * (`served.ts`). Decided once per pane; Refresh asks again. */
+  const serve = useQuery({
+    queryKey: qk.wuiServe(fs.scopeId, folder),
+    queryFn: async () => {
+      const at = slug ? await openServedWui(slug, fs.scopeId, folder) : null;
+      return at === null ? null : new URL(at, window.location.href).href;
+    },
+    staleTime: Infinity,
+    retry: false,
+  });
+  const servedAt = serve.data ?? null;
+  const served = servedAt !== null;
+
+  const built = useQuery({
+    ...wuiDocQuery(fs, path, entry, instance, generation, served),
+    enabled: !serve.isPending,
+  });
+
+  /** The sub-page the frame is on, as a path below `servedAt` — what a page
+   * announces as it lands (`{ page }`). A ref, not state: the frame navigated
+   * there itself, and re-rendering its `src` would load the page a second
+   * time. It is read when the frame is (re)loaded — on open and on Refresh.
+   * Remembered so a reload lands where the person was: the reader's in the
+   * address (`?page=`, shareable), the author's for the tab's life. */
+  const pageKey = `wui-page:${fs.scopeId}:${path}`;
+  const [remembered] = useState(() =>
+    author ? sessionStorage.getItem(pageKey) : new URLSearchParams(window.location.search).get("page"),
+  );
+  const pageRef = useRef<string | null>(null);
+  const entryAt = useMemo(() => {
+    const at = resolveInFolder(folder, entry);
+    return at === null ? null : encodePath(at);
+  }, [folder, entry]);
+  const frameSrc = useMemo(() => {
+    if (servedAt === null || entryAt === null) return null;
+    return servedAt + (below(servedAt, pageRef.current ?? remembered) ?? entryAt);
+    // `generation` is the reload: Refresh re-reads the sub-page the frame is on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servedAt, entryAt, remembered, generation]);
 
   /**
    * Does this page have a build step?
@@ -343,6 +429,11 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     return n;
   };
   const bumpGeneration = () => setGeneration(draw());
+  /** Ask again whether this folder can be served. The answer that sent the
+   * pane the single-page way may have been a moment's — a gateway restarting,
+   * a dropped probe — and a pass held past its life reads nothing; Refresh and
+   * Try again are where someone asks "look again". */
+  const reaskServe = () => void queryClient.invalidateQueries({ queryKey: qk.wuiServe(fs.scopeId, folder) });
   /** What is SHOWN is the page's — a verdict about a sibling is not shown —
    * and only while current (`verdictFor`): a "✓ Deployed" over whatever a
    * later read found, or a red "does not open" over a page that now does,
@@ -377,7 +468,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     const settle = (state: DeployState) => setDeploys((d) => ({ ...d, [path]: state }));
     if (deploy.at < latest) return settle({ path, at: latest, applied: true, state: "failed", step: "superseded" });
     const verified =
-      queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, instance, deploy.at)) !== undefined;
+      queryClient.getQueryData(qk.wuiDoc(fs.scopeId, path, instance, deploy.at, served)) !== undefined;
     if (deploy.state === "done") {
       if (!verified) return settle({ path, at: latest, applied: true, state: "failed", step: "changed" });
       setGeneration(deploy.at);
@@ -391,7 +482,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       setGeneration(deploy.at);
     }
     settle({ ...deploy, applied: true });
-  }, [deploy, path, latest, queryClient, fs.scopeId, instance]);
+  }, [deploy, path, latest, queryClient, fs.scopeId, instance, served]);
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   /** The page this pane has already rebuilt on open, so that "when I open this"
    * means what it says: once. React re-runs the effect whenever the preference
@@ -445,7 +536,6 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     const raw = viewParam(spec, "tools");
     return Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string") : [];
   }, [spec]);
-  const slug = useWorkspaceSlug();
   const callTool = useMemo(
     () => (slug ? itemCallTool(slug, fs.scopeId) : null),
     [slug, fs.scopeId],
@@ -483,6 +573,68 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     };
   }, [slug, fs.scopeId]);
 
+  const { confirm } = useDialog();
+  /** One question at a time: a page that asks to open a link in a loop must
+   * not stack dialogs on the reader. */
+  const asking = useRef(false);
+  /** D4: a link out of the page, opened only once the reader has seen where
+   * it goes and said so. The frame cannot follow it itself — the containing
+   * document refuses the frame's own navigation (`frame-src`), which is what
+   * stops a page carrying what it read out in a URL — so the person is the
+   * gate, and this dialog, drawn outside the frame, is the one the page cannot
+   * forge. */
+  const askToOpen = useMemo(
+    () => async (raw: string) => {
+      if (asking.current) return;
+      let url: URL;
+      try {
+        url = new URL(raw);
+      } catch {
+        return;
+      }
+      if (!/^(https?|mailto):$/.test(url.protocol)) return;
+      asking.current = true;
+      try {
+        const choice = await confirm({
+          title: "Open a link outside this page?",
+          body: (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ fontSize: pxToRem(18), fontWeight: 600 }}>{url.host || url.pathname}</div>
+              <div style={{ wordBreak: "break-all", fontSize: pxToRem(12) }}>{url.href}</div>
+              <div>It opens in a new tab. Only open it if you know where it goes.</div>
+            </div>
+          ),
+          actions: [
+            { id: "cancel", label: "Cancel" },
+            { id: "open", label: "Open", variant: "primary" },
+          ],
+        });
+        if (choice === "open") window.open(url.href, "_blank", "noopener,noreferrer");
+      } finally {
+        asking.current = false;
+      }
+    },
+    [confirm],
+  );
+  /** D10 on the reader page: a link to a file in the item, which a reader has
+   * no workspace here to open it in. */
+  const tellWorkspaceFile = useMemo(
+    () => async (target: string) => {
+      if (asking.current) return;
+      asking.current = true;
+      try {
+        await confirm({
+          title: "This link points at a file in the workspace",
+          body: <div style={{ wordBreak: "break-all" }}>{target} — open the item to see it.</div>,
+          actions: [{ id: "ok", label: "OK", variant: "primary" }],
+        });
+      } finally {
+        asking.current = false;
+      }
+    },
+    [confirm],
+  );
+
   /** Post to the frame. `"*"` because an opaque origin cannot be named as a
    * target; what makes that safe is `SPA_CSP` (see the note on the reply path
    * below), not this handle. */
@@ -506,6 +658,30 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         setReports((rs) =>
           trimReports([...rs, { id: nextReportId.current++, kind: report, message, detail }]),
         );
+        return;
+      }
+
+      if (isPageMessage(ev.data)) {
+        const msg = ev.data;
+        if (typeof msg.page === "string" && servedAt !== null) {
+          const rel = below(servedAt, msg.page);
+          if (rel === null) return; // not this page's address — not ours to remember
+          pageRef.current = rel;
+          if (author) sessionStorage.setItem(pageKey, rel);
+          else rememberInAddress(rel);
+          // The page's folder is where a link stops being the page's: past
+          // it is the item (or nothing). The runtime cannot know where that
+          // is, so it is told on every page it lands on.
+          const scope = folder ? `${servedAt}${encodePath(folder)}/` : servedAt;
+          win.postMessage({ proto: WUI_PROTOCOL, event: "scope", prefix: scope }, "*");
+        } else if (typeof msg.open === "string") {
+          void askToOpen(msg.open);
+        } else if (typeof msg.leave === "string") {
+          const target = resolveReadPath(folder, msg.leave);
+          if (target === null) return;
+          if (author && openFile) openFile(target);
+          else void tellWorkspaceFile(target);
+        }
         return;
       }
 
@@ -558,6 +734,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     declaredWorkflows,
     startRun,
     openLogin,
+    servedAt,
+    pageKey,
+    askToOpen,
+    tellWorkspaceFile,
   ]);
 
   // Forwarded, not acted on: the platform cannot know whether a half-finished
@@ -786,6 +966,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * view file it was opened with, whose stale `entry:` a folder re-read alone
    * cannot shake. Never a build. */
   const tryAgain = () => {
+    reaskServe();
     // Where the host holds the view file, the host does the whole re-read —
     // the view file first, then a fresh pane with what it now says. Bumping
     // the generation here as well read the folder twice, first with the old
@@ -945,7 +1126,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // carries the sentence; the pane keeps showing what it showed.
       const next = draw();
       try {
-        await queryClient.fetchQuery({ ...wuiDocQuery(fs, mine, entry, instance, next), staleTime: 0 });
+        await queryClient.fetchQuery({ ...wuiDocQuery(fs, mine, entry, instance, next, served), staleTime: 0 });
       } catch (err) {
         if (moved()) return;
         setDeploy({
@@ -1039,6 +1220,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             // NOT the build log. Refresh after a failure is the reflex — you
             // fixed the file, now show me — and clearing it took the compiler
             // error, the only explanation on screen, along with the page.
+            reaskServe();
             bumpGeneration();
           }}
         >
@@ -1391,10 +1573,13 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         </div>
       ) : (
         <iframe
+          // A served page is reloaded by remounting: its `src` is the page it
+          // was on, which may be the same string as before.
+          key={frameSrc === null ? "doc" : `served:${generation}`}
           ref={frameRef}
           title={viewParamString(spec, "title") ?? folder.split("/").pop() ?? "WUI"}
           sandbox="allow-scripts"
-          srcDoc={built.data.doc}
+          {...(frameSrc === null ? { srcDoc: built.data.doc } : { src: frameSrc })}
           style={{ flex: 1, width: "100%", minHeight: 0, border: 0, background: "#fff" }}
         />
       )}

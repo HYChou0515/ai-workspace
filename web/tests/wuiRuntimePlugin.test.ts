@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { WUI_RUNTIME_FILE, wuiRuntime } from "../vite-plugins/wuiRuntime";
 import { wuiRuntimeScript } from "../src/renderers/wui/runtime";
+import { PING_ANSWER } from "../src/renderers/wui/served";
 
 describe("the wui-runtime build plugin", () => {
   it("emits the same runtime the single-page assembler injects", () => {
@@ -26,5 +27,11 @@ describe("the wui-runtime build plugin", () => {
     const py = readFileSync(resolve(__dirname, "../../src/workspace_app/api/wui_content.py"), "utf-8");
 
     expect(py).toContain(`RUNTIME_FILE = "${WUI_RUNTIME_FILE}"`);
+  });
+
+  it("expects the ping answer the server gives — anything else sends every page the single-page way", () => {
+    const py = readFileSync(resolve(__dirname, "../../src/workspace_app/api/wui_content.py"), "utf-8");
+
+    expect(py).toContain(`PING_ANSWER = "${PING_ANSWER}"`);
   });
 });

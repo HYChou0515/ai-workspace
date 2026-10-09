@@ -124,6 +124,13 @@ function wuiRuntime(window: any, parent: any, document: any): void {
       return;
     }
 
+    // Where this page's folder ends, as an address prefix — told by the
+    // parent on every page this lands on (only it knows the folder).
+    if (m.event === "scope") {
+      scope = typeof m.prefix === "string" ? m.prefix : null;
+      return;
+    }
+
     if (m.command === "pick") {
       setPicking(!!m.on);
       return;
@@ -212,6 +219,8 @@ function wuiRuntime(window: any, parent: any, document: any): void {
   // the platform, which asks the reader before opening it (D4). Only schemes a
   // person means to visit: a `javascript:` link is the page's own business.
   var OUTSIDE = /^(https?|mailto):/i;
+  /** The address prefix this page's folder occupies, once the parent says. */
+  var scope: any = null;
 
   function anchorOf(t: any): any {
     for (var n = t; n; n = n.parentNode) {
@@ -248,7 +257,20 @@ function wuiRuntime(window: any, parent: any, document: any): void {
       post({ proto: PROTO, open: url.href });
       return;
     }
-    if (served) return; // within the site: the browser's to follow
+    if (served) {
+      // Within the folder: the browser's to follow. Past it, on this host:
+      // a file in the item (D10 — the workspace opens it), or no page at all,
+      // which the frame would only show as a refusal.
+      if (!scope || !url || url.href.indexOf(scope) === 0) return;
+      ev.preventDefault();
+      var root = /^(.*\/wui-content\/[^/]+\/)/.exec(scope);
+      if (root && url.href.indexOf(root[1]) === 0) {
+        post({ proto: PROTO, leave: "/" + decodeURIComponent(url.href.slice(root[1].length).split(/[?#]/)[0]) });
+      } else {
+        report("error", "This page links to " + href + ", which is not part of it, so the link cannot be followed.");
+      }
+      return;
+    }
     // A single-page document. Its links resolve against the parent's address,
     // so following one navigated the frame into the platform's own app.
     if (href.charAt(0) === "#") {

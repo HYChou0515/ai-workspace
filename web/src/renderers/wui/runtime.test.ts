@@ -546,6 +546,54 @@ describe("the WUI runtime on a served page (plan-wui-multipage)", () => {
   });
 });
 
+describe("the WUI runtime and the edge of its folder", () => {
+  const LOC = { location: { href: SERVED, origin: "http://app.test", protocol: "http:" } };
+  const SCOPE = { proto: "wui/1", event: "scope", prefix: "http://app.test/api/wui-content/TOKEN/docs/" };
+
+  it("hands a link to a file in the item, past the page's folder, to the platform", () => {
+    const { sent, fire } = boot(LOC);
+    fire("message", { data: SCOPE });
+    const ev = click(link("../../notes%20v2.md"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(sent).toContainEqual({ proto: "wui/1", leave: "/notes v2.md" });
+  });
+
+  it("leaves a link inside the folder to the browser", () => {
+    const { sent, fire } = boot(LOC);
+    fire("message", { data: SCOPE });
+    const ev = click(link("../setup/"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(sent.filter((m) => "leave" in m)).toEqual([]);
+  });
+
+  it("does not follow a link to somewhere on this host that is not a page at all", () => {
+    const { sent, fire } = boot(LOC);
+    fire("message", { data: SCOPE });
+    const ev = click(link("/api/a/rca/items"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(sent.filter((m) => "leave" in m)).toEqual([]);
+    expect(sent.some((m) => m.report === "error")).toBe(true);
+  });
+
+  it("follows links as the browser would until it has been told where the folder ends", () => {
+    const { fire } = boot(LOC);
+    const ev = click(link("../../notes.md"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
 describe("the WUI runtime in a single-page document (the fallback)", () => {
   const SRCDOC = { location: { href: "about:srcdoc", origin: "null", protocol: "about:" } };
 

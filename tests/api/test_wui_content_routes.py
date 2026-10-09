@@ -60,7 +60,7 @@ def _pass(client, iid: str, folder: str = "/docs") -> str:
     r = client.post(_wp(iid, "/wui/pass"), json={"folder": folder})
     assert r.status_code == 200, r.text
     base = r.json()["base"]
-    assert base.startswith("/api/wui-content/") and base.endswith("/")
+    assert base.startswith("/wui-content/") and base.endswith("/")
     return base
 
 
