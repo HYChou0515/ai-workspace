@@ -415,7 +415,7 @@ def test_a_page_cannot_reach_the_rest_of_the_api():
     and a request without a session is not necessarily anonymous — the default
     composition answers every request as the configured user. So the API
     refuses what only such a page sends: `Origin: null`, the opaque origin's
-    signature on every `fetch`, XHR and non-GET request it makes."""
+    signature on a CORS-mode `fetch`, an XHR and any non-GET request."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     iid = _item(spec, by="bob")
@@ -463,8 +463,8 @@ def test_a_page_s_own_scripts_are_fetched_so_their_errors_can_be_reported():
 
 
 def test_a_page_in_another_encoding_keeps_it():
-    """The single-page way read non-UTF-8 text as latin-1; the served way must
-    not turn those characters into U+FFFD by relabelling the bytes UTF-8."""
+    """The served way must not turn a non-UTF-8 page's characters into U+FFFD
+    by relabelling its bytes UTF-8 — nor its stylesheets' and scripts'."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     iid = _item(spec, by="bob")
@@ -478,7 +478,10 @@ def test_a_page_in_another_encoding_keeps_it():
 
     assert "charset=utf-8" not in page.headers["content-type"]
     assert "良率".encode("big5") in page.content and RUNTIME.encode() in page.content
-    assert css.headers["content-type"].endswith("charset=iso-8859-1")
+    # No charset: a stylesheet or script without one is read in the encoding of
+    # the page that loads it — Big5 for a Big5 page. Labelled latin-1 (round 1)
+    # it was right only for a latin-1 file.
+    assert css.headers["content-type"] == "text/css"
 
 
 def test_the_envelope_is_exactly_the_one_documented():
@@ -517,3 +520,56 @@ def test_one_mint_clears_at_most_fifty_lapsed_passes():
 
     rm = spec.get_resource_manager(WuiPass)
     assert len(list(rm.list_resources(QB.all().build()))) == 55 - 50 + 1
+
+
+def test_marking_scripts_leaves_what_scripts_and_data_say_alone():
+    """Only the TAGS are marked. A `<script src=` inside a script's own text, a
+    JSON island or a comment is the page's data — rewriting it broke the script
+    (a syntax error) and the JSON (a parse error)."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    page = (
+        b'<html><head><!-- <script src="c.js"> -->'
+        b"<script>var s = \"<script src='a.js'><\\/script>\";</script>"
+        b'<script type="application/json">{"html":"<script src=\\"x.js\\">"}</script>'
+        b'<SCRIPT SRC="./up.js"></SCRIPT></head><body></body></html>'
+    )
+    _put(client, iid, "/docs/index.html", page)
+    base = _pass(client, iid)
+
+    text = client.get(f"{base}docs/index.html").text
+
+    assert '<!-- <script src="c.js"> -->' in text
+    assert "var s = \"<script src='a.js'><\\/script>\";" in text
+    assert '{"html":"<script src=\\"x.js\\">"}' in text
+    assert '<SCRIPT SRC="./up.js" crossorigin="anonymous">' in text
+
+
+def test_a_runtime_with_characters_beyond_ascii_still_goes_into_any_page():
+    """The page is worked on as latin-1; a runtime character outside it would
+    make the response fail. It is written in as `\\u` escapes instead."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder, runtime='window.x = "\u2026 \U0001f600";')
+    iid = _item(spec, by="bob")
+    base = _site(client, iid)
+
+    r = client.get(f"{base}docs/site/index.html")
+
+    assert r.status_code == 200
+    assert 'window.x = "\\u2026 \\ud83d\\ude00";' in r.text
+
+
+def test_the_held_passes_are_bounded(monkeypatch):
+    """A cache, not a map: it may not grow with every pass ever looked up."""
+    from workspace_app.api import wui_content
+
+    monkeypatch.setattr(wui_content, "_HOLD_MAX", 2)
+    spec = make_spec(default_user=lambda: "bob")
+    wui_content.register_wui_pass(spec)
+    passes = wui_content.WuiPasses(spec, now=lambda: 1_000_000.0)
+    tokens = [passes.mint(slug="rca", item_id="i", folder=f"/f{n}", user="bob") for n in range(5)]
+
+    for token in tokens:
+        assert passes.get(token) is not None
+        assert len(passes._held) <= 2

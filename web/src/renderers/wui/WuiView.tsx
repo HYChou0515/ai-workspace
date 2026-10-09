@@ -23,7 +23,7 @@
  */
 
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { useFileService, type FileService } from "../../api/fileService";
 import { qk } from "../../api/queryKeys";
@@ -63,6 +63,30 @@ import {
 
 /** The conventional entry, overridable with `entry:` in the view file. */
 export const DEFAULT_ENTRY = "index.html";
+
+const FRAME_STYLE = { flex: 1, width: "100%", minHeight: 0, border: 0, background: "#fff" } as const;
+
+/**
+ * A served page's frame. It takes its address ONCE, when it mounts, and never
+ * again: a new address on a mounted iframe is a navigation, and a pane that
+ * re-read the folder and found nothing changed must not reload the page under
+ * someone's hands (plan decision 9). To load somewhere else, remount it.
+ */
+function ServedFrame({
+  src,
+  title,
+  frameRef,
+  onMount,
+}: {
+  src: string;
+  title: string;
+  frameRef: RefObject<HTMLIFrameElement | null>;
+  onMount: () => void;
+}) {
+  const [at] = useState(src);
+  useEffect(() => onMount(), [onMount]);
+  return <iframe ref={frameRef} title={title} sandbox="allow-scripts" src={at} style={FRAME_STYLE} />;
+}
 
 /** A short fingerprint of a page's text, to tell whether a re-read changed it. */
 function digest(text: string): string {
@@ -356,16 +380,36 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     const at = resolveInFolder(folder, entry);
     return at === null ? null : encodePath(at);
   }, [folder, entry]);
-  const frameSrc = useMemo(() => {
-    if (servedAt === null || entryAt === null) return null;
-    return servedAt + (below(servedAt, pageRef.current ?? remembered) ?? entryAt);
-    // `generation` is the reload: Refresh re-reads the sub-page the frame is on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [servedAt, entryAt, remembered, generation]);
-  // A fresh load of the frame has not landed anywhere yet.
+  /** Where a served frame opens: the sub-page it was on, else the entry. Read
+   * on every render, but TAKEN only when a frame mounts (`ServedFrame`):
+   * setting an iframe's `src` is a navigation, so recomputing it on a re-read
+   * that changed nothing sent the frame to the page it was already on — a
+   * reload, and a half-filled form with it. */
+  const frameSrc =
+    servedAt === null || entryAt === null
+      ? null
+      : servedAt + (below(servedAt, pageRef.current ?? remembered) ?? entryAt);
+  /** A frame that has just mounted has not landed anywhere yet. */
+  const frameMounted = useMemo(
+    () => () => {
+      landed.current = false;
+    },
+    [],
+  );
+  /** Has anything the served frame may load changed since it was loaded? A
+   * served page's address is the same before and after, so a re-read that is
+   * a cache hit (a verified Deploy) would leave it showing the old page — the
+   * single-page way reloads because its inlined document changed. The entry's
+   * own text is compared in the frame's key; this covers the rest of the
+   * folder: a write anyone else made inside it, or a build. The page's own
+   * saves do not count — reloading over them is how a half-filled form is lost. */
+  const folderChanged = useRef(false);
+  const [frameEpoch, setFrameEpoch] = useState(0);
   useEffect(() => {
-    landed.current = false;
-  }, [frameSrc, generation]);
+    if (!folderChanged.current) return;
+    folderChanged.current = false;
+    setFrameEpoch((e) => e + 1);
+  }, [generation]);
 
   /**
    * Does this page have a build step?
@@ -811,6 +855,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // change the pane must follow, and a self-write is an exact path,
         // so the manifest's own path is the whole of that exception.
         const inFolder = changed === folder || changed.startsWith(`${folder}/`);
+        if (inFolder && !own) folderChanged.current = true;
         if (changed === `${folder}/package.json` || (!own && inFolder)) {
           void queryClient.invalidateQueries({ queryKey: qk.wuiBuildable(fs.scopeId, folder) });
         }
@@ -913,6 +958,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         if (event.type === "output") say(event.text);
         else if (event.exit_code === 0) {
           outcome = "ok";
+          // A build rewrote what the frame loads; whatever re-read follows —
+          // a Rebuild's, or a Deploy's verified one — must reload it.
+          folderChanged.current = true;
           note("Build finished.");
           // Fold it away: the page below IS the result, and it is what the
           // reader came for. One line stays, and opens it again.
@@ -1615,18 +1663,28 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             <TryAgain onClick={tryAgain} />
           )}
         </div>
+      ) : frameSrc !== null ? (
+        <ServedFrame
+          // A served page's address is the same before and after a rebuild, so
+          // it is reloaded by remounting: when the re-read entry differs, or
+          // anything else in the folder changed since the frame was loaded
+          // (`folderChanged` — someone else's write, or a build). Its own saves
+          // do not reload it. (A Refresh remounts anyway: the read in between
+          // shows "Opening…".)
+          key={`served:${digest(built.data.doc)}:${frameEpoch}`}
+          frameRef={frameRef}
+          title={viewParamString(spec, "title") ?? folder.split("/").pop() ?? "WUI"}
+          src={frameSrc}
+          onMount={frameMounted}
+        />
       ) : (
         <iframe
-          // A served page's address is the same before and after a rebuild, so
-          // it is reloaded by remounting — when what the re-read found differs,
-          // as the single-page way reloads only when its document does. (A
-          // Refresh remounts anyway: the read in between shows "Opening…".)
-          key={frameSrc === null ? "doc" : `served:${digest(built.data.doc)}`}
+          // The single-page way: one assembled document, reloaded when it changes.
           ref={frameRef}
           title={viewParamString(spec, "title") ?? folder.split("/").pop() ?? "WUI"}
           sandbox="allow-scripts"
-          {...(frameSrc === null ? { srcDoc: built.data.doc } : { src: frameSrc })}
-          style={{ flex: 1, width: "100%", minHeight: 0, border: 0, background: "#fff" }}
+          srcDoc={built.data.doc}
+          style={FRAME_STYLE}
         />
       )}
     </div>

@@ -157,9 +157,12 @@ class OpaqueOriginGuard:
     the bridge applies.
 
     What only such a page sends is `Origin: null`: an opaque origin stamps it on
-    every `fetch`, XHR and non-GET request (measured, Phase 1). The app's own
-    requests carry a real origin or none. So `/api/*` answers `Origin: null`
-    with 403 — except the content route, which serves the page its own files.
+    a CORS-mode `fetch`, an XHR and any non-GET request (measured in Chromium in
+    review). It does NOT stamp a `no-cors` GET — `fetch(u, {mode: "no-cors"})`,
+    `<img>`, `<script>` — so those still pass: a GET whose answer the page
+    cannot read. The app's own requests carry a real origin or none. So
+    `/api/*` answers `Origin: null` with 403 — except the content route, which
+    serves the page its own files.
     A pure ASGI middleware, like `VersionHeaderMiddleware`, so streaming bodies
     are untouched."""
 
@@ -261,7 +264,7 @@ class WuiPasses:
                 return None
             assert isinstance(found, WuiPass)  # narrow for ty (coverage-clean)
             data = found
-            if len(self._held) > _HOLD_MAX:  # bounded: a cache, not a map
+            if len(self._held) >= _HOLD_MAX:  # bounded: a cache, not a map
                 self._held.clear()
             self._held[token] = (data, now)
         return data if data.expires_at > int(now) else None
@@ -288,7 +291,12 @@ def _inside(folder: str, path: str) -> bool:
     return folder == "/" or path == folder or path.startswith(folder + "/")
 
 
-_SCRIPT_TAG = re.compile(r"<script\b([^>]*)>", re.IGNORECASE)
+# A comment, or a WHOLE script element: its text is consumed with it, so a
+# `<script src=` written inside a script's string, a JSON island or a comment is
+# never taken for a tag. Only the opening tag of a real element is rewritten.
+_SCRIPT_OR_COMMENT = re.compile(
+    r"<!--.*?-->|<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL
+)
 _HAS_SRC = re.compile(r"\bsrc\s*=", re.IGNORECASE)
 _HAS_CROSSORIGIN = re.compile(r"\bcrossorigin\b", re.IGNORECASE)
 
@@ -305,11 +313,13 @@ def fetch_scripts_in_cors_mode(html: str) -> str:
 
     def mark(m: re.Match[str]) -> str:
         attrs = m.group(1)
-        if not _HAS_SRC.search(attrs) or _HAS_CROSSORIGIN.search(attrs):
+        if attrs is None or not _HAS_SRC.search(attrs) or _HAS_CROSSORIGIN.search(attrs):
             return m.group(0)
-        return f'<script{attrs} crossorigin="anonymous">'
+        whole = m.group(0)
+        tag_end = len("<script") + len(attrs)
+        return f'{whole[:tag_end]} crossorigin="anonymous"{whole[tag_end:]}'
 
-    return _SCRIPT_TAG.sub(mark, html)
+    return _SCRIPT_OR_COMMENT.sub(mark, html)
 
 
 def _ascii(text: str) -> str:
@@ -455,8 +465,10 @@ def register_wui_content_routes(
             try:
                 data.decode("utf-8")
             except UnicodeDecodeError:
-                # The single-page way read a non-UTF-8 text file as latin-1;
-                # labelled UTF-8 (the default for `text/*`) its characters
-                # became U+FFFD.
-                media = f"{media.split(';')[0]}; charset=iso-8859-1"
+                # No charset at all: a stylesheet or script without one is read
+                # in the encoding of the page that loads it (Big5 for a Big5
+                # page). Labelled UTF-8 — Starlette's default for `text/*`,
+                # hence the header — its characters became U+FFFD.
+                bare = media.split(";")[0]
+                return Response(data, headers={**_headers(), "Content-Type": bare})
         return Response(data, media_type=media, headers=_headers())

@@ -632,6 +632,20 @@ describe("the WUI runtime keeps its pass out of what it reports", () => {
     expect(String(said?.message)).not.toContain("s3cr3tTOKEN");
   });
 
+  it("cuts the pass out of a picked element's markup too", () => {
+    /** A page's script writes absolute addresses into its DOM — a search
+     * result's link — and "Tell the agent" pastes the picked markup. */
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const a = link("http://app.test/api/wui-content/s3cr3tTOKEN/docs/setup/");
+    fire("message", { data: { proto: "wui/1", command: "pick", on: true } });
+
+    a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    const pick = sent.find((m) => m.report === "pick") as { detail: { html: string } } | undefined;
+    expect(pick?.detail.html).toContain("/api/wui-content/…/docs/setup/");
+    expect(pick?.detail.html).not.toContain("s3cr3tTOKEN");
+  });
+
   it("hands only places a person visits to the platform, not any scheme a link may carry", () => {
     const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
 
@@ -697,6 +711,8 @@ describe("the WUI runtime in a single-page document (the fallback)", () => {
     expect(ev.preventDefault).toHaveBeenCalled();
     const said = sent.find((m) => m.report === "error");
     expect(String(said?.message)).toContain("report.html");
+    // And who can change that: the deployment, not the page's author.
+    expect(String(said?.message)).toContain("administrator");
   });
 
   it("still hands a link to another site to the platform", () => {

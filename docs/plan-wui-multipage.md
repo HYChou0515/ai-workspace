@@ -37,7 +37,7 @@ User-confirmed:
 | # | Decision |
 |---|---|
 | D1 | **A WUI may be a multi-page site.** What it hosts is a real generator's OUTPUT (mkdocs, Sphinx, hand-written HTML …); the platform does not learn markdown. A platform-rendered markdown site (a `docs.ai.yaml` view) was the rejected alternative: re-implementing a docs site that loses to mkdocs. |
-| D2 | **Same permissions as every WUI.** It IS a WUI — `view: wui`, `entry:`, Deploy, the overview, unlisting, the reader page, the bridge. No second, wider read scope (`plan-wui.md` decision 1 and the Deploy section stand). |
+| D2 | **Same permissions as every WUI.** It IS a WUI — `view: wui`, `entry:`, Deploy, the overview, unlisting, the reader page, the bridge. No second, wider read scope (`plan-wui.md` decision 1 and the Deploy section stand — **qualified by the pass, pending the user: see "Needs the user's decision"**). |
 | D3 | **The platform bridges one-page → many-page**, so an existing `mkdocs.yml` runs unchanged. Rejected: requiring authors to switch on Material's `offline` plugin / `use_directory_urls: false` — less platform work, but it helps one generator only, and an unconverted site fails silently, the failure `wui.md` exists to avoid. |
 | D4 | **Links out open behind a platform-drawn confirmation.** The dialog is drawn OUTSIDE the frame (as `openLogin`'s is), shows the domain large and the full URL beneath, and opens a new tab only on the reader's press. **Applies to every WUI** — it cannot be docs-only. Accepted residual risk: a reader who presses Open without reading lets a hostile page carry data out in the URL; the gate is the reader's attention, not a guarantee like `openLogin`'s "credentials never pass the page". |
 
@@ -106,7 +106,8 @@ URLs work.
 
 ## Revised mechanism (supersedes the "how" of D6, D7, D9)
 
-The decisions D1–D14 stand; how D6/D7/D9 are delivered changes, and D8 gets
+The decisions D1–D14 stand, except where "Needs the user's decision" below
+says they are qualified (D2, D3); how D6/D7/D9 are delivered changes, and D8 gets
 simpler. Decided by me after Phase 1 while the user was away — **the user may
 overturn it**; it is the cheapest of the three routes that meets D3 (the others:
 a separate content origin — the GitHub/Google "usercontent" shape, strongest
@@ -177,14 +178,27 @@ breaks top-level `let`/`const` sharing across scripts, cannot reach
   request as the configured user, and a cookie a browser sends without
   `SameSite` would reach a deploy's cookie reader. So `OpaqueOriginGuard`
   answers `/api/*` with 403 when the request carries `Origin: null` — an
-  opaque origin's stamp on every `fetch`, XHR and non-GET request — except the
-  content route itself.
+  opaque origin's stamp on a CORS-mode `fetch`, an XHR and any non-GET
+  request — except the content route itself.
 - **Residual risks, accepted:** a token in a URL can leak (through D4, a reader
   who opens a URL carrying it) and then reads that folder until expiry, only
   while the minting user can still read the item; reports cut the token out
   before they reach the chat. A page can still make GET requests without an
-  `Origin` header to its host (`<img src>`, `<script src>`), which carry no
-  cookie in Chromium and cannot be read back.
+  `Origin` header to its host — `<img src>`, `<script src>`, and a `fetch` in
+  `no-cors` mode (measured) — whose answers it cannot read. They carry no
+  cookie in Chromium, but where a deployment answers a cookie-less request as
+  a user (the default composition answers every request as the configured
+  one), such a GET runs as that user. GET routes are expected to change
+  nothing; one that does is reachable this way.
+
+### What this overturns in `plan-wui.md`
+
+`plan-wui.md` carries the overturned marker for one replaced mechanism: its
+Deploy section's "同一個組裝器" — every page assembled into one `srcdoc`
+document — is no longer how a page reaches its frame where the deployment
+serves it; the frame loads the page from its address under a pass, and the
+assembler is the fallback. Its decision 1 is **not** overturned by the author;
+whether the pass is acceptable under it is the first item below.
 
 ### Needs the user's decision (not settled by the author)
 

@@ -1977,8 +1977,8 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
 - WUI 的 iframe 改從 `/api/wui-content/<通行證>/<資料夾>/…` 載入（之前是把整個資料夾組成一份 `srcdoc`）。
   通行證是 pane 用登入身分向 `POST /api/a/{slug}/items/{id}/wui/pass` 要的，存成 specstar 列（`WuiPass`，
   12 小時；同一人同一資料夾還剩一半以上就沿用，所以開著的頁面至少能用 6 小時；每次要新的時候順手清掉最多 50 張過期的）。
-- **所有 `/api/*`（內容路由除外）拒絕帶 `Origin: null` 的請求（403）。** 那是 null origin 頁面的 `fetch` / XHR / 非 GET
-  請求才會帶的標記；平台自己的前端送的是真的 origin 或不送。如果你們有別的客戶端會送 `Origin: null`（例如從本機
+- **所有 `/api/*`（內容路由除外）拒絕帶 `Origin: null` 的請求（403）。** 那是 null origin 頁面的 CORS 模式 `fetch` / XHR / 非 GET
+  請求才會帶的標記（`no-cors` 的 GET 不帶）；平台自己的前端送的是真的 origin 或不送。如果你們有別的客戶端會送 `Origin: null`（例如從本機
   `file://` 打開的工具頁面呼叫 API），它會開始拿到 403。
 - **所有 WUI**（不只文件站）：頁內連到別的網站的連結，改成平台在頁面外畫的確認框、按「Open」才開新分頁；
   之前是點了沒反應（iframe 變成瀏覽器錯誤頁）。頁內的 `#錨點` 之前會把 iframe 導航成平台自己的 app（壞掉），

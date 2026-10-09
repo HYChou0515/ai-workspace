@@ -83,15 +83,20 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     return true;
   }
 
+  // A served page's addresses carry its pass, and what this reports is pasted
+  // into the chat by "Tell the agent" — so the pass is cut out of all of it:
+  // the message, and a picked element's markup.
+  function redact(text: any) {
+    return String(text).replace(/\/wui-content\/[^/\s"']+\//g, "/wui-content/\u2026/");
+  }
+
   function report(kind: any, message: any, detail?: any) {
     // Capped: a message can contain a URL, and after inlining a URL can BE a
     // multi-megabyte data: payload. It is rendered in the pane and pushed into
     // the chat draft, so an uncapped one is a page freezing the app it reports
     // to. The pick detail is capped separately, on the parent, which is the half
     // a fabricated message can reach.
-    // A served page's addresses carry its pass, and a report is pasted into the
-    // chat by "Tell the agent" — so the pass is cut out of every report.
-    var text = String(message).replace(/\/wui-content\/[^/\s]+\//g, "/wui-content/\u2026/");
+    var text = redact(message);
     post({
       proto: PROTO,
       report: kind,
@@ -497,7 +502,7 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     e.stopPropagation();
     var r = el.getBoundingClientRect();
     report("pick", "The user pointed at this part of the page.", {
-      html: (el.outerHTML || "").slice(0, 4000),
+      html: redact(el.outerHTML || "").slice(0, 4000),
       marker: marker(el),
       rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
       styles: styleSummary(el),

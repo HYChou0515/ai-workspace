@@ -326,8 +326,8 @@ API。
 `<script src>`、web font、遠端圖片，連「把自己導航到別的網站」都擋掉（那條靠 app 文件的
 `frame-src`，見 [`plan-wui.md`](plan-wui.md)）。從網址載入的頁面可以向**它來的那台主機**
 要東西（CSP 的 `'self'`），但拿得到的只有通行證底下、它自己資料夾裡的檔案：平台其他的 API
-一律拒絕帶 `Origin: null` 的請求——那是 null origin 的頁面發出 `fetch`、XHR 和非 GET 請求時
-都會帶的標記。**建置期不受這個限制**：那是 sandbox 裡的 `pnpm` / `uvx`，
+一律拒絕帶 `Origin: null` 的請求——null origin 的頁面發出 CORS 模式的 `fetch`、XHR 和任何非 GET
+請求時都會帶這個標記（`no-cors` 的 GET、`<img>`、`<script>` 不帶，那些仍會送到主機上，只是頁面讀不到回應）。**建置期不受這個限制**：那是 sandbox 裡的 `pnpm` / `uvx`，
 不是瀏覽器。
 
 **連到別的網站的連結**不會自己打開：平台在頁面**外面**畫一個框，大字寫網域、下面是完整

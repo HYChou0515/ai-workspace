@@ -12,6 +12,8 @@ import { FileServiceProvider, type FileService } from "../../api/fileService";
 import { HttpError } from "../../api/http";
 import type { FileContent } from "../../api/types";
 import { OpenFileProvider } from "../../hooks/openFile";
+import { publishFileChanged } from "../../lib/fileChangedBus";
+import { autoBuildScope, setWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { QueryWrap } from "../../test/queryWrapper";
 import type { ViewSpec } from "../entity/types";
@@ -71,6 +73,12 @@ function renderPane(
 }
 
 const frame = () => document.querySelector("iframe");
+
+/** Let every effect a verdict sets off run, before asserting nothing changed —
+ * a remount that lands a tick after the last awaited text is still a remount. */
+const settle = () => act(async () => {
+  await new Promise((r) => setTimeout(r, 100));
+});
 
 async function framed(opts: Parameters<typeof renderPane>[0] = {}) {
   const r = renderPane(opts);
@@ -266,6 +274,104 @@ describe("a served WUI, deployed", () => {
     expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
   });
 
+  it("shows the page Deploy verified when only a stylesheet changed — the entry is not the whole page", async () => {
+    stubDeploy();
+    renderPane();
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const before = frame();
+
+    act(() => publishFileChanged("item1", "/sales/s.css"));
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    await screen.findByRole("textbox", { name: /address/i });
+    await waitFor(() => expect(frame()).not.toBe(before));
+  });
+
+  it("reloads after a Deploy that built, though no file event arrived and the entry reads the same", async () => {
+    setWuiAutoBuild(autoBuildScope("item1", "/sales"), false);
+    let finish: () => void = () => {};
+    const done = new Promise<void>((r) => (finish = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/wui/build")) {
+          const enc = new TextEncoder();
+          const body = new ReadableStream({
+            async start(c) {
+              c.enqueue(enc.encode(`data: ${JSON.stringify({ type: "output", text: "building\n" })}\n\n`));
+              await done;
+              c.enqueue(enc.encode(`data: ${JSON.stringify({ type: "done", exit_code: 0 })}\n\n`));
+              c.close();
+            },
+          });
+          return new Response(body, { headers: { "content-type": "text/event-stream" } });
+        }
+        if (u.includes("/wui/deploy") && init?.method === "POST")
+          return new Response(
+            JSON.stringify({
+              slug: "rca",
+              item_id: "item1",
+              item_title: "Item one",
+              path: "/sales/page.ai.yaml",
+              title: "Sales",
+              deployed_by: "u",
+              deployed_at: 1,
+              can_remove: true,
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        throw new Error(`unexpected ${u}`);
+      }),
+    );
+    renderPane({ files: { ...SITE, "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }) } });
+    await screen.findByRole("button", { name: /^rebuild$/i });
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await screen.findByText(/building/);
+    await settle();
+    // The frame as it stands WHILE the build runs: what must be replaced is
+    // the page from before the build finished, whatever else moved meanwhile.
+    const during = frame();
+    finish();
+
+    await screen.findByRole("textbox", { name: /address/i });
+    await waitFor(() => expect(frame()).not.toBe(during));
+  });
+
+  it("does not count the page's own save as a change to reload for", async () => {
+    stubDeploy();
+    const { say, replies } = await framed();
+    const before = frame();
+
+    say({ proto: WUI_PROTOCOL, id: "p.1", verb: "writeFile", args: { path: "data.json", text: "{}" } });
+    await waitFor(() => expect(replies).toContainEqual(expect.objectContaining({ id: "p.1", ok: true })));
+    act(() => publishFileChanged("item1", "/sales/data.json"));
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    await screen.findByRole("textbox", { name: /address/i });
+    await settle();
+    expect(frame()).toBe(before);
+  });
+
+  it("does not move a frame the person navigated inside, on a Deploy that changed nothing", async () => {
+    /** Setting an iframe's `src` IS a navigation. Recomputing it from the
+     * sub-page on every re-read sent the frame to the page it was already on —
+     * a reload, and the half-filled form with it. */
+    stubDeploy();
+    const { say } = await framed();
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+    const before = frame();
+    const src = before!.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    await screen.findByRole("textbox", { name: /address/i });
+    await settle();
+    expect(frame()).toBe(before);
+    expect(frame()!.getAttribute("src")).toBe(src);
+  });
+
   it("does not reload a page Deploy found unchanged — a half-filled form survives it", async () => {
     stubDeploy();
     renderPane();
@@ -275,6 +381,7 @@ describe("a served WUI, deployed", () => {
     fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
     await screen.findByRole("textbox", { name: /address/i });
+    await settle();
     expect(frame()).toBe(before);
   });
 });
@@ -289,6 +396,18 @@ describe("a remembered sub-page that is gone", () => {
 
     await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`));
     expect(sessionStorage.getItem("wui-page:item1:/sales/page.ai.yaml")).toBeNull();
+  });
+
+  it("ignores a 'gone' that names an address which is not this page's", async () => {
+    sessionStorage.setItem("wui-page:item1:/sales/page.ai.yaml", "sales/setup/");
+    const { say } = await framed();
+    const before = frame();
+
+    say({ proto: WUI_PROTOCOL, missing: `${ORIGIN}/api/a/rca/items/x/files/y` });
+
+    await settle();
+    expect(frame()).toBe(before);
+    expect(sessionStorage.getItem("wui-page:item1:/sales/page.ai.yaml")).toBe("sales/setup/");
   });
 
   it("drops it from the reader's address too", async () => {
