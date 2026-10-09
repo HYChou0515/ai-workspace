@@ -122,6 +122,8 @@ def _workspace_path(raw: str) -> str:
       ``output_path`` (the two files beside it take its name)
     * ``list_schedule_bindings`` / ``bind_schedule`` / ``unbind_schedule``
       (``api/schedule_binding_routes.py``) — the ``path`` query parameter
+    * ``mint_wui_pass`` / ``wui_content`` (``api/wui_content.py``) — the body's
+      folder and the ``{path:path}`` URL route behind a pass
 
     Known NOT to pass through here, deliberately or otherwise:
     ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store

@@ -242,7 +242,9 @@ class ItemLocator:
             refuse_if_gone(facts, item_id)
         raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
-    def require_access(self, slug: str, item_id: str, verb: Verb) -> str:
+    def require_access(
+        self, slug: str, item_id: str, verb: Verb, *, user: str | None = None
+    ) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
         then gate the current user for ``verb`` against the item's live Permission
         (``read_meta`` first → 404 no existence leak, then ``verb`` → 403). Returns
@@ -256,8 +258,14 @@ class ItemLocator:
         `access_window`; the DECISION never is, so a verb the caller has not
         asked for before is still evaluated properly, and a permission change
         calls `forget_access` rather than waiting the window out.
+
+        ``user`` names the caller for a request that carries no session of its
+        own: a WUI frame's content request is cookie-less by construction, and
+        the pass it presents says whose authority it was minted under
+        (`wui_content.py`). Every other route leaves it out.
         """
-        user = self._get_user_id()
+        if user is None:
+            user = self._get_user_id()
         now = self._now()
         cached = self._access.get(item_id)
         if cached is None or now - cached[1] >= self._access_window:

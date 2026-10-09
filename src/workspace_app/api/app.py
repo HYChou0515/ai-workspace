@@ -163,6 +163,12 @@ from .view_plugin_routes import register_view_plugin_routes, register_view_plugi
 from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
+from .wui_content import (
+    WuiPasses,
+    built_wui_runtime,
+    register_wui_content_routes,
+    register_wui_pass,
+)
 from .wui_deploy import DeployedPages, register_deployed_wui, register_wui_deploy_routes
 from .wui_routes import register_wui_routes
 
@@ -473,6 +479,11 @@ def create_app(
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,
     spa_dist: Path | None = None,
+    # docs/plan-wui-multipage.md: the runtime the content route puts at the top
+    # of every page it serves. None reads the build's `wui-runtime.js` beside
+    # the SPA — a seam so a test need not build the frontend.
+    wui_runtime: Callable[[], str | None] | None = None,
+    wui_now: Callable[[], float] = time.time,
     root_path: str = "",
     # #312: whether THIS process drains the job queues in-process. Default True
     # keeps the all-in-one behaviour (local dev / tests / single-pod deploys).
@@ -1821,6 +1832,7 @@ def create_app(
     # everything above, and both reasons apply: Deploy on a bare test client
     # writes one, and the blob-gc worker must hold every model the API does.
     register_deployed_wui(spec)
+    register_wui_pass(spec)
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
@@ -2724,6 +2736,17 @@ def create_app(
         get_user_id=get_user_id,
     )
 
+    if spa_dist is None:
+        spa_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
+    register_wui_content_routes(
+        api,
+        locator=locator,
+        files=files,
+        passes=WuiPasses(spec, now=wui_now),
+        get_user_id=get_user_id,
+        runtime=wui_runtime or built_wui_runtime(spa_dist),
+    )
+
     def _schedule_saved(item_id: str, path: str) -> None:
         # What the file PUT does after a save (`file_routes.write_file`): an
         # activity entry, and a FileChanged so another viewer of the file
@@ -2850,8 +2873,6 @@ def create_app(
     # Mount the built SPA last so API routes registered above take precedence
     # over the catch-all static handler. If no build exists, skip silently —
     # the API alone is still usable (e.g. via curl or the specstar admin UI).
-    if spa_dist is None:
-        spa_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
     if spa_dist.is_dir() and (spa_dist / "index.html").is_file():
         app.mount("/", SpaStaticFiles(directory=spa_dist, html=True), name="spa")
 
