@@ -269,10 +269,45 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 
 決策與被否決的替代方案（例如在寫入時索引每個 `view: wui` 檔）在 `docs/plan-wui-overview.md`。
 
+### 多頁：一個資料夾就是一個網站（例如文件站）
+
+一個 WUI 資料夾可以放**好幾頁**——幾份互相連結的 HTML，像靜態網站產生器（mkdocs、
+Sphinx…）的成品。頁與頁之間的連結、`#錨點`、瀏覽器的上一頁、頁面自己用
+`fetch("./data.json")` 讀**自己資料夾**的檔案，全部照一般網站的樣子動；網址也跟著頁面走
+（讀者版是 `?page=`），複製下來給別人，打開就是那一頁。這不是「文件站模式」：平台分不出
+一個資料夾是文件站還是別的，**任何** WUI 都一樣。
+
+要做文件站，抄 `sample-skills/wui/examples/docs/`：`docs/*.md` 寫內容，`package.json` 的
+`build` 是 `uvx --with mkdocs-material mkdocs build`（用 `uvx` 而不是 `pip install`，
+因為 sandbox 回收後不會留下 virtualenv，`uvx` 每次 build 會自己長回來），`page.ai.yaml`
+寫 `entry: site/index.html`。
+
+**主題會伸手要網路的三個地方**（實測，2026-10-09）——頁面執行期沒有網路，這三個要關掉或
+把檔案放進資料夾：Material 預設字型向 Google 要（`theme: font: false`）；`repo_url`
+會讓頁首去問 GitHub 星數與最新版本（拿掉）；` ```mermaid ` 圖表會讓 Material 去 CDN 抓
+mermaid，**抓不到時它的搜尋在每一頁都會停在「正在初始化」**——一個離線的普通靜態伺服器上
+也一模一樣。把 `mermaid.min.js` 放進 `docs/` 並列進 `extra_javascript:`，Material 就用
+這一份。頁面上方的錯誤面板會逐一列出被擋的請求，漏掉的第一次打開就看得到。
+
+**它怎麼做到的**（`docs/plan-wui-multipage.md`）：單頁的 WUI 是平台把整個資料夾組成**一份**
+文件塞進 iframe（`srcdoc`），那份文件的 `location` 是 `about:srcdoc`——不是一個網址，
+所以凡是拿 `location` 算路徑的程式第一行就壞（Material 就是）。所以現在頁面改從**一個真的
+網址**載入：pane 先向平台要一張通行證（綁這個人、這個 item、這個資料夾，唯讀，12 小時），
+iframe 從 `/api/wui-content/<通行證>/<資料夾>/…` 載入，瀏覽器自己去拿每一個檔案。
+
+⚠️ **這條路要運營方點頭一次。** iframe 是 null origin，它發出的每一個請求都**不帶 cookie**
+（實測）。如果正式環境前面有一道每個請求都驗 SSO cookie 的 gateway，它會把頁面的每個請求
+擋下來——所以 pane 載入前會先用一個**不帶 cookie** 的請求試一次，不通就退回舊的單頁組裝
+（頁內的連結點不過去：作者的錯誤面板會說這裡只能顯示單頁，讀者點了沒反應）。要多頁，運營方要讓 `/api/wui-content/`
+不經 SSO 放行——那條路由自己用通行證驗權限，每個請求都重新檢查那個人對 item 的讀取權。
+見 [`migrations.md`](migrations.md#pr-904)。
+
 ## 頁面的邊界
 
 頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts"`，**沒有**
-`allow-same-origin`），所以它拿不到 cookie、碰不到外層 DOM、也呼叫不了 API。
+`allow-same-origin`；從網址載入的頁面，伺服器回應的 CSP 還帶 `sandbox`，所以就算直接在
+分頁裡打開那個網址也一樣是 null origin），所以它拿不到 cookie、碰不到外層 DOM、也呼叫不了
+API。
 唯一的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
 動詞的完整清單如下，而這個集合只在一種情況下會變：新增一個要先寫下它為什麼不能從
 `callTool` 進來的論證。（刻意不寫數字——上一版寫「七個」而 bridge 有八個，而一個手寫的數字沒有任何守衛看得到它過期。）
@@ -286,10 +321,18 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 | `startRun` | 起一個 workflow 並把進度串回來 |
 | `openLogin` | 請平台打開**它自己的**登入框(畫在頁面框外;頁面什麼都不交、也看不到輸入了什麼 —— `plan-wui-viewer-login.md`)。不能從 `callTool` 進來的論證:它存在的目的就是讓憑證**不經過頁面** |
 
-**執行期沒有網路。** 這是說「頁面跑起來之後」——`fetch`、遠端 `<script src>`、web font、
-遠端圖片，連「把自己導航到別的網站」都擋掉（那條靠 app 文件的 `frame-src`，見
-[`plan-wui.md`](plan-wui.md)）。**建置期不受這個限制**：那是 sandbox 裡的 `pnpm`，
+**執行期沒有網路。** 這是說「頁面跑起來之後」——對**別的網站**的 `fetch`、遠端
+`<script src>`、web font、遠端圖片，連「把自己導航到別的網站」都擋掉（那條靠 app 文件的
+`frame-src`，見 [`plan-wui.md`](plan-wui.md)）。從網址載入的頁面可以向**它來的那台主機**
+要東西（CSP 的 `'self'`），但拿得到的只有通行證底下、它自己資料夾裡的檔案——請求不帶
+cookie，API 認不出它是誰。**建置期不受這個限制**：那是 sandbox 裡的 `pnpm` / `uvx`，
 不是瀏覽器。
+
+**連到別的網站的連結**不會自己打開：平台在頁面**外面**畫一個框，大字寫網域、下面是完整
+網址，讀者按「Open」才在新分頁開（`noopener,noreferrer`）。頁面偽造不了這個框，也一次只問
+一個。殘餘的風險要知道：一個讀者不看網址就按，惡意頁面還是能把讀到的東西塞在網址裡帶出去
+——這道關卡靠的是人的注意力，不是像 `openLogin` 那樣「憑證根本不經過頁面」。指到 item 裡
+**別的檔案**的連結，在工作區裡會直接打開那個檔案；在讀者版上會說它指向工作區裡的哪個檔。
 
 所以「不能 CDN」的實際意思是**依賴要跟頁面一起被存起來**——對你們碰不到 CDN 的環境來說，
 這本來就是你們的做法，而且結果更好：離線可用、版本不會被上游偷換、外網不通也不影響。
@@ -332,6 +375,7 @@ AI。它讀的是 `wui` 這個 shared skill（`sample-skills/wui/`），裡面�
 | `examples/external/` | 答案在**另一個系統**裡——`callTool` |
 | `examples/chart/` | 有人想**看見數字的形狀**——真的圖表庫,build 負責把它抓進資料夾 |
 | `examples/react/` | **預設就用這份**——React + TypeScript,真的 build(`pnpm build` → `dist/`) |
+| `examples/docs/` | 有人要的是**拿來讀**的頁面——手冊、操作說明、長到一頁放不下的筆記:mkdocs 產生的多頁文件站 |
 
 小模型照抄比照著規格生成可靠得多，所以範例是這個 skill 最重要的部分。
 
@@ -347,8 +391,11 @@ AI。它讀的是 `wui` 這個 shared skill（`sample-skills/wui/`），裡面�
 - **不會自己重載。** AI 改完頁面，要按面板上的「重新整理」才看得到。
 - **不會傳播。** WUI 活在做出它的那個 item 裡；別的 item 要用只能複製資料夾。
 - **放在 workspace 根目錄的頁面不能寫入**——它沒有自己的資料夾。讀沒問題。
-- `srcset` 不會被解析，寫一個 `src` 就好。
-- 網址帶 query string（`logo.png?v=2`）會讓副檔名判斷失效。
+- **單頁組裝時**（部署沒放行 `/api/wui-content/` 的時候），`srcset` 不會被解析，寫一個
+  `src` 就好；網址帶 query string（`logo.png?v=2`）會讓副檔名判斷失效；頁與頁之間的連結
+  點不過去。從網址載入的頁面沒有這三條限制。
+- **通行證 12 小時。** 一個開著超過 12 小時的頁面，再點連結會看到「連結過期」——作者按
+  Refresh、讀者重新整理瀏覽器，就會換一張。
 - KB 與 wiki 的檔案服務分不出「沒有權限」和「檔案不存在」，兩者都會被當成不存在。
 
 ## 延伸閱讀

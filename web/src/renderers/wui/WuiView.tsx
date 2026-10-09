@@ -10,12 +10,16 @@
  *
  * - `sandbox="allow-scripts"` WITHOUT `allow-same-origin` — a null origin, so
  *   no cookies, no parent DOM, no API, and `postMessage` is the only way out.
- * - The CSP in `assemble.ts` — no fetch, no XHR, no WebSocket, no remote
- *   subresource, so the page cannot send what it read.
+ * - The CSP — no request to anywhere but this host, no remote subresource, so
+ *   the page cannot send what it read. A page served from its own address
+ *   (`served.ts`, `docs/plan-wui-multipage.md`) gets it as the server's header
+ *   (`api/wui_content.py`, which also carries `sandbox`); a page shown the
+ *   single-page way gets it as the first thing in its `srcdoc` (`assemble.ts`).
  * - `SPA_CSP`'s `frame-src` in `api/spa.py` — the page cannot NAVIGATE itself
- *   somewhere else either. That one cannot live in the frame: a document's own
+ *   to another site either. That one cannot live in the frame: a document's own
  *   CSP has no say over its own navigation, and without it `location.href` was
- *   an open exfiltration route past the other two.
+ *   an open exfiltration route past the other two. A link to another site is
+ *   handed to the pane instead, which asks the reader (`askToOpen`).
  */
 
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -713,10 +717,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         )
         .then((res) => {
           // `"*"` because an opaque origin cannot be named as a target. What
-          // makes that safe is not this handle — a WindowProxy keeps its
-          // identity across navigation — but `SPA_CSP`'s `frame-src` on the
-          // containing document, which forbids this frame becoming anything
-          // else. See `api/spa.py`.
+          // bounds where this lands is not this handle — a WindowProxy keeps
+          // its identity across navigation — but `SPA_CSP`'s `frame-src` on
+          // the containing document (`api/spa.py`): the frame can only ever
+          // hold a document from THIS host. A served site navigates within its
+          // folder, so a late answer can reach the next page of the same site;
+          // the runtime numbers each page's calls apart for exactly that.
           win.postMessage(res, "*");
         });
     };

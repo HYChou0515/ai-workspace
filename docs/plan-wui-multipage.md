@@ -195,6 +195,41 @@ Phase numbering is flat (`CLAUDE.md`). Every phase is red-first (`/tdd`).
 `docs/migrations.md` gets an entry in the implementing PR: D4 changes behaviour
 for every existing WUI with no knob (a link out goes from dead to a dialog).
 
+## Acceptance record (2026-10-09, measured — Phase 4/5)
+
+Chromium 1223 against this branch's app (`127.0.0.1:8241`), reader page `/w/…`
+and the workspace pane `/a/…/view?path=…`:
+
+| Check | Result |
+|---|---|
+| two-page WUI: frame `src` | `/api/wui-content/<pass>/two/index.html` |
+| `fetch("./data.json")` | `fetched:42` |
+| `#bottom` | scrolls (`scrollY=1469`), frame stays |
+| link to `report.html`, then Back | Page B with `?page=two/report.html`; Back → Page A |
+| `report.html#sec2` | Page B, scrolled (`scrollY=1445`) |
+| reopening the `?page=` address | lands on Page B |
+| link to `https://example.com/…` | the platform's dialog (domain + full URL); Cancel opens nothing; Open opens the tab |
+| `../notes.md` on the reader page | the "points at a file in the workspace" notice |
+| workspace pane: navigate, reload | stays on the sub-page |
+| this repo's `docs/`, `mkdocs.yml` unchanged | renders, styled; nav works; `?page=` follows; dark-mode toggle `default → slate`; **search stays on "initializing"** |
+| same site, mermaid kept in `docs/js/` + `extra_javascript` | **search: 116 results**, a result click navigates — identical to a plain static server |
+| `sample-skills/wui/examples/docs/`, built with its own command | nav + `#anchor` + search (3 results); **zero** blocked requests |
+
+**D12 as written does not hold, and not because of the platform.** This repo's
+site loads mermaid from `unpkg.com` at runtime; when that request fails,
+Material's search never leaves "initializing" — measured identically on a plain
+`python -m http.server` with only `unpkg.com` blocked (`找到 116 個` with the
+CDN, `正在初始化` without). A WUI has no runtime network by decision (D6), so a
+site that needs one at runtime behaves like that site offline. The example
+therefore turns the three runtime reaches off (`font: false`, no `repo_url`)
+and its README says to keep mermaid in the folder; the error panel names each
+blocked request.
+
+A worker stand-in that becomes real once an async read of its script finishes
+works for Material's search (measured: 116 results with it); a synchronous
+variant was tried while chasing the search failure above and dropped once the
+cause turned out to be mermaid.
+
 ## Verified ground truth (origin/master `958e011e`)
 
 - `web/src/renderers/wui/assemble.ts` — one entry, siblings inlined; `WUI_CSP`

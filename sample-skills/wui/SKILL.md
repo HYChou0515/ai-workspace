@@ -21,6 +21,7 @@ right the things that are easy to get wrong, and copying beats generating.
 | `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
 | `examples/chart/` | somebody wants to SEE the shape of the numbers | a real charting library, and the one build step that fetches it into the folder |
 | `examples/react/` | **the default toolchain** | React + TypeScript, `wui.d.ts` (the bridge, typed), and the three build settings that fail silently without them |
+| `examples/docs/` | somebody wants pages to READ — a handbook, a runbook, notes that outgrew one file | a documentation site: markdown in, `mkdocs build` out, many pages with search, and the three ways its theme reaches for a network it does not have |
 
 If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
@@ -206,6 +207,18 @@ title: Lot tracker
 `title` is what the pane is called. `entry` overrides `index.html` if you must.
 `icon` is optional: it marks the page on the WUI overview once it is Deployed;
 without one the overview draws a circle with the title's first letter.
+
+## A page can be many pages
+
+A WUI folder may hold a whole site — several HTML files that link to each other,
+like a generator's output. Links between them, `#anchors`, Back, and a
+`fetch("./data.json")` of a file in the folder all work, and the address follows
+the page so it can be shared. For documentation, copy `examples/docs/` rather
+than writing a site by hand.
+
+A link to another website does not open by itself: the platform asks the person
+first, in a box they can trust. A link to a file elsewhere in the item opens that
+file in the workspace.
 
 ## The rules that are enforced (not advice)
 

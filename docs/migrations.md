@@ -1970,6 +1970,44 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
 **確認做完**（`rollout 後`）：在出現卡片的對話按「登入 X」——只看到帳號密碼表單，沒有上面那顆按鈕；登入後對話框不跳動，
 說明裡寫「Private」。沒部署到這一版的症狀：表單上方有一顆登入方式按鈕。
 
+### 2026-10-09 · #904 WUI 可以是多頁網站（例如 mkdocs 文件站）：頁面改從自己的網址載入 {#pr-904}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- WUI 的 iframe 改從 `/api/wui-content/<通行證>/<資料夾>/…` 載入（之前是把整個資料夾組成一份 `srcdoc`）。
+  通行證是 pane 用登入身分向 `POST /api/a/{slug}/items/{id}/wui/pass` 要的，存成 specstar 列（`WuiPass`，
+  12 小時；同一人同一資料夾還剩一半以上就沿用，每次要新的時候順手清掉最多 50 張過期的）。
+- **所有 WUI**（不只文件站）：頁內連到別的網站的連結，改成平台在頁面外畫的確認框、按「Open」才開新分頁；
+  之前是點了沒反應（iframe 變成瀏覽器錯誤頁）。頁內的 `#錨點` 之前會把 iframe 導航成平台自己的 app（壞掉），
+  現在正常捲動。
+
+**資料** — 沒有回填。`WuiPass` 是新 model，註冊在 `spec.apply` 之後（沒有 auto-CRUD 路由，列不出別人的通行證）。
+
+**k8s · CI 側**（`rollout 前`，**只在前面有 gateway 的部署**）：
+
+- **指令**：在 gateway / ingress 上讓 `/api/wui-content/` 這個前綴**不經 SSO cookie 驗證**直接放行到 app
+  （部署在子路徑下時是 `<子路徑>/api/wui-content/`）。
+- **為什麼**：iframe 是 null origin，它發出的每一個請求都**不帶 SameSite=Lax 的 cookie**（實測：腳本、樣式、
+  `fetch`、連它自己的換頁都是 `Sec-Fetch-Site: cross-site`、`Cookie` 為空）。一道每個請求都驗 cookie 的 gateway
+  會把頁面的每個檔案都轉去登入頁。這條路由自己用通行證驗權限：通行證要存在、沒過期、路徑在它的資料夾內，
+  而且**每個請求**都重新檢查發通行證的那個人對 item 還有沒有讀取權。
+- **漏做的症狀**：沒有東西壞——pane 載入前會先用一個**不帶 cookie** 的請求試 `…/__wui/ping`，不通就退回原本的
+  單頁組裝，跟升級前一樣能用；只是多頁網站的連結點不過去（作者的錯誤面板會說這裡只能顯示單頁，讀者點了沒反應），
+  mkdocs 主題的 JavaScript（搜尋、深色模式）不會動。
+- **前端映像**：`pnpm build` 現在多輸出一個 `web/dist/wui-runtime.js`，app 從 SPA 的 dist 目錄讀它注入每一頁；
+  照常 build 就有。少了它，`__wui/ping` 回 503，所有 WUI 走單頁組裝。
+- **mkdocs 頁面的 build** 跑 `uvx --with mkdocs-material mkdocs build`：sandbox 要能連到 PyPI（或你們的套件鏡像）。
+  只影響有人做 mkdocs 頁面的時候；連不到時 Rebuild 的輸出會寫出 uv 的錯誤。
+
+**確認做完**（`rollout 後`）：
+
+1. 在任一 item 開一個 WUI，瀏覽器開發者工具看 iframe 的網址是 `/api/wui-content/…`（不是 `about:srcdoc`）。
+   是 `about:srcdoc` 就是 ping 沒通——在 pod 外用 `curl -s -o /dev/null -w '%{http_code}' <網址>/__wui/ping`
+  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行。
+2. 把 `sample-skills/wui/examples/docs/` 複製進一個 item，按 Rebuild，打開：側欄能換頁、搜尋有結果、網址列的
+   `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
+3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
