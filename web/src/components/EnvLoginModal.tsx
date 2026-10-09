@@ -70,6 +70,9 @@ export function EnvLoginModal({
       onClose={attemptClose}
       ariaLabel={title}
       data-testid="env-login-modal"
+      // Top-anchored: the result view is shorter than the form, and centred
+      // the dialog moved down under the pointer that had just pressed submit.
+      align="top"
       width={420}
       maxWidth="92vw"
       panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}
@@ -79,6 +82,7 @@ export function EnvLoginModal({
         <Logins
           offered={[provider]}
           initialDialog={provider.id}
+          formOnly
           creds={creds}
           setCreds={setCreds}
           exchange={(id, values) => client.resolveEnvProvider(slug, itemId, id, values)}

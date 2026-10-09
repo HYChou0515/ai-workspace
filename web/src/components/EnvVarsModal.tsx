@@ -1449,6 +1449,7 @@ export function Logins({
   offered,
   initialDialog = null,
   onCancel,
+  formOnly = false,
   disabled = false,
   creds,
   setCreds,
@@ -1461,6 +1462,9 @@ export function Logins({
   /** Where the form's Cancel goes when it is the whole page (`EnvLoginModal`):
    * there, collapsing the form would leave a page with nothing to do. */
   onCancel?: () => void;
+  /** Draw only the open form, not the list of logins to pick from — the
+   * card's login page, where the one login is already chosen. */
+  formOnly?: boolean;
   disabled?: boolean;
   creds: Record<string, string>;
   setCreds: (next: Record<string, string>) => void;
@@ -1509,7 +1513,8 @@ export function Logins({
   if (offered.length === 0) return null;
   return (
     <div style={{ display: "grid", gap: 6 }}>
-      {offered.map((provider) => (
+      {!formOnly &&
+        offered.map((provider) => (
         <div key={provider.id}>
           <button
             type="button"
