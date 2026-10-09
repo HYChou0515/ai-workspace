@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import shlex
 import uuid
@@ -8,11 +9,13 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     OutputSink,
+    PreviewFailed,
     RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .walk import flat_lister, walk_tree
 
@@ -68,6 +71,11 @@ class MockSandbox:
         # it never appears in walk/exists (it lives outside the workspace on a
         # real backend). A handle id here ⇔ its sandbox is marked authoritative.
         self._ready: set[str] = set()
+        self._previews: dict[str, dict[str, bytes]] = {}
+        #: Set to a reason to make every conversion fail with it (tests).
+        self.fail_preview: str | None = None
+        #: How many conversions actually ran (tests).
+        self.preview_conversions = 0
         # handle id -> the item it serves, `None` for an anonymous create.
         self._item_of: dict[str, str | None] = {}
 
@@ -117,6 +125,7 @@ class MockSandbox:
         self._dirs.pop(handle.id, None)
         self._exposed.pop(handle.id, None)
         self._ready.discard(handle.id)  # #366: teardown drops the readiness mark
+        self._previews.pop(handle.id, None)  # reaped with the sandbox (plan-pptx-preview N2)
 
     async def mark_ready(self, handle: SandboxHandle) -> None:
         """#366: mark the sandbox authoritative (its files are the complete,
@@ -129,6 +138,28 @@ class MockSandbox:
         """#366: True once `mark_ready` ran and the sandbox still lives."""
         self._require(handle)
         return handle.id in self._ready
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        self._require(handle)
+        return self._previews.get(handle.id, {}).get(check_preview_key(sha))
+
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        sha = hashlib.sha256(await self.download(handle, path)).hexdigest()
+        previews = self._previews.setdefault(handle.id, {})
+        if sha in previews:
+            return sha
+        if not convert:
+            return None
+        if self.fail_preview is not None:
+            raise PreviewFailed(self.fail_preview)
+        self.preview_conversions += 1
+        # A real conversion takes seconds; yield here so two concurrent askers
+        # really can both be converting — the race a caller's lock exists for.
+        await asyncio.sleep(0)
+        previews[sha] = b"%PDF-mock " + sha.encode()
+        return sha
 
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         self._require(handle)

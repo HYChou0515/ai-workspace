@@ -27,16 +27,19 @@ import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from .protocol import (
+    PREVIEW_TIMEOUT_S,
     EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
+    PreviewFailed,
     RunningSandbox,
     SandboxBusy,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,8 @@ logger = logging.getLogger(__name__)
 _ERRORS: dict[str, type[Exception]] = {
     "SandboxNotFound": SandboxNotFound,
     "FileNotFoundError": FileNotFoundError,
+    # plan-pptx-preview D5: the converter's own reason, not a missing sandbox.
+    "PreviewFailed": PreviewFailed,
     # A pod that has begun terminating (SIGTERM, or a PreStop hook hitting
     # `/drain`) refuses NEW sandboxes with 503 `{"error": "draining"}` while the
     # ones it already runs continue. That is `SandboxBusy`'s exact meaning —
@@ -682,6 +687,33 @@ class HttpSandbox:
     async def is_ready(self, handle: SandboxHandle) -> bool:
         resp = await self._io_request(handle, "GET", "/ready")
         return bool(resp.json()["ready"])
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        # 204 = no such preview; 404 already means "no such sandbox" on this wire.
+        resp = await self._io_request(handle, "GET", f"/preview/{check_preview_key(sha)}")
+        return None if resp.status_code == 204 else resp.content
+
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        # The host converts AND keeps the PDF; only the hash comes back here.
+        params = {"path": path, "convert": "true" if convert else "false"}
+        if not convert:
+            # A cache lookup: fast and idempotent, so the busy-retry applies.
+            resp = await self._io_request(handle, "POST", "/preview", params=params)
+        else:
+            # A conversion has its own deadline, like `exec`: NOT the escalating
+            # busy-retry, whose short first read would start a second soffice
+            # while the first still runs.
+            resp = await self._request(
+                handle,
+                "POST",
+                "/preview",
+                params=params,
+                timeout=httpx.Timeout(PREVIEW_TIMEOUT_S + 30, connect=10.0),
+            )
+        sha = resp.json()["sha"]
+        return None if sha is None else check_preview_key(sha)
 
     async def walk(
         self,

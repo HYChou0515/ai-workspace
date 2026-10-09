@@ -19,6 +19,7 @@ import contextlib
 import io
 import logging
 import os
+import shlex
 import shutil
 import tarfile
 import tempfile
@@ -29,15 +30,18 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from .protocol import (
+    PREVIEW_COMMAND,
     EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
+    PreviewFailed,
     RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
     WalkResult,
+    check_preview_key,
 )
 from .walk import flat_lister, walk_tree
 
@@ -51,6 +55,9 @@ _WORKDIR = "/workspace"
 # #366: readiness marker OUTSIDE the workspace (container root), so walk never
 # sees it. Deprecated backend — kept only to satisfy the Sandbox protocol.
 _READY_MARKER = "/.ready"
+# plan-pptx-preview N2: converted decks by content hash, at the container root
+# beside `.ready` — outside the `/workspace` walk scope.
+_PREVIEW_DIR = "/.preview"
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +246,43 @@ class DockerSandbox:
         container = self._require(handle)
         r = await asyncio.to_thread(container.exec_run, ["test", "-f", _READY_MARKER])
         return r.exit_code == 0
+
+    async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
+        container = self._require(handle)
+        path = f"{_PREVIEW_DIR}/{check_preview_key(sha)}.pdf"
+        r = await asyncio.to_thread(container.exec_run, ["cat", path], demux=True)
+        return (r.output[0] or b"") if r.exit_code == 0 else None
+
+    async def render_preview(
+        self, handle: SandboxHandle, path: str, *, convert: bool
+    ) -> str | None:
+        container = self._require(handle)
+        deck = self._target(path)
+        r = await asyncio.to_thread(container.exec_run, ["sha256sum", deck], demux=True)
+        if r.exit_code != 0:
+            raise FileNotFoundError(path)
+        sha = check_preview_key((r.output[0] or b"").decode().split()[0])
+        cached = f"{_PREVIEW_DIR}/{sha}.pdf"
+        if (await asyncio.to_thread(container.exec_run, ["test", "-f", cached])).exit_code == 0:
+            return sha
+        if not convert:
+            return None
+        # A fresh dir per attempt: its own output, its own LibreOffice profile
+        # (soffice refuses one another conversion holds) and its own TMPDIR.
+        # The container is the sandbox, so what it leaves is read inside it.
+        work = f"/.preview-out/{uuid.uuid4().hex}"
+        made = f"{work}/out/{shlex.quote(PurePosixPath(deck).stem)}.pdf"
+        script = (
+            f"mkdir -p {work}/out {work}/tmp {_PREVIEW_DIR} && export TMPDIR={work}/tmp && "
+            f'"$@" {work}/out {shlex.quote(deck)} -env:UserInstallation=file://{work}/profile '
+            f"&& mv {made} {cached}; rc=$?; rm -rf {work}; exit $rc"
+        )
+        r = await asyncio.to_thread(
+            container.exec_run, ["sh", "-c", script, "sh", *PREVIEW_COMMAND], demux=True
+        )
+        if r.exit_code != 0:
+            raise PreviewFailed((r.output[1] or b"").decode(errors="replace").strip()[-2000:])
+        return sha
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         if not await self.exists(handle, path):

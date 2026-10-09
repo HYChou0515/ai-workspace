@@ -433,6 +433,67 @@ textarea.input {
   }
 }
 
+/* A file viewer's stand-in for content it cannot show yet (SlidesRenderer):
+   centred in the pane — graphic, heading, a line of detail, actions. The busy
+   bar reuses the global progress sweep (and its reduced-motion pulse). */
+.slides-notice {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px;
+  text-align: center;
+}
+.slides-notice__title {
+  margin: 4px 0 0;
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--text-paper);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.slides-notice__body {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  /* Even lines, so a short sentence never leaves one character alone; and
+     Chinese breaks at its punctuation, not inside a word like 下載. */
+  text-wrap: balance;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.slides-notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.slides-notice__progress {
+  width: 160px;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--accent-soft);
+}
+.slides-notice__bar {
+  height: 100%;
+  width: 35%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: global-progress-slide 1.05s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .slides-notice__bar {
+    width: 100%;
+    animation: health-dot-pulse 1.4s ease-in-out infinite;
+  }
+}
+
 /*
  * Skeleton placeholder (#151): a shimmering block stood in for content that is
  * still loading. Sizing is the caller's job (modifier classes); this owns only
