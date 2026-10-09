@@ -2,14 +2,16 @@
  * A slide deck (pptx / ppt / odp) as a PDF (docs/plan-pptx-preview.md): the
  * item's sandbox converts it, and the browser's own PDF viewer shows it, the
  * way `PdfRenderer` shows a .pdf. A big deck is converted only after the person
- * says yes (N6); a failure gives the converter's reason and the original. The
- * Edit toggle shows the file as it was shown before this existed (N3).
+ * says yes (N6); a failure says so and offers the original. The Edit toggle
+ * shows the file as it was shown before this existed (N3).
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { useFileService } from "../api/fileService";
+import { qk } from "../api/queryKeys";
 import { useEditMode } from "../hooks/editMode";
+import { subscribeFileChanged } from "../lib/fileChangedBus";
 import { useT } from "../lib/i18n";
 import { relPath } from "../lib/relPath";
 import { TextRenderer } from "./TextRenderer";
@@ -24,10 +26,23 @@ export function SlidesRenderer({ path }: { path: string }) {
   const t = useT();
   const svc = useFileService();
   const { isEditing } = useEditMode();
-  const [confirmed, setConfirmed] = useState(false);
+  // A yes is for the deck it was given to: the next big deck asks again.
+  const [confirmedPath, setConfirmedPath] = useState<string | null>(null);
+  const confirmed = confirmedPath === path;
   const preview = svc.slidePreview;
+  const qc = useQueryClient();
+  // A person's save arrives on the bus, not through the refresh chain.
+  useEffect(
+    () =>
+      subscribeFileChanged(svc.scopeId, (changed) => {
+        if (relPath(changed) === relPath(path)) {
+          void qc.invalidateQueries({ queryKey: qk.file(svc.scopeId, path) });
+        }
+      }),
+    [qc, svc.scopeId, path],
+  );
   const q = useQuery({
-    queryKey: ["slidePreview", svc.scopeId, path, confirmed],
+    queryKey: qk.slidePreview(svc.scopeId, path, confirmed),
     queryFn: () => preview!(path, confirmed),
     enabled: Boolean(preview) && !isEditing(path),
     // The server answers from its cache when the deck is unchanged; asking
@@ -52,7 +67,7 @@ export function SlidesRenderer({ path }: { path: string }) {
   if (q.isError) {
     return (
       <div style={{ display: "grid", gap: 8 }}>
-        <span>{t("slides.failed", { why: String(q.error) })}</span>
+        <span>{t("slides.unreachable")}</span>
         {download}
       </div>
     );
@@ -66,7 +81,7 @@ export function SlidesRenderer({ path }: { path: string }) {
           type="button"
           className="btn"
           data-variant="primary"
-          onClick={() => setConfirmed(true)}
+          onClick={() => setConfirmedPath(path)}
         >
           {t("slides.confirmButton")}
         </button>
@@ -77,7 +92,7 @@ export function SlidesRenderer({ path }: { path: string }) {
   if (data.kind === "failed") {
     return (
       <div style={{ display: "grid", gap: 8 }}>
-        <span>{t("slides.failed", { why: data.why })}</span>
+        <span>{t("slides.failed")}</span>
         {download}
       </div>
     );

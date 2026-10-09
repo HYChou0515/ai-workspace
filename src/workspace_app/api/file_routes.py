@@ -388,7 +388,7 @@ def register_file_routes(
             quota=files.quota_of(investigation_id),
         )
 
-    previews = SlidePreviews(files=files, registry=registry, sandbox=sandbox)
+    previews = SlidePreviews(files=files, registry=registry, sandbox=sandbox, admission=admission)
 
     @app.get("/a/{slug}/items/{item_id}/files/preview")
     async def slide_preview(slug: str, item_id: str, path: str, confirm: bool = False) -> Response:

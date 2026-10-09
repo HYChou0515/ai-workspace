@@ -267,10 +267,15 @@ class DockerSandbox:
             return sha
         if not convert:
             return None
-        out = f"/.preview-out/{sha}"
+        # A fresh dir per attempt: its own output, its own LibreOffice profile
+        # (soffice refuses one another conversion holds) and its own TMPDIR.
+        # The container is the sandbox, so what it leaves is read inside it.
+        work = f"/.preview-out/{uuid.uuid4().hex}"
+        made = f"{work}/out/{shlex.quote(PurePosixPath(deck).stem)}.pdf"
         script = (
-            f'mkdir -p {out} {_PREVIEW_DIR} && "$@" {out} {shlex.quote(deck)} '
-            f"&& mv {out}/*.pdf {cached}; rc=$?; rm -rf {out}; exit $rc"
+            f"mkdir -p {work}/out {work}/tmp {_PREVIEW_DIR} && export TMPDIR={work}/tmp && "
+            f'"$@" {work}/out {shlex.quote(deck)} -env:UserInstallation=file://{work}/profile '
+            f"&& mv {made} {cached}; rc=$?; rm -rf {work}; exit $rc"
         )
         r = await asyncio.to_thread(
             container.exec_run, ["sh", "-c", script, "sh", *PREVIEW_COMMAND], demux=True

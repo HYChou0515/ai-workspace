@@ -22,6 +22,7 @@ from ..sandbox.protocol import SandboxNotFound
 
 if TYPE_CHECKING:
     from ..files.facade import WorkspaceFiles
+    from ..quota.admission import AdmissionGate
     from ..sandbox.protocol import Sandbox
     from .registry import InvestigationRegistry
 
@@ -55,14 +56,23 @@ def is_slide_deck(path: str) -> bool:
 
 class SlidePreviews:
     def __init__(
-        self, *, files: WorkspaceFiles, registry: InvestigationRegistry, sandbox: Sandbox
+        self,
+        *,
+        files: WorkspaceFiles,
+        registry: InvestigationRegistry,
+        sandbox: Sandbox,
+        admission: AdmissionGate | None,
     ) -> None:
         self._files = files
         self._registry = registry
         self._sandbox = sandbox
+        # Required though it may be None: converting can open a sandbox, which
+        # is what the per-person limit counts — the terminal passes the same gate.
+        self._admission = admission
         # D4: one conversion of a deck at a time on this pod; a second asker
-        # waits for the first and then finds the cache filled.
-        self._locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # waits for the first and then finds the cache filled. An entry lives
+        # only while someone holds or waits for it, so the map stays small.
+        self._locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
 
     async def preview(self, item_id: str, path: str, *, confirm: bool) -> Preview | NeedsConfirm:
         """The deck's PDF, or `NeedsConfirm` when it is big and not yet
@@ -78,12 +88,23 @@ class SlidePreviews:
             return Preview(cached)
         if size > CONFIRM_BYTES and not confirm:
             return NeedsConfirm(size=size, limit=CONFIRM_BYTES)
-        lock = self._locks.setdefault((item_id, path), asyncio.Lock())
-        async with lock:
-            session = await self._registry.session(item_id)
-            handle = await self._registry.ensure_handle(session)
-            sha = await self._sandbox.render_preview(handle, path, convert=True)
-            pdf = await self._sandbox.get_preview(handle, sha) if sha else None
+        key = (item_id, path)
+        lock, users = self._locks.get(key, (asyncio.Lock(), 0))
+        self._locks[key] = (lock, users + 1)
+        try:
+            async with lock:
+                if self._admission is not None:
+                    await self._admission.check(item_id)
+                session = await self._registry.session(item_id)
+                handle = await self._registry.ensure_handle(session)
+                sha = await self._sandbox.render_preview(handle, path, convert=True)
+                pdf = await self._sandbox.get_preview(handle, sha) if sha else None
+        finally:
+            lock, users = self._locks[key]
+            if users == 1:
+                del self._locks[key]
+            else:
+                self._locks[key] = (lock, users - 1)
         if pdf is None:  # pragma: no cover — reaped between the two calls
             raise SandboxNotFound(f"the sandbox of {item_id} went away while converting {path}")
         return Preview(pdf)

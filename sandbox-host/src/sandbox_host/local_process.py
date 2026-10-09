@@ -30,6 +30,7 @@ import os
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import uuid
@@ -293,9 +294,138 @@ _READY_MARKER = ".ready"
 # The app's plan-pptx-preview N2: converted decks by content hash, a sibling of
 # the workspace like `.ready` — never walked or archived, reaped with the dir.
 _PREVIEW_DIR = ".preview"
-# The converter's scratch output, under the sandbox's own HOME (writable by the
-# exec uid, in the infra area); moved into `.preview` and removed.
+# One conversion's scratch dir, under the sandbox's own HOME (writable by the
+# exec uid, in the infra area): `<nonce>/out` for the PDF, `<nonce>/profile` for
+# its own LibreOffice profile, `<nonce>/tmp` for TMPDIR. Removed afterwards.
 _PREVIEW_OUT = ".preview-out"
+# Everything a conversion makes is the SANDBOX's — under isolation it is read
+# here as root, and under the jail the infra area is the chroot `/` — so it is
+# opened without following a link at any step, and only a lone regular file is
+# taken (a hard link to someone else's file is not a PDF the deck made).
+_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+# The converter runs in sh so it can make its own dirs as the sandbox uid, keep
+# its temp files out of the workspace (isolation points TMPDIR there), use a
+# profile no other conversion holds (LibreOffice refuses a shared one), and
+# print a dot every so often: soffice is silent while it works, and the exec's
+# idle cap would otherwise kill it long before PREVIEW_TIMEOUT_S.
+_PREVIEW_SCRIPT = (
+    'work="$1"; deck="$2"; beat="$3"; shift 3; '
+    'mkdir -p "$work/out" "$work/tmp" || exit 1; export TMPDIR="$work/tmp"; hb=; '
+    'if [ "$beat" != 0 ]; then '
+    '( while :; do sleep "$beat" >/dev/null 2>&1 </dev/null; printf .; done ) & hb=$!; fi; '
+    '"$@" "$work/out" "$deck" "-env:UserInstallation=file://$work/profile"; rc=$?; '
+    '[ -n "$hb" ] && kill "$hb" 2>/dev/null; exit $rc'
+)
+
+
+def _open_dir(base: Path, *parts: str) -> int | None:
+    """An fd for `base/parts…`, refusing a link at every step below `base`;
+    None when any step is missing or is not a real directory."""
+    fd = os.open(base, _DIR_NOFOLLOW)
+    try:
+        for part in parts:
+            step = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = step
+    except OSError:  # missing, a link (ELOOP), not a dir (ENOTDIR)
+        os.close(fd)
+        return None
+    return fd
+
+
+def _read_lone_file(dir_fd: int, name: str) -> bytes | None:
+    """`name` in `dir_fd` when it is a regular file with one link; else None.
+    O_NONBLOCK so a planted FIFO cannot hang the open."""
+    try:
+        fd = os.open(
+            name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd
+        )
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return None
+        return f.read()
+
+
+def _is_lone_file(dir_fd: int, name: str) -> bool:
+    try:
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+
+
+def _cached_preview(root: Path, sha: str) -> bytes | None:
+    store = _open_dir(root, _PREVIEW_DIR)
+    if store is None:
+        return None
+    try:
+        return _read_lone_file(store, f"{sha}.pdf")
+    finally:
+        os.close(store)
+
+
+def _has_preview(root: Path, sha: str) -> bool:
+    store = _open_dir(root, _PREVIEW_DIR)
+    if store is None:
+        return False
+    try:
+        return _is_lone_file(store, f"{sha}.pdf")
+    finally:
+        os.close(store)
+
+
+def _keep_preview(root: Path, sha: str, pdf: bytes) -> None:
+    """Write `.preview/<sha>.pdf` afresh, whole or absent — never by moving the
+    sandbox's file — readable by this process only (0700 dir, 0600 file)."""
+    top = _open_dir(root)
+    assert top is not None  # the sandbox root itself: just resolved by _require
+    try:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(_PREVIEW_DIR, 0o700, dir_fd=top)
+        store = _open_dir(root, _PREVIEW_DIR)
+        if store is None:
+            raise PreviewFailed("the preview store is not a directory")
+    finally:
+        os.close(top)
+    try:
+        os.fchmod(store, 0o700)
+        part = f".{sha}.{uuid.uuid4().hex}.part"
+        fd = os.open(
+            part,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=store,
+        )
+        with os.fdopen(fd, "wb") as f:
+            f.write(pdf)
+        os.replace(part, f"{sha}.pdf", src_dir_fd=store, dst_dir_fd=store)
+    finally:
+        os.close(store)
+
+
+def _take_conversion(root: Path, nonce: str, stem: str) -> bytes | None:
+    """The PDF one conversion made, read safely; then its scratch dir is gone.
+    Removal is by fd too, so a link swapped in for `.preview-out` cannot point
+    the rmtree at another directory."""
+    scratch = _open_dir(root, _HOME, _PREVIEW_OUT)
+    if scratch is None:
+        return None
+    try:
+        out = _open_dir(root, _HOME, _PREVIEW_OUT, nonce, "out")
+        pdf = None
+        if out is not None:
+            try:
+                pdf = _read_lone_file(out, f"{stem}.pdf")
+            finally:
+                os.close(out)
+        with contextlib.suppress(OSError):
+            shutil.rmtree(nonce, dir_fd=scratch)
+        return pdf
+    finally:
+        os.close(scratch)
 
 
 def _sha256_of(path: Path) -> str:
@@ -678,11 +808,9 @@ class LocalProcessSandbox:
         return await asyncio.to_thread(marker.is_file)
 
     async def get_preview(self, handle: SandboxHandle, sha: str) -> bytes | None:
-        path = self._require(handle) / _PREVIEW_DIR / f"{check_preview_key(sha)}.pdf"
-        try:
-            return await asyncio.to_thread(path.read_bytes)
-        except FileNotFoundError:
-            return None
+        return await asyncio.to_thread(
+            _cached_preview, self._require(handle), check_preview_key(sha)
+        )
 
     async def render_preview(
         self, handle: SandboxHandle, path: str, *, convert: bool
@@ -690,44 +818,41 @@ class LocalProcessSandbox:
         root = self._require(handle)
         deck = self._resolve(self._workspace(handle), path)
         sha = await asyncio.to_thread(_sha256_of, deck)
-        cached = root / _PREVIEW_DIR / f"{sha}.pdf"
-        if await asyncio.to_thread(cached.is_file):
+        if await asyncio.to_thread(_has_preview, root, sha):
             return sha
         if not convert:
             return None
-        # The converter writes into the sandbox's own HOME (infra area, owned by
-        # the exec uid, a sibling of the workspace) — never the workspace, never
-        # stdout. Spelled as the exec sees it: chroot-relative under the jail.
+        # Into the sandbox's own HOME (infra area, owned by the exec uid) —
+        # never the workspace, never stdout. Spelled as the exec sees it:
+        # chroot-relative under the jail. A fresh dir per attempt, so two
+        # conversions never share an output dir or a profile.
         home = f"/{_HOME}" if self._isolate else str(root / _HOME)
-        out_rel = f"{_PREVIEW_OUT}/{sha}"
+        nonce = uuid.uuid4().hex
         rel_deck = "./" + deck.relative_to(self._workspace(handle)).as_posix()
-        # The dir is made by the exec itself, as the sandbox's uid — one made
-        # here, by this process, would not be writable by an isolated exec.
-        script = 'out="$1"; deck="$2"; shift 2; mkdir -p "$out" && exec "$@" "$out" "$deck"'
+        beat = f"{self._log_timeout / 3:g}" if self._log_timeout > 0 else "0"
         result = await self.exec(
             handle,
-            ["sh", "-c", script, "sh", f"{home}/{out_rel}", rel_deck, *self._preview_command],
+            [
+                "sh",
+                "-c",
+                _PREVIEW_SCRIPT,
+                "sh",
+                f"{home}/{_PREVIEW_OUT}/{nonce}",
+                rel_deck,
+                beat,
+                *self._preview_command,
+            ],
             exec_timeout=PREVIEW_TIMEOUT_S,
         )
-        out_dir = root / _HOME / out_rel
-        made = sorted(out_dir.glob("*.pdf")) if out_dir.is_dir() else []
-        # Kept only from a clean exit: a crash part-way can leave a PDF behind
-        # that is not the deck.
-        ok = result.exit_code == 0 and bool(made)
-
-        def keep() -> None:
-            if ok:
-                cached.parent.mkdir(exist_ok=True)
-                # Whole or absent: a racing reader never gets half a PDF.
-                made[0].replace(cached)
-            shutil.rmtree(out_dir, ignore_errors=True)
-
-        await asyncio.to_thread(keep)
-        if not ok:
+        pdf = await asyncio.to_thread(_take_conversion, root, nonce, deck.stem)
+        # Kept only from a clean exit that left a real PDF: a crash part-way
+        # can leave one behind that is not the deck.
+        if result.exit_code != 0 or pdf is None or not pdf.startswith(b"%PDF"):
             reason = result.stderr.decode(errors="replace").strip() or (
                 f"the converter exited {result.exit_code} without writing a PDF"
             )
             raise PreviewFailed(reason[-2000:])
+        await asyncio.to_thread(_keep_preview, root, sha, pdf)
         return sha
 
     def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:

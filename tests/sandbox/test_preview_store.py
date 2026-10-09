@@ -29,7 +29,7 @@ SHA = hashlib.sha256(DECK).hexdigest()
 FAKE_SOFFICE = (
     "sh",
     "-c",
-    'printf "%%PDF-fake" > "$1/$(basename "${2%.*}").pdf"; echo ran >> "$1/../../count"',
+    'printf "%%PDF-fake" > "$1/$(basename "${2%.*}").pdf"; echo ran >> "$1/../../../count"',
     "sh",
 )
 FAILING_SOFFICE = ("sh", "-c", "echo 'source file could not be loaded' >&2; exit 1", "sh")
@@ -202,3 +202,147 @@ async def test_the_converter_s_scratch_output_is_cleared(tmp_path) -> None:  # n
     await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
 
     assert not list(tmp_path.rglob(f".preview-out/{SHA}"))
+
+
+# ── review round 1: what the converter leaves is untrusted ─────────────────
+# Under isolation the host reads as root what a sandbox uid wrote; under the
+# jail the infra area is the chroot `/`. So nothing the sandbox can plant is
+# followed, and nothing kept is readable by another item.
+
+
+def _root_of(tmp_path, h):  # noqa: ANN001, ANN202
+    return tmp_path / h.id
+
+
+async def test_a_link_left_where_the_pdf_belongs_is_not_followed(tmp_path) -> None:  # noqa: ANN001
+    secret = tmp_path / "secret.pdf"
+    secret.write_bytes(b"%PDF someone else's")
+    plant = ("sh", "-c", f'ln -s {secret} "$1/$(basename "${{2%.*}}").pdf"', "sh")
+    sandbox = _local(tmp_path, plant)
+    h = await _with_deck(sandbox)
+
+    with pytest.raises(PreviewFailed):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.get_preview(h, SHA) is None
+
+
+async def test_a_link_planted_in_the_cache_is_not_a_preview(tmp_path) -> None:  # noqa: ANN001
+    secret = tmp_path / "secret.pdf"
+    secret.write_bytes(b"%PDF someone else's")
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+    (_root_of(tmp_path, h) / ".preview").mkdir()
+    (_root_of(tmp_path, h) / ".preview" / f"{SHA}.pdf").symlink_to(secret)
+
+    assert await sandbox.get_preview(h, SHA) is None
+    assert await sandbox.render_preview(h, "/slides/q3.pptx", convert=False) is None
+
+
+async def test_a_hard_link_left_where_the_pdf_belongs_is_not_taken(tmp_path) -> None:  # noqa: ANN001
+    secret = tmp_path / "secret.pdf"
+    secret.write_bytes(b"%PDF someone else's")
+    plant = ("sh", "-c", f'ln {secret} "$1/$(basename "${{2%.*}}").pdf"', "sh")
+    sandbox = _local(tmp_path, plant)
+    h = await _with_deck(sandbox)
+
+    with pytest.raises(PreviewFailed):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+
+async def test_a_cache_dir_that_is_a_link_is_not_read_through(tmp_path) -> None:  # noqa: ANN001
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / f"{SHA}.pdf").write_bytes(b"%PDF someone else's")
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+    (_root_of(tmp_path, h) / ".preview").symlink_to(elsewhere)
+
+    assert await sandbox.get_preview(h, SHA) is None
+    assert await sandbox.render_preview(h, "/slides/q3.pptx", convert=False) is None
+
+
+async def test_a_kept_preview_is_readable_by_its_owner_only(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    store = _root_of(tmp_path, h) / ".preview"
+    assert store.stat().st_mode & 0o777 == 0o700
+    assert (store / f"{SHA}.pdf").stat().st_mode & 0o777 == 0o600
+
+
+async def test_something_that_is_not_a_pdf_is_not_kept(tmp_path) -> None:  # noqa: ANN001
+    junk = ("sh", "-c", 'printf "not a pdf" > "$1/$(basename "${2%.*}").pdf"', "sh")
+    sandbox = _local(tmp_path, junk)
+    h = await _with_deck(sandbox)
+
+    with pytest.raises(PreviewFailed):
+        await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert await sandbox.get_preview(h, SHA) is None
+
+
+# LibreOffice refuses a profile another instance holds: this stand-in takes its
+# profile dir the way soffice locks it, so two conversions sharing one fail.
+LOCKING_SOFFICE = (
+    "sh",
+    "-c",
+    'p="${3#-env:UserInstallation=file://}"; mkdir "$p" || { echo "profile in use" >&2; exit 1; };'
+    ' sleep 0.3; printf "%%PDF-fake" > "$1/$(basename "${2%.*}").pdf"',
+    "sh",
+)
+
+
+async def test_two_conversions_at_once_each_get_their_own_profile(tmp_path) -> None:  # noqa: ANN001
+    import asyncio
+
+    sandbox = _local(tmp_path, LOCKING_SOFFICE)
+    h = await _with_deck(sandbox)
+    await sandbox.upload(h, DECK + b" two", "/slides/q4.pptx")
+
+    made = await asyncio.gather(
+        sandbox.render_preview(h, "/slides/q3.pptx", convert=True),
+        sandbox.render_preview(h, "/slides/q4.pptx", convert=True),
+    )
+
+    assert all(made)
+
+
+async def test_the_converter_s_temp_files_stay_out_of_the_workspace(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """Isolation points TMPDIR at the workspace; the converter must not use it."""
+    litter = (
+        "sh",
+        "-c",
+        'touch "$TMPDIR/lu-tmp"; printf "%%PDF-fake" > "$1/$(basename "${2%.*}").pdf"',
+        "sh",
+    )
+    sandbox = _local(tmp_path, litter)
+    h = await _with_deck(sandbox)
+    monkeypatch.setenv("TMPDIR", str(_root_of(tmp_path, h) / "root"))
+
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert [f.path for f in (await sandbox.walk(h, "/")).files] == ["/slides/q3.pptx"]
+
+
+async def test_a_quiet_converter_is_not_taken_for_a_hung_one(tmp_path) -> None:  # noqa: ANN001
+    """LibreOffice prints nothing while it works; the idle cap must not kill it
+    before the conversion's own time limit."""
+    quiet = ("sh", "-c", 'sleep 1.5; printf "%%PDF-fake" > "$1/$(basename "${2%.*}").pdf"', "sh")
+    sandbox = LocalProcessSandbox(
+        root_dir=tmp_path, isolate=False, preview_command=quiet, log_timeout=0.5
+    )
+    h = await _with_deck(sandbox)
+
+    assert await sandbox.render_preview(h, "/slides/q3.pptx", convert=True) == SHA
+
+
+async def test_nothing_of_a_conversion_is_left_behind(tmp_path) -> None:  # noqa: ANN001
+    sandbox = _local(tmp_path)
+    h = await _with_deck(sandbox)
+
+    await sandbox.render_preview(h, "/slides/q3.pptx", convert=True)
+
+    assert list((_root_of(tmp_path, h) / ".home" / ".preview-out").iterdir()) == []

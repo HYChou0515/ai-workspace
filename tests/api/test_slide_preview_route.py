@@ -164,3 +164,19 @@ async def test_a_reader_may_preview_and_a_stranger_may_not():
     assert _preview(client, iid, path="q3.pptx").status_code == 403
     holder["id"] = "mallory"  # no grants at all
     assert _preview(client, iid, path="q3.pptx").status_code == 404
+
+
+def test_a_preview_that_would_open_a_sandbox_is_held_to_the_sandbox_limit(monkeypatch):
+    """Converting opens the item's sandbox — the same thing a terminal does, so
+    the same per-person limit refuses it, with the same 507."""
+    from workspace_app.quota.admission import AdmissionGate, SandboxQuotaExceeded
+
+    async def full(_self, item_id, *_a, **_k):  # noqa: ANN001, ANN002, ANN003, ANN202
+        raise SandboxQuotaExceeded("alice", "sandboxes", 1, 1)
+
+    client, iid = _client_and_item()
+    monkeypatch.setattr(AdmissionGate, "check", full)
+
+    r = _preview(client, iid)
+
+    assert r.status_code == 507, r.text

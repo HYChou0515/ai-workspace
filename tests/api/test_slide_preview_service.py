@@ -48,7 +48,22 @@ class _Registry:
         return self.live
 
 
-async def _service(*, live: bool):  # noqa: ANN202
+class _Gate:
+    """The per-person sandbox limit: refuses when `full`, counts every ask."""
+
+    def __init__(self, *, full: bool) -> None:
+        self.full = full
+        self.asked = 0
+
+    async def check(self, item: str) -> None:
+        from workspace_app.quota.admission import SandboxQuotaExceeded
+
+        self.asked += 1
+        if self.full:
+            raise SandboxQuotaExceeded("alice", "sandboxes", 1, 1)
+
+
+async def _service(*, live: bool, gate: _Gate | None = None):  # noqa: ANN202
     sandbox = MockSandbox()
     handle = None
     if live:
@@ -56,7 +71,8 @@ async def _service(*, live: bool):  # noqa: ANN202
         await sandbox.upload(handle, DECK, "/q3.pptx")
     registry = _Registry(sandbox, handle)
     files = _Files({"/q3.pptx": len(DECK)})
-    return SlidePreviews(files=files, registry=registry, sandbox=sandbox), registry, sandbox  # ty: ignore[invalid-argument-type]
+    svc = SlidePreviews(files=files, registry=registry, sandbox=sandbox, admission=gate)  # ty: ignore[invalid-argument-type]
+    return svc, registry, sandbox
 
 
 async def test_a_cached_preview_is_served_without_waking_the_sandbox() -> None:
@@ -97,3 +113,40 @@ async def test_two_askers_at_once_convert_the_deck_once() -> None:
 
     assert isinstance(a, Preview) and isinstance(b, Preview)
     assert sandbox.preview_conversions == 1
+
+
+async def test_waking_a_sandbox_to_convert_is_held_to_the_sandbox_limit() -> None:
+    """A preview opens a sandbox like a terminal does, so it passes the same gate."""
+    import pytest
+
+    from workspace_app.quota.admission import SandboxQuotaExceeded
+
+    gate = _Gate(full=True)
+    svc, registry, _ = await _service(live=False, gate=gate)
+
+    with pytest.raises(SandboxQuotaExceeded):
+        await svc.preview("i", "/q3.pptx", confirm=False)
+
+    assert registry.wakes == 0
+
+
+async def test_a_cached_preview_does_not_ask_the_sandbox_limit() -> None:
+    gate = _Gate(full=False)
+    svc, _, _ = await _service(live=True, gate=gate)
+    await svc.preview("i", "/q3.pptx", confirm=False)
+    asked = gate.asked
+    gate.full = True
+
+    assert isinstance(await svc.preview("i", "/q3.pptx", confirm=False), Preview)
+    assert gate.asked == asked
+
+
+async def test_no_lock_outlives_its_conversion() -> None:
+    """One lock per (item, path) ever previewed would grow for the pod's life."""
+    svc, _, _ = await _service(live=True)
+
+    await asyncio.gather(
+        svc.preview("i", "/q3.pptx", confirm=False), svc.preview("i", "/q3.pptx", confirm=False)
+    )
+
+    assert svc._locks == {}
