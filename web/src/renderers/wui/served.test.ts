@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { API_PREFIX } from "../../api/http";
-import { openServedWui } from "./served";
+import { openServedWui, PROBE_TIMEOUT_MS } from "./served";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -61,6 +61,30 @@ describe("openServedWui", () => {
     stubFetch(minted(), ping);
 
     expect(await openServedWui("rca", "i1", "/sales")).toBeNull();
+  });
+
+  it("gives up on a probe nobody answers, rather than leaving the pane opening forever", async () => {
+    /** A gateway may hold a cookie-less request open instead of refusing it. */
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) =>
+          url.endsWith("/wui/pass")
+            ? Promise.resolve(minted())
+            : new Promise((_, reject) =>
+                init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+              ),
+        ),
+      );
+
+      const pending = openServedWui("rca", "i1", "/sales");
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + 1);
+
+      expect(await pending).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back when there is no pass to be had — an older server, or a refusal", async () => {

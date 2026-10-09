@@ -164,6 +164,7 @@ from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 from .wui_content import (
+    OpaqueOriginGuard,
     WuiPasses,
     built_wui_runtime,
     register_wui_content_routes,
@@ -1499,6 +1500,9 @@ def create_app(
     except PackageNotFoundError:  # editable/odd envs — the FE treats "" as "no skew"
         _app_version = ""
     app.add_middleware(VersionHeaderMiddleware, version=_app_version)
+    # docs/plan-wui-multipage.md: a served WUI page may reach its own host, so
+    # the rest of the API refuses what only such a page sends (`Origin: null`).
+    app.add_middleware(OpaqueOriginGuard)
 
     # Opt-in cost accounting for a slow request (WORKSPACE_PERF_TRACE=1). Added
     # LAST so it wraps OUTERMOST and its wall clock covers the whole request,

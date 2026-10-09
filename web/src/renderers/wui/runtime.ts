@@ -89,7 +89,9 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     // the chat draft, so an uncapped one is a page freezing the app it reports
     // to. The pick detail is capped separately, on the parent, which is the half
     // a fabricated message can reach.
-    var text = String(message);
+    // A served page's addresses carry its pass, and a report is pasted into the
+    // chat by "Tell the agent" — so the pass is cut out of every report.
+    var text = String(message).replace(/\/wui-content\/[^/\s]+\//g, "/wui-content/\u2026/");
     post({
       proto: PROTO,
       report: kind,
@@ -261,7 +263,7 @@ function wuiRuntime(window: any, parent: any, document: any): void {
       // Within the folder: the browser's to follow. Past it, on this host:
       // a file in the item (D10 — the workspace opens it), or no page at all,
       // which the frame would only show as a refusal.
-      if (!scope || !url || url.href.indexOf(scope) === 0) return;
+      if (!scope || !url || !/^https?:$/.test(url.protocol) || url.href.indexOf(scope) === 0) return;
       ev.preventDefault();
       var root = /^(.*\/wui-content\/[^/]+\/)/.exec(scope);
       if (root && url.href.indexOf(root[1]) === 0) {
@@ -284,7 +286,10 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     ev.preventDefault();
     report(
       "error",
-      "This page links to " + href + ", but here it can only be shown as a single page, so the link cannot be followed.",
+      "This page links to " +
+        href +
+        ", but here it can only be shown as a single page, so the link cannot be followed. " +
+        "Showing it as a whole site needs your administrator to let this platform's page addresses through.",
     );
   });
 
@@ -387,7 +392,7 @@ function wuiRuntime(window: any, parent: any, document: any): void {
             "for(var k=0;k<arguments.length;k++)a.push(new URL(arguments[k],b).href);return i.apply(self,a)};" +
             "var f=self.fetch;if(f)self.fetch=function(u,o){return f.call(self,typeof u==='string'?new URL(u,b).href:u,o)}})(" +
             JSON.stringify(at) +
-            ");\n";
+            ");/*wui-prologue*/";
           var blob = new window.Blob([prologue, source], { type: "text/javascript" });
           real = new RealWorker(URL.createObjectURL(blob), opts);
           real.onmessage = function (e: any) {
@@ -414,7 +419,11 @@ function wuiRuntime(window: any, parent: any, document: any): void {
   // The address follows the page: each page says where it is, and so does a
   // jump within it.
   if (served) {
-    post({ proto: PROTO, page: loc.href });
+    // A page the server could not find says so with a marker; announcing it as
+    // a page would have the pane remember an address that is gone and reload
+    // it, forever.
+    if (document.querySelector('meta[name="wui-missing"]')) post({ proto: PROTO, missing: loc.href });
+    else post({ proto: PROTO, page: loc.href });
     window.addEventListener("hashchange", function () {
       post({ proto: PROTO, page: loc.href });
     });

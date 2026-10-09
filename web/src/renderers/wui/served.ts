@@ -20,6 +20,10 @@ import { API_PREFIX, apiFetch } from "../../api/http";
 /** What `__wui/ping` answers (`PING_ANSWER` in `api/wui_content.py`). */
 export const PING_ANSWER = "wui-content";
 
+/** How long the probe may take. A gateway that holds a cookie-less request open
+ * instead of refusing it would otherwise leave the pane on "Opening…" forever. */
+export const PROBE_TIMEOUT_MS = 8000;
+
 /**
  * The address a frame loads this folder from — `<prefix>/wui-content/<pass>/`,
  * to which the page's workspace path (without its leading slash) is appended —
@@ -39,9 +43,15 @@ export async function openServedWui(slug: string, itemId: string, folder: string
     if (!resp.ok) return null;
     const { base } = (await resp.json()) as { base: string };
     const address = `${API_PREFIX}${base}`;
-    const ping = await fetch(`${address}__wui/ping`, { credentials: "omit" });
-    if (!ping.ok || (await ping.text()) !== PING_ANSWER) return null;
-    return address;
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), PROBE_TIMEOUT_MS);
+    try {
+      const ping = await fetch(`${address}__wui/ping`, { credentials: "omit", signal: stop.signal });
+      if (!ping.ok || (await ping.text()) !== PING_ANSWER) return null;
+      return address;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return null;
   }

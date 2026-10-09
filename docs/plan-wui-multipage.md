@@ -164,13 +164,44 @@ breaks top-level `let`/`const` sharing across scripts, cannot reach
   `credentials: "omit"`** — the same cookie-less request the frame will make.
   Anything but the expected answer (a gateway's login redirect, an old server, a
   missing runtime) and the pane renders the folder the old way (`srcdoc`,
-  single page, unchanged code) and tells the author, once, that multi-page
-  needs the operator to let `/api/wui-content/` through. The runtime also fixes
-  the `#anchor` defect for the fallback (it scrolls instead of navigating).
+  single page, unchanged code). There is no standing notice: it would sit on
+  every WUI of a deployment that has not opened the route. Instead, when a
+  page in the fallback has a link to another of its pages clicked, the
+  author's report panel says the link cannot be followed here and that a whole
+  site needs the administrator to let the platform's page addresses through
+  (narrowed from "tells the author, once", in review round 1). The runtime also
+  fixes the `#anchor` defect for the fallback (it scrolls instead of navigating).
+- **The rest of the API refuses a page** (added in review round 1). A served
+  page may reach its own host (`connect-src 'self'`), and a request without a
+  session is not necessarily anonymous — the default composition answers every
+  request as the configured user, and a cookie a browser sends without
+  `SameSite` would reach a deploy's cookie reader. So `OpaqueOriginGuard`
+  answers `/api/*` with 403 when the request carries `Origin: null` — an
+  opaque origin's stamp on every `fetch`, XHR and non-GET request — except the
+  content route itself.
 - **Residual risks, accepted:** a token in a URL can leak (through D4, a reader
   who opens a URL carrying it) and then reads that folder until expiry, only
-  while the minting user can still read the item; the frame may send
-  unauthenticated requests to its own host (no cookie travels with them).
+  while the minting user can still read the item; reports cut the token out
+  before they reach the chat. A page can still make GET requests without an
+  `Origin` header to its host (`<img src>`, `<script src>`), which carry no
+  cookie in Chromium and cannot be read back.
+
+### Needs the user's decision (not settled by the author)
+
+- **The pass qualifies `plan-wui.md` decision 1** ("not a public URL … anonymous
+  access would need a second auth story") and its Deploy section ("不需要第二套
+  安全模型"), which D2 said stand. A pass is a bearer capability: whoever holds
+  the URL reads that one folder, read-only, until it lapses, as long as the
+  person it was minted for may still read the item. It is minted only by a
+  signed-in person with `read_content`; it is narrower than the item; and it is
+  what an opaque-origin frame can present, since it sends no cookie. The
+  alternative that keeps decision 1 whole is the separate content origin
+  (GitHub/Google "usercontent"), at the cost of a hostname.
+- **Acceptance 1 is not met as written** (see the record below): this repo's
+  `docs/` with `mkdocs.yml` unchanged renders and navigates, but its search
+  stalls because the site fetches mermaid from a CDN at runtime. That also
+  qualifies **D3** ("an existing `mkdocs.yml` runs unchanged") for any site
+  that needs the network at runtime, which D6 forbids.
 
 ## Phases
 
@@ -215,12 +246,13 @@ and the workspace pane `/a/…/view?path=…`:
 | same site, mermaid kept in `docs/js/` + `extra_javascript` | **search: 116 results**, a result click navigates — identical to a plain static server |
 | `sample-skills/wui/examples/docs/`, built with its own command | nav + `#anchor` + search (3 results); **zero** blocked requests |
 
-**D12 as written does not hold, and not because of the platform.** This repo's
+**Acceptance 1 as written does not hold, and not because of the platform.** This repo's
 site loads mermaid from `unpkg.com` at runtime; when that request fails,
 Material's search never leaves "initializing" — measured identically on a plain
 `python -m http.server` with only `unpkg.com` blocked (`找到 116 個` with the
 CDN, `正在初始化` without). A WUI has no runtime network by decision (D6), so a
-site that needs one at runtime behaves like that site offline. The example
+site that needs one at runtime behaves like that site offline — which
+qualifies D3 for such sites (raised above for the user). The example
 therefore turns the three runtime reaches off (`font: false`, no `repo_url`)
 and its README says to keep mermaid in the folder; the error panel names each
 blocked request.

@@ -3,7 +3,7 @@
 The page is a static-site generator's whole output: `mkdocs build` turns
 `docs/*.md` into `site/` — one HTML file per page, a search index, the theme's
 JavaScript — and `page.ai.yaml` opens `site/index.html`. Links between pages,
-`#anchors`, the search box and the theme's light/dark toggle all work, because
+`#anchors` and the search box all work, because
 the platform serves the folder from a real address the way any static file
 server would.
 

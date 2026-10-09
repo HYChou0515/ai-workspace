@@ -226,10 +226,7 @@ describe("asking again", () => {
 describe("a served WUI, deployed", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("shows the page Deploy verified, even though its address has not changed", async () => {
-    /** The single-page way reloads because the document changed; a served page
-     * has the same address before and after, so without a reload of its own
-     * the frame would go on showing the page from before the Deploy. */
+  const stubDeploy = () =>
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: unknown, init?: RequestInit) =>
@@ -250,6 +247,27 @@ describe("a served WUI, deployed", () => {
           : Promise.reject(new Error(`unexpected ${String(url)}`)),
       ),
     );
+
+  it("shows the page Deploy verified when the page changed, though its address has not", async () => {
+    /** The single-page way reloads because the document changed; a served page
+     * has the same address before and after, so without a reload of its own
+     * the frame would go on showing the page from before the Deploy. */
+    stubDeploy();
+    const files: Record<string, string> = { ...SITE };
+    renderPane({ files });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const before = frame();
+
+    files["/sales/index.html"] = "<html><head></head><body>home, rebuilt</body></html>";
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+
+    await screen.findByRole("textbox", { name: /address/i });
+    await waitFor(() => expect(frame()).not.toBe(before));
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+  });
+
+  it("does not reload a page Deploy found unchanged — a half-filled form survives it", async () => {
+    stubDeploy();
     renderPane();
     await waitFor(() => expect(frame()).toBeInTheDocument());
     const before = frame();
@@ -257,8 +275,61 @@ describe("a served WUI, deployed", () => {
     fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
     await screen.findByRole("textbox", { name: /address/i });
-    await waitFor(() => expect(frame()).not.toBe(before));
-    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
+    expect(frame()).toBe(before);
+  });
+});
+
+describe("a remembered sub-page that is gone", () => {
+  it("drops it and opens the entry, when it is what the frame was opened on", async () => {
+    sessionStorage.setItem("wui-page:item1:/sales/page.ai.yaml", "sales/gone/");
+    const { say } = await framed();
+    expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/gone/`);
+
+    say({ proto: WUI_PROTOCOL, missing: `${BASE}sales/gone/` });
+
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`));
+    expect(sessionStorage.getItem("wui-page:item1:/sales/page.ai.yaml")).toBeNull();
+  });
+
+  it("drops it from the reader's address too", async () => {
+    window.history.replaceState(null, "", "/w/rca/item1/sales/page.ai.yaml?page=sales%2Fgone%2F&x=1");
+    const { say } = await framed({ chrome: "viewer" });
+
+    say({ proto: WUI_PROTOCOL, missing: `${BASE}sales/gone/` });
+
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`));
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBeNull();
+    expect(params.get("x")).toBe("1");
+  });
+
+  it("treats the page a Refresh lands on as a fresh start, so a gone one is still dropped", async () => {
+    const { say } = await framed();
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/setup/`));
+    // From the frame now on screen — the Refresh remounted it, and the pane
+    // listens to that window only.
+    const now = frame()!.contentWindow as Window;
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { proto: WUI_PROTOCOL, missing: `${BASE}sales/setup/` }, source: now }),
+      );
+    });
+
+    await waitFor(() => expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`));
+  });
+
+  it("leaves a broken link followed mid-visit alone — Back is the way out, and the last good page is kept", async () => {
+    const { say } = await framed();
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+    const before = frame();
+
+    say({ proto: WUI_PROTOCOL, missing: `${BASE}sales/broken/` });
+
+    expect(frame()).toBe(before);
+    expect(sessionStorage.getItem("wui-page:item1:/sales/page.ai.yaml")).toBe("sales/setup/");
   });
 });
 
@@ -282,6 +353,26 @@ describe("a served WUI's reader page", () => {
     expect(params.get("page")).toBe("sales/setup/#install");
     expect(params.get("x")).toBe("1");
     expect(window.location.pathname).toBe("/w/rca/item1/sales/page.ai.yaml");
+  });
+
+  it("adds no history entry of its own — the frame's navigation already made one", async () => {
+    window.history.replaceState(null, "", "/w/rca/item1/sales/page.ai.yaml");
+    const { say } = await framed({ chrome: "viewer" });
+    const depth = window.history.length;
+
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
+    say({ proto: WUI_PROTOCOL, page: `${BASE}sales/other/` });
+
+    expect(window.history.length).toBe(depth);
+  });
+
+  it("does not remember the bare pass address as a page", async () => {
+    window.history.replaceState(null, "", "/w/rca/item1/sales/page.ai.yaml");
+    const { say } = await framed({ chrome: "viewer" });
+
+    say({ proto: WUI_PROTOCOL, page: BASE });
+
+    expect(new URLSearchParams(window.location.search).get("page")).toBeNull();
   });
 
   it.each([
@@ -343,6 +434,24 @@ describe("leaving a WUI", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("a.test");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("asks before a mail link too — it is a place a person goes", async () => {
+    const { say } = await framed();
+
+    say({ proto: WUI_PROTOCOL, open: "mailto:lead@example.com" });
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("lead@example.com");
+  });
+
+  it("tells a reader about one workspace file at a time", async () => {
+    const { say } = await framed({ chrome: "viewer" });
+
+    say({ proto: WUI_PROTOCOL, leave: "/a.md" });
+    say({ proto: WUI_PROTOCOL, leave: "/b.md" });
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("/a.md");
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 

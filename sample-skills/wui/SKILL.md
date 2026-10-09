@@ -216,14 +216,20 @@ like a generator's output. Links between them, `#anchors`, Back, and a
 the page so it can be shared. For documentation, copy `examples/docs/` rather
 than writing a site by hand.
 
+That needs the deployment to serve pages from their own address. Where it does
+not, the page is shown as one document: links to its other pages and a
+`fetch` of its own files do not work there, so a page that must also work that
+way reads its files with `workspace.readFile`.
+
 A link to another website does not open by itself: the platform asks the person
 first, in a box they can trust. A link to a file elsewhere in the item opens that
 file in the workspace.
 
 ## The rules that are enforced (not advice)
 
-- **No network AT RUNTIME.** `fetch`, XHR, WebSocket, a CDN `<script src>`, a
-  Google Font — all blocked once the page is running. Everything it uses is a
+- **No network AT RUNTIME.** `fetch`, XHR, WebSocket to anywhere but the page's
+  own folder, a CDN `<script src>`, a Google Font — all blocked once the page is
+  running. Everything it uses is a
   file in its folder, or comes through `workspace.*`. There is no workaround; do
   not spend a turn looking.
   **A build is not runtime.** `pnpm install` runs in the sandbox, where you have

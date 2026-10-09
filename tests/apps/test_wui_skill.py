@@ -108,6 +108,7 @@ def test_an_example_counts_as_built_only_when_it_has_a_source_to_build() -> None
             f"{name} is classed as built but pulls no bundler — its EXAMPLES guards "
             "were dropped and nothing failed"
         )
+
     # A site is generated, not bundled and not hand-written: its build runs the
     # generator. Read from its `package.json`, the file that decides what a
     # build IS — not from the config file the predicate looked at.
@@ -761,7 +762,9 @@ def test_a_site_example_needs_no_network_once_built(payload: dict[str, bytes], n
     file in the folder."""
     config = payload[f"examples/{name}/mkdocs.yml"].decode()
 
-    assert re.search(r"^\s+font:\s*false\s*$", config, re.MULTILINE), "the theme font is a Google request"
+    assert re.search(r"^\s+font:\s*false\s*$", config, re.MULTILINE), (
+        "the theme font is a Google request"
+    )
     assert "repo_url" not in config, "a repo_url makes the page call the GitHub API"
     assert "http://" not in config and "https://" not in config
 

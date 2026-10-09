@@ -92,6 +92,10 @@ def test_a_page_is_served_from_its_pass_with_the_runtime_first_and_the_envelope_
     assert "connect-src 'self'" in csp
     assert "worker-src blob:" in csp
     assert r.headers["access-control-allow-origin"] == "*"
+    # The pass is in the URL: a page's own requests must not repeat it to anyone,
+    # and nothing served under it may be kept by a cache for the next holder.
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["cache-control"] == "no-store"
 
 
 def _site(client, iid: str) -> str:
@@ -280,3 +284,236 @@ def test_without_a_runtime_no_page_is_served_and_the_ping_says_so():
     assert client.get(f"{base}docs/site/index.html").status_code == 503
     # Not a page: served without one.
     assert client.get(f"{base}docs/site/assets/main.css").status_code == 200
+
+
+@pytest.mark.parametrize("link", ["docs/site/", "docs/site"])
+def test_the_folder_itself_is_the_page_s_own_home(link):
+    """A page links home with `../` or `./`. The folder is inside itself — a
+    `startswith(folder + "/")` test refused it, and the frame landed on a bare
+    error page."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _site(client, iid)
+    r0 = client.post(_wp(iid, "/wui/pass"), json={"folder": "/docs/site"})
+    base = r0.json()["base"]
+
+    r = client.get(f"{base}{link}", follow_redirects=False)
+
+    if link.endswith("/"):
+        assert r.status_code == 200 and "home" in r.text
+    else:
+        assert (r.status_code, r.headers["location"]) == (301, "site/")
+
+
+def test_a_page_at_the_workspace_root_opens_at_the_bare_address():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/index.html", b"<html><head></head><body>root home</body></html>")
+    base = _pass(client, iid, folder="/")
+
+    r = client.get(base)
+
+    assert r.status_code == 200 and "root home" in r.text
+
+
+def test_a_directory_redirect_survives_a_name_that_is_not_latin():
+    """Header values are latin-1; a raw `說明/` raised and answered 500."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(client, iid, "/docs/說明 書/index.html", b"<html><head></head><body>x</body></html>")
+    base = _pass(client, iid)
+
+    r = client.get(f"{base}docs/%E8%AA%AA%E6%98%8E%20%E6%9B%B8", follow_redirects=False)
+
+    assert r.status_code == 301
+    assert r.headers["location"] == "%E8%AA%AA%E6%98%8E%20%E6%9B%B8/"
+
+
+def test_the_runtime_goes_after_the_doctype_when_there_is_no_head_tag():
+    """HTML lets a page leave `<head>` out. Put before the doctype, the script
+    made the browser ignore it — quirks mode, where the single-page way gave
+    standards mode."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(
+        client,
+        iid,
+        "/docs/index.html",
+        b"\xef\xbb\xbf<!-- hi -->\n<!DOCTYPE html>\n<title>t</title><p>x",
+    )
+    base = _pass(client, iid)
+
+    text = client.get(f"{base}docs/index.html").text
+
+    assert text.index("<!DOCTYPE html>") < text.index(RUNTIME)
+
+
+def test_a_missing_page_says_so_in_a_page_that_tells_the_pane():
+    """A frame that lands on a page that is gone — a remembered sub-page since
+    renamed — must not sit on a bare 'Not found.' the pane never hears about."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    base = _site(client, iid)
+
+    r = client.get(f"{base}docs/site/gone/", headers={"sec-fetch-dest": "iframe"})
+
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("text/html")
+    assert RUNTIME in r.text
+    assert '<meta name="wui-missing"' in r.text
+    # A subresource that is missing stays a plain 404: it is not a page.
+    asset = client.get(f"{base}docs/site/gone.css", headers={"sec-fetch-dest": "style"})
+    assert asset.status_code == 404 and RUNTIME not in asset.text
+
+
+def test_a_held_pass_still_lapses_on_time():
+    """Looking a pass up is held for a few seconds — a page asks for dozens of
+    files at once — but its expiry is judged on every request, held or not."""
+    holder = {"id": "bob"}
+    clock = {"t": 1_000_000.0}
+    client, spec = _client_and_spec(holder, now=lambda: clock["t"])
+    iid = _item(spec, by="bob")
+    base = _site(client, iid)
+    clock["t"] = 1_000_000.0 + PASS_TTL_S - 1
+    assert client.get(f"{base}docs/site/index.html").status_code == 200
+
+    clock["t"] += 2
+
+    assert client.get(f"{base}docs/site/index.html").status_code == 404
+
+
+def test_one_page_load_looks_its_pass_up_once():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    base = _site(client, iid)
+    rm = spec.get_resource_manager(WuiPass)
+    calls = []
+    real_get = rm.get
+
+    def counting_get(*a, **k):
+        calls.append(a)
+        return real_get(*a, **k)
+
+    rm.get = counting_get  # type: ignore[method-assign]
+    try:
+        for _ in range(5):
+            assert client.get(f"{base}docs/site/assets/main.css").status_code == 200
+    finally:
+        rm.get = real_get  # type: ignore[method-assign]
+
+    assert len(calls) <= 1
+
+
+def test_a_page_cannot_reach_the_rest_of_the_api():
+    """A served page may send requests to its own host (`connect-src 'self'`),
+    and a request without a session is not necessarily anonymous — the default
+    composition answers every request as the configured user. So the API
+    refuses what only such a page sends: `Origin: null`, the opaque origin's
+    signature on every `fetch`, XHR and non-GET request it makes."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    base = _site(client, iid)
+
+    from_page = client.get("/wui", headers={"origin": "null"})
+    run = client.post(_wp(iid, "/wui/pass"), json={"folder": "/docs"}, headers={"origin": "null"})
+
+    assert from_page.status_code == 403
+    assert run.status_code == 403
+    # Its own folder, through its pass, still answers it.
+    assert (
+        client.get(f"{base}docs/site/assets/main.css", headers={"origin": "null"}).status_code
+        == 200
+    )
+    # And the app itself, which sends a real origin or none, is untouched.
+    assert client.get("/wui").status_code == 200
+    assert client.get("/wui", headers={"origin": "http://testserver"}).status_code == 200
+
+
+def test_a_page_s_own_scripts_are_fetched_so_their_errors_can_be_reported():
+    """An opaque-origin page's plain `<script src>` is a cross-origin script, and
+    the browser MUTES its errors to "Script error." — no message, no file, no line,
+    and its promise rejections vanish. The report panel exists for those errors,
+    so the page's own scripts are fetched in CORS mode, which the route allows."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _put(
+        client,
+        iid,
+        "/docs/index.html",
+        b'<html><head><script src="./app.js"></script>'
+        b'<script type="module" src="m.js" crossorigin="use-credentials"></script>'
+        b"<script>inline()</script></head><body></body></html>",
+    )
+    base = _pass(client, iid)
+
+    text = client.get(f"{base}docs/index.html").text
+
+    assert '<script src="./app.js" crossorigin="anonymous">' in text
+    # One the page already marked keeps its own choice; an inline one has nothing to fetch.
+    assert '<script type="module" src="m.js" crossorigin="use-credentials">' in text
+    assert "<script>inline()</script>" in text
+
+
+def test_a_page_in_another_encoding_keeps_it():
+    """The single-page way read non-UTF-8 text as latin-1; the served way must
+    not turn those characters into U+FFFD by relabelling the bytes UTF-8."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    big5 = '<html><head><meta charset="big5"></head><body>良率</body></html>'.encode("big5")
+    _put(client, iid, "/docs/index.html", big5)
+    _put(client, iid, "/docs/s.css", 'p::after{content:"é"}'.encode("latin-1"))
+    base = _pass(client, iid)
+
+    page = client.get(f"{base}docs/index.html")
+    css = client.get(f"{base}docs/s.css")
+
+    assert "charset=utf-8" not in page.headers["content-type"]
+    assert "良率".encode("big5") in page.content and RUNTIME.encode() in page.content
+    assert css.headers["content-type"].endswith("charset=iso-8859-1")
+
+
+def test_the_envelope_is_exactly_the_one_documented():
+    """Every clause, not the four the other tests name: `form-action 'none'` and
+    `base-uri 'self'` are the envelope too."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    base = _site(client, iid)
+
+    csp = client.get(f"{base}docs/site/index.html").headers["content-security-policy"]
+
+    assert csp == (
+        "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
+        "media-src 'self' data:; connect-src 'self'; worker-src blob:; form-action 'none'; "
+        "base-uri 'self'"
+    )
+
+
+def test_a_pass_lives_the_twelve_hours_the_docs_promise():
+    assert PASS_TTL_S == 12 * 60 * 60
+
+
+def test_one_mint_clears_at_most_fifty_lapsed_passes():
+    """Bounded so a mint never becomes a sweep of the table (the runbook says 50)."""
+    holder = {"id": "bob"}
+    clock = {"t": 1_000_000.0}
+    client, spec = _client_and_spec(holder, now=lambda: clock["t"])
+    iid = _item(spec, by="bob")
+    for i in range(55):
+        _pass(client, iid, folder=f"/f{i}")
+    clock["t"] += PASS_TTL_S + 1
+
+    _pass(client, iid, folder="/fresh")
+
+    rm = spec.get_resource_manager(WuiPass)
+    assert len(list(rm.list_resources(QB.all().build()))) == 55 - 50 + 1

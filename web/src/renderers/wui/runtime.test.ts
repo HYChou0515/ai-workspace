@@ -419,6 +419,16 @@ describe("the WUI runtime on a served page (plan-wui-multipage)", () => {
     expect(sent).toContainEqual({ proto: "wui/1", page: SERVED });
   });
 
+  it("announces a jump within the page too, so the address names the section", () => {
+    const loc = { href: SERVED, origin: "http://app.test", protocol: "http:" };
+    const { sent, fire } = boot({ location: loc });
+
+    loc.href = `${SERVED}#install`;
+    fire("hashchange", {});
+
+    expect(sent).toContainEqual({ proto: "wui/1", page: `${SERVED}#install` });
+  });
+
   it("announces nothing in a single-page document, which has no address of its own", () => {
     const { sent } = boot({ location: { href: "about:srcdoc", origin: "null", protocol: "about:" } });
 
@@ -543,6 +553,21 @@ describe("the WUI runtime on a served page (plan-wui-multipage)", () => {
     expect(made[0].text).toContain("/*worker at http://app.test/api/wui-content/TOKEN/docs/assets/w.js*/");
     // Posted before the blob existed, delivered once it did.
     expect(made[0].posted).toEqual([{ type: "setup" }]);
+
+    // And the prologue really re-bases the worker's own relative reads on the
+    // script's address: run it against a worker scope and watch what arrives.
+    const imported: string[] = [];
+    const fetched: string[] = [];
+    const scope = {
+      importScripts: (...urls: string[]) => imported.push(...urls),
+      fetch: (u: string) => fetched.push(u),
+    };
+    const prologue = made[0].text.slice(0, made[0].text.indexOf("/*wui-prologue*/"));
+    new Function("self", prologue)(scope);
+    scope.importScripts("lunr.js");
+    scope.fetch("../search/index.json");
+    expect(imported).toEqual(["http://app.test/api/wui-content/TOKEN/docs/assets/lunr.js"]);
+    expect(fetched).toEqual(["http://app.test/api/wui-content/TOKEN/docs/search/index.json"]);
   });
 });
 
@@ -591,6 +616,56 @@ describe("the WUI runtime and the edge of its folder", () => {
     fire("click", ev);
 
     expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe("the WUI runtime keeps its pass out of what it reports", () => {
+  it("does not put the page's pass in a report — reports go into the chat", () => {
+    const { sent, fireCapture } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const img = document.createElement("img");
+    Object.defineProperty(img, "src", { value: "http://app.test/api/wui-content/s3cr3tTOKEN/docs/missing.png" });
+
+    fireCapture("error", { target: img });
+
+    const said = sent.find((m) => m.report === "error");
+    expect(String(said?.message)).toContain("/api/wui-content/…/docs/missing.png");
+    expect(String(said?.message)).not.toContain("s3cr3tTOKEN");
+  });
+
+  it("hands only places a person visits to the platform, not any scheme a link may carry", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+    fire("click", click(link("ftp://example.com/x")));
+    fire("click", click(link("data:text/html,hi")));
+
+    expect(sent.filter((m) => "open" in m)).toEqual([]);
+  });
+});
+
+describe("the WUI runtime on a page that is not there", () => {
+  it("tells the parent the address is gone, instead of announcing it as a page", () => {
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "wui-missing");
+    document.head.appendChild(meta);
+    try {
+      const { sent } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+      expect(sent).toContainEqual({ proto: "wui/1", missing: SERVED });
+      expect(sent.filter((m) => "page" in m)).toEqual([]);
+    } finally {
+      meta.remove();
+    }
+  });
+
+  it("leaves a javascript: link to the page, even past the folder's edge", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    fire("message", { data: { proto: "wui/1", event: "scope", prefix: "http://app.test/api/wui-content/TOKEN/docs/" } });
+    const ev = click(link("javascript:void(0)"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(sent.some((m) => m.report === "error")).toBe(false);
   });
 });
 

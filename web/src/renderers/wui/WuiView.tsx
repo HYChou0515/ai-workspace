@@ -64,6 +64,13 @@ import {
 /** The conventional entry, overridable with `entry:` in the view file. */
 export const DEFAULT_ENTRY = "index.html";
 
+/** A short fingerprint of a page's text, to tell whether a re-read changed it. */
+function digest(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return `${text.length}:${h.toString(36)}`;
+}
+
 /** `href` as a path below `base`, or `null` when it is not under it — another
  * site, a protocol-relative address, a climb out with `..`. Resolved first, so
  * no spelling of "somewhere else" survives as text that merely starts right. */
@@ -79,21 +86,30 @@ function below(base: string, href: string | null): string | null {
 
 /** The reader's address, with the sub-page in it — replaced, not pushed: the
  * frame's own navigation already made the history entry, so Back and Forward
- * are the browser's. */
-function rememberInAddress(page: string): void {
+ * are the browser's. `null` takes it out. */
+function rememberInAddress(page: string | null): void {
   const params = new URLSearchParams(window.location.search);
-  params.set("page", page);
+  if (page === null) params.delete("page");
+  else params.set("page", page);
   window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params}${window.location.hash}`);
 }
 
 /** What a page says about leaving itself (`runtime.ts`): where it landed, a
  * link to another site, a link to a file in the item. */
-type PageMessage = { proto: typeof WUI_PROTOCOL; page?: unknown; open?: unknown; leave?: unknown };
+type PageMessage = {
+  proto: typeof WUI_PROTOCOL;
+  page?: unknown;
+  open?: unknown;
+  leave?: unknown;
+  missing?: unknown;
+};
 
 function isPageMessage(data: unknown): data is PageMessage {
   if (!data || typeof data !== "object") return false;
   const m = data as Record<string, unknown>;
-  return m.proto === WUI_PROTOCOL && ("page" in m || "open" in m || "leave" in m) && !("id" in m);
+  return (
+    m.proto === WUI_PROTOCOL && ("page" in m || "open" in m || "leave" in m || "missing" in m) && !("id" in m)
+  );
 }
 
 /**
@@ -332,6 +348,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     author ? sessionStorage.getItem(pageKey) : new URLSearchParams(window.location.search).get("page"),
   );
   const pageRef = useRef<string | null>(null);
+  /** Whether the frame's current load has announced a real page yet. A gone
+   * address BEFORE that is the remembered one — drop it and open the entry; a
+   * gone address AFTER it is a broken link someone followed, and Back is theirs. */
+  const landed = useRef(false);
   const entryAt = useMemo(() => {
     const at = resolveInFolder(folder, entry);
     return at === null ? null : encodePath(at);
@@ -342,6 +362,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     // `generation` is the reload: Refresh re-reads the sub-page the frame is on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [servedAt, entryAt, remembered, generation]);
+  // A fresh load of the frame has not landed anywhere yet.
+  useEffect(() => {
+    landed.current = false;
+  }, [frameSrc, generation]);
 
   /**
    * Does this page have a build step?
@@ -433,6 +457,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     return n;
   };
   const bumpGeneration = () => setGeneration(draw());
+  /** The latest `bumpGeneration`, for the message listener — which must not be
+   * re-subscribed on every render to see it. */
+  const reload = useRef(bumpGeneration);
+  reload.current = bumpGeneration;
   /** Ask again whether this folder can be served. The answer that sent the
    * pane the single-page way may have been a moment's — a gateway restarting,
    * a dropped probe — and a pass held past its life reads nothing; Refresh and
@@ -671,6 +699,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           const rel = below(servedAt, msg.page);
           if (rel === null) return; // not this page's address — not ours to remember
           pageRef.current = rel;
+          landed.current = true;
           if (author) sessionStorage.setItem(pageKey, rel);
           else rememberInAddress(rel);
           // The page's folder is where a link stops being the page's: past
@@ -678,6 +707,14 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           // is, so it is told on every page it lands on.
           const scope = folder ? `${servedAt}${encodePath(folder)}/` : servedAt;
           win.postMessage({ proto: WUI_PROTOCOL, event: "scope", prefix: scope }, "*");
+        } else if (typeof msg.missing === "string" && servedAt !== null) {
+          if (landed.current || below(servedAt, msg.missing) === null) return;
+          // The address this pane opened on is gone (renamed, deleted). Forget
+          // it and open the entry instead of reloading a dead page forever.
+          if (author) sessionStorage.removeItem(pageKey);
+          else rememberInAddress(null);
+          pageRef.current = entryAt;
+          reload.current();
         } else if (typeof msg.open === "string") {
           void askToOpen(msg.open);
         } else if (typeof msg.leave === "string") {
@@ -742,6 +779,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     openLogin,
     servedAt,
     pageKey,
+    entryAt,
     askToOpen,
     tellWorkspaceFile,
   ]);
@@ -1579,9 +1617,11 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         </div>
       ) : (
         <iframe
-          // A served page is reloaded by remounting: its `src` is the page it
-          // was on, which may be the same string as before.
-          key={frameSrc === null ? "doc" : `served:${generation}`}
+          // A served page's address is the same before and after a rebuild, so
+          // it is reloaded by remounting — when what the re-read found differs,
+          // as the single-page way reloads only when its document does. (A
+          // Refresh remounts anyway: the read in between shows "Opening…".)
+          key={frameSrc === null ? "doc" : `served:${digest(built.data.doc)}`}
           ref={frameRef}
           title={viewParamString(spec, "title") ?? folder.split("/").pop() ?? "WUI"}
           sandbox="allow-scripts"

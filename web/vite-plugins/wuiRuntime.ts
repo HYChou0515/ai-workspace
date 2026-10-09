@@ -7,7 +7,7 @@
  * `runtime.ts` — and the build writes it out beside the bundle, so there is one
  * runtime, not a copy kept in step with another by hand.
  */
-import type { Plugin } from "vite";
+import { transformWithEsbuild, type Plugin } from "vite";
 
 import { wuiRuntimeScript } from "../src/renderers/wui/runtime";
 
@@ -17,8 +17,17 @@ export const WUI_RUNTIME_FILE = "wui-runtime.js";
 export function wuiRuntime(): Plugin {
   return {
     name: "aiws-wui-runtime",
-    generateBundle() {
-      this.emitFile({ type: "asset", fileName: WUI_RUNTIME_FILE, source: wuiRuntimeScript() });
+    async generateBundle() {
+      // Minified to ONE line: the server puts it first in each page's `<head>`,
+      // and a multi-line runtime pushed every error in the page's own inline
+      // script that many lines down (378, measured in review). ASCII (esbuild's
+      // default), so it goes into a page of any encoding unchanged.
+      const { code } = await transformWithEsbuild(wuiRuntimeScript(), WUI_RUNTIME_FILE, {
+        minify: true,
+        loader: "js",
+        charset: "ascii",
+      });
+      this.emitFile({ type: "asset", fileName: WUI_RUNTIME_FILE, source: code.trim() });
     },
   };
 }
