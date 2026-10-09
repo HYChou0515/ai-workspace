@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from ..config.schema import default_lookup_targets
 from ..monitor import IMonitor
 from ..users import UserDirectory
 from .activity import ActivityLog
@@ -59,8 +60,17 @@ def register_meta_routes(
     monitor: IMonitor,
     superusers: frozenset[str] = frozenset(),
     groups_provider: Callable[[str], frozenset[str]] | None = None,
+    lookup_targets: Sequence[Mapping[str, str]] | None = None,
 ) -> None:
     """Mount the platform meta routes onto ``app``."""
+    targets = [dict(t) for t in (lookup_targets or default_lookup_targets())]
+
+    @app.get("/lookup-targets")
+    async def get_lookup_targets() -> list[dict[str, str]]:
+        """The "請幫我查" card's search buttons (docs/plan-outside-lookup.md
+        D3): `server.lookup_targets`, validated at boot. Each `url` holds `{q}`,
+        which the card fills with the query as the person edited it."""
+        return targets
 
     @app.get("/me")
     async def get_me() -> dict:

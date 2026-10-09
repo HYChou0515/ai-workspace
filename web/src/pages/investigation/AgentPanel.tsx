@@ -156,6 +156,7 @@ export function AgentPanel({
   onSaveEnvVars,
   environment,
   canExportVideo = false,
+  canAddFiles,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -233,6 +234,11 @@ export function AgentPanel({
    *  export needs only the chat, so the dialog always opens; without this the
    *  video choice is drawn locked, with the reason. */
   canExportVideo?: boolean;
+  /** plan-outside-lookup: may this viewer add files (`add_content`)? `false`
+   *  hides the 請幫我查 card's attachments — the server refuses them — and says
+   *  the text goes to the AI unsaved. Absent ⇒ unknown, drawn as allowed (the
+   *  server still decides). */
+  canAddFiles?: boolean;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -272,6 +278,10 @@ export function AgentPanel({
         : {
             slug,
             itemId: investigationId,
+            // The "請幫我查" card answers into THIS chat (plan-outside-lookup).
+            ...(chatId ? { chatId } : {}),
+            ...(canAddFiles === false ? { canAddFiles: false } : {}),
+            answered: (callId: string) => answeredCalls.has(callId),
             ...(canEnv
               ? {
                   env: {
@@ -284,7 +294,7 @@ export function AgentPanel({
                 }
               : {}),
           },
-    [readOnly, slug, investigationId, canEnv, envVars, envPolicy, answeredCalls],
+    [readOnly, slug, investigationId, chatId, canAddFiles, canEnv, envVars, envPolicy, answeredCalls],
   );
   // A one-line answer to "I just did something and nothing happened" — the
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the

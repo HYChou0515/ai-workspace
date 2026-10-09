@@ -24,7 +24,7 @@ import { STORE_POLL_MS, useStorePollFallback } from "./useStorePollFallback";
 /** A quota refusal is the one send failure the user can do something about, so
  *  the composer names which limit and where to go rather than echoing a status.
  *  Three rules answer 507 and the remedies are three different places. */
-const CHAT_QUOTA_KEY = {
+export const CHAT_QUOTA_KEY = {
   workspace: "chat.send.workspaceFull",
   user: "chat.send.userFull",
   environment: "chat.send.envFull",

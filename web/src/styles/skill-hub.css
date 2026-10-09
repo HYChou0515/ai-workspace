@@ -966,3 +966,124 @@ a.skills-row-name {
   gap: var(--space-8);
   color: var(--text-paper-d);
 }
+
+/* docs/plan-outside-lookup.md — the "請幫我查" card (`ask_outside`). Its own
+   classes, like the request card above. */
+.outside-lookup-card {
+  margin-left: 28px; /* the avatar column every assistant block is indented past */
+  padding: var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  font-size: var(--text-small);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.outside-lookup-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.outside-lookup-why {
+  margin: calc(-1 * var(--space-8)) 0 0;
+}
+
+.outside-lookup-subject {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+.outside-lookup-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.outside-lookup-label {
+  font-weight: 600;
+}
+
+.outside-lookup-hint {
+  margin: 0;
+  color: var(--text-paper-d);
+}
+
+.outside-lookup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+/* The whole address, as text: what the person reads before opening it (D5). */
+.outside-lookup-url {
+  font-family: var(--font-mono);
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-card);
+  background: var(--paper-2);
+  user-select: all;
+  word-break: break-all;
+}
+
+.outside-lookup-paste {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+/* The native file input stays in the tree — its label names it for assistive
+   tech, and the 選擇檔案 button clicks it — but is not drawn (GOV.UK's file
+   upload: a visible label and a secondary "choose" button). */
+.outside-lookup-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.outside-lookup-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8);
+  border: 1px dashed var(--paper-3);
+  border-radius: var(--radius-card);
+}
+
+.outside-lookup-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.outside-lookup-files li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.outside-lookup-error {
+  margin: 0;
+  color: var(--err);
+}
+
+.outside-lookup-note {
+  margin: 0;
+  color: var(--text-paper-d);
+}

@@ -279,3 +279,7 @@ def test_replay_offers_the_tools_the_turn_held_not_the_entry_level_grant():
     offered = {t["function"]["name"] for t in completion.kwargs["tools"]}
     assert "spc" in offered
     assert "pareto" not in offered
+    # An item chat thread is a chat: the live turn held the 請幫我查 card
+    # (plan-outside-lookup D6), so the replay offers it too (review round 2).
+    assert "ask_user" in offered
+    assert "ask_outside" in offered

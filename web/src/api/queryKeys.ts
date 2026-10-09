@@ -115,6 +115,8 @@ export const qk = {
   privateEnv: (slug: string, itemId: string) => ["privateEnv", slug, itemId] as const,
   // `plan-personal-env`: the CALLER's values for every item.
   personalEnv: () => ["personalEnv"] as const,
+  /** docs/plan-outside-lookup.md D3: the deploy's search buttons. */
+  lookupTargets: () => ["lookupTargets"] as const,
   // The deploy's sign-ins, asked with no item (the "My environment variables" page).
   myEnvProviders: () => ["myEnvProviders"] as const,
   // The item's shared values + policy, for a page that has only its id.

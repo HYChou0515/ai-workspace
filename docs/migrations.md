@@ -1924,6 +1924,39 @@ host log 常出現 `no pack for … still running` 時再調大。兩個值都�
   按下後變「已請 AI 重試」，AI 重跑那支工具。
 - 沒部署到這一版的症狀：AI 只用文字說「請到環境變數面板設定 X」，沒有卡片。
 
+### 2026-10-09 · #897 AI 請使用者去外面查，結果存成檔案帶回來 {#pr-897}
+
+**設定** — 一個新 key，預設值就能用：`server.lookup_targets`（卡片上的搜尋按鈕，`{name, url}` 清單，`url` 含 `{q}`）。
+沒設 = 只有 Google；**有設就整份取代**，還要 Google 要自己列進去。每筆要 `name` + `url`、`url` 是 `http(s)://` 且含
+`{q}`、名字不重複（前後空白不算），**空清單也不行**（不設就是 Google）；否則**啟動失敗**，錯在某一筆時說出是第幾筆。`rollout 前`
+檢查 `config.yaml`——為什麼：設錯的部署起不來，pod 會 crashloop。細節見 [設定](configuration.md)。
+
+另外三件行為改變，沒有開關（`docs/plan-outside-lookup.md`），不用做事，但要知道：
+
+- **新的內建工具 `ask_outside`，不必授權**：**聊天**裡拿得到 `ask_user` 就有它（四個 App——playground、pm、rca、
+  topic-hub——的聊天都有）；KB 聊天、workflow 步驟（包括排程跑的）、sub-agent 都**沒有**，就算步驟的工具清單含
+  `ask_user`。AI 需要公開的外部資料時呼叫它，聊天裡出「請幫我查」卡片——查詢模式（每個 `lookup_targets` 一顆按鈕，
+  在**使用者的瀏覽器**開新分頁搜尋；查詢可以先改）或開網址模式（只接受 http/https）。**turn 停在卡片**，和 `ask_user`
+  一樣。不分是否斷網：能上網的部署，AI 一樣可能請使用者幫忙查。
+- **回覆會在 workspace 寫檔**：送出時存成 `lookups/<使用者當地日期>-<摘要>.md`（附件放同名資料夾），算進 workspace
+  容量；滿了整個回覆被擋（507），不會留下半套。存檔要 `add_content` 權限；只能聊天的成員照樣能回，內容只在訊息裡、
+  不存檔、卡片上沒有附檔區。「查不到／不查了」不寫檔。同一顆 pod 上同一張卡只收一個回覆，第二個回 409；多顆 pod 剛好同時送出同一張卡的回覆，仍可能兩個都收下。
+- **聊天廣播的 `user_message` 事件多一個 `answers` 欄位**（這則訊息回應哪張卡）。另一個分頁裡的同一張卡會當下收起，
+  `ask_user`／`request_env` 的卡也一樣。舊版前端忽略這個欄位，不會壞。
+
+**k8s · CI 側** — 前端 lockfile 多四個套件：`turndown@7.2.0`、`turndown-plugin-gfm@1.0.2`、`@mixmark-io/domino@2.2.0`
+（turndown 的相依）、`@types/turndown@5.0.5`（dev；image build 也會裝）——版本以 `web/pnpm-lock.yaml` 為準。
+**`rollout 前`（build image 前）**：離線 build 環境要先把這四個套件放進你的 npm 套件鏡像——為什麼：image build 時
+`pnpm install --frozen-lockfile` 從 lockfile 裝，鏡像裡沒有就裝不到。漏了的症狀：前端 build 階段 `pnpm install` 失敗，
+image 做不出來。能連公開 registry 的 build 不用做事。沒有新的 manifest、env、probe 或 JobType。
+
+**確認做完**（`rollout 後`）
+
+- `GET /api/lookup-targets` 回你設定的清單（沒設就是 Google 一筆）。
+- 在任一 App 的聊天問一個需要外部資料的問題：出現「請幫我查」卡片，turn 停住；按「Google ↗」在新分頁搜尋改過的查詢；
+  把網頁內容貼回卡片是 Markdown；送出後 `lookups/` 多一個檔案，AI 下一輪引用它。
+- 沒部署到這一版的症狀：卡片不會出現；`GET /api/lookup-targets` 是 404。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

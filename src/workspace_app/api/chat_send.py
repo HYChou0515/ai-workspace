@@ -1528,6 +1528,7 @@ class ChatSendService:
                             content=body.content,
                             created_at=created,
                             markings=[msgspec.to_builtins(m) for m in sent_markings],
+                            answers=body.answers,
                         ),
                     )
                 # #492: flush the item's live sandbox to durable when THIS turn ends, so

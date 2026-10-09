@@ -1,0 +1,162 @@
+{
+ "cases": [
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"q\"}",
+   "card": {
+    "why": "w",
+    "query": "q"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"pandas 2.0 新功能\"}",
+   "card": {
+    "why": "w",
+    "query": "pandas 2.0 新功能"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://example.com/a?b=c#d\"}",
+   "card": {
+    "why": "w",
+    "url": "https://example.com/a?b=c#d"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"http://intra.example\"}",
+   "card": {
+    "why": "w",
+    "url": "http://intra.example"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"http://a b\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"javascript:alert(1)\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"file:///etc/passwd\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"HTTPS://A.EXAMPLE\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"ftp://a.example\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\" https://a.example\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/\\n\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\ufeffy\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u0085y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u001fy\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u00a0y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a.example/x\\u3000y\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://a\\u200b.example/\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://例子.測試/路徑?q=中文\"}",
+   "card": {
+    "why": "w",
+    "url": "https://例子.測試/路徑?q=中文"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"q\",\"url\":\"https://a\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"\",\"query\":\"q\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":3,\"query\":\"q\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":[\"q\"]}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"q\",\"extra\":1}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup][\"w\",\"q\"]",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]null",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]not json",
+   "card": null
+  },
+  {
+   "output": "error: pass exactly one of `query` or `url`",
+   "card": null
+  },
+  {
+   "output": "",
+   "card": null
+  },
+  {
+   "output": "one\n[outside-lookup]{\"why\":\"a\",\"query\":\"first\"}\n[outside-lookup]{\"why\":\"b\",\"query\":\"last\"}",
+   "card": {
+    "why": "b",
+    "query": "last"
+   }
+  },
+  {
+   "output": "x\n[outside-lookup]{\"why\":\"a\",\"query\":\"q\"}\ntrailing prose",
+   "card": null
+  }
+ ]
+}

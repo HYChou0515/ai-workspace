@@ -420,6 +420,11 @@ class AgentToolContext:
     # triggered says otherwise (the chat send routes, the KB chat send), and a
     # sub-agent inherits its caller's lane the same way it inherits output ceilings.
     call_lane: CallLane = "background"
+    # Whether this turn is a CHAT turn — a thread a person can answer in, so a
+    # card that waits for them (`ask_outside`, plan-outside-lookup D6) can be
+    # drawn. Set only by the chat turn builder; a workflow step or a schedule
+    # leaves it False even when its tool list includes `ask_user`.
+    in_chat: bool = False
     # #624: how many history messages this turn had to leave out because they
     # would not fit the endpoint's context window. 0 = nothing was cut (the
     # normal case, and the default when no ceiling is known — we send it all

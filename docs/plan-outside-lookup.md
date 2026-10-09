@@ -1,6 +1,7 @@
 # 斷網部署:AI 停下來請使用者去外面查,再把結果帶回來
 
-**狀態:** 計劃(P1)。
+**狀態:** P1–P8 完成(#897):P8 真瀏覽器量過 1280／390(卡片與頁面都沒有水平溢出、按鈕都在卡內),demo 已錄(MP4);
+as-built 與計劃不同之處見 §8。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master` 程式碼或文件確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -17,8 +18,9 @@
   它就跟著有**(`env_request.py` 的授權判斷),不必改每個 app 的 `app.json`。
 - 停 turn 的機制只有一個:`api/litellm_runner.py:ask_user_stop_behaviour`(SDK 的 `StopAtTools`;`request_env`
   只在真的畫出卡片時停,被拒絕時不停,讓模型讀到原因)。
-- `ask_user` 開在五個 app 的聊天(`_template`、`playground`、`pm`、`rca`、`topic-hub` 的 `app.json`);KB 聊天沒有;
-  workflow 的 agent step 只拿它自己列的 `tools`。
+- `ask_user` 列在五個 `app.json`(`_template`、`playground`、`pm`、`rca`、`topic-hub`;`_template` 不是使用者看得到的
+  App);KB 聊天沒有。workflow 的 agent step 有寫 `tools:` 就只拿它列的,**沒寫就拿 App 的全部**(含 `ask_user`)——
+  所以「跟著 `ask_user`」不足以擋掉 workflow,見 §8 A8。
 
 ## 2. 決定
 
@@ -33,6 +35,8 @@
 | D7 | 有「查不到／不查了」按鈕,可選填理由;AI 下一輪改用手上的資料,並說明沒有外部佐證 | 〔user〕同意 |
 | D8 | 查詢在卡片上可以先改,按目的地按鈕時送出去的是改過的內容;不另外寫 AI 規則、不加公司提醒文字 | 〔user〕「1就好」 |
 | D9 | 一張卡只查一件事 | 〔user〕同意 |
+| D10 | 在卡片上貼上圖片(截圖、「複製圖片」)就變成附件;不能附檔的人貼圖時卡片說明不能附檔,不默默吞掉 | 〔user〕同意(2026-10-09) |
+| D11 | 貼上的網頁「處理越少越好」:外部圖片照轉出來的 `![說明](網址)` 留著、不提示;內嵌 `data:` 圖片不抽出;相對連結不補;只把貼上區說明改成「選取要的段落再複製(避免全選)」 | 〔user〕「處理越少越好才對」 |
 
 ## 3. 機制
 
@@ -54,8 +58,8 @@ ask_outside(why: str, query: str | None = None, url: str | None = None)
 ### 3.2 停 turn 與授權
 
 - `ask_user_stop_behaviour` 多一個工具:`ask_outside` 畫出卡片時停(成功回覆才停,錯誤不停),和 `request_env` 同一套。
-- 授權照 `request_env`:**這個 turn 有 `ask_user` 就有 `ask_outside`**。結果:五個 app 的聊天有;KB 聊天沒有 `ask_user`
-  所以沒有;workflow step 只拿它列的工具,所以沒有(D6)。不改任何 `app.json`。
+- 授權:**聊天的 turn、而且有 `ask_user`**,才有 `ask_outside`(§8 A8)。結果:四個 App 的聊天有;KB 聊天沒有
+  `ask_user` 所以沒有;workflow step 不是聊天,所以沒有(D6)。不改任何 `app.json`。
 
 ### 3.3 目的地設定(D3)
 
@@ -148,3 +152,46 @@ server:
 4. 送出:`lookups/` 底下多一個檔案,AI 下一輪引用它作答。
 5. 再問一次,這次按「查不到／不查了」:AI 說明沒有外部佐證,改用手上資料。
 6. 部署有設 `server.lookup_targets` 時:卡片上的按鈕就是清單上的那些。
+
+## 8. 施工後與計劃不同的地方(as-built,#897)
+
+- **A1 卡片的來源**:不從 `tool_args` 畫,改成回覆尾端的宣告(`\n[outside-lookup]{json}`),和 `request_env` 同一套。
+  停 turn 的判斷和聊天讀的是後端驗過的同一份(`declared_lookup`;前端的讀法用共用案例表
+  `tests/fixtures/outside_lookup_cases.json` 釘在後端上,`web/tests/outsideLookupParity.test.ts`);匯出只拿掉同一個
+  marker 後面的宣告(`shown_files.without_card_declaration`),不做同樣的驗證。
+- **A2 網址的判斷**:前後端用同一個樣式,不各用自己語言的網址解析器——`http://a b` 在 Python 有 host、在 JS 會丟錯,
+  後端會為一張前端畫不出來的卡停住 turn。樣式裡也**不用 `\s`**,把空白字元逐一列出(`_SPACE`):兩種語言的 `\s`
+  不一樣(U+FEFF 只在 JS 算空白,U+0085 只在 Python 算),review round 1 抓到。
+- **A3 權限**:送出要 `converse`;**存檔要 `add_content`**,和 #847 marking 同一條規則(review 抓過「只能聊天的人
+  透過 marking 寫檔」)。只能聊天的人照樣能回,內容只在訊息裡、不存檔;卡片上**不出附檔區**,改說明文字不會存
+  (`ChatItem.canAddFiles`,從 `useItemAccess().canAddContent` 傳下來)。
+- **A4 檔名**:`lookups/<使用者當地日期 YYYY-MM-DD>-<摘要>.md`,日期由瀏覽器送(格式不對才用伺服器的 UTC 日期)——
+  伺服器是 UTC,台灣早上 8 點前查的會被歸到前一天。不放時分;同名加 `-2`、`-3`。檔頭照記完整時間(UTC)。
+- **A5 廣播帶 `answers`**:`user_message` 事件多一個 `answers`,另一個分頁的同一張卡當下收起,不必等重新整理後
+  才發現送出被拒(409)。`ask_user`、`request_env` 的卡一起受益。
+- **A6 錯誤文字**:容量滿用聊天送出的同一組文字(`CHAT_QUOTA_KEY`),其他用伺服器給的原因。
+- **A7 附件 UI**:照 GOV.UK Design System〈File upload〉——看得到的標籤、次要樣式的「選擇檔案」、一直看得到的拖放區、
+  「尚未選擇檔案」、選了列檔名且可移除。<https://design-system.service.gov.uk/components/file-upload/>
+- **A8 只在聊天裡(D6)**:「有 `ask_user` 就有」不夠——workflow 步驟沒寫 `tools:` 時拿到 App 的全部工具,`ask_user`
+  也在內,連排程跑的都會出卡片。改成**只有聊天的 turn**(`AgentToolContext.in_chat`,只有 `build_chat_turn` 設)
+  才給。review round 1 抓到。
+- **A9 送出的流程**:同一張卡在同一顆 pod 上一次只處理一個回覆(依 item + call id 上鎖,鎖有計數——放開時還有人在等
+  就不能丟掉,review round 2 抓到);第二個在寫檔前就看到已回覆、回 409。寫完檔後再重讀一次對話,抓別顆 pod 先記下的
+  回覆:那時收回自己的檔案、回 409。送出失敗時,**只在對話裡沒有「這一則」回覆(同一張卡、同樣內容)時**收回檔案;
+  請求在送出受 shield 保護之後被取消則**不收回**——訊息可能在取消之後才存進去。已知的縫:取消落在 shield 之前(送出還在
+  檢查能不能跑這一輪時),檔案會留著、沒有訊息提到;卡片仍開著,再回一次會存成 `-2`。兩顆 pod 的送出剛好重疊時
+  仍可能都成功,不另做跨 pod 鎖。
+- **A10 貼上的內容用檔案 part 送**:Starlette 的表單欄位上限 1 MiB,一頁中文(一字 3 bytes)就會超過;改成檔案 part,
+  上限同單一檔案上限。
+- **A11 用字**:
+  - 訊息和檔頭記的是**實際搜尋的字**(使用者改過的查詢,D8),檔頭另記 AI 原本的查詢。
+  - 「查不到／不查了」送「沒有查到／不查了:<查詢>」+「原因:<理由>」(計劃寫「使用者沒有查到:<理由>」,但同一顆
+    按鈕也代表「不查了」)。
+  - 工具給模型的回覆是「The user now sees a card asking them to look up … Wait for them …」(計劃寫「Asked the user
+    to look this up outside: …」)。
+  - 工具說明不說「這個部署斷網」,改說「你跑的伺服器可能上不了網」——工具不分部署都會給。
+- **A12 卡片的寫入用 `useMutation`**(repo 慣例),送出中/錯誤狀態從 mutation 來。
+- **A13 目的地名稱比對去掉前後空白**:`Google` 和 `Google ` 在卡片上是同一顆按鈕。
+- **A14 health replay 照聊天回放**:回放 item 的對話(`source: rca`)時給 `in_chat`,聊天那一輪的工具清單才對得上
+  (review round 2)。已知不準:replay 載入的若是 workflow run 的對話,回放會多一個 `ask_outside`(那一輪本來沒有)——
+  replay 本來就不套步驟的 `tools` 子集,這是同一類既有的診斷誤差,不影響真正跑的那一輪(review round 3)。

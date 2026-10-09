@@ -135,6 +135,8 @@ export type UserMessage = {
   created_at: number;
   /** #847 P7: the markings sent with it, as persisted (a refused one too). */
   markings?: SentMarking[];
+  /** The call it answers (`Message.answers`) — a card retires on it live. */
+  answers?: string | null;
 };
 
 /** #43: a workspace file changed (a human wrote/moved/deleted it), broadcast so

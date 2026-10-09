@@ -38,6 +38,11 @@ vi.mock("./EnvRequestCard", () => ({
     <div data-testid="env-request-card-stub">{request.names.join(",")}</div>
   ),
 }));
+vi.mock("./OutsideLookupCard", () => ({
+  OutsideLookupCard: ({ lookup }: { lookup: { why: string } }) => (
+    <div data-testid="outside-lookup-card-stub">{lookup.why}</div>
+  ),
+}));
 vi.mock("./RcaMark", () => ({
   RcaMark: () => <span data-rca />,
 }));
@@ -1219,6 +1224,29 @@ describe("EntryView — request_env", () => {
     expect(screen.queryByTestId("env-request-card-stub")).toBeNull();
     expect(document.querySelector("details")).not.toBeNull();
     expect(screen.getByText(translate("zh-TW", "tool.request_env"))).toBeInTheDocument();
+  });
+});
+
+// docs/plan-outside-lookup.md: `ask_outside` declares the "請幫我查" card.
+describe("EntryView — ask_outside", () => {
+  const call = (output: string | undefined) => ({
+    kind: "tool_call" as const,
+    call: { call_id: "c1", name: "ask_outside", status: "done" as const, args: {}, output },
+  });
+
+  it("draws the declared lookup as the card", () => {
+    render(
+      <EntryView entry={call('Asked.\n[outside-lookup]{"why":"need the notes","query":"q"}')} />,
+    );
+    expect(screen.getByTestId("outside-lookup-card-stub")).toHaveTextContent("need the notes");
+    expect(document.querySelector("details")).toBeNull();
+  });
+
+  it("falls back to the ordinary tool card, labelled, when the call was refused", () => {
+    render(<EntryView entry={call("error: pass exactly one of `query` or `url`")} />);
+    expect(screen.queryByTestId("outside-lookup-card-stub")).toBeNull();
+    expect(document.querySelector("details")).not.toBeNull();
+    expect(screen.getByText(translate("zh-TW", "tool.ask_outside"))).toBeInTheDocument();
   });
 });
 

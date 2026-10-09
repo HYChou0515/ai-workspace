@@ -24,6 +24,7 @@ import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
 import { parseShownSkillHubEntry, stripSkillHubEntry } from "../renderers/skillHubEntry";
 import { parseEnvRequest } from "../renderers/envRequest";
+import { parseOutsideLookup } from "../renderers/outsideLookup";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
@@ -32,6 +33,7 @@ import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
 import { SkillHubEntryCard } from "./SkillHubEntryCard";
 import { EnvRequestCard } from "./EnvRequestCard";
+import { OutsideLookupCard } from "./OutsideLookupCard";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
@@ -118,6 +120,7 @@ const TOOL_LABEL: Record<string, MsgKey> = {
   show_file: "tool.show_file",
   show_skill_hub_entry: "tool.show_skill_hub_entry",
   request_env: "tool.request_env",
+  ask_outside: "tool.ask_outside",
   write_file: "tool.write_file",
   edit_file: "tool.edit_file",
   delete_file: "tool.delete_file",
@@ -339,6 +342,10 @@ export function EntryView({
     // refusal stays in the log.
     const envRequest = entry.call.name === "request_env" ? parseEnvRequest(entry.call.output) : null;
     if (envRequest) return <EnvRequestCard callId={entry.call.call_id} request={envRequest} />;
+    // docs/plan-outside-lookup.md: the "請幫我查" card, by the same rule — a
+    // refused call declares nothing and stays an ordinary tool card.
+    const lookup = entry.call.name === "ask_outside" ? parseOutsideLookup(entry.call.output) : null;
+    if (lookup) return <OutsideLookupCard callId={entry.call.call_id} lookup={lookup} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
         // 28 = the avatar column every assistant block is indented past. Flush
