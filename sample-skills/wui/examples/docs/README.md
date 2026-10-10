@@ -26,6 +26,13 @@ does not.
 Edit the markdown in `docs/`, then Rebuild. Add a page by writing the file and
 adding it to `nav:` in `mkdocs.yml`.
 
+On a deployment whose sandboxes run as local processes (`sandbox.kind: local`)
+this build fails with `Failed to build new PATH variable … path segment
+contains separator ':'`: the sandbox's home lives under the item's directory,
+whose name carries a `:`, and `uv` refuses a PATH entry that does. The hosted
+sandbox (`kind: http`, the production backend) names its directories without
+one, so it builds there. Measured 2026-10-09.
+
 ## Nothing may need the network
 
 Once the page is running it has none. The theme reaches for it in three places,

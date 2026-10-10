@@ -2031,6 +2031,8 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
   照常 build 就有。少了它，`__wui/ping` 回 503，所有 WUI 走單頁組裝。
 - **mkdocs 頁面的 build** 跑 `uvx --with mkdocs-material mkdocs build`：sandbox 要能連到 PyPI（或你們的套件鏡像）。
   只影響有人做 mkdocs 頁面的時候；連不到時 Rebuild 的輸出會寫出 uv 的錯誤。
+  `sandbox.kind: local` 的部署上這個 build 會失敗（`path segment contains separator ':'`：sandbox 的 HOME 在 item
+  目錄底下，目錄名帶 `:`，uv 不接受）——跟那種部署上 npm 指令的既有限制同一類；`kind: http` 不受影響。
 
 **確認做完**（`rollout 後`）：
 
