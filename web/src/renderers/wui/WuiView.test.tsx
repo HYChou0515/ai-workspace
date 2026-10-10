@@ -19,6 +19,11 @@ import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
 import { MAX_REPORTS, WuiView, type WuiChrome } from "./WuiView";
 
+// This file is the single-page way — one assembled `srcdoc` document. A page
+// served from its own address is `WuiView.served.test.tsx`'s; here the
+// deployment never offers one, so no test's `fetch` stub is asked for a pass.
+vi.mock("./served", () => ({ openServedWui: vi.fn(async () => null) }));
+
 const text = (path: string, body: string): FileContent => ({
   kind: "text",
   path,

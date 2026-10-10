@@ -52,9 +52,20 @@ def _is_built(name: str) -> bool:
     return (_EXAMPLE_DIR / name / "src").is_dir()
 
 
+#: The generated sites (`docs/plan-wui-multipage.md`) — a THIRD shape: the page
+#: is a static-site generator's whole output (`site/`, many pages), built from
+#: markdown by a config file. Neither guard set fits it: there is no `app.js`
+#: beside an `index.html`, and no bundler. Detected by the generator's config.
+def _is_site(name: str) -> bool:
+    return (_EXAMPLE_DIR / name / "mkdocs.yml").is_file()
+
+
 #: The examples whose files ARE the page — no build, so the entry and its two
 #: siblings sit at the folder root.
-EXAMPLES = tuple(n for n in _example_names() if not _is_built(n))
+EXAMPLES = tuple(n for n in _example_names() if not _is_built(n) and not _is_site(n))
+
+#: Every generated-site example.
+SITES = tuple(n for n in _example_names() if _is_site(n))
 
 
 #: The first built one, for the tests that assert on a single built example.
@@ -97,7 +108,20 @@ def test_an_example_counts_as_built_only_when_it_has_a_source_to_build() -> None
             f"{name} is classed as built but pulls no bundler — its EXAMPLES guards "
             "were dropped and nothing failed"
         )
+
+    # A site is generated, not bundled and not hand-written: its build runs the
+    # generator. Read from its `package.json`, the file that decides what a
+    # build IS — not from the config file the predicate looked at.
+    def _generated(name: str) -> bool:
+        pkg = _EXAMPLE_DIR / name / "package.json"
+        return pkg.is_file() and "mkdocs build" in pkg.read_text()
+
+    assert SITES, "no generated-site example ships"
+    for name in SITES:
+        assert _generated(name), f"{name} is classed as a site but its build generates nothing"
+        assert name not in BUILT_ALL, f"{name} is a site and a bundled page at once"
     for name in EXAMPLES:
+        assert not _generated(name), f"{name} generates a site but is checked as a plain page"
         assert not _bundled(name), f"{name} bundles but is checked as a plain page"
         # And its files really ARE the page: the entry references its siblings
         # directly, rather than being a template the bundler rewrites.
@@ -701,3 +725,65 @@ def test_the_worked_reducer_shows_a_failed_step_as_failed(payload: dict[str, byt
         "`step_failed` carries `reason`, the one sentence saying which gate gave "
         "up; a page that drops it can only say something went wrong"
     )
+
+
+# ── generated sites (docs/plan-wui-multipage.md) ─────────────────────────────
+
+
+@pytest.mark.parametrize("name", SITES)
+def test_a_site_example_opens_its_generated_entry(payload: dict[str, bytes], name: str):
+    """The page is the generator's OUTPUT. Without `entry:` the pane opens the
+    folder's own `index.html`, which a site does not have — "not published"."""
+    yaml = payload[f"examples/{name}/page.ai.yaml"].decode()
+
+    assert re.search(r"^view:\s*wui\s*$", yaml, re.MULTILINE)
+    assert re.search(r"^entry:\s*site/index\.html\s*$", yaml, re.MULTILINE)
+
+
+@pytest.mark.parametrize("name", SITES)
+def test_a_site_example_builds_with_an_environment_that_survives_a_recycle(
+    payload: dict[str, bytes], name: str
+):
+    """`.venv` is not kept, and neither is a `pip --user` install (it lives in
+    the sandbox's `.home`, reaped with it). `uvx --with` grows the generator
+    back on every build, the way `pnpm install` grows `node_modules`."""
+    build = json.loads(payload[f"examples/{name}/package.json"].decode())["scripts"]["build"]
+
+    assert build.startswith("uvx --with mkdocs-material mkdocs build"), build
+
+
+@pytest.mark.parametrize("name", SITES)
+def test_a_site_example_needs_no_network_once_built(payload: dict[str, bytes], name: str):
+    """Measured (Phase 4 of the plan): mkdocs-material's theme font comes from
+    Google, a `repo_url` makes its JavaScript call the GitHub API, and a
+    mermaid diagram makes it fetch mermaid from a CDN — and when THAT fails its
+    search stops initialising, the same on any offline static server. A WUI has
+    no network at runtime, so the example turns each of them off or keeps the
+    file in the folder."""
+    config = payload[f"examples/{name}/mkdocs.yml"].decode()
+
+    assert re.search(r"^\s+font:\s*false\s*$", config, re.MULTILINE), (
+        "the theme font is a Google request"
+    )
+    assert "repo_url" not in config, "a repo_url makes the page call the GitHub API"
+    assert "http://" not in config and "https://" not in config
+
+
+@pytest.mark.parametrize("name", SITES)
+def test_a_site_example_is_more_than_one_page(payload: dict[str, bytes], name: str):
+    """The reason this shape exists. A one-page site would teach nothing a plain
+    page does not, and would never exercise a link between pages."""
+    pages = [p for p in payload if p.startswith(f"examples/{name}/docs/") and p.endswith(".md")]
+    home = payload[f"examples/{name}/docs/index.md"].decode()
+
+    assert len(pages) >= 2, pages
+    linked = re.findall(r"\]\(([\w\-/]+\.md)(?:#[\w-]+)?\)", home)
+    assert linked, "the home page links to no other page"
+    for target in linked:
+        assert f"examples/{name}/docs/{target}" in payload, f"{target} is linked but does not exist"
+
+
+def test_the_skill_points_at_the_site_examples():
+    body = SHARED_SKILLS["wui"].joinpath("SKILL.md").read_text()
+    for name in SITES:
+        assert f"examples/{name}/" in body, name

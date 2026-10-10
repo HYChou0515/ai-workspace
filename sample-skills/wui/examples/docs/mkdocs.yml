@@ -1,0 +1,18 @@
+site_name: Line handbook
+# A WUI has no network once it is running, so nothing here may need one:
+# - `font: false` — the theme's default font is a request to Google;
+# - no repository link — with one, the theme's JavaScript calls the code host;
+# - no mermaid fence unless the library is a file in `docs/` (see README.md).
+theme:
+  name: material
+  font: false
+  features:
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+plugins:
+  - search
+nav:
+  - Home: index.md
+  - Start of shift: start-of-shift.md
+  - When a lot is held: lot-hold.md

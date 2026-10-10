@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 import { pluginSourcesResolveFromHere, SDK_SPECIFIER, sharedModules } from "./vite-plugins/sharedModules";
+import { wuiRuntime } from "./vite-plugins/wuiRuntime";
 
 // Version-skew handshake: bake the SAME version string the backend serves
 // (pyproject.toml is the single source; `make release` bumps it) so the
@@ -28,7 +29,9 @@ export default defineConfig({
   base: process.env.VITE_BASE_PATH || "/",
   // #847/#848: `shared/*.js` + the import map runtime view plugins resolve
   // `react` / the view SDK through. See vite-plugins/sharedModules.ts.
-  plugins: [react(), sharedModules(), pluginSourcesResolveFromHere()],
+  // plan-wui-multipage: `wui-runtime.js`, which the server injects into every
+  // page it serves. See vite-plugins/wuiRuntime.ts.
+  plugins: [react(), sharedModules(), pluginSourcesResolveFromHere(), wuiRuntime()],
   server: {
     port: 5173,
     // The runtime view plugins' sources/tests live beside `web/`, not in it.

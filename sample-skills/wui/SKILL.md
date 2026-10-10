@@ -21,6 +21,7 @@ right the things that are easy to get wrong, and copying beats generating.
 | `examples/external/` | the answer lives in ANOTHER system | `callTool`, and telling the three refusals apart — not declared / not granted / the tool itself said no |
 | `examples/chart/` | somebody wants to SEE the shape of the numbers | a real charting library, and the one build step that fetches it into the folder |
 | `examples/react/` | **the default toolchain** | React + TypeScript, `wui.d.ts` (the bridge, typed), and the three build settings that fail silently without them |
+| `examples/docs/` | somebody wants pages to READ — a handbook, a runbook, notes that outgrew one file | a documentation site: markdown in, `mkdocs build` out, many pages with search, and the three ways its theme reaches for a network it does not have |
 
 If a page both reads and writes, start from the dashboard and add saving — a
 page that reads wrongly is obvious, a page that writes wrongly is not.
@@ -207,10 +208,28 @@ title: Lot tracker
 `icon` is optional: it marks the page on the WUI overview once it is Deployed;
 without one the overview draws a circle with the title's first letter.
 
+## A page can be many pages
+
+A WUI folder may hold a whole site — several HTML files that link to each other,
+like a generator's output. Links between them, `#anchors`, Back, and a
+`fetch("./data.json")` of a file in the folder all work, and the address follows
+the page so it can be shared. For documentation, copy `examples/docs/` rather
+than writing a site by hand.
+
+That needs the deployment to serve pages from their own address. Where it does
+not, the page is shown as one document: links to its other pages and a
+`fetch` of its own files do not work there, so a page that must also work that
+way reads its files with `workspace.readFile`.
+
+A link to another website does not open by itself: the platform asks the person
+first, in a box they can trust. A link to a file elsewhere in the item opens that
+file in the workspace.
+
 ## The rules that are enforced (not advice)
 
-- **No network AT RUNTIME.** `fetch`, XHR, WebSocket, a CDN `<script src>`, a
-  Google Font — all blocked once the page is running. Everything it uses is a
+- **No network AT RUNTIME.** `fetch`, XHR, WebSocket to anywhere but the page's
+  own folder, a CDN `<script src>`, a Google Font — all blocked once the page is
+  running. Everything it uses is a
   file in its folder, or comes through `workspace.*`. There is no workaround; do
   not spend a turn looking.
   **A build is not runtime.** `pnpm install` runs in the sandbox, where you have
