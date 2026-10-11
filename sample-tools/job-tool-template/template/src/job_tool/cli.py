@@ -15,10 +15,12 @@ import json
 import sys
 
 from job_contract import JobBackend
+from jsonschema import Draft202012Validator
 
 from job_tool.commands import commands
 from job_tool.describe import describe
 from job_tool.discover import NoBackend, load_backend
+from job_tool.run import run
 
 
 def _fail(message: str, exit_code: int) -> int:
@@ -58,7 +60,25 @@ def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = No
         )
         return 0
 
-    raise NotImplementedError("running a command arrives in P3")
+    try:
+        args = json.loads(rest[0])
+    except ValueError as exc:
+        return _fail(f"arguments for {name} are not JSON: {exc}", 2)
+    # The schema the model was shown is the one its arguments are held to, so
+    # what reaches the backend is what the backend declared it accepts.
+    problems = sorted(Draft202012Validator(command.params_json_schema).iter_errors(args), key=str)
+    if problems:
+        detail = "; ".join(
+            f"{'/'.join(map(str, p.absolute_path)) or 'arguments'}: {p.message}" for p in problems
+        )
+        return _fail(f"bad arguments for {name}: {detail}", 2)
+
+    outcome = run(name, args, backend)
+    if outcome.answer is not None:
+        print(json.dumps(outcome.answer))
+    if outcome.error is not None:
+        print(outcome.error, file=sys.stderr)
+    return outcome.exit_code
 
 
 if __name__ == "__main__":

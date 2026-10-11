@@ -1,0 +1,235 @@
+"""Running one call: the budget, the exit code, and what the model is told.
+
+Every call to the backend runs in a daemon thread that is waited on for the
+call's budget and no longer. A call that overruns is abandoned — the tool
+answers and exits, and the thread dies with the process — so a backend that
+hangs costs its budget, never the platform's whole ceiling.
+
+The model hears two things: the answer on stdout (JSON, with a `next` line
+saying what to do now) and the exit code, which the platform turns into its
+advice (0 done, 1 failed, 2 calling again may work, 3 a person must act).
+"""
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from typing import Any
+
+from pathlib import PurePosixPath
+
+from job_contract import JobBackend, JobError, JobStatus, Retryable
+
+from job_tool.commands import LIST_PAGE, LOG_PAGE
+
+
+@dataclass(frozen=True)
+class Outcome:
+    exit_code: int
+    answer: dict[str, Any] | None = None
+    """Printed on stdout as JSON. None on failure."""
+    error: str | None = None
+    """Printed on stderr. None on success."""
+
+
+class TimedOut(Exception):
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"no answer within {seconds:g}s")
+        self.seconds = seconds
+
+
+def within[T](seconds: float, fn: Callable[[], T]) -> T:
+    """`fn()`, or `TimedOut` once `seconds` pass without it returning."""
+    box: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # handed to the caller below, whatever it is
+            box["error"] = exc
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise TimedOut(seconds)
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _status(job: JobStatus, advice: str) -> dict[str, Any]:
+    return {"job": asdict(job), "next": advice}
+
+
+_RUNNING = "Still running; it continues on its own. Call get again later to check."
+_UNKNOWN = (
+    "The backend could not say just now. That does NOT mean the job does not exist; "
+    "call get again shortly."
+)
+
+
+def _done(backend: type[JobBackend]) -> str:
+    offered = backend.offers()
+    then = [
+        hint
+        for call, hint in (("logs", "logs reads its log"), ("fetch", "fetch saves its outputs"))
+        if call in offered
+    ]
+    return "Finished." + (f" Next: {'; '.join(then)}." if then else "")
+
+
+def _advice(job: JobStatus, backend: type[JobBackend]) -> str:
+    """What to do next about `job`, decided by its phase alone."""
+    if job.phase == "unknown":
+        return _UNKNOWN
+    return _RUNNING if job.phase == "running" else _done(backend)
+
+
+def _reported(job: JobStatus, backend: type[JobBackend]) -> Outcome:
+    """A status, with the advice its phase calls for. `unknown` is exit 2:
+    asking again may get an answer."""
+    return Outcome(2 if job.phase == "unknown" else 0, _status(job, _advice(job, backend)))
+
+
+def _get(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
+    budget = backend.contract.budget.get
+    return _reported(within(budget, lambda: backend().get(args["job_id"])), backend)
+
+
+_SUBMITTED = (
+    "Submitted; it runs on its own and nothing will announce when it ends. "
+    "Tell the user to ask again later, and call get with this job_id then."
+)
+
+
+def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
+    """Submit, and when the answer does not come in time, find out whether it
+    landed before saying anything — so "try again" is never said about a job
+    that is already running (two jobs, two bills)."""
+    contract = backend.contract
+    sent: dict[str, str] = {}
+
+    def send() -> str:
+        instance = backend()
+        sent["key"] = contract.idempotency.key(spec, caller=instance.caller_id())
+        return instance.submit(spec, sent["key"])
+
+    try:
+        job_id = within(contract.budget.submit, send)
+    except TimedOut:
+        key = sent.get("key")
+        if key is None:
+            # Stuck before `submit` was called; the stuck thread dies with
+            # this process, so nothing can arrive later.
+            return Outcome(
+                2,
+                error=f"The backend gave no answer within {contract.budget.submit:g}s, "
+                "before the job was sent: it was not sent. Calling again may work.",
+            )
+        try:
+            found = within(contract.budget.find_by_key, lambda: backend().find_by_key(key))
+        except Exception as exc:  # TimedOut, JobError, anything: the answer is unknown
+            return Outcome(
+                1,
+                error=f"The submit's outcome is unknown: the backend did not confirm it within "
+                f"{contract.budget.submit:g}s, and could not be asked whether it arrived "
+                f"({exc}). Before submitting again, call list to see whether it is there.",
+            )
+        if found is None:
+            return Outcome(
+                2,
+                error=f"The backend did not confirm the submit within "
+                f"{contract.budget.submit:g}s, and has no job for it. Submitting the same "
+                "spec again is safe: it carries the same key, so a late arrival of the "
+                "first one is returned rather than started twice.",
+            )
+        return Outcome(0, {"job_id": found.job_id, "next": _SUBMITTED})
+    return Outcome(0, {"job_id": job_id, "next": _SUBMITTED})
+
+
+def _list(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
+    cursor, limit = args.get("cursor"), args.get("limit", LIST_PAGE)
+    jobs, after = within(backend.contract.budget.list, lambda: backend().list(cursor, limit))
+    advice = (
+        f"More jobs are older than these; call list with cursor={after!r} for them."
+        if after is not None
+        else "There are no more jobs."
+    )
+    return Outcome(0, {"jobs": [asdict(job) for job in jobs], "next_cursor": after, "next": advice})
+
+
+def _update(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
+    budget = backend.contract.budget.update
+    job = within(budget, lambda: backend().update(args["job_id"], args["patch"]))
+    return Outcome(
+        0,
+        _status(
+            job,
+            "Change accepted; it may not have taken effect yet. Call get to see when it has.",
+        ),
+    )
+
+
+def _cancel(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
+    budget = backend.contract.budget.cancel
+    job = within(budget, lambda: backend().cancel(args["job_id"]))
+    # The cancel itself succeeded; where the job now is decides what follows.
+    return Outcome(0, _status(job, f"Cancel accepted. {_advice(job, backend)}"))
+
+
+def _logs(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
+    job_id, offset = args["job_id"], args.get("offset", 0)
+    limit = args.get("limit", LOG_PAGE)
+    budget = backend.contract.budget.logs
+    text, total = within(budget, lambda: backend().logs(job_id, offset, limit))
+    end = offset + len(text)
+    advice = (
+        f"{total - end} more characters; call logs with offset={end} to read on."
+        if end < total
+        else "That is the end of the log so far."
+    )
+    return Outcome(0, {"text": text, "offset": offset, "end": end, "total": total, "next": advice})
+
+
+def _fetch(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
+    dest = PurePosixPath(args["dest"])
+    # The working directory is the user's workspace; a path that leaves it
+    # would write somewhere nobody sees, or somewhere nobody should.
+    if dest.is_absolute() or ".." in dest.parts:
+        raise Retryable(
+            f"dest {args['dest']!r} must be a relative path inside the workspace, without '..'"
+        )
+    budget = backend.contract.budget.fetch
+    path = within(budget, lambda: backend().fetch(args["job_id"], args["name"], str(dest)))
+    return Outcome(0, {"path": path, "next": f"Saved to {path} in the workspace."})
+
+
+_RUNNERS: dict[str, Callable[[type[JobBackend], dict[str, Any]], Outcome]] = {
+    "submit": _submit,
+    "get": _get,
+    "list": _list,
+    "update": _update,
+    "cancel": _cancel,
+    "logs": _logs,
+    "fetch": _fetch,
+}
+
+
+def run(name: str, args: dict[str, Any], backend: type[JobBackend]) -> Outcome:
+    """Run command `name` with already-validated `args`."""
+    try:
+        return _RUNNERS[name](backend, args)
+    except TimedOut as exc:
+        return Outcome(
+            2,
+            error=f"The backend gave no answer within {exc.seconds:g}s; "
+            "it may be busy. Calling again may work.",
+        )
+    except JobError as exc:
+        return Outcome(exc.exit_code, error=str(exc))
+    except Exception as exc:
+        # The backend broke in a way it did not describe. Say what, plainly:
+        # a traceback is noise to the model, and stdout must stay empty.
+        return Outcome(1, error=f"the backend failed: {type(exc).__name__}: {exc}")

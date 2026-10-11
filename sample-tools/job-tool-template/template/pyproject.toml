@@ -7,7 +7,12 @@ description = "Submit work to a backend and ask about it later."
 requires-python = ">=3.12"
 # The contract, and YOUR backend. Both are separate packages so that changing
 # the backend and upgrading this template never touch each other.
-dependencies = ["job-contract"]
+dependencies = [
+    "job-contract",
+    # Arguments are checked against the schema the model was shown, before the
+    # backend sees them.
+    "jsonschema>=4",
+]
 
 [project.scripts]
 # EXACTLY ONE: the command the bundle's launcher runs. Every job command

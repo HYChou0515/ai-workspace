@@ -76,6 +76,14 @@ class Budget:
                     f"budget.{name}={seconds:g}: must be more than 0 and at most {limit:g} "
                     f"seconds (the platform stops a call at {PLATFORM_CEILING:g})"
                 )
+        # A submit that runs out of time is followed, in the same call, by
+        # find_by_key — so the two share one ceiling.
+        if self.submit + self.find_by_key > limit:
+            raise ContractError(
+                f"budget.submit + budget.find_by_key = {self.submit + self.find_by_key:g}: "
+                f"must be at most {limit:g}, because a submit that runs out of time is "
+                "followed by find_by_key in the same call"
+            )
 
 
 @dataclass(frozen=True)

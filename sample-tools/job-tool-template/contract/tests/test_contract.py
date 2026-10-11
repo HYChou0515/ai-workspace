@@ -23,6 +23,15 @@ def test_a_budget_past_the_platform_ceiling_is_refused_when_declared():
         Budget(get=56)
 
 
+def test_a_submit_and_its_lookup_must_fit_in_one_call_together():
+    # A submit that runs out of time is followed by find_by_key in the SAME
+    # call, so the two share the platform's ceiling.
+    with pytest.raises(ContractError, match="submit.*find_by_key"):
+        Budget(submit=40, find_by_key=20)
+
+    Budget(submit=40, find_by_key=15)
+
+
 def test_two_submits_of_the_same_job_get_the_same_key_whatever_else_differs():
     rule = Idempotency(fields=("image", "command"))
     first = {"image": "trainer:3", "command": "train.py", "note": "first try"}
