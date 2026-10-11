@@ -77,6 +77,7 @@ def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = No
             f"{'/'.join(map(str, p.absolute_path)) or 'arguments'}: {p.message}" for p in problems
         )
         return _fail(f"bad arguments for {name}: {detail}", 2)
+    args = _whole(args)
 
     # stdout is the answer and nothing else. While the backend runs — and
     # after, since an abandoned call may still be printing — anything it
@@ -93,6 +94,20 @@ def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = No
     if outcome.error is not None:
         print(outcome.error, file=sys.stderr)
     return outcome.exit_code
+
+
+def _whole(value: Any) -> Any:
+    """`value` with every whole-number float made an int. JSON Schema counts
+    `5.0` as an integer, so it passes validation; left a float it would give
+    the same spec a different idempotency key and break a backend that slices
+    or ranges with it."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _whole(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_whole(item) for item in value]
+    return value
 
 
 def _jsonable(value: Any) -> Any:

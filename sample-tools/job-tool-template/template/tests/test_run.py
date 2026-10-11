@@ -9,7 +9,7 @@ import time
 import pytest
 from backends import Scripted, ScriptedFull
 
-from job_contract import JobStatus, NeedsAction, NotFound
+from job_contract import JobError, JobStatus, NeedsAction, NotFound
 from job_tool.cli import main
 from job_tool.commands import LIST_PAGE, LOG_PAGE
 
@@ -83,12 +83,24 @@ def test_a_finished_job_points_only_at_the_calls_the_backend_has(capsys):
     Scripted.answers["get"] = JobStatus(job_id="j1", phase="done", state="failed: OOM")
 
     _, out, _ = _run(capsys, "get", {"job_id": "j1"})
-    assert json.loads(out)["next"] == "Finished."
+    assert json.loads(out)["next"] == "Finished; its state says how it ended."
 
     code = main(["get", json.dumps({"job_id": "j1"})], backend=WithLogs)
     out, _ = capsys.readouterr()
     assert code == 0
     assert "logs" in json.loads(out)["next"] and "fetch" not in json.loads(out)["next"]
+
+
+def test_a_finished_job_is_not_promised_outputs_it_may_not_have(capsys):
+    # The shell reads only `phase`: "done" may be a success or a cancel, so
+    # fetch is offered as a possibility, never as the next step.
+    Scripted.answers["cancel"] = JobStatus(job_id="j1", phase="done", state="cancelled")
+
+    _, out, _ = _run_full(capsys, "cancel", {"job_id": "j1"})
+
+    advice = json.loads(out)["next"]
+    assert "state" in advice
+    assert "if it produced any" in advice
 
 
 def test_a_backend_that_breaks_unexpectedly_is_a_plain_failure_not_a_traceback(capsys):
@@ -154,7 +166,7 @@ def test_a_slow_submit_that_did_not_land_may_be_sent_again(capsys):
 
 @pytest.mark.parametrize(
     "lookup",
-    [{"delay": 30.0}, {"answer": NeedsAction("set GPU_API_TOKEN")}],
+    [{"delay": 30.0}, {"answer": JobError("scheduler said no")}],
     ids=["lookup-times-out", "lookup-fails"],
 )
 def test_a_slow_submit_nobody_can_confirm_is_unknown_and_must_be_checked_first(capsys, lookup):
@@ -167,6 +179,19 @@ def test_a_slow_submit_nobody_can_confirm_is_unknown_and_must_be_checked_first(c
 
     assert (code, out) == (1, "")
     assert "unknown" in err and "list" in err
+
+
+def test_a_lookup_that_needs_a_person_still_says_so(capsys):
+    # The outcome is unknown either way, but exit 3 is what lets the platform
+    # offer the person a way to fix it; flattening it to 1 loses that.
+    Scripted.answers["submit"] = "j1"
+    Scripted.delay["submit"] = 30.0
+    Scripted.answers["find_by_key"] = NeedsAction("set GPU_API_TOKEN")
+
+    code, _, err = _run(capsys, "submit", SPEC_IN)
+
+    assert code == 3
+    assert "unknown" in err and "GPU_API_TOKEN" in err
 
 
 def test_a_submit_stuck_before_it_was_sent_is_safe_to_send_again(capsys):
@@ -197,6 +222,22 @@ def test_list_gives_a_page_and_says_whether_there_is_more(capsys):
     _, out, _ = _run(capsys, "list", {"cursor": "page-2", "limit": 5})
     assert json.loads(out)["next_cursor"] is None
     assert "no more" in json.loads(out)["next"]
+
+
+def test_a_cursor_the_backend_gave_as_a_number_can_still_be_passed_back(capsys):
+    # The shell's own schema says cursor is a string; handing the model 5
+    # would get its next call refused, and page 2 would never be reached.
+    Scripted.answers["list"] = ([], 5)
+    _, out, _ = _run(capsys, "list", {})
+    assert json.loads(out)["next_cursor"] == "5"
+
+    code, _, _ = _run(capsys, "list", {"cursor": "5"})
+    assert code == 0
+
+
+def test_list_pages_are_bounded(capsys):
+    code, _, err = _run(capsys, "list", {"limit": 10_000})
+    assert code == 2 and "limit" in err
 
 
 def _run_full(capsys, name, args):
@@ -243,12 +284,20 @@ def test_logs_say_how_much_is_left_and_where_to_read_it_from(capsys):
     assert "offset" not in json.loads(out)["next"]
 
 
-@pytest.mark.parametrize("dest", ["/etc/passwd", "../outside.txt", "out/../../x"])
-def test_fetch_never_writes_outside_the_workspace(capsys, dest):
+@pytest.mark.parametrize(
+    "dest", ["/etc/passwd", "../outside.txt", "out/../../x", "", ".", "linked/x"]
+)
+def test_fetch_never_writes_outside_the_workspace(capsys, dest, tmp_path, monkeypatch):
+    workspace, elsewhere = tmp_path / "workspace", tmp_path / "elsewhere"
+    workspace.mkdir()
+    elsewhere.mkdir()
+    (workspace / "linked").symlink_to(elsewhere)  # inside by name, outside in fact
+    monkeypatch.chdir(workspace)
+
     code, _, err = _run_full(capsys, "fetch", {"job_id": "j1", "name": "model", "dest": dest})
 
     assert code == 2
-    assert "relative" in err
+    assert "inside the workspace" in err
     assert Scripted.calls == []
 
 

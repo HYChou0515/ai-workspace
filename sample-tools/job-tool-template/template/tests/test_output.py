@@ -97,6 +97,23 @@ def test_detail_the_backend_could_not_spell_as_json_still_makes_a_json_answer(ca
     assert detail["loss"] == "nan"
 
 
+def test_a_whole_number_written_with_a_point_is_the_same_whole_number(capsys):
+    # JSON Schema counts 5.0 as an integer, so it passes validation; left a
+    # float, it gives the same spec a different key (two jobs, two bills) and
+    # breaks a backend that slices or ranges with it.
+    Scripted.answers["submit"] = "j1"
+    spec = {"image": "trainer:3", "command": "train.py", "gpus": 2.0, "lr": 0.5}
+
+    assert main(["submit", json.dumps(spec)], backend=Scripted) == 0
+    assert main(["submit", json.dumps({**spec, "gpus": 2})], backend=Scripted) == 0
+    capsys.readouterr()
+
+    (first, second) = [call for call in Scripted.calls if call[0] == "submit"]
+    assert first == second  # same spec, same key
+    sent = first[1]
+    assert type(sent["gpus"]) is int and sent["lr"] == 0.5
+
+
 def test_more_arguments_than_one_json_object_are_refused(capsys):
     code = main(["get", '{"job_id": "x"}', '{"job_id": "y"}'], backend=Scripted)
     _, err = capsys.readouterr()

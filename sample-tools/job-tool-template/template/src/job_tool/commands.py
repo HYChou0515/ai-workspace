@@ -25,8 +25,11 @@ class Command:
 #: How many characters of log one `logs` call returns unless asked otherwise.
 #: Tool output is capped by the platform; a page this size stays well inside it.
 LOG_PAGE = 4000
-#: How many jobs one `list` call returns unless asked otherwise.
+#: How many jobs one `list` call returns unless asked otherwise, and at most.
+#: Tool output is capped by the platform, so an unbounded page would come back
+#: cut off — and a cut-off list reads as "these are all my jobs".
 LIST_PAGE = 20
+LIST_MAX = 100
 
 _JOB_ID = {"type": "string", "description": "The job's id, as `submit` or `list` returned it."}
 
@@ -47,7 +50,12 @@ def _params(name: str, backend: type[JobBackend]) -> dict[str, Any]:
                     "type": ["string", "null"],
                     "description": "Where the previous page ended; leave out for the newest jobs.",
                 },
-                "limit": {"type": "integer", "minimum": 1, "default": LIST_PAGE},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": LIST_MAX,
+                    "default": LIST_PAGE,
+                },
             },
             [],
         )

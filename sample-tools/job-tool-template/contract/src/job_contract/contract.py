@@ -71,10 +71,12 @@ class Budget:
     def __post_init__(self) -> None:
         limit = PLATFORM_CEILING - MARGIN
         for name, seconds in asdict(self).items():
-            if not 0 < seconds <= limit:
+            # bool is an int to Python; as a budget it is a typo, not 1 second.
+            is_number = isinstance(seconds, int | float) and not isinstance(seconds, bool)
+            if not is_number or not 0 < seconds <= limit:
                 raise ContractError(
-                    f"budget.{name}={seconds:g}: must be more than 0 and at most {limit:g} "
-                    f"seconds (the platform stops a call at {PLATFORM_CEILING:g})"
+                    f"budget.{name}={seconds!r}: must be a number of seconds, more than 0 and "
+                    f"at most {limit:g} (the platform stops a call at {PLATFORM_CEILING:g})"
                 )
         # A submit that runs out of time is followed, in the same call, by
         # find_by_key — so the two share one ceiling.

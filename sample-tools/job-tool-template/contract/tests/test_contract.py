@@ -24,6 +24,13 @@ def test_a_budget_past_the_platform_ceiling_is_refused_when_declared():
         Budget(get=56)
 
 
+@pytest.mark.parametrize("seconds", [True, "10", float("nan")])
+def test_a_budget_that_is_not_a_number_of_seconds_is_refused(seconds):
+    # True would otherwise pass as 1 s, and "10" fail with a bare TypeError.
+    with pytest.raises(ContractError, match="get"):
+        Budget(get=seconds)  # type: ignore[arg-type]
+
+
 def test_a_submit_and_its_lookup_must_fit_in_one_call_together():
     # A submit that runs out of time is followed by find_by_key in the SAME
     # call, so the two share the platform's ceiling.

@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from job_contract import JobBackend, JobError, JobStatus, Retryable
@@ -84,13 +84,19 @@ _UNKNOWN = (
 
 
 def _done(backend: type[JobBackend]) -> str:
+    # `done` covers success, failure and cancel alike — the shell reads only
+    # the phase — so outputs are offered as a possibility, never promised.
     offered = backend.offers()
     then = [
         hint
-        for call, hint in (("logs", "logs reads its log"), ("fetch", "fetch saves its outputs"))
+        for call, hint in (
+            ("logs", "logs reads its log"),
+            ("fetch", "fetch saves its outputs, if it produced any"),
+        )
         if call in offered
     ]
-    return "Finished." + (f" Next: {'; '.join(then)}." if then else "")
+    ended = "Finished; its state says how it ended."
+    return ended + (f" If useful: {'; '.join(then)}." if then else "")
 
 
 def _advice(job: JobStatus, backend: type[JobBackend]) -> str:
@@ -144,8 +150,10 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
         try:
             found = within(contract.budget.find_by_key, lambda: backend().find_by_key(key))
         except Exception as exc:  # TimedOut, JobError, anything: the answer is unknown
+            # Still unknown; but a lookup that needs a person keeps its exit 3,
+            # which is what lets the platform offer that person a fix.
             return Outcome(
-                1,
+                exc.exit_code if isinstance(exc, JobError) else 1,
                 error=f"The submit's outcome is unknown: the backend did not confirm it within "
                 f"{contract.budget.submit:g}s, and could not be asked whether it arrived "
                 f"({exc}). Before submitting again, call list to see whether it is there.",
@@ -165,6 +173,8 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
 def _list(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
     cursor, limit = args.get("cursor"), args.get("limit", LIST_PAGE)
     jobs, after = within(backend.contract.budget.list, lambda: backend().list(cursor, limit))
+    # The model passes it back as `cursor`, which the schema says is a string.
+    after = None if after is None else str(after)
     advice = (
         f"More jobs are older than these; call list with cursor={after!r} for them."
         if after is not None
@@ -209,10 +219,21 @@ def _logs(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
 def _fetch(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
     dest = PurePosixPath(args["dest"])
     # The working directory is the user's workspace; a path that leaves it
-    # would write somewhere nobody sees, or somewhere nobody should.
-    if dest.is_absolute() or ".." in dest.parts:
+    # would write somewhere nobody sees, or somewhere nobody should. Checked
+    # by name AND where it really leads, since a symlink in the workspace can
+    # point anywhere; and it must name a file, not the workspace itself.
+    workspace = Path.cwd().resolve()
+    lands = (workspace / dest).resolve()
+    if (
+        dest.is_absolute()
+        or ".." in dest.parts
+        or not dest.parts
+        or not lands.is_relative_to(workspace)
+        or lands == workspace
+    ):
         raise Retryable(
-            f"dest {args['dest']!r} must be a relative path inside the workspace, without '..'"
+            f"dest {args['dest']!r} must name a file inside the workspace: a relative path, "
+            "without '..', that does not lead outside it through a link"
         )
     budget = backend.contract.budget.fetch
     path = within(budget, lambda: backend().fetch(args["job_id"], args["name"], str(dest)))
