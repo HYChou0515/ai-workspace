@@ -25,7 +25,10 @@ version of the backend package, and upgrading the template never touches it.
    `[project.entry-points."job_tool.backend"]` line pointing at your class.
 3. In this repository's `pyproject.toml`, replace `example-jobs` with your
    backend, and point `[tool.uv.sources]` at git URLs or an index — the builder
-   mounts only this repository, so `../` paths do not exist there.
+   mounts only this repository, so `../` paths do not exist there. (While they
+   are still `../` paths, a local build reuses uv's cached wheel for an
+   unchanged version number: bump the version, or
+   `uv cache clean job-contract <your-backend>`, after editing either.)
 4. `uv lock`, then `python -m job_tool.envfile` to write `env.json`.
 5. `uv run pytest`, then push. CI runs the same tests before building.
 

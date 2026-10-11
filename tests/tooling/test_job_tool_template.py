@@ -31,6 +31,11 @@ def test_the_template_builds_into_an_artifact_the_platform_accepts(tmp_path: Pat
     own launcher through the three-stage contract."""
     from workspace_app.tooling.builder import BUNDLE_NAME, build_artifact
 
+    # uv caches a built wheel by (name, version), and prebuild refreshes only
+    # the tool's own package: without this, an edit to contract/ or
+    # example-impl/ at an unchanged version builds the OLD code into the
+    # bundle, and this test would be grading a stale copy.
+    subprocess.run(["uv", "cache", "clean", "job-contract", "example-jobs"], check=True)
     manifest = build_artifact(source=_TEMPLATE / "template", out=tmp_path, builder_id="test:job")
 
     assert manifest.name == "job-tool"
