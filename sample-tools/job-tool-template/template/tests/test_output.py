@@ -55,6 +55,29 @@ def test_the_process_ends_at_the_budget_even_when_the_backend_waits_on_a_pool():
     assert took < 10  # the pool sleeps 30
 
 
+def _entry(backend: str, argv: list[str]) -> subprocess.CompletedProcess:
+    """The installed command, in a real process with real file descriptors."""
+    program = (
+        "import sys, json; sys.path.insert(0, sys.argv[1]);"
+        f"from backends import {backend}; from job_tool.cli import entry;"
+        f"raise SystemExit(entry(json.loads(sys.argv[2]), backend={backend}))"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", program, str(TESTS), json.dumps(argv)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_what_a_child_process_of_the_backend_writes_never_reaches_the_answer():
+    proc = _entry("Shelling", ["submit", json.dumps({"image": "a", "command": "b"})])
+
+    assert proc.returncode == 0, proc.stderr
+    assert _strict(proc.stdout)["job_id"] == "j1"  # exactly one JSON document
+    assert "CHILD-OUTPUT" in proc.stderr
+
+
 def test_what_the_backend_prints_never_reaches_the_answer(capsys):
     class Chatty(Scripted):
         def get(self, job_id):
@@ -67,6 +90,22 @@ def test_what_the_backend_prints_never_reaches_the_answer(capsys):
     assert code == 0
     assert _strict(out)["job"]["job_id"] == "j1"
     assert "debug: fetching" in err
+
+
+def test_what_the_backend_prints_when_it_is_imported_never_reaches_the_answer(capsys, monkeypatch):
+    # A module-level print or a library banner runs when the backend is
+    # loaded — before any call, in stages 1 and 2 too, whose JSON the builder
+    # and the platform parse.
+    def noisy_load():
+        print("acme-sdk v2.1 loaded")
+        return Scripted
+
+    monkeypatch.setattr("job_tool.cli.load_backend", noisy_load)
+
+    assert main([]) == 0
+    out, err = capsys.readouterr()
+    assert [c["name"] for c in _strict(out)] == ["submit", "get", "list"]
+    assert "acme-sdk" in err
 
 
 def test_a_backend_that_tries_to_exit_is_a_failure_not_a_silent_success(capsys):

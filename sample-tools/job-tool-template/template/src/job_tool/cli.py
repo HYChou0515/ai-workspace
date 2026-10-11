@@ -11,11 +11,14 @@ Which commands exist is decided by the backend: one per call it supports.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import os
 import sys
-from typing import Any
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any, TextIO
 
 from job_contract import JobBackend
 from jsonschema import Draft202012Validator
@@ -33,17 +36,60 @@ def _fail(message: str, exit_code: int) -> int:
     return exit_code
 
 
+@contextmanager
+def _answer_channel() -> Iterator[TextIO]:
+    """A stream that reaches the real stdout, while everything else that would
+    have — a backend's `print`, a library's banner at import, the output of a
+    command the backend runs (`sbatch`, `kubectl`), a C extension — goes to
+    stderr instead. stdout is the channel the platform parses as the answer,
+    so one stray line there corrupts it.
+
+    Swapping `sys.stdout` alone catches only Python-level prints: a child
+    process writes to file descriptor 1 directly. So when stdout is a real
+    file descriptor, fd 1 itself is pointed at stderr for the duration and the
+    answer is written to a duplicate of the original. Once a call has been
+    abandoned nothing is restored: its thread may still be writing, and
+    `entry` ends the process right after."""
+    original = sys.stdout
+    answer: TextIO = original
+    saved: int | None = None
+    try:
+        is_fd1 = original.fileno() == 1
+    except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+        is_fd1 = False  # not a real descriptor (a test's capture): sys level only
+    if is_fd1:
+        original.flush()
+        saved = os.dup(1)
+        os.dup2(2, 1)
+        answer = open(saved, "w", encoding="utf-8", closefd=False)  # noqa: SIM115
+    sys.stdout = sys.stderr
+    try:
+        yield answer
+    finally:
+        answer.flush()
+        if not abandoned():
+            if saved is not None:
+                os.dup2(saved, 1)
+                os.close(saved)
+            sys.stdout = original
+
+
 def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
+    with _answer_channel() as answer:
+        return _main(sys.argv[1:] if argv is None else argv, backend, answer)
+
+
+def _main(argv: list[str], backend: type[JobBackend] | None, answer: TextIO) -> int:
     if backend is None:
         try:
-            backend = load_backend()
+            backend = load_backend()  # imports the backend: inside the channel
         except NoBackend as exc:
             return _fail(str(exc), 1)
 
     offered = commands(backend)
     if not argv:
-        print(json.dumps([{"name": n, "description": describe(n, backend)} for n in offered]))
+        listed = [{"name": n, "description": describe(n, backend)} for n in offered]
+        print(json.dumps(listed), file=answer)
         return 0
 
     name, rest = argv[0], argv[1:]
@@ -52,15 +98,12 @@ def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = No
         return _fail(f"unknown command {name!r}; this tool has {list(offered)}", 2)
 
     if not rest:
-        print(
-            json.dumps(
-                {
-                    "name": name,
-                    "description": describe(name, backend),
-                    "params_json_schema": command.params_json_schema,
-                }
-            )
-        )
+        described = {
+            "name": name,
+            "description": describe(name, backend),
+            "params_json_schema": command.params_json_schema,
+        }
+        print(json.dumps(described), file=answer)
         return 0
 
     if len(rest) > 1:
@@ -79,18 +122,9 @@ def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = No
         return _fail(f"bad arguments for {name}: {detail}", 2)
     args = _whole(args)
 
-    # stdout is the answer and nothing else. While the backend runs — and
-    # after, since an abandoned call may still be printing — anything it
-    # prints goes to stderr; the answer is written to the stdout we started with.
-    answer_to = sys.stdout
-    sys.stdout = sys.stderr
-    try:
-        outcome = run(name, args, backend)
-    finally:
-        if not abandoned():
-            sys.stdout = answer_to
+    outcome = run(name, args, backend)
     if outcome.answer is not None:
-        print(_dump(outcome.answer), file=answer_to)
+        print(_dump(outcome.answer), file=answer)
     if outcome.error is not None:
         print(outcome.error, file=sys.stderr)
     return outcome.exit_code

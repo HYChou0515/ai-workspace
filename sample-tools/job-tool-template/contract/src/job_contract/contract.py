@@ -156,6 +156,11 @@ class Contract:
         twice = sorted({name for name in names if names.count(name) > 1})
         if twice:
             raise ContractError(f"env declares {twice} more than once")
+        if not self.idempotency.fields:
+            raise ContractError(
+                "idempotency.fields must name at least one spec field: with none, the key "
+                "depends on the caller alone and every submit of theirs is the same job"
+            )
         known = set(self.spec_schema.get("properties", {}))
         unknown = [name for name in self.idempotency.fields if name not in known]
         if unknown:

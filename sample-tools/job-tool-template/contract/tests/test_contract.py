@@ -75,6 +75,13 @@ def test_sameness_named_on_a_field_the_spec_does_not_have_is_refused_when_declar
     Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image",)))
 
 
+def test_sameness_named_on_no_field_at_all_is_refused_when_declared():
+    # With no fields the key depends on the caller alone: a person's second,
+    # different job would be answered with their first job's id.
+    with pytest.raises(ContractError, match="at least one"):
+        Contract(spec_schema=SPEC, idempotency=Idempotency(fields=()))
+
+
 def test_a_variable_declared_twice_is_refused():
     # Two descriptions of one variable: whichever the panel shows, the other lied.
     with pytest.raises(ContractError, match="GPU_API_TOKEN"):

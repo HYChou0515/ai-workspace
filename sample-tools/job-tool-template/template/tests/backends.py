@@ -6,6 +6,7 @@ which commands it offers, what it says, how it ends — never a backend's.
 
 from __future__ import annotations
 
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,6 +75,15 @@ class Pooled(Minimal):
     def get(self, job_id):
         with ThreadPoolExecutor(1) as pool:
             return pool.submit(time.sleep, 30).result()
+
+
+class Shelling(Minimal):
+    """`submit` runs a command, the way a backend calls `sbatch` or `kubectl`.
+    The child writes to file descriptor 1, which no `sys.stdout` swap reaches."""
+
+    def submit(self, spec, key):
+        subprocess.run(["echo", "CHILD-OUTPUT"], check=True)
+        return "j1"
 
 
 class Scripted(Minimal):
