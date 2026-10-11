@@ -120,3 +120,22 @@ def test_a_backend_offers_the_required_calls_and_only_the_optional_ones_it_wrote
 
     assert Minimal.offers() == REQUIRED
     assert Cancellable.offers() == (*REQUIRED, "cancel")
+
+
+def test_update_and_its_patch_schema_come_together_or_not_at_all():
+    # An update with no schema cannot tell the model what a patch may say; a
+    # schema with no update describes a call that does not exist.
+    with pytest.raises(ContractError, match="patch_schema"):
+
+        class UpdateWithoutSchema(Minimal):
+            def update(self, job_id, patch):
+                return self.get(job_id)
+
+    with pytest.raises(ContractError, match="update"):
+
+        class SchemaWithoutUpdate(Minimal):
+            contract = Contract(
+                spec_schema=SPEC,
+                idempotency=Idempotency(fields=("image",)),
+                patch_schema={"type": "object"},
+            )

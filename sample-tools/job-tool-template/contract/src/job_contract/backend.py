@@ -64,6 +64,18 @@ class JobBackend(ABC):
                 f"{cls.__name__} declares no `contract`; every backend says once what it "
                 "accepts, what makes two submits the same job, and how long each call takes"
             )
+        has_update = "update" in cls.offers()
+        has_schema = cls.contract.patch_schema is not None
+        if has_update and not has_schema:
+            raise ContractError(
+                f"{cls.__name__} implements `update` but its contract has no patch_schema: "
+                "the model would have no way to know what a patch may say"
+            )
+        if has_schema and not has_update:
+            raise ContractError(
+                f"{cls.__name__}'s contract declares a patch_schema but it does not implement "
+                "`update`: the schema would describe a call that does not exist"
+            )
 
     @classmethod
     def offers(cls) -> tuple[str, ...]:
