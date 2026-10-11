@@ -187,6 +187,8 @@ def test_a_slow_submit_nobody_can_confirm_is_unknown_and_must_be_checked_first(c
 
     assert (code, out) == (1, "")
     assert "unknown" in err and "list" in err
+    if isinstance(lookup.get("answer"), SystemExit):
+        assert "SystemExit" in err  # "(0)" alone would tell the model nothing
 
 
 def test_a_lookup_that_needs_a_person_still_says_so(capsys):

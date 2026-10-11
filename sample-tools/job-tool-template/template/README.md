@@ -96,10 +96,13 @@ again later.
 
 Three more things the shell does so your backend does not have to:
 
-- **stdout is only the answer.** From the moment your backend is imported,
-  anything written to stdout — your `print`, a library's banner, a command you
-  run such as `sbatch` — goes to stderr instead; the answer is written to the
-  real stdout on its own. Values JSON cannot spell (a datetime in `detail`,
+- **stdout is only the answer.** From the moment your backend is imported
+  until the process exits, anything written to stdout — your `print`, a
+  library's banner, a command you run such as `sbatch`, work you leave running
+  that speaks at exit — goes to stderr instead; the answer is written to the
+  real stdout on its own. (The command-level part needs stdout to be a real
+  file descriptor, which it is under the platform's launcher and the MCP
+  runner; elsewhere only Python's `print` is redirected.) Values JSON cannot spell (a datetime in `detail`,
   NaN) are written as text rather than failing a call that succeeded.
 - **Whole numbers arrive as `int`.** JSON Schema counts `5.0` as an integer;
   the shell turns it into `5` before your code or the idempotency key sees it.

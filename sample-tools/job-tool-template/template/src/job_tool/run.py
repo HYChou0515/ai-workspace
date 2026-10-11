@@ -161,7 +161,8 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
                 NeedsAction.exit_code if isinstance(exc, NeedsAction) else 1,
                 error=f"The submit's outcome is unknown: the backend did not confirm it within "
                 f"{contract.budget.submit:g}s, and could not be asked whether it arrived "
-                f"({exc}). Before submitting again, call list to see whether it is there.",
+                f"({type(exc).__name__}: {exc}). Before submitting again, call list to see "
+                "whether it is there.",
             )
         if found is None:
             return Outcome(

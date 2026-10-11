@@ -78,7 +78,7 @@ code.
 |---|---|---|
 | D27 | Class-level checks (a contract declared, every required call implemented, D26) live in `JobBackend.check()`, applied by `load_backend` — which the CLI and the shape tests both run. Nothing is checked at class definition | They ran only at instantiation, which stages 1–2, the shape tests and the builder smoke never do, so a backend without `get` shipped. Definition time was also wrong: it refused a base class that only shares helpers |
 | D28 | Once a call is abandoned, the installed command (`cli.entry`) ends the process with `os._exit` as soon as the answer is out | A backend waiting on a thread pool (boto3, gRPC) kept the process alive: the interpreter joins pool workers at exit. Measured 30.1 s against a 0.2 s budget before, 0.3 s after |
-| D29 | From the start of `main` — before the backend is even imported — file descriptor 1 points at stderr (and `sys.stdout` with it); the answer is written to a duplicate of the original stdout. Round 2 replaced the first version, which swapped `sys.stdout` only during the call | A backend's `print` corrupted the answer; round 2 then showed a child process (`sbatch`, `kubectl`), a C extension writing to fd 1, and a print at import time all still did |
+| D29 | From the start of `main` — before the backend is even imported — file descriptor 1 points at stderr (and `sys.stdout` with it) whenever stdout is a real descriptor, as it is under the launcher and the MCP runner; the answer is written to a duplicate of the original stdout. The installed command never points it back (D39). Round 2 replaced the first version, which swapped `sys.stdout` only during the call | A backend's `print` corrupted the answer; round 2 then showed a child process (`sbatch`, `kubectl`), a C extension writing to fd 1, and a print at import time all still did |
 | D30 | Anything the backend raises — `SystemExit` included — is exit 1 "the backend failed: …" | `sys.exit(0)` in a backend was exit 0 with no output: a failure dressed as success |
 | D31 | The answer is made JSON-safe before it is written (NaN/inf and non-JSON values become text) | A datetime in `detail` turned a successful cancel into a reported failure |
 | D32 | Whole-number floats in validated arguments become `int` | JSON Schema counts `5.0` as an integer, so it gave the same spec a second key, and broke backends that slice with it |
@@ -97,6 +97,18 @@ mechanisms (D27, D28) held under mutation; D29 did not and was replaced (above).
 | D37 | Any failure of the lookup after a submit timeout — `SystemExit` included — is "outcome unknown, call list first", exit 1, or 3 for `NeedsAction`; never 2 | A `Retryable` there exited 2, and the platform's "call it again" contradicted "list first" |
 | D38 | A `dest` the path check itself cannot resolve (a NUL byte, a vanished cwd) is exit 2, the model's to fix | It surfaced as "the backend failed" |
 
+### Settled in review round 3 (the last of the budget)
+
+All four lenses ran on `95d96a74`: conformance and regression came back
+clean, veracity found only the stale PR body. Defect found one medium, fixed
+with a parameter and a pinning test rather than a new mechanism, so it buys no
+further round.
+
+| # | Decision | Why |
+|---|---|---|
+| D39 | The installed command (`entry`) leaves fd 1 pointed at stderr after the answer; only `main` called in-process restores it, and a test pins that restore | Restoring it let a backend's leftovers — pool workers the interpreter joins at exit, atexit handlers — print after the answer, onto the stdout the platform parses |
+| D40 | The "outcome unknown" message names the exception's type | `SystemExit(0)` read as "(0)" |
+
 D4 ("shape only — no backend, no mocks") governs the template's gate:
 `template/tests/test_shape.py` and the CI step. The shell's own tests drive it
 with fixed-answer stand-in backends, and the demo backend's tests exercise the
@@ -108,6 +120,9 @@ demo; neither calls a real service.
   `main` leaves stdout pointed at stderr (its thread may still write) and
   `entry` ends the process. Calling `main` again in the same process — only an
   embedding or a test would — sends later answers to stderr.
+- **A closed or full stdout** (`>&-`, `/dev/full`) ends with a traceback and
+  exit 1 where it used to be exit 120; either way there was nowhere to put the
+  answer, and the platform never runs the tool so.
 - **Ctrl-C** in a developer's terminal reads as "the backend failed:
   KeyboardInterrupt", exit 1. The platform never sends SIGINT.
 - **The MCP runner prefers stderr.** `tooling/mcp_server.py` reports

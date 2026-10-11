@@ -6,6 +6,7 @@ which commands it offers, what it says, how it ends — never a backend's.
 
 from __future__ import annotations
 
+import atexit
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -84,6 +85,24 @@ class Shelling(Minimal):
     def submit(self, spec, key):
         subprocess.run(["echo", "CHILD-OUTPUT"], check=True)
         return "j1"
+
+
+class Lingering(Minimal):
+    """`get` answers in time but leaves work behind that speaks after the
+    answer: a pool job (the interpreter waits for it at exit) and an atexit
+    handler. Both run after `main` has returned."""
+
+    def get(self, job_id):
+        def later():
+            time.sleep(0.3)
+            print("POOL-NOISE")
+            subprocess.run(["echo", "POOL-CHILD"], check=True)
+
+        pool = ThreadPoolExecutor(1)
+        pool.submit(later)
+        pool.shutdown(wait=False)
+        atexit.register(lambda: print("ATEXIT-NOISE"))
+        return JobStatus(job_id=job_id, phase="running", state="queued")
 
 
 class Scripted(Minimal):

@@ -78,6 +78,36 @@ def test_what_a_child_process_of_the_backend_writes_never_reaches_the_answer():
     assert "CHILD-OUTPUT" in proc.stderr
 
 
+def test_what_the_backend_left_running_never_follows_the_answer():
+    # The installed command exits right after `main`; whatever speaks during
+    # that exit (pool workers being joined, atexit handlers) must not land on
+    # the stdout the platform parses.
+    proc = _entry("Lingering", ["get", json.dumps({"job_id": "j1"})])
+
+    assert proc.returncode == 0, proc.stderr
+    assert _strict(proc.stdout)["job"]["job_id"] == "j1"  # nothing after it
+    assert "POOL-NOISE" in proc.stderr and "POOL-CHILD" in proc.stderr
+    assert "ATEXIT-NOISE" in proc.stderr
+
+
+def test_stdout_is_given_back_after_a_call_that_finished_in_time():
+    # The channel points fd 1 at stderr for the duration; a call that was not
+    # abandoned must leave it as it found it, or the next answer in the same
+    # process lands on stderr.
+    program = (
+        "import sys; sys.path.insert(0, sys.argv[1]);"
+        "from backends import Minimal; from job_tool.cli import main;"
+        "main([], backend=Minimal); main(['get'], backend=Minimal)"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", program, str(TESTS)], capture_output=True, text=True, timeout=60
+    )
+
+    first, second = proc.stdout.splitlines()
+    assert [c["name"] for c in _strict(first)] == ["submit", "get", "list"]
+    assert _strict(second)["name"] == "get"
+
+
 def test_what_the_backend_prints_never_reaches_the_answer(capsys):
     class Chatty(Scripted):
         def get(self, job_id):

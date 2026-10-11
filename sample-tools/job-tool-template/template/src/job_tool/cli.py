@@ -37,7 +37,7 @@ def _fail(message: str, exit_code: int) -> int:
 
 
 @contextmanager
-def _answer_channel() -> Iterator[TextIO]:
+def _answer_channel(*, restore: bool) -> Iterator[TextIO]:
     """A stream that reaches the real stdout, while everything else that would
     have — a backend's `print`, a library's banner at import, the output of a
     command the backend runs (`sbatch`, `kubectl`), a C extension — goes to
@@ -47,9 +47,13 @@ def _answer_channel() -> Iterator[TextIO]:
     Swapping `sys.stdout` alone catches only Python-level prints: a child
     process writes to file descriptor 1 directly. So when stdout is a real
     file descriptor, fd 1 itself is pointed at stderr for the duration and the
-    answer is written to a duplicate of the original. Once a call has been
-    abandoned nothing is restored: its thread may still be writing, and
-    `entry` ends the process right after."""
+    answer is written to a duplicate of the original.
+
+    `restore` puts stdout back afterwards, for a caller that goes on in the
+    same process (a test). The installed command does not: after the answer
+    the process only exits, and exiting is when a backend's leftovers speak —
+    pool workers the interpreter joins, atexit handlers. Nor is anything
+    restored once a call was abandoned: its thread may still be writing."""
     original = sys.stdout
     answer: TextIO = original
     saved: int | None = None
@@ -67,15 +71,22 @@ def _answer_channel() -> Iterator[TextIO]:
         yield answer
     finally:
         answer.flush()
-        if not abandoned():
+        if restore and not abandoned():
             if saved is not None:
                 os.dup2(saved, 1)
                 os.close(saved)
             sys.stdout = original
 
 
-def main(argv: list[str] | None = None, *, backend: type[JobBackend] | None = None) -> int:
-    with _answer_channel() as answer:
+def main(
+    argv: list[str] | None = None,
+    *,
+    backend: type[JobBackend] | None = None,
+    restore_stdout: bool = True,
+) -> int:
+    """The three stages. `restore_stdout=False` is for the installed command
+    (`entry`), which only exits afterwards; see `_answer_channel`."""
+    with _answer_channel(restore=restore_stdout) as answer:
         return _main(sys.argv[1:] if argv is None else argv, backend, answer)
 
 
@@ -168,7 +179,7 @@ def entry(argv: list[str] | None = None, *, backend: type[JobBackend] | None = N
     abandoned it ends the process the moment the answer is out: the backend
     may have left a thread pool running, and the interpreter would wait for
     it at exit — up to the platform's whole ceiling."""
-    code = main(argv, backend=backend)
+    code = main(argv, backend=backend, restore_stdout=False)
     if abandoned():
         sys.stdout.flush()
         sys.__stdout__.flush()
