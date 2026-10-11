@@ -127,6 +127,12 @@ class Contract:
     """JSON schema of what `update` accepts, or None when there is no `update`.
     What a patch can say — a priority, a pause — is the author's."""
 
+    domain_description: str = ""
+    """What these jobs ARE, in the author's words ("Trains a model on the
+    shared GPU cluster."). The model reads it first, before the template's
+    sentences about how a job behaves — which come from this contract and are
+    never written by hand."""
+
     def __post_init__(self) -> None:
         known = set(self.spec_schema.get("properties", {}))
         unknown = [name for name in self.idempotency.fields if name not in known]
