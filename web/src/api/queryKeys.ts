@@ -76,8 +76,11 @@ export const qk = {
   // reload the frame on its own — the thing plan decision 9 forbids. The
   // reader's Try again, which needs the new entry, mounts a fresh pane
   // instead (`WuiPage`); an author sees it on Refresh.
-  wuiDoc: (id: string, path: string, instance: number, generation: number) =>
-    ["wuiDoc", id, path, instance, generation] as const,
+  wuiDoc: (id: string, path: string, instance: number, generation: number, served = false) =>
+    ["wuiDoc", id, path, instance, generation, served] as const,
+  /** Where a WUI folder is served from, or `null` for the single-page way
+   * (`renderers/wui/served.ts`). Per item and folder: the pass is. */
+  wuiServe: (id: string, folder: string) => ["wuiServe", id, folder] as const,
   // Whether a WUI's folder declares a build. Its own key rather than `file`:
   // that one holds a `FileContent`, and two shapes under one key is a cache
   // that hands a consumer the other one's answer.

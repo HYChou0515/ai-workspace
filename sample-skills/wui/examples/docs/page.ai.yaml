@@ -1,0 +1,4 @@
+view: wui
+title: Line handbook
+# The page is what the generator writes, not anything in this folder's root.
+entry: site/index.html

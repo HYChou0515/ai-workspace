@@ -264,8 +264,10 @@ export class WuiEntryMissing extends Error {
   }
 }
 
-/** Build the document for a WUI folder: read its entry, fold the folder in. */
-export async function buildWuiDoc(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
+/** Read a WUI's entry document, raising the one `WuiEntryMissing` that names
+ * why it could not be opened. The same reading for both ways a page is shown,
+ * so "not published yet" means the same thing on each. */
+async function readWuiEntry(fs: FileService, folder: string, entry: string): Promise<{ path: string; html: string }> {
   // Read the entry through the three-outcome reader rather than the loader,
   // which collapses them: an entry that exists but could not be READ is not the
   // same as one that is not there, and this is the one place a person is told.
@@ -276,7 +278,6 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
   if (path === null) {
     throw new WuiEntryMissing(entry, "bad-entry", `${entry} is not a path inside this page's folder.`);
   }
-  const load = folderLoader(fs, folder, directoryOf(path));
   const read = await readAsset(fs, path);
   if (read.kind === "failed") {
     throw new WuiEntryMissing(entry, read.permanent ? "permanent" : "unreadable", read.reason);
@@ -288,7 +289,26 @@ export async function buildWuiDoc(fs: FileService, folder: string, entry: string
     // to remove.
     throw new WuiEntryMissing(entry, "not-html", `${entry} is not a page this can open — a WUI's entry is HTML.`);
   }
-  const built = await assembleWuiDoc(read.asset.text, load);
+  return { path, html: read.asset.text };
+}
+
+/** Build the document for a WUI folder: read its entry, fold the folder in. */
+export async function buildWuiDoc(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
+  const { path, html } = await readWuiEntry(fs, folder, entry);
+  const built = await assembleWuiDoc(html, folderLoader(fs, folder, directoryOf(path)));
   // The entry is code by definition; `assembleWuiDoc` only sees what it pulls IN.
   return { ...built, used: [entry, ...built.used] };
+}
+
+/**
+ * Check that a SERVED page's entry opens, without assembling anything
+ * (`docs/plan-wui-multipage.md`). The browser fetches the siblings itself from
+ * the page's address, so inlining them here would read — and base64 — a whole
+ * site for a document nobody uses. The entry is still read, because "this page
+ * has not been published yet" must be said by the pane in a sentence, not by a
+ * frame showing a server's 404.
+ */
+export async function checkWuiEntry(fs: FileService, folder: string, entry: string): Promise<WuiDoc> {
+  await readWuiEntry(fs, folder, entry);
+  return { doc: "", used: [entry] };
 }

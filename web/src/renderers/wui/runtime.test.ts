@@ -7,7 +7,7 @@ type Handler = (ev: unknown) => void;
 
 /** A window of our own, so the runtime's listeners cannot leak between tests
  * and each case starts from nothing. */
-function boot() {
+function boot(extra: Record<string, unknown> = {}, prepare?: (win: object) => void) {
   const handlers: Record<string, Handler[]> = {};
   const sent: Record<string, unknown>[] = [];
   // Capture-phase listeners are kept apart, because whether the runtime
@@ -20,9 +20,11 @@ function boot() {
     },
     getComputedStyle: (el: Element) => globalThis.getComputedStyle(el),
     workspace: undefined as unknown,
-  };
+    ...extra,
+  } as Record<string, unknown> & { addEventListener: (t: string, f: Handler, c?: boolean) => void };
   const parent = { postMessage: (m: Record<string, unknown>) => sent.push(m) };
 
+  prepare?.(win);
   const make = new Function(`return (${WUI_RUNTIME_SOURCE})`)() as (
     w: unknown,
     p: unknown,
@@ -36,7 +38,7 @@ function boot() {
    * actually reaches. */
   const fireCapture = (type: string, ev: unknown) => (capture[type] ?? []).forEach((f) => f(ev));
   const ws = () => win.workspace as Record<string, (...a: unknown[]) => Promise<unknown>>;
-  return { sent, fire, fireCapture, ws };
+  return { sent, fire, fireCapture, ws, win };
 }
 
 afterEach(() => {
@@ -361,5 +363,363 @@ describe("the WUI runtime", () => {
     const box = document.querySelector("[data-wui-pick]") as HTMLElement;
     expect(box.style.cssText).toContain("all: initial");
     expect(box.style.zIndex).toBe("2147483647");
+  });
+});
+
+
+/** A click as the window's bubble listener receives it. */
+function click(target: Element, init: Partial<{ defaultPrevented: boolean; button: number; ctrlKey: boolean }> = {}) {
+  const ev = {
+    target,
+    defaultPrevented: init.defaultPrevented ?? false,
+    button: init.button ?? 0,
+    ctrlKey: init.ctrlKey ?? false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault: vi.fn(),
+  };
+  return ev;
+}
+
+function link(href: string): HTMLAnchorElement {
+  const a = document.createElement("a");
+  a.setAttribute("href", href);
+  a.textContent = "go";
+  document.body.appendChild(a);
+  return a;
+}
+
+const SERVED = "http://app.test/api/wui-content/TOKEN/docs/site/index.html";
+
+describe("the WUI runtime on a served page (plan-wui-multipage)", () => {
+  it("does not let a late answer meant for the previous page settle this page's call", async () => {
+    /**
+     * A served site navigates its frame, and the parent's answers go to
+     * whatever document is in it NOW. Ids that restart at 1 on every page meant
+     * the previous page's late answer to its call "1" settled this page's call
+     * "1" — with the wrong value.
+     */
+    const { sent, fire, ws } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    let settled = false;
+    void ws().whoami().then(() => (settled = true));
+
+    fire("message", { data: { proto: "wui/1", id: "1", ok: true, value: { user: "someone else" } } });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    fire("message", { data: { proto: "wui/1", id: String(sent.at(-1)!.id), ok: true, value: { user: "me" } } });
+    await Promise.resolve();
+    expect(settled).toBe(true);
+  });
+
+  it("announces the page it landed on, so the address can follow it", () => {
+    const { sent } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+    expect(sent).toContainEqual({ proto: "wui/1", page: SERVED });
+  });
+
+  it("announces a jump within the page too, so the address names the section", () => {
+    const loc = { href: SERVED, origin: "http://app.test", protocol: "http:" };
+    const { sent, fire } = boot({ location: loc });
+
+    loc.href = `${SERVED}#install`;
+    fire("hashchange", {});
+
+    expect(sent).toContainEqual({ proto: "wui/1", page: `${SERVED}#install` });
+  });
+
+  it("announces nothing in a single-page document, which has no address of its own", () => {
+    const { sent } = boot({ location: { href: "about:srcdoc", origin: "null", protocol: "about:" } });
+
+    expect(sent.filter((m) => "page" in m)).toEqual([]);
+  });
+
+  it("hands a link to another site to the platform instead of following it", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const ev = click(link("https://example.com/x?y=1"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(sent).toContainEqual({ proto: "wui/1", open: "https://example.com/x?y=1" });
+  });
+
+  it("leaves a link within the site to the browser", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const ev = click(link("../setup/"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(sent.filter((m) => "open" in m)).toEqual([]);
+  });
+
+  it("leaves a link alone when the page already handled the click itself", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+    fire("click", click(link("https://example.com/"), { defaultPrevented: true }));
+
+    expect(sent.filter((m) => "open" in m)).toEqual([]);
+  });
+
+  it("finds the link a click landed inside of", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const a = link("https://example.com/deep");
+    const inner = document.createElement("span");
+    a.appendChild(inner);
+
+    fire("click", click(inner));
+
+    expect(sent).toContainEqual({ proto: "wui/1", open: "https://example.com/deep" });
+  });
+
+  it("routes window.open through the platform too", () => {
+    const { sent, win } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+    const opened = (win.open as (u: string) => unknown)("https://example.com/w");
+
+    expect(opened).toBeNull();
+    expect(sent).toContainEqual({ proto: "wui/1", open: "https://example.com/w" });
+  });
+
+  it("gives a page whose storage is forbidden one that works for the visit", () => {
+    /** An opaque origin's `localStorage` throws `SecurityError` (Phase 1); a
+     * generator's theme toggle calls it and stopped there. */
+    const forbid = (win: object) => {
+      for (const name of ["localStorage", "sessionStorage"]) {
+        Object.defineProperty(win, name, {
+          configurable: true,
+          get() {
+            throw new DOMException("denied", "SecurityError");
+          },
+        });
+      }
+    };
+    const { win: shimmed } = boot(
+      { location: { href: SERVED, origin: "http://app.test", protocol: "http:" } },
+      forbid,
+    );
+
+    const ls = shimmed.localStorage as Storage;
+    ls.setItem("k", "v");
+    expect(ls.getItem("k")).toBe("v");
+    expect(ls.getItem("missing")).toBeNull();
+    expect((shimmed.sessionStorage as Storage).getItem("k")).toBeNull();
+  });
+
+  it("starts a worker from the page's own script, in a blob that still resolves against the script", async () => {
+    /** An opaque origin may not start a worker from a URL (Phase 1) — so the
+     * runtime reads the script and starts it from a blob, telling it where it
+     * really lives so its own importScripts / fetch resolve. */
+    const made: { url: string; text: string; posted: unknown[] }[] = [];
+    class RealWorker {
+      onmessage: ((e: unknown) => void) | null = null;
+      posted: unknown[] = [];
+      constructor(url: string) {
+        made.push({ url, text: blobs[url], posted: this.posted });
+      }
+      postMessage(m: unknown) {
+        this.posted.push(m);
+      }
+      addEventListener() {}
+      terminate() {}
+    }
+    const blobs: Record<string, string> = {};
+    let n = 0;
+    const { win } = boot({
+      location: { href: SERVED, origin: "http://app.test", protocol: "http:" },
+      Worker: RealWorker,
+      fetch: async (url: string) => ({ ok: true, text: async () => `/*worker at ${url}*/` }),
+      Blob: class {
+        constructor(readonly parts: string[]) {}
+      },
+      URL: Object.assign(URL, {}),
+    });
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockImplementation((b: unknown) => {
+      const id = `blob:null/${++n}`;
+      blobs[id] = (b as { parts: string[] }).parts.join("");
+      return id;
+    });
+
+    const w = new (win.Worker as new (u: string) => { postMessage(m: unknown): void })("../assets/w.js");
+    w.postMessage({ type: "setup" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(made).toHaveLength(1);
+    // The prologue names where the script really lives.
+    expect(made[0].text).toContain('"http://app.test/api/wui-content/TOKEN/docs/assets/w.js"');
+    expect(made[0].text).toContain("/*worker at http://app.test/api/wui-content/TOKEN/docs/assets/w.js*/");
+    // Posted before the blob existed, delivered once it did.
+    expect(made[0].posted).toEqual([{ type: "setup" }]);
+
+    // And the prologue really re-bases the worker's own relative reads on the
+    // script's address: run it against a worker scope and watch what arrives.
+    const imported: string[] = [];
+    const fetched: string[] = [];
+    const scope = {
+      importScripts: (...urls: string[]) => imported.push(...urls),
+      fetch: (u: string) => fetched.push(u),
+    };
+    const prologue = made[0].text.slice(0, made[0].text.indexOf("/*wui-prologue*/"));
+    new Function("self", prologue)(scope);
+    scope.importScripts("lunr.js");
+    scope.fetch("../search/index.json");
+    expect(imported).toEqual(["http://app.test/api/wui-content/TOKEN/docs/assets/lunr.js"]);
+    expect(fetched).toEqual(["http://app.test/api/wui-content/TOKEN/docs/search/index.json"]);
+  });
+});
+
+describe("the WUI runtime and the edge of its folder", () => {
+  const LOC = { location: { href: SERVED, origin: "http://app.test", protocol: "http:" } };
+  const SCOPE = { proto: "wui/1", event: "scope", prefix: "http://app.test/api/wui-content/TOKEN/docs/" };
+
+  it("hands a link to a file in the item, past the page's folder, to the platform", () => {
+    const { sent, fire } = boot(LOC);
+    fire("message", { data: SCOPE });
+    const ev = click(link("../../notes%20v2.md"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(sent).toContainEqual({ proto: "wui/1", leave: "/notes v2.md" });
+  });
+
+  it("leaves a link inside the folder to the browser", () => {
+    const { sent, fire } = boot(LOC);
+    fire("message", { data: SCOPE });
+    const ev = click(link("../setup/"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(sent.filter((m) => "leave" in m)).toEqual([]);
+  });
+
+  it("does not follow a link to somewhere on this host that is not a page at all", () => {
+    const { sent, fire } = boot(LOC);
+    fire("message", { data: SCOPE });
+    const ev = click(link("/api/a/rca/items"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(sent.filter((m) => "leave" in m)).toEqual([]);
+    expect(sent.some((m) => m.report === "error")).toBe(true);
+  });
+
+  it("follows links as the browser would until it has been told where the folder ends", () => {
+    const { fire } = boot(LOC);
+    const ev = click(link("../../notes.md"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe("the WUI runtime keeps its pass out of what it reports", () => {
+  it("does not put the page's pass in a report — reports go into the chat", () => {
+    const { sent, fireCapture } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const img = document.createElement("img");
+    Object.defineProperty(img, "src", { value: "http://app.test/api/wui-content/s3cr3tTOKEN/docs/missing.png" });
+
+    fireCapture("error", { target: img });
+
+    const said = sent.find((m) => m.report === "error");
+    expect(String(said?.message)).toContain("/api/wui-content/…/docs/missing.png");
+    expect(String(said?.message)).not.toContain("s3cr3tTOKEN");
+  });
+
+  it("cuts the pass out of a picked element's markup too", () => {
+    /** A page's script writes absolute addresses into its DOM — a search
+     * result's link — and "Tell the agent" pastes the picked markup. */
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    const a = link("http://app.test/api/wui-content/s3cr3tTOKEN/docs/setup/");
+    fire("message", { data: { proto: "wui/1", command: "pick", on: true } });
+
+    a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    const pick = sent.find((m) => m.report === "pick") as { detail: { html: string } } | undefined;
+    expect(pick?.detail.html).toContain("/api/wui-content/…/docs/setup/");
+    expect(pick?.detail.html).not.toContain("s3cr3tTOKEN");
+  });
+
+  it("hands only places a person visits to the platform, not any scheme a link may carry", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+    fire("click", click(link("ftp://example.com/x")));
+    fire("click", click(link("data:text/html,hi")));
+
+    expect(sent.filter((m) => "open" in m)).toEqual([]);
+  });
+});
+
+describe("the WUI runtime on a page that is not there", () => {
+  it("tells the parent the address is gone, instead of announcing it as a page", () => {
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "wui-missing");
+    document.head.appendChild(meta);
+    try {
+      const { sent } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+
+      expect(sent).toContainEqual({ proto: "wui/1", missing: SERVED });
+      expect(sent.filter((m) => "page" in m)).toEqual([]);
+    } finally {
+      meta.remove();
+    }
+  });
+
+  it("leaves a javascript: link to the page, even past the folder's edge", () => {
+    const { sent, fire } = boot({ location: { href: SERVED, origin: "http://app.test", protocol: "http:" } });
+    fire("message", { data: { proto: "wui/1", event: "scope", prefix: "http://app.test/api/wui-content/TOKEN/docs/" } });
+    const ev = click(link("javascript:void(0)"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(sent.some((m) => m.report === "error")).toBe(false);
+  });
+});
+
+describe("the WUI runtime in a single-page document (the fallback)", () => {
+  const SRCDOC = { location: { href: "about:srcdoc", origin: "null", protocol: "about:" } };
+
+  it("scrolls to an in-page anchor instead of navigating the frame away", () => {
+    /** A srcdoc document's links resolve against the PARENT's address, so
+     * `#bottom` sent the frame to the platform's own app (Phase 1). */
+    const { fire } = boot(SRCDOC);
+    const target = document.createElement("p");
+    target.id = "bottom";
+    target.scrollIntoView = vi.fn();
+    document.body.appendChild(target);
+    const ev = click(link("#bottom"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(target.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("says why a link to another page goes nowhere, rather than breaking the frame", () => {
+    const { sent, fire } = boot(SRCDOC);
+    const ev = click(link("report.html"));
+
+    fire("click", ev);
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    const said = sent.find((m) => m.report === "error");
+    expect(String(said?.message)).toContain("report.html");
+    // And who can change that: the deployment, not the page's author.
+    expect(String(said?.message)).toContain("administrator");
+  });
+
+  it("still hands a link to another site to the platform", () => {
+    const { sent, fire } = boot(SRCDOC);
+
+    fire("click", click(link("https://example.com/")));
+
+    expect(sent).toContainEqual({ proto: "wui/1", open: "https://example.com/" });
   });
 });

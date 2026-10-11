@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "uvx --with mkdocs-material mkdocs build --quiet"
+  }
+}
