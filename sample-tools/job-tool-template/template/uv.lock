@@ -21,6 +21,20 @@ wheels = [
 ]
 
 [[package]]
+name = "example-jobs"
+version = "0.1.0"
+source = { editable = "../example-impl" }
+dependencies = [
+    { name = "job-contract" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "job-contract", editable = "../contract" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -44,6 +58,7 @@ name = "job-tool"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "example-jobs" },
     { name = "job-contract" },
     { name = "jsonschema" },
 ]
@@ -55,6 +70,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "example-jobs", editable = "../example-impl" },
     { name = "job-contract", editable = "../contract" },
     { name = "jsonschema", specifier = ">=4" },
 ]

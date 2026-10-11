@@ -9,6 +9,9 @@ requires-python = ">=3.12"
 # the backend and upgrading this template never touch each other.
 dependencies = [
     "job-contract",
+    # YOUR backend. Replace this with your own package; it registers itself
+    # under the `job_tool.backend` entry point group and this tool finds it.
+    "example-jobs",
     # Arguments are checked against the schema the model was shown, before the
     # backend sees them.
     "jsonschema>=4",
@@ -34,6 +37,7 @@ dev = ["pytest>=8"]
 # outside it does not exist there.
 [tool.uv.sources]
 job-contract = { path = "../contract", editable = true }
+example-jobs = { path = "../example-impl", editable = true }
 
 # Self-contained rootdir so `pytest` doesn't walk up into the parent repo's config.
 [tool.pytest.ini_options]
