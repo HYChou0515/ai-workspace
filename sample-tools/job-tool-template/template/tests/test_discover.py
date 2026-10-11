@@ -29,6 +29,13 @@ def test_two_backends_are_refused_naming_both():
         load_backend([_ep("acme", "backends:Minimal"), _ep("other", "backends:Full")])
 
 
+def test_a_registered_backend_that_cannot_keep_its_contract_is_refused():
+    # This is the gate CI runs (the shape tests load the backend): a missing
+    # call fails here instead of shipping a command that fails every time.
+    with pytest.raises(NoBackend, match="get"):
+        load_backend([_ep("acme", "backends:NoGet")])
+
+
 def test_something_registered_that_is_not_a_backend_is_refused():
     with pytest.raises(NoBackend, match="backends:SPEC"):
         load_backend([_ep("acme", "backends:SPEC")])

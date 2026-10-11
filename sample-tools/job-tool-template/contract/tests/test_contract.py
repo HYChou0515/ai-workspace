@@ -121,24 +121,44 @@ class Minimal(JobBackend):
         return [], None
 
 
-def test_a_backend_that_declares_no_contract_is_refused_when_written():
+def test_a_backend_that_declares_no_contract_is_refused_by_the_check():
+    class Undeclared(Minimal):
+        contract = None  # type: ignore[assignment]
+
     with pytest.raises(ContractError, match="Undeclared"):
-
-        class Undeclared(Minimal):
-            contract = None  # type: ignore[assignment]
+        Undeclared.check()
 
 
-def test_a_backend_missing_a_required_call_cannot_be_built():
-    class NoCaller(JobBackend):
+def test_a_backend_missing_a_required_call_is_refused_by_the_check():
+    # Not at instantiation: stages 1 and 2 of the CLI, the shape tests and the
+    # builder's smoke never instantiate, so a missing `get` would ship and fail
+    # on every call. `check` is what loading a backend runs.
+    class NoGet(JobBackend):
         contract = CONTRACT
 
+        def caller_id(self): ...
         def submit(self, spec, key): ...
         def find_by_key(self, key): ...
-        def get(self, job_id): ...
         def list(self, cursor, limit): ...
 
-    with pytest.raises(TypeError, match="caller_id"):
-        NoCaller()  # type: ignore[abstract]
+    with pytest.raises(ContractError, match="get"):
+        NoGet.check()
+    Minimal.check()
+
+
+def test_a_shared_base_without_a_contract_can_be_written():
+    # Helpers shared by several backends live on a base that is not a backend
+    # itself; only the class that is loaded must be complete.
+    class Base(JobBackend):
+        def caller_id(self):
+            return "ann"
+
+    class Complete(Base, Minimal):
+        pass
+
+    Complete.check()
+    with pytest.raises(ContractError, match="contract"):
+        Base.check()
 
 
 def test_a_backend_offers_the_required_calls_and_only_the_optional_ones_it_wrote():
@@ -153,17 +173,18 @@ def test_a_backend_offers_the_required_calls_and_only_the_optional_ones_it_wrote
 def test_update_and_its_patch_schema_come_together_or_not_at_all():
     # An update with no schema cannot tell the model what a patch may say; a
     # schema with no update describes a call that does not exist.
+    class UpdateWithoutSchema(Minimal):
+        def update(self, job_id, patch):
+            return self.get(job_id)
+
+    class SchemaWithoutUpdate(Minimal):
+        contract = Contract(
+            spec_schema=SPEC,
+            idempotency=Idempotency(fields=("image",)),
+            patch_schema={"type": "object"},
+        )
+
     with pytest.raises(ContractError, match="patch_schema"):
-
-        class UpdateWithoutSchema(Minimal):
-            def update(self, job_id, patch):
-                return self.get(job_id)
-
+        UpdateWithoutSchema.check()
     with pytest.raises(ContractError, match="update"):
-
-        class SchemaWithoutUpdate(Minimal):
-            contract = Contract(
-                spec_schema=SPEC,
-                idempotency=Idempotency(fields=("image",)),
-                patch_schema={"type": "object"},
-            )
+        SchemaWithoutUpdate.check()

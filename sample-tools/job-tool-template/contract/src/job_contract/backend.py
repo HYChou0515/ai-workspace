@@ -57,13 +57,25 @@ class JobBackend(ABC):
 
     contract: ClassVar[Contract]
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
+    @classmethod
+    def check(cls) -> None:
+        """Refuse a backend that cannot keep its contract. Loading a backend
+        runs this — the CLI and the shape tests alike — so an incomplete one
+        fails CI instead of shipping a command that fails on every call.
+
+        Not done when a class is defined: a base class sharing helpers between
+        backends is incomplete on purpose, and only the class that is loaded
+        has to be whole."""
         if not isinstance(getattr(cls, "contract", None), Contract):
             raise ContractError(
                 f"{cls.__name__} declares no `contract`; every backend says once what it "
                 "accepts, what makes two submits the same job, and how long each call takes"
             )
+        missing = [
+            name for name in REQUIRED if getattr(getattr(cls, name), "__isabstractmethod__", False)
+        ]
+        if missing:
+            raise ContractError(f"{cls.__name__} does not implement the required {missing}")
         has_update = "update" in cls.offers()
         has_schema = cls.contract.patch_schema is not None
         if has_update and not has_schema:

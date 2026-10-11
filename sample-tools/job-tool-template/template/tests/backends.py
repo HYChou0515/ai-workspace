@@ -42,6 +42,24 @@ class Minimal(JobBackend):
         return [], None
 
 
+class NoGet(JobBackend):
+    """Forgot `get`: definable, but never loadable."""
+
+    contract = Minimal.contract
+
+    def caller_id(self):
+        return "ann"
+
+    def submit(self, spec, key):
+        return "j1"
+
+    def find_by_key(self, key):
+        return None
+
+    def list(self, cursor, limit):
+        return [], None
+
+
 class Scripted(Minimal):
     """Answers with whatever the test put in `answers`, or raises it, after
     `delay` seconds. A real thread really waits: the budget is real too."""

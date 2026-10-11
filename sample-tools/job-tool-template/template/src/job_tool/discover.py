@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from importlib.metadata import EntryPoint, entry_points
 
-from job_contract import JobBackend
+from job_contract import ContractError, JobBackend
 
 GROUP = "job_tool.backend"
 
@@ -39,4 +39,8 @@ def load_backend(found: Iterable[EntryPoint] | None = None) -> type[JobBackend]:
     backend = ep.load()
     if not (isinstance(backend, type) and issubclass(backend, JobBackend)):
         raise NoBackend(f"{ep.value} is not a JobBackend subclass")
+    try:
+        backend.check()
+    except ContractError as exc:
+        raise NoBackend(f"{ep.value} cannot keep the job contract: {exc}") from exc
     return backend
