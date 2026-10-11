@@ -8,6 +8,7 @@ from job_contract import (
     Budget,
     Contract,
     ContractError,
+    EnvVar,
     Idempotency,
     REQUIRED,
     JobBackend,
@@ -65,6 +66,24 @@ def test_sameness_named_on_a_field_the_spec_does_not_have_is_refused_when_declar
         Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("imgae",)))
 
     Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image",)))
+
+
+def test_a_variable_declared_twice_is_refused():
+    # Two descriptions of one variable: whichever the panel shows, the other lied.
+    with pytest.raises(ContractError, match="GPU_API_TOKEN"):
+        Contract(
+            spec_schema=SPEC,
+            idempotency=Idempotency(fields=("image",)),
+            env=(EnvVar("GPU_API_TOKEN"), EnvVar("GPU_API_TOKEN", required=True)),
+        )
+
+
+def test_not_saying_which_variables_is_not_saying_none_are_needed():
+    said_nothing = Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image",)))
+    needs_none = Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image",)), env=())
+
+    assert said_nothing.env is None
+    assert needs_none.env == ()
 
 
 def test_a_status_outside_the_three_phases_is_refused():

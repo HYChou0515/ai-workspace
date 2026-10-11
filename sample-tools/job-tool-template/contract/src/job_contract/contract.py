@@ -109,6 +109,18 @@ class Idempotency:
 
 
 @dataclass(frozen=True)
+class EnvVar:
+    """One environment variable the backend reads. A hint for the person
+    setting it up — the platform's panel shows it — never a gate."""
+
+    name: str
+    description: str | None = None
+    required: bool | None = None
+    """True: counted as missing until set. False: optional. None: listed,
+    never nagged about. Leave it None unless you are sure."""
+
+
+@dataclass(frozen=True)
 class Contract:
     """Everything a backend declares about itself, declared once.
 
@@ -133,7 +145,15 @@ class Contract:
     sentences about how a job behaves — which come from this contract and are
     never written by hand."""
 
+    env: tuple[EnvVar, ...] | None = None
+    """The environment variables the backend reads. None says nothing — which
+    is NOT the same as `()`, "needs none": the panel tells the two apart."""
+
     def __post_init__(self) -> None:
+        names = [var.name for var in self.env or ()]
+        twice = sorted({name for name in names if names.count(name) > 1})
+        if twice:
+            raise ContractError(f"env declares {twice} more than once")
         known = set(self.spec_schema.get("properties", {}))
         unknown = [name for name in self.idempotency.fields if name not in known]
         if unknown:
