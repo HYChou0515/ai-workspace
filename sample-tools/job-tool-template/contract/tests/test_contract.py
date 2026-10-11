@@ -160,6 +160,27 @@ def test_a_backend_missing_a_required_call_is_refused_by_the_check():
     Minimal.check()
 
 
+@pytest.mark.parametrize("replacement", [None, property(lambda self: "x")])
+def test_a_required_call_replaced_by_something_that_cannot_be_called_is_refused(replacement):
+    Broken = type("Broken", (Minimal,), {"get": replacement})
+
+    with pytest.raises(ContractError, match="get"):
+        Broken.check()
+
+
+def test_setting_an_optional_call_to_none_switches_it_off():
+    # The natural Python way to remove what a parent class provides.
+    class Cancellable(Minimal):
+        def cancel(self, job_id):
+            return self.get(job_id)
+
+    class NotCancellable(Cancellable):
+        cancel = None  # type: ignore[assignment]
+
+    assert "cancel" not in NotCancellable.offers()
+    NotCancellable.check()
+
+
 def test_a_shared_base_without_a_contract_can_be_written():
     # Helpers shared by several backends live on a base that is not a backend
     # itself; only the class that is loaded must be complete.

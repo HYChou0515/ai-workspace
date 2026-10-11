@@ -21,6 +21,12 @@ REQUIRED = ("caller_id", "submit", "find_by_key", "get", "list")
 OPTIONAL = ("update", "cancel", "logs", "fetch")
 
 
+def _callable(attribute: object) -> bool:
+    """Whether a class attribute is a call a backend can make: a function that
+    is not abstract. A property, None or an abstract method is not."""
+    return callable(attribute) and not getattr(attribute, "__isabstractmethod__", False)
+
+
 class JobError(Exception):
     """A failure the model should hear about. The exit code tells it what to
     do next; the message is the detail."""
@@ -71,9 +77,9 @@ class JobBackend(ABC):
                 f"{cls.__name__} declares no `contract`; every backend says once what it "
                 "accepts, what makes two submits the same job, and how long each call takes"
             )
-        missing = [
-            name for name in REQUIRED if getattr(getattr(cls, name), "__isabstractmethod__", False)
-        ]
+        # Abstract, None or a property: none of them can be called, so the
+        # command built on it would fail on every call.
+        missing = [name for name in REQUIRED if not _callable(getattr(cls, name, None))]
         if missing:
             raise ContractError(f"{cls.__name__} does not implement the required {missing}")
         has_update = "update" in cls.offers()
@@ -93,8 +99,12 @@ class JobBackend(ABC):
     def offers(cls) -> tuple[str, ...]:
         """The calls this backend supports: every required one, plus each
         optional one it overrides."""
+        # `fetch = None` in a subclass switches off what a parent provided.
         own = tuple(
-            name for name in OPTIONAL if getattr(cls, name) is not getattr(JobBackend, name)
+            name
+            for name in OPTIONAL
+            if getattr(cls, name, None) is not getattr(JobBackend, name)
+            and _callable(getattr(cls, name, None))
         )
         return REQUIRED + own
 

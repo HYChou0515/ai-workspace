@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from job_contract import JobBackend, JobError, JobStatus, Retryable
+from job_contract import JobBackend, JobError, JobStatus, NeedsAction, Retryable
 
 from job_tool.commands import LIST_PAGE, LOG_PAGE
 
@@ -153,11 +153,12 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
             )
         try:
             found = within(contract.budget.find_by_key, lambda: backend().find_by_key(key))
-        except Exception as exc:  # TimedOut, JobError, anything: the answer is unknown
-            # Still unknown; but a lookup that needs a person keeps its exit 3,
-            # which is what lets the platform offer that person a fix.
+        except BaseException as exc:  # noqa: BLE001 - TimedOut, sys.exit, anything: unknown
+            # Still unknown. A lookup that needs a person keeps exit 3, which is
+            # what lets the platform offer that person a fix; anything else is
+            # 1 — never 2, whose "call it again" would contradict "list first".
             return Outcome(
-                exc.exit_code if isinstance(exc, JobError) else 1,
+                NeedsAction.exit_code if isinstance(exc, NeedsAction) else 1,
                 error=f"The submit's outcome is unknown: the backend did not confirm it within "
                 f"{contract.budget.submit:g}s, and could not be asked whether it arrived "
                 f"({exc}). Before submitting again, call list to see whether it is there.",
@@ -226,8 +227,14 @@ def _fetch(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
     # would write somewhere nobody sees, or somewhere nobody should. Checked
     # by name AND where it really leads, since a symlink in the workspace can
     # point anywhere; and it must name a file, not the workspace itself.
-    workspace = Path.cwd().resolve()
-    lands = (workspace / dest).resolve()
+    try:
+        workspace = Path.cwd().resolve()
+        lands = (workspace / dest).resolve()
+    except (OSError, ValueError) as exc:  # a NUL in the path, a vanished cwd
+        raise Retryable(
+            f"dest {args['dest']!r} must name a file inside the workspace; it is not a "
+            f"usable path: {exc}"
+        ) from exc
     if (
         dest.is_absolute()
         or ".." in dest.parts

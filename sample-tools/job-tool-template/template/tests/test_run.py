@@ -9,7 +9,7 @@ import time
 import pytest
 from backends import Scripted, ScriptedFull
 
-from job_contract import JobError, JobStatus, NeedsAction, NotFound
+from job_contract import JobError, JobStatus, NeedsAction, NotFound, Retryable
 from job_tool.cli import main
 from job_tool.commands import LIST_PAGE, LOG_PAGE
 
@@ -166,8 +166,16 @@ def test_a_slow_submit_that_did_not_land_may_be_sent_again(capsys):
 
 @pytest.mark.parametrize(
     "lookup",
-    [{"delay": 30.0}, {"answer": JobError("scheduler said no")}],
-    ids=["lookup-times-out", "lookup-fails"],
+    [
+        {"delay": 30.0},
+        {"answer": JobError("scheduler said no")},
+        # Not 2: the platform would tell the model to call again, while the
+        # message says to call list first.
+        {"answer": Retryable("scheduler busy")},
+        # Not "the backend failed": this path exists to say "unknown".
+        {"answer": SystemExit(0)},
+    ],
+    ids=["lookup-times-out", "lookup-fails", "lookup-retryable", "lookup-exits"],
 )
 def test_a_slow_submit_nobody_can_confirm_is_unknown_and_must_be_checked_first(capsys, lookup):
     Scripted.answers["submit"] = "j1"
@@ -286,7 +294,7 @@ def test_logs_say_how_much_is_left_and_where_to_read_it_from(capsys):
 
 
 @pytest.mark.parametrize(
-    "dest", ["/etc/passwd", "../outside.txt", "out/../../x", "", ".", "linked/x"]
+    "dest", ["/etc/passwd", "../outside.txt", "out/../../x", "", ".", "linked/x", "a\x00b"]
 )
 def test_fetch_never_writes_outside_the_workspace(capsys, dest, tmp_path, monkeypatch):
     workspace, elsewhere = tmp_path / "workspace", tmp_path / "elsewhere"
