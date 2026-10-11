@@ -1,13 +1,17 @@
 """Running one call: the budget, the exit code, and what the model is told.
 
 Every call to the backend runs in a daemon thread that is waited on for the
-call's budget and no longer. A call that overruns is abandoned — the tool
-answers and exits, and the thread dies with the process — so a backend that
-hangs costs its budget, never the platform's whole ceiling.
+call's budget and no longer. A call that overruns is abandoned: the tool
+answers, and `cli.entry` then ends the process without waiting for anything
+the backend left running (a thread pool's workers, which the interpreter would
+otherwise join at exit). So a backend that hangs costs the time its budget
+allows — for `submit`, its budget plus `find_by_key`'s — never the platform's
+whole ceiling.
 
 The model hears two things: the answer on stdout (JSON, with a `next` line
-saying what to do now) and the exit code, which the platform turns into its
-advice (0 done, 1 failed, 2 calling again may work, 3 a person must act).
+saying what to do now) and the exit code. The platform adds its own advice for
+2 (calling again may work) and 3 (a person must act); 0 is an answer and 1 is a
+failure described by its message alone.
 """
 
 from __future__ import annotations
@@ -15,9 +19,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
-
 from pathlib import PurePosixPath
+from typing import Any
 
 from job_contract import JobBackend, JobError, JobStatus, Retryable
 
@@ -39,6 +42,15 @@ class TimedOut(Exception):
         self.seconds = seconds
 
 
+_abandoned = threading.Event()
+
+
+def abandoned() -> bool:
+    """Whether a call was given up on, so something may still be running that
+    must not be waited for when the process ends."""
+    return _abandoned.is_set()
+
+
 def within[T](seconds: float, fn: Callable[[], T]) -> T:
     """`fn()`, or `TimedOut` once `seconds` pass without it returning."""
     box: dict[str, Any] = {}
@@ -53,6 +65,7 @@ def within[T](seconds: float, fn: Callable[[], T]) -> T:
     worker.start()
     worker.join(seconds)
     if worker.is_alive():
+        _abandoned.set()
         raise TimedOut(seconds)
     if "error" in box:
         raise box["error"]
@@ -219,6 +232,7 @@ _RUNNERS: dict[str, Callable[[type[JobBackend], dict[str, Any]], Outcome]] = {
 
 def run(name: str, args: dict[str, Any], backend: type[JobBackend]) -> Outcome:
     """Run command `name` with already-validated `args`."""
+    _abandoned.clear()  # the state of THIS call, not of an earlier one in the same process
     try:
         return _RUNNERS[name](backend, args)
     except TimedOut as exc:
@@ -229,7 +243,9 @@ def run(name: str, args: dict[str, Any], backend: type[JobBackend]) -> Outcome:
         )
     except JobError as exc:
         return Outcome(exc.exit_code, error=str(exc))
-    except Exception as exc:
-        # The backend broke in a way it did not describe. Say what, plainly:
-        # a traceback is noise to the model, and stdout must stay empty.
+    except BaseException as exc:  # noqa: BLE001 - raised by the backend's code, in its thread
+        # The backend broke in a way it did not describe — including calling
+        # sys.exit, which would otherwise end this process with exit 0 and no
+        # answer, a failure dressed as success. Say what, plainly: a traceback
+        # is noise to the model, and stdout must stay empty.
         return Outcome(1, error=f"the backend failed: {type(exc).__name__}: {exc}")

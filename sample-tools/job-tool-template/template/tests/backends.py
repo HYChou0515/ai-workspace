@@ -7,6 +7,7 @@ which commands it offers, what it says, how it ends — never a backend's.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from job_contract import Budget, Contract, Idempotency, JobBackend, JobStatus
 
@@ -60,6 +61,21 @@ class NoGet(JobBackend):
         return [], None
 
 
+class Pooled(Minimal):
+    """`get` waits on a thread pool — what boto3, gRPC and most SDKs do. The
+    pool's worker is not a daemon, and the interpreter joins it at exit."""
+
+    contract = Contract(
+        spec_schema=SPEC,
+        idempotency=Idempotency(fields=("image", "command")),
+        budget=Budget(get=0.2),
+    )
+
+    def get(self, job_id):
+        with ThreadPoolExecutor(1) as pool:
+            return pool.submit(time.sleep, 30).result()
+
+
 class Scripted(Minimal):
     """Answers with whatever the test put in `answers`, or raises it, after
     `delay` seconds. A real thread really waits: the budget is real too."""
@@ -77,7 +93,7 @@ class Scripted(Minimal):
         type(self).calls.append((call, *args))
         time.sleep(type(self).delay.get(call, 0))
         answer = type(self).answers[call]
-        if isinstance(answer, Exception):
+        if isinstance(answer, BaseException):  # SystemExit too: backends do call sys.exit
             raise answer
         return answer
 

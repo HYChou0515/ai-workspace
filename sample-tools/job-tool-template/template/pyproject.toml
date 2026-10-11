@@ -20,7 +20,7 @@ dependencies = [
 [project.scripts]
 # EXACTLY ONE: the command the bundle's launcher runs. Every job command
 # (submit, get, …) lives behind it.
-job-tool = "job_tool.cli:main"
+job-tool = "job_tool.cli:entry"
 
 [build-system]
 requires = ["hatchling"]
