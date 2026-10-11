@@ -56,6 +56,18 @@ Source of each: **user** = chosen by the user in the 2026-10-11/12 grill;
 | D18 | No job-record file in the workspace: `list` is required and scoped by credential | mine |
 | D19 | Env vars are declared on the `Contract`; `env.json` is generated from it and a shape test pins the two equal | mine |
 
+### Settled while building (mine, for the user to overturn)
+
+| # | Decision | Why |
+|---|---|---|
+| D20 | `budget.submit + budget.find_by_key ≤ 55`, refused at declaration | A submit that runs out of time is followed by `find_by_key` in the same call; two budgets of 55 each would overrun the platform's 60 s before the shell could say anything |
+| D21 | `caller_id` runs inside the submit budget; a submit stuck there is "not sent", exit 2 | The key is not known yet, so `submit` was never called, and the stuck thread dies with the process — nothing can land later |
+| D22 | After a submit timeout, `find_by_key` returning None is exit 2 "sending the same spec again is safe"; failing to answer is exit 1 "call list first" (D16) | None is the backend saying it has nothing; the same spec carries the same key, so a late arrival is returned, not doubled |
+| D23 | Arguments are validated against the schema the model was shown (`jsonschema`, a new template dependency) before the backend is called; failures are exit 2 naming the field | What reaches the backend is what it declared it accepts |
+| D24 | `fetch` refuses an absolute `dest` or one through `..`, exit 2, before the backend is called | The working directory is the user's workspace |
+| D25 | `Contract.env` defaults to None ("did not say"; no `env.json`), distinct from `()` ("needs none"; `[]`) | #750's three states: absent is not empty |
+| D26 | A backend implementing `update` must declare `patch_schema`, and the reverse; refused at class definition | One without the other is a call the model cannot use correctly, or a schema for a call that does not exist |
+
 ### Known, not guaranteed
 
 - **Idempotency rests on the author honouring the docstring.** D4 rules out a
@@ -176,7 +188,9 @@ No `docs/migrations.md` entry: nothing an operator of ai-workspace must do.
 - **Path dependencies.** In this repo `template/` reaches `contract/` and
   `example-impl/` by relative path. The GitLab builder mounts only the tool repo,
   so a real author must point both at a git URL or an index; the README says so,
-  and P8 cannot prove it (it builds on the host).
+  and P8 cannot prove it (it builds on the host). Checked: the editable path
+  sources do NOT leak into the bundle — prebuild installs them from `file://`,
+  and the only `.pth` in the built bundle is virtualenv's own.
 - **Killing a stuck call.** A thread cannot be cancelled in Python; P3 ends the
   process instead. That is right for a one-shot CLI and wrong for anything
   long-lived. Both callers today are one-shot: the sandbox runs the launcher
