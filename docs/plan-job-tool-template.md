@@ -99,10 +99,13 @@ mechanisms (D27, D28) held under mutation; D29 did not and was replaced (above).
 
 ### Settled in review round 3 (the last of the budget)
 
-All four lenses ran on `95d96a74`: conformance and regression came back
-clean, veracity found only the stale PR body. Defect found one medium, fixed
-with a parameter and a pinning test rather than a new mechanism, so it buys no
-further round.
+All four lenses ran on `95d96a74`: regression came back clean; conformance
+found one unpinned line (the in-process stdout restore, now pinned by a test);
+veracity found the stale PR body and one message that said too little (D40);
+defect found one medium (D39). Each was fixed with a parameter, a message or a
+pinning test rather than a new mechanism. A confirmation round on the result,
+`338e754f` (defect / regression / veracity+conformance), found no defect and no
+regression, and two wording points in this section, corrected here.
 
 | # | Decision | Why |
 |---|---|---|
@@ -121,8 +124,9 @@ demo; neither calls a real service.
   `entry` ends the process. Calling `main` again in the same process — only an
   embedding or a test would — sends later answers to stderr.
 - **A closed or full stdout** (`>&-`, `/dev/full`) ends with a traceback and
-  exit 1 where it used to be exit 120; either way there was nowhere to put the
-  answer, and the platform never runs the tool so.
+  exit 1 — since the fd-level redirect (D29, round 2); before it, exit 120.
+  Either way there was nowhere to put the answer, and the platform never runs
+  the tool so.
 - **Ctrl-C** in a developer's terminal reads as "the backend failed:
   KeyboardInterrupt", exit 1. The platform never sends SIGINT.
 - **The MCP runner prefers stderr.** `tooling/mcp_server.py` reports
