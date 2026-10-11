@@ -29,7 +29,7 @@ version of the backend package, and upgrading the template never touches it.
    are still `../` paths, a local build reuses uv's cached wheel for an
    unchanged version number: bump the version, or
    `uv cache clean job-contract <your-backend>`, after editing either.)
-4. `uv lock`, then `python -m job_tool.envfile` to write `env.json`.
+4. `uv lock`, then `uv run python -m job_tool.envfile` to write `env.json`.
 5. `uv run pytest`, then push. CI runs the same tests before building.
 
 ## What your backend declares, once
@@ -81,7 +81,7 @@ plain failure.
 | outcome | exit | the model hears |
 |---|---|---|
 | a call returns | 0 | the answer, and a `next` line: ask again later / finished, its `state` says how (and, if offered, `logs`, or `fetch` if it produced outputs) / read on from offset N |
-| `phase="unknown"` | 2 | the backend could not say — not that the job is gone |
+| `get` returns `phase="unknown"` | 2 | the backend could not say — not that the job is gone (a `cancel` that returns it succeeded: 0, "Cancel accepted." followed by the same words) |
 | a call overruns its budget | 2 | no answer within N s; calling again may work |
 | a submit overruns before it was sent (in `caller_id`) | 2 | most likely not sent; sending the same spec again is safe (same key) |
 | a submit overruns, and `find_by_key` finds it | 0 | submitted |
@@ -94,11 +94,13 @@ plain failure.
 Nothing announces when a job ends: the model is told to have the user ask
 again later.
 
-Two more things the shell does so your backend does not have to:
+Three more things the shell does so your backend does not have to:
 
-- **stdout is only the answer.** Anything your code prints while it runs goes
-  to stderr; values JSON cannot spell (a datetime in `detail`, NaN) are written
-  as text rather than failing a call that succeeded.
+- **stdout is only the answer.** From the moment your backend is imported,
+  anything written to stdout — your `print`, a library's banner, a command you
+  run such as `sbatch` — goes to stderr instead; the answer is written to the
+  real stdout on its own. Values JSON cannot spell (a datetime in `detail`,
+  NaN) are written as text rather than failing a call that succeeded.
 - **Whole numbers arrive as `int`.** JSON Schema counts `5.0` as an integer;
   the shell turns it into `5` before your code or the idempotency key sees it.
 - **A call that overruns does not keep the process alive.** Once a call is

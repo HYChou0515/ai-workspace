@@ -22,8 +22,10 @@ MARGIN = 5.0
 
 
 class ContractError(Exception):
-    """A declaration that cannot be honoured. Raised when it is made, never
-    later, so a backend that loads is a backend whose declarations hold."""
+    """A declaration that cannot be honoured. Raised as early as it can be
+    known: a contract value when it is written, a backend's missing or
+    uncallable call when the backend is loaded (`JobBackend.check`), and a
+    `JobStatus` with a phase outside the three when the backend returns it."""
 
 
 Phase = Literal["running", "done", "unknown"]

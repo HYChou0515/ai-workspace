@@ -4,7 +4,7 @@ The platform's builder reads `env.json` beside `pyproject.toml` and shows each
 variable in the person's environment panel. Here it is never written by hand:
 the backend declares `Contract.env`, and
 
-    python -m job_tool.envfile
+    uv run python -m job_tool.envfile
 
 rewrites the file from it. A shape test fails the build when the two differ,
 so the panel cannot describe variables the backend no longer reads.

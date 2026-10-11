@@ -43,8 +43,8 @@ def test_the_tool_lists_its_commands_and_describes_each_one(capsys):
 
 
 def test_env_json_says_what_the_contract_says():
-    # Regenerate with `python -m job_tool.envfile` when this fails.
+    # Regenerate with `uv run python -m job_tool.envfile` when this fails.
     expected = render(load_backend().contract)
     on_disk = ROOT / FILENAME
     actual = on_disk.read_text(encoding="utf-8") if on_disk.exists() else None
-    assert actual == expected, "env.json is stale: run `python -m job_tool.envfile`"
+    assert actual == expected, "env.json is stale: run `uv run python -m job_tool.envfile`"

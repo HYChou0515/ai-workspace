@@ -45,5 +45,5 @@ it is the promise that only the backend can keep.
 **Name the variable in a `NeedsAction`.** `set GPU_API_TOKEN`, not "log in":
 the name is what lets the platform offer the person a way to set it.
 
-**After changing `Contract.env`, run `python -m job_tool.envfile`.** The shape
+**After changing `Contract.env`, run `uv run python -m job_tool.envfile`.** The shape
 tests fail until `env.json` matches.
