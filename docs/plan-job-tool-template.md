@@ -211,7 +211,11 @@ No `docs/migrations.md` entry: nothing an operator of ai-workspace must do.
   so a real author must point both at a git URL or an index; the README says so,
   and P8 cannot prove it (it builds on the host). Checked: the editable path
   sources do NOT leak into the bundle — prebuild installs them from `file://`,
-  and the only `.pth` in the built bundle is virtualenv's own.
+  and the only `.pth` in the built bundle is virtualenv's own. Found in round
+  1: they DO go stale — uv caches a wheel by (name, version) and prebuild
+  refreshes only the tool's own package, so after editing `contract/` the P8
+  build bundled the old one. P8 cleans the two from uv's cache first; the
+  README tells authors who build from `../` paths.
 - **Killing a stuck call.** A thread cannot be cancelled in Python; P3 ends the
   process instead. That is right for a one-shot CLI and wrong for anything
   long-lived. Both callers today are one-shot: the sandbox runs the launcher
