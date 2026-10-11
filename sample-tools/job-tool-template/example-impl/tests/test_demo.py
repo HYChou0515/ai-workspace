@@ -61,6 +61,34 @@ def test_a_cancelled_job_is_done_and_cancelling_it_again_is_not_an_error(backend
     assert not isinstance(never.value, Retryable)
 
 
+def test_a_cancelled_jobs_log_shows_only_what_it_ran(backend):
+    spec = {"task": "train", "seconds": 100}
+    job_id = backend.submit(spec, _key(backend, spec))
+    backend.cancel(job_id)
+
+    log, total = backend.logs(job_id, 0, 10_000)
+
+    assert "second 100" not in log
+    assert log.endswith("cancelled\n") and total == len(log)
+
+
+def test_changing_a_finished_job_is_a_plain_failure_the_model_can_act_on(backend):
+    # Submitting a new job is something the model can do itself: not exit 3,
+    # which tells it a person must act first.
+    spec = {"task": "train", "seconds": 0}
+    job_id = backend.submit(spec, _key(backend, spec))
+
+    with pytest.raises(JobError) as refused:
+        backend.update(job_id, {"seconds": 10})
+    assert not isinstance(refused.value, NeedsAction | Retryable)
+
+
+@pytest.mark.parametrize("cursor", ["abc", "-1"])
+def test_a_cursor_this_backend_never_gave_is_refused_so_it_can_be_corrected(backend, cursor):
+    with pytest.raises(Retryable, match="cursor"):
+        backend.list(cursor, 10)
+
+
 def test_another_callers_job_does_not_exist_for_you(backend, monkeypatch):
     spec = {"task": "train", "seconds": 600}
     job_id = backend.submit(spec, _key(backend, spec))

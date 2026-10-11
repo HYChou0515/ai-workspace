@@ -146,7 +146,13 @@ class DemoBackend(JobBackend):
     def list(self, cursor: str | None, limit: int) -> tuple[list[JobStatus], str | None]:
         mine = [r for r in self._records() if r["caller"] == self.caller_id()]
         mine.sort(key=lambda r: r["submitted_at"], reverse=True)
-        start = int(cursor or 0)
+        try:
+            start = int(cursor or 0)
+        except ValueError:
+            start = -1
+        if start < 0:
+            # Not a cursor this backend gave: the model can drop it and start over.
+            raise Retryable(f"cursor {cursor!r} is not one list returned; leave it out to start")
         page = mine[start : start + limit]
         after = str(start + limit) if start + limit < len(mine) else None
         return [self._status(r) for r in page], after
@@ -156,7 +162,9 @@ class DemoBackend(JobBackend):
     def update(self, job_id: str, patch: dict[str, Any]) -> JobStatus:
         record = self._mine(job_id)
         if self._status(record).phase == "done":
-            raise NeedsAction(f"job {job_id} already finished; submit a new one instead")
+            # A plain failure: submitting a new job is something the model can
+            # do itself, so this is not NeedsAction (a person must act first).
+            raise JobError(f"job {job_id} already finished; submit a new one instead")
         record["seconds"] = patch["seconds"]
         self._save(record)
         return self._status(record)
@@ -165,13 +173,17 @@ class DemoBackend(JobBackend):
         record = self._mine(job_id)
         if self._status(record).phase == "running":
             record["cancelled"] = True
+            record["stopped_at"] = time.time()
             self._save(record)
         return self._status(record)
 
     def logs(self, job_id: str, offset: int, limit: int) -> tuple[str, int]:
-        status = self._status(self._mine(job_id))
-        ran = status.detail["seconds"] - status.detail.get("remaining", 0)
-        log = "".join(f"second {n} of {status.detail['seconds']}\n" for n in range(1, ran + 1))
+        record = self._mine(job_id)
+        status = self._status(record)
+        # Only the seconds it really ran: up to now, or to when it was cancelled.
+        until = record.get("stopped_at") or time.time()
+        ran = int(min(record["seconds"], until - record["submitted_at"]))
+        log = "".join(f"second {n} of {record['seconds']}\n" for n in range(1, ran + 1))
         log += f"{status.state}\n" if status.phase == "done" else ""
         return log[offset : offset + limit], len(log)
 
