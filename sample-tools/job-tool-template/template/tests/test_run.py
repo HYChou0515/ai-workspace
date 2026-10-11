@@ -195,15 +195,16 @@ def test_a_lookup_that_needs_a_person_still_says_so(capsys):
 
 
 def test_a_submit_stuck_before_it_was_sent_is_safe_to_send_again(capsys):
-    # Stuck asking who the caller is: submit was never called, and the stuck
-    # thread dies with the process, so nothing can land later.
+    # Stuck asking who the caller is: submit was not called. Resending is safe
+    # because of the key, which is what the model must be told — not that
+    # nothing could ever have been sent.
     Scripted.delay["caller_id"] = 30.0
 
     code, _, err = _run(capsys, "submit", SPEC_IN)
 
     assert code == 2
     assert not any(call[0] in ("submit", "find_by_key") for call in Scripted.calls)
-    assert "not sent" in err
+    assert "most likely not sent" in err and "same key" in err
 
 
 def test_list_gives_a_page_and_says_whether_there_is_more(capsys):

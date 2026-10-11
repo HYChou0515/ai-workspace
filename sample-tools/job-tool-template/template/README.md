@@ -36,15 +36,19 @@ description the model reads — never restated anywhere else:
 
 | field | what it is |
 |---|---|
-| `spec_schema` | JSON schema of what `submit` accepts. The model fills these fields directly. |
+| `spec_schema` | JSON schema of what `submit` accepts. The model fills these fields directly. Arguments are checked against it before your backend is called, so add `"additionalProperties": false` if fields you did not declare must not reach you. |
 | `idempotency` | `fields`: which spec fields make two submits the same job. `per_user` (default true): two callers are two jobs. The shell derives the key; you never do. |
 | `budget` | seconds per call. Defaults: submit 10, find_by_key 5, get 3, list 5, update 10, cancel 10, logs 5, fetch 50. Each at most 55, and submit + find_by_key at most 55 together. |
 | `patch_schema` | what `update` accepts, or None when you have no `update`. Must come with `update`, and `update` with it. |
 | `domain_description` | what these jobs ARE, in your words. The model reads it first. |
 | `env` | the variables you read. None = "did not say", which is not `()` = "needs none". |
 
-A declaration that cannot hold is refused when the class is defined, not at
-the first call.
+A contract value that cannot hold (a budget past the ceiling, sameness named on
+a field the spec does not have) is refused when it is written. A backend that
+leaves out a required call, or has `update` without `patch_schema` (or the
+reverse), is refused when it is loaded — which the shape tests do, so CI fails
+before anything is built. A base class that only shares helpers between
+backends may be incomplete; only the class you register must be whole.
 
 ## What your backend implements
 
@@ -73,15 +77,28 @@ plain failure.
 
 | outcome | exit | the model hears |
 |---|---|---|
-| a call returns | 0 | the answer, and a `next` line: ask again later / it finished / read on from offset N |
+| a call returns | 0 | the answer, and a `next` line: ask again later / finished, its `state` says how (and, if offered, `logs`, or `fetch` if it produced outputs) / read on from offset N |
 | `phase="unknown"` | 2 | the backend could not say — not that the job is gone |
 | a call overruns its budget | 2 | no answer within N s; calling again may work |
-| a submit overruns before it was sent (in `caller_id`) | 2 | it was not sent; calling again may work |
+| a submit overruns before it was sent (in `caller_id`) | 2 | most likely not sent; sending the same spec again is safe (same key) |
 | a submit overruns, and `find_by_key` finds it | 0 | submitted |
 | a submit overruns, and `find_by_key` finds nothing | 2 | not there; sending the same spec again is safe |
-| a submit overruns, and `find_by_key` cannot answer | 1 | unknown; call `list` before submitting again |
-| arguments outside the schema | 2 | which field is wrong; the backend is never called |
-| `fetch` to an absolute path or through `..` | 2 | the path must stay inside the workspace |
+| a submit overruns, and `find_by_key` cannot answer | 1 (3 if it raised `NeedsAction`) | unknown; call `list` before submitting again |
+| arguments outside the schema, or more than one argument | 2 | what is wrong; the backend is never called |
+| `fetch` to a path that is empty, absolute, through `..`, or out through a link | 2 | it must name a file inside the workspace |
+| your code raises anything else, or calls `sys.exit` | 1 | the backend failed, and with what |
 
 Nothing announces when a job ends: the model is told to have the user ask
 again later.
+
+Two more things the shell does so your backend does not have to:
+
+- **stdout is only the answer.** Anything your code prints while it runs goes
+  to stderr; values JSON cannot spell (a datetime in `detail`, NaN) are written
+  as text rather than failing a call that succeeded.
+- **Whole numbers arrive as `int`.** JSON Schema counts `5.0` as an integer;
+  the shell turns it into `5` before your code or the idempotency key sees it.
+- **A call that overruns does not keep the process alive.** Once a call is
+  abandoned, the process ends as soon as the answer is out, without waiting
+  for threads your code started (a client library's pool, say). A hung
+  `submit` therefore costs its budget plus `find_by_key`'s — at most 55 s.

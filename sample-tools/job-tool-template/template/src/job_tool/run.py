@@ -140,12 +140,16 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
     except TimedOut:
         key = sent.get("key")
         if key is None:
-            # Stuck before `submit` was called; the stuck thread dies with
-            # this process, so nothing can arrive later.
+            # Stuck before `submit` was called, and the stuck thread ends with
+            # this process. Not airtight — `caller_id` could return in the
+            # instant before the process ends and the thread call `submit` —
+            # but the same spec carries the same key, so sending it again
+            # returns that job rather than starting a second.
             return Outcome(
                 2,
                 error=f"The backend gave no answer within {contract.budget.submit:g}s, "
-                "before the job was sent: it was not sent. Calling again may work.",
+                "before the job was sent, so it was most likely not sent. Submitting the "
+                "same spec again is safe: it carries the same key.",
             )
         try:
             found = within(contract.budget.find_by_key, lambda: backend().find_by_key(key))
