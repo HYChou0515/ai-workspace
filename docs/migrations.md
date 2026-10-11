@@ -2000,7 +2000,7 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
 - `kubectl exec` 進 sandbox-host：`ls <sandbox root>/<id>/.preview/` 有一個 64 位 hex 檔名的 `.pdf`；workspace 檔案樹裡看不到。
 - 沒部署到這一版的症狀：pptx 點開是一堆亂碼（文字編輯器）。
 
-### 2026-10-09 · #904 WUI 可以是多頁網站（例如 mkdocs 文件站）：頁面改從自己的網址載入 {#pr-904}
+### 2026-10-09 · 7578b4d1 · #904 WUI 可以是多頁網站（例如 mkdocs 文件站）：頁面改從自己的網址載入 {#pr-904}
 
 **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
 
