@@ -57,9 +57,9 @@ Read from `origin/master` at `5aa45d3b` (not measured live):
 Chosen while planning (the user may overturn):
 
 - `POST /run?chat_id=` answers **400** naming the change. It does not silently
-  ignore the parameter. Callers are only the FE takeover menu and
+  ignore the parameter. Callers were only the FE takeover menu and
   `scripts/check_inchat_workflow_343.py`; #197's headless launch never passes
-  it.
+  it. The script is removed with the takeover (P4).
 - Every other entrance keeps working and opens a fresh execution, which the
   Workflows sidebar lists. The entrances are:
   - `WorkflowsModal` (`web/src/components/WorkflowsModal.tsx:103`);
@@ -149,6 +149,19 @@ Report the list before P2 changes behaviour.
 **P4 — no takeover.**
 - `?chat_id=` returns 400 with a reason.
 - Runbook entry in `docs/migrations.md`.
+- **Built:**
+  - The route refuses `chat_id` before anything is staged, the way it refuses
+    an upload that escapes the workspace: nothing is written and no run
+    starts.
+  - The takeover branch is gone, so every launch opens its own conversation.
+    The cleanup no longer asks whether the chat was the caller's (`ours`): it
+    always is the route's.
+  - The orchestrator's one-run-per-chat guard stays, because a schedule's
+    shared conversation relies on it.
+  - Five #343 takeover tests were replaced by one: a launch naming a chat is
+    refused and changes nothing. `scripts/check_inchat_workflow_343.py` is
+    removed.
+  - Runbook: `#pr-913`, started here and extended by later phases.
 
 The execution tab (P8) selects an execution's messages by the run mark from P3,
 so a schedule's shared conversation shows one execution at a time.

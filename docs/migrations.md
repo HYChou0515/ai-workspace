@@ -2083,6 +2083,34 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - **Firefox 114 以前的版本畫不出圓點，值會以明碼顯示**（Chrome、Edge、Safari 都支援）。使用者若還在用舊版 Firefox，
   請他們升級。
 
+### 2026-10-12 · #913 Workflow 移出聊天：每個 node 只看它引用的東西，執行在 workspace 的 Workflows 側欄 {#pr-913}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- **啟動 workflow 不再接受 `chat_id`**（`POST /a/{slug}/items/{item_id}/run?chat_id=…` 回 **400**，訊息寫明原因，
+  而且整個呼叫什麼都不做：不寫上傳的檔案、不啟動 run）。以前帶 `chat_id` 會讓 run 接管那個既有聊天（#343）；
+  現在每個 run 都有自己的對話，聊天不會被接管（`docs/plan-workflow-out-of-chat.md` D3）。
+  **rollout 前**：如果你們有自己的腳本或外部系統會帶 `chat_id` 呼叫這支，把參數拿掉。為什麼：它現在會被明確拒絕，
+  而不是默默忽略。沒做的症狀：那支腳本每次都拿到 400，訊息裡寫著 `chat_id is no longer accepted`。
+  不帶 `chat_id` 的呼叫（包含 #197 的外部觸發、上傳輸入檔一起送的那種）完全不受影響。
+- **workflow 的 agent node 不再讀它所在對話的歷史**。node 只看得到自己的 prompt 裡明寫的東西（引用的上游 `outputs`、
+  檔案、`input.json`）；以前它會讀整串對話，包括被接管前的聊天、前面每個 step 的回覆、同一個排程對話裡之前的 run。
+  出貨的 workflow 都已確認不依賴這件事（計畫 P1）。**自訂的 workflow** 若有 node 的 prompt 寫「依照上面的內容」
+  卻沒有指名要讀哪個檔案，升版後它會看不到前文：改成在 prompt 裡指名檔案或引用上游的 `outputs`。
+- **一般聊天不再讀到 run 的內容**：run 寫下的訊息帶有標記，聊天組 context 時排除；以前被 #343 接管過的舊聊天，
+  run 那段時間內沒有標記的訊息也一併排除。
+- 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（每次嘗試的
+  prompt、思考、tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一起被 steer 作廢、被 map 清理。
+
+**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了兩個有預設值的欄位（`run_id`、`step`），舊資料照樣讀得出來。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
+
+**確認做完**（`rollout 後`）：
+
+- `curl -X POST '<api>/a/<slug>/items/<item>/run?chat_id=x'` 回 400 且訊息含 `chat_id is no longer accepted`。
+  沒部署到這一版的症狀：回 202，run 跑進那個聊天。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

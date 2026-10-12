@@ -303,73 +303,26 @@ def test_run_drives_its_own_workflow_chat_and_persists_there():
     assert any(m.role == "assistant" and m.content == "ack" for m in conv.messages)
 
 
-def test_run_takes_over_the_given_chat_instead_of_opening_a_new_one():
-    """#343: launching with ``?chat_id=`` runs the workflow IN that existing chat
-    (the one the user prepared in) — it sets that Conversation's ``run_id`` rather
-    than opening a fresh workflow chat."""
+def test_a_launch_naming_a_chat_is_refused_and_changes_nothing():
+    """plan-workflow-out-of-chat D3: a run never takes over a chat (#343 is
+    overturned). `?chat_id=` is refused by name rather than ignored, so a caller
+    still sending it learns why instead of finding its run somewhere else. As
+    with a path that escapes the workspace, nothing is written and no run starts:
+    the upload, the chat and the item's runs are as they were."""
     app, spec, item_id = _app()
     with TestClient(app) as client:
-        _put_input(client, item_id, '{"n": 3}')
-        # Keep the item's default chat separate so this exercises takeover, not the
-        # default-chat handling (P2). `prep` is the chat the user prepared in.
-        client.post(f"{_base(item_id)}/chats", json={"title": "main"})
         prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        resp = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-        assert resp.status_code == 202
-        body = resp.json()
-        assert body["chat_id"] == prep  # ran in the SAME chat, no new one opened
-        run_id = body["run_id"]
-        _poll(client, item_id, run_id, "done")
-        chats = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
-    # Only the prepped chat became a workflow chat; no fresh chat was opened for the run.
-    assert [cid for cid, c in chats.items() if c["run_id"]] == [prep]
-    conv = spec.get_resource_manager(Conversation).get(prep).data
-    assert conv.run_id == run_id
-    assert any(m.role == "assistant" for m in conv.messages)  # the run drove THIS chat
-
-
-def test_takeover_conflicts_when_the_chat_already_has_an_active_run():
-    """#343: a chat hosts one run at a time — launching in a chat whose run is still
-    live (here parked at its gate) is a 409, not a second parallel run in one thread."""
-    app, _spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"gate": true}')  # the run parks at the gate → active
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()
-        _poll(client, item_id, first["run_id"], "awaiting_human")
-        conflict = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-        assert conflict.status_code == 409
-
-
-def test_a_conflict_leaves_the_callers_own_chat_alone():
-    """The cleanup removes the chat the ROUTE opened. A chat the CALLER handed
-    over is theirs, and this is the one case where it is holding something: a
-    live run parked at a human gate.
-
-    Deleting it would take that run's conversation with it — and
-    `workflow_exec.drive_turn` catches `ResourceIDNotFoundError` only, not
-    `ResourceIsDeletedError`, so the resume after the decision would crash rather
-    than fall back to anything.
-
-    The rule (`if ours`) was correct and entirely unpinned: mutating both
-    branches to `if True` left every neighbouring test green, which is why this
-    exists.
-    """
-    app, spec, item_id = _app()
-    conv_rm = spec.get_resource_manager(Conversation)
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"gate": true}')  # parks at the gate → active
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()
-        _poll(client, item_id, first["run_id"], "awaiting_human")
-
-        conflict = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-
-        assert conflict.status_code == 409
-        # Untouched: still there, still pointing at the run it hosts.
-        chat = conv_rm.get(prep).data
-        assert isinstance(chat, Conversation)
-        assert chat.run_id == first["run_id"]
+        r = client.post(
+            f"{_base(item_id)}/run?chat_id={prep}",
+            files={"file": ("uploads/input.json", b'{"n": 9}', "application/json")},
+        )
+        assert r.status_code == 400
+        assert "chat_id" in r.json()["detail"]
+        assert client.get(f"{_base(item_id)}/files/uploads/input.json").status_code == 404
+        assert client.get(f"{_base(item_id)}/runs").json() == []
+    chat = spec.get_resource_manager(Conversation).get(prep).data
+    assert isinstance(chat, Conversation)
+    assert chat.run_id is None
 
 
 def test_a_launch_that_fails_leaves_no_chat_behind(monkeypatch):
@@ -406,45 +359,6 @@ def test_a_launch_that_fails_leaves_no_chat_behind(monkeypatch):
 
         after = sorted(rid for rid, _ in list_item_conversations(conv_rm, item_id))
         assert after == before, "the failed launch left its chat on the item"
-
-
-def test_relaunch_in_the_same_chat_after_the_previous_run_finished():
-    """#343 (v1): once a chat's run is terminal, the same thread may host ANOTHER
-    workflow — the Conversation's run_id moves from the first run to the second."""
-    app, spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"n": 1}')
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()["run_id"]
-        _poll(client, item_id, first, "done")
-        second = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-        assert second.status_code == 202
-        body = second.json()
-        assert body["chat_id"] == prep
-        assert body["run_id"] != first
-        _poll(client, item_id, body["run_id"], "done")
-    conv = spec.get_resource_manager(Conversation).get(prep).data
-    assert conv.run_id == body["run_id"]
-
-
-def test_takeover_of_the_default_chat_leaves_a_fresh_item_level_default():
-    """#343: taking over the item's default chat (the common case — the user prepared
-    in it) doesn't strand the item-level endpoints; the next item-level use resolves a
-    FRESH free default, and the prepared chat becomes the workflow chat."""
-    app, _spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"n": 5}')
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        assert next(c for c in client.get(f"{_base(item_id)}/chats").json())["is_default"]
-        run_id = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()["run_id"]
-        _poll(client, item_id, run_id, "done")
-        # Item-level send still works — it get-or-creates a fresh free default.
-        assert client.post(f"{_base(item_id)}/messages", json={"content": "hi"}).status_code == 202
-        after = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
-    assert after[prep]["run_id"] == run_id  # the prepared chat is now the workflow chat
-    new_default = next(c for c in after.values() if c["is_default"])
-    assert new_default["chat_id"] != prep  # a fresh free default replaced the taken-over one
-    assert new_default["run_id"] is None
 
 
 def test_two_parallel_runs_both_complete_sharing_the_filestore():

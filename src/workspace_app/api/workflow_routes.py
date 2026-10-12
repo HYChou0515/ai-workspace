@@ -464,11 +464,10 @@ def register_workflow_routes(
         runs are per-chat, so several may run in parallel on one item (§3). Inputs come
         from the workspace (``MANIFEST.input_json``).
 
-        #343: with a ``chat_id`` the run instead TAKES OVER that existing chat — the one
-        the user prepared in — so the workflow's agent nodes inherit the chat's history
-        and the run streams into the same thread. The chat must have no active run
-        (else 409); once its previous run is terminal it may host another. Without a
-        ``chat_id`` the legacy behaviour holds (a fresh workflow chat is opened).
+        ``chat_id`` is refused (400): a run never takes over a chat
+        (plan-workflow-out-of-chat D3; #343's takeover is overturned). It is named
+        rather than ignored, so a caller still sending it learns why instead of
+        finding its run in a conversation of its own.
 
         #197: an external system triggers headlessly by uploading the workflow's input
         FILES in the SAME call — we communicate with workflows through the workspace, not
@@ -481,6 +480,16 @@ def register_workflow_routes(
         # #306 PR3: launching a workflow drives the agent + stages input files →
         # gate on `converse` BEFORE the upload writes anything.
         locator.require_access(slug, item_id, "converse")
+        # Before anything is staged: the call is refused whole, like an upload
+        # that escapes the workspace.
+        if chat_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "chat_id is no longer accepted: a workflow runs in its own "
+                    "conversation, never in a chat. Launch without chat_id."
+                ),
+            )
         workflow_id, staged = await _staged_run_uploads(request, workflow_id)
         investigation_id, profile, manifest = await _workflow_manifest_or_404(
             slug, item_id, workflow_id
@@ -506,22 +515,15 @@ def register_workflow_routes(
             turn_engine.publish(
                 investigation_id, FileChanged(path=norm, by=get_user_id(), kind="written")
             )
-        # The chat overlay (manual §3): resolve the chat, start the run on it, then link
+        # The run's own conversation (manual §3): open it, start the run on it, then link
         # the run_id back. This runs synchronously before the run task drives any turn, so
-        # the chat carries its run_id before it streams. #343: with a chat_id, take over
-        # that existing chat; otherwise open a fresh workflow chat (the legacy path).
-        if chat_id:
-            target_chat_id, _conv = locator.require_chat(slug, item_id, chat_id)
-            ours = False
-        else:
-            # ONE way to open a run's chat, shared with the page-started entrance
-            # (`wui_routes.wui_run`). Two spellings of "open a workflow chat"
-            # eventually disagree, and the half that gets the next fix is not
-            # predictable from the outside.
-            target_chat_id = locator.open_run_chat(
-                investigation_id, manifest.title or workflow_id or "Workflow"
-            )
-            ours = True
+        # the conversation carries its run_id before it streams. ONE way to open it,
+        # shared with the page-started entrance (`wui_routes.wui_run`): two spellings of
+        # "open a workflow chat" eventually disagree, and the half that gets the next fix
+        # is not predictable from the outside.
+        target_chat_id = locator.open_run_chat(
+            investigation_id, manifest.title or workflow_id or "Workflow"
+        )
         try:
             run_id = await workflow_orchestrator.start(
                 slug=slug,
@@ -536,8 +538,7 @@ def register_workflow_routes(
                 chat_id=target_chat_id,
             )
         except ActiveRunExists as exc:
-            if ours:
-                locator.settle_run_chat(target_chat_id, None)
+            locator.settle_run_chat(target_chat_id, None)
             logger.warning(
                 "workflow_routes: run rejected on item %s, active run exists: %s",
                 investigation_id,
@@ -549,10 +550,8 @@ def register_workflow_routes(
             # a chat with no `run_id` is a FREE chat — the earliest free chat is
             # what the item opens as its DEFAULT. So a failed launch that keeps
             # its chat hands everyone on the item a different default
-            # conversation, and each retry adds another one ahead of it. A chat
-            # the CALLER supplied is theirs and is left alone.
-            if ours:
-                locator.settle_run_chat(target_chat_id, None)
+            # conversation, and each retry adds another one ahead of it.
+            locator.settle_run_chat(target_chat_id, None)
             raise
         locator.settle_run_chat(target_chat_id, run_id)
         activity.record(
