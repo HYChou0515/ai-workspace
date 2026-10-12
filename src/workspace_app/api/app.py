@@ -466,6 +466,9 @@ def create_app(
     # docs/plan-outside-lookup.md D3: the "請幫我查" card's search buttons
     # (`server.lookup_targets`, validated by the loader). None ⇒ Google alone.
     lookup_targets: list[dict[str, str]] | None = None,
+    # docs/plan-outside-helper.md §3.7.2: `server.outside_helper_dir`, where the
+    # operator publishes a packed helper. None/"" ⇒ nothing published.
+    outside_helper_dir: str | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -2559,6 +2562,9 @@ def create_app(
         get_user_id=get_user_id,
         deliver=deliver_outside_answer,
     )
+    from .outside_helper_release import register_outside_helper_release_routes
+
+    register_outside_helper_release_routes(api, folder=outside_helper_dir)
 
     # ---- Files API (plan-backend §3.8) ----
 

@@ -37,7 +37,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 
-import { HttpError } from "../api/http";
+import { API_BASE, HttpError } from "../api/http";
 import {
   type OutsideAnswer,
   type OutsideLookupClient,
@@ -307,7 +307,12 @@ export function OutsideLookupCard({
     <div className="outside-lookup-card" data-testid="outside-lookup-card">
       {head}
       {helperAvailable && helper.isSuccess && !online && !locked && (
-        <p className="outside-lookup-hint">{t("lookup.helperOffline")}</p>
+        <p className="outside-lookup-hint">
+          {t("lookup.helperOffline")}{" "}
+          <a href={`${API_BASE}/outside-helper`} target="_blank" rel="noopener noreferrer">
+            {t("lookup.helperInstall")}
+          </a>
+        </p>
       )}
 
       {isSearch ? (

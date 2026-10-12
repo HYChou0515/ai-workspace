@@ -74,6 +74,16 @@ describe("with no helper connected", () => {
     expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
     expect(client.handOver).not.toHaveBeenCalled();
   });
+
+  // §3.5: the offline line says where to get the helper — in a new tab, so
+  // the chat the card is in stays where it is.
+  it("links to where the helper is installed from", async () => {
+    draw({ online: false });
+
+    const link = await screen.findByRole("link", { name: "怎麼安裝" });
+    expect(link).toHaveAttribute("href", "/outside-helper");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
 });
 
 describe("a search, with the helper connected", () => {

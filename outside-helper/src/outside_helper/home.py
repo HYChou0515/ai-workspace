@@ -14,15 +14,10 @@ import tempfile
 from pathlib import Path
 from typing import IO, Any
 
+from . import setup_core
 
-def root() -> Path:
-    override = os.environ.get("OUTSIDE_HELPER_HOME")
-    if override:
-        return Path(override)
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        return Path(local) / "OutsideHelper"
-    return Path.home() / ".local" / "share" / "outside-helper"
+# One definition, shared with the installer and the launcher (stdlib-only).
+root = setup_core.root
 
 
 def profile_dir(home: Path) -> Path:

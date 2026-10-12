@@ -157,6 +157,28 @@ def test_a_chrome_that_fails_to_close_still_lets_the_helper_end():
     assert ctl.step() is False
 
 
+# §3.7.4 step 4: a freshly installed version proves it can drive Chrome before
+# it counts as installed — Playwright imports and its driver is on disk (an
+# antivirus that removed node.exe is caught here, not at the first lookup).
+def test_the_self_test_passes_on_a_working_install(capsys):
+    from outside_helper.app import self_test
+    from outside_helper.version import __version__
+
+    assert self_test() == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_the_self_test_fails_when_the_driver_is_gone(monkeypatch, tmp_path, capsys):
+    from outside_helper import app
+
+    monkeypatch.setattr(
+        app, "_driver_paths", lambda: (str(tmp_path / "node.exe"), str(tmp_path / "cli.js"))
+    )
+
+    assert app.self_test() == 1
+    assert "node.exe" in capsys.readouterr().out
+
+
 def test_a_status_reads_with_or_without_its_detail():
     assert describe("paused", "") == "已暫停 — 卡片會改成自己查"
     assert describe("unreachable", "connection refused") == "連不到 AI 工作區:connection refused"

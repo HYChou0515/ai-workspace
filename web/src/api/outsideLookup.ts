@@ -40,6 +40,17 @@ export type HelperJob = {
   note: string;
 };
 
+/** A packed helper the operator published (docs/plan-outside-helper.md §3.7.2). */
+export type HelperRelease = {
+  version: string;
+  min_version: string;
+  /** The zip's file name; downloaded from `/outside-helper/download/<file>`. */
+  file: string;
+  sha256: string;
+  /** Bytes. */
+  size: number;
+};
+
 type CardArgs = { slug: string; itemId: string; chatId?: string; callId: string };
 
 function cardJobs(args: CardArgs): string {
@@ -83,6 +94,14 @@ export const outsideLookupApi = {
   async cancel(args: CardArgs): Promise<void> {
     const r = await apiFetch(`${cardJobs(args)}/${enc(args.callId)}`, { method: "DELETE" });
     if (!r.ok && r.status !== 404) return refused(r, `cancel failed: ${r.status}`);
+  },
+
+  /** The helper the operator published (§3.7.2), or null when there is none. */
+  async release(): Promise<HelperRelease | null> {
+    const r = await apiFetch("/outside-helper/manifest");
+    if (r.status === 404) return null;
+    if (!r.ok) return refused(r, `helper release failed: ${r.status}`);
+    return (await r.json()) as HelperRelease;
   },
 
   async targets(): Promise<LookupTarget[]> {

@@ -51,6 +51,10 @@ export function usePlatformDestinations(): PlatformDestination[] {
     { to: "/my-resources", label: t("resources.title"), icon: "layers" },
     // `plan-personal-env`: a person's values for every item. The Env button's icon.
     { to: "/my-env", label: t("myEnv.title"), icon: "tag" },
+    // docs/plan-outside-helper.md §3.6: where the helper is downloaded.
+    // Unconditional for the WUI entry's reason: the page says when nothing is
+    // published, and whether the person's own helper is connected.
+    { to: "/outside-helper", label: t("outsideHelper.title"), icon: "download" },
     // The overview of Deployed pages (docs/plan-wui-overview.md). Unconditional:
     // an entrance that appears only once somebody has a page is the confusing
     // kind, and the empty state says what a WUI is. "WUI" is a proper noun.

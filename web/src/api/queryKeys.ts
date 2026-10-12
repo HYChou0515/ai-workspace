@@ -127,6 +127,8 @@ export const qk = {
   lookupTargets: () => ["lookupTargets"] as const,
   /** docs/plan-outside-helper.md: is the person's own helper connected. */
   outsideHelper: () => ["outsideHelper"] as const,
+  /** The packed helper the operator published (§3.7.2), or null. */
+  outsideHelperRelease: () => ["outsideHelperRelease"] as const,
   /** The helper job a lookup card handed over. */
   outsideJob: (itemId: string, chatId: string | undefined, callId: string) =>
     ["outsideJob", itemId, chatId ?? "", callId] as const,

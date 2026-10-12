@@ -252,6 +252,8 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             env_providers=get_env_providers(settings.server.env_providers),
             # Where the "請幫我查" card sends a search (plan-outside-lookup D3).
             lookup_targets=settings.server.lookup_targets,
+            # Where a packed outside helper is published (plan-outside-helper §3.7.2).
+            outside_helper_dir=settings.server.outside_helper_dir,
             # #262: same superuser set threaded into get_spec(...) above, so the
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),

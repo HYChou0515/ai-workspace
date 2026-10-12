@@ -141,6 +141,35 @@ class Controller:
             self._snapshot = (status, detail)
 
 
+def _driver_paths() -> tuple[str, str]:
+    from playwright._impl._driver import compute_driver_executable
+
+    node, cli = compute_driver_executable()
+    return str(node), str(cli)
+
+
+def self_test() -> int:
+    """`python -m outside_helper --self-test` (§3.7.4 step 4): a new version
+    counts as installed only once this passes in its own venv."""
+    from importlib.metadata import version as dist_version
+    from pathlib import Path
+
+    from .version import __version__
+
+    try:
+        import playwright.sync_api  # noqa: F401
+
+        missing = [p for p in _driver_paths() if not Path(p).exists()]
+    except Exception as exc:  # noqa: BLE001 — any of it means "cannot drive Chrome"
+        print(f"outside-helper {__version__}: playwright unusable: {exc}")
+        return 1
+    if missing:
+        print(f"outside-helper {__version__}: playwright driver missing: {', '.join(missing)}")
+        return 1
+    print(f"outside-helper {__version__}, playwright {dist_version('playwright')}: ok")
+    return 0
+
+
 def _ask_app_url(tk_root: Any) -> str | None:  # pragma: no cover — needs a display
     from tkinter import simpledialog
 
@@ -158,6 +187,8 @@ def _ask_app_url(tk_root: Any) -> str | None:  # pragma: no cover — needs a di
 
 
 def main() -> int:  # pragma: no cover — the window needs a display; verified by hand (D14)
+    if "--self-test" in sys.argv[1:]:
+        return self_test()
     import tkinter as tk
     from tkinter import messagebox
 
