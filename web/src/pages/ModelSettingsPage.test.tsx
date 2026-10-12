@@ -154,7 +154,7 @@ describe("ModelSettingsPage", () => {
     type(JSON.stringify(KB_2));
     expect(screen.getByTestId("model-settings-apply")).toBeDisabled(); // unsaved: save first
     fireEvent.click(screen.getByTestId("model-settings-save"));
-    await waitFor(() => expect(client.saveDraft).toHaveBeenCalledWith(KB_2));
+    await waitFor(() => expect(client.saveDraft).toHaveBeenCalledWith(KB_2, {}));
     await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
 
     fireEvent.click(screen.getByTestId("model-settings-apply"));
@@ -874,6 +874,47 @@ describe("ModelSettingsPage", () => {
     expect((await screen.findByTestId("model-settings-changes")).style.fontFamily).toBe("");
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
     expect(screen.getByTestId("model-settings-keys").style.fontFamily).toBe("");
+  });
+
+  it("saves on top of what it was editing, and only overwrites a newer save once told", async () => {
+    // final review 8: Save sent no precondition, so another superuser's newer
+    // draft was silently replaced.
+    const client = fakeClient({ draft: KB_2 });
+    const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+    const theirs = { config: { llm: { base_url: "http://theirs" } } };
+    const base = client.get.getMockImplementation();
+    client.get.mockImplementation(async () => ({ ...(await base!()), draft: theirs }));
+    await act(async () => queryClient.invalidateQueries());
+    client.saveDraft.mockRejectedValueOnce(new HttpError(409, "the saved draft changed since you started editing"));
+
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+
+    expect(await screen.findByTestId("model-settings-save-failed")).toHaveTextContent("changed since");
+    expect(client.saveDraft).toHaveBeenLastCalledWith({ config: { llm: { base_url: "http://mine" } } }, KB_2);
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+    await waitFor(() =>
+      expect(client.saveDraft).toHaveBeenLastCalledWith({ config: { llm: { base_url: "http://mine" } } }, theirs),
+    );
+  });
+
+  it("writes sentences in the page's font, not monospace", async () => {
+    // final review 8: the test result and the key refusal were whole sentences
+    // set in the monospace meant for paths and values.
+    const client = fakeClient();
+    client.setKey.mockRejectedValue(
+      new HttpError(422, "refused", undefined, undefined, { problems: ["config.x: no such setting"] }),
+    );
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByTestId("model-settings-test"));
+    expect((await screen.findByTestId("model-settings-test-result")).style.fontFamily).toBe("");
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x" } });
+    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    fireEvent.click(screen.getByTestId("model-settings-key-set"));
+    expect((await screen.findByTestId("model-settings-key-refused")).style.fontFamily).toBe("");
   });
 
   it("draws a refused key as an error at its field", async () => {

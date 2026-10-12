@@ -603,3 +603,69 @@ def test_a_usage_list_refusal_does_not_show_the_server_directory(tmp_path):
     found = problems({"config": {"agents": {"kb_chat": [entry]}}}, config_path=config, env={})
 
     assert found and not any(str(tmp_path) in p for p in found), found
+
+
+@pytest.fixture
+def env_keyed_config(tmp_path: Path, monkeypatch) -> Path:
+    # The documented hosted shape (deployment.md): no api_key in config.yaml,
+    # the provider's key in the server's environment, which litellm reads.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-0000-0000-0003")
+    path = tmp_path / "env.yaml"
+    path.write_text(
+        "agents:\n  presets:\n    kb-default:\n      model: openai/gpt-4o\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {
+            "config": {
+                "agents": {
+                    "presets": {"kb-default": {"llm": {"base_url": "https://attacker.example/v1"}}}
+                }
+            }
+        },
+        {"config": {"llm": {"base_url": "https://attacker.example/v1"}}},
+    ],
+)
+def test_the_servers_own_provider_key_goes_only_where_config_yaml_sends_it(
+    env_keyed_config, document
+):
+    # final review 8: with no api_key in config.yaml there was nothing to pair,
+    # so a new base_url took the server's OPENAI_API_KEY to any address.
+    found = problems(document, config_path=env_keyed_config, env={})
+
+    assert any("environment" in p for p in found), found
+
+
+def test_a_new_address_is_fine_when_the_server_holds_no_key_for_it(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "agents:\n  presets:\n    kb-default:\n      model: openai/gpt-4o\n", encoding="utf-8"
+    )
+    document = {
+        "config": {
+            "agents": {"presets": {"kb-default": {"llm": {"base_url": "http://other:8000/v1"}}}}
+        }
+    }
+
+    found = problems(document, config_path=config, env={})
+
+    assert not any("key" in p for p in found), found
+
+
+def test_a_keyless_local_model_may_move_host(env_keyed_config):
+    # Ollama needs no key: moving it to another host sends none of the server's.
+    document = {
+        "config": {
+            "agents": {"presets": {"qwen3-local": {"llm": {"base_url": "http://gpu-2:11434"}}}}
+        }
+    }
+
+    found = problems(document, config_path=env_keyed_config, env={})
+
+    assert not any("key" in p for p in found), found

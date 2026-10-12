@@ -420,3 +420,21 @@ def test_a_preset_published_on_the_page_reaches_an_app_turn(page):
     config = page.app.state.app_catalog.resolve(app_slug="playground", profile="default")
 
     assert config.model == "openai/brand-new-1"
+
+
+def test_save_refuses_to_overwrite_a_draft_saved_since_the_editor_read_it(page):
+    # final review 8: Apply was guarded against this race and Save was not — B's
+    # newer draft was replaced by A's edits, and neither was told.
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+    seen = page.client.get(BASE).json()["draft"]
+    theirs = {"config": {"agents": {"presets": {"kb-default": {"model": "openai/theirs"}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": theirs})
+    mine = {"config": {"agents": {"presets": {"kb-default": {"model": "openai/mine"}}}}}
+
+    response = page.client.put(f"{BASE}/draft", json={"patch": mine, "based_on": seen})
+
+    assert response.status_code == 409
+    assert isinstance(response.json()["detail"], str)
+    assert page.client.get(BASE).json()["draft"] == theirs
+    again = page.client.put(f"{BASE}/draft", json={"patch": mine, "based_on": theirs})
+    assert again.status_code == 200

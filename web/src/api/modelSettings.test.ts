@@ -39,3 +39,18 @@ describe("modelSettingsApi.apply", () => {
     });
   });
 });
+
+describe("modelSettingsApi.saveDraft", () => {
+  it("sends the draft the edits were based on, and says a 409 in the server's sentence", async () => {
+    const sentence = "the saved draft changed since you started editing";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ detail: sentence }), { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const failed = await modelSettingsApi.saveDraft({ a: 1 }, { b: 2 }).catch((e: unknown) => e);
+
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(JSON.parse(String(init.body))).toEqual({ patch: { a: 1 }, based_on: { b: 2 } });
+    expect((failed as HttpError).message).toBe(sentence);
+    expect(problemsOf(failed)).toEqual([]);
+  });
+});

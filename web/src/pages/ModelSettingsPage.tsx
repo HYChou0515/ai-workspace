@@ -28,6 +28,7 @@ import {
   type ModelSettingsPage as PageData,
   type SettingsDocument,
 } from "../api/modelSettings";
+import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
 import { useDialog } from "../components/Dialog";
 import { MonacoEditor, type EditorMarker } from "../components/MonacoEditor";
@@ -213,13 +214,23 @@ function useDraft(client: Client, data: PageData) {
   // never replaced by a refetch (confirmation round: another superuser's save,
   // picked up by any refetch, replaced the text being typed without a word).
   const previous = useRef(draft);
+  // The saved draft the text was taken from — what Save says it builds on, so
+  // the server refuses (409) to overwrite a newer save unseen (final review 8:
+  // Apply was guarded against that race, Save was not). Once told, the next
+  // Save builds on the newest one: replacing it is then a choice.
+  const base = useRef(draft);
+  const told = useRef(false);
+  const textNow = useRef(text);
+  textNow.current = text;
   useEffect(() => {
     const was = previous.current;
     previous.current = draft;
-    setText((current) => {
-      const now = parsePatch(current);
-      return now.ok && sameShape(now.patch, was) ? saved : current;
-    });
+    const now = parsePatch(textNow.current);
+    if (now.ok && sameShape(now.patch, was)) setText(saved);
+    if (now.ok && (sameShape(now.patch, was) || sameShape(now.patch, draft))) {
+      base.current = draft;
+      told.current = false;
+    }
   }, [draft, saved]);
   useEffect(() => {
     const timer = setTimeout(() => setCheckedText(text), CHECK_AFTER_MS);
@@ -242,8 +253,15 @@ function useDraft(client: Client, data: PageData) {
 
   const save = useMutation({
     meta: { silentError: true },
-    mutationFn: (p: Patch) => client.saveDraft(p),
-    onError: (e) => setSaveError(problemsOf(e).join(" · ") || messageOf(e)),
+    mutationFn: (p: Patch) => client.saveDraft(p, told.current ? previous.current : base.current),
+    onError: (e) => {
+      setSaveError(problemsOf(e).join(" · ") || messageOf(e));
+      if (e instanceof HttpError && e.status === 409) {
+        told.current = true;
+        void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
+      }
+    },
+    // What it builds on next follows the refetch (the effect above).
     onSuccess: () => {
       setSaveError("");
       setNotice(t("modelSettings.saved"));
@@ -330,7 +348,11 @@ function useDraft(client: Client, data: PageData) {
   };
   // NN/g heuristic #3 (user control): one button gives the saved draft back —
   // the editor's own undo is gone once a tab switch unmounts it (final review).
-  const discard = () => edit(saved);
+  const discard = () => {
+    base.current = draft;
+    told.current = false;
+    edit(saved);
+  };
   // "Applied: version X" describes the last Apply; a key change or a rollback
   // since makes it stale beside an Apply with work waiting (review r3).
   const clearNotice = () => setNotice("");
@@ -735,14 +757,14 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
         )}
       </div>
       {test.data && (
-        <p data-testid="model-settings-test-result" role={test.data.ok ? undefined : "alert"} style={MONO}>
+        <p data-testid="model-settings-test-result" role={test.data.ok ? undefined : "alert"} style={WRAP}>
           {test.data.ok
             ? t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms), reply: test.data.reply })
             : t("modelSettings.testFailed", { error: test.data.error })}
         </p>
       )}
       {test.isError && (
-        <p role="alert" style={MONO}>
+        <p role="alert" style={WRAP}>
           {t("modelSettings.testFailed", { error: String(test.error) })}
         </p>
       )}
@@ -1114,7 +1136,7 @@ function KeysTab({
               id="model-settings-key-refused"
               data-testid="model-settings-key-refused"
               className="ev-banner ev-banner--err"
-              style={{ ...MONO, ...WRAP, margin: 0 }}
+              style={{ ...WRAP, margin: 0 }}
             >
               {refused.join(" · ")}
             </p>

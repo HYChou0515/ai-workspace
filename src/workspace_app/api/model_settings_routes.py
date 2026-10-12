@@ -46,6 +46,14 @@ class _Patch(BaseModel):
     patch: dict[str, Any] = {}
 
 
+class _SaveDraft(BaseModel):
+    patch: dict[str, Any] = {}
+    #: The saved draft the edits started from. When given, Save refuses (409)
+    #: if the stored draft is another — someone saved since; overwriting it
+    #: unseen lost their work (final review 8). Apply is guarded the same way.
+    based_on: dict[str, Any] | None = None
+
+
 class _Problems(BaseModel):
     problems: list[str] = []
 
@@ -169,7 +177,7 @@ def register_model_settings_routes(
         return await asyncio.to_thread(read)
 
     @app.put("/admin/model-settings/draft")
-    async def save_draft(body: _Patch) -> _Problems:
+    async def save_draft(body: _SaveDraft) -> _Problems:
         me = _require_superuser()
 
         def save() -> _Problems:
@@ -178,6 +186,15 @@ def register_model_settings_routes(
             written = secrets_written(body.patch)
             if written:
                 raise HTTPException(status_code=422, detail={"problems": written})
+            if body.based_on is not None and body.based_on != store.draft():
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "the saved draft changed since you started editing — someone "
+                        "else saved. Your edits are still here; look at theirs (Discard "
+                        "edits shows them) or save again to replace them"
+                    ),
+                )
             store.save_draft(body.patch, by=me)
             return _Problems(problems=_problems(body.patch))
 

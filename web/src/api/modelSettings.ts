@@ -65,9 +65,13 @@ export const modelSettingsApi = {
     return (await r.json()) as ModelSettingsPage;
   },
 
-  /** Save the draft; nothing running changes. Answers what would stop it running. */
-  async saveDraft(patch: Patch): Promise<string[]> {
-    const r = await send("/draft", "PUT", { patch });
+  /** Save the draft; nothing running changes. Answers what would stop it running.
+   * `basedOn` is the saved draft the edits started from: the server refuses
+   * (409) when another is stored — someone else saved since. */
+  async saveDraft(patch: Patch, basedOn?: Patch): Promise<string[]> {
+    const r = await send("/draft", "PUT", basedOn === undefined ? { patch } : { patch, based_on: basedOn });
+    // 409: someone saved since — the server's sentence, not a problem in the draft.
+    if (r.status === 409) throw new HttpError(409, (await detailSentence(r)) ?? `saving the draft failed: ${r.status}`);
     if (!r.ok) throw await httpErrorFrom(r, `saving the draft failed: ${r.status}`);
     return ((await r.json()) as { problems: string[] }).problems;
   },

@@ -213,6 +213,23 @@ def _destination(model: str | None, base: Any) -> tuple[str, Any, str | None]:
     return (provider, base, text if "://" in text else None)
 
 
+def _key_used(model: str | None, key: str | None) -> str | None:
+    """The key a call sends: config's, or — with none there — the provider's
+    own variable from the server's environment, which litellm reads when it is
+    set (`OPENAI_API_KEY`, the documented hosted shape). Asked of litellm, the
+    one that reads it (final review 8: with no config key there was nothing to
+    pair, and a new base_url took the environment's key anywhere)."""
+    if key:
+        return key
+    import litellm
+
+    try:
+        held = bool(litellm.validate_environment(model=model or "")["keys_in_environment"])
+    except Exception:  # a model litellm cannot place reads no provider variable
+        held = False
+    return f"env:{_destination(model, None)[0]}" if held else None
+
+
 def _endpoints(
     settings: Settings, presets: list[str] | None, *, config_dir: Path | None
 ) -> list[tuple[str, str | None, Any, str | None]]:
@@ -267,7 +284,7 @@ def key_destination_problems(
     call after Apply and on a test call (final review). A key set on the page
     may go anywhere: its setter knows it."""
     paired = {
-        (_destination(model, base), key)
+        (_destination(model, base), _key_used(model, key))
         for _, model, base, key in _endpoints(deploy, None, config_dir=config_dir)
         if isinstance(base, str | None)
     }
@@ -279,11 +296,17 @@ def key_destination_problems(
             if problem not in found:
                 found.append(problem)
             continue
-        if key and key not in page_keys and (_destination(model, base), key) not in paired:
+        used = _key_used(model, key)
+        if used and used not in page_keys and (_destination(model, base), used) not in paired:
             provider, _, in_model = _destination(model, base)
             to = in_model or base or f"{provider or 'the provider'}'s default address"
+            whose = (
+                f"the server's own {provider} key (from its environment)"
+                if used.startswith("env:")
+                else "the deploy's key"
+            )
             problem = (
-                f"config.{where}: the deploy's key would go to {to!r}, "
+                f"config.{where}: {whose} would go to {to!r}, "
                 "where config.yaml never sends it — set a key for this endpoint on the API keys tab"
             )
             if problem not in found:
