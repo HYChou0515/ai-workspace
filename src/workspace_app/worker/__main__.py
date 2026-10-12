@@ -233,6 +233,7 @@ def main(argv: list[str] | None = None) -> None:
     # plan-model-settings P6: the same view of the published settings the API builds.
     live = LiveSettings(None, config_path=args.config, env=os.environ, boot=settings)
     coordinator = build_coordinator(settings, args.jobtype, config_dir=config_dir, live=live)
+    live.start()  # P10: a job reads memory; the version is read on this thread
     logger.info(
         "worker: booted jobtype=%s coordinator=%s", args.jobtype, type(coordinator).__name__
     )

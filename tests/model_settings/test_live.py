@@ -137,6 +137,36 @@ def test_without_a_store_it_runs_with_the_boot_settings_until_one_is_attached(st
     assert live.settings().agents.presets["openai-mini"].model == "openai/gpt-4.1-mini"
 
 
+def test_polling_keeps_the_database_off_the_request_path(store, config, monkeypatch):
+    # P10: one version read is ~17 ms on Postgres. A request that crossed the
+    # one-second window paid it, synchronously, on the event loop; with the poll
+    # running, a use only ever reads memory and an Apply still lands within it.
+    import threading
+    import time
+
+    reads: list[str] = []
+    real = store.current_version
+
+    def counted():
+        reads.append(threading.current_thread().name)
+        return real()
+
+    monkeypatch.setattr(store, "current_version", counted)
+    boot = load(config_path=config, env={})
+    live = LiveSettings(store, config_path=config, env={}, boot=boot)
+    stop = live.start(interval_s=0.01)
+    try:
+        store.publish(MINI, by="root")
+        deadline = time.monotonic() + 5
+        while live.settings().agents.presets["openai-mini"].model != "openai/gpt-4.1-mini":
+            assert time.monotonic() < deadline, "the poll never picked the Apply up"
+            time.sleep(0.01)
+    finally:
+        stop()
+
+    assert reads and threading.main_thread().name not in reads
+
+
 def test_a_derived_value_is_built_once_per_version(store, config):
     clock, made = Clock(), []
     live = _live(store, config, clock)

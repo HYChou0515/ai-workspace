@@ -64,6 +64,7 @@ class LiveSettings:
         self._boot = boot
         self._snapshot = Snapshot(version=None, document={}, settings=boot)
         self._checked_at: float | None = None
+        self._polling = False
         self._derived: dict[str, tuple[Snapshot, Any]] = {}
         self._derive_lock = threading.Lock()
 
@@ -117,34 +118,66 @@ class LiveSettings:
         return value
 
     def snapshot(self) -> Snapshot:
+        if self._polling:  # P10: the poll keeps it current; a use reads memory only
+            return self._snapshot
         with self._lock:
             now = self._clock()
             if self._checked_at is not None and now - self._checked_at < self._ttl:
                 return self._snapshot
             self._checked_at = now
-            if self._store is None:
-                return self._snapshot
-            try:
-                version = self._store.current_version()
-            except Exception:  # the database away: run on what we have
-                logger.warning(
-                    "model settings: could not read the version; keeping %s",
-                    self._snapshot.version,
-                    exc_info=True,
-                )
-                return self._snapshot
-            if version == self._snapshot.version:
-                return self._snapshot
-            try:
-                self._snapshot = self._build(version)
-            except Exception:
-                logger.error(
-                    "model settings: version %s does not build; keeping %s",
-                    version,
-                    self._snapshot.version,
-                    exc_info=True,
-                )
+            return self._refresh_locked()
+
+    def refresh(self) -> Snapshot:
+        """Read the version now and rebuild if it changed."""
+        with self._lock:
+            return self._refresh_locked()
+
+    def start(self, interval_s: float = VERSION_TTL_S) -> Callable[[], None]:
+        """Read the version every `interval_s` on a thread of its own, so no
+        request waits on the database (P10: one read measured ~17 ms on
+        Postgres, and the request that crossed the window paid it on the event
+        loop). Returns the function that stops it."""
+        stop = threading.Event()
+
+        def poll() -> None:
+            while not stop.wait(interval_s):
+                self.refresh()
+
+        thread = threading.Thread(target=poll, name="model-settings-poll", daemon=True)
+        self._polling = True
+        thread.start()
+
+        def halt() -> None:
+            stop.set()
+            thread.join()
+            self._polling = False
+
+        return halt
+
+    def _refresh_locked(self) -> Snapshot:
+        if self._store is None:
             return self._snapshot
+        try:
+            version = self._store.current_version()
+        except Exception:  # the database away: run on what we have
+            logger.warning(
+                "model settings: could not read the version; keeping %s",
+                self._snapshot.version,
+                exc_info=True,
+            )
+            return self._snapshot
+        if version == self._snapshot.version:
+            return self._snapshot
+        try:
+            self._snapshot = self._build(version)
+        except Exception:
+            logger.error(
+                "model settings: version %s does not build; keeping %s",
+                version,
+                self._snapshot.version,
+                exc_info=True,
+            )
+        return self._snapshot
 
     def _build(self, version: str | None) -> Snapshot:
         assert self._store is not None

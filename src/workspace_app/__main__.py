@@ -506,6 +506,8 @@ def main() -> None:
     # publishes — read from the same config file and environment as above.
     live = LiveSettings(None, config_path=args.config, env=os.environ, boot=settings)
     app = build_app(settings, config_dir=config_dir, live=live)
+    # P10: the version is read on a thread of its own, never on a request.
+    live.start()
     with boot_step("start HTTP server (uvicorn)"):
         serve(
             app,

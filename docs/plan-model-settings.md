@@ -33,7 +33,7 @@ settled by me, listed for the user to overturn.
 | M13 | **One function** produces the effective settings (defaults ⊕ published patch), used by the API, all nine workers and `skill_eval` — no consumer merges on its own | mine |
 | M14 | Expensive objects (failover chains, LLM clients with their connection pools) are cached by a **fingerprint of their resolved settings** and rebuilt only when it changes; if the version cannot be read, the last good settings stay in use | mine |
 | M15 | The page sits under a superuser-only "Settings" entry; its layout follows NN/g and Material 3, cited in the PR | mine |
-| M16 | A process reads the version string **at most once a second** and trusts it in between (`model_settings/live.py:VERSION_TTL_S`). A request reads the settings about ten times (`load_app_manifest` alone); one small read a second per process is the whole cost, and an Apply is in force everywhere within a second | mine — found in P4 |
+| M16 | A process reads the version string **once a second on a thread of its own** (`LiveSettings.start`, started by the API's and every worker's `main`); a request or a job only reads memory. An Apply is in force everywhere within about a second. Without the thread (tests, `skill_eval`) a use reads the version itself at most once a second (`VERSION_TTL_S`). P10 is why: one read measured ~17 ms on Postgres, and the request that crossed the window paid it on the event loop | mine — found in P4, changed by P10 |
 | M17 | **Turning a role on or off is not done here.** Whether a role (`kb.retrieval_llm`, `card_drafter`, `health.judge_llm`, …) is on decided at boot which features were wired (the quality judge, the drafter, the goal checker, code-wiki), and boot reads `config.yaml`, not the page — so Apply refuses a change to whether a role is on, with "change it in config.yaml" (`ROLES` in `model_settings/effective.py`). Changing **which** model a role uses is live | mine — found in P5 |
 | M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run | mine — found in P5 |
 | M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else it would delete a key the loader needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
@@ -50,6 +50,24 @@ settled by me, listed for the user to overturn.
   into "read when used".
 
 ### Performance (to be measured, not assumed — P10)
+
+*Measured 2026-10-12* (local Postgres 16 in docker for the meta / resource rows,
+blobs on disk; and the disk backend alone — the production image ships no
+Postgres driver, so disk is likely what production runs):
+
+| | disk | Postgres |
+|---|---|---|
+| read the version (one row) | 0.16 ms | 16.6 ms (max 49) |
+| a use of the settings, version unchanged | 0.3 µs | 0.5 µs |
+| first use after an Apply: read + rebuild | 2.7 ms (max 46) | 41 ms (max 94) |
+| `load_app_manifest`, same version | 1.4 µs | 2.7 µs |
+| `load_app_manifest`, first read after an Apply | 0.14 ms | 0.27 ms |
+| the checks Apply runs (`problems`) | 7 ms (first 3 s: imports) | 6 ms |
+
+The Postgres read is specstar's `get`, not a bare row; paid by whichever request
+crossed the one-second window, synchronously, it was a ~17 ms stall of the event
+loop every second. So the read moved to a thread (M16): a request now pays the
+0.5 µs, and the rebuild happens off the request path too.
 
 Each use reads one small "current version" value; only a change reloads the
 patch. Merging is microseconds; a turn is seconds of model time. The two ways
