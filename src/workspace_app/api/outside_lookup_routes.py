@@ -219,8 +219,10 @@ def register_outside_lookup_routes(
                 await _take_back(files, investigation_id, written)
             raise
         # A cancelled request (`CancelledError` is not an `Exception`) keeps its
-        # files: once shielded, the send carries on and persists the message —
-        # the window before that is in the module doc.
+        # files: once shielded, the send carries on and persists the message.
+        # Cancelled while the links are being remembered, before the send, it
+        # leaves its file with no message naming it (plan §6) — the window
+        # before that is in the module doc.
         who = get_user_id()
         for path in written:
             turn_engine.publish(

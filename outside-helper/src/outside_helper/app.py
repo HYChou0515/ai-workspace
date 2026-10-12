@@ -2,7 +2,7 @@
 
 The window (tkinter, in the standard library) shows a status line, a line
 about the next version, the buttons 登入, 暫停/繼續, 結束 (and 重新開啟 once a
-new version is ready), the 「開機時自動啟動」 box and 解除安裝 — and draws no
+new version is ready), the 「開機時自動啟動」 box, 重設登入 and 解除安裝 — and draws no
 state it did not read from the controller. The controller lives on ONE worker thread: it owns the
 Chrome (Playwright's sync API must stay on the thread that started it) and the
 `Worker` loop, and takes the buttons as commands through a queue. Closing the
@@ -62,6 +62,13 @@ def describe_update(status: str, *, forced: bool) -> str:
     return ""
 
 
+#: Statuses that show this version runs — a waiting version confirms itself
+#: on them (§3.7.5). Not "error" (the backend refused its requests) nor
+#: "unreachable" (its line to the backend may be what is broken): those may be
+#: the version's own fault, and a confirmed version is never rolled back.
+_CONFIRMS = ("connected", "needs_login", "paused", "update_required")
+
+
 class Controller:
     def __init__(
         self,
@@ -103,6 +110,8 @@ class Controller:
     # ── the worker thread ───────────────────────────────────────────────────
 
     def open(self) -> None:
+        # what a previous Chrome left is dead: never drive it again
+        self._chrome = self._worker = None
         try:
             self._chrome = self._make_chrome()
         except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
@@ -110,7 +119,9 @@ class Controller:
             self._show("no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
             return
         self._worker = self._make_worker(self._chrome)
-        if self._make_updater is not None:
+        if self._make_updater is not None and self._updater is None:
+            # one for the helper's life: a second would prepare the same
+            # version again over the first one's files
             self._updater = self._make_updater(self._chrome)
 
     def step(self, wait: float = 0.0) -> bool:
@@ -128,7 +139,8 @@ class Controller:
                 self._close()
                 return False
             if command == "reset_login":
-                self._reset_login()
+                if not self._reset_login():
+                    return True  # leave its reason on screen until the next poll
             else:
                 self._apply(command)
             try:
@@ -163,7 +175,8 @@ class Controller:
         if self._updater is None:
             return
         try:
-            self._updater.connected()
+            if status in _CONFIRMS:
+                self._updater.connected()
             if status == "connected":
                 self._updater.tick()
             elif status == "update_required":
@@ -173,18 +186,34 @@ class Controller:
 
     def run(self) -> None:
         self.open()
-        while self.step(self._poll_s):
-            pass
+        while True:
+            try:
+                if not self.step(self._poll_s):
+                    return
+            except Exception as exc:  # noqa: BLE001 — the window must not freeze on it
+                logger.exception("helper loop")
+                self._show("error", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
 
-    def _reset_login(self) -> None:
+    def _reset_login(self) -> bool:
         """「重設登入」 (§3.7.7): close Chrome — it holds its profile — move
-        the profile aside, start again on a fresh one and open the login."""
+        the profile aside, start again on a fresh one and open the login.
+        False when the profile could not be moved (still held — Windows): the
+        reason is on screen and Chrome reopens on the old profile."""
         self._close()
+        failed = ""
         if self._reset_profile is not None:
-            self._reset_profile()
+            try:
+                self._reset_profile()
+            except OSError as exc:
+                failed = str(exc) or type(exc).__name__
+                logger.warning("reset login", exc_info=True)
         self.open()
+        if failed:
+            self._show("error", f"重設登入沒有成功:{failed}")
+            return False
         if self._chrome is not None and self._worker is not None:
             self._chrome.open_login()
+        return True
 
     def _apply(self, command: str) -> None:
         if self._worker is None:
@@ -221,12 +250,22 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
     from .updates import Updater
     from .worker import Worker
 
-    updaters: list[Updater] = []
+    backends: list[Backend] = []
     chrome_version: list[str] = []
+
+    class _Latest:
+        """The current Chrome's backend: Chrome is reopened when the person
+        closes it, the one updater outlives it."""
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(backends[-1], name)
+
+    updater = Updater(home, _Latest())
 
     def make_worker(chrome: Any) -> Worker:
         backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
-        updaters.append(Updater(home, backend))
+        backends.append(backend)
+        del backends[:-1]
 
         def info() -> dict[str, str]:
             if not chrome_version:
@@ -238,7 +277,7 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
                 "chrome": chrome_version[0],
                 "playwright": dist_version("playwright"),
                 "python": platform.python_version(),
-                "update": updaters[0].report(),
+                "update": updater.report(),
             }
 
         return Worker(backend, chrome, errands=build_errands(backend.lookup_targets), info=info)
@@ -248,7 +287,7 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
     return Controller(
         make_chrome,
         make_worker,
-        make_updater=lambda _chrome: updaters[-1],
+        make_updater=lambda _chrome: updater,
         reset_profile=lambda: reset_profile(home),
     )
 

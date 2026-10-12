@@ -3,7 +3,8 @@
 Two callers:
 
 - **the card**, in the chat — hands a lookup to the person's helper, reads how
-  it is going, cancels it. Asks ``converse``, as answering the card by hand does.
+  it is going, cancels it. Handing over and cancelling ask ``converse``, as
+  answering the card by hand does; reading how it goes asks ``read_chat``.
 - **the helper**, a Python program on the person's PC — checks in, takes the
   next job, reports a failure. It authenticates as the person (the deploy's
   login, D6), so ``get_user_id`` is the person and it only ever sees their jobs.
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 from ..resources.conversation import Conversation
 from .locator import ItemLocator
 from .outside_helper_release import read_release
-from .outside_jobs import MIN_PROTOCOL, OutsideJob, OutsideJobStore, job_id
+from .outside_jobs import CLAIM_TIMEOUT_MS, MIN_PROTOCOL, OutsideJob, OutsideJobStore, job_id
 from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_card
 
 
@@ -102,12 +103,17 @@ def _asker(conv: Conversation, call_id: str) -> str | None:
     )
 
 
-def _out(jid: str, job: OutsideJob) -> JobOut:
+def _out(jid: str, job: OutsideJob, *, now: int | None = None) -> JobOut:
+    """The job as the card reads it. Given `now`, a claim no helper renewed
+    within CLAIM_TIMEOUT_MS reads as `queued` — that is what it is (the next
+    claim takes it); read as `claimed`, a card whose helper died mid-job showed
+    it at work forever."""
+    lapsed = now is not None and job.state == "claimed" and now - job.claimed_ms > CLAIM_TIMEOUT_MS
     return JobOut(
         id=jid,
         kind=job.kind,
         args=job.args,
-        state=job.state,
+        state="queued" if lapsed else job.state,
         error=job.error,
         note=job.note,
         auto=job.auto,
@@ -181,11 +187,13 @@ def register_outside_job_routes(
                 raise HTTPException(
                     status_code=409, detail="this lookup opens by itself only for who asked"
                 )
-            if existing is not None and existing.state != "cancelled":
-                return _out(jid, existing)  # already running or ran: leave it
+            if existing is not None:
+                # running, ran, or stopped by the person: the card asking again
+                # (it asks on every mount) starts nothing — 「查」 still can
+                return _out(jid, existing, now=store.now())
         elif existing is not None and existing.state in ("queued", "claimed"):
             # under way (a reloaded card offering 「查」 again): never restarted
-            return _out(jid, existing)
+            return _out(jid, existing, now=store.now())
         job = OutsideJob(
             owner=owner,
             item_id=investigation_id,
@@ -223,7 +231,7 @@ def register_outside_job_routes(
         job = await store.get(jid)
         if job is None:
             raise HTTPException(status_code=404, detail="this card has no helper job")
-        return _out(jid, job)
+        return _out(jid, job, now=store.now())
 
     async def cancel_job(jid: str) -> Response:
         if not await store.cancel(jid):
@@ -306,10 +314,11 @@ def register_outside_job_routes(
         except HTTPException as exc:
             if exc.status_code == 409:  # answered meanwhile: theirs stands
                 await store.end(jid, owner, "cancelled")
-            else:
+            elif 400 <= exc.status_code < 500:
                 # Never sendable as it is (nothing to send, the chat gone, the
                 # right to send revoked): end it, with why — left claimed, it
-                # went back to the queue to be fetched and refused forever.
+                # went back to the queue to be fetched and refused forever. A
+                # 5xx may pass: the job stays claimed and is tried again.
                 await store.fail(jid, owner, str(exc.detail)[:_ERROR_CHARS])
             raise
         await store.end(jid, owner, "done", saved=out.path or "")

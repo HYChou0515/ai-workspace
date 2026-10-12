@@ -147,6 +147,26 @@ def test_a_job_taken_and_never_finished_goes_back_to_the_queue():
     assert _claim(client).status_code == 200
 
 
+# The helper died mid-job (laptop closed): its claim lapses, and the card must
+# read the job as waiting again — read as "claimed" it showed the helper at
+# work forever, with no way back to the manual flow (review round 2).
+def test_the_card_reads_a_lapsed_claim_as_waiting():
+    from workspace_app.api.outside_jobs import CLAIM_TIMEOUT_MS
+
+    client, _spec, iid = _asked()
+    store = client.app.state.outside_jobs
+    t = [1_000_000]
+    store.now = lambda: t[0]
+    _beat(client)
+    _hand(client, iid)
+    _claim(client)
+    assert _state(client, iid)["state"] == "claimed"
+
+    t[0] += CLAIM_TIMEOUT_MS + 1
+
+    assert _state(client, iid)["state"] == "queued"
+
+
 def test_a_job_taken_recently_is_not_taken_again():
     from workspace_app.api.outside_jobs import CLAIM_TIMEOUT_MS
 

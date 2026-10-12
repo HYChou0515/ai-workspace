@@ -179,6 +179,23 @@ def test_a_link_opens_by_itself_only_for_the_person_who_asked():
     assert _auto(client, iid).status_code == 201
 
 
+# The person stopped a page that opened by itself: reloading the chat (the card
+# asks again on every mount) must not start it again — the card offers 「查」
+# instead (review round 2).
+def test_a_stopped_automatic_open_is_not_started_again():
+    client, iid = _chat("https://pandas.example/whatsnew")
+    _beat(client)
+    _answer(client, iid, content=PAGE)
+    _second_turn(client, iid)
+    assert _auto(client, iid).status_code == 201
+    assert client.delete(f"/a/rca/items/{iid}/outside-jobs/c2").status_code == 204
+
+    r = _auto(client, iid)
+
+    assert r.json()["state"] == "cancelled"
+    assert _claim(client).status_code == 204
+
+
 class _Watching(_Turns):
     """Records, as each turn STARTS, whether `url` is already a seen link."""
 

@@ -221,14 +221,8 @@ describe("review round 1", () => {
     expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
   });
 
-  // §3.5: done names where it was saved; a page opened with no nod says why.
-  it("names where it was saved, and why a page opened by itself", async () => {
-    draw({ existing: job({ state: "done", saved: "lookups/2026-10-13-pandas.md" }) });
-    expect(
-      await screen.findByText("小幫手已送給 AI,存在 lookups/2026-10-13-pandas.md"),
-    ).toBeInTheDocument();
-    cleanup();
-
+  // §3.5: a page opened with no nod says why.
+  it("says why a page opened by itself", async () => {
     const running = job({ kind: "open_url", state: "claimed", auto: true });
     // as the server answers the card's own request for a job already running
     draw({ lookup: PAGE, existing: running, handOver: async () => running });

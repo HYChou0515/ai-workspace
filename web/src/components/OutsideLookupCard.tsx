@@ -234,11 +234,8 @@ export function OutsideLookupCard({
     helping && !locked ? (
       <div className="outside-lookup-section" data-testid="outside-lookup-helper">
         {jobState === "done" ? (
-          <p className="outside-lookup-note">
-            {job.data?.saved
-              ? t("lookup.helperDoneSaved", { path: job.data.saved })
-              : t("lookup.helperDone")}
-          </p>
+          // where it was saved is said by the answer it sent, just below
+          <p className="outside-lookup-note">{t("lookup.helperDone")}</p>
         ) : working ? (
           <div className="outside-lookup-actions">
             {job.data?.auto && (

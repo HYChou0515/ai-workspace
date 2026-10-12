@@ -164,6 +164,43 @@ def test_a_result_that_cannot_be_sent_ends_the_job_with_why():
     assert _answers(spec) == []
 
 
+# A refusal that may pass (the server briefly unable — a 5xx) leaves the job
+# claimed, to be taken and tried again; only a page that can never be sent
+# ends it (review round 2).
+def test_a_result_refused_for_now_is_tried_again():
+    from tests.api.test_outside_answers import _asked
+    from workspace_app.api.request_env import IRequestEnv
+
+    down = [False]
+
+    class _Source(IRequestEnv):
+        async def env_for(self, request, *, user_id, item_id):
+            if down[0]:
+                raise RuntimeError("the env source is briefly down")
+            return {}
+
+    client, _spec, iid = _asked(request_env=_Source())
+    jid = _taken(client, iid)
+    down[0] = True
+
+    r = _result(client, jid)
+
+    assert r.status_code == 500
+    assert _state(client, iid)["state"] == "claimed"
+
+
+# A refusal's reason reaches the card as words, not a dict's repr.
+def test_a_refusals_reason_is_said_in_words():
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, iid = _asked()
+    jid = _taken(client, iid)
+
+    _result(client, jid, markdown="  ")
+
+    assert _state(client, iid)["error"] == "nothing to send — paste or attach"
+
+
 # A result too large for the workspace's file limit is refused like a paste.
 def test_a_result_larger_than_a_file_may_be_is_refused():
     from tests.api.conftest import register_rca_item

@@ -58,8 +58,9 @@ class Updater:
         self.status = ""
 
     def connected(self) -> None:
-        """The first check-in went through: if this is the version waiting to
-        be tried, it has proven itself and becomes current (§3.7.5 step 3)."""
+        """This version runs (the Controller calls it on the statuses that show
+        that): if it is the version waiting to be tried, it has proven itself
+        and becomes current (§3.7.5 step 3)."""
         if self._confirmed:
             return
         self._confirmed = True

@@ -134,6 +134,28 @@ def test_the_thread_polls_until_told_to_quit():
     assert (worker.ticks, chrome.closed) == (3, True)
 
 
+# Anything the loop did not expect is shown, and the loop goes on — a dead
+# worker thread froze the window on its last status (review round 2).
+def test_an_unexpected_failure_is_shown_and_the_helper_goes_on():
+    chrome = _Chrome()
+    ctl: Controller
+
+    class _Breaks(_Worker):
+        def tick(self) -> None:
+            super().tick()
+            if self.ticks == 1:
+                raise RuntimeError("Target page, context or browser has been closed")
+            if self.ticks == 3:
+                ctl.send("quit")
+
+    worker = _Breaks(["connected"] * 3)
+    ctl = Controller(lambda: chrome, lambda _c: worker, poll_s=0.01)
+
+    ctl.run()
+
+    assert worker.ticks == 3 and chrome.closed
+
+
 def test_with_no_chrome_the_buttons_do_nothing_but_quit():
     def broken():
         raise RuntimeError("")
@@ -244,6 +266,77 @@ def test_a_chrome_the_person_closed_is_opened_again():
 
     assert len(made) == 2
     assert ctl.snapshot()[0] == "connected"
+
+
+# Chrome closed and will not open again: the window says so — not the dead
+# Chrome's "unreachable", ticked forever (review round 2).
+def test_a_chrome_that_will_not_reopen_says_so():
+    events: list[str] = []
+    made, make = _made(events)
+    calls = [0]
+
+    def flaky() -> _Chrome:
+        calls[0] += 1
+        if calls[0] > 1:
+            raise RuntimeError("Chrome failed to start")
+        return make()
+
+    ctl = Controller(flaky, lambda _c: _Worker(["unreachable"] * 3))
+    ctl.open()
+    made[0].gone = True
+
+    assert ctl.step() is True
+    assert ctl.snapshot()[0] == "no_chrome"
+
+
+# 「重設登入」 when it cannot be done (the profile held by a Chrome still
+# ending, on Windows): the window says why; the helper keeps running.
+def test_a_reset_that_fails_does_not_stop_the_helper():
+    events: list[str] = []
+    _made_list, make = _made(events)
+
+    def stuck() -> None:
+        raise PermissionError(13, "in use", "profile")
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3), reset_profile=stuck)
+    ctl.open()
+    ctl.send("reset_login")
+
+    assert ctl.step() is True
+    assert ctl.snapshot()[0] == "error"
+    assert ctl.step() is True
+
+
+# Reopening Chrome keeps the one updater: a second would start a second
+# preparation of the same version over the first's files (review round 2).
+def test_reopening_chrome_keeps_the_updater():
+    events: list[str] = []
+    made, make = _made(events)
+    built: list[_Updater] = []
+
+    def make_updater(_c):
+        built.append(_Updater())
+        return built[-1]
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3), make_updater=make_updater)
+    ctl.open()
+    made[0].gone = True
+    ctl.step()
+
+    assert len(made) == 2 and len(built) == 1
+
+
+# A version the backend refuses ("error") or that cannot reach it does not
+# confirm itself: it may be the version's own fault, and confirmed it could
+# never be rolled back (review round 2).
+def test_a_version_that_cannot_work_with_the_backend_is_not_confirmed():
+    for status in ("error", "unreachable"):
+        up = _Updater()
+        ctl, _chrome = _with_updater([status], up)
+
+        ctl.step()
+
+        assert up.calls == [], status
 
 
 # §3.7.7 「重設登入」: a profile gone bad (a login that never takes) is moved
